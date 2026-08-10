@@ -23,6 +23,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/pkg/workloadroles"
 )
@@ -42,9 +43,13 @@ type AppInfo struct {
 	CPU  *metrics.CPUUsage
 	Mem  *metrics.MemoryUsage
 	HTTP *metrics.HTTPMetrics
+
+	// Secrets resolves backend-sourced variables so a ConfigVersion minted by an
+	// env change records the exact secret version it saw.
+	Secrets secret.Resolver
 }
 
-func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage, mem *metrics.MemoryUsage, http *metrics.HTTPMetrics) *AppInfo {
+func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage, mem *metrics.MemoryUsage, http *metrics.HTTPMetrics, secrets secret.Resolver) *AppInfo {
 	return &AppInfo{
 		Log:  log,
 		CV:   nil,
@@ -52,6 +57,8 @@ func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage
 		CPU:  cpu,
 		Mem:  mem,
 		HTTP: http,
+
+		Secrets: secrets,
 	}
 }
 
@@ -360,6 +367,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 					Source:      source,
 					Required:    ev.Required(),
 					Description: ev.Description(),
+					Backend:     ev.Backend(),
 				}
 				spec.Variables = append(spec.Variables, nv)
 			}
@@ -392,6 +400,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 									Source:      source,
 									Required:    ev.Required(),
 									Description: ev.Description(),
+									Backend:     ev.Backend(),
 								}
 								spec.Services[i].Env = append(spec.Services[i].Env, nv)
 							}
@@ -414,6 +423,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 							Source:      source,
 							Required:    ev.Required(),
 							Description: ev.Description(),
+							Backend:     ev.Backend(),
 						}
 						svc.Env = append(svc.Env, nv)
 					}
@@ -528,6 +538,7 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		env.SetSource(ev.Source)
 		env.SetRequired(ev.Required)
 		env.SetDescription(ev.Description)
+		env.SetBackend(ev.Backend)
 		envVars = append(envVars, &env)
 	}
 
@@ -556,6 +567,7 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 				env.SetSource(ev.Source)
 				env.SetRequired(ev.Required)
 				env.SetDescription(ev.Description)
+				env.SetBackend(ev.Backend)
 				svcEnvVars = append(svcEnvVars, &env)
 			}
 			sc.SetServiceEnv(svcEnvVars)
@@ -650,7 +662,7 @@ func (r *AppInfo) SetWorkloadRole(ctx context.Context, state *app_v1alpha.CrudSe
 }
 
 func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.EnvVarInput, service string) (string, error) {
-	result, err := appclient.SetEnvVars(ctx, r.EC, name, nil, vars, service)
+	result, err := appclient.SetEnvVars(ctx, r.EC, r.Secrets, name, nil, vars, service)
 	if err != nil {
 		return "", err
 	}
@@ -693,7 +705,7 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 
 	vars := make([]appclient.EnvVarInput, len(rpcVars))
 	for i, v := range rpcVars {
-		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive(), Backend: v.Backend()}
 	}
 
 	versionId, err := r.setEnvVars(ctx, args.App(), vars, args.Service())
@@ -723,10 +735,10 @@ func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.Crud
 
 	vars := make([]appclient.EnvVarInput, len(rpcVars))
 	for i, v := range rpcVars {
-		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive()}
+		vars[i] = appclient.EnvVarInput{Key: v.Key(), Value: v.Value(), Sensitive: v.Sensitive(), Backend: v.Backend()}
 	}
 
-	cvid, err := appclient.SetInitialEnvVars(ctx, r.EC, args.App(), vars, args.Service())
+	cvid, err := appclient.SetInitialEnvVars(ctx, r.EC, r.Secrets, args.App(), vars, args.Service())
 	if err != nil {
 		return err
 	}
@@ -742,7 +754,7 @@ func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDelet
 		return rpc.AppAccessError(ctx, args.App())
 	}
 
-	result, err := appclient.DeleteEnvVars(ctx, r.EC, args.App(), nil, []string{args.Key()}, args.Service())
+	result, err := appclient.DeleteEnvVars(ctx, r.EC, r.Secrets, args.App(), nil, []string{args.Key()}, args.Service())
 	if err != nil {
 		return err
 	}

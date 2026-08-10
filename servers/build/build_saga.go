@@ -385,6 +385,15 @@ func createConfigVersion(ctx context.Context, in createConfigVersionIn) (createC
 		return createConfigVersionOut{}, fmt.Errorf("deserializing config spec: %w", err)
 	}
 
+	// Freeze every backend-sourced variable to the version it resolves to right
+	// now, so this ConfigVersion records exactly which secret it shipped with.
+	// Pinning happens here rather than upstream in the saga because the action
+	// that stores the spec must be the one that records the pin: whichever
+	// version this attempt resolves is the version the config it writes claims.
+	if err := b.pinSecrets(ctx, &spec); err != nil {
+		return createConfigVersionOut{}, err
+	}
+
 	cv := &core_v1alpha.ConfigVersion{
 		App:  entity.Id(in.AppID),
 		Spec: spec,

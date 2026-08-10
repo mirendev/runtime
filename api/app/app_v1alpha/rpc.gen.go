@@ -391,6 +391,7 @@ type namedValueData struct {
 	Source      *string `cbor:"3,keyasint,omitempty" json:"source,omitempty"`
 	Required    *bool   `cbor:"4,keyasint,omitempty" json:"required,omitempty"`
 	Description *string `cbor:"5,keyasint,omitempty" json:"description,omitempty"`
+	Backend     *string `cbor:"6,keyasint,omitempty" json:"backend,omitempty"`
 }
 
 type NamedValue struct {
@@ -485,6 +486,21 @@ func (v *NamedValue) Description() string {
 
 func (v *NamedValue) SetDescription(description string) {
 	v.data.Description = &description
+}
+
+func (v *NamedValue) HasBackend() bool {
+	return v.data.Backend != nil
+}
+
+func (v *NamedValue) Backend() string {
+	if v.data.Backend == nil {
+		return ""
+	}
+	return *v.data.Backend
+}
+
+func (v *NamedValue) SetBackend(backend string) {
+	v.data.Backend = &backend
 }
 
 func (v *NamedValue) MarshalCBOR() ([]byte, error) {

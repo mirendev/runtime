@@ -44,6 +44,7 @@ const sidebars: SidebarsConfig = {
       label: 'Networking & Security',
       collapsed: false,
       items: [
+        'secrets',
         'traffic-routing',
         'tls',
         'firewall',

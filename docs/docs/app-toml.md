@@ -88,18 +88,25 @@ key = "SECRET_KEY"
 required = true
 sensitive = true
 description = "Used for session signing"
+
+[[env]]
+key = "STRIPE_API_KEY"
+backend = "cluster"
+ref = "payments/stripe-key"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `key` | string | Variable name. **Required.** | — |
 | `value` | string | Variable value | `""` |
+| `backend` | string | [Secret](/secrets) backend to source the value from | `""` |
+| `ref` | string | Reference to the secret within that backend | `""` |
 | `required` | bool | Fail deploy if value is empty | `false` |
 | `sensitive` | bool | Mask value in CLI output and logs | `false` |
 | `description` | string | Human-readable explanation of this variable | — |
 
 :::note[Validation]
-Every env entry must have a non-empty `key`. If `required` is `true` and `value` is empty at deploy time, the deploy fails.
+Every env entry must have a non-empty `key`. If `required` is `true` and `value` is empty at deploy time, the deploy fails. `ref` requires `backend`, and cannot be combined with `value`.
 :::
 
 ## `[build]` — Build Configuration {#build}

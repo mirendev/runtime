@@ -481,6 +481,14 @@ types:
         type: bool
         index: 2
         doc: Whether this is a sensitive value that should be masked
+      - name: backend
+        type: string
+        index: 3
+        optional: true
+        doc: >-
+          Secret backend the value comes from. Empty means value is an inline
+          literal; otherwise value holds a backend-relative reference and the
+          real value never travels here.
 
   - type: AccessInfo
     doc: Information about how to access the deployed application

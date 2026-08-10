@@ -82,6 +82,11 @@ configs:
         toml: saga
         nested: true
 
+      secrets:
+        type: SecretsConfig
+        toml: secrets
+        nested: true
+
   ServerConfig:
     description: Core server settings
     fields:
@@ -541,6 +546,18 @@ configs:
           description: Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
         env: MIREN_APP_VERSION_RETENTION_PERIOD
         toml: retention_period
+
+  SecretsConfig:
+    description: Secret storage and cluster key rotation
+    fields:
+      key_rotation_period:
+        type: string
+        default: "90d"
+        cli:
+          long: secret-key-rotation-period
+          description: Rotate the cluster key that encrypts stored secrets once it reaches this age (e.g. 90d, 1y). Set to 0 to rotate only on request.
+        env: MIREN_SECRET_KEY_ROTATION_PERIOD
+        toml: key_rotation_period
 
   SagaConfig:
     description: Saga execution retention garbage collection

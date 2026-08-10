@@ -463,9 +463,9 @@ func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	ConfigSpecServicesEnvBackendId     = entity.Id("dev.miren.core/component.config_spec.services.env.backend")
 	ConfigSpecServicesEnvDescriptionId = entity.Id("dev.miren.core/component.config_spec.services.env.description")
 	ConfigSpecServicesEnvKeyId         = entity.Id("dev.miren.core/component.config_spec.services.env.key")
-	ConfigSpecServicesEnvOriginId      = entity.Id("dev.miren.core/component.config_spec.services.env.origin")
 	ConfigSpecServicesEnvRequiredId    = entity.Id("dev.miren.core/component.config_spec.services.env.required")
 	ConfigSpecServicesEnvSensitiveId   = entity.Id("dev.miren.core/component.config_spec.services.env.sensitive")
 	ConfigSpecServicesEnvSourceId      = entity.Id("dev.miren.core/component.config_spec.services.env.source")
@@ -473,9 +473,9 @@ const (
 )
 
 type ConfigSpecServicesEnv struct {
+	Backend     string `cbor:"backend,omitempty" json:"backend,omitempty"`
 	Description string `cbor:"description,omitempty" json:"description,omitempty"`
 	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
 	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
@@ -483,14 +483,14 @@ type ConfigSpecServicesEnv struct {
 }
 
 func (o *ConfigSpecServicesEnv) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesEnvBackendId); ok && a.Value.Kind() == entity.KindString {
+		o.Backend = a.Value.String()
+	}
 	if a, ok := e.Get(ConfigSpecServicesEnvDescriptionId); ok && a.Value.Kind() == entity.KindString {
 		o.Description = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesEnvKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
-	}
-	if a, ok := e.Get(ConfigSpecServicesEnvOriginId); ok && a.Value.Kind() == entity.KindString {
-		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesEnvRequiredId); ok && a.Value.Kind() == entity.KindBool {
 		o.Required = a.Value.Bool()
@@ -507,14 +507,14 @@ func (o *ConfigSpecServicesEnv) Decode(e entity.AttrGetter) {
 }
 
 func (o *ConfigSpecServicesEnv) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Backend) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesEnvBackendId, o.Backend))
+	}
 	if !entity.Empty(o.Description) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesEnvDescriptionId, o.Description))
 	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesEnvKeyId, o.Key))
-	}
-	if !entity.Empty(o.Origin) {
-		attrs = append(attrs, entity.String(ConfigSpecServicesEnvOriginId, o.Origin))
 	}
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesEnvRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesEnvSensitiveId, o.Sensitive))
@@ -528,13 +528,13 @@ func (o *ConfigSpecServicesEnv) Encode() (attrs []entity.Attr) {
 }
 
 func (o *ConfigSpecServicesEnv) Empty() bool {
+	if !entity.Empty(o.Backend) {
+		return false
+	}
 	if !entity.Empty(o.Description) {
 		return false
 	}
 	if !entity.Empty(o.Key) {
-		return false
-	}
-	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Required) {
@@ -553,9 +553,9 @@ func (o *ConfigSpecServicesEnv) Empty() bool {
 }
 
 func (o *ConfigSpecServicesEnv) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("backend", "dev.miren.core/component.config_spec.services.env.backend", schema.Doc("Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version."))
 	sb.String("description", "dev.miren.core/component.config_spec.services.env.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/component.config_spec.services.env.key", schema.Doc("The name of the variable"))
-	sb.String("origin", "dev.miren.core/component.config_spec.services.env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)"))
 	sb.Bool("required", "dev.miren.core/component.config_spec.services.env.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/component.config_spec.services.env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/component.config_spec.services.env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
@@ -655,9 +655,9 @@ func (o *ConfigSpecServicesPorts) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	ConfigSpecVariablesBackendId     = entity.Id("dev.miren.core/component.config_spec.variables.backend")
 	ConfigSpecVariablesDescriptionId = entity.Id("dev.miren.core/component.config_spec.variables.description")
 	ConfigSpecVariablesKeyId         = entity.Id("dev.miren.core/component.config_spec.variables.key")
-	ConfigSpecVariablesOriginId      = entity.Id("dev.miren.core/component.config_spec.variables.origin")
 	ConfigSpecVariablesRequiredId    = entity.Id("dev.miren.core/component.config_spec.variables.required")
 	ConfigSpecVariablesSensitiveId   = entity.Id("dev.miren.core/component.config_spec.variables.sensitive")
 	ConfigSpecVariablesSourceId      = entity.Id("dev.miren.core/component.config_spec.variables.source")
@@ -665,9 +665,9 @@ const (
 )
 
 type ConfigSpecVariables struct {
+	Backend     string `cbor:"backend,omitempty" json:"backend,omitempty"`
 	Description string `cbor:"description,omitempty" json:"description,omitempty"`
 	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
 	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
@@ -675,14 +675,14 @@ type ConfigSpecVariables struct {
 }
 
 func (o *ConfigSpecVariables) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecVariablesBackendId); ok && a.Value.Kind() == entity.KindString {
+		o.Backend = a.Value.String()
+	}
 	if a, ok := e.Get(ConfigSpecVariablesDescriptionId); ok && a.Value.Kind() == entity.KindString {
 		o.Description = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecVariablesKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
-	}
-	if a, ok := e.Get(ConfigSpecVariablesOriginId); ok && a.Value.Kind() == entity.KindString {
-		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecVariablesRequiredId); ok && a.Value.Kind() == entity.KindBool {
 		o.Required = a.Value.Bool()
@@ -699,14 +699,14 @@ func (o *ConfigSpecVariables) Decode(e entity.AttrGetter) {
 }
 
 func (o *ConfigSpecVariables) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Backend) {
+		attrs = append(attrs, entity.String(ConfigSpecVariablesBackendId, o.Backend))
+	}
 	if !entity.Empty(o.Description) {
 		attrs = append(attrs, entity.String(ConfigSpecVariablesDescriptionId, o.Description))
 	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(ConfigSpecVariablesKeyId, o.Key))
-	}
-	if !entity.Empty(o.Origin) {
-		attrs = append(attrs, entity.String(ConfigSpecVariablesOriginId, o.Origin))
 	}
 	attrs = append(attrs, entity.Bool(ConfigSpecVariablesRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(ConfigSpecVariablesSensitiveId, o.Sensitive))
@@ -720,13 +720,13 @@ func (o *ConfigSpecVariables) Encode() (attrs []entity.Attr) {
 }
 
 func (o *ConfigSpecVariables) Empty() bool {
+	if !entity.Empty(o.Backend) {
+		return false
+	}
 	if !entity.Empty(o.Description) {
 		return false
 	}
 	if !entity.Empty(o.Key) {
-		return false
-	}
-	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Required) {
@@ -745,9 +745,9 @@ func (o *ConfigSpecVariables) Empty() bool {
 }
 
 func (o *ConfigSpecVariables) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("backend", "dev.miren.core/component.config_spec.variables.backend", schema.Doc("Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version."))
 	sb.String("description", "dev.miren.core/component.config_spec.variables.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/component.config_spec.variables.key", schema.Doc("The name of the variable"))
-	sb.String("origin", "dev.miren.core/component.config_spec.variables.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
 	sb.Bool("required", "dev.miren.core/component.config_spec.variables.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/component.config_spec.variables.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/component.config_spec.variables.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
@@ -1449,9 +1449,9 @@ func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	EnvBackendId     = entity.Id("dev.miren.core/env.backend")
 	EnvDescriptionId = entity.Id("dev.miren.core/env.description")
 	EnvKeyId         = entity.Id("dev.miren.core/env.key")
-	EnvOriginId      = entity.Id("dev.miren.core/env.origin")
 	EnvRequiredId    = entity.Id("dev.miren.core/env.required")
 	EnvSensitiveId   = entity.Id("dev.miren.core/env.sensitive")
 	EnvSourceId      = entity.Id("dev.miren.core/env.source")
@@ -1459,9 +1459,9 @@ const (
 )
 
 type Env struct {
+	Backend     string `cbor:"backend,omitempty" json:"backend,omitempty"`
 	Description string `cbor:"description,omitempty" json:"description,omitempty"`
 	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
 	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
@@ -1469,14 +1469,14 @@ type Env struct {
 }
 
 func (o *Env) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(EnvBackendId); ok && a.Value.Kind() == entity.KindString {
+		o.Backend = a.Value.String()
+	}
 	if a, ok := e.Get(EnvDescriptionId); ok && a.Value.Kind() == entity.KindString {
 		o.Description = a.Value.String()
 	}
 	if a, ok := e.Get(EnvKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
-	}
-	if a, ok := e.Get(EnvOriginId); ok && a.Value.Kind() == entity.KindString {
-		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(EnvRequiredId); ok && a.Value.Kind() == entity.KindBool {
 		o.Required = a.Value.Bool()
@@ -1493,14 +1493,14 @@ func (o *Env) Decode(e entity.AttrGetter) {
 }
 
 func (o *Env) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Backend) {
+		attrs = append(attrs, entity.String(EnvBackendId, o.Backend))
+	}
 	if !entity.Empty(o.Description) {
 		attrs = append(attrs, entity.String(EnvDescriptionId, o.Description))
 	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(EnvKeyId, o.Key))
-	}
-	if !entity.Empty(o.Origin) {
-		attrs = append(attrs, entity.String(EnvOriginId, o.Origin))
 	}
 	attrs = append(attrs, entity.Bool(EnvRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(EnvSensitiveId, o.Sensitive))
@@ -1514,13 +1514,13 @@ func (o *Env) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Env) Empty() bool {
+	if !entity.Empty(o.Backend) {
+		return false
+	}
 	if !entity.Empty(o.Description) {
 		return false
 	}
 	if !entity.Empty(o.Key) {
-		return false
-	}
-	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Required) {
@@ -1539,9 +1539,9 @@ func (o *Env) Empty() bool {
 }
 
 func (o *Env) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("backend", "dev.miren.core/env.backend", schema.Doc("Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version."))
 	sb.String("description", "dev.miren.core/env.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/env.key", schema.Doc("The name of the variable"))
-	sb.String("origin", "dev.miren.core/env.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
 	sb.Bool("required", "dev.miren.core/env.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/env.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/env.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
@@ -1721,9 +1721,9 @@ func (o *ServiceConcurrency) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	VariableBackendId     = entity.Id("dev.miren.core/variable.backend")
 	VariableDescriptionId = entity.Id("dev.miren.core/variable.description")
 	VariableKeyId         = entity.Id("dev.miren.core/variable.key")
-	VariableOriginId      = entity.Id("dev.miren.core/variable.origin")
 	VariableRequiredId    = entity.Id("dev.miren.core/variable.required")
 	VariableSensitiveId   = entity.Id("dev.miren.core/variable.sensitive")
 	VariableSourceId      = entity.Id("dev.miren.core/variable.source")
@@ -1731,9 +1731,9 @@ const (
 )
 
 type Variable struct {
+	Backend     string `cbor:"backend,omitempty" json:"backend,omitempty"`
 	Description string `cbor:"description,omitempty" json:"description,omitempty"`
 	Key         string `cbor:"key,omitempty" json:"key,omitempty"`
-	Origin      string `cbor:"origin,omitempty" json:"origin,omitempty"`
 	Required    bool   `cbor:"required,omitempty" json:"required,omitempty"`
 	Sensitive   bool   `cbor:"sensitive,omitempty" json:"sensitive,omitempty"`
 	Source      string `cbor:"source,omitempty" json:"source,omitempty"`
@@ -1741,14 +1741,14 @@ type Variable struct {
 }
 
 func (o *Variable) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(VariableBackendId); ok && a.Value.Kind() == entity.KindString {
+		o.Backend = a.Value.String()
+	}
 	if a, ok := e.Get(VariableDescriptionId); ok && a.Value.Kind() == entity.KindString {
 		o.Description = a.Value.String()
 	}
 	if a, ok := e.Get(VariableKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.Key = a.Value.String()
-	}
-	if a, ok := e.Get(VariableOriginId); ok && a.Value.Kind() == entity.KindString {
-		o.Origin = a.Value.String()
 	}
 	if a, ok := e.Get(VariableRequiredId); ok && a.Value.Kind() == entity.KindBool {
 		o.Required = a.Value.Bool()
@@ -1765,14 +1765,14 @@ func (o *Variable) Decode(e entity.AttrGetter) {
 }
 
 func (o *Variable) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.Backend) {
+		attrs = append(attrs, entity.String(VariableBackendId, o.Backend))
+	}
 	if !entity.Empty(o.Description) {
 		attrs = append(attrs, entity.String(VariableDescriptionId, o.Description))
 	}
 	if !entity.Empty(o.Key) {
 		attrs = append(attrs, entity.String(VariableKeyId, o.Key))
-	}
-	if !entity.Empty(o.Origin) {
-		attrs = append(attrs, entity.String(VariableOriginId, o.Origin))
 	}
 	attrs = append(attrs, entity.Bool(VariableRequiredId, o.Required))
 	attrs = append(attrs, entity.Bool(VariableSensitiveId, o.Sensitive))
@@ -1786,13 +1786,13 @@ func (o *Variable) Encode() (attrs []entity.Attr) {
 }
 
 func (o *Variable) Empty() bool {
+	if !entity.Empty(o.Backend) {
+		return false
+	}
 	if !entity.Empty(o.Description) {
 		return false
 	}
 	if !entity.Empty(o.Key) {
-		return false
-	}
-	if !entity.Empty(o.Origin) {
 		return false
 	}
 	if !entity.Empty(o.Required) {
@@ -1811,9 +1811,9 @@ func (o *Variable) Empty() bool {
 }
 
 func (o *Variable) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("backend", "dev.miren.core/variable.backend", schema.Doc("Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version."))
 	sb.String("description", "dev.miren.core/variable.description", schema.Doc("Human-readable description of this variable's purpose"))
 	sb.String("key", "dev.miren.core/variable.key", schema.Doc("The name of the variable"))
-	sb.String("origin", "dev.miren.core/variable.origin", schema.Doc("The provenance of the variable (user, file, generated, detected)."))
 	sb.Bool("required", "dev.miren.core/variable.required", schema.Doc("Whether this variable must have a non-empty value for deploy to succeed"))
 	sb.Bool("sensitive", "dev.miren.core/variable.sensitive", schema.Doc("Whether or not the value is sensitive"))
 	sb.String("source", "dev.miren.core/variable.source", schema.Doc("The source of the variable (config or manual). Defaults to config for backward compatibility."))
@@ -2439,6 +2439,125 @@ func (o *DeploymentLock) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	KeyRotationErrorMessageId     = entity.Id("dev.miren.core/key_rotation.error_message")
+	KeyRotationFromKeyId          = entity.Id("dev.miren.core/key_rotation.from_key")
+	KeyRotationRewrappedId        = entity.Id("dev.miren.core/key_rotation.rewrapped")
+	KeyRotationStatusId           = entity.Id("dev.miren.core/key_rotation.status")
+	KeyRotationStatusRewrappingId = entity.Id("dev.miren.core/status.rewrapping")
+	KeyRotationStatusRetiringId   = entity.Id("dev.miren.core/status.retiring")
+	KeyRotationStatusDoneId       = entity.Id("dev.miren.core/status.done")
+	KeyRotationStatusFailedId     = entity.Id("dev.miren.core/status.failed")
+	KeyRotationToKeyId            = entity.Id("dev.miren.core/key_rotation.to_key")
+)
+
+type KeyRotation struct {
+	ID           entity.Id         `json:"id"`
+	ErrorMessage string            `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	FromKey      string            `cbor:"from_key,omitempty" json:"from_key,omitempty"`
+	Rewrapped    int64             `cbor:"rewrapped,omitempty" json:"rewrapped,omitempty"`
+	Status       KeyRotationStatus `cbor:"status,omitempty" json:"status,omitempty"`
+	ToKey        string            `cbor:"to_key,omitempty" json:"to_key,omitempty"`
+}
+
+type KeyRotationStatus string
+
+const (
+	REWRAPPING KeyRotationStatus = "status.rewrapping"
+	RETIRING   KeyRotationStatus = "status.retiring"
+	DONE       KeyRotationStatus = "status.done"
+	FAILED     KeyRotationStatus = "status.failed"
+)
+
+var key_rotationstatusFromId = map[entity.Id]KeyRotationStatus{KeyRotationStatusRewrappingId: REWRAPPING, KeyRotationStatusRetiringId: RETIRING, KeyRotationStatusDoneId: DONE, KeyRotationStatusFailedId: FAILED}
+var key_rotationstatusToId = map[KeyRotationStatus]entity.Id{REWRAPPING: KeyRotationStatusRewrappingId, RETIRING: KeyRotationStatusRetiringId, DONE: KeyRotationStatusDoneId, FAILED: KeyRotationStatusFailedId}
+
+func (o *KeyRotation) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(KeyRotationErrorMessageId); ok && a.Value.Kind() == entity.KindString {
+		o.ErrorMessage = a.Value.String()
+	}
+	if a, ok := e.Get(KeyRotationFromKeyId); ok && a.Value.Kind() == entity.KindString {
+		o.FromKey = a.Value.String()
+	}
+	if a, ok := e.Get(KeyRotationRewrappedId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Rewrapped = a.Value.Int64()
+	}
+	if a, ok := e.Get(KeyRotationStatusId); ok && a.Value.Kind() == entity.KindId {
+		o.Status = key_rotationstatusFromId[a.Value.Id()]
+	}
+	if a, ok := e.Get(KeyRotationToKeyId); ok && a.Value.Kind() == entity.KindString {
+		o.ToKey = a.Value.String()
+	}
+}
+
+func (o *KeyRotation) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindKeyRotation)
+}
+
+func (o *KeyRotation) ShortKind() string {
+	return "key_rotation"
+}
+
+func (o *KeyRotation) Kind() entity.Id {
+	return KindKeyRotation
+}
+
+func (o *KeyRotation) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *KeyRotation) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.ErrorMessage) {
+		attrs = append(attrs, entity.String(KeyRotationErrorMessageId, o.ErrorMessage))
+	}
+	if !entity.Empty(o.FromKey) {
+		attrs = append(attrs, entity.String(KeyRotationFromKeyId, o.FromKey))
+	}
+	if !entity.Empty(o.Rewrapped) {
+		attrs = append(attrs, entity.Int64(KeyRotationRewrappedId, o.Rewrapped))
+	}
+	if a, ok := key_rotationstatusToId[o.Status]; ok {
+		attrs = append(attrs, entity.Ref(KeyRotationStatusId, a))
+	}
+	if !entity.Empty(o.ToKey) {
+		attrs = append(attrs, entity.String(KeyRotationToKeyId, o.ToKey))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindKeyRotation))
+	return
+}
+
+func (o *KeyRotation) Empty() bool {
+	if !entity.Empty(o.ErrorMessage) {
+		return false
+	}
+	if !entity.Empty(o.FromKey) {
+		return false
+	}
+	if !entity.Empty(o.Rewrapped) {
+		return false
+	}
+	if o.Status != "" {
+		return false
+	}
+	if !entity.Empty(o.ToKey) {
+		return false
+	}
+	return true
+}
+
+func (o *KeyRotation) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("error_message", "dev.miren.core/key_rotation.error_message", schema.Doc("Why the rotation stopped, when status is failed"))
+	sb.String("from_key", "dev.miren.core/key_rotation.from_key", schema.Doc("The key being retired. Versions still wrapped by it are what the backfill moves."), schema.Indexed)
+	sb.Int64("rewrapped", "dev.miren.core/key_rotation.rewrapped", schema.Doc("Versions moved so far, for progress reporting only — the backfill's real state is the kek_id query"))
+	sb.Singleton("dev.miren.core/status.rewrapping")
+	sb.Singleton("dev.miren.core/status.retiring")
+	sb.Singleton("dev.miren.core/status.done")
+	sb.Singleton("dev.miren.core/status.failed")
+	sb.Ref("status", "dev.miren.core/key_rotation.status", schema.Doc("rewrapping | retiring | done | failed"), schema.Indexed, schema.Choices(KeyRotationStatusRewrappingId, KeyRotationStatusRetiringId, KeyRotationStatusDoneId, KeyRotationStatusFailedId))
+	sb.String("to_key", "dev.miren.core/key_rotation.to_key", schema.Doc("The key being rotated to, already persisted and current before this record exists"))
+}
+
+const (
 	MetadataLabelsId  = entity.Id("dev.miren.core/metadata.labels")
 	MetadataNameId    = entity.Id("dev.miren.core/metadata.name")
 	MetadataProjectId = entity.Id("dev.miren.core/metadata.project")
@@ -2723,6 +2842,197 @@ func (o *Project) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("owner", "dev.miren.core/project.owner", schema.Doc("The email address of the project owner"))
 }
 
+const (
+	SecretCurrentVersionId = entity.Id("dev.miren.core/secret.current_version")
+	SecretPathId           = entity.Id("dev.miren.core/secret.path")
+)
+
+type Secret struct {
+	ID             entity.Id `json:"id"`
+	CurrentVersion entity.Id `cbor:"current_version,omitempty" json:"current_version,omitempty"`
+	Path           string    `cbor:"path,omitempty" json:"path,omitempty"`
+}
+
+func (o *Secret) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(SecretCurrentVersionId); ok && a.Value.Kind() == entity.KindId {
+		o.CurrentVersion = a.Value.Id()
+	}
+	if a, ok := e.Get(SecretPathId); ok && a.Value.Kind() == entity.KindString {
+		o.Path = a.Value.String()
+	}
+}
+
+func (o *Secret) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindSecret)
+}
+
+func (o *Secret) ShortKind() string {
+	return "secret"
+}
+
+func (o *Secret) Kind() entity.Id {
+	return KindSecret
+}
+
+func (o *Secret) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *Secret) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.CurrentVersion) {
+		attrs = append(attrs, entity.Ref(SecretCurrentVersionId, o.CurrentVersion))
+	}
+	if !entity.Empty(o.Path) {
+		attrs = append(attrs, entity.String(SecretPathId, o.Path))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindSecret))
+	return
+}
+
+func (o *Secret) Empty() bool {
+	if !entity.Empty(o.CurrentVersion) {
+		return false
+	}
+	if !entity.Empty(o.Path) {
+		return false
+	}
+	return true
+}
+
+func (o *Secret) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("current_version", "dev.miren.core/secret.current_version", schema.Doc("The version a floating (unpinned) reference resolves to. Moves on every write."))
+	sb.String("path", "dev.miren.core/secret.path", schema.Doc("Backend-relative path, e.g. \"payments/stripe-key\""), schema.Indexed)
+}
+
+const (
+	SecretVersionCiphertextId     = entity.Id("dev.miren.core/secret_version.ciphertext")
+	SecretVersionKekIdId          = entity.Id("dev.miren.core/secret_version.kek_id")
+	SecretVersionSecretId         = entity.Id("dev.miren.core/secret_version.secret")
+	SecretVersionStateId          = entity.Id("dev.miren.core/secret_version.state")
+	SecretVersionStateEnabledId   = entity.Id("dev.miren.core/state.enabled")
+	SecretVersionStateDisabledId  = entity.Id("dev.miren.core/state.disabled")
+	SecretVersionStateDestroyedId = entity.Id("dev.miren.core/state.destroyed")
+	SecretVersionValueMacId       = entity.Id("dev.miren.core/secret_version.value_mac")
+	SecretVersionWrappedDekId     = entity.Id("dev.miren.core/secret_version.wrapped_dek")
+)
+
+type SecretVersion struct {
+	ID         entity.Id          `json:"id"`
+	Ciphertext []byte             `cbor:"ciphertext,omitempty" json:"ciphertext,omitempty"`
+	KekId      string             `cbor:"kek_id,omitempty" json:"kek_id,omitempty"`
+	Secret     entity.Id          `cbor:"secret,omitempty" json:"secret,omitempty"`
+	State      SecretVersionState `cbor:"state,omitempty" json:"state,omitempty"`
+	ValueMac   string             `cbor:"value_mac,omitempty" json:"value_mac,omitempty"`
+	WrappedDek []byte             `cbor:"wrapped_dek,omitempty" json:"wrapped_dek,omitempty"`
+}
+
+type SecretVersionState string
+
+const (
+	ENABLED   SecretVersionState = "state.enabled"
+	DISABLED  SecretVersionState = "state.disabled"
+	DESTROYED SecretVersionState = "state.destroyed"
+)
+
+var secret_versionstateFromId = map[entity.Id]SecretVersionState{SecretVersionStateEnabledId: ENABLED, SecretVersionStateDisabledId: DISABLED, SecretVersionStateDestroyedId: DESTROYED}
+var secret_versionstateToId = map[SecretVersionState]entity.Id{ENABLED: SecretVersionStateEnabledId, DISABLED: SecretVersionStateDisabledId, DESTROYED: SecretVersionStateDestroyedId}
+
+func (o *SecretVersion) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(SecretVersionCiphertextId); ok && a.Value.Kind() == entity.KindBytes {
+		o.Ciphertext = a.Value.Bytes()
+	}
+	if a, ok := e.Get(SecretVersionKekIdId); ok && a.Value.Kind() == entity.KindString {
+		o.KekId = a.Value.String()
+	}
+	if a, ok := e.Get(SecretVersionSecretId); ok && a.Value.Kind() == entity.KindId {
+		o.Secret = a.Value.Id()
+	}
+	if a, ok := e.Get(SecretVersionStateId); ok && a.Value.Kind() == entity.KindId {
+		o.State = secret_versionstateFromId[a.Value.Id()]
+	}
+	if a, ok := e.Get(SecretVersionValueMacId); ok && a.Value.Kind() == entity.KindString {
+		o.ValueMac = a.Value.String()
+	}
+	if a, ok := e.Get(SecretVersionWrappedDekId); ok && a.Value.Kind() == entity.KindBytes {
+		o.WrappedDek = a.Value.Bytes()
+	}
+}
+
+func (o *SecretVersion) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindSecretVersion)
+}
+
+func (o *SecretVersion) ShortKind() string {
+	return "secret_version"
+}
+
+func (o *SecretVersion) Kind() entity.Id {
+	return KindSecretVersion
+}
+
+func (o *SecretVersion) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *SecretVersion) Encode() (attrs []entity.Attr) {
+	if len(o.Ciphertext) > 0 {
+		attrs = append(attrs, entity.Bytes(SecretVersionCiphertextId, o.Ciphertext))
+	}
+	if !entity.Empty(o.KekId) {
+		attrs = append(attrs, entity.String(SecretVersionKekIdId, o.KekId))
+	}
+	if !entity.Empty(o.Secret) {
+		attrs = append(attrs, entity.Ref(SecretVersionSecretId, o.Secret))
+	}
+	if a, ok := secret_versionstateToId[o.State]; ok {
+		attrs = append(attrs, entity.Ref(SecretVersionStateId, a))
+	}
+	if !entity.Empty(o.ValueMac) {
+		attrs = append(attrs, entity.String(SecretVersionValueMacId, o.ValueMac))
+	}
+	if len(o.WrappedDek) > 0 {
+		attrs = append(attrs, entity.Bytes(SecretVersionWrappedDekId, o.WrappedDek))
+	}
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindSecretVersion))
+	return
+}
+
+func (o *SecretVersion) Empty() bool {
+	if len(o.Ciphertext) != 0 {
+		return false
+	}
+	if !entity.Empty(o.KekId) {
+		return false
+	}
+	if !entity.Empty(o.Secret) {
+		return false
+	}
+	if o.State != "" {
+		return false
+	}
+	if !entity.Empty(o.ValueMac) {
+		return false
+	}
+	if len(o.WrappedDek) != 0 {
+		return false
+	}
+	return true
+}
+
+func (o *SecretVersion) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Bytes("ciphertext", "dev.miren.core/secret_version.ciphertext", schema.Doc("The value, encrypted with this version's data key (DEK)"))
+	sb.String("kek_id", "dev.miren.core/secret_version.kek_id", schema.Doc("Which of the cluster's KEKs wrapped this DEK. A resolve unwraps with it; a key rotation re-wraps rows still pointing at a retiring key."), schema.Indexed)
+	sb.Ref("secret", "dev.miren.core/secret_version.secret", schema.Doc("The secret this version belongs to"), schema.Indexed)
+	sb.Singleton("dev.miren.core/state.enabled")
+	sb.Singleton("dev.miren.core/state.disabled")
+	sb.Singleton("dev.miren.core/state.destroyed")
+	sb.Ref("state", "dev.miren.core/secret_version.state", schema.Doc("Whether this version may still be resolved"), schema.Indexed, schema.Choices(SecretVersionStateEnabledId, SecretVersionStateDisabledId, SecretVersionStateDestroyedId))
+	sb.String("value_mac", "dev.miren.core/secret_version.value_mac", schema.Doc("Keyed hash (HMAC) of the plaintext under the cluster key, so a write can recognize an identical existing version without decrypting. Keyed rather than a bare digest so storing it never hands an attacker a rainbow-table oracle for the plaintext."), schema.Indexed)
+	sb.Bytes("wrapped_dek", "dev.miren.core/secret_version.wrapped_dek", schema.Doc("The DEK, encrypted (wrapped) by one of the cluster's KEKs — see kek_id"))
+}
+
 var (
 	KindApp            = entity.Id("dev.miren.core/kind.app")
 	KindAppVersion     = entity.Id("dev.miren.core/kind.app_version")
@@ -2730,9 +3040,12 @@ var (
 	KindConfigVersion  = entity.Id("dev.miren.core/kind.config_version")
 	KindDeployment     = entity.Id("dev.miren.core/kind.deployment")
 	KindDeploymentLock = entity.Id("dev.miren.core/kind.deployment_lock")
+	KindKeyRotation    = entity.Id("dev.miren.core/kind.key_rotation")
 	KindMetadata       = entity.Id("dev.miren.core/kind.metadata")
 	KindOidcBinding    = entity.Id("dev.miren.core/kind.oidc_binding")
 	KindProject        = entity.Id("dev.miren.core/kind.project")
+	KindSecret         = entity.Id("dev.miren.core/kind.secret")
+	KindSecretVersion  = entity.Id("dev.miren.core/kind.secret_version")
 	Schema             = entity.Id("dev.miren.core/schema.v1alpha")
 )
 
@@ -2745,9 +3058,12 @@ func init() {
 		(&ConfigVersion{}).InitSchema(sb)
 		(&Deployment{}).InitSchema(sb)
 		(&DeploymentLock{}).InitSchema(sb)
+		(&KeyRotation{}).InitSchema(sb)
 		(&Metadata{}).InitSchema(sb)
 		(&OidcBinding{}).InitSchema(sb)
 		(&Project{}).InitSchema(sb)
+		(&Secret{}).InitSchema(sb)
+		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac[\xc9\xd2\xe48\x11~\r\xb6a\x19\xf6\x01<\xd3\f\x04\f\xcb\x04p!\x82\v\x8f\xe0P\xd9YU\xfa˖<\x92\\\xdd?7v\bx\n\xba\x9b\b\x1e\x10΄\xb5YN˲\xe4\x9aK\x85\x94v~\x92sSJYz\xd32\xd2\x03k\xe1^\xf5T\x00\xab\x1a.\x00n\x94\xb5\xf2?/\x97\xd4\xf7'jE\x86\xe1ߚG\xa0\xa7d\x18\f\xdf\xff\xce-\xef\te\b\xf4|\xa6е\xf2O\xafO\xb4}\xf5\x955sE\x1aE\xefP\xdfAHʙ\x99\x17\xa2\xa9\xe7\x01N\xb4݄\xa0\x8c*J\xba\xba\xe1\xecL/\x06\x02\xd1B\x88\xcfE \x06\xc1\x9f\xa0Q\x9a\xf7\xe2:!ӗ#L/\xb9\xb8u\x9c\xb4\xb5\xe0\x1dh\xd6~I\x9a\x00\xceR\t\xca.\x17\xfb1\x97\xfb\v\xd2\rW\xd2\r\x82\xf6D<ד\xf0\x1a2\f\xaf>\x1f\x93\xbb\x9d\x8a\x91\xfd\x1d\xbda\x1f\xe6\xc8\xff\xf7\xfa#\xbe\x10\a\xa8\xf8K\x06B\x0f\x01\xa6\x99;q'\xaa\x15\xb21\x1a\xa1虸\xd9c\xbbrO\xf3\xcd\aK\xc8!L֩\x87\x98\xe4\x98֚\xe3\xe8\t\xa3g\x90F\xe1W\xdf\v\xbe[\xf3\x7fs\x8f\xbfn\xe9\xc5\xc1pL\f\xd0\xdeLh_\xdcB\x93\x8a\xa8Qj\x90\xb3mO\xbc-\xb0\xb1\xbfM?\xf5\x9dt#\xc8\x7f\x9d\x8dg\xac\xc4m\x98\xac/]\x89h\xae\xf4\x0e\xeb\x01\xddk\xf6yR\xb5W7\xbb\xb8n{P\xa4%\x8a\xc4u\xeb\x9e\xe6\xe8\xf6\x8fQ\xd98\x84\xaa#'\xe8d\xdb\x13\xf6\xfc_#!K\x99$\x04\xba\x1d\xb5m\x0f0\xf1\xb4\xf3\x0fV\xf1\x97\xb6\xf8R!!-9\a\xb1\xfa(-\xb9\x16\x86\x8e?\xf7\xc0\xac_\xbc\xfa,zk~!G|\xff\xd0_\xf1\xee&\xc6\xe4\x1c\xb5\xff\xfc\xab\xefa9|=\x8d\x10\xc6\xe7[H\xc08_\xdb\xc69\x8d\xb4k\xeb\x8e_\x8c\xa9?\x05\xfd\x02\x94\xa6\x1b\xa5\x02Q\xd3֠\x04}\x8c\xf2\x8d\x04\n\xef\x87\x0e\x14\xb451*\xee\x16\x14\xec\xba\t\xe9\x98&\xb4\xf5\xe9\xd9H'$L8tB\xe6\f\x98\x9a[V\xf5\b\xb6\x8a\xc3\xe6Gȸ\xd84H\xa5h\x0fR\x91ބJ:w\xf3,\xc1\x80\x8c\x12D\r=\xa1\x9d\x11~\xd0\xc70q\x93\f`\xac\x02/\xae\x93g\x03\x01\x80\xb7j:wsW\xae'\x87vz\x8eF\xfa@\x13 \x04\x17u\x0fR\x92\x8b]\xe6\x97$l,\tg\xbcPUSv\xe6\xc6\x19}o\xc7L\xde\xdd6\x13\a\x91c#\x7f\x7f\x1d\x8b\xb4\x0e\xa1\"\xa3\xbar\x93\x06\x9cm\x1b\xabd\x93\xf7$\bk\xae\x86\u05f61\xefw\xb6x\x1b\xde\xf7T\xd5f\xc8\xc0\xb8d\xec\x01F\xfd\xd6\x0e\xea\xd2\xea\x87\x15\x15\xe3\xe1\x8c\xc1\xe3QY\xb7T(\xe3\xe3W\xdf\xd3\xeb\xf4\x89\xf3.\xba\x98x\xee\xd0z.\x11\xbb\x89z\x8c\xe7\x160pI\x15\x17f\xf4\xa7\xa0\x8f1p\x8e\xe41䕘\x1cij`\xaeooqM\xf9,e\x97Z\t\x80\xfaJ\xa4Q\xf1'krv\xc6x\xa1jB\x8e\x8a+\xb0\xeb\xe1J\xa4\x11\x17\x98&\x9er\xb5\xcd+\xf9(\x1a\xa8g\x8a\v5*\xfad\xcf\x04B\xe4x\xa2V\x10p&\x98\xd5w\xbb-\x96[T\xad\xdbG6*\xee\x8d\x1cw\xffgt\r\f@*\xd2\xf6\x94Պ\xdf\xc0-\xec\x01a\xcf\xf7\x17@[\t\xf8WSL6\xc1\xb4\x89\x89\xebY\xf67\x1b\xbb=\xcf\x1e\xec\xf6\xce\xc1./\x11F\x11Z\xb5F\xcb\x11\xeb_\xdeƤa\xf8u\xd4!\xac\r\xf3ի\xa7\xedL\xef\xbd\xdd\xe9y\xf8\x9cy\xfe!\xeab\x0e\xc1A\x99\x88\xe4:{ɱ\xe7\x96 \ued31\xf1\xccur]\xc1K$\xean\xf6S\x81)\xf1<pʌ}<\x05}<K\xec'\x16a\xe0\xc2\xf0\xb6\xba5q5\x94\xa9\x94\xfa\xec\x97,\xd4\xe7i\x8f\xab\xcfAe-\xd6z\x9e\xef\xe0\x1d\x9cE\xa8Z*o\xe14\xc1\x10v\xe6\xf8A\xfe\x1c\xcd\b93\xfd[<\x96O\xecՙv \x9f\xa5\x82\xdeh1\xe8\xef\xe6\x8b\x1a\xa0\x03\"A\xaf\xd7|4\xda엤=\x9350=\x1f\x99\xaa\a\xa2\xcc\x02\xf6\x14\xf41\xc0j;\xa6\x01vv\x91\xd8\x04\rS\xea\\\xe5ML\xbd\x86m\x10\xfcN[\xcby\xf5\xbd\xf8\x91\x00t\xbc!\xdd\n\xc9qU\xfa1\xe8'\xdb/iZ4ʛ\x19\t m\xcdYg\xf2\x0f:w\x97\xe9\x0fރ\x1bfI\x7f\a\xf5\xe5dc\x85\xed8oL\x06\nc\xd4ocy\x8d7S`\xf7\xc0\r\x9a\xa9\xbb\xe3\x04U\x81\x13\x00\xbb\xe7\xb8\xc0_\xa3\xb2\x03v\xafZ\x90\x8d\xa0\x83\xf2{琀\xac\b\x9f\xefM\xfc702o\xa6ƞ\xa9N\f\\\xd0\v5c\x9dm{/G\x9c\xd8\x04|2R\x01f=\xb8\xfa^Z\xbf\x13\xa3\x04&\xa9\xa2w\xbb\x13\x9b\xbbK\xd6\xd8TM6f\xb3)\xd3\xc6S\xfdL\x84M\x1b\xbe\xf1*\xd3\xcc>f\x05v\x7f\x9d\x8c\xaa\xb4wI:\x98&\x9e\xcf\xea\xe0\xcdq\xeećM\xbe\x8dE*zֽ`\nv\xbfs\x17\x0f\x9bF\xd0\x1a\x9a\x11t7@H/@\x13\xcbb\x012\x84Oq\x01Ҁ9\xde\xf7稅i\xf6=\xbd`\x97\xb5L\xbc\x85\xdak\x86\xce݅z\xe2\x03n(4\x1a\xee-\x87\xe0\x8a7\xbc\xf3\xe1\xde\xf4\xe2\xe1\xbeQͺT\xe0x*\xd5\f\xcd\xd8&^\x18\xdb!1wo\x10-\xb6\x85t\x98\xd6\xdcob\x9b|\xafLۨ\x1bΚQ\b`\x8d\x89k2\xf6`ǈ>.0\xa2\b|\xbeI\xe1C\xa1\bX\xd5\xf3\xd6\xcaL\xb7\xb0\x81}\x90\x011\xa9\x972\xa9\b\x9b\xd2L\x9d\xe3,I\v\xb3\xfbq\x06\xe2\x14\xbfA*Y\x0f <\x8eF\x1e\xe3\x8f\x16#|\x981\x82\x9c\xb2\x8a\xba\xe5/Y\xddBG\x8c2\x87\x15\x15\x8b#\v\xfa:*\r\x11f}Ê\x9ak\x9d\u008e\x11\f\x91ޝ8ۉ\x1e\x86:\xfbRD\xa8\xba\xa5\x02\x1a\x7f,\xc31\x11\xc7ҍMǝ\bJN\x1d\x84\x9b\x0eO{|\xd3\xe1\xa0\xf2\xf3\x18\xbciw\bE\xc9\xcc*\x06y\x94dJ\x83e\xe4\xb92\xf2\x1a\xbc\x93\xf4\xbcY\xc9\r^+=wf\x86\xb39\xf3\x8c4\a/\f\x9e\xf7p\xae\xe3-(\xf9\x96=8\x89\x9e\x01\xaeMiY\xa4G\xb4\xf0\xd4\xe7\xfd\x04\x14\fW\xe8A\x90\xae\x86W\x03\x15 ]\x01FE\x9f\x98\x85\x88\xf6\xa0\x81\xdf\xcb\x02\xd6EA㒘\xb8w|\x1c\aT\xaa\xb3\xe7\xfe\v\xd2^\xc1\"\x04\xd3\xe9d=\n\x03D\xe7.\x06I\x9d\x98eV\xadSR*-\\G\xb7\xe6!`h\x13\x97HQ0i\x7fa%q\xe5\xbe\xfaT\x94Ӷ\xa9O\x94\xb5\x94]l\xccÁ%|%\xeb\x00/zN\x10\xa2D\xcf3u\b\xffn\x8a\xab\xe9\b\xed\xa7\xa5\xac\xa5SD\f\xb3\xe3a\xf5l'\xb0\xa3\x81\xaa\xe4@\xf9ǁغ0R:8\xe3|h\xc5=\x10\xa5@Xcp\x9d\\c\xe0\x1anF\x8b\x0e\xb9\x90C\xd1z\x84\x8dx\x81D\xa5\x1c\xed\x81\xcbٶ\xf7\xbc{\xc1\x9f8\xb2I\xd5\xc0\x16\x18r<=A\xa3O\xa5\xbc\x109&\xe6\n\xb3\v\xa1W߮]k\x19\xc0\xad\xdd\xe1\x95h\xf9R\xbe\xa1\xe1\xd5t\x89\x13u\xb0h\xed\x14\xf1\xc9\x01\x1a\x93m\xeb֎\x13a\x95\xf9\xe7\xee\xdb'\x90\xfc\xea:^֢p\x99\a\xd7:\x9a|/\v\xf0\x91Ci4B\x95\x1e!\xff\xff&?,\x9a\xf9n\xb1A\xab\xfe\xa3R\xcc\xe5N\xf2V\xb0\x83\xfc\xa8H,ա\xcd\xe3Ǉ?goO\xf9\xeb\xe3\xc8e[\xcd\xdf\x1e\x1f\xe8\xb1\x1d\xe8o\x8e\x0f|pc\xfaȈ\x9f\xee~\xf5\xd5;f\xc4i@7^0\xdc\xdb\xd86zg\xb6ǊE\x1f\x969Ia\xbd\xa8\xd0=\x8a\xcbI\xbf<\x82_\\m:\xf4\x15\x05\xc5(|ؓ\x85\xbfs\xe6Y\x18g3KY?;\x82z\xa4\xd2\xf5\xabG\x06Z\x94\xc3\x1eC\x9akf??\x82\x93YR\xfb\xe9\x11\xec\xe3\x15\xb7\x97\xeb\xd83\xd7\xe0^\x94ͥ\xbc2\xf7\xa2,\xe2\x14\x15\xe7\n\x95TZ\xbb+͈vk{\x85\x9e\x9fY\xfa\xfbI9j\xd6\xe1Y\xa1\x99\x16\x14\x0e\x0f\xc8!\xe3\xc0\xedG娇\x8f\xe2ƵO\xb9Bd\xe1:\xbe[\x9e\xfc~\x19\xde\xceBQ\x88\x96*e\x16\xca;\xbb\xc0YhϦ\xce\x19,\xef݂\xf2\xa0\x95d\x17U\v\xd5~\xac\xd4Z\x98\xbe\x15V[\v\xdd2\xab\x18[\x18\xa2Kj\xb5\x87\xa6\x9b*\xe5\x16\xa6;G+\xbd\xbfxd\x18_\x0e~\f\xc5Ռ\x0f\xc9\xf0`I9\x92\x87h\xbct\xa5oͤ'\xfe\x83\xbc\x89\x1f)\xe9\xe1\x7f!ǡ]-&tb:\x13\v\xff\xaf\xb43F~J\x94\x17<=pY>\x94\xb7x\xcc\xe0\xc9d(/\xb9\x9a\xc122\xa1\xbc\xd8>Cf\xa5Ay.2\x83f\xe6@\xa5\x9f\x9f\x91\x00\xe5\xf9\xc4\fy8\xfb\x91\xb3Sz\xb4tM(\x98@\xf2ET\x81\\\xd56\xd0m\xbb\xba\xe3\xcdͺ\xd4\xea_\x8e˷\xf2\x8f\x84q\xa9\r\x01U\xa41v⊜\xb7\x90\xb0\xacmn\xdf@\xb2Py\xf7\xf8p\x85\nìoE\xf4\xe9\xeb\x10\xb8.\x8c\x01Q\x19\xf7)V\xbcM\xd7}\x10\"~\xf9&\xafS&en\xa77d\x18\xb6n\xa8\xfb\xdbȩ\xab\xd4;\xf7Z\xdd\xd3\xf9\x12g\xf2\xfakx\xabc\xe7\xb6\xe7\xa2ֹw\x03dY\xbe٭\x8cbWȨ\xf7`\xa9g\xb9\xcf\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\xb5\xfe\xed\xe78@\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac\\ٲ\xfc6\xd1\x7f\x8d\xef\x03\xc2\x12\xf6\x00NB\xd8\u0092\x02n\xa8\xe2\x86Gpi잱\xceؖ#i\xe6\x9c\xc3\x1d;\x14<\x05\xff\x13\xaex=\xb8\xa6\xac\xcdR[\x96%\x9f\xdcLi럶\xeeV\xab[\x9e\x97v$\x03\x8c-ܫ\x81r\x18\xab\x86q\x80+\x1d[\xf1\xefǰ\xf4ݹ\xb4\"\xd3\xf4/E\xc3Q-\x99&M\xf7\xdfs\xcb\x06BG\x04z>S\xe8[\xf1\xc77'\xda>}iM\\\x91F\xd2;\xd4w\xe0\x82\xb2Q\x8f\v\x95\xc9\xe7\tN\xb4݄\xa0#\x95\x94\xf4u\xc3\xc63\xbdh\bT\xe6C|&\x021q\xf6\x00\x8dT\xb4\x17\x9b\xf1\x89\xbe\x18!zd\xfc\xda3\xd2֜\xf5\xa0H\x87\xb0h\x068\v\xc9\xe9x\xb9\x98\xc9\\\xee\xef\x93~\xeaH?q:\x10\xfe\\ϋאiZ\rK\xad\xbb\x80\x86\x83\xd4K\x7fC\rt]\xce\xea\xff^M\xe1\xabQ\xfa\xaa\xb9q\x0e\xa3\fv\x80\xe1\xc2\xd4\xfa\x19\x9c\x89\xc8N\x11\xb7*\x95;\xf7\xb3&\x7f\xfall\xfaf'\xf4\xfc洞\xa9\xccY\x80ߩ\x81\x7f.\x0eP\xb1\xc7\x11\xb8\xea\x02t2w\xec\x96SV\xc8Zf\xb8\xa4gbG\x8f\xc5\xca\xd6\xe6K\x0f^!\x8b0\v\xa7\xeabf\xa34\xd3Z\x8a\x81\x8c\xf4\fB\xf3{\xe7r\u07bc\x15\xfd\xd7\xf7\xe8\xeb\x96^,\fÅ\x1e\xdaˌ\xf6\xf9-4!\x89\xbc\t\x05r6陶\x85\xf16\\\xe7\x9f\xfaN\xfa\x1b\x88\x7f\x9e\xb5bX-\xb7&2\xaa\xa4#\xbc\xe9\xe8\x1d\xd6\x1d\xdaf\xa6>\xb9\xb5\x9d\x1d]|o\a\x90\xa4%\x92\xc4\xf7\xd6\xd6\xe6\xec\xed\x1f\xa2kc\x11\xaa\x9e\x9c\xa0\x17\xed@\xc6\xe7\xff\xe8\x152%\xf3\n\x81JGy\xdb\x01(\x89\\~\xf0\x16\x7fa\x8b.\xa5\x11\xd3+g!V\x93R+\xd7\xc2Գ\xe7\x01F#\x17O\xff\x8fZ-\rr\x96\xef\xefj\x16oob\xcc\xc2Q\xbb\xe9w.\x87\xd7\x01+G\x84\xe0+ǫ_\x80q\xbe\xb2\x8ds\xbaѾ\xad{vѬ\xfe\xe0\xe5\vP\x9a\xfe&$\xf0\x9a\xb6\x1a\xc5\xcbc\x94\xaf%P\xd80\xf5 \xa1\xad\x89\xde\xe2>(\xc1\xa2\x9bX\x1d\x9d\x84\xb6>=\xeb\xd5\xf1\vf\x1c:#\xb3\x11F\xb9\xa4\xcc\xd6#\xd8*\x0e\x9b\xaf!\xe3˦@*I\a\x10\x92\fZU\xd2%\x9b\xc7\t\x1a\xe4&\x80\xd70\x10\xda\xeb\xc5\xf7\xf2\x18&Β\x1e\x8c\xd9\xc0\x8b\xcd\xe4\xf1\x80\aบ.\xd9ܓ\xeb\xc1\xa2\x9d\x9e\xa3\x9a\xde\xdb\t\xe0\x9c\xf1z\x00!\xc8\xc5X9a\x11f\x96\x840^\xa8\xac\xe9xfZ\x18]n\x87M\xde\xdef\x13\v\x91\xc3#\x7f{\x13Ӵ\x16\xa1\"7\xd91m\x06\x9cM\x1ao\xc9&퉓\xb1\xd1\xd6\xcf٤1\xed\xb7\xb6h\x1b6\fTֺK\x8f\xb9D\xac\x02\xa3~c\a5\xe4\xfaiU\x8a\xf1\xb0\xc5\xe0\xf0\xa8\xa8[ʥ\x96\xf1\xce\xe5\xd49}b\xac\x8f\x1e&\x8e\xda\xe7\x9eK\x84o\xa2\x12\xe3\xa89LLPɸ\xee\xfd\xc1\xcbc\fl#9\f\xd1\x11m#\xcd\tL\xf5\xcd-\xaaٜ\xa7㥖\x1c\xa0\xee\x88\xd0[\xfc\xf1\xba8\xdbb\xbcP9#G\x97\xcb\xe3\xeb\xa9#B/\x17\xe8$\x1er\xb5M+؍7P/%V\xd5\xc8h\xcd\x1e\v\xf8\xc8qC\xad@\xe1\xcc0\xaby\xdb\x1b\xa6=T\x8d\xd8G\xeei\xb6E\x8e\xb8\xff#z\x06z \x15i\a:֒]\xc1\x1e\xec^\xc1\x9e\xec\a@[\x06\xf8\x97SD\xc6\xc04\x86\x89\xcd\x19\xf2\x97\x8dˮ#\xf7.\xbbg\uf49bP\xa3\b\xadZ\xa3\xe5,\xeb\x9f?\x89\xad\x86\xa6WZ\x87\x8c\xado\xafv\xaelgx\xef\xec\x0e\xcf\xc1\xe7\xdfy1\xabY\x04\v\xa55\x92\xcd\xec\x19ǎZ\x00\xbf\xd3\xc6\xe83\x9b\xc9\x15\x05\xb7\"Qq3S\x85Q\xf2\xe7\x89\xd1Q\xf3ǃ\x97ǣ\xc4rb\x10&ƥ\xb9\x8fϩ\x99\xaa\xa1\xa3Lm\x9f\x99I\xb0}\xae\xec\xf5\xdbg\xa1\xb2\x0ek5ηV\xae\x06\x8dP\xb5T\\\xfda\x82.\xd8\x19\xe3{\xf9c\xd4=\xe4\x8c\xf4\xafq]>\x93Wgڃx\x16\x12\x06\xbd\x8b^~\xd7^T\x00=\x10\x01\xea\xbcf7\xbd\x9bCX\xb4ǲ\x1af`\xb7Q\xd6\xceC\xf3\xe0\xe51\xc0\xea:\xa6\x00vn\x91\x98\x055Qʯ\xf2\x12\xdb^M6qv\xa7\xad\xa1\xec\\.\xee\x12\x80\x9e5\xa4_!Y\xaaJU\x83\xaa\xd9n\xa4ʢZ^\x8f\x88\x03ik6\xf6\xda\xfe\xa0K64\x7f\xf0\x1d\\\x13\v\xfa[\xa8/'\xa3+L\xc6JcRQh\xa6\xfe$f\xd786\x85\xf1\xee\x89A3gw\x84\xa0*\x10\x02\x18\xef9\"\xf0\x97(\x13\xc0x\xafN\xa4\x99\x0fS=y\x9b\xd9;Zg\xc2\x16D\xc3\xe9$ݥ\xdb/@\x00\xd818\xd3_AoV3'\xf6\xacę\x80\xc3\xc77\xcaA\x0f\xb5s\xb9\xf4\x0eτ\x02FA%\xbd\x9b\xbbؒ\rI\xb1\\)Re\x8f\x19{J\xa7\xf1P\xff/B\xa6X_˕Nf\xfb\x99a\xbc\xbfI\xeaU:X3\x1dt\x12\x8fg\xe5z\xb3\x94;\x1ab\x93n㘊:\xfb\x03\"\xef\xfe\xbbdq\xb7i\x04\xb5C\v\x82\xcaz\b\xe9#h&\t\x8e ]\xf0)\x1eA\n0G\xfe\xfe\x14\xe50E\xbe\xb7/X\xf6\f\x11k\xa1v;C\x97l\xb0=\xf1\x0e764\xaa\xf0\r\x05g\x925\xacw\n_\xe7\xe2\n\xbf\x91ʹ\x12`KS\xc9fjnm\xa2\xc1\xad\x9d\x12cw\f\xd1b^H+jE\xfd\x12\xbb\xe6\xbb\xcd4\x89\xbaa\xa3\x0e\xae4ZA\x89X\xc5\x0e\x13}T\xc0D\x11\xf8|\x96\xc2n\xa1\bX5\xb0֬\x99Ja\x06{/\x03b\xde^:\nI\xc6\xd9\xd0TVNX\x14\xb0ݏ2\x10g\xfd\rB\x8az\x02\xeept\x14-^\x15\xf4\xf0AF\x0fb\xb6+\xea\x96=\x8eu\v=ћ9\xadJ\xf1rdAw7\xa9 |\xbboZ\x95\xe6r'7}x]\xa4\xef'\x96w\xa2\xeeP\xcb_\x92pY\xb7\x94C\xe3\x1c3\f\x17b]\xbaq\xed\xb8\x13Nɩ\a\xff\xda\xe1\xca^\x7f\xed\xb0P\xf9\x96\f6\xa2-B\x9e9\x83/\xfd\x8e\xbaĦYi0\x87\x92\xb4l\xf0m\xd2Qe\x997\xf8\xb4tԙ6\x0e\xde߅~\xdf\xd0\xc1G\x83\xa3=l\xed8\x1eJǟ5\x97D\xfd\x80kf\n\xdf)\xa02\xdf\xf3\xf3n\x02\n\xa6\x0e\x06य\xe1i\xa2\x1c\x84\r\xc2\xc8h\x8d>\x8a\xe8\x00\n\xf8\x9d,`\x15\x18\xd4B\x89\v\xf7\\\xc8q@){\xe3\xfb\x0f\x8a\xf6\x82\x16>\x982(\xeb\x1b\xd7@t\xc9\xee\t\x90\x0f\x92\x19\xb9N\xadRi\xf0:z=\xf7\x01}\x9e\xb8D\x02\x83I\xfe\xf3\xa3\x89+\xf1U\x9e\xd1+<לI\"\x17\xd7\xe8걄\xd7$\xfft\xc7\xec\xee\xa3\x14\x85}\xa2[\x1f\xa0\x9d9\x1bj\xab\xb9:\x97ۋ\xbd\x05\x18\x1c\x1e9\x99&\xa3\xc3\xe8\x92\rLL\xbcQ\x01D\xeeK\x83\x97\xb6e\xe3\xda\x03m\x1e\x10\xccu\xe73\xa1=D\xee5\xba\x89\xae\xed8H:On\xeb)\x82\xad\x7f0\x93\x99\x9bb\x1epMm\x8b(?\x06Ӕ̭\xf5٤sٱ\xf7\x81\xe2\xfc\xc8h\xdb\xd4':\xb6t\xbcl\xf0\xa3\xdf$˩\x1c=v}\x94\xa8\x8f]\x19\x15\xdfNQ5=\xa1\xc3l\\\xb5t\x9e\x90\x7f_\x9bVu;\xa6\x06\xea\xa8Jv\x94\xef\xa2\xc6\xda\x0e#\xa5\x0f|l\xa1\xaf\xa8'\"%p\xa3\x9cl&\x97\x1b\x98\x82[Т]\x06\xebPd\xe3`&\x0e\x90\xa8\x107\xe3\x04<\x9b\xf4\x9e\xca\t\xe8\x13n\xc4T\\6\xc0\x10\xb7\xd3\x034\xcaS\xea\x16\x91\xe1\xc2l\xd1\xf2\xa1\xd7\x02<\x8bVhP\x18\xbeÖQ\xd8(\x9fѰu\x17\xe2D\x05,\xaaQ\x11\x9d\x98\xa0\xd1\xf7?\x95\xda\x11\"\xbce\xae\xde\xce}\x06\xc9\x7f\xf1\x81ͬ(\\f0Ei\x93\xefd\x01\xbe&P\x82z\xa8\xd2=俁\xfa~\xd1\xc8w\x03`j\xeb?,\xc5\f}\x1b\xd7\x02\x9fƇE\xcbR\x1drg|tx:{^\x8e_\x1dG.s~\xfc\xe6xG\xaf\xf3\x89\xfc\xfax\xc7\a]%\xaf\xe9\xf1\xd3\xf5\xa0<\xbd\xa5{\x9c;\xb4\xfdy\xdd}\x12s\xec\xec\x8c\xf6X\x00\xf3\x832!)\x8ca\x16\x8aGq\x88\xf3\x17G\xf0\x8b#\xa0\x87fQ\x10 \xc5\xee\xc7,\xfc\x1d/|\xa1\x9e\xcd\f\xaf\xfe\xf4\b\xea\x91\xe8\xeb/_\xd3Q\x10\xa2}\x1d\xd2\x12\xc7\xfd\xd9\x11\x9c\xcc0\xefO\x8e`\x1f\x8f\x02?\xaeu\xcf\x12\x17~\xbfl,\xe5\xd1\xe2\xf7\xcb4NQ\xc0\xb8\x90\xeb\xb3\xe3Ʌ\x9b_\x1an.\xb5\xb4v\xc3\xd1?.\xc7\xcbr\xe7\x162jA0\xbbP\afƺ\x7fX\x8ez\xd89|[K\x95\r\x8e\x17\x9e\xe4\xbb!\xf3\xef\x96\xe1\xed\x1c\x15\x85h\xa9\xf0z\xe1zg\a\xdd\v\xf9Y\xc7\u07bd\x03\xbe\x0fJ^\xc9%ف\xfe\xc2m?\x16\xfe/4\xe0\n_\x00\x14\x8ae\xd6\x03\x81BeZ\xf2~\xe0\xd0pS\xcf\v\n\r\x9e\xa3\xaf\x0f~\xfe\x9an\xdc\x13\x85ס\xd8w\f\x87\xd6\xf0\xe03\x87\x88%\xa2\xf0\xd2\xd1\xe75\x91\x1a\xf8\xf7\xf2\x06~$̌\xdf\xc6ǡmt\xd0\x17b\xba\x14\x16\xbe\xa2\xdb\xe9#\xdf(\xfaA\xd9\xe0\xf3,\xa2<\x8d\xbc\x80\x16\x99Cy'\xd2\x02\x9e\xb4\x85\xf2\xb4\xfb\x02\x96e\b\xe5\t\xc9\x02\x9ai\x05\xe5ف\x1e\xec\xbe\t\x94'\x15\v\xe4a\xfbG,b\xe9\xd0\xd2qJo\x00Ɇ(*\x1ewt돾w\x1c\xdda\xa3\xfc8\x12\x8eh\x878UC\xa7\x0e\xb8\x84'\xe3\r\xf6\xf2\xf3\xea\xc1\xe9Y\x1a\x1d\x85\x9d\xd5\b\xe8\nW\xfbi\xcd٤\xf7\"\x14\bAg\rG\xe8\xb4\xefyǡ!L-\x894\x9b\xaf\x93\xd13\xeb\xcd\x05F\xf5\x92&\x1a\xab\x84\xca\xd4v-\x15\xba\xd9j\x1bT3[M[\x10\x92\xb3\xe7\x8d\xef\xab\xd5+\x17]\xbf\xf1\x82,\x98\x82\x1ab=\x90ƪ_\x9b\xc5\v\x89c\xd5\bǄ\x82\xeb\x16\xaeZa\xf9\x05ˮ\xa6\x197\xc4\\\xad>\xfa|\xb9\xeeYs5\x9c\xbbz6\x1e\xb6ʏg\xe0w\v\b\xa8\"\x8dVp\xf6\xc5\xc8\xd5/\b\x1f\x8al\x7f\xd2i\xa0\xf2>\x8c\xc6\xe1U\f\xb3\xfe\xcclH\x7f_\x86w\x12\x03\xa271\x0f\xb1\x970\xe9\xa0%Bč\xaf\xa2\x9b/\x01\xfa\xdfN\x1a2M[\xffxb\xff\x9a\"\xf1\xcf\x1c\xee\x1f R\x7f_\xb1\xf3_\x02\xb6v\xf9p>\xf9\x97\x03\xfe\x97t;_\xd8\aoK\xf6\xbe\xbaˈ\xfc\xfb-\xc2h\xe6\xeeC\x81\xacS!l\x83\xe51\xe3 \xc1[\x9f%\xc3\xff\x03\x00\x00\xff\xff\x01\x00\x00\xff\xffZQ\xfc\xcb\rG\x00\x00"))
 }

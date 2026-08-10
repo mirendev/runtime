@@ -42,6 +42,7 @@ import (
 	"miren.dev/runtime/pkg/procfile"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/tarx"
 	"miren.dev/runtime/pkg/workloadidentity"
@@ -111,6 +112,12 @@ type Builder struct {
 	BuildKit BuildKitProvider
 
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// Secrets resolves backend-sourced variables so a minted ConfigVersion
+	// records the exact secret version it saw. Nil on a cluster with no secret
+	// backends registered, in which case a config that references one fails
+	// rather than silently deploying without it.
+	Secrets secret.Resolver
 
 	// deploy owns the server-side deployment record lifecycle for builds whose
 	// client asked the server to manage it. It is an in-process wrapper over the
@@ -511,13 +518,19 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 			if len(serviceConfig.EnvVars) > 0 {
 				svc.Env = make([]core_v1alpha.ConfigSpecServicesEnv, 0, len(serviceConfig.EnvVars))
 				for _, envVar := range serviceConfig.EnvVars {
+					value, backend, sensitive := envVar.Value, envVar.Backend, envVar.Sensitive
+					if backend != "" {
+						value, sensitive = envVar.Ref, true
+					}
+
 					svc.Env = append(svc.Env, core_v1alpha.ConfigSpecServicesEnv{
 						Key:         envVar.Key,
-						Value:       envVar.Value,
-						Sensitive:   envVar.Sensitive,
+						Value:       value,
+						Sensitive:   sensitive,
 						Required:    envVar.Required,
 						Description: envVar.Description,
 						Source:      "config",
+						Backend:     backend,
 					})
 				}
 			}
@@ -618,13 +631,22 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 
 	variables := make([]core_v1alpha.ConfigSpecVariables, 0, len(appConfig.EnvVars))
 	for _, envVar := range appConfig.EnvVars {
+		value, backend, sensitive := envVar.Value, envVar.Backend, envVar.Sensitive
+		if backend != "" {
+			// A referenced secret carries its reference where an inline value
+			// would go, and is sensitive by construction: it exists precisely
+			// because the real value is not fit to sit in config.
+			value, sensitive = envVar.Ref, true
+		}
+
 		variables = append(variables, core_v1alpha.ConfigSpecVariables{
 			Key:         envVar.Key,
-			Value:       envVar.Value,
-			Sensitive:   envVar.Sensitive,
+			Value:       value,
+			Sensitive:   sensitive,
 			Required:    envVar.Required,
 			Description: envVar.Description,
 			Source:      "config",
+			Backend:     backend,
 		})
 	}
 	return variables
@@ -705,6 +727,10 @@ func mergeCliEnvVars(existingVars []core_v1alpha.ConfigSpecVariables, cliVars []
 
 	// CLI vars always override (marked as user-provided).
 	// Preserve Required/Description metadata from existing vars (e.g. from app.toml).
+	//
+	// Backend is deliberately not preserved: `-e KEY=VALUE` supplies a literal,
+	// so it replaces a secret reference on that key outright rather than being
+	// read as a new reference into whatever backend the old value named.
 	for _, cv := range cliVars {
 		newVar := core_v1alpha.ConfigSpecVariables{
 			Key:       cv.Key(),
@@ -1434,6 +1460,15 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	createVerCtx, createVerSpan := buildTracer.Start(ctx, "build.create_version",
 		trace.WithAttributes(attribute.String("miren.app.version", mrv.Version)))
 
+	// Freeze every backend-sourced variable to the version it resolves to right
+	// now, so this ConfigVersion records exactly which secret it shipped with.
+	if err := b.pinSecrets(createVerCtx, &configSpec); err != nil {
+		createVerSpan.RecordError(err)
+		createVerSpan.SetStatus(codes.Error, err.Error())
+		createVerSpan.End()
+		return nil, err
+	}
+
 	// Create ConfigVersion as the sole config store (inline Config is no longer written)
 	configVer := &core_v1alpha.ConfigVersion{
 		App:  mrv.App,
@@ -1533,6 +1568,27 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		versionShortId: versionShortId,
 		accessInfo:     accessInfo,
 	}, nil
+}
+
+// pinSecrets rewrites every backend-sourced variable in the spec to the exact
+// version it resolves to, so the ConfigVersion about to be minted records what
+// the deploy actually shipped with rather than a floating reference.
+//
+// A config with no such variables never needs a resolver, which keeps a cluster
+// that has no secret backends registered working exactly as before. One that
+// does reference a backend fails the deploy rather than starting an app whose
+// credential silently never arrived.
+func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec) error {
+	refs := coreutil.SecretReferences(spec)
+	if len(refs) == 0 {
+		return nil
+	}
+
+	if b.Secrets == nil {
+		return fmt.Errorf("config references secret %s but this cluster has no secret backends configured", refs[0])
+	}
+
+	return coreutil.PinSecrets(ctx, b.Secrets, spec)
 }
 
 // getAccessInfo queries routes to determine how the app can be accessed.

@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
@@ -45,6 +46,8 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/secret"
+	remotesecret "miren.dev/runtime/pkg/secret/remote"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/exec"
 	"miren.dev/runtime/version"
@@ -125,6 +128,13 @@ type RunnerDeps struct {
 	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
 	// verify the API certificate.
 	CACert []byte
+
+	// Secrets materializes the secret references a sandbox spec carries, at
+	// container creation. On the coordinator this is the local backend
+	// registry, where the keyring lives. A distributed runner holds no key
+	// material, so it must resolve over RPC instead; until that exists, a
+	// sandbox on such a runner fails rather than starting without its secret.
+	Secrets secret.Resolver
 }
 
 const (
@@ -367,6 +377,14 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 		r.Log.Warn("failed to set up workload identity issuer", "error", err)
 	}
 
+	// Likewise for secrets: a distributed runner can reach the entity store but
+	// not the cluster keyring, so it resolves through the coordinator. This one
+	// must not degrade quietly — a runner without it starts sandboxes whose
+	// referenced secrets can never materialize.
+	if err := r.setupRemoteSecrets(rs); err != nil {
+		return fmt.Errorf("setting up secret resolution: %w", err)
+	}
+
 	cm, err := r.SetupControllers(ctx, eas, rs.Server())
 	if err != nil {
 		return err
@@ -463,6 +481,27 @@ func queryWorkloadIssuerInfo(ctx context.Context, regClient *runner_v1alpha.Runn
 	ctx, cancel := context.WithTimeout(ctx, remoteTokenTimeout)
 	defer cancel()
 	return regClient.WorkloadIssuerInfo(ctx)
+}
+
+// setupRemoteSecrets points a distributed runner's secret resolution at the
+// coordinator. Runners do not hold the cluster keyring, so they cannot decrypt
+// a stored secret themselves.
+//
+// The coordinator's embedded runner (r.Config == nil) already holds the local
+// backend registry it was constructed with, and keeps it.
+func (r *Runner) setupRemoteSecrets(rs *rpc.State) error {
+	if r.Config == nil || r.deps.Secrets != nil {
+		return nil
+	}
+
+	client, err := rs.Client("dev.miren.runtime/secrets")
+	if err != nil {
+		return fmt.Errorf("connecting to coordinator secrets service: %w", err)
+	}
+
+	r.deps.Secrets = remotesecret.NewResolver(secret_v1alpha.NewSecretsClient(client))
+	r.Log.Info("secret resolution enabled via coordinator")
+	return nil
 }
 
 // initializeNetwork sets up the Flannel network for distributed runners.
@@ -710,6 +749,7 @@ func (r *Runner) SetupControllers(
 		WorkloadIssuer: r.deps.WorkloadIssuer,
 		ApiAddress:     r.deps.ApiAddress,
 		CACert:         r.deps.CACert,
+		Secrets:        r.deps.Secrets,
 	}
 
 	var sbc sandbox.SandboxLifecycle

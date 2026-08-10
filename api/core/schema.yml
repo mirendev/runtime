@@ -151,9 +151,9 @@ kinds:
                 source:
                   type: string
                   doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
-                origin:
+                backend:
                   type: string
-                  doc: The provenance of the variable (user, file, generated, detected).
+                  doc: Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version.
                 required:
                   type: bool
                   doc: Whether this variable must have a non-empty value for deploy to succeed
@@ -247,9 +247,9 @@ kinds:
             source:
               type: string
               doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
-            origin:
+            backend:
               type: string
-              doc: The provenance of the variable (user, file, generated, detected).
+              doc: Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version.
             required:
               type: bool
               doc: Whether this variable must have a non-empty value for deploy to succeed
@@ -439,6 +439,78 @@ kinds:
       type: string
       doc: Human-readable description of this binding
 
+  # A secret's stable identity. Mutable metadata only — the value lives in the
+  # immutable secret_version rows this points at, so nothing sensitive is here.
+  secret:
+    path:
+      type: string
+      doc: Backend-relative path, e.g. "payments/stripe-key"
+      indexed: true
+
+    current_version:
+      type: ref
+      doc: The version a floating (unpinned) reference resolves to. Moves on every write.
+
+  # An immutable, envelope-encrypted payload. Never rewritten after creation.
+  # The entity's built-in short id is the version handle used in references
+  # (the "x1A" in "payments/stripe-key@x1A") — there is no explicit version field.
+  secret_version:
+    secret:
+      type: ref
+      doc: The secret this version belongs to
+      indexed: true
+
+    state:
+      type: enum
+      doc: Whether this version may still be resolved
+      choices: [enabled, disabled, destroyed]
+      indexed: true
+
+    ciphertext:
+      type: bytes
+      doc: The value, encrypted with this version's data key (DEK)
+
+    wrapped_dek:
+      type: bytes
+      doc: The DEK, encrypted (wrapped) by one of the cluster's KEKs — see kek_id
+
+    kek_id:
+      type: string
+      doc: Which of the cluster's KEKs wrapped this DEK. A resolve unwraps with it; a key rotation re-wraps rows still pointing at a retiring key.
+      indexed: true
+
+    value_mac:
+      type: string
+      doc: Keyed hash (HMAC) of the plaintext under the cluster key, so a write can recognize an identical existing version without decrypting. Keyed rather than a bare digest so storing it never hands an attacker a rainbow-table oracle for the plaintext.
+      indexed: true
+
+  # A cluster-key rotation in flight. Modeled as an entity rather than an
+  # in-process routine so it survives a coordinator restart, and so the
+  # automatic trigger and the operator command drive one code path.
+  key_rotation:
+    from_key:
+      type: string
+      doc: The key being retired. Versions still wrapped by it are what the backfill moves.
+      indexed: true
+
+    to_key:
+      type: string
+      doc: The key being rotated to, already persisted and current before this record exists
+
+    status:
+      type: enum
+      doc: rewrapping | retiring | done | failed
+      choices: [rewrapping, retiring, done, failed]
+      indexed: true
+
+    rewrapped:
+      type: int
+      doc: Versions moved so far, for progress reporting only — the backfill's real state is the kek_id query
+
+    error_message:
+      type: string
+      doc: Why the rotation stopped, when status is failed
+
 components:
   config_spec:
     variables:
@@ -458,9 +530,9 @@ components:
         source:
           type: string
           doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
-        origin:
+        backend:
           type: string
-          doc: The provenance of the variable (user, file, generated, detected).
+          doc: Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version.
         required:
           type: bool
           doc: Whether this variable must have a non-empty value for deploy to succeed
@@ -528,9 +600,9 @@ components:
             source:
               type: string
               doc: The source of the variable (config or manual). Defaults to config for backward compatibility.
-            origin:
+            backend:
               type: string
-              doc: The provenance of the variable (user, file, generated, detected)
+              doc: Where the value comes from. Empty means value holds an inline literal; any other name refers to a registered secret backend instance (e.g. cluster) and value holds a backend-relative reference, optionally pinned with @version.
             required:
               type: bool
               doc: Whether this variable must have a non-empty value for deploy to succeed

@@ -21,6 +21,20 @@ type AppEnvVar struct {
 	Required    bool   `json:"required,omitempty" toml:"required,omitempty"`
 	Sensitive   bool   `json:"sensitive,omitempty" toml:"sensitive,omitempty"`
 	Description string `json:"description,omitempty" toml:"description,omitempty"`
+
+	// Backend names the secret backend the value comes from, and Ref addresses
+	// the secret within it. Together they replace Value: the credential itself
+	// never appears in app.toml, only a pointer to it, so the file stays safe to
+	// commit.
+	//
+	// A reference authored here floats: each new ConfigVersion resolves it to
+	// whatever is current, which is how a rotation reaches the app. Note that
+	// this is about minting a config, not running one — deploying or rolling
+	// back to an existing version keeps the reference that version recorded, so
+	// a rotation reaches an app only once a new config is created for it.
+	// Appending @version to Ref holds it at that exact version regardless.
+	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
+	Ref     string `json:"ref,omitempty" toml:"ref,omitempty"`
 }
 
 type BuildConfig struct {
@@ -174,6 +188,9 @@ func (ac *AppConfig) Validate() error {
 		if ev.Key == "" {
 			return &ValidationError{KeyPath: "env", Message: fmt.Sprintf("env[%d]: key is required", i)}
 		}
+		if err := ev.validateReference(fmt.Sprintf("env[%d]", i)); err != nil {
+			return err
+		}
 	}
 
 	// Validate service configurations
@@ -269,6 +286,9 @@ func (ac *AppConfig) Validate() error {
 		// Validate service environment variables
 		// Note: empty values are allowed - secrets may be stored server-side
 		for i, ev := range svcConfig.EnvVars {
+			if err := ev.validateReference(fmt.Sprintf("%s.env[%d]", svcPrefix, i)); err != nil {
+				return err
+			}
 			if ev.Key == "" {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".env",
@@ -551,4 +571,31 @@ func AliasLineNumbers(configPath string) map[string]int {
 	}
 
 	return result
+}
+
+// validateReference checks the secret-reference form of an env var. A reference
+// replaces the value rather than accompanying it, so accepting both would leave
+// it ambiguous which one is meant to reach the app — and the wrong guess ships a
+// literal path where a credential belongs.
+func (ev AppEnvVar) validateReference(keyPath string) error {
+	switch {
+	case ev.Ref == "" && ev.Backend == "":
+		return nil
+	case ev.Ref == "":
+		return &ValidationError{
+			KeyPath: keyPath + ".ref",
+			Message: fmt.Sprintf("%s: backend %q needs a ref naming the secret", keyPath, ev.Backend),
+		}
+	case ev.Backend == "":
+		return &ValidationError{
+			KeyPath: keyPath + ".backend",
+			Message: fmt.Sprintf("%s: ref %q needs a backend to resolve it against", keyPath, ev.Ref),
+		}
+	case ev.Value != "":
+		return &ValidationError{
+			KeyPath: keyPath + ".value",
+			Message: fmt.Sprintf("%s: set either value or ref, not both — a referenced secret gets its value from the backend", keyPath),
+		}
+	}
+	return nil
 }

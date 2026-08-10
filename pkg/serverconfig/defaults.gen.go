@@ -13,6 +13,7 @@ func DefaultConfig() *Config {
 		Labs:            []string{},
 		Mode:            new("standalone"),
 		Saga:            DefaultSagaConfig(),
+		Secrets:         DefaultSecretsConfig(),
 		Server:          DefaultServerConfig(),
 		TLS:             DefaultTLSConfig(),
 		Victorialogs:    DefaultVictoriaLogsConfig(),
@@ -73,6 +74,13 @@ func DefaultIngressConfig() IngressConfig {
 func DefaultSagaConfig() SagaConfig {
 	return SagaConfig{
 		RetentionPeriod: new("7d"),
+	}
+}
+
+// DefaultSecretsConfig returns default SecretsConfig
+func DefaultSecretsConfig() SecretsConfig {
+	return SecretsConfig{
+		KeyRotationPeriod: new("90d"),
 	}
 }
 

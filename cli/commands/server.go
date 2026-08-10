@@ -49,6 +49,7 @@ import (
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/units"
 	"miren.dev/runtime/pkg/workloadidentity"
@@ -668,6 +669,12 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// publicly trusted certificate. Only federating to an outside party needs
 	// those, and a cluster with no hostname simply has an anchor nobody outside
 	// can resolve.
+	// One registry shared by the coordinator and the runner in this process. The
+	// coordinator registers the in-cluster backend into it once it has an entity
+	// store; the runner then materializes through the same instance rather than
+	// needing its own access to the keyring.
+	secretRegistry := secret.NewRegistry()
+
 	var workloadIssuer *workloadidentity.Issuer
 	{
 		issuerURL := workloadidentity.LocalIssuerURL
@@ -741,6 +748,15 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 			"value", cfg.AppVersion.GetRetentionPeriod(), "error", err)
 	}
 
+	// Unlike the retention periods, 0 here is a real setting — "rotate only when
+	// asked" — so a malformed value must not collapse into it silently.
+	secretKeyRotationPeriod, err := units.ParseDuration(cfg.Secrets.GetKeyRotationPeriod())
+	if err != nil {
+		ctx.Log.Warn("invalid secrets.key_rotation_period, falling back to default",
+			"value", cfg.Secrets.GetKeyRotationPeriod(), "error", err)
+		secretKeyRotationPeriod = -1
+	}
+
 	// Saga retention treats 0 as "keep executions forever", which is a real
 	// setting an operator may want while investigating. That makes a malformed
 	// value dangerous in a way the app-version one is not: parsing to 0 would
@@ -790,9 +806,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		VictoriametricsAddress:    ctx.ServerState.VictoriametricsAddress,
 		VictorialogsAddress:       ctx.ServerState.VictorialogsAddress,
 		WorkloadIssuer:            workloadIssuer,
+		Secrets:                   secretRegistry,
 		AppVersionRetentionCount:  cfg.AppVersion.GetRetentionCount(),
 		AppVersionRetentionPeriod: appVersionRetentionPeriod,
 		SagaRetentionPeriod:       sagaRetentionPeriod,
+		SecretKeyRotationPeriod:   secretKeyRotationPeriod,
 	}
 
 	// Pass etcd TLS config when distributed runners is enabled
@@ -945,6 +963,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Build RunnerDeps from ServerState (all dependencies already initialized)
 	deps := runner.RunnerDeps{
+		Secrets:         secretRegistry,
 		CC:              ctx.ServerState.CC,
 		Namespace:       ctx.ServerState.Namespace,
 		Bridge:          ctx.ServerState.Bridge,

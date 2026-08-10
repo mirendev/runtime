@@ -39,6 +39,7 @@ import (
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/netutil"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -101,6 +102,12 @@ type SandboxControllerDeps struct {
 	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
 	// verify the API certificate rather than skipping verification.
 	CACert []byte
+
+	// Secrets materializes the secret references a sandbox spec carries, at the
+	// moment a container is created. Nil where no backend is reachable, in which
+	// case a spec that references one fails rather than starting the container
+	// with the reference in place of the value.
+	Secrets secret.Resolver
 }
 
 type SandboxController struct {
@@ -130,6 +137,12 @@ type SandboxController struct {
 	WorkloadIssuer workloadidentity.TokenIssuer
 	ApiAddress     string
 	CACert         []byte
+
+	// Secrets materializes the secret references a sandbox spec carries, at the
+	// moment a container is created. Nil where no backend is reachable, in which
+	// case a spec that references one fails rather than starting the container
+	// with the reference in place of the value.
+	Secrets secret.Resolver
 
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry
@@ -212,6 +225,7 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		WorkloadIssuer: cfg.WorkloadIssuer,
 		ApiAddress:     cfg.ApiAddress,
 		CACert:         cfg.CACert,
+		Secrets:        cfg.Secrets,
 	}, nil
 }
 
@@ -2500,8 +2514,20 @@ func (c *SandboxController) buildSubContainerSpec(
 		}
 	}
 
+	// Materialize any secret the spec references. The spec carries references
+	// rather than values precisely so nothing sensitive is at rest in the
+	// entity store; the value comes into being here, in memory, and goes
+	// straight into the container's environment below.
+	//
+	// A failure stops the container from starting. An app handed a reference
+	// where its credential belongs does not fail in a way anyone can read — it
+	// fails much later, inside whatever the credential was for.
+	envVars, err := secret.MaterializeEnv(ctx, c.Secrets, co.Env)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox %s container %s: %w", sb.ID, co.Name, err)
+	}
+
 	// Extract instance number from metadata labels and inject the instance env var
-	envVars := co.Env
 	var md core_v1alpha.Metadata
 	md.Decode(meta)
 

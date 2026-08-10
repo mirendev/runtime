@@ -321,6 +321,25 @@
   },
   {
     "type": "category",
+    "label": "secret",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/secret"
+    },
+    "items": [
+      "command/secret-destroy",
+      "command/secret-disable",
+      "command/secret-enable",
+      "command/secret-keyring",
+      "command/secret-list",
+      "command/secret-rotate-key",
+      "command/secret-set",
+      "command/secret-versions"
+    ]
+  },
+  {
+    "type": "category",
     "label": "server",
     "collapsed": true,
     "link": {

@@ -10,7 +10,7 @@ Set environment variables for an application
 
 Setting an environment variable creates a new app version and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart` afterward. The new version reuses your existing container image (no rebuild); Miren boots new sandboxes with the updated environment and drains the old ones. The command waits for the new version to become healthy before returning.
 
-Use `-e` for plain values and `-s` for sensitive values (masked in output and logs). A "secret" is simply an env var set with `-s` — there is no separate secret command. Pass `--service` to scope the change to a single service instead of all services.
+Use `-e` for plain values and `-s` for sensitive values (masked in output and logs). Note that `-s` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with `miren secret set` instead. Pass `--service` to scope the change to a single service instead of all services.
 
 :::note[No restart needed]
 Environment variable changes take effect on their own. Running `miren app restart` afterward only triggers a redundant second rollout.
@@ -24,7 +24,9 @@ miren env set [flags]
 
 ## Flags
 
+- `--backend, -b` — Source the value from a secret backend instead of setting it literally (default: cluster, with --ref)
 - `--env, -e` — Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)
+- `--ref` — Backend-relative reference to the secret, e.g. payments/stripe-key
 - `--sensitive, -s` — Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)
 - `--service, -S` — Set env var for specific service only (if not specified, sets for all services)
 

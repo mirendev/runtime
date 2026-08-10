@@ -112,7 +112,7 @@ func (c *GCController) run(ctx context.Context) {
 	// Run an initial GC on startup after a short delay.
 	select {
 	case <-time.After(30 * time.Second):
-		c.runGCWithLogging(ctx)
+		c.sweep(ctx)
 	case <-ctx.Done():
 		c.Log.Info("version retention GC controller stopped")
 		return
@@ -121,12 +121,26 @@ func (c *GCController) run(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			c.runGCWithLogging(ctx)
+			c.sweep(ctx)
 		case <-ctx.Done():
 			c.Log.Info("version retention GC controller stopped")
 			return
 		}
 	}
+}
+
+// sweep runs both retention passes for one tick.
+//
+// App versions go first: deleting one drops the ConfigVersion pinning its
+// secrets, so a secret version can become reapable in the same tick that
+// released it rather than waiting for the next. The order is the only thing
+// they share — the secret sweep reads its own pin picture and never looks at
+// the app sweep's result, so a failing app sweep must not take it down too.
+// Coupling them would hide the secret sweep behind an unrelated failure, and
+// the symptom (versions quietly accumulating) has no signal of its own.
+func (c *GCController) sweep(ctx context.Context) {
+	c.runGCWithLogging(ctx)
+	c.runSecretGCWithLogging(ctx)
 }
 
 func (c *GCController) runGCWithLogging(ctx context.Context) {
@@ -147,6 +161,31 @@ func (c *GCController) runGCWithLogging(ctx context.Context) {
 		c.Log.Debug("version retention GC complete, nothing pruned",
 			"skipped_live", result.SkippedLive,
 			"retained", result.RetainedVersions,
+			"total", result.TotalScanned)
+	}
+
+}
+
+func (c *GCController) runSecretGCWithLogging(ctx context.Context) {
+	result, err := c.RunSecretGC(ctx)
+	if err != nil {
+		c.Log.Error("secret version GC failed", "error", err)
+		return
+	}
+
+	if result.DeletedVersions > 0 || result.FailedVersions > 0 {
+		c.Log.Info("secret version GC complete",
+			"deleted", result.DeletedVersions,
+			"failed", result.FailedVersions,
+			"retained_pinned", result.RetainedPinned,
+			"retained_current", result.RetainedCurrent,
+			"retained_recent", result.RetainedRecent,
+			"total", result.TotalScanned)
+	} else {
+		c.Log.Debug("secret version GC complete, nothing reaped",
+			"retained_pinned", result.RetainedPinned,
+			"retained_current", result.RetainedCurrent,
+			"retained_recent", result.RetainedRecent,
 			"total", result.TotalScanned)
 	}
 }

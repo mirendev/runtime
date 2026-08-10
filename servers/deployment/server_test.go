@@ -25,7 +25,7 @@ func newTestDeploymentServer(t *testing.T, logger *slog.Logger, inmem *testutils
 	localClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
 	ec := aes.NewClient(logger, inmem.EAC)
 	ac := appclient.NewClient(logger, localClient)
-	return NewDeploymentServer(logger, inmem.EAC, ec, ac, "")
+	return NewDeploymentServer(logger, inmem.EAC, ec, ac, "", nil)
 }
 
 func TestCreateDeploymentWithGitInfo(t *testing.T) {

@@ -34,6 +34,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
@@ -46,6 +47,7 @@ import (
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
+	keyrotationctrl "miren.dev/runtime/controllers/keyrotation"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
 	sagagcctrl "miren.dev/runtime/controllers/sagagc"
 	"miren.dev/runtime/controllers/sandboxpool"
@@ -71,6 +73,9 @@ import (
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
+	"miren.dev/runtime/pkg/secret"
+	secretcluster "miren.dev/runtime/pkg/secret/cluster"
+	"miren.dev/runtime/pkg/secret/keyring"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/admin"
@@ -85,6 +90,7 @@ import (
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	runnerserver "miren.dev/runtime/servers/runner"
 	"miren.dev/runtime/servers/runnertelemetry"
+	secretsrv "miren.dev/runtime/servers/secret"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
 )
@@ -141,6 +147,12 @@ type CoordinatorConfig struct {
 	AppVersionRetentionCount  int
 	AppVersionRetentionPeriod time.Duration
 
+	// SecretKeyRotationPeriod is how old the cluster key may get before it
+	// rotates on its own. Zero means rotate only when asked; negative means the
+	// operator's value did not parse, so fall back to the default rather than
+	// reading a typo as "never rotate".
+	SecretKeyRotationPeriod time.Duration
+
 	// SagaRetentionPeriod is how long a finished saga execution is kept.
 	// Unlike the app-version knobs above, zero is meaningful here: it keeps
 	// executions indefinitely, which is the escape hatch for an operator who
@@ -150,6 +162,13 @@ type CoordinatorConfig struct {
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// Secrets holds the registered secret backends. The caller builds it so the
+	// runner sharing this process materializes through the same registry the
+	// coordinator pins and serves with. Nil leaves the cluster without a secret
+	// store, in which case a config referencing one fails rather than deploying
+	// without it.
+	Secrets *secret.Registry
 }
 
 // CloudAuthConfig contains cloud authentication settings
@@ -365,6 +384,7 @@ type Coordinator struct {
 	indexGC       *indexgcctrl.GCController
 	sagaGC        *sagagcctrl.GCController
 	schemaReindex *schemareindexctrl.Controller
+	keyRotation   *keyrotationctrl.Controller
 	hs            *httpingress.Server
 
 	authority *caauth.Authority
@@ -1061,6 +1081,41 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// The in-cluster backend needs the entity store, which only exists here, so
+	// the caller supplies an empty registry and this fills it in. Externally
+	// configured instances would register alongside it.
+	secretRegistry := c.Secrets
+	if secretRegistry == nil {
+		secretRegistry = secret.NewRegistry()
+	}
+	secretKeyring, err := keyring.Ensure(c.Log, c.DataPath)
+	if err != nil {
+		c.Log.Error("failed to open secret keyring", "error", err)
+		return err
+	}
+	secretBackend := secretcluster.NewBackend(c.Log, ec, secretKeyring)
+	if err := secretRegistry.Register(secretBackend); err != nil {
+		c.Log.Error("failed to register the in-cluster secret backend", "error", err)
+		return err
+	}
+
+	// Rotation owns the keyring from here: it is the only thing that swaps the
+	// backend's ring, and it persists each new ring before the backend seals
+	// anything with it.
+	keyRotationConfig := keyrotationctrl.DefaultConfig()
+	if c.SecretKeyRotationPeriod >= 0 {
+		keyRotationConfig.MaxKeyAge = c.SecretKeyRotationPeriod
+	}
+	keyRotation := &keyrotationctrl.Controller{
+		Log:      c.Log.With("module", "key-rotation"),
+		EC:       ec,
+		Backend:  secretBackend,
+		DataPath: c.DataPath,
+		Config:   keyRotationConfig,
+	}
+	keyRotation.Start(ctx)
+	c.keyRotation = keyRotation
+
 	// Migrate app versions before starting components that depend on them
 	migrationCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -1366,12 +1421,15 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	c.schemaReindex.Start(ctx)
 
-	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP)
+	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))
+
+	secretsServer := secretsrv.NewServer(c.Log, secretRegistry, keyRotation)
+	server.ExposeValue("dev.miren.runtime/secrets", secret_v1alpha.AdaptSecrets(secretsServer))
 
 	addonsLoopback, err := rs.Connect(rs.LoopbackAddr(), "dev.miren.runtime/addons")
 	if err != nil {
@@ -1385,6 +1443,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	bs := build.NewBuilder(c.Log, eac, appClient, addonsClient, c.Resolver, c.TempDir, c.LogWriter, c.CloudAuth.DNSHostname, c.BuildKit, c.DataPath)
 	bs.WorkloadIssuer = c.WorkloadIssuer
+	bs.Secrets = secretRegistry
 
 	var buildHandler build_v1alpha.Builder = bs
 	if labs.Sagas() {
@@ -1406,7 +1465,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
 
-	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname)
+	ds, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname, secretRegistry)
 	if err != nil {
 		c.Log.Error("failed to create deployment server", "error", err)
 		return err

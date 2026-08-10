@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -28,6 +29,19 @@ var urlUserinfoRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/?#@]+@`)
 // hint and nothing marked the var sensitive. Non-URL values pass through.
 func maskURLUserinfo(value string) string {
 	return urlUserinfoRe.ReplaceAllString(value, "${1}"+envRedacted+"@")
+}
+
+// displayEnvValue renders what `env list`/`env get` shows for one variable.
+//
+// A backend-sourced variable has no local value to mask: the bytes never
+// travelled here, only the reference did. Showing the reference — backend,
+// path, and the version this config pinned — is both safe and the only useful
+// thing to show, so --unmask has nothing extra to reveal for one.
+func displayEnvValue(value, backend string, sensitive, unmask bool) string {
+	if backend != "" {
+		return "\u2192 " + backend + ":" + value
+	}
+	return maskEnvValue(value, sensitive, unmask)
 }
 
 // maskEnvValue is the single source of truth for how an env-var value is
@@ -185,7 +199,13 @@ func EnvSet(ctx *Context, opts struct {
 	Service   string   `short:"S" long:"service" description:"Set env var for specific service only (if not specified, sets for all services)"`
 	Env       []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
 	Sensitive []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
+	Backend   string   `short:"b" long:"backend" description:"Source the value from a secret backend instead of setting it literally (default: cluster, with --ref)"`
+	Ref       string   `long:"ref" description:"Backend-relative reference to the secret, e.g. payments/stripe-key"`
 }) error {
+	if opts.Ref != "" || opts.Backend != "" {
+		return envSetReference(ctx, opts.App, opts.Service, opts.Env, opts.Sensitive, opts.Backend, opts.Ref)
+	}
+
 	if len(opts.Env) == 0 && len(opts.Sensitive) == 0 {
 		return fmt.Errorf("no environment variables specified")
 	}
@@ -220,7 +240,54 @@ func EnvSet(ctx *Context, opts struct {
 		vars = append(vars, ev)
 	}
 
-	res, err := depClient.SetEnvVars(ctx, opts.App, ctx.ClusterName, vars, opts.Service)
+	return applyEnvVars(ctx, depClient, opts.App, opts.Service, vars)
+}
+
+// envSetReference points a variable at a secret backend rather than giving it a
+// literal value. The value itself never travels here: only the reference does,
+// and the server pins it to a concrete version as it mints the new config.
+func envSetReference(ctx *Context, app, service string, env, sensitive []string, backend, ref string) error {
+	keys := append(append([]string{}, env...), sensitive...)
+
+	switch {
+	case ref == "":
+		return fmt.Errorf("--backend needs --ref naming the secret, e.g. --ref payments/stripe-key")
+	case len(keys) != 1:
+		return fmt.Errorf("--ref sets exactly one variable; pass a single -e KEY")
+	case strings.Contains(keys[0], "="):
+		// A literal alongside a reference is a contradiction, and guessing which
+		// one the user meant is how the wrong thing ends up deployed.
+		return fmt.Errorf("use -e KEY with --ref, not KEY=VALUE: the value comes from the backend")
+	}
+
+	if backend == "" {
+		backend = secret.ClusterBackendName
+	}
+
+	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")
+	if err != nil {
+		return fmt.Errorf("failed to connect to deployment service: %w", err)
+	}
+	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
+
+	ctx.Printf("pointing %s at %s:%s...\n", keys[0], backend, ref)
+
+	ev := &deployment_v1alpha.EnvironmentVariable{}
+	ev.SetKey(keys[0])
+	ev.SetValue(ref)
+	ev.SetBackend(backend)
+	ev.SetSensitive(true)
+
+	return applyEnvVars(ctx, depClient, app, service, []*deployment_v1alpha.EnvironmentVariable{ev})
+}
+
+// applyEnvVars pushes a set of variables and waits for the version they mint to
+// come up healthy, shared by the literal and reference paths so both report the
+// same way.
+func applyEnvVars(ctx *Context, depClient *deployment_v1alpha.DeploymentClient,
+	app, service string, vars []*deployment_v1alpha.EnvironmentVariable) error {
+
+	res, err := depClient.SetEnvVars(ctx, app, ctx.ClusterName, vars, service)
 	if err != nil {
 		return err
 	}
@@ -235,14 +302,14 @@ func EnvSet(ctx *Context, opts struct {
 	}
 
 	versionDisplay := ui.DisplayShortID(res.Deployment().AppVersionShortId(), res.VersionId())
-	ctx.Printf("Setting env vars on %s — new version: %s\n", opts.App, versionDisplay)
+	ctx.Printf("Setting env vars on %s — new version: %s\n", app, versionDisplay)
 
-	if err := awaitHealthy(ctx, opts.App, res.VersionId(), versionDisplay); err != nil {
+	if err := awaitHealthy(ctx, app, res.VersionId(), versionDisplay); err != nil {
 		return err
 	}
 
 	if res.HasAccessInfo() && res.AccessInfo() != nil {
-		displayDeployVersionAccessInfo(ctx, opts.App, res.AccessInfo())
+		displayDeployVersionAccessInfo(ctx, app, res.AccessInfo())
 	}
 
 	return nil
@@ -303,7 +370,7 @@ func EnvGet(ctx *Context, opts struct {
 		}
 	}
 
-	ctx.Printf("%s\n", maskEnvValue(found.Value(), found.Sensitive(), opts.Unmask))
+	ctx.Printf("%s\n", displayEnvValue(found.Value(), found.Backend(), found.Sensitive(), opts.Unmask))
 	return nil
 }
 
@@ -391,7 +458,7 @@ func EnvList(ctx *Context, opts struct {
 		for _, entry := range entries {
 			vars = append(vars, EnvVar{
 				Name:        entry.nv.Key(),
-				Value:       maskEnvValue(entry.nv.Value(), entry.nv.Sensitive(), false),
+				Value:       displayEnvValue(entry.nv.Value(), entry.nv.Backend(), entry.nv.Sensitive(), false),
 				Sensitive:   entry.nv.Sensitive(),
 				Service:     entry.service,
 				Source:      entry.nv.Source(),
@@ -510,7 +577,7 @@ func printEnvTable(ctx *Context, entries []envVarEntry) {
 	// Build rows
 	var rows []ui.Row
 	for _, entry := range entries {
-		value := maskEnvValue(entry.nv.Value(), entry.nv.Sensitive(), false)
+		value := displayEnvValue(entry.nv.Value(), entry.nv.Backend(), entry.nv.Sensitive(), false)
 		// Gray out values we masked so it's clear the redaction is intentional.
 		if value != entry.nv.Value() {
 			value = grayStyle.Render(value)

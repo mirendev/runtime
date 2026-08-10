@@ -242,6 +242,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Saga.RetentionPeriod = flags.SagaConfigRetentionPeriod
 	}
 
+	if flags.SecretsConfigKeyRotationPeriod != nil && *flags.SecretsConfigKeyRotationPeriod != "" {
+		cfg.Secrets.KeyRotationPeriod = flags.SecretsConfigKeyRotationPeriod
+	}
+
 	if flags.ServerConfigAddress != nil && *flags.ServerConfigAddress != "" {
 		cfg.Server.Address = flags.ServerConfigAddress
 	}
