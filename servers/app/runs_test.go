@@ -1,6 +1,7 @@
 package app
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -65,4 +66,27 @@ func TestRunInfoReportsAZeroExitCode(t *testing.T) {
 	})
 	assert.True(t, info.HasExitCode())
 	assert.Equal(t, int32(0), info.ExitCode())
+}
+
+// The entity fields are int64 and the wire ones int32. Wrapping a large value
+// into a small plausible-looking one is worse than saturating, because nothing
+// downstream can tell the result apart from a genuine one.
+func TestRunInfoSaturatesRatherThanWrapping(t *testing.T) {
+	info := runInfo(&run_v1alpha.Run{
+		ID:      "run/demo-x-1",
+		Status:  run_v1alpha.FAILED,
+		Attempt: math.MaxInt32 + 1,
+		Result:  run_v1alpha.Result{Code: math.MaxInt32 + 1, At: time.Now()},
+	})
+
+	assert.Equal(t, int32(math.MaxInt32), info.Attempt(), "must not wrap to a negative attempt")
+	assert.Equal(t, int32(math.MaxInt32), info.ExitCode(), "must not wrap to a small exit code")
+
+	info = runInfo(&run_v1alpha.Run{
+		ID:      "run/demo-x-1",
+		Status:  run_v1alpha.FAILED,
+		Attempt: math.MinInt32 - 1,
+		Result:  run_v1alpha.Result{Code: math.MinInt32 - 1, At: time.Now()},
+	})
+	assert.Equal(t, int32(math.MinInt32), info.ExitCode())
 }

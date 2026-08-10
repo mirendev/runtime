@@ -316,7 +316,7 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 	info.SetTrigger(strings.TrimPrefix(string(run.Trigger), "trigger."))
 	info.SetStatus(strings.TrimPrefix(string(run.Status), "status."))
 	info.SetCommand(run.Command)
-	info.SetAttempt(int32(run.Attempt))
+	info.SetAttempt(int32(clampInt32(run.Attempt)))
 	info.SetSandbox(run.Sandbox.String())
 	info.SetVersion(run.Version.String())
 
@@ -334,13 +334,7 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 		// are a byte, so this only matters for a corrupt or hostile value --
 		// but silently wrapping one into a plausible-looking code is the worst
 		// available outcome, so clamp instead.
-		code := run.Result.Code
-		if code > math.MaxInt32 {
-			code = math.MaxInt32
-		} else if code < math.MinInt32 {
-			code = math.MinInt32
-		}
-		info.SetExitCode(int32(code))
+		info.SetExitCode(int32(clampInt32(run.Result.Code)))
 	}
 
 	if !run.StartedAt.IsZero() {
@@ -351,6 +345,23 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 	}
 
 	return &info
+}
+
+// clampInt32 saturates rather than wrapping at the wire boundary.
+//
+// The entity fields are int64 and the RPC ones int32. Real exit codes are a
+// byte and real attempt counts are single digits, so this only matters for a
+// corrupt or hostile value -- but wrapping one into a small plausible-looking
+// number is the worst available outcome, since nothing downstream can tell it
+// apart from a genuine result.
+func clampInt32(v int64) int64 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return v
 }
 
 // reportsExitCode says whether a run ended by its command exiting, which is the
