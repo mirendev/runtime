@@ -15,6 +15,8 @@ The admin interface allows you to expose custom administrative functions in your
 Handle JSON-RPC 2.0 at `/.well-known/miren/admin` in your web service, validating the injected `ADMIN_TOKEN`:
 
 ```typescript
+const adminToken = process.env.ADMIN_TOKEN;
+
 Bun.serve({
   port: process.env.PORT ?? 3000,
   async fetch(req) {
@@ -22,7 +24,7 @@ Bun.serve({
     if (req.method !== 'POST' || url.pathname !== '/.well-known/miren/admin') {
       return new Response('Not Found', { status: 404 });
     }
-    if (req.headers.get('authorization') !== `Bearer ${process.env.ADMIN_TOKEN}`) {
+    if (!adminToken || req.headers.get('authorization') !== `Bearer ${adminToken}`) {
       return new Response('Unauthorized', { status: 401 });
     }
     const { method, id } = await req.json();

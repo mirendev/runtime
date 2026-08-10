@@ -26,7 +26,7 @@ provider = "local"
 mount_path = "/data"
 ```
 
-Anything the service writes under `/data` survives restarts and redeploys. For a managed [Miren Disk](#miren-disks) with exclusive leasing and its own size, drop `provider = "local"` and set `size_gb` instead.
+Anything the service writes under `/data` survives restarts and redeploys. For a managed [Miren Disk](#miren-disks) with exclusive leasing and its own size, drop `provider = "local"` and set `size_gb` instead — and give the service fixed concurrency (`mode = "fixed"`, `num_instances = 1`), which miren disks require.
 
 ## Local Storage
 
@@ -132,11 +132,15 @@ The feature is designed to keep our costs low, and our intention is to pass that
 
 ### Configuring Disks
 
-Add a disk to your application by including a `disks` section in your service configuration in `.miren/app.toml`:
+Add a disk to your application by including a `disks` section in your service configuration in `.miren/app.toml`. Because a miren disk is leased exclusively to one instance, the service must use fixed concurrency with `num_instances = 1`:
 
 ```toml
 [services.web]
 image = "myapp:latest"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
 
 [[services.web.disks]]
 name = "my-app-data"
@@ -187,6 +191,10 @@ the walk. Set `owner = "keep"` to opt out entirely.
 [services.db]
 image = "postgres:16"
 
+[services.db.concurrency]
+mode = "fixed"
+num_instances = 1
+
 [[services.db.env]]
 key = "POSTGRES_PASSWORD"
 value = "secret"
@@ -207,6 +215,10 @@ filesystem = "ext4"
 ```toml
 [services.web]
 image = "myapp:latest"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
 
 [[services.web.disks]]
 name = "myapp-uploads"

@@ -28,6 +28,8 @@ acme_dns_provider = "cloudflare"
 acme_email = "you@example.com"
 ```
 
+The DNS provider also needs its API credential in the Miren server's environment (for Cloudflare, `CF_DNS_API_TOKEN`) — the [DNS-01 section](#dns-01-challenge) shows how to wire it up.
+
 ## How It Works
 
 When a request arrives for a hostname with a configured route, Miren provisions a TLS certificate from Let's Encrypt using the ACME protocol. Certificates are cached on disk and renewed automatically before they expire.

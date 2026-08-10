@@ -34,8 +34,8 @@ TOKEN=$(cat "$MIREN_IDENTITY_TOKEN_PATH")
 Or request one scoped to a specific audience from the token server:
 
 ```bash
-curl -H "Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET" \
-  "$MIREN_IDENTITY_TOKEN_URL?audience=sts.amazonaws.com&ttl=900"
+TOKEN=$(curl -s -H "Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET" \
+  "$MIREN_IDENTITY_TOKEN_URL?audience=sts.amazonaws.com&ttl=900" | jq -r .value)
 ```
 
 Present the JWT to any service configured to trust your cluster's issuer (`$MIREN_OIDC_ISSUER_URL`) — see [AWS via STS Federation](#aws-via-sts-federation) for the end-to-end flow.
