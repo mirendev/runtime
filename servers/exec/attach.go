@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/entity"
@@ -47,11 +48,18 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 
 	hub := s.Hubs.Get(entity.Id(sandboxID), container)
 	if hub == nil {
-		// Either the sandbox isn't on this node, or its container was created
-		// without stdin. The second case is not recoverable at attach time:
-		// containerd wires up a stdin FIFO when the task is created and cannot
-		// add one later, so this has to be a clear error rather than a
-		// half-working attach with no input.
+		// No hub yet, and the two reasons need different answers. A container
+		// declared attachable simply has not booted yet, and the caller should
+		// wait. One never declared stdin never will be attachable: containerd
+		// wires up the FIFO at task creation and cannot add one later, so
+		// waiting would burn the client's whole timeout for nothing.
+		attachable, err := s.containerDeclaresStdin(ctx, sandboxID, container)
+		if err != nil {
+			return fmt.Errorf("attach: %w", err)
+		}
+		if attachable {
+			return NotReadyError{Sandbox: sandboxID, Container: container}
+		}
 		return fmt.Errorf("attach: container %q of %s is not attachable", container, sandboxID)
 	}
 
@@ -114,6 +122,38 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	}
 
 	return nil
+}
+
+// NotReadyError says the container is attachable but has not booted yet, which
+// is worth waiting for. It is distinct from "not attachable" so a client can
+// tell a race from a permanent answer instead of retrying both for two minutes
+// and then reporting one generic failure.
+type NotReadyError struct {
+	Sandbox   string
+	Container string
+}
+
+func (e NotReadyError) Error() string {
+	return fmt.Sprintf("attach: container %q of %s is not running yet", e.Container, e.Sandbox)
+}
+
+// containerDeclaresStdin reports whether the sandbox spec asked for this
+// container to be attachable, which is what separates "not yet" from "never".
+func (s *Server) containerDeclaresStdin(ctx context.Context, sandboxID, container string) (bool, error) {
+	resp, err := s.EAC.Get(ctx, sandboxID)
+	if err != nil {
+		return false, fmt.Errorf("reading sandbox %s: %w", sandboxID, err)
+	}
+
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+
+	for _, c := range sb.Spec.Container {
+		if c.Name == container {
+			return c.Stdin, nil
+		}
+	}
+	return false, nil
 }
 
 // hubStdin adapts a Hub to io.Writer for the input pump.

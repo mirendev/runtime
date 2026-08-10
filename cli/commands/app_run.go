@@ -147,9 +147,14 @@ func attachTargetMissing(err error) bool {
 	if errors.Is(err, cond.ErrNotFound{}) {
 		return true
 	}
+	// The error crosses an RPC boundary, so the typed value does not survive and
+	// the text is what there is to match on. These are the runner and proxy's
+	// three ways of saying "not yet": no sandbox entity, no node assigned, and
+	// no container booted.
 	msg := err.Error()
 	return strings.Contains(msg, "failed to find sandbox") ||
-		strings.Contains(msg, "not scheduled to a node yet")
+		strings.Contains(msg, "not scheduled to a node yet") ||
+		strings.Contains(msg, "is not running yet")
 }
 
 // reportRunExit propagates the run's exit code to the caller's shell.
