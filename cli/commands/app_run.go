@@ -159,7 +159,21 @@ func attachTargetMissing(err error) bool {
 // read the run is different: the task's outcome is unknown, and exiting 0 would
 // tell a script it succeeded.
 func reportRunExit(ctx *Context, runs *app_v1alpha.RunsClient, runID string) error {
-	got, err := runs.GetRun(ctx, runID)
+	// Retry briefly. A single transient read failure turning a task that
+	// succeeded into a CLI error is its own kind of lie, and the run has just
+	// finished writing its result.
+	var (
+		got *app_v1alpha.RunsClientGetRunResults
+		err error
+	)
+	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(runAttachPoll)
+		}
+		if got, err = runs.GetRun(ctx, runID); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("reading run %s to report its exit code: %w", runID, err)
 	}
