@@ -2,10 +2,12 @@ package execproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -27,13 +29,20 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 
 	ent, err := s.EAC.Get(ctx, id)
 	if err != nil {
-		// Accept a bare name as well as a full id, matching Exec's resolution.
-		var retryErr error
-		ent, retryErr = s.EAC.Get(ctx, "sandbox/"+id)
-		if retryErr != nil {
+		// Accept a bare name as well as a full id, matching Exec's resolution --
+		// but only when the first lookup genuinely found nothing. Retrying after
+		// a transient or access failure would look up a different id and report
+		// the second error, hiding the real one.
+		if !errors.Is(err, cond.ErrNotFound{}) {
 			return fmt.Errorf("failed to find sandbox %s: %w", id, err)
 		}
-		id = "sandbox/" + id
+
+		prefixed := "sandbox/" + id
+		ent, err = s.EAC.Get(ctx, prefixed)
+		if err != nil {
+			return fmt.Errorf("failed to find sandbox %s: %w", id, err)
+		}
+		id = prefixed
 	}
 
 	found := ent.Entity().Entity()

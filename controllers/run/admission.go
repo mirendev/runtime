@@ -82,6 +82,13 @@ func (c *Controller) acquireSlot(ctx context.Context, r *run_v1alpha.Run) (bool,
 			AcquiredAt: time.Now(),
 		}); cerr == nil {
 			return true, nil
+		} else {
+			// Usually a lost race, which the re-read below reports as
+			// in-flight. It can also be a transient store failure, and those
+			// look identical from here -- so record it, or an operator sees
+			// only a run that stays pending for no visible reason.
+			c.Log.Debug("run slot create did not take, re-reading",
+				"run", r.ID, "task", r.Task, "error", cerr)
 		}
 
 		existingEnt, err = c.EC.GetWithEntity(ctx, name, &existing)

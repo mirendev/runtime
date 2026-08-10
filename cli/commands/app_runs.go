@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"miren.dev/runtime/pkg/ui"
@@ -27,6 +28,13 @@ func AppRuns(ctx *Context, opts struct {
 	limit := opts.Limit
 	if limit == 0 {
 		limit = defaultRunListLimit
+	}
+	// Reject before narrowing. The RPC field is int32, so a value past its
+	// range wraps -- 4294967296 becomes 0, which the server reads as "no limit"
+	// and returns everything. Better to refuse than to silently do the opposite
+	// of what was asked.
+	if limit < 0 || limit > math.MaxInt32 {
+		return fmt.Errorf("--limit must be between 1 and %d", math.MaxInt32)
 	}
 
 	results, err := runs.ListRuns(ctx, opts.App, opts.Task, int32(limit))

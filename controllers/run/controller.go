@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/cond"
@@ -334,9 +335,12 @@ func (c *Controller) ensureTornDown(ctx context.Context, r *run_v1alpha.Run) err
 	sb, err := c.getSandbox(ctx, r.Sandbox)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
+			// Already gone, which is the outcome this wanted.
 			return nil
 		}
-		return nil
+		// Anything else means we could not tell whether a sandbox is still
+		// live. Return so the framework retries rather than leaving one running.
+		return fmt.Errorf("reading sandbox for terminal run: %w", err)
 	}
 	if sb.Status == compute.DEAD || sb.Status == compute.STOPPED {
 		return nil
@@ -389,8 +393,8 @@ func (c *Controller) ensureSandbox(ctx context.Context, r *run_v1alpha.Run) (ent
 		attempt = 1
 	}
 
-	name := fmt.Sprintf("run-%s-a%d", strings.TrimPrefix(r.ID.String(), "run/"), attempt)
-	sandboxID := entity.Id("sandbox/" + name)
+	sandboxID := runapi.SandboxName(r.ID, attempt)
+	name := strings.TrimPrefix(sandboxID.String(), "sandbox/")
 
 	if existing, err := c.getSandbox(ctx, sandboxID); err == nil {
 		return existing.ID, nil

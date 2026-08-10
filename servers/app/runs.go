@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
@@ -120,9 +122,10 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 		"run", id, "app", appName, "task", taskName, "trigger", "manual")
 
 	state.Results().SetId(id.String())
-	// The sandbox name is derived from the run and the attempt, so a client can
-	// attach without waiting to observe the sandbox being created.
-	state.Results().SetSandboxName(fmt.Sprintf("sandbox/run-%s-a1", strings.TrimPrefix(id.String(), "run/")))
+	// Derived from the run and the attempt by the same helper the controller
+	// uses, so a client can attach without waiting to observe the sandbox being
+	// created -- and the two cannot drift apart.
+	state.Results().SetSandboxName(runapi.SandboxName(id, 1).String())
 	return nil
 }
 
@@ -327,7 +330,17 @@ func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
 	// on the entity; it just isn't the run's result. The status carries the
 	// meaning in those cases.
 	if reportsExitCode(run.Status) && !run.Result.At.IsZero() {
-		info.SetExitCode(int32(run.Result.Code))
+		// The entity stores int64 and the wire field is int32. Real exit codes
+		// are a byte, so this only matters for a corrupt or hostile value --
+		// but silently wrapping one into a plausible-looking code is the worst
+		// available outcome, so clamp instead.
+		code := run.Result.Code
+		if code > math.MaxInt32 {
+			code = math.MaxInt32
+		} else if code < math.MinInt32 {
+			code = math.MinInt32
+		}
+		info.SetExitCode(int32(code))
 	}
 
 	if !run.StartedAt.IsZero() {

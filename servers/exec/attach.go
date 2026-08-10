@@ -80,6 +80,12 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 					if !ok {
 						return
 					}
+					// The wire fields are signed. A negative or zero dimension
+					// is meaningless, and casting one to uint32 would ask the
+					// pty for a gigantic terminal rather than being ignored.
+					if ws == nil || ws.Width() <= 0 || ws.Height() <= 0 {
+						continue
+					}
 					if err := hub.Resize(ctx, uint32(ws.Width()), uint32(ws.Height())); err != nil {
 						s.Log.Debug("failed to resize attached terminal", "error", err)
 					}
