@@ -259,6 +259,16 @@ func (s *Scheduler) fireTick(
 		Tick:        tick.UTC().Format(time.RFC3339),
 	}
 
+	// A skipped tick is born terminal, so it never passes through the
+	// controller that would otherwise stamp its timestamps. Retention is
+	// measured from EndedAt, and a scheduled run with none is retained
+	// unconditionally -- so without this, skipped ticks accumulate forever on
+	// exactly the busy task that produces the most of them.
+	if status == run_v1alpha.SKIPPED {
+		run.StartedAt = tick
+		run.EndedAt = tick
+	}
+
 	// Create is put-if-absent on a name derived from the tick, which is the
 	// entire single-execution guarantee: every replica derives the same name,
 	// etcd admits one, and the rest learn the tick is taken.

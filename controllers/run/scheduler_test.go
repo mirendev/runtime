@@ -265,3 +265,28 @@ func TestSchedulerFrontierDoesNotSkipUnfiredTicks(t *testing.T) {
 	assert.True(t, ticks["2026-08-04T12:30:00Z"], "the earlier tick must not be skipped over")
 	assert.True(t, ticks["2026-08-04T13:00:00Z"])
 }
+
+// A skipped tick is terminal the moment it is created, so it never passes
+// through the controller that stamps timestamps. Retention measures from
+// EndedAt and retains a scheduled run that has none, so without them the
+// busiest task accumulates skipped ticks forever.
+func TestSchedulerStampsSkippedTicks(t *testing.T) {
+	ctx := context.Background()
+	h := newSchedHarness(t, "*-*-* *:00/30:00")
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:30:01Z")))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T13:00:01Z")))
+
+	var skipped *run_v1alpha.Run
+	for _, r := range h.runs(ctx) {
+		if r.Status == run_v1alpha.SKIPPED {
+			skipped = &r
+		}
+	}
+	require.NotNil(t, skipped, "expected a skipped tick")
+
+	assert.False(t, skipped.EndedAt.IsZero(), "GC retains a scheduled run with no EndedAt forever")
+	assert.Equal(t, atUTC("2026-08-04T13:00:00Z"), skipped.EndedAt.UTC(),
+		"the tick it claimed is the honest timestamp for a run that never executed")
+}
