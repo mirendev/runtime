@@ -292,7 +292,10 @@ func (s *Scheduler) fireTick(
 	}
 
 	if status == run_v1alpha.SKIPPED {
-		s.Log.Info("skipped scheduled tick, previous run still going",
+		// Warn, not Info: the task did not run. That is a degraded handled
+		// event, and an operator watching a schedule wants it to stand out
+		// from the ticks that fired normally.
+		s.Log.Warn("skipped scheduled tick, previous run still going",
 			"run", id, "app", app.ID, "task", task.Name, "tick", run.Tick)
 		return nil
 	}
