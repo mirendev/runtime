@@ -2,8 +2,10 @@ package run
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,12 +134,25 @@ func TestSchedulerFiresEachTickExactlyOnce(t *testing.T) {
 	other := NewScheduler(log, h.inm.Client, h.inm.EAC)
 	require.NoError(t, other.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
 
+	// Evaluate the same tick from both replicas at once. Sequential sweeps
+	// would let the later one observe the earlier one's run and skip on that
+	// basis, which proves nothing about the create-if-absent guarantee.
 	at := atUTC("2026-08-04T12:30:01Z")
-	require.NoError(t, h.s.Sweep(ctx, at))
-	require.NoError(t, other.Sweep(ctx, at))
-	require.NoError(t, h.s.Sweep(ctx, at))
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, s := range []*Scheduler{h.s, other} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = s.Sweep(ctx, at)
+		}()
+	}
+	wg.Wait()
 
-	assert.Len(t, h.runs(ctx), 1, "one tick must produce one run however many replicas evaluate it")
+	for _, err := range errs {
+		require.NoError(t, err, "losing the race is not an error")
+	}
+	assert.Len(t, h.runs(ctx), 1, "one tick must produce one run however many replicas evaluate it at once")
 }
 
 // Ticks do not queue. A tick whose predecessor is still going is skipped -- and
@@ -244,25 +259,45 @@ func TestTickRunName(t *testing.T) {
 }
 
 // The frontier is what decides a tick is behind us, so it must only advance
-// past ticks that were actually handled. Advancing first would drop any tick
-// whose fire failed, permanently.
+// past ticks that were actually handled. Advancing first would drop the
+// remainder permanently when one fails -- and that difference is invisible
+// unless a failure is injected, since a sweep where everything succeeds
+// behaves identically either way.
 func TestSchedulerFrontierDoesNotSkipUnfiredTicks(t *testing.T) {
 	ctx := context.Background()
 	h := newSchedHarness(t, "*-*-* *:00/30:00")
 
 	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
 
-	// Two ticks come due at once.
-	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T13:00:01Z")))
+	// Two ticks come due at once, and the first one fails to fire.
+	real := h.s.fire
+	var attempted []time.Time
+	h.s.fire = func(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, appName string, task core_v1alpha.ConfigSpecTasks, tick time.Time) error {
+		attempted = append(attempted, tick)
+		if tick.Equal(atUTC("2026-08-04T12:30:00Z")) {
+			return errors.New("injected fire failure")
+		}
+		return real(ctx, app, ver, appName, task, tick)
+	}
 
-	runs := h.runs(ctx)
-	require.Len(t, runs, 2, "both due ticks are accounted for")
+	// A failing task is logged rather than aborting the sweep -- one bad task
+	// must not stop the others -- so the observable contract is what the next
+	// sweep does, not what this one returns.
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T13:00:01Z")))
+	require.Equal(t, []time.Time{atUTC("2026-08-04T12:30:00Z")}, attempted,
+		"the sweep stops at the failed tick rather than racing past it")
+
+	// The failure is over; the next sweep must retry the tick it could not
+	// fire, not skip to the newer one.
+	h.s.fire = real
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T13:00:02Z")))
 
 	ticks := map[string]bool{}
-	for _, r := range runs {
+	for _, r := range h.runs(ctx) {
 		ticks[r.Tick] = true
 	}
-	assert.True(t, ticks["2026-08-04T12:30:00Z"], "the earlier tick must not be skipped over")
+	assert.True(t, ticks["2026-08-04T12:30:00Z"],
+		"a tick that failed to fire must be retried, not left behind the frontier")
 	assert.True(t, ticks["2026-08-04T13:00:00Z"])
 }
 

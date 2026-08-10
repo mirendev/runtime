@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
@@ -2907,13 +2908,73 @@ func TestMigrateConsoleService(t *testing.T) {
 }
 
 // The deploy gate exists to prove every task ran. A skipped run did not, so it
-// must not let the version flip.
+// must not let the version flip -- and that has to be exercised through
+// awaitDeployRuns, since asserting the predicate alone would still pass if the
+// wait loop treated SKIPPED as done.
 func TestDeployGateRejectsASkippedRun(t *testing.T) {
-	// terminalWord is the message helper; the behavior under test is that
-	// SKIPPED is not in the success branch of awaitDeployRuns. Asserting the
-	// classification keeps that explicit.
-	assert.False(t, isDeployTaskSuccess(run_v1alpha.SKIPPED),
-		"a skipped run never executed, so it cannot satisfy the gate")
-	assert.True(t, isDeployTaskSuccess(run_v1alpha.SUCCEEDED))
-	assert.False(t, isDeployTaskSuccess(run_v1alpha.FAILED))
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-1")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SKIPPED))
+	require.NoError(t, err)
+
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {})
+	require.Error(t, err, "a skipped run never executed, so it cannot satisfy the gate")
+	assert.Contains(t, err.Error(), "migrate")
+	assert.Contains(t, err.Error(), "skipped")
+}
+
+// And the succeeding case has to actually pass, or the gate would block every
+// deploy rather than only the broken ones.
+func TestDeployGateAcceptsASucceededRun(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-2")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SUCCEEDED))
+	require.NoError(t, err)
+
+	assert.NoError(t, b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {}))
+}
+
+func TestDeployGateRejectsAFailedRun(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-3")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.FAILED))
+	require.NoError(t, err)
+
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {})
+	require.Error(t, err)
+	// The message has to point at the logs, since a failing migration is a
+	// deploy failure and the user is already reading this output.
+	assert.Contains(t, err.Error(), "miren logs run")
+}
+
+// runEntity builds a terminal run for the gate tests.
+func runEntity(t *testing.T, id entity.Id, status run_v1alpha.RunStatus) *entityserver_v1alpha.Entity {
+	t.Helper()
+
+	var e entityserver_v1alpha.Entity
+	e.SetId(id.String())
+	e.SetAttrs(entity.New(entity.DBId, id, (&run_v1alpha.Run{
+		Task:    "migrate",
+		Trigger: run_v1alpha.DEPLOY,
+		Status:  status,
+	}).Encode).Attrs())
+	return &e
 }

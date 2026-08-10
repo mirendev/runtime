@@ -53,16 +53,25 @@ type Scheduler struct {
 	// backfilled.
 	mu       sync.Mutex
 	frontier map[string]time.Time
+
+	// fire is the tick-firing step, indirected so a test can make it fail.
+	// The frontier only advances past ticks that were actually handled, and
+	// that rule is invisible unless a failure can be injected -- a sweep where
+	// everything succeeds behaves identically whether the frontier moves before
+	// or after firing.
+	fire func(context.Context, *core_v1alpha.App, *core_v1alpha.AppVersion, string, core_v1alpha.ConfigSpecTasks, time.Time) error
 }
 
 func NewScheduler(log *slog.Logger, ec *entityserver.Client, eac *entityserver_v1alpha.EntityAccessClient) *Scheduler {
-	return &Scheduler{
+	s := &Scheduler{
 		Log:      log.With("module", "run-scheduler"),
 		EC:       ec,
 		EAC:      eac,
 		Interval: SchedulerInterval,
 		frontier: make(map[string]time.Time),
 	}
+	s.fire = s.fireTick
+	return s
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
@@ -206,7 +215,7 @@ func (s *Scheduler) sweepTask(
 	// it first would drop any tick whose fire failed -- permanently, since the
 	// frontier is what decides a tick is behind us.
 	for _, tick := range fired {
-		if err := s.fireTick(ctx, app, ver, appName, task, tick); err != nil {
+		if err := s.fire(ctx, app, ver, appName, task, tick); err != nil {
 			return err
 		}
 

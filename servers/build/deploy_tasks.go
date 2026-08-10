@@ -196,12 +196,6 @@ func (b *Builder) awaitDeployRuns(
 	return nil
 }
 
-// isDeployTaskSuccess reports whether a run satisfies the deploy gate. Only a
-// command that ran and exited zero does; a skipped run never executed.
-func isDeployTaskSuccess(s run_v1alpha.RunStatus) bool {
-	return s == run_v1alpha.SUCCEEDED
-}
-
 func terminalWord(s run_v1alpha.RunStatus) string {
 	switch s {
 	case run_v1alpha.TIMED_OUT:
