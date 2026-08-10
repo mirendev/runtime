@@ -175,7 +175,9 @@ func TestSchedulerResumesAfterThePredecessorFinishes(t *testing.T) {
 	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
 	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:30:01Z")))
 
-	first := h.runs(ctx)[0]
+	runs := h.runs(ctx)
+	require.Len(t, runs, 1, "the tick should have produced exactly one run")
+	first := runs[0]
 	_, err := h.inm.EAC.Patch(ctx, entity.New(
 		entity.Ref(entity.DBId, first.ID),
 		(&run_v1alpha.Run{Status: run_v1alpha.SUCCEEDED}).Encode,
@@ -239,4 +241,27 @@ func TestTickRunName(t *testing.T) {
 	// a second run.
 	tokyo := tick.In(time.FixedZone("JST", 9*60*60))
 	assert.Equal(t, a, tickRunName("demo", "cleanup", tokyo))
+}
+
+// The frontier is what decides a tick is behind us, so it must only advance
+// past ticks that were actually handled. Advancing first would drop any tick
+// whose fire failed, permanently.
+func TestSchedulerFrontierDoesNotSkipUnfiredTicks(t *testing.T) {
+	ctx := context.Background()
+	h := newSchedHarness(t, "*-*-* *:00/30:00")
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
+
+	// Two ticks come due at once.
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T13:00:01Z")))
+
+	runs := h.runs(ctx)
+	require.Len(t, runs, 2, "both due ticks are accounted for")
+
+	ticks := map[string]bool{}
+	for _, r := range runs {
+		ticks[r.Tick] = true
+	}
+	assert.True(t, ticks["2026-08-04T12:30:00Z"], "the earlier tick must not be skipped over")
+	assert.True(t, ticks["2026-08-04T13:00:00Z"])
 }

@@ -287,7 +287,17 @@ func (c *GCController) stopFinishedSandbox(ctx context.Context, r *run_v1alpha.R
 	if r.Sandbox == "" {
 		return nil
 	}
-	if !r.EndedAt.IsZero() && now.Sub(r.EndedAt) < c.Config.OrphanSandbox {
+	// Only look at runs that finished recently enough for a lingering sandbox
+	// to be plausible. Without an upper bound this re-reads the sandbox of
+	// every retained run on every sweep, which for an app at the retention cap
+	// is a fixed cost per sweep that buys nothing: the run controller tears
+	// down on the transition, and anything it missed is caught within one
+	// window rather than needing to be rechecked forever.
+	if r.EndedAt.IsZero() {
+		return nil
+	}
+	age := now.Sub(r.EndedAt)
+	if age < c.Config.OrphanSandbox || age > c.Config.OrphanSandbox+c.Config.CheckInterval*4 {
 		return nil
 	}
 

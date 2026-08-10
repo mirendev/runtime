@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/entity"
@@ -2903,4 +2904,16 @@ func TestMigrateConsoleService(t *testing.T) {
 		// and leave the console running with the wrong environment.
 		assert.Equal(t, "production", ac.Tasks["console"].EnvVars[0].Value)
 	})
+}
+
+// The deploy gate exists to prove every task ran. A skipped run did not, so it
+// must not let the version flip.
+func TestDeployGateRejectsASkippedRun(t *testing.T) {
+	// terminalWord is the message helper; the behavior under test is that
+	// SKIPPED is not in the success branch of awaitDeployRuns. Asserting the
+	// classification keeps that explicit.
+	assert.False(t, isDeployTaskSuccess(run_v1alpha.SKIPPED),
+		"a skipped run never executed, so it cannot satisfy the gate")
+	assert.True(t, isDeployTaskSuccess(run_v1alpha.SUCCEEDED))
+	assert.False(t, isDeployTaskSuccess(run_v1alpha.FAILED))
 }

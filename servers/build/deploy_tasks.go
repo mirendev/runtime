@@ -2,12 +2,14 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -151,9 +153,15 @@ func (b *Builder) awaitDeployRuns(
 		for id, task := range pending {
 			var run run_v1alpha.Run
 			if err := b.ec.GetById(ctx, id, &run); err != nil {
-				// A run that can't be read yet is not a failure; the next poll
-				// tries again and the ceiling bounds it.
-				continue
+				// A run that isn't visible yet is a race with its own creation,
+				// and the next poll picks it up. Anything else -- a permission
+				// or transport failure -- will not fix itself, and waiting out
+				// the ceiling would turn it into a two-hour hang with a
+				// misleading message.
+				if errors.Is(err, cond.ErrNotFound{}) {
+					continue
+				}
+				return fmt.Errorf("reading deploy task run %s: %w", task, err)
 			}
 
 			switch run.Status {
@@ -173,10 +181,12 @@ func (b *Builder) awaitDeployRuns(
 				// Still going.
 
 			case run_v1alpha.SKIPPED:
-				// Only a scheduled tick is ever skipped, so this cannot happen
-				// for a deploy-triggered run. Treat it as done rather than
-				// waiting out the ceiling if it somehow does.
-				delete(pending, id)
+				// Only a scheduled tick is ever skipped, so a deploy-triggered
+				// run reaching here means something is wrong. Fail the deploy:
+				// the gate exists to prove every task ran, and a task that was
+				// skipped did not.
+				return fmt.Errorf("deploy task %s was skipped without running; see: miren logs run %s",
+					task, run.ID)
 
 			default:
 			}
@@ -184,6 +194,12 @@ func (b *Builder) awaitDeployRuns(
 	}
 
 	return nil
+}
+
+// isDeployTaskSuccess reports whether a run satisfies the deploy gate. Only a
+// command that ran and exited zero does; a skipped run never executed.
+func isDeployTaskSuccess(s run_v1alpha.RunStatus) bool {
+	return s == run_v1alpha.SUCCEEDED
 }
 
 func terminalWord(s run_v1alpha.RunStatus) string {

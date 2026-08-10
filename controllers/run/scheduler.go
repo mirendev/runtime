@@ -160,8 +160,10 @@ func (s *Scheduler) sweepTask(
 	expr, err := oncalendar.Parse(task.Schedule)
 	if err != nil {
 		// Config validation rejects unparseable schedules, so reaching here
-		// means a version predating that check. Skip rather than retrying every
-		// interval forever.
+		// means a version that predates that check. The error is returned and
+		// logged by the caller on every sweep, which is noisy but honest: a
+		// task the platform cannot schedule should keep saying so rather than
+		// going quiet and looking healthy.
 		return fmt.Errorf("parsing schedule %q: %w", task.Schedule, err)
 	}
 
@@ -200,16 +202,17 @@ func (s *Scheduler) sweepTask(
 		}
 	}
 
-	if len(fired) > 0 {
-		s.mu.Lock()
-		s.frontier[key] = fired[len(fired)-1]
-		s.mu.Unlock()
-	}
-
+	// Advance the frontier only past ticks that were actually handled. Moving
+	// it first would drop any tick whose fire failed -- permanently, since the
+	// frontier is what decides a tick is behind us.
 	for _, tick := range fired {
 		if err := s.fireTick(ctx, app, ver, appName, task, tick); err != nil {
 			return err
 		}
+
+		s.mu.Lock()
+		s.frontier[key] = tick
+		s.mu.Unlock()
 	}
 
 	return nil

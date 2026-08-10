@@ -1365,17 +1365,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	runReconciler.SetPeriodic(runctrl.SweepInterval, runController.SweepDeadlines)
 	c.cm.AddController(runReconciler)
 
-	// Scheduled tasks. Deliberately not a reconcile controller: ticks are
-	// derived from config on a timer, not from an entity changing, and dedup is
-	// the create-if-absent on the tick-derived name rather than any lock.
-	c.runScheduler = runctrl.NewScheduler(c.Log, ec, eac)
-	c.runScheduler.Start(ctx)
-
-	// Run retention. Not a reconcile controller: it deletes rather than
-	// transitions, on a cadence of minutes.
-	c.runGC = runctrl.NewGCController(c.Log, ec, eac)
-	c.runGC.Start(ctx)
-
 	// A sandbox reaching STOPPED produces no event on the run index, so without
 	// this bridge a finished run would wait for the sweep to notice it.
 	runSandboxWatch := runctrl.NewSandboxWatchController(c.Log, eac, runReconciler)
@@ -1418,6 +1407,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to start controller manager", "error", err)
 		return err
 	}
+
+	// Scheduled tasks. Deliberately not a reconcile controller: ticks come from
+	// config on a timer, not from an entity changing, and dedup is the
+	// create-if-absent on the tick-derived name rather than any lock.
+	//
+	// Started here with the other background controllers rather than at
+	// construction, so it does not begin firing runs before the reconcile
+	// manager -- including the run controller that would execute them -- is up.
+	c.runScheduler = runctrl.NewScheduler(c.Log, ec, eac)
+	c.runScheduler.Start(ctx)
+
+	// Run retention. Not a reconcile controller either: it deletes rather than
+	// transitions, on a cadence of minutes.
+	c.runGC = runctrl.NewGCController(c.Log, ec, eac)
+	c.runGC.Start(ctx)
 
 	// Start the artifact GC controller
 	c.artifactGC = &artifactctrl.GCController{

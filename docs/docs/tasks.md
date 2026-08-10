@@ -74,11 +74,17 @@ schedule = "Mon *-*-* 09:00:00"
 
 Scheduling has three behaviors worth knowing before you rely on it:
 
-**Ticks don't queue.** If a run is still going when the next firing comes due, that firing is **skipped** — and recorded as skipped, so `miren app runs` shows it. A job that has grown slower than its interval looks the same as a job that stopped running, unless the platform says which.
+:::note[Ticks don't queue]
+If a run is still going when the next firing comes due, that firing is **skipped** — and recorded as skipped, so `miren app runs` shows it. A job that has grown slower than its interval looks the same as a job that stopped running, unless the platform says which.
+:::
 
-**Missed firings aren't replayed.** If the cluster was down when a firing came due, it's skipped rather than run on recovery. Replaying an outage's worth of jobs is a good way to turn an outage into an incident. If you need catch-up, make the job idempotent over a window.
+:::note[Missed firings aren't replayed]
+If the cluster was down when a firing came due, it's skipped rather than run on recovery. Replaying an outage's worth of jobs is a good way to turn an outage into an incident. If you need catch-up, make the job idempotent over a window.
+:::
 
-**Each firing runs once**, across the whole cluster, without you configuring anything.
+:::note[Each firing runs once]
+Once across the whole cluster, without you configuring anything.
+:::
 
 ### `manual` — run when you ask
 
