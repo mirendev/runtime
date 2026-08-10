@@ -83,13 +83,17 @@ tail = "logs app -f"
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](/in-cluster-api). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
-| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one |
+| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for an app that declares tasks, where leaving it unset is an error |
 
 ### `web` and the synthesized web service {#web}
 
 If neither `app.toml` nor your `Procfile` declares a `web` service, Miren
 synthesizes one from the image's entrypoint. That is the historical default and
 it stays the default: leaving `web` unset never changes what your app does.
+
+There is one exception, and it's the case where guessing would be expensive: an
+app that declares [tasks](#tasks) and no services has to say which it meant. See
+the validation note below.
 
 `web = false` opts out. It's how an app that only declares tasks says it has no
 long-running process at all — no web service, no route, and nothing running (or
