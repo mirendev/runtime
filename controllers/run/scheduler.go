@@ -46,6 +46,11 @@ type Scheduler struct {
 	Interval time.Duration
 
 	cancel func()
+	// done closes once the sweep loop has exited, so Stop can wait for it.
+	// Without that, Stop returns while a sweep is mid-flight and the scheduler
+	// can still create runs afterwards -- which for a caller shutting down in
+	// order is the opposite of what Stop appears to promise.
+	done chan struct{}
 
 	// mu guards frontier, which records the newest tick already considered for
 	// each (app, task). It is in-memory on purpose: on startup the frontier
@@ -78,16 +83,26 @@ func (s *Scheduler) Start(ctx context.Context) {
 	s.Log.Info("starting run scheduler", "interval", s.Interval)
 
 	ctx, s.cancel = context.WithCancel(ctx)
+	s.done = make(chan struct{})
 	go s.run(ctx)
 }
 
+// Stop cancels the scheduler and waits for an in-flight sweep to finish, so a
+// caller shutting down in order can rely on no further runs being created.
 func (s *Scheduler) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+	if s.cancel == nil {
+		return
+	}
+	s.cancel()
+
+	if s.done != nil {
+		<-s.done
 	}
 }
 
 func (s *Scheduler) run(ctx context.Context) {
+	defer close(s.done)
+
 	ticker := time.NewTicker(s.Interval)
 	defer ticker.Stop()
 
@@ -205,7 +220,9 @@ func (s *Scheduler) sweepTask(
 		cursor = next
 
 		// A pathological expression plus a long outage could otherwise produce
-		// an unbounded list; the frontier advance below still moves past them.
+		// an unbounded list. The remainder is not dropped: the frontier only
+		// advances past ticks that were fired, so the next sweep picks up where
+		// this one stopped.
 		if len(fired) >= 64 {
 			break
 		}

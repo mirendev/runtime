@@ -325,3 +325,52 @@ func TestSchedulerStampsSkippedTicks(t *testing.T) {
 	assert.Equal(t, atUTC("2026-08-04T13:00:00Z"), skipped.EndedAt.UTC(),
 		"the tick it claimed is the honest timestamp for a run that never executed")
 }
+
+// Stop has to wait for an in-flight sweep, or a caller shutting down in order
+// can still see runs created after it returns -- the opposite of what Stop
+// appears to promise.
+func TestSchedulerStopWaitsForTheSweep(t *testing.T) {
+	h := newSchedHarness(t, "*-*-* *:00/30:00")
+	h.s.Interval = time.Millisecond
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	real := h.s.fire
+	h.s.fire = func(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, appName string, task core_v1alpha.ConfigSpecTasks, tick time.Time) error {
+		once.Do(func() { close(entered) })
+		<-release
+		return real(ctx, app, ver, appName, task, tick)
+	}
+
+	// Seed the frontier in the past so the very next sweep has a tick to fire.
+	h.s.frontier[entity.Id("app/demo").String()+"/cleanup"] = time.Now().Add(-time.Hour)
+	h.s.Start(context.Background())
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweep never started")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		h.s.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a sweep was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return after the sweep finished")
+	}
+}
