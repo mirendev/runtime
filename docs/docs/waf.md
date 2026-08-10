@@ -16,7 +16,7 @@ WAF is configured per route. Enable it and all requests to that route are inspec
 The WAF inspects request content for attack payloads (SQL injection, XSS, command injection, path traversal). It does **not** rate-limit, fingerprint bots, or block reconnaissance scans (e.g., probes for `/wp-admin/` or `/xmlrpc.php` on non-WordPress sites). For that kind of filtering, use an upstream proxy like Cloudflare in front of your route.
 :::
 
-## Enabling WAF
+## Minimum working example
 
 <CliCommand context="client">
 ```miren
@@ -24,7 +24,7 @@ miren route waf myapp.example.com
 ```
 </CliCommand>
 
-This enables WAF at paranoia level 1 (the default), which catches well-known attack patterns with minimal false positives.
+That's the entire setup — WAF is enabled at paranoia level 1 (the default), which catches well-known attack patterns with minimal false positives. Malicious requests to the route now get a `403 Forbidden`; clean requests pass through unchanged.
 
 To use a higher paranoia level:
 

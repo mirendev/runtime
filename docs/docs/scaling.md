@@ -14,6 +14,23 @@ Miren automatically scales your application instances based on traffic. This pag
 This page is about how many instances of your app run. When the machine itself runs out of room, you add more machines to the cluster instead: see [Distributed Runners](/distributed-runners).
 :::
 
+## Minimum working example
+
+Configure scaling in `.miren/app.toml` under `[services.<name>.concurrency]`:
+
+```toml
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+scale_down_delay = "15m"
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 2
+```
+
+`auto` scales the service with traffic, all the way down to zero when idle; `fixed` runs an exact instance count. Deploy and the settings take effect. Both modes and every field are explained below.
+
 ## How Autoscaling Works
 
 By default, Miren uses **autoscaling** for web services. As traffic to your application increases, Miren automatically launches additional instances to handle the load. When traffic decreases, instances are scaled back down.

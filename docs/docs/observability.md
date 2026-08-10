@@ -8,6 +8,22 @@ keywords: [observability, tracing, opentelemetry, spans, latency, cold start]
 
 Miren instruments the request lifecycle with [OpenTelemetry](https://opentelemetry.io/) distributed tracing. Traces flow from the initial HTTP request through internal routing, sandbox management, and container operations, giving you visibility into what's happening at every layer.
 
+## Minimum working example
+
+Miren's side needs no setup — every request is already traced, and the `traceparent` header is forwarded to your app. To join your app's spans to those traces, point an OpenTelemetry SDK at your backend in `.miren/app.toml`:
+
+```toml
+[[env]]
+key = "OTEL_EXPORTER_OTLP_ENDPOINT"
+value = "https://your-otel-collector:4318"
+
+[[env]]
+key = "OTEL_SERVICE_NAME"
+value = "my-app"
+```
+
+The SDK picks up `traceparent` from incoming requests, so your app's spans land in the same trace as Miren's routing and cold-start spans.
+
 ## What Miren Traces
 
 Every HTTP request that arrives at Miren generates a trace with spans covering:

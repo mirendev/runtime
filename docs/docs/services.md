@@ -10,6 +10,22 @@ import CliCommand from '@site/src/components/CliCommand';
 
 A Miren app can run multiple **services**—separate processes that work together as part of the same application. Each service can have its own command, image, environment variables, and scaling configuration.
 
+## Minimum working example
+
+Define one service per process in `.miren/app.toml`:
+
+```toml title=".miren/app.toml"
+name = "myapp"
+
+[services.web]
+command = "npm start"
+
+[services.worker]
+command = "npm run worker"
+```
+
+Deploy, and both processes run from your app's built image — `web` receives HTTP traffic, `worker` runs alongside it, and each scales independently.
+
 ## What is a Service?
 
 A service is a named process within your app. Common patterns include:

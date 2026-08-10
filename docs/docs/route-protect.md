@@ -21,6 +21,19 @@ Both work the same way: add an auth provider, then attach it to a route with `mi
 
 With OIDC, your app reads identity straight off plain HTTP headers like `X-User-Email`, so there's no auth code to write. Any standards-compliant identity provider works.
 
+## Minimum working example
+
+The fastest way to put a login in front of a route is a shared password:
+
+<CliCommand context="client">
+```miren
+miren auth provider add password staging-pw
+miren route protect staging.example.com --provider staging-pw
+```
+</CliCommand>
+
+Visitors now get a login form; entering the right password sets a 24-hour session cookie. For per-user identity from a provider like Google or GitHub, use the OIDC [Quick Start](#quick-start) below instead.
+
 ## Quick Start
 
 **Step 1: Add an identity provider**

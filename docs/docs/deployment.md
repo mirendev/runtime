@@ -10,6 +10,18 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Deployment is the core workflow of Miren — it takes your application code, builds a container image, and runs it on your server.
 
+## Minimum working example
+
+From the root of your project:
+
+<CliCommand context="client">
+```miren
+miren deploy
+```
+</CliCommand>
+
+That's the whole thing — Miren detects your language, builds the image on the server, and activates the new version. If the project isn't set up yet, the CLI offers to run `miren init` first; if the app doesn't exist on the server, it's created automatically on first deploy.
+
 ## How Deployment Works
 
 When you run `miren deploy`, Miren:

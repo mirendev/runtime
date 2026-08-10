@@ -10,6 +10,26 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren handles getting traffic to your app. For HTTP apps, this works automatically — deploy and add a route. For non-HTTP services like IRC servers, game servers, or custom TCP/UDP protocols, you configure ports explicitly.
 
+## Minimum working example
+
+Map a hostname to your app:
+
+<CliCommand context="client">
+```miren
+miren route set myapp.example.com myapp
+```
+</CliCommand>
+
+Requests to that hostname now reach your `web` service, with TLS provisioned automatically. For a non-HTTP service, expose a port directly in `.miren/app.toml`:
+
+```toml
+[[services.irc.ports]]
+port = 6667
+name = "irc"
+type = "tcp"
+node_port = 6667
+```
+
 ## Web Traffic (HTTP)
 
 When you deploy an app, the `web` service automatically receives HTTP traffic. No port configuration is needed — Miren handles TLS, routing, and load balancing.

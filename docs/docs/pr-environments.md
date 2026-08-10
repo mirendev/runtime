@@ -10,6 +10,18 @@ import CliCommand from '@site/src/components/CliCommand';
 
 A pull request environment is a labeled build of your app — called an **ephemeral version** in Miren — that runs alongside the active version on its own subdomain. It runs separately from your normal deploys and is deleted automatically when its TTL expires. The typical use is one preview per PR, reachable at something like `pr-123.myapp.example.com`.
 
+## Minimum working example
+
+With wildcard DNS pointed at your cluster (`*.myapp.example.com` → your cluster's hostname), one flag creates a preview:
+
+<CliCommand context="client">
+```miren
+miren deploy --ephemeral pr-123 --ttl 48h
+```
+</CliCommand>
+
+The build comes up at `https://pr-123.myapp.example.com`, runs alongside the active version without touching production traffic, and deletes itself when the TTL expires. See [Quick Start](#quick-start) for the DNS setup.
+
 ## How It Works
 
 When you run `miren deploy --ephemeral <label>`:
@@ -171,11 +183,11 @@ To deploy a preview per pull request from GitHub Actions, pair this with [CI/CD 
 
 **Step 1: Allow `pull_request` events on the OIDC binding.**
 
-`miren auth ci --github` permits `push` and `workflow_dispatch` by default. Add `pull_request`:
+`miren auth ci add --github` permits `push` and `workflow_dispatch` by default. Add `pull_request`:
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp-staging --github acme/web-app \
+miren auth ci add -a myapp-staging --github acme/web-app \
   --allowed-events push,workflow_dispatch,pull_request
 ```
 </CliCommand>

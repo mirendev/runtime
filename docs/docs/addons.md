@@ -10,6 +10,22 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Addons are managed services that Miren provisions and operates for your app. Instead of running your own database as a service, you configure an addon, and Miren handles the infrastructure — creating the server, injecting connection credentials, and cleaning up when you're done.
 
+## Minimum working example
+
+Declare an addon in `.miren/app.toml` and it's provisioned on the next deploy:
+
+```toml
+name = "myapp"
+
+[services.web]
+command = "npm start"
+
+[addons.miren-postgresql]
+variant = "small"
+```
+
+Miren creates the PostgreSQL server, injects `DATABASE_URL` (and the other `PG*` variables) into every service, and holds your app's start until the database is ready.
+
 ## Addons vs. Services
 
 | | Addons | Services |

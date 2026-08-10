@@ -10,6 +10,24 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren automatically provisions TLS certificates for your applications using [Let's Encrypt](https://letsencrypt.org/). By default, no configuration is needed — when you set a route for your app, Miren obtains a certificate automatically.
 
+## Minimum working example
+
+There's nothing to configure — set a route and HTTPS follows:
+
+<CliCommand context="client">
+```miren
+miren route set myapp.example.com myapp
+```
+</CliCommand>
+
+The first request to the hostname triggers certificate provisioning from Let's Encrypt; renewal is automatic. If your server isn't reachable from the public internet, switch to a [DNS-01 challenge](#dns-01-challenge):
+
+```toml title="/etc/miren/server.toml"
+[tls]
+acme_dns_provider = "cloudflare"
+acme_email = "you@example.com"
+```
+
 ## How It Works
 
 When a request arrives for a hostname with a configured route, Miren provisions a TLS certificate from Let's Encrypt using the ACME protocol. Certificates are cached on disk and renewed automatically before they expire.
@@ -44,7 +62,7 @@ Miren uses [lego](https://go-acme.github.io/lego/) for DNS challenges, which sup
 
 Add the DNS provider and ACME email to your server config file:
 
-```toml title="/var/lib/miren/server/config.toml"
+```toml title="/etc/miren/server.toml"
 [tls]
 acme_dns_provider = "dnsimple"
 acme_email = "you@example.com"
@@ -127,7 +145,7 @@ See [Server Configuration Reference → `[ingress]`](/server-config#ingress) for
 
 ## TLS Settings Reference
 
-All TLS settings live under the `[tls]` section of the server config file (typically `/var/lib/miren/server/config.toml`). The three ingress-cert settings below are consulted only under TLS-terminating ingress modes:
+All TLS settings live under the `[tls]` section of the server config file (typically `/etc/miren/server.toml` — see [Server Configuration](/server-config#config-file) for the search order). The three ingress-cert settings below are consulted only under TLS-terminating ingress modes:
 
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|

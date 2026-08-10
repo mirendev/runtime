@@ -10,6 +10,38 @@ import CliCommand from '@site/src/components/CliCommand';
 
 The admin interface allows you to expose custom administrative functions in your application that can be called from the CLI or other tooling. This is useful for user management, cache clearing, database operations, and other maintenance tasks.
 
+## Minimum working example
+
+Handle JSON-RPC 2.0 at `/.well-known/miren/admin` in your web service, validating the injected `ADMIN_TOKEN`:
+
+```typescript
+Bun.serve({
+  port: process.env.PORT ?? 3000,
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (req.method !== 'POST' || url.pathname !== '/.well-known/miren/admin') {
+      return new Response('Not Found', { status: 404 });
+    }
+    if (req.headers.get('authorization') !== `Bearer ${process.env.ADMIN_TOKEN}`) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+    const { method, id } = await req.json();
+    if (method === 'ping') return Response.json({ jsonrpc: '2.0', id, result: 'pong' });
+    return Response.json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
+  },
+});
+```
+
+Deploy, then call it from the CLI:
+
+<CliCommand context="client">
+```miren
+miren admin -a myapp ping
+```
+</CliCommand>
+
+The [complete examples](#complete-example-go) below add introspection, typed parameters, and constant-time token comparison.
+
 ## How It Works
 
 Your application exposes admin methods via a JSON-RPC 2.0 endpoint at a well-known path. When you run `miren admin`, the CLI:

@@ -12,6 +12,22 @@ Miren provides two options for persistent storage: **Local Storage** (simple, no
 
 Both storage options are node-local — your data lives on the server where your app runs. See each section below for backup options.
 
+## Minimum working example
+
+Attach a persistent directory to a service in `.miren/app.toml`:
+
+```toml
+[services.web]
+command = "node server.js"
+
+[[services.web.disks]]
+name = "data"
+provider = "local"
+mount_path = "/data"
+```
+
+Anything the service writes under `/data` survives restarts and redeploys. For a managed [Miren Disk](#miren-disks) with exclusive leasing and its own size, drop `provider = "local"` and set `size_gb` instead.
+
 ## Local Storage
 
 Local storage gives your app a persistent directory on the server's filesystem. Data survives container restarts and redeployments.
