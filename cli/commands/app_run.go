@@ -51,7 +51,7 @@ func AppRun(ctx *Context, opts struct {
 		return nil
 	}
 
-	if err := attachToRun(ctx, runID, created.SandboxName()); err != nil {
+	if err := attachToRun(ctx, runs, runID, created.SandboxName()); err != nil {
 		return err
 	}
 
@@ -90,7 +90,7 @@ func AppAttach(ctx *Context, opts struct {
 		return fmt.Errorf("run %s has not started yet", opts.Run)
 	}
 
-	if err := attachToRun(ctx, info.Id(), info.Sandbox()); err != nil {
+	if err := attachToRun(ctx, runs, info.Id(), info.Sandbox()); err != nil {
 		return err
 	}
 
@@ -99,7 +99,7 @@ func AppAttach(ctx *Context, opts struct {
 
 // attachToRun streams a run's terminal until the client disconnects or the run
 // ends.
-func attachToRun(ctx *Context, runID, sandboxName string) error {
+func attachToRun(ctx *Context, runs *app_v1alpha.RunsClient, runID, sandboxName string) error {
 	opt := new(exec_v1alpha.ShellOptions)
 	in, out, winUpdates, cleanup := setupExecIO(ctx, opt)
 	defer cleanup()
@@ -134,6 +134,15 @@ func attachToRun(ctx *Context, runID, sandboxName string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
+		// A short task can finish before the terminal ever attaches, taking its
+		// container -- and the thing to attach to -- with it. That is not a
+		// failure: the run did what it was asked, and its exit code is
+		// recorded. Stop waiting and let the caller report it.
+		if runIsOver(ctx, runs, runID) {
+			return nil
+		}
+
 		if time.Now().After(deadline) {
 			return fmt.Errorf("run %s did not start within 2m: %w", runID, err)
 		}
@@ -155,6 +164,28 @@ func attachTargetMissing(err error) bool {
 	return strings.Contains(msg, "failed to find sandbox") ||
 		strings.Contains(msg, "not scheduled to a node yet") ||
 		strings.Contains(msg, "is not running yet")
+}
+
+// runIsOver reports whether the run has already reached a terminal state. A
+// read failure answers no: the caller keeps waiting, which its own deadline
+// bounds, rather than abandoning an attach over a transient blip.
+func runIsOver(ctx *Context, runs *app_v1alpha.RunsClient, runID string) bool {
+	got, err := runs.GetRun(ctx, runID)
+	if err != nil {
+		return false
+	}
+
+	info := got.Run()
+	if info == nil {
+		return false
+	}
+
+	switch info.Status() {
+	case "succeeded", "failed", "timed_out", "canceled", "skipped":
+		return true
+	default:
+		return false
+	}
 }
 
 // reportRunExit propagates the run's exit code to the caller's shell.
