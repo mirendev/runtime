@@ -23,6 +23,23 @@ Both rely on the cluster's OIDC infrastructure, but the token flows in different
 The same token can authenticate to your cluster's own API — deploy, read logs, open a shell — scoped by a role you choose per app. See [In-Cluster API Access](/in-cluster-api).
 :::
 
+## Minimum working example
+
+Every sandbox already has a token — no configuration needed. Read it from the mounted file:
+
+```bash
+TOKEN=$(cat "$MIREN_IDENTITY_TOKEN_PATH")
+```
+
+Or request one scoped to a specific audience from the token server:
+
+```bash
+TOKEN=$(curl -s -H "Authorization: Bearer $MIREN_IDENTITY_TOKEN_SECRET" \
+  "$MIREN_IDENTITY_TOKEN_URL?audience=sts.amazonaws.com&ttl=900" | jq -r .value)
+```
+
+Present the JWT to any service configured to trust your cluster's issuer (`$MIREN_OIDC_ISSUER_URL`) — see [AWS via STS Federation](#aws-via-sts-federation) for the end-to-end flow.
+
 ## How It Works
 
 1. **Your cluster is an OIDC issuer.** It owns a signing key and publishes a standard discovery document at `/.well-known/openid-configuration` and its public keys (JWKS) at `/.well-known/miren/jwks`.

@@ -19,6 +19,23 @@ Tailscale is the common case, but nothing here is specific to it. Headscale,
 Nebula, ZeroTier, and plain WireGuard all behave the same way.
 :::
 
+## Minimum working example
+
+Install and register the cluster the way you normally would. The one required
+change on a host the internet can't reach is switching app certificates to a
+DNS-01 challenge:
+
+```toml title="/etc/miren/server.toml"
+[tls]
+acme_email = 'you@example.com'
+acme_dns_provider = 'dnsimple'
+```
+
+Put your DNS provider's API credentials in `/var/lib/miren/server/env` and
+restart the server. Point your domain's DNS at the tailnet address (or use
+[Miren Anywhere](/miren-cloud/miren-anywhere) for public traffic), and deploys
+work unchanged.
+
 ## Setting up
 
 Install Miren and register the cluster the way you normally would. There's no

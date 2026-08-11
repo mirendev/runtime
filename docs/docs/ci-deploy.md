@@ -16,6 +16,42 @@ GitHub Actions works out of the box. Other OIDC-capable CI systems (GitLab CI, C
 This page covers OIDC for **CI/CD deployment authentication** — letting pipelines deploy without stored secrets. For putting single sign-on in front of your **application's HTTP routes**, see [Protecting Routes](/route-protect).
 :::
 
+## Minimum working example
+
+One-time setup — export the cluster address (store the output as a GitHub Actions secret named `MIREN_CLUSTER`) and allow the repository to deploy:
+
+<CliCommand context="client">
+```miren
+miren cluster export-address
+miren auth ci add -a myapp --github acme/web-app
+```
+</CliCommand>
+
+Then add `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mirendev/actions/deploy@main
+        with:
+          cluster: ${{ secrets.MIREN_CLUSTER }}
+          app: myapp
+```
+
+Every push to `main` now deploys, authenticated by a short-lived OIDC token — no deploy secrets stored anywhere. The [Quick Start](#quick-start-with-github-actions) below walks through each piece.
+
 ## How It Works
 
 1. **Create an OIDC binding** on your Miren cluster that links an app to an identity provider and the claims that identify your repository.
@@ -55,7 +91,7 @@ Create a binding that allows your GitHub repository to deploy:
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp --github acme/web-app
+miren auth ci add -a myapp --github acme/web-app
 ```
 </CliCommand>
 
@@ -120,7 +156,7 @@ The `--github` shorthand accepts any ref from the repository, for the allowed ev
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp --github acme/web-app \
+miren auth ci add -a myapp --github acme/web-app \
   --allowed-refs "refs/heads/main"
 ```
 </CliCommand>
@@ -151,7 +187,7 @@ By default, only `push` and `workflow_dispatch` events are permitted. To also al
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp --github acme/web-app \
+miren auth ci add -a myapp --github acme/web-app \
   --allowed-events push,workflow_dispatch,pull_request
 ```
 </CliCommand>
@@ -162,7 +198,7 @@ Restrict deployments to specific git refs:
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp --github acme/web-app \
+miren auth ci add -a myapp --github acme/web-app \
   --allowed-refs "refs/heads/main,refs/tags/v*"
 ```
 </CliCommand>
@@ -189,7 +225,7 @@ For CI systems other than GitHub Actions, use the `--issuer` and `--subject` fla
 
 <CliCommand context="client">
 ```miren
-miren auth ci myapp \
+miren auth ci add -a myapp \
   --issuer https://gitlab.com \
   --subject "project_path:acme/web-app:ref_type:branch:ref:main"
 ```
@@ -267,7 +303,7 @@ miren auth ci remove abc123
 
 ## CLI Reference
 
-### `miren auth ci`
+### `miren auth ci add`
 
 Create an OIDC binding for an application.
 

@@ -12,6 +12,27 @@ A Miren cluster starts as a single machine: one server that builds your apps, sc
 
 Distributed runners are the way past that ceiling. You add more machines to the cluster, and Miren spreads your workloads across all of them, so you scale out instead of up.
 
+## Minimum working example
+
+Three commands take a cluster from one machine to two. On your workstation, mint a join token:
+
+<CliCommand context="client">
+```miren
+miren runner token create
+```
+</CliCommand>
+
+On the machine you're adding, join with that token and install the runner as a service:
+
+<CliCommand context="server">
+```miren
+miren runner join mren_...
+miren runner install
+```
+</CliCommand>
+
+Once `miren runner list` shows the node ready, the scheduler starts placing sandboxes on it — nothing changes in your apps.
+
 ## How it works
 
 A distributed cluster has two kinds of nodes: one **coordinator** and any number of **runners**.

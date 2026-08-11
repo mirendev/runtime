@@ -10,6 +10,19 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren uses a **convention over configuration** approach. Most apps deploy with zero configuration—Miren detects your language, builds your image, and runs it with sensible defaults. When you need to customize, you add a `.miren/app.toml` file.
 
+## Minimum working example
+
+The smallest useful `.miren/app.toml` names the app and its start command:
+
+```toml title=".miren/app.toml"
+name = "myapp"
+
+[services.web]
+command = "npm start"
+```
+
+Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive — environment variables, more services, scaling, disks.
+
 ## When You Don't Need app.toml
 
 If your app is a single web service with a standard language stack, Miren handles everything:

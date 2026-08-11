@@ -8,6 +8,18 @@ keywords: [disk space, garbage collection, retention, image cleanup, disk pressu
 
 Every deploy leaves something behind on the node: a container image, a snapshot, some registry blobs, build cache, logs. On a cluster that deploys often, all of that accumulates, and a node with a finite disk will eventually fill up. Miren reclaims this space automatically and continuously, so under normal use you never have to think about it. This page is the map for when you do — what accumulates, how each piece gets cleaned up, what you can tune, and what changes when the disk gets tight.
 
+## Minimum working example
+
+Cleanup is automatic and needs no configuration. The knob you're most likely to want — how much deploy history each app keeps — lives in the server config:
+
+```toml title="/etc/miren/server.toml"
+[app_version]
+retention_count = 10      # always keep this many recent versions per app
+retention_period = "14d"  # keep anything younger than this when there's room
+```
+
+Aging versions out sooner lets the image cleanup cascade reclaim their disk over the next few sweeps. The rest of this page explains what accumulates and how each piece is reclaimed.
+
 ## What uses disk
 
 A handful of things grow over time:

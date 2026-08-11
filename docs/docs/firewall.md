@@ -14,6 +14,18 @@ Miren automatically configures firewall rules during setup. Most users won't nee
 
 Miren automatically configures iptables rules to enable container networking. This page explains how Miren's firewall rules work and how to troubleshoot networking issues.
 
+## Minimum working example
+
+Host-level rules are managed for you. The only thing to configure yourself is your cloud provider's security group or network ACL — allow these inbound ports:
+
+```text
+8443/udp   Miren API (QUIC) — CLI and client connections
+80/tcp     HTTP — ACME challenges and redirect to HTTPS
+443/tcp    HTTPS — application traffic
+```
+
+Also open any `node_port` values your apps declare for TCP/UDP services, and the [inter-node ports](#between-nodes-distributed-runners) if you run distributed runners.
+
 ## How Miren Configures Firewall Rules
 
 When Miren sets up the network bridge, it installs iptables rules in two chains:

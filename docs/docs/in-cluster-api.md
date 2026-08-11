@@ -18,6 +18,22 @@ Every sandbox already carries a [workload identity token](/workload-identity). T
 
 Typical uses: a CI job running inside a sandbox that redeploys its own app, a sidecar that tails its app's logs, an operator tool that reads status across the cluster, or an app that manages its own configuration.
 
+## Minimum working example
+
+From inside any sandbox with the `miren` binary in its image, the CLI authenticates automatically:
+
+```bash
+miren app status
+miren logs
+```
+
+That works out of the box under the default `app-readonly` role. To let an app do more — redeploy itself, for example — raise its role in `.miren/app.toml`:
+
+```toml
+name = "my-app"
+workload_role = "app-deployer"
+```
+
 ## Connecting
 
 From inside a sandbox, the `miren` CLI just works — it detects that it's running in-cluster and authenticates with the mounted token:

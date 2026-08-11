@@ -10,6 +10,20 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren captures logs from your applications, sandboxes, builds, and the system itself. Logs are stored in [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/) and queryable through the `miren logs` command and its subcommands.
 
+## Minimum working example
+
+<CliCommand context="client">
+```miren
+# Last 100 lines for the current app
+miren logs
+
+# Follow in real time, filtered to errors
+miren logs -f -g error
+```
+</CliCommand>
+
+Add `-a myapp` to target a specific app. Build, sandbox, and system logs each have their own subcommand, covered below.
+
 ## Subcommands
 
 | Subcommand | Description |
