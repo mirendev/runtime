@@ -52,6 +52,8 @@ type BackupTarget struct {
 	Filesystem string
 	ImagePath  string
 	IsAttached bool
+	// VolumeID identifies the volume in the cloud, for backups sent there.
+	VolumeID string
 }
 
 // RestoreTarget contains resolved and validated information needed to
@@ -86,6 +88,7 @@ func PrepareBackup(ctx context.Context, resolver DiskResolver, name string, data
 		Filesystem: disk.Filesystem,
 		ImagePath:  resolveImagePath(vol, dataPath),
 		IsAttached: disk.Status == StatusAttached,
+		VolumeID:   vol.VolumeID,
 	}, nil
 }
 

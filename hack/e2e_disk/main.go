@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/cloudauth"
 )
@@ -67,19 +66,15 @@ func main() {
 	imageData := bytes.Repeat([]byte("universal mode disk image "), 4096)
 	check(os.WriteFile(filepath.Join(diskPath, "disk.img"), imageData, 0644), "write image")
 
-	state := diskio.NewState()
-	state.SetVolume("volume-1", &diskio.VolumeState{
-		EntityId:   "volume-1",
-		VolumeId:   volumeID,
+	snapshotter := diskio.NewImageSnapshotter(log, updates)
+	imageUpdateID, err := snapshotter.Snapshot(ctx, diskio.SnapshotRequest{
+		VolumeID:   volumeID,
+		ImagePath:  filepath.Join(diskPath, "disk.img"),
 		Name:       "e2e-disk",
-		DiskPath:   diskPath,
-		SizeBytes:  int64(len(imageData)),
 		Filesystem: "ext4",
-		Mode:       storage_v1alpha.VM_UNIVERSAL,
 	})
-
-	watcher := diskio.NewImageWatcher(log, state, updates, time.Hour)
-	watcher.SnapshotOnce(ctx)
+	check(err, "snapshot image")
+	fmt.Printf("✓ uploaded loop_image snapshot %s\n", imageUpdateID)
 
 	// --- list both kinds back ---
 	logs, err := updates.List(ctx, volumeID, diskio.ListOptions{Kind: diskio.KindLBDLog})

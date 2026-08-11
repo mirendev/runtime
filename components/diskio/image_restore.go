@@ -79,21 +79,6 @@ func (c *DiskMountController) RestoreImageIfMissing(ctx context.Context, volStat
 		return fmt.Errorf("installing restored image: %w", err)
 	}
 
-	// Record what we just restored, so the image watcher does not immediately
-	// upload an identical copy back.
-	if info, err := os.Stat(imagePath); err == nil {
-		if merr := writeImageMarker(volState.DiskPath, imageMarker{
-			SizeBytes:   info.Size(),
-			ModTime:     info.ModTime(),
-			OrderingKey: newest.OrderingKey,
-		}); merr != nil {
-			c.log.Warn("failed to record restored image marker",
-				"volume_id", volState.VolumeId,
-				"error", merr,
-			)
-		}
-	}
-
 	c.log.Info("restored volume image",
 		"volume_id", volState.VolumeId,
 		"update_id", newest.UpdateID,

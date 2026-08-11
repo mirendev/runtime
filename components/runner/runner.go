@@ -916,19 +916,10 @@ func (r *Runner) SetupControllers(
 		log.Info("started log watcher in delete-only mode (no cloud configured)")
 	}
 
-	// Universal mode has no write log, so its volumes are backed up by
-	// snapshotting the whole backing image on an interval. Only worth running
-	// when there is somewhere to send them.
-	if updatesClient != nil {
-		imageWatcher := diskio.NewImageWatcher(log, diskioState, updatesClient, diskio.DefaultImageSnapshotInterval)
-		go func() {
-			if werr := imageWatcher.Run(ctx); werr != nil {
-				log.Error("image watcher stopped", "error", werr)
-			}
-		}()
-		r.closers = append(r.closers, waitCloser{imageWatcher})
-		log.Info("started image watcher", "interval", diskio.DefaultImageSnapshotInterval)
-	}
+	// Universal-mode volumes are not backed up on a timer. Snapshotting a
+	// mounted image means reading it while the loop device is still writing,
+	// which yields a state that never existed on disk -- see ImageSnapshotter.
+	// `miren disk backup --cloud` takes one when an operator decides it is safe.
 
 	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)
 	cm.AddController(controller.NewReconcileController(

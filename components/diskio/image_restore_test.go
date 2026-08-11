@@ -112,12 +112,6 @@ func TestRestoreImageRebuildsMissingImage(t *testing.T) {
 
 	assert.Equal(t, []UpdateKind{KindLoopImage}, client.listedKinds,
 		"only loop images are candidates for a universal volume")
-
-	// The marker matches, so the image watcher will not immediately re-upload
-	marker := readImageMarker(vol.DiskPath)
-	require.NotNil(t, marker)
-	assert.Equal(t, "0000000000000002", marker.OrderingKey)
-	assert.Equal(t, int64(len(image)), marker.SizeBytes)
 }
 
 // The local image is by definition newer than anything the cloud holds, so a

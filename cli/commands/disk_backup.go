@@ -1,11 +1,17 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -15,6 +21,8 @@ func DiskBackup(ctx *Context, opts struct {
 	Name     string `short:"n" long:"name" description:"Disk name to backup" required:"true"`
 	Output   string `short:"o" long:"output" description:"Output snapshot path (default: DISK-YYYYMMDD-HHMMSS.miren.zst)"`
 	DataPath string `long:"data-path" description:"Path to miren data directory" default:"/var/lib/miren"`
+	Cloud    bool   `long:"cloud" description:"Also upload the snapshot to miren.cloud as a restore point"`
+	Pin      string `long:"pin" description:"Name the uploaded restore point, pinning it against cleanup"`
 }) (retErr error) {
 	if _, err := os.Stat(opts.DataPath); err != nil {
 		return fmt.Errorf("data path %s not found — disk backup must be run on the server", opts.DataPath)
@@ -39,7 +47,14 @@ func DiskBackup(ctx *Context, opts struct {
 	}
 
 	if target.IsAttached {
-		ctx.Warn("Disk is currently attached — backup will be crash-consistent")
+		// Nothing here freezes the filesystem or takes a copy-on-write clone, so
+		// this is a sequential read of a file the loop device is still writing.
+		// The head and tail of the image come from different moments, which is
+		// weaker than the power-loss state fsck and Postgres recovery are built
+		// for. Say so plainly: the operator is the one deciding this is safe.
+		ctx.Warn("Disk is attached and may be written during the backup.")
+		ctx.Warn("The image is read while in use, so it is not a point-in-time copy and may not mount cleanly.")
+		ctx.Warn("Detach the disk first for a backup you can rely on.")
 	}
 
 	outputPath := opts.Output
@@ -94,5 +109,74 @@ func DiskBackup(ctx *Context, opts struct {
 	ctx.Info("  Duration:        %s", duration.Truncate(time.Millisecond))
 	ctx.Info("  Snapshot:        %s", outputPath)
 
+	if opts.Cloud {
+		updateID, err := uploadSnapshotToCloud(ctx, opts.DataPath, target, outputPath, opts.Pin)
+		if err != nil {
+			return fmt.Errorf("uploading snapshot to miren.cloud: %w", err)
+		}
+		ctx.Info("  Uploaded:        %s", updateID)
+	}
+
 	return nil
+}
+
+// uploadSnapshotToCloud sends a finished snapshot file to miren.cloud as a
+// loop_image update for the disk's volume.
+//
+// The cluster's service account key lives in the registration this server wrote
+// at enrolment, which is why this has to run on the server alongside the data
+// directory.
+func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.BackupTarget, snapshotPath, pin string) (string, error) {
+	if target.VolumeID == "" {
+		return "", fmt.Errorf("disk %q has no cloud volume; it may predate cloud registration", target.Name)
+	}
+
+	reg, err := registration.LoadRegistration(filepath.Join(dataPath, "server"))
+	if err != nil {
+		return "", fmt.Errorf("loading cluster registration: %w", err)
+	}
+	if reg == nil || reg.Status != "approved" || reg.PrivateKey == "" {
+		return "", fmt.Errorf("this cluster is not registered with miren.cloud")
+	}
+
+	keyPair, err := cloudauth.LoadKeyPairFromPEM(reg.PrivateKey)
+	if err != nil {
+		return "", fmt.Errorf("parsing cluster key: %w", err)
+	}
+
+	cloudURL := reg.CloudURL
+	if cloudURL == "" {
+		cloudURL = coordinate.DefaultCloudURL
+	}
+
+	authClient, err := cloudauth.NewAuthClient(cloudURL, keyPair)
+	if err != nil {
+		return "", fmt.Errorf("creating cloud auth client: %w", err)
+	}
+
+	file, err := os.Open(snapshotPath)
+	if err != nil {
+		return "", fmt.Errorf("opening snapshot: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat snapshot: %w", err)
+	}
+
+	ctx.Info("Uploading to %s...", cloudURL)
+
+	updates := diskio.NewCloudUpdatesClient(ctx.Log, cloudURL, authClient)
+	return updates.Upload(context.Background(), target.VolumeID, diskio.UploadRequest{
+		Kind:         diskio.KindLoopImage,
+		OrderingKey:  fmt.Sprintf("%016x", time.Now().UnixNano()),
+		SnapshotName: pin,
+		Metadata: map[string]any{
+			"compression":  "zstd",
+			"format":       "miren-snapshot",
+			"filesystem":   target.Filesystem,
+			"was_attached": target.IsAttached,
+		},
+	}, file, info.Size())
 }
