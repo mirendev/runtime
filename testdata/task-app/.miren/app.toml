@@ -17,3 +17,18 @@ timeout = "2m"
 [tasks.slow]
 command = "/bin/app slow"
 timeout = "5m"
+
+[tasks.brief]
+command = "/bin/app brief"
+timeout = "2m"
+
+[tasks.showenv]
+command = "/bin/app env"
+timeout = "2m"
+
+# Declared env, which a run has to carry into the container. A task names no
+# service, so this travels a different path than a service's env and had none
+# at all until it was wired up.
+[[tasks.showenv.env]]
+key = "TASK_SECRET"
+value = "carried"

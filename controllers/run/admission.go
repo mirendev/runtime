@@ -9,6 +9,7 @@ import (
 
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
@@ -211,19 +212,23 @@ func (c *Controller) admitByCount(ctx context.Context, r *run_v1alpha.Run, maxCo
 	return true, nil
 }
 
-// maxConcurrent reads the task's cap from the version's config, defaulting to
-// one. A task that has vanished from config -- the app was redeployed without
-// it while a run was pending -- gets the default rather than an error, so the
-// run resolves instead of wedging.
+// maxConcurrent reads the task's cap from the version's config.
+//
+// A task that cannot be resolved -- no version, a version since deleted, an app
+// redeployed without the task while a run was pending -- falls back to the
+// default for its name rather than erroring, so the run resolves instead of
+// wedging. runapi.MaxConcurrent supplies the defaults, including the console
+// convention's higher one, so this agrees with the refusal the app server
+// quotes to a caller.
 func (c *Controller) maxConcurrent(ctx context.Context, r *run_v1alpha.Run) (int64, error) {
 	if r.Version == "" {
-		return 1, nil
+		return runapi.MaxConcurrent(nil, r.Task), nil
 	}
 
 	resp, err := c.EAC.Get(ctx, r.Version.String())
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
-			return 1, nil
+			return runapi.MaxConcurrent(nil, r.Task), nil
 		}
 		return 0, fmt.Errorf("reading app version for admission: %w", err)
 	}
@@ -233,17 +238,14 @@ func (c *Controller) maxConcurrent(ctx context.Context, r *run_v1alpha.Run) (int
 
 	cfgSpec, err := coreutil.ResolveConfig(ctx, c.EAC, &ver)
 	if err != nil {
-		return 1, nil
+		return runapi.MaxConcurrent(nil, r.Task), nil
 	}
 
-	for _, t := range cfgSpec.Tasks {
-		if t.Name == r.Task {
-			if t.MaxConcurrent > 0 {
-				return t.MaxConcurrent, nil
-			}
-			return 1, nil
+	for i := range cfgSpec.Tasks {
+		if cfgSpec.Tasks[i].Name == r.Task {
+			return runapi.MaxConcurrent(&cfgSpec.Tasks[i], r.Task), nil
 		}
 	}
 
-	return 1, nil
+	return runapi.MaxConcurrent(nil, r.Task), nil
 }

@@ -838,6 +838,12 @@ interfaces:
             type: list
             element: string
             doc: Overrides the task's command
+          - name: tty
+            type: bool
+            doc: |
+              Allocate a pseudo-terminal. The client decides, since only it
+              knows whether a person is watching: set when stdin is a terminal
+              and the caller is going to attach.
         results:
           - name: id
             type: string

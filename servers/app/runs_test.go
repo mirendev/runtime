@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"miren.dev/runtime/api/core/core_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 )
 
@@ -89,4 +90,41 @@ func TestRunInfoSaturatesRatherThanWrapping(t *testing.T) {
 		Result:  run_v1alpha.Result{Code: math.MinInt32 - 1, At: time.Now()},
 	})
 	assert.Equal(t, int32(math.MinInt32), info.ExitCode())
+}
+
+// A bare `miren app run` has to resolve to a real command. The sandbox only
+// sets the container's process args when the command is non-empty, so an empty
+// one leaves runc with nothing to execute and the container never starts:
+// "args must not be empty" on any stack-built image, and the app's own server
+// process on an image that happens to define a CMD.
+func TestResolveCommandFallsBackToAShell(t *testing.T) {
+	assert.Equal(t, defaultConsoleCommand, resolveCommand(nil, nil))
+	assert.Equal(t, defaultConsoleCommand, resolveCommand(&core_v1alpha.ConfigSpecTasks{Name: "console"}, nil))
+}
+
+func TestResolveCommandPrefersWhatWasAsked(t *testing.T) {
+	task := &core_v1alpha.ConfigSpecTasks{Name: "migrate", Command: "rails db:migrate"}
+
+	assert.Equal(t, "rails db:migrate", resolveCommand(task, nil))
+	assert.Equal(t, "'psql'", resolveCommand(task, []string{"psql"}),
+		"an explicit command overrides the task's")
+}
+
+// The container's args are built as sh -c <string>, so an override has to
+// survive a round of shell parsing to arrive as the argv the caller typed.
+func TestShellQuotePreservesArgumentBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"spaces inside an argument", []string{"echo", "hello   world"}, `'echo' 'hello   world'`},
+		{"a quoted sql statement", []string{"psql", "-c", "SELECT 1"}, `'psql' '-c' 'SELECT 1'`},
+		{"an embedded single quote", []string{"echo", "it's"}, `'echo' 'it'\''s'`},
+		{"characters the shell would expand", []string{"echo", "$HOME", "*"}, `'echo' '$HOME' '*'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, shellQuote(tc.argv))
+		})
+	}
 }

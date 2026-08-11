@@ -6682,6 +6682,7 @@ type runsCreateRunArgsData struct {
 	App     *string   `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Task    *string   `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
 	Command *[]string `cbor:"2,keyasint,omitempty" json:"command,omitempty"`
+	Tty     *bool     `cbor:"3,keyasint,omitempty" json:"tty,omitempty"`
 }
 
 type RunsCreateRunArgs struct {
@@ -6720,6 +6721,17 @@ func (v *RunsCreateRunArgs) Command() []string {
 		return nil
 	}
 	return *v.data.Command
+}
+
+func (v *RunsCreateRunArgs) HasTty() bool {
+	return v.data.Tty != nil
+}
+
+func (v *RunsCreateRunArgs) Tty() bool {
+	if v.data.Tty == nil {
+		return false
+	}
+	return *v.data.Tty
 }
 
 func (v *RunsCreateRunArgs) MarshalCBOR() ([]byte, error) {
@@ -7134,7 +7146,7 @@ func AdaptRuns(t Runs) *rpc.Interface {
 			InterfaceName: "Runs",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"app", "task", "command"},
+			Params:        []string{"app", "task", "command", "tty"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CreateRun(ctx, &RunsCreateRun{Call: call})
 			},
@@ -7213,12 +7225,13 @@ func (v *RunsClientCreateRunResults) SandboxName() string {
 	return *v.data.SandboxName
 }
 
-func (v RunsClient) CreateRun(ctx context.Context, app string, task string, command []string) (*RunsClientCreateRunResults, error) {
+func (v RunsClient) CreateRun(ctx context.Context, app string, task string, command []string, tty bool) (*RunsClientCreateRunResults, error) {
 	args := RunsCreateRunArgs{}
 	args.data.App = &app
 	args.data.Task = &task
 	x := slices.Clone(command)
 	args.data.Command = &x
+	args.data.Tty = &tty
 
 	var ret runsCreateRunResultsData
 

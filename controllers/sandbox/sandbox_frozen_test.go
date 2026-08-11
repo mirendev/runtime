@@ -49,7 +49,18 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// sandbox, which is what makes an exit code reliable: the sandbox entity
 		// has several writers and a stale read-modify-write can lose one, while
 		// the run has a single writer plus that input.
-		"sandbox.go":  "2d01b2c913efa7781d41433c3aba33ec00647c70ff5b3cd45913a923d968159b",
+		//
+		// createSandbox's boot-failure defer now also tears down the sandbox's
+		// Hubs. A Hub is created before the container's task is, so a container
+		// that never started leaves one behind, and an attaching client finds it
+		// and blocks on output that can never arrive.
+		//
+		// Saga path audited: this one is NOT inherited. saga_controller.go
+		// replaces createSandbox wholesale with createSandboxViaSaga, so the
+		// cleanup was mirrored into undoBootContainers in create_saga.go,
+		// alongside the disk-lease and token-state releases that are duplicated
+		// there for exactly the same reason.
+		"sandbox.go":  "3e889b582b3db2059dc1b729cec6fff89b3bec32c15278cb1b30d723d7e72326",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

@@ -47,6 +47,12 @@ type Options struct {
 	// case for a task run.
 	Service string
 
+	// Task names the entry in Config.Tasks to draw env from. A run has no
+	// service, so without this the env a task declares is stored at build time
+	// and read back nowhere -- which silently drops the credentials a task was
+	// declared to carry.
+	Task string
+
 	Image string
 
 	// Command overrides the service's command. The config entrypoint is still
@@ -266,6 +272,23 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 				}
 			}
 			break
+		}
+	}
+
+	// Per-task env, on the same footing as a service's: it overrides the app's
+	// globals and still loses to the system-managed vars appended below. A run
+	// names a task instead of a service, so this is the branch that carries
+	// what [tasks.<name>.env] declared.
+	if opts.Task != "" {
+		for _, t := range cfgSpec.Tasks {
+			if t.Name == opts.Task {
+				for _, x := range t.Env {
+					if !IsSystemEnvVar(x.Key) {
+						envMap[x.Key] = x.Value
+					}
+				}
+				break
+			}
 		}
 	}
 

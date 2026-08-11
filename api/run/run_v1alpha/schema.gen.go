@@ -34,6 +34,7 @@ const (
 	RunTriggerDeployId     = entity.Id("dev.miren.run/trigger.deploy")
 	RunTriggerScheduleId   = entity.Id("dev.miren.run/trigger.schedule")
 	RunTriggerManualId     = entity.Id("dev.miren.run/trigger.manual")
+	RunTtyId               = entity.Id("dev.miren.run/run.tty")
 	RunVersionId           = entity.Id("dev.miren.run/run.version")
 )
 
@@ -55,6 +56,7 @@ type Run struct {
 	Tick              string          `cbor:"tick,omitempty" json:"tick,omitempty"`
 	Timeout           string          `cbor:"timeout,omitempty" json:"timeout,omitempty"`
 	Trigger           RunTrigger      `cbor:"trigger,omitempty" json:"trigger,omitempty"`
+	Tty               bool            `cbor:"tty,omitempty" json:"tty,omitempty"`
 	Version           entity.Id       `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
@@ -138,6 +140,9 @@ func (o *Run) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(RunTriggerId); ok && a.Value.Kind() == entity.KindId {
 		o.Trigger = runtriggerFromId[a.Value.Id()]
 	}
+	if a, ok := e.Get(RunTtyId); ok && a.Value.Kind() == entity.KindBool {
+		o.Tty = a.Value.Bool()
+	}
 	if a, ok := e.Get(RunVersionId); ok && a.Value.Kind() == entity.KindId {
 		o.Version = a.Value.Id()
 	}
@@ -208,6 +213,7 @@ func (o *Run) Encode() (attrs []entity.Attr) {
 	if a, ok := runtriggerToId[o.Trigger]; ok {
 		attrs = append(attrs, entity.Ref(RunTriggerId, a))
 	}
+	attrs = append(attrs, entity.Bool(RunTtyId, o.Tty))
 	if !entity.Empty(o.Version) {
 		attrs = append(attrs, entity.Ref(RunVersionId, o.Version))
 	}
@@ -264,6 +270,9 @@ func (o *Run) Empty() bool {
 	if o.Trigger != "" {
 		return false
 	}
+	if !entity.Empty(o.Tty) {
+		return false
+	}
 	if !entity.Empty(o.Version) {
 		return false
 	}
@@ -276,7 +285,7 @@ func (o *Run) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("attempt_record", "dev.miren.run/run.attempt_record", schema.Doc("History of attempts made for this run"), schema.Many)
 	(&AttemptRecord{}).InitSchema(sb.Builder("run.attempt_record"))
 	sb.Time("cancel_requested_at", "dev.miren.run/run.cancel_requested_at", schema.Doc("Set by `miren app runs cancel`. Cancellation is a request rather than a\nstatus write because the controller owns every status transition; a\nsecond writer would race it.\n"))
-	sb.String("command", "dev.miren.run/run.command", schema.Doc("The resolved command, after any invoke override"))
+	sb.String("command", "dev.miren.run/run.command", schema.Doc("The resolved command line, as handed to \"sh -c\". An invoke override\narrives as argv and is shell-quoted into this, so a quoted argument\nsurvives: the container's process args are always built by the shell,\nand a list would have to be quoted into a string here regardless.\n"))
 	sb.Time("ended_at", "dev.miren.run/run.ended_at", schema.Doc("When the run reached a terminal status"))
 	sb.Int64("max_attempts", "dev.miren.run/run.max_attempts", schema.Doc("Total attempts allowed, resolved from the task's retries at creation"))
 	sb.Time("queued_at", "dev.miren.run/run.queued_at", schema.Doc("When the run was first seen by the controller. The start deadline is\nmeasured from here rather than from started_at, which is only written\nonce a run is already running -- so a run held back by admission would\notherwise queue with no bound at all.\n"))
@@ -299,6 +308,7 @@ func (o *Run) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Singleton("dev.miren.run/trigger.schedule")
 	sb.Singleton("dev.miren.run/trigger.manual")
 	sb.Ref("trigger", "dev.miren.run/run.trigger", schema.Doc("What started this run"), schema.Choices(RunTriggerDeployId, RunTriggerScheduleId, RunTriggerManualId))
+	sb.Bool("tty", "dev.miren.run/run.tty", schema.Doc("Allocate a pseudo-terminal for the run. Set when a person is invoking\ninteractively from a real terminal, and not for deploy- or\nschedule-triggered runs: a pty merges stdout and stderr and rewrites\nnewlines, which is right for a console session and wrong for a log a\nmachine reads. containerd fixes this at task creation, so like stdin it\ncannot be decided later.\n"))
 	sb.Ref("version", "dev.miren.run/run.version", schema.Doc("The app version whose image and config this run executes"))
 }
 
@@ -556,5 +566,5 @@ func init() {
 		(&Run{}).InitSchema(sb)
 		(&RunSlot{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.run", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8cVɲ\xd3:\x10\xfd\x8d\xfb\x1eCQ\x8c;S|\x91KQ\xb7m\x11Kr4\x84d\rŞ_\xb87\xc0\x17\u009aҔD\x96\xe5d\x93R\xfb\xf49\xeeQ\xf1\t\x04\xe1\xc8\x01\xf7\rg\nE\xa3\xac\xc0-\x13\xa0\x1f\xf7\xd9Ï\xee\xa1;\xfc\xf2\x8c]\x0e\x9eY\x7f;\x90\x9c0\x91+v\x1d\xc3\x11\xf4\x8f\xa7\r\x03[0\x1b2M^\x94\xba\x839N\xb8a\xe0\\\x0f\xff-\xf8\x1a\x83|2\u07bfO\x86\xe3P&\xccOGzU%\xb5\n\xa9T\x00\x9c\x88\xe3\x1f\xaf f\x88\x13bT\xf2I\n\x14\xe6r\nIϤ\x9bR\xfa\x8e\"|\xf7\x99\xbd̓\xccU֓\xf4\xfcw\xab|\x14\x80В 0\x9c-\xa7\x00\x86q\xf4\x12\xef\xd7%\x0e̴T\x02z\rv1\xb30\xd6\xd3\xd0D\xc0F\x1eB\x1aɸ\xee\xef\x87u\xba!\xca\\\xf2\xf8|e發\xb9%c\xac\xf6\x12]<;z\xa7\x8db\xa2\xef\xf7\xa84\x93\xa2\xdf\x7f\"\xe34\x90qR\x8c\x13ul]'y\x94\nJK\x85w#@\x89\xa08\xb6\nw\x16\xf5U\xc0z\t\xc8#_\x18p*9'\x02Bђq\x15\xb0\xe7\xfd_\xf2\xee\xea\xf9˒\xc7ɡ\x8di\x86\"\x8dٓ\xac\xdd\xcfJ\xfa\u03a2\xbd\xbc\x97]\xcc\xf3\x8bO\x8e\xf9P2\x15j;\x06Z\x17\xcf7\xd6\xef\xa1\\\xbf@\xbcc\xed\xbe\xba\x04\xbe̢\xf0\xe4&ƾ\xb9ٝ\xe0~^\n\xc8\xf6\xe1\xb4T\xa0\xc0\xd0\xd2*\x8aq\x02\xc3ٿ\b\x85\xe5[\xf7\xd3\xee\xc9hQ?\x02\x1e\x90\xce_\x1b\x18\x8d\x83\xc0\x10\xbd\xad\xe0\x0eZ\x1d\xe6X\xe4\xda\xdc\xdd\\\xd6\xe7\v\x9c;6\xb4\xd6\xfe\xcaZ\x16E\xf9\xddu\x84\x8dX\xd46p\x9a\x00\xf6\x13\n`\xa2\x9f\a\x19\x9d\"\xda++D\xdd+\xa2\xbd\u07b2i\xc2\"\xe1\xe8\x15\xd1!,7\xc2\xe1Ţ[\x82\x99\xb6\x94\"\x02\x16˗\xf4\x12\xce\\\xb5\xa0\x95\xd6T<ϸkǾ\xac\xa8\x9b\x800\x98\xfe4\xbb3\x96\b\x8c&\x82;\xcd/\x99\x85!q!H\x1b\xff\x98\x92q\xc5;\xd5x\x8a\xf5=\xaaȋ\xc6b\xbb\x9f:\xc0i\x94\xc7y\xf5#\xa9\thǉ\xb0d\xac9\x05t\xd0t@\xb0#\xce\xeb\x99\xdc\x12^\xcb6nS\x88:\x19q%VW\x8d*+\xe6\U000daf9fZ=\xcax\xa1\x95-\xf1\xe0\x1d\xb7\xd97\x1f\xf2\xebe~C\xe8\xce2u\xd9\xcb\xed\xf5\x83\xfc\x8a+\xffH\xa2D퓬FP6\xd4ɥ\x9e\x11\xca\xff\x8c@\xa8O\xebji\x87$0\xf7\xda\xeaA*ӆoW\x17E\xe5\xfb\xf5,\xb0ڠ\x7f\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xf8Q\x05L\x18\v\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.run", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8cVI\xb2\xd3<\x10\xbe\xc6\xfb\x7f\x86\xa2\x18w\xa68\x91K\x91ڶ\x88\x06GCH\xd6P\x1c\x80#\xbc\x17\xe0\x84\xb0\xa64Ŗe9٤\xba\xdd\xfd}\xeaQх\bā\x1386\x9c*\x10\x8d\xb2\x02\xf6T\x10\xfdx\xcc>~t\x1f\x9d\xf0\xcb#\x0e\xb9\xf1\x8a\xfa\xdb\x11\xc9\x11\x159c\xd7Q`D\xffx\xdaQb\vd\x83\xc6ѓb'\x98\xf3\b;J\x9c\xeb\xe9\xbf\x15_c\x80\x8f\xc6\xfb\xf7Iq\x18L\x85\xf9\xe9@\xaf\xaa\xa0V\x01\x96\x8a\x10\x8e\xc4\xf9\x8fg\x10\v\x8b#\xa2X\xf2Q\n\x10f\x92B\xd2\vꦤ\xbe\xa3\b\xdf}fo\xf3 s\x96\xed$=\xfe\xdd&\x1e\x04\x01Ң@0\\5\xc7@\f\xe5\xe0)\xdeoS\x9c\xa8i\xb1$\xe09\xe8\xa4fal\xa7\xa1\x91 ;y\ni$e\xde\xdf\x0f\xdbp\x83\x94\x99\xf2\xf8<\xd3\xf3L\xdeܢ1V{\x8a.\xca\x0e\xdei\xa3\xa8\xe8\xfb#(M\xa5菟\x10\x1b\a\xc4FE9R\xe7\xd6u\x92G\xaa\xc0\xb4Vx7\x02\x18\t\f\xacUp\xb0\xa0g\x01\xeb5C\x1e\xf9ʀc\xc99\x12$\x14-)\xb3\x80=\xee\xff\x12wW\xcf_\x968\x8eNmL3\x14\x89e_\xb2v?+\xe1\a\vv:\x97N\xea\xf5\xe0\x8bC>\x94H\x05ڲ\x00\xeb\xa2|c\xfd\x1e\xca\xf5\v\xc0;\xd6\xee\xabK\xe0\xcb\"\n\x0fnb컛\xdd\t\xeeץ \xd9>\\\xd6\n\x14\x10ZZ\x85!N`\x90\xfdA ,\u07fb\x9f\xf6\x88\x98\x05\xfdH\xe0\x04xyl@4\xceD\f\xd2\xfb\x8aݙ6\x879\x16\xb96w7\x97\xf5\xf9\n\xe6\x8e\r\xad\xb5\xbf\xb2\x96EQ~w\x1d\xa2\f\x8a\xda\x06L\x13\x8c\xfd\b\x82P\xd1/\x83\x8cN\xd1\xda++D\xdd+Z{\xbd\xa7\xe3\bE\xc2\xd1+Z\x87\xb0\xdc@N/Vݒ\x99j\x8b1\x00\x81b\xf9\x12_\xb2SW-\xd2Jk*\x9eW\xbbkǱ\xac\xa8\x9b\x800\x98^Z\xdc\x19k\x00\x8a\x13\xc0I\xcbKfeH\\\b\xd2\xc6?\xa6\xa4\xccp\x97\x1aNѾ\a\x15qQYm\xf7SG`d\xf2\xbc\xac~\x045\xc1\xdaq$,b5\xa7`\x1d4\x1e\x80X\x06\xcbz&\xb7d\xaf<K\x8c9\x87g\x89\x13|\xb0;)Y\xad4q\xf5B\x8aI\x89\xfb\xb3\xb9\x97XY\xb1\x1c\xee\xf4\xd8j5\x93\xf1\xf6+\xfb\xe7\x8dw\\}\xdf|ȯ\xd7\xf1\r\xc2\aKմ\xc4\xfb\xf9\x87\xfc>,\xffu\"E\xed\xfdV\x03(\x1b\xea\xe4R\xcf\x00\xe5\x1fL\x00\xd4G{\xb3\xb4C\"Xz\xed\xf5 \x95i\xc3C\xd7EQy\xec^\t6\x1b\xf4\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff\\\x90K\x8dE\v\x00\x00"))
 }

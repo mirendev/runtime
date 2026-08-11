@@ -1358,6 +1358,14 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			if relErr := c.ReleaseDiskLeases(cleanupCtx, co.ID); relErr != nil {
 				c.Log.Error("failed to release disk leases after boot failure", "id", co.ID, "err", relErr)
 			}
+
+			// Same reason as the leases: this defer is the only cleanup a failed
+			// boot gets. A Hub is created before the task is, so a container that
+			// never started still leaves one behind, and an attaching client
+			// finds it and waits on output that can never arrive -- forever,
+			// since the client's start deadline is only consulted between
+			// attempts and it is now inside a successful attach.
+			c.hubs.RemoveAll(co.ID)
 		}
 	}()
 

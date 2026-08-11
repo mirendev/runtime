@@ -21,7 +21,13 @@ This is useful for:
 
 Disconnecting is not cancelling. If your connection drops, the command keeps going — reattach with ` + "`" + `miren app attach` + "`" + `, read its output with ` + "`" + `miren logs run` + "`" + `, or leave it and let its timeout reap it.
 
+Press **Ctrl-P Ctrl-Q** to leave a run you are attached to. It keeps running.
+
 ` + "`" + `--detach` + "`" + ` therefore means exactly one thing: don't attach my terminal right now. Use ` + "`" + `miren app runs cancel` + "`" + ` to actually stop a run.
+
+:::note[Ctrl-C goes to your command]
+Your keystrokes reach the command, so Ctrl-C interrupts *it* rather than this CLI — the same as pressing it in a local shell. That is why leaving needs its own sequence.
+:::
 
 :::tip[Sandboxes are per-invocation]
 The sandbox is per-invocation. Any changes you make (files created, packages installed) are discarded when it ends.
@@ -36,6 +42,8 @@ const appAttachDescription = `Joins your terminal to a task run that is already 
 Attaching and detaching are invisible to the run itself: it is started by the platform and outlives any client. So you can attach to a run started with ` + "`" + `--detach` + "`" + `, reattach after a dropped connection, or never attach at all.
 
 Several clients can attach to one run at once; they share the same terminal.
+
+Press **Ctrl-P Ctrl-Q** to detach again, leaving the run going.
 
 :::note[Attaching to a finished run]
 Only runs whose command is still executing can be attached. For one that has finished, read its output back with ` + "`" + `miren logs run` + "`" + `.

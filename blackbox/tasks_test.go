@@ -210,3 +210,96 @@ func TestAttachedRunPropagatesExitCode(t *testing.T) {
 	r := m.Run("app", "run", "-a", name, "--task", "fail")
 	r.RequireExitCode(t, 3)
 }
+
+// Bare `miren app run` -- no --task -- is the oldest surface this command has,
+// and the one absorbing it into runs broke. The command resolved to the empty
+// string, which the sandbox turns into "no process args at all", so runc
+// refused to start the container and the run failed before executing anything.
+func TestBareRunOpensAConsole(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "task-app"})
+
+	r := m.MustRun("app", "run", "-a", name, "--detach")
+	id := strings.TrimSpace(r.Stdout)
+	if id == "" {
+		t.Fatal("expected a run id on stdout")
+	}
+
+	// A shell with nobody typing at it just waits, which is the point: reaching
+	// running at all means it had a command to execute.
+	harness.Poll(t, fmt.Sprintf("run %s starts", id), 3*time.Minute, 2*time.Second, func() (bool, string) {
+		run, ok := findRun(listRuns(t, m, name), id)
+		if !ok {
+			return false, "not listed yet"
+		}
+		if run.Status == "running" {
+			return true, ""
+		}
+		if run.Status == "failed" {
+			t.Fatalf("bare run %s failed instead of opening a console; it resolved no command to execute", id)
+		}
+		return false, "status: " + run.Status
+	})
+
+	m.MustRun("app", "runs", "cancel", "-a", name, id)
+	waitForRun(t, m, name, id)
+}
+
+// Arguments reach the container as the argv the caller typed. They are joined
+// into one string for "sh -c", so anything that does not survive a round of
+// shell parsing arrives as a different command than the one that was run.
+func TestRunPreservesArgumentBoundaries(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "task-app"})
+
+	r := m.MustRun("app", "run", "-a", name, "--", "echo", "hello   world")
+
+	if !strings.Contains(r.Stdout, "hello   world") {
+		t.Fatalf("argument boundaries were lost; want \"hello   world\" in output, got:\n%s", r.Stdout)
+	}
+}
+
+// [tasks.<name>.env] has to reach the container. A task names no service, so
+// its env travels a path of its own, and it had none: the values were stored at
+// build time and read back nowhere.
+func TestRunCarriesDeclaredTaskEnv(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "task-app"})
+
+	r := m.MustRun("app", "run", "-a", name, "--task", "showenv")
+
+	if !strings.Contains(r.Stdout, "TASK_SECRET=carried") {
+		t.Fatalf("declared task env did not reach the container; got:\n%s", r.Stdout)
+	}
+}
+
+// An attached run must not return before the command does. The attach used to
+// end when the *client's* stdin ended, which non-interactively is immediately:
+// the command kept running while the CLI reported success, so a script gating
+// on `miren app run` proceeded as though a task that was still going had
+// passed.
+func TestAttachedRunWaitsForTheCommand(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "task-app"})
+
+	start := time.Now()
+	r := m.Run("app", "run", "-a", name, "--task", "brief")
+	elapsed := time.Since(start)
+
+	r.RequireExitCode(t, 7)
+
+	if elapsed < 3*time.Second {
+		t.Fatalf("attached run returned after %s, before the command it was watching could finish", elapsed)
+	}
+	if !strings.Contains(r.Stdout, "brief task done") {
+		t.Fatalf("attached run missed output written before the command exited; got:\n%s", r.Stdout)
+	}
+}

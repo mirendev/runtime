@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -53,7 +54,11 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		id = args.Value()
 		ret, err := s.EAC.Get(ctx, id)
 		if err != nil {
-			if errors.Is(err, cond.ErrNotFound{}) {
+			// Retry a bare name as a sandbox id, but only when it is actually
+			// bare: re-prefixing an id that already carries one produces
+			// "sandbox/sandbox/run-..." in the error a client is shown, which
+			// reads as corruption rather than a missing entity.
+			if errors.Is(err, cond.ErrNotFound{}) && !strings.HasPrefix(id, "sandbox/") {
 				id = "sandbox/" + id
 				ret, err = s.EAC.Get(ctx, id)
 			}
@@ -134,8 +139,6 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	return nil
 }
 
-// createEphemeralSandbox creates a new sandbox for a console session.
-// The sandbox is deleted when the returned cleanup function is called.
 // resolveSandboxApp returns the app a sandbox entity belongs to, or "" if it
 // cannot be determined. A "" result denies an app-scoped caller (rpc.AllowApp
 // fails closed against an empty app), which is the safe outcome — we never let a

@@ -119,6 +119,17 @@ const ConsoleName = "console"
 // cluster capacity on request, so the default is the conservative one.
 const DefaultTaskMaxConcurrent = 1
 
+// ConsoleMaxConcurrent caps simultaneous console runs when the app has not
+// declared [tasks.console].
+//
+// The conservative default is wrong here. `miren app run` had no limit at all
+// before tasks absorbed it, and most apps will never declare the task, so
+// falling back to 1 would silently make the second person to open a console
+// wait behind the first -- a new restriction on an existing command rather than
+// a bound on new functionality. Set well past what anyone reaches by hand; an
+// app that wants a different number can declare the task and say so.
+const ConsoleMaxConcurrent = 10
+
 // TaskConfig represents a command the app knows how to run: what to run, what
 // starts it, and how it ends.
 //

@@ -387,3 +387,53 @@ func TestIsSystemEnvVar(t *testing.T) {
 	assert.True(t, IsSystemEnvVar("MIREN_APP"))
 	assert.False(t, IsSystemEnvVar("DATABASE_URL"))
 }
+
+// A run names a task, not a service, so task env is the only path its declared
+// environment has. It used to be stored at build time and read back nowhere,
+// which silently dropped the credentials a task was declared to carry -- the
+// RFD's own worked example among them.
+func TestBuildMergesTaskEnv(t *testing.T) {
+	opts := baseOptions()
+	opts.Service = ""
+	opts.Task = "session"
+	opts.Config.Variables = []core_v1alpha.ConfigSpecVariables{
+		{Key: "SHARED", Value: "global"},
+		{Key: "ONLY_GLOBAL", Value: "kept"},
+	}
+	opts.Config.Tasks = []core_v1alpha.ConfigSpecTasks{
+		{Name: "session", Env: []core_v1alpha.ConfigSpecTasksEnv{
+			{Key: "ANTHROPIC_API_KEY", Value: "sk-test"},
+			{Key: "SHARED", Value: "task-wins"},
+		}},
+		{Name: "other", Env: []core_v1alpha.ConfigSpecTasksEnv{
+			{Key: "NOT_MINE", Value: "no"},
+		}},
+	}
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+
+	env := envMap(t, spec)
+	assert.Equal(t, "sk-test", env["ANTHROPIC_API_KEY"])
+	assert.Equal(t, "task-wins", env["SHARED"], "task env overrides the app's globals")
+	assert.Equal(t, "kept", env["ONLY_GLOBAL"])
+	assert.NotContains(t, env, "NOT_MINE", "another task's env must not leak in")
+}
+
+// System-managed vars are appended after everything else precisely so a task
+// cannot shadow them; ADMIN_TOKEN in particular is the app's own credential.
+func TestBuildTaskEnvCannotShadowSystemVariables(t *testing.T) {
+	opts := baseOptions()
+	opts.Service = ""
+	opts.Task = "session"
+	opts.Config.Tasks = []core_v1alpha.ConfigSpecTasks{
+		{Name: "session", Env: []core_v1alpha.ConfigSpecTasksEnv{
+			{Key: "ADMIN_TOKEN", Value: "stolen"},
+		}},
+	}
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+
+	assert.Equal(t, "tok", envMap(t, spec)["ADMIN_TOKEN"])
+}

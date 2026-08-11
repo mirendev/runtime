@@ -459,6 +459,10 @@ func (c *Controller) buildSpec(ctx context.Context, r *run_v1alpha.Run) (*comput
 		Image:   ver.ImageUrl,
 		Command: r.Command,
 
+		// Carries [tasks.<name>.env] into the container. A run has no service,
+		// so this is the only path that env has.
+		Task: r.Task,
+
 		// A run declares no ports and touches no disks. Both are load-bearing:
 		// a declared port would have the sandbox controller kill the run for
 		// failing to bind one, and a miren disk is single-writer and would
@@ -471,6 +475,12 @@ func (c *Controller) buildSpec(ctx context.Context, r *run_v1alpha.Run) (*comput
 		// attached later otherwise -- and "start detached, attach later" is the
 		// point of separating the two.
 		Stdin: true,
+
+		// A pty only when a person asked for one. Stdin without it gives a
+		// shell no job control, no line editing, and no prompt; a pty on a
+		// deploy task would instead merge its stderr into stdout and rewrite
+		// newlines in the log a machine reads.
+		Tty: r.Tty,
 
 		// One command, at most once: a sandbox whose containers vanish must be
 		// retired rather than rebooted.

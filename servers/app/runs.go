@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
@@ -28,14 +29,43 @@ import (
 // overload nobody wanted, since declaring [services.console] used to get you
 // both a long-running service the launcher keeps up and the command app run
 // executes -- and only the second was ever the point.
-const ConsoleTask = "console"
-
-// ConsoleMaxConcurrent is the ceiling on simultaneous console runs.
 //
-// It is a new limit on an existing command rather than a limit on new
-// functionality, so it is set well past what anyone reaches by hand. An app
-// that genuinely wants more can declare [tasks.console] and say so.
-const ConsoleMaxConcurrent = 10
+// Aliased rather than respelled: the config package validates against its copy,
+// and a second literal here would let the two drift into disagreeing about
+// which task name is the convention.
+const ConsoleTask = appconfig.ConsoleName
+
+// refuseIfAtLimit rejects a manual invoke that would exceed the task's cap.
+//
+// Counts running rather than pending, matching what the controller's admission
+// counts, so the number quoted here is the number actually enforced. The check
+// is racy against a simultaneous invoke and deliberately so: it exists to give
+// a person a clear answer, while the guarantee that matters -- at most one run
+// of a task at max_concurrent = 1 -- is held by the controller's slot entity,
+// which is exact.
+func (r *AppInfo) refuseIfAtLimit(ctx context.Context, appID entity.Id, taskName string, task *core_v1alpha.ConfigSpecTasks) error {
+	maxConcurrent := runapi.MaxConcurrent(task, taskName)
+
+	results, err := r.EC.List(ctx, entity.Ref(run_v1alpha.RunAppId, appID))
+	if err != nil {
+		return fmt.Errorf("checking concurrent runs: %w", err)
+	}
+
+	var live int64
+	for results.Next() {
+		var other run_v1alpha.Run
+		results.Read(&other)
+		if other.Task == taskName && other.Status == run_v1alpha.RUNNING {
+			live++
+		}
+	}
+
+	if live >= maxConcurrent {
+		return fmt.Errorf("%d of %d concurrent runs of %q are already active; wait for one to finish, or raise max_concurrent on the task",
+			live, maxConcurrent, taskName)
+	}
+	return nil
+}
 
 var _ app_v1alpha.Runs = &AppInfo{}
 
@@ -86,10 +116,16 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 		return fmt.Errorf("app %s declares no task named %q", args.App(), taskName)
 	}
 
-	command, err := resolveCommand(task, args.Command())
-	if err != nil {
+	// Refuse rather than queue. A run held back at the limit is invisible to the
+	// caller, who sees only a command that has not returned; worse, the CLI
+	// eventually gives up while the run stays pending, so a person who retries
+	// after that message gets the command executed twice -- which for a
+	// hand-invoked migration is the failure this whole design exists to prevent.
+	if err := r.refuseIfAtLimit(ctx, appRec.ID, taskName, task); err != nil {
 		return err
 	}
+
+	command := resolveCommand(task, args.Command())
 
 	timeout := ""
 	if task != nil {
@@ -109,6 +145,7 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 		Task:        taskName,
 		Trigger:     run_v1alpha.MANUAL,
 		Command:     command,
+		Tty:         args.Tty(),
 		Status:      run_v1alpha.PENDING,
 		Timeout:     timeout,
 		MaxAttempts: manualMaxAttempts,
@@ -298,18 +335,44 @@ func findTask(cfgSpec *core_v1alpha.ConfigSpec, name string) *core_v1alpha.Confi
 	return nil
 }
 
+// defaultConsoleCommand is what a bare `miren app run` executes when the app
+// has not declared [tasks.console].
+//
+// It has to be a real command. The sandbox only sets the container's process
+// args when the command is non-empty, so an empty one falls through to whatever
+// the image configures -- which on a stack-built image is nothing at all, and
+// runc refuses to start a container with no args. appspec prepends the config
+// entrypoint, so this resolves to "<entrypoint> /bin/sh" where one exists and a
+// bare shell where it does not, which is the chain the exec server applied
+// before runs absorbed this command.
+const defaultConsoleCommand = "/bin/sh"
+
 // resolveCommand picks what a run executes: an explicit override, else the
-// task's declared command, else nothing -- which leaves the resolution to the
-// runner's console fallback chain, since what a bare `miren app run` should do
-// depends on what the image supplies and cannot be written down as a default.
-func resolveCommand(task *core_v1alpha.ConfigSpecTasks, override []string) (string, error) {
+// task's declared command, else a shell.
+func resolveCommand(task *core_v1alpha.ConfigSpecTasks, override []string) string {
 	if len(override) > 0 {
-		return strings.Join(override, " "), nil
+		return shellQuote(override)
 	}
-	if task != nil {
-		return task.Command, nil
+	if task != nil && task.Command != "" {
+		return task.Command
 	}
-	return "", nil
+	return defaultConsoleCommand
+}
+
+// shellQuote renders argv as a single shell word-for-word equivalent command.
+//
+// The container's process args are always built as sh -c <string>, so an
+// override has to survive one round of shell parsing to arrive as the argv the
+// caller typed. Joining on spaces does not: `run -- echo "a  b"` reaches the
+// container as two arguments, and `psql -c "SELECT 1"` as three. Single quotes
+// suppress every form of expansion the shell would otherwise apply, with the
+// usual dance for an embedded quote since there is no escape inside them.
+func shellQuote(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " ")
 }
 
 func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {

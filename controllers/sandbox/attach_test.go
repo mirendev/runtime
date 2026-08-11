@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -320,8 +321,25 @@ func TestHubRegistry(t *testing.T) {
 	assert.NotSame(t, h, other, "containers within a sandbox get their own hubs")
 
 	r.Remove(id, "app")
-	assert.Nil(t, r.Get(id, "app"))
+	removed := r.Get(id, "app")
+	require.NotNil(t, removed, "a removed hub lingers so a late client still gets its output")
+	assert.True(t, removed.closed, "but it is closed, so an attach ends at once")
 	assert.NotNil(t, r.Get(id, "sidecar"), "removing one container leaves its siblings")
+
+	expireHubs(r)
+	assert.Nil(t, r.Get(id, "app"), "and it is gone once the linger window passes")
+}
+
+// expireHubs advances the registry's clock past the linger window, so tests can
+// assert on expiry without sleeping a minute.
+func expireHubs(r *HubRegistry) {
+	r.mu.Lock()
+	base := time.Now().Add(2 * hubLinger)
+	r.now = func() time.Time { return base }
+	r.mu.Unlock()
+
+	// Any registry operation sweeps; use one that observes nothing.
+	r.Get(entity.Id("sandbox/nonexistent"), "app")
 }
 
 // A sandbox going away must take every one of its containers' hubs with it, or
@@ -337,9 +355,12 @@ func TestHubRegistryRemoveAll(t *testing.T) {
 
 	r.RemoveAll(doomed)
 
+	assert.Same(t, kept, r.Get(survivor, "app"), "another sandbox's hubs are untouched")
+
+	expireHubs(r)
 	assert.Nil(t, r.Get(doomed, "app"))
 	assert.Nil(t, r.Get(doomed, "sidecar"))
-	assert.Same(t, kept, r.Get(survivor, "app"), "another sandbox's hubs are untouched")
+	assert.Same(t, kept, r.Get(survivor, "app"), "and a live sandbox's hub is not swept with them")
 }
 
 // RemoveAll must key on the sandbox boundary, not a bare string prefix, or
@@ -354,8 +375,29 @@ func TestHubRegistryRemoveAllRespectsSandboxBoundary(t *testing.T) {
 
 	r.RemoveAll(short)
 
+	expireHubs(r)
 	assert.Nil(t, r.Get(short, "app"))
 	assert.Same(t, kept, r.Get(longer, "app"), "a sandbox whose id merely shares a prefix is unaffected")
+}
+
+// A sandbox name is derived from its run and attempt, so the same key can come
+// back for a retry. Reviving the retired Hub would replay the failed attempt's
+// output into the new attempt's terminal.
+func TestHubRegistryDoesNotReviveARetiredHub(t *testing.T) {
+	r := NewHubRegistry()
+	id := entity.Id("sandbox/sb-1")
+
+	first := r.GetOrCreate(id, "app")
+	_, _ = first.Write([]byte("output from the first attempt"))
+	r.RemoveAll(id)
+
+	second := r.GetOrCreate(id, "app")
+	assert.NotSame(t, first, second, "a new container gets a new hub")
+
+	var got syncBuffer
+	unsubscribe := second.Subscribe(&got)
+	defer unsubscribe()
+	assert.Empty(t, got.String(), "the retired hub's output must not replay into the new one")
 }
 
 // A nil registry is what a controller built without one has; every method must
@@ -432,4 +474,149 @@ func TestHubCloseWithManySubscribersThenUnsubscribeAll(t *testing.T) {
 			stop()
 		}
 	})
+}
+
+// Done is the signal an attached client waits on. Without it the only event an
+// attach can observe is its own stdin ending, which says nothing about the
+// workload: a non-interactive caller's stdin is /dev/null and EOFs at once, so
+// the attach would return while the task was still running and report it as
+// finished.
+func TestHubDoneIsOpenUntilClose(t *testing.T) {
+	h := NewHub()
+
+	select {
+	case <-h.Done():
+		t.Fatal("Done must not be closed while the container is alive")
+	default:
+	}
+
+	h.Close()
+
+	select {
+	case <-h.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done must be closed once the Hub is torn down")
+	}
+}
+
+// Teardown races the client's own unsubscribe, and both paths close channels.
+func TestHubDoneSurvivesRepeatedClose(t *testing.T) {
+	h := NewHub()
+	h.Close()
+	h.Close()
+
+	select {
+	case <-h.Done():
+	default:
+		t.Fatal("Done must stay closed")
+	}
+}
+
+// A Hub reached through the registry is the one a client attaches to, so
+// removal has to close it -- otherwise the client waits on a container that is
+// already gone.
+func TestHubRegistryRemoveClosesDone(t *testing.T) {
+	r := NewHubRegistry()
+	h := r.GetOrCreate(entity.Id("sandbox/one"), "app")
+
+	r.RemoveAll(entity.Id("sandbox/one"))
+
+	select {
+	case <-h.Done():
+	case <-time.After(time.Second):
+		t.Fatal("RemoveAll must close the Hub it drops")
+	}
+}
+
+// A container starts as soon as its sandbox boots, while the client is still
+// resolving the sandbox and opening a connection. Anything written in that
+// window used to be dropped, so `miren app run -- echo hi` printed nothing --
+// the one thing running a command interactively is for.
+func TestHubReplaysOutputWrittenBeforeAnyoneAttached(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+
+	_, _ = h.Write([]byte("printed before the client arrived\n"))
+
+	var got syncBuffer
+	unsubscribe := h.Subscribe(&got)
+	defer unsubscribe()
+
+	assert.Eventually(t, func() bool {
+		return strings.Contains(got.String(), "printed before the client arrived")
+	}, time.Second, 10*time.Millisecond)
+}
+
+// The replay must not duplicate or drop the chunk that lands while a subscriber
+// is being registered, which is why the snapshot and the registration share a
+// lock.
+func TestHubReplayThenLiveOutputArrivesOnceInOrder(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+
+	_, _ = h.Write([]byte("first\n"))
+
+	var got syncBuffer
+	unsubscribe := h.Subscribe(&got)
+	defer unsubscribe()
+
+	_, _ = h.Write([]byte("second\n"))
+
+	assert.Eventually(t, func() bool {
+		return got.String() == "first\nsecond\n"
+	}, time.Second, 10*time.Millisecond, "got %q", got.String())
+}
+
+// The buffer is bounded because a Hub lives as long as its container and a
+// detached run can produce output for hours. A late client gets the tail.
+func TestHubReplayIsBounded(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+
+	chunk := bytes.Repeat([]byte("x"), 8<<10)
+	for range 16 {
+		_, _ = h.Write(chunk)
+	}
+	_, _ = h.Write([]byte("TAIL"))
+
+	var got syncBuffer
+	unsubscribe := h.Subscribe(&got)
+	defer unsubscribe()
+
+	assert.Eventually(t, func() bool {
+		s := got.String()
+		return len(s) <= replayBuffer && strings.HasSuffix(s, "TAIL")
+	}, time.Second, 10*time.Millisecond)
+}
+
+// A single write larger than the whole buffer keeps its tail rather than
+// overflowing or being discarded outright.
+func TestHubReplayHandlesAnOversizedWrite(t *testing.T) {
+	h := NewHub()
+	defer h.Close()
+
+	_, _ = h.Write(append(bytes.Repeat([]byte("y"), replayBuffer+1024), []byte("END")...))
+
+	var got syncBuffer
+	unsubscribe := h.Subscribe(&got)
+	defer unsubscribe()
+
+	assert.Eventually(t, func() bool {
+		s := got.String()
+		return len(s) <= replayBuffer && strings.HasSuffix(s, "END")
+	}, time.Second, 10*time.Millisecond)
+}
+
+// A command that finished before the client connected is exactly when its
+// output matters most, and a terminal has nowhere else to read it from.
+func TestHubClosedStillReplays(t *testing.T) {
+	h := NewHub()
+	_, _ = h.Write([]byte("ran and exited\n"))
+	h.Close()
+
+	var got syncBuffer
+	unsubscribe := h.Subscribe(&got)
+	defer unsubscribe()
+
+	assert.Contains(t, got.String(), "ran and exited")
 }

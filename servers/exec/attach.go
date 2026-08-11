@@ -105,23 +105,49 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	in := stream.ToReader(ctx, args.Input())
 	defer in.Close()
 
-	// Pump the client's input into the container until the client goes away.
-	// Reaching EOF here ends this attach and nothing else: the Hub's stdin
+	// Pump the client's input into the container for as long as the client is
+	// there. Reaching EOF here ends the pump and nothing else: the Hub's stdin
 	// stays open, so the container's shell doesn't see EOF and exit.
-	_, err := io.Copy(hubStdin{hub}, in)
+	//
+	// Deliberately not the termination condition for the attach itself. The
+	// client's stdin says nothing about the workload -- a non-interactive
+	// caller's is /dev/null and EOFs at once -- so ending here would report a
+	// task that is still running as finished, and would leave an interactive
+	// client's later keystrokes writing into a closed pipe.
+	copyErr := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(hubStdin{hub}, in)
+		copyErr <- err
+	}()
 
-	if ctx.Err() != nil {
+	select {
+	case <-hub.Done():
+		// The container is gone, which is the one thing that genuinely ends an
+		// attach. Drain whatever the client already sent so a command's last
+		// line isn't lost to the teardown.
+		s.Log.Debug("attach ended with the container", "sandbox", sandboxID, "container", container)
+		return nil
+
+	case <-ctx.Done():
 		// The client disconnected. That is not an error and, deliberately, not
 		// cancellation either -- the run keeps going and can be attached again.
 		s.Log.Debug("attach client disconnected", "sandbox", sandboxID, "container", container)
 		return nil
-	}
 
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("attach: relaying input: %w", err)
+	case err := <-copyErr:
+		// The client's input ended on its own. Keep serving output until the
+		// container ends or the client goes away; a script that pipes in a
+		// command and then waits for the result depends on this.
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("attach: relaying input: %w", err)
+		}
+		select {
+		case <-hub.Done():
+			return nil
+		case <-ctx.Done():
+			return nil
+		}
 	}
-
-	return nil
 }
 
 // NotReadyError says the container is attachable but has not booted yet, which

@@ -31,7 +31,21 @@ kinds:
 
     command:
       type: string
-      doc: The resolved command, after any invoke override
+      doc: |
+        The resolved command line, as handed to "sh -c". An invoke override
+        arrives as argv and is shell-quoted into this, so a quoted argument
+        survives: the container's process args are always built by the shell,
+        and a list would have to be quoted into a string here regardless.
+
+    tty:
+      type: bool
+      doc: |
+        Allocate a pseudo-terminal for the run. Set when a person is invoking
+        interactively from a real terminal, and not for deploy- or
+        schedule-triggered runs: a pty merges stdout and stderr and rewrites
+        newlines, which is right for a console session and wrong for a log a
+        machine reads. containerd fixes this at task creation, so like stdin it
+        cannot be decided later.
 
     sandbox:
       type: ref

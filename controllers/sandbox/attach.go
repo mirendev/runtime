@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -20,6 +21,22 @@ import (
 // terminal, is the durable record: everything a dropped client missed is still
 // readable with `miren logs`.
 const subscriberQueue = 256
+
+// replayBuffer bounds the recent output a Hub keeps for clients that have not
+// attached yet.
+//
+// Without it, output written before a client subscribes is gone: the container
+// starts as soon as its sandbox boots, while the client is still resolving the
+// sandbox and opening a connection. A command that finishes in that window --
+// `miren app run -- echo hi`, or any task that fails immediately -- would print
+// nothing at all, which is what running a command interactively is for. The old
+// exec path could not lose this, because it started the process with the
+// client's streams already connected.
+//
+// Bounded because a Hub lives as long as its container and a detached run can
+// produce output for hours. What a late client gets is the recent tail; the log
+// stream remains the complete record.
+const replayBuffer = 64 << 10
 
 // Resizer is the part of containerd's task API a Hub needs to propagate window
 // size changes. Narrowed to one method so tests don't need a real task.
@@ -43,6 +60,16 @@ type Hub struct {
 	subs   map[uint64]*subscriber
 	nextID uint64
 	closed bool
+
+	// done is closed when the container this Hub fronts is gone. It is the
+	// only signal an attached client has that the thing it is watching has
+	// ended: the client's own stdin says nothing about the workload, and
+	// treating stdin's EOF as the end reports a run still going as finished.
+	done chan struct{}
+
+	// history is the recent output replayed to a client that attaches after the
+	// container has already written something.
+	history []byte
 
 	stdinR *io.PipeReader
 	stdinW *io.PipeWriter
@@ -73,6 +100,7 @@ func NewHub() *Hub {
 	r, w := io.Pipe()
 	return &Hub{
 		subs:   make(map[uint64]*subscriber),
+		done:   make(chan struct{}),
 		stdinR: r,
 		stdinW: w,
 	}
@@ -87,7 +115,7 @@ func NewHub() *Hub {
 // the logs.
 func (h *Hub) Write(p []byte) (int, error) {
 	h.mu.Lock()
-	if h.closed || len(h.subs) == 0 {
+	if h.closed {
 		h.mu.Unlock()
 		return len(p), nil
 	}
@@ -96,6 +124,13 @@ func (h *Hub) Write(p []byte) (int, error) {
 	// chunk has to be copied before it reaches another goroutine.
 	chunk := make([]byte, len(p))
 	copy(chunk, p)
+
+	h.remember(chunk)
+
+	if len(h.subs) == 0 {
+		h.mu.Unlock()
+		return len(p), nil
+	}
 
 	for _, s := range h.subs {
 		select {
@@ -109,9 +144,31 @@ func (h *Hub) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Subscribe delivers subsequent container output to w until the returned
-// function is called. Multiple clients may subscribe at once; each gets every
-// chunk written after it subscribed.
+// remember appends a chunk to the replay buffer, dropping the oldest bytes once
+// it is full. Caller holds h.mu.
+func (h *Hub) remember(chunk []byte) {
+	if len(chunk) >= replayBuffer {
+		// A single chunk larger than the whole buffer: keep only its tail, so
+		// what a client replays is still the most recent output.
+		h.history = append(h.history[:0], chunk[len(chunk)-replayBuffer:]...)
+		return
+	}
+
+	if len(h.history)+len(chunk) > replayBuffer {
+		drop := len(h.history) + len(chunk) - replayBuffer
+		h.history = append(h.history[:0], h.history[drop:]...)
+	}
+	h.history = append(h.history, chunk...)
+}
+
+// Subscribe delivers container output to w until the returned function is
+// called. Multiple clients may subscribe at once.
+//
+// A new subscriber first receives the recent output the container has already
+// produced, then everything written from here on. The replay is what makes a
+// command that finishes before the client connects still print something; the
+// snapshot and the registration happen under one lock, so no chunk is delivered
+// twice or skipped between the two.
 //
 // The returned function is idempotent and must be called to release the
 // subscriber's goroutine.
@@ -123,15 +180,30 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 
 	h.mu.Lock()
 	if h.closed {
+		// Still replay: a container that has already exited is the case where
+		// the output matters most, and there is nothing else left to read it
+		// from at a terminal.
+		history := make([]byte, len(h.history))
+		copy(history, h.history)
 		h.mu.Unlock()
+
+		if len(history) > 0 {
+			_, _ = w.Write(history)
+		}
 		return func() {}
 	}
 	id := h.nextID
 	h.nextID++
 	h.subs[id] = s
+
+	history := make([]byte, len(h.history))
+	copy(history, h.history)
 	h.mu.Unlock()
 
 	go func() {
+		if len(history) > 0 {
+			_, _ = w.Write(history)
+		}
 		for {
 			select {
 			case <-s.done:
@@ -206,6 +278,14 @@ func (h *Hub) Dropped() uint64 {
 	return total
 }
 
+// Done is closed once the container is gone.
+//
+// An attached client selects on this to learn that the workload ended. Without
+// it the only event an attach can see is its own stdin reaching EOF, which is
+// unrelated: stdin is /dev/null in any non-interactive caller, so an attach
+// keyed on it returns immediately and reports a still-running task as finished.
+func (h *Hub) Done() <-chan struct{} { return h.done }
+
 // Close releases the Hub and closes the container's stdin. Only teardown may
 // call it: closing stdin ends an interactive shell, so a client disconnecting
 // must not.
@@ -216,6 +296,7 @@ func (h *Hub) Close() {
 		return
 	}
 	h.closed = true
+	close(h.done)
 	subs := make([]*subscriber, 0, len(h.subs))
 	for id, s := range h.subs {
 		subs = append(subs, s)
@@ -244,16 +325,63 @@ func containerIsAttachable(sb *compute.Sandbox, containerName string) bool {
 	return false
 }
 
+// hubLinger is how long a torn-down Hub stays reachable.
+//
+// A short command races its own teardown. The container exits, the run
+// controller observes it and stops the sandbox, and the Hub goes with it --
+// possibly before the client that asked for the command has finished
+// connecting. Dropping the Hub at that moment means the client finds nothing to
+// attach to and prints no output at all, so `miren app run -- echo hi` says
+// nothing about half the time, depending on which side wins.
+//
+// Lingering makes that deterministic instead: the Hub is closed, so an attach
+// returns immediately, but its replay buffer is still there to hand over. The
+// cost is bounded -- a closed Hub holds at most replayBuffer bytes and is swept
+// on the next registry operation after it expires.
+const hubLinger = 60 * time.Second
+
 // HubRegistry holds the live Hubs for a runner's containers, so the exec server
 // can find the Hub for a sandbox the sandbox controller booted. Both live in
 // the runner process.
 type HubRegistry struct {
 	mu   sync.Mutex
 	hubs map[string]*Hub
+
+	// expiring holds Hubs whose containers are gone, kept briefly so a client
+	// that arrives just after teardown still gets the output.
+	expiring map[string]expiringHub
+
+	// now is overridable so tests can advance the clock rather than sleep.
+	now func() time.Time
+}
+
+type expiringHub struct {
+	hub *Hub
+	at  time.Time
 }
 
 func NewHubRegistry() *HubRegistry {
-	return &HubRegistry{hubs: make(map[string]*Hub)}
+	return &HubRegistry{
+		hubs:     make(map[string]*Hub),
+		expiring: make(map[string]expiringHub),
+		now:      time.Now,
+	}
+}
+
+// retire closes a Hub and holds it for the linger window. Caller holds r.mu.
+func (r *HubRegistry) retire(key string, h *Hub) {
+	h.Close()
+	r.expiring[key] = expiringHub{hub: h, at: r.now().Add(hubLinger)}
+}
+
+// sweepExpired drops lingering Hubs whose window has passed. Caller holds r.mu.
+func (r *HubRegistry) sweepExpired() {
+	now := r.now()
+	for key, e := range r.expiring {
+		if now.After(e.at) {
+			delete(r.expiring, key)
+		}
+	}
 }
 
 func hubKey(sandboxID entity.Id, container string) string {
@@ -270,17 +398,29 @@ func (r *HubRegistry) GetOrCreate(sandboxID entity.Id, container string) *Hub {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.sweepExpired()
+
 	key := hubKey(sandboxID, container)
 	if h, ok := r.hubs[key]; ok {
 		return h
 	}
+
+	// A sandbox name is derived from the run and attempt, so a retired Hub
+	// under the same key belongs to an earlier life of this container and must
+	// not be revived: its buffer holds the previous attempt's output.
+	delete(r.expiring, key)
+
 	h := NewHub()
 	r.hubs[key] = h
 	return h
 }
 
 // Get returns the Hub for a container, or nil if the container is not
-// attachable or is not running on this node.
+// attachable and never ran here.
+//
+// A Hub whose container has already gone is still returned for a short window,
+// so a client that arrives just after teardown gets the output rather than
+// nothing. It is closed, so the attach ends as soon as it has replayed.
 func (r *HubRegistry) Get(sandboxID entity.Id, container string) *Hub {
 	if r == nil {
 		return nil
@@ -288,23 +428,35 @@ func (r *HubRegistry) Get(sandboxID entity.Id, container string) *Hub {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.hubs[hubKey(sandboxID, container)]
+
+	r.sweepExpired()
+
+	key := hubKey(sandboxID, container)
+	if h, ok := r.hubs[key]; ok {
+		return h
+	}
+	if e, ok := r.expiring[key]; ok {
+		return e.hub
+	}
+	return nil
 }
 
-// Remove tears down and forgets a container's Hub.
+// Remove tears down a container's Hub, leaving it reachable for the linger
+// window.
 func (r *HubRegistry) Remove(sandboxID entity.Id, container string) {
 	if r == nil {
 		return
 	}
 
 	r.mu.Lock()
-	key := hubKey(sandboxID, container)
-	h := r.hubs[key]
-	delete(r.hubs, key)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
 
-	if h != nil {
-		h.Close()
+	r.sweepExpired()
+
+	key := hubKey(sandboxID, container)
+	if h, ok := r.hubs[key]; ok {
+		delete(r.hubs, key)
+		r.retire(key, h)
 	}
 }
 
@@ -318,16 +470,14 @@ func (r *HubRegistry) RemoveAll(sandboxID entity.Id) {
 	prefix := sandboxID.String() + "/"
 
 	r.mu.Lock()
-	var doomed []*Hub
+	defer r.mu.Unlock()
+
+	r.sweepExpired()
+
 	for key, h := range r.hubs {
 		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
-			doomed = append(doomed, h)
 			delete(r.hubs, key)
+			r.retire(key, h)
 		}
-	}
-	r.mu.Unlock()
-
-	for _, h := range doomed {
-		h.Close()
 	}
 }
