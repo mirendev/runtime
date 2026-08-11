@@ -157,18 +157,27 @@ func setupClusterFromAddress(cfg *clientconfig.Config, address, expectedFingerpr
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cert, fingerprint, err := extractTLSCertificate(ctx, address)
+	cert, err := extractTLSCertificate(ctx, address)
 	if err != nil {
 		return nil, "", err
 	}
 
-	if err := checkFingerprint(expectedFingerprint, fingerprint); err != nil {
+	if err := checkFingerprint(expectedFingerprint, cert.Fingerprint); err != nil {
 		return nil, "", err
 	}
 
 	cc := &clientconfig.ClusterConfig{
 		Hostname: address,
-		CACert:   cert,
+		CACert:   cert.CAPEM,
+	}
+
+	// MIREN_CLUSTER is frequently a hostname, which the cluster's certificate
+	// almost never covers. There's no Context to narrate through here, so this
+	// resolves silently — a mismatch we can't fix surfaces on the dial.
+	if _, sniHost, err := normalizeAddress(address); err == nil {
+		if serverName, _ := verificationName(sniHost, cert.Leaf); serverName != "" {
+			cc.TLSServerName = serverName
+		}
 	}
 
 	leafData := &clientconfig.ConfigData{

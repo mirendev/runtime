@@ -111,7 +111,7 @@ func (m *SelectionModel) SetCursor(index int) {
 }
 
 // Helper function to run cluster selection
-func SelectCluster(ctx *Context, title string, clusters []string, activeCluster string, dimActive bool) (string, error) {
+func SelectCluster(ctx *Context, title string, clusters []string, activeCluster string) (string, error) {
 	model := &SelectionModel{
 		Title: title,
 		Items: clusters,
@@ -121,16 +121,6 @@ func SelectCluster(ctx *Context, title string, clusters []string, activeCluster 
 			}
 			return "  "
 		},
-	}
-
-	if dimActive {
-		model.ItemStyle = func(item string) lipgloss.Style {
-			if item == activeCluster {
-				return lipgloss.NewStyle().Foreground(theme.Muted)
-			}
-			return lipgloss.NewStyle()
-		}
-		model.Footer = "Note: You cannot remove the active cluster"
 	}
 
 	// Find current active cluster index

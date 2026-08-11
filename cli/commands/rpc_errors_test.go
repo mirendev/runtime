@@ -1,12 +1,15 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -195,8 +198,12 @@ func TestRPCClientRefusesUnknownCluster(t *testing.T) {
 	if !strings.Contains(d.Summary, "typo") {
 		t.Errorf("Summary = %q, want it to name the requested cluster", d.Summary)
 	}
-	if !strings.Contains(d.Detail, "wrong cluster") {
-		t.Errorf("Detail = %q, want it to explain why we didn't fall back", d.Detail)
+	// The guard is that we rule out the silent substitution this path exists to
+	// prevent. Deliberately not asserting "nothing was contacted": -C accepts an
+	// ad-hoc address, which LoadCluster dials before failing, so that claim would
+	// be false exactly when someone typo'd an address.
+	if !strings.Contains(d.Detail, "didn't fall back") {
+		t.Errorf("Detail = %q, want it to rule out falling back to another cluster", d.Detail)
 	}
 }
 
@@ -225,10 +232,124 @@ func TestRPCClientRefusesBrokenActiveCluster(t *testing.T) {
 	}
 }
 
+// A cluster selected in the client config is just as authoritative as one
+// loaded into ClusterConfig. This path used to log a warning and connect to the
+// default server address instead, which is the same silent substitution the
+// ClusterConfig path refuses to make — except it surfaced as a timeout against
+// a server the user never named.
+func TestRPCClientRefusesUnusableActiveCluster(t *testing.T) {
+	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("homelab", &clientconfig.ClusterConfig{
+		Hostname: "homelab:8443",
+		// A certificate with no key: enough to make the entry unusable.
+		ClientCert: "-----BEGIN CERTIFICATE-----\nnot a real one\n-----END CERTIFICATE-----\n",
+	})
+	if err := cfg.SetActiveCluster("homelab"); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Context{
+		Context:      context.Background(),
+		Stderr:       io.Discard,
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ClientConfig: cfg,
+	}
+
+	_, err := c.RPCClient("entities")
+	if err == nil {
+		t.Fatal("expected an error rather than a fallback to the default address")
+	}
+
+	d, ok := errors.AsType[*ui.Diagnostic](err)
+	if !ok {
+		t.Fatalf("got %T, want *ui.Diagnostic", err)
+	}
+	if !strings.Contains(d.Summary, "homelab") {
+		t.Errorf("Summary = %q, want it to name the selected cluster", d.Summary)
+	}
+}
+
+// Configured clusters with none selected is the state you land in after
+// removing the active cluster. It used to fall through to the default address
+// and fail as "no remote address specified", naming neither the problem nor the
+// fix.
+func TestRPCClientReportsNoActiveCluster(t *testing.T) {
+	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("cloud", &clientconfig.ClusterConfig{Hostname: "cloud.example.com:8443"})
+	cfg.SetCluster("homelab", &clientconfig.ClusterConfig{Hostname: "homelab:8443"})
+	// Active deliberately unset.
+
+	c := &Context{
+		Context:      context.Background(),
+		Stderr:       io.Discard,
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ClientConfig: cfg,
+	}
+
+	_, err := c.RPCClient("entities")
+	if err == nil {
+		t.Fatal("expected an error when no cluster is active")
+	}
+
+	d, ok := errors.AsType[*ui.Diagnostic](err)
+	if !ok {
+		t.Fatalf("got %T (%v), want *ui.Diagnostic", err, err)
+	}
+	if !strings.Contains(d.Summary, "no active cluster") {
+		t.Errorf("Summary = %q, want it to say nothing is active", d.Summary)
+	}
+	// The names are the thing you need to act on the advice.
+	if len(d.Facts) == 0 || !strings.Contains(d.Facts[0].Value, "homelab") {
+		t.Errorf("Facts = %v, want the configured cluster names", d.Facts)
+	}
+}
+
+// A config with no clusters at all is a different thing from one with clusters
+// and none active: it's local development before anything has been added, where
+// the default address is what was meant. Refusing either would break `miren
+// server` on localhost, so both shapes are pinned.
+//
+// They fail in different places, which is the trap. Only the nil case reaches
+// the default-address fallback; an empty-but-present config stops earlier, at
+// cs.Client, for want of an endpoint. Both are non-refusals, which is what this
+// guards, but only one of them exercises the fall-through.
+func TestRPCClientDoesNotRefuseWithoutClusters(t *testing.T) {
+	newContext := func(cfg *clientconfig.Config) *Context {
+		return &Context{
+			Context:      context.Background(),
+			Stderr:       io.Discard,
+			Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+			ClientConfig: cfg,
+		}
+	}
+
+	// Whether a server answers the default address is not this test's business.
+	assertNotRefused := func(t *testing.T, err error) {
+		t.Helper()
+		if d, ok := errors.AsType[*ui.Diagnostic](err); ok {
+			t.Fatalf("refused instead of falling back: %s", d.Summary)
+		}
+	}
+
+	t.Run("no config at all reaches the default address", func(t *testing.T) {
+		c := newContext(nil)
+		_, err := c.RPCClient("entities")
+		assertNotRefused(t, err)
+	})
+
+	// The other half of the new guard: clusters must be present for the refusal
+	// to fire, so an empty config must not trip it.
+	t.Run("an empty config does not trip the no-active-cluster refusal", func(t *testing.T) {
+		c := newContext(clientconfig.NewConfig())
+		_, err := c.RPCClient("entities")
+		assertNotRefused(t, err)
+	})
+}
+
 // The underlying reason is the actionable part here, so it shows without -v.
 func TestUnusableClusterErrorShowsItsCause(t *testing.T) {
 	c := &Context{ClusterName: "prod"}
-	err := c.unusableClusterError(errors.New("tls: failed to find any PEM data"))
+	err := c.unusableClusterError("prod", errors.New("tls: failed to find any PEM data"))
 
 	d, ok := errors.AsType[*ui.Diagnostic](err)
 	if !ok {

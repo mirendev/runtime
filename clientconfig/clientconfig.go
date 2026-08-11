@@ -432,6 +432,55 @@ func (c *Config) SetActiveCluster(name string) error {
 	return nil
 }
 
+// markLeafDirty queues a leaf config to be rewritten by the next Save.
+//
+// Leaves are only written when they appear in unsavedLeafConfigs, so mutating
+// one in memory without this is a change that never reaches disk.
+func (c *Config) markLeafDirty(leafConfig *Config) {
+	// A leaf with no source name has nowhere to be written back to.
+	if leafConfig.sourcePath == "" {
+		return
+	}
+
+	if c.unsavedLeafConfigs == nil {
+		c.unsavedLeafConfigs = make(map[string]*ConfigData)
+	}
+
+	c.unsavedLeafConfigs[leafConfig.sourcePath] = &ConfigData{
+		Active:     leafConfig.active,
+		Clusters:   leafConfig.clusters,
+		Identities: leafConfig.identities,
+		Keys:       leafConfig.keys,
+	}
+}
+
+// clearActiveIfNamed drops every active pointer that names the cluster being
+// removed, so none of them refers to something that isn't there.
+//
+// Leaf configs carry their own active_cluster and it wins over the main file's,
+// so clearing only c.active is not enough. Missing one is not a cosmetic bug:
+// the leaf gets written back naming a cluster that no longer exists anywhere,
+// and the next load refuses the whole configuration with "active cluster %q not
+// found in configured clusters".
+//
+// Each cleared leaf is queued for save individually. The leaf that owned the
+// removed cluster is not necessarily the one pointing at it: a leaf can carry
+// an active_cluster naming a cluster defined in the main file or in a different
+// leaf entirely, and clearing that one in memory alone would leave the same
+// unloadable config on disk.
+func (c *Config) clearActiveIfNamed(name string) {
+	if c.active == name {
+		c.active = ""
+	}
+
+	for _, leafConfig := range c.leafConfigs {
+		if leafConfig.active == name {
+			leafConfig.active = ""
+			c.markLeafDirty(leafConfig)
+		}
+	}
+}
+
 // ClearActiveCluster unsets the active cluster, leaving no cluster active. This
 // is a valid state (used, for example, when the active cluster is being removed)
 // and callers must re-select one before commands that need a default cluster.
@@ -885,16 +934,19 @@ func (c *Config) SetCluster(name string, cluster *ClusterConfig) {
 	// SetCluster always modifies the main config, never leaf configs
 }
 
-// RemoveCluster removes a cluster from the configuration
+// RemoveCluster removes a cluster from the configuration.
+//
+// Removing the active cluster is allowed, and drops the active pointer with it.
+// Refusing was meant to stop the config ending up pointed at nothing, but with
+// a single cluster it made the entry impossible to delete at all: there is
+// nowhere to switch to first. Clearing the pointer keeps the invariant that
+// actually mattered — active never names a cluster that isn't there — without
+// the dead end.
 func (c *Config) RemoveCluster(name string) error {
-	// Don't allow removing the active cluster
-	if c.active == name {
-		return fmt.Errorf("cannot remove active cluster %q", name)
-	}
-
 	// Check if cluster exists in main config
 	if _, existsInMain := c.clusters[name]; existsInMain {
 		delete(c.clusters, name)
+		c.clearActiveIfNamed(name)
 		return nil
 	}
 
@@ -904,21 +956,9 @@ func (c *Config) RemoveCluster(name string) error {
 			// Remove from leaf config's clusters map
 			delete(leafConfig.clusters, name)
 
-			// Mark the leaf config as needing to be saved
-			// by adding it to unsavedLeafConfigs
-			leafName := leafConfig.sourcePath
-			if leafName != "" {
-				if c.unsavedLeafConfigs == nil {
-					c.unsavedLeafConfigs = make(map[string]*ConfigData)
-				}
-				configData := &ConfigData{
-					Active:     leafConfig.active,
-					Clusters:   leafConfig.clusters,
-					Identities: leafConfig.identities,
-					Keys:       leafConfig.keys,
-				}
-				c.unsavedLeafConfigs[leafName] = configData
-			}
+			// Before the snapshot, which copies active by value.
+			c.clearActiveIfNamed(name)
+			c.markLeafDirty(leafConfig)
 			return nil
 		}
 	}

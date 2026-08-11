@@ -447,7 +447,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		err error
 	)
 
-	// A selected cluster is authoritative. If its configuration can't produce a
+	// An active cluster is authoritative. If its configuration can't produce a
 	// connection, that is the answer — we must not fall through to the branches
 	// below, because they connect somewhere else entirely.
 	//
@@ -459,7 +459,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
 		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
 		if err != nil {
-			return nil, c.unusableClusterError(err)
+			return nil, c.unusableClusterError(c.ClusterName, err)
 		}
 
 		client, err := cs.Client(name)
@@ -470,6 +470,15 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	}
 
 	if c.ClientConfig != nil {
+		// Clusters configured but none active. Falling through would dial the
+		// default address and fail deep in the transport as "no remote address
+		// specified", which is true and useless. A config with no clusters at all
+		// is a different thing and does belong on the default address, which is
+		// how local development works before anything is added.
+		if c.ClientConfig.ActiveCluster() == "" && c.ClientConfig.GetClusterCount() > 0 {
+			return nil, c.noActiveClusterError()
+		}
+
 		cs, err = c.ClientConfig.State(c, opts...)
 		if err == nil {
 			client, err := cs.Client(name)
@@ -478,7 +487,21 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 			}
 			return client, nil
 		}
-		c.Log.Warn("Client config could not provide RPC state", "error", err)
+
+		// The same rule as above, one layer down. This branch used to log a
+		// warning and carry on to the default address, which is the exact
+		// substitution the branch above refuses to make — and the warning
+		// scrolled past on the way to a confusing timeout against a server the
+		// user never asked about.
+		//
+		// A config with no active cluster is the one case where continuing is
+		// right: there is no cluster to be wrong about, and the local-dev path
+		// below is what the user meant.
+		if active := c.ClientConfig.ActiveCluster(); active != "" {
+			return nil, c.unusableClusterError(active, err)
+		}
+
+		c.Log.Debug("Client config could not provide RPC state", "error", err)
 	}
 
 	cs, err = rpc.NewState(c, append(opts, rpc.WithSkipVerify)...)

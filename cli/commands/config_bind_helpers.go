@@ -530,9 +530,10 @@ var (
 )
 
 // tryConnectToCluster attempts to connect to a cluster using its available addresses
-// and returns the working address and CA certificate. It tries all provided addresses
-// in parallel and optionally falls back to localhost if all addresses fail.
-func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bool) (workingAddress string, caCert string, err error) {
+// and returns the working address along with what its certificate told us. It tries
+// all provided addresses in parallel and optionally falls back to localhost if all
+// addresses fail.
+func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bool) (workingAddress string, cert *clusterCertificate, err error) {
 	// Filter out addresses we should skip
 	var addressesToTry []string
 	for _, addr := range cluster.APIAddresses {
@@ -547,17 +548,16 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 	}
 
 	if len(addressesToTry) == 0 && !tryLocalhost {
-		return "", "", fmt.Errorf("no valid addresses available for cluster %s", cluster.Name)
+		return "", nil, fmt.Errorf("no valid addresses available for cluster %s", cluster.Name)
 	}
 
 	ctx.Info("Trying to connect to cluster addresses...")
 
 	// Result struct for each connection attempt
 	type connResult struct {
-		addr        string
-		cert        string
-		fingerprint string
-		err         error
+		addr string
+		cert *clusterCertificate
+		err  error
 	}
 
 	// Try all addresses in parallel
@@ -569,12 +569,11 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 		go func(address string) {
 			defer wg.Done()
 
-			cert, fingerprint, err := extractTLSCertificate(ctx, address)
+			cert, err := extractTLSCertificate(ctx, address)
 			resultChan <- connResult{
-				addr:        address,
-				cert:        cert,
-				fingerprint: fingerprint,
-				err:         err,
+				addr: address,
+				cert: cert,
+				err:  err,
 			}
 		}(addr)
 	}
@@ -602,10 +601,10 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 
 		// Check fingerprint if we have an expected one
 		if cluster.CACertFingerprint != "" {
-			if !strings.EqualFold(cluster.CACertFingerprint, result.fingerprint) {
+			if !strings.EqualFold(cluster.CACertFingerprint, result.cert.Fingerprint) {
 				ctx.Warn("Certificate fingerprint mismatch for %s", result.addr)
 				ctx.Warn("Expected: %s", cluster.CACertFingerprint)
-				ctx.Warn("Actual:   %s", result.fingerprint)
+				ctx.Warn("Actual:   %s", result.cert.Fingerprint)
 				lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", result.addr)
 				continue
 			}
@@ -636,12 +635,11 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 			go func(address string) {
 				defer localWg.Done()
 
-				cert, fingerprint, err := extractTLSCertificate(ctx, address)
+				cert, err := extractTLSCertificate(ctx, address)
 				localResultChan <- connResult{
-					addr:        address,
-					cert:        cert,
-					fingerprint: fingerprint,
-					err:         err,
+					addr: address,
+					cert: cert,
+					err:  err,
 				}
 			}(addr)
 		}
@@ -662,10 +660,10 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 
 			// Check fingerprint if we have an expected one
 			if cluster.CACertFingerprint != "" {
-				if !strings.EqualFold(cluster.CACertFingerprint, result.fingerprint) {
+				if !strings.EqualFold(cluster.CACertFingerprint, result.cert.Fingerprint) {
 					ctx.Warn("Certificate fingerprint mismatch for %s", result.addr)
 					ctx.Warn("Expected: %s", cluster.CACertFingerprint)
-					ctx.Warn("Actual:   %s", result.fingerprint)
+					ctx.Warn("Actual:   %s", result.cert.Fingerprint)
 					lastErr = fmt.Errorf("certificate fingerprint verification failed for %s", result.addr)
 					continue
 				}
@@ -679,7 +677,7 @@ func tryConnectToCluster(ctx *Context, cluster *ClusterResponse, tryLocalhost bo
 	}
 
 	if lastErr != nil {
-		return "", "", fmt.Errorf("failed to connect to any cluster address: %w", lastErr)
+		return "", nil, fmt.Errorf("failed to connect to any cluster address: %w", lastErr)
 	}
-	return "", "", fmt.Errorf("no addresses available for cluster %s", cluster.Name)
+	return "", nil, fmt.Errorf("no addresses available for cluster %s", cluster.Name)
 }

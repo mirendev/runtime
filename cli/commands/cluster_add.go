@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,7 +54,8 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	// Detect manual mode: both --cluster and --address provided
 	manualMode := clusterName != "" && address != ""
 
-	// In manual mode, identity is optional (OIDC/environment auth can be used).
+	// In manual mode, identity is optional (a CI runner authenticates with an
+	// OIDC token from its environment and has none configured).
 	// In discovery mode, identity is required to fetch available clusters.
 	if !manualMode {
 		// Discovery mode — identity is required
@@ -77,6 +79,22 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		if mainConfig == nil || !mainConfig.HasIdentities() {
 			return fmt.Errorf("identity %q not found: no identities configured", identityName)
 		}
+	} else if mainConfig != nil {
+		// Manual mode with no --identity. Optional isn't the same as unwanted:
+		// someone who has run `miren login` has an identity sitting right there,
+		// and leaving it off produces a cluster entry with no way to authenticate
+		// at all — which used to surface much later, and much less helpfully, as a
+		// certificate parse error on the first command that needed the cluster.
+		// Discovery mode already adopts a lone identity; match it.
+		switch names := mainConfig.GetIdentityNames(); len(names) {
+		case 0:
+			// Nothing configured, so this really is an ambient-auth setup.
+		case 1:
+			identityName = names[0]
+			ctx.Info("Using identity '%s' (only one available)", identityName)
+		default:
+			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+		}
 	}
 
 	// Look up identity if one was specified (skip if manual mode with no identity)
@@ -97,7 +115,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	}
 
 	// If no cluster name or address provided, query the identity server for available clusters
-	var caCert string
+	var clusterCert *clusterCertificate
 	var allAddresses []string
 	var clusterXID string
 
@@ -131,7 +149,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 			return err
 		}
 
-		caCert = cert
+		clusterCert = cert
 		address = workingAddress
 
 		if localName != selectedCluster.Name {
@@ -146,12 +164,12 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		ctx.Info("Connecting to %s to extract TLS certificate...", address)
 
 		// Extract the TLS certificate from the server
-		cert, fingerprint, err := extractTLSCertificate(ctx, address)
+		cert, err := extractTLSCertificate(ctx, address)
 		if err != nil {
 			return fmt.Errorf("failed to extract TLS certificate: %w", err)
 		}
-		caCert = cert
-		ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", fingerprint)
+		clusterCert = cert
+		ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", cert.Fingerprint)
 	}
 
 	// Create the cluster configuration
@@ -160,8 +178,13 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		AllAddresses: allAddresses,
 		Identity:     identityName,
 		XID:          clusterXID,
-		CACert:       caCert,
 	}
+
+	if clusterCert != nil {
+		clusterConfig.CACert = clusterCert.CAPEM
+	}
+
+	applyVerificationName(ctx, clusterConfig, address, clusterCert)
 
 	// Load or create the main client config
 	mainConfig, err = clientconfig.LoadConfig()
@@ -209,7 +232,9 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 
 	if mainConfig.GetClusterCount() == 1 {
 		// If this is the first cluster, set it as active
-		mainConfig.SetActiveCluster(clusterName)
+		if err := mainConfig.SetActiveCluster(clusterName); err != nil {
+			return fmt.Errorf("failed to set active cluster: %w", err)
+		}
 		ctx.Info("Setting %q as the active cluster", clusterName)
 	}
 
@@ -221,7 +246,9 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 	if identityName != "" {
 		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
 	} else {
-		ctx.Completed("Successfully added cluster %q at %s (using environment auth)", clusterName, address)
+		ctx.Completed("Successfully added cluster %q at %s", clusterName, address)
+		ctx.Info("No identity is attached, so this cluster authenticates with whatever the environment supplies.")
+		ctx.Info("Outside CI that's usually not what you want. Run 'miren login' and add it again.")
 	}
 	ctx.Info("Configuration saved to clientconfig.d/%s.yaml", clusterName)
 
@@ -286,13 +313,94 @@ func normalizeAddress(address string) (normalizedAddr, sniHost string, err error
 	}
 }
 
-// extractTLSCertificate connects to the server via QUIC and extracts the TLS certificate
-// Returns the PEM-encoded certificate and its SHA1 fingerprint (hex-encoded)
-func extractTLSCertificate(ctx context.Context, address string) (string, string, error) {
+// clusterCertificate is what probing a cluster's API endpoint tells us about
+// its TLS configuration.
+type clusterCertificate struct {
+	// CAPEM is the certificate to pin, PEM encoded: the root of the presented
+	// chain, or the certificate itself when it is self-signed.
+	CAPEM string
+
+	// Fingerprint is the SHA1 of the pinned certificate's DER bytes, hex encoded.
+	Fingerprint string
+
+	// Leaf is the certificate the server presented for itself. It carries the
+	// SANs, which is what decides whether a given dial address can be verified.
+	Leaf *x509.Certificate
+}
+
+// verificationName decides what name the cluster's certificate should be
+// verified against when dialing with sniHost, and reports whether verification
+// can succeed at all.
+//
+// Dialing by IP normally needs no help, because the API certificate carries
+// every address the server discovered as an IP SAN, and those are the addresses
+// cluster discovery hands out. A hostname is a different story: the certificate
+// carries `localhost`, `api.miren`, and whatever the operator listed in
+// `additional_names`, so a MagicDNS name or any other DNS record pointed at the
+// cluster matches nothing and the handshake fails on a name mismatch. The same
+// goes for an IP the server doesn't know it has, like one in front of a static
+// NAT.
+//
+// api.miren is the way out. Every API certificate carries it precisely so that
+// clients which cannot dial a SAN still verify against the cluster CA rather
+// than skipping verification — it is how sandboxes reach the API over a bridge
+// address that was leased after the certificate was issued. Borrowing it keeps
+// a hostname dial fully verified instead of downgrading it.
+func verificationName(sniHost string, leaf *x509.Certificate) (serverName string, verifiable bool) {
+	if leaf == nil {
+		return "", true
+	}
+
+	// Handles IP literals as well as names, matching against IP SANs.
+	if leaf.VerifyHostname(sniHost) == nil {
+		return "", true
+	}
+
+	if slices.Contains(leaf.DNSNames, clientconfig.APIServerName) {
+		return clientconfig.APIServerName, true
+	}
+
+	return "", false
+}
+
+// applyVerificationName sets the cluster's TLS server name when the dial
+// address can't verify on its own, warning when nothing will.
+//
+// Both early returns are unreachable in practice and neither warns, which is
+// deliberate: every caller reaches here only after extractTLSCertificate
+// succeeded on this same address, so a nil certificate or an address that no
+// longer parses would both mean something upstream broke its own contract.
+// Warning about that would put an alarming and unactionable message in front of
+// a user whose cluster is fine. The cost if it ever did happen is a config
+// written without a TLSServerName, which fails later with a name mismatch.
+func applyVerificationName(ctx *Context, cfg *clientconfig.ClusterConfig, address string, cert *clusterCertificate) {
+	if cert == nil {
+		return
+	}
+
+	_, sniHost, err := normalizeAddress(address)
+	if err != nil {
+		return
+	}
+
+	serverName, verifiable := verificationName(sniHost, cert.Leaf)
+	switch {
+	case !verifiable:
+		ctx.Warn("The cluster's certificate doesn't cover %q, so connections to it will fail.", sniHost)
+		ctx.Warn("Add it to additional_names in the server config and restart, or use an address the certificate already covers.")
+	case serverName != "":
+		cfg.TLSServerName = serverName
+		ctx.Info("Verifying the cluster's certificate as %q, since it doesn't cover %q", serverName, sniHost)
+	}
+}
+
+// extractTLSCertificate connects to the server via QUIC and inspects the
+// certificate it presents.
+func extractTLSCertificate(ctx context.Context, address string) (*clusterCertificate, error) {
 	// Normalize the address with robust parsing
 	normalizedAddr, sniHost, err := normalizeAddress(address)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to normalize address: %w", err)
+		return nil, fmt.Errorf("failed to normalize address: %w", err)
 	}
 
 	// Create a context with timeout
@@ -316,7 +424,7 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 	// Try to establish a QUIC connection
 	udpAddr, err := net.ResolveUDPAddr("udp", normalizedAddr)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to resolve address: %w", err)
+		return nil, fmt.Errorf("failed to resolve address: %w", err)
 	}
 
 	// Try IPv6/dual-stack binding first, fallback to IPv4
@@ -326,7 +434,7 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 		// Fallback to IPv4 if IPv6 fails
 		udpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 		if err != nil {
-			return "", "", fmt.Errorf("failed to create UDP socket: %w", err)
+			return nil, fmt.Errorf("failed to create UDP socket: %w", err)
 		}
 	}
 	defer udpConn.Close()
@@ -338,7 +446,7 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 
 	conn, err := transport.Dial(connCtx, udpAddr, tlsConfig, quicConfig)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to establish QUIC connection: %w", err)
+		return nil, fmt.Errorf("failed to establish QUIC connection: %w", err)
 	}
 	defer conn.CloseWithError(0, "done")
 
@@ -347,7 +455,7 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 
 	// Extract the certificate chain
 	if len(connState.PeerCertificates) == 0 {
-		return "", "", fmt.Errorf("no certificates found in TLS handshake")
+		return nil, fmt.Errorf("no certificates found in TLS handshake")
 	}
 
 	// Get the root CA certificate (usually the last in the chain)
@@ -371,5 +479,9 @@ func extractTLSCertificate(ctx context.Context, address string) (string, string,
 		Bytes: rootCert.Raw,
 	})
 
-	return string(certPEM), fingerprint, nil
+	return &clusterCertificate{
+		CAPEM:       string(certPEM),
+		Fingerprint: fingerprint,
+		Leaf:        connState.PeerCertificates[0],
+	}, nil
 }
