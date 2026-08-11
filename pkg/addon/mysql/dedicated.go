@@ -27,10 +27,6 @@ func mysqlContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
 	}
 }
 
-type resultCapture struct {
-	Result *addon.ProvisionResult
-}
-
 // --- Dedicated Provisioning Saga Actions ---
 
 type GenerateCredentialsIn struct {
@@ -215,46 +211,10 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 	return nil
 }
 
-type BuildDedicatedResultIn struct {
-	ServiceHost  string    `saga:"servicehost"`
-	Username     string    `saga:"username"`
-	Password     string    `saga:"password"`
-	DatabaseName string    `saga:"databasename"`
-	ServerID     entity.Id `saga:"serverid"`
-}
-
-type BuildDedicatedResultOut struct {
-	Done bool
-}
-
-func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (BuildDedicatedResultOut, error) {
-	rc := saga.Get[*resultCapture](ctx)
-
-	envVars := buildEnvVars(in.ServiceHost, mysqlPort, in.Username, in.Password, in.DatabaseName)
-
-	dedicatedData := &addon_v1alpha.MysqlDedicatedData{
-		MysqlServer:  in.ServerID,
-		DatabaseName: in.DatabaseName,
-		Username:     in.Username,
-	}
-
-	rc.Result = &addon.ProvisionResult{
-		EnvVars: envVars,
-		Attrs:   dedicatedData.Encode(),
-	}
-
-	return BuildDedicatedResultOut{Done: true}, nil
-}
-
-func UndoBuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn, out BuildDedicatedResultOut) error {
-	return nil
-}
-
-func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
+func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: mysqlPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("provision-dedicated-mysql").
 		Using(fw).
-		Using(rc).
 		Using(cfg).
 		Action(GenerateCredentials).Undo(UndoGenerateCredentials).
 		Action(CreateMysqlServer).Undo(UndoCreateMysqlServer).
@@ -263,7 +223,6 @@ func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework,
 		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
 		Action(dbsaga.WaitForDedicatedService).Undo(dbsaga.UndoWaitForDedicatedService).
 		Action(UpdateDedicatedServer).Undo(UndoUpdateDedicatedServer).
-		Action(BuildDedicatedResult).Undo(UndoBuildDedicatedResult).
 		RegisterTo(registry)
 }
 
@@ -376,18 +335,18 @@ func (p *Provider) provisionDedicated(ctx context.Context, assoc addon.AddonAsso
 		"app", app.Name,
 		"variant", variant.Name)
 
-	rc := &resultCapture{}
 	registry := saga.NewRegistry()
 
-	if err := RegisterDedicatedSaga(registry, p.Fw, rc); err != nil {
+	if err := RegisterDedicatedSaga(registry, p.Fw); err != nil {
 		return nil, fmt.Errorf("registering dedicated saga: %w", err)
 	}
 
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
+	execID := addon.ProvisionExecutionID(assoc.ID)
 	err := executor.Start("provision-dedicated-mysql").
-		WithID(addon.ProvisionExecutionID(assoc.ID)).
+		WithID(execID).
 		Input("appname", app.Name).
 		Input("variantname", variant.Name).
 		Input("variantconfig", variant.Config).
@@ -396,12 +355,37 @@ func (p *Provider) provisionDedicated(ctx context.Context, assoc addon.AddonAsso
 		return nil, err
 	}
 
-	if rc.Result == nil {
-		return nil, fmt.Errorf("saga completed but no result was captured")
+	// Read the answer back out of the execution rather than out of a struct the
+	// run filled in, so a saga that finished on an earlier pass still yields one.
+	out, err := executor.ExecutionOutputs(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("reading provisioning outputs: %w", err)
+	}
+
+	var host, username, password, dbName string
+	var serverID entity.Id
+
+	for key, target := range map[string]any{
+		"servicehost":  &host,
+		"username":     &username,
+		"password":     &password,
+		"databasename": &dbName,
+		"serverid":     &serverID,
+	} {
+		if err := out.Get(key, target); err != nil {
+			return nil, fmt.Errorf("reading %s from provisioning outputs: %w", key, err)
+		}
 	}
 
 	p.Log.Info("dedicated MySQL provisioned", "app", app.Name)
-	return rc.Result, nil
+	return &addon.ProvisionResult{
+		EnvVars: buildEnvVars(host, mysqlPort, username, password, dbName),
+		Attrs: (&addon_v1alpha.MysqlDedicatedData{
+			MysqlServer:  serverID,
+			DatabaseName: dbName,
+			Username:     username,
+		}).Encode(),
+	}, nil
 }
 
 func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAssociation) error {

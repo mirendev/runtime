@@ -13,15 +13,14 @@ import (
 func TestRegisterSharedSaga(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterSharedSaga(registry, fw, rc)
+	err := RegisterSharedSaga(registry, fw)
 	require.NoError(t, err)
 
 	def, ok := registry.Get("provision-shared-mysql")
 	require.True(t, ok)
 	assert.Equal(t, "provision-shared-mysql", def.Name)
-	assert.Len(t, def.Actions, 6)
+	assert.Len(t, def.Actions, 5)
 }
 
 func TestRegisterEnsureSharedServerSaga(t *testing.T) {
