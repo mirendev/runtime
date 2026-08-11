@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -170,6 +171,15 @@ func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *co
 		Input("sandbox_id", co.ID.String()).
 		WithID(fmt.Sprintf("create-sandbox-%s", co.ID)).
 		Execute(ctx)
+
+	if errors.Is(err, saga.ErrExecutionInProgress) {
+		// This controller keeps one executor for its lifetime, so the claim is
+		// real here: an earlier pass is still driving this creation. Nothing
+		// has failed, so leave the sandbox PENDING for the reconciler rather
+		// than killing it over work that is still going.
+		s.log.Debug("sandbox creation already in flight", "id", co.ID)
+		return nil
+	}
 
 	if err != nil {
 		s.log.Error("saga sandbox creation failed, marking DEAD", "id", co.ID, "error", err)
