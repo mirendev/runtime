@@ -306,7 +306,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	// Universal mode has no write log to replay, but the cloud may be holding a
 	// snapshot of an image this host has lost.
 	if volState.Mode == storage_v1alpha.VM_UNIVERSAL {
-		if rerr := c.restoreImageIfMissing(ctx, volState, imagePath); rerr != nil {
+		if rerr := c.RestoreImageIfMissing(ctx, volState, imagePath); rerr != nil {
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to restore volume image: %v", rerr))
 			return fmt.Errorf("failed to restore volume image: %w", rerr)
 		}

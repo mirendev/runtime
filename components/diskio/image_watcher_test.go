@@ -48,7 +48,7 @@ func TestImageWatcherUploadsUniversalVolume(t *testing.T) {
 	content := bytes.Repeat([]byte("disk contents "), 512)
 	watcher, fake, vol := newImageWatcherFixture(t, content)
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 
 	require.Len(t, fake.uploads, 1)
 	up := fake.uploads[0]
@@ -83,17 +83,17 @@ func TestImageWatcherUploadsUniversalVolume(t *testing.T) {
 func TestImageWatcherSkipsUnchangedImage(t *testing.T) {
 	watcher, fake, _ := newImageWatcherFixture(t, []byte("stable contents"))
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	require.Len(t, fake.uploads, 1)
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Len(t, fake.uploads, 1, "an unchanged image should not be uploaded again")
 }
 
 func TestImageWatcherUploadsAgainWhenImageChanges(t *testing.T) {
 	watcher, fake, vol := newImageWatcherFixture(t, []byte("first contents"))
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	require.Len(t, fake.uploads, 1)
 
 	// Rewrite the image with different contents and a later mtime
@@ -102,7 +102,7 @@ func TestImageWatcherUploadsAgainWhenImageChanges(t *testing.T) {
 	later := time.Now().Add(time.Minute)
 	require.NoError(t, os.Chtimes(imagePath, later, later))
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	require.Len(t, fake.uploads, 2)
 
 	// Ordering keys must advance so replay order is well defined
@@ -115,7 +115,7 @@ func TestImageWatcherIgnoresAcceleratorVolumes(t *testing.T) {
 	watcher, fake, vol := newImageWatcherFixture(t, []byte("contents"))
 	vol.Mode = storage_v1alpha.VM_ACCELERATOR
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Empty(t, fake.uploads)
 }
 
@@ -123,7 +123,7 @@ func TestImageWatcherIgnoresMissingImage(t *testing.T) {
 	watcher, fake, vol := newImageWatcherFixture(t, []byte("contents"))
 	require.NoError(t, os.Remove(filepath.Join(vol.DiskPath, "disk.img")))
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Empty(t, fake.uploads, "a volume with no image yet has nothing to back up")
 }
 
@@ -133,11 +133,11 @@ func TestImageWatcherRetriesAfterFailedUpload(t *testing.T) {
 	watcher, fake, vol := newImageWatcherFixture(t, []byte("contents"))
 	fake.uploadErr = errors.New("cloud unavailable")
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Nil(t, readImageMarker(vol.DiskPath), "no marker should be written for a failed upload")
 
 	fake.uploadErr = nil
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Len(t, fake.uploads, 1, "the next tick should retry")
 }
 
@@ -145,7 +145,7 @@ func TestImageWatcherRetriesAfterFailedUpload(t *testing.T) {
 func TestImageWatcherCleansUpStagingFiles(t *testing.T) {
 	watcher, _, vol := newImageWatcherFixture(t, bytes.Repeat([]byte("x"), 4096))
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 
 	entries, err := os.ReadDir(vol.DiskPath)
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestImageWatcherIncludesLeaseNonce(t *testing.T) {
 		LeaseNonce: "nonce-abc",
 	})
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 
 	require.Len(t, fake.uploads, 1)
 	assert.Equal(t, "nonce-abc", fake.uploads[0].Request.LeaseNonce)
@@ -172,7 +172,7 @@ func TestImageWatcherWithoutCloudDoesNothing(t *testing.T) {
 	watcher, _, vol := newImageWatcherFixture(t, []byte("contents"))
 	watcher.updates = nil
 
-	watcher.snapshotAll(context.Background())
+	watcher.SnapshotOnce(context.Background())
 	assert.Nil(t, readImageMarker(vol.DiskPath))
 }
 

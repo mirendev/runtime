@@ -8,13 +8,13 @@ import (
 	"miren.dev/runtime/pkg/snapshot"
 )
 
-// restoreImageIfMissing rebuilds a universal-mode volume's backing image from
+// RestoreImageIfMissing rebuilds a universal-mode volume's backing image from
 // the newest loop_image snapshot in the cloud, when the host no longer has one.
 //
 // This is the universal-mode counterpart to replayMissingSegments. It recovers a
 // lost disk; it never touches an image that is already here, because the local
 // copy is by definition newer than anything the cloud holds.
-func (c *DiskMountController) restoreImageIfMissing(ctx context.Context, volState *VolumeState, imagePath string) error {
+func (c *DiskMountController) RestoreImageIfMissing(ctx context.Context, volState *VolumeState, imagePath string) error {
 	if c.updatesClient == nil {
 		return nil
 	}

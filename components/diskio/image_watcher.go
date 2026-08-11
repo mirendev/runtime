@@ -76,7 +76,7 @@ func (w *ImageWatcher) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			w.snapshotAll(ctx)
+			w.SnapshotOnce(ctx)
 		}
 	}
 }
@@ -86,8 +86,9 @@ func (w *ImageWatcher) Wait() {
 	<-w.done
 }
 
-// snapshotAll considers every universal-mode volume once.
-func (w *ImageWatcher) snapshotAll(ctx context.Context) {
+// SnapshotOnce considers every universal-mode volume once. Run calls this on
+// each tick; it is exported so a snapshot can also be taken on demand.
+func (w *ImageWatcher) SnapshotOnce(ctx context.Context) {
 	if w.updates == nil {
 		return
 	}

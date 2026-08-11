@@ -103,7 +103,7 @@ func TestRestoreImageRebuildsMissingImage(t *testing.T) {
 	}
 	mc.SetUpdatesClient(client)
 
-	require.NoError(t, mc.restoreImageIfMissing(context.Background(), vol, imagePath))
+	require.NoError(t, mc.RestoreImageIfMissing(context.Background(), vol, imagePath))
 
 	// The newest snapshot wins
 	restored, err := os.ReadFile(imagePath)
@@ -134,7 +134,7 @@ func TestRestoreImageLeavesExistingImageAlone(t *testing.T) {
 	}
 	mc.SetUpdatesClient(client)
 
-	require.NoError(t, mc.restoreImageIfMissing(context.Background(), vol, imagePath))
+	require.NoError(t, mc.RestoreImageIfMissing(context.Background(), vol, imagePath))
 
 	got, err := os.ReadFile(imagePath)
 	require.NoError(t, err)
@@ -147,14 +147,14 @@ func TestRestoreImageNoSnapshotsIsNotAnError(t *testing.T) {
 	mc, vol, imagePath := newRestoreFixture(t)
 	mc.SetUpdatesClient(&restoreUpdatesClient{})
 
-	require.NoError(t, mc.restoreImageIfMissing(context.Background(), vol, imagePath))
+	require.NoError(t, mc.RestoreImageIfMissing(context.Background(), vol, imagePath))
 	assert.NoFileExists(t, imagePath)
 }
 
 func TestRestoreImageWithoutCloudIsNotAnError(t *testing.T) {
 	mc, vol, imagePath := newRestoreFixture(t)
 
-	require.NoError(t, mc.restoreImageIfMissing(context.Background(), vol, imagePath))
+	require.NoError(t, mc.RestoreImageIfMissing(context.Background(), vol, imagePath))
 	assert.NoFileExists(t, imagePath)
 }
 
@@ -162,7 +162,7 @@ func TestRestoreImageSurfacesListFailure(t *testing.T) {
 	mc, vol, imagePath := newRestoreFixture(t)
 	mc.SetUpdatesClient(&restoreUpdatesClient{listErr: errors.New("cloud unavailable")})
 
-	err := mc.restoreImageIfMissing(context.Background(), vol, imagePath)
+	err := mc.RestoreImageIfMissing(context.Background(), vol, imagePath)
 	require.ErrorContains(t, err, "listing image snapshots")
 }
 
@@ -173,7 +173,7 @@ func TestRestoreImageSurfacesDownloadFailure(t *testing.T) {
 		dlErr:   errors.New("blob gone"),
 	})
 
-	err := mc.restoreImageIfMissing(context.Background(), vol, imagePath)
+	err := mc.RestoreImageIfMissing(context.Background(), vol, imagePath)
 	require.ErrorContains(t, err, "downloading image snapshot")
 }
 
@@ -188,7 +188,7 @@ func TestRestoreImageLeavesNothingBehindOnCorruptPayload(t *testing.T) {
 	}
 	mc.SetUpdatesClient(client)
 
-	err := mc.restoreImageIfMissing(context.Background(), vol, imagePath)
+	err := mc.RestoreImageIfMissing(context.Background(), vol, imagePath)
 	require.Error(t, err)
 
 	assert.NoFileExists(t, imagePath)
