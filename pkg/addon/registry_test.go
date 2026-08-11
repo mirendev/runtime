@@ -38,7 +38,7 @@ type mockProvider struct{}
 func (m *mockProvider) LocalityMode() LocalityMode {
 	return OnCluster
 }
-func (m *mockProvider) Provision(ctx context.Context, app App, variant Variant) (*ProvisionResult, error) {
+func (m *mockProvider) Provision(ctx context.Context, _ AddonAssociation, app App, variant Variant) (*ProvisionResult, error) {
 	return &ProvisionResult{}, nil
 }
 func (m *mockProvider) AdjustEnvVars(ctx context.Context, result *ProvisionResult, assoc AddonAssociation, collisions []string) ([]Variable, error) {

@@ -101,13 +101,7 @@ func (c *RotationController) rotate(ctx context.Context, req *addon_v1alpha.Rota
 		return c.setError(ctx, req, fmt.Errorf("rotation not supported for addon %q", addonName))
 	}
 
-	assoc := addon.AddonAssociation{
-		ID:      assocData.ID,
-		App:     assocData.App,
-		Addon:   assocData.Addon,
-		Variant: assocData.Variant,
-		Entity:  assocEntity,
-	}
+	assoc := addon.AssociationFrom(&assocData, assocEntity)
 
 	// Claim the target secret durably *before* any engine change, so a crash is
 	// recoverable: a retry reuses this exact secret instead of minting a fresh one

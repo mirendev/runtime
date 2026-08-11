@@ -142,7 +142,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		app := addon.App{Name: "mytest-app"}
 		variant := addon.Variant{Name: "shared"}
 
-		provResult, err := provider.Provision(ctx, app, variant)
+		provResult, err := provider.Provision(ctx, addon.AddonAssociation{ID: entity.Id("assoc-" + app.Name)}, app, variant)
 		require.NoError(t, err)
 		require.NotNil(t, provResult, "provision result should be returned")
 		assert.NotEmpty(t, provResult.EnvVars, "env vars should be set")
@@ -190,7 +190,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		require.NoError(t, err)
 		countBefore := serverBefore.AssociationCount
 
-		firstResult, err := provider.Provision(ctx, addon.App{Name: "first-app"}, variant)
+		firstResult, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-first"}, addon.App{Name: "first-app"}, variant)
 		require.NoError(t, err)
 		require.NotNil(t, firstResult)
 
@@ -201,7 +201,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		firstServiceRef := serverAfterFirst.Service
 		assert.Equal(t, countBefore+1, serverAfterFirst.AssociationCount)
 
-		secondResult, err := provider.Provision(ctx, addon.App{Name: "second-app"}, variant)
+		secondResult, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-second"}, addon.App{Name: "second-app"}, variant)
 		require.NoError(t, err)
 		require.NotNil(t, secondResult)
 
@@ -229,7 +229,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 	t.Run("RotateDedicatedCredential", func(t *testing.T) {
 		provider := postgresql.NewProvider(fw)
 
-		provResult, err := provider.Provision(ctx, addon.App{Name: "dedrot-app"}, addon.Variant{Name: "small"})
+		provResult, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-dedrot"}, addon.App{Name: "dedrot-app"}, addon.Variant{Name: "small"})
 		require.NoError(t, err)
 		require.NotNil(t, provResult)
 
@@ -329,7 +329,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 	t.Run("RotateDedicatedCredential_LegacyFallback", func(t *testing.T) {
 		provider := postgresql.NewProvider(fw)
 
-		provResult, err := provider.Provision(ctx, addon.App{Name: "dedlegacy-app"}, addon.Variant{Name: "small"})
+		provResult, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-dedlegacy"}, addon.App{Name: "dedlegacy-app"}, addon.Variant{Name: "small"})
 		require.NoError(t, err)
 		require.NotNil(t, provResult)
 

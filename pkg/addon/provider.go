@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -27,8 +28,11 @@ type AddonProvider interface {
 	LocalityMode() LocalityMode
 
 	// Provision creates the backing resources for an addon and returns the
-	// environment variables and entity attributes to store.
-	Provision(ctx context.Context, app App, variant Variant) (*ProvisionResult, error)
+	// environment variables and entity attributes to store. It takes the
+	// association so the work can be named after it, which is what lets a
+	// later pass continue an attempt a crash interrupted rather than start
+	// over on top of what it already built.
+	Provision(ctx context.Context, assoc AddonAssociation, app App, variant Variant) (*ProvisionResult, error)
 
 	// AdjustEnvVars is called when provisioned env vars collide with existing
 	// app env vars. The provider can rename or adjust variables.
@@ -92,13 +96,36 @@ type ProvisionResult struct {
 	Attrs   []entity.Attr
 }
 
-// AddonAssociation holds the state needed for deprovisioning.
+// AddonAssociation is the provider's view of an association: enough to name the
+// work after it, plus the entity so a teardown or rotation can read what an
+// earlier run recorded.
 type AddonAssociation struct {
 	ID      entity.Id
 	App     entity.Id
 	Addon   entity.Id
 	Variant string
-	Entity  *entity.Entity
+
+	// Read-only in practice, despite the type. Providers report writes by
+	// returning Attrs on a ProvisionResult, and a resumed saga could not write
+	// through this anyway: it arrives as a detached copy via JSON.
+	Entity *entity.Entity
+}
+
+// AssociationFrom builds the provider view from a decoded association and the
+// entity it came out of.
+//
+// NOTE for future cleanup: this type is a subset of
+// addon_v1alpha.AddonAssociation plus that entity. Passing the decoded
+// association through instead would delete the type, this function, and every
+// conversion at once.
+func AssociationFrom(assoc *addon_v1alpha.AddonAssociation, ent *entity.Entity) AddonAssociation {
+	return AddonAssociation{
+		ID:      assoc.ID,
+		App:     assoc.App,
+		Addon:   assoc.Addon,
+		Variant: assoc.Variant,
+		Entity:  ent,
+	}
 }
 
 // AddonDefinition describes an addon's metadata and available variants.
@@ -148,4 +175,23 @@ func NameFromRef(ref entity.Id) string {
 		}
 	}
 	return s
+}
+
+// ProvisionExecutionID and DeprovisionExecutionID name an association's saga
+// after the association itself. That is what lets a later reconcile pass
+// continue an attempt a crash interrupted, instead of starting a second one
+// alongside whatever the first already built.
+//
+// Two passes must not drive the same execution at once. The executor guards
+// against that within a single instance, but each operation here builds its
+// own, so what actually serializes association work is the reconcile
+// controller: it processes one event per entity at a time and queues the rest.
+// Anything that drives a provision from outside that loop would need its own
+// answer.
+func ProvisionExecutionID(assocID entity.Id) string {
+	return "provision-" + assocID.String()
+}
+
+func DeprovisionExecutionID(assocID entity.Id) string {
+	return "deprovision-" + assocID.String()
 }

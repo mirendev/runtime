@@ -149,7 +149,7 @@ func (p *testProvider) LocalityMode() addon.LocalityMode {
 	return p.localityMode
 }
 
-func (p *testProvider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *testProvider) Provision(ctx context.Context, _ addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	p.provisionCalled = true
 	if p.provisionFn != nil {
 		return p.provisionFn(ctx, app, variant)

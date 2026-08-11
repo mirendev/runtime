@@ -352,7 +352,7 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 		RegisterTo(registry)
 }
 
-func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *Provider) provisionDedicated(ctx context.Context, assoc addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	p.Log.Info("provisioning dedicated Valkey",
 		"app", app.Name,
 		"variant", variant.Name)
@@ -368,6 +368,7 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("provision-dedicated-valkey").
+		WithID(addon.ProvisionExecutionID(assoc.ID)).
 		Input("appname", app.Name).
 		Input("variantname", variant.Name).
 		Input("variantconfig", variant.Config).
@@ -397,6 +398,7 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-dedicated-valkey").
+		WithID(addon.DeprovisionExecutionID(assoc.ID)).
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {

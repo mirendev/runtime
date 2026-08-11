@@ -107,7 +107,7 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		ID:   assoc.App,
 		Name: appName,
 	}
-	result, err := provider.Provision(ctx, app, addon.Variant{
+	result, err := provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, addon.Variant{
 		Name:   assoc.Variant,
 		Config: variantConfig,
 	})
@@ -120,13 +120,7 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	// just created. If compensation also fails, return the error without
 	// setting terminal "error" status so the controller retries.
 	if err := c.completeProvision(ctx, assoc, meta, provider, result); err != nil {
-		depErr := provider.Deprovision(ctx, addon.AddonAssociation{
-			ID:      assoc.ID,
-			App:     assoc.App,
-			Addon:   assoc.Addon,
-			Variant: assoc.Variant,
-			Entity:  meta.Entity,
-		})
+		depErr := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
 		if depErr != nil {
 			c.log.Error("compensation deprovision failed, will retry",
 				"provision_error", err, "deprovision_error", depErr)
@@ -165,13 +159,7 @@ func (c *Controller) completeProvision(
 	envVars := result.EnvVars
 	collisions := findCollisions(existingVars, envVars)
 	if len(collisions) > 0 {
-		adjusted, err := provider.AdjustEnvVars(ctx, result, addon.AddonAssociation{
-			ID:      assoc.ID,
-			App:     assoc.App,
-			Addon:   assoc.Addon,
-			Variant: assoc.Variant,
-			Entity:  meta.Entity,
-		}, collisions)
+		adjusted, err := provider.AdjustEnvVars(ctx, result, addon.AssociationFrom(assoc, meta.Entity), collisions)
 		if err != nil {
 			return fmt.Errorf("adjusting env vars: %w", err)
 		}
@@ -221,13 +209,7 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 	}
 
 	// Step 1: Call provider.Deprovision
-	err := provider.Deprovision(ctx, addon.AddonAssociation{
-		ID:      assoc.ID,
-		App:     assoc.App,
-		Addon:   assoc.Addon,
-		Variant: assoc.Variant,
-		Entity:  meta.Entity,
-	})
+	err := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
 	if err != nil {
 		// Try to set error status, but don't fail if the update is rejected
 		// (e.g., the app was deleted and the entity server rejects the patch

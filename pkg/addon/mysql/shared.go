@@ -732,7 +732,7 @@ func RegisterDeprovisionSharedSaga(registry *saga.Registry, fw *addon.ProviderFr
 		RegisterTo(registry)
 }
 
-func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *Provider) provisionShared(ctx context.Context, assoc addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	p.Log.Info("provisioning shared MySQL",
 		"app", app.Name,
 		"variant", variant.Name)
@@ -748,6 +748,7 @@ func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant a
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("provision-shared-mysql").
+		WithID(addon.ProvisionExecutionID(assoc.ID)).
 		Input("appname", app.Name).
 		Input("variantconfig", variant.Config).
 		Execute(ctx)
@@ -776,6 +777,7 @@ func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssoc
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-shared-mysql").
+		WithID(addon.DeprovisionExecutionID(assoc.ID)).
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {
