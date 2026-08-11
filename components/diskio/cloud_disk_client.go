@@ -25,7 +25,11 @@ type LogSegmentInfo struct {
 type CloudDiskClient interface {
 	AcquireLease(ctx context.Context, volumeID string) (nonce string, err error)
 	ReleaseLease(ctx context.Context, volumeID string, nonce string) error
-	ListLogSegments(ctx context.Context, volumeID string) ([]LogSegmentInfo, error)
+	// ListLogSegments returns the volume's log segments whose TAI64N label
+	// sorts after `after`. Passing the caller's replay horizon keeps the server
+	// from walking, and returning, a volume's entire backup history. An empty
+	// `after` asks for everything.
+	ListLogSegments(ctx context.Context, volumeID string, after string) ([]LogSegmentInfo, error)
 	DownloadLogSegment(ctx context.Context, volumeID, segmentID string) (io.ReadCloser, error)
 }
 
@@ -147,13 +151,18 @@ type logSegmentInfoJSON struct {
 	Label     string `json:"label"`
 }
 
-func (c *cloudDiskClient) ListLogSegments(ctx context.Context, volumeID string) ([]LogSegmentInfo, error) {
+func (c *cloudDiskClient) ListLogSegments(ctx context.Context, volumeID string, after string) ([]LogSegmentInfo, error) {
 	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/log-segments")
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct log segments URL: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"?volume_id="+url.QueryEscape(volumeID), nil)
+	query := url.Values{"volume_id": {volumeID}}
+	if after != "" {
+		query.Set("after", after)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create list log segments request: %w", err)
 	}

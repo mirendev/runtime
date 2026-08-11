@@ -142,7 +142,7 @@ func TestListLogSegmentsSuccess(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	segments, err := client.ListLogSegments(context.Background(), "vol-1")
+	segments, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "vol-1", receivedVolumeID)
@@ -164,7 +164,7 @@ func TestListLogSegmentsEmpty(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	segments, err := client.ListLogSegments(context.Background(), "vol-1")
+	segments, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
 	assert.Empty(t, segments)
@@ -179,7 +179,7 @@ func TestListLogSegmentsError(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
@@ -197,7 +197,7 @@ func TestListLogSegmentsEscapesVolumeID(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol/with spaces&special")
+	_, err := client.ListLogSegments(context.Background(), "vol/with spaces&special", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "vol/with spaces&special", receivedVolumeID)
@@ -310,7 +310,7 @@ func TestListLogSegmentsIncludesAuthToken(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer test-jwt-token", receivedAuth)
@@ -383,7 +383,7 @@ func TestListLogSegmentsInvalidJSON(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode")

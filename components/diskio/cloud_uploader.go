@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"miren.dev/lbd"
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
@@ -43,6 +44,11 @@ func NewCloudSegmentUploader(log *slog.Logger, baseURL string, authClient *cloud
 
 type logSegmentUploadRequest struct {
 	VolumeID string `json:"volume_id"`
+	// Label is the TAI64N label from the segment filename, disk.<label>.log.
+	// The cloud stores it as the segment's ordering key and hands it back from
+	// ListLogSegments, which is what replay sorts and horizon-compares on, so
+	// it cannot be reconstructed server-side.
+	Label string `json:"label"`
 }
 
 type logSegmentUploadResponse struct {
@@ -76,8 +82,13 @@ func (u *CloudSegmentUploader) UploadSegment(ctx context.Context, volumeID, segm
 		return "", nil // skip empty files
 	}
 
+	label := lbd.LabelFromLogPath(segmentPath)
+	if !isValidTAI64NLabel(label) {
+		return "", fmt.Errorf("segment %q has no usable TAI64N label", segmentPath)
+	}
+
 	// Step 1: Request upload URL
-	reqBody, err := json.Marshal(logSegmentUploadRequest{VolumeID: volumeID})
+	reqBody, err := json.Marshal(logSegmentUploadRequest{VolumeID: volumeID, Label: label})
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal upload request: %w", err)
 	}

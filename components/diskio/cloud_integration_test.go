@@ -289,13 +289,16 @@ func (m *mockCloudServer) handleComplete(w http.ResponseWriter, r *http.Request)
 
 func (m *mockCloudServer) handleListSegments(w http.ResponseWriter, r *http.Request) {
 	volumeID := r.URL.Query().Get("volume_id")
+	// The real server filters on `after` -- the caller's replay horizon -- and
+	// returns only what sorts past it.
+	after := r.URL.Query().Get("after")
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var segs []logSegmentInfoJSON
 	for id, seg := range m.segments {
-		if seg.Complete && seg.VolumeID == volumeID {
+		if seg.Complete && seg.VolumeID == volumeID && seg.Label > after {
 			segs = append(segs, logSegmentInfoJSON{
 				SegmentID: id,
 				Label:     seg.Label,

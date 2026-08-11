@@ -97,7 +97,7 @@ func TestCloudSegmentUploaderFullFlow(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	segContent := []byte("test segment data for upload")
 	require.NoError(t, os.WriteFile(segPath, segContent, 0644))
 
@@ -155,7 +155,7 @@ func TestCloudSegmentUploaderIncludesLeaseNonce(t *testing.T) {
 	})
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, state)
@@ -189,7 +189,7 @@ func TestCloudSegmentUploaderNoLeaseNonceWithoutState(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
@@ -231,7 +231,7 @@ func TestCloudSegmentUploaderUploadRequestFails(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
@@ -260,7 +260,7 @@ func TestCloudSegmentUploaderDataUploadFails(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
@@ -291,7 +291,7 @@ func TestCloudSegmentUploaderCompletionFails(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
@@ -324,7 +324,7 @@ func TestCloudSegmentUploaderAbsoluteCompletedURL(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
+	segPath := filepath.Join(tmpDir, "disk.400000000000000100000001.log")
 	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
 
 	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
@@ -333,4 +333,61 @@ func TestCloudSegmentUploaderAbsoluteCompletedURL(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "/absolute/complete", completePath)
+}
+
+// The cloud stores the TAI64N label as the segment's ordering key and cannot
+// reconstruct it from the payload, so the uploader has to send it.
+func TestCloudSegmentUploaderSendsLabel(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	const label = "400000000000000100000001"
+	var uploadReq logSegmentUploadRequest
+
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&uploadReq))
+			json.NewEncoder(w).Encode(logSegmentUploadResponse{
+				SegmentID:    "cloud-seg-abc",
+				UploadURL:    ts.URL + "/upload-target",
+				CompletedURL: "/api/v1/disk/log-segments/cloud-seg-abc/complete",
+			})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}
+
+	tmpDir := t.TempDir()
+	segPath := filepath.Join(tmpDir, "disk."+label+".log")
+	require.NoError(t, os.WriteFile(segPath, []byte("segment data"), 0644))
+
+	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123", segPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, label, uploadReq.Label, "the label must travel unchanged")
+	assert.Equal(t, "vol-123", uploadReq.VolumeID)
+}
+
+// A segment whose filename carries no TAI64N label has no ordering key, so it
+// is rejected locally with a clear message rather than as a 400 from the cloud.
+func TestCloudSegmentUploaderRejectsUnlabelledSegment(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	called := false
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}
+
+	tmpDir := t.TempDir()
+	segPath := filepath.Join(tmpDir, "not-a-segment.log")
+	require.NoError(t, os.WriteFile(segPath, []byte("segment data"), 0644))
+
+	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123", segPath)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no usable TAI64N label")
+	assert.False(t, called, "nothing should be sent for an unlabelled segment")
 }
