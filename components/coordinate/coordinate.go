@@ -77,6 +77,7 @@ import (
 	secretcluster "miren.dev/runtime/pkg/secret/cluster"
 	"miren.dev/runtime/pkg/secret/keyring"
 	"miren.dev/runtime/pkg/sysstats"
+	"miren.dev/runtime/pkg/uplink"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/app"
@@ -409,13 +410,14 @@ type Coordinator struct {
 	// ready. nil when sagas are disabled. See MIR-1285.
 	sagaBuilder *build.SagaBuilder
 
-	// appInfo and anywhere are retained so app state can be reported up to
+	// appInfo and uplink are retained so app state can be reported up to
 	// cloud for visibility (MIR-1558). appInfo is the same instance backing
 	// the app RPC surface, so cloud sees the health `miren app list` sees;
-	// anywhere is the uplink to send it on. Both are nil when cloud auth is
-	// not configured, which is the disconnected case reporting must tolerate.
-	appInfo  *app.AppInfo
-	anywhere *anywhere.Connector
+	// uplink is the control-plane link to send it on. Both are nil when cloud
+	// auth is not configured, which is the disconnected case reporting must
+	// tolerate.
+	appInfo *app.AppInfo
+	uplink  *uplink.Client
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -1530,27 +1532,41 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.reportStatusPeriodically(ctx)
 	}
 
-	// Start Miren Anywhere connector for NAT traversal when cloud auth is configured
+	// Bring up the control-plane link to cloud, then attach its tenants. The
+	// link is owned here rather than by any one feature, because several share
+	// it: Miren Anywhere uses it to learn when to dial a POP, and app reporting
+	// uses it to push state up. Adding a tenant means registering against the
+	// link, not wrapping it.
 	if c.CloudAuth.Enabled && c.authClient != nil {
 		cloudURL := c.CloudAuth.CloudURL
 		if cloudURL == "" {
 			cloudURL = DefaultCloudURL
 		}
 
-		conn := anywhere.New(anywhere.Config{
-			CloudURL:   cloudURL,
+		link := uplink.NewClient(
+			cloudURL,
+			c.authClient,
+			uplink.NewMessageRouter(),
+			c.Log.With("component", "uplink"),
+		)
+		c.uplink = link
+
+		anywhereConn := anywhere.New(anywhere.Config{
 			ClusterXID: c.CloudAuth.ClusterID,
-			AuthClient: c.authClient,
 			Ingress:    c.hs,
 			Log:        c.Log.With("component", "anywhere"),
+			Uplink:     link,
 		})
-		c.anywhere = conn
-
-		c.startAppReporter(conn)
+		c.startAppReporter(link)
 
 		go func() {
-			if err := conn.Run(ctx); err != nil && ctx.Err() == nil {
-				c.Log.Error("Miren Anywhere connector exited with error", "error", err)
+			// POP connections outlive individual reconnects but not the link
+			// itself, which is why this is tied to Run returning rather than to
+			// this function, which returns as soon as everything is wired.
+			defer anywhereConn.Close()
+
+			if err := link.Run(ctx); err != nil && ctx.Err() == nil {
+				c.Log.Error("cloud uplink exited with error", "error", err)
 			}
 		}()
 	}

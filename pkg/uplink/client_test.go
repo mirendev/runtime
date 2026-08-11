@@ -1,4 +1,4 @@
-package anywhere
+package uplink
 
 import (
 	"context"

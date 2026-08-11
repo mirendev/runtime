@@ -1,4 +1,4 @@
-package anywhere
+package uplink
 
 import (
 	"context"
@@ -37,20 +37,100 @@ type Client struct {
 	mu        sync.Mutex
 	onConnect []func(ctx context.Context)
 
+	// Established by the link itself on each connect, not by any tenant.
+	timeOffset     time.Duration
+	organizationID string
+
 	// getToken overrides auth token acquisition for testing.
 	// When nil, authClient.GetToken is used.
 	getToken func(ctx context.Context) (string, error)
 }
 
 // NewClient creates a new WebSocket client.
+//
+// The returned client already handles the two exchanges that belong to the link
+// rather than to any tenant: a clock sync and an organization lookup, both
+// issued on every connect. Tenants layer their own handlers and hooks on top.
 func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *MessageRouter, log *slog.Logger) *Client {
-	return &Client{
+	c := &Client{
 		cloudURL:   cloudURL,
 		authClient: authClient,
 		router:     router,
 		log:        log,
 		outbox:     make(chan *Envelope, outboxSize),
 	}
+
+	router.Handle(TypeTimeResponse, c.handleTimeResponse)
+	router.Handle(TypeOrgInfoResponse, c.handleOrgInfoResponse)
+
+	c.OnConnect(func(ctx context.Context) {
+		c.log.Info("sending initial requests")
+		//nolint:errcheck // best-effort: a dropped request is retried next connect
+		c.SendMessage(TypeTimeRequest, TimeRequest{
+			ClientTransmitTime: time.Now().UTC(),
+		})
+		//nolint:errcheck // best-effort: a dropped request is retried next connect
+		c.SendMessage(TypeOrgInfoRequest, struct{}{})
+	})
+
+	return c
+}
+
+// TimeOffset returns the estimated clock offset between this cluster and the
+// cloud, computed via simplified NTP.
+//
+// This is link-level state rather than a tenant's: cloud reconciles the
+// timestamps a cluster reports against its own clock using this offset, so any
+// tenant reporting timestamped state depends on it.
+func (c *Client) TimeOffset() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.timeOffset
+}
+
+// OrganizationID returns the organization ID reported by the cloud.
+func (c *Client) OrganizationID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.organizationID
+}
+
+func (c *Client) handleTimeResponse(_ context.Context, data json.RawMessage) error {
+	t4 := time.Now().UTC()
+
+	var resp TimeResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return err
+	}
+
+	// Simplified NTP offset calculation:
+	// offset = ((T2 - T1) + (T3 - T4)) / 2
+	t1 := resp.ClientTransmitTime
+	t2 := resp.ServerReceiveTime
+	t3 := resp.ServerTransmitTime
+
+	offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
+
+	c.mu.Lock()
+	c.timeOffset = offset
+	c.mu.Unlock()
+
+	c.log.Info("clock sync complete", "offset", offset)
+	return nil
+}
+
+func (c *Client) handleOrgInfoResponse(_ context.Context, data json.RawMessage) error {
+	var resp OrgInfoResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.organizationID = resp.OrganizationID
+	c.mu.Unlock()
+
+	c.log.Info("organization info received", "org_id", resp.OrganizationID)
+	return nil
 }
 
 // OnConnect registers a callback invoked each time a WebSocket
@@ -78,6 +158,14 @@ func (c *Client) connectCallbacks() []func(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.onConnect)
+}
+
+// Handle registers a handler for an inbound message type, which is how a
+// feature becomes a tenant of the link. Message types are namespaced per
+// family (app.*, deploy.*) so the link stays a shared pipe rather than
+// accumulating per-feature special cases.
+func (c *Client) Handle(msgType string, handler MessageHandler) {
+	c.router.Handle(msgType, handler)
 }
 
 // Send queues an envelope for delivery to the cloud. Non-blocking;
