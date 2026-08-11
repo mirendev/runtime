@@ -33,7 +33,9 @@ import (
 type storedSegment struct {
 	VolumeID string
 	Data     []byte
+	// Label is the update's ordering key; for lbd_log that is the TAI64N label
 	Label    string
+	Kind     string
 	Complete bool
 }
 
@@ -90,18 +92,18 @@ func (m *mockCloudServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "DELETE" && strings.Contains(path, "/disk/volumes/") && strings.HasSuffix(path, "/lease"):
 		m.handleReleaseLease(w, r)
 
-	// Segment upload flow
-	case r.Method == "POST" && strings.HasSuffix(path, "/log-segments/upload"):
+	// Update upload flow
+	case r.Method == "POST" && strings.HasSuffix(path, "/updates/upload"):
 		m.handleUploadRequest(w, r)
 	case r.Method == "PUT" && strings.HasPrefix(path, "/upload/"):
 		m.handleUploadData(w, r)
-	case r.Method == "POST" && strings.Contains(path, "/log-segments/") && strings.HasSuffix(path, "/complete"):
+	case r.Method == "POST" && strings.Contains(path, "/updates/") && strings.HasSuffix(path, "/complete"):
 		m.handleComplete(w, r)
 
-	// Segment list/download
-	case r.Method == "GET" && strings.HasSuffix(path, "/log-segments") || (r.Method == "GET" && strings.HasSuffix(path, "/disk/log-segments")):
+	// Update list/download
+	case r.Method == "GET" && strings.HasSuffix(path, "/updates"):
 		m.handleListSegments(w, r)
-	case r.Method == "GET" && strings.Contains(path, "/log-segments/") && strings.HasSuffix(path, "/download"):
+	case r.Method == "GET" && strings.Contains(path, "/updates/") && strings.HasSuffix(path, "/download"):
 		m.handleDownloadRequest(w, r)
 
 	// Raw data download
@@ -192,23 +194,49 @@ func (m *mockCloudServer) handleReleaseLease(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 }
 
+// volumeIDFromUpdatesPath pulls the volume out of
+// /api/v1/disk/volumes/{volumeId}/updates/...
+func volumeIDFromUpdatesPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		if p == "volumes" && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
 func (m *mockCloudServer) handleUploadRequest(w http.ResponseWriter, r *http.Request) {
-	var req logSegmentUploadRequest
+	var req beginUploadRequestJSON
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
+	// The real server derives the ordering key from the request, not the
+	// payload, and refuses an update without one.
+	if req.OrderingKey == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"ordering_key is required"}`)
+		return
+	}
+
+	volumeID := volumeIDFromUpdatesPath(r.URL.Path)
+
 	m.mu.Lock()
 	segID := m.nextID("seg")
-	m.segments[segID] = &storedSegment{VolumeID: req.VolumeID}
+	m.segments[segID] = &storedSegment{
+		VolumeID: volumeID,
+		Label:    req.OrderingKey,
+		Kind:     req.Kind,
+	}
 	m.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logSegmentUploadResponse{
-		SegmentID:    segID,
-		UploadURL:    m.server.URL + "/upload/" + segID,
-		CompletedURL: m.server.URL + "/api/v1/disk/log-segments/" + segID + "/complete",
+	json.NewEncoder(w).Encode(beginUploadResponseJSON{
+		UpdateID:    segID,
+		UploadURL:   m.server.URL + "/upload/" + segID,
+		CompleteURL: m.server.URL + "/api/v1/disk/volumes/" + volumeID + "/updates/" + segID + "/complete",
 	})
 }
 
@@ -233,17 +261,17 @@ func (m *mockCloudServer) handleUploadData(w http.ResponseWriter, r *http.Reques
 }
 
 func (m *mockCloudServer) handleComplete(w http.ResponseWriter, r *http.Request) {
-	// Extract segment ID: /api/v1/disk/log-segments/{id}/complete
+	// Extract update ID: /api/v1/disk/volumes/{volumeId}/updates/{id}/complete
 	parts := strings.Split(r.URL.Path, "/")
 	var segID string
 	for i, p := range parts {
-		if p == "log-segments" && i+1 < len(parts) {
+		if p == "updates" && i+1 < len(parts) {
 			segID = parts[i+1]
 			break
 		}
 	}
 
-	var req logSegmentCompleteRequest
+	var req completeUploadRequestJSON
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -277,18 +305,13 @@ func (m *mockCloudServer) handleComplete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Extract label from lbd header
-	rd, err := lbd.NewReader(bytes.NewReader(seg.Data))
-	if err == nil {
-		seg.Label = rd.Header.SegmentLabel
-	}
-
 	seg.Complete = true
 	w.WriteHeader(http.StatusOK)
 }
 
 func (m *mockCloudServer) handleListSegments(w http.ResponseWriter, r *http.Request) {
-	volumeID := r.URL.Query().Get("volume_id")
+	volumeID := volumeIDFromUpdatesPath(r.URL.Path)
+	kind := r.URL.Query().Get("kind")
 	// The real server filters on `after` -- the caller's replay horizon -- and
 	// returns only what sorts past it.
 	after := r.URL.Query().Get("after")
@@ -296,28 +319,34 @@ func (m *mockCloudServer) handleListSegments(w http.ResponseWriter, r *http.Requ
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var segs []logSegmentInfoJSON
+	segs := []UpdateInfo{}
 	for id, seg := range m.segments {
-		if seg.Complete && seg.VolumeID == volumeID && seg.Label > after {
-			segs = append(segs, logSegmentInfoJSON{
-				SegmentID: id,
-				Label:     seg.Label,
-			})
+		if !seg.Complete || seg.VolumeID != volumeID || seg.Label <= after {
+			continue
 		}
+		if kind != "" && seg.Kind != kind {
+			continue
+		}
+		segs = append(segs, UpdateInfo{
+			UpdateID:    id,
+			Kind:        seg.Kind,
+			OrderingKey: seg.Label,
+			Size:        int64(len(seg.Data)),
+		})
 	}
 
-	sort.Slice(segs, func(i, j int) bool { return segs[i].Label < segs[j].Label })
+	sort.Slice(segs, func(i, j int) bool { return segs[i].OrderingKey < segs[j].OrderingKey })
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(listLogSegmentsResponse{Segments: segs})
+	json.NewEncoder(w).Encode(listUpdatesResponseJSON{Updates: segs})
 }
 
 func (m *mockCloudServer) handleDownloadRequest(w http.ResponseWriter, r *http.Request) {
-	// Extract segment ID: /api/v1/disk/log-segments/{id}/download
+	// Extract update ID: /api/v1/disk/volumes/{volumeId}/updates/{id}/download
 	parts := strings.Split(r.URL.Path, "/")
 	var segID string
 	for i, p := range parts {
-		if p == "log-segments" && i+1 < len(parts) {
+		if p == "updates" && i+1 < len(parts) {
 			segID = parts[i+1]
 			break
 		}
@@ -333,7 +362,7 @@ func (m *mockCloudServer) handleDownloadRequest(w http.ResponseWriter, r *http.R
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logSegmentDownloadResponse{
+	json.NewEncoder(w).Encode(downloadResponseJSON{
 		DownloadURL: m.server.URL + "/data/" + segID,
 	})
 }

@@ -40,7 +40,8 @@ type DiskMountController struct {
 	ops      DiskMountOps
 
 	// Cloud client for lease management and segment replay (nil when cloud not configured)
-	cloudClient CloudDiskClient
+	cloudClient   CloudDiskClient
+	updatesClient CloudUpdatesClient
 
 	// writeTracker records revisions this controller writes directly via eac,
 	// so the reconcile watch skips the resulting self-generated events instead
@@ -69,6 +70,12 @@ func (c *DiskMountController) SetEAC(eac *entityserver_v1alpha.EntityAccessClien
 // SetCloudClient sets the cloud client for lease management and segment replay.
 func (c *DiskMountController) SetCloudClient(client CloudDiskClient) {
 	c.cloudClient = client
+}
+
+// SetUpdatesClient wires the generic volume update client, used to recover a
+// universal-mode volume's backing image from the cloud.
+func (c *DiskMountController) SetUpdatesClient(client CloudUpdatesClient) {
+	c.updatesClient = client
 }
 
 // SetWriteTracker wires the reconcile controller's write tracker so that entity
@@ -295,6 +302,15 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	imagePath := filepath.Join(volState.DiskPath, "disk.img")
+
+	// Universal mode has no write log to replay, but the cloud may be holding a
+	// snapshot of an image this host has lost.
+	if volState.Mode == storage_v1alpha.VM_UNIVERSAL {
+		if rerr := c.restoreImageIfMissing(ctx, volState, imagePath); rerr != nil {
+			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to restore volume image: %v", rerr))
+			return fmt.Errorf("failed to restore volume image: %w", rerr)
+		}
+	}
 
 	// Attach device based on volume mode
 	var devicePath string

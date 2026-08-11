@@ -861,6 +861,7 @@ func (r *Runner) SetupControllers(
 
 	// Set up cloud auth for disk replication if configured
 	var logUploader diskio.LogSegmentUploader
+	var updatesClient diskio.CloudUpdatesClient
 	if r.CloudAuth != nil && r.CloudAuth.Enabled && r.CloudAuth.PrivateKey != "" {
 		cloudURL := r.CloudAuth.CloudURL
 		if cloudURL == "" {
@@ -886,10 +887,15 @@ func (r *Runner) SetupControllers(
 				if aerr != nil {
 					log.Warn("failed to create auth client for log watcher", "error", aerr)
 				} else {
-					cloudDiskClient := diskio.NewCloudDiskClient(log, cloudURL, authClient)
-					r.dmc.SetCloudClient(cloudDiskClient)
+					// One client serves both kinds: lbd log segments for
+					// accelerator mode, image snapshots for universal mode.
+					updatesClient = diskio.NewCloudUpdatesClient(log, cloudURL, authClient)
 
-					logUploader = diskio.NewCloudSegmentUploader(log, cloudURL, authClient, diskioState)
+					cloudDiskClient := diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updatesClient)
+					r.dmc.SetCloudClient(cloudDiskClient)
+					r.dmc.SetUpdatesClient(updatesClient)
+
+					logUploader = diskio.NewCloudSegmentUploaderWithClient(log, updatesClient, diskioState)
 				}
 			}
 		}
@@ -908,6 +914,20 @@ func (r *Runner) SetupControllers(
 		log.Info("started log watcher with cloud upload")
 	} else {
 		log.Info("started log watcher in delete-only mode (no cloud configured)")
+	}
+
+	// Universal mode has no write log, so its volumes are backed up by
+	// snapshotting the whole backing image on an interval. Only worth running
+	// when there is somewhere to send them.
+	if updatesClient != nil {
+		imageWatcher := diskio.NewImageWatcher(log, diskioState, updatesClient, diskio.DefaultImageSnapshotInterval)
+		go func() {
+			if werr := imageWatcher.Run(ctx); werr != nil {
+				log.Error("image watcher stopped", "error", werr)
+			}
+		}()
+		r.closers = append(r.closers, waitCloser{imageWatcher})
+		log.Info("started image watcher", "interval", diskio.DefaultImageSnapshotInterval)
 	}
 
 	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)

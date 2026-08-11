@@ -34,20 +34,32 @@ type CloudDiskClient interface {
 }
 
 // cloudDiskClient implements CloudDiskClient using the miren.cloud HTTP API.
+//
+// Lease operations are their own endpoints; log segments go through the generic
+// volume update API as lbd_log updates.
 type cloudDiskClient struct {
 	log        *slog.Logger
 	baseURL    string
 	authClient *cloudauth.AuthClient
 	client     *http.Client
+	updates    CloudUpdatesClient
 }
 
 // NewCloudDiskClient creates a new CloudDiskClient.
 func NewCloudDiskClient(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient) CloudDiskClient {
+	return NewCloudDiskClientWithUpdates(log, baseURL, authClient,
+		NewCloudUpdatesClient(log, baseURL, authClient))
+}
+
+// NewCloudDiskClientWithUpdates builds a disk client over an existing updates
+// client, so callers that already have one need not construct a second.
+func NewCloudDiskClientWithUpdates(log *slog.Logger, baseURL string, authClient *cloudauth.AuthClient, updates CloudUpdatesClient) CloudDiskClient {
 	return &cloudDiskClient{
 		log:        log.With("module", "cloud-disk-client"),
 		baseURL:    baseURL,
 		authClient: authClient,
 		client:     &http.Client{Timeout: 30 * time.Second},
+		updates:    updates,
 	}
 }
 
@@ -142,113 +154,23 @@ func (c *cloudDiskClient) ReleaseLease(ctx context.Context, volumeID string, non
 	return nil
 }
 
-type listLogSegmentsResponse struct {
-	Segments []logSegmentInfoJSON `json:"segments"`
-}
-
-type logSegmentInfoJSON struct {
-	SegmentID string `json:"segment_id"`
-	Label     string `json:"label"`
-}
-
 func (c *cloudDiskClient) ListLogSegments(ctx context.Context, volumeID string, after string) ([]LogSegmentInfo, error) {
-	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/log-segments")
+	updates, err := c.updates.List(ctx, volumeID, ListOptions{
+		Kind:  KindLBDLog,
+		After: after,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to construct log segments URL: %w", err)
+		return nil, fmt.Errorf("listing log segments: %w", err)
 	}
 
-	query := url.Values{"volume_id": {volumeID}}
-	if after != "" {
-		query.Set("after", after)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"?"+query.Encode(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create list log segments request: %w", err)
-	}
-
-	token, err := c.authClient.Authenticate(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to authenticate: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list log segments: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list log segments failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var listResp listLogSegmentsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
-		return nil, fmt.Errorf("failed to decode log segments response: %w", err)
-	}
-
-	segments := make([]LogSegmentInfo, len(listResp.Segments))
-	for i, seg := range listResp.Segments {
-		segments[i] = LogSegmentInfo(seg)
+	// An lbd_log update's ordering key is the segment's TAI64N label
+	segments := make([]LogSegmentInfo, len(updates))
+	for i, u := range updates {
+		segments[i] = LogSegmentInfo{SegmentID: u.UpdateID, Label: u.OrderingKey}
 	}
 	return segments, nil
 }
 
-type logSegmentDownloadResponse struct {
-	DownloadURL string `json:"download_url"`
-}
-
 func (c *cloudDiskClient) DownloadLogSegment(ctx context.Context, volumeID, segmentID string) (io.ReadCloser, error) {
-	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/log-segments", segmentID, "download")
-	if err != nil {
-		return nil, fmt.Errorf("failed to construct download URL: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create download request: %w", err)
-	}
-
-	token, err := c.authClient.Authenticate(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to authenticate: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to request download URL: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("download request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var downloadResp logSegmentDownloadResponse
-	if err := json.NewDecoder(resp.Body).Decode(&downloadResp); err != nil {
-		return nil, fmt.Errorf("failed to decode download response: %w", err)
-	}
-
-	// Fetch the actual segment data from the presigned URL
-	dataReq, err := http.NewRequestWithContext(ctx, "GET", downloadResp.DownloadURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create data download request: %w", err)
-	}
-
-	dataResp, err := c.client.Do(dataReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download segment data: %w", err)
-	}
-
-	if dataResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(dataResp.Body)
-		dataResp.Body.Close()
-		return nil, fmt.Errorf("segment data download failed with status %d: %s", dataResp.StatusCode, string(body))
-	}
-
-	return dataResp.Body, nil
+	return c.updates.Download(ctx, volumeID, segmentID)
 }
