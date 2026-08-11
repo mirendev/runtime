@@ -18,7 +18,55 @@ const (
 	// TypeConnectionRequest is sent from cloud to cluster when a POP
 	// server needs the cluster to establish an HTTP/3 connection.
 	TypeConnectionRequest = "connection.request"
+
+	// TypeAppSnapshot carries the cluster's full current app set to cloud
+	// for visibility reporting. Part of the app.* family described in
+	// RFD-94; see AppSnapshot for the contract.
+	TypeAppSnapshot = "app.snapshot"
 )
+
+// AppSnapshot is the cluster's view of every app it currently runs, sent
+// on each (re)connect. Cloud treats it as ground truth for that cluster.
+//
+// This is the ephemeral tier of RFD-94's volatility spectrum: the weakest
+// durability contract in the design. Delivery is best-effort because loss
+// self-heals — a dropped snapshot is repaired by the next one rather than
+// retried, so nothing here is worth an ack.
+//
+// Two things are deliberately absent and belong to the follow-up that adds
+// sync correctness:
+//
+//   - No epoch. Cloud upserts what it receives and never sweeps, so an app
+//     deleted in the cluster lingers in cloud until epochs arrive and make
+//     mark-and-sweep safe. Sweeping without an epoch would soft-delete apps
+//     that simply haven't landed yet, since a real snapshot arrives in
+//     batches rather than atomically.
+//   - No instance counts or resource usage. Health alone proves the seam.
+type AppSnapshot struct {
+	// ObservedAt is the runtime's own clock reading for when this state was
+	// true. Cloud reconciles it against its own clock using the offset from
+	// the existing time-sync exchange, and applies last-writer-wins with it,
+	// so a delayed message cannot clobber fresher state.
+	ObservedAt time.Time `json:"observed_at"`
+
+	Apps []AppState `json:"apps"`
+}
+
+// AppState is one app's current sample within a snapshot.
+//
+// Note there is no cluster or organization field. Cloud derives both from
+// the authenticated cluster identity on the socket and its own clusters
+// record — a cluster is never trusted to say which tenant its data belongs
+// to, only what its own apps are doing.
+type AppState struct {
+	Name string `json:"name"`
+
+	// Health is the runtime's classification, one of the apphealth values:
+	// healthy, degraded, starting, crashed, idle, or unknown. It is computed
+	// the same way `miren app list` computes it, deliberately, so the CLI and
+	// the dashboard cannot disagree about whether an app is fine.
+	Health string `json:"health"`
+}
 
 // Envelope is the wire format for all messages on the WebSocket.
 type Envelope struct {

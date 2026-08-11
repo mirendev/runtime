@@ -408,6 +408,14 @@ type Coordinator struct {
 	// dependencies — the registry and the cluster.local mapping — are
 	// ready. nil when sagas are disabled. See MIR-1285.
 	sagaBuilder *build.SagaBuilder
+
+	// appInfo and anywhere are retained so app state can be reported up to
+	// cloud for visibility (MIR-1558). appInfo is the same instance backing
+	// the app RPC surface, so cloud sees the health `miren app list` sees;
+	// anywhere is the uplink to send it on. Both are nil when cloud auth is
+	// not configured, which is the disconnected case reporting must tolerate.
+	appInfo  *app.AppInfo
+	anywhere *anywhere.Connector
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -1422,6 +1430,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.schemaReindex.Start(ctx)
 
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
+	c.appInfo = ai
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 
@@ -1535,6 +1544,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			Ingress:    c.hs,
 			Log:        c.Log.With("component", "anywhere"),
 		})
+		c.anywhere = conn
+
+		c.startAppReporter(conn)
 
 		go func() {
 			if err := conn.Run(ctx); err != nil && ctx.Err() == nil {

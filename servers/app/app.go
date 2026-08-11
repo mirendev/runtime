@@ -133,9 +133,28 @@ func (r *AppInfo) Destroy(ctx context.Context, state *app_v1alpha.CrudDestroy) e
 }
 
 func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
-	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+	results, err := r.ListApps(ctx)
 	if err != nil {
 		return err
+	}
+
+	state.Results().SetApps(results)
+
+	return nil
+}
+
+// ListApps computes the current inventory of apps: identity, active version,
+// health, instance counts, scaling mode, and routes.
+//
+// This is deliberately shared rather than duplicated. Health is a
+// classification over sandbox pool state, not a stored field, so any second
+// implementation would drift from this one and let `miren app list` and the
+// cloud dashboard disagree about whether an app is healthy. Both read from
+// here instead.
+func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) {
+	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect apps and resolve their active versions
@@ -175,7 +194,7 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 	poolList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	now := time.Now()
@@ -204,7 +223,7 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 
 	routeList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for routeList.Next() {
@@ -272,9 +291,7 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 		results = append(results, &a)
 	}
 
-	state.Results().SetApps(results)
-
-	return nil
+	return results, nil
 }
 
 func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudSetConfiguration) error {
