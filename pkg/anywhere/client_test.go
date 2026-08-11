@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -227,5 +228,117 @@ func TestOnConnectCalled(t *testing.T) {
 	case <-called:
 	case <-ctx.Done():
 		t.Fatal("onConnect was not called")
+	}
+}
+
+// TestOnConnectCallbacksAccumulate guards the fan-out. Registering a second
+// callback used to replace the first, which meant a feature reporter
+// registering one would silently disable the connector's own time sync and
+// org info rather than failing visibly. Both must run, in registration order.
+func TestOnConnectCallbacksAccumulate(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+
+	done := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		time.Sleep(50 * time.Millisecond)
+		conn.Close(websocket.StatusNormalClosure, "done")
+	}))
+	defer srv.Close()
+
+	router := NewMessageRouter()
+	client := newTestClient(srv.URL, "test-token", router)
+
+	record := func(name string) func(context.Context) {
+		return func(context.Context) {
+			mu.Lock()
+			order = append(order, name)
+			finished := len(order) >= 3
+			mu.Unlock()
+
+			if finished {
+				once.Do(func() { close(done) })
+			}
+		}
+	}
+
+	client.OnConnect(record("first"))
+	client.OnConnect(record("second"))
+	client.OnConnect(record("third"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go client.Run(ctx) //nolint:errcheck
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		mu.Lock()
+		got := slices.Clone(order)
+		mu.Unlock()
+		t.Fatalf("not all onConnect callbacks ran, got %v", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if diff := order[:3]; !slices.Equal(diff, []string{"first", "second", "third"}) {
+		t.Fatalf("callbacks ran out of registration order: %v", diff)
+	}
+}
+
+// TestOnConnectContextCancelledOnDisconnect pins the lifetime of the context
+// handed to connect callbacks. A callback that hands work off to a goroutine
+// relies on this to tear that work down when the connection drops; without it
+// the work would hold the long-lived Run context and a flapping connection
+// would accumulate one straggler per reconnect.
+func TestOnConnectContextCancelledOnDisconnect(t *testing.T) {
+	cancelled := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		// Drop the connection out from under the callback.
+		time.Sleep(50 * time.Millisecond)
+		conn.Close(websocket.StatusNormalClosure, "done")
+	}))
+	defer srv.Close()
+
+	router := NewMessageRouter()
+	client := newTestClient(srv.URL, "test-token", router)
+
+	client.OnConnect(func(ctx context.Context) {
+		go func() {
+			<-ctx.Done()
+			once.Do(func() { close(cancelled) })
+		}()
+	})
+
+	// The Run context deliberately outlives the assertion deadline. If the
+	// callback were handed the Run context instead of a connection-scoped one,
+	// waiting on it would block past the deadline rather than racing it, so
+	// this fails rather than flaking when the scoping regresses.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	go client.Run(ctx) //nolint:errcheck
+
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("callback context outlived the connection")
 	}
 }

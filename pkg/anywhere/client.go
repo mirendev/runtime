@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -31,7 +33,9 @@ type Client struct {
 	router     *MessageRouter
 	log        *slog.Logger
 	outbox     chan *Envelope
-	onConnect  func(ctx context.Context)
+
+	mu        sync.Mutex
+	onConnect []func(ctx context.Context)
 
 	// getToken overrides auth token acquisition for testing.
 	// When nil, authClient.GetToken is used.
@@ -52,8 +56,28 @@ func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *Messag
 // OnConnect registers a callback invoked each time a WebSocket
 // connection is established. The handler can use Send to queue
 // messages for the new connection.
+//
+// Callbacks accumulate rather than replace: the connector registers its
+// own for time sync and org info, and feature reporters add theirs on top.
+// They run in registration order on the connection goroutine, so a
+// callback that needs to do real work should hand off to its own.
+//
+// The context is scoped to the connection, so work handed off that way is
+// cancelled when the connection drops. That is the right lifetime for it:
+// anything still queued at that point is discarded on reconnect anyway, so
+// finishing would only produce a message nobody sends.
 func (c *Client) OnConnect(fn func(ctx context.Context)) {
-	c.onConnect = fn
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onConnect = append(c.onConnect, fn)
+}
+
+// connectCallbacks returns a snapshot of the registered callbacks so they
+// can be invoked without holding the lock.
+func (c *Client) connectCallbacks() []func(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.onConnect)
 }
 
 // Send queues an envelope for delivery to the cloud. Non-blocking;
@@ -115,14 +139,18 @@ func (c *Client) runOnce(ctx context.Context) error {
 	}
 	defer conn.CloseNow()
 
-	c.drainOutbox()
-
-	if c.onConnect != nil {
-		c.onConnect(ctx)
-	}
-
+	// Derived before the callbacks run, not after, so what they receive is
+	// scoped to this connection. A callback that hands off to a goroutine can
+	// then be torn down when the connection drops, rather than outliving it
+	// and leaving one straggler per reconnect.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	c.drainOutbox()
+
+	for _, fn := range c.connectCallbacks() {
+		fn(ctx)
+	}
 
 	errCh := make(chan error, 2)
 
