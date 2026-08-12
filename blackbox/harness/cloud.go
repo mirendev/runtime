@@ -497,7 +497,7 @@ func (env *CloudEnv) waitForConnection(t *testing.T) {
 	t.Log("waiting for Miren Anywhere to connect to cloud...")
 
 	// Look for the definitive "connected to cloud" log line emitted by
-	// pkg/anywhere/client.go:163 after the WebSocket dial succeeds.
+	// pkg/uplink/client.go after the WebSocket dial succeeds.
 	const readyMarker = "connected to cloud"
 
 	Poll(t, "Miren Anywhere connected", 60*time.Second, 2*time.Second, func() (bool, string) {
