@@ -47,54 +47,72 @@ func newDetachReader(src io.Reader, onDetach func()) *detachReader {
 // going and has no exit code to report yet.
 func (d *detachReader) Detached() bool { return d.detached.Load() }
 
+// Read never returns (0, nil).
+//
+// io.Reader permits it, but this reader feeds an RPC stream that does not: a
+// zero-length payload is how the transport spells EOF (pkg/rpc/stream's reader
+// returns io.EOF for an empty Recv), so returning one ends the container's stdin
+// for the rest of the session. Holding a Ctrl-P back produces exactly that
+// nothing-yet state, which made a single Ctrl-P -- previous-line in readline --
+// silently sever input, and left Ctrl-P Ctrl-Q unable to escape either, since
+// the server had stopped reading. So a held byte loops and waits for the next
+// one rather than reporting an empty read.
 func (d *detachReader) Read(p []byte) (int, error) {
-	if len(d.buf) > 0 {
-		n := copy(p, d.buf)
-		d.buf = d.buf[n:]
-		return n, nil
-	}
-	if d.closed {
-		return 0, io.EOF
+	if len(p) == 0 {
+		return 0, nil
 	}
 
-	if len(d.scratch) < len(p) {
-		d.scratch = make([]byte, len(p))
-	}
+	for {
+		if len(d.buf) > 0 {
+			n := copy(p, d.buf)
+			d.buf = d.buf[n:]
+			return n, nil
+		}
+		if d.closed {
+			return 0, io.EOF
+		}
 
-	n, err := d.src.Read(d.scratch[:len(p)])
+		if len(d.scratch) < len(p) {
+			d.scratch = make([]byte, len(p))
+		}
 
-	out := make([]byte, 0, n+1)
-	for _, b := range d.scratch[:n] {
-		if d.armed {
-			d.armed = false
-			if b == ctrlQ {
-				d.detached.Store(true)
-				d.closed = true
-				if d.onDetach != nil {
-					d.onDetach()
+		n, err := d.src.Read(d.scratch[:len(p)])
+
+		out := make([]byte, 0, n+1)
+		for _, b := range d.scratch[:n] {
+			if d.armed {
+				d.armed = false
+				if b == ctrlQ {
+					d.detached.Store(true)
+					d.closed = true
+					if d.onDetach != nil {
+						d.onDetach()
+					}
+					break
 				}
-				break
+				// Not the sequence after all, so the held Ctrl-P was a real
+				// keystroke and belongs in the stream ahead of this byte.
+				out = append(out, ctrlP)
 			}
-			// Not the sequence after all, so the held Ctrl-P was a real
-			// keystroke and belongs in the stream ahead of this byte.
-			out = append(out, ctrlP)
+			if b == ctrlP {
+				d.armed = true
+				continue
+			}
+			out = append(out, b)
 		}
-		if b == ctrlP {
-			d.armed = true
-			continue
-		}
-		out = append(out, b)
-	}
 
-	copied := copy(p, out)
-	d.buf = append(d.buf[:0], out[copied:]...)
-
-	if err != nil {
-		d.closed = true
-		if copied > 0 {
+		if len(out) > 0 {
+			copied := copy(p, out)
+			d.buf = append(d.buf[:0], out[copied:]...)
 			return copied, nil
 		}
-		return 0, err
+
+		if err != nil {
+			d.closed = true
+			return 0, err
+		}
+
+		// Nothing to deliver yet: everything read so far is a held Ctrl-P
+		// awaiting the byte that decides what it means. Wait for that byte.
 	}
-	return copied, nil
 }

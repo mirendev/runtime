@@ -65,7 +65,7 @@ func AppRun(ctx *Context, opts struct {
 		return nil
 	}
 
-	detached, err := attachToRun(ctx, runs, runID, created.SandboxName())
+	detached, err := attachToRun(ctx, runs, runID, created.SandboxName(), true)
 	if err != nil {
 		return err
 	}
@@ -123,7 +123,7 @@ func AppAttach(ctx *Context, opts struct {
 		return fmt.Errorf("run %s has not started yet", opts.Run)
 	}
 
-	detached, err := attachToRun(ctx, runs, info.Id(), info.Sandbox())
+	detached, err := attachToRun(ctx, runs, info.Id(), info.Sandbox(), false)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,14 @@ func AppAttach(ctx *Context, opts struct {
 // what to say about the exit code: a detached run has not produced one yet,
 // while an attach that ended on its own means the container is gone and a code
 // is on its way.
-func attachToRun(ctx *Context, runs *app_v1alpha.RunsClient, runID, sandboxName string) (bool, error) {
+//
+// cancelIfNeverStarts belongs to the caller because the two callers mean
+// different things by giving up. `miren app run` created the run, so a run that
+// never started is a command that never executed and leaving it pending would
+// let it execute later, after this process told the caller it did not start.
+// `miren app attach` only ever asked to watch: cancelling there would kill
+// someone else's run for the crime of pulling a large image slowly.
+func attachToRun(ctx *Context, runs *app_v1alpha.RunsClient, runID, sandboxName string, cancelIfNeverStarts bool) (bool, error) {
 	opt := new(exec_v1alpha.ShellOptions)
 	in, out, winUpdates, cleanup := setupExecIO(ctx, opt)
 	defer cleanup()
@@ -197,6 +204,10 @@ func attachToRun(ctx *Context, runs *app_v1alpha.RunsClient, runID, sandboxName 
 		}
 
 		if time.Now().After(deadline) {
+			if !cancelIfNeverStarts {
+				return false, fmt.Errorf("run %s has not started within 2m; it is still going and can be attached again: %w", runID, err)
+			}
+
 			// Cancel rather than abandon. The run is still pending, so leaving
 			// it would let it execute later, after this command has already
 			// told the caller it did not start -- and someone who retries on

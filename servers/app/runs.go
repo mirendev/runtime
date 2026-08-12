@@ -46,7 +46,12 @@ const ConsoleTask = appconfig.ConsoleName
 func (r *AppInfo) refuseIfAtLimit(ctx context.Context, appID entity.Id, taskName string, task *core_v1alpha.ConfigSpecTasks) error {
 	maxConcurrent := runapi.MaxConcurrent(task, taskName)
 
-	results, err := r.EC.List(ctx, entity.Ref(run_v1alpha.RunAppId, appID))
+	// By status rather than by app, for the reason admitByCount gives: runs are
+	// durable history, so the app index grows without bound and counting a
+	// handful of live runs would decode every run the app has ever had --
+	// including the deploy- and schedule-triggered ones. The running index is
+	// bounded by what is executing cluster-wide.
+	results, err := r.EC.List(ctx, entity.Ref(run_v1alpha.RunStatusId, run_v1alpha.RunStatusRunningId))
 	if err != nil {
 		return fmt.Errorf("checking concurrent runs: %w", err)
 	}
@@ -55,7 +60,7 @@ func (r *AppInfo) refuseIfAtLimit(ctx context.Context, appID entity.Id, taskName
 	for results.Next() {
 		var other run_v1alpha.Run
 		results.Read(&other)
-		if other.Task == taskName && other.Status == run_v1alpha.RUNNING {
+		if other.App == appID && other.Task == taskName {
 			live++
 		}
 	}

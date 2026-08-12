@@ -123,8 +123,9 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	select {
 	case <-hub.Done():
 		// The container is gone, which is the one thing that genuinely ends an
-		// attach. Drain whatever the client already sent so a command's last
-		// line isn't lost to the teardown.
+		// attach. Whatever the client is still sending is abandoned along with
+		// the input pump, which costs nothing: there is no longer a process on
+		// the other end of that stdin to receive it.
 		s.Log.Debug("attach ended with the container", "sandbox", sandboxID, "container", container)
 		return nil
 

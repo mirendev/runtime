@@ -109,3 +109,40 @@ func iotest(t *testing.T, chunks ...string) io.Reader {
 	t.Helper()
 	return &chunkReader{chunks: chunks}
 }
+
+// The reader feeds an RPC stream where a zero-length payload means EOF, so
+// (0, nil) is not merely discouraged here -- it severs the container's stdin
+// for the rest of the session. A held-back Ctrl-P is the state that produces
+// it, and Ctrl-P alone is previous-line in readline: common enough that this
+// broke interactive use outright, and left the detach sequence unable to
+// rescue it because the server had stopped reading.
+func TestDetachReaderNeverReportsAnEmptyRead(t *testing.T) {
+	// One byte per Read, so the held Ctrl-P is alone in its read exactly as it
+	// is when a person types it.
+	d := newDetachReader(iotest(t, "\x10", "l", "s", "\n"), func() {
+		t.Fatal("Ctrl-P followed by ordinary bytes is not the detach sequence")
+	})
+
+	buf := make([]byte, 64)
+	for {
+		n, err := d.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		require.NotZero(t, n, "a zero-length read is EOF to the stream and kills stdin")
+	}
+}
+
+// The same invariant at the moment of detaching: the sequence itself produces
+// no bytes, and must arrive as EOF rather than an empty read.
+func TestDetachReaderReportsEOFNotAnEmptyReadOnDetach(t *testing.T) {
+	var detached bool
+	d := newDetachReader(iotest(t, "\x10", "\x11"), func() { detached = true })
+
+	buf := make([]byte, 64)
+	n, err := d.Read(buf)
+	assert.Zero(t, n)
+	assert.Equal(t, io.EOF, err)
+	assert.True(t, detached)
+}
