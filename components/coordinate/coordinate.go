@@ -180,6 +180,11 @@ type CloudAuthConfig struct {
 	Tags        map[string]string `json:"tags" yaml:"tags"`                 // Tags from registration for RBAC evaluation
 	ClusterID   string            `json:"cluster_id" yaml:"cluster_id"`     // Cluster ID for status reporting
 	DNSHostname string            `json:"dns_hostname" yaml:"dns_hostname"` // Cloud-provisioned DNS hostname for the cluster
+
+	// IdentityIssuerURL is the workload identity anchor cloud assigned this
+	// cluster, when it has one. Empty means the cluster anchors identity at its
+	// own hostname and serves its own discovery.
+	IdentityIssuerURL string `json:"identity_issuer_url" yaml:"identity_issuer_url"`
 }
 
 const (
@@ -399,6 +404,13 @@ type Coordinator struct {
 	netcheckMu        sync.RWMutex
 	netcheckResult    *cloudauth.NetcheckDualStackResult
 	netcheckCheckedAt time.Time
+
+	// publishedKeyFingerprint is the workload identity key set most recently
+	// accepted by cloud, so an unchanged set isn't republished on every status
+	// cycle. Guarded because the startup publish and the periodic one are
+	// different goroutines.
+	publishedKeysMu         sync.Mutex
+	publishedKeyFingerprint string
 
 	logAddressesOnce sync.Once
 
@@ -1524,6 +1536,11 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	// Report initial cluster status if cloud auth is enabled
 	if c.CloudAuth.Enabled && c.authClient != nil && c.CloudAuth.ClusterID != "" {
+		// Publish the public half of the workload identity key set before the
+		// status loop, so cloud can serve discovery for this cluster from the
+		// moment it starts handing out tokens. The signing key stays here.
+		c.publishSigningKeysAtStartup(ctx)
+
 		err = c.ReportStartupStatus(ctx)
 		if err != nil {
 			c.Log.Error("failed to report initial cluster status", "error", err)
@@ -1861,6 +1878,13 @@ func (c *Coordinator) reportStatusPeriodically(ctx context.Context) {
 				c.Log.Error("failed to report cluster status", "error", err)
 			} else {
 				c.Log.Debug("reported cluster status to cloud")
+			}
+
+			// Republish only when the key set actually changed, which makes
+			// this the path a rotation propagates through — and the retry for
+			// a startup publish that failed.
+			if _, err := c.publishSigningKeys(ctx); err != nil {
+				c.Log.Error("failed to publish workload identity signing keys", "error", err)
 			}
 		}
 	}
