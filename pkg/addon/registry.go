@@ -134,7 +134,12 @@ func (r *Registry) GetVariantConfig(addonName, variantName, version string) (map
 			// Clone the config so we don't mutate the definition.
 			cfg := make(map[string]string, len(v.Config)+1)
 			maps.Copy(cfg, v.Config)
-			cfg[ConfigImage] = ResolveImage(def.BaseImage, def.DefaultVersion, version)
+			// An InApp addon has no container of its own, so there is no image
+			// to resolve. Leaving the key absent is what tells the callers that
+			// validate or pull it that there is nothing to check.
+			if def.BaseImage != "" {
+				cfg[ConfigImage] = ResolveImage(def.BaseImage, def.DefaultVersion, version)
+			}
 			return cfg, nil
 		}
 	}

@@ -68,9 +68,12 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		if err != nil {
 			return fmt.Errorf("resolving image: %w", err)
 		}
-		image := variantConfig[addon.ConfigImage]
-		if err := s.imageChecker.CheckImage(ctx, image); err != nil {
-			return err
+		// An InApp addon contributes storage to the app's own sandbox rather
+		// than running a container, so it has no image to validate.
+		if image := variantConfig[addon.ConfigImage]; image != "" {
+			if err := s.imageChecker.CheckImage(ctx, image); err != nil {
+				return err
+			}
 		}
 	}
 

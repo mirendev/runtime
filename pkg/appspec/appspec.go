@@ -361,6 +361,8 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 					switch disk.Provider {
 					case core_v1alpha.ConfigSpecServicesDisksLOCAL:
 						provider = "local"
+					case core_v1alpha.ConfigSpecServicesDisksSQLITE:
+						provider = "sqlite"
 					case core_v1alpha.ConfigSpecServicesDisksMIREN:
 						provider = "miren"
 					default:
@@ -379,6 +381,8 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 						ReadOnly:     disk.ReadOnly,
 						SizeGb:       disk.SizeGb,
 						Filesystem:   disk.Filesystem,
+						DbFile:       disk.DbFile,
+						SqliteId:     disk.SqliteId,
 						LeaseTimeout: disk.LeaseTimeout,
 						Owner:        disk.Owner,
 					})

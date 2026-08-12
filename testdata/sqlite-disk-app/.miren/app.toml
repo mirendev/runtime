@@ -1,0 +1,14 @@
+name = "sqlite-disk-app"
+
+# Declares the database directly as a disk rather than through the addon. The
+# id, not the disk name, identifies the database; they differ here so the test
+# can prove storage is keyed on the id.
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.web.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+id = "notes"

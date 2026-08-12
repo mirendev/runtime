@@ -142,6 +142,9 @@ func (f *FakeSandboxController) AcquireDiskLease(ctx context.Context, diskID, sa
 	return leaseID, nil
 }
 
+// ReleaseSqliteDisks is a no-op: the fake has no replication manager.
+func (f *FakeSandboxController) ReleaseSqliteDisks(ctx context.Context, sandboxID entity.Id) {}
+
 // ReleaseDiskLeases releases all disk leases owned by the given sandbox.
 // Mirrors controllers/sandbox/sandbox.go:releaseDiskLeases.
 func (f *FakeSandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {

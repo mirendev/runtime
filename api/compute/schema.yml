@@ -89,6 +89,12 @@ components:
         filesystem:
           type: string
           doc: Filesystem type for auto-creation (for disk provider)
+        db_file:
+          type: string
+          doc: Database filename inside the disk directory (for sqlite provider; a bare filename, not a path, defaults to data.db)
+        sqlite_id:
+          type: string
+          doc: Identity of the database this volume attaches to (for sqlite provider, scoped to the app)
         lease_timeout:
           type: string
           doc: Timeout for acquiring disk lease (for disk provider)

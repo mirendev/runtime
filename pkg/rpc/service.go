@@ -12,4 +12,8 @@ type ServiceID = string
 // Add new services here to maintain type safety and avoid string typos.
 const (
 	ServiceRunner ServiceID = "dev.miren.runtime/runner"
+
+	// ServiceSqliteBackup stores LTX transaction files replicated from
+	// SQLite-provider disks on runners.
+	ServiceSqliteBackup ServiceID = "dev.miren.runtime/sqlite-backup"
 )

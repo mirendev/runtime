@@ -74,6 +74,8 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 			switch d.Provider {
 			case core_v1alpha.LOCAL:
 				provider = core_v1alpha.ConfigSpecServicesDisksLOCAL
+			case core_v1alpha.SQLITE:
+				provider = core_v1alpha.ConfigSpecServicesDisksSQLITE
 			case core_v1alpha.MIREN:
 				provider = core_v1alpha.ConfigSpecServicesDisksMIREN
 			}
@@ -84,6 +86,8 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 				ReadOnly:     d.ReadOnly,
 				SizeGb:       d.SizeGb,
 				Filesystem:   d.Filesystem,
+				DbFile:       d.DbFile,
+				SqliteId:     d.SqliteId,
 				LeaseTimeout: d.LeaseTimeout,
 				Owner:        d.Owner,
 			})

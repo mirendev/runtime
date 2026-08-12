@@ -499,7 +499,11 @@ func validateNodePorts(ctx context.Context, eac *entityserver_v1alpha.EntityAcce
 func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, spec core_v1alpha.ConfigSpec) error {
 	for _, svc := range spec.Services {
 		for _, disk := range svc.Disks {
-			if disk.SizeGb > 0 || disk.Name == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL {
+			// Local and sqlite disks are bind-mounted host directories with no
+			// Disk entity to look up, so there is nothing to pre-validate.
+			if disk.SizeGb > 0 || disk.Name == "" ||
+				disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL ||
+				disk.Provider == core_v1alpha.ConfigSpecServicesDisksSQLITE {
 				continue
 			}
 			// size_gb == 0 means we expect the disk to already exist
@@ -517,8 +521,10 @@ func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAc
 
 func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvider {
 	switch provider {
-	case "local":
+	case appconfig.DiskProviderLocal:
 		return core_v1alpha.ConfigSpecServicesDisksLOCAL
+	case appconfig.DiskProviderSqlite:
+		return core_v1alpha.ConfigSpecServicesDisksSQLITE
 	default:
 		return core_v1alpha.ConfigSpecServicesDisksMIREN
 	}
@@ -663,6 +669,8 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 						ReadOnly:     disk.ReadOnly,
 						SizeGb:       int64(disk.SizeGB),
 						Filesystem:   disk.Filesystem,
+						DbFile:       disk.DbFile,
+						SqliteId:     disk.Id,
 						LeaseTimeout: disk.LeaseTimeout,
 						Owner:        disk.Owner,
 						Provider:     mapDiskProvider(disk.Provider),

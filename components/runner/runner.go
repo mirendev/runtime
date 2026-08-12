@@ -25,11 +25,13 @@ import (
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
+	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/components/sqlitedisk"
 	"miren.dev/runtime/controllers/disk"
 	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
@@ -208,6 +210,10 @@ type Runner struct {
 	dvc    *diskio.DiskVolumeController
 	dmc    *diskio.DiskMountController
 	diskGC *diskio.DeletedVolumeGC
+
+	// Replicates SQLite-provider disks to the coordinator. Nil when the backup
+	// service is unreachable, in which case it is inert and disks still attach.
+	sqliteDisks *sqlitedisk.Manager
 }
 
 func (r *Runner) Close() error {
@@ -391,6 +397,8 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 		return fmt.Errorf("setting up secret resolution: %w", err)
 	}
 
+	r.setupSqliteDisks(rs)
+
 	cm, err := r.SetupControllers(ctx, eas, rs.Server())
 	if err != nil {
 		return err
@@ -429,6 +437,45 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 // rather than reading this early and caching a nil.
 func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer {
 	return r.deps.WorkloadIssuer
+}
+
+// setupSqliteDisks connects to the coordinator's SQLite backup service so
+// sqlite-provider disks are replicated as they are written.
+//
+// A failure here is not fatal. The manager stays nil, which is inert, so disks
+// still attach and apps still run — they are simply not backed up until the
+// runner reconnects. Losing backups is better than refusing to start workloads.
+func (r *Runner) setupSqliteDisks(rs *rpc.State) {
+	var (
+		client *rpc.NetworkClient
+		err    error
+	)
+	if r.Config == nil {
+		client, err = rs.Connect("", string(rpc.ServiceSqliteBackup))
+	} else {
+		client, err = rs.Client(string(rpc.ServiceSqliteBackup))
+	}
+	if err != nil {
+		r.Log.Warn("sqlite disk backups disabled: cannot reach coordinator backup service", "error", err)
+		return
+	}
+
+	r.sqliteDisks = sqlitedisk.NewManager(r.Log, sqlitebackup_v1alpha.NewSqliteBackupClient(client))
+	r.closers = append(r.closers, sqliteDiskCloser{r.sqliteDisks})
+
+	r.Log.Info("sqlite disk backups enabled")
+}
+
+// sqliteDiskCloser gives the final replication sync its own context. The
+// runner's context is already cancelled by the time closers run, and a
+// cancelled context would abandon the last transactions instead of shipping
+// them.
+type sqliteDiskCloser struct{ m *sqlitedisk.Manager }
+
+func (c sqliteDiskCloser) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return c.m.Close(ctx)
 }
 
 // setupRemoteWorkloadIssuer wires a remote workload identity issuer for
@@ -759,6 +806,7 @@ func (r *Runner) SetupControllers(
 		ApiAddress:     r.deps.ApiAddress,
 		CACert:         r.deps.CACert,
 		Secrets:        r.deps.Secrets,
+		SqliteDisks:    r.sqliteDisks,
 	}
 
 	var sbc sandbox.SandboxLifecycle

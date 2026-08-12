@@ -20,6 +20,12 @@ const (
 	OnCluster LocalityMode = "on_cluster"
 	// Remote means the addon connects to an external service.
 	Remote LocalityMode = "remote"
+	// InApp means the addon has no server of its own: its backing resource is
+	// attached to the app's own sandbox. An embedded database like SQLite is
+	// in-process, so there is no host to connect to — the app opens a file the
+	// addon arranged to have mounted. Such an addon contributes Disks rather
+	// than standing up a sandbox pool, and has no container image.
+	InApp LocalityMode = "in_app"
 )
 
 // AddonProvider defines the interface that addon implementations must satisfy.
@@ -90,10 +96,48 @@ type Variable struct {
 	Sensitive bool
 }
 
+// Disk is a storage attachment an addon contributes to the app's own sandbox.
+//
+// Only InApp addons use this. An OnCluster addon owns its storage privately —
+// it declares volumes on the sandbox pool it creates — whereas an InApp addon
+// has no sandbox of its own and must reach into the app's.
+type Disk struct {
+	// Name identifies the disk within a service's spec.
+	Name string
+
+	// Provider selects the volume provider (see controllers/sandbox/volume.go).
+	Provider string
+
+	// MountPath is where the disk appears inside the container.
+	MountPath string
+
+	// DbFile names a database within the mounted directory, for providers that
+	// manage one. Empty for providers that do not.
+	DbFile string
+
+	// Services names the services that receive this disk. Empty means every
+	// service in the app, matching how addon env vars reach every service.
+	Services []string
+
+	// RequiresSingleWriter marks storage that only one process may write, such
+	// as a SQLite database. Services receiving such a disk must run a single
+	// fixed instance; the controller refuses to attach it otherwise.
+	//
+	// The provider declares this rather than the controller inferring it,
+	// because whether concurrent writers are safe is a property of what the
+	// addon put on the disk, not of the disk itself.
+	RequiresSingleWriter bool
+}
+
 // ProvisionResult is returned by a provider after successful provisioning.
 type ProvisionResult struct {
 	EnvVars []Variable
 	Attrs   []entity.Attr
+
+	// Disks are attached to the app's own sandbox. Only InApp providers set
+	// this; the controller writes them into the app's config the same way it
+	// writes EnvVars, so they are removed again on deprovision.
+	Disks []Disk
 }
 
 // AddonAssociation is the provider's view of an association: enough to name the

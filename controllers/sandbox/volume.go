@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/components/sqlitedisk"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -29,6 +32,12 @@ func (c *SandboxController) ConfigureVolumes(ctx context.Context, sb *compute.Sa
 			volumeMounts[volume.Name] = path
 		case "local":
 			path, err := c.configureLocalVolume(ctx, sb, volume)
+			if err != nil {
+				return nil, err
+			}
+			volumeMounts[volume.Name] = path
+		case "sqlite":
+			path, err := c.configureSqliteVolume(ctx, sb, volume)
 			if err != nil {
 				return nil, err
 			}
@@ -93,24 +102,34 @@ func (c *SandboxController) configureHostVolume(sb *compute.Sandbox, volume comp
 	return path, nil
 }
 
+// resolveAppKey returns the per-app identifier used to isolate host-backed
+// volume directories. It falls back to the volume name for a sandbox with no
+// app version, which is how standalone sandboxes get their own directory.
+func (c *SandboxController) resolveAppKey(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume, kind string) (string, error) {
+	if sb.Spec.Version == "" {
+		return volume.Name, nil
+	}
+
+	res, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+	if err != nil {
+		return "", fmt.Errorf("resolve app version %s for %s volume %q: %w", sb.Spec.Version, kind, volume.Name, err)
+	}
+	var appVer core_v1alpha.AppVersion
+	appVer.Decode(res.Entity().Entity())
+	if appVer.App == "" {
+		return "", fmt.Errorf("app version %s has empty app reference for %s volume %q", sb.Spec.Version, kind, volume.Name)
+	}
+	return appVer.App.String(), nil
+}
+
 func (c *SandboxController) configureLocalVolume(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume) (string, error) {
 	if volume.MountPath == "" {
 		return "", fmt.Errorf("missing mount_path for local volume %q", volume.Name)
 	}
 
-	// Resolve app ID from sandbox version for per-app isolation
-	appKey := volume.Name
-	if sb.Spec.Version != "" {
-		res, err := c.EAC.Get(ctx, sb.Spec.Version.String())
-		if err != nil {
-			return "", fmt.Errorf("resolve app version %s for local volume %q: %w", sb.Spec.Version, volume.Name, err)
-		}
-		var appVer core_v1alpha.AppVersion
-		appVer.Decode(res.Entity().Entity())
-		if appVer.App == "" {
-			return "", fmt.Errorf("app version %s has empty app reference for local volume %q", sb.Spec.Version, volume.Name)
-		}
-		appKey = appVer.App.String()
+	appKey, err := c.resolveAppKey(ctx, sb, volume, "local")
+	if err != nil {
+		return "", err
 	}
 
 	localPath := filepath.Join(c.DataPath, "data", "local", appKey)
@@ -124,6 +143,115 @@ func (c *SandboxController) configureLocalVolume(ctx context.Context, sb *comput
 
 	c.Log.Info("configured local storage volume", "volume", volume.Name, "path", localPath)
 	return localPath, nil
+}
+
+// sqliteIdPattern re-checks the id from the spec before it becomes a directory
+// name. app.toml validation already enforces this; it is repeated here because
+// the value reaches a path join.
+var sqliteIdPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+// sqliteVolumeLayout resolves where a sqlite volume's database lives, without
+// creating anything. Boot reconciliation reuses it to resume replication for a
+// sandbox that outlived the runner, so the two paths cannot drift apart on how
+// a database is located.
+func (c *SandboxController) sqliteVolumeLayout(
+	ctx context.Context,
+	sb *compute.Sandbox,
+	volume compute.SandboxSpecVolume,
+) (dir, dbFile, sqliteId, appKey string, err error) {
+	dbFile = volume.DbFile
+	if dbFile == "" {
+		dbFile = appconfig.DefaultSqliteDbFile
+	}
+	// app.toml validation already rejects these, but the name lands in a path
+	// join, so it is re-checked here rather than trusted from the spec. Only
+	// the mount directory itself is created, so db_file has to name a file
+	// directly inside it.
+	if dbFile == "." || dbFile == ".." || dbFile != filepath.Base(dbFile) {
+		return "", "", "", "", fmt.Errorf("invalid db_file %q for sqlite volume %q: must be a filename with no path separators", dbFile, volume.Name)
+	}
+
+	// The id, not the volume name, identifies the database. Two services of one
+	// app that name the same id therefore share one database, while the same id
+	// under a different app is a different database.
+	sqliteId = volume.SqliteId
+	if sqliteId == "" {
+		sqliteId = appconfig.DefaultSqliteId
+	}
+	if !sqliteIdPattern.MatchString(sqliteId) {
+		return "", "", "", "", fmt.Errorf("invalid sqlite id %q for volume %q", sqliteId, volume.Name)
+	}
+
+	appKey, err = c.resolveAppKey(ctx, sb, volume, "sqlite")
+	if err != nil {
+		return "", "", "", "", err
+	}
+
+	// Keyed on the id so that disks sharing an id share a database, and disks
+	// with different ids stay isolated. appKey provides the per-app namespace.
+	return filepath.Join(c.DataPath, "data", "sqlite", appKey, sqliteId), dbFile, sqliteId, appKey, nil
+}
+
+// configureSqliteVolume prepares a SQLite-provider disk: a plain host
+// directory holding a database that litestream replicates to the coordinator.
+// Unlike a miren disk there is no image, no loop device and no lease — the
+// directory is bind-mounted straight into the container.
+func (c *SandboxController) configureSqliteVolume(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume) (string, error) {
+	if volume.MountPath == "" {
+		return "", fmt.Errorf("missing mount_path for sqlite volume %q", volume.Name)
+	}
+
+	// app.toml rejects this, but a read-only mount would fail deep inside
+	// SQLite (WAL needs to write its sidecars) and would also skip the
+	// chown that makes the directory reachable by the container user.
+	if volume.ReadOnly {
+		return "", fmt.Errorf("sqlite volume %q cannot be read_only: SQLite requires a writable mount for its write-ahead log", volume.Name)
+	}
+
+	// A sqlite disk is identified by (app, id). Without an app there is no
+	// stable namespace to key the database or its backups on, and two
+	// unrelated sandboxes declaring the same disk name would collide on one
+	// backup key with two writers. Local volumes tolerate a missing app
+	// because their fallback only names a directory.
+	if sb.Spec.Version == "" {
+		return "", fmt.Errorf("sqlite volume %q requires an app version: sqlite disks are namespaced per app", volume.Name)
+	}
+
+	dir, dbFile, sqliteId, appKey, err := c.sqliteVolumeLayout(ctx, sb, volume)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create sqlite volume directory: %w", err)
+	}
+	// MkdirAll respects the umask, so the mode above is a request, not a
+	// guarantee. The directory is chowned to the container's run user, and
+	// SQLite needs to write its -wal and -shm sidecars into it, so make the
+	// owner bits explicit rather than depending on how the runner was started.
+	if err := os.Chmod(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to set permissions on sqlite volume directory: %w", err)
+	}
+
+	dbPath := filepath.Join(dir, dbFile)
+
+	if c.SqliteDisks != nil {
+		// Register restores the database from the coordinator when this node
+		// has no copy, creates it when there is no backup either, and then
+		// replicates it for as long as the disk stays attached.
+		key := sqlitedisk.BackupKey(appKey, sqliteId)
+		if err := c.SqliteDisks.Register(ctx, sb.ID.String(), key, dbPath); err != nil {
+			return "", fmt.Errorf("failed to start replicating sqlite volume %q: %w", volume.Name, err)
+		}
+	} else if err := sqlitedisk.EnsureDatabase(dbPath); err != nil {
+		// Backups are unavailable, but the app still expects a usable database.
+		return "", fmt.Errorf("failed to initialize sqlite volume %q: %w", volume.Name, err)
+	}
+
+	c.Log.Info("configured sqlite volume",
+		"volume", volume.Name, "id", sqliteId, "path", dir, "db_file", dbFile, "replicated", c.SqliteDisks != nil)
+
+	return dir, nil
 }
 
 func (c *SandboxController) configureMirenVolume(ctx context.Context, sb *compute.Sandbox, volume compute.SandboxSpecVolume, meta *entity.Meta) (string, error) {

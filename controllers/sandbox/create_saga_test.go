@@ -139,6 +139,7 @@ type mockContainerRuntime struct {
 	bootContainersCalls      int
 	destroySubCtrsCalls      int
 	releaseDiskLeasesCalls   int
+	releaseSqliteDisksCalls  int
 	releaseTokenStateCalls   int
 	releaseHubsCalls         int
 	unconfigureFirewallCalls int
@@ -255,6 +256,12 @@ func (m *mockContainerRuntime) ReleaseDiskLeases(ctx context.Context, sandboxID 
 	defer m.mu.Unlock()
 	m.releaseDiskLeasesCalls++
 	return m.releaseDiskLeasesErr
+}
+
+func (m *mockContainerRuntime) ReleaseSqliteDisks(ctx context.Context, sandboxID entity.Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseSqliteDisksCalls++
 }
 
 func (m *mockContainerRuntime) ReleaseTokenState(id entity.Id) {
@@ -698,6 +705,8 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	assert.Equal(t, 1, h.runtime.releaseDiskLeasesCalls)
 	assert.Equal(t, 1, h.runtime.releaseTokenStateCalls,
 		"undoing boot-containers must release the token state it registered")
+	assert.Equal(t, 1, h.runtime.releaseSqliteDisksCalls,
+		"undoing create must stop replicating the sqlite disks ConfigureVolumes registered")
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)
 	assert.Equal(t, 1, h.runtime.cleanupContainerCalls)
 	assert.Equal(t, 1, h.networking.releaseCalls)

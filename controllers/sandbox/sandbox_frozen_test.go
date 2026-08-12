@@ -24,6 +24,24 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
+		// SQLite disks (revised after review): replication is now released
+		// after DestroySubContainers rather than before, so writes made during
+		// graceful shutdown still reach the coordinator; surviving sandboxes
+		// are re-registered in reconcileSandboxesOnBoot, since replication
+		// lives in the runner process and does not survive its restart; and
+		// the volume's directory mode is set explicitly because MkdirAll
+		// respects the umask.
+		//
+		// SQLite disks: ConfigureVolumes gained a "sqlite" provider arm
+		// (configureSqliteVolume), BuildSpec includes sqlite volumes in the
+		// chown-to-run-user set so the container can write its own database,
+		// and StopSandbox releases replication alongside disk leases. The saga
+		// path needs no matching edit: it reaches all three through
+		// sandboxOps.{ConfigureVolumes,BuildSpec}, which delegate to the
+		// SandboxController methods, and ReleaseSqliteDisks was added to the
+		// runtime interface and wired into the create saga's undo (see
+		// create_saga.go) the same way ReleaseTokenState is.
+		//
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
@@ -68,6 +86,8 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// controller has no boot reconciliation of its own.
 		"sandbox.go":  "b574475091e6ea0f42be38e6b8f22ecdeda84b7c5a0b8004fa071e0a0657ae12",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
+		"sandbox.go":  "826f809e82077b22648c39c5fba9751b873cc2eb3f6b0752d7f48a9e5ecbb85f",
+		"volume.go":   "0555947db9407572a87b7e42f0792b80cebb061e0fe6a07be138689332e958f0",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
 

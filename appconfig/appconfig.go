@@ -58,7 +58,8 @@ type ServiceConcurrencyConfig struct {
 
 // DiskConfig represents a disk attachment for a service.
 // Provider defaults to "miren" (network disk) when empty.
-// Use provider = "local" for node-local persistent storage.
+// Use provider = "local" for node-local persistent storage, or
+// provider = "sqlite" for a continuously backed-up SQLite database.
 type DiskConfig struct {
 	Name         string `toml:"name"`
 	Provider     string `toml:"provider"`
@@ -68,7 +69,44 @@ type DiskConfig struct {
 	Filesystem   string `toml:"filesystem"`
 	LeaseTimeout string `toml:"lease_timeout"`
 	Owner        string `toml:"owner"`
+
+	// DbFile is the database's filename inside the mounted directory, for
+	// provider = "sqlite" only. It is a bare filename, not a path.
+	// Defaults to DefaultSqliteDbFile.
+	DbFile string `toml:"db_file"`
+
+	// Id identifies which database a sqlite disk attaches to, for
+	// provider = "sqlite" only. Defaults to DefaultSqliteId. IDs are scoped to
+	// the app: two services of one app that name the same id share a database,
+	// while the same id in a different app is a different database.
+	Id string `toml:"id"`
 }
+
+// Disk providers accepted in app.toml.
+const (
+	DiskProviderMiren  = "miren"
+	DiskProviderLocal  = "local"
+	DiskProviderSqlite = "sqlite"
+)
+
+// DefaultSqliteDbFile is the database name used when a sqlite disk does not
+// set db_file.
+const DefaultSqliteDbFile = "data.db"
+
+// DefaultSqliteId is the database identity used when a sqlite disk does not
+// set id.
+const DefaultSqliteId = "default"
+
+// isPlainFilename reports whether name is a bare filename rather than a path:
+// no separators, and not a directory reference.
+func isPlainFilename(name string) bool {
+	return name != "" && name != "." && name != ".." && name == filepath.Base(name)
+}
+
+// sqliteIdPattern constrains a sqlite disk id to a single safe path segment.
+// The id names a directory on the runner and part of the backup key on the
+// coordinator, so anything that could escape either is rejected outright.
+var sqliteIdPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // PortConfig represents a network port for a service
 type PortConfig struct {
@@ -485,16 +523,58 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Validate disk configurations
-		hasMirenDisks := false
+		//
+		// Miren and sqlite disks both demand a single writer: miren disks are
+		// leased exclusively, and a SQLite database replicated by litestream
+		// would be corrupted by concurrent writers.
+		hasSingleWriterDisks := false
 		for i, disk := range svcConfig.Disks {
-			if disk.Provider != "" && disk.Provider != "miren" && disk.Provider != "local" {
+			switch disk.Provider {
+			case "", DiskProviderMiren, DiskProviderLocal, DiskProviderSqlite:
+			default:
 				return &ValidationError{
 					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\" or \"local\"", serviceName, i, disk.Name, disk.Provider),
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\", \"local\", or \"sqlite\"", serviceName, i, disk.Name, disk.Provider),
 				}
 			}
-			if disk.Provider == "" || disk.Provider == "miren" {
-				hasMirenDisks = true
+			if disk.Provider == "" || disk.Provider == DiskProviderMiren || disk.Provider == DiskProviderSqlite {
+				hasSingleWriterDisks = true
+			}
+			if disk.DbFile != "" && disk.Provider != DiskProviderSqlite {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".disks",
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) db_file is only supported for sqlite disks", serviceName, i, disk.Name),
+				}
+			}
+			if disk.Id != "" && disk.Provider != DiskProviderSqlite {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".disks",
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) id is only supported for sqlite disks", serviceName, i, disk.Name),
+				}
+			}
+			if disk.Id != "" && !sqliteIdPattern.MatchString(disk.Id) {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".disks",
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) invalid id %q, must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", serviceName, i, disk.Name, disk.Id),
+				}
+			}
+			// A WAL-mode database needs to write its -wal and -shm sidecars, so
+			// it cannot live on a read-only mount even to be read from.
+			if disk.ReadOnly && disk.Provider == DiskProviderSqlite {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".disks",
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) read_only is not supported for sqlite disks: SQLite requires a writable mount for its write-ahead log", serviceName, i, disk.Name),
+				}
+			}
+			// db_file names a file directly inside the mounted directory. Only
+			// that directory is created and made writable for the container, so
+			// a nested path would fail later with an opaque SQLite error about
+			// a directory nothing ever created.
+			if disk.DbFile != "" && !isPlainFilename(disk.DbFile) {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".disks",
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) db_file %q must be a filename with no path separators", serviceName, i, disk.Name, disk.DbFile),
+				}
 			}
 			if disk.Name == "" {
 				return &ValidationError{
@@ -514,23 +594,25 @@ func (ac *AppConfig) Validate() error {
 					Message: fmt.Sprintf("service %s: disk[%d] (%s) mount_path must be an absolute path", serviceName, i, disk.Name),
 				}
 			}
-			if disk.Provider == "local" {
+			// Local and sqlite disks are bind-mounted host directories: there is
+			// no disk image to size or format, and no lease to wait on.
+			if disk.Provider == DiskProviderLocal || disk.Provider == DiskProviderSqlite {
 				if disk.SizeGB != 0 {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) size_gb is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) size_gb is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 				if disk.Filesystem != "" {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) filesystem is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) filesystem is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 				if disk.LeaseTimeout != "" {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) lease_timeout is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) lease_timeout is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 			} else {
@@ -557,18 +639,18 @@ func (ac *AppConfig) Validate() error {
 			}
 		}
 
-		// Miren disks require fixed concurrency with a single instance
-		if hasMirenDisks {
+		// Miren and sqlite disks require fixed concurrency with a single instance
+		if hasSingleWriterDisks {
 			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".concurrency",
-					Message: fmt.Sprintf("service %s: miren disks can only be attached to services with fixed concurrency mode", serviceName),
+					Message: fmt.Sprintf("service %s: miren and sqlite disks can only be attached to services with fixed concurrency mode", serviceName),
 				}
 			}
 			if svcConfig.Concurrency.NumInstances != 1 {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".concurrency.num_instances",
-					Message: fmt.Sprintf("service %s: miren disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName),
+					Message: fmt.Sprintf("service %s: miren and sqlite disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName),
 				}
 			}
 		}

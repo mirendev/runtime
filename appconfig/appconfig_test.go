@@ -3,6 +3,7 @@ package appconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1644,4 +1645,224 @@ comand = "bin/migrate"
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
 	assert.Contains(t, err.Error(), `did you mean "command"`)
+}
+
+func TestValidateSqliteDiskProvider(t *testing.T) {
+	const fixedService = `
+name = "test-app"
+
+[services.db.concurrency]
+mode = "fixed"
+num_instances = 1
+`
+
+	t.Run("sqlite disk on fixed service succeeds", func(t *testing.T) {
+		ac, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+`))
+		require.NoError(t, err)
+		require.Equal(t, "sqlite", ac.Services["db"].Disks[0].Provider)
+		assert.Empty(t, ac.Services["db"].Disks[0].DbFile, "db_file is optional")
+	})
+
+	t.Run("db_file is accepted", func(t *testing.T) {
+		ac, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+db_file = "app.sqlite"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, "app.sqlite", ac.Services["db"].Disks[0].DbFile)
+	})
+
+	// SQLite has a single writer; more than one instance would corrupt it.
+	t.Run("sqlite disk on auto mode service fails", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+
+[[services.web.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "fixed concurrency mode")
+	})
+
+	// A sqlite disk is a bind-mounted directory: nothing to size or format.
+	for _, tc := range []struct{ name, field, want string }{
+		{"size_gb", `size_gb = 10`, "size_gb is not supported for sqlite disks"},
+		{"filesystem", `filesystem = "ext4"`, "filesystem is not supported for sqlite disks"},
+		{"lease_timeout", `lease_timeout = "5m"`, "lease_timeout is not supported for sqlite disks"},
+	} {
+		t.Run(tc.name+" rejected", func(t *testing.T) {
+			_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+` + tc.field + "\n"))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	t.Run("db_file rejected on non-sqlite disks", func(t *testing.T) {
+		_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 10
+db_file = "app.sqlite"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db_file is only supported for sqlite disks")
+	})
+
+	// db_file names a file directly inside the mounted directory: only that
+	// directory is created, so a nested path would fail later inside SQLite.
+	for _, bad := range []string{"/abs/app.db", "../escape.db", "./app.db", "sub/../../escape.db", "sub/app.db", ".", ".."} {
+		t.Run("db_file rejected: "+bad, func(t *testing.T) {
+			_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+db_file = "` + bad + `"
+`))
+			require.Error(t, err, "db_file %q should be rejected", bad)
+			assert.Contains(t, err.Error(), "must be a filename with no path separators")
+		})
+	}
+
+	t.Run("unknown provider still rejected", func(t *testing.T) {
+		_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "postgres"
+mount_path = "/data"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `must be "miren", "local", or "sqlite"`)
+	})
+}
+
+func TestValidateSqliteDiskId(t *testing.T) {
+	const fixedService = `
+name = "test-app"
+
+[services.db.concurrency]
+mode = "fixed"
+num_instances = 1
+`
+
+	t.Run("id defaults to empty and is filled in later", func(t *testing.T) {
+		ac, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+`))
+		require.NoError(t, err)
+		assert.Empty(t, ac.Services["db"].Disks[0].Id)
+		assert.Equal(t, "default", DefaultSqliteId)
+	})
+
+	t.Run("explicit id is accepted", func(t *testing.T) {
+		ac, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+id = "sessions"
+`))
+		require.NoError(t, err)
+		assert.Equal(t, "sessions", ac.Services["db"].Disks[0].Id)
+	})
+
+	// Two disks may share an id: within one app that means one database.
+	t.Run("same id on two disks is allowed", func(t *testing.T) {
+		_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "primary"
+provider = "sqlite"
+mount_path = "/data"
+id = "shared"
+
+[[services.db.disks]]
+name = "secondary"
+provider = "sqlite"
+mount_path = "/data2"
+id = "shared"
+`))
+		require.NoError(t, err)
+	})
+
+	t.Run("id rejected on non-sqlite disks", func(t *testing.T) {
+		_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 10
+id = "sessions"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "id is only supported for sqlite disks")
+	})
+
+	// The id becomes a directory name and part of the coordinator backup key.
+	for _, bad := range []string{"../escape", "a/b", "/abs", ".hidden", "-leading", "has space", strings.Repeat("x", 65)} {
+		t.Run("id rejected: "+bad, func(t *testing.T) {
+			_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+id = "` + bad + `"
+`))
+			require.Error(t, err, "id %q should be rejected", bad)
+			assert.Contains(t, err.Error(), "invalid id")
+		})
+	}
+}
+
+// SQLite needs to write its -wal/-shm sidecars, so a read-only sqlite disk
+// cannot work; it must fail as a config error rather than deep inside SQLite.
+func TestValidateSqliteDiskRejectsReadOnly(t *testing.T) {
+	const fixedService = `
+name = "test-app"
+
+[services.db.concurrency]
+mode = "fixed"
+num_instances = 1
+`
+
+	_, err := Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+read_only = true
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read_only is not supported for sqlite disks")
+
+	// read_only stays valid on the providers that can honour it.
+	_, err = Parse([]byte(fixedService + `
+[[services.db.disks]]
+name = "data"
+mount_path = "/data"
+size_gb = 10
+read_only = true
+`))
+	require.NoError(t, err)
 }

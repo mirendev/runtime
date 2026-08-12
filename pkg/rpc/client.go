@@ -660,6 +660,12 @@ func (c *NetworkClient) Close() error {
 		_ = c.inlineClient.Close()
 	}
 
+	// A local client (see LocalClient) has no session state and no remote
+	// object to release, so there is nothing to dereference.
+	if c.State == nil {
+		return nil
+	}
+
 	return c.derefOID(c.State.top, c.oid)
 }
 

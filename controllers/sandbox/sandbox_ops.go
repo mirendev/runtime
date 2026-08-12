@@ -144,6 +144,10 @@ func (o *sandboxOps) ReleaseHubs(id entity.Id) {
 	o.ctrl.hubs.RemoveAll(id)
 }
 
+func (o *sandboxOps) ReleaseSqliteDisks(ctx context.Context, sandboxID entity.Id) {
+	o.ctrl.releaseSqliteDisks(ctx, sandboxID)
+}
+
 func (o *sandboxOps) ReleaseTokenState(id entity.Id) {
 	o.ctrl.ReleaseTokenState(id)
 }

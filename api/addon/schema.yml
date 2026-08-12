@@ -59,6 +59,11 @@ kinds:
           type: string
         sensitive:
           type: bool
+    # Names of the disks this addon contributed to the app's services, recorded
+    # so deprovision removes exactly what was added. Only InApp addons set this.
+    disk_names:
+      type: string
+      many: true
 
   # rotation_request drives a one-shot credential rotation for the addon server
   # backing an association. The RPC creates one with status "pending"; the
