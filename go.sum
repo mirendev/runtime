@@ -868,8 +868,8 @@ github.com/mimuret/golang-iij-dpf v0.9.1 h1:Gj6EhHJkOhr+q2RnvRPJsPMcjuVnWPSccEHy
 github.com/mimuret/golang-iij-dpf v0.9.1/go.mod h1:sl9KyOkESib9+KRD3HaGpgi1xk7eoN2+d96LCLsME2M=
 github.com/minio/highwayhash v1.0.1/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
-github.com/mirendev/flannel v0.26.8-0.20260630195747-affa754a04b8 h1:FYfTsdVBXM9Qxu2lEYOlU3QZ4V5tY6KS1aJmdCO6oHY=
-github.com/mirendev/flannel v0.26.8-0.20260630195747-affa754a04b8/go.mod h1:/oz+EbTC6NGJTxk2VsqBigFAqaIEYBuS7Bf9/MDJ2DI=
+github.com/mirendev/flannel v0.26.8-0.20260805213236-ce737c30f40c h1:JA+DVw1mVm48VLK/U0zI991j2feFzikW/fU9tO5Eq+s=
+github.com/mirendev/flannel v0.26.8-0.20260805213236-ce737c30f40c/go.mod h1:/oz+EbTC6NGJTxk2VsqBigFAqaIEYBuS7Bf9/MDJ2DI=
 github.com/mitchellh/cli v1.0.0/go.mod h1:hNIlj7HEI86fIcpObd7a0FcrxTWetlwJDGcceTlRvqc=
 github.com/mitchellh/cli v1.1.0/go.mod h1:xcISNoH86gajksDmfB23e/pu+B+GeFRMYmoHXxx3xhI=
 github.com/mitchellh/go-homedir v1.0.0/go.mod h1:SfyaCUpYCn1Vlf4IUYiD9fPX4A5wJrkLzIz1N1q0pr0=
