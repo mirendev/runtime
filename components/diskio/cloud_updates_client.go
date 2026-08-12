@@ -64,6 +64,10 @@ type UpdateInfo struct {
 	SnapshotName string `json:"snapshot_name,omitempty"`
 }
 
+// maxUpdateListPages caps a cursor walk. The server pages at 100 by default, so
+// this allows a very long stream while still terminating if paging misbehaves.
+const maxUpdateListPages = 1000
+
 // ListOptions filters a volume's update stream.
 //
 // After is exclusive and must be paired with a Kind: ordering keys are only
@@ -298,8 +302,13 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 
 	// Walk every page: callers want the whole matching set, and the cursor is
 	// an implementation detail of the transport.
+	// The server's cursor strictly advances, but a client that trusts that
+	// without checking will spin forever against one that regresses, growing
+	// `all` until it runs out of memory. Refuse to walk in circles.
 	var all []UpdateInfo
-	for {
+	seen := make(map[string]struct{})
+
+	for pages := 0; pages < maxUpdateListPages; pages++ {
 		pageURL := baseURL
 		if encoded := query.Encode(); encoded != "" {
 			pageURL += "?" + encoded
@@ -314,8 +323,16 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 		if page.NextCursor == "" {
 			return all, nil
 		}
+		if _, repeated := seen[page.NextCursor]; repeated {
+			return nil, fmt.Errorf("listing updates for volume %q: server repeated cursor %q",
+				volumeID, page.NextCursor)
+		}
+		seen[page.NextCursor] = struct{}{}
 		query.Set("cursor", page.NextCursor)
 	}
+
+	return nil, fmt.Errorf("listing updates for volume %q: more than %d pages",
+		volumeID, maxUpdateListPages)
 }
 
 func (c *cloudUpdatesClient) Download(ctx context.Context, volumeID, updateID string) (io.ReadCloser, error) {

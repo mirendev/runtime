@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log/slog"
@@ -253,4 +254,46 @@ func TestCloudUpdatesClientDownloadSurfacesMissingUpdate(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "404")
+}
+
+// A server that repeats a cursor would otherwise spin this forever, growing the
+// result slice until the process dies. Callers pass context.Background(), so
+// nothing else would stop it.
+func TestCloudUpdatesClientListRefusesRepeatedCursor(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	calls := 0
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{
+			Updates:    []UpdateInfo{{UpdateID: "volup-1", Kind: "lbd_log", OrderingKey: "40000000682f1a2c1dcd6500"}},
+			NextCursor: "lbd_log:stuck",
+		})
+	}
+
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+	_, err := client.List(context.Background(), "vol-1", ListOptions{})
+
+	require.ErrorContains(t, err, "repeated cursor")
+	assert.LessOrEqual(t, calls, 3, "should give up as soon as the cursor repeats")
+}
+
+func TestCloudUpdatesClientListStopsAtPageCeiling(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	page := 0
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		page++
+		// Always a fresh cursor, so only the ceiling ends this
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{
+			Updates:    []UpdateInfo{{UpdateID: fmt.Sprintf("volup-%d", page), Kind: "lbd_log"}},
+			NextCursor: fmt.Sprintf("lbd_log:%d", page),
+		})
+	}
+
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+	_, err := client.List(context.Background(), "vol-1", ListOptions{})
+
+	require.ErrorContains(t, err, "more than")
+	assert.LessOrEqual(t, page, maxUpdateListPages+1)
 }

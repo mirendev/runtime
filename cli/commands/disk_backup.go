@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,11 +77,18 @@ func DiskBackup(ctx *Context, opts struct {
 	if err != nil {
 		return fmt.Errorf("creating output file: %w", err)
 	}
+	// Set once the snapshot itself is written. A later step failing (the cloud
+	// upload) must not take a finished local backup down with it.
+	snapshotComplete := false
+
 	defer func() {
-		if cerr := outFile.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing output file: %w", cerr)
+		closeErr := outFile.Close()
+		if closeErr != nil && retErr == nil {
+			retErr = fmt.Errorf("closing output file: %w", closeErr)
 		}
-		if retErr != nil {
+		// Only discard a snapshot that never finished, or one whose close
+		// failed and may therefore be truncated.
+		if retErr != nil && (!snapshotComplete || closeErr != nil) {
 			os.Remove(outputPath)
 		}
 	}()
@@ -99,6 +105,8 @@ func DiskBackup(ctx *Context, opts struct {
 		return fmt.Errorf("stat output file: %w", err)
 	}
 
+	snapshotComplete = true
+
 	duration := time.Since(start)
 	ratio := float64(outInfo.Size()) / float64(imgInfo.Size()) * 100
 
@@ -110,8 +118,16 @@ func DiskBackup(ctx *Context, opts struct {
 	ctx.Info("  Snapshot:        %s", outputPath)
 
 	if opts.Cloud {
-		updateID, err := uploadSnapshotToCloud(ctx, opts.DataPath, target, outputPath, opts.Pin)
+		updateID, err := uploadSnapshotToCloud(ctx, opts.DataPath, target, outputPath, cloudSnapshotDetails{
+			Pin:            opts.Pin,
+			ImageSize:      imgInfo.Size(),
+			ImageChecksum:  checksum,
+			CompressedSize: outInfo.Size(),
+		})
 		if err != nil {
+			// The local snapshot is finished and valid; say where it is rather
+			// than leaving the operator thinking they got nothing.
+			ctx.Warn("Upload failed, but the local snapshot is intact at %s", outputPath)
 			return fmt.Errorf("uploading snapshot to miren.cloud: %w", err)
 		}
 		ctx.Info("  Uploaded:        %s", updateID)
@@ -120,13 +136,23 @@ func DiskBackup(ctx *Context, opts struct {
 	return nil
 }
 
+// cloudSnapshotDetails carries what the sidecar records about the image the
+// snapshot was taken from. It mirrors what diskio.ImageSnapshotter writes, so a
+// restore sees the same fields whichever path produced the update.
+type cloudSnapshotDetails struct {
+	Pin            string
+	ImageSize      int64
+	ImageChecksum  string
+	CompressedSize int64
+}
+
 // uploadSnapshotToCloud sends a finished snapshot file to miren.cloud as a
 // loop_image update for the disk's volume.
 //
 // The cluster's service account key lives in the registration this server wrote
 // at enrolment, which is why this has to run on the server alongside the data
 // directory.
-func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.BackupTarget, snapshotPath, pin string) (string, error) {
+func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.BackupTarget, snapshotPath string, details cloudSnapshotDetails) (string, error) {
 	if target.VolumeID == "" {
 		return "", fmt.Errorf("disk %q has no cloud volume; it may predate cloud registration", target.Name)
 	}
@@ -168,14 +194,21 @@ func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.Backu
 	ctx.Info("Uploading to %s...", cloudURL)
 
 	updates := diskio.NewCloudUpdatesClient(ctx.Log, cloudURL, authClient)
-	return updates.Upload(context.Background(), target.VolumeID, diskio.UploadRequest{
+	// ctx is the command context, so Ctrl-C interrupts the upload rather than
+	// leaving it running to the end of a multi-gigabyte image.
+	return updates.Upload(ctx, target.VolumeID, diskio.UploadRequest{
 		Kind:         diskio.KindLoopImage,
 		OrderingKey:  fmt.Sprintf("%016x", time.Now().UnixNano()),
-		SnapshotName: pin,
+		SnapshotName: details.Pin,
 		Metadata: map[string]any{
-			"compression":  "zstd",
-			"format":       "miren-snapshot",
-			"filesystem":   target.Filesystem,
+			"compression":     "zstd",
+			"format":          "miren-snapshot",
+			"filesystem":      target.Filesystem,
+			"image_size":      details.ImageSize,
+			"image_sha256":    details.ImageChecksum,
+			"compressed_size": details.CompressedSize,
+			// Records that this was taken from a live disk, so the image is a
+			// smear across the read rather than a point-in-time copy.
 			"was_attached": target.IsAttached,
 		},
 	}, file, info.Size())
