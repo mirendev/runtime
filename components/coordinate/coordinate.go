@@ -1788,7 +1788,13 @@ func (c *Coordinator) ReportStartupStatus(ctx context.Context) error {
 		Containerized:     containerenv.InContainer(),
 	}
 
-	return c.authClient.ReportClusterStatus(ctx, status)
+	result, err := c.authClient.ReportClusterStatus(ctx, status)
+	if err != nil {
+		return err
+	}
+
+	c.recordIdentityAnchor(result.IdentityIssuerURL)
+	return nil
 }
 
 // ReportStatus reports the current cluster status to miren.cloud
@@ -1837,7 +1843,13 @@ func (c *Coordinator) ReportStatus(ctx context.Context) error {
 		Containerized: containerenv.InContainer(),
 	}
 
-	return c.authClient.ReportClusterStatus(ctx, status)
+	result, err := c.authClient.ReportClusterStatus(ctx, status)
+	if err != nil {
+		return err
+	}
+
+	c.recordIdentityAnchor(result.IdentityIssuerURL)
+	return nil
 }
 
 // collectResourceUsage gathers basic host system resource usage metrics

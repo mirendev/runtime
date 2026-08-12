@@ -75,13 +75,23 @@ type UnreachablePort struct {
 }
 
 // ReportClusterStatus sends a status report for the specified cluster
-func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusReport) error {
+// StatusResponse is what cloud answers a status report with.
+type StatusResponse struct {
+	Message string `json:"message"`
+	// IdentityIssuerURL is where cloud would anchor this cluster's workload
+	// identity, repeated on every report so a cluster registered before anchors
+	// existed can learn its own without re-registering. Empty when cloud is not
+	// serving discovery.
+	IdentityIssuerURL string `json:"identity_issuer_url,omitempty"`
+}
+
+func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusReport) (*StatusResponse, error) {
 	if status == nil {
-		return fmt.Errorf("status cannot be nil")
+		return nil, fmt.Errorf("status cannot be nil")
 	}
 
 	if status.ClusterID == "" {
-		return fmt.Errorf("cluster_id is required")
+		return nil, fmt.Errorf("cluster_id is required")
 	}
 
 	// Validate state field
@@ -91,19 +101,19 @@ func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusRepo
 	case "":
 		status.State = "unknown" // default to unknown if not specified
 	default:
-		return fmt.Errorf("invalid state: %s (must be one of: active, degraded, inactive, unknown)", status.State)
+		return nil, fmt.Errorf("invalid state: %s (must be one of: active, degraded, inactive, unknown)", status.State)
 	}
 
 	// Get authentication token
 	token, err := a.GetToken(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get authentication token: %w", err)
+		return nil, fmt.Errorf("failed to get authentication token: %w", err)
 	}
 
 	// Prepare the request body
 	body, err := json.Marshal(status)
 	if err != nil {
-		return fmt.Errorf("failed to marshal status report: %w", err)
+		return nil, fmt.Errorf("failed to marshal status report: %w", err)
 	}
 
 	// Build the request URL
@@ -112,7 +122,7 @@ func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusRepo
 	// Create the request
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -121,7 +131,7 @@ func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusRepo
 	// Send the request
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send status report: %w", err)
+		return nil, fmt.Errorf("failed to send status report: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -130,11 +140,19 @@ func (a *AuthClient) ReportClusterStatus(ctx context.Context, status *StatusRepo
 		var errResp map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
 			if errMsg, ok := errResp["error"].(string); ok {
-				return fmt.Errorf("status report failed: %s", errMsg)
+				return nil, fmt.Errorf("status report failed: %s", errMsg)
 			}
 		}
-		return fmt.Errorf("status report failed with status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("status report failed with status code: %d", resp.StatusCode)
 	}
 
-	return nil
+	// The report itself succeeded, so a body we cannot read costs the anchor
+	// and nothing else. Reporting it as a failed status report would be a lie
+	// that also stops the retry loop from making progress.
+	var result StatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return &StatusResponse{}, nil
+	}
+
+	return &result, nil
 }

@@ -88,7 +88,7 @@ func TestReportClusterStatus(t *testing.T) {
 	}
 
 	// Report status
-	err = authClient.ReportClusterStatus(context.Background(), status)
+	_, err = authClient.ReportClusterStatus(context.Background(), status)
 	require.NoError(t, err)
 
 	// Verify the status was received correctly
@@ -134,7 +134,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 	ctx := context.Background()
 
 	// Test nil status
-	err = authClient.ReportClusterStatus(ctx, nil)
+	_, err = authClient.ReportClusterStatus(ctx, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "status cannot be nil")
 
@@ -142,7 +142,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 	status := &StatusReport{
 		State: "active",
 	}
-	err = authClient.ReportClusterStatus(ctx, status)
+	_, err = authClient.ReportClusterStatus(ctx, status)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cluster_id is required")
 
@@ -151,7 +151,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 		ClusterID: "test-cluster",
 		State:     "invalid-state",
 	}
-	err = authClient.ReportClusterStatus(ctx, status)
+	_, err = authClient.ReportClusterStatus(ctx, status)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid state")
 
@@ -161,6 +161,6 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 		// State not set, should default to "unknown"
 	}
 	// This will fail to connect but won't fail validation
-	_ = authClient.ReportClusterStatus(ctx, status)
+	_, _ = authClient.ReportClusterStatus(ctx, status)
 	assert.Equal(t, "unknown", status.State)
 }

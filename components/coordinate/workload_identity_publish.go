@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/registration"
 )
 
 // publishRetries and publishRetryDelay bound the startup attempt. Publication
@@ -142,4 +144,47 @@ func (c *Coordinator) anchoredAtCloud() bool {
 		return false
 	}
 	return c.WorkloadIssuer.IssuerURL() == c.CloudAuth.IdentityIssuerURL
+}
+
+// recordIdentityAnchor persists the anchor cloud reports, so a cluster that
+// registered before anchors existed can be moved to one without re-registering.
+//
+// Registration is otherwise the only place this value is handed out, which
+// would leave exactly the clusters that most want to move — already registered,
+// and not reachable from the internet — with no way to obtain it. Cloud repeats
+// it on every status report; this writes it down the first time it changes.
+//
+// Recording is not adopting. The anchor a cluster mints under is fixed at
+// startup from its configured setting, so writing this only makes the move
+// available; `miren server identity-anchor` still has to ask for it.
+func (c *Coordinator) recordIdentityAnchor(issuerURL string) {
+	if issuerURL == "" || issuerURL == c.CloudAuth.IdentityIssuerURL {
+		return
+	}
+
+	registrationDir := filepath.Join(c.DataPath, "server")
+	reg, err := registration.LoadRegistration(registrationDir)
+	if err != nil || reg == nil {
+		// Nothing to update: an unregistered cluster has no file, and a
+		// registration we cannot read is the status loop's problem to report,
+		// not this one's.
+		return
+	}
+	if reg.IdentityIssuerURL == issuerURL {
+		// Already on disk; only our in-memory copy was stale.
+		c.CloudAuth.IdentityIssuerURL = issuerURL
+		return
+	}
+
+	reg.IdentityIssuerURL = issuerURL
+	if err := registration.SaveRegistration(registrationDir, reg); err != nil {
+		c.Log.Warn("failed to record the workload identity anchor reported by cloud",
+			"issuer", issuerURL, "error", err)
+		return
+	}
+
+	c.CloudAuth.IdentityIssuerURL = issuerURL
+	c.Log.Info("recorded the workload identity anchor miren.cloud assigned this cluster",
+		"issuer", issuerURL,
+		"note", "run 'miren server identity-anchor cloud' to adopt it")
 }

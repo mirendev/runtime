@@ -270,6 +270,8 @@ miren server identity-anchor cluster   # go back to serving it yourself
 
 Run it on the cluster host. It records the choice and restarts the server, which is what puts the new anchor into effect.
 
+A cluster registered before anchors existed has none recorded yet, so the command will say so. Miren Cloud repeats the anchor on every status report and the cluster writes it down the first time it sees it, so waiting one report cycle (five minutes) after upgrading is enough — no re-registration.
+
 Inside the cluster, the move is seamless. The server remembers the anchor it was minting under, recognizes the change on the next boot, and **keeps accepting the old issuer until every token that could carry it has expired** — 25 hours, comfortably past the 24-hour maximum token lifetime. Without that window the move would take out the cluster's own services, which verify these tokens too. During it, the old hostname also keeps serving discovery, so an external verifier you haven't repointed yet can still check tokens minted before the move.
 
 Mounted token files are rewritten during that restart, so a sandbox gets its new token without waiting for the refresh loop.
