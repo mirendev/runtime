@@ -87,6 +87,11 @@ configs:
         toml: secrets
         nested: true
 
+      workload_identity:
+        type: WorkloadIdentityConfig
+        toml: workload_identity
+        nested: true
+
   ServerConfig:
     description: Core server settings
     fields:
@@ -558,6 +563,19 @@ configs:
           description: Rotate the cluster key that encrypts stored secrets once it reaches this age (e.g. 90d, 1y). Set to 0 to rotate only on request.
         env: MIREN_SECRET_KEY_ROTATION_PERIOD
         toml: key_rotation_period
+
+  WorkloadIdentityConfig:
+    description: Workload identity token issuance
+    fields:
+      anchor:
+        type: string
+        cli:
+          long: identity-anchor
+          description: "Where workload identity tokens are anchored: cluster (default, this cluster serves its own discovery) or cloud (miren.cloud serves discovery for it). Signing keys stay on the cluster either way."
+        env: MIREN_WORKLOAD_IDENTITY_ANCHOR
+        toml: anchor
+        validation:
+          enum: [cluster, cloud]
 
   SagaConfig:
     description: Saga execution retention garbage collection

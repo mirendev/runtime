@@ -23,6 +23,19 @@ func PeekSandboxClaims(tokenString string) (app, role string, ok bool) {
 	return claims.App, claims.Role, true
 }
 
+// PeekTokenIssuer reads the iss claim from a token WITHOUT verifying its
+// signature. Like PeekSandboxClaims, it is only for inspecting a token this
+// cluster already minted and wrote to local disk — used at boot to notice that
+// a mounted token predates an anchor flip and needs rewriting. Never use it to
+// authenticate an inbound token.
+func PeekTokenIssuer(tokenString string) (string, bool) {
+	issuer, err := peekIssuer(strings.TrimSpace(tokenString))
+	if err != nil {
+		return "", false
+	}
+	return issuer, true
+}
+
 // clockSkewLeeway absorbs small clock differences on exp/nbf/iat. Tokens are
 // minted and verified by the same coordinator process today, so this is
 // insurance rather than a live requirement.
@@ -69,13 +82,22 @@ func (v *Validator) Validate(tokenString string) (*WorkloadClaims, error) {
 	// public key we look up by kid would otherwise be usable as a shared secret.
 	_, err := jwt.ParseWithClaims(tokenString, &claims, v.keyFunc,
 		jwt.WithValidMethods([]string{"RS256", "EdDSA"}),
-		jwt.WithIssuer(v.issuer.IssuerURL()),
 		jwt.WithAudience(APIAudience),
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(clockSkewLeeway),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("workloadidentity: verifying token: %w", err)
+	}
+
+	// Checked here rather than via jwt.WithIssuer, which takes a single value:
+	// after an anchor flip the superseded issuer stays acceptable until the
+	// tokens carrying it expire.
+	if !v.issuer.AcceptsIssuer(claims.Issuer) {
+		// Wraps the library's sentinel so callers that match on it keep working
+		// now that the check has moved out of jwt.WithIssuer.
+		return nil, fmt.Errorf("workloadidentity: token issuer %q is not this cluster: %w",
+			claims.Issuer, jwt.ErrTokenInvalidIssuer)
 	}
 
 	// jwt.WithAudience only checks that APIAudience is *among* the audiences, so

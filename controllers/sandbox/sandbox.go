@@ -394,6 +394,9 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	var unhealthySandboxes []entity.Id
 	runningCount := 0
 	reattachedCount := 0
+	// Counts surviving sandboxes whose mounted token was minted under a
+	// different issuer, i.e. the anchor moved across this restart.
+	staleAnchorTokens := 0
 
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
@@ -504,6 +507,17 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 					c.tokenRefresher.register(sb.ID.String(), tokenPath, appName, role)
 					c.Log.Debug("re-registered sandbox for token refresh",
 						"sandbox_id", sb.ID, "app", appName, "role", role)
+
+					// A mounted token minted under a different anchor means the
+					// cluster's identity anchor moved while this sandbox was
+					// running. Waiting for the 45-minute refresh tick would
+					// leave it presenting a superseded issuer for most of an
+					// hour, so note it and rewrite every token once
+					// reconciliation is done.
+					if issuer, ok := workloadidentity.PeekTokenIssuer(string(data)); ok &&
+						c.WorkloadIssuer != nil && issuer != c.WorkloadIssuer.IssuerURL() {
+						staleAnchorTokens++
+					}
 				}
 			}
 
@@ -551,6 +565,18 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			c.Log.Error("failed to cleanup unhealthy sandbox", "id", id, "err", err)
 			// Continue with other sandboxes even if one fails
 		}
+	}
+
+	// Rewrite every mounted token now rather than at the next refresh tick. The
+	// old tokens still verify — the superseded anchor is accepted for its
+	// overlap window — but a workload that re-reads its token file should see
+	// the new issuer promptly, and anything holding a cached copy is on the
+	// clock until that window closes.
+	if staleAnchorTokens > 0 {
+		c.Log.Info("workload identity anchor changed while sandboxes were running; rewriting mounted tokens",
+			"issuer", c.WorkloadIssuer.IssuerURL(),
+			"sandboxes", staleAnchorTokens)
+		c.refreshTokens()
 	}
 
 	c.Log.Info("boot reconciliation complete",

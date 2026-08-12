@@ -39,6 +39,7 @@ miren server [flags]
 - `--etcd-prefix, -p` — Etcd prefix
 - `--etcd-quota-backend-bytes` — Etcd backend quota in bytes (0 = auto-size from system RAM)
 - `--http-request-timeout` — HTTP request timeout in seconds
+- `--identity-anchor` — Where workload identity tokens are anchored: cluster (default, this cluster serves its own discovery) or cloud (miren.cloud serves discovery for it). Signing keys stay on the cluster either way.
 - `--ingress-address` — Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported.
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)
 - `--ips` — Additional IPs assigned to the server cert
@@ -83,6 +84,7 @@ miren server --mode standalone
 
 - [`miren server config`](/command/server-config) — Server configuration management commands
 - [`miren server container`](/command/server-container) — Run the miren server in a container (Docker or Podman)
+- [`miren server identity-anchor`](/command/server-identity-anchor) — Move where this cluster's workload identity is anchored
 - [`miren server install`](/command/server-install) — Install systemd service for miren server
 - [`miren server register`](/command/server-register) — Register this cluster with miren.cloud
 - [`miren server status`](/command/server-status) — Show miren service status

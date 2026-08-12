@@ -342,4 +342,8 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Victoriametrics.StartEmbedded = flags.VictoriaMetricsConfigStartEmbedded
 	}
 
+	if flags.WorkloadIdentityConfigAnchor != nil && *flags.WorkloadIdentityConfigAnchor != "" {
+		cfg.WorkloadIdentity.Anchor = flags.WorkloadIdentityConfigAnchor
+	}
+
 }

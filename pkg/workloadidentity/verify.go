@@ -28,14 +28,24 @@ func (iss *Issuer) VerifyToken(tokenString, expectedAudience string) (*WorkloadC
 		// with. Without this a token could nominate its own algorithm, which is
 		// the classic JWT confusion attack.
 		jwt.WithValidMethods(iss.supportedAlgs()),
-		jwt.WithIssuer(iss.issuerURL),
 		jwt.WithAudience(expectedAudience),
 		jwt.WithExpirationRequired(),
+		// The issuer is checked below rather than here: jwt.WithIssuer takes a
+		// single value, and after an anchor flip this cluster has to accept the
+		// superseded one too.
+		jwt.WithIssuedAt(),
 	)
 
 	claims := &WorkloadClaims{}
 	if _, err := parser.ParseWithClaims(tokenString, claims, iss.keyForToken); err != nil {
 		return nil, fmt.Errorf("verifying token: %w", err)
+	}
+
+	if !iss.AcceptsIssuer(claims.Issuer) {
+		// Wraps the library's sentinel so callers that match on it keep working
+		// now that the check has moved out of jwt.WithIssuer.
+		return nil, fmt.Errorf("verifying token: issuer %q is not this cluster: %w",
+			claims.Issuer, jwt.ErrTokenInvalidIssuer)
 	}
 
 	return claims, nil

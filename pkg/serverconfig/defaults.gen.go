@@ -5,19 +5,20 @@ package serverconfig
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		AppVersion:      DefaultAppVersionConfig(),
-		Buildkit:        DefaultBuildkitConfig(),
-		Containerd:      DefaultContainerdConfig(),
-		Etcd:            DefaultEtcdConfig(),
-		Ingress:         DefaultIngressConfig(),
-		Labs:            []string{},
-		Mode:            new("standalone"),
-		Saga:            DefaultSagaConfig(),
-		Secrets:         DefaultSecretsConfig(),
-		Server:          DefaultServerConfig(),
-		TLS:             DefaultTLSConfig(),
-		Victorialogs:    DefaultVictoriaLogsConfig(),
-		Victoriametrics: DefaultVictoriaMetricsConfig(),
+		AppVersion:       DefaultAppVersionConfig(),
+		Buildkit:         DefaultBuildkitConfig(),
+		Containerd:       DefaultContainerdConfig(),
+		Etcd:             DefaultEtcdConfig(),
+		Ingress:          DefaultIngressConfig(),
+		Labs:             []string{},
+		Mode:             new("standalone"),
+		Saga:             DefaultSagaConfig(),
+		Secrets:          DefaultSecretsConfig(),
+		Server:           DefaultServerConfig(),
+		TLS:              DefaultTLSConfig(),
+		Victorialogs:     DefaultVictoriaLogsConfig(),
+		Victoriametrics:  DefaultVictoriaMetricsConfig(),
+		WorkloadIdentity: DefaultWorkloadIdentityConfig(),
 	}
 }
 
@@ -129,5 +130,12 @@ func DefaultVictoriaMetricsConfig() VictoriaMetricsConfig {
 		HTTPPort:        new(8428),
 		RetentionPeriod: new("1"),
 		StartEmbedded:   nil,
+	}
+}
+
+// DefaultWorkloadIdentityConfig returns default WorkloadIdentityConfig
+func DefaultWorkloadIdentityConfig() WorkloadIdentityConfig {
+	return WorkloadIdentityConfig{
+		Anchor: nil,
 	}
 }

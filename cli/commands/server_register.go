@@ -91,6 +91,8 @@ func Register(ctx *Context, opts RegisterOptions) error {
 			existing.OrganizationID = status.OrganizationID
 			existing.ServiceAccountID = status.ServiceAccountID
 			existing.DNSHostname = status.DNSHostname
+			existing.IdentityIssuerURL = status.IdentityIssuerURL
+			existing.IdentityAnchor = anchorForRegistration(status.IdentityIssuerURL)
 			existing.RegisteredAt = time.Now()
 
 			if err := registration.SaveRegistration(opts.OutputDir, existing); err != nil {
@@ -104,6 +106,7 @@ func Register(ctx *Context, opts RegisterOptions) error {
 			if status.DNSHostname != "" {
 				ctx.Info("DNS Hostname: %s", status.DNSHostname)
 			}
+			reportIdentityAnchor(ctx, status.IdentityIssuerURL)
 			ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
 			return nil
@@ -195,11 +198,15 @@ func Register(ctx *Context, opts RegisterOptions) error {
 		OrganizationID:   status.OrganizationID,
 		ServiceAccountID: status.ServiceAccountID,
 		DNSHostname:      status.DNSHostname,
-		PrivateKey:       privateKey,
-		CloudURL:         opts.CloudURL,
-		RegisteredAt:     time.Now(),
-		Tags:             opts.Tags,
-		Status:           "approved",
+		// Recorded even when the cluster is not anchored at cloud, so
+		// switching later with --identity-anchor=cloud needs no re-register.
+		IdentityIssuerURL: status.IdentityIssuerURL,
+		IdentityAnchor:    anchorForRegistration(status.IdentityIssuerURL),
+		PrivateKey:        privateKey,
+		CloudURL:          opts.CloudURL,
+		RegisteredAt:      time.Now(),
+		Tags:              opts.Tags,
+		Status:            "approved",
 	}
 
 	if err := registration.SaveRegistration(opts.OutputDir, stored); err != nil {
@@ -213,6 +220,7 @@ func Register(ctx *Context, opts RegisterOptions) error {
 	if status.DNSHostname != "" {
 		ctx.Info("DNS Hostname: %s", status.DNSHostname)
 	}
+	reportIdentityAnchor(ctx, status.IdentityIssuerURL)
 	ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
 	return nil
@@ -281,4 +289,33 @@ func RegisterStatus(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// anchorForRegistration picks the workload identity anchor a newly registered
+// cluster starts on.
+//
+// New clusters anchor at cloud: it is the only option that works for a cluster
+// that isn't reachable from the internet, and it keeps federation up while the
+// cluster is down. Nothing is pinned to the old anchor yet, so a fresh
+// registration is the one moment the choice is free — which is exactly why it
+// is made here and recorded, rather than defaulted in server config where it
+// would also catch clusters that registered long ago.
+//
+// Falls back to the cluster anchor when cloud offers none, so a self-hosted
+// miren.cloud without discovery configured still registers cleanly.
+func anchorForRegistration(identityIssuerURL string) string {
+	if identityIssuerURL == "" {
+		return registration.AnchorCluster
+	}
+	return registration.AnchorCloud
+}
+
+func reportIdentityAnchor(ctx *Context, identityIssuerURL string) {
+	if identityIssuerURL == "" {
+		ctx.Info("Workload Identity: anchored at this cluster (miren.cloud is not serving discovery)")
+		return
+	}
+	ctx.Info("Workload Identity Issuer: %s", identityIssuerURL)
+	ctx.Info("  Signing keys stay on this cluster; miren.cloud serves discovery for them.")
+	ctx.Info("  Switch with: miren server identity-anchor cluster")
 }

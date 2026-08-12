@@ -37,6 +37,17 @@ func addCommands(d *mflags.Dispatcher) {
 		}),
 	))
 
+	d.Dispatch("server identity-anchor", Infer("server identity-anchor", "Move where this cluster's workload identity is anchored", IdentityAnchor,
+		WithExample(mflags.Example{
+			Name: "Let miren.cloud serve discovery for this cluster",
+			Body: "miren server identity-anchor cloud",
+		}),
+		WithExample(mflags.Example{
+			Name: "Serve discovery from the cluster itself",
+			Body: "miren server identity-anchor cluster",
+		}),
+	))
+
 	// Server management commands
 	d.Dispatch("server install", Infer("server install", "Install systemd service for miren server", ServerInstall,
 		WithExample(mflags.Example{

@@ -233,7 +233,56 @@ Any system that wants to trust Miren-issued tokens follows the standard OIDC ver
 
 3. **Verify** — check the JWT signature against the JWKS, confirm the token isn't expired, and **pin the issuer**: the token's `iss` claim must exactly match the issuer URL you trust.
 
-The issuer URL is your cluster's public hostname. For clusters registered with Miren Cloud it's the provisioned DNS name; for self-hosted clusters it's the first TLS name configured for the cluster. Either way it's the value exposed to sandboxes as `MIREN_OIDC_ISSUER_URL`.
+The issuer URL is whichever anchor the cluster is using — see below. Either way it's the value exposed to sandboxes as `MIREN_OIDC_ISSUER_URL`.
+
+## Where the Issuer Lives {#anchor}
+
+Two things have to be true for federation to work: something has to *sign* the tokens, and something has to *serve* the public keys an outside verifier fetches to check them. Miren splits those deliberately.
+
+**The signing key never leaves your cluster.** It's generated on the cluster, written to `<data_path>/server/workload-identity.key`, and is not uploaded anywhere — not to Miren Cloud, not to us. That's the property that matters: a compromise of Miren Cloud yields public keys and no ability to mint an identity for your workloads.
+
+Who serves the keys is a separate choice, set with `--identity-anchor` (see [server config](/server-config#workload-identity)):
+
+| Anchor | `iss` claim | Discovery served by |
+| --- | --- | --- |
+| `cluster` (default) | your cluster's hostname, e.g. `https://cluster-abc.miren.systems` | your cluster's ingress |
+| `cloud` | `https://api.miren.cloud/identity/<cluster-id>` | Miren Cloud, from keys your cluster published |
+
+**Clusters registered with Miren Cloud anchor at cloud by default.** A cluster registered before this default existed, or one running without cloud, stays on the cluster anchor — an upgrade never moves an anchor on its own, because moving it changes `iss`. Anchoring at cloud costs nothing in trust and buys two things:
+
+- **Federation works for clusters that aren't reachable from the internet.** AWS, GCP, and Azure all fetch your JWKS over the public internet. A cluster behind carrier NAT can't serve that, and previously couldn't federate at all.
+- **Federation survives cluster downtime.** Discovery stays up while the cluster reboots or its certificate renews.
+
+When anchored at cloud, the cluster publishes the public half of its key set at startup and again whenever the set changes. Rotation propagates the same way, with no per-verifier reconfiguration.
+
+A cluster on the cluster anchor publishes nothing — Miren Cloud holds no key material for it, and its `/identity/...` discovery endpoint returns 404. Publication follows the anchor rather than registration, so cloud only ever serves a discovery document for an issuer that some token actually carries.
+
+:::warning[Moving the anchor is a cutover for external verifiers]
+The `iss` claim gets pinned in every external trust configuration you set up — an AWS IAM OIDC provider, a GCP workload identity pool. Moving the anchor on a cluster that's already federating invalidates all of them until each is repointed at the new issuer. Inside the cluster the move is handled for you; outside it, it is a coordinated change.
+:::
+
+### Moving the anchor
+
+```bash
+miren server identity-anchor cloud     # let Miren Cloud serve discovery
+miren server identity-anchor cluster   # go back to serving it yourself
+```
+
+Run it on the cluster host. It records the choice and restarts the server, which is what puts the new anchor into effect.
+
+Inside the cluster, the move is seamless. The server remembers the anchor it was minting under, recognizes the change on the next boot, and **keeps accepting the old issuer until every token that could carry it has expired** — 25 hours, comfortably past the 24-hour maximum token lifetime. Without that window the move would take out the cluster's own services, which verify these tokens too. During it, the old hostname also keeps serving discovery, so an external verifier you haven't repointed yet can still check tokens minted before the move.
+
+Mounted token files are rewritten during that restart, so a sandbox gets its new token without waiting for the refresh loop.
+
+:::warning[Apps may need a restart]
+Rewriting the token file only helps a workload that **re-reads** `MIREN_IDENTITY_TOKEN_PATH`. An app that read its token once at startup and kept it in memory goes on presenting the old issuer until it restarts or its cached token expires — and once the overlap window closes, that token stops verifying.
+
+`MIREN_OIDC_ISSUER_URL` is also injected as an environment variable at sandbox start, so a running container keeps reporting the old issuer until it restarts, even though the token file next to it has moved on.
+
+If your apps cache their token, plan a rolling restart after moving the anchor. Re-reading the file each time you need a token — which the [token file](#the-identity-token-file) section already recommends — avoids the problem entirely.
+:::
+
+Moving the anchor twice within the overlap window keeps only the most recent previous issuer; tokens still carrying the earliest one stop verifying. The server warns when this happens.
 
 ## Sharp Edges & Limitations
 
@@ -241,7 +290,7 @@ The issuer URL is your cluster's public hostname. For clusters registered with M
 
 Workload identity turns on automatically — there's no per-app setting to enable it — and every cluster issues tokens, including one installed with `--without-cloud` and no TLS name. Your sandboxes always get the `MIREN_IDENTITY_*` variables.
 
-What such a cluster lacks is a hostname an outside party can resolve. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys. Give the cluster a real name (register it with Miren Cloud, or pass `--dns-names`) and its tokens become federatable, with no other change.
+What such a cluster lacks is a hostname an outside party can resolve. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys. Give the cluster a name an outside party can reach — register it with Miren Cloud, pass `--dns-names`, or register and use `--identity-anchor=cloud` if the cluster itself isn't reachable — and its tokens become federatable, with no other change.
 
 :::note[Why tokens exist either way]
 Miren's own services authenticate to each other with these tokens — the cluster-local registry and the telemetry that distributed runners ship both verify them against the signing key in-process, which needs no DNS and no publicly trusted certificate. Tying identity to being externally addressable would leave those services with nothing but the network to trust.
@@ -273,3 +322,5 @@ The cluster's signing key lives alongside the server data. Rotation supports an 
 - The current key can be demoted to a `.prev` file, which is still published in the JWKS for verification but no longer used to sign.
 - Additional live keys can be placed in a `workload-identity.d/` directory; all live keys are published, but only the primary signs.
 - Rotation is **not** automatic — an operator must move keys deliberately, and clear a stale `.prev` before rotating again.
+
+A cluster anchored at cloud publishes its new key set on the next status cycle after a rotation, so verifiers pick it up without you touching their trust configuration. A cluster serving its own discovery publishes it the moment it restarts with the new key.

@@ -23,7 +23,7 @@ import (
 // coordinator's API, where this authenticator lives.
 type Authenticator struct {
 	validator *Validator
-	issuerURL string
+	issuer    *Issuer
 	logger    *slog.Logger
 }
 
@@ -32,7 +32,7 @@ var _ rpc.Authenticator = (*Authenticator)(nil)
 func NewAuthenticator(iss *Issuer, logger *slog.Logger) *Authenticator {
 	return &Authenticator{
 		validator: NewValidator(iss),
-		issuerURL: iss.IssuerURL(),
+		issuer:    iss,
 		logger:    logger,
 	}
 }
@@ -54,8 +54,13 @@ func (a *Authenticator) Authenticate(ctx context.Context, creds *rpc.Credentials
 	// Claim the token only if it names us as its issuer. No cloud or external
 	// OIDC token can carry our issuer URL, so this settles which authenticator
 	// owns the token before any signature work happens.
+	//
+	// A superseded anchor counts as ours: after a flip, a workload holding a
+	// token minted under the old issuer is still this cluster's workload, and
+	// refusing to claim it here would drop it through to authenticators that
+	// will never accept it.
 	issuer, err := peekIssuer(tokenString)
-	if err != nil || issuer != a.issuerURL {
+	if err != nil || a.issuer == nil || !a.issuer.AcceptsIssuer(issuer) {
 		return nil, nil
 	}
 
