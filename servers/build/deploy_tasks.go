@@ -52,7 +52,7 @@ func (b *Builder) runDeployTasks(
 	appID entity.Id,
 	versionID entity.Id,
 	cfgSpec *core_v1alpha.ConfigSpec,
-	report func(format string, args ...any),
+	status StatusSender,
 ) error {
 	tasks := deployTriggeredTasks(cfgSpec)
 	if len(tasks) == 0 {
@@ -67,10 +67,10 @@ func (b *Builder) runDeployTasks(
 		}
 		runIDs[id] = task.Name
 
-		report("Running deploy task %s", task.Name)
+		status.SendMessage(fmt.Sprintf("Running deploy task %s", task.Name))
 	}
 
-	return b.awaitDeployRuns(ctx, runIDs, report)
+	return b.awaitDeployRuns(ctx, runIDs, status)
 }
 
 // deployTriggeredTasks returns the tasks a deploy must run, in a stable order.
@@ -126,7 +126,7 @@ func (b *Builder) createDeployRun(
 func (b *Builder) awaitDeployRuns(
 	ctx context.Context,
 	runIDs map[entity.Id]string,
-	report func(format string, args ...any),
+	status StatusSender,
 ) error {
 	deadline := time.Now().Add(deployTaskCeiling)
 	pending := make(map[entity.Id]string, len(runIDs))
@@ -167,7 +167,7 @@ func (b *Builder) awaitDeployRuns(
 			switch run.Status {
 			case run_v1alpha.SUCCEEDED:
 				delete(pending, id)
-				report("Deploy task %s succeeded", task)
+				status.SendMessage(fmt.Sprintf("Deploy task %s succeeded", task))
 
 			case run_v1alpha.FAILED, run_v1alpha.TIMED_OUT, run_v1alpha.CANCELED:
 				// Surface where to look. A failing migration is a deploy

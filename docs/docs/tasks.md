@@ -50,8 +50,14 @@ The deploy waits. If the task fails, **the deploy fails** and your previous vers
 
 Deploy tasks run after your addons are ready, so a migration has its database. Several of them run at the same time; ordering between tasks isn't expressible yet.
 
+:::warning[Your previous version is running while the task is]
+The gate sits before the new version takes traffic, but the task itself runs on the **new** image. So a migration executes against your database while the **old** code is still serving every request.
+
+Your schema changes have to be compatible with both versions at once — expand-contract, or an equivalent. This is the normal path, not an edge case.
+:::
+
 :::note[Rollbacks]
-Rollbacks don't run deploy tasks. Activating a version that already exists would re-run a migration against a database that's already migrated forward, and Miren doesn't run down-migrations. Reversibility is your app's to design — expand-contract is the usual answer.
+Rollbacks don't run deploy tasks. Activating a version that already exists would re-run a migration against a database that's already migrated forward, and Miren doesn't run down-migrations. Reversibility is your app's to design.
 :::
 
 ### `schedule` — run on a timer
@@ -146,6 +152,10 @@ Until you do, Miren treats a `[services.console]` block as a task and warns at b
 
 ## Current limitations
 
-- **No per-task image or disks.** A task runs in the app's image and touches no disks directly. It can still reach anything your addons expose, since those arrive as environment variables.
-- **No ordering between deploy tasks.** They run concurrently.
-- **No per-stage deploy hooks.** A deploy task gates the whole deploy, before any rollout begins; "run this after the canary validates" isn't expressible yet.
+- **A task cannot reach a Miren disk.** If your app keeps data on a [disk](./disks.md), a task can't see it — not even the disk belonging to a service in the same app. Miren disks are single-writer, and a task running beside the service that holds the lease would either block or race it, so runs skip disks entirely.
+
+  This one is quiet: nothing warns you, and your program reports its own "no such file or directory". A backfill over disk-backed data isn't expressible yet — reach that data through an addon, or do the work inside the service that owns the disk.
+
+- **No ordering between deploy tasks.** Every deploy task starts at once, and the deploy waits for all of them. If one migration has to land before another, put both in a single task and order them yourself.
+
+- **A task runs in the app's image.** No per-task image. Anything your addons expose is available, since those arrive as environment variables.

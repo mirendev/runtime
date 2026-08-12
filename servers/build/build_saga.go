@@ -584,10 +584,7 @@ func runDeployTasks(ctx context.Context, in runDeployTasksIn) (runDeployTasksOut
 		return runDeployTasksOut{}, fmt.Errorf("reading app: %w", err)
 	}
 
-	err = b.runDeployTasks(ctx, in.AppName, appRec.ID, entity.Id(in.AppVersionID), &spec,
-		func(format string, args ...any) {
-			status.SendMessage(fmt.Sprintf(format, args...))
-		})
+	err = b.runDeployTasks(ctx, in.AppName, appRec.ID, entity.Id(in.AppVersionID), &spec, status)
 	if err != nil {
 		status.SendError("%s", err)
 		return runDeployTasksOut{}, err

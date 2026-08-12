@@ -374,3 +374,37 @@ func TestSchedulerStopWaitsForTheSweep(t *testing.T) {
 		t.Fatal("Stop did not return after the sweep finished")
 	}
 }
+
+// The readable prefix joins app and task with a hyphen, and neither excludes
+// one -- task names are TOML table keys, so [tasks.db-migrate] is ordinary. A
+// run's identity is cluster-wide within its kind, so if the digest covers only
+// the tick, these two collide outright whenever their instants agree. Two daily
+// schedules agree every day.
+//
+// The consequence is not a duplicated run but a missing one: the loser of the
+// create reads ErrConflict as "another replica claimed this tick", advances its
+// frontier, and never retries.
+func TestTickRunNameDistinguishesAmbiguousAppAndTaskPairs(t *testing.T) {
+	tick := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+
+	a := tickRunName("api", "db-migrate", tick)
+	b := tickRunName("api-db", "migrate", tick)
+
+	assert.NotEqual(t, a, b, "two different jobs sharing an instant must not share a name")
+}
+
+// The dedup property the whole schedule trigger rests on: same app, same task,
+// same instant is the same name on every replica.
+func TestTickRunNameIsStableForTheSameJobAndTick(t *testing.T) {
+	tick := time.Date(2026, 8, 12, 6, 0, 0, 0, time.UTC)
+
+	assert.Equal(t,
+		tickRunName("api", "cleanup", tick),
+		tickRunName("api", "cleanup", tick.In(time.FixedZone("elsewhere", 3600))),
+		"the same instant in another zone is the same tick")
+
+	assert.NotEqual(t,
+		tickRunName("api", "cleanup", tick),
+		tickRunName("api", "cleanup", tick.Add(time.Hour)),
+		"a different instant is a different tick")
+}

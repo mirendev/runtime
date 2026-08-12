@@ -1706,16 +1706,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			}
 
 			if taskErr := b.runDeployTasks(ctx, name, appRec.ID, id, &configSpec,
-				func(format string, args ...any) {
-					if status == nil {
-						return
-					}
-					so := new(build_v1alpha.Status)
-					so.Update().SetMessage(fmt.Sprintf(format, args...))
-					if _, sendErr := status.Send(ctx, so); sendErr != nil {
-						b.Log.Warn("error sending deploy task status", "error", sendErr)
-					}
-				}); taskErr != nil {
+				NewRPCStatusSender(status, b.Log)); taskErr != nil {
 				b.sendErrorStatus(ctx, status, "%s", taskErr)
 				return nil, taskErr
 			}

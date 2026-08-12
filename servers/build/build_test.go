@@ -2923,7 +2923,7 @@ func TestDeployGateRejectsASkippedRun(t *testing.T) {
 	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SKIPPED))
 	require.NoError(t, err)
 
-	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {})
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{})
 	require.Error(t, err, "a skipped run never executed, so it cannot satisfy the gate")
 	assert.Contains(t, err.Error(), "migrate")
 	assert.Contains(t, err.Error(), "skipped")
@@ -2943,7 +2943,7 @@ func TestDeployGateAcceptsASucceededRun(t *testing.T) {
 	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SUCCEEDED))
 	require.NoError(t, err)
 
-	assert.NoError(t, b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {}))
+	assert.NoError(t, b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{}))
 }
 
 func TestDeployGateRejectsAFailedRun(t *testing.T) {
@@ -2958,7 +2958,7 @@ func TestDeployGateRejectsAFailedRun(t *testing.T) {
 	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.FAILED))
 	require.NoError(t, err)
 
-	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, func(string, ...any) {})
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{})
 	require.Error(t, err)
 	// The message has to point at the logs, since a failing migration is a
 	// deploy failure and the user is already reading this output.

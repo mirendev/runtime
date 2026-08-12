@@ -348,7 +348,29 @@ func (s *Scheduler) taskIsBusy(ctx context.Context, appID entity.Id, task string
 // truncated because it only has to separate ticks of one task on one app, not
 // resist collision by an adversary.
 func tickRunName(appName, task string, tick time.Time) string {
-	sum := sha256.Sum256([]byte(tick.UTC().Format(time.RFC3339)))
+	// App and task go into the digest, not just the readable prefix.
+	//
+	// The prefix joins them with hyphens, and neither is restricted to exclude
+	// one: task names are TOML table keys, so [tasks.db-migrate] is ordinary.
+	// That makes app "api" + task "db-migrate" and app "api-db" + task
+	// "migrate" render the same prefix, and a run's identity is cluster-wide
+	// within its kind rather than scoped per app. Hashing the tick alone then
+	// collides them outright whenever the instants agree -- which for two daily
+	// or six-hourly schedules is every time, not a rare race.
+	//
+	// The loser of that Create sees ErrConflict, which this scheduler reads as
+	// "another replica claimed this tick", so it advances the frontier and
+	// never retries: one app's job silently stops running, and the only trace
+	// says something untrue about why. The NUL separators cannot appear in
+	// either input, so the digest distinguishes what the prefix cannot.
+	h := sha256.New()
+	h.Write([]byte(appName))
+	h.Write([]byte{0})
+	h.Write([]byte(task))
+	h.Write([]byte{0})
+	h.Write([]byte(tick.UTC().Format(time.RFC3339)))
+	sum := h.Sum(nil)
+
 	digest := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:6]))
 	return fmt.Sprintf("%s-%s-%s", appName, task, digest)
 }
