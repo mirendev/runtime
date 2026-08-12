@@ -83,7 +83,7 @@ tail = "logs app -f"
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](/in-cluster-api). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
-| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for an app that declares tasks, where leaving it unset is an error |
+| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for a task-only app with no services, where leaving it unset is an error |
 
 ### `web` and the synthesized web service {#web}
 
@@ -98,6 +98,12 @@ the validation note below.
 `web = false` opts out. It's how an app that only declares tasks says it has no
 long-running process at all — no web service, no route, and nothing running (or
 billed for compute) between invocations.
+
+It opts out of the *synthesized* service, not of a web service you asked for. A
+`web` declared in `app.toml` or named by a `web:` line in your `Procfile` is an
+explicit request and still runs, `web = false` or not — so an app being migrated
+keeps whatever its `Procfile` says until that line is removed. Delete the
+declaration to be rid of the service.
 
 :::note[Validation]
 If an app declares tasks, declares no services, and doesn't set `web`, the build

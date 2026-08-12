@@ -2804,3 +2804,45 @@ func TestValidateRequiredVarsCoversTaskEnv(t *testing.T) {
 	spec.Tasks[0].Env[0].Value = "postgres://..."
 	assert.NoError(t, validateRequiredVars(spec))
 }
+
+// analyze is the deploy preview, so it must not report a web service the deploy
+// will refuse to create. A task-only app that never says whether it wants web
+// reaches the historical default and gets one synthesized from the image
+// entrypoint; showing that as "image default" is an affirmative claim about a
+// deploy that is in fact about to fail with errAmbiguousWeb.
+func TestValidateWebIntentDrivesWhatAnalyzeCanClaim(t *testing.T) {
+	taskOnly := &appconfig.AppConfig{
+		Tasks: map[string]*appconfig.TaskConfig{
+			"migrate": {Command: "rails db:migrate"},
+		},
+	}
+
+	// The condition analyze has to detect.
+	require.ErrorIs(t, validateWebIntent(taskOnly, nil), errAmbiguousWeb)
+
+	// And the service it would otherwise have described: synthesized, with no
+	// command of its own, which is what renders as "image default".
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{},
+		AppConfig:   taskOnly,
+	})
+	var web *core_v1alpha.ConfigSpecServices
+	for i := range spec.Services {
+		if spec.Services[i].Name == "web" {
+			web = &spec.Services[i]
+		}
+	}
+	require.NotNil(t, web, "the synthesized web is what analyze must not report")
+	assert.Empty(t, web.Command)
+
+	// Saying either thing clears it, and then the listing is honest again.
+	explicit := &appconfig.AppConfig{
+		Tasks: taskOnly.Tasks,
+		Web:   func() *bool { b := false; return &b }(),
+	}
+	assert.NoError(t, validateWebIntent(explicit, nil))
+
+	// A Procfile web counts as saying so, and -- unlike web = false -- leaves a
+	// real service behind, which is why the docs call that out.
+	assert.NoError(t, validateWebIntent(taskOnly, map[string]string{"web": "bin/server"}))
+}

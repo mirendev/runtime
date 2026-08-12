@@ -2034,6 +2034,22 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 		events = append(events, event)
 	}
 
+	// analyze is the command you reach for to preview a deploy, so it must not
+	// describe a service the deploy will refuse to create. An app that declares
+	// tasks and no services and never says whether it wants web reaches
+	// buildServicesConfig's historical default and comes back with a synthesized
+	// `web` -- which analyze would render as "image default", an affirmative
+	// claim about a deploy that is in fact about to fail. Run the same check
+	// BuildFromTar runs and report that instead.
+	webIntentErr := validateWebIntent(ac, procfileServices)
+	if webIntentErr != nil {
+		var event build_v1alpha.DetectionEvent
+		event.SetKind("config")
+		event.SetName("web")
+		event.SetMessage(webIntentErr.Error())
+		events = append(events, event)
+	}
+
 	// Use buildVersionConfig to compute services - same logic as BuildFromTar
 	spec := buildVersionConfig(ConfigInputs{
 		BuildResult:      &buildResult,
@@ -2047,8 +2063,16 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 
 	// Convert spec.Services to ServiceInfo with source tracking
 	// This includes ALL services, even those without explicit commands (they use image default)
+	//
+	// Skipped entirely when the web intent is ambiguous: the only entry there is
+	// the synthesized web this app never asked for, and listing it would be the
+	// wrong claim rather than a missing one.
 	var services []build_v1alpha.ServiceInfo
-	for _, svc := range spec.Services {
+	specServices := spec.Services
+	if webIntentErr != nil {
+		specServices = nil
+	}
+	for _, svc := range specServices {
 		var svcInfo build_v1alpha.ServiceInfo
 		svcInfo.SetName(svc.Name)
 
