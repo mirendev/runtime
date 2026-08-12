@@ -132,7 +132,14 @@ func (s *State) serveInlineCalls(ctx context.Context, dec *cbor.Decoder, enc *cb
 		var rs streamRequest
 
 		if err := dec.Decode(&rs); err != nil {
-			if !errors.Is(err, io.EOF) {
+			// A canceled context means the call these callbacks served has
+			// already finished and the caller is tearing down its session,
+			// which resets any stream still open here. That reset surfaces as
+			// a transport error rather than a clean EOF, and on WebTransport
+			// it does not even carry a matchable type, so the context is what
+			// distinguishes expected teardown from a stream that genuinely
+			// broke mid-call.
+			if !errors.Is(err, io.EOF) && ctx.Err() == nil {
 				s.log.Error("rpc.callstream call: error decoding stream request", "error", err)
 			}
 			return
@@ -161,11 +168,13 @@ func (s *State) serveInlineCalls(ctx context.Context, dec *cbor.Decoder, enc *cb
 				continue
 			}
 
-			ctx, cancel := context.WithCancel(ctx)
-			err := c.callInline(ctx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
+			callCtx, cancel := context.WithCancel(ctx)
+			err := c.callInline(callCtx, mm, rs.OID, rs.Method, iface.Interface, enc, dec)
 			cancel()
 			if err != nil {
-				if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) {
+				// ctx is deliberately the stream's context, not callCtx, which
+				// cancel has already finished by this point.
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, cond.ErrClosed{}) && ctx.Err() == nil {
 					s.log.Error("rpc.callstream: error calling inline", "error", err)
 				}
 				return
