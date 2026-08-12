@@ -1,12 +1,14 @@
 package uplink
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -340,5 +342,34 @@ func TestOnConnectContextCancelledOnDisconnect(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("callback context outlived the connection")
+	}
+}
+
+// A response that unmarshals cleanly but carries no timestamps must not be
+// averaged into a nonsense offset and logged as a healthy sync. Same for an
+// org response naming no organization.
+func TestControlPlaneHandlersRejectEmptyPayloads(t *testing.T) {
+	var buf bytes.Buffer
+	c := &Client{
+		log:    slog.New(slog.NewTextHandler(&buf, nil)),
+		outbox: make(chan *Envelope, outboxSize),
+	}
+
+	if err := c.handleTimeResponse(t.Context(), json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("handleTimeResponse: %v", err)
+	}
+	if err := c.handleOrgInfoResponse(t.Context(), json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("handleOrgInfoResponse: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "clock sync complete") {
+		t.Error("reported a clock sync from a response with no timestamps")
+	}
+	if strings.Contains(out, "organization info received") {
+		t.Error("reported an organization from a response naming none")
+	}
+	if got := strings.Count(out, "level=WARN"); got != 2 {
+		t.Errorf("expected both incomplete payloads to warn, got %d warnings in:\n%s", got, out)
 	}
 }

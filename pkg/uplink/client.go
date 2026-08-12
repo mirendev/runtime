@@ -37,10 +37,6 @@ type Client struct {
 	mu        sync.Mutex
 	onConnect []func(ctx context.Context)
 
-	// Established by the link itself on each connect, not by any tenant.
-	timeOffset     time.Duration
-	organizationID string
-
 	// getToken overrides auth token acquisition for testing.
 	// When nil, authClient.GetToken is used.
 	getToken func(ctx context.Context) (string, error)
@@ -76,25 +72,15 @@ func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *Messag
 	return c
 }
 
-// TimeOffset returns the estimated clock offset between this cluster and the
-// cloud, computed via simplified NTP.
+// handleTimeResponse computes the clock offset between this cluster and cloud
+// and logs it.
 //
-// This is link-level state rather than a tenant's: cloud reconciles the
-// timestamps a cluster reports against its own clock using this offset, so any
-// tenant reporting timestamped state depends on it.
-func (c *Client) TimeOffset() time.Duration {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.timeOffset
-}
-
-// OrganizationID returns the organization ID reported by the cloud.
-func (c *Client) OrganizationID() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.organizationID
-}
-
+// The offset is not retained, because nothing in the runtime reads it: cloud
+// runs its own reconciliation against the timestamps a cluster reports, so a
+// reporter sends raw wall clock and lets the other end do the math. Keeping an
+// accessor here for a caller that doesn't exist would just be a claim about
+// how the runtime works that isn't true. The exchange still earns its place by
+// surfacing skew in the log, and by giving cloud its half of the round trip.
 func (c *Client) handleTimeResponse(_ context.Context, data json.RawMessage) error {
 	t4 := time.Now().UTC()
 
@@ -109,25 +95,37 @@ func (c *Client) handleTimeResponse(_ context.Context, data json.RawMessage) err
 	t2 := resp.ServerReceiveTime
 	t3 := resp.ServerTransmitTime
 
-	offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
+	// A response missing any timestamp unmarshals cleanly into zero values, and
+	// the arithmetic below would turn that into an offset of roughly the Unix
+	// epoch and log it as a healthy sync. Since the whole reason this exchange
+	// stays is the accuracy of what it logs, an incomplete payload has to be
+	// visibly suspicious rather than quietly averaged.
+	if t1.IsZero() || t2.IsZero() || t3.IsZero() {
+		c.log.Warn("ignoring incomplete time response from cloud")
+		return nil
+	}
 
-	c.mu.Lock()
-	c.timeOffset = offset
-	c.mu.Unlock()
+	offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
 
 	c.log.Info("clock sync complete", "offset", offset)
 	return nil
 }
 
+// handleOrgInfoResponse logs the organization cloud says this cluster belongs
+// to. Like the clock offset, it is not retained: cloud derives the org from its
+// own records rather than from anything the cluster asserts, so the runtime has
+// no use for a copy. It is worth logging because it confirms which tenant the
+// link resolved to.
 func (c *Client) handleOrgInfoResponse(_ context.Context, data json.RawMessage) error {
 	var resp OrgInfoResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return err
 	}
 
-	c.mu.Lock()
-	c.organizationID = resp.OrganizationID
-	c.mu.Unlock()
+	if resp.OrganizationID == "" {
+		c.log.Warn("ignoring org info response with no organization")
+		return nil
+	}
 
 	c.log.Info("organization info received", "org_id", resp.OrganizationID)
 	return nil

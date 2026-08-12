@@ -51,6 +51,13 @@ func New(cfg Config) *Connector {
 
 	cfg.Uplink.Handle(TypeConnectionRequest, c.handleConnectionRequest)
 
+	// Startup confirmation. Anywhere is otherwise silent until a POP request
+	// arrives, which may be hours away or never come at all, leaving an
+	// operator unable to tell a wired connector from one that failed to come
+	// up. It used to say this on the way in and out of its own Run loop; now
+	// that it doesn't own one, registration is the moment worth recording.
+	log.Info("Miren Anywhere ready", "cluster", cfg.ClusterXID)
+
 	return c
 }
 

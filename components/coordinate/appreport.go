@@ -106,9 +106,13 @@ func (c *Coordinator) reportAppSnapshot(ctx context.Context) {
 	}
 
 	if err := c.uplink.SendMessage(TypeAppSnapshot, snapshot); err != nil {
-		c.Log.Warn("failed to send app snapshot to cloud", "error", err)
+		c.Log.Warn("failed to queue app snapshot for cloud", "error", err)
 		return
 	}
 
-	c.Log.Info("reported app snapshot to cloud", "apps", len(snapshot.Apps))
+	// Queued, not reported: SendMessage returns nil whether or not the envelope
+	// made it into the outbox, which drops on overflow and is discarded on
+	// reconnect. Claiming we reported would assert something we cannot observe
+	// from here.
+	c.Log.Info("queued app snapshot for cloud", "apps", len(snapshot.Apps))
 }
