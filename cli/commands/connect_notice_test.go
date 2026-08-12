@@ -112,24 +112,21 @@ func TestConnectNoticeErasesItself(t *testing.T) {
 	}
 }
 
-// Without a terminal there's nothing to animate, so it should say its piece
-// once rather than emitting a frame every tick into a log file.
-func TestConnectNoticePrintsOnceWhenNotInteractive(t *testing.T) {
+// Without a terminal nobody is watching for a hang, and anything written here
+// is debris in whatever captured the stream — `--format json` output with
+// stderr merged in, most painfully.
+func TestConnectNoticeSilentWhenNotInteractive(t *testing.T) {
 	var out syncBuffer
 	n := newTestNotice(&out, false, time.Millisecond)
 	go n.run(time.Now())
 
-	// Give the ticker several chances to print again before stopping, so a
-	// missing guard would actually show up as a repeat.
-	waitForOutput(t, &out)
+	// Long enough that an interactive notice would be several frames in, so
+	// silence here means suppressed rather than merely not started yet.
 	time.Sleep(50 * time.Millisecond)
 	n.Stop()
 
-	if got := strings.Count(out.String(), "connecting to"); got != 1 {
-		t.Errorf("non-interactive notice printed %d times, want 1:\n%s", got, out.String())
-	}
-	if strings.Contains(out.String(), "\033[K") {
-		t.Errorf("non-interactive notice emitted terminal escapes: %q", out.String())
+	if out.String() != "" {
+		t.Errorf("non-interactive notice wrote output: %q", out.String())
 	}
 }
 

@@ -31,9 +31,14 @@ const (
 //
 // It writes to stderr, never stdout: this runs before every RPC command, and a
 // progress line in stdout would corrupt `--format json` output the moment
-// anyone pipes it. It also deliberately avoids a full terminal UI. Raw mode on
-// a code path this hot means a Ctrl-C during a slow connect can leave the
-// user's terminal broken, and rewriting one line with \r cannot do that.
+// anyone pipes it. Stderr alone isn't enough, though — plenty of callers merge
+// the two streams — so a stderr that isn't a terminal produces no notice at
+// all. The only thing this line does is reassure someone watching a terminal
+// that we haven't hung, and nobody is watching a pipe.
+//
+// It also deliberately avoids a full terminal UI. Raw mode on a code path this
+// hot means a Ctrl-C during a slow connect can leave the user's terminal
+// broken, and rewriting one line with \r cannot do that.
 type connectNotice struct {
 	out         io.Writer
 	interactive bool
@@ -73,6 +78,12 @@ func (n *connectNotice) Stop() {
 func (n *connectNotice) run(start time.Time) {
 	defer close(n.done)
 
+	// Without a terminal there's no one to reassure, and the line would just be
+	// debris in whatever captured the stream.
+	if !n.interactive {
+		return
+	}
+
 	// Stay quiet unless the connection is actually slow.
 	select {
 	case <-n.stop:
@@ -86,8 +97,6 @@ func (n *connectNotice) run(start time.Time) {
 	defer ticker.Stop()
 
 	for {
-		// The static (non-terminal) line is printed once and never rewritten,
-		// so a running clock on it would be a lie the moment it's drawn.
 		w.label = connectNoticeLabel(n.target, time.Since(start), n.interactive)
 		w.tick()
 
