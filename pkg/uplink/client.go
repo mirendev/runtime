@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,6 +24,19 @@ const (
 	maxBackoff     = 60 * time.Second
 	wsEndpoint     = "/api/v1/cluster-channel/ws"
 	writeTimeout   = 10 * time.Second
+
+	// backoffJitter is the fraction of a delay that is randomized away.
+	//
+	// Clusters do not disconnect independently. The common cause is something
+	// on the other end — a cloud deploy, a load balancer rotation — which drops
+	// every cluster at the same instant. An undithered backoff then marches the
+	// entire fleet back in lockstep, and since each one opens a snapshot on
+	// connect, cloud takes the whole fleet's reconnect work as a single spike
+	// rather than as a rate.
+	//
+	// Subtracting rather than adding matters: it keeps the delay bounded by the
+	// backoff schedule instead of letting the worst case drift past maxBackoff.
+	backoffJitter = 0.3
 )
 
 // Client maintains a persistent WebSocket connection to the cloud
@@ -186,6 +200,56 @@ func (c *Client) SendMessage(msgType string, data any) error {
 	return nil
 }
 
+// SendBlocking queues an envelope, waiting for room instead of dropping when
+// the outbox is full. It returns when the envelope is queued, or with the
+// context's error if the connection goes away first.
+//
+// Send's drop-on-overflow is the right behavior for a single small message
+// whose loss self-heals, but wrong for a stream. A tenant sending a bounded
+// sequence — a snapshot in batches, a backfill walking a watermark — is
+// pushing faster than one message per connect, and silent drops there don't
+// read as "we lost a sample," they read as "that batch never existed." For a
+// snapshot that is indistinguishable from apps having been deleted.
+//
+// Blocking makes the write loop's drain rate the natural throttle, which is
+// also what lets two streaming tenants share the link without coordinating:
+// neither can starve the other by filling the outbox, because filling it just
+// slows the filler down. Callers must pass the connection-scoped context so a
+// sender parked here is released when the connection drops rather than waking
+// up to write into a socket that is gone.
+func (c *Client) SendBlocking(ctx context.Context, env *Envelope) error {
+	// Checked before the select rather than left to it. When the outbox has
+	// room and the context is already dead, both cases below are ready and Go
+	// picks between them at random, so a sender whose connection just went away
+	// would queue an envelope about half the time. That envelope usually dies
+	// in the next connect's drainOutbox, but a sender that was slow enough to
+	// straddle the reconnect can land it on the *new* connection instead, which
+	// for a snapshot means an abandoned epoch arriving intact and authorizing a
+	// sweep against a stale picture. Making the contract deterministic is worth
+	// more than the nanosecond, particularly for something other tenants build
+	// on.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case c.outbox <- env:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// SendMessageBlocking marshals data and queues it, waiting for outbox room.
+// See SendBlocking for when to prefer this over SendMessage.
+func (c *Client) SendMessageBlocking(ctx context.Context, msgType string, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", msgType, err)
+	}
+	return c.SendBlocking(ctx, &Envelope{Type: msgType, Data: raw})
+}
+
 // Run maintains the WebSocket connection with reconnection. It blocks
 // until the context is cancelled.
 func (c *Client) Run(ctx context.Context) error {
@@ -204,17 +268,49 @@ func (c *Client) Run(ctx context.Context) error {
 			backoff = initialBackoff
 		}
 
+		delay := jittered(backoff)
+
 		c.log.Warn("websocket disconnected, reconnecting",
-			"error", err, "backoff", backoff)
+			"error", err, "backoff", delay)
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(delay):
 		}
 
 		backoff = min(backoff*2, maxBackoff)
 	}
+}
+
+// jittered spreads a delay over [(1-backoffJitter)·d, d] so a fleet knocked
+// offline together does not come back together.
+func jittered(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return d - time.Duration(rand.Float64()*backoffJitter*float64(d))
+}
+
+// SpreadOnConnect returns a delay a tenant should wait before starting the
+// work it does on each connect, so that work is spread across the fleet rather
+// than landing as one spike.
+//
+// Exported rather than kept inside Run because jittering the reconnect alone
+// only moves the spike: a fleet that comes back staggered but then has every
+// cluster immediately stream a snapshot has changed when the pile-up happens,
+// not whether it does. Tenants need the same treatment for their own connect
+// work.
+//
+// The window is the caller's choice because it depends on what the work is
+// worth delaying. Anything on the ephemeral tier can afford a generous one:
+// nothing downstream distinguishes a snapshot that starts now from one that
+// starts a minute from now.
+func SpreadOnConnect(window time.Duration) time.Duration {
+	if window <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Float64() * float64(window))
 }
 
 // runOnce connects and processes messages until an error occurs.
