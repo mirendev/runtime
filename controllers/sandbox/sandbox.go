@@ -572,6 +572,11 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	// overlap window — but a workload that re-reads its token file should see
 	// the new issuer promptly, and anything holding a cached copy is on the
 	// clock until that window closes.
+	// Every stale-anchor sandbox is already in the refresher: register() runs
+	// sequentially in the loop above, in the same iteration that counts it. The
+	// rewrite therefore reaches all of them. That ordering is load-bearing — if
+	// the loop above ever becomes concurrent, or registration moves elsewhere,
+	// this call has to be re-checked or it will silently cover only some.
 	if staleAnchorTokens > 0 {
 		c.Log.Info("workload identity anchor changed while sandboxes were running; rewriting mounted tokens",
 			"issuer", c.WorkloadIssuer.IssuerURL(),

@@ -571,7 +571,7 @@ configs:
         type: string
         cli:
           long: identity-anchor
-          description: "Where workload identity tokens are anchored: cluster (default, this cluster serves its own discovery) or cloud (miren.cloud serves discovery for it). Signing keys stay on the cluster either way."
+          description: "Where workload identity tokens are anchored: cluster (this cluster serves its own discovery) or cloud (miren.cloud serves discovery for it). Signing keys stay on the cluster either way. Unset defers to the anchor chosen at registration, which is cloud for newly registered clusters and cluster otherwise."
         env: MIREN_WORKLOAD_IDENTITY_ANCHOR
         toml: anchor
         validation:

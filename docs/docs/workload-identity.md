@@ -290,7 +290,9 @@ Moving the anchor twice within the overlap window keeps only the most recent pre
 
 Workload identity turns on automatically — there's no per-app setting to enable it — and every cluster issues tokens, including one installed with `--without-cloud` and no TLS name. Your sandboxes always get the `MIREN_IDENTITY_*` variables.
 
-What such a cluster lacks is a hostname an outside party can resolve. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys. Give the cluster a name an outside party can reach — register it with Miren Cloud, pass `--dns-names`, or register and use `--identity-anchor=cloud` if the cluster itself isn't reachable — and its tokens become federatable, with no other change.
+What such a cluster lacks is an issuer an outside party can reach. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys.
+
+Two ways to fix that. Give the cluster a public DNS record that routes to its ingress, and put that name in `--dns-names` so the certificate covers it; the flag alone only adds a name to the certificate, it does not publish a record or make the cluster reachable. Or register with Miren Cloud and use `--identity-anchor=cloud`, which is the option that works when the cluster isn't reachable from the internet at all.
 
 :::note[Why tokens exist either way]
 Miren's own services authenticate to each other with these tokens — the cluster-local registry and the telemetry that distributed runners ship both verify them against the signing key in-process, which needs no DNS and no publicly trusted certificate. Tying identity to being externally addressable would leave those services with nothing but the network to trust.

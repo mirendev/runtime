@@ -232,7 +232,11 @@ The `iss` claim is pinned in external trust configurations — an AWS IAM OIDC p
 
 Requires registration with Miren Cloud: an unregistered cluster has no cloud anchor to adopt and falls back to its own hostname with a warning.
 
-**The default comes from registration, not from this setting.** A cluster registered with Miren Cloud anchors at `cloud`; one registered before that default existed, or running without cloud, stays on `cluster`. Setting this field overrides that choice in either direction — which is what makes an upgrade safe, since nothing moves an existing cluster's `iss` unless you ask for it.
+:::info[The default comes from registration, not from this field]
+A cluster registered with Miren Cloud anchors at `cloud`. One that registered before that default existed, or that runs without cloud, stays on `cluster`.
+:::
+
+Setting this field overrides that choice in either direction, and it outranks the registration at startup. That precedence is what makes an upgrade safe, since nothing moves an existing cluster's `iss` unless you ask for it. It also means `miren server identity-anchor` refuses to run while this field disagrees with the anchor you asked for, rather than reporting a move that the next restart would ignore.
 
 To move an already-registered cluster, prefer [`miren server identity-anchor`](/command/server-identity-anchor) over editing this field: it handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](/workload-identity#moving-the-anchor).
 
