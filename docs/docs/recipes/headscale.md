@@ -1,6 +1,6 @@
 ---
 title: Run a headscale control server
-description: A worked example — self-host headscale, the open-source Tailscale control server, as a Miren app with its state on a persistent disk and its clients logging in over your own hostname.
+description: Self-host headscale, the open-source Tailscale control server, on Miren — reachable at your own hostname, with its database and keys on a persistent disk.
 keywords: [headscale, tailscale, tailnet, control server, vpn, wireguard, derp, self-hosted, example, deploy]
 ---
 
@@ -13,14 +13,8 @@ control server — the coordination plane your Tailscale clients log in to, exch
 through, and get their network map from. Self-hosting it means your tailnet's coordination
 belongs to you.
 
-The end state: headscale running as a single Miren `web` service on port 8080, reachable
-over HTTPS at a hostname you own, with its SQLite database and private keys on a persistent
-disk. You point `tailscale up --login-server` at it and register nodes with
-`miren sandbox exec`.
-
-Along the way it exercises a fair amount of Miren — running an upstream image on its own
-entrypoint, a local disk, environment-driven config, and (for the embedded relay) a UDP node
-port.
+By the end you'll have headscale answering over HTTPS at a hostname you own, its database
+and keys on a disk that survives redeploys, and a first node joined to your tailnet.
 
 :::info[This is an application recipe, not a language guide]
 For getting your own source code onto Miren, start with [Deployment](/deployment) and the
@@ -29,20 +23,6 @@ For the opposite topic — running a Miren **cluster** on a tailnet — see
 [Running Miren on a Tailnet](/tailscale).
 :::
 
-## How it works
-
-1. A three-line Dockerfile adds a `config.yaml` and a `CMD` to the official headscale image.
-   The service sets no `command`, so the image's own `ENTRYPOINT` + `CMD` run as the process
-   argv — which is what lets a shell-less image work at all.
-2. The `web` service listens on `0.0.0.0:8080`. Miren's ingress terminates TLS at your
-   hostname and proxies to it.
-3. A `config.yaml` baked into the image holds everything static; the values that change per
-   deployment come from `HEADSCALE_*` environment variables in `app.toml`.
-4. The database and the noise private key live on a local disk at `/data`, so they survive
-   redeploys.
-5. Admin commands (`headscale users create` and friends) run *inside the live sandbox*,
-   because the headscale CLI talks to the running server over a unix socket.
-
 ## Prerequisites
 
 - `miren` CLI installed and authenticated (`miren whoami`).
@@ -50,6 +30,17 @@ For the opposite topic — running a Miren **cluster** on a tailnet — see
 - A hostname you control, pointed at the cluster — see
   [Custom Domains](/traffic-routing#custom-domains) or claim one through
   [Miren Cloud subdomains](/miren-cloud/subdomains).
+- **The ability to edit the cluster's server config.** Tailscale clients hold a connection
+  to the control server open far longer than the ingress allows by default, so this recipe
+  needs one cluster-wide setting changed before a client will stay connected. Details in
+  [Give clients a longer timeout](#longer-timeout).
+
+:::warning[That timeout is cluster-wide]
+`http_request_timeout` applies to every app on the cluster, not just headscale. If you can't
+change it — someone else runs the cluster, or other apps depend on the current value — nodes
+will keep dropping their connection to headscale, and there's no way to work around it from
+headscale's side.
+:::
 
 ## Select the target cluster
 
@@ -66,28 +57,25 @@ miren whoami
 
 ## The Dockerfile
 
-The official headscale image is **distroless** — it contains no shell, no package manager,
-nothing but the binary at `/ko-app/headscale` and a CA bundle. That's fine, as long as you
-don't ask Miren to run a `command`:
+You only need to add your config file and tell the image what to run:
 
 ```dockerfile
 FROM docker.io/headscale/headscale:0.29.3
 
 COPY config.yaml /etc/headscale/config.yaml
 
-# The image sets ENTRYPOINT ["/ko-app/headscale"] but no CMD, so give it one.
+# The image sets an ENTRYPOINT but no CMD, so give it one.
 CMD ["serve"]
 ```
 
-That's the whole thing. The upstream image already ships the CA bundle headscale needs to
+That's the whole build. The upstream image already carries the CA bundle headscale needs to
 fetch the DERP map, so there's nothing to install.
 
-:::info[Why there's no `command` in the app.toml]
-When a service sets no `command`, Miren runs the image's `ENTRYPOINT` + `CMD` directly as
-the process argv, the way `docker run IMAGE` does — no shell involved, the entrypoint gets
-PID 1, and signals reach it. Set a `command` and Miren runs it through `/bin/sh -c` instead,
-which a distroless image has no shell for. That's the whole reason this recipe leaves
-`command` out.
+:::warning[Don't set a `command` for this app]
+The headscale image ships without a shell, and a service that sets `command` needs one.
+Leave it out — as the `app.toml` below does — and the image runs what its own `CMD` says.
+This also means you can't open an interactive shell in the container; see
+[Getting a shell](#getting-a-shell) if you want that.
 :::
 
 Add a `.dockerignore` so local files stay out of the build context:
@@ -107,16 +95,12 @@ everyone:
 # Overridden by HEADSCALE_SERVER_URL from app.toml.
 server_url: http://127.0.0.1:8080
 
-# Bind on all interfaces: Miren health-checks and routes from outside the container,
-# so a 127.0.0.1 listener never comes up healthy.
+# Bind on all interfaces. A 127.0.0.1 listener is unreachable from outside the
+# container, so the app never comes up healthy.
 listen_addr: 0.0.0.0:8080
 metrics_listen_addr: 0.0.0.0:9090
 
-# The CLI reaches the running server over this socket.
-unix_socket: /var/run/headscale/headscale.sock
-
-# State on the mounted disk. headscale creates both on first start, and opens
-# SQLite in WAL mode on its own.
+# State on the mounted disk. headscale creates both on first start.
 noise:
   private_key_path: /data/noise_private.key
 database:
@@ -146,9 +130,9 @@ dns:
       - 8.8.8.8
 ```
 
-headscale honors `HEADSCALE_*` overrides for nested keys too — `database.sqlite.path`
-becomes `HEADSCALE_DATABASE_SQLITE_PATH` — so you can move any of this into `app.toml`
-without a boot script.
+Any of these can move into `app.toml` as an environment variable instead: headscale accepts
+`HEADSCALE_*` overrides for nested keys too, so `database.sqlite.path` becomes
+`HEADSCALE_DATABASE_SQLITE_PATH`.
 
 :::warning[A missing `dns` block fails validation]
 `dns.override_local_dns` defaults to true, and headscale refuses to start without
@@ -167,10 +151,8 @@ name = "headscale"
 [build]
 dockerfile = "Dockerfile"
 
-# Must be named `web`: `miren route set` has no port selector and always sends a
-# hostname to the service called `web`.
-#
-# Deliberately no `command` — see above. The image's ENTRYPOINT + CMD run as-is.
+# Must be named `web` — that's the service a hostname route points at.
+# No `command` here, on purpose: see above.
 [services.web]
 port_timeout = "120s"
 
@@ -195,11 +177,9 @@ key = "HEADSCALE_SERVER_URL"
 value = "https://headscale.example.com"
 ```
 
-A control server should never scale to zero or run two copies against one SQLite file,
-hence `mode = "fixed"` with a single instance. The disk is `provider = "local"`, which
-[Persistent Storage](/disks) recommends for SQLite — and headscale already opens the
-database in WAL mode, so there's nothing to configure. Note that any disk pins the app to
-the coordinator node.
+A control server shouldn't scale to zero or run two copies against one SQLite file, hence a
+single fixed instance. [Persistent Storage](/disks) recommends a local disk for SQLite,
+which is what this uses; note that any disk pins the app to the coordinator node.
 
 ## Deploy
 
@@ -224,38 +204,31 @@ miren route list
 ```
 </CliCommand>
 
-## Raise the ingress timeout
+## Give clients a longer timeout {#longer-timeout}
 
-This is the one server-side change headscale needs, and it's worth making before you connect
-a client rather than after.
+Do this before you connect a client. Tailscale clients keep a connection to the control
+server open and idle for long stretches, longer than the ingress tolerates by default, and
+headscale offers no setting to make them chattier. Left alone, nodes drop and reconnect for
+no visible reason.
 
-A Tailscale client holds a long-poll connection open to `/machine/map` and expects it to
-stay open. Miren's ingress puts an idle read deadline on the connection to a backend, set by
-`http_request_timeout` and **defaulting to 60 seconds**. The deadline resets whenever data
-arrives, so the stream survives as long as headscale keeps talking — and headscale sends a
-keepalive every **50 seconds plus up to 9 seconds of jitter**.
-
-Those two defaults leave as little as one second of headroom, and the jitter means it varies
-per session — the kind of margin that produces intermittent, hard-to-attribute drops rather
-than a clean failure. Give it real room, in the server config file
-(`/etc/miren/server.toml`, or `/var/lib/miren/config/server.toml`):
+Raise the limit in the server config file (`/etc/miren/server.toml`, or
+`/var/lib/miren/config/server.toml`) and restart the server:
 
 ```toml
 [server]
 http_request_timeout = 120
 ```
 
-Restart the server afterward. The value is an integer number of seconds, not a duration
-string — see [Server Configuration](/server-config#server).
+The value is seconds. See [Server Configuration](/server-config#server).
 
 ## Verify
 
 <CliCommand context="client">
 ```bash
 miren app status -a headscale   # Current Version + active
-miren sandbox list              # one running sandbox, service "web"
+miren sandbox list              # a running sandbox for headscale, service "web"
 
-curl -s https://headscale.example.com/health   # {"status":"pass"}
+curl -fsS https://headscale.example.com/health   # {"status":"pass"}
 ```
 </CliCommand>
 
@@ -268,48 +241,36 @@ TLS terminates at Miren's ingress and headscale itself serves plain HTTP behind 
 
 ## Create a user and register a node
 
-The headscale CLI talks to the running server over the unix socket in
-`/var/run/headscale`, so these have to run **in the live sandbox**:
+The `headscale` command only talks to its own running server, so these have to run inside
+the live container. Find the sandbox in `miren sandbox list` — the one whose app is
+`headscale` and service is `web` — and use its ID:
 
 <CliCommand context="client">
 ```bash
-SANDBOX=$(miren sandbox list --format json | jq -r '.[0].id')
+miren sandbox list                              # find the headscale web sandbox
 
-miren sandbox exec "$SANDBOX" -- headscale users create alice
-miren sandbox exec "$SANDBOX" -- headscale preauthkeys create --user 1 --expiration 24h
-miren sandbox exec "$SANDBOX" -- headscale nodes list
+miren sandbox exec <id> -- headscale users create alice
+miren sandbox exec <id> -- headscale users list   # note alice's numeric ID
+miren sandbox exec <id> -- headscale preauthkeys create --user <user-id> --expiration 24h
+miren sandbox exec <id> -- headscale nodes list
 ```
 </CliCommand>
 
-Passing a command after `--` runs it as argv, with no shell in the way, which is why this
-works against a distroless image.
+`preauthkeys create` takes the user's numeric ID, not the name, which is why you look it up
+first. On a cluster running other apps, `miren sandbox list` will show their sandboxes too —
+match on the app name rather than taking the first row.
 
-:::warning[`miren app run` is not the tool here]
-`miren app run` builds a fresh ephemeral sandbox, which on a shell-less image fails outright
-with `failed to create ephemeral sandbox: sandbox failed to start, status: status.dead`.
-Even where it does start, it's a *different* container with no headscale server in it, so
-the CLI would have no socket to talk to. Admin commands have to reach the running instance
-via `miren sandbox exec`.
+:::warning[`miren app run` won't work here]
+It starts a fresh, separate container rather than reaching the one serving traffic, so the
+`headscale` command inside it has no server to talk to. Use `miren sandbox exec`.
 :::
 
-:::note[No interactive shell on this image]
-`miren sandbox exec <id>` with no command tries to open `/bin/sh` and fails with
-`stat /bin/sh: no such file or directory`. Named commands work; an interactive prompt
-doesn't. See [Getting a shell](#getting-a-shell) if you want one.
-:::
-
-Then, on the machine joining the tailnet, point Tailscale at your server and use the
-preauth key:
+Then, on the machine joining the tailnet, point Tailscale at your server and use the preauth
+key:
 
 ```bash
 tailscale up --login-server=https://headscale.example.com --authkey=<key>
 ```
-
-:::info[What wasn't exercised]
-Everything else on this page was run as written against a Miren cluster. The client join
-just above, and the embedded DERP relay further down, follow
-[headscale's own documentation](https://headscale.net) and were not tested end to end.
-:::
 
 ## Getting a shell {#getting-a-shell}
 
@@ -329,8 +290,7 @@ COPY --from=upstream /ko-app/headscale /usr/local/bin/headscale
 COPY config.yaml /etc/headscale/config.yaml
 ```
 
-With a shell present you set the command explicitly, using `exec` so headscale still ends up
-as PID 1:
+Now that there's a shell, set the command explicitly:
 
 ```toml
 [services.web]
@@ -338,9 +298,8 @@ command = "exec headscale serve"
 port_timeout = "120s"
 ```
 
-Everything else in the recipe is unchanged, and `miren sandbox exec <id>` now opens a prompt.
+Everything else in the recipe is unchanged, and `miren sandbox exec <id>` opens a prompt.
 The tradeoff is a larger image and a base you're responsible for patching.
-
 
 ## Running the embedded DERP relay
 
@@ -348,13 +307,11 @@ Tailscale clients prefer direct peer-to-peer connections and fall back to a DERP
 they can't get one. The config above borrows Tailscale's public relays, which is the simpler
 choice and costs you nothing to operate.
 
-To relay through your own server instead, enable headscale's embedded DERP. It needs two
-things from Miren: the relay itself is served over HTTPS on your existing hostname, and STUN
-needs a UDP port exposed on the host. This is also the part of the recipe that exercises
-Miren's [non-HTTP ports](/traffic-routing#non-http-services-tcpudp).
+To relay through your own server instead, enable headscale's embedded DERP. The relay is
+served over HTTPS on your existing hostname; STUN additionally needs a UDP port open on the
+host, declared as a [node port](/traffic-routing#non-http-services-tcpudp).
 
-Add the STUN port alongside the HTTP one, and turn the relay on with more `HEADSCALE_*`
-overrides:
+Add the STUN port alongside the HTTP one, and turn the relay on:
 
 ```toml
 # A second port on the same service; the HTTP one above stays as it is.
@@ -384,24 +341,20 @@ key = "HEADSCALE_DERP_SERVER_PRIVATE_KEY_PATH"
 value = "/data/derp_server_private.key"
 ```
 
-On boot headscale logs `stun server started at [::]:3478` and advertises a region whose node
-carries `HostName: <your server_url host>`, `DERPPort: 443`, `STUNPort: 3478`. Open 3478/udp
-in any cloud firewall in front of the cluster — node ports are not opened for you, and
-[Firewall](/firewall) covers the inbound rules.
+On boot headscale logs `stun server started at [::]:3478` and advertises the new region.
+Open 3478/udp in any cloud firewall in front of the cluster — node ports aren't opened for
+you, and [Firewall](/firewall) covers the inbound rules.
 
-:::warning[Relayed traffic runs through the HTTP ingress]
-The relay is advertised on port 443 at your hostname, so it rides the same ingress path as
-everything else and inherits the `http_request_timeout` idle deadline described above. A
-relayed session that goes quiet for longer than that window gets its connection torn down.
-If you depend heavily on relaying, keep the public DERP servers in `derp.urls` as a fallback
+:::warning[Keep the public relays as a fallback]
+Relayed traffic reaches your hostname over the same HTTPS path as everything else, so a
+relayed session that goes quiet long enough hits the timeout from
+[earlier](#longer-timeout). Leave Tailscale's servers in `derp.urls` alongside your own
 rather than removing them.
 :::
 
 ## Roadblock checklist
 
-1. The official image is **distroless** — no shell. Leave `command` out of `app.toml` so the
-   image's `ENTRYPOINT` + `CMD` run as argv; setting one sends it through `/bin/sh -c` and
-   the sandbox dies at startup.
+1. Don't set a `command` — the image has no shell, and the sandbox dies at startup if you do.
 2. Give the image a `CMD ["serve"]`. Upstream sets an `ENTRYPOINT` but no `CMD`, so without
    it headscale starts with no subcommand.
 3. Name the service **`web`**, or routing returns `error acquiring lease: app/headscale`.
@@ -414,10 +367,10 @@ rather than removing them.
    `server_url cannot be part of base_domain in a way that could make the DERP and headscale server unreachable`.
    `headscale.example.com` with a base domain of `ts.example.com` is fine;
    `example.com` as the base domain is not.
-8. Raise `http_request_timeout` to 120; the 60s default leaves as little as one second of
-   margin against headscale's 50–59s keepalive.
-9. Use `miren sandbox exec <id> -- <cmd>` for admin commands. `miren app run` can't start on
-   a shell-less image, and `sandbox exec` with no command can't open one either.
+8. Raise `http_request_timeout` before connecting a client — see
+   [Give clients a longer timeout](#longer-timeout).
+9. Run admin commands with `miren sandbox exec <id> -- <cmd>`, against the sandbox actually
+   serving headscale. `preauthkeys create` wants the user's numeric ID, not the name.
 10. `WRN listening without TLS but ServerURL does not start with http://` is expected.
 11. For the embedded DERP, open 3478/udp in the cloud firewall as well as declaring the
     node port.
