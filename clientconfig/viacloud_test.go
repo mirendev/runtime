@@ -38,20 +38,48 @@ func TestCloudRPCEndpoint(t *testing.T) {
 
 		// A development cloud has no certificate, so the scheme carries over
 		// rather than being silently upgraded to one that cannot connect.
-		{"http://miren.host:3001", "ws://miren.host:3001/api/v1/clusters/cluster-abc/rpc"},
+		{"http://localhost:3001", "ws://localhost:3001/api/v1/clusters/cluster-abc/rpc"},
+		{"http://127.0.0.1:3001", "ws://127.0.0.1:3001/api/v1/clusters/cluster-abc/rpc"},
 
 		// No scheme is assumed to be the real thing, which is always TLS.
 		{"api.miren.cloud", "wss://api.miren.cloud/api/v1/clusters/cluster-abc/rpc"},
 	}
 
 	for _, tt := range tests {
-		got, err := cloudRPCEndpoint(tt.cloudURL, "cluster-abc")
+		got, err := cloudRPCEndpoint(tt.cloudURL, "cluster-abc", false)
 		require.NoError(t, err)
 		require.Equal(t, tt.want, got, "cloudRPCEndpoint(%q)", tt.cloudURL)
 	}
 
-	_, err := cloudRPCEndpoint("https://", "cluster-abc")
+	_, err := cloudRPCEndpoint("https://", "cluster-abc", false)
 	require.Error(t, err, "a url naming no host should not produce an endpoint")
+}
+
+// Every byte of a relayed session's authority is the caller's own credential,
+// and over an unencrypted socket all of it is readable by anyone on the path.
+// Loopback is the case that justifies plaintext; anywhere else has to be asked
+// for, because getting it by accident is silent and costs you the token.
+func TestCloudRPCEndpointRefusesRemotePlaintext(t *testing.T) {
+	_, err := cloudRPCEndpoint("http://cloud.internal:3001", "cluster-abc", false)
+	require.ErrorContains(t, err, "clear")
+
+	// Asked for, it is allowed: a development cloud reachable by name is a real
+	// setup, and the documented one for a container that cannot say localhost.
+	got, err := cloudRPCEndpoint("http://miren.host:3001", "cluster-abc", true)
+	require.NoError(t, err)
+	require.Equal(t, "ws://miren.host:3001/api/v1/clusters/cluster-abc/rpc", got)
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	loopback := []string{"localhost", "localhost:3001", "LocalHost:80", "127.0.0.1", "127.0.0.1:3001", "[::1]:3001", "::1"}
+	for _, h := range loopback {
+		require.True(t, isLoopbackHost(h), "%q should be loopback", h)
+	}
+
+	remote := []string{"miren.host:3001", "example.com", "10.0.0.1:80", "[2001:db8::1]:443"}
+	for _, h := range remote {
+		require.False(t, isLoopbackHost(h), "%q should not be loopback", h)
+	}
 }
 
 // The happy path: a cloud-routed cluster resolves to a relay endpoint and a
@@ -96,6 +124,10 @@ func TestViaCloudOptionsHonorsExplicitCloudURL(t *testing.T) {
 		XID:      "cluster-abc",
 		Identity: "cloud",
 		CloudURL: "http://miren.host:3001",
+		// Reaching a development cloud by a name rather than by loopback is
+		// the documented setup for a container, and it is plaintext, so it has
+		// to say so.
+		Insecure: true,
 	})
 
 	cluster, err := config.GetCluster("prod")
@@ -104,6 +136,23 @@ func TestViaCloudOptionsHonorsExplicitCloudURL(t *testing.T) {
 	endpoint, _, err := cluster.cloudRelay(t.Context(), config)
 	r.NoError(err)
 	r.Equal("ws://miren.host:3001/api/v1/clusters/cluster-abc/rpc", endpoint)
+}
+
+// The same entry without that admission is refused, which is what makes the
+// admission mean something.
+func TestViaCloudRefusesRemotePlaintextByDefault(t *testing.T) {
+	config := viaCloudConfig(t, &ClusterConfig{
+		ViaCloud: true,
+		XID:      "cluster-abc",
+		Identity: "cloud",
+		CloudURL: "http://miren.host:3001",
+	})
+
+	cluster, err := config.GetCluster("prod")
+	require.NoError(t, err)
+
+	_, err = cluster.RPCOptionsWithName(t.Context(), config, "prod")
+	require.ErrorContains(t, err, "clear")
 }
 
 // Each of these is a config that cannot produce a working connection. Failing

@@ -267,11 +267,24 @@ func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]
 
 	// No cluster CA here: the certificate presented is cloud's, verified against
 	// the system roots. The cluster's own identity is not what is on the wire.
-	return []rpc.StateOption{
+	opts := []rpc.StateOption{
 		rpc.WithEndpoint(endpoint),
 		rpc.WithBindAddr("[::]:0"),
 		rpc.WithBearerToken(token),
-	}, nil
+	}
+
+	// Honoured rather than ignored: on this path it is what lets a development
+	// cloud with a self-signed certificate, or none at all, be reached. It is
+	// the same admission either way — that this connection is not authenticated
+	// — so it governs both.
+	if c.Insecure {
+		opts = append(opts, rpc.WithSkipVerify)
+	}
+	if c.TLSServerName != "" {
+		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
+	}
+
+	return opts, nil
 }
 
 // cloudRelay resolves where to reach the cluster through cloud, and with what.
@@ -308,7 +321,7 @@ func (c *ClusterConfig) cloudRelay(ctx context.Context, config *Config) (endpoin
 		return "", "", fmt.Errorf("failed to authenticate with cloud: %w", err)
 	}
 
-	endpoint, err = cloudRPCEndpoint(cloudURL, c.XID)
+	endpoint, err = cloudRPCEndpoint(cloudURL, c.XID, c.Insecure)
 	if err != nil {
 		return "", "", err
 	}
@@ -319,7 +332,15 @@ func (c *ClusterConfig) cloudRelay(ctx context.Context, config *Config) (endpoin
 // cloudRPCEndpoint turns a cloud base URL into the relay remote for a cluster.
 // The scheme carries over: an http:// cloud is a development one with no
 // certificate, and must be dialed as plaintext rather than silently upgraded.
-func cloudRPCEndpoint(cloudURL, clusterXID string) (string, error) {
+//
+// Plaintext is refused beyond the loopback interface unless the entry says it
+// means it. Everything about this connection is the caller's credential — in
+// the handshake header so cloud can authorize it, and in every operation frame
+// so the cluster can — and over ws:// all of that crosses the network in the
+// clear, reusable by anyone who watched. Local development is the case that
+// justifies it; a hostname that resolves somewhere else is almost always a
+// mistake, and a silent one.
+func cloudRPCEndpoint(cloudURL, clusterXID string, allowPlaintext bool) (string, error) {
 	scheme, base := "wss://", cloudURL
 	switch {
 	case strings.HasPrefix(base, "http://"):
@@ -333,7 +354,32 @@ func cloudRPCEndpoint(cloudURL, clusterXID string) (string, error) {
 		return "", fmt.Errorf("cloud url %q names no host", cloudURL)
 	}
 
+	host, _, _ := strings.Cut(base, "/")
+	if scheme == "ws://" && !allowPlaintext && !isLoopbackHost(host) {
+		return "", fmt.Errorf(
+			"cloud url %q is unencrypted, which would send your credentials to %s in the clear; "+
+				"use https, or set insecure: true on the cluster if you meant it",
+			cloudURL, host)
+	}
+
 	return scheme + base + fmt.Sprintf(CloudRPCPath, clusterXID), nil
+}
+
+// isLoopbackHost reports whether a "host" or "host:port" names this machine.
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func (c *ClusterConfig) State(ctx context.Context, config *Config, opts ...rpc.StateOption) (*rpc.State, error) {

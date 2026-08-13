@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -249,10 +250,14 @@ func TestFramesForUnknownSessionAreIgnored(t *testing.T) {
 	r.NoError(link.deliver(ctx, cloudrpc.TypeClose, cloudrpc.Close{SessionID: "gone"}))
 }
 
-// Handlers run on the uplink's shared read loop, so a session that has stopped
-// reading must not be allowed to stall it. The session is closed instead, and —
-// this is the part that matters — the link keeps serving everyone else.
-func TestStuckSessionIsClosedRatherThanStallingTheLink(t *testing.T) {
+// Handlers run on the uplink's shared read loop, so a session drowning in
+// frames must not stall it. What that costs the session is covered next to the
+// accounting it uses; what matters here is that everyone else keeps going.
+//
+// Nothing asserts how the flood ends, deliberately. Whether the backlog fills
+// before the session's reader gives up on the garbage being sent is a race, and
+// pinning either outcome would make this a test of scheduling.
+func TestAFloodedSessionDoesNotStallTheLink(t *testing.T) {
 	r := require.New(t)
 	ctx := t.Context()
 
@@ -260,17 +265,12 @@ func TestStuckSessionIsClosedRatherThanStallingTheLink(t *testing.T) {
 
 	r.NoError(link.deliver(ctx, cloudrpc.TypeOpen, cloudrpc.Open{SessionID: "stuck"}))
 
-	// Nothing reads this session, so its backlog fills. Deliver well past the
-	// depth; the relay must give up rather than wait.
-	var err error
 	for range 4096 {
-		err = link.deliver(ctx, cloudrpc.TypeData,
-			cloudrpc.Data{SessionID: "stuck", Payload: []byte("frame")})
-		if err != nil {
+		if err := link.deliver(ctx, cloudrpc.TypeData,
+			cloudrpc.Data{SessionID: "stuck", Payload: []byte("frame")}); err != nil {
 			break
 		}
 	}
-	r.Error(err, "relay accepted an unbounded backlog for a session nothing is reading")
 
 	// The link is still usable: a fresh session opens and serves.
 	r.NoError(link.deliver(ctx, cloudrpc.TypeOpen, cloudrpc.Open{SessionID: "healthy"}))
@@ -285,6 +285,38 @@ func TestStuckSessionIsClosedRatherThanStallingTheLink(t *testing.T) {
 	res, cerr := (&example.MeterClient{Client: c}).ReadTemperature(ctx, "test")
 	r.NoError(cerr)
 	r.Equal(float32(42), res.Reading().Temperature())
+}
+
+// One session's memory is bounded, so the other half of the sum has to be too.
+func TestSessionsAreCapped(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	link := clusterWithRelay(t, ctx, "meter", example.AdaptMeter(&testMeter{temp: 42}))
+
+	var err error
+	opened := 0
+	for i := range 1024 {
+		err = link.deliver(ctx, cloudrpc.TypeOpen,
+			cloudrpc.Open{SessionID: fmt.Sprintf("s%d", i)})
+		if err != nil {
+			break
+		}
+		opened++
+	}
+
+	r.Error(err, "the relay opened %d sessions without a ceiling", opened)
+	r.Positive(opened, "the cap should leave room for real callers")
+
+	// The refusal is told, not dropped: a caller waiting on a connection that
+	// silently never answers has nothing to act on.
+	var sawClose bool
+	for len(link.out) > 0 {
+		if env := <-link.out; env.Type == cloudrpc.TypeClose {
+			sawClose = true
+		}
+	}
+	r.True(sawClose, "a refused session was never told")
 }
 
 // A session must not outlive the connection carrying it. There is no resuming a
@@ -313,14 +345,20 @@ func TestSessionEndsWithTheConnection(t *testing.T) {
 
 	dropConn()
 
-	// The relay tells the caller the session is over. Poll rather than sleep a
-	// fixed span, so this is not a race on a slow machine.
+	// The session stops serving. Each attempt is bounded rather than left to
+	// run: the close notice travels on the link that just died, so whether the
+	// caller is told or simply left waiting is not something this end decides —
+	// what it owes is to stop answering.
 	deadline := time.After(3 * time.Second)
 	for {
-		_, err = mc.ReadTemperature(t.Context(), "test")
+		callCtx, cancelCall := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		_, err = mc.ReadTemperature(callCtx, "test")
+		cancelCall()
+
 		if err != nil {
 			return
 		}
+
 		select {
 		case <-deadline:
 			r.Fail("session outlived the connection that carried it")

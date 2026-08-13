@@ -20,8 +20,35 @@ type session struct {
 
 	inbound chan []byte
 
+	// pending is the total size of the frames queued on inbound. The channel's
+	// depth bounds how many frames may wait; this bounds how much memory they
+	// may hold, which is the quantity that actually matters — the far end
+	// chooses the frame size, so a count says nothing about the cost.
+	pendingMu sync.Mutex
+	pending   int
+
 	closeOnce sync.Once
 	closed    chan struct{}
+}
+
+// reserve accounts for a frame about to be queued, and reports whether the
+// session has room for it.
+func (s *session) reserve(n int) bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+
+	if s.pending+n > maxPendingBytes {
+		return false
+	}
+	s.pending += n
+	return true
+}
+
+// release accounts for a frame the reader has taken.
+func (s *session) release(n int) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pending -= n
 }
 
 // Send wraps a frame and waits for room on the uplink. Blocking here is how
@@ -39,12 +66,14 @@ func (s *session) Recv() ([]byte, error) {
 	// that reply sits in the channel would lose it.
 	select {
 	case b := <-s.inbound:
+		s.release(len(b))
 		return b, nil
 	default:
 	}
 
 	select {
 	case b := <-s.inbound:
+		s.release(len(b))
 		return b, nil
 	case <-s.closed:
 		return nil, io.EOF

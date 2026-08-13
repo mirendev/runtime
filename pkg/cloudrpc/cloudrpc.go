@@ -31,6 +31,22 @@ const (
 	// so frames only pile up here when a session has genuinely stopped reading.
 	// The depth is what separates an ordinary scheduling delay from that.
 	inboundDepth = 64
+
+	// maxPendingBytes bounds the memory those frames may hold.
+	//
+	// The depth alone bounds nothing useful, because the far end chooses the
+	// frame size: sixty-four frames is a few kilobytes or most of a gigabyte
+	// depending on who is sending. This is the limit that holds either way.
+	maxPendingBytes = 8 << 20
+
+	// maxSessions bounds how many relayed sessions run at once.
+	//
+	// One session is one command in flight, so this is generous for an
+	// operator and still a ceiling on what a misbehaving cloud can make this
+	// cluster allocate. Cloud is authenticated, which makes this a guard
+	// against a bug there rather than against an anonymous flood — but a
+	// cluster with no limit of its own has no answer to either.
+	maxSessions = 128
 )
 
 // Link is the part of the control-plane link this package uses: somewhere to
@@ -124,6 +140,15 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 		// something to paper over. Refusing beats serving two callers one pipe.
 		return fmt.Errorf("session %s already open", req.SessionID)
 	}
+	if len(s.sessions) >= maxSessions {
+		s.mu.Unlock()
+		// Told rather than dropped: the caller is waiting on a connection that
+		// would otherwise just never answer.
+		//nolint:errcheck // the refusal is best-effort; the caller times out either way
+		s.send(ctx, TypeClose, Close{SessionID: req.SessionID, Reason: "too many open sessions"})
+		s.log.Warn("refused a relayed RPC session, too many open", "session", req.SessionID, "open", maxSessions)
+		return fmt.Errorf("too many relayed sessions open")
+	}
 	s.sessions[req.SessionID] = sess
 	s.mu.Unlock()
 
@@ -172,12 +197,22 @@ func (s *Server) handleData(_ context.Context, data json.RawMessage) error {
 		return nil
 	}
 
+	if !sess.reserve(len(msg.Payload)) {
+		s.log.Warn("relayed RPC session is holding too much, closing it",
+			"session", msg.SessionID, "limit", maxPendingBytes)
+		s.forget(sess.id)
+		sess.shutdown()
+		return fmt.Errorf("session %s backlog too large", msg.SessionID)
+	}
+
 	select {
 	case sess.inbound <- msg.Payload:
 		return nil
 	case <-sess.closed:
+		sess.release(len(msg.Payload))
 		return nil
 	default:
+		sess.release(len(msg.Payload))
 		s.log.Warn("relayed RPC session is not reading, closing it", "session", msg.SessionID)
 		s.forget(sess.id)
 		sess.shutdown()
