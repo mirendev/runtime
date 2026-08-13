@@ -16,6 +16,9 @@ import (
 type mockUploader struct {
 	uploaded []mockUploadCall
 	err      error
+	// failPaths fails only the named segments, so a test can make one segment
+	// in a run fail while the rest would otherwise succeed.
+	failPaths map[string]error
 }
 
 type mockUploadCall struct {
@@ -26,6 +29,9 @@ type mockUploadCall struct {
 func (m *mockUploader) UploadSegment(_ context.Context, volumeID, segmentPath string) (string, error) {
 	if m.err != nil {
 		return "", m.err
+	}
+	if err, ok := m.failPaths[filepath.Base(segmentPath)]; ok {
+		return "", err
 	}
 	m.uploaded = append(m.uploaded, mockUploadCall{volumeID: volumeID, segmentPath: segmentPath})
 	return "seg-id-" + filepath.Base(segmentPath), nil
@@ -248,4 +254,54 @@ func TestLogWatcherDefersUnregisteredVolume(t *testing.T) {
 
 	assert.Empty(t, uploader.uploaded, "nothing should be uploaded without a cloud id")
 	assert.FileExists(t, segPath, "the segment must survive for a later scan")
+}
+
+// The horizon is a high-water mark, not a cursor. If a failed segment were
+// skipped and a later one uploaded, the horizon would step over the gap, and
+// replay (which asks only for what sorts above the horizon) would never request
+// the skipped segment again. That is a silent hole in the restore chain.
+func TestLogWatcherStopsAtTheFirstFailedSegment(t *testing.T) {
+	tmpDir := t.TempDir()
+	diskPath := filepath.Join(tmpDir, "vol1")
+	logDir := filepath.Join(diskPath, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+
+	// TAI64N labels sort chronologically, and ReadDir returns them sorted, so
+	// "first" here means both first on disk and first in time.
+	first := "disk.40000000682f1a2c1dcd6500.log"
+	second := "disk.40000000682f1a2c1dcd6501.log"
+	for _, name := range []string{first, second} {
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, name), []byte("data"), 0644))
+	}
+
+	state := NewState()
+	state.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId:      "disk_volume/vol1",
+		VolumeId:      "vol1",
+		CloudVolumeId: "cloud-vol1",
+		DiskPath:      diskPath,
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+	})
+
+	uploader := &mockUploader{failPaths: map[string]error{first: os.ErrPermission}}
+	NewLogWatcher(slog.Default(), state, uploader, time.Second).
+		scanAndUpload(context.Background())
+
+	assert.Empty(t, uploader.uploaded, "the later segment must not upload past the gap")
+	assert.FileExists(t, filepath.Join(logDir, first))
+	assert.FileExists(t, filepath.Join(logDir, second))
+
+	horizon, err := readLogHorizon(diskPath)
+	require.NoError(t, err)
+	assert.Empty(t, horizon, "the horizon must not move past a segment that never uploaded")
+
+	// Once the failure clears, both go up and the horizon lands on the newest
+	uploader.failPaths = nil
+	NewLogWatcher(slog.Default(), state, uploader, time.Second).
+		scanAndUpload(context.Background())
+
+	require.Len(t, uploader.uploaded, 2)
+	horizon, err = readLogHorizon(diskPath)
+	require.NoError(t, err)
+	assert.Equal(t, "40000000682f1a2c1dcd6501", horizon)
 }
