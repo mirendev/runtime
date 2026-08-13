@@ -26,7 +26,7 @@ var netTransports = []netTransport{
 	{
 		name:   "websocket",
 		listen: func() rpc.StateOption { return rpc.WithWSBindAddr("localhost:0") },
-		remote: func(s *rpc.State) string { return "ws://" + s.WSListenAddr() },
+		remote: func(s *rpc.State) string { return "wss://" + s.WSListenAddr() },
 	},
 	{
 		name:   "tcp",

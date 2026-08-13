@@ -177,12 +177,27 @@ func nowStamp() string {
 	return time.Now().Format(time.RFC3339Nano)
 }
 
-// bearer returns the configured bearer token, which rides in the operation
-// frame rather than an Authorization header on this transport.
+// bearer returns the configured bearer token. On this transport it rides in the
+// operation frame rather than an Authorization header, but which token to send
+// is the same question the HTTP path asks, so both resolve it here.
+//
+// A per-request func takes precedence over a static token, and a func that fails
+// yields no token at all: the request goes unauthenticated and the server
+// rejects it, so the caller's retry picks up a token that has since been
+// refreshed. Failing hard here would deny that retry the chance.
 func (c *NetworkClient) bearer() string {
 	if c.State == nil || c.State.opts == nil {
 		return ""
 	}
+
+	if fn := c.State.opts.bearerTokenFunc; fn != nil {
+		token, err := fn()
+		if err != nil {
+			return ""
+		}
+		return token
+	}
+
 	return c.State.opts.bearerToken
 }
 

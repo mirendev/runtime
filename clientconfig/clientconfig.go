@@ -76,6 +76,20 @@ type ClusterConfig struct {
 	// TLSServerName overrides the name the server certificate is verified
 	// against, for when the dial address cannot be a certificate SAN.
 	TLSServerName string `yaml:"tls_server_name,omitempty"`
+
+	// ViaCloud routes RPC through Miren Cloud rather than dialing the cluster,
+	// for a cluster this machine has no route to. It needs XID to name the
+	// cluster and an identity to authenticate as; Hostname is unused.
+	//
+	// Opting in is explicit rather than a fallback from a failed direct dial,
+	// so that every command's answer comes from a path you chose. A silent
+	// fallback would also make every command wait out a dial timeout first.
+	ViaCloud bool `yaml:"via_cloud,omitempty"`
+
+	// CloudURL overrides where the relay lives. Normally empty: the identity's
+	// issuer is already the cloud that vouches for you, and pointing the two at
+	// different places is a mistake far more often than an intent.
+	CloudURL string `yaml:"cloud_url,omitempty"`
 }
 
 // Config represents the complete client configuration

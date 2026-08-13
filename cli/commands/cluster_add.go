@@ -33,18 +33,43 @@ func ClusterAdd(ctx *Context, opts struct {
 	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
 	Address  string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
 	Force    bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
+	ViaCloud bool   `long:"via-cloud" description:"Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to"`
 }) error {
-	return addCluster(ctx, opts.Identity, opts.Cluster, opts.Address, opts.Force)
+	return addCluster(ctx, addClusterOptions{
+		identityName: opts.Identity,
+		clusterName:  opts.Cluster,
+		address:      opts.Address,
+		force:        opts.Force,
+		viaCloud:     opts.ViaCloud,
+	})
 }
 
 // AddClusterInteractive prompts the user to select and add a cluster interactively.
 // It auto-selects the identity if only one is available.
 // Returns nil if a cluster was successfully added.
 func AddClusterInteractive(ctx *Context) error {
-	return addCluster(ctx, "", "", "", false)
+	return addCluster(ctx, addClusterOptions{})
 }
 
-func addCluster(ctx *Context, identityName, clusterName, address string, force bool) error {
+type addClusterOptions struct {
+	identityName string
+	clusterName  string
+	address      string
+	force        bool
+
+	// viaCloud writes an entry that reaches the cluster through Miren Cloud.
+	// It only makes sense in discovery mode: routing through cloud needs the
+	// cluster's XID, and asking cloud which clusters you have is the only way
+	// to learn it.
+	viaCloud bool
+}
+
+func addCluster(ctx *Context, opts addClusterOptions) error {
+	identityName, clusterName, address, force := opts.identityName, opts.clusterName, opts.address, opts.force
+
+	if opts.viaCloud && address != "" {
+		return fmt.Errorf("--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
+	}
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
@@ -140,23 +165,37 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		clusterName = localName
 		clusterXID = selectedCluster.XID
 
-		// Store all available addresses
-		allAddresses = selectedCluster.APIAddresses
-
-		// Try to connect to the cluster
-		workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
-		if err != nil {
-			return err
-		}
-
-		clusterCert = cert
-		address = workingAddress
-
-		if localName != selectedCluster.Name {
-			ctx.Info("Adding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
+		if opts.viaCloud {
+			// No address, no probe, no certificate. Every one of those describes
+			// dialing the cluster, which is the thing this entry exists to avoid
+			// — and probing would just fail slowly before writing the entry that
+			// was going to work.
+			if localName != selectedCluster.Name {
+				ctx.Info("Adding cluster '%s' as '%s', routed through Miren Cloud", selectedCluster.Name, localName)
+			} else {
+				ctx.Info("Adding cluster '%s', routed through Miren Cloud", selectedCluster.Name)
+			}
 		} else {
-			ctx.Info("Adding cluster '%s' (connected to %s)", selectedCluster.Name, workingAddress)
+			// Store all available addresses
+			allAddresses = selectedCluster.APIAddresses
+
+			// Try to connect to the cluster
+			workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
+			if err != nil {
+				return err
+			}
+
+			clusterCert = cert
+			address = workingAddress
+
+			if localName != selectedCluster.Name {
+				ctx.Info("Adding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
+			} else {
+				ctx.Info("Adding cluster '%s' (connected to %s)", selectedCluster.Name, workingAddress)
+			}
 		}
+	} else if opts.viaCloud {
+		return fmt.Errorf("--via-cloud needs to look the cluster up in cloud, so it can't be combined with --cluster; run `miren cluster add --via-cloud` and pick from the list")
 	} else if clusterName == "" || address == "" {
 		return fmt.Errorf("both --cluster and --address must be specified, or neither (to list available clusters)")
 	} else {
@@ -178,6 +217,7 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		AllAddresses: allAddresses,
 		Identity:     identityName,
 		XID:          clusterXID,
+		ViaCloud:     opts.viaCloud,
 	}
 
 	if clusterCert != nil {
@@ -243,7 +283,10 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		return fmt.Errorf("failed to save cluster configuration: %w", err)
 	}
 
-	if identityName != "" {
+	if opts.viaCloud {
+		ctx.Completed("Successfully added cluster %q with identity %q, routed through Miren Cloud", clusterName, identityName)
+		ctx.Info("Commands reach it over the connection it holds open to cloud, so it needs no address here.")
+	} else if identityName != "" {
 		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
 	} else {
 		ctx.Completed("Successfully added cluster %q at %s", clusterName, address)

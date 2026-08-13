@@ -174,6 +174,16 @@ is — its subject is a self-minted key — so it carries no RPC privilege of it
 own and is denied every non-public method by the authorizer. A caller that needs
 authorization presents a bearer token.
 
+Note where the token is *not* visible. It sits inside a CBOR frame, so anything
+standing between the two peers — a relay forwarding these messages toward a peer
+it cannot reach directly — sees only opaque bytes and cannot authorize the
+connection from them. The WebSocket backend therefore also offers the configured
+bearer as an `Authorization` header on the handshake, which is the intermediary's
+copy. It authorizes the *connection*; the in-frame bearer authorizes each
+*operation*, and only the latter reaches the `Authenticator`. Presenting the same
+token for both is what makes a relayed connection authenticate exactly as a
+direct one does.
+
 ## Versioning
 
 `opRequest.Version` names the version a stream speaks. Absent or `0` means

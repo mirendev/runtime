@@ -70,6 +70,7 @@ import (
 	"miren.dev/runtime/pkg/anywhere"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/cloudrpc"
 	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -1661,6 +1662,16 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			Log:        c.Log.With("component", "anywhere"),
 			Uplink:     link,
 		})
+		// Serving RPC over the link is what lets an operator reach a cluster
+		// they have no route to. It hands out no new authority: calls arriving
+		// this way land on the same objects the network listener serves, and are
+		// authenticated and authorized by the same chain.
+		cloudrpc.New(cloudrpc.Config{
+			Uplink: link,
+			State:  c.state,
+			Log:    c.Log.With("component", "cloudrpc"),
+		})
+
 		go func() {
 			// POP connections outlive individual reconnects but not the link
 			// itself, which is why this is tied to Run returning rather than to
