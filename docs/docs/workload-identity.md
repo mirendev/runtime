@@ -241,11 +241,11 @@ Two things have to be true for federation to work: something has to *sign* the t
 
 **The signing key never leaves your cluster.** It's generated on the cluster, written to `<data_path>/server/workload-identity.key`, and is not uploaded anywhere — not to Miren Cloud, not to us. That's the property that matters: a compromise of Miren Cloud yields public keys and no ability to mint an identity for your workloads.
 
-Who serves the keys is a separate choice, set with `--identity-anchor` (see [server config](/server-config#workload-identity)):
+Who serves the keys follows from registration (see [server config](/server-config#workload-identity)):
 
 | Anchor | `iss` claim | Discovery served by |
 | --- | --- | --- |
-| `cluster` (default) | your cluster's hostname, e.g. `https://cluster-abc.miren.systems` | your cluster's ingress |
+| `cluster` | your cluster's hostname, e.g. `https://cluster-abc.miren.systems` | your cluster's ingress |
 | `cloud` | `https://api.miren.cloud/identity/<cluster-id>` | Miren Cloud, from keys your cluster published |
 
 **Clusters registered with Miren Cloud anchor at cloud by default.** A cluster registered before this default existed, or one running without cloud, stays on the cluster anchor — an upgrade never moves an anchor on its own, because moving it changes `iss`. Anchoring at cloud costs nothing in trust and buys two things:
@@ -294,7 +294,7 @@ Workload identity turns on automatically — there's no per-app setting to enabl
 
 What such a cluster lacks is an issuer an outside party can reach. It anchors its tokens at `https://cluster.local`, which nothing outside the cluster can fetch a discovery document from, so **external federation won't work**: AWS, GCP, and Azure all need to reach your issuer URL to fetch its keys.
 
-Two ways to fix that. Give the cluster a public DNS record that routes to its ingress, and put that name in `--dns-names` so the certificate covers it; the flag alone only adds a name to the certificate, it does not publish a record or make the cluster reachable. Or register with Miren Cloud and use `--identity-anchor=cloud`, which is the option that works when the cluster isn't reachable from the internet at all.
+Two ways to fix that. Give the cluster a public DNS record that routes to its ingress, and put that name in `--dns-names` so the certificate covers it; the flag alone only adds a name to the certificate, it does not publish a record or make the cluster reachable. Or register with Miren Cloud, which anchors the cluster there and is the option that works when it isn't reachable from the internet at all.
 
 :::note[Why tokens exist either way]
 Miren's own services authenticate to each other with these tokens — the cluster-local registry and the telemetry that distributed runners ship both verify them against the signing key in-process, which needs no DNS and no publicly trusted certificate. Tying identity to being externally addressable would leave those services with nothing but the network to trust.

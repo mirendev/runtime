@@ -114,20 +114,19 @@ func (c *BuildkitConfig) SetStartEmbedded(v bool) {
 
 // Config Complete server configuration from all sources
 type Config struct {
-	AppVersion       AppVersionConfig       `toml:"app_version"`
-	Buildkit         BuildkitConfig         `toml:"buildkit"`
-	Containerd       ContainerdConfig       `toml:"containerd"`
-	Etcd             EtcdConfig             `toml:"etcd"`
-	Ingress          IngressConfig          `toml:"ingress"`
-	Labs             []string               `toml:"labs" env:"MIREN_LABS"`
-	Mode             *string                `toml:"mode" env:"MIREN_MODE"`
-	Saga             SagaConfig             `toml:"saga"`
-	Secrets          SecretsConfig          `toml:"secrets"`
-	Server           ServerConfig           `toml:"server"`
-	TLS              TLSConfig              `toml:"tls"`
-	Victorialogs     VictoriaLogsConfig     `toml:"victorialogs"`
-	Victoriametrics  VictoriaMetricsConfig  `toml:"victoriametrics"`
-	WorkloadIdentity WorkloadIdentityConfig `toml:"workload_identity"`
+	AppVersion      AppVersionConfig      `toml:"app_version"`
+	Buildkit        BuildkitConfig        `toml:"buildkit"`
+	Containerd      ContainerdConfig      `toml:"containerd"`
+	Etcd            EtcdConfig            `toml:"etcd"`
+	Ingress         IngressConfig         `toml:"ingress"`
+	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
+	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
+	Saga            SagaConfig            `toml:"saga"`
+	Secrets         SecretsConfig         `toml:"secrets"`
+	Server          ServerConfig          `toml:"server"`
+	TLS             TLSConfig             `toml:"tls"`
+	Victorialogs    VictoriaLogsConfig    `toml:"victorialogs"`
+	Victoriametrics VictoriaMetricsConfig `toml:"victoriametrics"`
 }
 
 // GetMode returns the value of Mode or its zero value if nil
@@ -670,24 +669,6 @@ func (c *VictoriaMetricsConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *VictoriaMetricsConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
-}
-
-// WorkloadIdentityConfig Workload identity token issuance
-type WorkloadIdentityConfig struct {
-	Anchor *string `toml:"anchor" env:"MIREN_WORKLOAD_IDENTITY_ANCHOR"`
-}
-
-// GetAnchor returns the value of Anchor or its zero value if nil
-func (c *WorkloadIdentityConfig) GetAnchor() string {
-	if c.Anchor != nil {
-		return *c.Anchor
-	}
-	return ""
-}
-
-// SetAnchor sets the value of Anchor
-func (c *WorkloadIdentityConfig) SetAnchor(v string) {
-	c.Anchor = &v
 }
 
 // HTTPRequestTimeoutDuration returns the timeout as a time.Duration

@@ -64,10 +64,6 @@ func (c *Config) Validate() error {
 	if err := c.Victoriametrics.Validate(); err != nil {
 		return fmt.Errorf("victoriametrics: %w", err)
 	}
-
-	if err := c.WorkloadIdentity.Validate(); err != nil {
-		return fmt.Errorf("workload_identity: %w", err)
-	}
 	return nil
 }
 
@@ -296,25 +292,6 @@ func (c *VictoriaMetricsConfig) Validate() error {
 	}
 
 	// Check for port conflicts in VictoriaMetricsConfig
-
-	return nil
-}
-
-// Validate validates WorkloadIdentityConfig
-func (c *WorkloadIdentityConfig) Validate() error {
-
-	// Validate anchor enum
-	if c.Anchor != nil {
-		validAnchor := map[string]bool{
-			"cluster": true,
-			"cloud":   true,
-		}
-		if !validAnchor[*c.Anchor] {
-			return fmt.Errorf("invalid anchor %q: must be one of [cluster cloud]", *c.Anchor)
-		}
-	}
-
-	// Check for port conflicts in WorkloadIdentityConfig
 
 	return nil
 }

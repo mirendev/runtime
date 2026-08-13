@@ -92,40 +92,6 @@ func TestIdentityAnchorNoOpLeavesRegistrationAlone(t *testing.T) {
 	require.Equal(t, before.ModTime(), after.ModTime(), "a no-op must not rewrite the registration")
 }
 
-// Startup lets an explicit setting outrank the registration, so a move made
-// under a conflicting setting would report success and change nothing.
-func TestIdentityAnchorRefusesWhenConfigOutranksIt(t *testing.T) {
-	dataPath := t.TempDir()
-	dir := writeRegistration(t, dataPath, approvedRegistration())
-
-	t.Setenv("MIREN_WORKLOAD_IDENTITY_ANCHOR", registration.AnchorCluster)
-
-	err := IdentityAnchor(anchorTestContext(t), IdentityAnchorOptions{
-		Anchor:   registration.AnchorCloud,
-		DataPath: dataPath,
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "MIREN_WORKLOAD_IDENTITY_ANCHOR")
-	require.Contains(t, err.Error(), "outranks the registration")
-
-	// And the registration is left alone, so nothing claims a move happened.
-	require.Empty(t, loadRegistration(t, dir).IdentityAnchor)
-}
-
-// A setting that agrees with the target is not a conflict.
-func TestIdentityAnchorAllowsAgreeingConfig(t *testing.T) {
-	dataPath := t.TempDir()
-	dir := writeRegistration(t, dataPath, approvedRegistration())
-
-	t.Setenv("MIREN_WORKLOAD_IDENTITY_ANCHOR", registration.AnchorCloud)
-
-	require.NoError(t, IdentityAnchor(anchorTestContext(t), IdentityAnchorOptions{
-		Anchor:   registration.AnchorCloud,
-		DataPath: dataPath,
-	}))
-	require.Equal(t, registration.AnchorCloud, loadRegistration(t, dir).IdentityAnchor)
-}
-
 func TestIdentityAnchorRejects(t *testing.T) {
 	tests := []struct {
 		name    string

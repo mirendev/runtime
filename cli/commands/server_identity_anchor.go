@@ -2,20 +2,16 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
-	"miren.dev/mflags"
 	"miren.dev/runtime/pkg/registration"
-	"miren.dev/runtime/pkg/serverconfig"
 )
 
 // IdentityAnchorOptions contains options for moving a cluster's workload
 // identity anchor.
 type IdentityAnchorOptions struct {
-	Anchor     string `position:"0" usage:"Where to anchor workload identity: cluster or cloud"`
-	DataPath   string `short:"d" long:"data-path" description:"Server data path" default:"/var/lib/miren"`
-	ConfigFile string `long:"config" description:"Path to the server configuration file (defaults to the usual discovery under --data-path)"`
+	Anchor   string `position:"0" usage:"Where to anchor workload identity: cluster or cloud"`
+	DataPath string `short:"d" long:"data-path" description:"Server data path" default:"/var/lib/miren"`
 }
 
 // IdentityAnchor moves where this cluster's workload identity is anchored.
@@ -61,14 +57,6 @@ func IdentityAnchor(ctx *Context, opts IdentityAnchorOptions) error {
 			"this usually means cloud is running without IDENTITY_ISSUER_BASE_URL set")
 	}
 
-	// The server lets an explicit setting outrank the registration, so writing
-	// the registration alone can be a no-op that still reports success. Resolve
-	// the same configuration the server will and refuse rather than promise a
-	// change that will not happen.
-	if err := checkAnchorOverride(ctx, opts, target); err != nil {
-		return err
-	}
-
 	reg.IdentityAnchor = target
 	if err := registration.SaveRegistration(registrationDir, reg); err != nil {
 		return fmt.Errorf("failed to save registration: %w", err)
@@ -96,51 +84,4 @@ func IdentityAnchor(ctx *Context, opts IdentityAnchorOptions) error {
 	restartMirenServiceIfActive(ctx)
 
 	return nil
-}
-
-// checkAnchorOverride refuses the move when server configuration pins the
-// anchor to something other than the target.
-//
-// Startup precedence is: explicit setting, then the registration, then the
-// cluster anchor. Recording the registration under an explicit setting that
-// disagrees changes nothing at boot, so the operator has to clear the setting
-// for the move to mean anything.
-//
-// A config problem must not block the move on its own: the anchor lives in the
-// registration and the server will resolve it again at startup either way, so
-// an unreadable config is reported and stepped over rather than treated as
-// fatal.
-func checkAnchorOverride(ctx *Context, opts IdentityAnchorOptions, target string) error {
-	// Mirrors what serverconfig.Load does for a nil flag set: wiring the struct
-	// through mflags is what applies the MIREN_* environment variables. Load
-	// only does that when it builds the flags itself, and we need our own so
-	// config discovery honors --data-path.
-	flags := serverconfig.NewCLIFlags()
-	fs := mflags.NewFlagSet("serverconfig")
-	if err := fs.FromStruct(flags); err != nil {
-		ctx.Warn("Could not read server configuration to check for an anchor override: %v", err)
-		return nil
-	}
-	flags.ServerConfigDataPath = &opts.DataPath
-
-	cfg, err := serverconfig.Load(opts.ConfigFile, flags, ctx.Log)
-	if err != nil {
-		ctx.Warn("Could not read server configuration to check for an anchor override: %v", err)
-		return nil
-	}
-
-	configured := cfg.WorkloadIdentity.GetAnchor()
-	if configured == "" || configured == target {
-		return nil
-	}
-
-	source := "your server configuration file"
-	if os.Getenv("MIREN_WORKLOAD_IDENTITY_ANCHOR") != "" {
-		source = "MIREN_WORKLOAD_IDENTITY_ANCHOR"
-	}
-
-	return fmt.Errorf(
-		"%s pins the workload identity anchor to %q, which outranks the registration at startup; "+
-			"clear it (or set it to %q) and run this again, otherwise the restart would leave the anchor unchanged",
-		source, configured, target)
 }

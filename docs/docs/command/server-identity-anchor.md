@@ -20,7 +20,6 @@ miren server identity-anchor <anchor> [flags]
 
 ## Flags
 
-- `--config` — Path to the server configuration file (defaults to the usual discovery under --data-path)
 - `--data-path, -d` — Server data path (default: `/var/lib/miren`)
 
 ## Global Options

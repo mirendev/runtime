@@ -53,7 +53,6 @@ type CLIFlags struct {
 	VictoriaMetricsConfigHTTPPort        *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode" env:"MIREN_VICTORIAMETRICS_HTTP_PORT"`
 	VictoriaMetricsConfigRetentionPeriod *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months" env:"MIREN_VICTORIAMETRICS_RETENTION_PERIOD"`
 	VictoriaMetricsConfigStartEmbedded   *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server" env:"MIREN_VICTORIAMETRICS_START_EMBEDDED"`
-	WorkloadIdentityConfigAnchor         *string  `long:"identity-anchor" description:"Where workload identity tokens are anchored: cluster (this cluster serves its own discovery) or cloud (miren.cloud serves discovery for it). Signing keys stay on the cluster either way. Unset defers to the anchor chosen at registration, which is cloud for newly registered clusters and cluster otherwise." env:"MIREN_WORKLOAD_IDENTITY_ANCHOR"`
 }
 
 // NewCLIFlags creates a new CLIFlags struct for parsing

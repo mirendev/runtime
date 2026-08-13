@@ -220,26 +220,10 @@ Setting `retention_period` to `0` keeps finished executions forever. That's usef
 |-------|------|---------|-------------|---------|----------|
 | `retention_period` | string | `7d` | Delete finished saga executions older than this (e.g. `7d`, `24h`). `0` keeps them indefinitely | `MIREN_SAGA_RETENTION_PERIOD` | `--saga-retention-period` |
 
-## `[workload_identity]` — Workload Identity Anchor {#workload-identity}
+## Workload Identity Anchor {#workload-identity}
 
-The anchor is the `iss` claim in the tokens this cluster mints for its apps, and the address an outside verifier fetches its public keys from. The signing key is generated on the cluster and never leaves it under either setting — this chooses who *serves* the keys, not who holds them.
+The anchor is the `iss` claim in the tokens this cluster mints for its apps, and the address an outside verifier fetches its public keys from. The signing key is generated on the cluster and never leaves it either way — the anchor decides who *serves* the keys, not who holds them.
 
-`cluster` anchors tokens at the cluster's own hostname and serves discovery from its ingress. `cloud` anchors them at `https://api.miren.cloud/identity/<cluster-id>`, with the cluster publishing the public half of its key set and Miren Cloud serving discovery for it. Anchoring at cloud is what makes federation work for a cluster that isn't reachable from the internet — one behind carrier NAT, for instance — and keeps it working while the cluster is down or its certificate is renewing.
+There is no configuration field for it, because it is a property of the registration rather than of the server. A cluster registered with Miren Cloud is anchored there, and Miren Cloud serves its discovery; a cluster installed with `--without-cloud` anchors at its own hostname and serves its own.
 
-:::warning[Changing the anchor changes `iss`]
-The `iss` claim is pinned in external trust configurations — an AWS IAM OIDC provider, a GCP workload identity pool. Switching a registered cluster's anchor invalidates every one of them until they're updated to the new issuer. Pick the anchor when you register a cluster, not after it's federating.
-:::
-
-Requires registration with Miren Cloud: an unregistered cluster has no cloud anchor to adopt and falls back to its own hostname with a warning.
-
-:::info[The default comes from registration, not from this field]
-A cluster registered with Miren Cloud anchors at `cloud`. One that registered before that default existed, or that runs without cloud, stays on `cluster`.
-:::
-
-Setting this field overrides that choice in either direction, and it outranks the registration at startup. That precedence is what makes an upgrade safe, since nothing moves an existing cluster's `iss` unless you ask for it. It also means `miren server identity-anchor` refuses to run while this field disagrees with the anchor you asked for, rather than reporting a move that the next restart would ignore.
-
-To move an already-registered cluster, prefer [`miren server identity-anchor`](/command/server-identity-anchor) over editing this field: it handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](/workload-identity#moving-the-anchor).
-
-| Field | Type | Default | Description | Env Var | CLI Flag |
-|-------|------|---------|-------------|---------|----------|
-| `anchor` | string | from registration | Where workload identity is anchored: `cluster` or `cloud` | `MIREN_WORKLOAD_IDENTITY_ANCHOR` | `--identity-anchor` |
+To change it on a registered cluster, use [`miren server identity-anchor`](/command/server-identity-anchor), which handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](/workload-identity#moving-the-anchor).

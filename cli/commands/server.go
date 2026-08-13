@@ -692,15 +692,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		// down. It is opt-in because the iss claim gets pinned in external
 		// trust configurations, so moving it breaks anyone who configured the
 		// old one.
-		// Precedence: an explicit flag, env var, or config file wins, because an
-		// operator saying so should always be able to override. Otherwise the
-		// anchor recorded at registration decides — which is how new clusters
-		// default to cloud without an upgrade moving the iss of a cluster that
-		// registered before the choice existed.
-		anchor := cfg.WorkloadIdentity.GetAnchor()
-		if anchor == "" {
-			anchor = registeredAnchor
-		}
+		// The anchor is a property of the registration, so registration is the
+		// only thing that decides it. A cluster that registered before the
+		// choice existed has none recorded and stays on its own hostname, which
+		// is what keeps an upgrade from moving anyone's iss.
+		anchor := registeredAnchor
 		if anchor == "" {
 			anchor = registration.AnchorCluster
 		}
