@@ -52,6 +52,7 @@
         "TestRoutePasswordProviderLifecycle",
         "TestAddonVariants",
         "TestAddonListAvailable",
+        "TestAddonEnvSurvivesDeployVersion",
         "TestDistributedRunnerCordon",
         "TestDistributedRunnerDrain",
         "TestDistributedRunnerList",

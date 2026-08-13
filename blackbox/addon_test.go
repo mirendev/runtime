@@ -3,6 +3,7 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -297,4 +298,73 @@ func TestAddonUnknownAddon(t *testing.T) {
 	if r.Success() {
 		t.Fatal("expected addon create to fail for unknown addon")
 	}
+}
+
+// TestAddonEnvSurvivesDeployVersion reproduces MIR-1579.
+//
+// An addon injects its variables by minting a *successor* AppVersion, so the
+// version produced by the deploy that attached the addon has never contained
+// DATABASE_URL. Re-activating that version with `deploy -V` — the documented way
+// to skip a rebuild, and the natural recovery step after a first deploy whose
+// health check failed — used to leave the app permanently without its database
+// credentials. Nothing restored them: not a rebuild, not `app restart`. The only
+// known recovery was destroying the addon, which drops the database.
+//
+// This is the exact sequence two operators hit independently on two clusters.
+func TestAddonEnvSurvivesDeployVersion(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "go-server",
+	})
+
+	// The version built before the addon exists — the one a failed first deploy
+	// names in its error, and the one an operator passes to -V.
+	preAddonVersion := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+	t.Logf("pre-addon version: %s", preAddonVersion)
+
+	m.MustRun("addon", "create", "miren-postgresql:small", "-a", name)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+
+	addonVersion := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+	if addonVersion == preAddonVersion {
+		t.Fatalf("expected the addon to mint a new version, still on %s", preAddonVersion)
+	}
+
+	// The bug trigger.
+	m.MustRun("deploy", "-a", name, "-V", preAddonVersion, "-f")
+	harness.WaitForAppReady(t, m, name, 2*time.Minute)
+
+	// The addon binding must have followed the app onto the re-activated version.
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 2*time.Minute)
+
+	// Specifically DATABASE_URL's source, not just the word "addon" somewhere in
+	// the table: deprovision only strips keys whose source is exactly "addon",
+	// so a relabelled var would be leaked when the addon is removed.
+	r := m.MustRun("env", "list", "-a", name, "--format", "json")
+	if got := envVarSource(t, r.Stdout, "DATABASE_URL"); got != "addon" {
+		t.Errorf("DATABASE_URL source = %q, want \"addon\"; a relabelled var leaks on addon destroy:\n%s", got, r.Stdout)
+	}
+}
+
+// envVarSource pulls one variable's source out of `env list --format json`.
+func envVarSource(t *testing.T, jsonOutput, key string) string {
+	t.Helper()
+
+	var vars []struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &vars); err != nil {
+		t.Fatalf("failed to parse env list JSON: %v", err)
+	}
+	for _, v := range vars {
+		if v.Name == key {
+			return v.Source
+		}
+	}
+	t.Fatalf("env var %s not found in env list", key)
+	return ""
 }

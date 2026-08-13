@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appclient "miren.dev/runtime/api/app"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
@@ -772,21 +773,6 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		return err
 	}
 
-	// If env vars are provided, create a derived version with merged variables
-	if args.HasEnvVars() && len(args.EnvVars()) > 0 {
-		derivedVersion, err := d.createDerivedVersion(ctx, &appVersion, args.EnvVars())
-		if err != nil {
-			d.Log.Error("Failed to create derived version with env vars", "error", err)
-			results.SetError(fmt.Sprintf("failed to apply env vars: %v", err))
-			return nil
-		}
-		appVersion = *derivedVersion
-		appVersionId = derivedVersion.Version
-		d.Log.Info("Created derived version with env vars",
-			"original", args.AppVersionId(), "derived", appVersionId,
-			"env_var_count", len(args.EnvVars()))
-	}
-
 	isEphemeral := args.HasEphemeralLabel() && args.EphemeralLabel() != ""
 
 	if isEphemeral {
@@ -819,6 +805,18 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			return nil
 		}
 
+		// An ephemeral deploy off an old version needs the app's addon bindings
+		// just as much as a normal one. Resolve before ReplaceExisting, which
+		// deletes the preview currently holding this label: a resolution failure
+		// after that point would leave the operator with neither the old preview
+		// nor a new one.
+		spec, needsDerived, err := d.resolveDeployConfig(ctx, appName, &appVersion, args.EnvVars())
+		if err != nil {
+			d.Log.Error("Failed to resolve config for ephemeral version", "app", appName, "version", appVersionId, "error", err)
+			results.SetError(fmt.Sprintf("failed to resolve config: %v", err))
+			return nil
+		}
+
 		if err := ephemeralx.ReplaceExisting(ctx, d.EAC, appEntity.ID, ephLabel, d.Log); err != nil {
 			results.SetError(fmt.Sprintf("failed to replace existing ephemeral version %q: %v", ephLabel, err))
 			return nil
@@ -838,6 +836,22 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 
 		ephName := appName + "-eph-" + idgen.Gen("v")
 		ephVersion.Version = ephName
+
+		// Only the ConfigVersion is minted here — ephVersion is the AppVersion
+		// that gets created, so deriving a full version pair first would leave
+		// the intermediate one orphaned. Config is blanked only alongside a new
+		// ConfigVersion, so a legacy inline-config version with nothing to carry
+		// keeps its inline config.
+		if needsDerived {
+			cvid, cvErr := d.createConfigVersion(ctx, &appVersion, spec)
+			if cvErr != nil {
+				d.Log.Error("Failed to create config version for ephemeral deploy", "app", appName, "error", cvErr)
+				results.SetError(fmt.Sprintf("failed to apply config: %v", cvErr))
+				return nil
+			}
+			ephVersion.ConfigVersion = cvid
+			ephVersion.Config = core_v1alpha.Config{}
+		}
 
 		ephID, createErr := d.EC.Create(ctx, ephName, &ephVersion)
 		if createErr != nil {
@@ -910,6 +924,57 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	// that cancellation is right here, in the failure path.
 	settleCtx, cancelSettle := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancelSettle()
+
+	// Work out what this version should actually run with: its own config, plus
+	// the addon bindings and operator-set variables that belong to the app, plus
+	// any CLI-supplied vars. When that differs from what the version already
+	// stores, activate a derived version carrying the merged config instead.
+	//
+	// This sits after Begin so the read-merge-activate runs under the deploy
+	// lock and a concurrent deploy for the same app cannot land between the read
+	// and the activation. It does not close the window against the addon
+	// controller, which swings active_version under its own CAS without taking
+	// this lock — that needs SetActiveVersion to become a CAS too (MIR-1579
+	// follow-up).
+	spec, needsDerived, err := d.resolveDeployConfig(ctx, appName, &appVersion, args.EnvVars())
+	if err != nil {
+		d.Log.Error("Failed to resolve config for version", "app", appName, "version", appVersionId, "error", err)
+		failMsg := fmt.Sprintf("failed to resolve config: %v", err)
+		if failErr := d.tracker.Fail(settleCtx, newDeploymentId, failMsg, ""); failErr != nil {
+			d.Log.Error("Failed to mark deployment as failed; releasing lock", "error", failErr)
+			d.releaseDeployLock(settleCtx, appName, newDeploymentId)
+		}
+		results.SetError(failMsg)
+		return nil
+	}
+	if needsDerived {
+		derivedVersion, deriveErr := d.deriveVersion(ctx, &appVersion, spec)
+		if deriveErr != nil {
+			d.Log.Error("Failed to create derived version", "app", appName, "error", deriveErr)
+			failMsg := fmt.Sprintf("failed to apply config: %v", deriveErr)
+			if failErr := d.tracker.Fail(settleCtx, newDeploymentId, failMsg, ""); failErr != nil {
+				d.Log.Error("Failed to mark deployment as failed; releasing lock", "error", failErr)
+				d.releaseDeployLock(settleCtx, appName, newDeploymentId)
+			}
+			results.SetError(failMsg)
+			return nil
+		}
+		appVersion = *derivedVersion
+		appVersionId = derivedVersion.Version
+
+		// The record was opened against the source version; point it at what is
+		// actually going live so the deployment history and the CLI's health
+		// wait both name the right version. This carries the version *name*, not
+		// the entity id — that is what the record holds on every other path, and
+		// what awaitHealthy on the client matches against.
+		if setErr := d.tracker.SetAppVersion(ctx, newDeploymentId, derivedVersion.Version); setErr != nil {
+			d.Log.Error("Failed to record derived version on deployment", "error", setErr)
+		}
+
+		d.Log.Info("Created derived version to preserve app config",
+			"app", appName, "source_version", sourceVersionId, "derived_version", appVersionId,
+			"variable_count", len(spec.Variables), "cli_env_var_count", len(args.EnvVars()))
+	}
 
 	// This path has no build; it goes straight to activation.
 	//
@@ -1429,8 +1494,6 @@ func (w *rpcEntityWrapper) Attrs() []entity.Attr {
 	return w.entity.Attrs()
 }
 
-// createDerivedVersion clones an existing AppVersion with CLI env vars merged
-// into its config, creates the new entity, and returns it.
 // verifyVersionOwnedByApp rejects deploying an AppVersion that belongs to a
 // different app than appName.
 //
@@ -1460,42 +1523,32 @@ func (d *DeploymentServer) verifyVersionOwnedByApp(ctx context.Context, version 
 	return nil
 }
 
-func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_v1alpha.AppVersion, envVars []*deployment_v1alpha.EnvironmentVariable) (*core_v1alpha.AppVersion, error) {
-	// Extract app name from the base version's App field (e.g. "app/go-server" -> "go-server")
-	appName := string(base.App)
-	if idx := len("app/"); len(appName) > idx && appName[:idx] == "app/" {
-		appName = appName[idx:]
-	}
-
+// deriveVersion clones an existing AppVersion onto a new ConfigSpec, minting the
+// ConfigVersion + AppVersion pair the rest of the system reads through. The
+// artifact fields are carried over verbatim: the point of this path is to run
+// exactly the image the base version built, under a different configuration.
+//
+// The pair is written the same way as the build path (servers/build/build_saga.go)
+// and the env-mutation path (api/app/envvar.go): config lives in the
+// ConfigVersion entity and the inline Config field is left blank.
+func (d *DeploymentServer) deriveVersion(ctx context.Context, base *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec) (*core_v1alpha.AppVersion, error) {
+	appName := strings.TrimPrefix(string(base.App), "app/")
 	newVersionName := appName + "-" + idgen.Gen("v")
+
+	cvid, err := d.createConfigVersion(ctx, base, spec)
+	if err != nil {
+		return nil, err
+	}
 
 	derived := &core_v1alpha.AppVersion{
 		App:            base.App,
 		Version:        newVersionName,
 		Artifact:       base.Artifact,
 		ImageUrl:       base.ImageUrl,
-		Config:         base.Config,
+		ConfigVersion:  cvid,
 		AdminToken:     base.AdminToken,
 		Manifest:       base.Manifest,
 		ManifestDigest: base.ManifestDigest,
-	}
-
-	// Merge env vars into config
-	varMap := make(map[string]core_v1alpha.Variable)
-	for _, v := range derived.Config.Variable {
-		varMap[v.Key] = v
-	}
-	for _, ev := range envVars {
-		varMap[ev.Key()] = core_v1alpha.Variable{
-			Key:       ev.Key(),
-			Value:     ev.Value(),
-			Sensitive: ev.Sensitive(),
-			Source:    "manual",
-		}
-	}
-	derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(varMap))
-	for _, v := range varMap {
-		derived.Config.Variable = append(derived.Config.Variable, v)
 	}
 
 	id, err := d.EC.Create(ctx, newVersionName, derived)
@@ -1505,4 +1558,141 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 	derived.ID = id
 
 	return derived, nil
+}
+
+// createConfigVersion writes a ConfigVersion entity holding spec, pinning any
+// backend-sourced variables first so the record names the exact secret version
+// it was built with. A spec with no references never needs a resolver, which
+// keeps clusters with no secret backends working exactly as before.
+func (d *DeploymentServer) createConfigVersion(ctx context.Context, base *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec) (entity.Id, error) {
+	if refs := coreutil.SecretReferences(spec); len(refs) > 0 {
+		if d.Secrets == nil {
+			return "", fmt.Errorf("config references secret %s but this cluster has no secret backends configured", refs[0])
+		}
+		if err := coreutil.PinSecrets(ctx, d.Secrets, spec); err != nil {
+			return "", fmt.Errorf("failed to pin secrets: %w", err)
+		}
+	}
+
+	appName := strings.TrimPrefix(string(base.App), "app/")
+	cvid, err := d.EC.Create(ctx, appName+"-"+idgen.Gen("c")+"-cfg", &core_v1alpha.ConfigVersion{
+		App:  base.App,
+		Spec: *spec,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to create derived config version: %w", err)
+	}
+	return cvid, nil
+}
+
+// resolveDeployConfig works out the config the named version should actually run
+// with, and reports whether that differs from the version's own stored config.
+//
+// A version is a snapshot of one build. Re-activating an old one (deploy -V, app
+// rollback) must not roll back the things that belong to the app rather than to
+// that build: addon-injected bindings and operator-set variables. An addon
+// injects its variables once, at provision time, by minting a *successor*
+// version — so the version a failed first deploy names has never contained
+// DATABASE_URL, and activating it verbatim stranded the app without a database
+// permanently (MIR-1579).
+//
+// CLI-supplied vars are applied last, so an explicit -e/-s always wins.
+func (d *DeploymentServer) resolveDeployConfig(ctx context.Context, appName string,
+	target *core_v1alpha.AppVersion, envVars []*deployment_v1alpha.EnvironmentVariable) (*core_v1alpha.ConfigSpec, bool, error) {
+
+	spec, err := coreutil.ResolveConfig(ctx, d.EAC, target)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolving config for version %s: %w", target.Version, err)
+	}
+
+	changed := false
+
+	if live, err := d.liveConfig(ctx, appName); err != nil {
+		return nil, false, err
+	} else if live != nil {
+		changed = coreutil.CarryForwardVars(spec, live)
+	}
+
+	for _, ev := range envVars {
+		if mergeManualVar(spec, ev) {
+			changed = true
+		}
+	}
+
+	return spec, changed, nil
+}
+
+// liveConfig resolves the config the app is running right now, or nil when it
+// has never been deployed.
+func (d *DeploymentServer) liveConfig(ctx context.Context, appName string) (*core_v1alpha.ConfigSpec, error) {
+	var appRec core_v1alpha.App
+	if err := d.EC.Get(ctx, appName, &appRec); err != nil {
+		return nil, fmt.Errorf("getting app %s: %w", appName, err)
+	}
+	if appRec.ActiveVersion == "" {
+		return nil, nil
+	}
+
+	var active core_v1alpha.AppVersion
+	if err := d.EC.GetById(ctx, appRec.ActiveVersion, &active); err != nil {
+		// A dangling active_version is not a reason to refuse the deploy; the
+		// version being activated is still perfectly valid on its own.
+		d.Log.Warn("could not read active version for env carry-forward",
+			"app", appName, "active_version", appRec.ActiveVersion, "error", err)
+		return nil, nil
+	}
+
+	spec, err := coreutil.ResolveConfig(ctx, d.EAC, &active)
+	if err != nil {
+		d.Log.Warn("could not resolve active config for env carry-forward",
+			"app", appName, "active_version", appRec.ActiveVersion, "error", err)
+		return nil, nil
+	}
+	return spec, nil
+}
+
+// mergeManualVar applies one CLI-supplied variable to the spec as an operator
+// value, reporting whether it changed anything.
+//
+// An existing entry is updated field by field rather than replaced, so the
+// app.toml metadata on it — Required and Description — survives a -e/-s that
+// shadows a declared variable. This matches mergeIntoSpec (api/app/envvar.go)
+// and the metadata carry in mergeVariablesFromAppConfig (servers/build/build.go);
+// replacing the struct would blank the description in `miren env list` and make
+// a declared-required variable look optional to the next build's validation.
+//
+// Backend comes from the incoming variable rather than the one being replaced.
+// The `-e KEY=VALUE` callers never set it, so this clears a secret reference the
+// key used to hold, which is what mergeCliEnvVars does and what you want: a
+// literal replaces the reference outright rather than being read as a new
+// reference into the backend the old value named. Carrying the incoming value
+// instead of hardcoding empty means a caller that does supply a reference keeps
+// it, and createConfigVersion pins it like any other.
+func mergeManualVar(spec *core_v1alpha.ConfigSpec, ev *deployment_v1alpha.EnvironmentVariable) bool {
+	for i, existing := range spec.Variables {
+		if existing.Key != ev.Key() {
+			continue
+		}
+
+		updated := existing
+		updated.Value = ev.Value()
+		updated.Sensitive = ev.Sensitive()
+		updated.Source = coreutil.SourceManual
+		updated.Backend = ev.Backend()
+
+		if updated == existing {
+			return false
+		}
+		spec.Variables[i] = updated
+		return true
+	}
+
+	spec.Variables = append(spec.Variables, core_v1alpha.ConfigSpecVariables{
+		Key:       ev.Key(),
+		Value:     ev.Value(),
+		Sensitive: ev.Sensitive(),
+		Source:    coreutil.SourceManual,
+		Backend:   ev.Backend(),
+	})
+	return true
 }
