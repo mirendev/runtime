@@ -98,15 +98,25 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			if w.uploader != nil {
 				_, err := w.uploader.UploadSegment(ctx, vol.VolumeId, segPath)
 				if err != nil {
-					w.log.Warn("failed to upload segment", "path", segPath, "error", err)
-					continue
+					// Stop this volume's scan rather than moving to the next
+					// segment. Entries are sorted and TAI64N labels sort
+					// chronologically, so uploading a later segment would
+					// advance the horizon past this one, and replay only asks
+					// for what sorts after the horizon. The gap would never be
+					// requested again. Leave the file and retry next scan.
+					w.log.Warn("failed to upload segment, pausing this volume's scan",
+						"path", segPath, "error", err)
+					break
 				}
 			}
 
 			// Update the log horizon so replay won't re-apply this segment
 			if err := updateLogHorizonFromPath(vol.DiskPath, segPath); err != nil {
-				w.log.Warn("failed to update log horizon, keeping segment file", "path", segPath, "error", err)
-				continue
+				// Same reasoning: if the horizon did not move, nothing later
+				// may move it past this segment.
+				w.log.Warn("failed to update log horizon, pausing this volume's scan",
+					"path", segPath, "error", err)
+				break
 			}
 
 			if err := os.Remove(segPath); err != nil {
