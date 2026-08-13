@@ -832,21 +832,6 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
 	}
 
-	// Reconcile volumes with entity server on startup to re-mount any
-	// universal mode volumes that were mounted before the last shutdown.
-	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk volumes on startup", "error", err)
-	}
-
-	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
-	r.dmc.SetEAC(eas)
-
-	// Reconcile mounts with entity server on startup to re-mount any
-	// accelerator volumes that were mounted before the last shutdown.
-	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk mounts on startup", "error", err)
-	}
-
 	// Prepare deleted volume GC (started after all controller init succeeds)
 	r.diskGC = &diskio.DeletedVolumeGC{
 		Log:      log.With("module", "deleted-volume-gc"),
@@ -858,6 +843,9 @@ func (r *Runner) SetupControllers(
 	// owned by the volume controller are cleaned up first
 	r.closers = append(r.closers, shutdownCloser{r.dvc})
 	r.closers = append(r.closers, shutdownCloser{r.dmc})
+
+	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
+	r.dmc.SetEAC(eas)
 
 	// Set up cloud auth for disk replication if configured
 	var logUploader diskio.LogSegmentUploader
@@ -911,6 +899,23 @@ func (r *Runner) SetupControllers(
 				}
 			}
 		}
+	}
+
+	// Reconcile only after the cloud clients above are in place. Startup is
+	// precisely when a host that lost its disks has images to restore, and a
+	// pass that ran before the updates client was wired would see no cloud,
+	// mount the volume, and format a fresh empty image over the gap.
+	//
+	// This also re-mounts universal volumes that were mounted before the last
+	// shutdown, and gives unregistered volumes their first shot at a cloud id.
+	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk volumes on startup", "error", err)
+	}
+
+	// Reconcile mounts with entity server on startup to re-mount any
+	// accelerator volumes that were mounted before the last shutdown.
+	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk mounts on startup", "error", err)
 	}
 
 	// Always start the log watcher so accelerator mode log segments are

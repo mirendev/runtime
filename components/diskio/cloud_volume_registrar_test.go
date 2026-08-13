@@ -198,7 +198,9 @@ func TestReconcileRegistersVolumeWithCloud(t *testing.T) {
 
 	// Recorded on the entity too, so a node that loses its state file can
 	// recover the id instead of registering a second volume for the same disk.
-	assert.Equal(t, "cloud-vol-abc", entityVol.MountId)
+	assert.Equal(t, "cloud-vol-abc", entityVol.CloudVolumeId)
+	assert.Empty(t, entityVol.MountId,
+		"mount_id keeps its documented meaning as a mount-point override")
 }
 
 func TestReconcileSurvivesRegistrationFailure(t *testing.T) {
@@ -218,7 +220,7 @@ func TestReconcileWithoutCloudLeavesVolumeLocal(t *testing.T) {
 	require.NotNil(t, volState)
 	assert.Equal(t, "vol-123", volState.VolumeId)
 	assert.Empty(t, volState.CloudVolumeId)
-	assert.Empty(t, entityVol.MountId)
+	assert.Empty(t, entityVol.CloudVolumeId)
 }
 
 func TestReconcileDoesNotReRegisterKnownVolume(t *testing.T) {
@@ -250,4 +252,44 @@ func TestReconcileDoesNotReRegisterKnownVolume(t *testing.T) {
 	// Registration is idempotent cloud-side, but a call per reconcile tick for
 	// every volume forever is still waste worth not spending.
 	assert.Len(t, registrar.calls, 1)
+}
+
+// mount_id is documented as an override for the mount point directory name.
+// Cloud registration must not quietly take that field over, or a volume that
+// set it would find its live mount relocated.
+func TestMountIdStillOverridesTheMountPoint(t *testing.T) {
+	ctx := t.Context()
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	state := NewState()
+	registrar := &stubRegistrar{volumeID: "cloud-vol-abc"}
+	vc := newTestDiskVolumeController(testutils.TestLogger(t), t.TempDir(), "test-node-1",
+		es.EAC, state, newMockDiskVolumeOps())
+	vc.SetCloudVolumeRegistrar(registrar, "cluster-a")
+
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-123",
+		NodeId:       compute.NewNodeId("test-node-1").Id(),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		MountId:      "custom-mount",
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_PENDING,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+
+	volState := state.GetVolume("disk_volume/vol-123")
+	require.NotNil(t, volState)
+	assert.Equal(t, "custom-mount", volState.VolumeId,
+		"the mount point keeps following mount_id")
+	assert.Equal(t, "cloud-vol-abc", volState.CloudVolumeId,
+		"and the cloud id lands in its own field")
+
+	// The registrar is told the local id, which is what names the mount
+	require.Len(t, registrar.calls, 1)
+	assert.Equal(t, "custom-mount", registrar.calls[0].LocalVolumeID)
 }

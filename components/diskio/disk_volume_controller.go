@@ -22,10 +22,15 @@ func alwaysMount(mode storage_v1alpha.DiskVolumeVolumeMode) bool {
 	return mode == storage_v1alpha.VM_UNIVERSAL
 }
 
-// localVolumeIDFromEntity derives the node-local volume identifier from its
-// entity id. This names the mount point and must stay stable for the life of
-// the volume, which is why the cloud's id is kept separately.
-func localVolumeIDFromEntity(entityId string) string {
+// localVolumeID resolves a volume's node-local identifier: the schema's
+// mount_id override when set, otherwise the entity id suffix. This names the
+// mount point and must stay stable for the life of the volume, which is why
+// the cloud's id for the same volume is carried separately.
+func localVolumeID(volume *storage_v1alpha.DiskVolume) string {
+	if volume.MountId != "" {
+		return volume.MountId
+	}
+	entityId := string(volume.ID)
 	if idx := strings.LastIndex(entityId, "/"); idx != -1 {
 		return entityId[idx+1:]
 	}
@@ -180,7 +185,7 @@ func (c *DiskVolumeController) ensureCloudRegistration(ctx context.Context, volu
 	if c.eac != nil {
 		attrs := []entity.Attr{
 			entity.Ref(entity.DBId, volume.ID),
-			entity.String(storage_v1alpha.DiskVolumeMountIdId, cloudVolumeId),
+			entity.String(storage_v1alpha.DiskVolumeCloudVolumeIdId, cloudVolumeId),
 		}
 		if _, err := c.eac.Patch(ctx, attrs, 0); err != nil {
 			c.log.Warn("failed to record cloud volume id on entity",
@@ -251,11 +256,9 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			return c.createVolume(ctx, volume)
 		}
 		volState := &VolumeState{
-			EntityId: entityId,
-			VolumeId: localVolumeIDFromEntity(entityId),
-			// MountId carries this volume's id in miren.cloud, empty until it
-			// has been registered there.
-			CloudVolumeId: volume.MountId,
+			EntityId:      entityId,
+			VolumeId:      localVolumeID(volume),
+			CloudVolumeId: volume.CloudVolumeId,
 			Name:          volume.Name,
 			DiskPath:      volumePath,
 			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
@@ -364,11 +367,11 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 	// Update state
 	volState := &VolumeState{
 		EntityId: entityId,
-		VolumeId: localVolumeIDFromEntity(entityId),
-		// MountId carries this volume's id in miren.cloud, empty until it has
-		// been registered there. Registration happens on reconcile so a cloud
-		// that is unreachable now does not block creating the disk.
-		CloudVolumeId: volume.MountId,
+		VolumeId: localVolumeID(volume),
+		// Empty until the disk controller registers this volume in the cloud,
+		// which happens on reconcile so an unreachable cloud does not block
+		// creating the disk.
+		CloudVolumeId: volume.CloudVolumeId,
 		Name:          volume.Name,
 		DiskPath:      volumePath,
 		SizeBytes:     sizeBytes,

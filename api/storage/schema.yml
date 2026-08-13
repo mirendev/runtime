@@ -166,6 +166,10 @@ kinds:
       type: string
       doc: Override for the mount point directory name (defaults to entity suffix if empty)
 
+    cloud_volume_id:
+      type: string
+      doc: Identifier for this volume in miren.cloud, assigned when the disk controller registers it there (empty until then)
+
     node_id:
       type: ref
       doc: Node where this volume should be provisioned
