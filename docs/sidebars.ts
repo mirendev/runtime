@@ -155,6 +155,7 @@ const sidebars: SidebarsConfig = {
         'recipes/hermes-agent',
         'recipes/amp-runner',
         'recipes/openhands-agent-server',
+        'recipes/headscale',
       ],
     },
     {

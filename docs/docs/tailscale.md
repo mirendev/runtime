@@ -16,7 +16,9 @@ This page covers both, plus what to expect from the dashboard.
 
 :::info[Applies to any overlay]
 Tailscale is the common case, but nothing here is specific to it. Headscale,
-Nebula, ZeroTier, and plain WireGuard all behave the same way.
+Nebula, ZeroTier, and plain WireGuard all behave the same way. Looking for the
+reverse — hosting headscale itself as an app on Miren? See
+[Run a headscale control server](/recipes/headscale).
 :::
 
 ## Minimum working example
