@@ -72,6 +72,16 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			continue
 		}
 
+		// A volume with no cloud id has not been registered yet. Uploading
+		// would fail, and deleting would throw away a segment that was never
+		// backed up, so leave both alone: registration is retried on every
+		// reconcile and the next scan will pick these up.
+		if w.uploader != nil && vol.CloudVolumeId == "" {
+			w.log.Debug("volume not registered with miren.cloud, deferring segment upload",
+				"volume_id", vol.VolumeId)
+			continue
+		}
+
 		logDir := filepath.Join(vol.DiskPath, "logs")
 		entries, err := os.ReadDir(logDir)
 		if err != nil {
@@ -96,7 +106,7 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 			segPath := filepath.Join(logDir, name)
 
 			if w.uploader != nil {
-				_, err := w.uploader.UploadSegment(ctx, vol.VolumeId, segPath)
+				_, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, segPath)
 				if err != nil {
 					// Stop this volume's scan rather than moving to the next
 					// segment. Entries are sorted and TAI64N labels sort

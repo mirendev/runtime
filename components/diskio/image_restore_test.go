@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -79,10 +80,11 @@ func newRestoreFixture(t *testing.T) (*DiskMountController, *VolumeState, string
 		compute_v1alpha.NewNodeId("node-1"), NewState(), newMockDiskMountOps())
 
 	vol := &VolumeState{
-		VolumeId:   "vol-1",
-		Name:       "data",
-		DiskPath:   diskPath,
-		Filesystem: "ext4",
+		VolumeId:      "vol-1",
+		CloudVolumeId: "cloud-vol-1",
+		Name:          "data",
+		DiskPath:      diskPath,
+		Filesystem:    "ext4",
 	}
 	return mc, vol, filepath.Join(diskPath, "disk.img")
 }
@@ -187,4 +189,57 @@ func TestRestoreImageLeavesNothingBehindOnCorruptPayload(t *testing.T) {
 
 	assert.NoFileExists(t, imagePath)
 	assert.NoFileExists(t, imagePath+".restoring")
+}
+
+// An unregistered volume has nothing in the cloud to restore from, and asking
+// with an empty id would just be a bad request.
+func TestRestoreImageSkipsUnregisteredVolume(t *testing.T) {
+	mc, vol, imagePath := newRestoreFixture(t)
+	vol.CloudVolumeId = ""
+
+	client := &restoreUpdatesClient{
+		updates:  []UpdateInfo{{UpdateID: "volup-1", Kind: "loop_image", OrderingKey: "0000000000000001"}},
+		payloads: map[string][]byte{"volup-1": buildSnapshot(t, "data", []byte("cloud contents"))},
+	}
+	mc.SetUpdatesClient(client)
+
+	require.NoError(t, mc.RestoreImageIfMissing(context.Background(), vol, imagePath))
+	assert.NoFileExists(t, imagePath)
+	assert.Empty(t, client.listedKinds)
+}
+
+// Universal volumes are mounted by the volume controller, not the mount
+// controller, so the restore hook has to live on that path or it never runs for
+// the one mode that needs it.
+func TestVolumeControllerRestoresImageBeforeMounting(t *testing.T) {
+	root := t.TempDir()
+	diskPath := filepath.Join(root, "volumes", "vol-1")
+	require.NoError(t, os.MkdirAll(diskPath, 0755))
+	imagePath := filepath.Join(diskPath, "disk.img")
+
+	image := bytes.Repeat([]byte("recovered contents "), 256)
+	client := &restoreUpdatesClient{
+		updates:  []UpdateInfo{{UpdateID: "volup-1", Kind: "loop_image", OrderingKey: "0000000000000001"}},
+		payloads: map[string][]byte{"volup-1": buildSnapshot(t, "data", image)},
+	}
+
+	mntOps := newMockDiskMountOps()
+	vc := NewDiskVolumeController(slog.Default(), root, compute_v1alpha.NewNodeId("node-1"),
+		NewState(), newMockDiskVolumeOps(), mntOps)
+	vc.SetUpdatesClient(client)
+
+	volState := &VolumeState{
+		EntityId:      "disk_volume/vol-1",
+		VolumeId:      "vol-1",
+		CloudVolumeId: "cloud-vol-1",
+		DiskPath:      diskPath,
+		Filesystem:    "ext4",
+		Mode:          storage_v1alpha.VM_UNIVERSAL,
+	}
+
+	require.NoError(t, vc.ensureVolumeMount(context.Background(), volState.EntityId, volState))
+
+	restored, err := os.ReadFile(imagePath)
+	require.NoError(t, err)
+	assert.Equal(t, image, restored)
 }

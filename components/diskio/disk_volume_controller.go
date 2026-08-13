@@ -22,6 +22,16 @@ func alwaysMount(mode storage_v1alpha.DiskVolumeVolumeMode) bool {
 	return mode == storage_v1alpha.VM_UNIVERSAL
 }
 
+// localVolumeIDFromEntity derives the node-local volume identifier from its
+// entity id. This names the mount point and must stay stable for the life of
+// the volume, which is why the cloud's id is kept separately.
+func localVolumeIDFromEntity(entityId string) string {
+	if idx := strings.LastIndex(entityId, "/"); idx != -1 {
+		return entityId[idx+1:]
+	}
+	return entityId
+}
+
 // DiskVolumeController watches disk_volume entities and manages sparse disk images
 // using loop devices.
 type DiskVolumeController struct {
@@ -40,6 +50,30 @@ type DiskVolumeController struct {
 	// orphanSweepDone ensures the boot-time orphan kernel state
 	// reconciliation runs at most once per controller lifetime.
 	orphanSweepDone bool
+
+	// registrar creates this volume in miren.cloud so the backup paths have
+	// something to address. nil when no cloud is configured, in which case
+	// disks are purely local.
+	registrar CloudVolumeRegistrar
+	// clusterID scopes registered volume names, so two clusters in one
+	// organization cannot collide on a shared disk name.
+	clusterID string
+
+	// updatesClient recovers a universal volume's backing image from the cloud
+	// when the node no longer has one. nil when no cloud is configured.
+	updatesClient CloudUpdatesClient
+}
+
+// SetCloudVolumeRegistrar wires cloud registration. Without it, volumes are
+// created locally and never appear in miren.cloud.
+func (c *DiskVolumeController) SetCloudVolumeRegistrar(registrar CloudVolumeRegistrar, clusterID string) {
+	c.registrar = registrar
+	c.clusterID = clusterID
+}
+
+// SetUpdatesClient wires the client used to restore a missing backing image.
+func (c *DiskVolumeController) SetUpdatesClient(client CloudUpdatesClient) {
+	c.updatesClient = client
 }
 
 func NewDiskVolumeController(log *slog.Logger, dataPath string, nodeId compute.NodeId, state *State, ops DiskVolumeOps, mntOps DiskMountOps) *DiskVolumeController {
@@ -85,13 +119,77 @@ func (c *DiskVolumeController) reconcileVolume(ctx context.Context, volume *stor
 
 	switch volume.DesiredState {
 	case storage_v1alpha.DV_PRESENT:
-		return c.reconcileVolumePresent(ctx, volume)
+		if err := c.reconcileVolumePresent(ctx, volume); err != nil {
+			return err
+		}
+		// Registration runs after the volume is otherwise reconciled, and its
+		// failures are logged rather than returned: a cloud we cannot reach
+		// must not stop a local disk from working.
+		c.ensureCloudRegistration(ctx, volume)
+		return nil
 	case storage_v1alpha.DV_ABSENT:
 		return c.reconcileVolumeAbsent(ctx, volume)
 	default:
 		c.log.Warn("unknown desired state", "desired_state", volume.DesiredState)
 		return nil
 	}
+}
+
+// ensureCloudRegistration gives a volume an identity in miren.cloud so the
+// backup paths have something to address.
+//
+// It runs on every reconcile rather than only at creation. That way a disk that
+// predates cloud enrolment, or one whose registration failed while the cloud was
+// down, picks up an id on the next pass instead of staying invisible forever.
+func (c *DiskVolumeController) ensureCloudRegistration(ctx context.Context, volume *storage_v1alpha.DiskVolume) {
+	if c.registrar == nil {
+		return
+	}
+
+	entityId := string(volume.ID)
+	volState := c.state.GetVolume(entityId)
+	if volState == nil || volState.CloudVolumeId != "" {
+		return
+	}
+	if volState.SizeBytes <= 0 {
+		// Still mid-creation; the cloud rejects a zero-size volume anyway.
+		return
+	}
+
+	cloudVolumeId, err := c.registrar.EnsureVolume(ctx, RegisterVolumeRequest{
+		LocalVolumeID: volState.VolumeId,
+		ClusterID:     c.clusterID,
+		DisplayName:   volState.Name,
+		SizeBytes:     volState.SizeBytes,
+		Filesystem:    volState.Filesystem,
+	})
+	if err != nil {
+		c.log.Warn("failed to register volume with miren.cloud, will retry on next reconcile",
+			"entity_id", entityId, "error", err)
+		return
+	}
+
+	// GetVolume handed back a copy, so re-read under the store's lock instead of
+	// writing this stale one back over whatever the mount path may have set.
+	if err := c.state.SetCloudVolumeId(entityId, cloudVolumeId); err != nil {
+		c.log.Warn("failed to persist cloud volume id", "entity_id", entityId, "error", err)
+	}
+
+	// Record it on the entity too, so a node that loses its local state file can
+	// recover the id rather than registering a second volume for the same disk.
+	if c.eac != nil {
+		attrs := []entity.Attr{
+			entity.Ref(entity.DBId, volume.ID),
+			entity.String(storage_v1alpha.DiskVolumeMountIdId, cloudVolumeId),
+		}
+		if _, err := c.eac.Patch(ctx, attrs, 0); err != nil {
+			c.log.Warn("failed to record cloud volume id on entity",
+				"entity_id", entityId, "error", err)
+		}
+	}
+
+	c.log.Info("volume registered with miren.cloud",
+		"entity_id", entityId, "cloud_volume_id", cloudVolumeId)
 }
 
 func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
@@ -152,21 +250,17 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			c.log.Warn("volume directory missing despite DV_READY, resetting to pending", "entity_id", entityId)
 			return c.createVolume(ctx, volume)
 		}
-		volumeId := volume.MountId
-		if volumeId == "" {
-			volumeId = entityId
-			if idx := strings.LastIndex(entityId, "/"); idx != -1 {
-				volumeId = entityId[idx+1:]
-			}
-		}
 		volState := &VolumeState{
-			EntityId:   entityId,
-			VolumeId:   volumeId,
-			Name:       volume.Name,
-			DiskPath:   volumePath,
-			SizeBytes:  units.GigaBytes(volume.SizeGb).Bytes().Int64(),
-			Filesystem: volume.Filesystem,
-			Mode:       volume.VolumeMode,
+			EntityId: entityId,
+			VolumeId: localVolumeIDFromEntity(entityId),
+			// MountId carries this volume's id in miren.cloud, empty until it
+			// has been registered there.
+			CloudVolumeId: volume.MountId,
+			Name:          volume.Name,
+			DiskPath:      volumePath,
+			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
+			Filesystem:    volume.Filesystem,
+			Mode:          volume.VolumeMode,
 		}
 		c.state.SetVolume(entityId, volState)
 		if err := c.state.Save(); err != nil {
@@ -267,24 +361,19 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		}
 	}
 
-	// Use MountId if set, otherwise entity suffix
-	volumeId := volume.MountId
-	if volumeId == "" {
-		volumeId = entityId
-		if idx := strings.LastIndex(entityId, "/"); idx != -1 {
-			volumeId = entityId[idx+1:]
-		}
-	}
-
 	// Update state
 	volState := &VolumeState{
-		EntityId:   entityId,
-		VolumeId:   volumeId,
-		Name:       volume.Name,
-		DiskPath:   volumePath,
-		SizeBytes:  sizeBytes,
-		Filesystem: volume.Filesystem,
-		Mode:       volume.VolumeMode,
+		EntityId: entityId,
+		VolumeId: localVolumeIDFromEntity(entityId),
+		// MountId carries this volume's id in miren.cloud, empty until it has
+		// been registered there. Registration happens on reconcile so a cloud
+		// that is unreachable now does not block creating the disk.
+		CloudVolumeId: volume.MountId,
+		Name:          volume.Name,
+		DiskPath:      volumePath,
+		SizeBytes:     sizeBytes,
+		Filesystem:    volume.Filesystem,
+		Mode:          volume.VolumeMode,
 	}
 	c.state.SetVolume(entityId, volState)
 
@@ -302,11 +391,11 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 
 	c.log.Info("disk volume created",
 		"entity_id", entityId,
-		"volume_id", volumeId,
+		"volume_id", volState.VolumeId,
 		"image_path", imagePath,
 	)
 
-	if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_READY, volumeId, ""); err != nil {
+	if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_READY, volState.VolumeId, ""); err != nil {
 		c.log.Warn("failed to update volume state to ready", "error", err)
 	}
 
@@ -518,6 +607,16 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 		"image_path", imagePath,
 		"mount_path", mountPath,
 	)
+
+	// Universal volumes are mounted here rather than by the mount controller,
+	// so this is the only place a lost image can be noticed before something
+	// tries to use it. If the cloud is holding a snapshot, rebuild from it now;
+	// otherwise the format step below would silently hand back an empty disk.
+	if alwaysMount(volState.Mode) {
+		if err := restoreImageIfMissing(ctx, c.log, c.updatesClient, volState, imagePath); err != nil {
+			return fmt.Errorf("restore volume image: %w", err)
+		}
+	}
 
 	// Check whether this backing file is already attached to a loop device
 	// in the kernel. If it is — e.g. left over from a SIGKILL'd miren whose

@@ -23,8 +23,13 @@ type DiskState struct {
 
 // VolumeState holds the state of a disk volume entity.
 type VolumeState struct {
-	VolumeID  string
-	ImagePath string
+	// VolumeID is the node-local identifier. It names the volume's directory,
+	// so it is deliberately separate from the cloud's id for the same volume.
+	VolumeID string
+	// CloudVolumeID identifies this volume in miren.cloud, empty until the disk
+	// controller has registered it there.
+	CloudVolumeID string
+	ImagePath     string
 }
 
 // LeaseState holds the state of a disk lease entity.
@@ -52,8 +57,12 @@ type BackupTarget struct {
 	Filesystem string
 	ImagePath  string
 	IsAttached bool
-	// VolumeID identifies the volume in the cloud, for backups sent there.
+	// VolumeID is the node-local volume identifier.
 	VolumeID string
+	// CloudVolumeID identifies the volume in miren.cloud, for backups sent
+	// there. Empty means the disk has not been registered with a cloud, so
+	// there is nowhere to upload to.
+	CloudVolumeID string
 }
 
 // RestoreTarget contains resolved and validated information needed to
@@ -88,7 +97,9 @@ func PrepareBackup(ctx context.Context, resolver DiskResolver, name string, data
 		Filesystem: disk.Filesystem,
 		ImagePath:  resolveImagePath(vol, dataPath),
 		IsAttached: disk.Status == StatusAttached,
-		VolumeID:   vol.VolumeID,
+
+		VolumeID:      vol.VolumeID,
+		CloudVolumeID: vol.CloudVolumeID,
 	}, nil
 }
 

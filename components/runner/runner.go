@@ -895,6 +895,18 @@ func (r *Runner) SetupControllers(
 					r.dmc.SetCloudClient(cloudDiskClient)
 					r.dmc.SetUpdatesClient(updatesClient)
 
+					// Universal volumes are mounted by the volume controller, so
+					// that is where a lost image has to be noticed.
+					r.dvc.SetUpdatesClient(updatesClient)
+
+					// Give local disks an identity in the cloud. Without this
+					// every backup call would carry an id the cloud has never
+					// heard of.
+					r.dvc.SetCloudVolumeRegistrar(
+						diskio.NewCloudVolumeRegistrar(log, cloudURL, authClient),
+						r.CloudAuth.ClusterID,
+					)
+
 					logUploader = diskio.NewCloudSegmentUploaderWithClient(log, updatesClient, diskioState)
 				}
 			}

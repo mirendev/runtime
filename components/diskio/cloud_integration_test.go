@@ -513,8 +513,9 @@ func TestCloudIntegrationFullRoundTrip(t *testing.T) {
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
-		VolumeId: volumeID,
-		DiskPath: volDir,
+		VolumeId:      volumeID,
+		CloudVolumeId: volumeID,
+		DiskPath:      volDir,
 	})
 	require.NoError(t, err)
 
@@ -564,10 +565,11 @@ func TestCloudIntegrationLogWatcherUpload(t *testing.T) {
 
 	state := NewState()
 	state.SetVolume("disk_volume/"+volumeID, &VolumeState{
-		EntityId: "disk_volume/" + volumeID,
-		VolumeId: volumeID,
-		DiskPath: volDir,
-		Mode:     storage_v1alpha.VM_ACCELERATOR,
+		EntityId:      "disk_volume/" + volumeID,
+		VolumeId:      volumeID,
+		CloudVolumeId: volumeID,
+		DiskPath:      volDir,
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
 	})
 
 	uploader := NewCloudSegmentUploader(slog.Default(), mock.URL(), authClient, state)
@@ -679,8 +681,9 @@ func TestCloudIntegrationIncrementalReplay(t *testing.T) {
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
-		VolumeId: volumeID,
-		DiskPath: volDir,
+		VolumeId:      volumeID,
+		CloudVolumeId: volumeID,
+		DiskPath:      volDir,
 	})
 	require.NoError(t, err)
 
@@ -747,8 +750,9 @@ func TestCloudIntegrationOverwriteSemantics(t *testing.T) {
 	mc.SetCloudClient(cloudClient)
 
 	err = mc.replayMissingSegments(context.Background(), &VolumeState{
-		VolumeId: volumeID,
-		DiskPath: volDir,
+		VolumeId:      volumeID,
+		CloudVolumeId: volumeID,
+		DiskPath:      volDir,
 	})
 	require.NoError(t, err)
 

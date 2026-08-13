@@ -76,8 +76,11 @@ func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*sn
 	var vol storage_v1alpha.DiskVolume
 	vol.Decode(values[0].Entity())
 	return &snapshot.VolumeState{
-		VolumeID:  vol.VolumeId,
-		ImagePath: vol.ImagePath,
+		VolumeID: vol.VolumeId,
+		// MountId is where the disk controller records the volume's id in
+		// miren.cloud once it has registered it.
+		CloudVolumeID: vol.MountId,
+		ImagePath:     vol.ImagePath,
 	}, nil
 }
 

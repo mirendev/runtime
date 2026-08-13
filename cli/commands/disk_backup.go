@@ -153,8 +153,9 @@ type cloudSnapshotDetails struct {
 // at enrolment, which is why this has to run on the server alongside the data
 // directory.
 func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.BackupTarget, snapshotPath string, details cloudSnapshotDetails) (string, error) {
-	if target.VolumeID == "" {
-		return "", fmt.Errorf("disk %q has no cloud volume; it may predate cloud registration", target.Name)
+	if target.CloudVolumeID == "" {
+		return "", fmt.Errorf("disk %q is not registered with miren.cloud yet; "+
+			"registration happens on the next disk reconcile, so try again shortly", target.Name)
 	}
 
 	reg, err := registration.LoadRegistration(filepath.Join(dataPath, "server"))
@@ -196,7 +197,7 @@ func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.Backu
 	updates := diskio.NewCloudUpdatesClient(ctx.Log, cloudURL, authClient)
 	// ctx is the command context, so Ctrl-C interrupts the upload rather than
 	// leaving it running to the end of a multi-gigabyte image.
-	return updates.Upload(ctx, target.VolumeID, diskio.UploadRequest{
+	return updates.Upload(ctx, target.CloudVolumeID, diskio.UploadRequest{
 		Kind:         diskio.KindLoopImage,
 		OrderingKey:  fmt.Sprintf("%016x", time.Now().UnixNano()),
 		SnapshotName: details.Pin,

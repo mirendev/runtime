@@ -29,7 +29,7 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 		return fmt.Errorf("reading log horizon: %w", err)
 	}
 
-	missing, err := c.cloudClient.ListLogSegments(ctx, volState.VolumeId, horizon)
+	missing, err := c.cloudClient.ListLogSegments(ctx, volState.CloudVolumeId, horizon)
 	if err != nil {
 		return fmt.Errorf("listing remote log segments: %w", err)
 	}
@@ -58,7 +58,7 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 
 	var lastLabel string
 	for _, seg := range missing {
-		if err := c.replayOneSegment(ctx, volState.VolumeId, seg.SegmentID, img); err != nil {
+		if err := c.replayOneSegment(ctx, volState.CloudVolumeId, seg.SegmentID, img); err != nil {
 			return fmt.Errorf("replaying segment %s (label %s): %w", seg.SegmentID, seg.Label, err)
 		}
 

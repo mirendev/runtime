@@ -284,10 +284,12 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		return nil
 	}
 
-	// For accelerator mode with cloud configured, acquire lease and replay segments
+	// For accelerator mode with cloud configured, acquire lease and replay
+	// segments. A volume with no cloud id has not been registered yet, so there
+	// is no lease to take and nothing to replay.
 	var leaseNonce string
-	if volState.Mode == storage_v1alpha.VM_ACCELERATOR && c.cloudClient != nil {
-		nonce, lerr := c.cloudClient.AcquireLease(ctx, volState.VolumeId)
+	if volState.Mode == storage_v1alpha.VM_ACCELERATOR && c.cloudClient != nil && volState.CloudVolumeId != "" {
+		nonce, lerr := c.cloudClient.AcquireLease(ctx, volState.CloudVolumeId)
 		if lerr != nil {
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to acquire volume lease: %v", lerr))
 			return fmt.Errorf("failed to acquire volume lease: %w", lerr)
@@ -295,7 +297,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		leaseNonce = nonce
 
 		if rerr := c.replayMissingSegments(ctx, volState); rerr != nil {
-			c.cloudClient.ReleaseLease(ctx, volState.VolumeId, nonce)
+			c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, nonce)
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to replay segments: %v", rerr))
 			return fmt.Errorf("failed to replay segments: %w", rerr)
 		}
@@ -324,7 +326,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		devicePath, err = c.ops.LbdAttach(ctx, imagePath, logDir)
 		if err != nil {
 			if leaseNonce != "" {
-				c.cloudClient.ReleaseLease(ctx, volState.VolumeId, leaseNonce)
+				c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, leaseNonce)
 			}
 			c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to attach lbd device: %v", err))
 			return fmt.Errorf("failed to attach lbd device: %w", err)
@@ -399,7 +401,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		}
 
 		if leaseNonce != "" && c.cloudClient != nil {
-			if lerr := c.cloudClient.ReleaseLease(ctx, volState.VolumeId, leaseNonce); lerr != nil {
+			if lerr := c.cloudClient.ReleaseLease(ctx, volState.CloudVolumeId, leaseNonce); lerr != nil {
 				c.log.Warn("rollback: failed to release lease", "error", lerr)
 			}
 		}

@@ -27,8 +27,16 @@ type VolumeState struct {
 	// EntityId is the ID of the disk_volume entity
 	EntityId string `json:"entity_id"`
 
-	// VolumeId is the volume identifier
+	// VolumeId is the local volume identifier. It names the mount point, so it
+	// is deliberately not the cloud's id: repointing it would relocate a live
+	// mount out from under whatever is using it.
 	VolumeId string `json:"volume_id"`
+
+	// CloudVolumeId is this volume's identifier in miren.cloud, empty until it
+	// has been registered there. Every cloud call keys off it, so empty means
+	// "not backed up yet" rather than "fall back to the local id", which the
+	// cloud would only reject.
+	CloudVolumeId string `json:"cloud_volume_id,omitempty"`
 
 	// Name is the human-readable name (from parent disk)
 	Name string `json:"name,omitempty"`
@@ -210,6 +218,22 @@ func (s *State) SetVolumeAndSave(entityId string, volume *VolumeState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Volumes[entityId] = volume
+	return s.saveLocked()
+}
+
+// SetCloudVolumeId records a volume's miren.cloud identifier and persists it.
+// It mutates the stored volume in place under the lock rather than taking a
+// whole VolumeState, so it cannot clobber mount fields another path set while
+// the caller was talking to the cloud.
+func (s *State) SetCloudVolumeId(entityId, cloudVolumeId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	v := s.Volumes[entityId]
+	if v == nil {
+		return fmt.Errorf("volume %s not found in state", entityId)
+	}
+	v.CloudVolumeId = cloudVolumeId
 	return s.saveLocked()
 }
 
