@@ -83,6 +83,7 @@ miren server --mode standalone
 
 - [`miren server config`](/command/server-config) — Server configuration management commands
 - [`miren server container`](/command/server-container) — Run the miren server in a container (Docker or Podman)
+- [`miren server identity-anchor`](/command/server-identity-anchor) — Move where this cluster's workload identity is anchored
 - [`miren server install`](/command/server-install) — Install systemd service for miren server
 - [`miren server register`](/command/server-register) — Register this cluster with miren.cloud
 - [`miren server status`](/command/server-status) — Show miren service status

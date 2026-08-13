@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testIdentityIssuerURL is the anchor the stub cloud reports back.
+const testIdentityIssuerURL = "https://api.miren.cloud/identity/test-cluster-123"
+
 func TestReportClusterStatus(t *testing.T) {
 	// Create a test server to mock the cloud API
 	var receivedStatus *StatusReport
@@ -45,7 +48,8 @@ func TestReportClusterStatus(t *testing.T) {
 
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{
-				"status": "accepted",
+				"status":              "accepted",
+				"identity_issuer_url": testIdentityIssuerURL,
 			})
 
 		default:
@@ -88,8 +92,15 @@ func TestReportClusterStatus(t *testing.T) {
 	}
 
 	// Report status
-	err = authClient.ReportClusterStatus(context.Background(), status)
+	result, err := authClient.ReportClusterStatus(context.Background(), status)
 	require.NoError(t, err)
+
+	// The anchor rides back on the response, and it is the only way a cluster
+	// registered before anchors existed ever learns its own. A decoding
+	// regression here would strand that migration path silently, so assert the
+	// field rather than discarding the response.
+	require.NotNil(t, result)
+	assert.Equal(t, testIdentityIssuerURL, result.IdentityIssuerURL)
 
 	// Verify the status was received correctly
 	assert.NotNil(t, receivedStatus)
@@ -134,7 +145,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 	ctx := context.Background()
 
 	// Test nil status
-	err = authClient.ReportClusterStatus(ctx, nil)
+	_, err = authClient.ReportClusterStatus(ctx, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "status cannot be nil")
 
@@ -142,7 +153,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 	status := &StatusReport{
 		State: "active",
 	}
-	err = authClient.ReportClusterStatus(ctx, status)
+	_, err = authClient.ReportClusterStatus(ctx, status)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cluster_id is required")
 
@@ -151,7 +162,7 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 		ClusterID: "test-cluster",
 		State:     "invalid-state",
 	}
-	err = authClient.ReportClusterStatus(ctx, status)
+	_, err = authClient.ReportClusterStatus(ctx, status)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid state")
 
@@ -161,6 +172,6 @@ func TestReportClusterStatus_Validation(t *testing.T) {
 		// State not set, should default to "unknown"
 	}
 	// This will fail to connect but won't fail validation
-	_ = authClient.ReportClusterStatus(ctx, status)
+	_, _ = authClient.ReportClusterStatus(ctx, status)
 	assert.Equal(t, "unknown", status.State)
 }

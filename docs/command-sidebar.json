@@ -358,6 +358,7 @@
       "command/server-container-install",
       "command/server-container-status",
       "command/server-container-uninstall",
+      "command/server-identity-anchor",
       "command/server-install",
       "command/server-register",
       "command/server-register-status",

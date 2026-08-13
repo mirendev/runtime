@@ -622,6 +622,9 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	// Load registration if it exists
 	var cloudAuthConfig coordinate.CloudAuthConfig
+	// registeredAnchor is the workload identity anchor chosen at registration
+	// time; empty for a cluster that registered before the choice existed.
+	var registeredAnchor string
 	registrationDir := filepath.Join(cfg.Server.GetDataPath(), "server")
 	if reg, err := registration.LoadRegistration(registrationDir); err != nil {
 		ctx.Log.Warn("failed to load registration", "error", err, "dir", registrationDir)
@@ -648,6 +651,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		cloudAuthConfig.Tags = reg.Tags
 		cloudAuthConfig.ClusterID = reg.ClusterID
 		cloudAuthConfig.DNSHostname = reg.DNSHostname
+		cloudAuthConfig.IdentityIssuerURL = reg.IdentityIssuerURL
+		registeredAnchor = reg.IdentityAnchor
 	} else if reg != nil && reg.Status == "pending" {
 		ctx.Log.Info("found pending cluster registration",
 			"cluster-name", reg.ClusterName,
@@ -677,12 +682,41 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 
 	var workloadIssuer *workloadidentity.Issuer
 	{
+		// The anchor decides only where discovery lives and what goes in the
+		// iss claim. The signing key stays here either way: cloud never sees
+		// it, so anchoring at cloud does not put cloud in a position to mint an
+		// identity, only to serve the public keys this cluster published.
+		//
+		// Anchoring at cloud is what makes federation work for a cluster that
+		// is not publicly reachable, and keeps it working while the cluster is
+		// down. It is opt-in because the iss claim gets pinned in external
+		// trust configurations, so moving it breaks anyone who configured the
+		// old one.
+		// The anchor is a property of the registration, so registration is the
+		// only thing that decides it. A cluster that registered before the
+		// choice existed has none recorded and stays on its own hostname, which
+		// is what keeps an upgrade from moving anyone's iss.
+		anchor := registeredAnchor
+		if anchor == "" {
+			anchor = registration.AnchorCluster
+		}
+		anchorAtCloud := anchor == registration.AnchorCloud
+
 		issuerURL := workloadidentity.LocalIssuerURL
 		switch {
+		case anchorAtCloud && cloudAuthConfig.IdentityIssuerURL != "":
+			issuerURL = cloudAuthConfig.IdentityIssuerURL
 		case cloudAuthConfig.DNSHostname != "":
 			issuerURL = "https://" + cloudAuthConfig.DNSHostname
 		case len(cfg.TLS.AdditionalNames) > 0:
 			issuerURL = "https://" + cfg.TLS.AdditionalNames[0]
+		}
+
+		if anchorAtCloud && cloudAuthConfig.IdentityIssuerURL == "" {
+			ctx.Log.Warn("workload identity anchor is set to cloud but cloud assigned none; "+
+				"falling back to the cluster's own anchor. Re-register, or check that "+
+				"miren.cloud has IDENTITY_ISSUER_BASE_URL configured",
+				"issuer", issuerURL)
 		}
 
 		workloadIssuer, err = workloadidentity.NewIssuer(workloadidentity.IssuerConfig{

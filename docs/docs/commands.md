@@ -262,6 +262,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server container install`](/command/server-container-install) | Install miren server in a container |
 | [`miren server container status`](/command/server-container-status) | Show status of miren server container |
 | [`miren server container uninstall`](/command/server-container-uninstall) | Uninstall miren server container |
+| [`miren server identity-anchor`](/command/server-identity-anchor) | Move where this cluster's workload identity is anchored |
 | [`miren server install`](/command/server-install) | Install systemd service for miren server |
 | [`miren server register`](/command/server-register) | Register this cluster with miren.cloud |
 | [`miren server register status`](/command/server-register-status) | Show cluster registration status |

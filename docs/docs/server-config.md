@@ -219,3 +219,11 @@ Setting `retention_period` to `0` keeps finished executions forever. That's usef
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
 | `retention_period` | string | `7d` | Delete finished saga executions older than this (e.g. `7d`, `24h`). `0` keeps them indefinitely | `MIREN_SAGA_RETENTION_PERIOD` | `--saga-retention-period` |
+
+## Workload Identity Anchor {#workload-identity}
+
+The anchor is the `iss` claim in the tokens this cluster mints for its apps, and the address an outside verifier fetches its public keys from. The signing key is generated on the cluster and never leaves it either way — the anchor decides who *serves* the keys, not who holds them.
+
+There is no configuration field for it, because it is a property of the registration rather than of the server. A cluster registered with Miren Cloud is anchored there, and Miren Cloud serves its discovery; a cluster installed with `--without-cloud` anchors at its own hostname and serves its own.
+
+To change it on a registered cluster, use [`miren server identity-anchor`](/command/server-identity-anchor), which handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](/workload-identity#moving-the-anchor).

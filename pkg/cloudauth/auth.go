@@ -29,10 +29,32 @@ func NewAuthClient(serverURL string, keyPair *KeyPair) (*AuthClient, error) {
 		return nil, fmt.Errorf("keyPair cannot be nil")
 	}
 	return &AuthClient{
-		serverURL:  serverURL,
-		keyPair:    keyPair,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		serverURL: serverURL,
+		keyPair:   keyPair,
+		httpClient: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: refuseDowngrade,
+		},
 	}, nil
+}
+
+// refuseDowngrade stops a redirect from carrying credentials off TLS.
+//
+// Every request this client makes has the service account bearer token on it,
+// and net/http keeps the Authorization header across a same-host redirect. A
+// cloud URL that answered with a redirect to plain http would therefore put the
+// token on the wire in the clear. Only the downgrade is refused, so a plain
+// http:// cloud URL — which is how the dev environment reaches
+// http://miren.host:3001 — still redirects normally.
+func refuseDowngrade(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	if previous := via[len(via)-1]; previous.URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect from %s to %s: it would send credentials over plaintext",
+			previous.URL.Scheme, req.URL.Scheme)
+	}
+	return nil
 }
 
 // BeginAuthRequest is the request to begin authentication

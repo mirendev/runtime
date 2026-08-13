@@ -60,7 +60,13 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// cleanup was mirrored into undoBootContainers in create_saga.go,
 		// alongside the disk-lease and token-state releases that are duplicated
 		// there for exactly the same reason.
-		"sandbox.go":  "3e889b582b3db2059dc1b729cec6fff89b3bec32c15278cb1b30d723d7e72326",
+		// Anchor moves: boot reconciliation notices a mounted token minted
+		// under a different issuer and rewrites every token file once, rather
+		// than leaving sandboxes on a superseded issuer until the 45-minute
+		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
+		// is only reached from Init, which both paths share, and the saga
+		// controller has no boot reconciliation of its own.
+		"sandbox.go":  "b574475091e6ea0f42be38e6b8f22ecdeda84b7c5a0b8004fa071e0a0657ae12",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

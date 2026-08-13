@@ -3,28 +3,43 @@
 //
 // # Trust Model
 //
-// Each cluster is its own OIDC issuer with an independent signing key and JWKS
-// endpoint. New clusters sign with RS256 (RSA), the universally supported
-// default; clusters provisioned before that default keep their EdDSA key
-// advertised in JWKS for verification while new tokens are signed with a freshly
-// generated RS256 key. Miren Cloud is not in the trust path — it only contributes
-// organization_id and cluster_id as claim metadata during registration. This
-// per-cluster model means external verifiers (e.g., AWS IAM OIDC) must
-// configure trust per cluster rather than once for all of Miren. A future
-// central issuer could reduce that to one trust config scoped by claims, but
-// would introduce a single point of compromise for all clusters.
+// Each cluster is its own OIDC issuer with an independent signing key. New
+// clusters sign with RS256 (RSA), the universally supported default; clusters
+// provisioned before that default keep their EdDSA key advertised in JWKS for
+// verification while new tokens are signed with a freshly generated RS256 key.
+//
+// Miren Cloud is never in the signing path. The private key is generated here,
+// stays on disk here, and is not sent anywhere — so a compromise of cloud
+// yields public keys and no ability to mint an identity. Cloud contributes
+// organization_id and cluster_id as claim metadata during registration and,
+// when a cluster opts in, hosts discovery on the cluster's behalf.
 //
 // # Issuer URL (iss claim)
 //
 // The issuer URL is the cluster's cryptographic identity anchor — it's baked
-// into every token and pinned in external trust configurations. For
-// cloud-registered clusters, this is the provisioned DNS hostname
-// (e.g., https://cluster-abc.miren.systems). For bare-metal clusters without
-// registration, it falls back to cfg.TLS.AdditionalNames[0], meaning the
-// identity anchor is determined by config list order. This fallback is
-// intentionally simple for v1; a more deliberate selection mechanism (e.g.,
-// explicit --issuer-url flag) may be warranted if bare-metal OIDC federation
-// sees adoption.
+// into every token and pinned in external trust configurations. In precedence
+// order:
+//
+//   - The cloud-assigned anchor (https://api.miren.cloud/identity/<cluster-id>),
+//     when the cluster is registered and --identity-anchor=cloud. The cluster
+//     publishes the public half of its key set and cloud serves discovery for
+//     it. This is what lets a cluster behind carrier NAT federate to an outside
+//     verifier at all, and keeps federation working while the cluster is down.
+//   - The cloud-provisioned DNS hostname (e.g. https://cluster-abc.miren.systems),
+//     with the cluster serving its own discovery. The default, because moving a
+//     registered cluster's iss breaks every external trust configuration pinned
+//     to the old value.
+//   - cfg.TLS.AdditionalNames[0] for bare-metal clusters without registration,
+//     meaning the anchor is determined by config list order. This fallback is
+//     intentionally simple for v1; a more deliberate selection mechanism (e.g.,
+//     an explicit --issuer-url flag) may be warranted if bare-metal OIDC
+//     federation sees adoption.
+//
+// Anchoring per cluster means external verifiers configure trust per cluster
+// rather than once for all of Miren. A central issuer would reduce that to one
+// trust config scoped by claims, but would introduce a single point of
+// compromise for every cluster — which is precisely what keeping the signing
+// keys here avoids, cloud-hosted discovery or not.
 //
 // A cluster with no hostname at all still gets an issuer, anchored at
 // LocalIssuerURL. Identity is not conditional on being externally addressable:
@@ -36,6 +51,8 @@
 package workloadidentity
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +61,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,10 +90,14 @@ type Issuer struct {
 	// advertised holds additional public keys published in JWKS for
 	// verification only (e.g. a rotated-out previous key, or a legacy EdDSA key
 	// retained after migrating signing to RS256).
-	advertised     []jose.JSONWebKey
-	issuerURL      string
-	organizationID string
-	clusterID      string
+	advertised []jose.JSONWebKey
+	issuerURL  string
+	// supersededIssuer is an anchor this cluster used to mint under, still
+	// accepted for verification until the tokens carrying it have expired.
+	// Empty once the overlap lapses. Never signed with.
+	supersededIssuer string
+	organizationID   string
+	clusterID        string
 }
 
 // TokenIssuer is the minting surface the sandbox controller depends on. The
@@ -187,6 +209,20 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 		return nil, fmt.Errorf("reading previous signing key %s: %w", prevPath, err)
 	}
 
+	// Reconcile the anchor against the one the last run used. A move is
+	// detected here, by the only thing that knows both values, rather than by
+	// whatever changed the setting — which would otherwise have to re-derive
+	// this precedence chain and could record the wrong outgoing anchor.
+	//
+	// Tokens minted under a superseded anchor are still in circulation,
+	// including ones an app read once and cached, so it keeps verifying for the
+	// rest of its overlap window even though nothing is signed with it.
+	superseded, err := trackAnchorMove(filepath.Dir(keyPath), issuerURL, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	iss.supersededIssuer = superseded
+
 	// Load additional live keys from the workload-identity.d directory (a sibling
 	// of the primary key file). Each key there is sign-capable and published in
 	// JWKS, enabling key rotation and multiple key types to coexist. A missing
@@ -236,12 +272,50 @@ func (iss *Issuer) IssuerURL() string {
 	return iss.issuerURL
 }
 
+// AcceptedIssuers are the iss values this cluster will verify: the current
+// anchor, and a superseded one still inside its overlap window.
+//
+// Only the current anchor is ever minted under — see IssuerURL. Verification
+// paths must consult this instead of comparing against IssuerURL, or an anchor
+// flip invalidates every token already in circulation.
+func (iss *Issuer) AcceptedIssuers() []string {
+	if iss.supersededIssuer == "" {
+		return []string{iss.issuerURL}
+	}
+	return []string{iss.issuerURL, iss.supersededIssuer}
+}
+
+// AcceptsIssuer reports whether tokens carrying this iss should be verified.
+func (iss *Issuer) AcceptsIssuer(issuer string) bool {
+	return issuer != "" && (issuer == iss.issuerURL || issuer == iss.supersededIssuer)
+}
+
 func (iss *Issuer) PublicKey() any {
 	return iss.primary.public
 }
 
 func (iss *Issuer) Hostname() string {
-	u, err := url.Parse(iss.issuerURL)
+	return issuerHostname(iss.issuerURL)
+}
+
+// Hostnames are the hosts this cluster answers discovery on: the current anchor
+// and a superseded one still inside its overlap window.
+//
+// The old host keeps serving so an external verifier pinned to the previous
+// anchor can still fetch keys for tokens minted before the flip. Nothing new is
+// issued under it, so the window closes on its own.
+func (iss *Issuer) Hostnames() []string {
+	var hosts []string
+	for _, issuer := range iss.AcceptedIssuers() {
+		if host := issuerHostname(issuer); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+func issuerHostname(issuer string) string {
+	u, err := url.Parse(issuer)
 	if err != nil {
 		return ""
 	}
@@ -403,6 +477,26 @@ func (iss *Issuer) VerificationKeys() []jose.JSONWebKey {
 
 func (iss *Issuer) JWKSDocument() ([]byte, error) {
 	return json.Marshal(jose.JSONWebKeySet{Keys: iss.VerificationKeys()})
+}
+
+// KeySetFingerprint identifies the current set of verification keys.
+//
+// It exists so publication to Miren Cloud can be skipped when nothing changed:
+// the key set turns over on rotation and otherwise stays put for months, so
+// republishing an identical set on every status cycle is pure noise. Sorted
+// before hashing so a reordering of the same keys is not mistaken for a
+// rotation.
+func (iss *Issuer) KeySetFingerprint() string {
+	keys := iss.VerificationKeys()
+
+	ids := make([]string, 0, len(keys))
+	for _, key := range keys {
+		ids = append(ids, key.KeyID)
+	}
+	sort.Strings(ids)
+
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func loadOrGenerateKey(keyPath string) (*signingKey, error) {

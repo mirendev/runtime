@@ -74,19 +74,44 @@ type Status struct {
 	OrganizationID   string `json:"organization_id,omitempty"`
 	ServiceAccountID string `json:"service_account_id,omitempty"`
 	DNSHostname      string `json:"dns_hostname,omitempty"`
+	// IdentityIssuerURL is where cloud will anchor this cluster's workload
+	// identity if the cluster asks it to. Advertised at registration rather
+	// than only on first key publication so a cluster can adopt the anchor on
+	// the boot it registers, instead of minting a boot's worth of tokens under
+	// one iss and then switching. Empty when cloud has no anchor configured.
+	IdentityIssuerURL string `json:"identity_issuer_url,omitempty"`
 }
+
+// Workload identity anchors. See pkg/workloadidentity for what the choice
+// means; in short, both keep the signing key on the cluster, and this decides
+// only who serves discovery and what goes in the iss claim.
+const (
+	AnchorCluster = "cluster"
+	AnchorCloud   = "cloud"
+)
 
 // StoredRegistration contains the registration data stored on disk
 type StoredRegistration struct {
-	ClusterID        string            `json:"cluster_id"`
-	ClusterName      string            `json:"cluster_name"`
-	OrganizationID   string            `json:"organization_id"`
-	ServiceAccountID string            `json:"service_account_id"`
-	DNSHostname      string            `json:"dns_hostname,omitempty"` // Auto-provisioned DNS hostname from cloud
-	PrivateKey       string            `json:"private_key"`            // PEM encoded private key
-	CloudURL         string            `json:"cloud_url"`
-	RegisteredAt     time.Time         `json:"registered_at"`
-	Tags             map[string]string `json:"tags,omitempty"`
+	ClusterID        string `json:"cluster_id"`
+	ClusterName      string `json:"cluster_name"`
+	OrganizationID   string `json:"organization_id"`
+	ServiceAccountID string `json:"service_account_id"`
+	DNSHostname      string `json:"dns_hostname,omitempty"` // Auto-provisioned DNS hostname from cloud
+	// IdentityIssuerURL is the workload identity anchor cloud assigned this
+	// cluster. Persisted because the iss claim it produces gets pinned in
+	// external trust configurations, so it has to survive restarts unchanged
+	// rather than being recomputed from whatever cloud reports today.
+	IdentityIssuerURL string `json:"identity_issuer_url,omitempty"`
+	// IdentityAnchor records which anchor this cluster registered with:
+	// AnchorCloud or AnchorCluster. The choice is made at registration, so it
+	// lives with the registration rather than in server config — a cluster that
+	// registered before this existed finds no value here and keeps the cluster
+	// anchor, which is what stops an upgrade from silently moving anyone's iss.
+	IdentityAnchor string            `json:"identity_anchor,omitempty"`
+	PrivateKey     string            `json:"private_key"` // PEM encoded private key
+	CloudURL       string            `json:"cloud_url"`
+	RegisteredAt   time.Time         `json:"registered_at"`
+	Tags           map[string]string `json:"tags,omitempty"`
 
 	// Pending registration fields
 	Status         string    `json:"status,omitempty"` // "pending" or "approved"

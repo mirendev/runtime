@@ -13,12 +13,19 @@ func (h *Server) isIssuerHost(reqHost string) bool {
 	if err != nil {
 		host = reqHost
 	}
-	issuerHost := h.workloadIssuer.Hostname()
-	issuerHostOnly, _, err := net.SplitHostPort(issuerHost)
-	if err != nil {
-		issuerHostOnly = issuerHost
+
+	// Matches a superseded anchor too, so a verifier pinned to the previous
+	// issuer can still fetch keys for tokens minted before the anchor moved.
+	for _, issuerHost := range h.workloadIssuer.Hostnames() {
+		issuerHostOnly, _, err := net.SplitHostPort(issuerHost)
+		if err != nil {
+			issuerHostOnly = issuerHost
+		}
+		if host == issuerHostOnly {
+			return true
+		}
 	}
-	return host == issuerHostOnly
+	return false
 }
 
 func (h *Server) handleOIDCDiscovery(w http.ResponseWriter, req *http.Request) {
