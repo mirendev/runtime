@@ -352,29 +352,6 @@ relayed session that goes quiet long enough hits the timeout from
 rather than removing them.
 :::
 
-## Roadblock checklist
-
-1. Don't set a `command` — the image has no shell, and the sandbox dies at startup if you do.
-2. Give the image a `CMD ["serve"]`. Upstream sets an `ENTRYPOINT` but no `CMD`, so without
-   it headscale starts with no subcommand.
-3. Name the service **`web`**, or routing returns `error acquiring lease: app/headscale`.
-4. Set `listen_addr` to `0.0.0.0:8080`, never `127.0.0.1`.
-5. `HEADSCALE_SERVER_URL` must match the routed hostname exactly — clients are handed that
-   URL and keep using it.
-6. Include a `dns` block, or startup fails on
-   `dns.nameservers.global must be set when dns.override_local_dns is true`.
-7. Keep the `server_url` host out from under `dns.base_domain`, or you get
-   `server_url cannot be part of base_domain in a way that could make the DERP and headscale server unreachable`.
-   `headscale.example.com` with a base domain of `ts.example.com` is fine;
-   `example.com` as the base domain is not.
-8. Raise `http_request_timeout` before connecting a client — see
-   [Give clients a longer timeout](#longer-timeout).
-9. Run admin commands with `miren sandbox exec <id> -- <cmd>`, against the sandbox actually
-   serving headscale. `preauthkeys create` wants the user's numeric ID, not the name.
-10. `WRN listening without TLS but ServerURL does not start with http://` is expected.
-11. For the embedded DERP, open 3478/udp in the cloud firewall as well as declaring the
-    node port.
-
 ## Next steps
 
 - [App Configuration](/app-configuration) — the full `app.toml` reference in context
