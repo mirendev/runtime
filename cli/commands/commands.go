@@ -682,7 +682,7 @@ miren deploy --analyze
 
 	d.Dispatch("route timeout", Infer("route timeout", "Override the ingress request timeout for an HTTP route", RouteTimeout,
 		WithExample(mflags.Example{
-			Name: "Give a long-poll route a 10 minute timeout",
+			Name: "Give a long-poll route a 10-minute timeout",
 			Body: "miren route timeout example.com 10m",
 		}),
 		WithExample(mflags.Example{

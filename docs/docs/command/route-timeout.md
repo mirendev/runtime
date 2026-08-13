@@ -36,7 +36,7 @@ miren route timeout <host> <timeout> [flags]
 
 ## Examples
 
-**Give a long-poll route a 10 minute timeout:**
+**Give a long-poll route a 10-minute timeout:**
 
 ```bash
 miren route timeout example.com 10m
