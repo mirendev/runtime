@@ -1,0 +1,34 @@
+name = "task-app"
+
+# No services at all: this app is nothing but tasks. `web = false` is how it
+# says so out loud -- without it the build fails rather than guessing, because
+# the platform would otherwise synthesize a web service from the image
+# entrypoint and keep it running forever.
+web = false
+
+[tasks.hello]
+command = "/bin/app hello"
+timeout = "2m"
+
+[tasks.fail]
+command = "/bin/app fail"
+timeout = "2m"
+
+[tasks.slow]
+command = "/bin/app slow"
+timeout = "5m"
+
+[tasks.brief]
+command = "/bin/app brief"
+timeout = "2m"
+
+[tasks.showenv]
+command = "/bin/app env"
+timeout = "2m"
+
+# Declared env, which a run has to carry into the container. A task names no
+# service, so this travels a different path than a service's env and had none
+# at all until it was wired up.
+[[tasks.showenv.env]]
+key = "TASK_SECRET"
+value = "carried"

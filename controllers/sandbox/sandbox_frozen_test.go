@@ -27,12 +27,40 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
-		// (resolveAppAndRole) so the token carries it. Secret materialization
-		// also lives under BuildSpec, substituting referenced values in memory
-		// just before the container is created. The saga path needs no matching
-		// edit for either: it reaches the same code through sandboxOps.BuildSpec,
+		// (resolveAppAndRole) so the token carries it. The saga path needs no
+		// matching edit: it reaches the same code through sandboxOps.BuildSpec,
 		// which delegates to SandboxController.BuildSpec.
-		"sandbox.go":  "f7191f5775c675318f63c7fae229578cdc59238949a0487193b8545de59aec7e",
+		//
+		// RFD-97 app tasks (MIR-853): monitorTaskExit records the exit code
+		// alongside the STOPPED transition, and Create honors
+		// SandboxSpec.RestartPolicy == never rather than rebooting a sandbox
+		// whose command must execute at most once.
+		//
+		// Also adds the stdio fan-out Hub: attachable containers get a stdin
+		// FIFO at boot and their output teed to attached clients.
+		//
+		// Saga path audited per the instructions below. BootContainers and
+		// monitorTaskExit are not duplicated there -- create_saga.go reaches
+		// them through sandbox_ops.go, so it inherits the exit recording. The
+		// Create dispatch *is* duplicated, so both restart-policy guards were
+		// mirrored into SagaSandboxController.Create.
+		//
+		// monitorTaskExit also reports the exit to the task run that owns the
+		// sandbox, which is what makes an exit code reliable: the sandbox entity
+		// has several writers and a stale read-modify-write can lose one, while
+		// the run has a single writer plus that input.
+		//
+		// createSandbox's boot-failure defer now also tears down the sandbox's
+		// Hubs. A Hub is created before the container's task is, so a container
+		// that never started leaves one behind, and an attaching client finds it
+		// and blocks on output that can never arrive.
+		//
+		// Saga path audited: this one is NOT inherited. saga_controller.go
+		// replaces createSandbox wholesale with createSandboxViaSaga, so the
+		// cleanup was mirrored into undoBootContainers in create_saga.go,
+		// alongside the disk-lease and token-state releases that are duplicated
+		// there for exactly the same reason.
+		"sandbox.go":  "3e889b582b3db2059dc1b729cec6fff89b3bec32c15278cb1b30d723d7e72326",
 		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

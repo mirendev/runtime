@@ -42,7 +42,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "df3e94413eb036c1", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
+	assert.Equal(t, "6a1ff70cbfb3c296", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 
@@ -298,4 +298,43 @@ func TestSpecsMatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A pool whose spec differs only in restart policy must not be reused: the
+// policy decides whether a vanished container is rebooted or the sandbox is
+// retired, which is the difference between a task run executing once and
+// executing twice.
+func TestSpecsMatchDetectsRestartPolicyChange(t *testing.T) {
+	a := baseSpec()
+	b := baseSpec()
+	b.RestartPolicy = compute_v1alpha.SandboxSpecNEVER
+
+	reason, ok := specsMatch(a, b)
+	assert.False(t, ok)
+	assert.Contains(t, reason, "restart policy")
+}
+
+// Stdin and Tty are fixed by containerd when the task is created and cannot be
+// added to a running container, so a spec that differs in either needs new
+// containers rather than a reused pool.
+func TestSpecsMatchDetectsStdinAndTtyChanges(t *testing.T) {
+	t.Run("stdin", func(t *testing.T) {
+		a := baseSpec()
+		b := baseSpec()
+		b.Container[0].Stdin = true
+
+		reason, ok := specsMatch(a, b)
+		assert.False(t, ok)
+		assert.Contains(t, reason, "stdin")
+	})
+
+	t.Run("tty", func(t *testing.T) {
+		a := baseSpec()
+		b := baseSpec()
+		b.Container[0].Tty = true
+
+		reason, ok := specsMatch(a, b)
+		assert.False(t, ok)
+		assert.Contains(t, reason, "tty")
+	})
 }

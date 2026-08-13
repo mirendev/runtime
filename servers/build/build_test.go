@@ -14,6 +14,8 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/entity"
@@ -731,6 +733,68 @@ func TestBuildServicesConfig(t *testing.T) {
 				require.Len(t, services, 1)
 				assert.Equal(t, "web", services[0].Name)
 				assert.Equal(t, "npm start", services[0].Command)
+			},
+		},
+		{
+			name: "web = false suppresses the synthesized web service",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(false),
+				Tasks: map[string]*appconfig.TaskConfig{
+					"session": {Command: "/bin/bash"},
+				},
+			},
+			procfileServices: nil,
+			ensureWeb:        true,
+			webDefault:       "would-have-been-synthesized",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				assert.Empty(t, services, "a task-only app runs nothing between invocations")
+			},
+		},
+		{
+			name: "web = false does not remove an explicitly declared web service",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(false),
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {Command: "bin/server"},
+				},
+			},
+			ensureWeb:  true,
+			webDefault: "unused",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "bin/server", services[0].Command,
+					"the opt-out suppresses synthesis, it does not delete config the user wrote")
+			},
+		},
+		{
+			name: "web = true is the same as leaving it unset",
+			appConfig: &appconfig.AppConfig{
+				Web: ptr(true),
+			},
+			ensureWeb:  true,
+			webDefault: "bin/server",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				require.Len(t, services, 1)
+				assert.Equal(t, "web", services[0].Name)
+			},
+		},
+		{
+			// The historical default has to survive: an app declaring only a
+			// worker still gets a web, or its pool would drain on next deploy.
+			name: "unset web still synthesizes alongside a declared worker",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"worker": {Command: "bin/worker"},
+				},
+			},
+			ensureWeb:  true,
+			webDefault: "bin/server",
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				names := make([]string, 0, len(services))
+				for _, s := range services {
+					names = append(names, s.Name)
+				}
+				assert.ElementsMatch(t, []string{"web", "worker"}, names)
 			},
 		},
 		{
@@ -1808,7 +1872,7 @@ func TestComputeBuildEnvVars(t *testing.T) {
 	}
 }
 
-func TestValidateServicesExist(t *testing.T) {
+func TestValidateWorkloadsExist(t *testing.T) {
 	tests := []struct {
 		name    string
 		config  core_v1alpha.ConfigSpec
@@ -1842,7 +1906,7 @@ func TestValidateServicesExist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateServicesExist(tt.config)
+			err := validateWorkloadsExist(tt.config)
 			if tt.wantErr {
 				assert.ErrorIs(t, err, errNoServices)
 			} else {
@@ -2529,4 +2593,388 @@ func TestValidateDiskConfigsAutoCreate(t *testing.T) {
 
 	err := validateDiskConfigs(ctx, server.EAC, spec)
 	assert.NoError(t, err)
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestBuildTasksConfig(t *testing.T) {
+	t.Run("nil and empty produce no tasks", func(t *testing.T) {
+		assert.Nil(t, buildTasksConfig(nil, nil))
+		assert.Nil(t, buildTasksConfig(&appconfig.AppConfig{}, nil))
+	})
+
+	t.Run("resolves defaults and desugars every", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Tasks: map[string]*appconfig.TaskConfig{
+				"migrate": {
+					Command: "bin/rails db:migrate",
+					Trigger: appconfig.TriggerDeploy,
+					Timeout: "10m",
+					Retries: 2,
+				},
+				"cleanup": {
+					Command: "bin/cleanup",
+					Trigger: appconfig.TriggerSchedule,
+					Every:   "6h",
+				},
+				"reindex": {
+					Command:       "bin/reindex",
+					MaxConcurrent: 4,
+					EnvVars: []appconfig.AppEnvVar{
+						{Key: "BATCH", Value: "500"},
+					},
+				},
+			},
+		}
+
+		tasks := buildTasksConfig(ac, nil)
+		require.Len(t, tasks, 3)
+
+		byName := make(map[string]core_v1alpha.ConfigSpecTasks, len(tasks))
+		for _, tk := range tasks {
+			byName[tk.Name] = tk
+		}
+
+		migrate := byName["migrate"]
+		assert.Equal(t, "bin/rails db:migrate", migrate.Command)
+		assert.Equal(t, "deploy", migrate.Trigger)
+		assert.Equal(t, "10m", migrate.Timeout)
+		assert.Equal(t, int64(2), migrate.Retries)
+		assert.Equal(t, int64(1), migrate.MaxConcurrent, "max_concurrent defaults to 1")
+		assert.Empty(t, migrate.Schedule)
+
+		// every is sugar: only the calendar form reaches ConfigSpec, so every
+		// consumer has exactly one scheduling mechanism to understand.
+		assert.Equal(t, "*-*-* 00/6:00:00", byName["cleanup"].Schedule)
+		assert.Empty(t, byName["cleanup"].Timeout)
+
+		reindex := byName["reindex"]
+		assert.Equal(t, "manual", reindex.Trigger, "trigger defaults to manual")
+		assert.Equal(t, int64(4), reindex.MaxConcurrent)
+		require.Len(t, reindex.Env, 1)
+		assert.Equal(t, "BATCH", reindex.Env[0].Key)
+		assert.Equal(t, "config", reindex.Env[0].Source)
+	})
+
+	t.Run("output order is stable across builds", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Tasks: map[string]*appconfig.TaskConfig{
+				"zulu": {Command: "z"}, "alpha": {Command: "a"}, "mike": {Command: "m"},
+			},
+		}
+		// Map iteration order varies per run; the stored config must not, or
+		// identical input would produce spurious version churn.
+		want := []string{"alpha", "mike", "zulu"}
+		for range 20 {
+			var got []string
+			for _, tk := range buildTasksConfig(ac, nil) {
+				got = append(got, tk.Name)
+			}
+			require.Equal(t, want, got)
+		}
+	})
+}
+
+func TestValidateWebIntent(t *testing.T) {
+	tasks := map[string]*appconfig.TaskConfig{"t": {Command: "x"}}
+
+	tests := []struct {
+		name     string
+		ac       *appconfig.AppConfig
+		procfile map[string]string
+		wantErr  bool
+	}{
+		{
+			name:    "nil config",
+			ac:      nil,
+			wantErr: false,
+		},
+		{
+			name:    "no tasks is the pre-existing world",
+			ac:      &appconfig.AppConfig{},
+			wantErr: false,
+		},
+		{
+			name:    "tasks and no services without saying which",
+			ac:      &appconfig.AppConfig{Tasks: tasks},
+			wantErr: true,
+		},
+		{
+			name:    "tasks with web = false",
+			ac:      &appconfig.AppConfig{Tasks: tasks, Web: ptr(false)},
+			wantErr: false,
+		},
+		{
+			name:    "tasks with web = true",
+			ac:      &appconfig.AppConfig{Tasks: tasks, Web: ptr(true)},
+			wantErr: false,
+		},
+		{
+			name: "tasks with a declared service",
+			ac: &appconfig.AppConfig{
+				Tasks:    tasks,
+				Services: map[string]*appconfig.ServiceConfig{"web": {Command: "bin/s"}},
+			},
+			wantErr: false,
+		},
+		{
+			// A Procfile answers the question just as well as app.toml does.
+			name:     "tasks with a Procfile service",
+			ac:       &appconfig.AppConfig{Tasks: tasks},
+			procfile: map[string]string{"worker": "bin/worker"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateWebIntent(tt.ac, tt.procfile)
+			if tt.wantErr {
+				require.ErrorIs(t, err, errAmbiguousWeb)
+				// The message has to carry the fix, not just the complaint.
+				assert.Contains(t, err.Error(), "web = false")
+				assert.Contains(t, err.Error(), "[services.web]")
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestValidateWorkloadsExistAcceptsTasksOnly(t *testing.T) {
+	spec := core_v1alpha.ConfigSpec{
+		Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "session", Command: "/bin/bash"}},
+	}
+	assert.NoError(t, validateWorkloadsExist(spec),
+		"an app made entirely of tasks is valid; it just has nothing running between invocations")
+
+	assert.ErrorIs(t, validateWorkloadsExist(core_v1alpha.ConfigSpec{}), errNoServices)
+}
+
+// The check has to survive being run in the order the build actually runs
+// things. buildServicesConfig calls ResolveDefaults, which mutates ac.Services
+// in place to stage the synthesized web service -- so once the config has been
+// assembled, every app looks like it declares a service and the question can no
+// longer be asked. A test with a fresh struct is exactly where that aliasing is
+// invisible, which is why this one goes through buildVersionConfig first.
+func TestValidateWebIntentSurvivesConfigAssembly(t *testing.T) {
+	ac := &appconfig.AppConfig{
+		Tasks: map[string]*appconfig.TaskConfig{
+			"session": {Command: "/bin/bash"},
+		},
+	}
+
+	// Asked before assembly -- the order the build uses -- the ambiguity is caught.
+	require.ErrorIs(t, validateWebIntent(ac, nil), errAmbiguousWeb)
+
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{Command: "bin/server"},
+		AppConfig:   ac,
+	})
+	require.NotEmpty(t, spec.Services, "assembly stages a synthesized web service")
+
+	// And this is the trap: after assembly the app claims a service it never
+	// declared, so asking now can never fail.
+	assert.Contains(t, ac.Services, "web",
+		"ResolveDefaults mutates the caller's config, which is what makes the ordering load-bearing")
+	assert.NoError(t, validateWebIntent(ac, nil),
+		"asking after assembly always passes; if this ever starts failing the ordering constraint has changed")
+}
+
+// A task's env is declared the same way a service's is, so a required-but-empty
+// task variable must fail the deploy too -- otherwise the run starts and falls
+// over on a value the platform already knew was missing.
+func TestValidateRequiredVarsCoversTaskEnv(t *testing.T) {
+	spec := core_v1alpha.ConfigSpec{
+		Tasks: []core_v1alpha.ConfigSpecTasks{
+			{
+				Name: "migrate",
+				Env: []core_v1alpha.ConfigSpecTasksEnv{
+					{Key: "DATABASE_URL", Required: true},
+					{Key: "OPTIONAL", Required: false},
+				},
+			},
+		},
+	}
+
+	err := validateRequiredVars(spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DATABASE_URL")
+	assert.Contains(t, err.Error(), "task: migrate", "the message should say where to look")
+	assert.NotContains(t, err.Error(), "OPTIONAL")
+
+	spec.Tasks[0].Env[0].Value = "postgres://..."
+	assert.NoError(t, validateRequiredVars(spec))
+}
+
+// analyze is the deploy preview, so it must not report a web service the deploy
+// will refuse to create. A task-only app that never says whether it wants web
+// reaches the historical default and gets one synthesized from the image
+// entrypoint; showing that as "image default" is an affirmative claim about a
+// deploy that is in fact about to fail with errAmbiguousWeb.
+func TestValidateWebIntentDrivesWhatAnalyzeCanClaim(t *testing.T) {
+	taskOnly := &appconfig.AppConfig{
+		Tasks: map[string]*appconfig.TaskConfig{
+			"migrate": {Command: "rails db:migrate"},
+		},
+	}
+
+	// The condition analyze has to detect.
+	require.ErrorIs(t, validateWebIntent(taskOnly, nil), errAmbiguousWeb)
+
+	// And the service it would otherwise have described: synthesized, with no
+	// command of its own, which is what renders as "image default".
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{},
+		AppConfig:   taskOnly,
+	})
+	var web *core_v1alpha.ConfigSpecServices
+	for i := range spec.Services {
+		if spec.Services[i].Name == "web" {
+			web = &spec.Services[i]
+		}
+	}
+	require.NotNil(t, web, "the synthesized web is what analyze must not report")
+	assert.Empty(t, web.Command)
+
+	// Saying either thing clears it, and then the listing is honest again.
+	explicit := &appconfig.AppConfig{
+		Tasks: taskOnly.Tasks,
+		Web:   func() *bool { b := false; return &b }(),
+	}
+	assert.NoError(t, validateWebIntent(explicit, nil))
+
+	// A Procfile web counts as saying so, and -- unlike web = false -- leaves a
+	// real service behind, which is why the docs call that out.
+	assert.NoError(t, validateWebIntent(taskOnly, map[string]string{"web": "bin/server"}))
+}
+
+// [services.console] is a real name in the wild, undocumented but used. It gets
+// a shim rather than a hard break: it becomes a task, which is the only thing
+// anyone declaring it ever wanted, since a console service being kept running
+// was never useful.
+func TestMigrateConsoleService(t *testing.T) {
+	t.Run("moves the block to tasks", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{
+				"web":     {Command: "bin/server"},
+				"console": {Command: "bin/rails console"},
+			},
+		}
+
+		assert.True(t, migrateConsoleService(ac))
+		assert.NotContains(t, ac.Services, "console",
+			"a console service must stop being deployed as a long-running process")
+		require.Contains(t, ac.Tasks, "console")
+		assert.Equal(t, "bin/rails console", ac.Tasks["console"].Command)
+		assert.Equal(t, appconfig.TriggerManual, ac.Tasks["console"].Trigger)
+		assert.Contains(t, ac.Services, "web", "other services are untouched")
+	})
+
+	t.Run("an author who wrote both meant both", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{"console": {Command: "svc"}},
+			Tasks:    map[string]*appconfig.TaskConfig{"console": {Command: "task"}},
+		}
+
+		assert.False(t, migrateConsoleService(ac))
+		assert.Contains(t, ac.Services, "console", "the service stays an ordinary service")
+		assert.Equal(t, "task", ac.Tasks["console"].Command, "the task wins")
+	})
+
+	t.Run("nothing to do", func(t *testing.T) {
+		assert.False(t, migrateConsoleService(nil))
+		assert.False(t, migrateConsoleService(&appconfig.AppConfig{}))
+	})
+
+	t.Run("carries the service env across", func(t *testing.T) {
+		ac := &appconfig.AppConfig{
+			Services: map[string]*appconfig.ServiceConfig{
+				"console": {
+					Command: "bin/console",
+					EnvVars: []appconfig.AppEnvVar{{Key: "RAILS_ENV", Value: "production"}},
+				},
+			},
+		}
+
+		require.True(t, migrateConsoleService(ac))
+		require.Len(t, ac.Tasks["console"].EnvVars, 1)
+		assert.Equal(t, "RAILS_ENV", ac.Tasks["console"].EnvVars[0].Key)
+		// The value matters as much as the key: a migration that carried the
+		// name across but dropped the setting would pass a key-only assertion
+		// and leave the console running with the wrong environment.
+		assert.Equal(t, "production", ac.Tasks["console"].EnvVars[0].Value)
+	})
+}
+
+// The deploy gate exists to prove every task ran. A skipped run did not, so it
+// must not let the version flip -- and that has to be exercised through
+// awaitDeployRuns, since asserting the predicate alone would still pass if the
+// wait loop treated SKIPPED as done.
+func TestDeployGateRejectsASkippedRun(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-1")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SKIPPED))
+	require.NoError(t, err)
+
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{})
+	require.Error(t, err, "a skipped run never executed, so it cannot satisfy the gate")
+	assert.Contains(t, err.Error(), "migrate")
+	assert.Contains(t, err.Error(), "skipped")
+}
+
+// And the succeeding case has to actually pass, or the gate would block every
+// deploy rather than only the broken ones.
+func TestDeployGateAcceptsASucceededRun(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-2")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.SUCCEEDED))
+	require.NoError(t, err)
+
+	assert.NoError(t, b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{}))
+}
+
+func TestDeployGateRejectsAFailedRun(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client}
+
+	runID := entity.Id("run/demo-migrate-3")
+	_, err := inmem.EAC.Put(ctx, runEntity(t, runID, run_v1alpha.FAILED))
+	require.NoError(t, err)
+
+	err = b.awaitDeployRuns(ctx, map[entity.Id]string{runID: "migrate"}, noopStatusSender{})
+	require.Error(t, err)
+	// The message has to point at the logs, since a failing migration is a
+	// deploy failure and the user is already reading this output.
+	assert.Contains(t, err.Error(), "miren logs run")
+}
+
+// runEntity builds a terminal run for the gate tests.
+func runEntity(t *testing.T, id entity.Id, status run_v1alpha.RunStatus) *entityserver_v1alpha.Entity {
+	t.Helper()
+
+	var e entityserver_v1alpha.Entity
+	e.SetId(id.String())
+	e.SetAttrs(entity.New(entity.DBId, id, (&run_v1alpha.Run{
+		Task:    "migrate",
+		Trigger: run_v1alpha.DEPLOY,
+		Status:  status,
+	}).Encode).Attrs())
+	return &e
 }

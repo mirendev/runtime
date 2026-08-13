@@ -140,6 +140,10 @@ func (o *sandboxOps) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id)
 	return o.ctrl.ReleaseDiskLeases(ctx, sandboxID)
 }
 
+func (o *sandboxOps) ReleaseHubs(id entity.Id) {
+	o.ctrl.hubs.RemoveAll(id)
+}
+
 func (o *sandboxOps) ReleaseTokenState(id entity.Id) {
 	o.ctrl.ReleaseTokenState(id)
 }

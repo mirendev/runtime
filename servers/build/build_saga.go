@@ -36,6 +36,7 @@ const (
 	actionCreateConfigVer = "create-config-version"
 	actionCreateVersion   = "create-version"
 	actionProvisionAddons = "provision-addons"
+	actionRunDeployTasks  = "run-deploy-tasks"
 	actionSetActiveVer    = "set-active-version"
 	actionFinalize        = "finalize"
 	actionBeginDeploy     = "begin-deployment"
@@ -117,6 +118,9 @@ func undoReceiveTar(ctx context.Context, in receiveTarIn, _ receiveTarOut) error
 type loadSourceIn struct {
 	AppName   string `json:"app_name" saga:"app_name"`
 	SourceDir string `json:"source_dir" saga:"source_dir"`
+	// StreamID is consumed so a config error found here can be reported to the
+	// deploying client, which is the whole value of failing fast.
+	StreamID string `json:"stream_id" saga:"stream_id"`
 }
 
 type loadSourceOut struct {
@@ -147,6 +151,16 @@ func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
 	procfile, err := b.readProcFile(tr)
 	if err != nil {
 		return loadSourceOut{}, fmt.Errorf("reading procfile: %w", err)
+	}
+
+	// Ask about web intent here rather than in prepareConfig. Everything it
+	// reads is source-derived and already in hand, so this is the fail-fast this
+	// action exists for -- and prepareConfig is too late anyway, since
+	// buildVersionConfig stages a synthesized web service into ac.Services and
+	// the question can no longer be asked afterwards.
+	if err := validateWebIntent(ac, procfile); err != nil {
+		deps.statuses.SenderFor(in.StreamID).SendError("%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return loadSourceOut{}, err
 	}
 
 	return loadSourceOut{
@@ -255,6 +269,7 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		ProcfileServices: in.ProcfileServices,
 		ExistingConfig:   existing,
 		CliEnvVars:       in.CLIEnvVars,
+		Log:              b.Log,
 	})
 
 	// Validate the app.toml workload_role here, before the version is created or
@@ -264,7 +279,7 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		status.SendError("%s", err)
 		return prepareConfigOut{}, err
 	}
-	if err := validateServicesExist(spec); err != nil {
+	if err := validateWorkloadsExist(spec); err != nil {
 		status.SendError("%s. See https://miren.md/services", err)
 		return prepareConfigOut{}, err
 	}
@@ -524,6 +539,68 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 // with the active version, not replace it). Records the previous
 // active version so undo can restore it on failure.
 
+// runDeployTasksIn gates the version flip on every deploy-triggered task.
+//
+// It consumes addons_provisioned so it runs only once the app's backing
+// services exist -- a migration needs its database -- and produces an edge
+// setActiveVersion consumes, which is what puts it strictly before any traffic
+// moves.
+type runDeployTasksIn struct {
+	AppName        string    `json:"app_name" saga:"app_name"`
+	StreamID       string    `json:"stream_id" saga:"stream_id"`
+	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
+	ConfigSpec     string    `json:"config_spec_json" saga:"config_spec_json"`
+	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+}
+
+type runDeployTasksOut struct {
+	Done saga.Edge `saga:"deploy_tasks_ran"`
+}
+
+func runDeployTasks(ctx context.Context, in runDeployTasksIn) (runDeployTasksOut, error) {
+	// An ephemeral preview shares the app's addons and is torn down on its own
+	// schedule; running its migrations again would be at best redundant and at
+	// worst a second writer against the same database.
+	if in.EphemeralLabel != "" {
+		return runDeployTasksOut{}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+	status := deps.statuses.SenderFor(in.StreamID)
+
+	spec, err := unmarshalConfigSpec(in.ConfigSpec)
+	if err != nil {
+		return runDeployTasksOut{}, fmt.Errorf("deserializing config: %w", err)
+	}
+
+	if len(deployTriggeredTasks(&spec)) == 0 {
+		return runDeployTasksOut{}, nil
+	}
+
+	appRec, err := b.appClient.GetByName(ctx, in.AppName)
+	if err != nil {
+		return runDeployTasksOut{}, fmt.Errorf("reading app: %w", err)
+	}
+
+	err = b.runDeployTasks(ctx, in.AppName, appRec.ID, entity.Id(in.AppVersionID), &spec, status)
+	if err != nil {
+		status.SendError("%s", err)
+		return runDeployTasksOut{}, err
+	}
+
+	return runDeployTasksOut{}, nil
+}
+
+// undoRunDeployTasks deliberately does nothing. The runs happened; a deploy
+// task's effects are the app's to reverse, and the platform does not run
+// down-migrations. Nothing was brought up to tear down either, since this gate
+// sits ahead of the rollout.
+func undoRunDeployTasks(_ context.Context, _ runDeployTasksIn, _ runDeployTasksOut) error {
+	return nil
+}
+
 type setActiveVersionIn struct {
 	AppName        string               `json:"app_name" saga:"app_name"`
 	StreamID       string               `json:"stream_id" saga:"stream_id"`
@@ -531,6 +608,10 @@ type setActiveVersionIn struct {
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	AddonsReady    saga.Edge            `saga:"addons_provisioned"`
+	// DeployTasksRan puts the version flip strictly after every
+	// deploy-triggered task has succeeded, so a failed task means a failed
+	// deploy rather than a half-promoted one.
+	DeployTasksRan saga.Edge `saga:"deploy_tasks_ran"`
 	// DeploymentID is empty for an untracked build. Consuming it also anchors
 	// this action after begin-deployment, which is where the record is created.
 	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
@@ -859,6 +940,7 @@ func registerBuildSaga(
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionRunDeployTasks, runDeployTasks).Undo(undoRunDeployTasks).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).

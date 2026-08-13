@@ -59,11 +59,13 @@ miren app --watch
 
 ## Subcommands
 
+- [`miren app attach`](/command/app-attach) — Attach to a running task
 - [`miren app delete`](/command/app-delete) — Delete an application and all its resources
 - [`miren app history`](/command/app-history) — Show deployment history for an application
 - [`miren app list`](/command/app-list) — List all applications
 - [`miren app restart`](/command/app-restart) — Restart an application
 - [`miren app run`](/command/app-run) — Open interactive shell in a new sandbox
+- [`miren app runs`](/command/app-runs) — List recent task runs
 - [`miren app set-workload-role`](/command/app-set-workload-role) — Set the API role for an app's sandbox identity tokens
 - [`miren app status`](/command/app-status) — Show current status of an application
 - [`miren app versions`](/command/app-versions) — List app versions with status

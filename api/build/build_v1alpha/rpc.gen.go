@@ -708,6 +708,93 @@ func (v *ServiceInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type taskInfoData struct {
+	Name     *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Command  *string `cbor:"1,keyasint,omitempty" json:"command,omitempty"`
+	Trigger  *string `cbor:"2,keyasint,omitempty" json:"trigger,omitempty"`
+	Schedule *string `cbor:"3,keyasint,omitempty" json:"schedule,omitempty"`
+}
+
+type TaskInfo struct {
+	data taskInfoData
+}
+
+func (v *TaskInfo) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *TaskInfo) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *TaskInfo) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *TaskInfo) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *TaskInfo) Command() string {
+	if v.data.Command == nil {
+		return ""
+	}
+	return *v.data.Command
+}
+
+func (v *TaskInfo) SetCommand(command string) {
+	v.data.Command = &command
+}
+
+func (v *TaskInfo) HasTrigger() bool {
+	return v.data.Trigger != nil
+}
+
+func (v *TaskInfo) Trigger() string {
+	if v.data.Trigger == nil {
+		return ""
+	}
+	return *v.data.Trigger
+}
+
+func (v *TaskInfo) SetTrigger(trigger string) {
+	v.data.Trigger = &trigger
+}
+
+func (v *TaskInfo) HasSchedule() bool {
+	return v.data.Schedule != nil
+}
+
+func (v *TaskInfo) Schedule() string {
+	if v.data.Schedule == nil {
+		return ""
+	}
+	return *v.data.Schedule
+}
+
+func (v *TaskInfo) SetSchedule(schedule string) {
+	v.data.Schedule = &schedule
+}
+
+func (v *TaskInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *TaskInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *TaskInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *TaskInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type detectionEventData struct {
 	Kind    *string `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
 	Name    *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
@@ -788,6 +875,7 @@ type analysisResultData struct {
 	BuildDockerfile *string           `cbor:"5,keyasint,omitempty" json:"build_dockerfile,omitempty"`
 	EnvVars         *[]string         `cbor:"6,keyasint,omitempty" json:"env_vars,omitempty"`
 	Events          *[]DetectionEvent `cbor:"7,keyasint,omitempty" json:"events,omitempty"`
+	Tasks           *[]TaskInfo       `cbor:"8,keyasint,omitempty" json:"tasks,omitempty"`
 }
 
 type AnalysisResult struct {
@@ -903,6 +991,18 @@ func (v *AnalysisResult) Events() *[]DetectionEvent {
 
 func (v *AnalysisResult) SetEvents(events *[]DetectionEvent) {
 	v.data.Events = events
+}
+
+func (v *AnalysisResult) HasTasks() bool {
+	return v.data.Tasks != nil
+}
+
+func (v *AnalysisResult) Tasks() *[]TaskInfo {
+	return v.data.Tasks
+}
+
+func (v *AnalysisResult) SetTasks(tasks *[]TaskInfo) {
+	v.data.Tasks = tasks
 }
 
 func (v *AnalysisResult) MarshalCBOR() ([]byte, error) {

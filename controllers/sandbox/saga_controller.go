@@ -119,6 +119,13 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 			case unhealthy:
 				s.log.Info("sandbox container exists but is unhealthy", "id", co.ID)
 
+				// Mirrors SandboxController.Create: a sandbox whose command
+				// must execute at most once is finished the moment its
+				// containers stop being healthy.
+				if shouldRetireInsteadOfRestart(co) {
+					return s.inner.markDeadNoRestart(ctx, co, "unhealthy")
+				}
+
 				if co.Status == compute.RUNNING {
 					s.log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
 					patchAttrs := entity.New(
@@ -136,6 +143,13 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 				}
 				return nil
 			}
+		}
+
+		// Mirrors SandboxController.Create: the containers are gone, and for a
+		// sandbox that must not re-run its command that is the end of the road
+		// rather than a reboot.
+		if shouldRetireInsteadOfRestart(co) {
+			return s.inner.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
 		return s.createSandboxViaSaga(ctx, co)

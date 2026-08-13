@@ -912,6 +912,17 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	defer cancelSettle()
 
 	// This path has no build; it goes straight to activation.
+	//
+	// Deploy-triggered tasks (RFD-97) deliberately do not run here. They gate
+	// the build saga, which activates a *new* version; this path activates one
+	// that already exists, which is a rollback or a redeploy of a known-good
+	// version. Re-running a migration against a database that has already been
+	// migrated forward is more likely to be wrong than right, and the platform
+	// has no down-migrations to make it reversible.
+	//
+	// That is a decision rather than an oversight, but it is not one RFD-97
+	// makes -- it is tracked as an open question there. If rollbacks should run
+	// tasks, this is the hook point.
 	if phaseErr := d.tracker.SetPhase(ctx, newDeploymentId, deploylifecycle.PhaseActivating); phaseErr != nil {
 		d.Log.Error("Failed to set activating phase", "error", phaseErr)
 	}

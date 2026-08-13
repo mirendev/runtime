@@ -198,6 +198,17 @@ miren deploy --analyze
 			Body: "miren logs system -f",
 		}),
 	))
+	d.Dispatch("logs run", Infer("logs run", "View logs for a task run", LogsRun,
+		WithGroup(GroupMonitoring),
+		WithExample(mflags.Example{
+			Name: "View a run's output",
+			Body: "miren logs run run/myapp-migrate-4kq2np",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow a running task",
+			Body: "miren logs run run/myapp-reindex-8xh1dc -f",
+		}),
+	))
 
 	// App management commands
 	d.Dispatch("app", Infer("app", "Get information about an application", App,
@@ -303,6 +314,38 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Run database migrations",
 			Body: "miren app run -- bin/rails db:migrate",
+		}),
+		WithExample(mflags.Example{
+			Name: "Run a declared task",
+			Body: "miren app run --task reindex",
+		}),
+		WithExample(mflags.Example{
+			Name: "Start a task without holding a terminal",
+			Body: "miren app run --task reindex --detach",
+		}),
+	))
+	d.Dispatch("app runs", Infer("app runs", "List recent task runs", AppRuns,
+		WithGroup(GroupMonitoring),
+		WithExample(mflags.Example{
+			Name: "Show recent runs",
+			Body: "miren app runs",
+		}),
+		WithExample(mflags.Example{
+			Name: "Show runs of one task as JSON",
+			Body: "miren app runs --task migrate --format json",
+		}),
+	))
+	d.Dispatch("app runs cancel", Infer("app runs cancel", "End a run early", AppRunsCancel,
+		WithExample(mflags.Example{
+			Name: "Cancel a run",
+			Body: "miren app runs cancel run/myapp-reindex-4kq2np",
+		}),
+	))
+	d.Dispatch("app attach", Infer("app attach", "Attach to a running task", AppAttach,
+		WithDescription(appAttachDescription),
+		WithExample(mflags.Example{
+			Name: "Rejoin a run's terminal",
+			Body: "miren app attach run/myapp-session-4kq2np",
 		}),
 	))
 	d.Dispatch("apps", Infer("apps", "List all applications (alias for 'app list')", AppList,

@@ -185,7 +185,10 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			if resolved, rerr := coreutil.ResolveConfig(ctx, a.EC.EAC(), &appVer); rerr == nil {
 				spec = resolved
 			}
-			health := poolHealth{isAutoscale: specAllowsScaleToZero(spec)}
+			health := poolHealth{
+				isAutoscale: specAllowsScaleToZero(spec),
+				isTaskOnly:  specIsTaskOnly(spec),
+			}
 
 			for poolsResp.Next() {
 				var pool compute_v1alpha.SandboxPool

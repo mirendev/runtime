@@ -420,6 +420,47 @@ types:
         type: string
         index: 4
 
+  - type: RunInfo
+    doc: One execution of an app task
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: task
+        type: string
+        index: 1
+      - name: trigger
+        type: string
+        index: 2
+        doc: What started the run (deploy, schedule, manual)
+      - name: status
+        type: string
+        index: 3
+      - name: command
+        type: string
+        index: 4
+      - name: exit_code
+        type: int32
+        index: 5
+        doc: Set only when an exit was actually observed; a run that timed out or was canceled has none
+      - name: attempt
+        type: int32
+        index: 7
+      - name: started_at
+        type: int64
+        index: 8
+        doc: Unix milliseconds, 0 if the run never started
+      - name: ended_at
+        type: int64
+        index: 9
+        doc: Unix milliseconds, 0 if the run has not finished
+      - name: sandbox
+        type: string
+        index: 10
+      - name: version
+        type: string
+        index: 11
+
 interfaces:
   - name: Crud
     http:
@@ -780,3 +821,62 @@ interfaces:
             type: string
           - name: name
             type: string
+
+  # Runs are the unit users ask about, so they are the unit surfaced. Creating
+  # one returns immediately with an id: the run controller does the admitting
+  # and the launching, so a caller never blocks on capacity.
+  - name: Runs
+    methods:
+      - name: createRun
+        parameters:
+          - name: app
+            type: string
+          - name: task
+            type: string
+            doc: Task to run; empty resolves the console convention
+          - name: command
+            type: list
+            element: string
+            doc: Overrides the task's command
+          - name: tty
+            type: bool
+            doc: |
+              Allocate a pseudo-terminal. The client decides, since only it
+              knows whether a person is watching: set when stdin is a terminal
+              and the caller is going to attach.
+        results:
+          - name: id
+            type: string
+          - name: sandbox_name
+            type: string
+            doc: Deterministic name of the sandbox the run will use, for attaching
+
+      - name: listRuns
+        parameters:
+          - name: app
+            type: string
+          - name: task
+            type: string
+            doc: Optional filter
+          - name: limit
+            type: int32
+        results:
+          - name: runs
+            type: list
+            element: RunInfo
+
+      - name: getRun
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: run
+            type: RunInfo
+
+      - name: cancelRun
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: canceled
+            type: bool

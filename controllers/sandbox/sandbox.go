@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -46,6 +47,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/ocireg"
 )
@@ -108,6 +110,10 @@ type SandboxControllerDeps struct {
 	// case a spec that references one fails rather than starting the container
 	// with the reference in place of the value.
 	Secrets secret.Resolver
+
+	// Hubs is the stdio fan-out registry shared with the runner's exec server.
+	// Optional; one is created if absent, which is what tests want.
+	Hubs *HubRegistry
 }
 
 type SandboxController struct {
@@ -168,7 +174,16 @@ type SandboxController struct {
 
 	// writeTracker tracks entity write revisions to skip self-generated watch events
 	writeTracker controller.WriteTracker
+
+	// hubs holds the stdio fan-out for attachable containers on this node. The
+	// exec server reads from the same registry, which is why it is shared
+	// rather than owned outright.
+	hubs *HubRegistry
 }
+
+// Hubs exposes the registry of attachable containers so the runner's exec
+// server can join a client to a running container's terminal.
+func (c *SandboxController) Hubs() *HubRegistry { return c.hubs }
 
 // NewSandboxController creates a new SandboxController with validated dependencies.
 func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error) {
@@ -206,7 +221,13 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		return nil, fmt.Errorf("sandbox: Resolver is required")
 	}
 
+	hubs := cfg.Hubs
+	if hubs == nil {
+		hubs = NewHubRegistry()
+	}
+
 	return &SandboxController{
+		hubs:           hubs,
 		Log:            cfg.Log.With("module", "sandbox"),
 		CC:             cfg.CC,
 		EAC:            cfg.EAC,
@@ -1089,11 +1110,34 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 	// Create log consumer for this container
 	sl := c.logConsumer(sb, containerName, shortID)
 
+	// Rebuild the Hub for an attachable container so clients can rejoin after
+	// the runner restarts. cio.NewAttach reopens whichever FIFOs the task was
+	// created with and skips any stream we pass as nil, so supplying a stdin
+	// reader here restores input for a task that was created with one — and is
+	// harmlessly ignored for a task that was not.
+	var hub *Hub
+	if containerIsAttachable(sb, containerName) {
+		hub = c.hubs.GetOrCreate(sb.ID, containerName)
+	}
+
+	streams := cio.WithStreams(nil, sl, sl.Stderr())
+	if hub != nil {
+		streams = cio.WithStreams(
+			hub.Stdin(),
+			io.MultiWriter(sl, hub),
+			io.MultiWriter(sl.Stderr(), hub),
+		)
+	}
+
 	// Reattach to the existing task with our log consumer
 	// This drains stdout/stderr and prevents the process from blocking on writes
-	task, err := container.Task(ctx, cio.NewAttach(cio.WithStreams(nil, sl, sl.Stderr())))
+	task, err := container.Task(ctx, cio.NewAttach(streams))
 	if err != nil {
 		return fmt.Errorf("failed to attach to task: %w", err)
+	}
+
+	if hub != nil {
+		hub.SetResizer(task)
 	}
 
 	if task == nil {
@@ -1112,7 +1156,7 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 		c.Log.Warn("failed to set up task wait during reattach", "id", containerID, "error", err)
 	} else {
 		// Launch goroutine to monitor process exit
-		go c.monitorTaskExit(sb, containerID, task, exitCh)
+		go c.monitorTaskExit(sb, containerID, containerName, task, exitCh)
 		c.Log.Debug("re-established task exit monitoring", "sandbox", sb.ID, "container", containerID)
 	}
 
@@ -1182,6 +1226,17 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			case unhealthy:
 				c.Log.Info("sandbox container exists but is unhealthy", "id", co.ID)
 
+				// A sandbox that must not re-run its command is finished the
+				// moment its containers stop being healthy. Fall through to the
+				// recreate path below and we would execute it a second time.
+				//
+				// Gated on RUNNING because that is what distinguishes "it ran
+				// and its containers are gone" from "it has not started yet":
+				// only the former would be a re-execution.
+				if shouldRetireInsteadOfRestart(co) {
+					return c.markDeadNoRestart(ctx, co, "unhealthy")
+				}
+
 				// Mark sandbox as DEAD first if it was RUNNING
 				// This prevents infinite recreation loops
 				if co.Status == compute.RUNNING {
@@ -1213,6 +1268,20 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 			}
 		}
 
+		// Reaching here means the containers are gone (CheckSandbox returned
+		// notFound, or erred and we're proceeding optimistically). For a normal
+		// sandbox that's a reboot. For one whose command must execute at most
+		// once it is the end of the road: the realistic case is a runner
+		// restarting mid-run, where re-running a migration is not a recoverable
+		// mistake.
+		//
+		// Only once it has actually been RUNNING, though. A PENDING sandbox has
+		// no containers because none have been created yet, and refusing to
+		// create them would retire every no-restart sandbox before it ever ran.
+		if shouldRetireInsteadOfRestart(co) {
+			return c.markDeadNoRestart(ctx, co, "containers missing")
+		}
+
 		return c.createSandbox(ctx, co, meta, false)
 	case compute.NOT_READY:
 		// Transient boot state; nothing to reconcile until it resolves.
@@ -1221,6 +1290,47 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		c.Log.Warn("ignoring sandbox status", "status", co.Status)
 		return nil
 	}
+}
+
+// shouldRetireInsteadOfRestart reports whether a sandbox whose containers are
+// missing or unhealthy must be retired rather than (re)created.
+//
+// The RUNNING check is what separates "it ran and its containers are gone" from
+// "it has not started yet". Only the first is a re-execution; without the
+// distinction every no-restart sandbox is retired on its first reconcile,
+// before it has run anything at all.
+func shouldRetireInsteadOfRestart(co *compute.Sandbox) bool {
+	return co.Status == compute.RUNNING && co.Spec.RestartPolicy == compute.SandboxSpecNEVER
+}
+
+// markDeadNoRestart retires a sandbox whose spec forbids restarting it, then
+// runs the ordinary teardown so nothing is left behind.
+//
+// It deliberately records no Exit: the command's own exit was never observed,
+// and inventing a code here would be indistinguishable from the process
+// actually having returned one.
+func (c *SandboxController) markDeadNoRestart(ctx context.Context, co *compute.Sandbox, reason string) error {
+	c.Log.Info("retiring sandbox rather than restarting it",
+		"id", co.ID, "reason", reason, "restart_policy", "never")
+
+	if co.Status != compute.DEAD {
+		patchAttrs := entity.New(
+			entity.Ref(entity.DBId, co.ID),
+			(&compute.Sandbox{Status: compute.DEAD}).Encode,
+		)
+		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+		if err != nil {
+			return fmt.Errorf("failed to mark no-restart sandbox as DEAD: %w", err)
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+	}
+
+	if err := c.StopSandbox(ctx, co.ID, co); err != nil {
+		return fmt.Errorf("failed to clean up no-restart sandbox: %w", err)
+	}
+	return nil
 }
 
 func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) (err error) {
@@ -1248,6 +1358,14 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			if relErr := c.ReleaseDiskLeases(cleanupCtx, co.ID); relErr != nil {
 				c.Log.Error("failed to release disk leases after boot failure", "id", co.ID, "err", relErr)
 			}
+
+			// Same reason as the leases: this defer is the only cleanup a failed
+			// boot gets. A Hub is created before the task is, so a container that
+			// never started still leaves one behind, and an attaching client
+			// finds it and waits on output that can never arrive -- forever,
+			// since the client's start deadline is only consulted between
+			// attempts and it is now inside a successful attach.
+			c.hubs.RemoveAll(co.ID)
 		}
 	}()
 
@@ -2181,7 +2299,24 @@ func (c *SandboxController) BootContainers(
 		if container.Tty {
 			cioOpts = append(cioOpts, cio.WithTerminal)
 		}
-		cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
+
+		// An attachable container gets a Hub: its stdin FIFO exists from the
+		// start (containerd only wires one up when a reader is supplied here,
+		// and it cannot be added later), and its output is teed to whoever is
+		// attached as well as to the logs.
+		var hub *Hub
+		if container.Stdin {
+			hub = c.hubs.GetOrCreate(sb.ID, container.Name)
+		}
+		if hub != nil {
+			cioOpts = append(cioOpts, cio.WithStreams(
+				hub.Stdin(),
+				io.MultiWriter(sl, hub),
+				io.MultiWriter(sl.Stderr(), hub),
+			))
+		} else {
+			cioOpts = append(cioOpts, cio.WithStreams(nil, sl, sl.Stderr()))
+		}
 
 		task, err := cc.NewTask(ctx, cio.NewCreator(cioOpts...))
 		if err != nil {
@@ -2199,13 +2334,17 @@ func (c *SandboxController) BootContainers(
 
 		c.Log.Info("container started", "id", cc.ID())
 
+		if hub != nil {
+			hub.SetResizer(task)
+		}
+
 		// Monitor task for process exit to update sandbox status
 		exitCh, err := task.Wait(ctx)
 		if err != nil {
 			c.Log.Warn("failed to set up task wait", "id", cc.ID(), "error", err)
 		} else {
 			// Launch goroutine to monitor process exit
-			go c.monitorTaskExit(sb, cc.ID(), task, exitCh)
+			go c.monitorTaskExit(sb, cc.ID(), container.Name, task, exitCh)
 		}
 
 		// Start port monitoring for this container if it has ports
@@ -2221,6 +2360,7 @@ func (c *SandboxController) BootContainers(
 func (c *SandboxController) monitorTaskExit(
 	sb *compute.Sandbox,
 	containerID string,
+	containerName string,
 	task containerd.Task,
 	exitCh <-chan containerd.ExitStatus,
 ) {
@@ -2265,21 +2405,34 @@ func (c *SandboxController) monitorTaskExit(
 			// We don't delete the task here so that our destroySubContainers function
 			// has a consistent view of the state of containers and tasks.
 
-			// Update sandbox status to STOPPED using Patch (only updating Status field)
-			// We use Patch instead of Put since we're only changing one field
-			// STOPPED status triggers cleanup in reconciliation (stopSandbox), which:
+			// Record the exit in the same patch as the STOPPED transition, so
+			// anything woken by the stop already has the code. Splitting them
+			// would leave a window where a run's sandbox reads stopped with no
+			// result to report.
+			//
+			// ExitTime can be zero even on a clean exit, and an Exit carrying a
+			// zero code and a zero time is Empty() -- it would encode to nothing
+			// and the code would silently vanish. Fall back to now.
+			exitAt := exitStatus.ExitTime()
+			if exitAt.IsZero() {
+				exitAt = time.Now()
+			}
+
+			// Update sandbox status to STOPPED using Patch (only updating the
+			// fields set here). STOPPED triggers cleanup in reconciliation
+			// (stopSandbox), which:
 			// - Releases IPs immediately
 			// - Cleans up containers
 			// - Marks as DEAD afterward
-			patchAttrs := entity.New(
-				entity.Ref(entity.DBId, sb.ID),
-				(&compute.Sandbox{
-					Status: compute.STOPPED,
-				}).Encode,
-			)
-
+			//
+			// The DEAD patch that follows leaves Exit intact: it is a struct
+			// literal with an empty Exit, which the generated encoder skips.
 			ctx := context.Background()
-			result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+			result, err := c.recordExit(c.topCtx, sb.ID, compute.Exit{
+				Code:      int64(exitStatus.ExitCode()),
+				At:        exitAt,
+				Container: containerName,
+			})
 			if err != nil {
 				if !errors.Is(err, cond.ErrNotFound{}) {
 					c.Log.Error("failed to update sandbox status to STOPPED",
@@ -2289,9 +2442,16 @@ func (c *SandboxController) monitorTaskExit(
 				}
 				return
 			}
-			if c.writeTracker != nil && result.HasRevision() {
+			if c.writeTracker != nil && result != nil && result.HasRevision() {
 				c.writeTracker.RecordWrite(result.Revision())
 			}
+
+			// If this sandbox belongs to a task run, report the exit to the run
+			// as well. That is not redundancy: the sandbox entity has several
+			// writers, so the exit recorded there can lose a write to a
+			// concurrent stale patch, while the run has exactly one writer plus
+			// this input and nothing to contend with.
+			c.reportRunExit(ctx, sb, exitStatus.ExitCode(), exitAt)
 
 			c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
 			return
@@ -2301,6 +2461,117 @@ func (c *SandboxController) monitorTaskExit(
 			return
 		}
 	}
+}
+
+// recordExit writes a container's exit alongside the STOPPED transition, under
+// optimistic concurrency.
+//
+// The revision guard is the whole point. PatchEntity is read-modify-write, and
+// the rest of the controller patches with revision 0, so two writers computed
+// from the same snapshot do not merge -- the second simply overwrites the first
+// wholesale. The boot path is exactly such a writer: it decides to mark a
+// sandbox RUNNING from a snapshot taken before the task started, and for a
+// command that exits in milliseconds that write can land after the exit. The
+// result is not a clobbered field but a lost update, taking the exit code with
+// it and restoring RUNNING on a sandbox whose process is already gone.
+//
+// Retrying against the current revision makes the exit the last write instead.
+// The cap is high rather than small: losing a task's exit code is not something
+// to give up on after a couple of attempts, and contention here is bounded by
+// the handful of writers a single sandbox has.
+func (c *SandboxController) recordExit(
+	ctx context.Context,
+	id entity.Id,
+	exit compute.Exit,
+) (*entityserver_v1alpha.EntityAccessClientPatchResults, error) {
+	const maxAttempts = 100
+
+	var lastErr error
+	for attempt := range maxAttempts {
+		if attempt > 0 {
+			// Back off rather than hammering the store. Without this a
+			// contended sandbox issues up to 200 immediate round trips, and a
+			// shutdown could not interrupt them.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(min(time.Duration(attempt)*10*time.Millisecond, 500*time.Millisecond)):
+			}
+		}
+
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return nil, err
+		}
+
+		patchAttrs := entity.New(
+			entity.Ref(entity.DBId, id),
+			(&compute.Sandbox{Status: compute.STOPPED, Exit: exit}).Encode,
+		)
+
+		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), resp.Entity().Revision())
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return nil, err
+		}
+
+		lastErr = err
+		c.Log.Debug("retrying exit record after a concurrent sandbox write",
+			"sandbox", id, "attempt", attempt+1)
+	}
+
+	return nil, fmt.Errorf("recording exit for %s: %w", id, lastErr)
+}
+
+// reportRunExit records a container's exit against the task run that owns it.
+//
+// RFD-97 models the reported exit as an *input* to the run controller rather
+// than a state the reporter owns, with a source saying where it came from. This
+// is that input for the ordinary case where the command is the container's own
+// process; the exec path supplies the same field when a client is attached.
+//
+// Reporting here rather than leaving the run to read it off the sandbox is what
+// makes the exit code reliable. The sandbox entity is written by the boot path,
+// the exit monitor, and teardown, all with revision 0 -- so a read-modify-write
+// computed from a pre-exit snapshot can land afterwards and take the exit with
+// it. The run entity has one writer and this input, so there is no race to lose.
+func (c *SandboxController) reportRunExit(
+	ctx context.Context,
+	sb *compute.Sandbox,
+	code uint32,
+	at time.Time,
+) {
+	var runID entity.Id
+	for _, l := range sb.Spec.LogAttribute {
+		if l.Key == "miren.run" {
+			runID = entity.Id(l.Value)
+			break
+		}
+	}
+	if runID == "" {
+		return
+	}
+
+	_, err := c.EAC.Patch(ctx, entity.New(
+		entity.Ref(entity.DBId, runID),
+		(&run_v1alpha.Run{
+			Result: run_v1alpha.Result{
+				Code:   int64(code),
+				At:     at,
+				Source: run_v1alpha.TASK,
+			},
+		}).Encode,
+	).Attrs(), 0)
+	if err != nil {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			c.Log.Warn("failed to report exit to run", "run", runID, "sandbox", sb.ID, "error", err)
+		}
+		return
+	}
+
+	c.Log.Debug("reported exit to run", "run", runID, "sandbox", sb.ID, "exit_code", code)
 }
 
 func (c *SandboxController) sandboxPath(sb *compute.Sandbox, sub ...string) string {
@@ -2907,6 +3178,12 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Debug("stopping sandbox", "id", id)
+
+	// Drop any stdio fan-out for this sandbox. This is the one place allowed to
+	// close a Hub's stdin: the container is going away, so there is no longer a
+	// shell for an EOF to kill. Attached clients see their stream end, which is
+	// what "the run finished" should look like from a terminal.
+	c.hubs.RemoveAll(id)
 
 	// Release in-memory token state first. Container teardown below can be slow or
 	// fail partway, and a sandbox left registered keeps getting fresh tokens minted

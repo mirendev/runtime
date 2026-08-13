@@ -32,6 +32,20 @@ components:
         Addons with slow cold-init (e.g. MySQL first-boot ~20s) should set
         this to a larger value.
 
+    restart_policy:
+      type: enum
+      choices: [always, never]
+      doc: |
+        Whether the sandbox controller may reboot this sandbox's containers if
+        they have disappeared while the entity still reads RUNNING. Empty means
+        "always", which is the historical behavior every service depends on.
+
+        "never" is required for sandboxes backing a task run, whose command
+        must execute at most once. Without it a run that loses its containers
+        without the exit being observed -- a runner restart mid-run is the
+        realistic case -- gets its command re-executed on the next reconcile,
+        which for a migration is not a recoverable mistake.
+
     route:
       type: component
       doc: Network route configuration
@@ -196,6 +210,33 @@ kinds:
     last_activity:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
+
+    # Written once, in the same patch as the STOPPED transition, so any watcher
+    # that sees the sandbox stop also sees why.
+    #
+    # This is a component rather than a top-level `exit_code` int because
+    # `required: true` would make the generated Encode() emit the attribute
+    # unconditionally, and several sites patch Sandbox by struct literal to
+    # change only Status -- each of those would stamp exit_code=0 over the real
+    # value. A singular component is skipped entirely when empty, while
+    # `required` on the inner code makes a legitimate 0 encode.
+    exit:
+      type: component
+      doc: Terminal result of the sandbox's primary container task; absent until it exits
+      attrs:
+        code:
+          type: int
+          required: true
+          doc: Process exit code. Required so a legitimate 0 survives encoding.
+        at:
+          type: time
+          doc: |
+            When the task exited. Always set when the component is written:
+            an Exit with a zero code and a zero time is indistinguishable from
+            an absent one, and would be dropped.
+        container:
+          type: string
+          doc: Name of the container whose task exited
 
     # Network is runtime field (address allocated by controller)
     network:

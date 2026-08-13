@@ -1393,3 +1393,255 @@ port_timeout = "2m"
 		assert.Equal(t, "2m", ac.Services["web"].PortTimeout)
 	})
 }
+
+func TestParseTasks(t *testing.T) {
+	config := `
+name = "test-app"
+web = false
+
+[tasks.migrate]
+command = "bin/rails db:migrate"
+trigger = "deploy"
+timeout = "10m"
+retries = 2
+
+[tasks.cleanup]
+command = "bin/cleanup-sessions"
+trigger = "schedule"
+every = "6h"
+
+[tasks.reports]
+command = "bin/weekly-report"
+trigger = "schedule"
+schedule = "Mon *-*-* 09:00:00"
+
+[tasks.reindex]
+command = "bin/reindex"
+max_concurrent = 4
+
+[[tasks.reindex.env]]
+key = "BATCH_SIZE"
+value = "500"
+`
+	ac, err := Parse([]byte(config))
+	require.NoError(t, err)
+	require.Len(t, ac.Tasks, 4)
+
+	migrate := ac.Tasks["migrate"]
+	assert.Equal(t, "bin/rails db:migrate", migrate.Command)
+	assert.Equal(t, TriggerDeploy, migrate.ResolvedTrigger())
+	assert.Equal(t, "10m", migrate.Timeout)
+	assert.Equal(t, 2, migrate.Retries)
+
+	// trigger defaults to manual, max_concurrent to 1
+	reindex := ac.Tasks["reindex"]
+	assert.Equal(t, TriggerManual, reindex.ResolvedTrigger())
+	assert.Equal(t, 4, reindex.ResolvedMaxConcurrent())
+	require.Len(t, reindex.EnvVars, 1)
+	assert.Equal(t, "BATCH_SIZE", reindex.EnvVars[0].Key)
+
+	assert.Equal(t, DefaultTaskMaxConcurrent, migrate.ResolvedMaxConcurrent())
+
+	// every is sugar: it desugars to the same mechanism schedule uses.
+	cleanup, err := ac.Tasks["cleanup"].ResolvedSchedule()
+	require.NoError(t, err)
+	assert.Equal(t, "*-*-* 00/6:00:00", cleanup)
+
+	reports, err := ac.Tasks["reports"].ResolvedSchedule()
+	require.NoError(t, err)
+	assert.Equal(t, "Mon *-*-* 09:00:00", reports)
+
+	// A non-scheduled task has no schedule at all.
+	none, err := ac.Tasks["reindex"].ResolvedSchedule()
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
+func TestWantsWeb(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       string
+		wantWeb      bool
+		wantExplicit bool
+	}{
+		{
+			name:         "unset preserves the historical default",
+			config:       "name = \"a\"\n",
+			wantWeb:      true,
+			wantExplicit: false,
+		},
+		{
+			name:         "explicit false opts out",
+			config:       "name = \"a\"\nweb = false\n",
+			wantWeb:      false,
+			wantExplicit: true,
+		},
+		{
+			name:         "explicit true is still explicit",
+			config:       "name = \"a\"\nweb = true\n",
+			wantWeb:      true,
+			wantExplicit: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ac, err := Parse([]byte(tt.config))
+			require.NoError(t, err)
+
+			want, explicit := ac.WantsWeb()
+			assert.Equal(t, tt.wantWeb, want)
+			assert.Equal(t, tt.wantExplicit, explicit)
+		})
+	}
+}
+
+func TestWantsWebNilConfig(t *testing.T) {
+	var ac *AppConfig
+	want, explicit := ac.WantsWeb()
+	assert.True(t, want)
+	assert.False(t, explicit)
+}
+
+func TestTaskValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name:    "command is required",
+			config:  "name = \"a\"\n[tasks.t]\ntrigger = \"manual\"\n",
+			wantErr: "command is required",
+		},
+		{
+			name:    "invalid trigger",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"whenever\"\n",
+			wantErr: "invalid trigger",
+		},
+		{
+			name:    "every and schedule are mutually exclusive",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nevery = \"6h\"\nschedule = \"daily\"\n",
+			wantErr: "cannot set both",
+		},
+		{
+			name:    "schedule trigger needs one of them",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\n",
+			wantErr: "requires either",
+		},
+		{
+			name:    "every without a schedule trigger is inert",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\nevery = \"6h\"\n",
+			wantErr: "has no effect without",
+		},
+		{
+			name:    "schedule without a schedule trigger is inert",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"deploy\"\nschedule = \"daily\"\n",
+			wantErr: "has no effect without",
+		},
+		{
+			name:    "unparseable every",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nevery = \"soon\"\n",
+			wantErr: "invalid every",
+		},
+		{
+			name:    "every must tile a day",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nevery = \"7h\"\n",
+			wantErr: "does not divide a day evenly",
+		},
+		{
+			name:    "unparseable schedule",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nschedule = \"0 9 * * 1\"\n",
+			wantErr: "invalid calendar expression",
+		},
+		{
+			name:    "invalid timeout",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntimeout = \"10\"\n",
+			wantErr: "invalid timeout",
+		},
+		{
+			name:    "negative timeout",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntimeout = \"-5m\"\n",
+			wantErr: "must not be negative",
+		},
+		{
+			name:    "negative retries",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"deploy\"\nretries = -1\n",
+			wantErr: "retries must be non-negative",
+		},
+		{
+			name:    "retries on a manual task",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\nretries = 2\n",
+			wantErr: "no effect on a manually-triggered task",
+		},
+		{
+			name:    "negative max_concurrent",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\nmax_concurrent = -1\n",
+			wantErr: "max_concurrent must be at least 1",
+		},
+		{
+			name:    "task env key is required",
+			config:  "name = \"a\"\n[tasks.t]\ncommand = \"x\"\n[[tasks.t.env]]\nvalue = \"v\"\n",
+			wantErr: "env[0] key is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.config))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestTaskValidationAccepts(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{"timeout 0 means unbounded", "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntimeout = \"0s\"\n"},
+		{"retries on a scheduled task", "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nevery = \"1h\"\nretries = 3\n"},
+		{"keyword schedule", "name = \"a\"\n[tasks.t]\ncommand = \"x\"\ntrigger = \"schedule\"\nschedule = \"daily\"\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.config))
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// A task's schema has no ports, concurrency, image, or disks. They must be
+// rejected as unknown fields rather than accepted-and-ignored, and the
+// "did you mean?" machinery must not advertise them.
+func TestTaskRejectsServiceOnlyFields(t *testing.T) {
+	for _, field := range []string{
+		"port = 8080",
+		"ports = []",
+		"image = \"alpine\"",
+		"[tasks.t.concurrency]\nmode = \"auto\"",
+		"[[tasks.t.disks]]\nname = \"d\"",
+	} {
+		t.Run(field, func(t *testing.T) {
+			config := "name = \"a\"\n[tasks.t]\ncommand = \"x\"\n" + field + "\n"
+			_, err := Parse([]byte(config))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unknown field")
+		})
+	}
+}
+
+func TestTaskUnknownFieldSuggestsTaskField(t *testing.T) {
+	config := `
+name = "test-app"
+
+[tasks.migrate]
+comand = "bin/migrate"
+`
+	_, err := Parse([]byte(config))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+	assert.Contains(t, err.Error(), `did you mean "command"`)
+}
