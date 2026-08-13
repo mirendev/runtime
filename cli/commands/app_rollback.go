@@ -116,13 +116,15 @@ func Rollback(ctx *Context, opts struct {
 		return fmt.Errorf("rollback failed")
 	}
 
-	versionDisplay := selectedVersion
-	if deployResult.HasDeployment() && deployResult.Deployment().HasAppVersionShortId() {
-		versionDisplay = deployResult.Deployment().AppVersionShortId()
+	var deployed *deployment_v1alpha.DeploymentInfo
+	if deployResult.HasDeployment() {
+		deployed = deployResult.Deployment()
 	}
+	deployedVersion, versionDisplay := rollbackVersionIDs(deployed, selectedVersion)
+
 	ctx.Printf("Rolling back %s to version %s\n", opts.App, versionDisplay)
 
-	if err := awaitHealthy(ctx, opts.App, selectedVersion, versionDisplay); err != nil {
+	if err := awaitHealthy(ctx, opts.App, deployedVersion, versionDisplay); err != nil {
 		return err
 	}
 
@@ -131,4 +133,32 @@ func Rollback(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// rollbackVersionIDs reports which version to wait on and which to show, given
+// the deployment the server opened and the version the operator picked.
+//
+// The two can differ. The server activates a version *derived* from the selected
+// one whenever the app's addon bindings or operator-set env vars have to be
+// carried forward onto it (MIR-1579), and the deployment record then names the
+// derived version. Waiting on the id we asked for would never see it go active,
+// and the wait would fail with "never became active" — the same message that
+// sent operators down the path that caused MIR-1579 in the first place.
+//
+// A nil deployment, or one that names no version, falls back to the selection so
+// an older server that returns neither still behaves as before.
+func rollbackVersionIDs(dep *deployment_v1alpha.DeploymentInfo, selectedVersion string) (deployed, display string) {
+	deployed, display = selectedVersion, selectedVersion
+	if dep == nil {
+		return deployed, display
+	}
+
+	if id := dep.AppVersionId(); id != "" {
+		deployed = id
+		display = id
+	}
+	if dep.HasAppVersionShortId() && dep.AppVersionShortId() != "" {
+		display = dep.AppVersionShortId()
+	}
+	return deployed, display
 }
