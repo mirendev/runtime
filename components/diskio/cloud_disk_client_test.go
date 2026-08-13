@@ -126,26 +126,28 @@ func TestReleaseLeaseError(t *testing.T) {
 func TestListLogSegmentsSuccess(t *testing.T) {
 	ts, h, authClient := newTestUploaderServer(t)
 
-	var receivedVolumeID string
+	var receivedPath, receivedKind string
 
 	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		receivedVolumeID = r.URL.Query().Get("volume_id")
+		receivedPath = r.URL.Path
+		receivedKind = r.URL.Query().Get("kind")
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(listLogSegmentsResponse{
-			Segments: []logSegmentInfoJSON{
-				{SegmentID: "seg-1", Label: "400002b3a1c5f2b400000001"},
-				{SegmentID: "seg-2", Label: "400002b3a1c5f2b400000002"},
-				{SegmentID: "seg-3", Label: "400002b3a1c5f2b400000003"},
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{
+			Updates: []UpdateInfo{
+				{UpdateID: "seg-1", Kind: "lbd_log", OrderingKey: "400002b3a1c5f2b400000001"},
+				{UpdateID: "seg-2", Kind: "lbd_log", OrderingKey: "400002b3a1c5f2b400000002"},
+				{UpdateID: "seg-3", Kind: "lbd_log", OrderingKey: "400002b3a1c5f2b400000003"},
 			},
 		})
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	segments, err := client.ListLogSegments(context.Background(), "vol-1")
+	segments, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
-	assert.Equal(t, "vol-1", receivedVolumeID)
+	assert.Equal(t, "/api/v1/disk/volumes/vol-1/updates", receivedPath)
+	assert.Equal(t, "lbd_log", receivedKind, "log segments are lbd_log updates")
 	require.Len(t, segments, 3)
 	assert.Equal(t, "seg-1", segments[0].SegmentID)
 	assert.Equal(t, "400002b3a1c5f2b400000001", segments[0].Label)
@@ -158,13 +160,11 @@ func TestListLogSegmentsEmpty(t *testing.T) {
 
 	h.handler = func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(listLogSegmentsResponse{
-			Segments: []logSegmentInfoJSON{},
-		})
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{Updates: []UpdateInfo{}})
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	segments, err := client.ListLogSegments(context.Background(), "vol-1")
+	segments, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
 	assert.Empty(t, segments)
@@ -179,28 +179,29 @@ func TestListLogSegmentsError(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
 }
 
+// The volume ID now travels in the path, so it has to survive path escaping.
 func TestListLogSegmentsEscapesVolumeID(t *testing.T) {
 	ts, h, authClient := newTestUploaderServer(t)
 
-	var receivedVolumeID string
+	var receivedPath string
 
 	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		receivedVolumeID = r.URL.Query().Get("volume_id")
+		receivedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(listLogSegmentsResponse{})
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{})
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol/with spaces&special")
+	_, err := client.ListLogSegments(context.Background(), "vol with spaces", "")
 
 	require.NoError(t, err)
-	assert.Equal(t, "vol/with spaces&special", receivedVolumeID)
+	assert.Equal(t, "/api/v1/disk/volumes/vol with spaces/updates", receivedPath)
 }
 
 func TestDownloadLogSegmentSuccess(t *testing.T) {
@@ -212,11 +213,11 @@ func TestDownloadLogSegmentSuccess(t *testing.T) {
 		switch {
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/download"):
 			// Verify the path includes the segment ID
-			assert.Contains(t, r.URL.Path, "/api/v1/disk/log-segments/seg-abc/download")
+			assert.Contains(t, r.URL.Path, "/api/v1/disk/volumes/vol-1/updates/seg-abc/download")
 			assert.True(t, strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "))
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logSegmentDownloadResponse{
+			json.NewEncoder(w).Encode(downloadResponseJSON{
 				DownloadURL: ts.URL + "/data/seg-abc",
 			})
 
@@ -260,7 +261,7 @@ func TestDownloadLogSegmentDataFetchError(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/download"):
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logSegmentDownloadResponse{
+			json.NewEncoder(w).Encode(downloadResponseJSON{
 				DownloadURL: ts.URL + "/data/expired",
 			})
 		case r.URL.Path == "/data/expired":
@@ -306,11 +307,11 @@ func TestListLogSegmentsIncludesAuthToken(t *testing.T) {
 	h.handler = func(w http.ResponseWriter, r *http.Request) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(listLogSegmentsResponse{})
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{})
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer test-jwt-token", receivedAuth)
@@ -326,7 +327,7 @@ func TestDownloadLogSegmentIncludesAuthToken(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/download"):
 			apiAuth = r.Header.Get("Authorization")
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logSegmentDownloadResponse{
+			json.NewEncoder(w).Encode(downloadResponseJSON{
 				DownloadURL: ts.URL + "/data/seg-1",
 			})
 		case r.URL.Path == "/data/seg-1":
@@ -383,7 +384,7 @@ func TestListLogSegmentsInvalidJSON(t *testing.T) {
 	}
 
 	client := NewCloudDiskClient(slog.Default(), ts.URL, authClient)
-	_, err := client.ListLogSegments(context.Background(), "vol-1")
+	_, err := client.ListLogSegments(context.Background(), "vol-1", "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode")
@@ -449,7 +450,7 @@ func TestDownloadLogSegmentURLConstruction(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/download"):
 			receivedPath = r.URL.Path
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(logSegmentDownloadResponse{
+			json.NewEncoder(w).Encode(downloadResponseJSON{
 				DownloadURL: ts.URL + "/data",
 			})
 		case r.URL.Path == "/data":
@@ -462,5 +463,5 @@ func TestDownloadLogSegmentURLConstruction(t *testing.T) {
 	require.NoError(t, err)
 	rc.Close()
 
-	assert.Equal(t, "/api/v1/disk/log-segments/my-seg-id/download", receivedPath)
+	assert.Equal(t, "/api/v1/disk/volumes/vol-1/updates/my-seg-id/download", receivedPath)
 }

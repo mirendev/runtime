@@ -17,33 +17,25 @@ import (
 const logHorizonFile = "log_horizon"
 
 // replayMissingSegments downloads and replays any log segments from the cloud
-// that have not yet been applied to the local disk image. Segments are filtered
-// by comparing their TAI64N labels against the stored horizon label.
+// that have not yet been applied to the local disk image.
+//
+// The horizon is read first and passed to the server, which returns only the
+// segments past it. Asking for the whole history and discarding most of it
+// worked, but grew with the volume's age rather than with what is actually
+// missing.
 func (c *DiskMountController) replayMissingSegments(ctx context.Context, volState *VolumeState) error {
-	remoteSegments, err := c.cloudClient.ListLogSegments(ctx, volState.VolumeId)
-	if err != nil {
-		return fmt.Errorf("listing remote log segments: %w", err)
-	}
-
-	if len(remoteSegments) == 0 {
-		c.log.Info("no remote log segments to replay", "volume_id", volState.VolumeId)
-		return nil
-	}
-
 	horizon, err := readLogHorizon(volState.DiskPath)
 	if err != nil {
 		return fmt.Errorf("reading log horizon: %w", err)
 	}
 
-	// Filter to segments with labels newer than the horizon
-	var missing []LogSegmentInfo
-	for _, seg := range remoteSegments {
-		if seg.Label > horizon {
-			missing = append(missing, seg)
-		}
+	missing, err := c.cloudClient.ListLogSegments(ctx, volState.CloudVolumeId, horizon)
+	if err != nil {
+		return fmt.Errorf("listing remote log segments: %w", err)
 	}
 
-	// Sort by label to ensure chronological replay order
+	// Sort by label to ensure chronological replay order. The server returns
+	// them ordered already; this keeps replay correct regardless.
 	sort.Slice(missing, func(i, j int) bool { return missing[i].Label < missing[j].Label })
 
 	if len(missing) == 0 {
@@ -53,7 +45,6 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 
 	c.log.Info("replaying missing log segments",
 		"volume_id", volState.VolumeId,
-		"total_remote", len(remoteSegments),
 		"horizon", horizon,
 		"to_replay", len(missing),
 	)
@@ -67,7 +58,7 @@ func (c *DiskMountController) replayMissingSegments(ctx context.Context, volStat
 
 	var lastLabel string
 	for _, seg := range missing {
-		if err := c.replayOneSegment(ctx, volState.VolumeId, seg.SegmentID, img); err != nil {
+		if err := c.replayOneSegment(ctx, volState.CloudVolumeId, seg.SegmentID, img); err != nil {
 			return fmt.Errorf("replaying segment %s (label %s): %w", seg.SegmentID, seg.Label, err)
 		}
 

@@ -16,11 +16,13 @@ miren disk backup [flags]
 
 ## Flags
 
+- `--cloud` — Also upload the snapshot to miren.cloud as a restore point
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--data-path` — Path to miren data directory (default: `/var/lib/miren`)
 - `--name, -n` — Disk name to backup
 - `--output, -o` — Output snapshot path (default: DISK-YYYYMMDD-HHMMSS.miren.zst)
+- `--pin` — Name the uploaded restore point, pinning it against cleanup
 
 ## Global Options
 

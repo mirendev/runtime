@@ -30,6 +30,8 @@ type mockCloudDiskClient struct {
 
 	segments    []LogSegmentInfo
 	segmentsErr error
+	// listAfter records the horizon each ListLogSegments call passed
+	listAfter []string
 
 	downloadData map[string][]byte
 	downloadErr  error
@@ -50,8 +52,21 @@ func (m *mockCloudDiskClient) ReleaseLease(_ context.Context, volumeID, nonce st
 	return m.releaseLeaseErr
 }
 
-func (m *mockCloudDiskClient) ListLogSegments(_ context.Context, _ string) ([]LogSegmentInfo, error) {
-	return m.segments, m.segmentsErr
+func (m *mockCloudDiskClient) ListLogSegments(_ context.Context, _ string, after string) ([]LogSegmentInfo, error) {
+	m.listAfter = append(m.listAfter, after)
+	if m.segmentsErr != nil {
+		return nil, m.segmentsErr
+	}
+
+	// The server filters on `after`; mirror that so these tests exercise what
+	// replay actually receives rather than an unfiltered stream.
+	var matched []LogSegmentInfo
+	for _, seg := range m.segments {
+		if seg.Label > after {
+			matched = append(matched, seg)
+		}
+	}
+	return matched, nil
 }
 
 func (m *mockCloudDiskClient) DownloadLogSegment(_ context.Context, _, segmentID string) (io.ReadCloser, error) {
@@ -621,4 +636,29 @@ func TestReplayOverwriteAtSameBlock(t *testing.T) {
 	result, err := os.ReadFile(diskPath)
 	require.NoError(t, err)
 	assert.Equal(t, dataNew, result[0:4096], "block 0 should have the latest write")
+}
+
+// Replay asks the server for what it is missing rather than for the volume's
+// whole history: the horizon goes out as `after`, so the response scales with
+// what needs applying instead of with the volume's age.
+func TestReplayPassesHorizonAsAfter(t *testing.T) {
+	tmpDir := t.TempDir()
+	volDir := filepath.Join(tmpDir, "vol")
+	require.NoError(t, os.MkdirAll(volDir, 0755))
+
+	const horizon = "400000000000000200000002"
+	require.NoError(t, writeLogHorizon(volDir, horizon))
+
+	cloud := &mockCloudDiskClient{}
+	mc := NewDiskMountController(slog.Default(), tmpDir, compute.NewNodeId("node-1"), NewState(), newMockDiskMountOps())
+	mc.SetCloudClient(cloud)
+
+	err := mc.replayMissingSegments(context.Background(), &VolumeState{
+		VolumeId: "vol-1",
+		DiskPath: volDir,
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, []string{horizon}, cloud.listAfter,
+		"the stored horizon should be sent as the after bound")
 }

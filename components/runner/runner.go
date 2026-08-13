@@ -841,20 +841,8 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
 	}
 
-	// Reconcile volumes with entity server on startup to re-mount any
-	// universal mode volumes that were mounted before the last shutdown.
-	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk volumes on startup", "error", err)
-	}
-
 	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
 	r.dmc.SetEAC(eas)
-
-	// Reconcile mounts with entity server on startup to re-mount any
-	// accelerator volumes that were mounted before the last shutdown.
-	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk mounts on startup", "error", err)
-	}
 
 	// Prepare deleted volume GC (started after all controller init succeeds)
 	r.diskGC = &diskio.DeletedVolumeGC{
@@ -870,6 +858,7 @@ func (r *Runner) SetupControllers(
 
 	// Set up cloud auth for disk replication if configured
 	var logUploader diskio.LogSegmentUploader
+	var updatesClient diskio.CloudUpdatesClient
 	if r.CloudAuth != nil && r.CloudAuth.Enabled && r.CloudAuth.PrivateKey != "" {
 		cloudURL := r.CloudAuth.CloudURL
 		if cloudURL == "" {
@@ -895,13 +884,47 @@ func (r *Runner) SetupControllers(
 				if aerr != nil {
 					log.Warn("failed to create auth client for log watcher", "error", aerr)
 				} else {
-					cloudDiskClient := diskio.NewCloudDiskClient(log, cloudURL, authClient)
-					r.dmc.SetCloudClient(cloudDiskClient)
+					// One client serves both kinds: lbd log segments for
+					// accelerator mode, image snapshots for universal mode.
+					updatesClient = diskio.NewCloudUpdatesClient(log, cloudURL, authClient)
 
-					logUploader = diskio.NewCloudSegmentUploader(log, cloudURL, authClient, diskioState)
+					cloudDiskClient := diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updatesClient)
+					r.dmc.SetCloudClient(cloudDiskClient)
+					r.dmc.SetUpdatesClient(updatesClient)
+
+					// Universal volumes are mounted by the volume controller, so
+					// that is where a lost image has to be noticed.
+					r.dvc.SetUpdatesClient(updatesClient)
+
+					// Give local disks an identity in the cloud. Without this
+					// every backup call would carry an id the cloud has never
+					// heard of.
+					r.dvc.SetCloudVolumeRegistrar(
+						diskio.NewCloudVolumeRegistrar(log, cloudURL, authClient),
+						r.CloudAuth.ClusterID,
+					)
+
+					logUploader = diskio.NewCloudSegmentUploaderWithClient(log, updatesClient, diskioState)
 				}
 			}
 		}
+	}
+
+	// Reconcile only after the cloud clients above are in place. Startup is
+	// precisely when a host that lost its disks has images to restore, and a
+	// pass that ran before the updates client was wired would see no cloud,
+	// mount the volume, and format a fresh empty image over the gap.
+	//
+	// This also re-mounts universal volumes that were mounted before the last
+	// shutdown, and gives unregistered volumes their first shot at a cloud id.
+	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk volumes on startup", "error", err)
+	}
+
+	// Reconcile mounts with entity server on startup to re-mount any
+	// accelerator volumes that were mounted before the last shutdown.
+	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
+		log.Warn("failed to reconcile disk mounts on startup", "error", err)
 	}
 
 	// Always start the log watcher so accelerator mode log segments are
@@ -918,6 +941,11 @@ func (r *Runner) SetupControllers(
 	} else {
 		log.Info("started log watcher in delete-only mode (no cloud configured)")
 	}
+
+	// Universal-mode volumes are not backed up on a timer. Snapshotting a
+	// mounted image means reading it while the loop device is still writing,
+	// which yields a state that never existed on disk -- see ImageSnapshotter.
+	// `miren disk backup --cloud` takes one when an operator decides it is safe.
 
 	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)
 	cm.AddController(controller.NewReconcileController(

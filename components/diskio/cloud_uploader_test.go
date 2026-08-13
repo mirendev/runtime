@@ -2,10 +2,9 @@ package diskio
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/base64"
 	"encoding/json"
-	"hash/crc32"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -62,275 +61,142 @@ func newTestUploaderServer(t *testing.T) (*httptest.Server, *testAPIHandler, *cl
 	return ts, h, authClient
 }
 
-func TestCloudSegmentUploaderFullFlow(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
+// fakeUpdatesClient records what the uploader asked for. The transport itself
+// is covered in cloud_updates_client_test.go; these tests are about what the
+// uploader decides to send.
+type fakeUpdatesClient struct {
+	uploads   []fakeUpload
+	uploadErr error
+	nextID    string
+}
 
-	var (
-		uploadReqReceived   bool
-		uploadDataReceived  []byte
-		completeReqReceived bool
-		completeBody        logSegmentCompleteRequest
-	)
+type fakeUpload struct {
+	VolumeID string
+	Request  UploadRequest
+	Body     []byte
+}
 
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			uploadReqReceived = true
-			var req logSegmentUploadRequest
-			json.NewDecoder(r.Body).Decode(&req)
-			assert.Equal(t, "vol-123", req.VolumeID)
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "cloud-seg-abc",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: "/api/v1/disk/log-segments/cloud-seg-abc/complete",
-			})
-
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			uploadDataReceived, _ = io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/complete"):
-			completeReqReceived = true
-			json.NewDecoder(r.Body).Decode(&completeBody)
-			w.WriteHeader(http.StatusOK)
-		}
+func (f *fakeUpdatesClient) Upload(ctx context.Context, volumeID string, req UploadRequest, body io.Reader, size int64) (string, error) {
+	if f.uploadErr != nil {
+		return "", f.uploadErr
 	}
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return "", err
+	}
+	if int64(len(data)) != size {
+		return "", fmt.Errorf("declared size %d but body is %d bytes", size, len(data))
+	}
+	f.uploads = append(f.uploads, fakeUpload{VolumeID: volumeID, Request: req, Body: data})
+	if f.nextID != "" {
+		return f.nextID, nil
+	}
+	return "volup-fake", nil
+}
 
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
-	segContent := []byte("test segment data for upload")
-	require.NoError(t, os.WriteFile(segPath, segContent, 0644))
+func (f *fakeUpdatesClient) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {
+	return nil, nil
+}
 
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
+func (f *fakeUpdatesClient) Download(ctx context.Context, volumeID, updateID string) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("not implemented")
+}
 
-	segID, err := uploader.UploadSegment(context.Background(), "vol-123", segPath)
+func writeTestSegment(t *testing.T, label string, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "disk."+label+".log")
+	require.NoError(t, os.WriteFile(path, content, 0644))
+	return path
+}
+
+func TestCloudSegmentUploaderUploadsAsLBDLog(t *testing.T) {
+	const label = "400000000000000100000001"
+	fake := &fakeUpdatesClient{nextID: "volup-abc"}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
+
+	content := []byte("lbd log segment bytes")
+	segID, err := uploader.UploadSegment(context.Background(), "vol-123", writeTestSegment(t, label, content))
 	require.NoError(t, err)
-	assert.Equal(t, "cloud-seg-abc", segID)
+	assert.Equal(t, "volup-abc", segID)
 
-	assert.True(t, uploadReqReceived, "upload request should be sent")
-	assert.Equal(t, segContent, uploadDataReceived, "file data should be uploaded")
-	assert.True(t, completeReqReceived, "complete request should be sent")
+	require.Len(t, fake.uploads, 1)
+	up := fake.uploads[0]
+	assert.Equal(t, "vol-123", up.VolumeID)
+	assert.Equal(t, KindLBDLog, up.Request.Kind)
+	// The TAI64N label is the ordering key replay sorts on
+	assert.Equal(t, label, up.Request.OrderingKey)
+	assert.Equal(t, content, up.Body)
+}
 
-	// Verify hashes
-	md5h := md5.Sum(segContent)
-	expectedMD5 := base64.StdEncoding.EncodeToString(md5h[:])
-	assert.Equal(t, expectedMD5, completeBody.MD5)
+// A segment whose filename carries no TAI64N label has no ordering key, so it
+// is rejected locally rather than as a 400 from the cloud.
+func TestCloudSegmentUploaderRejectsUnlabelledSegment(t *testing.T) {
+	fake := &fakeUpdatesClient{}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
 
-	crch := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	crch.Write(segContent)
-	expectedCRC := base64.StdEncoding.EncodeToString(crch.Sum(nil))
-	assert.Equal(t, expectedCRC, completeBody.CRC32C)
+	path := filepath.Join(t.TempDir(), "not-a-segment.log")
+	require.NoError(t, os.WriteFile(path, []byte("data"), 0644))
 
-	assert.Equal(t, int64(len(segContent)), completeBody.Size)
-	assert.Equal(t, "vol-123", completeBody.VolumeID)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123", path)
+	require.ErrorContains(t, err, "no usable TAI64N label")
+	assert.Empty(t, fake.uploads, "nothing should be sent for an unlabelled segment")
 }
 
 func TestCloudSegmentUploaderIncludesLeaseNonce(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
-
-	var completeBody logSegmentCompleteRequest
-
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "seg-1",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: ts.URL + "/complete",
-			})
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-		case r.Method == "POST" && r.URL.Path == "/complete":
-			json.NewDecoder(r.Body).Decode(&completeBody)
-			w.WriteHeader(http.StatusOK)
-		}
-	}
-
+	fake := &fakeUpdatesClient{}
 	state := NewState()
-	state.SetMount("disk_mount/mnt-1", &MountState{
-		EntityId:   "disk_mount/mnt-1",
-		VolumeId:   "vol-456",
-		LeaseNonce: "lease-nonce-xyz",
+	state.SetMount("mount-1", &MountState{
+		EntityId:   "mount-1",
+		VolumeId:   "vol-123",
+		LeaseNonce: "nonce-abc",
 	})
 
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, state)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-456", segPath)
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, state)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123",
+		writeTestSegment(t, "400000000000000100000001", []byte("data")))
 	require.NoError(t, err)
 
-	assert.Equal(t, "lease-nonce-xyz", completeBody.LeaseNonce)
+	require.Len(t, fake.uploads, 1)
+	assert.Equal(t, "nonce-abc", fake.uploads[0].Request.LeaseNonce)
 }
 
 func TestCloudSegmentUploaderNoLeaseNonceWithoutState(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
+	fake := &fakeUpdatesClient{}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
 
-	var completeBody logSegmentCompleteRequest
-
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "seg-1",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: ts.URL + "/complete",
-			})
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-		case r.Method == "POST" && r.URL.Path == "/complete":
-			json.NewDecoder(r.Body).Decode(&completeBody)
-			w.WriteHeader(http.StatusOK)
-		}
-	}
-
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "disk.0001.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123",
+		writeTestSegment(t, "400000000000000100000001", []byte("data")))
 	require.NoError(t, err)
 
-	assert.Equal(t, "", completeBody.LeaseNonce)
+	require.Len(t, fake.uploads, 1)
+	assert.Empty(t, fake.uploads[0].Request.LeaseNonce)
 }
 
 func TestCloudSegmentUploaderSkipsEmptyFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "empty.log")
-	require.NoError(t, os.WriteFile(segPath, nil, 0644))
+	fake := &fakeUpdatesClient{}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
 
-	uploader := &CloudSegmentUploader{log: slog.Default()}
-
-	segID, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
+	segID, err := uploader.UploadSegment(context.Background(), "vol-123",
+		writeTestSegment(t, "400000000000000100000001", nil))
 	require.NoError(t, err)
-	assert.Equal(t, "", segID)
+	assert.Empty(t, segID)
+	assert.Empty(t, fake.uploads, "an empty segment is not worth uploading")
 }
 
 func TestCloudSegmentUploaderFileNotFound(t *testing.T) {
-	uploader := &CloudSegmentUploader{log: slog.Default()}
+	fake := &fakeUpdatesClient{}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
 
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", "/nonexistent/path.log")
+	_, err := uploader.UploadSegment(context.Background(), "vol-123", "/nonexistent/disk.400000000000000100000001.log")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "open")
+	assert.Empty(t, fake.uploads)
 }
 
-func TestCloudSegmentUploaderUploadRequestFails(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
+func TestCloudSegmentUploaderPropagatesUploadFailure(t *testing.T) {
+	fake := &fakeUpdatesClient{uploadErr: errors.New("cloud unavailable")}
+	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, nil)
 
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload") {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("server error"))
-		}
-	}
-
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "500")
-}
-
-func TestCloudSegmentUploaderDataUploadFails(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
-
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "seg-1",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: "/complete",
-			})
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("expired presigned URL"))
-		}
-	}
-
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "403")
-}
-
-func TestCloudSegmentUploaderCompletionFails(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
-
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "seg-1",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: ts.URL + "/complete",
-			})
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-		case r.Method == "POST" && r.URL.Path == "/complete":
-			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte("duplicate segment"))
-		}
-	}
-
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "409")
-}
-
-func TestCloudSegmentUploaderAbsoluteCompletedURL(t *testing.T) {
-	ts, h, authClient := newTestUploaderServer(t)
-
-	var completePath string
-
-	h.handler = func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/log-segments/upload"):
-			json.NewEncoder(w).Encode(logSegmentUploadResponse{
-				SegmentID:    "seg-1",
-				UploadURL:    ts.URL + "/upload-data",
-				CompletedURL: ts.URL + "/absolute/complete",
-			})
-		case r.Method == "PUT" && r.URL.Path == "/upload-data":
-			io.ReadAll(r.Body)
-			w.WriteHeader(http.StatusOK)
-		case r.Method == "POST":
-			completePath = r.URL.Path
-			w.WriteHeader(http.StatusOK)
-		}
-	}
-
-	tmpDir := t.TempDir()
-	segPath := filepath.Join(tmpDir, "seg.log")
-	require.NoError(t, os.WriteFile(segPath, []byte("data"), 0644))
-
-	uploader := NewCloudSegmentUploader(slog.Default(), ts.URL, authClient, nil)
-
-	_, err := uploader.UploadSegment(context.Background(), "vol-1", segPath)
-	require.NoError(t, err)
-
-	assert.Equal(t, "/absolute/complete", completePath)
+	_, err := uploader.UploadSegment(context.Background(), "vol-123",
+		writeTestSegment(t, "400000000000000100000001", []byte("data")))
+	require.ErrorContains(t, err, "cloud unavailable")
 }
