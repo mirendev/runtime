@@ -234,6 +234,8 @@ func TestViaCloudOptionsRequiresACloud(t *testing.T) {
 	cluster, err := config.GetCluster("prod")
 	require.NoError(t, err)
 
+	// "cloud" appears in most errors on this path, including the one for
+	// failing to authenticate, so matching it would pass on the wrong failure.
 	_, err = cluster.RPCOptionsWithName(t.Context(), config, "prod")
-	require.ErrorContains(t, err, "cloud")
+	require.ErrorContains(t, err, "neither it nor identity")
 }

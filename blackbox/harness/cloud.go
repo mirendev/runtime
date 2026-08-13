@@ -171,7 +171,14 @@ func (env *CloudEnv) SetupViaCloudCluster(t *testing.T, clusterName string) (con
 
 	// A second login, after the group exists: a token carries the groups its
 	// user had when it was minted, and the first one predates the grant.
-	token, _ := env.devLogin(t)
+	//
+	// It has to be the same account, or the token written below and the user
+	// the caller is told about belong to different people, and the mismatch
+	// surfaces much later as a confusing whoami failure.
+	token, secondXID := env.devLogin(t)
+	if secondXID != userXID {
+		t.Fatalf("dev login returned a different user on the second call: %s then %s", userXID, secondXID)
+	}
 
 	cfg := fmt.Sprintf(`active_cluster: %s
 identities:
@@ -187,7 +194,7 @@ clusters:
 `, clusterName, env.CloudURL, token, clusterName, env.ClusterID)
 
 	env.m.RunCmdAsRoot("bash", "-c",
-		fmt.Sprintf("cat > %s << 'CFGEOF'\n%s\nCFGEOF", viaCloudConfigPath, cfg))
+		fmt.Sprintf("cat > %s << 'CFGEOF'\n%s\nCFGEOF", viaCloudConfigPath, cfg)).RequireSuccess(t)
 
 	t.Cleanup(func() {
 		env.m.RunCmdAsRoot("rm", "-f", viaCloudConfigPath)

@@ -34,7 +34,10 @@ type fakeLink struct {
 func newFakeLink() *fakeLink {
 	return &fakeLink{
 		handlers: make(map[string]uplink.MessageHandler),
-		out:      make(chan *uplink.Envelope, 256),
+		// Deep enough that no test fills it by accident: a full link changes
+		// what the relay does (best-effort sends start dropping), so a test
+		// that overflows it is measuring the fake rather than the code.
+		out: make(chan *uplink.Envelope, 4096),
 	}
 }
 
@@ -319,11 +322,21 @@ func TestSessionsAreCapped(t *testing.T) {
 
 	// The refusal is told, not dropped: a caller waiting on a connection that
 	// silently never answers has nothing to act on.
+	//
+	// Drained rather than sampled, because the refusal is best-effort and would
+	// genuinely be dropped if the link filled — which would make this assertion
+	// a statement about the fake's buffer rather than about the relay.
 	var sawClose bool
-	for len(link.out) > 0 {
-		if env := <-link.out; env.Type == cloudrpc.TypeClose {
-			sawClose = true
+	for {
+		select {
+		case env := <-link.out:
+			if env.Type == cloudrpc.TypeClose {
+				sawClose = true
+			}
+			continue
+		case <-time.After(200 * time.Millisecond):
 		}
+		break
 	}
 	r.True(sawClose, "a refused session was never told")
 }

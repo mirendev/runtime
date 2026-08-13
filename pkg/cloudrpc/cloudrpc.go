@@ -168,17 +168,13 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 }
 
 func (s *Server) serve(ctx context.Context, sess *session) {
-	defer func() {
-		s.forget(sess.id)
-		sess.shutdown()
-	}()
+	defer s.teardown(sess)
 
 	err := s.state.ServeMessageConn(ctx, sess, rpc.WithMaxFrameSize(maxFrameData))
 
 	// Tell the far end, best effort: if the uplink is what failed, this goes
 	// nowhere, and the caller learns from its own broken connection instead.
-	//nolint:errcheck // best-effort teardown notice
-	s.send(ctx, TypeClose, Close{SessionID: sess.id, Reason: "session ended"})
+	s.sendBestEffort(TypeClose, Close{SessionID: sess.id, Reason: "session ended"})
 
 	s.log.Info("relayed RPC session closed", "session", sess.id, "error", err)
 }
@@ -213,8 +209,7 @@ func (s *Server) handleData(_ context.Context, data json.RawMessage) error {
 	if !sess.reserve(len(msg.Payload)) {
 		s.log.Warn("relayed RPC session is holding too much, closing it",
 			"session", msg.SessionID, "limit", maxPendingBytes)
-		s.forget(sess.id)
-		sess.shutdown()
+		s.teardown(sess)
 		return fmt.Errorf("session %s backlog too large", msg.SessionID)
 	}
 
@@ -227,8 +222,7 @@ func (s *Server) handleData(_ context.Context, data json.RawMessage) error {
 	default:
 		sess.release(len(msg.Payload))
 		s.log.Warn("relayed RPC session is not reading, closing it", "session", msg.SessionID)
-		s.forget(sess.id)
-		sess.shutdown()
+		s.teardown(sess)
 		return fmt.Errorf("session %s backlog full", msg.SessionID)
 	}
 }
@@ -245,8 +239,7 @@ func (s *Server) handleClose(_ context.Context, data json.RawMessage) error {
 	}
 
 	s.log.Debug("far end closed a relayed RPC session", "session", msg.SessionID, "reason", msg.Reason)
-	s.forget(sess.id)
-	sess.shutdown()
+	s.teardown(sess)
 
 	return nil
 }
@@ -257,10 +250,21 @@ func (s *Server) lookup(id string) *session {
 	return s.sessions[id]
 }
 
-func (s *Server) forget(id string) {
+// teardown ends a session and forgets it, in that order, everywhere.
+//
+// The two steps were open-coded at each teardown site, which left the ordering
+// looking incidental when it is not: shutting down first means a frame arriving
+// in between finds a session that is already closed rather than one that is
+// about to be. Only the session that is actually registered is removed, so a
+// late second teardown cannot evict a successor holding the same id.
+func (s *Server) teardown(sess *session) {
+	sess.shutdown()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, id)
+	if s.sessions[sess.id] == sess {
+		delete(s.sessions, sess.id)
+	}
 }
 
 // send marshals and queues an envelope, waiting for room rather than dropping.

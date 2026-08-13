@@ -54,7 +54,15 @@ func TestRPCViaCloud(t *testing.T) {
 		if !r.Success() {
 			return false, "exit " + strconv.Itoa(r.ExitCode) + ": " + r.Stderr
 		}
+
+		// Exiting zero is not the condition being waited for. The grant can
+		// land between the command being permitted and the policy being
+		// visible, and an empty list would end the poll on a result the
+		// assertions below would then reject.
 		relayedApps = appNames(t, r.Stdout)
+		if len(relayedApps) == 0 {
+			return false, "relayed app list is still empty"
+		}
 		return true, ""
 	})
 

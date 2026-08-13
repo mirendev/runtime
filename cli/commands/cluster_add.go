@@ -220,6 +220,18 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		ViaCloud:     opts.viaCloud,
 	}
 
+	// A cloud reached over plain HTTP is a development one, and routing through
+	// it means putting this identity's token on an unencrypted socket. The
+	// entry has to say so or it will not connect at all — and writing an entry
+	// that cannot work, or one that quietly ships a credential in the clear
+	// without recording that anywhere, are both worse than saying it out loud
+	// here and putting the admission in the file.
+	if opts.viaCloud && identity != nil && strings.HasPrefix(identity.Issuer, "http://") {
+		clusterConfig.Insecure = true
+		ctx.Warn("%s is not encrypted, so commands to this cluster will send your credentials in the clear.", identity.Issuer)
+		ctx.Warn("Recorded as insecure: true on the cluster. Use an https cloud for anything but local development.")
+	}
+
 	if clusterCert != nil {
 		clusterConfig.CACert = clusterCert.CAPEM
 	}

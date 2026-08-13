@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/tls"
+	"net"
 	"net/http"
 	"strings"
 
@@ -66,6 +67,39 @@ func wsRemoteURL(remote string) string {
 	return scheme + "://" + host + "/" + path
 }
 
+// bearerTravelsSafely reports whether a credential may be put on the handshake
+// to this URL.
+//
+// Encrypted, always. Unencrypted, only to this machine — which is what ws://
+// exists for, a development endpoint with no certificate. A configured remote
+// like ws://relay.example would otherwise put a reusable credential on the
+// network in the clear, and the caller would never know it happened.
+//
+// A caller that meant to reach a remote plaintext endpoint gets no header and
+// an authentication failure from the far end, which is the right way round: a
+// broken connection is recoverable, a leaked token is not.
+func bearerTravelsSafely(url string) bool {
+	rest, ok := strings.CutPrefix(url, "ws://")
+	if !ok {
+		return true // wss://, so the handshake is encrypted
+	}
+
+	host, _, _ := strings.Cut(rest, "/")
+	if isLoopbackAddr(host) {
+		return true
+	}
+
+	// isLoopbackAddr only knows addresses, and a development endpoint is
+	// usually reached by name. Handled here rather than there, because that
+	// helper also decides an audit record's level and this is not a reason to
+	// change what it means.
+	name, _, err := net.SplitHostPort(host)
+	if err != nil {
+		name = host
+	}
+	return strings.EqualFold(name, "localhost")
+}
+
 // dialWSMessageConn opens a WebSocket to a "host:port" or "host:port/path"
 // remote and wraps it as a MessageConn. ctx bounds the connection's lifetime, so
 // it must be the State's context rather than any one call's.
@@ -80,16 +114,18 @@ func dialWSMessageConn(ctx context.Context, remote string, tlsCfg *tls.Config, b
 	cfg := tlsCfg.Clone()
 	cfg.NextProtos = []string{"http/1.1"}
 
+	url := wsRemoteURL(remote)
+
 	opts := &websocket.DialOptions{
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: cfg},
 		},
 	}
-	if bearer != "" {
+	if bearer != "" && bearerTravelsSafely(url) {
 		opts.HTTPHeader = http.Header{"Authorization": []string{"Bearer " + bearer}}
 	}
 
-	c, _, err := websocket.Dial(ctx, wsRemoteURL(remote), opts)
+	c, _, err := websocket.Dial(ctx, url, opts)
 	if err != nil {
 		return nil, err
 	}

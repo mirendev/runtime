@@ -30,3 +30,34 @@ func TestWSRemoteURL(t *testing.T) {
 		}
 	}
 }
+
+// The handshake bearer must never cross an unencrypted hop to somewhere else.
+// Plaintext exists for a development endpoint on this machine; anywhere else it
+// would put a reusable credential on the wire, and nothing about the connection
+// would look wrong afterwards.
+func TestBearerTravelsSafely(t *testing.T) {
+	safe := []string{
+		"wss://api.miren.cloud/api/v1/clusters/c/rpc",
+		"wss://anything.example",
+		"ws://localhost:3001/relay",
+		"ws://LocalHost:3001/relay",
+		"ws://127.0.0.1:18080/relay",
+		"ws://[::1]:18080/relay",
+	}
+	for _, url := range safe {
+		if !bearerTravelsSafely(url) {
+			t.Errorf("%q should carry a bearer", url)
+		}
+	}
+
+	unsafe := []string{
+		"ws://relay.example/relay",
+		"ws://miren.host:3001/relay",
+		"ws://10.0.0.1:8080/relay",
+	}
+	for _, url := range unsafe {
+		if bearerTravelsSafely(url) {
+			t.Errorf("%q must not carry a bearer", url)
+		}
+	}
+}
