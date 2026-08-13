@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"miren.dev/runtime/pkg/cloudauth"
@@ -76,6 +77,15 @@ type ListOptions struct {
 	Kind  UpdateKind
 	After string
 	Until string
+
+	// Descending returns newest first instead of replay order. Paired with
+	// Limit 1 it answers "what is the most recent update" in one round trip,
+	// rather than paging a volume's whole history to keep the last row.
+	Descending bool
+
+	// Limit caps how many updates come back. Zero walks every page, which is
+	// what replay wants; a positive value stops as soon as it has enough.
+	Limit int
 }
 
 // CloudUpdatesClient is the runtime's view of the cloud's volume update API.
@@ -299,6 +309,12 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 	if opts.Until != "" {
 		query.Set("until", opts.Until)
 	}
+	if opts.Descending {
+		query.Set("order", "desc")
+	}
+	if opts.Limit > 0 {
+		query.Set("limit", strconv.Itoa(opts.Limit))
+	}
 
 	// Walk every page: callers want the whole matching set, and the cursor is
 	// an implementation detail of the transport.
@@ -319,6 +335,12 @@ func (c *cloudUpdatesClient) List(ctx context.Context, volumeID string, opts Lis
 			return nil, err
 		}
 		all = append(all, page.Updates...)
+
+		// A caller that asked for a bounded number stops as soon as it has
+		// them, rather than following the cursor to the end of the history.
+		if opts.Limit > 0 && len(all) >= opts.Limit {
+			return all[:opts.Limit], nil
+		}
 
 		if page.NextCursor == "" {
 			return all, nil

@@ -297,3 +297,55 @@ func TestCloudUpdatesClientListStopsAtPageCeiling(t *testing.T) {
 	require.ErrorContains(t, err, "more than")
 	assert.LessOrEqual(t, page, maxUpdateListPages+1)
 }
+
+// Restore asks for one row from the newest end. The point of the option is to
+// avoid the page walk, so the test that matters is that it stops after one
+// request even when the server offers a cursor to keep going.
+func TestCloudUpdatesClientListDescendingStopsAtLimit(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	var seenQueries []string
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		seenQueries = append(seenQueries, r.URL.RawQuery)
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{
+			Updates:    []UpdateInfo{{UpdateID: "volup-newest", Kind: "loop_image", OrderingKey: "0000000000000009"}},
+			NextCursor: "loop_image:0000000000000009",
+		})
+	}
+
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+	updates, err := client.List(context.Background(), "vol-1", ListOptions{
+		Kind:       KindLoopImage,
+		Descending: true,
+		Limit:      1,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, updates, 1)
+	assert.Equal(t, "volup-newest", updates[0].UpdateID)
+
+	require.Len(t, seenQueries, 1, "a bounded list must not follow the cursor")
+	assert.Contains(t, seenQueries[0], "order=desc")
+	assert.Contains(t, seenQueries[0], "limit=1")
+}
+
+// Without a limit the walk is unchanged, so replay keeps getting everything.
+func TestCloudUpdatesClientListStaysAscendingByDefault(t *testing.T) {
+	ts, h, authClient := newTestUploaderServer(t)
+
+	var seenQueries []string
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		seenQueries = append(seenQueries, r.URL.RawQuery)
+		json.NewEncoder(w).Encode(listUpdatesResponseJSON{
+			Updates: []UpdateInfo{{UpdateID: "volup-1", Kind: "loop_image", OrderingKey: "0000000000000001"}},
+		})
+	}
+
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, authClient)
+	_, err := client.List(context.Background(), "vol-1", ListOptions{Kind: KindLoopImage})
+	require.NoError(t, err)
+
+	require.Len(t, seenQueries, 1)
+	assert.NotContains(t, seenQueries[0], "order=")
+	assert.NotContains(t, seenQueries[0], "limit=")
+}

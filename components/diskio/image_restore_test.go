@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ type restoreUpdatesClient struct {
 	dlErr    error
 
 	listedKinds []UpdateKind
+	listedOpts  []ListOptions
 }
 
 func (r *restoreUpdatesClient) Upload(ctx context.Context, volumeID string, req UploadRequest, body io.Reader, size int64) (string, error) {
@@ -33,10 +35,22 @@ func (r *restoreUpdatesClient) Upload(ctx context.Context, volumeID string, req 
 
 func (r *restoreUpdatesClient) List(ctx context.Context, volumeID string, opts ListOptions) ([]UpdateInfo, error) {
 	r.listedKinds = append(r.listedKinds, opts.Kind)
+	r.listedOpts = append(r.listedOpts, opts)
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
-	return r.updates, nil
+
+	// Imitate the server: r.updates is held in ascending ordering-key order, so
+	// a descending request gets the reverse, and Limit truncates. A double that
+	// ignored these would hide the restore path asking for the wrong end.
+	out := slices.Clone(r.updates)
+	if opts.Descending {
+		slices.Reverse(out)
+	}
+	if opts.Limit > 0 && len(out) > opts.Limit {
+		out = out[:opts.Limit]
+	}
+	return out, nil
 }
 
 func (r *restoreUpdatesClient) Download(ctx context.Context, volumeID, updateID string) (io.ReadCloser, error) {
@@ -114,6 +128,11 @@ func TestRestoreImageRebuildsMissingImage(t *testing.T) {
 
 	assert.Equal(t, []UpdateKind{KindLoopImage}, client.listedKinds,
 		"only loop images are candidates for a universal volume")
+
+	// One row from the newest end, rather than a walk of the whole history
+	require.Len(t, client.listedOpts, 1)
+	assert.True(t, client.listedOpts[0].Descending)
+	assert.Equal(t, 1, client.listedOpts[0].Limit)
 }
 
 // The local image is by definition newer than anything the cloud holds, so a

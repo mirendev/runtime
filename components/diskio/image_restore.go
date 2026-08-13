@@ -41,7 +41,13 @@ func restoreImageIfMissing(ctx context.Context, log *slog.Logger, client CloudUp
 		return fmt.Errorf("stat image: %w", err)
 	}
 
-	updates, err := client.List(ctx, volState.CloudVolumeId, ListOptions{Kind: KindLoopImage})
+	// Newest first, one row: a volume with a long backup history should not
+	// cost a page walk to answer "what is the most recent image".
+	updates, err := client.List(ctx, volState.CloudVolumeId, ListOptions{
+		Kind:       KindLoopImage,
+		Descending: true,
+		Limit:      1,
+	})
 	if err != nil {
 		return fmt.Errorf("listing image snapshots: %w", err)
 	}
@@ -51,8 +57,7 @@ func restoreImageIfMissing(ctx context.Context, log *slog.Logger, client CloudUp
 		return nil
 	}
 
-	// The cloud returns them in ordering-key order, so the last is the newest
-	newest := updates[len(updates)-1]
+	newest := updates[0]
 
 	log.Info("restoring volume image from cloud snapshot",
 		"volume_id", volState.VolumeId,
