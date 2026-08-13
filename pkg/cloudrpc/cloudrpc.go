@@ -49,13 +49,19 @@ const (
 	maxSessions = 128
 )
 
-// Link is the part of the control-plane link this package uses: somewhere to
-// register handlers, and a send that applies backpressure instead of dropping.
-// *uplink.Client is the implementation; naming the two methods keeps the
-// dependency honest and lets the relay be exercised without a socket.
+// Link is the part of the control-plane link this package uses.
+// *uplink.Client is the implementation; naming the methods keeps the dependency
+// honest and lets the relay be exercised without a socket.
+//
+// Both sends are here because the choice between them is not a preference. A
+// session's frames cannot be lost, so they wait for room. Anything sent from a
+// message handler cannot wait, because handlers run on the link's read loop and
+// every other tenant is queued behind them — so those go best-effort or not at
+// all.
 type Link interface {
 	Handle(msgType string, handler uplink.MessageHandler)
 	SendContext(ctx context.Context, env *uplink.Envelope) error
+	Send(env *uplink.Envelope)
 }
 
 // Config wires a Server to the link it rides and the RPC server it exposes.
@@ -142,10 +148,12 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 	}
 	if len(s.sessions) >= maxSessions {
 		s.mu.Unlock()
-		// Told rather than dropped: the caller is waiting on a connection that
-		// would otherwise just never answer.
-		//nolint:errcheck // the refusal is best-effort; the caller times out either way
-		s.send(ctx, TypeClose, Close{SessionID: req.SessionID, Reason: "too many open sessions"})
+		// Told rather than dropped, but never waited on: this runs on the link's
+		// read loop, so waiting for room would stall every other tenant — and
+		// the outbox being full is exactly the situation where a cap gets hit.
+		// If the refusal is lost the caller times out instead, which is the
+		// same outcome one step slower.
+		s.sendBestEffort(TypeClose, Close{SessionID: req.SessionID, Reason: "too many open sessions"})
 		s.log.Warn("refused a relayed RPC session, too many open", "session", req.SessionID, "open", maxSessions)
 		return fmt.Errorf("too many relayed sessions open")
 	}
@@ -183,6 +191,11 @@ func (s *Server) serve(ctx context.Context, sess *session) {
 // caller. Dropping the frame instead would be worse than useless — RPC cannot
 // resynchronise after a hole — so the session is torn down and the caller finds
 // out.
+//
+// The context is unused because of that, not by oversight: every operation here
+// is non-blocking, so there is nothing for a cancellation to cut short. Any
+// change that introduces a wait here has to take the context — and should think
+// again first, because the wait is on the shared loop.
 func (s *Server) handleData(_ context.Context, data json.RawMessage) error {
 	var msg Data
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -253,10 +266,24 @@ func (s *Server) forget(id string) {
 // send marshals and queues an envelope, waiting for room rather than dropping.
 // A relayed session has no way to recover from a lost frame, so the uplink's
 // best-effort path is not an option here.
+//
+// It blocks, so it must not be called from a message handler — see Link.
 func (s *Server) send(ctx context.Context, msgType string, payload any) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal %s: %w", msgType, err)
 	}
 	return s.uplink.SendContext(ctx, &uplink.Envelope{Type: msgType, Data: raw})
+}
+
+// sendBestEffort queues an envelope if there is room and gives up if there is
+// not, for a notice sent from a message handler. Nothing downstream depends on
+// it arriving; what matters is that it never makes the read loop wait.
+func (s *Server) sendBestEffort(msgType string, payload any) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		s.log.Error("failed to marshal a relay notice", "type", msgType, "error", err)
+		return
+	}
+	s.uplink.Send(&uplink.Envelope{Type: msgType, Data: raw})
 }

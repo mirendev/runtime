@@ -62,6 +62,15 @@ func (l *fakeLink) SendContext(ctx context.Context, env *uplink.Envelope) error 
 	}
 }
 
+// Send is the best-effort half: it drops rather than waiting, and — the part
+// that matters for a stalled link — it never blocks at all.
+func (l *fakeLink) Send(env *uplink.Envelope) {
+	select {
+	case l.out <- env:
+	default:
+	}
+}
+
 func (l *fakeLink) stall() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -317,6 +326,40 @@ func TestSessionsAreCapped(t *testing.T) {
 		}
 	}
 	r.True(sawClose, "a refused session was never told")
+}
+
+// Refusing a session must not wait on the link.
+//
+// Handlers run on the link's read loop, so anything that waits there stops
+// every other tenant — and a congested outbox is exactly the condition under
+// which a cap gets hit, so the two arrive together or not at all.
+func TestRefusingASessionDoesNotWaitOnTheLink(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	link := clusterWithRelay(t, ctx, "meter", example.AdaptMeter(&testMeter{temp: 42}))
+
+	for i := range 1024 {
+		if err := link.deliver(ctx, cloudrpc.TypeOpen,
+			cloudrpc.Open{SessionID: fmt.Sprintf("s%d", i)}); err != nil {
+			break
+		}
+	}
+
+	// Nothing can reach the far end now, in either direction.
+	link.stall()
+
+	refused := make(chan error, 1)
+	go func() {
+		refused <- link.deliver(ctx, cloudrpc.TypeOpen, cloudrpc.Open{SessionID: "one-more"})
+	}()
+
+	select {
+	case err := <-refused:
+		r.Error(err, "the session past the cap should have been refused")
+	case <-time.After(2 * time.Second):
+		r.Fail("refusing a session blocked the link's read loop")
+	}
 }
 
 // A session must not outlive the connection carrying it. There is no resuming a
