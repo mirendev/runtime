@@ -832,6 +832,9 @@ func (r *Runner) SetupControllers(
 		return nil, fmt.Errorf("disk volume controller init: %w", err)
 	}
 
+	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
+	r.dmc.SetEAC(eas)
+
 	// Prepare deleted volume GC (started after all controller init succeeds)
 	r.diskGC = &diskio.DeletedVolumeGC{
 		Log:      log.With("module", "deleted-volume-gc"),
@@ -843,9 +846,6 @@ func (r *Runner) SetupControllers(
 	// owned by the volume controller are cleaned up first
 	r.closers = append(r.closers, shutdownCloser{r.dvc})
 	r.closers = append(r.closers, shutdownCloser{r.dmc})
-
-	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
-	r.dmc.SetEAC(eas)
 
 	// Set up cloud auth for disk replication if configured
 	var logUploader diskio.LogSegmentUploader
