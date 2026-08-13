@@ -81,7 +81,7 @@ In standalone mode, embedded services start automatically unless explicitly disa
 | `release_path` | string | — | Path to release directory containing binaries | `MIREN_SERVER_RELEASE_PATH` | `--release-path` |
 | `config_cluster_name` | string | `local` | Cluster name in client config | `MIREN_SERVER_CONFIG_CLUSTER_NAME` | `--config-cluster-name`, `-C` |
 | `skip_client_config` | bool | `false` | Skip writing client config to `clientconfig.d` | `MIREN_SERVER_SKIP_CLIENT_CONFIG` | `--skip-client-config` |
-| `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
+| `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1). Cluster-wide default; override per route with `miren route timeout` — see [Request Timeouts](/traffic-routing#request-timeouts) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
 | `stop_sandboxes_on_shutdown` | bool | `false` | Stop all sandboxes when server shuts down (useful in development) | `MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN` | `--stop-sandboxes-on-shutdown` |
 ## `[ingress]` — Ingress Settings {#ingress}
 

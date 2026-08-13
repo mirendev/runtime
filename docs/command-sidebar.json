@@ -261,6 +261,7 @@
       "command/route-set",
       "command/route-set-default",
       "command/route-show",
+      "command/route-timeout",
       "command/route-unprotect",
       "command/route-unset-default",
       "command/route-waf"

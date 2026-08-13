@@ -69,6 +69,11 @@ const (
 	// apps from having their leases evicted on every 30s tick, which would
 	// force every request through the full entity store + activator pipeline.
 	minLeaseTTL = 5 * time.Minute
+	// maxBadTimeoutsTracked caps the per-route memory of which unusable
+	// request_timeout we have already warned about. Past the cap we stop
+	// warning rather than start flooding — a config error that repeats forever
+	// is worth one line, never a stream of them.
+	maxBadTimeoutsTracked = 1024
 )
 
 type IngressConfig struct {
@@ -88,6 +93,19 @@ type Server struct {
 
 	aa        activator.AppActivator
 	transport http.RoundTripper
+
+	// transports memoizes one proxy transport per distinct per-route timeout
+	// override. Each needs its own connection pool: Go keys pooled connections
+	// by (scheme, host) only, so a connection dialed under a 10m idle deadline
+	// would otherwise be handed to a request that wants the 60s default.
+	transportMu sync.Mutex
+	transports  map[time.Duration]http.RoundTripper
+
+	// badTimeouts records, per route, the last unusable request_timeout we
+	// warned about, so a misconfigured route produces one warning instead of
+	// one per request. See warnBadRouteTimeout.
+	badTimeoutMu sync.Mutex
+	badTimeouts  map[entity.Id]string
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -134,19 +152,6 @@ func NewServer(
 		config.RequestTimeout = 60 * time.Second
 	}
 
-	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
-	baseTransport.ResponseHeaderTimeout = config.RequestTimeout
-	baseTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		conn, err := (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		return &idleTimeoutConn{Conn: conn, idleTimeout: config.RequestTimeout}, nil
-	}
-
 	var signingKey []byte
 	if config.DataPath != "" {
 		var err error
@@ -164,7 +169,9 @@ func NewServer(
 		ingressClient:      ingress.NewClient(log, rpcClient),
 		appClient:          app.NewClient(log, rpcClient),
 		aa:                 aa,
-		transport:          baseTransport,
+		transport:          newProxyTransport(config.RequestTimeout),
+		transports:         make(map[time.Duration]http.RoundTripper),
+		badTimeouts:        make(map[entity.Id]string),
 		httpMetrics:        httpMetrics,
 		logWriter:          logWriter,
 		apps:               make(map[string]*appUsage),
@@ -187,6 +194,114 @@ func NewServer(
 	go serv.watchInvalidations(ctx)
 
 	return serv
+}
+
+// newProxyTransport builds a transport that gives up on a proxied request once
+// it has been silent for timeout. Two knobs enforce that: ResponseHeaderTimeout
+// bounds the wait for the app's response headers, and idleTimeoutConn bounds
+// the gap between reads once bytes are flowing.
+func newProxyTransport(timeout time.Duration) http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = timeout
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &idleTimeoutConn{Conn: conn, idleTimeout: timeout}, nil
+	}
+	return t
+}
+
+// transportFor returns the transport enforcing the given request timeout,
+// building and memoizing one the first time a route asks for a value other than
+// the server default. The number of distinct transports is bounded by the
+// number of distinct per-route overrides an operator has configured.
+func (h *Server) transportFor(timeout time.Duration) http.RoundTripper {
+	if timeout <= 0 || timeout == h.config.RequestTimeout {
+		return h.transport
+	}
+
+	h.transportMu.Lock()
+	defer h.transportMu.Unlock()
+
+	if t, ok := h.transports[timeout]; ok {
+		return t
+	}
+
+	// Tests build a Server directly and skip this map; writing to a nil one
+	// would panic rather than fail usefully.
+	if h.transports == nil {
+		h.transports = make(map[time.Duration]http.RoundTripper)
+	}
+
+	h.Log.Info("building proxy transport for per-route request timeout", "timeout", timeout)
+	t := newProxyTransport(timeout)
+	h.transports[timeout] = t
+	return t
+}
+
+// routeRequestTimeout resolves a route's request timeout override. It returns 0
+// when the route carries no override or carries one we cannot honor, which
+// tells transportFor to use the server-wide default.
+func (h *Server) routeRequestTimeout(route *ingress_v1alpha.HttpRoute) time.Duration {
+	if route == nil || route.RequestTimeout == "" {
+		return 0
+	}
+
+	d, err := time.ParseDuration(route.RequestTimeout)
+	if err != nil {
+		h.warnBadRouteTimeout(route, "ignoring unparseable route request timeout", "error", err)
+		return 0
+	}
+
+	if d <= 0 {
+		h.warnBadRouteTimeout(route, "ignoring non-positive route request timeout")
+		return 0
+	}
+
+	return d
+}
+
+// warnBadRouteTimeout warns about an unusable request_timeout once per route,
+// and again only if that route later carries a different unusable value.
+//
+// The warning is worth keeping at Warn — a route that silently ignores its
+// configured timeout is exactly the kind of thing an operator needs to see. But
+// routeRequestTimeout runs on every request through the route, and a bad value
+// never self-heals, so warning unconditionally would emit the same line for as
+// long as the misconfiguration lasts and drown the tier it sits in.
+func (h *Server) warnBadRouteTimeout(route *ingress_v1alpha.HttpRoute, msg string, extra ...any) {
+	h.badTimeoutMu.Lock()
+
+	if h.badTimeouts == nil {
+		h.badTimeouts = make(map[entity.Id]string)
+	}
+
+	warned, tracking := h.badTimeouts[route.ID]
+	switch {
+	case warned == route.RequestTimeout && tracking:
+		h.badTimeoutMu.Unlock()
+		return
+	case !tracking && len(h.badTimeouts) >= maxBadTimeoutsTracked:
+		// Out of room to remember this one. Staying quiet is the safer failure:
+		// the alternative is warning on every request for every route past the
+		// cap.
+		h.badTimeoutMu.Unlock()
+		return
+	}
+
+	h.badTimeouts[route.ID] = route.RequestTimeout
+	h.badTimeoutMu.Unlock()
+
+	args := []any{"route", route.ID, "host", route.Host, "value", route.RequestTimeout}
+	args = append(args, extra...)
+	args = append(args, "note", "further requests on this route will not repeat this warning")
+
+	h.Log.Warn(msg, args...)
 }
 
 // watchInvalidations listens for sandbox invalidation signals from the
@@ -567,9 +682,11 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 	}
 
+	requestTimeout := h.routeRequestTimeout(route)
+
 	// Compose middleware chain: WAF → auth → serve
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
+		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName, requestTimeout)
 	}
 
 	handler = h.authMiddleware(route, handler)
@@ -642,7 +759,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string, requestTimeout time.Duration) {
 	ctx := req.Context()
 
 	// Get app details first to have the name for metrics
@@ -697,7 +814,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			req = req.WithContext(ctx)
 			// On non-final attempts, suppress error response so we can retry
 			writeErr := attempt == maxRetries
-			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr)
+			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr, requestTimeout)
 			if err != nil && isProxyConnectionError(err) {
 				// Cached lease pointed at a dead sandbox — invalidate all app
 				// leases (they likely all point to the same dead sandbox) and retry
@@ -790,7 +907,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)
-		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true)
+		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true, requestTimeout)
 		if err != nil {
 			// Connection error on a fresh lease - the sandbox may have died
 			// between lease acquisition and proxy. Invalidate immediately.
@@ -843,7 +960,7 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 // captures the error but does NOT write to the ResponseWriter, allowing the caller
 // to retry with a fresh lease. This is safe because connection errors happen during
 // TCP dial, before any response bytes are sent.
-func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool) error {
+func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
@@ -855,7 +972,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	var proxyErr error
 
 	proxy := &httputil.ReverseProxy{
-		Transport: h.transport,
+		Transport: h.transportFor(requestTimeout),
 		Director: func(outReq *http.Request) {
 			outReq.URL.Scheme = targetParsed.Scheme
 			outReq.URL.Host = targetParsed.Host

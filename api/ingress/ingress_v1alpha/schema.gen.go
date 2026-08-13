@@ -6,22 +6,24 @@ import (
 )
 
 const (
-	HttpRouteAppId           = entity.Id("dev.miren.ingress/http_route.app")
-	HttpRouteAuthProviderId  = entity.Id("dev.miren.ingress/http_route.auth_provider")
-	HttpRouteClaimMappingsId = entity.Id("dev.miren.ingress/http_route.claim_mappings")
-	HttpRouteDefaultId       = entity.Id("dev.miren.ingress/http_route.default")
-	HttpRouteHostId          = entity.Id("dev.miren.ingress/http_route.host")
-	HttpRouteWafProfileId    = entity.Id("dev.miren.ingress/http_route.waf_profile")
+	HttpRouteAppId            = entity.Id("dev.miren.ingress/http_route.app")
+	HttpRouteAuthProviderId   = entity.Id("dev.miren.ingress/http_route.auth_provider")
+	HttpRouteClaimMappingsId  = entity.Id("dev.miren.ingress/http_route.claim_mappings")
+	HttpRouteDefaultId        = entity.Id("dev.miren.ingress/http_route.default")
+	HttpRouteHostId           = entity.Id("dev.miren.ingress/http_route.host")
+	HttpRouteRequestTimeoutId = entity.Id("dev.miren.ingress/http_route.request_timeout")
+	HttpRouteWafProfileId     = entity.Id("dev.miren.ingress/http_route.waf_profile")
 )
 
 type HttpRoute struct {
-	ID            entity.Id       `json:"id"`
-	App           entity.Id       `cbor:"app,omitempty" json:"app,omitempty"`
-	AuthProvider  entity.Id       `cbor:"auth_provider,omitempty" json:"auth_provider,omitempty"`
-	ClaimMappings []ClaimMappings `cbor:"claim_mappings,omitempty" json:"claim_mappings,omitempty"`
-	Default       bool            `cbor:"default,omitempty" json:"default,omitempty"`
-	Host          string          `cbor:"host,omitempty" json:"host,omitempty"`
-	WafProfile    entity.Id       `cbor:"waf_profile,omitempty" json:"waf_profile,omitempty"`
+	ID             entity.Id       `json:"id"`
+	App            entity.Id       `cbor:"app,omitempty" json:"app,omitempty"`
+	AuthProvider   entity.Id       `cbor:"auth_provider,omitempty" json:"auth_provider,omitempty"`
+	ClaimMappings  []ClaimMappings `cbor:"claim_mappings,omitempty" json:"claim_mappings,omitempty"`
+	Default        bool            `cbor:"default,omitempty" json:"default,omitempty"`
+	Host           string          `cbor:"host,omitempty" json:"host,omitempty"`
+	RequestTimeout string          `cbor:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	WafProfile     entity.Id       `cbor:"waf_profile,omitempty" json:"waf_profile,omitempty"`
 }
 
 func (o *HttpRoute) Decode(e entity.AttrGetter) {
@@ -44,6 +46,9 @@ func (o *HttpRoute) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(HttpRouteHostId); ok && a.Value.Kind() == entity.KindString {
 		o.Host = a.Value.String()
+	}
+	if a, ok := e.Get(HttpRouteRequestTimeoutId); ok && a.Value.Kind() == entity.KindString {
+		o.RequestTimeout = a.Value.String()
 	}
 	if a, ok := e.Get(HttpRouteWafProfileId); ok && a.Value.Kind() == entity.KindId {
 		o.WafProfile = a.Value.Id()
@@ -80,6 +85,9 @@ func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Host) {
 		attrs = append(attrs, entity.String(HttpRouteHostId, o.Host))
 	}
+	if !entity.Empty(o.RequestTimeout) {
+		attrs = append(attrs, entity.String(HttpRouteRequestTimeoutId, o.RequestTimeout))
+	}
 	if !entity.Empty(o.WafProfile) {
 		attrs = append(attrs, entity.Ref(HttpRouteWafProfileId, o.WafProfile))
 	}
@@ -103,6 +111,9 @@ func (o *HttpRoute) Empty() bool {
 	if !entity.Empty(o.Host) {
 		return false
 	}
+	if !entity.Empty(o.RequestTimeout) {
+		return false
+	}
 	if !entity.Empty(o.WafProfile) {
 		return false
 	}
@@ -116,6 +127,7 @@ func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {
 	(&ClaimMappings{}).InitSchema(sb.Builder("http_route.claim_mappings"))
 	sb.Bool("default", "dev.miren.ingress/http_route.default", schema.Doc("Whether this is the default route for routing"), schema.Indexed)
 	sb.String("host", "dev.miren.ingress/http_route.host", schema.Doc("The hostname to match on for the application"), schema.Indexed)
+	sb.String("request_timeout", "dev.miren.ingress/http_route.request_timeout", schema.Doc("Per-route override for the ingress request timeout (e.g. \"10m\", \"300s\"). Empty falls back to the server's http_request_timeout (default 60s). Must be a positive duration; invalid or non-positive values are ignored at request time."))
 	sb.Ref("waf_profile", "dev.miren.ingress/http_route.waf_profile", schema.Doc("Reference to a WAF profile for request filtering"))
 }
 
@@ -412,5 +424,5 @@ func init() {
 		(&PasswordProvider{}).InitSchema(sb)
 		(&WafProfile{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x96ے\xd30\f\x86_\x04\x86\xe3p&\xcc>\x91\xc7\x1b+\x89\xb6>\xad\xedv\xdbK\xb8\x80\aa\xe1\rᚉ\x9cnb;\x9b\x9a\x9b\x8e\xaaH\x9f,\xe5\xb7&\xf7Bs\x05\xb7\x02\x0e\x8dB\a\xbaA\xdd;\xf0\x1ev\xa8\x85\xbf?\xbe(\x9e|\x19\x9f4C\b\x969\xb3\x0f\xf0\x9b\b\xc7'e\xe0\x1c\x13i\x7f;a\x14G]V\xeb:\x04)\xfc\xf7\x9f\xd7(\x8eϷH\r\xb7\x96\n\xb6\xa3\x11N\x16\xaeQPڇ\xed\xb4}\x18\x98u\xe6\x80\x02\x1c\x01T\xea\x9aP\xbfF\xd4\xc7MT+9*\xa6\xb8\xb5\xa8{/\x14ק?D\xd4ٓ\x11\x89\xadQ\xd6h\xd0a\xb6\xa6\x89\x95U\x9aG\xabT\x0e\xf0\x1bM\xe2My\xfc\x94\x16\xe1t\n\x88\xe6x\xd4\xce\a\x87\xba'\xc4ۋ\x88\x01\xf8y\x92\xddd/ \xfd\x01\x9cG\xa3\xfb\xc3\x15\x97v\xe0\xd2:Tܝ\xd8؇\"ԙD\xf5^oN\\@\xc7\xf72P\xb1\xfe\xfcg\xac&\xae\x8d\x91\x04X\xd1\xe9\x020\x18\x1f\xb3\x05Yy\xb7\xef6\x93\xefx7ʤC\t\xc4\xd8-\x1d\x93l6\xfb\xbd\x99aǗ\x8fܧ\x05s\x92\xc7\xd32r\x11T)\x88\xaf\xd4ߧMTc\xb9\xe3\xda g\x12\x0e \xa3\x943\xdf\xd8f\x8b:l\xf6\xb9\x1c\xcc\xda\x1b\xa5F\r\x8a\xf6\xe1\xd6M\xad>+c\x93\xb0\xcaf\x7fP\xb3\xef/\xc0\x9aV\"\xe8\xc0PPq\x9c\xff\xe6\xb2\xf8\\I\xf2\xd0:\x88\xfaR\xa9+'\xae,\x96\x8cht\x87=\xbb\xf1FG\xad-\x1d9\xad\xa9\xa0ih\x83q\x8c.K\xdcQ\xa9/g\xae\xbc\xb6\x94I\xb7h\xfe\xc9\xf3W\xa4\x96\xe6\x9f\r\xb6wQj2\xf1伕]\x96\xf2|k,\xf8\xb8\x87&\xbbz\x0f%\xa4\xb5-@\x8a\xb5\xdc\xfb;\xe3D\xae\xdaWe|\x11\xfa_{{\xe5\x00\x05\xf0\xd2\xfc\xafj\x18\x0f\x9e\x81\xfb!\xea6u\xd5N\xf0\xb6`\xe7\xe1;?\x18\x17X\xfc\x9aX.\xc2\xcb\x1f\x16\xc9:\xa9؛\xd9\xeb\xacZ@e\x03\xf52\xf8\a\x00\x00\xff\xff\x01\x00\x00\xff\xff\xfc\xecL2;\t\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x96ے\xdb \f\x86_\xa4\x9d\x1e\xa7纳O\xc4\x10#\xdb\xdap\n`or\xd9\xde\xf4A\xba\xed\x1b\xb6\xd7\x1d\x83\xb36\xe08\xe4&#\v\xf1\t\xc9?\x8a\x1f\x99\xa4\x02\x0e\f\x86J\xa0\x01Y\xa1l\rX\v{\x94\xcc>\x1e_e+\xdfƕ\xaasN\x13\xa3z\a\x7f<\xe1\xf8,\x0f\x9cc\x02\xed_Ô\xa0(\xf3lM\x83\xc0\x99\xfd\xf9k\x87\xec\xf8r\x8bTQ\xad}\xc2z4\xdcI\xc3\x0e\x99\xdf\xf6i{[\xef:\xa2\x8d\x1a\x90\x81\xf1\x00\x11\xbb&\xd4\xef\x11\xf5y\x13Us\x8a\x82\b\xaa5\xca\xd62A\xe5\xe9\xaf'\xcadeDb\xad\x84V\x12\xa4\x9b\xad\xa9cy\x96\xeab\x96\xc2\x06\xfe\xf0\x9dx\x97\x1f?\xa6\x05\xb8?\x05\x04s<jc\x9dA\xd9z\xc4\xfb\xab\x88\x0e蹓\xcdd/ \xed\x00Ƣ\x92\xedpG\xb9\xee(\xd7\x06\x055'2\xd6!<\xeaL\xf2\xf9\xdenv\x9cAC{\xee|\xb2\xf6\xfc0fc;\xa5\xb8\a\xac\xe8t\x01\xe8\x94\r\xbb\x99\xb7\xd2j\xbfln6p\xe8\xc1:\xe2P\x80\xea\x03G\xa5\xce\x14\xf9a\x13\xf9@\x9bQy\rr\xf0\xb8\xfd\xd21)q\xb3\x85\xf73\xec\xf8\xfa\xc2\x15]0'\xc5=\xcf#\x17A\x85\x1a\xfb~\xa9e\vT\xa5\xa9\xa1R!%\x1c\x06\xe0\xe1v$\xbe\xb1\xcc\x1a\xa5۬s٘5\x91\xf8B\x15\xb2\xfa\xe9\"O\xa5\xbe\xc8c\xa3\xb0\x9b&\xd2\xc7+\xb0\xaa\xe6\b\xd2\x11d>9Ώ\xa9,\xbe\x16\x92,\xd4\x06\x82\xd4D\xecJ\x89+\xb3*!*\xd9`K\ueb52AkKGJ\xab\nh\x12j\xa7\f\xf1\xf7/\x8c\xbdؗ2W^[\xcc\xf4\x17s\xfe)\xb8\x9d\xf1\xfe\xb3Az\x13\xa4\xc6#O\xca[\x19\x8f1\xcf\xd6J\x83\r\xa3m\xb2\x8bG[DZ\x9b\x02^\xb1\x9aZ\xfb\xa0\fKU\xfb&\x8f\xcfBo\xfa+X9@\x06\xbc\xd6\xff\xbb\x12Ɠ\xa7\xa3\xb6\v\xba\x8d]\xa5\x1d<d\xec4|o;e\x1c\t\x1f(\xcbAx\xfd[%\x1a'\x05s3y\x9dE\x03(/\xa0\\\x06\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x1c\x06\xbc\xb1\x8e\t\x00\x00"))
 }

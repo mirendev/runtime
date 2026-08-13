@@ -103,6 +103,35 @@ miren route set '*.yourdomain.com' myapp
 
 You don't have to do anything else for HTTPS — Miren provisions Let's Encrypt certificates as requests arrive. See [TLS Certificates](/tls) for the details.
 
+### Request Timeouts
+
+Miren gives up on a proxied request once it has gone quiet for 60 seconds — nothing from your app, nothing to send. That covers most apps, but it cuts off patterns that are silent by design: long polling, an endpoint that waits on a slow job before writing its first byte, or a report that takes minutes to assemble.
+
+Raise the limit for just that route:
+
+<CliCommand context="client">
+```miren
+miren route timeout longpoll.yourdomain.com 10m
+```
+</CliCommand>
+
+Check what a route is using, and put it back on the cluster default:
+
+<CliCommand context="client">
+```miren
+miren route timeout longpoll.yourdomain.com
+miren route timeout longpoll.yourdomain.com --clear
+```
+</CliCommand>
+
+The value is a duration string such as `10m`, `300s`, or `2h`, and must be positive. `miren route list` shows a `TIMEOUT` column with each route's override, or `-` when it uses the default.
+
+The 60-second default itself is the `server.http_request_timeout` setting — see [Server Configuration](/server-config). A per-route value overrides it for that route only.
+
+:::note[Streaming responses are already fine]
+The timeout measures silence, not total duration. A server-sent-events stream or a WebSocket that keeps sending data will run indefinitely on the default — you only need an override when the connection genuinely goes quiet for longer than a minute.
+:::
+
 ### Choosing a Port
 
 Miren sets the `PORT` environment variable to tell your app which port to listen on. Your app should bind to `PORT`:

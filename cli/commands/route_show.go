@@ -111,6 +111,7 @@ func RouteShow(ctx *Context, opts struct {
 			ProviderMissing bool                `json:"provider_missing,omitempty"`
 			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
 			WafLevel        int                 `json:"waf_level"`
+			RequestTimeout  string              `json:"request_timeout,omitempty"`
 		}
 
 		wafLevel := 0
@@ -125,6 +126,7 @@ func RouteShow(ctx *Context, opts struct {
 			Protected:      protected,
 			ProtectionType: protectionType,
 			WafLevel:       wafLevel,
+			RequestTimeout: route.RequestTimeout,
 		}
 
 		if protected {
@@ -158,6 +160,9 @@ func RouteShow(ctx *Context, opts struct {
 	ctx.Printf("  Protected: %v\n", protected)
 	if wafProfile != nil {
 		ctx.Printf("  WAF Level: %d\n", wafProfile.ParanoiaLevel)
+	}
+	if route.RequestTimeout != "" {
+		ctx.Printf("  Timeout:   %s\n", route.RequestTimeout)
 	}
 
 	switch protectionType {

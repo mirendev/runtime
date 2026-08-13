@@ -429,7 +429,7 @@ func TestProxyToLeaseRetrySuppress(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 
 	// Port 1 is not listening — triggers ECONNREFUSED
-	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", false)
+	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", false, 0)
 
 	if err == nil {
 		t.Fatal("expected connection error, got nil")
@@ -459,7 +459,7 @@ func TestProxyToLeaseWriteErrorOnFinalAttempt(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/test", nil)
 
-	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", true)
+	err := h.proxyToLease(rec, req, "http://127.0.0.1:1", "app/test", "test-app", true, 0)
 
 	if err == nil {
 		t.Fatal("expected connection error, got nil")
@@ -486,7 +486,7 @@ func TestProxyToLeaseNoRetryOnTimeout(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/test", nil)
 
-	err := h.proxyToLease(rec, req, backend.URL, "app/test", "test-app", false)
+	err := h.proxyToLease(rec, req, backend.URL, "app/test", "test-app", false, 0)
 
 	// Timeouts are not connection errors — writeErrorResponse only suppresses connection errors
 	if err != nil {
