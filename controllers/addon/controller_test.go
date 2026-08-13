@@ -252,6 +252,46 @@ func TestProvisionCompensatesOnPostProvisionFailure(t *testing.T) {
 // association has since moved to "deprovisioning" (e.g. on startup resync
 // after the user ran `addon destroy`), provision() must be a no-op so the
 // subsequent deprovisioning event can run.
+// MIR-1524 itself. provision() writes "provisioning" before the work starts, so
+// a coordinator that dies partway leaves the association sitting on it. The
+// switch had no case for that value, so every later pass fell through and
+// returned in silence, and the association was never picked back up.
+func TestReconcileResumesAnInterruptedProvision(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{
+		Name: "miren-postgresql",
+	})
+	require.NoError(t, err)
+
+	// Exactly what a crash mid-provision leaves behind.
+	assocID, err := ec.Create(ctx, "test-assoc", &addon_v1alpha.AddonAssociation{
+		App:     appID,
+		Addon:   addonID,
+		Variant: "small",
+		Status:  "provisioning",
+	})
+	require.NoError(t, err)
+
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, assocID, &assoc)
+	require.NoError(t, err)
+
+	require.NoError(t, ctrl.Reconcile(ctx, &assoc, meta))
+
+	assert.True(t, provider.provisionCalled,
+		"an interrupted provision must be picked back up, not skipped in silence")
+
+	// Read the status off meta rather than the store: the controller framework
+	// flushes a handler's writes once it returns, so calling Reconcile directly
+	// leaves them staged here.
+	var staged addon_v1alpha.AddonAssociation
+	staged.Decode(meta.Entity)
+	assert.Equal(t, "active", staged.Status, "and run through to a settled status")
+}
+
 func TestProvisionSkipsWhenAssociationNoLongerPending(t *testing.T) {
 	ctx, ctrl, ec, provider := setupControllerTest(t)
 

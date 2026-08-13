@@ -50,7 +50,19 @@ func (c *Controller) Init(ctx context.Context) error {
 
 func (c *Controller) Reconcile(ctx context.Context, assoc *addon_v1alpha.AddonAssociation, meta *entity.Meta) error {
 	switch assoc.Status {
-	case "pending":
+	case "pending", "provisioning":
+		// "provisioning" belongs here because provision() writes it before the
+		// work starts, so a coordinator that dies mid-provision leaves the
+		// association on it. The switch used to have no case for that: every
+		// later pass fell through and returned in silence, nothing picked the
+		// work back up, and because the deployment launcher holds an app back
+		// while an association is still provisioning, the app stopped
+		// deploying too. That is MIR-1524.
+		//
+		// Re-entering is safe because of the revs below this one: the
+		// execution is named after the association, so a second pass continues
+		// the interrupted attempt rather than starting a fresh one beside
+		// whatever the first already built.
 		return c.provision(ctx, assoc, meta)
 	case "deprovisioning":
 		return c.deprovision(ctx, assoc, meta)
@@ -68,12 +80,15 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	// resync, the reconcile event may carry an older revision than what's
 	// now in the store). If the user has already marked this association for
 	// deprovisioning, skip; the subsequent deprovisioning event will handle it.
+	//
+	// "provisioning" passes as well as "pending", because an attempt a crash
+	// interrupted is still an attempt that should finish.
 	var current addon_v1alpha.AddonAssociation
 	if err := c.ec.GetById(ctx, assoc.ID, &current); err != nil {
 		return fmt.Errorf("re-reading association: %w", err)
 	}
-	if current.Status != "pending" {
-		c.log.Info("association no longer pending, skipping provision",
+	if current.Status != "pending" && current.Status != "provisioning" {
+		c.log.Info("association no longer wants provisioning, skipping",
 			"association", assoc.ID, "status", current.Status)
 		return nil
 	}
