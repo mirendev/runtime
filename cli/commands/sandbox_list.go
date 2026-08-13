@@ -12,12 +12,50 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
+// sandboxFilter narrows a sandbox listing to one app and/or service. Both
+// match against the values shown in the APP and SERVICE columns, so what you
+// filter on is what you see — including the "-" cases, which simply match
+// nothing rather than matching everything.
+type sandboxFilter struct {
+	app     string
+	service string
+}
+
+func (f sandboxFilter) keep(app, service string) bool {
+	if f.app != "" && app != f.app {
+		return false
+	}
+
+	if f.service != "" && service != f.service {
+		return false
+	}
+
+	return true
+}
+
+func (f sandboxFilter) describe() string {
+	switch {
+	case f.app != "" && f.service != "":
+		return fmt.Sprintf(" for app %q, service %q", f.app, f.service)
+	case f.app != "":
+		return fmt.Sprintf(" for app %q", f.app)
+	case f.service != "":
+		return fmt.Sprintf(" for service %q", f.service)
+	default:
+		return ""
+	}
+}
+
 func SandboxList(ctx *Context, opts struct {
-	All    bool   `short:"a" long:"all" description:"Include dead sandboxes (excluded by default)"`
-	Status string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
+	All     bool   `short:"a" long:"all" description:"Include dead sandboxes (excluded by default)"`
+	Status  string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
+	App     string `long:"app" description:"Only show sandboxes belonging to this app"`
+	Service string `long:"service" description:"Only show sandboxes of this service (e.g. web, worker)"`
 	FormatOptions
 	ConfigCentric
 }) error {
+	filter := sandboxFilter{app: opts.App, service: opts.Service}
+
 	client, err := ctx.RPCClient("entities")
 	if err != nil {
 		return err
@@ -122,6 +160,18 @@ func SandboxList(ctx *Context, opts struct {
 			var sandbox compute_v1alpha.Sandbox
 			sandbox.Decode(e.Entity())
 
+			// Extract pool label from metadata
+			var md core_v1alpha.Metadata
+			md.Decode(e.Entity())
+			poolLabel, _ := md.Labels.Get("pool")
+
+			// Get service from pool
+			service := poolServiceMap[poolLabel]
+
+			if !filter.keep(ui.CleanEntityID(versionAppMap[sandbox.Spec.Version.String()]), service) {
+				continue
+			}
+
 			if excludeDead && compute.SandboxDead(sandbox.Status) {
 				continue
 			}
@@ -134,14 +184,6 @@ func SandboxList(ctx *Context, opts struct {
 					continue
 				}
 			}
-
-			// Extract pool label from metadata
-			var md core_v1alpha.Metadata
-			md.Decode(e.Entity())
-			poolLabel, _ := md.Labels.Get("pool")
-
-			// Get service from pool
-			service := poolServiceMap[poolLabel]
 
 			// Get network address
 			address := ""
@@ -194,6 +236,21 @@ func SandboxList(ctx *Context, opts struct {
 		var sandbox compute_v1alpha.Sandbox
 		sandbox.Decode(e.Entity())
 
+		// Extract pool label from metadata
+		var md core_v1alpha.Metadata
+		md.Decode(e.Entity())
+		poolLabel, _ := md.Labels.Get("pool")
+
+		// Resolve app name from version
+		appName := ui.CleanEntityID(versionAppMap[sandbox.Spec.Version.String()])
+
+		// Narrowing comes before the dead check so that the "N dead hidden"
+		// tally counts what this listing is actually about. Reporting the
+		// cluster's dead sandboxes under `--app foo` would be a non-sequitur.
+		if !filter.keep(appName, poolServiceMap[poolLabel]) {
+			continue
+		}
+
 		if excludeDead && compute.SandboxDead(sandbox.Status) {
 			deadCount++
 			continue
@@ -213,10 +270,6 @@ func SandboxList(ctx *Context, opts struct {
 			continue
 		}
 
-		// Extract pool label from metadata
-		var md core_v1alpha.Metadata
-		md.Decode(e.Entity())
-		poolLabel, _ := md.Labels.Get("pool")
 		poolLabelDisplay := poolLabel
 		if poolLabelDisplay == "" {
 			poolLabelDisplay = "-"
@@ -263,15 +316,14 @@ func SandboxList(ctx *Context, opts struct {
 			poolLabelDisplay = shortId
 		}
 
-		// Resolve app name from version
-		appName := "-"
-		if name, ok := versionAppMap[sandbox.Spec.Version.String()]; ok {
-			appName = ui.CleanEntityID(name)
+		appDisplay := appName
+		if appDisplay == "" {
+			appDisplay = "-"
 		}
 
 		rows = append(rows, ui.Row{
 			sandboxId,
-			appName,
+			appDisplay,
 			versionDisplay,
 			service,
 			poolLabelDisplay,
@@ -284,7 +336,13 @@ func SandboxList(ctx *Context, opts struct {
 	}
 
 	if len(rows) == 0 {
-		ctx.Printf("No sandboxes found\n")
+		// Naming the filters matters most when they're the reason for the empty
+		// result — a typo'd app name is otherwise indistinguishable from an app
+		// that genuinely has nothing running.
+		ctx.Printf("No sandboxes found%s\n", filter.describe())
+		if deadCount > 0 {
+			ctx.Printf("%d dead sandbox(es) hidden. Use --all to show.\n", deadCount)
+		}
 		return nil
 	}
 

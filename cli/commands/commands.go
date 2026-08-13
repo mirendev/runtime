@@ -368,6 +368,14 @@ miren deploy --analyze
 			Body: "miren sandbox list --all",
 		}),
 		WithExample(mflags.Example{
+			Name: "Show only one app's sandboxes",
+			Body: "miren sandbox list --app myapp",
+		}),
+		WithExample(mflags.Example{
+			Name: "Show only one service of an app",
+			Body: "miren sandbox list --app myapp --service worker",
+		}),
+		WithExample(mflags.Example{
 			Name: "List as JSON",
 			Body: "miren sandbox list --format json",
 		}),
@@ -397,6 +405,14 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Run a command in a sandbox",
 			Body: "miren sandbox exec sb_abc123 -- ls -la /app",
+		}),
+		WithExample(mflags.Example{
+			Name: "Let miren pick a running sandbox for an app",
+			Body: "miren sandbox exec --app myapp",
+		}),
+		WithExample(mflags.Example{
+			Name: "Run a command in one of an app's worker sandboxes",
+			Body: "miren sandbox exec --app myapp --service worker -- ps aux",
 		}),
 	))
 
