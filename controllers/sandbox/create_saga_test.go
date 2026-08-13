@@ -140,6 +140,7 @@ type mockContainerRuntime struct {
 	destroySubCtrsCalls      int
 	releaseDiskLeasesCalls   int
 	releaseTokenStateCalls   int
+	releaseHubsCalls         int
 	unconfigureFirewallCalls int
 	waitForPortCalls         int
 	lastWaitForPortTimeout   time.Duration
@@ -260,6 +261,12 @@ func (m *mockContainerRuntime) ReleaseTokenState(id entity.Id) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.releaseTokenStateCalls++
+}
+
+func (m *mockContainerRuntime) ReleaseHubs(id entity.Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseHubsCalls++
 }
 
 func (m *mockContainerRuntime) UnconfigureFirewall(sb *compute.Sandbox) {

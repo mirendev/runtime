@@ -57,3 +57,24 @@ interfaces:
         results:
           - name: code
             type: int32
+
+      # attach joins a client to a container's existing primary process,
+      # rather than executing a second process beside it the way exec does.
+      #
+      # The distinction is the whole point: an exec'd process belongs to the
+      # client that started it and dies with it, taking its exit code along.
+      # An attached client is a subscriber -- it can come and go, several can
+      # watch at once, and none of that reaches the workload.
+      - name: attach
+        parameters:
+          - name: sandbox
+            type: string
+          - name: container
+            type: string
+            doc: Container within the sandbox; empty means the app container
+          - name: input
+            type: stream.RecvStream[[]byte]
+          - name: output
+            type: stream.SendStream[[]byte]
+          - name: window_updates
+            type: stream.RecvStream[*WindowSize]

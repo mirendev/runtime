@@ -57,6 +57,7 @@ type SandboxContainerRuntime interface {
 	BootContainers(ctx context.Context, sb *compute.Sandbox, ep *network.EndpointConfig, sbPid int, cgroups map[string]string, meta *entity.Meta, volumeMounts map[string]string) ([]WaitPort, error)
 	DestroySubContainers(ctx context.Context, id entity.Id) error
 	ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error
+	ReleaseHubs(id entity.Id)
 	ReleaseTokenState(id entity.Id)
 	UnconfigureFirewall(sb *compute.Sandbox)
 	WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error

@@ -15,6 +15,11 @@ const (
 	Crashed = "crashed"
 	// Idle means the app is deliberately scaled to zero (no desired instances).
 	Idle = "idle"
+	// Ready means the app is deployed and available to invoke, but has no
+	// long-running process to be healthy or idle. A task-only app is doing
+	// exactly what it was configured to do; reporting it as idle would say it
+	// went to sleep.
+	Ready = "ready"
 	// Unknown means there is no pool state to derive health from.
 	Unknown = "unknown"
 )

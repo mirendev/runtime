@@ -164,5 +164,6 @@ miren logs --last 5m -g error
 
 - [`miren logs app`](/command/logs-app) — View application logs
 - [`miren logs build`](/command/logs-build) — View build logs
+- [`miren logs run`](/command/logs-run) — View logs for a task run
 - [`miren logs sandbox`](/command/logs-sandbox) — View sandbox logs
 - [`miren logs system`](/command/logs-system) — View system logs

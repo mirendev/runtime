@@ -33,6 +33,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
+	"miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
@@ -49,6 +50,7 @@ import (
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
 	keyrotationctrl "miren.dev/runtime/controllers/keyrotation"
 	nodehealthctrl "miren.dev/runtime/controllers/nodehealth"
+	runctrl "miren.dev/runtime/controllers/run"
 	sagagcctrl "miren.dev/runtime/controllers/sagagc"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
@@ -385,6 +387,8 @@ type Coordinator struct {
 	certProvider  autotls.CertificateProvider
 	autocertReady func() // nil when DNS-01 path is used
 	artifactGC    *artifactctrl.GCController
+	runScheduler  *runctrl.Scheduler
+	runGC         *runctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
 	indexGC       *indexgcctrl.GCController
@@ -470,6 +474,12 @@ func (c *Coordinator) Stop() {
 	}
 	if c.ephemeralGC != nil {
 		c.ephemeralGC.Stop()
+	}
+	if c.runScheduler != nil {
+		c.runScheduler.Stop()
+	}
+	if c.runGC != nil {
+		c.runGC.Stop()
 	}
 	if c.versionGC != nil {
 		c.versionGC.Stop()
@@ -1343,6 +1353,44 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(rotationReconciler)
 
+	// Run controller: one sandbox, one command, one exit code, then teardown.
+	runController := runctrl.NewController(c.Log, ec, eac)
+	if err := runController.Init(ctx); err != nil {
+		c.Log.Error("failed to initialize run controller", "error", err)
+		return err
+	}
+
+	runReconciler := controller.NewReconcileController(
+		"run",
+		c.Log,
+		entity.Ref(entity.EntityKind, run_v1alpha.KindRun),
+		eac,
+		controller.AdaptReconcileController[run_v1alpha.Run](runController),
+		time.Minute,
+		4,
+	)
+	// The controller needs a handle on its own queue: the deadline sweep and the
+	// sandbox bridge enqueue work rather than transitioning runs themselves, so
+	// every status change stays inside the reconcile the framework serializes
+	// per entity.
+	runController.RC = runReconciler
+	runReconciler.SetPeriodic(runctrl.SweepInterval, runController.SweepDeadlines)
+	c.cm.AddController(runReconciler)
+
+	// A sandbox reaching STOPPED produces no event on the run index, so without
+	// this bridge a finished run would wait for the sweep to notice it.
+	runSandboxWatch := runctrl.NewSandboxWatchController(c.Log, eac, runReconciler)
+	runSandboxReconciler := controller.NewReconcileController(
+		"run-sandbox-watch",
+		c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox),
+		eac,
+		controller.AdaptController(runSandboxWatch),
+		0,
+		1,
+	)
+	c.cm.AddController(runSandboxReconciler)
+
 	eps := execproxy.NewServer(c.Log, eac, rs)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
@@ -1371,6 +1419,21 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to start controller manager", "error", err)
 		return err
 	}
+
+	// Scheduled tasks. Deliberately not a reconcile controller: ticks come from
+	// config on a timer, not from an entity changing, and dedup is the
+	// create-if-absent on the tick-derived name rather than any lock.
+	//
+	// Started here with the other background controllers rather than at
+	// construction, so it does not begin firing runs before the reconcile
+	// manager -- including the run controller that would execute them -- is up.
+	c.runScheduler = runctrl.NewScheduler(c.Log, ec, eac)
+	c.runScheduler.Start(ctx)
+
+	// Run retention. Not a reconcile controller either: it deletes rather than
+	// transitions, on a cadence of minutes.
+	c.runGC = runctrl.NewGCController(c.Log, ec, eac)
+	c.runGC.Start(ctx)
 
 	// Start the artifact GC controller
 	c.artifactGC = &artifactctrl.GCController{
@@ -1447,6 +1510,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	c.appInfo = ai
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
+	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))

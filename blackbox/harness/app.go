@@ -141,7 +141,9 @@ func WaitForAppReady(t *testing.T, m *Miren, name string, timeout time.Duration)
 		for _, app := range apps {
 			if app.Name == name {
 				switch app.Health {
-				case "healthy":
+				// "ready" is a task-only app: deployed and invokable, with no
+				// long-running process to become healthy.
+				case "healthy", "ready":
 					return true, ""
 				case "crashed":
 					return false, fmt.Sprintf("app %s health: crashed (may recover after env injection)", name)

@@ -9,28 +9,42 @@ import (
 )
 
 const (
-	SandboxSpecContainerId       = entity.Id("dev.miren.compute/component.sandbox_spec.container")
-	SandboxSpecHostNetworkId     = entity.Id("dev.miren.compute/component.sandbox_spec.hostNetwork")
-	SandboxSpecLogAttributeId    = entity.Id("dev.miren.compute/component.sandbox_spec.logAttribute")
-	SandboxSpecLogEntityId       = entity.Id("dev.miren.compute/component.sandbox_spec.logEntity")
-	SandboxSpecPortWaitTimeoutId = entity.Id("dev.miren.compute/component.sandbox_spec.port_wait_timeout")
-	SandboxSpecRouteId           = entity.Id("dev.miren.compute/component.sandbox_spec.route")
-	SandboxSpecStaticHostId      = entity.Id("dev.miren.compute/component.sandbox_spec.static_host")
-	SandboxSpecVersionId         = entity.Id("dev.miren.compute/component.sandbox_spec.version")
-	SandboxSpecVolumeId          = entity.Id("dev.miren.compute/component.sandbox_spec.volume")
+	SandboxSpecContainerId           = entity.Id("dev.miren.compute/component.sandbox_spec.container")
+	SandboxSpecHostNetworkId         = entity.Id("dev.miren.compute/component.sandbox_spec.hostNetwork")
+	SandboxSpecLogAttributeId        = entity.Id("dev.miren.compute/component.sandbox_spec.logAttribute")
+	SandboxSpecLogEntityId           = entity.Id("dev.miren.compute/component.sandbox_spec.logEntity")
+	SandboxSpecPortWaitTimeoutId     = entity.Id("dev.miren.compute/component.sandbox_spec.port_wait_timeout")
+	SandboxSpecRestartPolicyId       = entity.Id("dev.miren.compute/component.sandbox_spec.restart_policy")
+	SandboxSpecRestartPolicyAlwaysId = entity.Id("dev.miren.compute/component.sandbox_spec.restart_policy.always")
+	SandboxSpecRestartPolicyNeverId  = entity.Id("dev.miren.compute/component.sandbox_spec.restart_policy.never")
+	SandboxSpecRouteId               = entity.Id("dev.miren.compute/component.sandbox_spec.route")
+	SandboxSpecStaticHostId          = entity.Id("dev.miren.compute/component.sandbox_spec.static_host")
+	SandboxSpecVersionId             = entity.Id("dev.miren.compute/component.sandbox_spec.version")
+	SandboxSpecVolumeId              = entity.Id("dev.miren.compute/component.sandbox_spec.volume")
 )
 
 type SandboxSpec struct {
-	Container       []SandboxSpecContainer  `cbor:"container" json:"container"`
-	HostNetwork     bool                    `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
-	LogAttribute    types.Labels            `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
-	LogEntity       string                  `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
-	PortWaitTimeout string                  `cbor:"port_wait_timeout,omitempty" json:"port_wait_timeout,omitempty"`
-	Route           []SandboxSpecRoute      `cbor:"route,omitempty" json:"route,omitempty"`
-	StaticHost      []SandboxSpecStaticHost `cbor:"static_host,omitempty" json:"static_host,omitempty"`
-	Version         entity.Id               `cbor:"version,omitempty" json:"version,omitempty"`
-	Volume          []SandboxSpecVolume     `cbor:"volume,omitempty" json:"volume,omitempty"`
+	Container       []SandboxSpecContainer   `cbor:"container" json:"container"`
+	HostNetwork     bool                     `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
+	LogAttribute    types.Labels             `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
+	LogEntity       string                   `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
+	PortWaitTimeout string                   `cbor:"port_wait_timeout,omitempty" json:"port_wait_timeout,omitempty"`
+	RestartPolicy   SandboxSpecRestartPolicy `cbor:"restart_policy,omitempty" json:"restart_policy,omitempty"`
+	Route           []SandboxSpecRoute       `cbor:"route,omitempty" json:"route,omitempty"`
+	StaticHost      []SandboxSpecStaticHost  `cbor:"static_host,omitempty" json:"static_host,omitempty"`
+	Version         entity.Id                `cbor:"version,omitempty" json:"version,omitempty"`
+	Volume          []SandboxSpecVolume      `cbor:"volume,omitempty" json:"volume,omitempty"`
 }
+
+type SandboxSpecRestartPolicy string
+
+const (
+	SandboxSpecALWAYS SandboxSpecRestartPolicy = "component.sandbox_spec.restart_policy.always"
+	SandboxSpecNEVER  SandboxSpecRestartPolicy = "component.sandbox_spec.restart_policy.never"
+)
+
+var sandbox_specrestart_policyFromId = map[entity.Id]SandboxSpecRestartPolicy{SandboxSpecRestartPolicyAlwaysId: SandboxSpecALWAYS, SandboxSpecRestartPolicyNeverId: SandboxSpecNEVER}
+var sandbox_specrestart_policyToId = map[SandboxSpecRestartPolicy]entity.Id{SandboxSpecALWAYS: SandboxSpecRestartPolicyAlwaysId, SandboxSpecNEVER: SandboxSpecRestartPolicyNeverId}
 
 func (o *SandboxSpec) Decode(e entity.AttrGetter) {
 	for _, a := range e.GetAll(SandboxSpecContainerId) {
@@ -53,6 +67,9 @@ func (o *SandboxSpec) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(SandboxSpecPortWaitTimeoutId); ok && a.Value.Kind() == entity.KindString {
 		o.PortWaitTimeout = a.Value.String()
+	}
+	if a, ok := e.Get(SandboxSpecRestartPolicyId); ok && a.Value.Kind() == entity.KindId {
+		o.RestartPolicy = sandbox_specrestart_policyFromId[a.Value.Id()]
 	}
 	for _, a := range e.GetAll(SandboxSpecRouteId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -94,6 +111,9 @@ func (o *SandboxSpec) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.PortWaitTimeout) {
 		attrs = append(attrs, entity.String(SandboxSpecPortWaitTimeoutId, o.PortWaitTimeout))
 	}
+	if a, ok := sandbox_specrestart_policyToId[o.RestartPolicy]; ok {
+		attrs = append(attrs, entity.Ref(SandboxSpecRestartPolicyId, a))
+	}
 	for _, v := range o.Route {
 		attrs = append(attrs, entity.Component(SandboxSpecRouteId, v.Encode()))
 	}
@@ -125,6 +145,9 @@ func (o *SandboxSpec) Empty() bool {
 	if !entity.Empty(o.PortWaitTimeout) {
 		return false
 	}
+	if o.RestartPolicy != "" {
+		return false
+	}
 	if len(o.Route) != 0 {
 		return false
 	}
@@ -147,6 +170,9 @@ func (o *SandboxSpec) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Label("logAttribute", "dev.miren.compute/component.sandbox_spec.logAttribute", schema.Doc("Labels for log entries"), schema.Many)
 	sb.String("logEntity", "dev.miren.compute/component.sandbox_spec.logEntity", schema.Doc("Entity to associate log output with"))
 	sb.String("port_wait_timeout", "dev.miren.compute/component.sandbox_spec.port_wait_timeout", schema.Doc("Max time to wait for declared container ports to bind before marking\nthe sandbox DEAD. Parsed via time.ParseDuration (e.g. \"60s\"). Empty,\ninvalid, or non-positive values (including \"0s\") fall back to 15s.\nAddons with slow cold-init (e.g. MySQL first-boot ~20s) should set\nthis to a larger value.\n"))
+	sb.Singleton("dev.miren.compute/component.sandbox_spec.restart_policy.always")
+	sb.Singleton("dev.miren.compute/component.sandbox_spec.restart_policy.never")
+	sb.Ref("restart_policy", "dev.miren.compute/component.sandbox_spec.restart_policy", schema.Doc("Whether the sandbox controller may reboot this sandbox's containers if\nthey have disappeared while the entity still reads RUNNING. Empty means\n\"always\", which is the historical behavior every service depends on.\n\n\"never\" is required for sandboxes backing a task run, whose command\nmust execute at most once. Without it a run that loses its containers\nwithout the exit being observed -- a runner restart mid-run is the\nrealistic case -- gets its command re-executed on the next reconcile,\nwhich for a migration is not a recoverable mistake.\n"), schema.Choices(SandboxSpecRestartPolicyAlwaysId, SandboxSpecRestartPolicyNeverId))
 	sb.Component("route", "dev.miren.compute/component.sandbox_spec.route", schema.Doc("Network route configuration"), schema.Many)
 	(&SandboxSpecRoute{}).InitSchema(sb.Builder("component.sandbox_spec.route"))
 	sb.Component("static_host", "dev.miren.compute/component.sandbox_spec.static_host", schema.Doc("Static host-to-IP mapping"), schema.Many)
@@ -1012,6 +1038,7 @@ func (o *Node) InitSchema(sb *schema.SchemaBuilder) {
 const (
 	SandboxBoundPortId      = entity.Id("dev.miren.compute/sandbox.bound_port")
 	SandboxContainerId      = entity.Id("dev.miren.compute/sandbox.container")
+	SandboxExitId           = entity.Id("dev.miren.compute/sandbox.exit")
 	SandboxHostNetworkId    = entity.Id("dev.miren.compute/sandbox.hostNetwork")
 	SandboxLabelsId         = entity.Id("dev.miren.compute/sandbox.labels")
 	SandboxLastActivityId   = entity.Id("dev.miren.compute/sandbox.last_activity")
@@ -1034,6 +1061,7 @@ type Sandbox struct {
 	ID           entity.Id     `json:"id"`
 	BoundPort    []BoundPort   `cbor:"bound_port,omitempty" json:"bound_port,omitempty"`
 	Container    []Container   `cbor:"container" json:"container"`
+	Exit         Exit          `cbor:"exit,omitempty" json:"exit"`
 	HostNetwork  bool          `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
 	Labels       []string      `cbor:"labels,omitempty" json:"labels,omitempty"`
 	LastActivity time.Time     `cbor:"last_activity,omitempty" json:"last_activity"`
@@ -1075,6 +1103,9 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 			v.Decode(a.Value.Component())
 			o.Container = append(o.Container, v)
 		}
+	}
+	if a, ok := e.Get(SandboxExitId); ok && a.Value.Kind() == entity.KindComponent {
+		o.Exit.Decode(a.Value.Component())
 	}
 	if a, ok := e.Get(SandboxHostNetworkId); ok && a.Value.Kind() == entity.KindBool {
 		o.HostNetwork = a.Value.Bool()
@@ -1154,6 +1185,9 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.Container {
 		attrs = append(attrs, entity.Component(SandboxContainerId, v.Encode()))
 	}
+	if !o.Exit.Empty() {
+		attrs = append(attrs, entity.Component(SandboxExitId, o.Exit.Encode()))
+	}
 	attrs = append(attrs, entity.Bool(SandboxHostNetworkId, o.HostNetwork))
 	for _, v := range o.Labels {
 		attrs = append(attrs, entity.String(SandboxLabelsId, v))
@@ -1194,6 +1228,9 @@ func (o *Sandbox) Empty() bool {
 		return false
 	}
 	if len(o.Container) != 0 {
+		return false
+	}
+	if !o.Exit.Empty() {
 		return false
 	}
 	if !entity.Empty(o.HostNetwork) {
@@ -1237,6 +1274,8 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 	(&BoundPort{}).InitSchema(sb.Builder("sandbox.bound_port"))
 	sb.Component("container", "dev.miren.compute/sandbox.container", schema.Doc("A container running in the sandbox"), schema.Many, schema.Required)
 	(&Container{}).InitSchema(sb.Builder("sandbox.container"))
+	sb.Component("exit", "dev.miren.compute/sandbox.exit", schema.Doc("Terminal result of the sandbox's primary container task; absent until it exits"))
+	(&Exit{}).InitSchema(sb.Builder("sandbox.exit"))
 	sb.Bool("hostNetwork", "dev.miren.compute/sandbox.hostNetwork", schema.Doc("Indicates if the container should use the networking of\nnode that it is running on directly\n"))
 	sb.String("labels", "dev.miren.compute/sandbox.labels", schema.Doc("Label for the sandbox"), schema.Many)
 	sb.Time("last_activity", "dev.miren.compute/sandbox.last_activity", schema.Doc("Last lease activity (throttled updates, ~30s granularity for scale-down)"))
@@ -1680,6 +1719,60 @@ func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Singleton("dev.miren.compute/protocol.udp")
 	sb.Ref("protocol", "dev.miren.compute/port.protocol", schema.Doc("Port protocol"), schema.Choices(PortProtocolTcpId, PortProtocolUdpId))
 	sb.String("type", "dev.miren.compute/port.type", schema.Doc("The highlevel type of the port"))
+}
+
+const (
+	ExitAtId        = entity.Id("dev.miren.compute/exit.at")
+	ExitCodeId      = entity.Id("dev.miren.compute/exit.code")
+	ExitContainerId = entity.Id("dev.miren.compute/exit.container")
+)
+
+type Exit struct {
+	At        time.Time `cbor:"at,omitempty" json:"at"`
+	Code      int64     `cbor:"code" json:"code"`
+	Container string    `cbor:"container,omitempty" json:"container,omitempty"`
+}
+
+func (o *Exit) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ExitAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.At = a.Value.Time()
+	}
+	if a, ok := e.Get(ExitCodeId); ok && a.Value.Kind() == entity.KindInt64 {
+		o.Code = a.Value.Int64()
+	}
+	if a, ok := e.Get(ExitContainerId); ok && a.Value.Kind() == entity.KindString {
+		o.Container = a.Value.String()
+	}
+}
+
+func (o *Exit) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.At) {
+		attrs = append(attrs, entity.Time(ExitAtId, o.At))
+	}
+	attrs = append(attrs, entity.Int64(ExitCodeId, o.Code))
+	if !entity.Empty(o.Container) {
+		attrs = append(attrs, entity.String(ExitContainerId, o.Container))
+	}
+	return
+}
+
+func (o *Exit) Empty() bool {
+	if !entity.Empty(o.At) {
+		return false
+	}
+	if !entity.Empty(o.Code) {
+		return false
+	}
+	if !entity.Empty(o.Container) {
+		return false
+	}
+	return true
+}
+
+func (o *Exit) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Time("at", "dev.miren.compute/exit.at", schema.Doc("When the task exited. Always set when the component is written:\nan Exit with a zero code and a zero time is indistinguishable from\nan absent one, and would be dropped.\n"))
+	sb.Int64("code", "dev.miren.compute/exit.code", schema.Doc("Process exit code. Required so a legitimate 0 survives encoding."), schema.Required)
+	sb.String("container", "dev.miren.compute/exit.container", schema.Doc("Name of the container whose task exited"))
 }
 
 const (
@@ -2180,5 +2273,5 @@ func init() {
 		(&SandboxPool{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\ɲ\xf5*\x15~\r\xaf͵\xefJͯ\x96}\xd9\xddR\xa7\xbeB\x8a\x1d\xd6N8;\x81\xfc@v\xe3L-\xab\xd4*_\xc2\xff\x1c\xdfP\xc7\x16M\x12\x92@B\xd8\x0e\x1cdr\n\b냵\x80հ8\xfb\x15S\xd4\xc0{\f\u05ec!\x1chV\xb0\xa6\xed$\xc0\x85P,\xde\xee\x9fY|y\xa7\xbed\x94a\xf8\x97\xa6\xbd.{\xa8\x8f\x06\xe0?g\xcc\x1aD\xe8r\x80\xf3\x99@\x8d\xc5_?\x9c\b\xbe\x7fɏ\x91\xa1\x96\xe4\bc\x0eB\xe8\xb1.n\x83|\xb4p\x16\x92\x13Z\xbe\xae\x81\x14\x8c\n\xc9\x11\xa1R\xe0\x06\xd1ǿ\r\x94۬\xa0\xa0F'\xa8\xf5t<Lk$E\x87\xc7?\xce\x044\xd9W\x02d\x1cJ\"$p\xc09\x92\x9a\xb4\x996) ,I\x03\x1a\xe6\v!\x98\x8eR\xe09\xc1\x1a\x82\x8cչ \xbe\x18\x00\x10E\x05\xb8\xab\t-5\u008bS\xd73\x00\xda5\x17\xf5'\xbf\xa2\xba\x03\xf1Ϫ`\x1c3\n\xf8\xfe\xd5%\xe4H\x9d\xf5\xdd.\xb6\r\x9dj\xb8\x7fc\x95\xc4\xe9\xa9\xe7\xfc\xb9М%\x92\x9dY\xfc\xb3-{\xe7\xfa\n\x1c\x10~\xdc?\xf6\x8c\xaa\xc92\xfd\xbd\xec腲\x1b\xf5\t\xd9\xf6\xb3=*L\x84\x9a\x9dW\x9c\xb6k߅t\xb4\x02T\xcb\xea\xe1ۄ\x03\xae\xed\xa3\x17\xd93O\xcd\xef\x15\xb8 \x8cj\x86˾\xe2,p\xdfV^\xbf\x87\xea\xb6Bu\xcbI\x83\xf8#W\xc7\r+\x88\xfbg\x03G\xb6\x06$왽-\xbb译\x87\xf6Ϛ\x85\xaf\x05@\xb2\x1a\t\x99W\x80\xb8<\x81\xdd\xf0t\xd66\xdd\xf1\x9f\x0f!\xb5\x9c\xbd@a ʾ\xa2hO\x04\xafS\nD\xf1\x89\xdd\re_\xb1\x94\xab2\x04M\xef[\x1f-D\ve\xc4x\xffȳڦC\xa4$\xff\xf1\x16P\x1c\x16&;\xb1\x8e\xe2\xbce\\:\xba\xeb\xc5iU<\x11E\xc5(P9\x96\xec\f\x97\xd0\xd9\x12:r\xb2\x7f\ni\xb9\x11)s\xb5u\xe9\xd1\xd4\x1f\x02\nʁ\xd0li\x05;0X\x10*WW\x8dhz\xd5_\v\xf4\xcba\x81\x16\x8cJD(pG\x9edl\xdc\x10\xe7\x128[\x00\xc7.\xfd\x87\xc0L\a \xd5\xd2 j\xf4}\xd9W\x1caj^\xbf\xbe\x8e@Ϥ\xccϤ\x86\x99\xed\x1b\x9a78~\x17\xc1\xb1;\xcc.\x15\xe2і\x0eT\x86\x91Df'\xe8\xd2|\x1bmP7\f[C\xadK;\xa9[$+\xbb\vU)V\x05\xbf\x18\f\x05\xa1G\xf1\x18\xceQl\x98p($\xe3\x0f\xb3\v\xc7\xeaܢ{\xd4܈\x02\xf4\xea\xacm\xa1\xaa\x11\an\xa4'\r*\x8d\xa0\xc0\x14\xe7;l\x95\xbaa\x1duu\x13\x98\x86\x8d]\xf5͘]\xa5\x91v\xe9&\xcfi\xd2 \x19\x06!\tE\xb27\xad\x17\xb7a.-\x8f\xee7(\x82u\xbc\x00댘r\xec\xbe0b\t\xf9w#\xcf\x1b.\xe6\xeavb\xac\xc9E\xc1\xb8\xa1%c\xb5W\xa1o\x9b\xc3\xcf\f\r\x8e11KGϳ\x96;\xcc\xcc_B>\xb8\xb6\x0e\x1b\x02\xf2pg\xc8\x18\x86|\xb0,d\xac\xf6\xb2Y\x1d4`\x92Bg\xd3\xd0p&Y\xc1jMW\r5\xbf\xa7]Ȣ\xf5\xed\xbb\x9e,\x93E[tx\xbdO\x87\xdbU.\xf4Ѓ\xd4\xe2\xbdJE\x1c\xf2\xf8\x9c\x15\xe6\xe4Jj(\xc1ث\x17\xa7\xae\x87;1f\xa2\xabo\xaf\xa1\x88\xaa\x93\x98\xddh\xae\x9cC\xd6\x19\xa9\xb7\x8b\xd6]\nNHḺ\aS\x9c\xcegU\xb9Ji\x94s\xa1\n\x03ݺ/2P\x87\x8el\x7f<*&\xe4\xefA\xde\x18\xbf\x18\xad\xe46\f\x83\xbd\x06\xf6u\x8f\xa2\xe3V7\xb4=ۖ\xb9\x90<\x9e\u0088!d\x8e\nI\xae\xc42\xdcL\x9b\x06\x87\xfd5\xb0\x11\x06$V~\"%'\xa7N\xba.G=i\x9f\xc5\xdb+\xeeZ\xcd\xca\xdfQ\xd9O\x8a\x8c\xd5\b#\xd5cP+\xd1q6%u\x84\xbc\xa2ږ\xa0\xd9\ft\x97y\xf2\x05\xe6\x06&\xceo\xf6\xdd\fXzѝ(Hk\x9aL9\xf6|\xf7\xc2x\v\x1c\x86\x9ecΦK\n\xa6aC\x84K\xc0l\x02\xf8\xac}\xd7 \xfb컇G\x83R\"\t7d\xb6Z\xd9W\xa2-\xbc\xc6x\r8\x10=Ϣ\x85\xc2\xe8`]\xdamZ\xdf\r]z1\xe6\n(R\x8a\x7f\xd3k\xfc\xfdX\xd4'\x83\xa5\xe58\xd9\xd68\xbbb\xa7\x9f\xed\xe7#.\xa4\xfae\x12\xf0\xb3\x91\xd6r\xd4Mq%\a^\xbfy\x8eí\xc8\xecY\xf8\x8d\xd0\xedY\xf8\xc4\xd8\xee\xfe\xb1\xc5V\xd0\x03\xf2,\xe0\xfby\xc2ܢ\xe3\xc0\x1f%\x80G\x84\x87?I\x80\u074c\x1aS@ӂ\xc9\xe5H\xdb\ag\x7fl\xf9\xdbT~\xf6\x19\xa7_%\x0f\xf3Dtz\xffȷ\xb3ǐ\xf5\xc7\t\x93\xda\b\xd4R\xceI\\\x80\x9b2ٔ\xb8w9\xce\xf6\xb6\xdb\x1d\x06\xa7\x88)&N\xfe$\x197*\x90N\x9e\xf6Z\xa4\xfd\xebd\xd0ݡx\xcaa\x9f\f5\x04\xec\xcf#\xf5a}\xb2L\x13\xe3\xfe\xfb\xa7|Ja\xb8\f\xf8E\xcatb\xef\bR,|\xe2\xd5A\x8a\x9dڸQH1\xd3\t\x17\rҷ>z\x02?\x88\x9e\xc0\x8e+\x88\x1fF\x83\xa6\xdc\x01\xc4\a%1W\x02;\xe3\x03\xb5\xa9\xf3\x1b\"r\xb2w\xde/\x9b\xe7NN\x16=DZ\xf4\xbc\xc4\x0f٘\xfd\xc1t\xbcx\x12b\xec\xf8#\xf0?\b\xbd[\xe7 h\xb8\xb7}\x87@H$I\x91\xab\xad\xef\xc6nn\xf3\xc6:-\xc7\n\xad\x93\x03\xbak\xb5~\x9a\u008d>\xdeF\xf5\x0f\\\xb8\xab\x14\xef*\xb9\xa0\xa4Ր'\xd2F\xafP笐\x81RHz\x0eߍ\x9eC\xf0mĉ`\xbd\xe2\xcb\\e\x10\x8a\xd5]\xe3\x1eǳmٟ\r]\x1d!r\x89\xff\xbes\x89\rx\x86\x89\xb8䃏G\xc6j\xba&\xb4\xc8*\x9c\x15\x0f!\xa11\x86ک\xa7Ǥ\x16{\xf5\xbeڱ\b\xf1\x0eF\x0f\fH\xc0D\x837Ӧ\xa7Ţ#\xa2|\xb8>xq\xeas\xecx\xedc\xb17\x1c\xf6x\xebk\xf1؍\x027\xa6\xc6\x14\xd3\x1d\x1f\x8b\xd8rv%\u0602VCm\x8e\xbb{\x1bs@8g\xb4\xb6\x06}\xacN\xbd\xaaxeeq\x05\xf9\x03\xe4\xe5ɾ\x01\xb2\x95\xa8\xe7$\xef\x1due\xc0V\xbb\xd7\xee\xe8o\x1bI\x9f\xe7\x8d\xcd\x12<\xf3\x80\xef\xb2.\x81gk\x91f$\xf0\x98\xee\t{\xf12\x1a\x89\xad\xf4W\xec\v\xc17\x8c\x01y\x1f\x1a\xf6\xaf\xf9\x00\xe1\xb2\x05\x8a\t-W\xde\a\xda\x1e%\xef(]\xefi{\x94B\xb2\xb6\x85\xa0\x98:\x91\xd9\x1e\x842\x99\x9bw\x8c\xe1w\x84C\x9fP6\xbf\x17L\xaa\x8d[BfS\xc8؛\xe6Pz|\xa7\x1d\xf0\xacX\x9c\xca\xf4\xa4ۢ5\xd9\xea\xee<G\xe8\x84\xfeѡO\x00\xe6%\xa1y\x01k_d\xde?\xedYH\xdb#R\xde\x7f\f\xe6\x9e,Nv\x01\x1bc\xaa\xc2\xc6.X\xe2d.\xce.\xed\xe2\xe1\xed\x02\x8f\xcc<YU+\xa7K\xee\xbb\xce\x00\x05\x1d\xf2\x02\xb4\xcf\vl\xbd\xe7T\xbc\xaev\xa8z\xb6|\xd9E\xf7\xcdg\xde2V\a\xa5\xf3\xce\xed\xb5+\x8d\xe5;\xea\x0eV\x86Z\xa3?\vUp\x85\xe4\xf1\xbc&\x84\x05\xa3\x02\x8aN\x92+\xe4\x05G\xa2\xca\v}\x9d\xae\xc0n\xa1\x8f\x93k\xbc\xefl\x8e\xc0j}\xb9\xd2QI\xcc\xf5\x1a\x9d\xb5M_\xfaz\x9c\xfd)`\xc79P\x99\x13*$\xa2\x05\x18\xbd\xfe~\xd9<\x99\xe6\x16*\x06A8\xe09\xea\xb2y\x82\xea{\xc0\xee\xa2B[A\x03\x1c\x19\xbe\xc9X\x9d\xba-\x9e+\x82\t\x8c~gaV@\x89I\x83\xb1y\xe3T\x8a[\x90\xda≮e\xf3\xc6\xc9ժǻ\x9c!\x9e\x81\x03-\x00\xe7\xa7Gn\x8f\x93\xab\xbb\xaf\x81\x1ev\xbf\xbe\xc6즾\xb20\ft\xf6ef bq[\x0egr\x9f\"ڶyP\xf3\xadH\xc8!\x9d?q\x01\x8f\xb4\xfe\x91\xd6?\xd2\xfaGZ\xffH\xeb\x1fi\xfd#\xad\xbf\ty\xa4\xf5\x8f\xb4\xfe\x91\xd6?\xd2\xfaGZ\xffH\xeb\x1fi\xfd#\xad\x7f\xa4\xf5\x8f\xb4\xfe\x91\xd6?\xd2\xfaGZ\xffH\xeb\xffߤ\xf5C\xff\x00;\xbd\x16\x06~%6X/\xfbJ\xac2\xad]\xa8yϋ\xa8\x94\xd7b~\x95\xc9\xfc\xce\xcb\xdaO3\xd9_1Y\xfd)\x98!C\xb9\xf1['c\x82l+\x959\xe1 *\x9d\xf6_\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xd5h\x02\x8e\x7fJ\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\ۮ\xfd,\x11\x7f\r?\x0f\x9f\xe7S\xd4\xfe\xd5x\x8e\xa7/\uab6fаʬ\x96\xbdZ\xe8\x1f\xe8:x\xa7\xc6Ę\xe8C\xf8\xdf\xdb7\xd4ká-m\xa1\xa5,\x13oz\xb3\x03\x94\xf9\x01\xc303\f\xb3\xd7+\xa6\xa8\x81\xf7\x18\xaeYC8Ь`M\xdbI\x80\v\xa1X\xbc\xdd?\xb3\xf8\xf2N}\xc9(\xc3\xf0/M{]\xf6P\x1f\r\xc0\x7fΘ5\x88\xd0\xe5\x00\xe73\x81\x1a\x8b\xbf~8\x11|\xff\x92\x1f#C-\xc9\x11\xc6\x1c\x84\xd0c]\xdc\x06\xf9h\xe1,$'\xb4|]\x03)\x18\x15\x92#B\xa5\xc0\r\xa2\x8f\x7f\x1b(\xb7YAA\x8dNP\xeb\xe9x\x16\xad\x91\x14\x1d\x1e\xff8\x13\xd0d_\t\x90q(\x89\x90\xc0\x01\xe7Hj\xd2fڤ\x80\xb0$\rh\x98/\x84`:J\x81\xe7\x04k\b2V\xe7\x8c\xf8b\x00@\x14\x15\xe0\xae&\xb4\xd4\b/N]\xcf\x00h\xd7\\ԟ\xfc\x8a\xea\x0e\xc4?\xab\x82q\xcc(\xe0\xfbW\x97\x90#u\xd6w\xbb\xd86t\xaa\xe1\xfe\x8dU\x12\xa7\xa7\x9e\xf3\xe7Bs\x96Hvf\xf3϶\xec\x9d\xeb+p@\xf8q\xff\xd83\xaa&\xcb\xf4\xf7\xb2\xa3\x17\xcan\xd4\xc7d\xdb\xcf\xf6\xa80\x11jv^vڮ}\x17\xd2\xd1\nP-\xab\x87O\b\a\\\xdbGo\xb2g\x9ez\xbdW\xe0\x820\xaa\x17\\\xf6\x15g\x83\xfb\xb6\xf2\xfa=T\xb7\x15\xaa[N\x1a\xc4\x1f\xb9:nXA\xdc?\x1b8\xb25 a\xcf\xecm\xd9E\x7f\x8d<\xb4\x7f\xd6K\xf8Z\x00$\xab\x91\x90y\x05\x88\xcb\x13X\x81\xa7\xb3\xb6\xa9\xc4\x7f>\x84\xd4r\xf6\x02\x85\x81(\xfb\x8a\xa2=\x11\xbcN)\x10\xc5'v7\x94}\xc5R\xae\xf2\x104\xbdo\x7f4\x13-\x94a\xe3\xfd#\xcfn\x9b\x0e\x91\x9c\xfc\xc7[@qX\x98\xec\xc4:\x8a\xf3\x96q\xe9\xe8\xae\x17\xa7U\xad\x89(*F\x81ʱdg\xb8\x84ΖБ\x93\xfdSHˍH\x99\xab\xadK\x8f\xa6\xfe\x10PP\x0e\x84^\x96V\xb0\xc3\x02\vB\xe5\xea\xae\x11M\xaf\xfak\x86~9\xccЂQ\x89\b\x05\xee𓌍\x1b\xec\\\x02g\v\xe0Hn\xfe\xfdC`\xa6\x03\x90ji\x105\xfa\xbe\xec+\x0e3\xf5Z\xbf\xbe\x8e@Ϥ\xccϤ\x86\x99\xed\x1b\x9a7V\xfc.b\xc5\xee0\xbbT\x88G[:P\x19F\x12\x19IХ\xb9\x18mP7\f[C\xadK;\xa9[$++\x85\xaa\x14\xab\x82_\f\x86\x82Уx\f\xe7\xc86L8\x14\x92\xf1\x87\x91±:\xb7\xe8\x1e57\xa2\x00\xbd:{[\xa8jā\x1b\xe9I\x83J\xc3(0Ź\x84\xadR7\xac\xa3\xaen\x02Ӱ!Uߌ\x91*\x8d\xb4K7yN\x93\x06\xc90\bI(\x92\xbdi\xbd\xb8\rsnyt\xbfA\x11\xac\xe3\x05XgĔc\xe5°%\xe4ߍk\xdep1Wŉ\xb1&\x17\x05㆖\x8c\xd5^\x85\xbem\x0e?348\xc6\xc4,\x1d=\xcf^\xee03\x7f\t\xf9\xe0\xda:l0ȳ:C\xc60\xe4\x83e!c\xb5\xe7\xcd\xea\xa0\x01\x93\x14:\x9b\x86\x863\xc9\nVk\xbaj\xa8\xf9=\xedB\x16\xadO\xeez\xb2L\x16m\xd1\xe1\xf5>\x1dnWW\xa1\x87\x1e\xb8\x16\xefU*\xe2\x90\xc7\xe7\xec0'WRC\t\xc6^\xbd8u=܉1s\xbb\xfa\xf6\x1a\x8a\xa8:\x89ٍ\xe6\xca9d\x9d\xe1z\xbbhݥ\xe0\x84\xc4\xc4\x1c{0\xc5\xe9|V\x95\xab\x94F9\x17\xaa0Э\xfb\"\x03\xf5k@\x9b\xf4\xc7\x03\xeeĊ\x95.m\x9c\xb3%P\xe6\x02\xed2\xbc\x1e\xc7Uad\xd6]?-\\t\x8fLi\x82b0\xb2Eod\x87\xd3\xe49\x8b\x96\xa6\xf7\xb6<\xceW\x94D*\x98\x90>\xecyR1!\x7f\x0f\xf2\xc6\xf8Ũ|\xb7a\xd8\xc9\xd7\xc0D{\x14\x1d\x14p\xe3\x06g\xdb2\x97@\x8f\x1b6b\b\x99\xa3B\x92+\xb1\xd2\xd4L\x9b\x06V\xbf\x06Nـ\xc4\xcaO\xa4\xe4\xe4\xd4Iן\xab'\xed\xb3`Ɗ/\\\xb3\xf2wT\xf6\x93\"c5\xc2\x03\xe81\xa8\xe5\xe88\x9b\x92:L^\x91\xe7%h6\x03\xdde\xfb}Q\x0f\x03\x13w)\xf1\x85],\xbd\xe8N\x14\xa4\xb5\xfb\xa6\x1c+\xaa=3\xde\x02\x9a\xa6_1g\xd3-\x05Ӱ\xc1\xc2%`6\x01|\xd6y\xd2 \xfb\x9c'\xcf\x1a\rJ\x89$ܐ\x11\xb5\xb2\xafD\xbbO\x1acK\x9f\x8a\x16\n\xa3\x8cti\xb7\xdf\xf2n\xe8ҳ1W@\x91\\\xfc\x9b\xde\xe3\xefǢ>y\x13]\x8e\x93m\x8d\xb3\xebb\xfa\xb3\xfd눻\xaf\xfe2\t\xf8\xd9k\xecr\xd4Mv%\xdfj\x7f\xf3\xdc\n\xb7\xae\xbd\xcf\xc2o܋\x9f\x85O\xbc8\xdf?\xb6\xd8\nz@\x9eݦ\x7f\x9e0\xb7\xe8K\xf6\x8f\x12\xc0#\xee\xde?I\x80ݼ\x92\xa7\x80\xa6\xddԗ#m\x1f\x9c\xfd\x17\xf7ߦ\xaeg\x9fq\xfaU\xf20O\\\xfd\xef\x1f\xf9${\x8c\a\xfc8aR\x1b\xb7\xe0\x94s\x12\x17=H\x99lJPa9ζ\xd8\xed\x8e1\xa4\xb0)&\b\xf1I2nT\x94\"y\xdaka\x8c_'\x83\xee\x8es\xa4\x1c\xf6\xc9PC4\xe4y\xa4>f\x92\xcc\xd3Ġ\xca\xfdS>\xa50DZ~\x912\x9d\xd8\x00L\x8a\x85O\x8cˤة\x8dpM\x8a\x99N\x88\xe2H\xdf\xfe\xe8\t\xfc z\x02;B\x10?\x8c\x06M\x89\x01\xc4_JbB\x02;\xef\aJ\xa8\xf3\x1b\"r\";\xef\x97\xcds\x87,\xde\xd6p\x10\x12q\x99\xb7\xac&\x85\x99:\x9d\xb5\xf9\xf5\x11P\xb8\x02\xdfqܦ\xa8\x99&?\xa3\xfa\x86\x1eb\xc7\xcdf\x86b\xe8\xb5}\xcd\xe21\x92\"\x06K\xfc\x90]\xdd\x1f@\x88\x17\x89\x84\xb8B\xfc\xb1\xff\x1f\x84\x1bZ\xe7\xf0k\xb8\xb7}\a_H$I\x91\xab\xe3\xee\xdeW\xdd\xe6\x8d}Z\x8e\x15\xda'\at\xd7n\xfd4e5Z\xa5\x19s7\xac\xc2ݥ\xf8#낒\xd6D\x9dI\x1b\xbdC\x9d\xb3C\x06J!\xe99|7z\x0e\xc1d\x9b\x13\xc1zǗ\x8f\xdfA(Vw\x8d{\x1c϶e\xff\xf3\xfa\xea\b\xb1\xb1\xa8\x9d[l\xc03L\xc4%\x1f\xfcZ2Vӵ\xbfEVWx\xf1\x10\x12\x1a\xe3\x9c8\xf5\xf4{\xb8\xc5^\x8d\xd1;V0^\xcb\xf7\xc0\x80\x04L\xacV3mz\x9a-\xfa\x16\x98\x0f!\x93\x17\xa7>ǎ\xd7>\x16{\xe3\x92\x12\xefqX<v\xeb\x9fl\xc0\x14ӝ=\x8b\xd8rv%\u0602VCm\x8e\xbb[\x8c9 \x9c3Z['f\xacN=\xc9xeeq\x05\xf9\x03\xe4\xe5\xc9&\x95\xd9JT~\xd2{G]\x19\xb0\xd5\xee\xb5;\xfa\xdb\xc6C\xd7\xf3\xc6f\t\x9ey\xc0wY\x97@\x1ed\xa4\x19\tdg>a/^F#\xb1\xf5\xe4\x17\x9br\xfa\x861 o\xe6j\x9f\x1e\n\b\x97-PLh\xb9\x92pj{\x94\xbc\xa3t\xbd\xa7\xedQ\n\xc9\xda\x16\x82l\xeaDf{\x10\xcadn\x12cÉ\xa9C\x9fPzHϘT\x1b\xb7\x84̦\x90\xb1\xd1\xf5P\xbe\xc5N;\xe0ٱ8\x95\xe9yb\x8c\xd6d\xab\xd2y\x8e\xd0\t}\x16\xab\x8f\x01&5դT\xdb\x14\xdf\xfb\xa7=\x1bi{D\xf2\xfb\x8f\xc1\xf76\x8b\x93]\xc0ޫU!!}\xc1\xc1٥]<k\xbb\xc0#39\xd0j\xe7t\xc9M\x14\x0eP\xd0\xe1-\x84\xf6o![\t\xc2j\xad\xab\x1d\xaa~Y\xbe\x17U7\x898o\x19\xab\x83\xdcy\xe7\xf6\xda\xf5t\xe7;\xea\x0eV\x86Z\xa3?\vUp\x99\xe4\xf1\xbc&\x84\x05\xa3\x02\x8aN\x92+\xe4\x05G\xa2\xca\v\xfd\x84\xa0\xc0n\xa1\x8f\x93\xd0\xe5w6G`\xb5\x0e(uT\x12\x13R\xa4\xb3\xb6i^\x8a\xc7ٟ\x02v\x9c\x03\x959\xa1B\"Z\x80\xd1\xeb\xef\x97͓in\xa1b\x10\x84\x03\x9e\xa3.\x9b'\xa8\xbe\xff\x88pQ\xa1\xad\xa0\x01\x8e̺\xc9X\x9d\xba-\x9e\x10\xc1\x04F疘\x1dPl\xd2`l\xde8\xe5\xe2\x16\xa46\x0f\xb3ղy\xe3$\x9c\xec\xf1.g\x88g\xe0@\v\xc0\xf9\xe9\x91\xdb\xe3\xe4\xea\xeek\xa0\x87\x95\xd7\xd7\x18i\xea+\v\xc3@g_f\x06\"\x16\xb7\xe5p&\xf7)\xa2m\x9b_j\xbe\x15\t9\xa40L\\\xc0#\x95\xe1He8R\x19\x8eT\x86#\x95\xe1He8R\x196!\x8fT\x86#\x95\xe1He8R\x19\x8eT\x86#\x95\xe1He8R\x19\x8eT\x86#\x95\xe1He8R\x19\x8eT\x86#\x95\xe1He\xf8?\xa62\x84\xfe\x8b|\x1a\n\a~%6@Q\xf6\x95XeZ\xbbP\xf3\x9e\x17Q)O\xcd\xfc\xb4\x99\xf9\xb1\xa4\xb5\xdf7\xb3?\x05\xb4\xfa{Jë\xec\xc6\x0f\x06\x8d\x8f\x82[Ϸ\x93\x15D=!\xfe\x17\x00\x00\xff\xff\x01\x00\x00\xff\xff]9\x19\x98\xc4M\x00\x00"))
 }

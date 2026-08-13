@@ -301,6 +301,113 @@ func (v *SandboxExecExecResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type sandboxExecAttachArgsData struct {
+	Sandbox       *string         `cbor:"0,keyasint,omitempty" json:"sandbox,omitempty"`
+	Container     *string         `cbor:"1,keyasint,omitempty" json:"container,omitempty"`
+	Input         *rpc.Capability `cbor:"2,keyasint,omitempty" json:"input,omitempty"`
+	Output        *rpc.Capability `cbor:"3,keyasint,omitempty" json:"output,omitempty"`
+	WindowUpdates *rpc.Capability `cbor:"4,keyasint,omitempty" json:"window_updates,omitempty"`
+}
+
+type SandboxExecAttachArgs struct {
+	call rpc.Call
+	data sandboxExecAttachArgsData
+}
+
+func (v *SandboxExecAttachArgs) HasSandbox() bool {
+	return v.data.Sandbox != nil
+}
+
+func (v *SandboxExecAttachArgs) Sandbox() string {
+	if v.data.Sandbox == nil {
+		return ""
+	}
+	return *v.data.Sandbox
+}
+
+func (v *SandboxExecAttachArgs) HasContainer() bool {
+	return v.data.Container != nil
+}
+
+func (v *SandboxExecAttachArgs) Container() string {
+	if v.data.Container == nil {
+		return ""
+	}
+	return *v.data.Container
+}
+
+func (v *SandboxExecAttachArgs) HasInput() bool {
+	return v.data.Input != nil
+}
+
+func (v *SandboxExecAttachArgs) Input() *stream.RecvStreamClient[[]byte] {
+	if v.data.Input == nil {
+		return nil
+	}
+	return &stream.RecvStreamClient[[]byte]{Client: v.call.NewClient(v.data.Input)}
+}
+
+func (v *SandboxExecAttachArgs) HasOutput() bool {
+	return v.data.Output != nil
+}
+
+func (v *SandboxExecAttachArgs) Output() *stream.SendStreamClient[[]byte] {
+	if v.data.Output == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[[]byte]{Client: v.call.NewClient(v.data.Output)}
+}
+
+func (v *SandboxExecAttachArgs) HasWindowUpdates() bool {
+	return v.data.WindowUpdates != nil
+}
+
+func (v *SandboxExecAttachArgs) WindowUpdates() *stream.RecvStreamClient[*WindowSize] {
+	if v.data.WindowUpdates == nil {
+		return nil
+	}
+	return &stream.RecvStreamClient[*WindowSize]{Client: v.call.NewClient(v.data.WindowUpdates)}
+}
+
+func (v *SandboxExecAttachArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SandboxExecAttachArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SandboxExecAttachArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SandboxExecAttachArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type sandboxExecAttachResultsData struct{}
+
+type SandboxExecAttachResults struct {
+	call rpc.Call
+	data sandboxExecAttachResultsData
+}
+
+func (v *SandboxExecAttachResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *SandboxExecAttachResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *SandboxExecAttachResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *SandboxExecAttachResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type SandboxExecExec struct {
 	rpc.Call
 	args    SandboxExecExecArgs
@@ -327,8 +434,35 @@ func (t *SandboxExecExec) Results() *SandboxExecExecResults {
 	return results
 }
 
+type SandboxExecAttach struct {
+	rpc.Call
+	args    SandboxExecAttachArgs
+	results SandboxExecAttachResults
+}
+
+func (t *SandboxExecAttach) Args() *SandboxExecAttachArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *SandboxExecAttach) Results() *SandboxExecAttachResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type SandboxExec interface {
 	Exec(ctx context.Context, state *SandboxExecExec) error
+	Attach(ctx context.Context, state *SandboxExecAttach) error
 }
 
 type reexportSandboxExec struct {
@@ -336,6 +470,10 @@ type reexportSandboxExec struct {
 }
 
 func (reexportSandboxExec) Exec(ctx context.Context, state *SandboxExecExec) error {
+	panic("not implemented")
+}
+
+func (reexportSandboxExec) Attach(ctx context.Context, state *SandboxExecAttach) error {
 	panic("not implemented")
 }
 
@@ -353,6 +491,16 @@ func AdaptSandboxExec(t SandboxExec) *rpc.Interface {
 			Params:        []string{"category", "value", "command", "options", "input", "output", "window_updates"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Exec(ctx, &SandboxExecExec{Call: call})
+			},
+		},
+		{
+			Name:          "attach",
+			InterfaceName: "SandboxExec",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"sandbox", "container", "input", "output", "window_updates"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Attach(ctx, &SandboxExecAttach{Call: call})
 			},
 		},
 	}
@@ -419,4 +567,40 @@ func (v SandboxExecClient) Exec(ctx context.Context, category string, value stri
 	}
 
 	return &SandboxExecClientExecResults{client: v.Client, data: ret}, nil
+}
+
+type SandboxExecClientAttachResults struct {
+	client rpc.Client
+	data   sandboxExecAttachResultsData
+}
+
+func (v SandboxExecClient) Attach(ctx context.Context, sandbox string, container string, input stream.RecvStream[[]byte], output stream.SendStream[[]byte], window_updates stream.RecvStream[*WindowSize]) (*SandboxExecClientAttachResults, error) {
+	args := SandboxExecAttachArgs{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.Sandbox = &sandbox
+	args.data.Container = &container
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[[]byte](input), input)
+		args.data.Input = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[[]byte](output), output)
+		args.data.Output = c
+		caps[oid] = ic
+	}
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptRecvStream[*WindowSize](window_updates), window_updates)
+		args.data.WindowUpdates = c
+		caps[oid] = ic
+	}
+
+	var ret sandboxExecAttachResultsData
+
+	err := v.CallWithCaps(ctx, "attach", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SandboxExecClientAttachResults{client: v.Client, data: ret}, nil
 }

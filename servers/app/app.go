@@ -275,7 +275,13 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 			// and app-status/deploy agree: an autoscale app reads as idle
 			// (deliberately at zero), while a fixed service reads as starting
 			// (not up yet) rather than a misleading idle.
-			ps := poolHealth{isAutoscale: specAllowsScaleToZero(specMap[entry.activeVersion.ID.String()])}
+			// Both classifiers have to agree, or `m app list` and the deploy
+			// poller disagree about the same app.
+			spec := specMap[entry.activeVersion.ID.String()]
+			ps := poolHealth{
+				isAutoscale: specAllowsScaleToZero(spec),
+				isTaskOnly:  specIsTaskOnly(spec),
+			}
 			a.SetReadyInstances(0)
 			a.SetDesiredInstances(0)
 			a.SetHealth(ps.classify())

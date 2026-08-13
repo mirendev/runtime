@@ -336,7 +336,7 @@ func isMapSection(path []string) bool {
 		return false
 	}
 	last := path[len(path)-1]
-	return last == "services" || last == "addons"
+	return last == "services" || last == "addons" || last == "tasks"
 }
 
 // validFieldsForPath returns the valid field names for a given section path.
@@ -347,15 +347,20 @@ func validFieldsForPath(path string) ([]string, bool) {
 
 // validFields maps section paths to their valid field names.
 var validFields = map[string][]string{
-	"":                       {"name", "post_import", "env", "concurrency", "services", "build", "include", "addons", "aliases"},
-	"services.*":             {"command", "port", "port_name", "port_type", "ports", "image", "env", "concurrency", "disks"},
+	"":                       {"name", "post_import", "env", "concurrency", "services", "tasks", "web", "build", "include", "addons", "aliases", "workload_role"},
+	"services.*":             {"command", "port", "port_name", "port_type", "ports", "image", "env", "concurrency", "disks", "port_timeout"},
 	"services.*.concurrency": {"mode", "requests_per_instance", "scale_down_delay", "num_instances", "shutdown_timeout"},
 	"services.*.disks":       {"name", "provider", "mount_path", "read_only", "size_gb", "filesystem", "lease_timeout"},
 	"services.*.ports":       {"port", "name", "type", "node_port"},
-	"build":                  {"dockerfile", "onbuild", "version", "alpine_image"},
-	"addons.*":               {"variant", "version"},
-	"env":                    {"key", "value", "required", "sensitive", "description"},
-	"services.*.env":         {"key", "value", "required", "sensitive", "description"},
+	// Tasks deliberately have no ports, concurrency, image, or disks: a task is
+	// a command the platform runs, not a process it keeps up. Suggesting them
+	// here would advertise fields the schema doesn't accept.
+	"tasks.*":        {"command", "trigger", "every", "schedule", "timeout", "retries", "max_concurrent", "env"},
+	"tasks.*.env":    {"key", "value", "required", "sensitive", "description"},
+	"build":          {"dockerfile", "onbuild", "version", "alpine_image"},
+	"addons.*":       {"variant", "version"},
+	"env":            {"key", "value", "required", "sensitive", "description"},
+	"services.*.env": {"key", "value", "required", "sensitive", "description"},
 }
 
 // suggestField returns the best matching field name if similar enough,

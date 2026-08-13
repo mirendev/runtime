@@ -38,11 +38,14 @@
       "id": "command/app"
     },
     "items": [
+      "command/app-attach",
       "command/app-delete",
       "command/app-history",
       "command/app-list",
       "command/app-restart",
       "command/app-run",
+      "command/app-runs",
+      "command/app-runs-cancel",
       "command/app-set-workload-role",
       "command/app-status",
       "command/app-versions"
@@ -237,6 +240,7 @@
     "items": [
       "command/logs-app",
       "command/logs-build",
+      "command/logs-run",
       "command/logs-sandbox",
       "command/logs-system"
     ]

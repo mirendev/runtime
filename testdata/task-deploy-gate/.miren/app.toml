@@ -1,0 +1,10 @@
+name = "task-deploy-gate"
+
+# A deploy task that always fails, so a test can assert the deploy is gated on
+# it rather than proceeding to flip the active version.
+web = false
+
+[tasks.migrate]
+command = "/bin/app fail"
+trigger = "deploy"
+timeout = "2m"

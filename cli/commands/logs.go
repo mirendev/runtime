@@ -45,6 +45,19 @@ func buildFilterWithService(userFilter, service string) string {
 // app log queries. Applied in dispatchLogs on the streamLogChunks path.
 const systemExclusion = `-source:"system"`
 
+// buildRunFilter narrows the app's log stream to one run.
+//
+// The run id is on every entry because the run controller puts it in the
+// sandbox spec's log attributes, which the sandbox controller copies verbatim.
+// So this is a pure client-side filter -- no server change, no new log target.
+func buildRunFilter(runID, userFilter string) string {
+	runFilter := fmt.Sprintf("(run:%q OR miren.run:%q)", runID, runID)
+	if userFilter == "" {
+		return runFilter
+	}
+	return runFilter + " " + userFilter
+}
+
 // buildBuildFilter creates a filter for build logs of a specific version.
 // Combines source:build with the version filter.
 func buildBuildFilter(version, userFilter string) string {
@@ -963,4 +976,46 @@ func legacyLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from *
 	}
 
 	return nil
+}
+
+// LogsRun reads back one run's output.
+//
+// It joins the logs family rather than hanging off `miren app runs`, because
+// `miren app runs logs` is a double plural sitting one character away from
+// `miren app run` -- the wrong direction to typo.
+func LogsRun(ctx *Context, opts struct {
+	AppCentric
+	FormatOptions
+
+	Run    string         `position:"0" usage:"Run ID" required:"true"`
+	Last   *time.Duration `short:"l" long:"last" description:"Show logs from the last duration"`
+	Since  string         `long:"since" description:"Show logs since a time (RFC3339, '2006-01-02 15:04', or a duration like '2h' ago)"`
+	Until  string         `long:"until" description:"Show logs until a time (RFC3339, '2006-01-02 15:04', or a duration like '30m' ago); not valid with --follow"`
+	Follow bool           `short:"f" long:"follow" description:"Follow log output (live tail)"`
+	Filter string         `short:"g" long:"grep" description:"Filter logs (e.g., 'error', '\"exact phrase\"', 'error -debug', '/regex/')"`
+}) error {
+	cl, err := ctx.RPCClient("dev.miren.runtime/logs")
+	if err != nil {
+		return err
+	}
+
+	from, until, err := resolveLogWindow(opts.Last, opts.Since, opts.Until, opts.Follow, time.Now())
+	if err != nil {
+		return err
+	}
+
+	runID := opts.Run
+	if !strings.Contains(runID, "/") {
+		runID = "run/" + runID
+	}
+
+	return dispatchLogs(ctx, cl, logDispatchArgs{
+		app:            opts.App,
+		from:           from,
+		until:          until,
+		follow:         opts.Follow,
+		rawFilter:      opts.Filter,
+		combinedFilter: buildRunFilter(runID, opts.Filter),
+		json:           opts.IsJSON(),
+	})
 }

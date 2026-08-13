@@ -381,6 +381,13 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 	if err := deps.runtime.ReleaseDiskLeases(ctx, entity.Id(in.SandboxID)); err != nil {
 		return fmt.Errorf("saga undo: releasing disk leases for %s: %w", in.SandboxID, err)
 	}
+
+	// Same reasoning as the token state above: BootContainers creates a Hub for
+	// every attachable container, and a failed saga never reaches StopSandbox,
+	// which is the only other place they are torn down. A Hub outliving its
+	// container is worse than a leak -- an attaching client finds it and waits
+	// on output from a container that no longer exists.
+	deps.runtime.ReleaseHubs(entity.Id(in.SandboxID))
 	return nil
 }
 
