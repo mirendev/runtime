@@ -257,6 +257,15 @@ func (s *Store) MarkPreviousActiveAs(ctx context.Context, appName, exceptID stri
 	return nil
 }
 
+// RecordFrom decodes a stored entity into a Record.
+//
+// Exported for readers that get entities from somewhere other than this store —
+// the changefeed hands out entities directly, and a caller decoding them by
+// hand would be a second copy of the mapping that drifts from this one.
+func RecordFrom(e *entityserver_v1alpha.Entity) *Record {
+	return recordFrom(e)
+}
+
 func recordFrom(e *entityserver_v1alpha.Entity) *Record {
 	var dep core_v1alpha.Deployment
 	dep.Decode(&entityAttrs{entity: e})
