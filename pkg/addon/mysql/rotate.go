@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
-	coreutil "miren.dev/runtime/api/core"
-	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
@@ -54,31 +52,24 @@ func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssoci
 	}
 }
 
-// activeConfigVar reads a variable's value from an app's active ConfigVersion.
-// This is the authoritative current value; association.variables is deliberately
-// not rewritten on rotation and can hold a stale password.
-func activeConfigVar(ctx context.Context, fw *addon.ProviderFramework, appID entity.Id, key string) (string, error) {
-	var app core_v1alpha.App
-	if err := fw.EC.GetById(ctx, appID, &app); err != nil {
-		return "", fmt.Errorf("getting app %s: %w", appID, err)
-	}
-	if app.ActiveVersion == "" {
-		return "", nil
-	}
-	var version core_v1alpha.AppVersion
-	if err := fw.EC.GetById(ctx, app.ActiveVersion, &version); err != nil {
-		return "", fmt.Errorf("getting app version: %w", err)
-	}
-	spec, err := coreutil.ResolveConfig(ctx, fw.EAC, &version)
-	if err != nil {
-		return "", fmt.Errorf("resolving config: %w", err)
-	}
-	for _, v := range spec.Variables {
+// associationVar reads a variable's value from the addon association's own
+// record of what it supplies.
+//
+// The association is the current record. The rotation controller rewrites it on
+// every rotation, and coreutil.ResolveRuntimeConfig resolves the app's bindings
+// from it. Reading the app's stored ConfigVersion instead finds nothing, because
+// no version records addon variables any more.
+//
+// An association that last rotated before that change can still hold a stale
+// password. ReportStaleAssociationVariables names those at boot; the repair is
+// to rotate again.
+func associationVar(assoc *addon_v1alpha.AddonAssociation, key string) string {
+	for _, v := range assoc.Variables {
 		if v.Key == key {
-			return v.Value, nil
+			return v.Value
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // bestEffortOldUserPassword reads the app's current MYSQL_PASSWORD for use as a
@@ -86,16 +77,10 @@ func activeConfigVar(ctx context.Context, fw *addon.ProviderFramework, appID ent
 // on rollback is a safety net, and the forward rotation (which durably redeploys
 // the app onto the new secret) is authoritative. An empty result just means the
 // rollback ALTER is skipped.
-func bestEffortOldUserPassword(ctx context.Context, fw *addon.ProviderFramework, appID entity.Id) string {
-	if appID == "" {
-		return ""
-	}
-	old, err := activeConfigVar(ctx, fw, appID, "MYSQL_PASSWORD")
-	if err != nil {
-		fw.Log.Warn("could not read current user password for rollback; rollback will skip restore", "app", appID, "error", err)
-		return ""
-	}
-	return old
+func bestEffortOldUserPassword(assoc *addon_v1alpha.AddonAssociation) string {
+	// Read before the rotation controller records the new values, so this is the
+	// password the app is running with.
+	return associationVar(assoc, "MYSQL_PASSWORD")
 }
 
 // --- Shared per-app user rotation (Class A) ---
@@ -109,13 +94,11 @@ type CaptureOldUserPasswordOut struct {
 }
 
 func CaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn) (CaptureOldUserPasswordOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
 	var assoc addon_v1alpha.AddonAssociation
 	if in.AssocEntity != nil {
 		assoc.Decode(in.AssocEntity)
 	}
-	return CaptureOldUserPasswordOut{UserOldPassword: bestEffortOldUserPassword(ctx, fw, assoc.App)}, nil
+	return CaptureOldUserPasswordOut{UserOldPassword: bestEffortOldUserPassword(&assoc)}, nil
 }
 
 func UndoCaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn, out CaptureOldUserPasswordOut) error {
@@ -439,8 +422,6 @@ type CaptureDedicatedConnInfoOut struct {
 // existed fall back to the app's active config. The old user password is a
 // best-effort read used only for rollback.
 func CaptureDedicatedConnInfo(ctx context.Context, in CaptureDedicatedConnInfoIn) (CaptureDedicatedConnInfoOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
 	var data addon_v1alpha.MysqlDedicatedData
 	if in.AssocEntity != nil {
 		data.Decode(in.AssocEntity)
@@ -452,39 +433,27 @@ func CaptureDedicatedConnInfo(ctx context.Context, in CaptureDedicatedConnInfoIn
 		assoc.Decode(in.AssocEntity)
 	}
 
-	// Legacy associations predate these attrs; recover conn info from the app's
-	// active config so they stay rotatable.
-	if user == "" || database == "" {
-		if assoc.App == "" {
-			return CaptureDedicatedConnInfoOut{}, fmt.Errorf("association has no stored connection info and no app ref to fall back to")
-		}
-		if user == "" {
-			u, err := activeConfigVar(ctx, fw, assoc.App, "MYSQL_USER")
-			if err != nil {
-				return CaptureDedicatedConnInfoOut{}, fmt.Errorf("reading MYSQL_USER from active config: %w", err)
-			}
-			user = u
-		}
-		if database == "" {
-			d, err := activeConfigVar(ctx, fw, assoc.App, "MYSQL_DATABASE")
-			if err != nil {
-				return CaptureDedicatedConnInfoOut{}, fmt.Errorf("reading MYSQL_DATABASE from active config: %w", err)
-			}
-			database = d
-		}
+	// Legacy associations predate these attrs. Recover conn info from the
+	// variables the association records, which provisioning has written since
+	// before the attrs existed, so they stay rotatable.
+	if user == "" {
+		user = associationVar(&assoc, "MYSQL_USER")
+	}
+	if database == "" {
+		database = associationVar(&assoc, "MYSQL_DATABASE")
 	}
 
 	if user == "" {
-		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated mysql user (no stored attr, no MYSQL_USER in active config)")
+		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated mysql user (no stored attr, no MYSQL_USER on the association)")
 	}
 	if database == "" {
-		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated mysql database (no stored attr, no MYSQL_DATABASE in active config)")
+		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated mysql database (no stored attr, no MYSQL_DATABASE on the association)")
 	}
 
 	return CaptureDedicatedConnInfoOut{
 		DedicatedUser:        user,
 		DedicatedDatabase:    database,
-		DedicatedUserOldPass: bestEffortOldUserPassword(ctx, fw, assoc.App),
+		DedicatedUserOldPass: bestEffortOldUserPassword(&assoc),
 	}, nil
 }
 
