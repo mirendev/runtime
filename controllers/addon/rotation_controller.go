@@ -128,19 +128,21 @@ func (c *RotationController) rotate(ctx context.Context, req *addon_v1alpha.Rota
 		return c.setError(ctx, req, fmt.Errorf("rotating credential: %w", err))
 	}
 
-	// Propagate to the consuming app by minting a new version so the injected
-	// connection string picks up the new secret. This runs *after* the credential
-	// already changed, so a failure here must stay retryable rather than terminal:
-	// returning an error re-reconciles, and re-running the idempotent rotation
-	// above converges. (The authoritative running value lives in the ConfigVersion
-	// this creates; association.variables are intentionally left as-is.)
+	// Record the new values on the association. That is the whole propagation:
+	// the app resolves its bindings from here, and the launcher's
+	// AddonAssociation watch turns the change into a reconcile that relaunches
+	// the consumer with the new secret. No version is minted.
+	//
+	// This runs after the credential already changed on the engine, so a failure
+	// must stay retryable rather than terminal. Returning an error re-reconciles,
+	// and re-running the idempotent rotation above converges.
 	if len(result.EnvVars) > 0 {
-		if err := createVersionWithVars(ctx, c.log, c.ec, c.eac, assoc.App, result.EnvVars); err != nil {
-			return fmt.Errorf("redeploying consumer (will retry): %w", err)
+		if err := setAssociationVars(ctx, c.eac, req.Association, result.EnvVars); err != nil {
+			return fmt.Errorf("recording rotated variables (will retry): %w", err)
 		}
 	}
 
-	// Done — clear the recorded secret now that it lives in the app config.
+	// Done — clear the recorded secret now that it lives on the association.
 	if err := c.ec.Patch(ctx, req.ID, 0,
 		entity.String(addon_v1alpha.RotationRequestStatusId, "done"),
 		entity.String(addon_v1alpha.RotationRequestNewSecretId, ""),
