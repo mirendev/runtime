@@ -61,19 +61,17 @@ var httpingressTracer = otel.Tracer("miren.dev/runtime/httpingress")
 
 const (
 	timeoutMessage = "Request timeout"
-	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot
-	// This is longer than request timeout to prevent dangling resources
+	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot.
+	// It runs on its own context rather than the request's, so a client that
+	// gives up first still leaves a booting sandbox to finish rather than
+	// stranding it. Unrelated to the request timeout, which a route can now
+	// raise past this.
 	leaseAcquisitionTimeout = 2 * time.Minute
 	// minLeaseTTL is the minimum time a lease is kept in cache after its last
 	// use before it becomes eligible for eviction. This prevents low-traffic
 	// apps from having their leases evicted on every 30s tick, which would
 	// force every request through the full entity store + activator pipeline.
 	minLeaseTTL = 5 * time.Minute
-	// maxBadTimeoutsTracked caps the per-route memory of which unusable
-	// request_timeout we have already warned about. Past the cap we stop
-	// warning rather than start flooding — a config error that repeats forever
-	// is worth one line, never a stream of them.
-	maxBadTimeoutsTracked = 1024
 )
 
 type IngressConfig struct {
@@ -100,12 +98,6 @@ type Server struct {
 	// would otherwise be handed to a request that wants the 60s default.
 	transportMu sync.Mutex
 	transports  map[time.Duration]http.RoundTripper
-
-	// badTimeouts records, per route, the last unusable request_timeout we
-	// warned about, so a misconfigured route produces one warning instead of
-	// one per request. See warnBadRouteTimeout.
-	badTimeoutMu sync.Mutex
-	badTimeouts  map[entity.Id]string
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -171,7 +163,6 @@ func NewServer(
 		aa:                 aa,
 		transport:          newProxyTransport(config.RequestTimeout),
 		transports:         make(map[time.Duration]http.RoundTripper),
-		badTimeouts:        make(map[entity.Id]string),
 		httpMetrics:        httpMetrics,
 		logWriter:          logWriter,
 		apps:               make(map[string]*appUsage),
@@ -232,76 +223,28 @@ func (h *Server) transportFor(timeout time.Duration) http.RoundTripper {
 		return t
 	}
 
-	// Tests build a Server directly and skip this map; writing to a nil one
-	// would panic rather than fail usefully.
-	if h.transports == nil {
-		h.transports = make(map[time.Duration]http.RoundTripper)
-	}
-
 	h.Log.Info("building proxy transport for per-route request timeout", "timeout", timeout)
 	t := newProxyTransport(timeout)
 	h.transports[timeout] = t
 	return t
 }
 
-// routeRequestTimeout resolves a route's request timeout override. It returns 0
-// when the route carries no override or carries one we cannot honor, which
-// tells transportFor to use the server-wide default.
-func (h *Server) routeRequestTimeout(route *ingress_v1alpha.HttpRoute) time.Duration {
+// routeRequestTimeout resolves a route's request timeout override, falling back
+// to the server default (0 here, which transportFor reads as "use the default")
+// on empty, invalid, or non-positive values. SetRouteRequestTimeout rejects
+// those at the write boundary, so a typo can only arrive by editing the entity
+// directly, and quietly ignoring it beats failing the request.
+func routeRequestTimeout(route *ingress_v1alpha.HttpRoute) time.Duration {
 	if route == nil || route.RequestTimeout == "" {
 		return 0
 	}
 
 	d, err := time.ParseDuration(route.RequestTimeout)
-	if err != nil {
-		h.warnBadRouteTimeout(route, "ignoring unparseable route request timeout", "error", err)
-		return 0
-	}
-
-	if d <= 0 {
-		h.warnBadRouteTimeout(route, "ignoring non-positive route request timeout")
+	if err != nil || d <= 0 {
 		return 0
 	}
 
 	return d
-}
-
-// warnBadRouteTimeout warns about an unusable request_timeout once per route,
-// and again only if that route later carries a different unusable value.
-//
-// The warning is worth keeping at Warn — a route that silently ignores its
-// configured timeout is exactly the kind of thing an operator needs to see. But
-// routeRequestTimeout runs on every request through the route, and a bad value
-// never self-heals, so warning unconditionally would emit the same line for as
-// long as the misconfiguration lasts and drown the tier it sits in.
-func (h *Server) warnBadRouteTimeout(route *ingress_v1alpha.HttpRoute, msg string, extra ...any) {
-	h.badTimeoutMu.Lock()
-
-	if h.badTimeouts == nil {
-		h.badTimeouts = make(map[entity.Id]string)
-	}
-
-	warned, tracking := h.badTimeouts[route.ID]
-	switch {
-	case warned == route.RequestTimeout && tracking:
-		h.badTimeoutMu.Unlock()
-		return
-	case !tracking && len(h.badTimeouts) >= maxBadTimeoutsTracked:
-		// Out of room to remember this one. Staying quiet is the safer failure:
-		// the alternative is warning on every request for every route past the
-		// cap.
-		h.badTimeoutMu.Unlock()
-		return
-	}
-
-	h.badTimeouts[route.ID] = route.RequestTimeout
-	h.badTimeoutMu.Unlock()
-
-	args := []any{"route", route.ID, "host", route.Host, "value", route.RequestTimeout}
-	args = append(args, extra...)
-	args = append(args, "note", "further requests on this route will not repeat this warning")
-
-	h.Log.Warn(msg, args...)
 }
 
 // watchInvalidations listens for sandbox invalidation signals from the
@@ -682,7 +625,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 	}
 
-	requestTimeout := h.routeRequestTimeout(route)
+	requestTimeout := routeRequestTimeout(route)
 
 	// Compose middleware chain: WAF → auth → serve
 	handler := func(w http.ResponseWriter, r *http.Request) {

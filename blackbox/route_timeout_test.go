@@ -76,16 +76,15 @@ func TestRouteTimeoutSetShowClear(t *testing.T) {
 
 	r = m.MustRun("route", "timeout", host, "--format", "json")
 	r.RequireSuccess(t)
-	// Unmarshal into a fresh value: request_timeout is omitted once cleared, so
-	// reusing `shown` would leave the previous value in place.
-	var cleared struct {
-		RequestTimeout string `json:"request_timeout"`
-	}
+	// Decode into a map rather than a struct: the field carries omitempty, so
+	// "cleared" means absent. An omitted field, "", and null all decode to the
+	// same empty string, which would let a regression through.
+	var cleared map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(r.Stdout), &cleared); err != nil {
 		t.Fatalf("failed to parse route timeout JSON: %v (stdout: %s)", err, r.Stdout)
 	}
-	if cleared.RequestTimeout != "" {
-		t.Errorf("expected request_timeout to be cleared, got %q", cleared.RequestTimeout)
+	if raw, ok := cleared["request_timeout"]; ok {
+		t.Errorf("expected request_timeout to be omitted after clearing, got %s", raw)
 	}
 
 	// Clearing again is a no-op
@@ -143,13 +142,12 @@ func TestRouteTimeoutDefaultRoute(t *testing.T) {
 	r = m.MustRun("route", "timeout", "--default", "--format", "json")
 	r.RequireSuccess(t)
 
-	var cleared struct {
-		RequestTimeout string `json:"request_timeout"`
-	}
+	// Absent, not empty: the field carries omitempty.
+	var cleared map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(r.Stdout), &cleared); err != nil {
 		t.Fatalf("failed to parse route timeout JSON: %v (stdout: %s)", err, r.Stdout)
 	}
-	if cleared.RequestTimeout != "" {
-		t.Errorf("expected request_timeout to be cleared, got %q", cleared.RequestTimeout)
+	if raw, ok := cleared["request_timeout"]; ok {
+		t.Errorf("expected request_timeout to be omitted after clearing, got %s", raw)
 	}
 }

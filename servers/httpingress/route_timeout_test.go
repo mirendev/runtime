@@ -1,8 +1,6 @@
 package httpingress
 
 import (
-	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
-	"miren.dev/runtime/pkg/entity"
 )
 
 // newTimeoutTestServer builds the minimal Server needed to exercise the
@@ -26,24 +23,7 @@ func newTimeoutTestServer(defaultTimeout time.Duration) *Server {
 	}
 }
 
-// countingHandler tallies records per level so tests can assert on log volume.
-type countingHandler struct {
-	slog.Handler
-	warns int
-}
-
-func (h *countingHandler) Handle(ctx context.Context, r slog.Record) error {
-	if r.Level == slog.LevelWarn {
-		h.warns++
-	}
-	return nil
-}
-
-func (h *countingHandler) Enabled(context.Context, slog.Level) bool { return true }
-
 func TestRouteRequestTimeout(t *testing.T) {
-	h := newTimeoutTestServer(60 * time.Second)
-
 	tests := []struct {
 		name  string
 		route *ingress_v1alpha.HttpRoute
@@ -61,88 +41,9 @@ func TestRouteRequestTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, h.routeRequestTimeout(tt.route))
+			require.Equal(t, tt.want, routeRequestTimeout(tt.route))
 		})
 	}
-}
-
-func TestRouteRequestTimeoutWarnsOncePerRoute(t *testing.T) {
-	counter := &countingHandler{Handler: slog.DiscardHandler}
-
-	h := newTimeoutTestServer(60 * time.Second)
-	h.Log = slog.New(counter)
-	h.badTimeouts = make(map[entity.Id]string)
-
-	bad := &ingress_v1alpha.HttpRoute{ID: "http_route/bad", Host: "bad.example.com", RequestTimeout: "10"}
-
-	for range 100 {
-		require.Zero(t, h.routeRequestTimeout(bad))
-	}
-	require.Equal(t, 1, counter.warns,
-		"a route with a bad value must warn once, not once per request")
-
-	// A different route with its own bad value is its own warning.
-	other := &ingress_v1alpha.HttpRoute{ID: "http_route/other", Host: "other.example.com", RequestTimeout: "0s"}
-	for range 10 {
-		require.Zero(t, h.routeRequestTimeout(other))
-	}
-	require.Equal(t, 2, counter.warns, "each misconfigured route gets its own warning")
-
-	// Changing the same route to a different bad value is news worth repeating.
-	bad.RequestTimeout = "forever"
-	for range 10 {
-		require.Zero(t, h.routeRequestTimeout(bad))
-	}
-	require.Equal(t, 3, counter.warns, "a newly-broken value on the same route should warn again")
-
-	// Fixing the route stops the warnings entirely.
-	bad.RequestTimeout = "10m"
-	for range 10 {
-		require.Equal(t, 10*time.Minute, h.routeRequestTimeout(bad))
-	}
-	require.Equal(t, 3, counter.warns, "a valid value must not warn")
-}
-
-func TestRouteRequestTimeoutWarnCapStaysQuiet(t *testing.T) {
-	counter := &countingHandler{Handler: slog.DiscardHandler}
-
-	h := newTimeoutTestServer(60 * time.Second)
-	h.Log = slog.New(counter)
-	h.badTimeouts = make(map[entity.Id]string)
-
-	// Fill the tracking map to its cap, then confirm routes past it stay silent
-	// rather than falling back to warning on every request.
-	for i := range maxBadTimeoutsTracked {
-		route := &ingress_v1alpha.HttpRoute{
-			ID:             entity.Id(fmt.Sprintf("http_route/bad-%d", i)),
-			RequestTimeout: "nope",
-		}
-		require.Zero(t, h.routeRequestTimeout(route))
-	}
-	require.Equal(t, maxBadTimeoutsTracked, counter.warns)
-
-	overflow := &ingress_v1alpha.HttpRoute{ID: "http_route/overflow", RequestTimeout: "nope"}
-	for range 50 {
-		require.Zero(t, h.routeRequestTimeout(overflow))
-	}
-	require.Equal(t, maxBadTimeoutsTracked, counter.warns,
-		"past the cap we go quiet rather than warn on every request")
-	require.Len(t, h.badTimeouts, maxBadTimeoutsTracked, "the map must not grow past its cap")
-}
-
-func TestTransportForToleratesNilMap(t *testing.T) {
-	// Several existing test helpers build a Server without the transports map;
-	// a write to a nil map would panic instead of failing usefully.
-	h := &Server{
-		Log:       slog.New(slog.DiscardHandler),
-		config:    IngressConfig{RequestTimeout: 60 * time.Second},
-		transport: newProxyTransport(60 * time.Second),
-	}
-
-	require.NotPanics(t, func() {
-		got := h.transportFor(10 * time.Minute)
-		require.NotSame(t, h.transport, got)
-	})
 }
 
 func TestTransportForUsesDefault(t *testing.T) {
