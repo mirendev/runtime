@@ -43,6 +43,13 @@ func TestCloudRPCEndpoint(t *testing.T) {
 
 		// No scheme is assumed to be the real thing, which is always TLS.
 		{"api.miren.cloud", "wss://api.miren.cloud/api/v1/clusters/cluster-abc/rpc"},
+
+		// A cloud mounted under a path keeps it, so the relay route is appended
+		// to where that cloud actually lives rather than to its host. Deliberate
+		// — an install behind a shared domain is a real shape — and untested
+		// until review pointed out that nothing said so either way.
+		{"https://cloud.example.com/miren", "wss://cloud.example.com/miren/api/v1/clusters/cluster-abc/rpc"},
+		{"https://cloud.example.com/miren/", "wss://cloud.example.com/miren/api/v1/clusters/cluster-abc/rpc"},
 	}
 
 	for _, tt := range tests {
