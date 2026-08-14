@@ -40,15 +40,14 @@ func TestRegisterEnsureSharedServerSaga(t *testing.T) {
 func TestRegisterSharedSaga(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterSharedSaga(registry, fw, rc)
+	err := RegisterSharedSaga(registry, fw)
 	require.NoError(t, err)
 
 	def, ok := registry.Get("provision-shared-postgresql")
 	require.True(t, ok)
 	assert.Equal(t, "provision-shared-postgresql", def.Name)
-	assert.Len(t, def.Actions, 6)
+	assert.Len(t, def.Actions, 5)
 }
 
 func TestRegisterDeprovisionSharedSaga(t *testing.T) {
@@ -67,9 +66,8 @@ func TestRegisterDeprovisionSharedSaga(t *testing.T) {
 func TestRegisterSharedSaga_IncludesNestedSaga(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterSharedSaga(registry, fw, rc)
+	err := RegisterSharedSaga(registry, fw)
 	require.NoError(t, err)
 
 	// The nested ensure-shared-server saga should also be registered
@@ -82,9 +80,8 @@ func TestRegisterSharedSaga_IncludesNestedSaga(t *testing.T) {
 func TestSharedSagaActionOrder(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterSharedSaga(registry, fw, rc)
+	err := RegisterSharedSaga(registry, fw)
 	require.NoError(t, err)
 
 	def, ok := registry.Get("provision-shared-postgresql")

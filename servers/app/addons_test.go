@@ -24,7 +24,7 @@ func (m *mockProvider) LocalityMode() addon.LocalityMode {
 	return addon.OnCluster
 }
 
-func (m *mockProvider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (m *mockProvider) Provision(ctx context.Context, _ addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	return &addon.ProvisionResult{}, nil
 }
 

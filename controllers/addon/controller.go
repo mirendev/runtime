@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/saga"
 )
 
 // Controller reconciles AddonAssociation entities, driving provisioning
@@ -26,6 +27,11 @@ type Controller struct {
 	ec       *entityserver.Client
 	eac      *entityserver_v1alpha.EntityAccessClient
 	registry *addon.Registry
+
+	// Providers build their own executors, so this is not for running sagas.
+	// It is here so the controller can retire a teardown record it owns; see
+	// deprovision.
+	sagaStorage saga.Storage
 }
 
 // NewController creates a new addon controller.
@@ -34,12 +40,14 @@ func NewController(
 	ec *entityserver.Client,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	registry *addon.Registry,
+	sagaStorage saga.Storage,
 ) *Controller {
 	return &Controller{
-		log:      log.With("module", "addon"),
-		ec:       ec,
-		eac:      eac,
-		registry: registry,
+		log:         log.With("module", "addon"),
+		ec:          ec,
+		eac:         eac,
+		registry:    registry,
+		sagaStorage: sagaStorage,
 	}
 }
 
@@ -50,7 +58,19 @@ func (c *Controller) Init(ctx context.Context) error {
 
 func (c *Controller) Reconcile(ctx context.Context, assoc *addon_v1alpha.AddonAssociation, meta *entity.Meta) error {
 	switch assoc.Status {
-	case "pending":
+	case "pending", "provisioning":
+		// "provisioning" belongs here because provision() writes it before the
+		// work starts, so a coordinator that dies mid-provision leaves the
+		// association on it. The switch used to have no case for that: every
+		// later pass fell through and returned in silence, nothing picked the
+		// work back up, and because the deployment launcher holds an app back
+		// while an association is still provisioning, the app stopped
+		// deploying too. That is MIR-1524.
+		//
+		// Re-entering is safe because of the revs below this one: the
+		// execution is named after the association, so a second pass continues
+		// the interrupted attempt rather than starting a fresh one beside
+		// whatever the first already built.
 		return c.provision(ctx, assoc, meta)
 	case "deprovisioning":
 		return c.deprovision(ctx, assoc, meta)
@@ -68,12 +88,15 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	// resync, the reconcile event may carry an older revision than what's
 	// now in the store). If the user has already marked this association for
 	// deprovisioning, skip; the subsequent deprovisioning event will handle it.
+	//
+	// "provisioning" passes as well as "pending", because an attempt a crash
+	// interrupted is still an attempt that should finish.
 	var current addon_v1alpha.AddonAssociation
 	if err := c.ec.GetById(ctx, assoc.ID, &current); err != nil {
 		return fmt.Errorf("re-reading association: %w", err)
 	}
-	if current.Status != "pending" {
-		c.log.Info("association no longer pending, skipping provision",
+	if current.Status != "pending" && current.Status != "provisioning" {
+		c.log.Info("association no longer wants provisioning, skipping",
 			"association", assoc.ID, "status", current.Status)
 		return nil
 	}
@@ -107,7 +130,7 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		ID:   assoc.App,
 		Name: appName,
 	}
-	result, err := provider.Provision(ctx, app, addon.Variant{
+	result, err := provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, addon.Variant{
 		Name:   assoc.Variant,
 		Config: variantConfig,
 	})
@@ -120,13 +143,15 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	// just created. If compensation also fails, return the error without
 	// setting terminal "error" status so the controller retries.
 	if err := c.completeProvision(ctx, assoc, meta, provider, result); err != nil {
-		depErr := provider.Deprovision(ctx, addon.AddonAssociation{
-			ID:      assoc.ID,
-			App:     assoc.App,
-			Addon:   assoc.Addon,
-			Variant: assoc.Variant,
-			Entity:  meta.Entity,
-		})
+		// Same reasoning as deprovision(): this compensation runs the teardown
+		// saga under the association's name, so a failed one would answer every
+		// later attempt from its own record and the retry promised above would
+		// never actually run.
+		if dropErr := saga.DropIfFailed(ctx, c.sagaStorage,
+			addon.DeprovisionExecutionID(assoc.ID)); dropErr != nil {
+			return fmt.Errorf("clearing failed teardown record: %w", dropErr)
+		}
+		depErr := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
 		if depErr != nil {
 			c.log.Error("compensation deprovision failed, will retry",
 				"provision_error", err, "deprovision_error", depErr)
@@ -165,13 +190,7 @@ func (c *Controller) completeProvision(
 	envVars := result.EnvVars
 	collisions := findCollisions(existingVars, envVars)
 	if len(collisions) > 0 {
-		adjusted, err := provider.AdjustEnvVars(ctx, result, addon.AddonAssociation{
-			ID:      assoc.ID,
-			App:     assoc.App,
-			Addon:   assoc.Addon,
-			Variant: assoc.Variant,
-			Entity:  meta.Entity,
-		}, collisions)
+		adjusted, err := provider.AdjustEnvVars(ctx, result, addon.AssociationFrom(assoc, meta.Entity), collisions)
 		if err != nil {
 			return fmt.Errorf("adjusting env vars: %w", err)
 		}
@@ -220,14 +239,21 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 		return c.setError(meta, fmt.Errorf("unknown addon %q", addonName))
 	}
 
+	// Naming the execution after the association makes a teardown resumable,
+	// but it also makes a failed one permanent: Execute would hand back the
+	// recorded error on every later pass, so `addon destroy` would be one-shot
+	// until saga retention freed the name. Retrying a compensated saga is the
+	// owner's decision, and for teardown the controller is that owner. Every
+	// undo in these sagas is a no-op, so a failed run tore nothing down and put
+	// nothing back; a fresh attempt has strictly more to do, never something to
+	// redo.
+	if err := saga.DropIfFailed(ctx, c.sagaStorage,
+		addon.DeprovisionExecutionID(assoc.ID)); err != nil {
+		return fmt.Errorf("clearing failed teardown record: %w", err)
+	}
+
 	// Step 1: Call provider.Deprovision
-	err := provider.Deprovision(ctx, addon.AddonAssociation{
-		ID:      assoc.ID,
-		App:     assoc.App,
-		Addon:   assoc.Addon,
-		Variant: assoc.Variant,
-		Entity:  meta.Entity,
-	})
+	err := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
 	if err != nil {
 		// Try to set error status, but don't fail if the update is rejected
 		// (e.g., the app was deleted and the entity server rejects the patch

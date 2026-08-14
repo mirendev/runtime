@@ -61,7 +61,7 @@ func TestRabbitMQ_Rotation_Integration(t *testing.T) {
 
 	provider := rabbitmq.NewProvider(fw)
 
-	prov, err := provider.Provision(ctx, addon.App{Name: "rmqrot-app"}, addon.Variant{Name: "small"})
+	prov, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-rmqrot"}, addon.App{Name: "rmqrot-app"}, addon.Variant{Name: "small"})
 	require.NoError(t, err)
 	require.NotNil(t, prov)
 

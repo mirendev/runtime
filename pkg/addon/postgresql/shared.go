@@ -499,44 +499,9 @@ func UndoCreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn, ou
 
 // Step 6: Build the ProvisionResult.
 
-type BuildSharedResultIn struct {
-	ServerID           entity.Id
-	ServiceHost        string
-	SharedDatabaseName string
-	SharedUsername     string
-	SharedPassword     string
-}
-
-type BuildSharedResultOut struct {
-	Done bool
-}
-
-func BuildSharedResult(ctx context.Context, in BuildSharedResultIn) (BuildSharedResultOut, error) {
-	rc := saga.Get[*resultCapture](ctx)
-
-	envVars := buildEnvVars(in.ServiceHost, postgresPort, in.SharedUsername, in.SharedPassword, in.SharedDatabaseName)
-
-	sharedData := &addon_v1alpha.PostgresqlSharedData{
-		PostgresServer: in.ServerID,
-		DatabaseName:   in.SharedDatabaseName,
-		Username:       in.SharedUsername,
-	}
-
-	rc.Result = &addon.ProvisionResult{
-		EnvVars: envVars,
-		Attrs:   sharedData.Encode(),
-	}
-
-	return BuildSharedResultOut{Done: true}, nil
-}
-
-func UndoBuildSharedResult(ctx context.Context, in BuildSharedResultIn, out BuildSharedResultOut) error {
-	return nil
-}
-
 // RegisterSharedSaga registers the shared PostgreSQL provisioning saga.
 // This also registers the nested ensure-shared-server saga in the same registry.
-func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
+func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	if err := RegisterEnsureSharedServerSaga(registry, fw); err != nil {
 		return err
 	}
@@ -544,7 +509,6 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	b := saga.Define("provision-shared-postgresql").
 		Using(fw).
-		Using(rc).
 		Using(cfg)
 	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})
 	return b.
@@ -553,7 +517,6 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc
 		Action(CreateSharedUser).Undo(UndoCreateSharedUser).
 		Action(CreateSharedDatabase).Undo(UndoCreateSharedDatabase).
 		Action(dbsaga.IncrementAssociationCount).Undo(dbsaga.UndoIncrementAssociationCount).
-		Action(BuildSharedResult).Undo(UndoBuildSharedResult).
 		RegisterTo(registry)
 }
 
@@ -783,22 +746,23 @@ func RegisterDeprovisionSharedSaga(registry *saga.Registry, fw *addon.ProviderFr
 		RegisterTo(registry)
 }
 
-func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *Provider) provisionShared(ctx context.Context, assoc addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	p.Log.Info("provisioning shared PostgreSQL",
 		"app", app.Name,
 		"variant", variant.Name)
 
-	rc := &resultCapture{}
 	registry := saga.NewRegistry()
 
-	if err := RegisterSharedSaga(registry, p.Fw, rc); err != nil {
+	if err := RegisterSharedSaga(registry, p.Fw); err != nil {
 		return nil, fmt.Errorf("registering shared saga: %w", err)
 	}
 
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
+	execID := addon.ProvisionExecutionID(assoc.ID)
 	err := executor.Start("provision-shared-postgresql").
+		WithID(execID).
 		Input("appname", app.Name).
 		Input("variantconfig", variant.Config).
 		Execute(ctx)
@@ -806,12 +770,37 @@ func (p *Provider) provisionShared(ctx context.Context, app addon.App, variant a
 		return nil, err
 	}
 
-	if rc.Result == nil {
-		return nil, fmt.Errorf("saga completed but no result was captured")
+	// Read the answer back out of the execution rather than out of a struct the
+	// run filled in, so a saga that finished on an earlier pass still yields
+	// one.
+	out, err := executor.ExecutionOutputs(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("reading provisioning outputs: %w", err)
+	}
+
+	var host, username, password, dbName string
+	var serverID entity.Id
+	for key, target := range map[string]any{
+		"servicehost":        &host,
+		"sharedusername":     &username,
+		"sharedpassword":     &password,
+		"shareddatabasename": &dbName,
+		"serverid":           &serverID,
+	} {
+		if err := out.Get(key, target); err != nil {
+			return nil, fmt.Errorf("reading %s from provisioning outputs: %w", key, err)
+		}
 	}
 
 	p.Log.Info("shared PostgreSQL provisioned", "app", app.Name)
-	return rc.Result, nil
+	return &addon.ProvisionResult{
+		EnvVars: buildEnvVars(host, postgresPort, username, password, dbName),
+		Attrs: (&addon_v1alpha.PostgresqlSharedData{
+			PostgresServer: serverID,
+			DatabaseName:   dbName,
+			Username:       username,
+		}).Encode(),
+	}, nil
 }
 
 func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssociation) error {
@@ -827,6 +816,7 @@ func (p *Provider) deprovisionShared(ctx context.Context, assoc addon.AddonAssoc
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-shared-postgresql").
+		WithID(addon.DeprovisionExecutionID(assoc.ID)).
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {

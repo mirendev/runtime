@@ -110,7 +110,7 @@ func TestMySQL_Integration(t *testing.T) {
 
 	// --- Shared ---
 
-	sharedProv, err := provider.Provision(ctx, addon.App{Name: "myshared-app"}, addon.Variant{Name: "shared"})
+	sharedProv, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-myshared"}, addon.App{Name: "myshared-app"}, addon.Variant{Name: "shared"})
 	require.NoError(t, err)
 	require.NotNil(t, sharedProv)
 	sharedEnv := envMap(sharedProv.EnvVars)
@@ -168,7 +168,7 @@ func TestMySQL_Integration(t *testing.T) {
 
 	// --- Dedicated ---
 
-	dedProv, err := provider.Provision(ctx, addon.App{Name: "myded-app"}, addon.Variant{Name: "small"})
+	dedProv, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-myded"}, addon.App{Name: "myded-app"}, addon.Variant{Name: "small"})
 	require.NoError(t, err)
 	require.NotNil(t, dedProv)
 	dedEnv := envMap(dedProv.EnvVars)
@@ -241,7 +241,7 @@ func TestMySQL_Integration(t *testing.T) {
 	// consumes the old password only fires on saga failure, which this happy-path
 	// wire test does not force; the read that feeds it is exercised here.)
 
-	legacyProv, err := provider.Provision(ctx, addon.App{Name: "mylegacy-app"}, addon.Variant{Name: "small"})
+	legacyProv, err := provider.Provision(ctx, addon.AddonAssociation{ID: "assoc-mylegacy"}, addon.App{Name: "mylegacy-app"}, addon.Variant{Name: "small"})
 	require.NoError(t, err)
 	require.NotNil(t, legacyProv)
 	legacyEnv := envMap(legacyProv.EnvVars)

@@ -13,15 +13,14 @@ import (
 func TestRegisterDedicatedSaga(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterDedicatedSaga(registry, fw, rc)
+	err := RegisterDedicatedSaga(registry, fw)
 	require.NoError(t, err)
 
 	def, ok := registry.Get("provision-dedicated-valkey")
 	require.True(t, ok)
 	assert.Equal(t, "provision-dedicated-valkey", def.Name)
-	assert.Len(t, def.Actions, 8)
+	assert.Len(t, def.Actions, 7)
 }
 
 func TestRegisterDeprovisionDedicatedSaga(t *testing.T) {
@@ -72,27 +71,26 @@ func TestDeprovisionDedicatedSagaOrder(t *testing.T) {
 func TestDedicatedSagaActionOrder(t *testing.T) {
 	registry := saga.NewRegistry()
 	fw := &addon.ProviderFramework{}
-	rc := &resultCapture{}
 
-	err := RegisterDedicatedSaga(registry, fw, rc)
+	err := RegisterDedicatedSaga(registry, fw)
 	require.NoError(t, err)
 
 	def, ok := registry.Get("provision-dedicated-valkey")
 	require.True(t, ok)
 
-	expectedActions := []string{
+	// Order comes from the data dependencies between actions, not from the order
+	// they were registered in. Worth pinning rather than just asserting
+	// membership: deleting an action, as dropping the result-building step did,
+	// changes the graph the topological sort reads.
+	expectedOrder := []string{
 		"generate-credentials",
-		"create-valkey-server",
 		"create-dedicated-pool",
-		"wait-for-dedicated-pool",
 		"create-dedicated-service",
+		"create-valkey-server",
+		"wait-for-dedicated-pool",
 		"wait-for-dedicated-service",
 		"update-dedicated-server",
-		"build-dedicated-result",
 	}
 
-	for _, name := range expectedActions {
-		_, exists := def.Actions[name]
-		assert.True(t, exists, "expected action %q to exist", name)
-	}
+	assert.Equal(t, expectedOrder, def.ExecutionOrder())
 }

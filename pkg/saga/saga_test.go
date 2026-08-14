@@ -835,3 +835,296 @@ func TestExecutor_EdgeDependency(t *testing.T) {
 	assert.Equal(t, StatusCompleted, exec.Status)
 	assert.Equal(t, []string{"step-a", "step-b"}, exec.ExecutionOrder)
 }
+
+// A caller that names its execution after the entity it belongs to re-enters
+// Execute on every reconcile pass. That must continue the existing execution
+// rather than start a fresh one over the top of it.
+func TestExecutor_ReExecuteResumesInsteadOfRestarting(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	err := Define("resume-calc").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	ctx := context.Background()
+
+	start := func() error {
+		return executor.Start("resume-calc").
+			Input("a", 2).
+			Input("b", 3).
+			Input("factor", 4).
+			WithID("assoc-42").
+			Execute(ctx)
+	}
+
+	require.NoError(t, start())
+	require.Len(t, ctrl.addCalls, 1)
+	require.Len(t, ctrl.multiplyCalls, 1)
+
+	// Same name again: the work is already done, so nothing should re-run and
+	// the record must survive intact.
+	require.NoError(t, start())
+	assert.Len(t, ctrl.addCalls, 1, "completed action must not run twice")
+	assert.Len(t, ctrl.multiplyCalls, 1, "completed action must not run twice")
+
+	exec, err := storage.Get(ctx, "assoc-42")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+	assert.Len(t, exec.ExecutionOrder, 2, "re-entry must not clobber the record")
+}
+
+// The case MIR-1524 is about: a process dies with an execution half finished,
+// and the next pass picks it up where it stopped instead of starting over on
+// top of what the first attempt already built.
+func TestExecutor_ReExecuteContinuesInterruptedRun(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	err := Define("interrupted-calc").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	// Stand in for a crash after the first action: the record says running,
+	// with only "add" recorded.
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "assoc-99",
+		DefinitionName:    "interrupted-calc",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(2), "b": float64(3), "factor": float64(4)},
+		Status:            StatusRunning,
+		ExecutedActions: map[string]*ActionResult{
+			// Output keys are Go field names, as json.Marshal writes them.
+			"add": {Output: []byte(`{"Sum":5}`), ExecutedAt: time.Now()},
+		},
+		ExecutionOrder: []string{"add"},
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}))
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	require.NoError(t, executor.Start("interrupted-calc").
+		Input("a", 2).
+		Input("b", 3).
+		Input("factor", 4).
+		WithID("assoc-99").
+		Execute(ctx))
+
+	assert.Empty(t, ctrl.addCalls, "already-recorded action must not re-run")
+	require.Len(t, ctrl.multiplyCalls, 1, "remaining action must run")
+	assert.Equal(t, MultiplyIn{Sum: 5, Factor: 4}, ctrl.multiplyCalls[0],
+		"resumed action must see the first attempt's output")
+
+	exec, err := storage.Get(ctx, "assoc-99")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+}
+
+// A saga that already failed and compensated hands its error back rather than
+// reporting a quiet success. Retrying under the same name would run against
+// resources the rollback has already torn down, so the decision belongs to
+// whoever owns the operation.
+func TestExecutor_ReExecuteReportsAnAlreadyFailedRun(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	err := Define("failed-calc").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "assoc-failed",
+		DefinitionName:    "failed-calc",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(2), "b": float64(3), "factor": float64(4)},
+		Status:            StatusFailed,
+		Error:             "out of turkey",
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}))
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Start("failed-calc").
+		Input("a", 2).
+		Input("b", 3).
+		Input("factor", 4).
+		WithID("assoc-failed").
+		Execute(ctx)
+
+	require.Error(t, err, "a failed execution must not read as success")
+	assert.Contains(t, err.Error(), "out of turkey", "and must carry what actually went wrong")
+	assert.Empty(t, ctrl.addCalls, "a compensated saga must not quietly run again")
+	assert.Empty(t, ctrl.multiplyCalls)
+}
+
+// A status resume does not recognise must not read as a finished saga. This is
+// the same shape as the bug the rest of this change is about: a value nobody
+// listed falling through a switch and being reported as success.
+func TestExecutor_ReExecuteRejectsAnUnrecognizedStatus(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	err := Define("odd-calc").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "assoc-odd",
+		DefinitionName:    "odd-calc",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(2), "b": float64(3)},
+		Status:            Status("marinating"), // a state this version has never heard of
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}))
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Start("odd-calc").
+		Input("a", 2).
+		Input("b", 3).
+		WithID("assoc-odd").
+		Execute(ctx)
+
+	require.Error(t, err, "an unknown status must not be reported as a completed saga")
+	assert.Contains(t, err.Error(), "marinating", "and must say what it could not make sense of")
+	assert.Empty(t, ctrl.addCalls, "nor should it run actions over a record it cannot read")
+}
+
+// Two passes arriving at once must not both drive the same execution. The
+// second is told the work is in progress, which is neither a failure nor a
+// success, so a caller can tell it apart from a finished run.
+func TestExecutor_ConcurrentExecuteDoesNotDriveTheSameRunTwice(t *testing.T) {
+	registry := NewRegistry()
+
+	ctrl := &testController{}
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	err := Define("slow-calc").
+		Using(ctrl).
+		Action("add", func(ctx context.Context, in AddNumbersIn) (AddNumbersOut, error) {
+			close(entered)
+			<-release
+			return AddNumbers(ctx, in)
+		}).Undo(UndoAddNumbers).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	start := func() error {
+		return executor.Start("slow-calc").
+			Input("a", 2).
+			Input("b", 3).
+			WithID("assoc-concurrent").
+			Execute(ctx)
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- start() }()
+
+	<-entered // the first pass is inside the action and holds the claim
+	assert.ErrorIs(t, start(), ErrExecutionInProgress,
+		"the second pass must be told the work is already being driven")
+
+	close(release)
+	require.NoError(t, <-first)
+
+	exec, err := storage.Get(ctx, "assoc-concurrent")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, exec.Status)
+	assert.Len(t, exec.ExecutionOrder, 1, "the action must have run exactly once")
+}
+
+// A caller that knows the recorded outcome no longer describes reality can
+// retire it. Anything else is left alone, so a caller can say what it means
+// without first reading the record.
+func TestDropIf(t *testing.T) {
+	ctx := context.Background()
+
+	save := func(t *testing.T, s Storage, id string, status Status) {
+		t.Helper()
+		require.NoError(t, s.Save(ctx, &Execution{ID: id, DefinitionName: "d", Status: status}))
+	}
+	exists := func(t *testing.T, s Storage, id string) bool {
+		t.Helper()
+		_, err := s.Get(ctx, id)
+		return err == nil
+	}
+
+	t.Run("failed is dropped, completed is not", func(t *testing.T) {
+		s := NewMemoryStorage()
+		save(t, s, "a", StatusFailed)
+		save(t, s, "b", StatusCompleted)
+		require.NoError(t, DropIfFailed(ctx, s, "a"))
+		require.NoError(t, DropIfFailed(ctx, s, "b"))
+		assert.False(t, exists(t, s, "a"))
+		assert.True(t, exists(t, s, "b"))
+	})
+
+	t.Run("completed is dropped, running is not", func(t *testing.T) {
+		s := NewMemoryStorage()
+		save(t, s, "a", StatusCompleted)
+		save(t, s, "b", StatusRunning)
+		require.NoError(t, DropIfCompleted(ctx, s, "a"))
+		require.NoError(t, DropIfCompleted(ctx, s, "b"))
+		assert.False(t, exists(t, s, "a"))
+		assert.True(t, exists(t, s, "b"), "an in-flight run must never be pulled out from under its driver")
+	})
+
+	t.Run("absent is not an error", func(t *testing.T) {
+		s := NewMemoryStorage()
+		assert.NoError(t, DropIfFailed(ctx, s, "nope"))
+		assert.NoError(t, DropIfCompleted(ctx, s, "nope"))
+	})
+}
+
+// An id collision must not run one saga's actions against another's record.
+func TestExecutor_ReExecuteRejectsADifferentDefinitionUnderTheSameName(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	require.NoError(t, Define("calc-a").Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).RegisterTo(registry))
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "shared-name",
+		DefinitionName:    "calc-b", // a different saga recorded under this name
+		DefinitionVersion: 1,
+		Status:            StatusRunning,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}))
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("calc-a").Input("a", 2).Input("b", 3).
+		WithID("shared-name").Execute(ctx)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "calc-b")
+	assert.Empty(t, ctrl.addCalls, "and no action runs against the other saga's record")
+}

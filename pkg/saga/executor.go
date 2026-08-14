@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/pkg/idgen"
@@ -13,6 +14,12 @@ import (
 
 // ErrExecutionNotFound is returned by Storage.Get when no execution exists for the given ID.
 var ErrExecutionNotFound = errors.New("execution not found")
+
+// ErrExecutionInProgress reports that this Executor is already driving the
+// named execution, so this call did nothing. It is not a failure and it is not
+// success: the work is still going, and the caller should come back for the
+// answer rather than read outputs that have not been written yet.
+var ErrExecutionInProgress = errors.New("execution already in progress")
 
 type executorCtxKey struct{}
 type executionIDCtxKey struct{}
@@ -61,6 +68,22 @@ type Executor struct {
 	storage  Storage
 	registry *Registry
 	log      *slog.Logger
+
+	// inFlight names the executions this Executor is currently driving. A
+	// caller that names its execution after the entity it belongs to will
+	// re-enter Execute on every reconcile pass, and without this the second
+	// caller would drive the same execution concurrently with the first.
+	//
+	// The scope really is this value, not the process: callers that build an
+	// Executor per operation get an empty map each time and so get nothing from
+	// this. Serializing across them is the caller's problem, and for addon and
+	// sandbox work it is already solved a level up, by a reconcile controller
+	// that handles one event per entity at a time. Anything driving an
+	// execution from outside such a loop needs its own answer, and a durable
+	// one (a lease or a compare-and-swap on the record) if it wants to hold
+	// across processes rather than within one.
+	inFlightMu sync.Mutex
+	inFlight   map[string]struct{}
 }
 
 // ExecutorOption configures an Executor.
@@ -87,11 +110,31 @@ func NewExecutor(storage Storage, opts ...ExecutorOption) *Executor {
 		storage:  storage,
 		registry: globalRegistry,
 		log:      slog.Default(),
+		inFlight: make(map[string]struct{}),
 	}
 	for _, opt := range opts {
 		opt(e)
 	}
 	return e
+}
+
+// claim marks an execution as being driven by this Executor, reporting false if
+// this Executor is already driving it.
+func (e *Executor) claim(id string) bool {
+	e.inFlightMu.Lock()
+	defer e.inFlightMu.Unlock()
+
+	if _, busy := e.inFlight[id]; busy {
+		return false
+	}
+	e.inFlight[id] = struct{}{}
+	return true
+}
+
+func (e *Executor) release(id string) {
+	e.inFlightMu.Lock()
+	defer e.inFlightMu.Unlock()
+	delete(e.inFlight, id)
 }
 
 // StartBuilder provides a fluent API for starting saga executions.
@@ -118,6 +161,14 @@ func (sb *StartBuilder) Input(key string, value any) *StartBuilder {
 }
 
 // WithID sets a specific execution ID (otherwise one is generated).
+//
+// Naming an execution makes Execute idempotent under that name: a second call
+// continues the existing run rather than starting a new one. The inputs given
+// here are the bootstrap data for the first call only. A later call that
+// supplies different ones resumes from what the first recorded and ignores
+// them, because the actions that already ran did so against the originals and
+// re-deriving half a saga from new inputs would produce a run that never
+// happened.
 func (sb *StartBuilder) WithID(id string) *StartBuilder {
 	sb.id = id
 	return sb
@@ -139,6 +190,27 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 	// Generate ID if not provided
 	if id == "" {
 		id = generateID()
+	}
+
+	// A caller that names its execution after the entity it belongs to calls
+	// this on every reconcile pass. Only one of those may drive at a time.
+	if !e.claim(id) {
+		e.log.Debug("execution already being driven here, skipping",
+			"saga", defName, "execution", id)
+		return ErrExecutionInProgress
+	}
+	defer e.release(id)
+
+	// Naming an execution that already exists means continue it, not replace
+	// it. Overwriting would discard the record of what a previous attempt
+	// built, leaving those resources with nothing that knows to undo them.
+	switch existing, err := e.storage.Get(ctx, id); {
+	case err == nil:
+		e.log.Info("continuing existing execution",
+			"saga", defName, "execution", id, "status", existing.Status)
+		return e.resume(ctx, def, existing)
+	case !errors.Is(err, ErrExecutionNotFound):
+		return fmt.Errorf("loading execution %q: %w", id, err)
 	}
 
 	// Create execution
@@ -490,34 +562,21 @@ func (e *Executor) Recover(ctx context.Context) error {
 
 		e.log.Info("recovering saga", "saga", exec.DefinitionName, "execution", exec.ID, "status", exec.Status)
 
-		// Check version compatibility
-		if def.Version != exec.DefinitionVersion {
-			e.log.Warn("saga definition version mismatch",
-				"saga", exec.DefinitionName,
-				"execution_version", exec.DefinitionVersion,
-				"current_version", def.Version)
+		if !e.claim(exec.ID) {
+			e.log.Debug("execution already being driven here, leaving it alone",
+				"saga", exec.DefinitionName, "execution", exec.ID)
+			continue
 		}
+		// Released through defer so an action that panics cannot strand the
+		// claim. A stranded one is permanent: every later Execute under that
+		// name would report the work as still in flight and never run it.
+		err := func() error {
+			defer e.release(exec.ID)
+			return e.resume(ctx, def, exec)
+		}()
 
-		switch exec.Status {
-		case StatusPending, StatusRunning:
-			// Check if there's a failed action that needs compensation.
-			// This handles the edge case where we crashed after recording failure
-			// but before persisting StatusUndoing.
-			if exec.Error != "" {
-				e.log.Info("found failed action during recovery, starting undo",
-					"saga", exec.DefinitionName, "error", exec.Error)
-				recoverErrors = append(recoverErrors, e.runUndo(ctx, def, exec))
-			} else {
-				// Resume execution (pending means crashed before first action started)
-				if err := e.runExecution(ctx, def, exec); err != nil {
-					recoverErrors = append(recoverErrors, err)
-				}
-			}
-		case StatusUndoing:
-			// Resume undo
-			recoverErrors = append(recoverErrors, e.runUndo(ctx, def, exec))
-		case StatusCompleted, StatusFailed:
-			// Terminal states; nothing to recover.
+		if err != nil {
+			recoverErrors = append(recoverErrors, err)
 		}
 	}
 
@@ -525,6 +584,57 @@ func (e *Executor) Recover(ctx context.Context) error {
 		return fmt.Errorf("recovery completed with %d errors", len(recoverErrors))
 	}
 	return nil
+}
+
+// resume continues an execution from wherever it stopped. Both Recover and a
+// re-entered Execute go through here, so the two cannot drift apart on what
+// "continue this" means for a given status.
+//
+// A caller that reaches a Failed execution gets the recorded failure back
+// rather than a silent success: the saga tried, compensated, and gave up, and
+// retrying that is a decision for whoever owns the operation, not something to
+// do implicitly under the same name.
+func (e *Executor) resume(ctx context.Context, def *Definition, exec *Execution) error {
+	// A name that means one saga to the caller and another to the record is an
+	// id collision, and resuming across it would run this definition's actions
+	// against the other's recorded outputs. Naming executions after entities
+	// makes collisions the thing worth guarding, so this is an error rather
+	// than the warning a version skew gets.
+	if def.Name != exec.DefinitionName {
+		return fmt.Errorf("execution %q belongs to saga %q, not %q",
+			exec.ID, exec.DefinitionName, def.Name)
+	}
+
+	if def.Version != exec.DefinitionVersion {
+		e.log.Warn("saga definition version mismatch",
+			"saga", exec.DefinitionName,
+			"execution_version", exec.DefinitionVersion,
+			"current_version", def.Version)
+	}
+
+	switch exec.Status {
+	case StatusPending, StatusRunning:
+		// A recorded error with a non-terminal status means we crashed after
+		// noting the failure but before persisting StatusUndoing.
+		if exec.Error != "" {
+			e.log.Info("found failed action, starting undo",
+				"saga", exec.DefinitionName, "error", exec.Error)
+			return e.runUndo(ctx, def, exec)
+		}
+		return e.runExecution(ctx, def, exec)
+	case StatusUndoing:
+		return e.runUndo(ctx, def, exec)
+	case StatusCompleted:
+		return nil
+	case StatusFailed:
+		return fmt.Errorf("saga failed: %s", exec.Error)
+	}
+
+	// This whole change exists because a value nobody listed fell through a
+	// switch in silence, so not here. An unrecognized status is a corrupt
+	// record or one written by a version that knows a state this one does not,
+	// and resuming is not something we can claim to have done either way.
+	return fmt.Errorf("execution %q has unrecognized status %q", exec.ID, exec.Status)
 }
 
 // extractOutputs extracts output key-value pairs from an action's output.

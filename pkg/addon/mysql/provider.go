@@ -22,11 +22,11 @@ func NewProvider(fw *addon.ProviderFramework) *Provider {
 	}
 }
 
-func (p *Provider) Provision(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *Provider) Provision(ctx context.Context, assoc addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	if IsSharedVariant(variant.Name) {
-		return p.provisionShared(ctx, app, variant)
+		return p.provisionShared(ctx, assoc, app, variant)
 	}
-	return p.provisionDedicated(ctx, app, variant)
+	return p.provisionDedicated(ctx, assoc, app, variant)
 }
 
 func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation) error {

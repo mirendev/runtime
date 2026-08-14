@@ -30,10 +30,6 @@ func memcacheContainerPorts() []compute_v1alpha.SandboxSpecContainerPort {
 	}
 }
 
-type resultCapture struct {
-	Result *addon.ProvisionResult
-}
-
 // --- Dedicated Provisioning Saga Actions ---
 
 type GenerateNamesIn struct {
@@ -174,41 +170,10 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 	return nil
 }
 
-type BuildDedicatedResultIn struct {
-	ServiceHost string    `saga:"servicehost"`
-	ServerID    entity.Id `saga:"serverid"`
-}
-
-type BuildDedicatedResultOut struct {
-	Done bool
-}
-
-func BuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn) (BuildDedicatedResultOut, error) {
-	rc := saga.Get[*resultCapture](ctx)
-
-	envVars := buildEnvVars(in.ServiceHost, memcachePort)
-
-	dedicatedData := &addon_v1alpha.MemcacheDedicatedData{
-		MemcacheServer: in.ServerID,
-	}
-
-	rc.Result = &addon.ProvisionResult{
-		EnvVars: envVars,
-		Attrs:   dedicatedData.Encode(),
-	}
-
-	return BuildDedicatedResultOut{Done: true}, nil
-}
-
-func UndoBuildDedicatedResult(ctx context.Context, in BuildDedicatedResultIn, out BuildDedicatedResultOut) error {
-	return nil
-}
-
-func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework, rc *resultCapture) error {
+func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: memcachePort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("provision-dedicated-memcache").
 		Using(fw).
-		Using(rc).
 		Using(cfg).
 		Action(GenerateNames).Undo(UndoGenerateNames).
 		Action(CreateMemcacheServer).Undo(UndoCreateMemcacheServer).
@@ -217,7 +182,6 @@ func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework,
 		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
 		Action(dbsaga.WaitForDedicatedService).Undo(dbsaga.UndoWaitForDedicatedService).
 		Action(UpdateDedicatedServer).Undo(UndoUpdateDedicatedServer).
-		Action(BuildDedicatedResult).Undo(UndoBuildDedicatedResult).
 		RegisterTo(registry)
 }
 
@@ -311,22 +275,23 @@ func RegisterDeprovisionDedicatedSaga(registry *saga.Registry, fw *addon.Provide
 		RegisterTo(registry)
 }
 
-func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+func (p *Provider) provisionDedicated(ctx context.Context, assoc addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
 	p.Log.Info("provisioning dedicated Memcached",
 		"app", app.Name,
 		"variant", variant.Name)
 
-	rc := &resultCapture{}
 	registry := saga.NewRegistry()
 
-	if err := RegisterDedicatedSaga(registry, p.Fw, rc); err != nil {
+	if err := RegisterDedicatedSaga(registry, p.Fw); err != nil {
 		return nil, fmt.Errorf("registering dedicated saga: %w", err)
 	}
 
 	storage := p.Fw.Storage
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
+	execID := addon.ProvisionExecutionID(assoc.ID)
 	err := executor.Start("provision-dedicated-memcache").
+		WithID(execID).
 		Input("appname", app.Name).
 		Input("variantname", variant.Name).
 		Input("variantconfig", variant.Config).
@@ -335,12 +300,32 @@ func (p *Provider) provisionDedicated(ctx context.Context, app addon.App, varian
 		return nil, err
 	}
 
-	if rc.Result == nil {
-		return nil, fmt.Errorf("saga completed but no result was captured")
+	// Read the answer back out of the execution rather than out of a struct the
+	// run filled in, so a saga that finished on an earlier pass still yields one.
+	out, err := executor.ExecutionOutputs(ctx, execID)
+	if err != nil {
+		return nil, fmt.Errorf("reading provisioning outputs: %w", err)
 	}
 
-	p.Log.Info("dedicated Memcached provisioned", "app", app.Name)
-	return rc.Result, nil
+	var host string
+	var serverID entity.Id
+
+	for key, target := range map[string]any{
+		"servicehost": &host,
+		"serverid":    &serverID,
+	} {
+		if err := out.Get(key, target); err != nil {
+			return nil, fmt.Errorf("reading %s from provisioning outputs: %w", key, err)
+		}
+	}
+
+	p.Log.Info("dedicated Memcache provisioned", "app", app.Name)
+	return &addon.ProvisionResult{
+		EnvVars: buildEnvVars(host, memcachePort),
+		Attrs: (&addon_v1alpha.MemcacheDedicatedData{
+			MemcacheServer: serverID,
+		}).Encode(),
+	}, nil
 }
 
 func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAssociation) error {
@@ -356,6 +341,7 @@ func (p *Provider) deprovisionDedicated(ctx context.Context, assoc addon.AddonAs
 	executor := saga.NewExecutor(storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
 
 	err := executor.Start("deprovision-dedicated-memcache").
+		WithID(addon.DeprovisionExecutionID(assoc.ID)).
 		Input("assocentity", assoc.Entity).
 		Execute(ctx)
 	if err != nil {
