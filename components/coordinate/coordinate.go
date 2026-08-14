@@ -1099,6 +1099,23 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Report associations left stale by a rotation that predates resolving
+	// bindings from them. This only reports; see ReportStaleAssociationVariables
+	// for why repairing it here would be worse.
+	//
+	// Bounded by the same startup-maintenance deadline as the migrations above, so
+	// a large or slow store delays boot by at most that budget. A sweep cut short
+	// reports what it reached and boot continues: an unread association means a
+	// missing warning, never a missing binding.
+	assocStale, assocChecked, assocErr := addonctrl.ReportStaleAssociationVariables(maintCtx, c.Log, ec, eac)
+	if assocErr != nil {
+		c.Log.Warn("addon association variable check did not complete",
+			"stale", assocStale, "checked", assocChecked, "error", assocErr)
+	} else if assocStale > 0 {
+		c.Log.Warn("addon associations disagree with their apps' stored config",
+			"stale", assocStale, "checked", assocChecked)
+	}
+
 	// Set up addon registry and register providers.
 	addonRegistry := addon.NewRegistry()
 	addonFw := addon.NewProviderFramework(c.Log, ec, eac, saga.NewEntityStorage(etcdStore, c.Log))
