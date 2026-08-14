@@ -1058,3 +1058,73 @@ func TestExecutor_ConcurrentExecuteDoesNotDriveTheSameRunTwice(t *testing.T) {
 	assert.Equal(t, StatusCompleted, exec.Status)
 	assert.Len(t, exec.ExecutionOrder, 1, "the action must have run exactly once")
 }
+
+// A caller that knows the recorded outcome no longer describes reality can
+// retire it. Anything else is left alone, so a caller can say what it means
+// without first reading the record.
+func TestDropIf(t *testing.T) {
+	ctx := context.Background()
+
+	save := func(t *testing.T, s Storage, id string, status Status) {
+		t.Helper()
+		require.NoError(t, s.Save(ctx, &Execution{ID: id, DefinitionName: "d", Status: status}))
+	}
+	exists := func(t *testing.T, s Storage, id string) bool {
+		t.Helper()
+		_, err := s.Get(ctx, id)
+		return err == nil
+	}
+
+	t.Run("failed is dropped, completed is not", func(t *testing.T) {
+		s := NewMemoryStorage()
+		save(t, s, "a", StatusFailed)
+		save(t, s, "b", StatusCompleted)
+		require.NoError(t, DropIfFailed(ctx, s, "a"))
+		require.NoError(t, DropIfFailed(ctx, s, "b"))
+		assert.False(t, exists(t, s, "a"))
+		assert.True(t, exists(t, s, "b"))
+	})
+
+	t.Run("completed is dropped, running is not", func(t *testing.T) {
+		s := NewMemoryStorage()
+		save(t, s, "a", StatusCompleted)
+		save(t, s, "b", StatusRunning)
+		require.NoError(t, DropIfCompleted(ctx, s, "a"))
+		require.NoError(t, DropIfCompleted(ctx, s, "b"))
+		assert.False(t, exists(t, s, "a"))
+		assert.True(t, exists(t, s, "b"), "an in-flight run must never be pulled out from under its driver")
+	})
+
+	t.Run("absent is not an error", func(t *testing.T) {
+		s := NewMemoryStorage()
+		assert.NoError(t, DropIfFailed(ctx, s, "nope"))
+		assert.NoError(t, DropIfCompleted(ctx, s, "nope"))
+	})
+}
+
+// An id collision must not run one saga's actions against another's record.
+func TestExecutor_ReExecuteRejectsADifferentDefinitionUnderTheSameName(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	require.NoError(t, Define("calc-a").Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).RegisterTo(registry))
+
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "shared-name",
+		DefinitionName:    "calc-b", // a different saga recorded under this name
+		DefinitionVersion: 1,
+		Status:            StatusRunning,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}))
+
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err := executor.Start("calc-a").Input("a", 2).Input("b", 3).
+		WithID("shared-name").Execute(ctx)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "calc-b")
+	assert.Empty(t, ctrl.addCalls, "and no action runs against the other saga's record")
+}

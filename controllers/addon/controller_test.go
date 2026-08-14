@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/saga"
 )
 
 func TestAddonNameFromRef(t *testing.T) {
@@ -196,9 +197,56 @@ func setupControllerTest(t *testing.T) (context.Context, *Controller, *entityser
 		},
 	})
 
-	ctrl := NewController(slog.Default(), ec, inmem.EAC, registry)
+	// Tests that care reach this back through ctrl.sagaStorage.
+	ctrl := NewController(slog.Default(), ec, inmem.EAC, registry, saga.NewMemoryStorage())
 
 	return ctx, ctrl, ec, provider
+}
+
+// Naming a teardown after its association makes a failed one permanent unless
+// something retires the record: Execute would replay the recorded error on
+// every later pass and never call the provider again, so `addon destroy` would
+// be one-shot. Every undo in these sagas is a no-op, so a failed run left its
+// resources in place and a retry has only more to do.
+func TestDeprovisionRetriesAfterAFailedTeardownSaga(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{
+		Name: "miren-postgresql",
+	})
+	require.NoError(t, err)
+
+	assocID, err := ec.Create(ctx, "test-assoc", &addon_v1alpha.AddonAssociation{
+		App:     appID,
+		Addon:   addonID,
+		Variant: "small",
+		Status:  "deprovisioning",
+	})
+	require.NoError(t, err)
+
+	// What an earlier teardown that gave up leaves behind.
+	require.NoError(t, ctrl.sagaStorage.Save(ctx, &saga.Execution{
+		ID:             addon.DeprovisionExecutionID(assocID),
+		DefinitionName: "deprovision-dedicated-postgresql",
+		Status:         saga.StatusFailed,
+		Error:          "engine unreachable",
+	}))
+
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, assocID, &assoc)
+	require.NoError(t, err)
+
+	require.NoError(t, ctrl.Reconcile(ctx, &assoc, meta))
+
+	// The load-bearing assertion. The provider here is a mock that never runs a
+	// saga, so it would be called either way; what decides whether a real one
+	// re-runs is whether the failed record is still sitting under that name.
+	_, err = ctrl.sagaStorage.Get(ctx, addon.DeprovisionExecutionID(assocID))
+	assert.ErrorIs(t, err, saga.ErrExecutionNotFound,
+		"a failed teardown record must be retired so the next Execute runs the saga")
+
+	assert.True(t, provider.deprovisionCalled, "and the teardown still reaches the provider")
 }
 
 // getMeta fetches an entity by ID and returns both the decoded struct and a Meta
@@ -247,11 +295,6 @@ func TestProvisionCompensatesOnPostProvisionFailure(t *testing.T) {
 	assert.True(t, provider.deprovisionCalled, "Deprovision should have been called as compensation after post-provision failure")
 }
 
-// TestProvisionSkipsWhenAssociationNoLongerPending verifies the pre-flight
-// re-read: if a stale Reconcile event routes through provision() but the
-// association has since moved to "deprovisioning" (e.g. on startup resync
-// after the user ran `addon destroy`), provision() must be a no-op so the
-// subsequent deprovisioning event can run.
 // MIR-1524 itself. provision() writes "provisioning" before the work starts, so
 // a coordinator that dies partway leaves the association sitting on it. The
 // switch had no case for that value, so every later pass fell through and
@@ -292,6 +335,11 @@ func TestReconcileResumesAnInterruptedProvision(t *testing.T) {
 	assert.Equal(t, "active", staged.Status, "and run through to a settled status")
 }
 
+// TestProvisionSkipsWhenAssociationNoLongerPending verifies the pre-flight
+// re-read: if a stale Reconcile event routes through provision() but the
+// association has since moved to "deprovisioning" (e.g. on startup resync
+// after the user ran `addon destroy`), provision() must be a no-op so the
+// subsequent deprovisioning event can run.
 func TestProvisionSkipsWhenAssociationNoLongerPending(t *testing.T) {
 	ctx, ctrl, ec, provider := setupControllerTest(t)
 

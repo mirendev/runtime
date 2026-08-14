@@ -595,6 +595,16 @@ func (e *Executor) Recover(ctx context.Context) error {
 // retrying that is a decision for whoever owns the operation, not something to
 // do implicitly under the same name.
 func (e *Executor) resume(ctx context.Context, def *Definition, exec *Execution) error {
+	// A name that means one saga to the caller and another to the record is an
+	// id collision, and resuming across it would run this definition's actions
+	// against the other's recorded outputs. Naming executions after entities
+	// makes collisions the thing worth guarding, so this is an error rather
+	// than the warning a version skew gets.
+	if def.Name != exec.DefinitionName {
+		return fmt.Errorf("execution %q belongs to saga %q, not %q",
+			exec.ID, exec.DefinitionName, def.Name)
+	}
+
 	if def.Version != exec.DefinitionVersion {
 		e.log.Warn("saga definition version mismatch",
 			"saga", exec.DefinitionName,

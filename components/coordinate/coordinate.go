@@ -1302,7 +1302,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 
 	// Add addon controller (reconciles addon associations for provisioning/deprovisioning)
-	addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry)
+	addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry, addonFw.Storage)
 	if err := addonController.Init(ctx); err != nil {
 		c.Log.Error("failed to initialize addon controller", "error", err)
 		return err

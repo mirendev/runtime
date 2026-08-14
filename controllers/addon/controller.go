@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/saga"
 )
 
 // Controller reconciles AddonAssociation entities, driving provisioning
@@ -26,6 +27,11 @@ type Controller struct {
 	ec       *entityserver.Client
 	eac      *entityserver_v1alpha.EntityAccessClient
 	registry *addon.Registry
+
+	// Providers build their own executors, so this is not for running sagas.
+	// It is here so the controller can retire a teardown record it owns; see
+	// deprovision.
+	sagaStorage saga.Storage
 }
 
 // NewController creates a new addon controller.
@@ -34,12 +40,14 @@ func NewController(
 	ec *entityserver.Client,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	registry *addon.Registry,
+	sagaStorage saga.Storage,
 ) *Controller {
 	return &Controller{
-		log:      log.With("module", "addon"),
-		ec:       ec,
-		eac:      eac,
-		registry: registry,
+		log:         log.With("module", "addon"),
+		ec:          ec,
+		eac:         eac,
+		registry:    registry,
+		sagaStorage: sagaStorage,
 	}
 }
 
@@ -135,6 +143,14 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 	// just created. If compensation also fails, return the error without
 	// setting terminal "error" status so the controller retries.
 	if err := c.completeProvision(ctx, assoc, meta, provider, result); err != nil {
+		// Same reasoning as deprovision(): this compensation runs the teardown
+		// saga under the association's name, so a failed one would answer every
+		// later attempt from its own record and the retry promised above would
+		// never actually run.
+		if dropErr := saga.DropIfFailed(ctx, c.sagaStorage,
+			addon.DeprovisionExecutionID(assoc.ID)); dropErr != nil {
+			return fmt.Errorf("clearing failed teardown record: %w", dropErr)
+		}
 		depErr := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
 		if depErr != nil {
 			c.log.Error("compensation deprovision failed, will retry",
@@ -221,6 +237,19 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 	provider, _, ok := c.registry.Get(addonName)
 	if !ok {
 		return c.setError(meta, fmt.Errorf("unknown addon %q", addonName))
+	}
+
+	// Naming the execution after the association makes a teardown resumable,
+	// but it also makes a failed one permanent: Execute would hand back the
+	// recorded error on every later pass, so `addon destroy` would be one-shot
+	// until saga retention freed the name. Retrying a compensated saga is the
+	// owner's decision, and for teardown the controller is that owner. Every
+	// undo in these sagas is a no-op, so a failed run tore nothing down and put
+	// nothing back; a fresh attempt has strictly more to do, never something to
+	// redo.
+	if err := saga.DropIfFailed(ctx, c.sagaStorage,
+		addon.DeprovisionExecutionID(assoc.ID)); err != nil {
+		return fmt.Errorf("clearing failed teardown record: %w", err)
 	}
 
 	// Step 1: Call provider.Deprovision

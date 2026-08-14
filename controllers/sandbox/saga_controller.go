@@ -22,6 +22,7 @@ type SagaSandboxController struct {
 	inner    *SandboxController
 	ops      *sandboxOps
 	executor *saga.Executor
+	storage  saga.Storage
 	registry *saga.Registry
 	log      *slog.Logger
 }
@@ -47,6 +48,7 @@ func NewSagaSandboxController(
 		inner:    inner,
 		ops:      &sandboxOps{ctrl: inner},
 		executor: executor,
+		storage:  storage,
 		registry: registry,
 		log:      log.With("module", "saga-sandbox-controller"),
 	}, nil
@@ -167,9 +169,19 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox) error {
 	s.log.Info("creating sandbox via saga", "id", co.ID)
 
+	execID := fmt.Sprintf("create-sandbox-%s", co.ID)
+
+	// We only get here once CheckSandbox has found the containers missing, so a
+	// record of a previous successful creation describes resources that are no
+	// longer there. Left in place it would resume straight to success and the
+	// sandbox would never be rebuilt, which the old overwrite-on-start hid.
+	if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
+		return fmt.Errorf("clearing stale creation record: %w", err)
+	}
+
 	err := s.executor.Start(sagaCreateSandbox).
 		Input("sandbox_id", co.ID.String()).
-		WithID(fmt.Sprintf("create-sandbox-%s", co.ID)).
+		WithID(execID).
 		Execute(ctx)
 
 	if errors.Is(err, saga.ErrExecutionInProgress) {
