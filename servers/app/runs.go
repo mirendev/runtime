@@ -321,7 +321,7 @@ func (r *AppInfo) resolveActiveConfig(ctx context.Context, versionID entity.Id) 
 		return nil, fmt.Errorf("reading active version: %w", err)
 	}
 
-	cfgSpec, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &ver)
+	cfgSpec, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &ver)
 	if err != nil {
 		return nil, fmt.Errorf("resolving config: %w", err)
 	}

@@ -52,7 +52,7 @@ func SandboxPoolList(ctx *Context, opts struct {
 		if sid := e.Entity().ShortId(); sid != "" {
 			versionShortIdMap[v.ID.String()] = sid
 		}
-		if resolvedCfg, err := coreutil.ResolveConfig(ctx, eac, v); err == nil {
+		if resolvedCfg, err := coreutil.ResolveRuntimeConfig(ctx, eac, v); err == nil {
 			specMap[v.ID.String()] = resolvedCfg
 		}
 	}

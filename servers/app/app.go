@@ -180,7 +180,7 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 			if verEnt, err := r.EC.GetByIdWithEntity(ctx, entity.Id(app.ActiveVersion), &appVer); err == nil {
 				entry.activeVersion = &appVer
 				entry.activeVersionEntity = verEnt
-				if resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer); err == nil {
+				if resolvedCfg, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &appVer); err == nil {
 					specMap[appVer.ID.String()] = resolvedCfg
 				}
 			}
@@ -532,7 +532,7 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		return fmt.Errorf("app has no active version")
 	}
 
-	spec, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer)
+	spec, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &appVer)
 	if err != nil {
 		return fmt.Errorf("failed to resolve config: %w", err)
 	}
@@ -817,7 +817,7 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 			r.Log.Warn("failed to get active version, skipping desired instance restore",
 				"version", appRec.ActiveVersion, "error", err)
 		} else {
-			spec, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &ver)
+			spec, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &ver)
 			if err != nil {
 				r.Log.Warn("failed to resolve config, skipping desired instance restore", "error", err)
 			} else {
