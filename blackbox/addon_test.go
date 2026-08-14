@@ -3,6 +3,7 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -297,4 +298,109 @@ func TestAddonUnknownAddon(t *testing.T) {
 	if r.Success() {
 		t.Fatal("expected addon create to fail for unknown addon")
 	}
+}
+
+// TestAddonEnvSurvivesDeployVersion covers MIR-1579.
+//
+// An addon's variables belong to the app, not to any one build, so no version
+// has to have been built with them. Re-activating a version that does not carry
+// DATABASE_URL — which `deploy -V` does, and which is the natural recovery step
+// after a first deploy whose health check failed — used to leave the app without
+// its database credentials permanently. Nothing restored them: not a rebuild,
+// not `app restart`. The only known recovery was destroying the addon, which
+// drops the database.
+//
+// This is the sequence two operators hit independently on two clusters.
+func TestAddonEnvSurvivesDeployVersion(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "go-server",
+	})
+	appDir := m.ContainerPath(filepath.Join(c.TestdataDir, "go-server"))
+
+	// The version built before the addon exists — the one a failed first deploy
+	// names in its error, and the one an operator passes to -V.
+	preAddonVersion := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+	t.Logf("pre-addon version: %s", preAddonVersion)
+
+	m.MustRun("addon", "create", "miren-postgresql:small", "-a", name)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
+
+	// Captured now, asserted at the end: attaching an addon contributes a binding
+	// without minting a version. Checking it here would mask the defect this test
+	// is really about, because a build that predates the addon fails the
+	// DATABASE_URL assertions below whether or not a version was minted.
+	versionAfterAttach := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+
+	// Rebuild so there is a genuinely different version to come back from.
+	m.MustRun("deploy", "-a", name, "-d", appDir, "-f")
+	harness.WaitForAppReady(t, m, name, 2*time.Minute)
+
+	rebuilt := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+	if rebuilt == preAddonVersion {
+		t.Fatalf("expected the rebuild to produce a new version, still on %s", preAddonVersion)
+	}
+
+	// The bug trigger.
+	m.MustRun("deploy", "-a", name, "-V", preAddonVersion, "-f")
+	harness.WaitForAppReady(t, m, name, 2*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 2*time.Minute)
+
+	// Specifically DATABASE_URL's source, not just the word "addon" somewhere in
+	// the table: deprovision only strips keys whose source is exactly "addon",
+	// so a relabelled var would be leaked when the addon is removed.
+	r := m.MustRun("env", "list", "-a", name, "--format", "json")
+	if got := envVarSource(t, r.Stdout, "DATABASE_URL"); got != "addon" {
+		t.Errorf("DATABASE_URL source = %q, want \"addon\"; a relabelled var leaks on addon destroy:\n%s", got, r.Stdout)
+	}
+
+	// And the operator got the version they asked for, not one derived from it.
+	if got := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name); got != preAddonVersion {
+		t.Errorf("active version = %q, want %q; `deploy -V` must activate the named version, not a derivative",
+			got, preAddonVersion)
+	}
+
+	// The other half of the same defect: once the app was on a version without
+	// the binding, nothing put it back. `app restart` re-launched the same
+	// configuration and a rebuild copied config forward from whatever was
+	// active. Restarting while on the re-activated version is the case that used
+	// to stay broken.
+	m.MustRun("app", "restart", "-a", name)
+	harness.WaitForAppReady(t, m, name, 2*time.Minute)
+	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 2*time.Minute)
+
+	r = m.MustRun("env", "list", "-a", name, "--format", "json")
+	if got := envVarSource(t, r.Stdout, "DATABASE_URL"); got != "addon" {
+		t.Errorf("DATABASE_URL source = %q, want \"addon\" after restart:\n%s", got, r.Stdout)
+	}
+
+	// The binding is resolved rather than stored, so attaching the addon never
+	// had to mint a version to carry it.
+	if versionAfterAttach != preAddonVersion {
+		t.Errorf("version after attaching addon = %q, want %q; a binding must not require a new version",
+			versionAfterAttach, preAddonVersion)
+	}
+}
+
+// envVarSource pulls one variable's source out of `env list --format json`.
+func envVarSource(t *testing.T, jsonOutput, key string) string {
+	t.Helper()
+
+	var vars []struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(jsonOutput), &vars); err != nil {
+		t.Fatalf("failed to parse env list JSON: %v", err)
+	}
+	for _, v := range vars {
+		if v.Name == key {
+			return v.Source
+		}
+	}
+	t.Fatalf("env var %s not found in env list", key)
+	return ""
 }
