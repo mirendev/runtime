@@ -64,6 +64,18 @@ type addClusterOptions struct {
 	viaCloud bool
 }
 
+// announceClusterAdd says which cluster is being added, under what local name,
+// and how it will be reached. Shared so the three ways of getting here cannot
+// describe themselves differently, and so a path that ends up routed cannot
+// report an address it is not going to use.
+func announceClusterAdd(ctx *Context, remoteName, localName, how string) {
+	if localName != remoteName {
+		ctx.Info("Adding cluster '%s' as '%s' (%s)", remoteName, localName, how)
+		return
+	}
+	ctx.Info("Adding cluster '%s' (%s)", remoteName, how)
+}
+
 func addCluster(ctx *Context, opts addClusterOptions) error {
 	identityName, clusterName, address, force := opts.identityName, opts.clusterName, opts.address, opts.force
 
@@ -156,8 +168,19 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			return fmt.Errorf("no clusters available for your account")
 		}
 
+		// Which of the undialable clusters cloud can still reach. Asked before
+		// the picker so a cluster that works is offered as one, rather than
+		// greyed out for advertising no address it was never going to have.
+		//
+		// Skipped when the caller already said --via-cloud, since the answer
+		// would change nothing.
+		var cloudRoutable map[string]bool
+		if !opts.viaCloud {
+			cloudRoutable = cloudRoutableClusters(ctx, mainConfig, identityName, identity, clusters)
+		}
+
 		// Present cluster selection to user and get local name
-		selectedCluster, localName, err := selectClusterFromList(ctx, clusters)
+		selectedCluster, localName, err := selectClusterFromList(ctx, clusters, cloudRoutable)
 		if err != nil {
 			return err
 		}
@@ -165,16 +188,20 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		clusterName = localName
 		clusterXID = selectedCluster.XID
 
+		// A cluster nothing can dial, which cloud can reach. Routing through
+		// cloud is not a fallback here so much as the only way it was ever
+		// going to work, so it is chosen without asking.
+		if !opts.viaCloud && cloudRoutable[selectedCluster.XID] {
+			opts.viaCloud = true
+			ctx.Info("%s advertises no address this machine can dial, and cloud can reach it.", selectedCluster.Name)
+		}
+
 		if opts.viaCloud {
 			// No address, no probe, no certificate. Every one of those describes
 			// dialing the cluster, which is the thing this entry exists to avoid
 			// — and probing would just fail slowly before writing the entry that
 			// was going to work.
-			if localName != selectedCluster.Name {
-				ctx.Info("Adding cluster '%s' as '%s', routed through Miren Cloud", selectedCluster.Name, localName)
-			} else {
-				ctx.Info("Adding cluster '%s', routed through Miren Cloud", selectedCluster.Name)
-			}
+			announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 		} else {
 			// Store all available addresses
 			allAddresses = selectedCluster.APIAddresses
@@ -182,16 +209,32 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			// Try to connect to the cluster
 			workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
 			if err != nil {
-				return err
-			}
+				// It advertised addresses and none of them answered, which is
+				// the other shape of unreachable: a cluster on a network this
+				// machine is not on. Cloud may still hold a link to it, and if
+				// it does, the entry that works is the routed one.
+				online, cloudErr := clusterOnlineInCloud(ctx, mainConfig, identityName, identity, selectedCluster.XID)
+				if cloudErr != nil {
+					ctx.Warn("Could not ask cloud whether it can reach %s: %v", selectedCluster.Name, cloudErr)
+				}
+				if !online {
+					return err
+				}
 
-			clusterCert = cert
-			address = workingAddress
+				ctx.Info("Could not reach %s directly, but cloud has a link to it.", selectedCluster.Name)
 
-			if localName != selectedCluster.Name {
-				ctx.Info("Adding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
+				// The address and certificate belong to a route that does not
+				// work from here. Keeping either would write an entry that
+				// looks dialable and is not.
+				opts.viaCloud = true
+				allAddresses = nil
+
+				announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 			} else {
-				ctx.Info("Adding cluster '%s' (connected to %s)", selectedCluster.Name, workingAddress)
+				clusterCert = cert
+				address = workingAddress
+
+				announceClusterAdd(ctx, selectedCluster.Name, localName, "connected to "+workingAddress)
 			}
 		}
 	} else if opts.viaCloud {

@@ -51,6 +51,12 @@ const (
 	// port is what's necessary and sufficient, not TCP) and points at the
 	// on-host diagnostic that reproduces the exact decision.
 	unreachableAddressHelp = "open UDP 8443 (QUIC) on the host or set additional_ips, then restart miren; run 'miren debug advertise' on the host to see why"
+
+	// viaCloudNote replaces that note for a cluster nothing can dial but cloud
+	// can still reach. Not a degraded state to remediate: it is a working
+	// cluster on a network that does not accept inbound connections, which is a
+	// reasonable way to run one.
+	viaCloudNote = "via Miren Cloud"
 )
 
 // printUnreachableClustersHelp prints a warning header, a bulleted list of the
@@ -252,6 +258,128 @@ func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityN
 	return response.Clusters, nil
 }
 
+// clusterOnlineInCloud asks cloud whether it currently holds a link to a
+// cluster, which is the precondition for relaying RPC to it.
+//
+// This is what separates "you cannot dial this cluster, and nothing else can
+// either" from "you cannot dial it, but cloud can". The first is a dead end
+// worth saying so about; the second is a cluster that works fine once the
+// config says to route through cloud.
+func clusterOnlineInCloud(
+	ctx *Context,
+	config *clientconfig.Config,
+	identityName string,
+	identity *clientconfig.IdentityConfig,
+	clusterXID string,
+) (bool, error) {
+	if identity == nil || clusterXID == "" {
+		return false, nil
+	}
+
+	issuerURL := identity.Issuer
+	if issuerURL == "" {
+		return false, fmt.Errorf("identity has no issuer configured")
+	}
+
+	token, err := config.TokenForIdentity(ctx, identityName, identity, issuerURL)
+	if err != nil {
+		return false, fmt.Errorf("failed to authenticate: %w", err)
+	}
+
+	onlineURL, err := url.JoinPath(issuerURL, "/api/v1/clusters/", clusterXID, "/online")
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", onlineURL, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	// Short, because this runs while somebody is waiting at a prompt and a slow
+	// answer is worth no more than no answer: either way we fall back to
+	// treating the cluster as unroutable.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("cloud returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var response struct {
+		Online bool `json:"online"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return false, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return response.Online, nil
+}
+
+// cloudRoutableClusters reports which of the given clusters cannot be dialed
+// directly but can be reached through cloud, keyed by XID.
+//
+// Only the ones advertising no address are asked about, which is both the case
+// this exists for and a bound on how many requests a picker costs.
+//
+// An error on any single check is not fatal, since the cluster simply does not
+// get offered as cloud-routable, which is what a "no" would have produced. It
+// is still reported once at the end rather than swallowed: about to be told a
+// cluster is unusable, it matters whether that is cloud's answer or cloud
+// failing to give one.
+func cloudRoutableClusters(
+	ctx *Context,
+	config *clientconfig.Config,
+	identityName string,
+	identity *clientconfig.IdentityConfig,
+	clusters []ClusterResponse,
+) map[string]bool {
+	routable := make(map[string]bool)
+
+	var (
+		unchecked []string
+		lastErr   error
+	)
+
+	for _, cluster := range clusters {
+		if cluster.hasReachableAddress() || cluster.XID == "" {
+			continue
+		}
+
+		online, err := clusterOnlineInCloud(ctx, config, identityName, identity, cluster.XID)
+		if err != nil {
+			unchecked = append(unchecked, cluster.Name)
+			lastErr = err
+			continue
+		}
+		if online {
+			routable[cluster.XID] = true
+		}
+	}
+
+	if len(unchecked) > 0 {
+		ctx.Warn("Could not ask cloud whether %s reachable through it (%v); treating as not reachable.",
+			plural(unchecked), lastErr)
+	}
+
+	return routable
+}
+
+// plural renders a short list of names for a one-line message.
+func plural(names []string) string {
+	if len(names) == 1 {
+		return fmt.Sprintf("%s is", names[0])
+	}
+	return fmt.Sprintf("%s are", strings.Join(names, ", "))
+}
+
 // buildClusterPickerItems turns the fetched clusters into picker rows. Every
 // cluster gets a row: reachable ones show their primary address (sorted so a
 // public address wins) and are selectable; unreachable ones (no advertised
@@ -260,7 +388,7 @@ func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityN
 // the source cluster, the set of disabled row IDs, and the count of selectable
 // (reachable) clusters. Kept pure so the classification is unit-testable
 // without standing up a TUI. See MIR-1316.
-func buildClusterPickerItems(clusters []ClusterResponse) (items []ui.PickerItem, clusterMap map[string]*ClusterResponse, disabled map[string]bool, reachableCount int) {
+func buildClusterPickerItems(clusters []ClusterResponse, cloudRoutable map[string]bool) (items []ui.PickerItem, clusterMap map[string]*ClusterResponse, disabled map[string]bool, reachableCount int) {
 	items = make([]ui.PickerItem, 0, len(clusters))
 	clusterMap = make(map[string]*ClusterResponse)
 	disabled = make(map[string]bool)
@@ -278,6 +406,13 @@ func buildClusterPickerItems(clusters []ClusterResponse) (items []ui.PickerItem,
 			if len(addresses) > 1 {
 				address = fmt.Sprintf("%s (+%d)", address, len(addresses)-1)
 			}
+		} else if cloudRoutable[cluster.XID] {
+			// Selectable, because it can be used: the entry will route through
+			// cloud rather than dialing. Counted as reachable for the same
+			// reason, since that count only exists to decide whether the picker
+			// has anything to offer.
+			reachableCount++
+			address = viaCloudNote
 		} else {
 			address = unreachableAddressNote
 			disabled[itemID] = true
@@ -299,7 +434,7 @@ func buildClusterPickerItems(clusters []ClusterResponse) (items []ui.PickerItem,
 
 // selectClusterFromList presents an interactive list of clusters for selection and prompts for local name
 // Returns the selected cluster and the local name to use
-func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterResponse, string, error) {
+func selectClusterFromList(ctx *Context, clusters []ClusterResponse, cloudRoutable map[string]bool) (*ClusterResponse, string, error) {
 	// Check if we can run interactive mode
 	if !ui.IsInteractive() {
 		// Non-interactive mode - list clusters and exit. We list clusters with no
@@ -321,6 +456,8 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 				if cluster.CACertFingerprint != "" {
 					ctx.Printf("   Certificate Fingerprint: %s\n", cluster.CACertFingerprint)
 				}
+			} else if cloudRoutable[cluster.XID] {
+				ctx.Printf("   Status: %s (no direct route, but cloud can reach it)\n", viaCloudNote)
 			} else {
 				ctx.Printf("   Status: %s — %s\n", unreachableAddressNote, unreachableAddressHelp)
 			}
@@ -330,11 +467,12 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse) (*ClusterRe
 		return nil, "", fmt.Errorf("interactive mode not available")
 	}
 
-	// Build the picker rows. Clusters with no reachable address are listed too,
-	// but disabled (greyed out, not selectable) with the reason inline, rather
-	// than hidden — a silently missing cluster reads as an auth/org problem and
-	// sends users chasing the wrong thing. See MIR-1316.
-	items, clusterMap, disabled, reachableCount := buildClusterPickerItems(clusters)
+	// Build the picker rows. A cluster with no reachable address that cloud can
+	// still reach is selectable and annotated, because it works. One nothing can
+	// reach is listed but disabled, with the reason inline rather than hidden —
+	// a silently missing cluster reads as an auth or org problem and sends users
+	// chasing the wrong thing. See MIR-1316.
+	items, clusterMap, disabled, reachableCount := buildClusterPickerItems(clusters, cloudRoutable)
 
 	// If nothing is selectable, a picker is a dead end. Print the clusters with
 	// their reason and return a clear error instead of trapping the user in a

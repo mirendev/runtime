@@ -25,13 +25,27 @@ firewall rule to add.
 
 ## Setting one up
 
+Usually you do not have to do anything. `miren cluster add` picks this route on
+its own when it is the one that works:
+
+```bash
+miren cluster add
+```
+
+If the cluster you pick advertises no address your machine can dial, or
+advertises addresses that do not answer, the command asks cloud whether it has a
+link to that cluster. If it does, the entry is written to route through cloud
+and it tells you so. A cluster that neither you nor cloud can reach still fails,
+because that is a real problem rather than a routing choice.
+
+To skip the direct attempt entirely, ask for it:
+
 ```bash
 miren cluster add --via-cloud
 ```
 
-With no address to dial, the command looks your clusters up in cloud and asks
-which one you mean. You need to be logged in first (`miren login`), and the
-cluster needs to be registered with cloud and online.
+Either way you need to be logged in first (`miren login`), and the cluster needs
+to be registered with cloud and online.
 
 After that, use it like any other cluster:
 
