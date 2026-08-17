@@ -61,8 +61,11 @@ var httpingressTracer = otel.Tracer("miren.dev/runtime/httpingress")
 
 const (
 	timeoutMessage = "Request timeout"
-	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot
-	// This is longer than request timeout to prevent dangling resources
+	// leaseAcquisitionTimeout is the maximum time to wait for sandbox boot.
+	// It runs on its own context rather than the request's, so a client that
+	// gives up first still leaves a booting sandbox to finish rather than
+	// stranding it. Unrelated to the request timeout, which a route can now
+	// raise past this.
 	leaseAcquisitionTimeout = 2 * time.Minute
 	// minLeaseTTL is the minimum time a lease is kept in cache after its last
 	// use before it becomes eligible for eviction. This prevents low-traffic
@@ -88,6 +91,13 @@ type Server struct {
 
 	aa        activator.AppActivator
 	transport http.RoundTripper
+
+	// transports memoizes one proxy transport per distinct per-route timeout
+	// override. Each needs its own connection pool: Go keys pooled connections
+	// by (scheme, host) only, so a connection dialed under a 10m idle deadline
+	// would otherwise be handed to a request that wants the 60s default.
+	transportMu sync.Mutex
+	transports  map[time.Duration]http.RoundTripper
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -134,19 +144,6 @@ func NewServer(
 		config.RequestTimeout = 60 * time.Second
 	}
 
-	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
-	baseTransport.ResponseHeaderTimeout = config.RequestTimeout
-	baseTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		conn, err := (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		return &idleTimeoutConn{Conn: conn, idleTimeout: config.RequestTimeout}, nil
-	}
-
 	var signingKey []byte
 	if config.DataPath != "" {
 		var err error
@@ -164,7 +161,8 @@ func NewServer(
 		ingressClient:      ingress.NewClient(log, rpcClient),
 		appClient:          app.NewClient(log, rpcClient),
 		aa:                 aa,
-		transport:          baseTransport,
+		transport:          newProxyTransport(config.RequestTimeout),
+		transports:         make(map[time.Duration]http.RoundTripper),
 		httpMetrics:        httpMetrics,
 		logWriter:          logWriter,
 		apps:               make(map[string]*appUsage),
@@ -187,6 +185,66 @@ func NewServer(
 	go serv.watchInvalidations(ctx)
 
 	return serv
+}
+
+// newProxyTransport builds a transport that gives up on a proxied request once
+// it has been silent for timeout. Two knobs enforce that: ResponseHeaderTimeout
+// bounds the wait for the app's response headers, and idleTimeoutConn bounds
+// the gap between reads once bytes are flowing.
+func newProxyTransport(timeout time.Duration) http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = timeout
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &idleTimeoutConn{Conn: conn, idleTimeout: timeout}, nil
+	}
+	return t
+}
+
+// transportFor returns the transport enforcing the given request timeout,
+// building and memoizing one the first time a route asks for a value other than
+// the server default. The number of distinct transports is bounded by the
+// number of distinct per-route overrides an operator has configured.
+func (h *Server) transportFor(timeout time.Duration) http.RoundTripper {
+	if timeout <= 0 || timeout == h.config.RequestTimeout {
+		return h.transport
+	}
+
+	h.transportMu.Lock()
+	defer h.transportMu.Unlock()
+
+	if t, ok := h.transports[timeout]; ok {
+		return t
+	}
+
+	h.Log.Info("building proxy transport for per-route request timeout", "timeout", timeout)
+	t := newProxyTransport(timeout)
+	h.transports[timeout] = t
+	return t
+}
+
+// routeRequestTimeout resolves a route's request timeout override, falling back
+// to the server default (0 here, which transportFor reads as "use the default")
+// on empty, invalid, or non-positive values. SetRouteRequestTimeout rejects
+// those at the write boundary, so a typo can only arrive by editing the entity
+// directly, and quietly ignoring it beats failing the request.
+func routeRequestTimeout(route *ingress_v1alpha.HttpRoute) time.Duration {
+	if route == nil || route.RequestTimeout == "" {
+		return 0
+	}
+
+	d, err := time.ParseDuration(route.RequestTimeout)
+	if err != nil || d <= 0 {
+		return 0
+	}
+
+	return d
 }
 
 // watchInvalidations listens for sandbox invalidation signals from the
@@ -567,9 +625,11 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 	}
 
+	requestTimeout := routeRequestTimeout(route)
+
 	// Compose middleware chain: WAF → auth → serve
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName)
+		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName, requestTimeout)
 	}
 
 	handler = h.authMiddleware(route, handler)
@@ -642,7 +702,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string, requestTimeout time.Duration) {
 	ctx := req.Context()
 
 	// Get app details first to have the name for metrics
@@ -697,7 +757,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			req = req.WithContext(ctx)
 			// On non-final attempts, suppress error response so we can retry
 			writeErr := attempt == maxRetries
-			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr)
+			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr, requestTimeout)
 			if err != nil && isProxyConnectionError(err) {
 				// Cached lease pointed at a dead sandbox — invalidate all app
 				// leases (they likely all point to the same dead sandbox) and retry
@@ -790,7 +850,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)
-		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true)
+		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true, requestTimeout)
 		if err != nil {
 			// Connection error on a fresh lease - the sandbox may have died
 			// between lease acquisition and proxy. Invalidate immediately.
@@ -843,7 +903,7 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 // captures the error but does NOT write to the ResponseWriter, allowing the caller
 // to retry with a fresh lease. This is safe because connection errors happen during
 // TCP dial, before any response bytes are sent.
-func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool) error {
+func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
@@ -855,7 +915,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	var proxyErr error
 
 	proxy := &httputil.ReverseProxy{
-		Transport: h.transport,
+		Transport: h.transportFor(requestTimeout),
 		Director: func(outReq *http.Request) {
 			outReq.URL.Scheme = targetParsed.Scheme
 			outReq.URL.Host = targetParsed.Host

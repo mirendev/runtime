@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -554,5 +555,50 @@ func (c *Client) DetachWAFProfileFromRoute(ctx context.Context, route *ingress_v
 	}
 
 	route.WafProfile = ""
+	return route, nil
+}
+
+// SetRouteRequestTimeout sets the per-route ingress request timeout override.
+// The timeout is stored as a duration string (e.g. "10m") and must parse to a
+// positive duration.
+func (c *Client) SetRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute, timeout string) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+
+	d, err := time.ParseDuration(timeout)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request timeout %q: %w", timeout, err)
+	}
+	if d <= 0 {
+		return nil, fmt.Errorf("request timeout must be positive, got %q", timeout)
+	}
+
+	err = c.ec.Patch(ctx, route.ID, 0,
+		entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, timeout),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set request timeout on route: %w", err)
+	}
+
+	route.RequestTimeout = timeout
+	return route, nil
+}
+
+// ClearRouteRequestTimeout removes the per-route timeout override, so the route
+// falls back to the server-wide http_request_timeout.
+func (c *Client) ClearRouteRequestTimeout(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+
+	err := c.ec.Patch(ctx, route.ID, 0,
+		entity.String(ingress_v1alpha.HttpRouteRequestTimeoutId, ""),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clear request timeout on route: %w", err)
+	}
+
+	route.RequestTimeout = ""
 	return route, nil
 }

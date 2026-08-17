@@ -349,3 +349,83 @@ func TestValidateWildcardHost(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteRequestTimeout(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	client := &Client{
+		log: slog.Default(),
+		ec:  ec,
+		eac: inmem.EAC,
+	}
+
+	testAppID := entity.Id("test-app-timeout")
+	const host = "timeout.example.com"
+
+	_, err := client.SetRoute(ctx, host, testAppID)
+	require.NoError(t, err)
+
+	// SetRoute returns the struct it wrote, which has no entity ID; the helpers
+	// patch by ID, so work from a looked-up route.
+	route, err := client.Lookup(ctx, host)
+	require.NoError(t, err)
+	require.Empty(t, route.RequestTimeout, "a fresh route carries no override")
+
+	t.Run("SetAndOverwrite", func(t *testing.T) {
+		_, err := client.SetRouteRequestTimeout(ctx, route, "10m")
+		require.NoError(t, err)
+
+		got, err := client.Lookup(ctx, host)
+		require.NoError(t, err)
+		require.Equal(t, "10m", got.RequestTimeout)
+
+		_, err = client.SetRouteRequestTimeout(ctx, got, "300s")
+		require.NoError(t, err)
+
+		got, err = client.Lookup(ctx, host)
+		require.NoError(t, err)
+		require.Equal(t, "300s", got.RequestTimeout)
+	})
+
+	t.Run("RejectsInvalidDurations", func(t *testing.T) {
+		// Establish a known value rather than inheriting whatever an earlier
+		// subtest happened to leave behind.
+		_, err := client.SetRouteRequestTimeout(ctx, route, "45s")
+		require.NoError(t, err)
+
+		for _, bad := range []string{"10", "forever", "0s", "-5m"} {
+			_, err := client.SetRouteRequestTimeout(ctx, route, bad)
+			require.Error(t, err, "expected %q to be rejected", bad)
+		}
+
+		// The rejected writes must not have disturbed the stored value.
+		got, err := client.Lookup(ctx, host)
+		require.NoError(t, err)
+		require.Equal(t, "45s", got.RequestTimeout)
+	})
+
+	t.Run("ClearLeavesOtherFieldsIntact", func(t *testing.T) {
+		// Clearing an already-empty override would pass vacuously, so set one.
+		_, err := client.SetRouteRequestTimeout(ctx, route, "90s")
+		require.NoError(t, err)
+
+		withWAF, err := client.SetRouteWAFLevel(ctx, host, 2)
+		require.NoError(t, err)
+		require.NotEmpty(t, withWAF.WafProfile)
+		require.Equal(t, "90s", withWAF.RequestTimeout, "precondition: an override is in place")
+
+		_, err = client.ClearRouteRequestTimeout(ctx, withWAF)
+		require.NoError(t, err)
+
+		got, err := client.Lookup(ctx, host)
+		require.NoError(t, err)
+		require.Empty(t, got.RequestTimeout, "override should be gone")
+		require.Equal(t, withWAF.WafProfile, got.WafProfile, "clearing must not disturb the WAF profile")
+		require.Equal(t, testAppID, got.App)
+		require.Equal(t, host, got.Host)
+	})
+}

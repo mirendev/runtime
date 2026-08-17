@@ -15,6 +15,9 @@ kinds:
       type: bool
       indexed: true
       doc: Whether this is the default route for routing
+    request_timeout:
+      type: string
+      doc: Per-route override for the ingress request timeout (e.g. "10m", "300s"). Empty falls back to the server's http_request_timeout (default 60s). Must be a positive duration; invalid or non-positive values are ignored at request time.
     waf_profile:
       type: ref
       doc: Reference to a WAF profile for request filtering

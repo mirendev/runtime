@@ -39,12 +39,13 @@ func RouteList(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type RouteInfo struct {
-			Host      string `json:"host"`
-			App       string `json:"app"`
-			Default   bool   `json:"default"`
-			WafLevel  int    `json:"waf_level"`
-			CreatedAt int64  `json:"created_at"`
-			UpdatedAt int64  `json:"updated_at"`
+			Host           string `json:"host"`
+			App            string `json:"app"`
+			Default        bool   `json:"default"`
+			WafLevel       int    `json:"waf_level"`
+			RequestTimeout string `json:"request_timeout,omitempty"`
+			CreatedAt      int64  `json:"created_at"`
+			UpdatedAt      int64  `json:"updated_at"`
 		}
 
 		var routeInfos []RouteInfo
@@ -54,12 +55,13 @@ func RouteList(ctx *Context, opts struct {
 				host = "(default)"
 			}
 			routeInfos = append(routeInfos, RouteInfo{
-				Host:      host,
-				App:       string(r.Route.App),
-				Default:   r.Route.Default,
-				WafLevel:  resolveWAFLevel(r.Route),
-				CreatedAt: r.CreatedAt,
-				UpdatedAt: r.UpdatedAt,
+				Host:           host,
+				App:            string(r.Route.App),
+				Default:        r.Route.Default,
+				WafLevel:       resolveWAFLevel(r.Route),
+				RequestTimeout: r.Route.RequestTimeout,
+				CreatedAt:      r.CreatedAt,
+				UpdatedAt:      r.UpdatedAt,
 			})
 		}
 
@@ -67,7 +69,7 @@ func RouteList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "CREATED", "UPDATED"}
+	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "TIMEOUT", "CREATED", "UPDATED"}
 
 	for _, r := range routes {
 		route := r.Route
@@ -92,11 +94,17 @@ func RouteList(ctx *Context, opts struct {
 			wafDisplay = fmt.Sprintf("%d", wafLevel)
 		}
 
+		timeoutDisplay := "-"
+		if route.RequestTimeout != "" {
+			timeoutDisplay = route.RequestTimeout
+		}
+
 		rows = append(rows, ui.Row{
 			host,
 			appDisplay,
 			defaultDisplay,
 			wafDisplay,
+			timeoutDisplay,
 			humanFriendlyTimestamp(time.UnixMilli(r.CreatedAt)),
 			humanFriendlyTimestamp(time.UnixMilli(r.UpdatedAt)),
 		})

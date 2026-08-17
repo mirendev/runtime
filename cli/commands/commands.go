@@ -696,6 +696,25 @@ miren deploy --analyze
 		}),
 	))
 
+	d.Dispatch("route timeout", Infer("route timeout", "Override the ingress request timeout for an HTTP route", RouteTimeout,
+		WithExample(mflags.Example{
+			Name: "Give a long-poll route a 10-minute timeout",
+			Body: "miren route timeout example.com 10m",
+		}),
+		WithExample(mflags.Example{
+			Name: "Show the current timeout for a route",
+			Body: "miren route timeout example.com",
+		}),
+		WithExample(mflags.Example{
+			Name: "Set a timeout on the default route",
+			Body: "miren route timeout --default 5m",
+		}),
+		WithExample(mflags.Example{
+			Name: "Go back to the server default timeout",
+			Body: "miren route timeout example.com --clear",
+		}),
+	))
+
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
