@@ -1,10 +1,14 @@
 package rpc_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -423,6 +427,40 @@ func TestAdoptedMessageConn(t *testing.T) {
 		r.Contains(err.Error(), "denied by policy")
 	})
 
+	// The denial above checks what the caller is told. This checks the part that
+	// actually matters: a denied call must not reach the handler at all. The two
+	// are separable — a gate that ran the method and then reported an error
+	// would satisfy the first and be worthless.
+	t.Run("a denied call never reaches the handler", func(t *testing.T) {
+		r := require.New(t)
+		ctx := t.Context()
+
+		ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+			rpc.WithAuthenticator(&recordingAuthenticator{
+				identity: &rpc.Identity{Subject: "nobody", Method: rpc.AuthMethodJWT},
+			}),
+			rpc.WithAuthorizer(denyAll{}),
+		)
+		r.NoError(err)
+
+		var seen *rpc.Identity
+		ss.Server().ExposeValue("meter", example.AdaptMeter(&identityMeter{seen: &seen}))
+
+		cs, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithBearerToken("token"))
+		r.NoError(err)
+
+		serverEnd, clientEnd := newEnvelopePair()
+		go ss.ServeMessageConn(ctx, serverEnd) //nolint:errcheck // ends with ctx
+
+		c, err := cs.ClientFromMessageConn(ctx, clientEnd, "meter")
+		r.NoError(err)
+
+		mc := &example.MeterClient{Client: c}
+		_, err = mc.ReadTemperature(ctx, "test")
+		r.Error(err)
+		r.Nil(seen, "the handler ran despite the authorizer denying the call")
+	})
+
 	// A frame cap below the payload size forces msgmux to split a write across
 	// several messages, which is what an envelope with its own size limit needs.
 	t.Run("respects a frame size below the payload size", func(t *testing.T) {
@@ -447,3 +485,60 @@ func TestAdoptedMessageConn(t *testing.T) {
 		r.Greater(conn.count(), int64(10))
 	})
 }
+
+// The audit trail had no entry for anything arriving over a message transport,
+// because every function in audit.go took an *http.Request. A cloud-routed call
+// is precisely the one an operator would want a record of, so this checks a real
+// call over a real message session produces one, naming the session it came in
+// on rather than an address the transport does not have.
+func TestMessageTransportCallIsAudited(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify, rpc.WithLogger(log))
+	r.NoError(err)
+	ss.Server().ExposeValue("meter", example.AdaptMeter(&exampleMeter{temp: 42}))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	r.NoError(err)
+
+	serverEnd, clientEnd := newEnvelopePair()
+
+	go ss.ServeMessageConn(ctx, namedConn{serverEnd}) //nolint:errcheck // ends with ctx
+
+	c, err := cs.ClientFromMessageConn(ctx, clientEnd, "meter")
+	r.NoError(err)
+
+	mc := &example.MeterClient{Client: c}
+	_, err = mc.ReadTemperature(ctx, "test")
+	r.NoError(err)
+
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+		if rec["msg"] == "rpc access" {
+			found = rec
+			break
+		}
+	}
+
+	r.NotNil(found, "a call over a message transport produced no audit record")
+	r.Equal("cloud-relay/sess-1", found["remote"],
+		"the record must name the session the call arrived on")
+	r.Equal("ok", found["outcome"])
+}
+
+// namedConn is a MessageConn that names its far end, which is what a relayed
+// session does.
+type namedConn struct{ *envelopeConn }
+
+func (namedConn) Remote() string { return "cloud-relay/sess-1" }

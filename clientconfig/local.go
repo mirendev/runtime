@@ -287,6 +287,27 @@ func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]
 	return opts, nil
 }
 
+// CloudEndpoint returns the cloud a via-cloud cluster is reached through.
+//
+// An explicit cloud_url wins over the identity's issuer, which is what makes a
+// cluster registered with one cloud reachable through another. Exported so the
+// commands that need to name that cloud share the rule rather than restating
+// it: two copies drift, and the copy outside this package is the one nothing
+// else would catch.
+func (c *ClusterConfig) CloudEndpoint(config *Config) (string, error) {
+	if c.CloudURL != "" {
+		return c.CloudURL, nil
+	}
+
+	if config != nil && c.Identity != "" {
+		if identity, err := config.GetIdentity(c.Identity); err == nil && identity != nil && identity.Issuer != "" {
+			return identity.Issuer, nil
+		}
+	}
+
+	return "", fmt.Errorf("cluster is routed via cloud but neither it nor identity %q names a cloud", c.Identity)
+}
+
 // cloudRelay resolves where to reach the cluster through cloud, and with what.
 func (c *ClusterConfig) cloudRelay(ctx context.Context, config *Config) (endpoint, token string, err error) {
 	if c.XID == "" {
@@ -301,12 +322,9 @@ func (c *ClusterConfig) cloudRelay(ctx context.Context, config *Config) (endpoin
 		return "", "", fmt.Errorf("failed to get identity %q: %w", c.Identity, err)
 	}
 
-	cloudURL := c.CloudURL
-	if cloudURL == "" {
-		cloudURL = identity.Issuer
-	}
-	if cloudURL == "" {
-		return "", "", fmt.Errorf("cluster is routed via cloud but neither it nor identity %q names a cloud", c.Identity)
+	cloudURL, err := c.CloudEndpoint(config)
+	if err != nil {
+		return "", "", err
 	}
 
 	// A certificate identity has no bearer token, and the relay has nothing else
@@ -362,7 +380,12 @@ func cloudRPCEndpoint(cloudURL, clusterXID string, allowPlaintext bool) (string,
 			cloudURL, host)
 	}
 
-	return scheme + base + fmt.Sprintf(CloudRPCPath, clusterXID), nil
+	// Escaped because it comes from a config file. An XID holding / ? or #
+	// would otherwise redraw the URL rather than fail it, sending the request —
+	// and the bearer on it — somewhere other than the path meant here. Cloud
+	// only ever mints well-formed ones, so this needs a hand-edited config to
+	// reach, which is exactly the case where a silent redirect is worst.
+	return scheme + base + fmt.Sprintf(CloudRPCPath, url.PathEscape(clusterXID)), nil
 }
 
 // isLoopbackHost reports whether a "host" or "host:port" names this machine.

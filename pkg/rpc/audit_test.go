@@ -197,7 +197,7 @@ func TestLogAuthReject(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/_rpc/call/test/method", nil)
 	req.RemoteAddr = "203.0.113.9:5555"
 
-	logAuthReject(captureLogger(&buf), req, OID("cap-123"), "signature verification failed")
+	logAuthReject(captureLogger(&buf), req.RemoteAddr, OID("cap-123"), "signature verification failed")
 
 	records := decodeRecords(t, &buf)
 	if len(records) != 1 {
@@ -235,7 +235,7 @@ func TestLogAccess(t *testing.T) {
 
 	t.Run("ok outcome logs at info with identity fields", func(t *testing.T) {
 		var buf bytes.Buffer
-		logAccess(ctxWithIdentity, captureLogger(&buf), newReq(), mm, "ok")
+		logAccess(ctxWithIdentity, captureLogger(&buf), newReq().RemoteAddr, mm, "ok")
 
 		records := decodeRecords(t, &buf)
 		if len(records) != 1 {
@@ -263,7 +263,7 @@ func TestLogAccess(t *testing.T) {
 		var buf bytes.Buffer
 		req, _ := http.NewRequest("POST", "/_rpc/call/test/method", nil)
 		req.RemoteAddr = "127.0.0.1:8443"
-		logAccess(ctxWithIdentity, captureLogger(&buf), req, mm, "ok")
+		logAccess(ctxWithIdentity, captureLogger(&buf), req.RemoteAddr, mm, "ok")
 
 		records := decodeRecords(t, &buf)
 		if len(records) != 1 {
@@ -278,7 +278,7 @@ func TestLogAccess(t *testing.T) {
 		var buf bytes.Buffer
 		req, _ := http.NewRequest("POST", "/_rpc/call/test/method", nil)
 		req.RemoteAddr = "127.0.0.1:8443"
-		logAccess(ctxWithIdentity, captureLogger(&buf), req, mm, "forbidden", "error", "denied")
+		logAccess(ctxWithIdentity, captureLogger(&buf), req.RemoteAddr, mm, "forbidden", "error", "denied")
 
 		records := decodeRecords(t, &buf)
 		if len(records) != 1 {
@@ -291,7 +291,7 @@ func TestLogAccess(t *testing.T) {
 
 	t.Run("forbidden outcome logs at warn and carries extra fields", func(t *testing.T) {
 		var buf bytes.Buffer
-		logAccess(ctxWithIdentity, captureLogger(&buf), newReq(), mm, "forbidden", "error", "access denied by RBAC policy")
+		logAccess(ctxWithIdentity, captureLogger(&buf), newReq().RemoteAddr, mm, "forbidden", "error", "access denied by RBAC policy")
 
 		records := decodeRecords(t, &buf)
 		if len(records) != 1 {
@@ -312,7 +312,7 @@ func TestLogAccess(t *testing.T) {
 
 	t.Run("unauthorized outcome without identity logs empty subject", func(t *testing.T) {
 		var buf bytes.Buffer
-		logAccess(context.Background(), captureLogger(&buf), newReq(), mm, "unauthorized")
+		logAccess(context.Background(), captureLogger(&buf), newReq().RemoteAddr, mm, "unauthorized")
 
 		records := decodeRecords(t, &buf)
 		if len(records) != 1 {
@@ -495,3 +495,44 @@ func TestLogCertAuthDeduplicates(t *testing.T) {
 		t.Errorf("suppressed: got %v, want 999", got)
 	}
 }
+
+// Calls carried over a message transport were absent from the audit trail
+// entirely: the whole file took an *http.Request, so nothing on that path could
+// reach it. A cloud-routed call is exactly the one an operator wants recorded,
+// so the record has to name where it came from without inventing an address.
+func TestMsgRemoteFromContext(t *testing.T) {
+	ctx := contextWithMsgRemote(context.Background(), "cloud-relay/cluster-abc.xyz")
+	if got := msgRemoteFromContext(ctx); got != "cloud-relay/cluster-abc.xyz" {
+		t.Errorf("msgRemoteFromContext = %q, want the session's own label", got)
+	}
+
+	// A session that names nothing says so, rather than reporting something
+	// address-shaped that would read as knowledge this transport lacks.
+	if got := msgRemoteFromContext(context.Background()); got != "message" {
+		t.Errorf("msgRemoteFromContext with no label = %q, want %q", got, "message")
+	}
+	if got := msgRemoteFromContext(contextWithMsgRemote(context.Background(), "")); got != "message" {
+		t.Errorf("msgRemoteFromContext with an empty label = %q, want %q", got, "message")
+	}
+}
+
+// The same fallback has to hold for a connection implementing nothing, which is
+// every MessageConn that is only a byte pipe.
+func TestMessageConnRemote(t *testing.T) {
+	if got := messageConnRemote(plainMessageConn{}); got != "message" {
+		t.Errorf("messageConnRemote(plain) = %q, want %q", got, "message")
+	}
+	if got := messageConnRemote(namedMessageConn{}); got != "somewhere" {
+		t.Errorf("messageConnRemote(named) = %q, want %q", got, "somewhere")
+	}
+}
+
+type plainMessageConn struct{}
+
+func (plainMessageConn) Send([]byte) error     { return nil }
+func (plainMessageConn) Recv() ([]byte, error) { return nil, nil }
+func (plainMessageConn) Close() error          { return nil }
+
+type namedMessageConn struct{ plainMessageConn }
+
+func (namedMessageConn) Remote() string { return "somewhere" }

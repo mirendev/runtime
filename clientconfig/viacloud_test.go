@@ -246,3 +246,53 @@ func TestViaCloudOptionsRequiresACloud(t *testing.T) {
 	_, err = cluster.RPCOptionsWithName(t.Context(), config, "prod")
 	require.ErrorContains(t, err, "neither it nor identity")
 }
+
+// A cluster XID reaches this from a config file, so it is not automatically
+// well-formed. Unescaped, one holding a slash or a query marker would redraw
+// the URL instead of failing it, and the request — carrying a bearer — would go
+// somewhere other than the relay path.
+func TestCloudRPCEndpointEscapesTheClusterXID(t *testing.T) {
+	got, err := cloudRPCEndpoint("https://api.miren.cloud", "evil/../../admin", false)
+	require.NoError(t, err)
+	require.Equal(t, "wss://api.miren.cloud/api/v1/clusters/evil%2F..%2F..%2Fadmin/rpc", got,
+		"a separator in the xid must stay part of one path segment")
+
+	got, err = cloudRPCEndpoint("https://api.miren.cloud", "abc?x=1#f", false)
+	require.NoError(t, err)
+	require.Equal(t, "wss://api.miren.cloud/api/v1/clusters/abc%3Fx=1%23f/rpc", got,
+		"a query or fragment marker must not escape the path")
+}
+
+// whoami and the connection itself both have to answer "which cloud does this
+// cluster go through". They read the same resolver so the answer shown cannot
+// drift from the answer used.
+func TestCloudEndpointPrefersExplicitURLOverIssuer(t *testing.T) {
+	r := require.New(t)
+
+	config := viaCloudConfig(t, &ClusterConfig{
+		ViaCloud: true,
+		XID:      "cluster-abc",
+		Identity: "cloud",
+		CloudURL: "https://other.example",
+	})
+
+	cluster, err := config.GetCluster("prod")
+	r.NoError(err)
+
+	got, err := cluster.CloudEndpoint(config)
+	r.NoError(err)
+	r.Equal("https://other.example", got)
+
+	// Falling back to the identity's issuer is what makes the common config,
+	// which names no cloud on the cluster at all, work.
+	cluster.CloudURL = ""
+	got, err = cluster.CloudEndpoint(config)
+	r.NoError(err)
+	r.Equal("https://api.miren.cloud", got)
+
+	// And naming neither is an error rather than an empty string that would
+	// surface later as a dial to nowhere.
+	cluster.Identity = ""
+	_, err = cluster.CloudEndpoint(config)
+	r.ErrorContains(err, "neither it nor identity")
+}

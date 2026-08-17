@@ -93,3 +93,17 @@ func (s *session) Close() error {
 func (s *session) shutdown() {
 	s.closeOnce.Do(func() { close(s.closed) })
 }
+
+// Remote names this session's far end for the audit trail.
+//
+// There is no address to give: the caller reached us through cloud, over a link
+// this cluster dialed outbound, so the only thing the socket knows about is
+// cloud. The session id is what actually distinguishes one caller from another
+// here, and it is the identifier cloud logs on its side too, which is what makes
+// the two halves of a relayed call joinable after the fact.
+//
+// Deliberately not address-shaped. An audit line that looked like a peer address
+// would be claiming knowledge this transport does not have.
+func (s *session) Remote() string {
+	return "cloud-relay/" + s.id
+}

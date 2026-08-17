@@ -975,20 +975,20 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	ts := r.Header.Get("rpc-timestamp")
 
 	if ts == "" {
-		logAuthReject(s.state.audit(), r, oid, "no timestamp provided")
+		logAuthReject(s.state.audit(), r.RemoteAddr, oid, "no timestamp provided")
 		http.Error(w, "no timestamp provided", http.StatusForbidden)
 		return nil, false
 	}
 
 	if err := freshTimestamp(ts); err != nil {
-		logAuthReject(s.state.audit(), r, oid, err.Error())
+		logAuthReject(s.state.audit(), r.RemoteAddr, oid, err.Error())
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return nil, false
 	}
 
 	sign := r.Header.Get("rpc-signature")
 	if sign == "" {
-		logAuthReject(s.state.audit(), r, oid, "no signature provided")
+		logAuthReject(s.state.audit(), r.RemoteAddr, oid, "no signature provided")
 		http.Error(w, "no signature provided", http.StatusForbidden)
 		return nil, false
 	}
@@ -1005,7 +1005,7 @@ func (s *Server) authRequest(r *http.Request, w http.ResponseWriter, oid OID) (e
 	}
 
 	if err := verifyString(capa.pub, httpCanonical(r.Method, r.URL.Path, ts), sign); err != nil {
-		logAuthReject(s.state.audit(), r, oid, err.Error())
+		logAuthReject(s.state.audit(), r.RemoteAddr, oid, err.Error())
 		http.Error(w, "failed to verify signature", http.StatusForbidden)
 		return nil, false
 	}
@@ -1101,7 +1101,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 	if !mm.Public {
 		identity := IdentityFromContext(ctx)
 		if identity == nil {
-			logAccess(ctx, s.state.audit(), r, mm, "unauthorized")
+			logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "unauthorized")
 			w.Header().Add("rpc-status", "unauthorized")
 			w.Header().Add("rpc-error", "authentication required")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -1113,7 +1113,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 			resource := strings.ToLower(mm.InterfaceName)
 			action := strings.ToLower(mm.Name)
 			if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-				logAccess(ctx, s.state.audit(), r, mm, "forbidden", "error", err)
+				logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "forbidden", "error", err)
 				w.Header().Add("rpc-status", "forbidden")
 				w.Header().Add("rpc-error", err.Error())
 				w.WriteHeader(http.StatusForbidden)
@@ -1121,7 +1121,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		logAccess(ctx, s.state.audit(), r, mm, "ok")
+		logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "ok")
 	}
 
 	ctx = Propagator().Extract(ctx, propagation.HeaderCarrier(r.Header))
@@ -1261,7 +1261,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 		if !mm.Public {
 			identity := IdentityFromContext(ctx)
 			if identity == nil {
-				logAccess(ctx, s.state.audit(), r, mm, "unauthorized")
+				logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "unauthorized")
 				w.Header().Add("rpc-status", "unauthorized")
 				w.Header().Add("rpc-error", "authentication required")
 				w.WriteHeader(http.StatusUnauthorized)
@@ -1273,7 +1273,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 				resource := strings.ToLower(mm.InterfaceName)
 				action := strings.ToLower(mm.Name)
 				if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-					logAccess(ctx, s.state.audit(), r, mm, "forbidden", "error", err)
+					logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "forbidden", "error", err)
 					w.Header().Add("rpc-status", "forbidden")
 					w.Header().Add("rpc-error", err.Error())
 					w.WriteHeader(http.StatusForbidden)
@@ -1281,7 +1281,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			logAccess(ctx, s.state.audit(), r, mm, "ok")
+			logAccess(ctx, s.state.audit(), r.RemoteAddr, mm, "ok")
 		}
 
 		w.WriteHeader(http.StatusOK)

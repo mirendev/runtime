@@ -40,6 +40,47 @@ type MessageConn interface {
 	Close() error
 }
 
+// MessageRemote is an optional interface a MessageConn may implement to name
+// its far end.
+//
+// Optional because a MessageConn is a byte pipe and most backends have no
+// address to give. It exists for the audit trail, which records where a call
+// came from and had nothing to record on this transport.
+type MessageRemote interface {
+	Remote() string
+}
+
+type msgRemoteKey struct{}
+
+// contextWithMsgRemote labels a context with the far end of the message
+// session it belongs to, so code deep in dispatch can record where a call came
+// from without every layer between having to carry it.
+func contextWithMsgRemote(ctx context.Context, remote string) context.Context {
+	return context.WithValue(ctx, msgRemoteKey{}, remote)
+}
+
+// msgRemoteFromContext returns the label set by contextWithMsgRemote, or
+// "message" for a session that never set one.
+func msgRemoteFromContext(ctx context.Context) string {
+	if remote, ok := ctx.Value(msgRemoteKey{}).(string); ok && remote != "" {
+		return remote
+	}
+	return "message"
+}
+
+// messageConnRemote asks a connection to name its far end, falling back to a
+// constant. The fallback is deliberately not an address-shaped string: an audit
+// line saying "message" is honest about knowing nothing, where a fake address
+// would not be.
+func messageConnRemote(conn MessageConn) string {
+	if r, ok := conn.(MessageRemote); ok {
+		if remote := r.Remote(); remote != "" {
+			return remote
+		}
+	}
+	return "message"
+}
+
 // MessageSessionOption configures a session built over a MessageConn.
 type MessageSessionOption func(*messageSessionOptions)
 
@@ -81,6 +122,8 @@ func (s *State) ServeMessageConn(ctx context.Context, conn MessageConn, opts ...
 
 	sess := newMsgSession(conn, false, o.maxFrame)
 	router := &sessionRouter{state: s, server: s.server}
+
+	ctx = contextWithMsgRemote(ctx, messageConnRemote(conn))
 
 	return router.run(ctx, sess)
 }

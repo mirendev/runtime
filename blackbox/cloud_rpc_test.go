@@ -3,7 +3,10 @@
 package blackbox
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -95,6 +98,108 @@ func TestRPCViaCloud(t *testing.T) {
 	if who.UserID != devUserXID {
 		t.Fatalf("whoami reports user %q, want %q", who.UserID, devUserXID)
 	}
+}
+
+// A deploy is the demanding case for this route, and nothing had ever pushed
+// one through it. Reading state moves a few hundred bytes; a deploy pulls the
+// build context in 1-10 MB chunks, holds one RPC open for the length of a
+// build, and drives it through capabilities the server calls back into.
+//
+// The limits on this path were all sized for coordination traffic. This is what
+// tells us whether any of them starve real work, which arithmetic alone cannot:
+// the frame caps, the per-session byte budgets, and the per-envelope write
+// timeout all have to hold at once.
+//
+// Asserting the app runs, rather than that the command exited zero, is the
+// point. A deploy that uploaded nothing and reported success is exactly the
+// failure this should catch.
+func TestDeployViaCloud(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+	env := harness.NewCloudEnv(t, m)
+
+	configPath, _ := env.SetupViaCloudCluster(t, "viacloud")
+	m.SetEnv("MIREN_CONFIG", configPath)
+	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
+
+	// The cluster only re-reads its RBAC policy once a denial tells it to, so
+	// the grant made a moment ago needs a call to land first. Deploy is far too
+	// expensive to use as the thing that provokes that, so a cheap read does it.
+	harness.Poll(t, "cloud-routed cluster reachable", 90*time.Second, 3*time.Second, func() (bool, string) {
+		r := m.Run("app", "list", "--format", "json")
+		if !r.Success() {
+			return false, "exit " + strconv.Itoa(r.ExitCode) + ": " + r.Stderr
+		}
+		return true, ""
+	})
+
+	// DeployApp waits for the app to come up healthy, so returning at all means
+	// the build context arrived, the build ran, and the app started — the whole
+	// chain, over the relay.
+	appName := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
+
+	apps := appNames(t, m.MustRun("app", "list", "--format", "json").Stdout)
+	if !slices.Contains(apps, appName) {
+		t.Fatalf("deployed %s over the relay but the cluster does not list it: %v", appName, apps)
+	}
+
+	// The stock testdata apps are ~24 KB, which is one small chunk and touches
+	// none of the limits this route actually risks. A context big enough to
+	// force full-size frames is the only thing that exercises them.
+	t.Run("large build context", func(t *testing.T) {
+		big := largeContextApp(t, c, 8<<20)
+
+		bigApp := harness.DeployApp(t, m, harness.AppOptions{
+			Testdata:     big,
+			ReadyTimeout: 4 * time.Minute,
+		})
+
+		apps := appNames(t, m.MustRun("app", "list", "--format", "json").Stdout)
+		if !slices.Contains(apps, bigApp) {
+			t.Fatalf("deployed %s with a large context but the cluster does not list it: %v", bigApp, apps)
+		}
+	})
+}
+
+// largeContextApp writes a testdata app whose build context is at least size
+// bytes, and returns its directory name.
+//
+// The payload is random so it does not compress: the tar has to stay large
+// after gzip or the upload never produces the full-size frames that make this
+// worth doing. It sits beside the app rather than inside the build, so the
+// image is unchanged and only the upload path gets heavier.
+func largeContextApp(t *testing.T, c *harness.Cluster, size int) string {
+	t.Helper()
+
+	// The harness prefixes app names itself, so this one does not.
+	name := "large-context"
+	dir := filepath.Join(c.TestdataDir, name)
+
+	if err := os.MkdirAll(filepath.Join(dir, ".miren"), 0o755); err != nil {
+		t.Fatalf("failed to create the large-context app: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	src := filepath.Join(c.TestdataDir, "go-server")
+	for _, f := range []string{"Procfile", "go.mod", "main.go", ".miren/app.toml"} {
+		data, err := os.ReadFile(filepath.Join(src, f))
+		if err != nil {
+			t.Fatalf("failed to read %s from go-server: %v", f, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), data, 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", f, err)
+		}
+	}
+
+	blob := make([]byte, size)
+	if _, err := rand.Read(blob); err != nil {
+		t.Fatalf("failed to generate the payload: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "payload.bin"), blob, 0o644); err != nil {
+		t.Fatalf("failed to write the payload: %v", err)
+	}
+
+	return name
 }
 
 func appNames(t *testing.T, out string) []string {

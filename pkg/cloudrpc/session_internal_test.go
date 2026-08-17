@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // idleSession registers a session with no reader behind it, so what the
@@ -127,4 +131,16 @@ func TestSessionRefusesAnOversizedFrame(t *testing.T) {
 	if s.reserve(maxPendingBytes + 1) {
 		t.Fatal("accepted a frame larger than the entire allowance")
 	}
+}
+
+// A relayed session has no peer address to report — the socket only knows about
+// cloud — so it reports the session id, which is what distinguishes one caller
+// from another and is the same identifier cloud records on its side.
+func TestSessionReportsARemoteForAuditing(t *testing.T) {
+	sess := &session{id: "cluster-abc.xyz"}
+
+	var conn rpc.MessageConn = sess
+	remote, ok := conn.(rpc.MessageRemote)
+	require.True(t, ok, "a relayed session must be able to name its far end")
+	require.Equal(t, "cloud-relay/cluster-abc.xyz", remote.Remote())
 }

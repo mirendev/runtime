@@ -264,7 +264,7 @@ jobs:
 
         # The cloud-backed tests run in their own job (test-blackbox-pop):
         # they need the cloud repo and restart the server. Never shard them.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud' || true)
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
 
@@ -349,7 +349,7 @@ jobs:
       # genuine hang.
       run: |
         RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
-        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud)$' ./blackbox/...
+        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
@@ -446,6 +446,11 @@ jobs:
       env:
         BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
       run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestRPCViaCloud$' ./blackbox/...
+
+    - name: Run cloud deploy blackbox tests
+      env:
+        BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()

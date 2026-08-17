@@ -22,11 +22,10 @@ func Whoami(ctx *Context, opts struct {
 	// in, which is also the server the identity below authenticates against.
 	hostname := ctx.ClusterConfig.Hostname
 	if ctx.ClusterConfig.ViaCloud {
-		hostname = ctx.ClusterConfig.CloudURL
-		if hostname == "" && ctx.ClientConfig != nil && ctx.ClusterConfig.Identity != "" {
-			if id, err := ctx.ClientConfig.GetIdentity(ctx.ClusterConfig.Identity); err == nil && id != nil {
-				hostname = id.Issuer
-			}
+		// Same precedence the connection itself uses, from the same place, so
+		// what this reports cannot drift from where the call actually went.
+		if cloud, err := ctx.ClusterConfig.CloudEndpoint(ctx.ClientConfig); err == nil {
+			hostname = cloud
 		}
 	}
 	if hostname == "" {

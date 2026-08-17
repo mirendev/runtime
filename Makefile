@@ -180,7 +180,7 @@ test-blackbox: ## Run blackbox tests (requires `make dev` running)
 	# The cloud-backed tests are excluded: each stands up a whole cloud on fixed
 	# ports and restarts the server, which interferes with everything after it.
 	# They have their own target below, and their own CI job.
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud)$$' ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$$' ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \
@@ -197,6 +197,7 @@ test-blackbox-pop: ## Run cloud-backed blackbox tests (requires `make dev` and c
 	# a port the first has not finished releasing.
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestPOP$$' ./blackbox/...
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestRPCViaCloud$$' ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$$' ./blackbox/...
 
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
 	# Runs the whole blackbox suite (not just the distributed-specific tests)

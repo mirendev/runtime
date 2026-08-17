@@ -369,6 +369,9 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 		// A token was presented but did not authenticate. Fail closed rather
 		// than silently downgrading to the capability identity, which would let
 		// a forged or expired token still execute.
+		if !mm.Public {
+			logAccess(ctx, s.state.audit(), msgRemoteFromContext(ctx), mm, "unauthorized")
+		}
 		return ctx, nil, Method{}, nil, opReply{Status: "forbidden", Error: "invalid bearer token"}, false
 	}
 	ctx = ContextWithIdentity(ctx, identity)
@@ -377,14 +380,23 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 		ctx = Propagator().Extract(ctx, propagation.MapCarrier(req.Trace))
 	}
 
-	if !mm.Public && s.state.authorizer != nil {
-		resource := strings.ToLower(mm.InterfaceName)
-		action := strings.ToLower(mm.Name)
-		if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-			s.state.log.Warn("authorization denied",
-				"resource", resource, "action", action, "subject", identity.Subject, "error", err)
-			return ctx, nil, Method{}, nil, opReply{Status: "forbidden", Error: err.Error()}, false
+	// Audited on the same terms as the HTTP path: non-public methods only, both
+	// outcomes. Calls arriving this way were previously absent from the trail
+	// entirely, which is the wrong gap to have — a cloud-routed call is exactly
+	// the one an operator wants a record of.
+	if !mm.Public {
+		if s.state.authorizer != nil {
+			resource := strings.ToLower(mm.InterfaceName)
+			action := strings.ToLower(mm.Name)
+			if err := s.state.authorizer.Authorize(ctx, identity, resource, action); err != nil {
+				s.state.log.Warn("authorization denied",
+					"resource", resource, "action", action, "subject", identity.Subject, "error", err)
+				logAccess(ctx, s.state.audit(), msgRemoteFromContext(ctx), mm, "forbidden", "error", err)
+				return ctx, nil, Method{}, nil, opReply{Status: "forbidden", Error: err.Error()}, false
+			}
 		}
+
+		logAccess(ctx, s.state.audit(), msgRemoteFromContext(ctx), mm, "ok")
 	}
 
 	return ctx, iface, mm, iface.pub, opReply{}, true

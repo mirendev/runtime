@@ -285,11 +285,16 @@ func logCertAuth(ctx context.Context, log *slog.Logger, dedup *certAuthDeduper, 
 // "ok" for an authorized dispatch, or "unauthorized"/"forbidden" for a rejected
 // one; non-ok outcomes log at Warn so denials surface without a level filter.
 //
+// remote is a free-form label for where the call came from, because not every
+// transport has an address: an HTTP peer passes RemoteAddr, and a message
+// transport passes whatever identifies its far end. It is only read to decide
+// whether the peer is loopback, which is trusted same-host chatter.
+//
 // Callers invoke this only for non-public methods. Public methods (e.g. health
 // checks and runner Join, which are public precisely because they carry no
 // caller identity) are intentionally left out of the audit trail rather than
 // logging identity-less lines for them.
-func logAccess(ctx context.Context, log *slog.Logger, r *http.Request, mm Method, outcome string, extra ...any) {
+func logAccess(ctx context.Context, log *slog.Logger, remote string, mm Method, outcome string, extra ...any) {
 	var subject, method string
 	if id := IdentityFromContext(ctx); id != nil {
 		subject = id.Subject
@@ -305,12 +310,12 @@ func logAccess(ctx context.Context, log *slog.Logger, r *http.Request, mm Method
 	switch {
 	case outcome != "ok":
 		level = slog.LevelWarn
-	case isLoopbackAddr(r.RemoteAddr):
+	case isLoopbackAddr(remote):
 		level = slog.LevelDebug
 	}
 
 	attrs := []any{
-		"remote", r.RemoteAddr,
+		"remote", remote,
 		"rpc", mm.InterfaceName + "." + mm.Name,
 		"subject", subject,
 		"auth_method", method,
@@ -327,9 +332,9 @@ func logAccess(ctx context.Context, log *slog.Logger, r *http.Request, mm Method
 // through logAccess, but a forged or replayed capability is exactly the kind of
 // event the audit trail exists to capture, so it must not be confined to the
 // general log. Always Warn, since every one of these is a failed auth attempt.
-func logAuthReject(log *slog.Logger, r *http.Request, oid OID, reason string) {
+func logAuthReject(log *slog.Logger, remote string, oid OID, reason string) {
 	log.Warn("auth rejected",
-		"remote", r.RemoteAddr,
+		"remote", remote,
 		"oid", string(oid),
 		"reason", reason,
 	)

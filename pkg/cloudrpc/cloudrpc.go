@@ -3,7 +3,9 @@ package cloudrpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 
@@ -176,7 +178,16 @@ func (s *Server) serve(ctx context.Context, sess *session) {
 	// nowhere, and the caller learns from its own broken connection instead.
 	s.sendBestEffort(TypeClose, Close{SessionID: sess.id, Reason: "session ended"})
 
-	s.log.Info("relayed RPC session closed", "session", sess.id, "error", err)
+	// An ordinary ending arrives as EOF or a cancelled context: the caller hung
+	// up, or this side tore the session down. Attaching an error field to those
+	// makes every healthy session read as a fault to an operator scanning for
+	// one, so the field is kept for endings that are actually unexpected.
+	switch {
+	case err == nil, errors.Is(err, io.EOF), errors.Is(err, context.Canceled):
+		s.log.Info("relayed RPC session closed", "session", sess.id)
+	default:
+		s.log.Info("relayed RPC session closed", "session", sess.id, "error", err)
+	}
 }
 
 // handleData delivers one frame to its session.
