@@ -820,6 +820,16 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 	return variables
 }
 
+// hasAddonSourced reports whether any variable came from an addon.
+func hasAddonSourced(vars []core_v1alpha.ConfigSpecVariables) bool {
+	for _, v := range vars {
+		if v.Source == coreutil.SourceAddon {
+			return true
+		}
+	}
+	return false
+}
+
 // mergeVariablesFromAppConfig merges environment variables from app.toml into existing variables.
 // The merge strategy respects variable sources:
 // - Manual vars (source="manual") always persist and shadow config vars with the same key
@@ -829,9 +839,21 @@ func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.
 func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables, appConfig *appconfig.AppConfig) []core_v1alpha.ConfigSpecVariables {
 	appConfigVars := buildVariablesFromAppConfig(appConfig)
 
-	// If no app.toml vars, preserve all existing vars
+	// No app.toml vars: keep the existing ones, minus addon bindings, which every
+	// path out of here drops for the reason below. Returned as-is when there is
+	// nothing to drop, so a nil stays nil.
 	if appConfigVars == nil {
-		return existingVars
+		if !hasAddonSourced(existingVars) {
+			return existingVars
+		}
+		kept := make([]core_v1alpha.ConfigSpecVariables, 0, len(existingVars))
+		for _, v := range existingVars {
+			if v.Source == coreutil.SourceAddon {
+				continue
+			}
+			kept = append(kept, v)
+		}
+		return kept
 	}
 
 	// Build a map of app.toml variables for quick lookup
@@ -843,7 +865,13 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables
 	// Build result by merging
 	varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 
-	// First, add all existing manual and addon variables - these always persist
+	// Carry operator-set variables forward. They belong to the app, not to any one
+	// build.
+	//
+	// Addon variables are not carried. They live on the AddonAssociation and are
+	// applied when a version is resolved to run. A build that copied one would
+	// store a credential the addon may later rotate or take back, and that copy
+	// would outlive the addon. Versions built from here on contain none.
 	for _, v := range existingVars {
 		// Backward compatibility: preserve unknown-source vars as manual
 		source := v.Source
@@ -851,8 +879,7 @@ func mergeVariablesFromAppConfig(existingVars []core_v1alpha.ConfigSpecVariables
 			source = "manual"
 		}
 
-		// Keep manual and addon vars - they shadow config vars with the same key
-		if source == "manual" || source == "addon" {
+		if source == "manual" {
 			varMap[v.Key] = v
 		}
 		// config vars are only kept if still in app.toml (checked below)

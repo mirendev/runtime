@@ -340,6 +340,9 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			if err := r.EC.GetById(ctx, appRec.ActiveVersion, &appVer); err != nil {
 				return err
 			}
+			// The stored config, not ResolveRuntimeConfig. This is a write path, and
+			// resolving through the overlay would store live addon bindings in the
+			// ConfigVersion minted below.
 			resolvedCfg, err := coreutil.ResolveConfig(ctx, r.EC.EAC(), &appVer)
 			if err != nil {
 				return fmt.Errorf("failed to resolve config: %w", err)
@@ -379,10 +382,20 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 		// Replace the entire env var list with the new one from the client
 		// The client is responsible for sending the complete desired state
+		//
+		// Addon bindings are dropped, not stored. GetConfiguration returns the
+		// runtime view, so a client that round-trips it sends them back here.
+		// Storing them would copy an addon's credentials into a version again, and
+		// they would outlive the addon, because deprovisioning no longer rewrites
+		// stored config. The app still gets its bindings: they are supplied at
+		// resolve time, not read from here.
 		if cfg.HasEnvVars() {
 			spec.Variables = nil
 			for _, ev := range cfg.EnvVars() {
 				source := ev.Source()
+				if source == coreutil.SourceAddon {
+					continue
+				}
 				nv := core_v1alpha.ConfigSpecVariables{
 					Key:         ev.Key(),
 					Value:       ev.Value(),
