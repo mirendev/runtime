@@ -1457,3 +1457,66 @@ func TestSetInitialEnvVarsPreservesTheSecretBackend(t *testing.T) {
 	assert.Equal(t, "cluster", cv.Spec.Variables[0].Backend)
 	assert.Equal(t, "payments/stripe-key@x1A", cv.Spec.Variables[0].Value)
 }
+
+// TestSetConfiguration_DropsAddonBindings covers the GetConfiguration round
+// trip. GetConfiguration returns the runtime view, so a client that reads it,
+// edits one variable and writes the whole set back sends the addon's binding
+// along with everything else. Storing it would copy an addon credential into a
+// version again, and because deprovisioning no longer rewrites stored config,
+// that copy would outlive the addon.
+func TestSetConfiguration_DropsAddonBindings(t *testing.T) {
+	ctx := context.Background()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	appInfo := &AppInfo{
+		Log:  slog.Default(),
+		EC:   ec,
+		CPU:  &metrics.CPUUsage{},
+		Mem:  &metrics.MemoryUsage{},
+		HTTP: &metrics.HTTPMetrics{},
+	}
+	client := &app_v1alpha.CrudClient{Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo))}
+
+	appName := "addon-roundtrip"
+	appID, err := inmem.Client.Create(ctx, appName, &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	// What a client sends back after reading the runtime view: its own variable
+	// plus the addon's binding, which it never set and does not own.
+	own := &app_v1alpha.NamedValue{}
+	own.SetKey("LOG_LEVEL")
+	own.SetValue("debug")
+	own.SetSource(coreutil.SourceManual)
+
+	binding := &app_v1alpha.NamedValue{}
+	binding.SetKey("DATABASE_URL")
+	binding.SetValue("postgres://from-the-addon")
+	binding.SetSensitive(true)
+	binding.SetSource(coreutil.SourceAddon)
+
+	cfg := &app_v1alpha.Configuration{}
+	cfg.SetEnvVars([]*app_v1alpha.NamedValue{own, binding})
+
+	_, err = client.SetConfiguration(ctx, appName, cfg)
+	require.NoError(t, err)
+
+	var appCheck core_v1alpha.App
+	require.NoError(t, ec.GetById(ctx, appID, &appCheck))
+
+	var ver core_v1alpha.AppVersion
+	require.NoError(t, ec.GetById(ctx, appCheck.ActiveVersion, &ver))
+
+	stored, err := coreutil.ResolveConfig(ctx, ec.EAC(), &ver)
+	require.NoError(t, err)
+
+	keys := make(map[string]string, len(stored.Variables))
+	for _, v := range stored.Variables {
+		keys[v.Key] = v.Value
+	}
+	assert.Equal(t, "debug", keys["LOG_LEVEL"], "the client's own variable must be stored")
+	assert.NotContains(t, keys, "DATABASE_URL",
+		"an addon binding handed back by the client must not be written into a version")
+}

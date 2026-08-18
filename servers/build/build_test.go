@@ -1023,7 +1023,10 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "addon vars persist across deploys",
+			// Addon bindings are resolved from the association when a version
+			// runs, so a build must not copy them into the version it stores.
+			// The app still receives them; see ResolveRuntimeConfig.
+			name: "addon vars are not carried into a build",
 			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon", Sensitive: true},
 				{Key: "PGHOST", Value: "host.addon.app.miren", Source: "addon"},
@@ -1035,13 +1038,14 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.ConfigSpecVariables{
-				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon", Sensitive: true},
-				{Key: "PGHOST", Value: "host.addon.app.miren", Source: "addon"},
 				{Key: "CONFIG_VAR", Value: "new", Source: "config"},
 			},
 		},
 		{
-			name: "addon vars not overridden by config vars",
+			// The stored version keeps the app.toml declaration. The addon's
+			// value still wins at runtime, because ResolveRuntimeConfig lets a
+			// binding displace a config-sourced variable.
+			name: "app.toml declaration is stored where an addon var was dropped",
 			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
 			},
@@ -1051,18 +1055,17 @@ func TestMergeVariablesFromAppConfig(t *testing.T) {
 				},
 			},
 			wantVars: []core_v1alpha.ConfigSpecVariables{
-				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
+				{Key: "DATABASE_URL", Value: "postgres://manual/db", Source: "config"},
 			},
 		},
 		{
-			name: "addon vars preserved when app.toml has no env section",
+			name: "operator vars preserved when app.toml has no env section",
 			existingVars: []core_v1alpha.ConfigSpecVariables{
 				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
 				{Key: "MANUAL_VAR", Value: "val", Source: "manual"},
 			},
 			appConfig: nil,
 			wantVars: []core_v1alpha.ConfigSpecVariables{
-				{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
 				{Key: "MANUAL_VAR", Value: "val", Source: "manual"},
 			},
 		},
@@ -1968,7 +1971,11 @@ func TestMergeVariablesFromAppConfig_MetadataCarried(t *testing.T) {
 		assert.Equal(t, "PostgreSQL connection string", result[0].Description, "should carry Description from config var")
 	})
 
-	t.Run("addon var inherits metadata from config var", func(t *testing.T) {
+	// An addon var is no longer stored at all, so what a build keeps for this key
+	// is the app.toml declaration itself, metadata included. The binding still
+	// shadows it when the version runs, and still inherits that metadata there;
+	// see TestResolveRuntimeConfigOverridesAppTomlDeclaration.
+	t.Run("config metadata survives dropping an addon var", func(t *testing.T) {
 		existingVars := []core_v1alpha.ConfigSpecVariables{
 			{Key: "DATABASE_URL", Value: "postgres://addon/db", Source: "addon"},
 		}
@@ -1980,7 +1987,7 @@ func TestMergeVariablesFromAppConfig_MetadataCarried(t *testing.T) {
 
 		result := mergeVariablesFromAppConfig(existingVars, appConfig)
 		require.Len(t, result, 1)
-		assert.Equal(t, "addon", result[0].Source)
+		assert.Equal(t, "config", result[0].Source)
 		assert.True(t, result[0].Required)
 		assert.Equal(t, "Database URL", result[0].Description)
 	})

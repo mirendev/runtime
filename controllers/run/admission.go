@@ -236,7 +236,7 @@ func (c *Controller) maxConcurrent(ctx context.Context, r *run_v1alpha.Run) (int
 	var ver core_v1alpha.AppVersion
 	ver.Decode(resp.Entity().Entity())
 
-	cfgSpec, err := coreutil.ResolveConfig(ctx, c.EAC, &ver)
+	cfgSpec, err := coreutil.ResolveRuntimeConfig(ctx, c.EAC, &ver)
 	if err != nil {
 		return runapi.MaxConcurrent(nil, r.Task), nil
 	}

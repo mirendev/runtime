@@ -446,7 +446,7 @@ func (c *Controller) buildSpec(ctx context.Context, r *run_v1alpha.Run) (*comput
 	var ver core_v1alpha.AppVersion
 	ver.Decode(verResp.Entity().Entity())
 
-	cfgSpec, err := coreutil.ResolveConfig(ctx, c.EAC, &ver)
+	cfgSpec, err := coreutil.ResolveRuntimeConfig(ctx, c.EAC, &ver)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolving config: %w", err)
 	}

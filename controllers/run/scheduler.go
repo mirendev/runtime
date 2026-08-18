@@ -151,7 +151,7 @@ func (s *Scheduler) sweepApp(ctx context.Context, app *core_v1alpha.App, now tim
 		return fmt.Errorf("reading active version: %w", err)
 	}
 
-	cfgSpec, err := coreutil.ResolveConfig(ctx, s.EAC, &ver)
+	cfgSpec, err := coreutil.ResolveRuntimeConfig(ctx, s.EAC, &ver)
 	if err != nil {
 		return fmt.Errorf("resolving config: %w", err)
 	}

@@ -209,6 +209,10 @@ func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName st
 	var appVer core_v1alpha.AppVersion
 	var spec core_v1alpha.ConfigSpec
 
+	// Whichever branch fills spec below, dropAddonVars strips addon variables
+	// before it is returned. This function feeds the paths that mint a new
+	// ConfigVersion, and an addon binding is resolved at runtime rather than
+	// stored.
 	if baseVersion != nil {
 		appVer = *baseVersion
 		resolvedCfg, err := coreutil.ResolveConfig(ctx, ec.EAC(), &appVer)
@@ -230,7 +234,26 @@ func resolveBaseVersion(ctx context.Context, ec *entityserver.Client, appName st
 		appVer.App = appRec.ID
 	}
 
+	dropAddonVars(&spec)
 	return &appVer, &spec, &appRec, appRev, nil
+}
+
+// dropAddonVars removes addon variables from a spec about to become a new
+// ConfigVersion.
+//
+// Addon bindings live on the AddonAssociation and are applied at resolve time by
+// coreutil.ResolveRuntimeConfig. A stored copy is not what the app runs on, so
+// carrying one into a new version would only resurrect a credential the addon
+// may no longer own.
+func dropAddonVars(spec *core_v1alpha.ConfigSpec) {
+	kept := spec.Variables[:0]
+	for _, v := range spec.Variables {
+		if v.Source == coreutil.SourceAddon {
+			continue
+		}
+		kept = append(kept, v)
+	}
+	spec.Variables = kept
 }
 
 // SetInitialEnvVars stages env vars on an app's initial ConfigVersion,

@@ -182,7 +182,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			// before the loop so an active version with no pools yet is still
 			// classified correctly (a fixed service reads as starting, not idle).
 			var spec *core_v1alpha.ConfigSpec
-			if resolved, rerr := coreutil.ResolveConfig(ctx, a.EC.EAC(), &appVer); rerr == nil {
+			if resolved, rerr := coreutil.ResolveRuntimeConfig(ctx, a.EC.EAC(), &appVer); rerr == nil {
 				spec = resolved
 			}
 			health := poolHealth{

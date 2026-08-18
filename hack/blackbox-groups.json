@@ -57,7 +57,8 @@
         "TestDistributedRunnerList",
         "TestDistributedRunnerLogs",
         "TestDistributedRunnerMetrics",
-        "TestDistributedRunnerNodePort"
+        "TestDistributedRunnerNodePort",
+        "TestAddonEnvSurvivesDeployVersion"
       ]
     }
   ]

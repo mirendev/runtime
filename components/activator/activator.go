@@ -606,7 +606,7 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 	// register a freshly-discovered pool on the cache-miss path. This is the
 	// scale-up path (only reached when no sandbox has capacity), so the extra
 	// entity store reads are acceptable.
-	spec, err := coreutil.ResolveConfig(ctx, a.eac, ver)
+	spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, ver)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve config: %w", err)
 	}
@@ -1416,7 +1416,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			appVer.Decode(verResp.Entity().Entity())
 
 			// Resolve config from ConfigVersion if available
-			spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+			spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, &appVer)
 			if err != nil {
 				a.log.Error("failed to resolve config for sandbox", "error", err, "sandbox", sb.ID)
 				return nil
@@ -1610,7 +1610,7 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		appVer.Decode(verResp.Entity().Entity())
 
 		// Resolve config from ConfigVersion if available
-		spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+		spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, &appVer)
 		if err != nil {
 			a.log.Error("failed to resolve config for sandbox", "error", err, "sandbox", sb.ID)
 			continue
@@ -1724,7 +1724,7 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		appVer.Decode(verResp.Entity().Entity())
 
 		// Resolve config from ConfigVersion if available
-		spec, err := coreutil.ResolveConfig(ctx, a.eac, &appVer)
+		spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, &appVer)
 		if err != nil {
 			a.log.Error("failed to resolve config for pool", "error", err, "pool", pool.ID)
 			continue

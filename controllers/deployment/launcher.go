@@ -95,7 +95,7 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	app.ID = ver.App
 
 	// Resolve config
-	spec, err := coreutil.ResolveConfig(ctx, l.EAC, ver)
+	spec, err := coreutil.ResolveRuntimeConfig(ctx, l.EAC, ver)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve config for version %s: %w", ver.Version, err)
 	}
@@ -248,7 +248,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	ver.Decode(verResp.Entity().Entity())
 
 	// Resolve config from ConfigVersion if available, otherwise use inline
-	spec, err := coreutil.ResolveConfig(ctx, l.EAC, &ver)
+	spec, err := coreutil.ResolveRuntimeConfig(ctx, l.EAC, &ver)
 	if err != nil {
 		return fmt.Errorf("failed to resolve config: %w", err)
 	}

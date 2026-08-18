@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
-	coreutil "miren.dev/runtime/api/core"
-	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
@@ -55,33 +53,24 @@ func (p *Provider) RotateCredential(ctx context.Context, assoc addon.AddonAssoci
 	}
 }
 
-// activeConfigVar reads a variable's value from an app's active ConfigVersion.
-// This is the authoritative current value — unlike association.variables, which
-// is deliberately not rewritten on rotation and can hold a stale password. The
-// per-app compensation uses it so a rollback restores the password the app is
-// actually running with, not an older one.
-func activeConfigVar(ctx context.Context, fw *addon.ProviderFramework, appID entity.Id, key string) (string, error) {
-	var app core_v1alpha.App
-	if err := fw.EC.GetById(ctx, appID, &app); err != nil {
-		return "", fmt.Errorf("getting app %s: %w", appID, err)
-	}
-	if app.ActiveVersion == "" {
-		return "", nil
-	}
-	var version core_v1alpha.AppVersion
-	if err := fw.EC.GetById(ctx, app.ActiveVersion, &version); err != nil {
-		return "", fmt.Errorf("getting app version: %w", err)
-	}
-	spec, err := coreutil.ResolveConfig(ctx, fw.EAC, &version)
-	if err != nil {
-		return "", fmt.Errorf("resolving config: %w", err)
-	}
-	for _, v := range spec.Variables {
+// associationVar reads a variable's value from the addon association's own
+// record of what it supplies.
+//
+// The association is the current record. The rotation controller rewrites it on
+// every rotation, and coreutil.ResolveRuntimeConfig resolves the app's bindings
+// from it. Reading the app's stored ConfigVersion instead finds nothing, because
+// no version records addon variables any more.
+//
+// An association that last rotated before that change can still hold a stale
+// password. ReportStaleAssociationVariables names those at boot; the repair is
+// to rotate again.
+func associationVar(assoc *addon_v1alpha.AddonAssociation, key string) string {
+	for _, v := range assoc.Variables {
 		if v.Key == key {
-			return v.Value, nil
+			return v.Value
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // --- Per-app user rotation (Class A) ---
@@ -95,8 +84,6 @@ type CaptureOldUserPasswordOut struct {
 }
 
 func CaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn) (CaptureOldUserPasswordOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
 	var assoc addon_v1alpha.AddonAssociation
 	if in.AssocEntity != nil {
 		assoc.Decode(in.AssocEntity)
@@ -105,11 +92,9 @@ func CaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn) (C
 		return CaptureOldUserPasswordOut{}, fmt.Errorf("association has no app ref")
 	}
 
-	old, err := activeConfigVar(ctx, fw, assoc.App, "PGPASSWORD")
-	if err != nil {
-		return CaptureOldUserPasswordOut{}, fmt.Errorf("reading current user password from active config: %w", err)
-	}
-	return CaptureOldUserPasswordOut{UserOldPassword: old}, nil
+	// Read before the rotation controller records the new values, so this is the
+	// password the app is running with.
+	return CaptureOldUserPasswordOut{UserOldPassword: associationVar(&assoc, "PGPASSWORD")}, nil
 }
 
 func UndoCaptureOldUserPassword(ctx context.Context, in CaptureOldUserPasswordIn, out CaptureOldUserPasswordOut) error {
@@ -432,51 +417,39 @@ type CaptureDedicatedConnInfoOut struct {
 // CaptureDedicatedConnInfo resolves the role name and database to connect to.
 // Provisioning records both on the association attrs (see BuildDedicatedResult),
 // so they read straight off the entity — no dependency on a deployed app.
-// Associations created before those attrs existed fall back to the app's active
-// ConfigVersion, the authoritative record of what the app connects as. The
+// Associations created before those attrs existed fall back to the variables the
+// association itself records, which is where an addon's contribution lives. The
 // password is never read here: the durable current password lives on the server
 // entity (see LoadDedicatedRotationState), which survives even a retry that
 // already redeployed the app onto the new secret.
 func CaptureDedicatedConnInfo(ctx context.Context, in CaptureDedicatedConnInfoIn) (CaptureDedicatedConnInfoOut, error) {
-	fw := saga.Get[*addon.ProviderFramework](ctx)
-
 	var data addon_v1alpha.PostgresqlDedicatedData
 	if in.AssocEntity != nil {
 		data.Decode(in.AssocEntity)
 	}
 	user, database := data.Username, data.DatabaseName
 
-	// Legacy associations predate these attrs; recover conn info from the app's
-	// active config so they stay rotatable.
+	// Legacy associations predate these attrs. Recover conn info from the
+	// variables the association records, which provisioning has written since
+	// before the attrs existed, so they stay rotatable.
 	if user == "" || database == "" {
 		var assoc addon_v1alpha.AddonAssociation
 		if in.AssocEntity != nil {
 			assoc.Decode(in.AssocEntity)
 		}
-		if assoc.App == "" {
-			return CaptureDedicatedConnInfoOut{}, fmt.Errorf("association has no stored connection info and no app ref to fall back to")
-		}
 		if user == "" {
-			u, err := activeConfigVar(ctx, fw, assoc.App, "PGUSER")
-			if err != nil {
-				return CaptureDedicatedConnInfoOut{}, fmt.Errorf("reading PGUSER from active config: %w", err)
-			}
-			user = u
+			user = associationVar(&assoc, "PGUSER")
 		}
 		if database == "" {
-			d, err := activeConfigVar(ctx, fw, assoc.App, "PGDATABASE")
-			if err != nil {
-				return CaptureDedicatedConnInfoOut{}, fmt.Errorf("reading PGDATABASE from active config: %w", err)
-			}
-			database = d
+			database = associationVar(&assoc, "PGDATABASE")
 		}
 	}
 
 	if user == "" {
-		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated postgres user (no stored attr, no PGUSER in active config)")
+		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated postgres user (no stored attr, no PGUSER on the association)")
 	}
 	if database == "" {
-		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated postgres database (no stored attr, no PGDATABASE in active config)")
+		return CaptureDedicatedConnInfoOut{}, fmt.Errorf("could not determine dedicated postgres database (no stored attr, no PGDATABASE on the association)")
 	}
 
 	return CaptureDedicatedConnInfoOut{DedicatedUser: user, DedicatedDatabase: database}, nil

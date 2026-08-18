@@ -148,7 +148,7 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		v.Decode(res.Entity().Entity())
 
 		// Resolve config from ConfigVersion if available
-		resolvedCfg, err := coreutil.ResolveConfig(ctx, s.EAC, &v)
+		resolvedCfg, err := coreutil.ResolveRuntimeConfig(ctx, s.EAC, &v)
 		if err == nil {
 			s.Log.Debug("found version", "id", verId)
 

@@ -589,7 +589,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		ver.Decode(verResp.Entity().Entity())
 
 		// Resolve config from ConfigVersion if available
-		spec, err := coreutil.ResolveConfig(ctx, m.eac, &ver)
+		spec, err := coreutil.ResolveRuntimeConfig(ctx, m.eac, &ver)
 		if err != nil {
 			m.log.Error("failed to resolve config for pool", "pool", pool.ID, "error", err)
 			continue

@@ -356,9 +356,9 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		}
 		require.Len(t, serverAttrs, 1, "provision should record the server ref attr")
 
-		// Stand up the app whose active config carries the connection vars. The
-		// fallback reads user/database from here; PGPASSWORD rides along as the
-		// value a per-app rollback would restore.
+		// Stand up an app so the association has a realistic app ref. The fallback
+		// no longer reads config from here: addon variables are not stored on a
+		// version any more, so it reads the association's own record instead.
 		cvID, err := ec.Create(ctx, idgen.GenNS("config-version"), &core_v1alpha.ConfigVersion{
 			Spec: core_v1alpha.ConfigSpec{
 				Variables: []core_v1alpha.ConfigSpecVariables{
@@ -379,11 +379,19 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Build the legacy-shaped association: app ref set, server ref patched on,
-		// username/database attrs absent.
+		// username/database attrs absent, but the contributed variables present.
+		// Provisioning has written association.variables since before those attrs
+		// existed, so an association old enough to be missing them still carries
+		// the variables. That is the shape this fallback exists for.
 		assocID, err := ec.Create(ctx, idgen.GenNS("addon-assoc"), &addon_v1alpha.AddonAssociation{
 			Variant: "small",
 			Status:  "active",
 			App:     appID,
+			Variables: []addon_v1alpha.Variables{
+				{Key: "PGUSER", Value: user},
+				{Key: "PGDATABASE", Value: database},
+				{Key: "PGPASSWORD", Value: oldPassword, Sensitive: true},
+			},
 		})
 		require.NoError(t, err)
 		require.NoError(t, ec.Patch(ctx, assocID, 0, serverAttrs...))
@@ -422,10 +430,10 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		for _, v := range rotResult.EnvVars {
 			rotEnv[v.Key] = v.Value
 		}
-		// (a) The fallback resolved user/database from active config: with the attrs
-		// absent, a correct result env can only have come from the ConfigVersion.
-		assert.Equal(t, user, rotEnv["PGUSER"], "user should resolve from active config")
-		assert.Equal(t, database, rotEnv["PGDATABASE"], "database should resolve from active config")
+		// (a) The fallback resolved user/database from the association: with the
+		// attrs absent, a correct result env can only have come from its variables.
+		assert.Equal(t, user, rotEnv["PGUSER"], "user should resolve from the association")
+		assert.Equal(t, database, rotEnv["PGDATABASE"], "database should resolve from the association")
 		assert.Equal(t, newSecret, rotEnv["PGPASSWORD"], "result should carry the new password")
 
 		// (b) Wire-level proof: the new password authenticates.
