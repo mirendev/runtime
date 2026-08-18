@@ -426,14 +426,12 @@ type Coordinator struct {
 	// ready. nil when sagas are disabled. See MIR-1285.
 	sagaBuilder *build.SagaBuilder
 
-	// appInfo and uplink are retained so app state can be reported up to
-	// cloud for visibility (MIR-1558). appInfo is the same instance backing
-	// the app RPC surface, so cloud sees the health `miren app list` sees;
-	// uplink is the control-plane link to send it on. Both are nil when cloud
+	// appInfo is retained so app state can be reported up to cloud for
+	// visibility (MIR-1558). It is the same instance backing the app RPC
+	// surface, so cloud sees the health `miren app list` sees. nil when cloud
 	// auth is not configured, which is the disconnected case reporting must
 	// tolerate.
 	appInfo *app.AppInfo
-	uplink  *uplink.Client
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -1630,8 +1628,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			uplink.NewMessageRouter(),
 			c.Log.With("component", "uplink"),
 		)
-		c.uplink = link
-
 		anywhereConn := anywhere.New(anywhere.Config{
 			ClusterXID: c.CloudAuth.ClusterID,
 			Ingress:    c.hs,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -342,6 +343,171 @@ func TestOnConnectContextCancelledOnDisconnect(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("callback context outlived the connection")
+	}
+}
+
+// A streaming tenant needs backpressure, not the drop Send does. Losing one
+// batch of a snapshot is not a lost sample the next one repairs — it looks
+// exactly like the apps in that batch no longer existing, which is what makes
+// silent drops dangerous for anything sent as a sequence.
+func TestSendBlockingWaitsForRoomInsteadOfDropping(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, 1),
+	}
+
+	c.Send(&Envelope{Type: "first"})
+
+	// Send would drop this one on the floor and report nothing.
+	queued := make(chan error, 1)
+	go func() {
+		queued <- c.SendBlocking(t.Context(), &Envelope{Type: "second"})
+	}()
+
+	select {
+	case <-queued:
+		t.Fatal("SendBlocking returned while the outbox was full")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if got := <-c.outbox; got.Type != "first" {
+		t.Fatalf("expected first out of the outbox, got %s", got.Type)
+	}
+
+	select {
+	case err := <-queued:
+		if err != nil {
+			t.Fatalf("SendBlocking: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendBlocking stayed parked after the outbox drained")
+	}
+
+	if got := <-c.outbox; got.Type != "second" {
+		t.Fatalf("expected second out of the outbox, got %s", got.Type)
+	}
+}
+
+// The counterpart risk to blocking: a sender parked on a full outbox when the
+// connection dies must be released rather than held until the next drain. The
+// connection-scoped context is what does that, so a caller passing the wrong
+// one leaks a goroutine per reconnect.
+func TestSendBlockingReleasesOnContextCancel(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, 1),
+	}
+
+	c.Send(&Envelope{Type: "filler"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	released := make(chan error, 1)
+	go func() {
+		released <- c.SendBlocking(ctx, &Envelope{Type: "parked"})
+	}()
+
+	// Give the sender a moment to actually park before pulling it back out.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-released:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendBlocking outlived its connection context")
+	}
+}
+
+// Clusters do not disconnect independently — a cloud deploy drops all of them
+// at once — so an undithered backoff marches the whole fleet back in lockstep
+// and hands cloud the fleet's reconnect work as one spike. What matters is
+// that the delays actually spread, not that any single one is a given value.
+func TestBackoffJitterSpreadsReconnects(t *testing.T) {
+	const base = 10 * time.Second
+
+	buckets := map[int]bool{}
+	for range 500 {
+		got := jittered(base)
+
+		if got > base {
+			t.Fatalf("jittered(%v) = %v, must not exceed the backoff schedule", base, got)
+		}
+		if min := time.Duration(float64(base) * (1 - backoffJitter)); got < min {
+			t.Fatalf("jittered(%v) = %v, below the %v floor", base, got, min)
+		}
+
+		buckets[int(got/(base/20))] = true
+	}
+
+	// A constant would land in one bucket; a healthy spread covers most of them.
+	if len(buckets) < 5 {
+		t.Errorf("reconnect delays clustered into %d buckets, expected them spread", len(buckets))
+	}
+}
+
+// Jittering the reconnect alone only moves the spike, because each tenant
+// starts streaming the moment it connects. The spread has to reach that work
+// too, which is what SpreadOnConnect is for.
+func TestSpreadOnConnectScattersAcrossTheWindow(t *testing.T) {
+	const window = time.Minute
+
+	buckets := map[int]bool{}
+	for range 500 {
+		got := SpreadOnConnect(window)
+
+		if got < 0 || got >= window {
+			t.Fatalf("SpreadOnConnect(%v) = %v, outside the window", window, got)
+		}
+		buckets[int(got/(window/20))] = true
+	}
+
+	if len(buckets) < 15 {
+		t.Errorf("connect delays covered %d of 20 buckets, expected a wide scatter", len(buckets))
+	}
+}
+
+// A zero or negative window means the caller wants no spreading, which has to
+// mean "go now" rather than panicking or blocking forever.
+func TestSpreadOnConnectHandlesNoWindow(t *testing.T) {
+	if got := SpreadOnConnect(0); got != 0 {
+		t.Errorf("SpreadOnConnect(0) = %v, want 0", got)
+	}
+	if got := SpreadOnConnect(-time.Second); got != 0 {
+		t.Errorf("SpreadOnConnect(-1s) = %v, want 0", got)
+	}
+	if got := jittered(0); got != 0 {
+		t.Errorf("jittered(0) = %v, want 0", got)
+	}
+}
+
+// With outbox room available and a dead context, both select cases are ready
+// and Go chooses at random, so this has to be decided before the select or it
+// is right about half the time. A sender that slips an envelope through after
+// its connection died can have it land on the next connection instead, which
+// for a snapshot means an abandoned epoch arriving whole and authorizing a
+// sweep against stale state.
+func TestSendBlockingRefusesADeadContextEvenWithRoom(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, outboxSize),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Repeated because the bug is probabilistic: one attempt passes half the
+	// time even with the check missing.
+	for range 200 {
+		if err := c.SendBlocking(ctx, &Envelope{Type: "should-not-land"}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	}
+
+	if got := len(c.outbox); got != 0 {
+		t.Errorf("%d envelopes queued on a cancelled context, expected none", got)
 	}
 }
 
