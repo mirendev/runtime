@@ -1652,6 +1652,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			Uplink:     link,
 		})
 		c.startAppReporter(link)
+		c.startDeployReporter(link)
 
 		go func() {
 			// POP connections outlive individual reconnects but not the link
