@@ -2581,6 +2581,79 @@ func TestShouldWarnLocalStorageMigration(t *testing.T) {
 	})
 }
 
+// TestAliasedLocalMountPaths covers the detection behind the deploy warning that
+// fires when an app declares local disks at 2+ distinct mount paths, which all
+// alias to the same shared per-app store.
+func TestAliasedLocalMountPaths(t *testing.T) {
+	local := func(name, mountPath string) core_v1alpha.ConfigSpecServicesDisks {
+		return core_v1alpha.ConfigSpecServicesDisks{
+			Name:      name,
+			MountPath: mountPath,
+			Provider:  core_v1alpha.ConfigSpecServicesDisksLOCAL,
+		}
+	}
+	miren := func(name, mountPath string) core_v1alpha.ConfigSpecServicesDisks {
+		return core_v1alpha.ConfigSpecServicesDisks{
+			Name:      name,
+			MountPath: mountPath,
+			Provider:  core_v1alpha.ConfigSpecServicesDisksMIREN,
+		}
+	}
+	svc := func(name string, disks ...core_v1alpha.ConfigSpecServicesDisks) core_v1alpha.ConfigSpecServices {
+		return core_v1alpha.ConfigSpecServices{Name: name, Disks: disks}
+	}
+
+	tests := []struct {
+		name string
+		spec core_v1alpha.ConfigSpec
+		want []string
+	}{
+		{
+			name: "distinct paths in one service",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{
+				svc("web", local("cache", "/cache"), local("data", "/data")),
+			}},
+			want: []string{"/cache", "/data"},
+		},
+		{
+			name: "same path across services is not aliasing",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{
+				svc("web", local("local-data", "/miren/data/local")),
+				svc("worker", local("local-data", "/miren/data/local")),
+			}},
+			want: nil,
+		},
+		{
+			name: "single local disk",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{
+				svc("web", local("data", "/data")),
+			}},
+			want: nil,
+		},
+		{
+			name: "distinct paths spread across services",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{
+				svc("web", local("cache", "/cache")),
+				svc("worker", local("data", "/data")),
+			}},
+			want: []string{"/cache", "/data"},
+		},
+		{
+			name: "miren disks are ignored",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{
+				svc("web", local("data", "/data"), miren("vol", "/vol")),
+			}},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, aliasedLocalMountPaths(tt.spec))
+		})
+	}
+}
+
 func TestValidateDiskConfigsAutoCreate(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
