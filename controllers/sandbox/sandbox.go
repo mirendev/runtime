@@ -3435,6 +3435,16 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 // but marking it unhealthy over it would be worse.
 func (c *SandboxController) reregisterSqliteDisks(ctx context.Context, sb *compute.Sandbox) {
 	if c.SqliteDisks == nil {
+		// Returning quietly would strand a sandbox that is still serving: it
+		// outlived the runner and is writing to a database this process has no
+		// way to replicate. Only say so when the sandbox actually has one,
+		// otherwise every restart logs for every sandbox on the node.
+		for _, volume := range sb.Spec.Volume {
+			if volume.Provider == "sqlite" {
+				c.Log.Error("sqlite disk left unreplicated after restart; backups are off for this runner",
+					"sandbox", sb.ID, "volume", volume.Name)
+			}
+		}
 		return
 	}
 

@@ -243,9 +243,18 @@ func (c *SandboxController) configureSqliteVolume(ctx context.Context, sb *compu
 		if err := c.SqliteDisks.Register(ctx, sb.ID.String(), key, dbPath); err != nil {
 			return "", fmt.Errorf("failed to start replicating sqlite volume %q: %w", volume.Name, err)
 		}
-	} else if err := sqlitedisk.EnsureDatabase(dbPath); err != nil {
+	} else {
 		// Backups are unavailable, but the app still expects a usable database.
-		return "", fmt.Errorf("failed to initialize sqlite volume %q: %w", volume.Name, err)
+		// Say so per disk and at Error: the app is about to accept writes that
+		// nothing is replicating, and the runner-wide notice that got us here
+		// scrolled past at startup. This is the last point where the specific
+		// database going unprotected can still be named.
+		c.Log.Error("sqlite disk attached without replication; writes are not being backed up",
+			"sandbox", sb.ID, "volume", volume.Name, "path", dbPath)
+
+		if err := sqlitedisk.EnsureDatabase(dbPath); err != nil {
+			return "", fmt.Errorf("failed to initialize sqlite volume %q: %w", volume.Name, err)
+		}
 	}
 
 	c.Log.Info("configured sqlite volume",

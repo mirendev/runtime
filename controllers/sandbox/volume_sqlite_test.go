@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -105,4 +106,48 @@ func TestConfigureSqliteVolumeRejectsUnsafeSpecValues(t *testing.T) {
 			require.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+// captureLogs returns a controller whose log output is collected, so tests can
+// assert on what an operator would actually see.
+func captureLogs(t *testing.T) (*SandboxController, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	return &SandboxController{
+		Log:      slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		DataPath: t.TempDir(),
+	}, &buf
+}
+
+// A sandbox that outlived its runner keeps writing to a database this process
+// cannot replicate. That has no error to propagate — the sandbox is healthy and
+// stays running — so the log line is the only signal an operator ever gets.
+func TestReregisterSqliteDisksReportsMissingReplication(t *testing.T) {
+	c, logs := captureLogs(t)
+	require.Nil(t, c.SqliteDisks, "this is the backups-unavailable case")
+
+	sb := &compute.Sandbox{Spec: compute.SandboxSpec{
+		Volume: []compute.SandboxSpecVolume{sqliteVolume()},
+	}}
+
+	c.reregisterSqliteDisks(context.Background(), sb)
+
+	out := logs.String()
+	require.Contains(t, out, "level=ERROR", "an unreplicated database must not be reported below Error")
+	require.Contains(t, out, "left unreplicated after restart")
+	require.Contains(t, out, "state", "the line must name which disk is unprotected")
+}
+
+// The same path must stay quiet for sandboxes with nothing to replicate, or
+// every restart on a node would log once per sandbox and bury the real ones.
+func TestReregisterSqliteDisksQuietWithoutSqliteVolumes(t *testing.T) {
+	c, logs := captureLogs(t)
+
+	sb := &compute.Sandbox{Spec: compute.SandboxSpec{
+		Volume: []compute.SandboxSpecVolume{{Name: "scratch", Provider: "local", MountPath: "/scratch"}},
+	}}
+
+	c.reregisterSqliteDisks(context.Background(), sb)
+
+	require.Empty(t, logs.String(), "a sandbox with no sqlite disk has nothing to warn about")
 }

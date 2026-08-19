@@ -24,6 +24,16 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
+		// SQLite disks (loud failures): the two paths that leave a database
+		// unreplicated now say so at Error instead of returning quietly --
+		// configureSqliteVolume when a disk attaches with no backup service,
+		// and reregisterSqliteDisks when a sandbox outlives the runner that
+		// was replicating it. Neither has an error to propagate (the app is
+		// meant to keep running either way), so the log line is the only
+		// signal an operator gets. No saga edit: both are reached through
+		// sandboxOps.ConfigureVolumes and Init respectively, which both paths
+		// share.
+		//
 		// SQLite disks (revised after review): replication is now released
 		// after DestroySubContainers rather than before, so writes made during
 		// graceful shutdown still reach the coordinator; surviving sandboxes
@@ -84,8 +94,8 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
 		// is only reached from Init, which both paths share, and the saga
 		// controller has no boot reconciliation of its own.
-		"sandbox.go":  "3fbe652158f1e202f5a5dfe913d0b4eb718e6b69b27cf3ab8b5867a2702e5a1e",
-		"volume.go":   "0555947db9407572a87b7e42f0792b80cebb061e0fe6a07be138689332e958f0",
+		"sandbox.go":  "9de705f9e0b66c15db148dbd651f37e74597f2d4cc62b0f758dcf4eb139857ce",
+		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
 

@@ -443,8 +443,13 @@ func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer {
 // sqlite-provider disks are replicated as they are written.
 //
 // A failure here is not fatal. The manager stays nil, which is inert, so disks
-// still attach and apps still run — they are simply not backed up until the
-// runner reconnects. Losing backups is better than refusing to start workloads.
+// still attach and apps still run — they are simply not backed up. Losing
+// backups is better than refusing to start workloads.
+//
+// There is no reconnect: nothing retries this, so backups stay off for the
+// lifetime of the process and an operator has to restart the runner once the
+// coordinator is reachable. That is why the failure logs at Error rather than
+// Warn, and why each sqlite disk says so again as it attaches.
 func (r *Runner) setupSqliteDisks(rs *rpc.State) {
 	var (
 		client *rpc.NetworkClient
@@ -456,7 +461,7 @@ func (r *Runner) setupSqliteDisks(rs *rpc.State) {
 		client, err = rs.Client(string(rpc.ServiceSqliteBackup))
 	}
 	if err != nil {
-		r.Log.Warn("sqlite disk backups disabled: cannot reach coordinator backup service", "error", err)
+		r.Log.Error("sqlite disk backups disabled for the life of this runner: cannot reach coordinator backup service; restart the runner once it is reachable", "error", err)
 		return
 	}
 
