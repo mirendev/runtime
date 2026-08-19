@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to build (tag, branch, or SHA). Leave empty to use current ref.'
+        description: 'Version tag to rebuild, e.g. v1.2.3. Leave empty to build the ref this run was dispatched on.'
         required: false
         default: ''
       update_latest:
@@ -31,23 +31,91 @@ jobs:
   init:
     runs-on: ubuntu-latest
     outputs:
-      ref: ${{ steps.set-ref.outputs.ref }}
-      sha: ${{ steps.set-ref.outputs.sha }}
+      # The human-readable name of what we're building, used for version
+      # strings and the stable-release conditions further down.
+      ref: ${{ steps.resolve.outputs.ref }}
+      # What every other job actually checks out. Resolving once here means the
+      # whole release is built from a single commit even if a tag moves mid-run.
+      sha: ${{ steps.sha.outputs.sha }}
+      # Whether later jobs may use the Actions cache at all. A dispatched
+      # rebuild runs an arbitrary tag's build scripts inside the default
+      # branch's cache scope, so it is kept away from it (see below). setup-go's
+      # cache is all-or-nothing, so false there drops the restore along with the
+      # save and the rebuild resolves modules cold; the Docker job is the only
+      # one that ends up genuinely read-only, since its cache-from survives.
+      cache: ${{ steps.resolve.outputs.cache }}
     steps:
+      # A dispatch with an explicit ref exists to repackage an already-released
+      # tag with current packaging code, so it only accepts exactly that.
+      #
+      # The run's Actions cache scope follows the ref it was dispatched on, not
+      # the code it checks out. Dispatching from main with a ref pointing
+      # elsewhere therefore runs that code (make targets, package.json scripts)
+      # while holding a write token for the default branch's cache scope, which
+      # every later run restores from — including release builds that sign and
+      # attest binaries. Constraining the input to a version tag keeps the
+      # rebuild escape hatch without letting a dispatch nominate arbitrary code
+      # to execute there.
+      - name: Resolve build ref
+        id: resolve
+        env:
+          DISPATCH_REF: ${{ inputs.ref }}
+          PUSH_REF: ${{ github.ref_name }}
+          PUSH_CHECKOUT: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DISPATCH_REF" ]; then
+            echo "ref=$PUSH_REF" >> "$GITHUB_OUTPUT"
+            # github.ref is already fully qualified, matching the tag path
+            # below, so neither form can be shadowed by a same-named ref of the
+            # other kind.
+            echo "checkout=$PUSH_CHECKOUT" >> "$GITHUB_OUTPUT"
+            echo "cache=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Mirrors the prerelease grammar in pkg/release/semver.go: dot
+          # separated identifiers, each at least one character, hyphens allowed
+          # inside one. Requiring a non-empty identifier also means the value
+          # can never contain '..', which git would reject as a ref anyway.
+          #
+          # Bash's =~ anchors against the whole string, so a value carrying a
+          # newline cannot satisfy this and go on to inject extra step outputs.
+          if [[ ! "$DISPATCH_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::Dispatch ref must be a version tag such as v1.2.3 or v1.2.3-rc1, got '$DISPATCH_REF'. To build a branch, dispatch the workflow on that branch and leave this input empty."
+            exit 1
+          fi
+
+          echo "ref=$DISPATCH_REF" >> "$GITHUB_OUTPUT"
+          # Fully qualified so a branch sharing the tag's name cannot shadow it.
+          echo "checkout=refs/tags/$DISPATCH_REF" >> "$GITHUB_OUTPUT"
+          echo "cache=false" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref || github.ref_name }}
-      - id: set-ref
-        run: |
-          echo "ref=${{ inputs.ref || github.ref_name }}" >> $GITHUB_OUTPUT
-          echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          ref: ${{ steps.resolve.outputs.checkout }}
+
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   test:
+    # A dispatched rebuild repackages a tag whose source already passed this
+    # suite when it was pushed, and the packaging code doing the rebuilding was
+    # tested on main. Running it again here would be the one place a dispatch
+    # executes tag code inside the default branch's cache scope — the whole
+    # suite is `make` and `bun run` against a writable shared cache. Skip it
+    # rather than harden nine cache blocks for a path that adds no signal.
+    #
+    # Only the explicit-ref form skips. A dispatch with an empty ref builds the
+    # ref it was dispatched on, so its cache scope is that ref's own and there
+    # is nothing to protect.
+    if: github.event_name != 'workflow_dispatch' || inputs.ref == ''
     needs: init
     uses: ./.github/workflows/test.yml
     with:
-      ref: ${{ needs.init.outputs.ref }}
+      ref: ${{ needs.init.outputs.sha }}
     secrets: inherit
 
   package:
@@ -66,13 +134,18 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
-        ref: ${{ needs.init.outputs.ref }}
+        ref: ${{ needs.init.outputs.sha }}
 
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        cache: true
+        # `make release-data` below runs the checked-out tag's Makefile, so a
+        # dispatched rebuild is kept off the shared cache entirely. setup-go has
+        # no read-only mode, so that costs the restore too and the rebuild
+        # resolves modules cold. CodeQL only flagged this shape in test.yml, but
+        # it is the same shape here.
+        cache: ${{ needs.init.outputs.cache }}
 
     - name: Install iso
       run: |
@@ -122,13 +195,15 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
-        ref: ${{ needs.init.outputs.ref }}
+        ref: ${{ needs.init.outputs.sha }}
 
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        cache: true
+        # Same as the package job: `make bin/miren` runs the tag's Makefile, so
+        # a dispatched rebuild starts from a cold module cache.
+        cache: ${{ needs.init.outputs.cache }}
 
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       run: |
@@ -292,6 +367,14 @@ jobs:
 
   build-and-push-docker:
     needs: [init, test, package]
+    # `test` is skipped on a dispatched rebuild, and a skipped dependency would
+    # otherwise skip this job too, leaving the rebuild with nothing to publish.
+    # Naming the results keeps a genuine test failure blocking while letting the
+    # deliberate skip through.
+    if: >-
+      !cancelled() &&
+      needs.package.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: depot-ubuntu-latest
     permissions:
       contents: read
@@ -301,7 +384,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.init.outputs.ref }}
+          ref: ${{ needs.init.outputs.sha }}
 
       - name: Download amd64 package
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -364,10 +447,22 @@ jobs:
           push: true
           tags: ${{ steps.docker-tags.outputs.tags }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The layer cache lives in the same scope as everything else here, and
+          # this builds the tag's Dockerfile, so a dispatched rebuild must not
+          # write to it. Reading stays on: a rebuild consuming a stale layer is
+          # the ordinary cache-trust question every push shares, not something
+          # this path makes worse.
+          cache-to: ${{ needs.init.outputs.cache == 'true' && 'type=gha,mode=max' || '' }}
 
   upload-to-miren:
     needs: [init, test, package, build-binaries]
+    # Same reasoning as build-and-push-docker: tolerate `test` being skipped on
+    # a dispatched rebuild without tolerating it having failed.
+    if: >-
+      !cancelled() &&
+      needs.package.result == 'success' &&
+      needs['build-binaries'].result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: depot-ubuntu-latest
     concurrency:
       group: upload-to-miren-${{ needs.init.outputs.ref }}
@@ -380,7 +475,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.init.outputs.ref }}
+          ref: ${{ needs.init.outputs.sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
