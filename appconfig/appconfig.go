@@ -58,8 +58,10 @@ type ServiceConcurrencyConfig struct {
 
 // DiskConfig represents a disk attachment for a service.
 // Provider defaults to "miren" (network disk) when empty.
-// Use provider = "local" for node-local persistent storage, or
-// provider = "sqlite" for a continuously backed-up SQLite database.
+// Use provider = "local" for node-local persistent storage.
+//
+// A SQLite database is not declared here. It comes from the miren-sqlite
+// addon, which attaches its own storage; see docs/docs/addons.md.
 type DiskConfig struct {
 	Name         string `toml:"name"`
 	Provider     string `toml:"provider"`
@@ -69,24 +71,12 @@ type DiskConfig struct {
 	Filesystem   string `toml:"filesystem"`
 	LeaseTimeout string `toml:"lease_timeout"`
 	Owner        string `toml:"owner"`
-
-	// DbFile is the database's filename inside the mounted directory, for
-	// provider = "sqlite" only. It is a bare filename, not a path.
-	// Defaults to DefaultSqliteDbFile.
-	DbFile string `toml:"db_file"`
-
-	// Id identifies which database a sqlite disk attaches to, for
-	// provider = "sqlite" only. Defaults to DefaultSqliteId. IDs are scoped to
-	// the app: two services of one app that name the same id share a database,
-	// while the same id in a different app is a different database.
-	Id string `toml:"id"`
 }
 
 // Disk providers accepted in app.toml.
 const (
-	DiskProviderMiren  = "miren"
-	DiskProviderLocal  = "local"
-	DiskProviderSqlite = "sqlite"
+	DiskProviderMiren = "miren"
+	DiskProviderLocal = "local"
 )
 
 // DefaultSqliteDbFile is the database name used when a sqlite disk does not
@@ -97,16 +87,27 @@ const DefaultSqliteDbFile = "data.db"
 // set id.
 const DefaultSqliteId = "default"
 
-// isPlainFilename reports whether name is a bare filename rather than a path:
-// no separators, and not a directory reference.
-func isPlainFilename(name string) bool {
-	return name != "" && name != "." && name != ".." && name == filepath.Base(name)
+// singleWriterAddons are addons whose storage only one process may write, so a
+// service receiving it must run exactly one instance.
+var singleWriterAddons = map[string]bool{
+	"miren-sqlite": true,
 }
 
-// sqliteIdPattern constrains a sqlite disk id to a single safe path segment.
-// The id names a directory on the runner and part of the backup key on the
-// coordinator, so anything that could escape either is rejected outright.
-var sqliteIdPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+// services reports whether an addon's storage reaches a named service. An empty
+// list means every service, matching how addon variables reach every service.
+func (c *AddonConfig) services() func(string) bool {
+	if c == nil || len(c.Services) == 0 {
+		return func(string) bool { return true }
+	}
+	return func(name string) bool {
+		for _, s := range c.Services {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
+}
 
 // PortConfig represents a network port for a service
 type PortConfig struct {
@@ -138,6 +139,15 @@ type ServiceConfig struct {
 type AddonConfig struct {
 	Variant string `toml:"variant"`
 	Version string `toml:"version"`
+
+	// Services names the services an addon's storage attaches to. Empty means
+	// every service, matching how addon variables reach every service.
+	//
+	// It exists because storage an addon supplies can carry constraints that
+	// the rest of the app should not have to inherit. A SQLite database allows
+	// one writer, so a service holding it must run a single fixed instance;
+	// without this an app could not also run a worker at three.
+	Services []string `toml:"services"`
 }
 
 // Task trigger values. A task's trigger says what starts it; the default is
@@ -524,57 +534,20 @@ func (ac *AppConfig) Validate() error {
 
 		// Validate disk configurations
 		//
-		// Miren and sqlite disks both demand a single writer: miren disks are
-		// leased exclusively, and a SQLite database replicated by litestream
-		// would be corrupted by concurrent writers.
+		// Miren disks are leased exclusively, so a service holding one must run
+		// a single fixed instance.
 		hasSingleWriterDisks := false
 		for i, disk := range svcConfig.Disks {
 			switch disk.Provider {
-			case "", DiskProviderMiren, DiskProviderLocal, DiskProviderSqlite:
+			case "", DiskProviderMiren, DiskProviderLocal:
 			default:
 				return &ValidationError{
 					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\", \"local\", or \"sqlite\"", serviceName, i, disk.Name, disk.Provider),
+					Message: fmt.Sprintf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\" or \"local\"", serviceName, i, disk.Name, disk.Provider),
 				}
 			}
-			if disk.Provider == "" || disk.Provider == DiskProviderMiren || disk.Provider == DiskProviderSqlite {
+			if disk.Provider == "" || disk.Provider == DiskProviderMiren {
 				hasSingleWriterDisks = true
-			}
-			if disk.DbFile != "" && disk.Provider != DiskProviderSqlite {
-				return &ValidationError{
-					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) db_file is only supported for sqlite disks", serviceName, i, disk.Name),
-				}
-			}
-			if disk.Id != "" && disk.Provider != DiskProviderSqlite {
-				return &ValidationError{
-					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) id is only supported for sqlite disks", serviceName, i, disk.Name),
-				}
-			}
-			if disk.Id != "" && !sqliteIdPattern.MatchString(disk.Id) {
-				return &ValidationError{
-					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) invalid id %q, must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", serviceName, i, disk.Name, disk.Id),
-				}
-			}
-			// A WAL-mode database needs to write its -wal and -shm sidecars, so
-			// it cannot live on a read-only mount even to be read from.
-			if disk.ReadOnly && disk.Provider == DiskProviderSqlite {
-				return &ValidationError{
-					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) read_only is not supported for sqlite disks: SQLite requires a writable mount for its write-ahead log", serviceName, i, disk.Name),
-				}
-			}
-			// db_file names a file directly inside the mounted directory. Only
-			// that directory is created and made writable for the container, so
-			// a nested path would fail later with an opaque SQLite error about
-			// a directory nothing ever created.
-			if disk.DbFile != "" && !isPlainFilename(disk.DbFile) {
-				return &ValidationError{
-					KeyPath: svcPrefix + ".disks",
-					Message: fmt.Sprintf("service %s: disk[%d] (%s) db_file %q must be a filename with no path separators", serviceName, i, disk.Name, disk.DbFile),
-				}
 			}
 			if disk.Name == "" {
 				return &ValidationError{
@@ -594,9 +567,7 @@ func (ac *AppConfig) Validate() error {
 					Message: fmt.Sprintf("service %s: disk[%d] (%s) mount_path must be an absolute path", serviceName, i, disk.Name),
 				}
 			}
-			// Local and sqlite disks are bind-mounted host directories: there is
-			// no disk image to size or format, and no lease to wait on.
-			if disk.Provider == DiskProviderLocal || disk.Provider == DiskProviderSqlite {
+			if disk.Provider == DiskProviderLocal {
 				if disk.SizeGB != 0 {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
@@ -639,18 +610,18 @@ func (ac *AppConfig) Validate() error {
 			}
 		}
 
-		// Miren and sqlite disks require fixed concurrency with a single instance
+		// Miren disks require fixed concurrency with a single instance
 		if hasSingleWriterDisks {
 			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".concurrency",
-					Message: fmt.Sprintf("service %s: miren and sqlite disks can only be attached to services with fixed concurrency mode", serviceName),
+					Message: fmt.Sprintf("service %s: miren disks can only be attached to services with fixed concurrency mode", serviceName),
 				}
 			}
 			if svcConfig.Concurrency.NumInstances != 1 {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".concurrency.num_instances",
-					Message: fmt.Sprintf("service %s: miren and sqlite disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName),
+					Message: fmt.Sprintf("service %s: miren disks can only be attached to services with fixed concurrency mode and num_instances=1", serviceName),
 				}
 			}
 		}
@@ -658,6 +629,36 @@ func (ac *AppConfig) Validate() error {
 
 	if err := ac.validateTasks(); err != nil {
 		return err
+	}
+
+	// An addon that supplies single-writer storage constrains the services it
+	// attaches to. Catching it here means a deploy fails with the reason rather
+	// than succeeding and leaving the app with no database, which is what
+	// happens further down: appspec skips a disk on a service that can scale.
+	//
+	// The set is named here rather than read from the addon registry because
+	// app.toml is parsed client-side, where no registry exists. It is short and
+	// changes rarely; a provider joining it needs a line here too.
+	for addonName, cfg := range ac.Addons {
+		if !singleWriterAddons[addonName] {
+			continue
+		}
+
+		targets := cfg.services()
+		for serviceName, svcConfig := range ac.Services {
+			if svcConfig == nil || !targets(serviceName) {
+				continue
+			}
+			c := svcConfig.Concurrency
+			if c == nil || c.Mode != "fixed" || c.NumInstances != 1 {
+				return &ValidationError{
+					KeyPath: "services." + serviceName + ".concurrency",
+					Message: fmt.Sprintf(
+						"service %s: addon %s supplies a database that allows one writer, so the service must set mode = \"fixed\" with num_instances = 1, or the addon must name other services with services = [...]",
+						serviceName, addonName),
+				}
+			}
+		}
 	}
 
 	for name, target := range ac.Aliases {

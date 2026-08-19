@@ -523,8 +523,6 @@ func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvid
 	switch provider {
 	case appconfig.DiskProviderLocal:
 		return core_v1alpha.ConfigSpecServicesDisksLOCAL
-	case appconfig.DiskProviderSqlite:
-		return core_v1alpha.ConfigSpecServicesDisksSQLITE
 	default:
 		return core_v1alpha.ConfigSpecServicesDisksMIREN
 	}
@@ -669,8 +667,6 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 						ReadOnly:     disk.ReadOnly,
 						SizeGb:       int64(disk.SizeGB),
 						Filesystem:   disk.Filesystem,
-						DbFile:       disk.DbFile,
-						SqliteId:     disk.Id,
 						LeaseTimeout: disk.LeaseTimeout,
 						Owner:        disk.Owner,
 						Provider:     mapDiskProvider(disk.Provider),
@@ -1883,12 +1879,14 @@ func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appco
 	for addonName, cfg := range ac.Addons {
 		variant := ""
 		version := ""
+		var services []string
 		if cfg != nil {
 			variant = cfg.Variant
 			version = cfg.Version
+			services = cfg.Services
 		}
 
-		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName, version)
+		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName, version, services)
 		if err != nil {
 			// "already attached" is expected on redeploys
 			if strings.Contains(err.Error(), "already attached") {

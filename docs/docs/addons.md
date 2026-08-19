@@ -214,12 +214,19 @@ variant = "standard"
 That difference has consequences worth knowing:
 
 - **One writer.** SQLite allows a single writer, so a service with a SQLite
-  database must use `mode = "fixed"` with `num_instances = 1`. Miren refuses to
-  attach the database otherwise rather than let it be corrupted.
+  database must use `mode = "fixed"` with `num_instances = 1`. Deploying without
+  that fails with the reason, rather than starting an app whose database is
+  quietly missing.
 - **One database per app.** An app gets a single SQLite database, because an app
-  gets a single instance of any addon. If you need more than one, or need to
-  attach a database to specific services, declare it as a disk instead — see
-  [SQLite Databases](/disks#sqlite-databases).
+  gets a single instance of any addon.
+- **Scoped with `services`.** By default the database attaches to every service,
+  which means every service inherits the single-writer rule. Name the ones that
+  need it and the rest are free to scale:
+
+  ```toml
+  [addons.miren-sqlite]
+  services = ["web"]
+  ```
 - **Node-local.** The database lives on the server your app runs on, so the app
   is pinned to the coordinator like any app with a disk.
 

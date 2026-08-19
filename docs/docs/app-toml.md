@@ -269,7 +269,7 @@ node_port = 7000
 
 ### `[[services.<name>.disks]]` — Persistent Disks {#disks}
 
-Attaches persistent storage to a service. See [Persistent Storage](/disks) for details on local storage, SQLite databases, and Miren Disks. For a SQLite database specifically, the [`miren-sqlite` addon](/addons#sqlite-is-different) is usually the shorter path; declare the disk directly when you need more than one database or want to target specific services.
+Attaches persistent storage to a service. See [Persistent Storage](/disks) for local storage and Miren Disks. A SQLite database is not declared here: the [`miren-sqlite` addon](/addons#sqlite-is-different) attaches its own storage.
 
 ```toml
 # Local storage (simple, node-local)
@@ -285,32 +285,24 @@ mount_path = "/var/lib/postgresql/data"
 size_gb = 20
 filesystem = "ext4"
 
-# SQLite database, backed up continuously (experimental)
-[[services.api.disks]]
-name = "state"
-provider = "sqlite"
-mount_path = "/data"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Unique disk name. **Required.** | — |
-| `provider` | string | `"miren"` for cloud-synced disks, `"local"` for node-local storage, `"sqlite"` for a continuously backed-up SQLite database | `"miren"` |
+| `provider` | string | `"miren"` for cloud-synced disks, `"local"` for node-local storage | `"miren"` |
 | `mount_path` | string | Mount point inside the container. **Required.** | — |
-| `size_gb` | int | Disk size in gigabytes (required for new miren disks, ignored for local and sqlite) | — |
+| `size_gb` | int | Disk size in gigabytes (required for new miren disks, ignored for local) | — |
 | `filesystem` | string | `"ext4"`, `"xfs"`, or `"btrfs"` (miren disks only) | `"ext4"` |
-| `read_only` | bool | Mount as read-only (not supported for sqlite disks) | `false` |
-| `id` | string | Which database a sqlite disk attaches to, scoped to the app (sqlite disks only) | `"default"` |
-| `db_file` | string | Database filename inside the mounted directory — a filename, not a path (sqlite disks only) | `"data.db"` |
+| `read_only` | bool | Mount as read-only | `false` |
 | `lease_timeout` | duration | How long to wait when acquiring the exclusive disk lease (miren disks only) | — |
 | `owner` | string | Ownership for a writable miren disk: empty makes it writable by the run user, `"keep"` opts out, `"uid"`/`"uid:gid"` pins an owner | — |
 
 :::note[Validation]
 - `name` and `mount_path` are required.
-- `provider` must be `"miren"` (default), `"local"`, or `"sqlite"`.
+- `provider` must be `"miren"` (default) or `"local"`.
 - For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative.
-- For sqlite disks: `size_gb`, `filesystem`, `lease_timeout` and `read_only` are not supported; `id` must be alphanumeric (`.`, `_` and `-` allowed after the first character); `db_file` must be a filename with no path separators.
-- Miren and sqlite disks require `mode = "fixed"` and `num_instances = 1`.
+- Miren disks require `mode = "fixed"` and `num_instances = 1`.
 - `lease_timeout` must be a valid Go duration (e.g. `"30s"`, `"2m"`).
 :::
 
@@ -441,6 +433,7 @@ version = "16"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `variant` | string | Addon variant (e.g. `small`, `shared`) | Addon's default variant |
+| `services` | list | Services the addon's storage attaches to. Empty means every service. Only meaningful for addons that supply storage, such as `miren-sqlite` | all services |
 | `version` | string | Software version tag, or a full image reference if it contains `:` | Addon's default version |
 
 Run `miren addon variants <addon-name>` to see available variants and `miren addon list-available` to see default versions.

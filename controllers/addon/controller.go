@@ -194,9 +194,9 @@ func (c *Controller) completeProvision(
 		envVars = adjusted
 	}
 
-	// Step 5: Record what this addon supplies. This is the only write. The app's
-	// versions are untouched; the binding reaches the app because
-	// ResolveRuntimeConfig reads it from here. Step 6 sets status to active, which
+	// Step 5: Record what this addon supplies, variables and any storage. This
+	// is the only write. The app's versions are untouched; the bindings reach
+	// the app because ResolveRuntimeConfig reads them from here. Step 6 sets status to active, which
 	// makes it visible, and the launcher's AddonAssociation watch turns that into
 	// a reconcile.
 	variables := make([]addon_v1alpha.Variables, len(envVars))
@@ -207,10 +207,22 @@ func (c *Controller) completeProvision(
 			Sensitive: v.Sensitive,
 		}
 	}
+	disks := make([]addon_v1alpha.Disks, len(result.Disks))
+	for i, d := range result.Disks {
+		disks[i] = addon_v1alpha.Disks{
+			Name:                 d.Name,
+			Provider:             d.Provider,
+			MountPath:            d.MountPath,
+			DbFile:               d.DbFile,
+			RequiresSingleWriter: d.RequiresSingleWriter,
+		}
+	}
+
 	if err := meta.Update((&addon_v1alpha.AddonAssociation{
 		Variables: variables,
+		Disks:     disks,
 	}).Encode()); err != nil {
-		return fmt.Errorf("persisting addon variables: %w", err)
+		return fmt.Errorf("persisting addon bindings: %w", err)
 	}
 
 	// Step 6: Set status to active

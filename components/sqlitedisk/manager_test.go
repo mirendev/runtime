@@ -3,6 +3,7 @@ package sqlitedisk
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -453,4 +454,51 @@ func TestRegisterClosesDatabaseAbandonedDuringOpen(t *testing.T) {
 	mgr.mu.Unlock()
 	require.Zero(t, remaining, "no replication should be left behind")
 	require.Zero(t, owners, "no owner tracking should be left behind")
+}
+
+// A failed open must tear down only its own registration. If it was abandoned
+// during the open and a later register already claimed the key, deleting the
+// entry unconditionally would strand that newer database: still replicating,
+// but absent from the map and so invisible to Close and to every later release.
+func TestFailedOpenLeavesNewerRegistrationAlone(t *testing.T) {
+	ctx := context.Background()
+	mgr, _ := newTestManager(t)
+
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+	seedRows(t, dbPath, "a")
+	key := BackupKey("app/demo", "state")
+
+	// A registration whose open is notionally still in flight, already dropped
+	// from the map by the release of its only owner.
+	stale := &replication{
+		dbPath: dbPath,
+		owners: map[string]struct{}{"sandbox/a": {}},
+		ready:  make(chan struct{}),
+	}
+
+	// The key is reclaimed before that open finishes.
+	require.NoError(t, mgr.Register(ctx, "sandbox/b", key, dbPath))
+
+	mgr.mu.Lock()
+	current := mgr.repls[key]
+	mgr.mu.Unlock()
+	require.NotNil(t, current, "the newer register should hold the key")
+
+	require.True(t, mgr.finishOpen(key, stale, nil, errors.New("open failed")),
+		"a registration that no longer holds the key is abandoned")
+
+	mgr.mu.Lock()
+	held := mgr.repls[key]
+	_, ownerHeld := mgr.owners["sandbox/b"]
+	mgr.mu.Unlock()
+
+	require.Same(t, current, held, "the newer registration must survive the failed open")
+	require.True(t, ownerHeld, "the newer registration's owner must stay tracked")
+
+	// And it must still be reachable for teardown.
+	require.NoError(t, mgr.DeregisterOwner(ctx, "sandbox/b"))
+	mgr.mu.Lock()
+	remaining := len(mgr.repls)
+	mgr.mu.Unlock()
+	require.Zero(t, remaining, "the surviving registration must still be closable")
 }

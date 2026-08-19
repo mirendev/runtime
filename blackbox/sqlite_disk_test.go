@@ -26,22 +26,8 @@ func TestSqliteAddonReplication(t *testing.T) {
 	})
 }
 
-// TestSqliteDiskReplication covers declaring the database directly as a disk.
-// That path stays supported for what the addon cannot express: more than one
-// database per app, and attaching to specific services.
-func TestSqliteDiskReplication(t *testing.T) {
-	runSqliteReplicationTest(t, sqliteCase{
-		testdata: "sqlite-disk-app",
-		// The app declares a disk named "state" with id "notes", so a key built
-		// from the id rather than the disk name is what proves the id wins.
-		wantKeyFragment: "notes",
-	})
-}
-
 type sqliteCase struct {
-	testdata string
-	// addon, when set, is the addon the app declares. Such an app is deployed
-	// without waiting on the deployed version, because provisioning replaces it.
+	testdata        string
 	addon           string
 	wantKeyFragment string
 }

@@ -198,7 +198,7 @@ func AddonCreate(ctx *Context, opts struct {
 
 	addonsClient := app_v1alpha.NewAddonsClient(cl)
 
-	result, err := addonsClient.CreateInstance(ctx, "", opts.Spec, "", opts.App, opts.Version)
+	result, err := addonsClient.CreateInstance(ctx, "", opts.Spec, "", opts.App, opts.Version, nil)
 	if err != nil {
 		return err
 	}

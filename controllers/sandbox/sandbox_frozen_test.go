@@ -84,9 +84,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
 		// is only reached from Init, which both paths share, and the saga
 		// controller has no boot reconciliation of its own.
-		"sandbox.go":  "b574475091e6ea0f42be38e6b8f22ecdeda84b7c5a0b8004fa071e0a0657ae12",
-		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
-		"sandbox.go":  "826f809e82077b22648c39c5fba9751b873cc2eb3f6b0752d7f48a9e5ecbb85f",
+		"sandbox.go":  "3fbe652158f1e202f5a5dfe913d0b4eb718e6b69b27cf3ab8b5867a2702e5a1e",
 		"volume.go":   "0555947db9407572a87b7e42f0792b80cebb061e0fe6a07be138689332e958f0",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

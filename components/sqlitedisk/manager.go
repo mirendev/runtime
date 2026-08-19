@@ -131,23 +131,7 @@ func (m *Manager) Register(ctx context.Context, owner, key, dbPath string) error
 
 	db, err := m.open(ctx, key, dbPath)
 
-	m.mu.Lock()
-	r.db, r.err = db, err
-	close(r.ready)
-	if err != nil {
-		// Drop the whole registration, including any owners that joined while
-		// the open was running — none of them are being replicated.
-		delete(m.repls, key)
-		for o := range r.owners {
-			m.untrackOwnerLocked(o, key)
-		}
-	}
-	// Every owner may have left while this open was running, in which case the
-	// release could not close a database that did not exist yet and left it to
-	// us. Without this the database would keep replicating with no owner and no
-	// entry in the map, invisible even to Close.
-	abandoned := m.repls[key] != r
-	m.mu.Unlock()
+	abandoned := m.finishOpen(key, r, db, err)
 
 	if err != nil {
 		return err
@@ -163,6 +147,42 @@ func (m *Manager) Register(ctx context.Context, owner, key, dbPath string) error
 
 	m.log.Info("replicating sqlite disk", "key", key, "path", dbPath, "owner", owner)
 	return nil
+}
+
+// finishOpen publishes the result of an open to everyone waiting on r and tears
+// the registration down if it failed. It reports whether r was abandoned while
+// the open was in flight, which the caller must handle by closing the database
+// itself.
+//
+// Both the teardown and the abandoned check hinge on r still being the
+// registration installed under key. A release that ran during the open drops the
+// entry, and a later register can install a fresh one in its place; in neither
+// case may this open delete the map entry or untrack owners, because they belong
+// to whoever holds the slot now.
+func (m *Manager) finishOpen(key string, r *replication, db *litestream.DB, err error) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	r.db, r.err = db, err
+	close(r.ready)
+
+	// Every owner may have left while this open was running, in which case the
+	// release could not close a database that did not exist yet and left it to
+	// us. Without this the database would keep replicating with no owner and no
+	// entry in the map, invisible even to Close.
+	if m.repls[key] != r {
+		return true
+	}
+
+	if err != nil {
+		// Drop the whole registration, including any owners that joined while
+		// the open was running — none of them are being replicated.
+		delete(m.repls, key)
+		for o := range r.owners {
+			m.untrackOwnerLocked(o, key)
+		}
+	}
+	return false
 }
 
 func (m *Manager) open(ctx context.Context, key, dbPath string) (*litestream.DB, error) {

@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Persistent Storage
 
-Miren provides three options for persistent storage: **Local Storage** (simple, node-local), **SQLite Databases** (node-local, continuously backed up), and **Miren Disks** (managed persistent volumes). All three are configured as disks in your `app.toml`. A SQLite database is usually easier to ask for as an [addon](/addons#sqlite-is-different); this page covers declaring one directly, which is what you want for finer control.
+Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`. For a SQLite database, use the [`miren-sqlite` addon](/addons#sqlite-is-different) instead: it attaches its own storage and keeps it backed up, so there is no disk to declare.
 
 Your data lives on the server where your app runs. Local storage and Miren Disks are backed up on request; a SQLite disk is backed up continuously as you write to it. See each section below.
 
@@ -78,7 +78,7 @@ This is handy for sharing node-local state between an app's services, but if you
 - Session storage
 - Any data that needs to persist across restarts
 
-For a SQLite database specifically, prefer [SQLite Databases](#sqlite-databases): you get the same node-local directory plus continuous backup and automatic restore.
+For a SQLite database, prefer the [`miren-sqlite` addon](/addons#sqlite-is-different): you get the same node-local directory plus continuous backup and automatic restore, without declaring a disk.
 
 ### Limitations
 
@@ -92,115 +92,6 @@ For a SQLite database specifically, prefer [SQLite Databases](#sqlite-databases)
 Previously, Miren automatically mounted `/miren/data/local` for every app. This is now opt-in via the disk config above.
 
 If any of your environment variables reference `/miren/data/local`, Miren will automatically add the local storage volume for you — so most apps will keep working without changes. You'll see a log message when this happens, and we recommend adding the explicit disk config when convenient.
-
----
-
-## SQLite Databases
-
-A `provider = "sqlite"` disk gives your app a directory containing a SQLite
-database that Miren keeps backed up for you. It is the same kind of node-local
-directory as local storage, with two things added: the database is created in
-WAL mode before your app starts, and committed transactions are replicated to
-the coordinator continuously in the background.
-
-:::tip[Most apps should use the addon instead]
-[`[addons.miren-sqlite]`](/addons#sqlite-is-different) sets all of this up for
-you and injects `DATABASE_URL`, and is the shorter path to the same database.
-Declare the disk directly when you need what the addon cannot express: more
-than one database in an app, attaching a database to specific services, or a
-particular filename.
-:::
-
-:::warning[Experimental]
-The SQLite disk provider is new and its behavior may change. Keep your own
-backups of anything you cannot afford to lose.
-:::
-
-### Configuration
-
-```toml
-[services.api]
-command = "./server"
-
-[services.api.concurrency]
-mode = "fixed"
-num_instances = 1
-
-[[services.api.disks]]
-name = "state"
-provider = "sqlite"
-mount_path = "/data"
-```
-
-Your app opens the database at `/data/data.db`. It already exists and is
-already in WAL mode, so there is no setup step — connect and start querying.
-
-### How It Works
-
-- **Created for you**: Miren creates the database in WAL mode before your
-  container starts, so your app never has to handle a missing file or set
-  `journal_mode` itself.
-- **Backed up continuously**: A replication process on the server watches the
-  database and ships committed transactions to the coordinator. There is no
-  schedule to configure and no backup job to run. Replication is asynchronous,
-  so a server that dies abruptly can lose the last moment of writes — a commit
-  is durable on that server immediately, but takes a beat to reach the backup.
-- **Restored automatically**: When a disk is attached on a server that has no
-  copy of the database, Miren restores it from the coordinator first. A brand
-  new disk with no backup simply starts empty.
-- **Survives redeploys**: Replication stops cleanly when a container shuts
-  down, flushing outstanding transactions, and resumes when the replacement
-  starts.
-
-Backups live under `/var/lib/miren/sqlite-backups` on the coordinator, one
-directory per database.
-
-### Naming a Database
-
-A sqlite disk's `id` decides *which* database it attaches to. It defaults to
-`"default"`, so the example above needs no `id` at all.
-
-IDs are scoped to your app. Two services of the same app that name the same id
-share one database; the same id in a different app is a different database.
-
-```toml
-# Both services attach the same database; only one of them should write.
-[[services.api.disks]]
-name = "state"
-provider = "sqlite"
-mount_path = "/data"
-id = "orders"
-
-[[services.worker.disks]]
-name = "state"
-provider = "sqlite"
-mount_path = "/data"
-id = "orders"
-```
-
-Use `db_file` to change the filename within the directory (default
-`data.db`). It is a filename, not a path — the directory is created for you,
-but subdirectories inside it are not.
-
-:::warning[One writer at a time]
-SQLite allows a single writer, so services with a sqlite disk must use
-`mode = "fixed"` and `num_instances = 1`. Two instances writing one database
-would corrupt it, so Miren rejects the config rather than letting that happen.
-
-If two services share an id as above, make sure only one of them writes.
-:::
-
-### Limitations
-
-- **Node-local**: The database lives on the server your app runs on. Apps with
-  any disk are pinned to the coordinator and are not scheduled to
-  [distributed runners](/distributed-runners).
-- **Single writer**: See the warning above.
-- **No read-only mounts**: `read_only = true` is rejected. SQLite needs to
-  write its write-ahead log even to read.
-- **Not a formatted volume**: A sqlite disk is a directory, so `size_gb`,
-  `filesystem` and `lease_timeout` do not apply and are rejected. It grows with
-  the server's free space rather than a fixed allocation.
 
 ---
 
@@ -425,7 +316,7 @@ We'll update this page and the [changelog](https://miren.md/changelog) as these 
 
 ### Next Steps
 
-- [app.toml Reference — Disks](/app-toml#disks) — Complete field reference for disk configuration (including `id`, `db_file` and `lease_timeout`)
+- [app.toml Reference — Disks](/app-toml#disks) — Complete field reference for disk configuration (including `lease_timeout`)
 - [Services](/services) — Define services that use persistent storage
 - [Getting Started](/getting-started) — Deploy your first app
 - [CLI Reference - Disk Commands](/command/debug-disk) — Complete disk CLI reference

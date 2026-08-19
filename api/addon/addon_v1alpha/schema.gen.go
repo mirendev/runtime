@@ -241,8 +241,9 @@ func (o *Details) InitSchema(sb *schema.SchemaBuilder) {
 const (
 	AddonAssociationAddonId        = entity.Id("dev.miren.addon/addon_association.addon")
 	AddonAssociationAppId          = entity.Id("dev.miren.addon/addon_association.app")
-	AddonAssociationDiskNamesId    = entity.Id("dev.miren.addon/addon_association.disk_names")
+	AddonAssociationDisksId        = entity.Id("dev.miren.addon/addon_association.disks")
 	AddonAssociationErrorMessageId = entity.Id("dev.miren.addon/addon_association.error_message")
+	AddonAssociationServicesId     = entity.Id("dev.miren.addon/addon_association.services")
 	AddonAssociationStatusId       = entity.Id("dev.miren.addon/addon_association.status")
 	AddonAssociationVariablesId    = entity.Id("dev.miren.addon/addon_association.variables")
 	AddonAssociationVariantId      = entity.Id("dev.miren.addon/addon_association.variant")
@@ -253,8 +254,9 @@ type AddonAssociation struct {
 	ID           entity.Id   `json:"id"`
 	Addon        entity.Id   `cbor:"addon,omitempty" json:"addon,omitempty"`
 	App          entity.Id   `cbor:"app,omitempty" json:"app,omitempty"`
-	DiskNames    []string    `cbor:"disk_names,omitempty" json:"disk_names,omitempty"`
+	Disks        []Disks     `cbor:"disks,omitempty" json:"disks,omitempty"`
 	ErrorMessage string      `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	Services     []string    `cbor:"services,omitempty" json:"services,omitempty"`
 	Status       string      `cbor:"status,omitempty" json:"status,omitempty"`
 	Variables    []Variables `cbor:"variables,omitempty" json:"variables,omitempty"`
 	Variant      string      `cbor:"variant,omitempty" json:"variant,omitempty"`
@@ -269,13 +271,20 @@ func (o *AddonAssociation) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(AddonAssociationAppId); ok && a.Value.Kind() == entity.KindId {
 		o.App = a.Value.Id()
 	}
-	for _, a := range e.GetAll(AddonAssociationDiskNamesId) {
-		if a.Value.Kind() == entity.KindString {
-			o.DiskNames = append(o.DiskNames, a.Value.String())
+	for _, a := range e.GetAll(AddonAssociationDisksId) {
+		if a.Value.Kind() == entity.KindComponent {
+			var v Disks
+			v.Decode(a.Value.Component())
+			o.Disks = append(o.Disks, v)
 		}
 	}
 	if a, ok := e.Get(AddonAssociationErrorMessageId); ok && a.Value.Kind() == entity.KindString {
 		o.ErrorMessage = a.Value.String()
+	}
+	for _, a := range e.GetAll(AddonAssociationServicesId) {
+		if a.Value.Kind() == entity.KindString {
+			o.Services = append(o.Services, a.Value.String())
+		}
 	}
 	if a, ok := e.Get(AddonAssociationStatusId); ok && a.Value.Kind() == entity.KindString {
 		o.Status = a.Value.String()
@@ -318,11 +327,14 @@ func (o *AddonAssociation) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.App) {
 		attrs = append(attrs, entity.Ref(AddonAssociationAppId, o.App))
 	}
-	for _, v := range o.DiskNames {
-		attrs = append(attrs, entity.String(AddonAssociationDiskNamesId, v))
+	for _, v := range o.Disks {
+		attrs = append(attrs, entity.Component(AddonAssociationDisksId, v.Encode()))
 	}
 	if !entity.Empty(o.ErrorMessage) {
 		attrs = append(attrs, entity.String(AddonAssociationErrorMessageId, o.ErrorMessage))
+	}
+	for _, v := range o.Services {
+		attrs = append(attrs, entity.String(AddonAssociationServicesId, v))
 	}
 	if !entity.Empty(o.Status) {
 		attrs = append(attrs, entity.String(AddonAssociationStatusId, o.Status))
@@ -347,10 +359,13 @@ func (o *AddonAssociation) Empty() bool {
 	if !entity.Empty(o.App) {
 		return false
 	}
-	if len(o.DiskNames) != 0 {
+	if len(o.Disks) != 0 {
 		return false
 	}
 	if !entity.Empty(o.ErrorMessage) {
+		return false
+	}
+	if len(o.Services) != 0 {
 		return false
 	}
 	if !entity.Empty(o.Status) {
@@ -371,13 +386,93 @@ func (o *AddonAssociation) Empty() bool {
 func (o *AddonAssociation) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("addon", "dev.miren.addon/addon_association.addon", schema.Indexed)
 	sb.Ref("app", "dev.miren.addon/addon_association.app", schema.Indexed, schema.Tags("dev.miren.app_ref"))
-	sb.String("disk_names", "dev.miren.addon/addon_association.disk_names", schema.Many)
+	sb.Component("disks", "dev.miren.addon/addon_association.disks", schema.Many)
+	(&Disks{}).InitSchema(sb.Builder("addon_association.disks"))
 	sb.String("error_message", "dev.miren.addon/addon_association.error_message")
+	sb.String("services", "dev.miren.addon/addon_association.services", schema.Many)
 	sb.String("status", "dev.miren.addon/addon_association.status", schema.Indexed)
 	sb.Component("variables", "dev.miren.addon/addon_association.variables", schema.Many)
 	(&Variables{}).InitSchema(sb.Builder("addon_association.variables"))
 	sb.String("variant", "dev.miren.addon/addon_association.variant")
 	sb.String("version", "dev.miren.addon/addon_association.version")
+}
+
+const (
+	DisksDbFileId               = entity.Id("dev.miren.addon/disks.db_file")
+	DisksMountPathId            = entity.Id("dev.miren.addon/disks.mount_path")
+	DisksNameId                 = entity.Id("dev.miren.addon/disks.name")
+	DisksProviderId             = entity.Id("dev.miren.addon/disks.provider")
+	DisksRequiresSingleWriterId = entity.Id("dev.miren.addon/disks.requires_single_writer")
+)
+
+type Disks struct {
+	DbFile               string `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	MountPath            string `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name                 string `cbor:"name,omitempty" json:"name,omitempty"`
+	Provider             string `cbor:"provider,omitempty" json:"provider,omitempty"`
+	RequiresSingleWriter bool   `cbor:"requires_single_writer,omitempty" json:"requires_single_writer,omitempty"`
+}
+
+func (o *Disks) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(DisksDbFileId); ok && a.Value.Kind() == entity.KindString {
+		o.DbFile = a.Value.String()
+	}
+	if a, ok := e.Get(DisksMountPathId); ok && a.Value.Kind() == entity.KindString {
+		o.MountPath = a.Value.String()
+	}
+	if a, ok := e.Get(DisksNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
+	}
+	if a, ok := e.Get(DisksProviderId); ok && a.Value.Kind() == entity.KindString {
+		o.Provider = a.Value.String()
+	}
+	if a, ok := e.Get(DisksRequiresSingleWriterId); ok && a.Value.Kind() == entity.KindBool {
+		o.RequiresSingleWriter = a.Value.Bool()
+	}
+}
+
+func (o *Disks) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.DbFile) {
+		attrs = append(attrs, entity.String(DisksDbFileId, o.DbFile))
+	}
+	if !entity.Empty(o.MountPath) {
+		attrs = append(attrs, entity.String(DisksMountPathId, o.MountPath))
+	}
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(DisksNameId, o.Name))
+	}
+	if !entity.Empty(o.Provider) {
+		attrs = append(attrs, entity.String(DisksProviderId, o.Provider))
+	}
+	attrs = append(attrs, entity.Bool(DisksRequiresSingleWriterId, o.RequiresSingleWriter))
+	return
+}
+
+func (o *Disks) Empty() bool {
+	if !entity.Empty(o.DbFile) {
+		return false
+	}
+	if !entity.Empty(o.MountPath) {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
+	if !entity.Empty(o.Provider) {
+		return false
+	}
+	if !entity.Empty(o.RequiresSingleWriter) {
+		return false
+	}
+	return true
+}
+
+func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("db_file", "dev.miren.addon/disks.db_file", schema.Doc("Database filename within the mounted directory, for providers that manage one"))
+	sb.String("mount_path", "dev.miren.addon/disks.mount_path", schema.Doc("Where the disk appears inside the container"))
+	sb.String("name", "dev.miren.addon/disks.name", schema.Doc("Disk name within a service's spec"))
+	sb.String("provider", "dev.miren.addon/disks.provider", schema.Doc("Volume provider (see controllers/sandbox/volume.go)"))
+	sb.Bool("requires_single_writer", "dev.miren.addon/disks.requires_single_writer", schema.Doc("Storage only one process may write, so a receiving service must run a single fixed instance"))
 }
 
 const (
@@ -1677,5 +1772,5 @@ func init() {
 		(&ValkeyDedicatedData{}).InitSchema(sb)
 		(&ValkeyServer{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac\x9aْ\xeb4\x10\x86\x9f\x83}\xdf!\xa7\x0ePP<\x8dK\xb1\x94D\x13\xdbr$%3\xb9\x04\xaaX\x9e\x83s\xb8\xe5\xe9\xe0\x9a\xb2e\xc7R\xb7\xd6xn\xa6\xec.鳥\xfe\xbb\xd5\xee\xcc+ڑ\x96\t\xca.\x9b\x96K\xd6m\b\xa5\xa2cG\xdeQ\xf5\xcfӛ\xc0\xfeb\xb0\x9b˿ǉg8\xc0\x9a\xfeߎ\x8a\x96\xf0\x0e\xc2w;\xce\x1a\xaa~\xffk\xcb\xe9\xd3'^\xc0\x86\xb2\x1d97\xba\xba\x10\xc9I\xa7\xe7\x97t\x8d\xfaڳ\x9dҒw\xfb,\x16\x93\x8a\x8b\x0e\xb0&#d}\x10b\xa9Z\xf2^Ϝ\xa3m\x80\x8c\x0f\x03\f\xae\xfa\x86\\\xaba\xfe\bi\x1c\v\xa4|\xe4\xa74\xa2&\r\xd7ת\x15\xd4`Z\xd7\x049ȗ\x86s{\v\n\x9f\xfez\x98\xf5\xae\x7f\xd6\xe4\x02E[\xd2]\xff\x1d\xa7\x1en\xb6\x81\xc1k\xd1\xf6\xa2c\x9d^\xae\x8cd\x10r\xe3\"\xb3\xc4\xf3븤\x8f\xe1\xcb͌l?\x8dk|?\x82ф7\xf6*\xf7\xb3)\xb1\xc8O㋜\xc9Y\x8b\xfde\\\xec[\xf0-'\xc4\xe6Ȯ\xe33\xeb\xe1\x02z\xfd\x9dЬ\vi\xce\xc6\xe7\xcc\\Z3\xf7ST\xec//I\xd3\x1fH\xd3K\xde\x12y\xad\x86\xb7\x9dw\xc0\x8f\xbf-0\xac\xab(\xfd\xa6\xa2\xe8(6>\f\a阞ګ:5\x95b\xf2\xc2\xe4䍷\xe1@{L\x96\x0f\xfe\x1c\x97\xfbY\x8ccLKX?X\xf7\xd0-\x9b8H)Qs2\x88\xb5\xaa\xc5y\xca\x7f'l\x1e\xb05\xef\xf4Ȅ\x92s\x99\x94\xab\xe3\xf2n|\xb9Mf-\a\xc3[\xb2\x9fdc.\xe1\xf4/\xa3ӥ\x10\xba\xea\x89R\x8fBR\x93\xb5\\\x13\xc4}\x11\xc5)\xd2ѭx\xaaz!\x1a\x93J\x1d\xcb\x00\xdbr\xea\xcf\x15.\x88\xc9\v\xaf\xcd\xc2\xf6\xf3\x8d=\x1deaw\xba&\xfa\xac\xc6ٻ\xe9\x1a.$\xfe|\xfb\x9c\xdb{ηh446\n\xfbo\f\x8a\vi\x8e\xec\xeaF\x85'x\xadA\x05\x87\xf8\xe7QPI\\\xbcH\x90\x9e'0\\\xa8#\xc7CP\x89H\xd8.\xa5@\x8a\xa8N\x01\xa4\x94\x16=Ǟ3?-\xc6\xc4\x1b\xacRc\xeb\xb0\xf0˚\x1c\xcdښ\xd4\a\xe6\n\xf2=\x14#\xee\xb0,I\xfe\x16HC.\xaaD\x94/\x93\xac\xbbd\xf9u\n[ )|0AVJT\xf8\U00100134\xac\x92o\xb1JX\x02\xd0\x02\xd2\xea\x85\xd2{\xc9TBZ`XA\x11\x80\xa4\x05P\xab\xa4\x85XwI\v\x9d\x9a\x10\x9b]\r\xa0L\x01Iɂ\x00\xc9\x1c\x12\xd6\xc8\x1c\xb1\x8ae\x8e\bi\x99\x7f\x9bd\x9c{&ϊI\xb7ԑ\x1e{2\x84 {]\b\x01Z \x84$\xd9n\xb9nO\x89\x10\x02\xc3\n\n\x06\x14B\x00\xb5*\x84\x10\xeb\xae\x10B5\r\xc4f\x96\rH\xfe\x90\xb3F\xfe\x88U,\x7fD\xb8#\xcbC\xc6:\x89\x02\x1a\xce@F\xa2B\x1b\xd7Iv:35\x7fv\xa3Oy8\xae\xa0\x84\xc0{\x05X\xc6lr\x9f\xb9\xb4\xb7\x1a;\x1eM_\x14h\x9a\x14\xb6\xc1F}\x95DՒQ\xd6iN\x8c\x84\x1e\xac\xfb\xe4\xa7'\x821)\x85\xacZ\xa6Ԝ\xda[\xd7\x04\x91\xe9\xf7\xeb\xd8c\xa5X-\x99QŃu\x9f\x96\x17\x84\xc55\x1aUW\x0fa\xd8\xcbK\x8b\xb3\xb2\xfc1\xe9\xcb\xdf\x16\xb4\af\t\xec\x0f\xffJ\x11,\xae0\x7f\xbfӝ\xdf\xf7\xa674\\Ls_yՉ\xe7ފ\x02\xbb\xff\xf5`Y\x93\x1fo\x98Y,-\x94\x8613.\x87\xd7^\x81bʘ\xa7\xb6\x8d\xb3X\xbe\x18\x13\xed>\xf8\x00,\xa0\xe5\x01\x05\rN\x7f{m\x80Ļ~\xa8[\xb1\xccS\xacS\\\xf3\xcbT\xf9-\xb7\x03\x83n\x85hF\x02:\xec\x17\xc2ݝ\xc3e;\xfdEj`\xcf\"'I6\xc7j\xfd\xef=-\xff\xe8k\x9f\x10/\x904\xa66́HF+J4\t%\r4\xb0@\x12(\xc8\x10l3\xfc\xd9\x12Ŗ\xfa\xa9uM\xb9\xddH\x8bi\xb7\x98L\x95\xe2X\xec\xb4\x14\xea\x00Z\xb4\xa1\x06\xbe\xbd\xdc\xe1v\x97\xed\x11D\xc4\"\xb0<B\x19\xe55ѮS\x02\xfd8wl\x81_\xd0G\x81\x8fW\xee\x1a\xdc{\xf0a\v\xbc\xf3M\x16p\xa5\x83\xb4\x0f\x8a\x85aw&\xbdN\n\xf5\xa9\xee\xf0\xd2\xcf\xe3\xea\xbf\xcb\x02\xba\xddR\xe3&\xd74\xedht\x13\xce^6>\x8b\x9c\xae\x857\x81\x04?Z\xef\xce\"\xdf\xe7\x11\xcb\xf5\xfaC&\x18|\x88\x9a\x1fe\xa1\xd1\xd6-\xca{\x01\xf0J\xe5^\xfcX\\/\xb9mL\xafz\xc3\xed\xb0\xbb\xf5\xfbc&\x126X\xcd\xfeBc\x8e\x8a\x1f\x03O\b\xec\xc8\xed\xeb-oG\x02\xc3\xd7\xecH\x00\t\x9b\x1afG\xa01kG\x02O\xc0\xc7(\x8cl\xef\x9e\x04{ukN#\xb4+Ahy\x88\xff\x94\xcf.\x8e\xf2`k\xedُ\xa8\xa77\x82h8\xef\xa8\x0eB\xea\xca\xfcO\xcc\xf4\xd3s\xe4?cܟ\xe3ҿQ\x83\x1fL2~\xbf\xcb섃Q\x99\xcd?0\n\xf5c\xb2Z\x86\xf8;;\xaf\x8d\x93]k\xa3q\x9e\x9a0\xb3J\xf7\x17+\xf9\x05e\xe0\x9c/\xa8vB\x87NI\xa9P\x98\xa7\x03\xa3\x83\xb9\xad(\xdbGb\xab4I\xfe\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff\xf5|..\xa0&\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.addon", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xac\x9aے\xe34\x13ǟ\xe3\xfb8\x9f\xcf\xd9Z\xa0\xa0x\x1a\x97b)\x896\xb6\xe5\x91\x14\xcf\xe4\x12(\xa0x\x8e\xdd喧\x83kʖ\x1dK\xdd:\xc6{3e\xf7H?K\xea\x7f\xb7\xe4v^ю\xb4LP6\xecZ.Y\xb7#\x94\x8a\x8e\x9dyG\xd5\xdfO\xff\a\xf6g\xa3\xdd\\\xfe5u\xbc\xc0\x06V\xf7\x7f\x0fT\xb4\x84w\x10~8p\xd6P\xf5\xc7\xcb=\xa7O\x9fx\x01;\xca\x0e\xe4\xd2\xe8j \x92\x93N/\x83t\x8d\xfaڳ\x83Ғw\xc7,\x16\x93\x8a\x8b\x0e\xb0f#d}\x10b\xa9Z\xf2^/\x9c\xb3m\x80\x8c\x0f\x03\f\xae\xfa\x86\\\xab\xb1\xff\x04i\x1c\v\xa4|\xe4\xa74\xa2&\r\xd7ת\x15\xd4`Z\xd7\x049ȗ\x86s\x1b\x05\x85O\x7f=\xf6z\xd7\xdfkv\x81\xa2-\xe9\xae\xffL]O7\xdb\xc8\xe0\xb5h{ѱN\xafWF2\b\xb9s\x91Y\xe2\xf9u\x9a\xd2\xc7pp\v#\xdbO\xd3\x1cߏ`4\xe1\x8d=\xcb\xe3bJL\xf2\xd3\xf8$\x17r\xd6d\x7f\x99&\xfb\x16\x1c\xe5\x8c؝\xd9uzf=^@\xaf\xbf\x13\xea5\x90\xe6b|\xce̥\xd5\xf38G\xc5qxN\x9a\xfeD\x9a^\xf2\x96\xc8k5\x8evY\x01?\xfe6\xc1\xb0\xae\xa2\xf4\x9b\x8a\xa2\xad\xd8\xf40\x1c\xa4Szj\xafꡩ\x14\x93\x03\x93\xb37ކ\r\xed6Y>\xf8s\x9a\xeeg1\x8e1\xada\xfdº\x87n\xd9\xc5AJ\x89\x9a\x93Q\xacU-.s\xfe{\xc0\xe6\x11[\xf3NOL(9\x97I\xb9:\xafc\xe3\xebm2k9\x18ޒ\xe3,\x1bs\t\xbb\x7f\x19\xed.\x85\xd0UO\x94z\x14\x92\x9a\xac\xe5\x9a \xee\x8b(N\x91\x8e\xee\xc5S\xd5\vјT\xeaXF؞S\x7f\xaepAL\x0e\xbc6\x13;.7vw\x94\x85\xdd\xee\x9a苚z\x1f\xe6k8\x91\xf8\xf3\xed}\xee\xe8\xd9ߢ\xd1\xd0\xd8(\xec\xbf)(\x06Ҝ\xd9Ս\nO\xf0Z\x8d\n6\xf1ϣ\xa0\x92\xb8x\x96 \xbd\x99\xc0p\xa1\x8e\x1cOA%\"a\xbb\x94\x02)\xa2s\n \xa5\xb4\xe8\xd9\xf6\x9c\xfei1&F\xb0I\x8d\xad\xc3\u008359\x9a\xb55\xa9O\xcc\x15\xe4{(F\xdcfY\x92\xfc=\x90\x86\\T\x89(\x9f'Yw\xc9\xf2\xeb\x14\xb6@Rxc\x82\xac\x94\xa8\xf0\xee\x01\tiY%G\xb1IX\x02\xd0\x02\xd2\xea\x85\xd2G\xc9TBZ\xa0Y\xc1!\x00I\v\xa06I\v\xb1\xee\x92\x16\xda5!6\xfb4\x802\x05$%\x0f\x04H搰E\xe6\x88U,sDH\xcb\xfc\xdb$\xe3\xd23yQL\xbaG\x1d\xe9\xb1'C\b\xb2\xb7\x85\x10\xa0\x05BH\x92\xfd\x9e\xeb\xf6!\x11B\xa0Y\xc1\x81\x01\x85\x10@m\n!ĺ+\x84Й\x06b3\x8f\rH\xfe\x90\xb3E\xfe\x88U,\x7fD\xb8#\xcbC\xc66\x89\x02\x1a\xce@F\xa2B\x1b\xd7I\xf6pajy\xedF\xaf\xf2\xb0]\xc1\x11\x02\xaf\x15`\x19\xb3\xc9}\xe6\xd2^j\xecx\xd4}U\xa0)R\xd8\x06\x1b\xf5U\x12UKFY\xa791\x12za\xdd'_=\x11\x8cI)d\xd52\xa5\x96\xd4\u07ba&\x88L\x8f\xafc\x8f\x95b\xb5dF\x15/\xac\xfb\xb4\xbc ,\xaeѨ\xbaz\b\xc3^^K\x9c\x95\xe5\x8fY_\xfe\xb2\xa0\xddpK5\x01\xc1\xe2\n\xf3\xd7;\xdd\xfe}ojC\xe3\xc5\xdc\xf7u\xe6\xb3\xc7C\x81]\xfabƐ(|A0^J\x03\xceZ\xa7\xdf\x025\xac\x11\xb0\xa3\xfb\xea\xc0\x9b9\xd9-7PM(!\x98\xbe\xed\x98\xf0\xab\x9e\xe8\x93ѣu\x9f\xac\x9b\x1aB\xb8\xbe\xf5\xd2[75\xbdz)\x06N\x99\x9c7\x8d\xe5.\xb9i\x98ޣf\xf9\xb4{\xf3\xeeذ\xeaQr=\xb3\x86\xc0\xffF2\xdd\v\xd1\xc4\xebi\x13\xdf\xff\x06\x8e\xfdW\x92\x1f^y\xb7{̜7+\xa7\xa0|\xb3\xc1\xe5A{\xb3\x87\x17\xcd\x11\xaf\xbdY\vS\xa6\xcdk\xdf8\xc3\xe2\xab1\x11\n\xf0\x01\x9eP\xb8\xb1\n\xaa\xde\xfe\x9a\xeb\b\x89\x97\x82Q\tk\xed\xa7X\xa7\xb8\xe6\xc3\xfc:\xb0\xde\xde\xe43\x11\xd0\tp%\xdc]N^\x97\xd3\xff\xe6\x12X\xb3\xc8\xf1\"\x9bc}\x0f:z\xbe\x03E\x87\xfd\x80x\x81\x9dd\xae͝\x88d\xb4\xa2D\x93\xd0N\x82\x1a\x16H\x02\x05-\x82\xed\xc6?{\xa2\xd8z\xa8n]Sn\x89\xdab\xdauGstu,\xf6^\x15*\v[\xb4\xf1\xc5\xe86\xb8\xd3\xed.\xdb#\x88\x88E`yd\xccy5ѮS\x02EZ\xb7m\x81_Л\xa2\x8fW\xee\x1a\\\x90\xf2a\v\xbc\xf3M\x16p\xa3\x83\xb4\x0f\x8a\x85a\x97\xab\xbdN\n\x15/\xef\xf0\xd2\xcf\xd3\xec\xbf\xcb\x02\xba%t\xe3&\xd74\xafht\x11.^6ދ\x9cR\x967\x81\x04+\x19wg\x91\xef\xf3\x88\xe5z\xfd!\x13\f\xaa\x13\xe6K=4ںEy/\x00ި\xdc\xc1\x8f\xc5\xc74\xb7\xb6\xedUo\xb8Fz\xb7~\x7f\xccDª\xbbY_h\xccQ\xf1c\xe0\t\x81\x15\xb9\xbd\xd2\xe7\xadH\xa0\xf9\x96\x15\t a\xa5ˬ\b4f\xadH\xe0\tx\x1b\x85\x91\xed]\x93`\x01w\xcbn\x84V%\b-\x0f\xf1\x9f\xf2\xd9\xc5Q\x1e\xac\xb7\xbe\xf1-\xea\xe9\x7fA4\xecwV'!ue~(5\xff\x1e!\xf2s)\xf7\x1bm\xfa\x87\v\xe0+Z\xc6G\xdd\xcc\xcf#\xa0UfE\x18\xb4BE\xba\xac:2.\xbe\xe4\xd5\xf6\xb2\xcfڨ\x9d\xe7L\x98yJ\xf7\x1fV\xf2\x0f\x94\x81}\xbe\xe0\xb4\x13\xdatJ\x8e\n\x85y:\xd0:\x98ۊ\xb2}$\xb6J\x93\xe4\x7f\x00\x00\x00\xff\xff\x01\x00\x00\xff\xfff\xa6\xc9\x12\xb5(\x00\x00"))
 }
