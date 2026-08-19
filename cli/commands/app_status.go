@@ -95,6 +95,11 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("%s %s\n", labelStyle.Render("Workload Role:"), role)
 	}
 
+	if down := appResult.MaintenanceRoutes(); len(down) > 0 {
+		ctx.Printf("%s %s\n", labelStyle.Render("Maintenance:"),
+			yellowStyle.Render(fmt.Sprintf("%s serving a holding page", maintenanceRouteList(down))))
+	}
+
 	// Configuration
 	if appConfig != nil {
 		ctx.Printf("\n%s\n", labelStyle.Render("Configuration:"))
@@ -384,13 +389,15 @@ func printAppStatusJSON(
 		Cluster           string           `json:"cluster"`
 		CurrentVersion    string           `json:"current_version,omitempty"`
 		WorkloadRole      string           `json:"workload_role,omitempty"`
+		MaintenanceRoutes []string         `json:"maintenance_routes,omitempty"`
 		Configuration     *configuration   `json:"configuration,omitempty"`
 		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
 		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
 	}{
-		App:          app,
-		Cluster:      cluster,
-		WorkloadRole: appResult.WorkloadRole(),
+		App:               app,
+		Cluster:           cluster,
+		WorkloadRole:      appResult.WorkloadRole(),
+		MaintenanceRoutes: appResult.MaintenanceRoutes(),
 	}
 
 	if appResult.HasVersionId() && appResult.VersionId() != "" {
@@ -427,4 +434,19 @@ func printAppStatusJSON(
 	}
 
 	return PrintJSON(output)
+}
+
+// maintenanceRouteList names the routes in maintenance for the status line. The
+// default route has no hostname of its own, so it's named rather than shown as
+// a blank.
+func maintenanceRouteList(hosts []string) string {
+	named := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h == "" {
+			h = "the default route"
+		}
+		named = append(named, h)
+	}
+
+	return strings.Join(named, ", ")
 }

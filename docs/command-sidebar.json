@@ -255,6 +255,7 @@
       "id": "command/route"
     },
     "items": [
+      "command/route-down",
       "command/route-list",
       "command/route-protect",
       "command/route-remove",
@@ -264,6 +265,7 @@
       "command/route-timeout",
       "command/route-unprotect",
       "command/route-unset-default",
+      "command/route-up",
       "command/route-waf"
     ]
   },

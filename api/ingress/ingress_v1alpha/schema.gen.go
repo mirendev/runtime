@@ -11,6 +11,7 @@ const (
 	HttpRouteClaimMappingsId  = entity.Id("dev.miren.ingress/http_route.claim_mappings")
 	HttpRouteDefaultId        = entity.Id("dev.miren.ingress/http_route.default")
 	HttpRouteHostId           = entity.Id("dev.miren.ingress/http_route.host")
+	HttpRouteMaintenanceId    = entity.Id("dev.miren.ingress/http_route.maintenance")
 	HttpRouteRequestTimeoutId = entity.Id("dev.miren.ingress/http_route.request_timeout")
 	HttpRouteWafProfileId     = entity.Id("dev.miren.ingress/http_route.waf_profile")
 )
@@ -22,6 +23,7 @@ type HttpRoute struct {
 	ClaimMappings  []ClaimMappings `cbor:"claim_mappings,omitempty" json:"claim_mappings,omitempty"`
 	Default        bool            `cbor:"default,omitempty" json:"default,omitempty"`
 	Host           string          `cbor:"host,omitempty" json:"host,omitempty"`
+	Maintenance    Maintenance     `cbor:"maintenance,omitempty" json:"maintenance"`
 	RequestTimeout string          `cbor:"request_timeout,omitempty" json:"request_timeout,omitempty"`
 	WafProfile     entity.Id       `cbor:"waf_profile,omitempty" json:"waf_profile,omitempty"`
 }
@@ -46,6 +48,9 @@ func (o *HttpRoute) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(HttpRouteHostId); ok && a.Value.Kind() == entity.KindString {
 		o.Host = a.Value.String()
+	}
+	if a, ok := e.Get(HttpRouteMaintenanceId); ok && a.Value.Kind() == entity.KindComponent {
+		o.Maintenance.Decode(a.Value.Component())
 	}
 	if a, ok := e.Get(HttpRouteRequestTimeoutId); ok && a.Value.Kind() == entity.KindString {
 		o.RequestTimeout = a.Value.String()
@@ -85,6 +90,9 @@ func (o *HttpRoute) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Host) {
 		attrs = append(attrs, entity.String(HttpRouteHostId, o.Host))
 	}
+	if !o.Maintenance.Empty() {
+		attrs = append(attrs, entity.Component(HttpRouteMaintenanceId, o.Maintenance.Encode()))
+	}
 	if !entity.Empty(o.RequestTimeout) {
 		attrs = append(attrs, entity.String(HttpRouteRequestTimeoutId, o.RequestTimeout))
 	}
@@ -111,6 +119,9 @@ func (o *HttpRoute) Empty() bool {
 	if !entity.Empty(o.Host) {
 		return false
 	}
+	if !o.Maintenance.Empty() {
+		return false
+	}
 	if !entity.Empty(o.RequestTimeout) {
 		return false
 	}
@@ -127,6 +138,8 @@ func (o *HttpRoute) InitSchema(sb *schema.SchemaBuilder) {
 	(&ClaimMappings{}).InitSchema(sb.Builder("http_route.claim_mappings"))
 	sb.Bool("default", "dev.miren.ingress/http_route.default", schema.Doc("Whether this is the default route for routing"), schema.Indexed)
 	sb.String("host", "dev.miren.ingress/http_route.host", schema.Doc("The hostname to match on for the application"), schema.Indexed)
+	sb.Component("maintenance", "dev.miren.ingress/http_route.maintenance", schema.Doc("Operator-initiated maintenance state. When present, the router serves a holding page instead of proxying to the app. Absent means the route serves normally."))
+	(&Maintenance{}).InitSchema(sb.Builder("http_route.maintenance"))
 	sb.String("request_timeout", "dev.miren.ingress/http_route.request_timeout", schema.Doc("Per-route override for the ingress request timeout (e.g. \"10m\", \"300s\"). Empty falls back to the server's http_request_timeout (default 60s). Must be a positive duration; invalid or non-positive values are ignored at request time."))
 	sb.Ref("waf_profile", "dev.miren.ingress/http_route.waf_profile", schema.Doc("Reference to a WAF profile for request filtering"))
 }
@@ -173,6 +186,74 @@ func (o *ClaimMappings) Empty() bool {
 func (o *ClaimMappings) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("claim", "dev.miren.ingress/claim_mappings.claim", schema.Doc("The JWT claim name (e.g. email, sub, name)"))
 	sb.String("header", "dev.miren.ingress/claim_mappings.header", schema.Doc("The HTTP header name to inject (e.g. X-User-Email)"))
+}
+
+const (
+	MaintenanceBackAtId    = entity.Id("dev.miren.ingress/maintenance.back_at")
+	MaintenanceReasonId    = entity.Id("dev.miren.ingress/maintenance.reason")
+	MaintenanceStartedAtId = entity.Id("dev.miren.ingress/maintenance.started_at")
+	MaintenanceStartedById = entity.Id("dev.miren.ingress/maintenance.started_by")
+)
+
+type Maintenance struct {
+	BackAt    string `cbor:"back_at,omitempty" json:"back_at,omitempty"`
+	Reason    string `cbor:"reason,omitempty" json:"reason,omitempty"`
+	StartedAt string `cbor:"started_at,omitempty" json:"started_at,omitempty"`
+	StartedBy string `cbor:"started_by,omitempty" json:"started_by,omitempty"`
+}
+
+func (o *Maintenance) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(MaintenanceBackAtId); ok && a.Value.Kind() == entity.KindString {
+		o.BackAt = a.Value.String()
+	}
+	if a, ok := e.Get(MaintenanceReasonId); ok && a.Value.Kind() == entity.KindString {
+		o.Reason = a.Value.String()
+	}
+	if a, ok := e.Get(MaintenanceStartedAtId); ok && a.Value.Kind() == entity.KindString {
+		o.StartedAt = a.Value.String()
+	}
+	if a, ok := e.Get(MaintenanceStartedById); ok && a.Value.Kind() == entity.KindString {
+		o.StartedBy = a.Value.String()
+	}
+}
+
+func (o *Maintenance) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.BackAt) {
+		attrs = append(attrs, entity.String(MaintenanceBackAtId, o.BackAt))
+	}
+	if !entity.Empty(o.Reason) {
+		attrs = append(attrs, entity.String(MaintenanceReasonId, o.Reason))
+	}
+	if !entity.Empty(o.StartedAt) {
+		attrs = append(attrs, entity.String(MaintenanceStartedAtId, o.StartedAt))
+	}
+	if !entity.Empty(o.StartedBy) {
+		attrs = append(attrs, entity.String(MaintenanceStartedById, o.StartedBy))
+	}
+	return
+}
+
+func (o *Maintenance) Empty() bool {
+	if !entity.Empty(o.BackAt) {
+		return false
+	}
+	if !entity.Empty(o.Reason) {
+		return false
+	}
+	if !entity.Empty(o.StartedAt) {
+		return false
+	}
+	if !entity.Empty(o.StartedBy) {
+		return false
+	}
+	return true
+}
+
+func (o *Maintenance) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("back_at", "dev.miren.ingress/maintenance.back_at", schema.Doc("RFC 3339 timestamp for the expected end of the window. Drives the Retry-After header and the holding page copy. Empty means no estimate was given."))
+	sb.String("reason", "dev.miren.ingress/maintenance.reason", schema.Doc("Operator-supplied explanation shown on the holding page"))
+	sb.String("started_at", "dev.miren.ingress/maintenance.started_at", schema.Doc("RFC 3339 timestamp for when maintenance began"))
+	sb.String("started_by", "dev.miren.ingress/maintenance.started_by", schema.Doc("Identifier of the operator who put the route into maintenance"))
 }
 
 const (
@@ -424,5 +505,5 @@ func init() {
 		(&PasswordProvider{}).InitSchema(sb)
 		(&WafProfile{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x96ے\xdb \f\x86_\xa4\x9d\x1e\xa7纳O\xc4\x10#\xdb\xdap\n`or\xd9\xde\xf4A\xba\xed\x1b\xb6\xd7\x1d\x83\xb36\xe08\xe4&#\v\xf1\t\xc9?\x8a\x1f\x99\xa4\x02\x0e\f\x86J\xa0\x01Y\xa1l\rX\v{\x94\xcc>\x1e_e+\xdfƕ\xaasN\x13\xa3z\a\x7f<\xe1\xf8,\x0f\x9cc\x02\xed_Ô\xa0(\xf3lM\x83\xc0\x99\xfd\xf9k\x87\xec\xf8r\x8bTQ\xad}\xc2z4\xdcI\xc3\x0e\x99\xdf\xf6i{[\xef:\xa2\x8d\x1a\x90\x81\xf1\x00\x11\xbb&\xd4\xef\x11\xf5y\x13Us\x8a\x82\b\xaa5\xca\xd62A\xe5\xe9\xaf'\xcadeDb\xad\x84V\x12\xa4\x9b\xad\xa9cy\x96\xeab\x96\xc2\x06\xfe\xf0\x9dx\x97\x1f?\xa6\x05\xb8?\x05\x04s<jc\x9dA\xd9z\xc4\xfb\xab\x88\x0e蹓\xcdd/ \xed\x00Ƣ\x92\xedpG\xb9\xee(\xd7\x06\x055'2\xd6!<\xeaL\xf2\xf9\xdenv\x9cAC{\xee|\xb2\xf6\xfc0fc;\xa5\xb8\a\xac\xe8t\x01\xe8\x94\r\xbb\x99\xb7\xd2j\xbfln6p\xe8\xc1:\xe2P\x80\xea\x03G\xa5\xce\x14\xf9a\x13\xf9@\x9bQy\rr\xf0\xb8\xfd\xd21)q\xb3\x85\xf73\xec\xf8\xfa\xc2\x15]0'\xc5=\xcf#\x17A\x85\x1a\xfb~\xa9e\vT\xa5\xa9\xa1R!%\x1c\x06\xe0\xe1v$\xbe\xb1\xcc\x1a\xa5۬s٘5\x91\xf8B\x15\xb2\xfa\xe9\"O\xa5\xbe\xc8c\xa3\xb0\x9b&\xd2\xc7+\xb0\xaa\xe6\b\xd2\x11d>9Ώ\xa9,\xbe\x16\x92,\xd4\x06\x82\xd4D\xecJ\x89+\xb3*!*\xd9`K\ueb52AkKGJ\xab\nh\x12j\xa7\f\xf1\xf7/\x8c\xbdؗ2W^[\xcc\xf4\x17s\xfe)\xb8\x9d\xf1\xfe\xb3Az\x13\xa4\xc6#O\xca[\x19\x8f1\xcf\xd6J\x83\r\xa3m\xb2\x8bG[DZ\x9b\x02^\xb1\x9aZ\xfb\xa0\fKU\xfb&\x8f\xcfBo\xfa+X9@\x06\xbc\xd6\xff\xbb\x12Ɠ\xa7\xa3\xb6\v\xba\x8d]\xa5\x1d<d\xec4|o;e\x1c\t\x1f(\xcbAx\xfd[%\x1a'\x05s3y\x9dE\x03(/\xa0\\\x06\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x1c\x06\xbc\xb1\x8e\t\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.ingress", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x9c\x96Y\x92\xd3<\x10\x80/\xf2\xffž\x83\xa99\x91J\xb6\xdavO\xace$9\x93<BQ\x05\xf7 pCx\xa6,\xd9\x13-\x8e#x\x99j\xb5[_\xaf\xd3ʉ\t\xca\xe1\x8e\xc1\xbe\xe2\xa8AT(:\r\xc6\xc0\x0e\x053\xa7Ó\xec\xcb\xc7\xe9K\xd5[\xab\x88\x96\xa3\x85\x9f\x8ep\xf8/7<\xdbx\xda\xef\x96INQ\xe4\xde\xda\x16a`\xe6\xdb\xf7\x1a\xd9\xe1\xf1\x16\xa9\xa2J9\x87\xcd$أ\x82\x1a\x99\xbb\xf6v\xfb\xdah{\xa2\xb4\xdc#\x03\xed\x00<Vͨ\x1f\x13\xea\xdd&\xaa\x19(r©R(:\xc38\x15\xc7_\x8e(\x92/\x13\x12\x1bɕ\x14 \xecY\x9a+\x96{\xa9.z),\xe0gW\x89\x97y\xf81\xcd\xc3]\x14\xe0\xc5)\xd4\xd6X\x8d\xa2s\x88WW\x11=Х\x92\xed,\a\x90n\x0fڠ\x14\xdd\xfe\x86\x0e\xaa\xa7\x83\xd2ȩ>\x92)\x0f\xeeP\v\xc9\xf9{\xbeYq\x06-\x1d\a\xeb\x9cu\xcba\xf2\xc6j)\a\aX\x99\xd3\x00\xd0K\xe3o3'\x05\x81\x9e\xa6˯7/O\x15\xb7 \xa8h\xc01v\xa1\xe2J\x8fsr\xb5N.l\xf0\x17\x97\xec\x8b<\xde\x00Uմ\xd9\x11:\x97k9\xa4\x1d^\xa9x\xc8\xd0@\x8d\x14\xbe\xbd\xb3\x9c\x12V\xaa\x16\x12\x8c\xa5\xda\x02[\x02\xb9\r\xce\xffH\xaa\x8f1\xa9>\x16\x8f\\\xd83\xe7\xf2\xfdf\xcb5܍`,\xb1\xc8A\x8e>\x01\x99*\v\xb2\b\x90\xf7\xb4\x9d\x96M\x8b\xc3<E\xa1b^>\x9b)ܞa\x87\xa7\x17\xb6r\xc0\x9c\a\xf0\xff\xdc20*\x9c\xbaO\x97J\x16\xa0*E5\x15\x12)\x19`\x0f\x83_\x88\x89nJ\xb3Aa\xb7[\x15@צ\xd4%*\x915\x0f\xbb{N\xf5Qn\x1b\x99\x15&\xfb\xd5%\xfb\xe6\n\xacj\x06\x04a\t2\xe7\x1c\xcf\xc7t,>\x14\x92\f4\x1a\xfc\xa8\xf1X\x95\x12W\x9e\xa7\x84(E\x8b\x1d\xb9]\xfe\x83w\xa1\"\xa5U\x054\x01\x8d\x95\x9a\xb8\x95\xeb_\xbaXW\xb0\\b\xa6\xdb\xc5\xe7?\xe9\xfd\x95Q\x8b\xef/\x02\x19\xb5\x1f\xb5!Ҥ\xbc\x95\x171\xe6\x99F*0~\xdd\xcdr\xf1k\x16\x91ֶ\x80\x9bXE\x8d\xb9\x97\x9a\xa5S\xfb,\xb7\xcfL\xff\xea\xf5_\t \x03^\xab\xffM\t\xe3A\xd3S\xd3\xfb\xb9\x8dU\xa5\x15\xbc\xcbة\xf9\xce\xf4R[\xe2\x7f\x93\x86\x8b\xf0\xfa\xcf\xd3h\x9d\x14\xecͤ\x9dE\v(O\xa0|\f\xfe\x00\x00\x00\xff\xff\x01\x00\x00\xff\xffo\x96ԕ\x81\v\x00\x00"))
 }

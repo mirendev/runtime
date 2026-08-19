@@ -155,6 +155,11 @@ types:
       - name: cooldown_seconds
         type: int32
         index: 9
+      - name: maintenance_routes
+        type: list
+        element: string
+        index: 10
+        doc: "Hostnames of this app's routes currently in maintenance. The default route appears as an empty string."
 
   - type: CpuUsage
     fields:
@@ -357,6 +362,11 @@ types:
         type: string
         index: 20
         doc: "The role the app's sandbox identity tokens authenticate as (empty means the default, app-readonly)"
+      - name: maintenanceRoutes
+        type: list
+        element: string
+        index: 21
+        doc: "Hostnames of this app's routes currently in maintenance, serving a holding page instead of the app. The default route appears as an empty string."
 
   - type: LogEntry
     fields:
@@ -506,6 +516,10 @@ interfaces:
           - name: workloadRole
             type: string
             doc: "The app's workload identity role (empty means the default, app-readonly)"
+          - name: maintenanceRoutes
+            type: list
+            element: string
+            doc: "Hostnames of this app's routes currently in maintenance, serving a holding page instead of the app. The default route appears as an empty string."
       - name: setHost
         http:
           put: /apps/{app}/host

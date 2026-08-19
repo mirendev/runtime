@@ -226,6 +226,8 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 		return nil, err
 	}
 
+	maintenanceMap := make(map[string][]string)
+
 	for routeList.Next() {
 		var route ingress_v1alpha.HttpRoute
 		routeList.Read(&route)
@@ -235,6 +237,10 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 			routeMap[appName] = append(routeMap[appName], route.Host)
 		} else if route.Default {
 			routeMap[appName] = append(routeMap[appName], "")
+		}
+
+		if !route.Maintenance.Empty() {
+			maintenanceMap[appName] = append(maintenanceMap[appName], route.Host)
 		}
 	}
 
@@ -292,6 +298,10 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 		// Routes
 		if routes, ok := routeMap[entry.name]; ok {
 			a.SetRoutes(routes)
+		}
+
+		if down, ok := maintenanceMap[entry.name]; ok {
+			a.SetMaintenanceRoutes(down)
 		}
 
 		results = append(results, &a)
@@ -626,6 +636,12 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		role = workloadroles.Default
 	}
 	state.Results().SetWorkloadRole(role)
+
+	if down, err := r.maintenanceRoutes(ctx, appRec.ID); err != nil {
+		r.Log.Warn("could not read maintenance state for app", "error", err, "app", name)
+	} else if len(down) > 0 {
+		state.Results().SetMaintenanceRoutes(down)
+	}
 
 	return nil
 }

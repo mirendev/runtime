@@ -112,6 +112,12 @@ func RouteShow(ctx *Context, opts struct {
 			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
 			WafLevel        int                 `json:"waf_level"`
 			RequestTimeout  string              `json:"request_timeout,omitempty"`
+
+			Maintenance          bool   `json:"maintenance"`
+			MaintenanceReason    string `json:"maintenance_reason,omitempty"`
+			MaintenanceBackAt    string `json:"maintenance_back_at,omitempty"`
+			MaintenanceStartedAt string `json:"maintenance_started_at,omitempty"`
+			MaintenanceStartedBy string `json:"maintenance_started_by,omitempty"`
 		}
 
 		wafLevel := 0
@@ -127,6 +133,12 @@ func RouteShow(ctx *Context, opts struct {
 			ProtectionType: protectionType,
 			WafLevel:       wafLevel,
 			RequestTimeout: route.RequestTimeout,
+
+			Maintenance:          !route.Maintenance.Empty(),
+			MaintenanceReason:    route.Maintenance.Reason,
+			MaintenanceBackAt:    route.Maintenance.BackAt,
+			MaintenanceStartedAt: route.Maintenance.StartedAt,
+			MaintenanceStartedBy: route.Maintenance.StartedBy,
 		}
 
 		if protected {
@@ -221,6 +233,23 @@ func RouteShow(ctx *Context, opts struct {
 
 			ctx.Printf("\n%s\n", table.Render())
 		}
+	}
+
+	if !route.Maintenance.Empty() {
+		ctx.Printf("\nMaintenance: this route is serving a holding page\n")
+		if route.Maintenance.Reason != "" {
+			ctx.Printf("  Reason:    %s\n", route.Maintenance.Reason)
+		}
+		if route.Maintenance.BackAt != "" {
+			ctx.Printf("  Back at:   %s\n", route.Maintenance.BackAt)
+		}
+		if route.Maintenance.StartedAt != "" {
+			ctx.Printf("  Since:     %s\n", route.Maintenance.StartedAt)
+		}
+		if route.Maintenance.StartedBy != "" {
+			ctx.Printf("  Set by:    %s\n", route.Maintenance.StartedBy)
+		}
+		ctx.Printf("  Bring it back with: miren route up %s\n", upTarget(opts.Host, opts.Default))
 	}
 
 	return nil

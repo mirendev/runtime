@@ -715,6 +715,33 @@ miren deploy --analyze
 		}),
 	))
 
+	d.Dispatch("route down", Infer("route down", "Put an HTTP route into maintenance", RouteDown,
+		WithDescription(routeDownDescription),
+		WithExample(mflags.Example{
+			Name: "Take a route down with an explanation",
+			Body: `miren route down example.com --reason "Upgrading the database"`,
+		}),
+		WithExample(mflags.Example{
+			Name: "Take a route down with an expected return time",
+			Body: `miren route down example.com --reason "DB migration" --back-at 15:00`,
+		}),
+		WithExample(mflags.Example{
+			Name: "Take the default route down",
+			Body: `miren route down --default --reason "Cluster upgrade"`,
+		}),
+	))
+	d.Dispatch("route up", Infer("route up", "Bring an HTTP route out of maintenance", RouteUp,
+		WithDescription(routeUpDescription),
+		WithExample(mflags.Example{
+			Name: "Bring a route back",
+			Body: "miren route up example.com",
+		}),
+		WithExample(mflags.Example{
+			Name: "Bring the default route back",
+			Body: "miren route up --default",
+		}),
+	))
+
 	// Config commands
 	d.Dispatch("config", Section("config", "Configuration file management", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("config info", Infer("config info", "Show configuration file locations and format", ConfigInfo,
@@ -1331,3 +1358,19 @@ const addonCreateDescription = `Attaching an addon provisions the backing resour
 const addonDestroyDescription = `Removing an addon deprovisions the backing resource and strips its injected environment variables from your app. Miren creates a new app version without those variables and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `.`
 
 const addonRotateDescription = `Rotating an addon credential generates a new secret, applies it to the running backing engine, and updates the value Miren stores. Consuming apps that embed the credential are redeployed automatically to pick up the new connection details — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + `. Rotation runs asynchronously: the command returns a request id and the rotation controller carries it out.`
+
+const routeDownDescription = `Puts a route into maintenance. Visitors get HTTP 503 and a holding page instead of reaching the app; nothing else changes.
+
+Maintenance is a routing decision and only a routing decision. The app's sandboxes keep running, so ` + "`" + `miren app run` + "`" + ` and one-shot migrations still work during the window — which is the whole point of taking traffic off the route first. Other hostnames pointing at the same app keep serving, and internal service-to-service calls are unaffected.
+
+` + "`" + `--reason` + "`" + ` is shown to visitors, so write it for them rather than for your team. ` + "`" + `--back-at` + "`" + ` accepts a clock time (` + "`" + `15:00` + "`" + `), a duration (` + "`" + `30m` + "`" + `), or an RFC 3339 timestamp; it drives both the holding page copy and the ` + "`" + `Retry-After` + "`" + ` header that crawlers and uptime monitors read.
+
+:::note[Ephemeral preview URLs are covered]
+Preview subdomains resolve through their base route, so taking ` + "`" + `app.example.com` + "`" + ` down also holds ` + "`" + `feat-x.app.example.com` + "`" + `. Previews share the app's database, so a migration window that left them serving would not be a window at all.
+:::`
+
+const routeUpDescription = `Brings a route out of maintenance and back to serving normally.
+
+This clears the whole maintenance record, including the reason and the operator who set it — a stale "Upgrading the database" hanging off a healthy route is a trap for whoever reads it next.
+
+Running this on a route that is already serving succeeds and says so, rather than erroring.`

@@ -92,6 +92,10 @@ func TestCarveOutsAbsentFromAllRoles(t *testing.T) {
 		"netdb":              {"releaseip", "releasesubnet", "releaseall", "gc"},
 		"outboardcontrol":    {"checkversion"},
 		"oidcbindings":       {"add", "remove", "list"},
+		// Maintenance takes a hostname out of service for everyone. It is an
+		// operator action on shared ingress, guarded by rpc.BoundApp rather
+		// than rpc.AllowApp, so no app-scoped or cluster role should reach it.
+		"routes": {"setmaintenance", "clearmaintenance"},
 		// setworkloadrole assigns a role (including cluster-scoped ones) to an
 		// app. It has no rpc.AllowApp guard and is the operator-only path, so it
 		// must never be granted to a token role — otherwise a workload could

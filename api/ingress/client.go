@@ -371,6 +371,23 @@ func (c *Client) DetachAuthProviderFromRoute(ctx context.Context, route *ingress
 	})
 }
 
+// SetRouteMaintenance puts a route into maintenance. The router serves a
+// holding page for the route until the state is cleared.
+func (c *Client) SetRouteMaintenance(ctx context.Context, route *ingress_v1alpha.HttpRoute, m ingress_v1alpha.Maintenance) (*ingress_v1alpha.HttpRoute, error) {
+	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
+		r.Maintenance = m
+	})
+}
+
+// ClearRouteMaintenance returns a route to normal serving. The whole component
+// is dropped, so the reason and operator recorded on entry don't linger on a
+// route that's serving again.
+func (c *Client) ClearRouteMaintenance(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
+		r.Maintenance = ingress_v1alpha.Maintenance{}
+	})
+}
+
 // mutateAndReplaceRoute performs a read-modify-write on a route entity.
 // It fetches the latest version from the store, applies the mutate function,
 // and replaces the entity at the current revision. This avoids overwriting

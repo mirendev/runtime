@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/cond"
@@ -49,6 +50,15 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		role = workloadroles.Default
 	}
 	rai.SetWorkloadRole(role)
+
+	// Maintenance state is decoration on this response, so a route store
+	// problem should not take the whole status call down with it. Status is
+	// what an operator reaches for when something is already wrong.
+	if down, err := a.maintenanceRoutes(ctx, appRec.ID); err != nil {
+		a.Log.Warn("could not read maintenance state for app", "error", err, "app", name)
+	} else if len(down) > 0 {
+		rai.SetMaintenanceRoutes(down)
+	}
 
 	var appVer core_v1alpha.AppVersion
 
@@ -267,4 +277,29 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 	state.Results().SetStatus(&rai)
 
 	return nil
+}
+
+// maintenanceRoutes lists the hostnames of an app's routes that are currently
+// serving a holding page. The default route has no hostname of its own and is
+// reported as an empty string.
+func (a *AppInfo) maintenanceRoutes(ctx context.Context, appID entity.Id) ([]string, error) {
+	routes, err := a.EC.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute))
+	if err != nil {
+		return nil, err
+	}
+
+	var down []string
+
+	for routes.Next() {
+		var route ingress_v1alpha.HttpRoute
+		routes.Read(&route)
+
+		if route.App != appID || route.Maintenance.Empty() {
+			continue
+		}
+
+		down = append(down, route.Host)
+	}
+
+	return down, nil
 }

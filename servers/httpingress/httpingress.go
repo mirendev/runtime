@@ -631,16 +631,35 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	// ephemeral lookup should fall back to the active version rather than 404.
 	wildcardRoute := route != nil && ingress.IsWildcardHost(route.Host)
 
-	// Compose middleware chain: WAF → auth → serve
-	handler := func(w http.ResponseWriter, r *http.Request) {
+	handler := h.buildRouteHandler(route, appName, func(w http.ResponseWriter, r *http.Request) {
 		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, wildcardRoute, appName, requestTimeout)
-	}
+	})
+
+	handler(w, req)
+}
+
+// buildRouteHandler composes the per-request middleware chain around serve.
+// Each call wraps the previous handler, so the last one applied runs first and
+// the execution order is WAF → maintenance → auth → serve.
+//
+// Both boundaries are load-bearing. WAF stays outermost so a maintenance window
+// doesn't become an open window for scanners. Maintenance runs ahead of auth
+// because a holding page is public information: otherwise a visitor completes a
+// full round trip to an identity provider only to be told the site is down, and
+// an API client gets a 401 when the honest answer is 503.
+//
+// The order lives here, rather than inline, so it is something a test can hold
+// onto — see TestMiddlewareChainOrder.
+func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *string, serve http.HandlerFunc) http.HandlerFunc {
+	handler := serve
 
 	handler = h.authMiddleware(route, handler)
 
+	handler = h.maintenanceMiddleware(route, appName, handler)
+
 	handler = h.wafMiddleware(route, handler)
 
-	handler(w, req)
+	return handler
 }
 
 // lookupEphemeralRoute checks whether the request host is an ephemeral

@@ -52,6 +52,7 @@ const sidebars: SidebarsConfig = {
         'tailscale',
         'waf',
         'route-protect',
+        'maintenance-mode',
         'workload-identity',
         'in-cluster-api',
       ],

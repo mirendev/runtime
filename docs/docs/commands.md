@@ -184,6 +184,7 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren route`](/command/route) | List all HTTP routes |
+| [`miren route down`](/command/route-down) | Put an HTTP route into maintenance |
 | [`miren route list`](/command/route-list) | List all HTTP routes |
 | [`miren route protect`](/command/route-protect) | Protect an HTTP route with an identity provider |
 | [`miren route remove`](/command/route-remove) | Remove an HTTP route |
@@ -193,6 +194,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren route timeout`](/command/route-timeout) | Override the ingress request timeout for an HTTP route |
 | [`miren route unprotect`](/command/route-unprotect) | Remove identity-provider protection from an HTTP route |
 | [`miren route unset-default`](/command/route-unset-default) | Remove the default route |
+| [`miren route up`](/command/route-up) | Bring an HTTP route out of maintenance |
 | [`miren route waf`](/command/route-waf) | Manage WAF protection on an HTTP route |
 
 ## runner

@@ -16,7 +16,8 @@
         "TestSandboxExec",
         "TestDeployGoServer",
         "TestRouteSetListRemove",
-        "TestSandboxList"
+        "TestSandboxList",
+        "TestRouteDownDefaultNeedsConfirmation"
       ]
     },
     {
@@ -58,7 +59,8 @@
         "TestDistributedRunnerLogs",
         "TestDistributedRunnerMetrics",
         "TestDistributedRunnerNodePort",
-        "TestAddonEnvSurvivesDeployVersion"
+        "TestAddonEnvSurvivesDeployVersion",
+        "TestRouteMaintenance"
       ]
     }
   ]
