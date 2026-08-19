@@ -28,6 +28,10 @@ Also open any `node_port` values your apps declare for TCP/UDP services, and the
 
 ## How Miren Configures Firewall Rules
 
+:::info[Both iptables and nftables are required]
+Miren uses `iptables` for the network bridge and per-sandbox NAT, and `nftables` (the `nft` command) for services and NodePorts. Both must be installed on the host — see [System Requirements](/system-requirements#required-host-commands).
+:::
+
 When Miren sets up the network bridge, it installs iptables rules in two chains:
 
 ### FORWARD Chain

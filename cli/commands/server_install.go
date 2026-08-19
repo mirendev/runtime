@@ -147,6 +147,7 @@ type installPrerequisites struct {
 	hasRoot             bool
 	hasSystemd          bool
 	hasContainerRuntime bool
+	missingNetCommands  []string
 }
 
 // checkInstallPrerequisites checks all prerequisites and returns their status
@@ -156,6 +157,7 @@ func checkInstallPrerequisites() installPrerequisites {
 		hasRoot:             os.Geteuid() == 0,
 		hasSystemd:          checkSystemdAvailable(),
 		hasContainerRuntime: runtimeErr == nil,
+		missingNetCommands:  findMissingCommands(requiredNetCommands(), exec.LookPath),
 	}
 }
 
@@ -178,13 +180,17 @@ func checkSystemdAvailable() bool {
 // printInstallPrerequisiteGuidance prints helpful guidance based on what's available
 func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites) {
 	fmt.Println()
-	ctx.Warn("Cannot proceed with systemd installation.")
+	ctx.Warn("Cannot proceed with installation.")
 	fmt.Println()
 
 	if !prereqs.hasRoot {
 		ctx.Info("Root privileges are required for systemd installation.")
 		fmt.Println("  Run with sudo: sudo miren server install")
 		fmt.Println()
+	}
+
+	if len(prereqs.missingNetCommands) > 0 {
+		printMissingNetCommandGuidance(ctx, prereqs.missingNetCommands)
 	}
 
 	if !prereqs.hasSystemd {
@@ -210,6 +216,23 @@ func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites
 			fmt.Println("  3. Use your system's init system to manage the miren server process")
 		}
 	}
+}
+
+// printMissingNetCommandGuidance explains which networking commands are missing
+// and how to install them. Miren shells out to these at runtime to configure
+// container networking, so they have to be on the host before the server or
+// runner starts.
+func printMissingNetCommandGuidance(ctx *Context, missing []string) {
+	ctx.Info("Missing required networking commands: %s", strings.Join(missing, ", "))
+	fmt.Println()
+	fmt.Println("  Miren uses iptables and nftables (nft) to configure container networking,")
+	fmt.Println("  services, and NodePorts. Install them with your package manager:")
+	fmt.Println()
+	fmt.Println("    Debian/Ubuntu:  sudo apt install iptables nftables")
+	fmt.Println("    RHEL/Fedora:    sudo dnf install iptables nftables")
+	fmt.Println()
+	fmt.Println("  More details: https://miren.md/system-requirements")
+	fmt.Println()
 }
 
 // ensureReleaseBundlePresent checks whether the full release bundle has been
@@ -326,15 +349,18 @@ func ServerInstall(ctx *Context, opts struct {
 	// Check all prerequisites upfront
 	prereqs := checkInstallPrerequisites()
 
-	if !prereqs.hasRoot || !prereqs.hasSystemd {
+	if !prereqs.hasRoot || !prereqs.hasSystemd || len(prereqs.missingNetCommands) > 0 {
 		printInstallPrerequisiteGuidance(ctx, prereqs)
 		if !prereqs.hasRoot {
 			return fmt.Errorf("root privileges required")
 		}
-		return fmt.Errorf("systemd not available")
+		if !prereqs.hasSystemd {
+			return fmt.Errorf("systemd not available")
+		}
+		return fmt.Errorf("missing required commands: %s", strings.Join(prereqs.missingNetCommands, ", "))
 	}
 
-	ctx.Completed("Prerequisites verified (root, systemd)")
+	ctx.Completed("Prerequisites verified (root, systemd, networking tools)")
 
 	// Check system requirements (memory, disk space)
 	if !opts.SkipSystemCheck {

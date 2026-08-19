@@ -46,16 +46,19 @@ func RunnerInstall(ctx *Context, opts struct {
 		}
 	}
 
-	// Check prerequisites (root + systemd)
+	// Check prerequisites (root + systemd + networking commands)
 	prereqs := checkInstallPrerequisites()
-	if !prereqs.hasRoot || !prereqs.hasSystemd {
+	if !prereqs.hasRoot || !prereqs.hasSystemd || len(prereqs.missingNetCommands) > 0 {
 		printRunnerPrerequisiteGuidance(ctx, prereqs)
 		if !prereqs.hasRoot {
 			return fmt.Errorf("root privileges required")
 		}
-		return fmt.Errorf("systemd not available")
+		if !prereqs.hasSystemd {
+			return fmt.Errorf("systemd not available")
+		}
+		return fmt.Errorf("missing required commands: %s", strings.Join(prereqs.missingNetCommands, ", "))
 	}
-	ctx.Completed("Prerequisites verified (root, systemd)")
+	ctx.Completed("Prerequisites verified (root, systemd, networking tools)")
 
 	// Check system requirements (memory, disk space)
 	if !opts.SkipSystemCheck {
@@ -281,6 +284,10 @@ func printRunnerPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites)
 		ctx.Info("Root privileges are required.")
 		fmt.Println("  Run with sudo: sudo miren runner install")
 		fmt.Println()
+	}
+
+	if len(prereqs.missingNetCommands) > 0 {
+		printMissingNetCommandGuidance(ctx, prereqs.missingNetCommands)
 	}
 
 	if !prereqs.hasSystemd {
