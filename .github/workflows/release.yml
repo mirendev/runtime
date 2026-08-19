@@ -61,15 +61,17 @@ jobs:
         env:
           DISPATCH_REF: ${{ inputs.ref }}
           PUSH_REF: ${{ github.ref_name }}
-          PUSH_CHECKOUT: ${{ github.ref }}
+          PUSH_CHECKOUT: ${{ github.sha }}
         run: |
           set -euo pipefail
 
           if [ -z "$DISPATCH_REF" ]; then
             echo "ref=$PUSH_REF" >> "$GITHUB_OUTPUT"
-            # github.ref is already fully qualified, matching the tag path
-            # below, so neither form can be shadowed by a same-named ref of the
-            # other kind.
+            # The triggering commit itself, so no ref name has to be resolved
+            # and none can be shadowed. It also keeps us on the same commit as
+            # the test suite, which checks out the caller's github.sha: taking
+            # the tip of the branch here instead would package something newer
+            # than what was tested whenever main advances mid-run.
             echo "checkout=$PUSH_CHECKOUT" >> "$GITHUB_OUTPUT"
             echo "cache=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -103,19 +105,19 @@ jobs:
   test:
     # A dispatched rebuild repackages a tag whose source already passed this
     # suite when it was pushed, and the packaging code doing the rebuilding was
-    # tested on main. Running it again here would be the one place a dispatch
-    # executes tag code inside the default branch's cache scope — the whole
-    # suite is `make` and `bun run` against a writable shared cache. Skip it
-    # rather than harden nine cache blocks for a path that adds no signal.
+    # tested on main. It is skipped rather than re-run because the suite has no
+    # way to aim at the tag: it inherits our github context, so on a dispatch it
+    # would test main while we package something else. Skipping also keeps tag
+    # code out of the default branch's cache scope, which is the half that
+    # matters for security, since the suite is `make` and `bun run` against a
+    # writable shared cache.
     #
     # Only the explicit-ref form skips. A dispatch with an empty ref builds the
-    # ref it was dispatched on, so its cache scope is that ref's own and there
-    # is nothing to protect.
+    # ref it was dispatched on, so the suite and the packaging agree and the
+    # cache scope is that ref's own.
     if: github.event_name != 'workflow_dispatch' || inputs.ref == ''
     needs: init
     uses: ./.github/workflows/test.yml
-    with:
-      ref: ${{ needs.init.outputs.sha }}
     secrets: inherit
 
   package:
