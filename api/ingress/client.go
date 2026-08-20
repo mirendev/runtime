@@ -87,6 +87,11 @@ func (c *Client) LookupWithWildcard(ctx context.Context, host string) (*ingress_
 	return nil, nil
 }
 
+// IsWildcardHost reports whether host is a wildcard route pattern (e.g. *.example.com).
+func IsWildcardHost(host string) bool {
+	return strings.HasPrefix(strings.ToLower(host), "*.")
+}
+
 // ValidateWildcardHost validates a wildcard host pattern.
 // Valid patterns: *.example.com, *.sub.example.com
 // Invalid: *.com, foo.*.com, **, *
