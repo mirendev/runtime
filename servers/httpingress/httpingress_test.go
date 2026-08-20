@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/httputil"
 )
 
@@ -494,5 +495,54 @@ func TestProxyToLeaseNoRetryOnTimeout(t *testing.T) {
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 for timeout, got %d", rec.Code)
+	}
+}
+
+func TestResolveVersionStrategy(t *testing.T) {
+	tests := []struct {
+		name           string
+		ephemeralLabel string
+		wildcardRoute  bool
+		want           versionResolution
+	}{
+		// A wildcard tenant subdomain that names no live ephemeral version must
+		// fall back to the active version, not hard-404 (MIR-1613).
+		{"wildcard label falls back to active", "tenant1", true, resolveEphemeralOrActive},
+		{"non-wildcard label stays strict", "feat-x", false, resolveEphemeralStrict},
+		{"no label serves active on wildcard", "", true, resolveActive},
+		{"no label serves active on exact", "", false, resolveActive},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveVersionStrategy(tt.ephemeralLabel, tt.wildcardRoute)
+			if got != tt.want {
+				t.Errorf("resolveVersionStrategy(%q, %v) = %d, want %d", tt.ephemeralLabel, tt.wildcardRoute, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLeaseCacheKey(t *testing.T) {
+	app := entity.Id("app-1")
+
+	// Two distinct wildcard subdomains that did not resolve to an ephemeral
+	// version must land on the same base key so they share one active-version
+	// lease pool instead of fragmenting per tenant.
+	tenant1 := leaseCacheKey(app, "tenant1", false)
+	tenant2 := leaseCacheKey(app, "tenant2", false)
+	labelFree := leaseCacheKey(app, "", false)
+	if tenant1 != labelFree || tenant2 != labelFree {
+		t.Errorf("unresolved labels should share the base key %q, got tenant1=%q tenant2=%q", labelFree, tenant1, tenant2)
+	}
+
+	// A resolved ephemeral version stays scoped per label and never collides
+	// with the base key or another label.
+	resolved := leaseCacheKey(app, "feat-x", true)
+	if resolved == labelFree {
+		t.Errorf("resolved ephemeral key %q must differ from the base key %q", resolved, labelFree)
+	}
+	if other := leaseCacheKey(app, "feat-y", true); other == resolved {
+		t.Errorf("distinct ephemeral labels must not share a key, both were %q", resolved)
 	}
 }

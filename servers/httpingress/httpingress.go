@@ -627,9 +627,13 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	requestTimeout := routeRequestTimeout(route)
 
+	// A wildcard route also serves as a multi-tenant subdomain, so a failed
+	// ephemeral lookup should fall back to the active version rather than 404.
+	wildcardRoute := route != nil && ingress.IsWildcardHost(route.Host)
+
 	// Compose middleware chain: WAF → auth → serve
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, appName, requestTimeout)
+		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, wildcardRoute, appName, requestTimeout)
 	}
 
 	handler = h.authMiddleware(route, handler)
@@ -701,8 +705,45 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 	}
 }
 
+// versionResolution describes how a request resolves to an app version.
+type versionResolution int
+
+const (
+	resolveActive            versionResolution = iota // serve app.ActiveVersion
+	resolveEphemeralStrict                            // resolve ephemeral by label; 404 if missing
+	resolveEphemeralOrActive                          // resolve ephemeral by label; fall back to active if missing
+)
+
+// resolveVersionStrategy decides how to resolve the app version for a request.
+// A request with no ephemeral label always serves the active version. When an
+// ephemeral label is present, a wildcard route (which doubles as a multi-tenant
+// subdomain) falls back to the active version if the label does not resolve,
+// while a non-wildcard route stays strict and 404s on a miss.
+func resolveVersionStrategy(ephemeralLabel string, wildcardRoute bool) versionResolution {
+	if ephemeralLabel == "" {
+		return resolveActive
+	}
+	if wildcardRoute {
+		return resolveEphemeralOrActive
+	}
+	return resolveEphemeralStrict
+}
+
+// leaseCacheKey returns the lease cache key for a request. A request that
+// resolved an ephemeral version is scoped per label so it never shares a lease
+// with the active version or another label. Everything else, including a
+// wildcard subdomain that fell back to the active version, shares the app base
+// key so those requests reuse one active-version lease pool instead of
+// fragmenting into a per-tenant entry.
+func leaseCacheKey(appID entity.Id, ephemeralLabel string, ephemeralResolved bool) string {
+	if ephemeralResolved {
+		return appID.String() + ":eph:" + ephemeralLabel
+	}
+	return appID.String()
+}
+
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, appName *string, requestTimeout time.Duration) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, wildcardRoute bool, appName *string, requestTimeout time.Duration) {
 	ctx := req.Context()
 
 	// Get app details first to have the name for metrics
@@ -730,12 +771,33 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		))
 	defer leaseSpan.End()
 
-	// Scope the lease cache key by ephemeral label so different versions
-	// (active vs ephemeral, or different ephemeral labels) never share leases.
-	leaseKey := targetAppId.String()
-	if ephemeralLabel != "" {
-		leaseKey = targetAppId.String() + ":eph:" + ephemeralLabel
+	// Resolve the version identity up front so the lease cache key reflects
+	// the version actually served. A resolved ephemeral version scopes the key
+	// per-label; an unresolved label on a wildcard route falls back to the
+	// active version and shares its lease pool rather than fragmenting into a
+	// per-tenant entry. Label-free requests skip the lookup and stay on the
+	// fast active path.
+	strategy := resolveVersionStrategy(ephemeralLabel, wildcardRoute)
+	var ephVer *core_v1alpha.AppVersion
+
+	if strategy != resolveActive {
+		ev, err := ephemeralx.LookupByLabel(ctx, h.eac, targetAppId, ephemeralLabel)
+		if err != nil {
+			h.Log.Error("error looking up ephemeral version", "error", err, "label", ephemeralLabel)
+			http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+			return
+		}
+		if ev == nil && strategy == resolveEphemeralStrict {
+			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", targetAppId)
+			http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			return
+		}
+		// ev may be nil here for a resolveEphemeralOrActive miss, which leaves
+		// the request on the active version and its shared lease pool.
+		ephVer = ev
 	}
+
+	leaseKey := leaseCacheKey(targetAppId, ephemeralLabel, ephVer != nil)
 
 	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
 	// invalidate all cached leases and retry once to acquire a fresh lease.
@@ -781,26 +843,15 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		var av core_v1alpha.AppVersion
 
-		if ephemeralLabel != "" {
-			// Resolve ephemeral version by label
-			ephVer, ephErr := ephemeralx.LookupByLabel(ctx, h.eac, targetAppId, ephemeralLabel)
-			if ephErr != nil {
-				h.Log.Error("error looking up ephemeral version", "error", ephErr, "label", ephemeralLabel)
-				http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
-				return
-			}
-			if ephVer == nil {
-				h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", targetAppId)
-				http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
-				return
-			}
+		if ephVer != nil {
 			av = *ephVer
 			leaseSpan.SetAttributes(
 				attribute.String("miren.app.version", string(av.ID)),
 				attribute.String("miren.ephemeral.label", ephemeralLabel),
 			)
 		} else {
-			// Resolve active version
+			// Active version: either a label-free request or a wildcard
+			// subdomain whose ephemeral label did not resolve.
 			if app.ActiveVersion == "" {
 				h.Log.Debug("no active version for app", "app", targetAppId)
 				http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
