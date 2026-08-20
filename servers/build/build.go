@@ -257,6 +257,40 @@ func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]stri
 	return errAmbiguousWeb
 }
 
+// validateAddonServices rejects a services = [...] entry that names no service.
+//
+// A name that matches nothing is always a mistake, and a silent one: the addon's
+// storage is filtered onto no service at all, while its variables are not
+// service-filtered and still reach every service. The app deploys green with a
+// connection string pointing at a mount that was never created.
+//
+// This cannot live in appconfig.Validate, which sees app.toml alone. A service
+// may be declared only in the Procfile, and rejecting those here would break a
+// config that is entirely valid. Both sources are known at this point, and only
+// here.
+func validateAddonServices(ac *appconfig.AppConfig, procfileServices map[string]string) error {
+	if ac == nil {
+		return nil
+	}
+	for addonName, cfg := range ac.Addons {
+		if cfg == nil {
+			continue
+		}
+		for _, target := range cfg.Services {
+			if _, ok := ac.Services[target]; ok {
+				continue
+			}
+			if _, ok := procfileServices[target]; ok {
+				continue
+			}
+			return fmt.Errorf(
+				"addon %s: services lists %q, which is no service of this app",
+				addonName, target)
+		}
+	}
+	return nil
+}
+
 // migrateConsoleService moves a legacy [services.console] block to [tasks.console].
 //
 // Declaring [services.console] used to get you two things: a long-running
@@ -1580,6 +1614,13 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	// instead of after a full image build.
 	if err := validateWebIntent(ac, procfileServices); err != nil {
 		b.sendErrorStatus(ctx, status, "%s\n\nSee https://miren.md/app-toml#tasks", err)
+		return nil, err
+	}
+
+	// Checked here rather than in appconfig.Validate for the same reason: a
+	// service may come from the Procfile, and only this side sees both.
+	if err := validateAddonServices(ac, procfileServices); err != nil {
+		b.sendErrorStatus(ctx, status, "%s", err)
 		return nil, err
 	}
 
