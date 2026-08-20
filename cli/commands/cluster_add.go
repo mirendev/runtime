@@ -64,6 +64,28 @@ type addClusterOptions struct {
 	viaCloud bool
 }
 
+// canFallBackToCloud reports whether a cluster that would not answer a direct
+// dial can be reached through cloud instead.
+//
+// A failure to ask is not the same as an answer of no, but it produces the same
+// decision, so it is reported and then treated as unreachable. That way a cloud
+// that is down leaves the user with the direct-connection error they were going
+// to get anyway, rather than a confusing one about routing.
+func canFallBackToCloud(
+	ctx *Context,
+	config *clientconfig.Config,
+	identityName string,
+	identity *clientconfig.IdentityConfig,
+	cluster *ClusterResponse,
+) bool {
+	online, err := clusterOnlineInCloud(ctx, config, identityName, identity, cluster.XID)
+	if err != nil {
+		ctx.Warn("Could not ask cloud whether it can reach %s: %v", cluster.Name, err)
+		return false
+	}
+	return online
+}
+
 // announceClusterAdd says which cluster is being added, under what local name,
 // and how it will be reached. Shared so the three ways of getting here cannot
 // describe themselves differently, and so a path that ends up routed cannot
@@ -213,11 +235,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 				// the other shape of unreachable: a cluster on a network this
 				// machine is not on. Cloud may still hold a link to it, and if
 				// it does, the entry that works is the routed one.
-				online, cloudErr := clusterOnlineInCloud(ctx, mainConfig, identityName, identity, selectedCluster.XID)
-				if cloudErr != nil {
-					ctx.Warn("Could not ask cloud whether it can reach %s: %v", selectedCluster.Name, cloudErr)
-				}
-				if !online {
+				if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
 					return err
 				}
 

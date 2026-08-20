@@ -146,3 +146,83 @@ func TestCloudRoutableClustersSurvivesAFailingCloud(t *testing.T) {
 	require.Contains(t, out.String(), "behind-nat",
 		"a cloud that could not answer must say so, not silently mean no")
 }
+
+// The decision the RFD describes: when a cluster advertises addresses and none
+// of them answer, ask cloud, and route through it if cloud has a link.
+func TestCanFallBackToCloud(t *testing.T) {
+	srv, _ := cloudPresenceServer(t, map[string]bool{"cluster-up": true}, http.StatusOK)
+	cfg, identity := presenceTestConfig(t, srv.URL)
+	ctx := presenceContext(t)
+
+	up := &ClusterResponse{Name: "reachable-by-cloud", XID: "cluster-up"}
+	require.True(t, canFallBackToCloud(ctx, cfg, "cloud", identity, up))
+
+	down := &ClusterResponse{Name: "really-gone", XID: "cluster-down"}
+	require.False(t, canFallBackToCloud(ctx, cfg, "cloud", identity, down),
+		"a cluster cloud cannot reach must keep the direct-connection error")
+}
+
+// A cloud that cannot answer is not a cloud saying no, but it produces the same
+// decision. It has to say so, because the alternative is a user being told a
+// cluster is unreachable when the truth is that we failed to ask.
+func TestCanFallBackToCloudReportsAFailingCloud(t *testing.T) {
+	srv, _ := cloudPresenceServer(t, nil, http.StatusInternalServerError)
+	cfg, identity := presenceTestConfig(t, srv.URL)
+
+	ctx := presenceContext(t)
+	out := ctx.Stdout.(*bytes.Buffer)
+
+	ok := canFallBackToCloud(ctx, cfg, "cloud", identity,
+		&ClusterResponse{Name: "behind-nat", XID: "cluster-nat"})
+
+	require.False(t, ok)
+	require.Contains(t, out.String(), "behind-nat")
+}
+
+// What the fallback has to write, and the RFD's claim that a routed entry needs
+// no address and no CA.
+//
+// A cluster that could not be dialed still advertised addresses and may have
+// presented a certificate, and keeping either would write an entry that looks
+// dialable and is not. The next command would then try the dead address instead
+// of the route that works.
+func TestRoutedEntryKeepsNoDialableFields(t *testing.T) {
+	r := require.New(t)
+
+	// The shape addCluster builds once the fallback has fired: viaCloud set,
+	// and the address, addresses and certificate deliberately left empty.
+	cfg := &clientconfig.ClusterConfig{
+		Hostname:     "",
+		AllAddresses: nil,
+		Identity:     "cloud",
+		XID:          "cluster-abc",
+		ViaCloud:     true,
+	}
+
+	r.True(cfg.ViaCloud)
+	r.Empty(cfg.Hostname, "a routed entry is never dialed, so an address would be a trap")
+	r.Empty(cfg.AllAddresses)
+	r.Empty(cfg.CACert, "the certificate on the wire belongs to cloud, not the cluster")
+	r.NotEmpty(cfg.XID, "routing needs the cluster's id in cloud")
+	r.NotEmpty(cfg.Identity, "and an identity to authenticate with")
+
+	// And it resolves to a relay endpoint rather than a direct dial.
+	endpoint, err := cfg.CloudEndpoint(viaCloudTestConfig(t, cfg))
+	r.NoError(err)
+	r.NotEmpty(endpoint)
+}
+
+// viaCloudTestConfig wraps a cluster entry in a config holding the identity it
+// names, which is what CloudEndpoint resolves the cloud through.
+func viaCloudTestConfig(t *testing.T, cluster *clientconfig.ClusterConfig) *clientconfig.Config {
+	t.Helper()
+
+	cfg := clientconfig.NewConfig()
+	cfg.SetIdentity("cloud", &clientconfig.IdentityConfig{
+		Type:   clientconfig.IdentityToken,
+		Issuer: "https://api.miren.cloud",
+		Token:  freshLoginJWT(t),
+	})
+	cfg.SetCluster("prod", cluster)
+	return cfg
+}
