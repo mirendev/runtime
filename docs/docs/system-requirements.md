@@ -24,6 +24,7 @@ Beyond hardware, Miren shells out to a couple of Linux networking tools that don
 | Command | Package | Used for |
 |---------|---------|----------|
 | `iptables` | `iptables` | The network bridge and per-sandbox NAT rules |
+| `ip6tables` | `iptables` | The IPv6 bridge rules (ships with the `iptables` package) |
 | `nft` | `nftables` | Services and NodePorts |
 
 Install both with your package manager:

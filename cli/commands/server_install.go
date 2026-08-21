@@ -184,7 +184,7 @@ func printInstallPrerequisiteGuidance(ctx *Context, prereqs installPrerequisites
 	fmt.Println()
 
 	if !prereqs.hasRoot {
-		ctx.Info("Root privileges are required for systemd installation.")
+		ctx.Info("Root privileges are required for installation.")
 		fmt.Println("  Run with sudo: sudo miren server install")
 		fmt.Println()
 	}
