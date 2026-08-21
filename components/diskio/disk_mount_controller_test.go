@@ -847,3 +847,71 @@ func TestDiskMountControllerUniversalOrphanSkipsUnmount(t *testing.T) {
 	// Mount state should still be cleaned up from mount controller's perspective
 	assert.Nil(t, state.GetMount("disk_mount/mnt-orphan-uni"))
 }
+
+// TestDiskMountControllerTeardownReleasesWithCloudId asserts the orphan-cleanup
+// lease release uses the volume's cloud id, not the local entity id stored on
+// the mount. The two are deliberately different here (MIR-1634).
+func TestDiskMountControllerTeardownReleasesWithCloudId(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+	state := NewState()
+	ops := newMockDiskMountOps()
+
+	state.SetVolume("disk_volume/vol-acc", &VolumeState{
+		EntityId:      "disk_volume/vol-acc",
+		VolumeId:      "vol-acc",
+		CloudVolumeId: "vol-cloud-acc",
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+	})
+	mountState := &MountState{
+		EntityId:   "disk_mount/mnt-acc",
+		VolumeId:   "disk_volume/vol-acc",
+		DevicePath: "/dev/loop3",
+		Mode:       storage_v1alpha.VM_ACCELERATOR,
+		LeaseNonce: "nonce-acc",
+	}
+	state.SetMount("disk_mount/mnt-acc", mountState)
+
+	cloud := &mockCloudDiskClient{}
+	mc := newTestDiskMountController(log, t.TempDir(), "test-node", nil, state, ops)
+	mc.SetCloudClient(cloud)
+
+	mc.teardownLocalMount(ctx, mountState)
+
+	require.Len(t, cloud.releaseLeaseCalls, 1)
+	assert.Equal(t, "vol-cloud-acc", cloud.releaseLeaseCalls[0].volumeID)
+	assert.Equal(t, "nonce-acc", cloud.releaseLeaseCalls[0].nonce)
+}
+
+// TestDiskMountControllerTeardownReleasesAfterVolumeGone is the robustness win
+// from persisting the cloud id on the mount: orphan cleanup runs after the
+// backing VolumeState has already been deleted, yet the lease is still released
+// with the correct cloud id because the mount carries it (MIR-1634).
+func TestDiskMountControllerTeardownReleasesAfterVolumeGone(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+	state := NewState()
+	ops := newMockDiskMountOps()
+
+	// Deliberately no VolumeState: the volume entity/state is gone, which is
+	// exactly the orphan-cleanup situation.
+	mountState := &MountState{
+		EntityId:      "disk_mount/mnt-acc",
+		VolumeId:      "disk_volume/vol-acc",
+		CloudVolumeId: "vol-cloud-acc",
+		DevicePath:    "/dev/loop3",
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+		LeaseNonce:    "nonce-acc",
+	}
+	state.SetMount("disk_mount/mnt-acc", mountState)
+
+	cloud := &mockCloudDiskClient{}
+	mc := newTestDiskMountController(log, t.TempDir(), "test-node", nil, state, ops)
+	mc.SetCloudClient(cloud)
+
+	mc.teardownLocalMount(ctx, mountState)
+
+	require.Len(t, cloud.releaseLeaseCalls, 1)
+	assert.Equal(t, "vol-cloud-acc", cloud.releaseLeaseCalls[0].volumeID)
+	assert.Equal(t, "nonce-acc", cloud.releaseLeaseCalls[0].nonce)
+}

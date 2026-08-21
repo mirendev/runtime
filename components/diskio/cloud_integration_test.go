@@ -223,7 +223,18 @@ func (m *mockCloudServer) handleUploadRequest(w http.ResponseWriter, r *http.Req
 
 	volumeID := volumeIDFromUpdatesPath(r.URL.Path)
 
+	// A leased volume rejects writes that don't carry the current nonce, which
+	// is exactly the production failure MIR-1634 reproduces: the uploader knew
+	// the nonce but keyed off the wrong volume id and so omitted it.
 	m.mu.Lock()
+	if lease, held := m.leases[volumeID]; held && req.LeaseNonce != lease.Nonce {
+		m.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprint(w, `{"error":"volume has an active lease: nonce required"}`)
+		return
+	}
+
 	segID := m.nextID("seg")
 	m.segments[segID] = &storedSegment{
 		VolumeID: volumeID,
@@ -765,4 +776,75 @@ func TestCloudIntegrationOverwriteSemantics(t *testing.T) {
 	horizon, err := readLogHorizon(volDir)
 	require.NoError(t, err)
 	assert.Equal(t, labels[1], horizon)
+}
+
+// TestCloudIntegrationLeasedWatcherUploadIncludesNonce is the end-to-end
+// regression for MIR-1634. The volume's local entity id and its cloud id are
+// deliberately different, and the cloud holds an active lease, so an upload
+// that omits the nonce is rejected. It exercises the real LogWatcher →
+// CloudSegmentUploader → cloud path and asserts the segment is accepted,
+// proving the nonce was resolved through the cloud id and forwarded.
+func TestCloudIntegrationLeasedWatcherUploadIncludesNonce(t *testing.T) {
+	mock := newMockCloudServer(t)
+	authClient := newTestAuthClient(t, mock.URL())
+
+	// Local entity id and cloud id differ, matching production.
+	entityID := "disk_volume/vol-local"
+	localVolumeID := "vol-local"
+	cloudVolumeID := "vol-cloud-1634"
+	blockSize := uint32(4096)
+	tmpDir := t.TempDir()
+
+	volDir := filepath.Join(tmpDir, "vol-1634")
+	logDir := filepath.Join(volDir, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+
+	data := bytes.Repeat([]byte{0xEE}, 4096)
+	label := "400000000000000100000001"
+	buildSegmentFile(t, logDir, label, blockSize, []lbd.Entry{
+		makeWriteEntry(0, data),
+	})
+
+	// Acquire an active lease on the cloud volume via the real client, so the
+	// mock will reject any upload that arrives without the matching nonce.
+	client := NewCloudDiskClient(slog.Default(), mock.URL(), authClient)
+	nonce, err := client.AcquireLease(context.Background(), cloudVolumeID)
+	require.NoError(t, err)
+	require.NotEmpty(t, nonce)
+
+	state := NewState()
+	state.SetVolume(entityID, &VolumeState{
+		EntityId:      entityID,
+		VolumeId:      localVolumeID,
+		CloudVolumeId: cloudVolumeID,
+		DiskPath:      volDir,
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+	})
+	// The mount records the lease nonce, keyed by the local entity id — the
+	// same shape the mount controller writes in production.
+	state.SetMount("disk_mount/mnt-1634", &MountState{
+		EntityId:   "disk_mount/mnt-1634",
+		VolumeId:   entityID,
+		Mode:       storage_v1alpha.VM_ACCELERATOR,
+		LeaseNonce: nonce,
+	})
+
+	uploader := NewCloudSegmentUploader(slog.Default(), mock.URL(), authClient, state)
+	watcher := NewLogWatcher(slog.Default(), state, uploader, time.Second)
+
+	watcher.scanAndUpload(context.Background())
+
+	// The upload must have been accepted for the cloud volume id, which only
+	// happens if the nonce was forwarded.
+	completed := mock.completedSegments(cloudVolumeID)
+	require.Len(t, completed, 1, "leased upload should succeed with the nonce")
+	assert.Equal(t, label, completed[0].Label)
+
+	// The segment file should have been consumed and the horizon advanced.
+	_, statErr := os.Stat(filepath.Join(logDir, fmt.Sprintf("disk.%s.log", label)))
+	assert.True(t, os.IsNotExist(statErr), "uploaded log file should have been removed")
+
+	horizon, err := readLogHorizon(volDir)
+	require.NoError(t, err)
+	assert.Equal(t, label, horizon)
 }

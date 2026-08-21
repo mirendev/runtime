@@ -239,3 +239,37 @@ func TestStateConcurrentAccess(t *testing.T) {
 	assert.NotNil(t, state.GetVolume("vol-1"))
 	assert.NotNil(t, state.GetMount("mount-1"))
 }
+
+func TestStateLeaseNonceForCloudVolume(t *testing.T) {
+	t.Run("matches on the mount's stored cloud id", func(t *testing.T) {
+		// No VolumeState at all — the mount alone carries the cloud id.
+		state := NewState()
+		state.SetMount("disk_mount/mnt-1", &MountState{
+			EntityId:      "disk_mount/mnt-1",
+			VolumeId:      "disk_volume/vol1",
+			CloudVolumeId: "vol-cloud-1",
+			LeaseNonce:    "nonce-1",
+		})
+
+		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
+		assert.Empty(t, state.LeaseNonceForCloudVolume("vol-other"))
+		assert.Empty(t, state.LeaseNonceForCloudVolume(""))
+	})
+
+	t.Run("falls back to volume state for mounts without a stored cloud id", func(t *testing.T) {
+		// Models a mount persisted before CloudVolumeId was recorded on it.
+		state := NewState()
+		state.SetVolume("disk_volume/vol1", &VolumeState{
+			EntityId:      "disk_volume/vol1",
+			VolumeId:      "vol1",
+			CloudVolumeId: "vol-cloud-1",
+		})
+		state.SetMount("disk_mount/mnt-1", &MountState{
+			EntityId:   "disk_mount/mnt-1",
+			VolumeId:   "disk_volume/vol1",
+			LeaseNonce: "nonce-1",
+		})
+
+		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
+	})
+}

@@ -115,14 +115,37 @@ func (c *DiskMountController) Shutdown() {
 	// Release cloud leases for any active mounts
 	if c.cloudClient != nil {
 		for _, ms := range c.state.ListMounts() {
-			if ms.LeaseNonce != "" {
-				c.log.Info("releasing lease on shutdown", "entity_id", ms.EntityId, "volume_id", ms.VolumeId)
-				if err := c.cloudClient.ReleaseLease(context.Background(), ms.VolumeId, ms.LeaseNonce); err != nil {
-					c.log.Warn("failed to release lease on shutdown", "entity_id", ms.EntityId, "error", err)
-				}
+			if ms.LeaseNonce == "" {
+				continue
+			}
+			cloudID := c.cloudVolumeIdFor(ms)
+			if cloudID == "" {
+				continue
+			}
+			c.log.Info("releasing lease on shutdown", "entity_id", ms.EntityId, "cloud_volume_id", cloudID)
+			if err := c.cloudClient.ReleaseLease(context.Background(), cloudID, ms.LeaseNonce); err != nil {
+				c.log.Warn("failed to release lease on shutdown", "entity_id", ms.EntityId, "error", err)
 			}
 		}
 	}
+}
+
+// cloudVolumeIdFor resolves a mount's backing cloud volume id, or "" if the
+// volume is unknown or not yet registered with the cloud. Mount state's
+// VolumeId is the local disk_volume entity id, which the cloud lease api never
+// accepts, so every lease-release path must map through here. The cloud id
+// recorded on the mount wins — it survives the VolumeState being deleted (e.g.
+// orphan cleanup); otherwise fall back to the volume state for mounts persisted
+// before the cloud id was recorded on the mount.
+func (c *DiskMountController) cloudVolumeIdFor(ms *MountState) string {
+	if ms.CloudVolumeId != "" {
+		return ms.CloudVolumeId
+	}
+	v := c.state.GetVolume(ms.VolumeId)
+	if v == nil {
+		return ""
+	}
+	return v.CloudVolumeId
 }
 
 func (c *DiskMountController) reconcileMount(ctx context.Context, mount *storage_v1alpha.DiskMount) error {
@@ -169,17 +192,20 @@ func (c *DiskMountController) reconcileMountMounted(ctx context.Context, mount *
 				)
 				volState := c.state.GetVolume(string(mount.VolumeId))
 				var mode storage_v1alpha.DiskVolumeVolumeMode
+				var cloudVolumeId string
 				if volState != nil {
 					mode = volState.Mode
+					cloudVolumeId = volState.CloudVolumeId
 				}
 				c.state.SetMount(entityId, &MountState{
-					EntityId:   entityId,
-					VolumeId:   string(mount.VolumeId),
-					DevicePath: mount.DevicePath,
-					MountPath:  mount.MountPath,
-					Mounted:    true,
-					ReadOnly:   mount.ReadOnly,
-					Mode:       mode,
+					EntityId:      entityId,
+					VolumeId:      string(mount.VolumeId),
+					CloudVolumeId: cloudVolumeId,
+					DevicePath:    mount.DevicePath,
+					MountPath:     mount.MountPath,
+					Mounted:       true,
+					ReadOnly:      mount.ReadOnly,
+					Mode:          mode,
 				})
 				if err := c.state.Save(); err != nil {
 					c.log.Warn("failed to save reconstructed mount state", "error", err)
@@ -258,11 +284,12 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	// Just set up tracking and mark DM_MOUNTED.
 	if alwaysMount(volState.Mode) {
 		devPath, mntPath, err := c.state.SetMountFromVolume(volumeId, &MountState{
-			EntityId: entityId,
-			VolumeId: volumeId,
-			Mounted:  true,
-			ReadOnly: mount.ReadOnly,
-			Mode:     volState.Mode,
+			EntityId:      entityId,
+			VolumeId:      volumeId,
+			CloudVolumeId: volState.CloudVolumeId,
+			Mounted:       true,
+			ReadOnly:      mount.ReadOnly,
+			Mode:          volState.Mode,
 		})
 		if err != nil {
 			c.setMountError(ctx, mount.ID, err.Error())
@@ -365,14 +392,15 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 	}
 
 	c.state.SetMount(entityId, &MountState{
-		EntityId:   entityId,
-		VolumeId:   volumeId,
-		DevicePath: devicePath,
-		MountPath:  mount.MountPath,
-		Mounted:    false,
-		ReadOnly:   mount.ReadOnly,
-		Mode:       volState.Mode,
-		LeaseNonce: leaseNonce,
+		EntityId:      entityId,
+		VolumeId:      volumeId,
+		CloudVolumeId: volState.CloudVolumeId,
+		DevicePath:    devicePath,
+		MountPath:     mount.MountPath,
+		Mounted:       false,
+		ReadOnly:      mount.ReadOnly,
+		Mode:          volState.Mode,
+		LeaseNonce:    leaseNonce,
 	})
 
 	if err := c.state.Save(); err != nil {
@@ -612,9 +640,11 @@ func (c *DiskMountController) unmountAndDetach(ctx context.Context, mount *stora
 	// Release cloud lease if one was acquired
 	var leaseErr error
 	if mountState.LeaseNonce != "" && c.cloudClient != nil {
-		if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
-			c.log.Warn("failed to release volume lease", "entity_id", entityId, "error", err)
-			leaseErr = fmt.Errorf("failed to release volume lease: %w", err)
+		if cloudID := c.cloudVolumeIdFor(mountState); cloudID != "" {
+			if err := c.cloudClient.ReleaseLease(ctx, cloudID, mountState.LeaseNonce); err != nil {
+				c.log.Warn("failed to release volume lease", "entity_id", entityId, "error", err)
+				leaseErr = fmt.Errorf("failed to release volume lease: %w", err)
+			}
 		}
 	}
 
@@ -812,8 +842,10 @@ func (c *DiskMountController) teardownLocalMount(ctx context.Context, mountState
 	}
 
 	if mountState.LeaseNonce != "" && c.cloudClient != nil {
-		if err := c.cloudClient.ReleaseLease(ctx, mountState.VolumeId, mountState.LeaseNonce); err != nil {
-			c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
+		if cloudID := c.cloudVolumeIdFor(mountState); cloudID != "" {
+			if err := c.cloudClient.ReleaseLease(ctx, cloudID, mountState.LeaseNonce); err != nil {
+				c.log.Warn("failed to release lease for orphaned mount", "entity_id", mountState.EntityId, "error", err)
+			}
 		}
 	}
 
