@@ -211,6 +211,26 @@ func TestClientLookupWithWildcard(t *testing.T) {
 	})
 }
 
+func TestIsWildcardHost(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"*.example.com", true},
+		{"*.APP.EXAMPLE.COM", true},
+		{"app.example.com", false},
+		{"example.com", false},
+		{"*", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			require.Equal(t, tt.want, IsWildcardHost(tt.host))
+		})
+	}
+}
+
 func TestExtractSubdomainLabel(t *testing.T) {
 	tests := []struct {
 		requestHost string

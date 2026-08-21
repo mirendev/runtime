@@ -11,6 +11,10 @@ Complete reference for `.miren/app.toml` — the configuration file for Miren ap
 
 For a guide-style introduction, see [App Configuration](/app-configuration).
 
+For editor autocomplete and automated validation, use the published
+[JSON Schema](/app-toml.schema.json). Editors that support TOML schemas can map
+that URL to `.miren/app.toml`.
+
 ## File Structure
 
 ```toml

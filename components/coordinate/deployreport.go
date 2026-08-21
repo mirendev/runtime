@@ -182,10 +182,16 @@ type DeployState struct {
 	// consulting any clock.
 	Revision int64 `json:"revision"`
 
-	AppName    string `json:"app_name"`
-	AppVersion string `json:"app_version"`
-	Status     string `json:"status"`
-	Phase      string `json:"phase"`
+	AppName string `json:"app_name"`
+
+	// Version is the app version this deploy shipped, nil when it never got
+	// one — a deploy that failed before a build produced a version has no
+	// version to name, and saying so with an absent object is honest where an
+	// empty string is a value that has to be recognized as meaning nothing.
+	Version *EntityRef `json:"version"`
+
+	Status string `json:"status"`
+	Phase  string `json:"phase"`
 
 	// DeployedAt is when the deploy was initiated, and must be identical in
 	// every report of this deploy: cloud partitions on it, so a value that
@@ -200,8 +206,30 @@ type DeployState struct {
 
 	Git *DeployGit `json:"git"`
 
-	// SourceDeployID links a rollback or redeploy to what it was based on.
-	SourceDeployID *string `json:"source_deploy_id"`
+	// SourceDeploy links a rollback or redeploy to what it was based on, nil
+	// for a fresh build.
+	SourceDeploy *EntityRef `json:"source_deploy"`
+}
+
+// EntityRef names one runtime entity, in both the form that identifies it and
+// the form a person reads.
+//
+// Both are carried because neither does the other's job. The id is the durable
+// handle: UUIDv7 under its base58, never reused, and unique across every
+// cluster. The short id is what the CLI and console actually show, but it is
+// allocated per cluster against the entities alive at that moment
+// (pkg/entity/store.go), so it collides across clusters and is freed for
+// reallocation once its entity is pruned. Cloud becomes the book of record for
+// a deploy after the runtime prunes it, so storing only the short id would
+// leave a history whose identifiers can later name something else.
+//
+// ShortID is empty when the runtime could not resolve one — an entity that was
+// pruned before this deploy was reported, most often. Readers fall back to the
+// id with its kind prefix stripped, which is what pkg/ui.DisplayShortID does
+// for the CLI.
+type EntityRef struct {
+	ID      string `json:"id"`
+	ShortID string `json:"short_id"`
 }
 
 // DeployGit is the provenance cloud keeps for a deploy.
@@ -242,6 +270,24 @@ type deploySource interface {
 	// Watch streams deploy operations in revision order starting just after
 	// fromRevision, blocking until the context ends or the stream fails.
 	Watch(ctx context.Context, fromRevision int64, fn func(*esv1.EntityOp) error) error
+
+	// ShortID resolves one entity's short id, returning "" when the entity is
+	// gone or carries none.
+	//
+	// No error, on purpose. A short id is a display convenience, and there is
+	// nothing a caller here could usefully do with a failure to read one: the
+	// deploy still has to be reported, and the reference still has its durable
+	// id. Returning "" collapses "pruned", "never had one" and "the read
+	// failed" into the one case every reader already handles.
+	ShortID(ctx context.Context, entityID string) string
+
+	// ShortIDsForKind resolves every short id for a kind in a single read.
+	//
+	// This exists for the backfill. Resolving one at a time is fine on the live
+	// path, where deploys arrive one at a time anyway, but a first re-list
+	// walks every deploy a cluster has ever run and would turn into a Get per
+	// deploy against a store that can answer the whole question at once.
+	ShortIDsForKind(ctx context.Context, kind entity.Id) map[string]string
 }
 
 // errCompacted ends a stream that cannot continue because the revision it
@@ -403,12 +449,16 @@ func (r *deployReporter) run(ctx context.Context, link deployLink) {
 		return
 	}
 
+	// One cache for the whole connection, so a delta stream that falls back to
+	// a re-list keeps what it already learned.
+	ids := newShortIDs(r.source)
+
 	mode, reason := decideSyncMode(watermark, head)
 	if mode == syncDelta {
 		r.log.Info("resuming deploy sync from cloud's watermark",
 			"watermark", watermark, "head", head)
 
-		err := r.stream(ctx, link, watermark, head)
+		err := r.stream(ctx, link, watermark, head, ids)
 		if err == nil || ctx.Err() != nil {
 			return
 		}
@@ -433,7 +483,7 @@ func (r *deployReporter) run(ctx context.Context, link deployLink) {
 			"watermark", watermark, "head", head)
 	}
 
-	r.relist(ctx, link, head)
+	r.relist(ctx, link, head, ids)
 }
 
 // requestCursor asks cloud where its copy left off and waits for the answer.
@@ -473,7 +523,7 @@ func (r *deployReporter) requestCursor(ctx context.Context, link deployLink) (in
 //
 // Returns nil when the connection ends, and an error when the stream must fall
 // back to a re-list.
-func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head int64) error {
+func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head int64, ids *shortIDs) error {
 	sent := from
 
 	return r.source.Watch(ctx, from, func(op *esv1.EntityOp) error {
@@ -511,7 +561,7 @@ func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head
 		// re-streams the same revision and drops it again, and a record with no
 		// stable timestamp has no home in cloud to hold open for it either.
 		if op.HasEntity() {
-			if state, ok := r.stateFrom(op.Entity()); ok {
+			if state, ok := r.stateFrom(ctx, op.Entity(), ids); ok {
 				batch.Deploys = append(batch.Deploys, state)
 			} else {
 				// relist counts these; the tail said nothing, which made the
@@ -539,17 +589,35 @@ func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head
 // sent or not advance it at all. It also makes an interrupted backfill free to
 // resume: whatever ranges committed stay committed, and the next connection
 // picks up from the watermark they left behind.
-func (r *deployReporter) relist(ctx context.Context, link deployLink, head int64) {
+func (r *deployReporter) relist(ctx context.Context, link deployLink, head int64, ids *shortIDs) {
 	records, readRevision, err := r.source.List(ctx)
 	if err != nil {
 		r.log.Warn("failed to list deploys for cloud", "error", err)
 		return
 	}
 
+	// Resolve short ids before projecting anything, and take the cheapest
+	// source for each kind.
+	//
+	// Versions are not in hand, so they cost one bulk read of the kind rather
+	// than a lookup per deploy. Deploys are: the listing above returned every
+	// record with its entity attached, so the short id of anything a rollback
+	// can name is already in memory. Listing the deployment kind for them would
+	// re-read the largest kind a cluster has, on the one path where that is a
+	// whole history, to learn what the caller is already holding.
+	//
+	// Both are optimizations and neither is authoritative. A version created
+	// after the bulk read, or a source deploy already pruned from the listing,
+	// falls through to a single lookup.
+	ids.preload(ctx, core_v1alpha.KindAppVersion)
+	for _, rec := range records {
+		ids.seed(rec.Entity)
+	}
+
 	states := make([]DeployState, 0, len(records))
 	skipped := 0
 	for _, rec := range records {
-		state, ok := r.stateFor(rec)
+		state, ok := r.stateFor(ctx, rec, ids)
 		if !ok {
 			skipped++
 			continue
@@ -631,18 +699,83 @@ func (r *deployReporter) relist(ctx context.Context, link deployLink, head int64
 	// deploy to happen inside it, and RFD-94 explicitly defers that accelerator.
 	// Adding it later means a message that carries no range and therefore
 	// cannot advance the watermark — the invariant to preserve if it lands.
-	if err := r.stream(ctx, link, readRevision, head); err != nil && ctx.Err() == nil {
+	if err := r.stream(ctx, link, readRevision, head, ids); err != nil && ctx.Err() == nil {
 		r.log.Warn("deploy tail ended", "error", err)
 	}
 }
 
-func (r *deployReporter) stateFrom(ent *esv1.Entity) (DeployState, bool) {
-	return r.stateFor(deploylifecycle.RecordFrom(ent))
+// shortIDs remembers short-id lookups for the life of one connection.
+//
+// Both halves of that matter. Remembering is what keeps a rollback and the
+// deploy it was based on from costing two reads of the same version. Misses are
+// remembered too, which is the less obvious half: a version pruned before its
+// deploy was reported will never resolve, and without a negative entry it would
+// be re-read on every batch for as long as the connection lasts.
+//
+// Scoped to a connection rather than to the process so an answer cannot outlive
+// the store that gave it. A short id freed by a prune and reallocated to
+// another entity would otherwise be served from here indefinitely.
+//
+// Not safe for concurrent use, and does not need to be: it belongs to one run,
+// which is a single goroutine from the handshake through to the tail.
+type shortIDs struct {
+	src   deploySource
+	known map[string]string
+}
+
+func newShortIDs(src deploySource) *shortIDs {
+	return &shortIDs{src: src, known: make(map[string]string)}
+}
+
+// preload fills in every short id for a kind in one read.
+//
+// Existing entries win, so a preload can never overwrite something already
+// observed — the preloaded view is older than any lookup that beat it here.
+func (s *shortIDs) preload(ctx context.Context, kind entity.Id) {
+	for id, short := range s.src.ShortIDsForKind(ctx, kind) {
+		if _, ok := s.known[id]; !ok {
+			s.known[id] = short
+		}
+	}
+}
+
+// seed records an entity the caller already holds, sparing a read for it.
+//
+// Existing entries win, for the same reason they do in preload: whatever is
+// already here was observed no earlier than this.
+func (s *shortIDs) seed(ent *esv1.Entity) {
+	id, short := shortIDEntry(ent)
+	if id == "" {
+		return
+	}
+	if _, ok := s.known[id]; !ok {
+		s.known[id] = short
+	}
+}
+
+// ref builds the reference cloud stores for an entity id, or nil when there is
+// no entity to name.
+func (s *shortIDs) ref(ctx context.Context, id string) *EntityRef {
+	if id == "" {
+		return nil
+	}
+
+	short, ok := s.known[id]
+	if !ok {
+		short = s.src.ShortID(ctx, id)
+		s.known[id] = short
+	}
+
+	return &EntityRef{ID: id, ShortID: short}
+}
+
+func (r *deployReporter) stateFrom(ctx context.Context, ent *esv1.Entity, ids *shortIDs) (DeployState, bool) {
+	return r.stateFor(ctx, deploylifecycle.RecordFrom(ent), ids)
 }
 
 // stateFor projects a record onto the wire shape, and reports false for a
 // record that cannot be reported at all.
-func (r *deployReporter) stateFor(rec *deploylifecycle.Record) (DeployState, bool) {
+func (r *deployReporter) stateFor(ctx context.Context, rec *deploylifecycle.Record, ids *shortIDs) (DeployState, bool) {
 	deployedAt, ok := deployedAtFor(rec)
 	if !ok {
 		// Cloud partitions on this, so a deploy without a stable one has no
@@ -658,7 +791,7 @@ func (r *deployReporter) stateFor(rec *deploylifecycle.Record) (DeployState, boo
 		ID:         string(dep.ID),
 		Revision:   rec.Revision,
 		AppName:    dep.AppName,
-		AppVersion: rec.AppVersion(),
+		Version:    ids.ref(ctx, rec.AppVersion()),
 		Status:     dep.Status,
 		Phase:      dep.Phase,
 		DeployedAt: deployedAt,
@@ -676,10 +809,7 @@ func (r *deployReporter) stateFor(rec *deploylifecycle.Record) (DeployState, boo
 		state.ErrorReason = &reason
 	}
 
-	if dep.SourceDeploymentId != "" {
-		source := dep.SourceDeploymentId
-		state.SourceDeployID = &source
-	}
+	state.SourceDeploy = ids.ref(ctx, dep.SourceDeploymentId)
 
 	if git := dep.GitInfo; git.Sha != "" || git.Branch != "" || git.Repository != "" {
 		state.Git = &DeployGit{
@@ -766,6 +896,64 @@ func (s *entityDeploySource) List(ctx context.Context) ([]*deploylifecycle.Recor
 	}
 
 	return records, res.Revision(), nil
+}
+
+func (s *entityDeploySource) ShortID(ctx context.Context, entityID string) string {
+	resp, err := s.eac.Get(ctx, entityID)
+	if err != nil {
+		// Swallowed rather than reported, per the interface: an entity pruned
+		// between the deploy and this read is the ordinary case, not a fault,
+		// and the caller has nothing better to do with either.
+		return ""
+	}
+	return shortIDOf(resp.Entity())
+}
+
+func (s *entityDeploySource) ShortIDsForKind(ctx context.Context, kind entity.Id) map[string]string {
+	res, err := s.eac.List(ctx, entity.Ref(entity.EntityKind, kind))
+	if err != nil {
+		// An empty map degrades to per-id lookups rather than to missing short
+		// ids, so a failure here costs reads and never correctness.
+		return nil
+	}
+
+	short := make(map[string]string, len(res.Values()))
+	for _, ent := range res.Values() {
+		if id, sid := shortIDEntry(ent); id != "" {
+			short[id] = sid
+		}
+	}
+	return short
+}
+
+// shortIDEntry reads the identity and short id off a listed entity.
+//
+// The id comes from the entity's own field rather than from a db/id attribute,
+// which is not the same string. Attribute values render through Value.String,
+// and that prefixes an id-kinded value with its kind ("id: app_version/…"), so
+// keying the map on one would build a map that ref can never hit — every
+// lookup would miss and fall through to the per-id read the bulk read exists to
+// avoid, silently and with nothing failing.
+func shortIDEntry(ent *esv1.Entity) (id, shortID string) {
+	if ent == nil {
+		return "", ""
+	}
+	return ent.Id(), shortIDOf(ent)
+}
+
+// shortIDOf reads the db/short-id attribute off an RPC entity, or "" when it
+// carries none. That attribute is string-kinded, so String is the right reader
+// for it.
+func shortIDOf(ent *esv1.Entity) string {
+	if ent == nil {
+		return ""
+	}
+	for _, attr := range ent.Attrs() {
+		if entity.Id(attr.ID) == entity.DBShortId {
+			return attr.Value.String()
+		}
+	}
+	return ""
 }
 
 func (s *entityDeploySource) Watch(ctx context.Context, fromRevision int64, fn func(*esv1.EntityOp) error) error {

@@ -368,29 +368,37 @@ func runWithCursor(t *testing.T, src deploySource, link *fakeDeployLink, waterma
 
 func deployRecord(t *testing.T, app string, revision int64) *deploylifecycle.Record {
 	t.Helper()
-	return &deploylifecycle.Record{
-		Deployment: &core_v1alpha.Deployment{
-			ID:         entity.Id(idgen.GenNS("deployment")),
-			AppName:    app,
-			AppVersion: "v1.0.0",
-			Status:     "active",
-			DeployedBy: core_v1alpha.DeployedBy{
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-			},
+
+	dep := &core_v1alpha.Deployment{
+		ID:      entity.Id(idgen.GenNS("deployment")),
+		AppName: app,
+		// A real version reference, so tests that do not care about versions
+		// still model a shape a cluster can actually report. "v1.0.0" was never
+		// one, and a fixture asserting an impossible value is how a rendering
+		// bug looks correct under test.
+		AppVersion: "app_version/" + app + "-vCZ1eUgSgNd28ed6vt2DgY",
+		Status:     "active",
+		DeployedBy: core_v1alpha.DeployedBy{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
 		},
-		Revision: revision,
 	}
+
+	// The store hands back records with their entity attached, and the reporter
+	// now leans on that to avoid re-reading the deployment kind. A fixture
+	// without one would leave that path untested and quietly passing.
+	ent := &esv1.Entity{}
+	ent.SetId(string(dep.ID))
+	ent.SetAttrs(dep.Encode())
+	ent.SetRevision(revision)
+
+	return &deploylifecycle.Record{Deployment: dep, Entity: ent, Revision: revision}
 }
 
 func deployOp(t *testing.T, app string, revision int64) *esv1.EntityOp {
 	t.Helper()
 
 	rec := deployRecord(t, app, revision)
-
-	ent := &esv1.Entity{}
-	ent.SetId(string(rec.Deployment.ID))
-	ent.SetAttrs(rec.Deployment.Encode())
-	ent.SetRevision(revision)
+	ent := rec.Entity
 
 	op := &esv1.EntityOp{}
 	op.SetOperation(int64(esv1.EntityOperationUpdate))
@@ -407,7 +415,16 @@ type fakeDeploySource struct {
 	watchOps     []*esv1.EntityOp
 	watchErr     map[int64]error
 
-	listed bool
+	// shortIDs is the store's view of every entity's short id, and byKind says
+	// which of them a bulk read for a kind would return. An id present in the
+	// first but not the second is one only a per-id lookup can find, which is
+	// how a version created after the backfill's bulk read is modelled.
+	shortIDs map[string]string
+	byKind   map[entity.Id][]string
+
+	listed   bool
+	getCalls []string
+	kindList []entity.Id
 }
 
 func (f *fakeDeploySource) HeadRevision(context.Context) (int64, error) {
@@ -417,6 +434,21 @@ func (f *fakeDeploySource) HeadRevision(context.Context) (int64, error) {
 func (f *fakeDeploySource) List(context.Context) ([]*deploylifecycle.Record, int64, error) {
 	f.listed = true
 	return f.records, f.listRevision, nil
+}
+
+func (f *fakeDeploySource) ShortID(_ context.Context, entityID string) string {
+	f.getCalls = append(f.getCalls, entityID)
+	return f.shortIDs[entityID]
+}
+
+func (f *fakeDeploySource) ShortIDsForKind(_ context.Context, kind entity.Id) map[string]string {
+	f.kindList = append(f.kindList, kind)
+
+	out := make(map[string]string)
+	for _, id := range f.byKind[kind] {
+		out[id] = f.shortIDs[id]
+	}
+	return out
 }
 
 func (f *fakeDeploySource) Watch(_ context.Context, from int64, fn func(*esv1.EntityOp) error) error {
@@ -529,10 +561,13 @@ func TestFullBatchFitsInOneFrame(t *testing.T) {
 		completed := now
 		reason := shortReason(strings.Repeat("x", maxErrorReasonBytes*4))
 		return DeployState{
-			ID:          idgen.GenNS("deployment"),
-			Revision:    5100294,
-			AppName:     "some-reasonably-long-app-name",
-			AppVersion:  "some-reasonably-long-app-name-v8kd0",
+			ID:       idgen.GenNS("deployment"),
+			Revision: 5100294,
+			AppName:  "some-reasonably-long-app-name",
+			Version: &EntityRef{
+				ID:      "app_version/some-reasonably-long-app-name-vCZ1eUgSgNd28ed6vt2DgY",
+				ShortID: "8kd0",
+			},
 			Status:      "failed",
 			Phase:       "activating",
 			DeployedAt:  now,
@@ -543,7 +578,10 @@ func TestFullBatchFitsInOneFrame(t *testing.T) {
 				Branch:     "release/some-fairly-long-branch-name",
 				Repository: "https://github.com/mirendev/some-repository-name",
 			},
-			SourceDeployID: ptr(idgen.GenNS("deployment")),
+			SourceDeploy: &EntityRef{
+				ID:      idgen.GenNS("deployment"),
+				ShortID: "2DgY",
+			},
 		}
 	}
 
@@ -580,8 +618,6 @@ func TestShortReasonCapsAndIsStable(t *testing.T) {
 	assert.Equal(t, short, shortReason(short), "a reason within the cap is untouched")
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // A deploy the reporter cannot key by creation time still has to let the
 // frontier past it.
 //
@@ -614,4 +650,293 @@ func TestUnkeyableDeployInTheTailStillAdvancesTheFrontier(t *testing.T) {
 	assert.Equal(t, int64(4000), batches[0].FromRevision)
 	assert.Equal(t, int64(5100), batches[0].ToRevision,
 		"the frontier must still pass it, or this revision wedges the watermark forever")
+}
+
+// The whole point of MIR-1615: a deploy report has to carry the short id the
+// console shows, not just the entity id it was already sending. The short id
+// lives on the app_version entity rather than on the deploy, so nothing reaches
+// the wire unless the reporter goes and joins it.
+func TestVersionShortIdReachesTheWire(t *testing.T) {
+	rec := deployRecord(t, "web", 100)
+	rec.Deployment.AppVersion = "app_version/web-vCZ1eUgSgNd28ed6vt2DgY"
+
+	src := &fakeDeploySource{
+		head:         5000,
+		records:      []*deploylifecycle.Record{rec},
+		listRevision: 5000,
+		shortIDs:     map[string]string{"app_version/web-vCZ1eUgSgNd28ed6vt2DgY": "8kd0"},
+		byKind: map[entity.Id][]string{
+			core_v1alpha.KindAppVersion: {"app_version/web-vCZ1eUgSgNd28ed6vt2DgY"},
+		},
+	}
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	state := onlyDeploy(t, link)
+	require.NotNil(t, state.Version)
+	assert.Equal(t, "8kd0", state.Version.ShortID)
+	assert.Equal(t, "app_version/web-vCZ1eUgSgNd28ed6vt2DgY", state.Version.ID,
+		"the durable id travels alongside: short ids are cluster-scoped and are "+
+			"freed for reuse when their entity is pruned, so cloud cannot key on one")
+}
+
+// A version the runtime can no longer resolve still has to be reported. The
+// deploy happened, and the id it names is the honest thing to show — a reader
+// falls back to it with the kind prefix stripped, exactly as the CLI does.
+func TestDeployIsStillReportedWhenTheVersionHasNoShortId(t *testing.T) {
+	rec := deployRecord(t, "web", 100)
+	rec.Deployment.AppVersion = "app_version/web-vGone"
+
+	// Nothing registered: the version entity was pruned before this ran.
+	src := &fakeDeploySource{head: 5000, records: []*deploylifecycle.Record{rec}, listRevision: 5000}
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	state := onlyDeploy(t, link)
+	require.NotNil(t, state.Version, "an unresolvable short id must not erase the version")
+	assert.Equal(t, "app_version/web-vGone", state.Version.ID)
+	assert.Empty(t, state.Version.ShortID)
+}
+
+// A deploy that failed before a build produced a version has no version to
+// name. Absent says that; an empty string would be a value a reader has to
+// recognize as meaning nothing.
+func TestDeployWithNoVersionReportsNoVersionAtAll(t *testing.T) {
+	rec := deployRecord(t, "web", 100)
+	rec.Deployment.AppVersion = ""
+
+	src := &fakeDeploySource{head: 5000, records: []*deploylifecycle.Record{rec}, listRevision: 5000}
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	state := onlyDeploy(t, link)
+	assert.Nil(t, state.Version)
+	assert.Nil(t, state.SourceDeploy, "a fresh build was based on nothing")
+	assert.Contains(t, link.raw(), `"version":null`,
+		"absent has to survive serialization, since that is what cloud reads")
+}
+
+// A backfill walks every deploy a cluster has ever run. Resolving short ids one
+// at a time there would be a read per deploy against a store that can answer
+// for a whole kind at once, which is the difference between a backfill that is
+// a slide and one that is a load.
+func TestRelistResolvesShortIdsInBulkRatherThanPerDeploy(t *testing.T) {
+	var records []*deploylifecycle.Record
+	byKind := map[entity.Id][]string{}
+	shortIDs := map[string]string{}
+
+	for i := range 50 {
+		rec := deployRecord(t, "web", int64(100+i))
+		// Ten versions across fifty deploys: rollbacks and redeploys ship a
+		// version that already shipped, so ids repeat by design.
+		version := "app_version/web-v" + string(rune('a'+i%10))
+		rec.Deployment.AppVersion = version
+		records = append(records, rec)
+
+		if _, seen := shortIDs[version]; !seen {
+			shortIDs[version] = "s" + string(rune('a'+i%10))
+			byKind[core_v1alpha.KindAppVersion] = append(byKind[core_v1alpha.KindAppVersion], version)
+		}
+	}
+
+	src := &fakeDeploySource{
+		head: 5000, records: records, listRevision: 5000,
+		shortIDs: shortIDs, byKind: byKind,
+	}
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	assert.Empty(t, src.getCalls,
+		"a re-list must not fall back to per-id reads for ids the bulk read already covered")
+	assert.Equal(t, []entity.Id{core_v1alpha.KindAppVersion}, src.kindList,
+		"versions cost a bulk read because the listing does not carry them; deploys "+
+			"must not, since it returned every record with its entity attached, and "+
+			"re-reading the largest kind on the backfill path is what this avoids")
+
+	var seen int
+	for _, b := range link.batches() {
+		for _, d := range b.Deploys {
+			require.NotNil(t, d.Version)
+			assert.NotEmpty(t, d.Version.ShortID)
+			seen++
+		}
+	}
+	assert.Equal(t, 50, seen)
+}
+
+// The cache has to remember misses as well as hits. A version pruned before its
+// deploy was reported will never resolve, and re-reading it on every batch for
+// the life of the connection is the failure this guards.
+func TestShortIdCacheRemembersMissesAndHits(t *testing.T) {
+	src := &fakeDeploySource{
+		shortIDs: map[string]string{"app_version/web-vLive": "8kd0"},
+	}
+	ids := newShortIDs(src)
+	ctx := t.Context()
+
+	for range 3 {
+		hit := ids.ref(ctx, "app_version/web-vLive")
+		require.NotNil(t, hit)
+		assert.Equal(t, "8kd0", hit.ShortID)
+
+		miss := ids.ref(ctx, "app_version/web-vGone")
+		require.NotNil(t, miss)
+		assert.Empty(t, miss.ShortID)
+	}
+
+	assert.Equal(t, []string{"app_version/web-vLive", "app_version/web-vGone"}, src.getCalls,
+		"each id is read exactly once, misses included")
+
+	assert.Nil(t, ids.ref(ctx, ""), "nothing to name means no reference at all")
+}
+
+// An entity created after the bulk read still has to resolve. The preloaded map
+// is an optimization, so a miss in it falls through to a lookup rather than
+// standing as an answer.
+func TestPreloadDoesNotMaskEntitiesItDidNotCover(t *testing.T) {
+	src := &fakeDeploySource{
+		shortIDs: map[string]string{
+			"app_version/web-vOld": "old0",
+			"app_version/web-vNew": "new0",
+		},
+		// Only the older version existed when the bulk read ran.
+		byKind: map[entity.Id][]string{
+			core_v1alpha.KindAppVersion: {"app_version/web-vOld"},
+		},
+	}
+
+	ids := newShortIDs(src)
+	ctx := t.Context()
+	ids.preload(ctx, core_v1alpha.KindAppVersion)
+
+	assert.Equal(t, "old0", ids.ref(ctx, "app_version/web-vOld").ShortID)
+	assert.Empty(t, src.getCalls, "the preloaded id needs no read of its own")
+
+	assert.Equal(t, "new0", ids.ref(ctx, "app_version/web-vNew").ShortID)
+	assert.Equal(t, []string{"app_version/web-vNew"}, src.getCalls,
+		"an id the bulk read missed falls through to a lookup")
+}
+
+// A rollback names the deploy it was based on, and the console wants that
+// reference to read the same way the version does.
+func TestSourceDeployCarriesItsShortIdToo(t *testing.T) {
+	rec := deployRecord(t, "web", 100)
+	source := idgen.GenNS("deployment")
+	rec.Deployment.SourceDeploymentId = source
+
+	src := &fakeDeploySource{
+		head: 5000, records: []*deploylifecycle.Record{rec}, listRevision: 5000,
+		shortIDs: map[string]string{source: "r7x2"},
+		byKind:   map[entity.Id][]string{core_v1alpha.KindDeployment: {source}},
+	}
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	state := onlyDeploy(t, link)
+	require.NotNil(t, state.SourceDeploy)
+	assert.Equal(t, source, state.SourceDeploy.ID)
+	assert.Equal(t, "r7x2", state.SourceDeploy.ShortID)
+}
+
+// onlyDeploy returns the single deploy the link received, failing if the run
+// reported any other number.
+func onlyDeploy(t *testing.T, link *fakeDeployLink) DeployState {
+	t.Helper()
+
+	var found []DeployState
+	for _, b := range link.batches() {
+		found = append(found, b.Deploys...)
+	}
+
+	require.Len(t, found, 1)
+	return found[0]
+}
+
+// The bulk read has to key on the same string ref looks up, and the two come
+// from different places: ref uses the plain entity id off a deploy record,
+// while the listing sees whole entities.
+//
+// Reading the id from a db/id attribute instead of the entity's own field is
+// the trap, because attribute values render through Value.String, which
+// prefixes an id-kinded value with its kind. That builds a map whose keys never
+// match, so every reference misses and falls through to the per-id read the
+// bulk read exists to avoid. Nothing errors and nothing fails; a backfill just
+// quietly costs a lookup per deploy again.
+func TestBulkReadKeysOnThePlainEntityId(t *testing.T) {
+	const id = "app_version/web-vCZ1eUgSgNd28ed6vt2DgY"
+
+	ent := &esv1.Entity{}
+	ent.SetId(id)
+	ent.SetAttrs([]entity.Attr{
+		entity.Ref(entity.DBId, entity.Id(id)),
+		entity.String(entity.DBShortId, "8kd0"),
+	})
+
+	gotID, gotShort := shortIDEntry(ent)
+	assert.Equal(t, id, gotID,
+		"the key has to be the plain id a deploy record names, with no kind prefix")
+	assert.Equal(t, "8kd0", gotShort)
+
+	// The specific way it goes wrong, pinned so the trap stays visible.
+	var fromAttr string
+	for _, attr := range ent.Attrs() {
+		if entity.Id(attr.ID) == entity.DBId {
+			fromAttr = attr.Value.String()
+		}
+	}
+	assert.NotEqual(t, id, fromAttr,
+		"if this ever starts matching, the comment on shortIDEntry is stale")
+}
+
+// A listed entity with no short id yields its id and an empty short id, rather
+// than dropping out of the map. The empty value is a real answer — it is what
+// makes the cache remember the miss instead of re-reading it every batch.
+func TestBulkReadKeepsEntitiesWithNoShortId(t *testing.T) {
+	ent := &esv1.Entity{}
+	ent.SetId("app_version/web-vNone")
+
+	id, short := shortIDEntry(ent)
+	assert.Equal(t, "app_version/web-vNone", id)
+	assert.Empty(t, short)
+}
+
+// A rollback names a deploy the listing already returned, so its short id costs
+// nothing to resolve. Re-listing the deployment kind to learn it would re-read
+// a cluster's whole history on the one path where that history is the workload.
+func TestSourceDeployResolvesFromTheListingWithoutAnyRead(t *testing.T) {
+	source := deployRecord(t, "web", 100)
+	rollback := deployRecord(t, "web", 200)
+	rollback.Deployment.SourceDeploymentId = string(source.Deployment.ID)
+
+	src := &fakeDeploySource{
+		head:         5000,
+		records:      []*deploylifecycle.Record{source, rollback},
+		listRevision: 5000,
+		// Registered so a read would succeed, which is what makes the
+		// assertion below mean "never asked" rather than "asked and missed".
+		shortIDs: map[string]string{string(source.Deployment.ID): "r7x2"},
+	}
+
+	// The store's own short id for the source, as the listing carries it.
+	src.records[0].Entity.SetAttrs(append(src.records[0].Entity.Attrs(),
+		entity.String(entity.DBShortId, "r7x2")))
+
+	link := &fakeDeployLink{}
+	runWithCursor(t, src, link, 0)
+
+	var seen *EntityRef
+	for _, b := range link.batches() {
+		for _, d := range b.Deploys {
+			if d.SourceDeploy != nil {
+				seen = d.SourceDeploy
+			}
+		}
+	}
+
+	require.NotNil(t, seen, "the rollback has to report what it was based on")
+	assert.Equal(t, "r7x2", seen.ShortID)
+	assert.NotContains(t, src.getCalls, string(source.Deployment.ID),
+		"the source deploy was in the listing, so resolving it must cost no read")
+	assert.NotContains(t, src.kindList, core_v1alpha.KindDeployment,
+		"and the deployment kind must not be listed to learn it")
 }
