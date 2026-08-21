@@ -93,6 +93,10 @@ const config: Config = {
       {
         generateLLMsTxt: true,
         generateLLMsFullTxt: true,
+        generateMarkdownFiles: true,
+        // Docs are served from the site root, so emit Markdown beside the
+        // corresponding HTML route rather than under build/docs/.
+        preserveDirectoryStructure: false,
         excludeImports: true,
         removeDuplicateHeadings: true,
         logLevel: 'quiet',
