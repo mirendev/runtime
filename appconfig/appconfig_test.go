@@ -220,6 +220,83 @@ console = "   "
 `,
 			wantErr: `alias "console": command must not be empty`,
 		},
+		{
+			name: "valid build secret",
+			config: `
+name = "test-app"
+
+[build]
+dockerfile = "Dockerfile"
+
+[[build.secrets]]
+id = "npm_token"
+backend = "cluster"
+ref = "registry/npm-token"
+`,
+			wantErr: "",
+		},
+		{
+			name: "build secret missing id",
+			config: `
+name = "test-app"
+
+[[build.secrets]]
+backend = "cluster"
+ref = "registry/npm-token"
+`,
+			wantErr: "build.secrets[0]: id is required",
+		},
+		{
+			name: "build secret without backend defaults to cluster",
+			config: `
+name = "test-app"
+
+[[build.secrets]]
+id = "npm_token"
+ref = "registry/npm-token"
+`,
+			wantErr: "",
+		},
+		{
+			name: "build secret invalid id",
+			config: `
+name = "test-app"
+
+[[build.secrets]]
+id = "npm/token"
+backend = "cluster"
+ref = "registry/npm-token"
+`,
+			wantErr: `build.secrets[0]: id "npm/token" must contain only letters, digits, and _.-`,
+		},
+		{
+			name: "build secret missing ref",
+			config: `
+name = "test-app"
+
+[[build.secrets]]
+id = "npm_token"
+backend = "cluster"
+`,
+			wantErr: "build.secrets[0]: ref is required",
+		},
+		{
+			name: "build secret duplicate id",
+			config: `
+name = "test-app"
+
+[[build.secrets]]
+id = "npm_token"
+backend = "cluster"
+ref = "registry/npm-token"
+
+[[build.secrets]]
+id = "npm_token"
+backend = "cluster"
+ref = "registry/other-token"
+`,
+			wantErr: `build.secrets[1]: duplicate id "npm_token"`,
+		},
 	}
 
 	for _, tt := range tests {

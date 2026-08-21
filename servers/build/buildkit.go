@@ -18,6 +18,7 @@ import (
 	"github.com/moby/buildkit/frontend"
 	gateway "github.com/moby/buildkit/frontend/gateway/client"
 	"github.com/moby/buildkit/session/auth/authprovider"
+	"github.com/moby/buildkit/session/secrets/secretsprovider"
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/stackbuild"
@@ -79,6 +80,12 @@ type transformOpt struct {
 	phaseUpdates  func(phase string)
 	cacheDir      string
 	frontendAttrs map[string]string
+	// buildSecrets maps a BuildKit secret id to its resolved plaintext. When
+	// non-empty, a secrets session provider is attached to the solve so a
+	// `RUN --mount=type=secret,id=<id>` step can read the value without it
+	// landing in an image layer. The bytes live only for the duration of the
+	// build and are never logged or exported.
+	buildSecrets map[string][]byte
 }
 
 type TransformOptions func(*transformOpt)
@@ -113,6 +120,25 @@ func WithBuildArgs(args map[string]string) TransformOptions {
 			o.frontendAttrs["build-arg:"+k] = v
 		}
 	}
+}
+
+// WithBuildSecrets attaches resolved secrets to the build, keyed by the mount id
+// a Dockerfile references with `--mount=type=secret,id=<id>`. Unlike build args,
+// these never enter the image or the frontend attributes.
+func WithBuildSecrets(secrets map[string][]byte) TransformOptions {
+	return func(o *transformOpt) {
+		o.buildSecrets = secrets
+	}
+}
+
+// attachBuildSecrets adds a secrets session provider to solveOpt when any build
+// secret was supplied. Mirrors addRegistryAuth: the value reaches BuildKit over
+// the session, never through frontend attributes or a layer.
+func attachBuildSecrets(solveOpt *client.SolveOpt, secrets map[string][]byte) {
+	if len(secrets) == 0 {
+		return
+	}
+	solveOpt.Session = append(solveOpt.Session, secretsprovider.FromMap(secrets))
 }
 
 func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, chan struct{}, error) {
@@ -153,6 +179,7 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 	if err := b.addRegistryAuth(&solveOpt, ocireg.Host); err != nil {
 		return nil, nil, err
 	}
+	attachBuildSecrets(&solveOpt, opts.buildSecrets)
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -394,6 +421,7 @@ func (b *Buildkit) BuildImage(
 	if err := b.addRegistryAuth(&solveOpt, registryHost); err != nil {
 		return nil, err
 	}
+	attachBuildSecrets(&solveOpt, opts.buildSecrets)
 
 	if opts.cacheDir != "" {
 		solveOpt.CacheImports = []client.CacheOptionsEntry{

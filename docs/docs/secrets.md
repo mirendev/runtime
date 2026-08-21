@@ -19,7 +19,7 @@ For a real credential, `miren env set -s` is not enough: it masks the value in o
 
 Use `-s` for values that are merely noisy in a terminal. Use a secret for anything that would matter if it leaked.
 
-Miren decrypts a secret at two points and holds the result only in memory: when a deploy resolves your reference to a concrete version, and when the container that needs the value is created. It is never written back to the cluster store in the clear.
+Miren decrypts a secret only into memory, never back to the cluster store in the clear. This happens at two points by default: when a deploy resolves your reference to a concrete version, and when the container that needs the value is created. A Dockerfile build can add a third — the value is decrypted into the builder's memory for a single build step (see [Using a secret at build time](#using-a-secret-at-build-time)), which BuildKit keeps out of the image unless your own build command copies or prints it.
 
 ## Storing a secret
 
@@ -85,6 +85,41 @@ DATABASE_POOL    10                                 manual
 ```
 
 Note the asymmetry: `backend` is optional on the command line but **required** in `app.toml`, where a `ref` without one is rejected rather than assumed. A reference cannot be combined with a value — set one or the other.
+
+## Using a secret at build time
+
+An `[[env]]` reference reaches your app at runtime, not during the build. A build sometimes needs a credential of its own — a private package-registry token for `npm ci` or `bundle install`, a license key needed to compile, a key to pull a private dependency. For those, declare a build secret.
+
+:::info[Dockerfile builds only]
+Build secrets reach Dockerfile builds only. You wire each one into a `RUN --mount=type=secret` step yourself, and Miren's automatic language builds have no such step — so declaring a build secret on an app that builds from an auto-detected stack is a build error, not a silent no-op.
+:::
+
+Declare the secrets under `[build]` in `app.toml`. Each entry has an `id` — the name your Dockerfile mounts it by — plus a `ref` naming the secret. `backend` names which store to resolve against and defaults to `cluster`, Miren's own built-in store (see [Backends](#backends) for registering others), so you set it only when the secret lives in a different backend. The `id` may contain letters, digits, and `_.-`:
+
+```toml
+[build]
+dockerfile = "Dockerfile"
+
+[[build.secrets]]
+id = "npm_token"
+backend = "cluster"
+ref = "registry/npm-token"
+```
+
+Then consume it in the Dockerfile with a secret mount. The value appears as a file under `/run/secrets/<id>` for the duration of that one `RUN`, and BuildKit places it nowhere else on its own — what your command does with it from there is the subject of the warning below:
+
+```dockerfile
+RUN --mount=type=secret,id=npm_token \
+    NPM_TOKEN="$(cat /run/secrets/npm_token)" npm ci
+```
+
+The credential is resolved to plaintext only in the builder's memory, handed to BuildKit over the build session, and mounted into the single `RUN` that asks for it. It never becomes a build argument, and BuildKit never writes it to the build log or an image layer on its own — so it is not visible in `docker history` or to anyone who later pulls the image. This is the difference from an inline value passed with `-e` or `--sensitive`, which is masked in CLI output but does end up baked into the image.
+
+:::warning[Read the mount, don't print it]
+BuildKit keeps the value out of layers and out of its own logs, but it cannot stop your own commands from leaking it. If you copy it into an `ENV`, write it to a file a later layer keeps, or print it to stdout or stderr — an `echo`, a `set -x`, a verbose tool — the value ends up in the image or the build log. Read it inside the `--mount=type=secret` `RUN`, use it there, and don't print it.
+:::
+
+A build secret must resolve at build time: if the `ref` cannot be found, or the cluster has no secret backend registered, the build fails rather than proceeding without the credential. Each `id` must be unique within the list and contain only letters, digits, and `_.-`, and the value is capped at 500 KB.
 
 ## Pinning: which version a deploy used
 

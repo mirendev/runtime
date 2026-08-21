@@ -1905,6 +1905,48 @@ func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec)
 	return coreutil.PinSecrets(ctx, b.Secrets, spec)
 }
 
+// resolveBuildSecrets resolves the [[build.secrets]] declared in app.toml to
+// their plaintext, keyed by mount id, for a BuildKit secrets session. The bytes
+// are held only for the duration of the build: they are never written to disk,
+// logged, added as a build-arg, or recorded in the saga log (only the reference
+// travels in the AppConfig).
+//
+// Returns nil when nothing is declared, so a build with no build secrets never
+// touches the resolver. A cluster with no secret backends fails the build rather
+// than silently building without the credential — matching pinSecrets.
+//
+// stack is the resolved build stack ("dockerfile" or "auto"). Only a Dockerfile
+// build has a place to consume a secret (its own --mount=type=secret step), so a
+// build secret declared for an auto-detected language stack is rejected rather
+// than resolved and silently ignored.
+func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConfig, stack string) (map[string][]byte, error) {
+	if ac == nil || ac.Build == nil || len(ac.Build.Secrets) == 0 {
+		return nil, nil
+	}
+
+	if stack != "dockerfile" {
+		return nil, fmt.Errorf("build secret %q is set, but build secrets are only supported for Dockerfile builds; this app builds with an auto-detected language stack, so add a Dockerfile with a matching --mount=type=secret step or remove [[build.secrets]]", ac.Build.Secrets[0].ID)
+	}
+
+	if b.Secrets == nil {
+		return nil, fmt.Errorf("build references secret %q but this cluster has no secret backends configured", ac.Build.Secrets[0].ID)
+	}
+
+	resolved := make(map[string][]byte, len(ac.Build.Secrets))
+	for _, bs := range ac.Build.Secrets {
+		backend := bs.Backend
+		if backend == "" {
+			backend = secret.ClusterBackendName
+		}
+		sv, err := b.Secrets.ResolveRef(ctx, backend, bs.Ref)
+		if err != nil {
+			return nil, fmt.Errorf("resolving build secret %q (%s/%s): %w", bs.ID, backend, bs.Ref, err)
+		}
+		resolved[bs.ID] = sv.Bytes
+	}
+	return resolved, nil
+}
+
 // getAccessInfo queries routes to determine how the app can be accessed.
 // When ephemeralLabel is non-empty, wildcard routes are resolved to concrete
 // hostnames using the label (e.g., *.app.example.com → feat-x.app.example.com).
