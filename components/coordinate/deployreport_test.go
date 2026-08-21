@@ -422,6 +422,16 @@ type fakeDeploySource struct {
 	shortIDs map[string]string
 	byKind   map[entity.Id][]string
 
+	// parkWatch makes the first watch block after delivering its ops, the way a
+	// real one does between deploys, and closes parked when it gets there.
+	// Only the first, so the re-list that follows an interrupt can finish.
+	parkWatch bool
+	parked    chan struct{}
+
+	// onOp runs before each streamed op is handed to the reporter, so a test
+	// can act from inside an active watch rather than only around one.
+	onOp func(int)
+
 	listed   bool
 	getCalls []string
 	kindList []entity.Id
@@ -451,18 +461,28 @@ func (f *fakeDeploySource) ShortIDsForKind(_ context.Context, kind entity.Id) ma
 	return out
 }
 
-func (f *fakeDeploySource) Watch(_ context.Context, from int64, fn func(*esv1.EntityOp) error) error {
+func (f *fakeDeploySource) Watch(ctx context.Context, from int64, fn func(*esv1.EntityOp) error) error {
 	if err, ok := f.watchErr[from]; ok {
 		return err
 	}
 
-	for _, op := range f.watchOps {
+	for i, op := range f.watchOps {
 		if op.Revision() <= from {
 			continue
+		}
+		if f.onOp != nil {
+			f.onOp(i)
 		}
 		if err := fn(op); err != nil {
 			return err
 		}
+	}
+
+	if f.parkWatch {
+		f.parkWatch = false
+		close(f.parked)
+		<-ctx.Done()
+		return ctx.Err()
 	}
 
 	return nil
@@ -939,4 +959,226 @@ func TestSourceDeployResolvesFromTheListingWithoutAnyRead(t *testing.T) {
 		"the source deploy was in the listing, so resolving it must cost no read")
 	assert.NotContains(t, src.kindList, core_v1alpha.KindDeployment,
 		"and the deployment kind must not be listed to learn it")
+}
+
+// A reset that lands mid-stream has to abandon the stream, not finish it.
+//
+// This is the case the whole mechanism exists for. A busy cluster streaming
+// deploys is exactly the one whose batches keep re-creating the cursor an
+// operator just cleared, so noticing the reset only at the next connect would
+// mean noticing it after the damage.
+func TestResetMidStreamFallsBackToRelist(t *testing.T) {
+	src := &fakeDeploySource{
+		head: 5000,
+		records: []*deploylifecycle.Record{
+			deployRecord(t, "web", 100),
+		},
+		listRevision: 5000,
+		watchOps: []*esv1.EntityOp{
+			deployOp(t, "web", 5100),
+			deployOp(t, "api", 5200),
+		},
+	}
+
+	r := newTestReporter(src)
+	link := &fakeDeployLink{}
+	link.onHello = func() { r.cursors <- 4000 }
+
+	// Delivered from inside the watch, after one op has streamed. Sending it
+	// during the hello would be intercepted by run's pre-stream check and the
+	// callback path — the one this test exists for — would never run.
+	src.onOp = func(i int) {
+		if i == 1 {
+			require.NoError(t, r.handleReset(context.Background(), nil))
+		}
+	}
+
+	r.run(testCtx(t), link)
+
+	assert.True(t, src.listed, "a reset must fall back to the full re-list")
+
+	batches := link.batches()
+	require.NotEmpty(t, batches)
+
+	// The first batch predates the reset: it is the delta stream doing its job
+	// against a cursor cloud had not yet disowned. What matters is that the
+	// stream stopped there and the re-list picked up from the bottom.
+	assert.Equal(t, int64(4000), batches[0].FromRevision)
+
+	require.Greater(t, len(batches), 1, "the stream must be followed by a re-list")
+	assert.Equal(t, int64(0), batches[1].FromRevision,
+		"the re-list restarts the frontier from the bottom, not from the disowned cursor")
+
+	for _, b := range batches[1:] {
+		assert.NotEqual(t, int64(4000), b.FromRevision,
+			"nothing after the reset may still report against the disowned cursor")
+	}
+}
+
+// A reset that arrives between connections outranks whatever the hello was
+// answered with.
+//
+// Clearing the cursor and saying so are two separate writes, so a handshake can
+// land in between and be told a watermark cloud is about to disown. The reset
+// has to win that race or the repair silently does not happen.
+func TestResetBetweenConnectionsOverridesAUsableCursor(t *testing.T) {
+	src := &fakeDeploySource{
+		head: 5000,
+		records: []*deploylifecycle.Record{
+			deployRecord(t, "web", 100),
+		},
+		listRevision: 5000,
+		watchOps: []*esv1.EntityOp{
+			deployOp(t, "web", 5100),
+		},
+	}
+
+	r := newTestReporter(src)
+	require.NoError(t, r.handleReset(context.Background(), nil))
+
+	link := &fakeDeployLink{}
+	link.onHello = func() { r.cursors <- 4000 }
+	r.run(testCtx(t), link)
+
+	assert.True(t, src.listed,
+		"a pending reset must re-list even though the cursor it was answered with looks usable")
+}
+
+// Two resets and one reset ask for the same thing, so the second must not buy a
+// second re-list on the following connection.
+func TestRepeatedResetsCollapse(t *testing.T) {
+	r := newTestReporter(&fakeDeploySource{head: 5000})
+
+	require.NoError(t, r.handleReset(context.Background(), nil))
+	require.NoError(t, r.handleReset(context.Background(), nil))
+
+	assert.True(t, r.resetPending())
+
+	r.takeReset()
+	assert.False(t, r.resetPending(),
+		"two asks are one request; the second must not buy a second re-list")
+}
+
+// Asking must not consume, or any caller that asks and then fails to re-list
+// drops the request on the floor along with the cursor it was invalidating.
+func TestAskingForAResetDoesNotConsumeIt(t *testing.T) {
+	r := newTestReporter(&fakeDeploySource{head: 5000})
+
+	assert.False(t, r.resetPending(), "nothing pending to begin with")
+	require.NoError(t, r.handleReset(context.Background(), nil))
+
+	assert.True(t, r.resetPending())
+	assert.True(t, r.resetPending(), "asking twice must still say yes")
+
+	r.takeReset()
+	assert.False(t, r.resetPending())
+}
+
+// A reset has to interrupt a watch that is parked between deploys, not wait for
+// the cluster to produce one.
+//
+// The queue alone cannot do this: the only thing that reads it mid-stream is
+// the watch callback, and on a quiet cluster the callback does not run. That is
+// the cluster where an operator most needs the reset to land promptly, because
+// cloud has already told them the nudge was delivered.
+func TestResetInterruptsAParkedWatch(t *testing.T) {
+	src := &fakeDeploySource{
+		head: 5000,
+		records: []*deploylifecycle.Record{
+			deployRecord(t, "web", 100),
+		},
+		listRevision: 5000,
+		parkWatch:    true,
+		parked:       make(chan struct{}),
+	}
+
+	r := newTestReporter(src)
+	link := &fakeDeployLink{}
+	link.onHello = func() { r.cursors <- 4000 }
+
+	// Delivered only once the watch is genuinely parked, so this cannot pass by
+	// racing ahead of the stream the way the mid-stream test does.
+	go func() {
+		<-src.parked
+		_ = r.handleReset(context.Background(), nil)
+	}()
+
+	r.run(testCtx(t), link)
+
+	assert.True(t, src.listed,
+		"a reset must wake a parked watch rather than waiting for the next deploy")
+
+	batches := link.batches()
+	require.NotEmpty(t, batches)
+	assert.Equal(t, int64(0), batches[0].FromRevision,
+		"and the re-list restarts from the bottom, not from the disowned cursor")
+}
+
+// A connection going away while a reset happens to be pending must not be
+// turned into a re-list against a link that is closing. The reset stays queued
+// and the next connection honours it.
+func TestParentCancellationIsNotAReset(t *testing.T) {
+	src := &fakeDeploySource{
+		head:         5000,
+		records:      []*deploylifecycle.Record{deployRecord(t, "web", 100)},
+		listRevision: 5000,
+		parkWatch:    true,
+		parked:       make(chan struct{}),
+	}
+
+	r := newTestReporter(src)
+	link := &fakeDeployLink{}
+	link.onHello = func() { r.cursors <- 4000 }
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		<-src.parked
+		cancel()
+	}()
+
+	r.run(ctx, link)
+
+	assert.False(t, src.listed, "a closing connection must not start a backfill")
+}
+
+// A stream that ends without re-listing must leave the request standing.
+//
+// This is the failure the flag exists to make impossible. When asking and
+// taking were one operation, a stream could consume the request, return
+// "re-list", and then have run decline to act because the connection had gone
+// away in the meantime. The request was then gone while the cursor it was
+// meant to invalidate stayed in use, and the next connection resumed happily
+// from it.
+func TestAStreamThatDoesNotRelistLeavesTheResetStanding(t *testing.T) {
+	src := &fakeDeploySource{head: 5000}
+	r := newTestReporter(src)
+
+	require.NoError(t, r.handleReset(context.Background(), nil))
+
+	// A connection that is already gone, so nothing downstream will re-list.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_ = r.stream(ctx, &fakeDeployLink{}, 4000, 5000, newShortIDs(src))
+
+	assert.True(t, r.resetPending(),
+		"stream must not consume a request it did not carry out")
+}
+
+// And the re-list is what clears it, so the repair is not asked for twice.
+func TestRelistTakesTheReset(t *testing.T) {
+	src := &fakeDeploySource{
+		head:         5000,
+		records:      []*deploylifecycle.Record{deployRecord(t, "web", 100)},
+		listRevision: 5000,
+	}
+
+	r := newTestReporter(src)
+	require.NoError(t, r.handleReset(context.Background(), nil))
+
+	r.relist(testCtx(t), &fakeDeployLink{}, 5000, newShortIDs(src))
+
+	assert.True(t, src.listed)
+	assert.False(t, r.resetPending(), "the re-list satisfied the request")
 }
