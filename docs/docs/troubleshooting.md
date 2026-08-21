@@ -30,6 +30,13 @@ miren doctor auth     # Check authentication
 ```
 </CliCommand>
 
+:::tip[Get a combined diagnosis]
+Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+"check the health of this app" or "check the health of this cluster."
+The `app-health` and `cluster-health` skills combine status, deployment history,
+logs, and diagnostics into a prioritized report with suggested next steps.
+:::
+
 ## App not starting
 
 If your app is deployed but not responding:

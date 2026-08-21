@@ -168,6 +168,13 @@ Now that you've got something deployed, here's where to go depending on what you
 
 **Deploy your own app.** Miren auto-detects Python, Node, Bun, Go, Ruby, and Rust projects. Run `miren init` in your project to create a [`.miren/app.toml`](/app-configuration) config, then `miren deploy`. You can always provide a `Dockerfile` if you need full control over the build. For a step-by-step walkthrough for your language, see the [Language Guides](/guides).
 
+:::tip[Set up your own app with an agent]
+Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+"set up this app on Miren." The `app-setup` skill inspects your project, works
+out its services and environment variables, creates the configuration, and
+walks through the first deploy.
+:::
+
 **Manage multiple clusters.** If you have more than one server, use [`miren cluster`](/command/cluster) to list your clusters and `miren cluster switch` to change which one you're targeting before deploying.
 
 **Configure your app.** The [App Configuration](/app-configuration) guide covers `.miren/app.toml` in depth: setting commands, ports, environment variables, concurrency, and more.

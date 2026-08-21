@@ -23,6 +23,14 @@ command = "npm start"
 
 Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive — environment variables, more services, scaling, disks.
 
+:::tip[Have an agent inspect your app]
+Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+"set up this app on Miren." The `app-setup` skill can inspect the repository,
+identify the services and environment variables it needs, and prepare a working
+`.miren/app.toml`. Use the rest of this page when you want to review or customize
+the result.
+:::
+
 ## When You Don't Need app.toml
 
 If your app is a single web service with a standard language stack, Miren handles everything:
