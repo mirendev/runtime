@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+- **Maintenance mode for routes** - `miren route down app.example.com --reason "Upgrading the database"` takes a hostname out of service and shows visitors a holding page; `miren route up` puts it back. Visitors get a 503, which is what crawlers and uptime monitors expect from planned downtime, rather than the 500s or platform error pages the old workarounds produced, plus a `Retry-After` when you give an expected return time with `--back-at`. Your app keeps running throughout, so `miren app run` and one-shot migrations work during the window. See the [maintenance mode guide](/maintenance-mode).
+
 ---
 
 ## v0.13.0

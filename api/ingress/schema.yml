@@ -36,6 +36,28 @@ kinds:
         header:
           type: string
           doc: The HTTP header name to inject (e.g. X-User-Email)
+    maintenance:
+      type: component
+      doc: >-
+        Operator-initiated maintenance state. When present, the router serves a
+        holding page instead of proxying to the app. Absent means the route
+        serves normally.
+      attrs:
+        reason:
+          type: string
+          doc: Operator-supplied explanation shown on the holding page
+        back_at:
+          type: string
+          doc: >-
+            RFC 3339 timestamp for the expected end of the window. Drives the
+            Retry-After header and the holding page copy. Empty means no
+            estimate was given.
+        started_at:
+          type: string
+          doc: RFC 3339 timestamp for when maintenance began
+        started_by:
+          type: string
+          doc: Identifier of the operator who put the route into maintenance
   password_provider:
     name:
       type: string

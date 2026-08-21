@@ -46,6 +46,12 @@ func RouteList(ctx *Context, opts struct {
 			RequestTimeout string `json:"request_timeout,omitempty"`
 			CreatedAt      int64  `json:"created_at"`
 			UpdatedAt      int64  `json:"updated_at"`
+
+			Maintenance          bool   `json:"maintenance"`
+			MaintenanceReason    string `json:"maintenance_reason,omitempty"`
+			MaintenanceBackAt    string `json:"maintenance_back_at,omitempty"`
+			MaintenanceStartedAt string `json:"maintenance_started_at,omitempty"`
+			MaintenanceStartedBy string `json:"maintenance_started_by,omitempty"`
 		}
 
 		var routeInfos []RouteInfo
@@ -62,6 +68,12 @@ func RouteList(ctx *Context, opts struct {
 				RequestTimeout: r.Route.RequestTimeout,
 				CreatedAt:      r.CreatedAt,
 				UpdatedAt:      r.UpdatedAt,
+
+				Maintenance:          !r.Route.Maintenance.Empty(),
+				MaintenanceReason:    r.Route.Maintenance.Reason,
+				MaintenanceBackAt:    r.Route.Maintenance.BackAt,
+				MaintenanceStartedAt: r.Route.Maintenance.StartedAt,
+				MaintenanceStartedBy: r.Route.Maintenance.StartedBy,
 			})
 		}
 
@@ -69,7 +81,7 @@ func RouteList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "TIMEOUT", "CREATED", "UPDATED"}
+	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
 
 	for _, r := range routes {
 		route := r.Route
@@ -99,12 +111,18 @@ func RouteList(ctx *Context, opts struct {
 			timeoutDisplay = route.RequestTimeout
 		}
 
+		servingDisplay := "✓"
+		if !route.Maintenance.Empty() {
+			servingDisplay = "maintenance"
+		}
+
 		rows = append(rows, ui.Row{
 			host,
 			appDisplay,
 			defaultDisplay,
 			wafDisplay,
 			timeoutDisplay,
+			servingDisplay,
 			humanFriendlyTimestamp(time.UnixMilli(r.CreatedAt)),
 			humanFriendlyTimestamp(time.UnixMilli(r.UpdatedAt)),
 		})

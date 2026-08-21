@@ -1,0 +1,73 @@
+interfaces:
+  - name: Routes
+    doc: >-
+      Operator controls over an existing HTTP route. Route records themselves
+      are still created and removed through the entity store; this interface
+      exists for the operations that need the server to establish something the
+      caller cannot be trusted to assert about itself.
+    methods:
+      - name: setMaintenance
+        index: 0
+        doc: >-
+          Put a route into maintenance, so the router serves a holding page
+          instead of proxying to the app. The operator identity and the start of
+          the window are stamped server-side from the authenticated caller.
+          Calling this on a route that is already in maintenance updates the
+          reason and expected return without restarting the clock.
+        parameters:
+          - name: host
+            type: string
+            doc: >-
+              Hostname of the route. Ignored when default_route is set, and
+              required otherwise.
+          - name: default_route
+            type: bool
+            doc: >-
+              Act on the default route, which has no hostname of its own,
+              instead of on a named host.
+          - name: reason
+            type: string
+            doc: Operator-supplied explanation shown to visitors.
+          - name: back_at
+            type: string
+            doc: >-
+              RFC 3339 timestamp for the expected end of the window, already
+              normalized by the caller. Empty means no estimate.
+        results:
+          - name: route
+            type: string
+            doc: Label for the route acted on, "default" for the default route.
+          - name: reason
+            type: string
+          - name: back_at
+            type: string
+          - name: started_at
+            type: string
+            doc: When the window opened, preserved across repeated calls.
+          - name: started_by
+            type: string
+            doc: Authenticated identity of the operator who opened the window.
+      - name: clearMaintenance
+        index: 1
+        doc: >-
+          Return a route to normal serving. Clearing a route that is already
+          serving succeeds and reports that nothing changed, so the reversal
+          path never makes an operator stop and work out whether they already
+          ran it.
+        parameters:
+          - name: host
+            type: string
+            doc: >-
+              Hostname of the route. Ignored when default_route is set, and
+              required otherwise.
+          - name: default_route
+            type: bool
+            doc: >-
+              Act on the default route, which has no hostname of its own,
+              instead of on a named host.
+        results:
+          - name: route
+            type: string
+          - name: changed
+            type: bool
+            doc: False when the route was already serving normally.

@@ -588,16 +588,17 @@ func (v *VersionInfo) UnmarshalJSON(data []byte) error {
 }
 
 type appInfoData struct {
-	Name             *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	CreatedAt        *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
-	CurrentVersion   *VersionInfo        `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
-	Health           *string             `cbor:"3,keyasint,omitempty" json:"health,omitempty"`
-	ReadyInstances   *int32              `cbor:"4,keyasint,omitempty" json:"ready_instances,omitempty"`
-	DesiredInstances *int32              `cbor:"5,keyasint,omitempty" json:"desired_instances,omitempty"`
-	ScalingMode      *string             `cbor:"6,keyasint,omitempty" json:"scaling_mode,omitempty"`
-	Routes           *[]string           `cbor:"7,keyasint,omitempty" json:"routes,omitempty"`
-	CrashCount       *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
-	CooldownSeconds  *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
+	Name              *string             `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	CreatedAt         *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"created_at,omitempty"`
+	CurrentVersion    *VersionInfo        `cbor:"2,keyasint,omitempty" json:"current_version,omitempty"`
+	Health            *string             `cbor:"3,keyasint,omitempty" json:"health,omitempty"`
+	ReadyInstances    *int32              `cbor:"4,keyasint,omitempty" json:"ready_instances,omitempty"`
+	DesiredInstances  *int32              `cbor:"5,keyasint,omitempty" json:"desired_instances,omitempty"`
+	ScalingMode       *string             `cbor:"6,keyasint,omitempty" json:"scaling_mode,omitempty"`
+	Routes            *[]string           `cbor:"7,keyasint,omitempty" json:"routes,omitempty"`
+	CrashCount        *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
+	CooldownSeconds   *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
+	MaintenanceRoutes *[]string           `cbor:"10,keyasint,omitempty" json:"maintenance_routes,omitempty"`
 }
 
 type AppInfo struct {
@@ -747,6 +748,22 @@ func (v *AppInfo) CooldownSeconds() int32 {
 
 func (v *AppInfo) SetCooldownSeconds(cooldown_seconds int32) {
 	v.data.CooldownSeconds = &cooldown_seconds
+}
+
+func (v *AppInfo) HasMaintenanceRoutes() bool {
+	return v.data.MaintenanceRoutes != nil
+}
+
+func (v *AppInfo) MaintenanceRoutes() []string {
+	if v.data.MaintenanceRoutes == nil {
+		return nil
+	}
+	return *v.data.MaintenanceRoutes
+}
+
+func (v *AppInfo) SetMaintenanceRoutes(maintenance_routes []string) {
+	x := slices.Clone(maintenance_routes)
+	v.data.MaintenanceRoutes = &x
 }
 
 func (v *AppInfo) MarshalCBOR() ([]byte, error) {
@@ -1379,6 +1396,7 @@ type applicationStatusData struct {
 	CooldownSeconds   *int32              `cbor:"18,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 	BoundPorts        *[]*BoundPort       `cbor:"19,keyasint,omitempty" json:"bound_ports,omitempty"`
 	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
+	MaintenanceRoutes *[]string           `cbor:"21,keyasint,omitempty" json:"maintenance_routes,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1703,6 +1721,22 @@ func (v *ApplicationStatus) WorkloadRole() string {
 
 func (v *ApplicationStatus) SetWorkloadRole(workloadRole string) {
 	v.data.WorkloadRole = &workloadRole
+}
+
+func (v *ApplicationStatus) HasMaintenanceRoutes() bool {
+	return v.data.MaintenanceRoutes != nil
+}
+
+func (v *ApplicationStatus) MaintenanceRoutes() []string {
+	if v.data.MaintenanceRoutes == nil {
+		return nil
+	}
+	return *v.data.MaintenanceRoutes
+}
+
+func (v *ApplicationStatus) SetMaintenanceRoutes(maintenanceRoutes []string) {
+	x := slices.Clone(maintenanceRoutes)
+	v.data.MaintenanceRoutes = &x
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {
@@ -2455,10 +2489,11 @@ func (v *CrudGetConfigurationArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudGetConfigurationResultsData struct {
-	Configuration  *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
-	VersionId      *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
-	VersionShortId *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
-	WorkloadRole   *string        `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
+	Configuration     *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
+	VersionId         *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId    *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
+	WorkloadRole      *string        `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
+	MaintenanceRoutes *[]string      `cbor:"4,keyasint,omitempty" json:"maintenanceRoutes,omitempty"`
 }
 
 type CrudGetConfigurationResults struct {
@@ -2480,6 +2515,11 @@ func (v *CrudGetConfigurationResults) SetVersionShortId(versionShortId string) {
 
 func (v *CrudGetConfigurationResults) SetWorkloadRole(workloadRole string) {
 	v.data.WorkloadRole = &workloadRole
+}
+
+func (v *CrudGetConfigurationResults) SetMaintenanceRoutes(maintenanceRoutes []string) {
+	x := slices.Clone(maintenanceRoutes)
+	v.data.MaintenanceRoutes = &x
 }
 
 func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -3941,6 +3981,17 @@ func (v *CrudClientGetConfigurationResults) WorkloadRole() string {
 		return ""
 	}
 	return *v.data.WorkloadRole
+}
+
+func (v *CrudClientGetConfigurationResults) HasMaintenanceRoutes() bool {
+	return v.data.MaintenanceRoutes != nil
+}
+
+func (v *CrudClientGetConfigurationResults) MaintenanceRoutes() []string {
+	if v.data.MaintenanceRoutes == nil {
+		return nil
+	}
+	return *v.data.MaintenanceRoutes
 }
 
 func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {

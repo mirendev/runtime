@@ -31,6 +31,7 @@ import (
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
 	"miren.dev/runtime/api/run/run_v1alpha"
@@ -93,6 +94,7 @@ import (
 	"miren.dev/runtime/servers/httpingress"
 	"miren.dev/runtime/servers/logs"
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
+	routessrv "miren.dev/runtime/servers/routes"
 	runnerserver "miren.dev/runtime/servers/runner"
 	"miren.dev/runtime/servers/runnertelemetry"
 	secretsrv "miren.dev/runtime/servers/secret"
@@ -1580,6 +1582,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	oidcServer := oidcbindingsrv.NewServer(c.Log, ec, eac)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcServer))
+
+	routesServer := routessrv.NewServer(c.Log, ingress.NewClient(c.Log, loopback))
+	server.ExposeValue("dev.miren.runtime/routes", ingress_v1alpha.AdaptRoutes(routesServer))
 
 	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
 	if err != nil {
