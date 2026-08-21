@@ -145,14 +145,22 @@ func TestCloudSegmentUploaderRejectsUnlabelledSegment(t *testing.T) {
 func TestCloudSegmentUploaderIncludesLeaseNonce(t *testing.T) {
 	fake := &fakeUpdatesClient{}
 	state := NewState()
+	// The local entity id and the cloud id are deliberately different: the
+	// uploader is handed the cloud id, but mount state keys off the local
+	// entity id, so a direct comparison would omit the nonce (MIR-1634).
+	state.SetVolume("disk_volume/abc", &VolumeState{
+		EntityId:      "disk_volume/abc",
+		VolumeId:      "abc",
+		CloudVolumeId: "vol-cloud-xyz",
+	})
 	state.SetMount("mount-1", &MountState{
 		EntityId:   "mount-1",
-		VolumeId:   "vol-123",
+		VolumeId:   "disk_volume/abc",
 		LeaseNonce: "nonce-abc",
 	})
 
 	uploader := NewCloudSegmentUploaderWithClient(slog.Default(), fake, state)
-	_, err := uploader.UploadSegment(context.Background(), "vol-123",
+	_, err := uploader.UploadSegment(context.Background(), "vol-cloud-xyz",
 		writeTestSegment(t, "400000000000000100000001", []byte("data")))
 	require.NoError(t, err)
 

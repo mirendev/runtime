@@ -74,6 +74,13 @@ type MountState struct {
 	// VolumeId is the ID of the disk_volume entity
 	VolumeId string `json:"volume_id"`
 
+	// CloudVolumeId is the backing volume's miren.cloud identifier, captured
+	// when the mount is created. Every cloud lease call keys off it, and
+	// recording it here means lease release still works after the volume's
+	// VolumeState is gone (e.g. orphan cleanup). Empty for mounts persisted
+	// before this field existed, or volumes never registered with the cloud.
+	CloudVolumeId string `json:"cloud_volume_id,omitempty"`
+
 	// DevicePath is the path to the loop device node
 	DevicePath string `json:"device_path"`
 
@@ -129,7 +136,44 @@ func LoadState(dataPath string) (*State, error) {
 
 	// Always use the new path going forward
 	state.path = path
+
+	// Backfill the cloud id onto mounts that predate MountState.CloudVolumeId.
+	// Without this, a legacy mount that stays mounted across the upgrade never
+	// records its cloud id, and once its VolumeState is gone (orphan cleanup)
+	// the lease can no longer be released.
+	//
+	// The in-memory backfill is what the running process relies on; persistence
+	// is best-effort. A failed rewrite must not discard the otherwise-valid
+	// state we just loaded (which would drop active lease nonces from memory),
+	// so we swallow the save error rather than fail the load. A later Save
+	// captures the backfill, and because Save serializes volumes and mounts
+	// together, no save can persist a volume deletion without also persisting
+	// the mounts we just backfilled.
+	if state.backfillMountCloudVolumeIds() {
+		_ = state.Save()
+	}
+
 	return &state, nil
+}
+
+// backfillMountCloudVolumeIds copies each volume's cloud id onto any mount that
+// has none, keyed by the mount's local volume entity id. It never overwrites a
+// cloud id already recorded on a mount. Returns true if any mount changed.
+func (s *State) backfillMountCloudVolumeIds() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	for _, m := range s.Mounts {
+		if m.CloudVolumeId != "" {
+			continue
+		}
+		if v := s.Volumes[m.VolumeId]; v != nil && v.CloudVolumeId != "" {
+			m.CloudVolumeId = v.CloudVolumeId
+			changed = true
+		}
+	}
+	return changed
 }
 
 // Save persists the state to disk atomically.
@@ -317,6 +361,42 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	mount.MountPath = v.MountPath
 	s.Mounts[mount.EntityId] = mount
 	return v.DevicePath, v.MountPath, nil
+}
+
+// LeaseNonceForCloudVolume returns the lease nonce held by a mount whose
+// backing volume has the given cloud volume id, or "" if none is held.
+//
+// The uploader is handed a volume's cloud id, but mount state keys off the
+// local disk_volume entity id, so the two cannot be compared directly. This
+// resolves cloud id -> volume entity id -> mount under a single read lock.
+func (s *State) LeaseNonceForCloudVolume(cloudVolumeId string) string {
+	if cloudVolumeId == "" {
+		return ""
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Prefer the cloud id recorded directly on the mount.
+	for _, m := range s.Mounts {
+		if m.CloudVolumeId == cloudVolumeId && m.LeaseNonce != "" {
+			return m.LeaseNonce
+		}
+	}
+
+	// Fall back to resolving through volume state for mounts persisted before
+	// the cloud id was recorded on the mount.
+	for _, v := range s.Volumes {
+		if v.CloudVolumeId != cloudVolumeId {
+			continue
+		}
+		for _, m := range s.Mounts {
+			if m.VolumeId == v.EntityId && m.LeaseNonce != "" {
+				return m.LeaseNonce
+			}
+		}
+	}
+	return ""
 }
 
 // GetVolumeByVolumeId returns a copy of a volume state by volume ID

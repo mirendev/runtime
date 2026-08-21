@@ -74,16 +74,13 @@ func (u *CloudSegmentUploader) UploadSegment(ctx context.Context, volumeID, segm
 	}, f, size)
 }
 
-// leaseNonceFor finds the nonce held for a volume in mount state, if any. The
-// cloud requires it on writes to a leased volume.
-func (u *CloudSegmentUploader) leaseNonceFor(volumeID string) string {
+// leaseNonceFor finds the nonce held for a cloud volume in mount state, if any.
+// The cloud requires it on writes to a leased volume. cloudVolumeID is the
+// volume's miren.cloud id; mount state keys off the local entity id, so the
+// lookup is delegated to State, which bridges the two.
+func (u *CloudSegmentUploader) leaseNonceFor(cloudVolumeID string) string {
 	if u.state == nil {
 		return ""
 	}
-	for _, m := range u.state.ListMounts() {
-		if m.VolumeId == volumeID && m.LeaseNonce != "" {
-			return m.LeaseNonce
-		}
-	}
-	return ""
+	return u.state.LeaseNonceForCloudVolume(cloudVolumeID)
 }

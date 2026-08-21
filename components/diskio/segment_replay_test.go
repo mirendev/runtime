@@ -534,6 +534,15 @@ func TestLeaseReleasedOnUnmount(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	state := NewState()
+	// The local entity id and the cloud id differ; the release must use the
+	// cloud id, resolved through volume state, not the local id on the mount
+	// (MIR-1634).
+	state.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId:      "disk_volume/vol1",
+		VolumeId:      "vol1",
+		CloudVolumeId: "vol-cloud-1",
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+	})
 	state.SetMount("disk_mount/mnt-1", &MountState{
 		EntityId:   "disk_mount/mnt-1",
 		VolumeId:   "disk_volume/vol1",
@@ -547,7 +556,7 @@ func TestLeaseReleasedOnUnmount(t *testing.T) {
 	mc.Shutdown()
 
 	require.Len(t, cloud.releaseLeaseCalls, 1)
-	assert.Equal(t, "disk_volume/vol1", cloud.releaseLeaseCalls[0].volumeID)
+	assert.Equal(t, "vol-cloud-1", cloud.releaseLeaseCalls[0].volumeID)
 	assert.Equal(t, "nonce-abc", cloud.releaseLeaseCalls[0].nonce)
 }
 

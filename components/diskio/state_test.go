@@ -1,6 +1,7 @@
 package diskio
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -238,4 +239,81 @@ func TestStateConcurrentAccess(t *testing.T) {
 	// State should still be valid
 	assert.NotNil(t, state.GetVolume("vol-1"))
 	assert.NotNil(t, state.GetMount("mount-1"))
+}
+
+func TestStateLeaseNonceForCloudVolume(t *testing.T) {
+	t.Run("matches on the mount's stored cloud id", func(t *testing.T) {
+		// No VolumeState at all — the mount alone carries the cloud id.
+		state := NewState()
+		state.SetMount("disk_mount/mnt-1", &MountState{
+			EntityId:      "disk_mount/mnt-1",
+			VolumeId:      "disk_volume/vol1",
+			CloudVolumeId: "vol-cloud-1",
+			LeaseNonce:    "nonce-1",
+		})
+
+		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
+		assert.Empty(t, state.LeaseNonceForCloudVolume("vol-other"))
+		assert.Empty(t, state.LeaseNonceForCloudVolume(""))
+	})
+
+	t.Run("falls back to volume state for mounts without a stored cloud id", func(t *testing.T) {
+		// Models a mount persisted before CloudVolumeId was recorded on it.
+		state := NewState()
+		state.SetVolume("disk_volume/vol1", &VolumeState{
+			EntityId:      "disk_volume/vol1",
+			VolumeId:      "vol1",
+			CloudVolumeId: "vol-cloud-1",
+		})
+		state.SetMount("disk_mount/mnt-1", &MountState{
+			EntityId:   "disk_mount/mnt-1",
+			VolumeId:   "disk_volume/vol1",
+			LeaseNonce: "nonce-1",
+		})
+
+		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
+	})
+}
+
+func TestLoadStateBackfillsMountCloudVolumeId(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a state file shaped like one persisted before MountState.CloudVolumeId
+	// existed: the volume knows its cloud id, the mount does not.
+	seed := NewState()
+	seed.SetPath(dir)
+	seed.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId:      "disk_volume/vol1",
+		VolumeId:      "vol1",
+		CloudVolumeId: "vol-cloud-1",
+	})
+	seed.SetMount("disk_mount/mnt-1", &MountState{
+		EntityId:   "disk_mount/mnt-1",
+		VolumeId:   "disk_volume/vol1",
+		LeaseNonce: "nonce-1",
+	})
+	require.NoError(t, seed.Save())
+
+	loaded, err := LoadState(dir)
+	require.NoError(t, err)
+
+	// The mount now carries the cloud id, resolved from volume state.
+	m := loaded.GetMount("disk_mount/mnt-1")
+	require.NotNil(t, m)
+	assert.Equal(t, "vol-cloud-1", m.CloudVolumeId)
+
+	// The backfill was persisted, not just applied in memory. Read the file
+	// directly so this is verified independently of a second load (which would
+	// re-backfill from the still-present volume state and mask a missing save).
+	raw, err := os.ReadFile(filepath.Join(dir, stateFileName))
+	require.NoError(t, err)
+	var persisted State
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	require.NotNil(t, persisted.Mounts["disk_mount/mnt-1"])
+	assert.Equal(t, "vol-cloud-1", persisted.Mounts["disk_mount/mnt-1"].CloudVolumeId)
+
+	// And the lease still resolves after the VolumeState is removed, which is
+	// the orphan-cleanup situation the backfill protects against.
+	loaded.DeleteVolume("disk_volume/vol1")
+	assert.Equal(t, "nonce-1", loaded.LeaseNonceForCloudVolume("vol-cloud-1"))
 }
