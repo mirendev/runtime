@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -58,6 +59,21 @@ const (
 	// upserts without a range, and cloud advancing its watermark on that would
 	// open exactly the permanent gap this design exists to prevent.
 	TypeDeployBatch = "deploy.batch"
+
+	// TypeDeploySyncReset is cloud telling this cluster that the cursor it is
+	// reporting against is no longer usable and the sync has to start over.
+	//
+	// Cloud sends it two ways, and they mean the same thing here. An operator
+	// repairing history discards the cursor and cloud says so directly; or a
+	// batch arrives claiming to start above where cloud has reached, which
+	// would leave a hole in the frontier, and cloud refuses it and says so in
+	// reply. Either way the cursor this reporter is working from describes a
+	// position cloud does not share, and the only way back into agreement is a
+	// full re-list.
+	//
+	// It carries no payload on purpose. A reason would invite the reporter to
+	// treat some reasons differently, and there is only one correct response.
+	TypeDeploySyncReset = "deploy.sync.reset"
 )
 
 const (
@@ -299,6 +315,15 @@ type deploySource interface {
 // one starts the exchange over anyway.
 var errCompacted = errors.New("watch start revision has been compacted")
 
+// errResetRequested ends a stream because cloud asked for a full re-list.
+//
+// Deliberately the same shape as errCompacted, and handled beside it, because
+// the two are the same situation reached from opposite directions: the cursor
+// this stream resumed from is not one cloud can accept, and re-listing is the
+// remedy. Compaction is the cluster discovering that; a reset is cloud saying
+// it.
+var errResetRequested = errors.New("cloud asked for a full re-list")
+
 // syncMode is how a connection's deploy sync proceeds.
 type syncMode int
 
@@ -356,6 +381,7 @@ func (c *Coordinator) startDeployReporter(link *uplink.Client) {
 	}
 
 	link.Handle(TypeDeploySyncCursor, reporter.handleCursor)
+	link.Handle(TypeDeploySyncReset, reporter.handleReset)
 
 	link.OnConnect(func(ctx context.Context) {
 		// Run off the connection goroutine: this reads the entity store, and
@@ -375,6 +401,25 @@ type deployReporter struct {
 	// late to be used cannot be mistaken for the answer to the next
 	// connection's question.
 	cursors chan int64
+
+	// mu guards resetWanted and cancelStream.
+	//
+	// A flag rather than a queue, and the distinction is load-bearing. A
+	// channel makes "is a reset pending" and "take the reset" the same
+	// operation, so every place that wants to *ask* also has to consume, and
+	// any of them that then fails to re-list drops the request on the floor.
+	// Separating the two means only the code that actually starts a re-list
+	// clears it, and a connection dying anywhere else leaves it standing for
+	// the next one.
+	//
+	// It collapses for free: two resets and one reset ask for the same thing.
+	//
+	// cancelStream is the running stream's cancel, or nil when none is
+	// running. The lock is held only long enough to read or replace these; the
+	// cancel is called outside it, since it runs arbitrary work.
+	mu           sync.Mutex
+	resetWanted  bool
+	cancelStream context.CancelFunc
 
 	// Pacing, held as fields rather than read from the constants directly so a
 	// test can drive the protocol without waiting out a spread measured in
@@ -423,6 +468,65 @@ func (r *deployReporter) handleCursor(_ context.Context, data json.RawMessage) e
 	return nil
 }
 
+// handleReset records that cloud wants a full re-list.
+//
+// Nothing is read out of the message, and a reset that arrives when no stream
+// is running is deliberately left in the buffer rather than dropped. The two
+// senders differ in timing: a rejected batch arrives mid-stream and wants to
+// interrupt it, while an operator's reset can land between connections, and
+// keeping it means the next run honours it instead of needing cloud to say it
+// again.
+func (r *deployReporter) handleReset(_ context.Context, _ json.RawMessage) error {
+	r.log.Info("cloud asked for a full deploy re-list")
+
+	r.mu.Lock()
+	r.resetWanted = true
+	cancel := r.cancelStream
+	r.mu.Unlock()
+
+	// Wake a stream that is parked waiting for the next deploy.
+	//
+	// Queuing alone is not enough, because the only thing that reads the queue
+	// mid-stream is the watch callback, and the callback does not run until the
+	// cluster produces a deploy. On a quiet cluster that could be hours, which
+	// is exactly the cluster where an operator most needs the reset to land
+	// now: they were told the nudge was delivered.
+	//
+	// Done even when a reset was already pending. A second one against a
+	// parked stream still has to wake it.
+	if cancel != nil {
+		cancel()
+	}
+
+	return nil
+}
+
+// setStreamCancel records the running stream's cancel, or clears it with nil.
+func (r *deployReporter) setStreamCancel(cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancelStream = cancel
+}
+
+// resetPending reports whether cloud has asked for a re-list, without taking
+// the request. Everything that decides uses this; only takeReset clears it.
+func (r *deployReporter) resetPending() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.resetWanted
+}
+
+// takeReset clears a pending request.
+//
+// Called from exactly one place, where a re-list actually begins. Anything
+// else that cleared it could fail to re-list afterwards, and the request would
+// be gone with the cursor it was meant to invalidate still in use.
+func (r *deployReporter) takeReset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resetWanted = false
+}
+
 // run reports deploys until the connection drops.
 //
 // Failure here is deliberately non-fatal and unretried within a connection.
@@ -454,6 +558,15 @@ func (r *deployReporter) run(ctx context.Context, link deployLink) {
 	ids := newShortIDs(r.source)
 
 	mode, reason := decideSyncMode(watermark, head)
+
+	// A reset that arrived while nothing was streaming outranks the cursor.
+	// Cloud may well have answered the hello with a watermark it is about to
+	// disown, since clearing the cursor and saying so are two writes and the
+	// handshake can land between them.
+	if r.resetPending() {
+		mode, reason = syncRelist, "cloud asked for a full re-list"
+	}
+
 	if mode == syncDelta {
 		r.log.Info("resuming deploy sync from cloud's watermark",
 			"watermark", watermark, "head", head)
@@ -472,12 +585,15 @@ func (r *deployReporter) run(ctx context.Context, link deployLink) {
 		// not evidence the cursor is bad, and re-listing on it would turn a
 		// blip into a full re-send of the cluster's history. The connection is
 		// coming down anyway, and the next one starts the handshake over.
-		if !errors.Is(err, errCompacted) {
+		switch {
+		case errors.Is(err, errCompacted):
+			r.log.Info("deploy watermark has been compacted away, re-listing")
+		case errors.Is(err, errResetRequested):
+			r.log.Info("cloud disowned the deploy watermark mid-stream, re-listing")
+		default:
 			r.log.Warn("deploy stream ended, waiting for the next connection", "error", err)
 			return
 		}
-
-		r.log.Info("deploy watermark has been compacted away, re-listing")
 	} else {
 		r.log.Info("re-listing deploys for cloud", "reason", reason,
 			"watermark", watermark, "head", head)
@@ -524,11 +640,35 @@ func (r *deployReporter) requestCursor(ctx context.Context, link deployLink) (in
 // Returns nil when the connection ends, and an error when the stream must fall
 // back to a re-list.
 func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head int64, ids *shortIDs) error {
+	// The watch runs under a context this reporter can cancel, so a reset can
+	// end a stream that is parked between deploys rather than waiting for one.
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	r.setStreamCancel(cancel)
+	defer r.setStreamCancel(nil)
+
+	// A reset that landed between the caller's check and the registration
+	// above found no stream to cancel, and a parked watch would never notice
+	// it. Checked here, after the cancel is visible, so that window is closed.
+	if r.resetPending() {
+		return errResetRequested
+	}
+
 	sent := from
 
-	return r.source.Watch(ctx, from, func(op *esv1.EntityOp) error {
+	err := r.source.Watch(watchCtx, from, func(op *esv1.EntityOp) error {
 		if op.IsCompacted() {
 			return errCompacted
+		}
+
+		// The callback fires as the cluster produces deploys, which is exactly
+		// when a stream is advancing cloud's watermark past the position a
+		// reset was trying to clear, so a busy cluster stops here on its next
+		// event. A parked one never reaches this at all, and is woken by the
+		// cancellation above instead.
+		if r.resetPending() {
+			return errResetRequested
 		}
 
 		revision := op.Revision()
@@ -578,6 +718,17 @@ func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head
 		sent = revision
 		return nil
 	})
+
+	// A watch cancelled by a reset is indistinguishable from any other
+	// cancellation at this point, and the pending flag is what tells them
+	// apart. No parent-context guard is needed: nothing is consumed here, so a
+	// connection going away mid-answer leaves the request standing for the
+	// next one rather than losing it.
+	if err != nil && !errors.Is(err, errResetRequested) && r.resetPending() {
+		return errResetRequested
+	}
+
+	return err
 }
 
 // relist re-sends every deploy the runtime holds, oldest first, then continues
@@ -590,6 +741,10 @@ func (r *deployReporter) stream(ctx context.Context, link deployLink, from, head
 // resume: whatever ranges committed stay committed, and the next connection
 // picks up from the watermark they left behind.
 func (r *deployReporter) relist(ctx context.Context, link deployLink, head int64, ids *shortIDs) {
+	// The single place a pending reset is cleared, because this is the single
+	// place its request is carried out.
+	r.takeReset()
+
 	records, readRevision, err := r.source.List(ctx)
 	if err != nil {
 		r.log.Warn("failed to list deploys for cloud", "error", err)
