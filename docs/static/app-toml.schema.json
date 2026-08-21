@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miren.md/app-toml.schema.json",
+  "title": "Miren app.toml",
+  "description": "Configuration for a Miren application. Save this file as .miren/app.toml.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {"type": "string", "description": "Application name. Inferred from the directory name when omitted."},
+    "include": {"type": "array", "description": "Extra files or directories to include in the build context.", "items": {"type": "string"}, "uniqueItems": true},
+    "concurrency": {"type": "integer", "description": "Legacy global concurrency target. Prefer per-service concurrency.", "minimum": 0, "deprecated": true},
+    "workload_role": {"type": "string", "description": "App-scoped role used for in-cluster API access.", "default": "app-readonly"},
+    "web": {"type": "boolean", "description": "Whether Miren may synthesize a long-running web service when none is declared."},
+    "env": {"type": "array", "description": "Environment variables available to every service.", "items": {"$ref": "#/$defs/env"}},
+    "build": {"$ref": "#/$defs/build"},
+    "services": {"type": "object", "description": "Long-running processes keyed by service name.", "additionalProperties": {"$ref": "#/$defs/service"}},
+    "tasks": {"type": "object", "description": "Invocable commands keyed by task name.", "additionalProperties": {"$ref": "#/$defs/task"}},
+    "addons": {"type": "object", "description": "Managed backing services keyed by addon name.", "additionalProperties": {"$ref": "#/$defs/addon"}},
+    "aliases": {"type": "object", "description": "CLI aliases. Each value is a Miren command without the leading `miren`.", "propertyNames": {"pattern": "^[a-z][a-z0-9_-]*( [a-z][a-z0-9_-]*)*$"}, "additionalProperties": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "duration": {"type": "string", "description": "A Go duration using h, m, and s units.", "pattern": "^(?:0|(?:[0-9]+(?:\\.[0-9]+)?(?:h|m|s))+)$"},
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1, "description": "Environment variable name."},
+        "value": {"type": "string", "default": ""},
+        "backend": {"type": "string", "description": "Secret backend from which to resolve the value."},
+        "ref": {"type": "string", "description": "Reference within the secret backend."},
+        "required": {"type": "boolean", "default": false},
+        "sensitive": {"type": "boolean", "default": false},
+        "description": {"type": "string"}
+      },
+      "allOf": [
+        {"if": {"required": ["ref"]}, "then": {"required": ["backend"], "properties": {"backend": {"minLength": 1}}, "not": {"required": ["value"]}}}
+      ]
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {"type": "string", "description": "Language or runtime version."},
+        "dockerfile": {"type": "string", "description": "Path to a custom Dockerfile."},
+        "onbuild": {"type": "array", "description": "Commands run in /app after the main build steps.", "items": {"type": "string"}},
+        "alpine_image": {"type": "string", "description": "Custom Alpine base image for the runtime stage."}
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port", "name"],
+      "properties": {
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "name": {"type": "string", "minLength": 1},
+        "type": {"type": "string", "enum": ["http", "tcp", "udp"], "default": "http"},
+        "node_port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"type": "string", "enum": ["auto", "fixed"]},
+        "requests_per_instance": {"type": "integer", "minimum": 0},
+        "scale_down_delay": {"$ref": "#/$defs/duration"},
+        "num_instances": {"type": "integer", "minimum": 1},
+        "shutdown_timeout": {"$ref": "#/$defs/duration"}
+      },
+      "allOf": [
+        {"if": {"properties": {"mode": {"const": "auto"}}, "required": ["mode"]}, "then": {"not": {"required": ["num_instances"]}}},
+        {"if": {"properties": {"mode": {"const": "fixed"}}, "required": ["mode"]}, "then": {"not": {"anyOf": [{"required": ["requests_per_instance"]}, {"required": ["scale_down_delay"]}]}}}
+      ]
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "mount_path"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "provider": {"type": "string", "enum": ["miren", "local"], "default": "miren"},
+        "mount_path": {"type": "string", "minLength": 1},
+        "read_only": {"type": "boolean", "default": false},
+        "size_gb": {"type": "integer", "minimum": 0},
+        "filesystem": {"type": "string", "enum": ["ext4", "xfs", "btrfs"], "default": "ext4"},
+        "lease_timeout": {"$ref": "#/$defs/duration"},
+        "owner": {"type": "string", "pattern": "^(?:keep|[0-9]+(?::[0-9]+)?)?$"}
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "port_name": {"type": "string"},
+        "port_type": {"type": "string", "enum": ["http", "tcp"]},
+        "ports": {"type": "array", "items": {"$ref": "#/$defs/port"}},
+        "port_timeout": {"$ref": "#/$defs/duration"},
+        "image": {"type": "string"},
+        "env": {"type": "array", "items": {"$ref": "#/$defs/env"}},
+        "concurrency": {"$ref": "#/$defs/concurrency"},
+        "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}}
+      },
+      "allOf": [
+        {"if": {"required": ["ports"]}, "then": {"not": {"anyOf": [{"required": ["port"]}, {"required": ["port_name"]}, {"required": ["port_type"]}]}}}
+      ]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "trigger": {"type": "string", "enum": ["manual", "deploy", "schedule"], "default": "manual"},
+        "every": {"$ref": "#/$defs/duration"},
+        "schedule": {"type": "string", "minLength": 1},
+        "timeout": {"$ref": "#/$defs/duration"},
+        "retries": {"type": "integer", "minimum": 0, "default": 0},
+        "max_concurrent": {"type": "integer", "minimum": 1, "default": 1},
+        "env": {"type": "array", "items": {"$ref": "#/$defs/env"}}
+      },
+      "allOf": [
+        {"not": {"required": ["every", "schedule"]}},
+        {"if": {"properties": {"trigger": {"const": "schedule"}}, "required": ["trigger"]}, "then": {"oneOf": [{"required": ["every"]}, {"required": ["schedule"]}]}, "else": {"not": {"anyOf": [{"required": ["every"]}, {"required": ["schedule"]}]}}},
+        {"if": {"properties": {"trigger": {"const": "manual"}}, "required": ["trigger"]}, "then": {"not": {"required": ["retries"]}}}
+      ]
+    },
+    "addon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variant": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    }
+  }
+}
