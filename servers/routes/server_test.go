@@ -86,6 +86,48 @@ func TestSetMaintenanceKeepsTheOriginalStartOnRepeat(t *testing.T) {
 	assert.Equal(t, backAt, second.BackAt())
 }
 
+// TestSetMaintenanceKeepsTheFirstOpenerUnderInterleaving covers two operators
+// opening a window at the same moment.
+//
+// Both read the route while it is still serving, so both believe they are the
+// first and both carry a fresh stamp. One write lands; the other must notice
+// the route is now in maintenance and keep the first operator's stamp rather
+// than its own. The stale route value below is exactly what the losing caller
+// holds: a snapshot taken before the other write landed.
+func TestSetMaintenanceKeepsTheFirstOpenerUnderInterleaving(t *testing.T) {
+	_, ic := newTestServer(t)
+
+	ctx := context.Background()
+
+	stale, err := ic.Lookup(ctx, testHost)
+	require.NoError(t, err)
+	require.True(t, stale.Maintenance.Empty(), "both callers start from a serving route")
+
+	_, err = ic.SetRouteMaintenance(ctx, stale,
+		"first operator's window", "", "2026-08-12T10:00:00Z", "evan@miren.dev")
+	require.NoError(t, err)
+
+	// The second caller writes from its pre-existing snapshot, still showing an
+	// empty component, and proposes its own stamp.
+	second, err := ic.SetRouteMaintenance(ctx, stale,
+		"second operator's window", "", "2026-08-12T10:00:05Z", "someone-else@miren.dev")
+	require.NoError(t, err)
+
+	assert.Equal(t, "evan@miren.dev", second.Maintenance.StartedBy,
+		"the window belongs to whoever opened it, not to whoever wrote last")
+	assert.Equal(t, "2026-08-12T10:00:00Z", second.Maintenance.StartedAt,
+		"the clock started when the first write landed")
+
+	// The reason is not part of the preservation: a later call is how an
+	// operator revises it, so the newest one wins.
+	assert.Equal(t, "second operator's window", second.Maintenance.Reason)
+
+	stored, err := ic.Lookup(ctx, testHost)
+	require.NoError(t, err)
+	assert.Equal(t, "evan@miren.dev", stored.Maintenance.StartedBy)
+	assert.Equal(t, "2026-08-12T10:00:00Z", stored.Maintenance.StartedAt)
+}
+
 func TestSetMaintenanceStampsAfreshAfterClearing(t *testing.T) {
 	client, _ := newTestServer(t)
 

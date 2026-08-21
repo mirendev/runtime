@@ -51,25 +51,19 @@ func (s *Server) SetMaintenance(ctx context.Context, state *ingress_v1alpha.Rout
 		return err
 	}
 
-	maint := ingress_v1alpha.Maintenance{
-		Reason:    args.Reason(),
-		BackAt:    backAt,
-		StartedAt: route.Maintenance.StartedAt,
-		StartedBy: route.Maintenance.StartedBy,
-	}
-
-	// A repeat call is how an operator revises the reason or pushes out the
-	// estimate mid-window. Restamping the start would then misreport how long
-	// traffic has actually been held, which is the one number worth having
-	// afterwards, so only a route that was serving gets a fresh stamp.
-	if route.Maintenance.Empty() {
-		maint.StartedAt = time.Now().UTC().Format(time.RFC3339)
-		maint.StartedBy = operatorIdentity(ctx)
-	}
-
-	if _, err := s.IC.SetRouteMaintenance(ctx, route, maint); err != nil {
+	// These two are a proposal, not a decision. Whether they get recorded
+	// depends on the route's state at the moment of the write, which only the
+	// mutation can see: a repeat call mid-window has to leave the original
+	// opener and start time alone, or the record stops answering the one
+	// question worth asking afterwards, which is how long traffic was held.
+	updated, err := s.IC.SetRouteMaintenance(ctx, route,
+		args.Reason(), backAt,
+		time.Now().UTC().Format(time.RFC3339), operatorIdentity(ctx))
+	if err != nil {
 		return fmt.Errorf("failed to put route into maintenance: %w", err)
 	}
+
+	maint := updated.Maintenance
 
 	s.Log.Info("route entered maintenance",
 		"route", label, "reason", maint.Reason, "back_at", maint.BackAt, "by", maint.StartedBy)

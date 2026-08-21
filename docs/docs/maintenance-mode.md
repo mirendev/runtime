@@ -48,13 +48,19 @@ miren route down app.example.com --reason "DB migration" --back-at 2027-03-04T15
 
 A bare clock time is read in your own timezone, and one that has already passed resolves to tomorrow, so `--back-at 09:00` at 3pm means 9am the next morning. An absolute timestamp has to be in the future; the server refuses one that has already passed rather than putting a stale estimate on the holding page.
 
+:::warning[`--back-at` is a promise to visitors, not a timer]
+It tells people when you expect to be back. It does not bring the route back. The route stays in maintenance until you run `miren route up`, however long that takes.
+
+If the window runs past your estimate, the `Retry-After` header stops being sent, but the page keeps showing the time you gave. That is deliberate: a page still naming a time that has passed reads as overdue, which is the truth, where a page quietly dropping the estimate would read as if nothing were wrong.
+:::
+
 ## What clients see
 
 Visitors get **HTTP 503 Service Unavailable**. This is the right status for deliberate, temporary downtime, and it's the one search crawlers and uptime monitors already know how to read — a maintenance window served as a 500, or as a 200 with an apology, is how sites lose ranking and how on-call gets paged for a planned event.
 
 Alongside it:
 
-- `Retry-After`, when you gave a `--back-at`. Monitors and crawlers use it to decide when to come back.
+- `Retry-After`, when you gave a `--back-at` that is still in the future. Monitors and crawlers use it to decide when to come back.
 - `Cache-Control: no-store`, so no browser or CDN holds the holding page past the end of the window.
 
 Clients that ask for JSON get JSON rather than a web page, which keeps API consumers from having to parse HTML to find out what happened:
@@ -110,6 +116,8 @@ There's no way to browse the real app from behind the holding page yet. Bring th
 
 ## What's not covered
 
-Maintenance mode is HTTP-only. Background workers and scheduled jobs keep running — if you need those paused for a migration, stop them the way you normally would.
+:::warning[Background work keeps running]
+Maintenance mode only affects HTTP traffic. Background workers and scheduled jobs carry on, so a window opened for a migration does not stop them writing to the database you are migrating. Stop them the way you normally would.
+:::
 
 Custom holding-page HTML and scheduled windows (announce a future window, enter and leave automatically) aren't supported yet.

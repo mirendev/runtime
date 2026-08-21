@@ -43,6 +43,72 @@ func runMaintenance(t *testing.T, maint ingress_v1alpha.Maintenance, accept stri
 	return rec
 }
 
+// TestMaintenancePageNamesTheHostVisited pins the heading to the name the
+// visitor typed. The route's own host is the wrong source: a wildcard route
+// stores a pattern and the default route stores nothing, so both would put
+// something meaningless in front of a person.
+func TestMaintenancePageNamesTheHostVisited(t *testing.T) {
+	tests := []struct {
+		name      string
+		routeHost string
+		requested string
+		want      string
+	}{
+		{
+			name:      "plain route",
+			routeHost: "app.example.com",
+			requested: "http://app.example.com/",
+			want:      "app.example.com",
+		},
+		{
+			name:      "wildcard route names the concrete subdomain",
+			routeHost: "*.example.com",
+			requested: "http://shop.example.com/",
+			want:      "shop.example.com",
+		},
+		{
+			name:      "preview subdomain names itself",
+			routeHost: "app.example.com",
+			requested: "http://feat-x.app.example.com/",
+			want:      "feat-x.app.example.com",
+		},
+		{
+			name:      "default route has no host of its own",
+			routeHost: "",
+			requested: "http://anything.example.com/",
+			want:      "anything.example.com",
+		},
+		{
+			name:      "port is stripped",
+			routeHost: "app.example.com",
+			requested: "http://app.example.com:8443/",
+			want:      "app.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestMaintenanceServer()
+
+			route := &ingress_v1alpha.HttpRoute{
+				Host:        tt.routeHost,
+				Maintenance: ingress_v1alpha.Maintenance{Reason: "Upgrading the database"},
+			}
+
+			next := func(w http.ResponseWriter, r *http.Request) {
+				t.Fatal("request reached the app while the route was in maintenance")
+			}
+
+			rec := httptest.NewRecorder()
+			s.maintenanceMiddleware(route, nil, next)(rec, httptest.NewRequest("GET", tt.requested, nil))
+
+			body := rec.Body.String()
+			assert.Contains(t, body, tt.want+" is down for maintenance")
+			assert.NotContains(t, body, ":8443", "the port has no business on the page")
+		})
+	}
+}
+
 func TestMaintenanceMiddlewarePassesThroughWhenNotSet(t *testing.T) {
 	s := newTestMaintenanceServer()
 

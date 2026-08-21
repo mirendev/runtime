@@ -373,8 +373,31 @@ func (c *Client) DetachAuthProviderFromRoute(ctx context.Context, route *ingress
 
 // SetRouteMaintenance puts a route into maintenance. The router serves a
 // holding page for the route until the state is cleared.
-func (c *Client) SetRouteMaintenance(ctx context.Context, route *ingress_v1alpha.HttpRoute, m ingress_v1alpha.Maintenance) (*ingress_v1alpha.HttpRoute, error) {
+//
+// reason and backAt always take effect. startedAt and startedBy are a proposal:
+// they are recorded only if the route is not already in maintenance, so
+// revising the reason mid-window leaves the original opener and start time
+// alone.
+//
+// That decision happens here, inside the read-modify-write, rather than in the
+// caller. A caller deciding it from its own earlier read can be wrong by the
+// time the write lands: two operators opening a window at once would both see
+// "not in maintenance", and the second write would replace the first operator's
+// stamp with its own.
+func (c *Client) SetRouteMaintenance(ctx context.Context, route *ingress_v1alpha.HttpRoute, reason, backAt, startedAt, startedBy string) (*ingress_v1alpha.HttpRoute, error) {
 	return c.mutateAndReplaceRoute(ctx, route.EntityId(), func(r *ingress_v1alpha.HttpRoute) {
+		m := ingress_v1alpha.Maintenance{
+			Reason:    reason,
+			BackAt:    backAt,
+			StartedAt: startedAt,
+			StartedBy: startedBy,
+		}
+
+		if !r.Maintenance.Empty() {
+			m.StartedAt = r.Maintenance.StartedAt
+			m.StartedBy = r.Maintenance.StartedBy
+		}
+
 		r.Maintenance = m
 	})
 }

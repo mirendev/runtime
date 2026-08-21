@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,9 +37,11 @@ func (s *Server) maintenanceMiddleware(route *ingress_v1alpha.HttpRoute, appName
 }
 
 func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID entity.Id, appName *string, maint ingress_v1alpha.Maintenance) {
-	display := s.maintenanceAppName(r, appID)
+	// Metrics want the app; the visitor wants the site they opened. The app's
+	// name is an operator's identifier, so "payments-api is down" means nothing
+	// to someone who typed shop.example.com.
 	if appName != nil && *appName == "" {
-		*appName = display
+		*appName = s.maintenanceAppName(r, appID)
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -71,13 +74,13 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	w.WriteHeader(http.StatusServiceUnavailable)
 
 	data := struct {
-		AppName string
-		Reason  string
-		BackAt  string
+		Site   string
+		Reason string
+		BackAt string
 	}{
-		AppName: display,
-		Reason:  maint.Reason,
-		BackAt:  formatBackAt(maint.BackAt),
+		Site:   visitorHost(r),
+		Reason: maint.Reason,
+		BackAt: formatBackAt(maint.BackAt),
 	}
 
 	if err := maintenancePage.Execute(w, data); err != nil {
@@ -85,9 +88,26 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	}
 }
 
-// maintenanceAppName resolves the app's display name for the holding page. It
-// returns an empty string on any failure — the page renders without a name
-// rather than turning a planned outage into a 500.
+// visitorHost is the hostname the visitor actually opened, without its port.
+//
+// It reads the request rather than the route because the route's host can be a
+// pattern or nothing at all: a wildcard route stores "*.example.com" and the
+// default route stores no host, while the request always carries the concrete
+// name. That also makes preview subdomains name themselves correctly.
+func visitorHost(r *http.Request) string {
+	host := r.Host
+
+	if stripped, _, err := net.SplitHostPort(host); err == nil {
+		host = stripped
+	}
+
+	return host
+}
+
+// maintenanceAppName resolves the app's name for request metrics, so a window's
+// traffic stays attributed to the app instead of landing in "unknown". It
+// returns an empty string on any failure — a lookup problem must not turn a
+// planned outage into a 500.
 func (s *Server) maintenanceAppName(r *http.Request, appID entity.Id) string {
 	if entity.Empty(appID) {
 		return ""
@@ -218,7 +238,7 @@ var maintenancePage = template.Must(template.New("maintenance").Parse(`<!DOCTYPE
 </head>
 <body>
 <main>
-<h1>{{if .AppName}}{{.AppName}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
+<h1>{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
 {{if .Reason}}<p>{{.Reason}}</p>{{end}}
 {{if .BackAt}}<p class="muted">Expected back at {{.BackAt}}.</p>{{else}}<p class="muted">Please check back shortly.</p>{{end}}
 </main>

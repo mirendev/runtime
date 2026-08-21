@@ -46,6 +46,13 @@ func TestRouteMaintenance(t *testing.T) {
 		if !strings.Contains(body, "Upgrading the database") {
 			return false, "response does not carry the maintenance reason"
 		}
+		// The heading names the site the visitor opened, not the app behind it.
+		if !strings.Contains(body, host+" is down for maintenance") {
+			return false, "holding page does not name the host that was visited"
+		}
+		if strings.Contains(body, name+" is down") {
+			return false, "holding page leaks the internal app name"
+		}
 		return true, ""
 	})
 
