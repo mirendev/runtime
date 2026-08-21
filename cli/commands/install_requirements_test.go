@@ -1,10 +1,39 @@
 package commands
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestFindMissingCommands(t *testing.T) {
+	names := []string{"iptables", "nft"}
+
+	// lookupWith returns a fake exec.LookPath that resolves only the given
+	// commands and reports the rest as missing.
+	lookupWith := func(present ...string) func(string) (string, error) {
+		set := make(map[string]bool, len(present))
+		for _, p := range present {
+			set[p] = true
+		}
+		return func(name string) (string, error) {
+			if set[name] {
+				return "/usr/sbin/" + name, nil
+			}
+			return "", fmt.Errorf("not found")
+		}
+	}
+
+	assert.Empty(t, findMissingCommands(names, lookupWith("iptables", "nft")),
+		"all present should report nothing missing")
+
+	assert.Equal(t, []string{"nft"}, findMissingCommands(names, lookupWith("iptables")),
+		"only the unresolved command should be reported")
+
+	assert.Equal(t, []string{"iptables", "nft"}, findMissingCommands(names, lookupWith()),
+		"none present should report all, in input order")
+}
 
 func TestMeetsThreshold(t *testing.T) {
 	const gib = int64(1024 * 1024 * 1024)

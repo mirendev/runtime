@@ -17,6 +17,32 @@ Miren needs a Linux server with enough memory and disk space to run its componen
 | **Memory** | 4 GB | 8 GB |
 | **Storage** | 50 GB | 100 GB |
 
+## Required host commands
+
+Beyond hardware, Miren shells out to a couple of Linux networking tools that don't ship in the release bundle. They must be installed on any machine running a Miren server or runner:
+
+| Command | Package | Used for |
+|---------|---------|----------|
+| `iptables` | `iptables` | The network bridge and per-sandbox NAT rules |
+| `ip6tables` | `iptables` | The IPv6 bridge rules (ships with the `iptables` package) |
+| `nft` | `nftables` | Services and NodePorts |
+
+Install both with your package manager:
+
+```bash
+# Debian/Ubuntu
+sudo apt install iptables nftables
+
+# RHEL/Fedora
+sudo dnf install iptables nftables
+```
+
+`miren server install` and `miren runner install` verify these are present before installing, so a missing tool stops the install with instructions rather than surfacing later as a broken network.
+
+:::note[Extra tooling for optional features]
+Some features reach for more commands, installed automatically or only when you opt in. [Block-device volumes](/managing-disk-space) use disk tooling (`lbdctl`, `mkfs.*`, `blkid`) when a disk is provisioned, and on SELinux-enforcing hosts the installer uses `semanage` and `restorecon` to label the binary. Both paths degrade gracefully if the tools are absent, so you only need them if you use the corresponding feature.
+:::
+
 ## Why these numbers?
 
 ### Memory
