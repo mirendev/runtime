@@ -36,6 +36,7 @@ import (
 	"miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
+	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
@@ -63,6 +64,7 @@ import (
 	"miren.dev/runtime/pkg/addon/mysql"
 	"miren.dev/runtime/pkg/addon/postgresql"
 	"miren.dev/runtime/pkg/addon/rabbitmq"
+	addonsqlite "miren.dev/runtime/pkg/addon/sqlite"
 	"miren.dev/runtime/pkg/addon/valkey"
 	"miren.dev/runtime/pkg/anywhere"
 	"miren.dev/runtime/pkg/caauth"
@@ -94,6 +96,7 @@ import (
 	runnerserver "miren.dev/runtime/servers/runner"
 	"miren.dev/runtime/servers/runnertelemetry"
 	secretsrv "miren.dev/runtime/servers/secret"
+	sqlitebackupsrv "miren.dev/runtime/servers/sqlitebackup"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
 	"miren.dev/runtime/version"
 )
@@ -1122,6 +1125,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	addonRegistry.Register(valkey.AddonName, valkey.NewProvider(addonFw), valkey.Definition())
 	addonRegistry.Register(rabbitmq.AddonName, rabbitmq.NewProvider(addonFw), rabbitmq.Definition())
 	addonRegistry.Register(memcache.AddonName, memcache.NewProvider(addonFw), memcache.Definition())
+	addonRegistry.Register(addonsqlite.AddonName, addonsqlite.NewProvider(addonFw), addonsqlite.Definition())
 
 	if err := addonRegistry.EnsureEntities(ctx, ec); err != nil {
 		c.Log.Error("failed to ensure addon entities", "error", err)
@@ -1583,6 +1587,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		return err
 	}
 	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
+
+	sqliteBackupServer, err := sqlitebackupsrv.NewServer(c.Log, filepath.Join(c.DataPath, "sqlite-backups"))
+	if err != nil {
+		c.Log.Error("failed to create sqlite backup server", "error", err)
+		return err
+	}
+	server.ExposeValue(rpc.ServiceSqliteBackup, sqlitebackup_v1alpha.AdaptSqliteBackup(sqliteBackupServer))
 
 	// Create httpingress server for internal HTTP requests
 	ingressConfig := httpingress.IngressConfig{

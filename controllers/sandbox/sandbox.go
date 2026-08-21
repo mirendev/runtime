@@ -31,6 +31,7 @@ import (
 	"golang.org/x/sys/unix"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/components/netresolve"
+	"miren.dev/runtime/components/sqlitedisk"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
@@ -114,6 +115,10 @@ type SandboxControllerDeps struct {
 	// Hubs is the stdio fan-out registry shared with the runner's exec server.
 	// Optional; one is created if absent, which is what tests want.
 	Hubs *HubRegistry
+
+	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil
+	// disables replication; the disks still mount.
+	SqliteDisks *sqlitedisk.Manager
 }
 
 type SandboxController struct {
@@ -179,6 +184,10 @@ type SandboxController struct {
 	// exec server reads from the same registry, which is why it is shared
 	// rather than owned outright.
 	hubs *HubRegistry
+
+	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil is
+	// inert, so disks still mount when backups are unavailable.
+	SqliteDisks *sqlitedisk.Manager
 }
 
 // Hubs exposes the registry of attachable containers so the runner's exec
@@ -247,6 +256,7 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		ApiAddress:     cfg.ApiAddress,
 		CACert:         cfg.CACert,
 		Secrets:        cfg.Secrets,
+		SqliteDisks:    cfg.SqliteDisks,
 	}, nil
 }
 
@@ -481,6 +491,12 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 			unhealthySandboxes = append(unhealthySandboxes, sb.ID)
 		} else {
 			reattachedCount++
+
+			// Replication lives in the runner process, not the sandbox, so a
+			// runner restart leaves surviving sandboxes writing to databases
+			// nothing is backing up. Re-register them for the same reason the
+			// IPs below are re-registered: the sandbox outlived the state.
+			c.reregisterSqliteDisks(ctx, &sb)
 
 			// Re-register IPs for healthy surviving sandboxes to ensure netdb
 			// tracks them as reserved. This prevents duplicate IP allocation
@@ -1397,6 +1413,10 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 			// since the client's start deadline is only consulted between
 			// attempts and it is now inside a successful attach.
 			c.hubs.RemoveAll(co.ID)
+			// ConfigureVolumes registered any sqlite disks before the failure,
+			// and this path never reaches StopSandbox, so release them here or
+			// a crash-looping app accumulates a replicator per boot attempt.
+			c.releaseSqliteDisks(cleanupCtx, co.ID)
 		}
 	}()
 
@@ -2732,10 +2752,13 @@ func (c *SandboxController) buildSubContainerSpec(
 			Options:     []string{"rbind", "rw"},
 		})
 
-		// A miren-provider disk should be writable by the run user. Skip
-		// read-only mounts (chowning a read-only filesystem would fail) and
-		// non-disk providers, which manage their own ownership.
-		if v, ok := volByName[m.Source]; ok && (v.Provider == "miren" || v.Provider == "") && !v.ReadOnly {
+		// A miren- or sqlite-provider disk should be writable by the run user:
+		// both are created by the runner as root, and a sqlite disk in
+		// particular needs the directory writable so SQLite can manage its
+		// -wal and -shm sidecars. Skip read-only mounts (chowning a read-only
+		// filesystem would fail) and other providers, which manage their own
+		// ownership.
+		if v, ok := volByName[m.Source]; ok && (v.Provider == "miren" || v.Provider == "" || v.Provider == "sqlite") && !v.ReadOnly {
 			diskMounts = append(diskMounts, diskMount{hostPath: rawPath, owner: v.Owner})
 		}
 	}
@@ -3321,6 +3344,14 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		// Continue with cleanup even if this fails
 	}
 
+	// Stop replicating sqlite disks only once the containers are gone. Doing it
+	// alongside the lease release above would end replication while the app is
+	// still shutting down gracefully, so anything it wrote in that window —
+	// which is as long as the shutdown timeout — would never reach the
+	// coordinator. Registrations are refcounted by sandbox, so a replacement
+	// starting meanwhile simply becomes another owner rather than conflicting.
+	c.releaseSqliteDisks(ctx, id)
+
 	// Delete pause container
 	c.Log.Debug("deleting pause container", "id", id)
 	if container != nil {
@@ -3394,7 +3425,72 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	return nil
 }
 
-// releaseDiskLeases releases all disk leases owned by the given sandbox.
+// reregisterSqliteDisks restores replication for a sandbox that outlived the
+// runner process. It mirrors what configureSqliteVolume did when the sandbox
+// first started, minus creating anything: the directory and database are
+// already there.
+//
+// Failures are logged rather than returned. A sandbox whose database cannot be
+// re-registered is still running and still serving; losing its backups is bad,
+// but marking it unhealthy over it would be worse.
+func (c *SandboxController) reregisterSqliteDisks(ctx context.Context, sb *compute.Sandbox) {
+	if c.SqliteDisks == nil {
+		// Returning quietly would strand a sandbox that is still serving: it
+		// outlived the runner and is writing to a database this process has no
+		// way to replicate. Only say so when the sandbox actually has one,
+		// otherwise every restart logs for every sandbox on the node.
+		for _, volume := range sb.Spec.Volume {
+			if volume.Provider == "sqlite" {
+				c.Log.Error("sqlite disk left unreplicated after restart; backups are off for this runner",
+					"sandbox", sb.ID, "volume", volume.Name)
+			}
+		}
+		return
+	}
+
+	for _, volume := range sb.Spec.Volume {
+		if volume.Provider != "sqlite" {
+			continue
+		}
+
+		dir, dbFile, sqliteId, appKey, err := c.sqliteVolumeLayout(ctx, sb, volume)
+		if err != nil {
+			c.Log.Error("failed to resolve sqlite volume during boot reconciliation",
+				"sandbox", sb.ID, "volume", volume.Name, "error", err)
+			continue
+		}
+
+		key := sqlitedisk.BackupKey(appKey, sqliteId)
+		if err := c.SqliteDisks.Register(ctx, sb.ID.String(), key, filepath.Join(dir, dbFile)); err != nil {
+			c.Log.Error("failed to resume replicating sqlite disk after restart",
+				"sandbox", sb.ID, "volume", volume.Name, "error", err)
+			continue
+		}
+
+		c.Log.Info("resumed replicating sqlite disk after restart",
+			"sandbox", sb.ID, "volume", volume.Name, "key", key)
+	}
+}
+
+// releaseSqliteDisks stops replicating the sandbox's sqlite-provider disks,
+// flushing a final sync so the last transactions reach the coordinator before
+// the disk is handed to a replacement sandbox.
+//
+// Keys are looked up by sandbox id rather than re-derived from the spec: this
+// runs during cleanup, by which point the app version entity the key was built
+// from may already be deleted. Failures are logged rather than returned, since
+// giving up here would strand the rest of the teardown.
+func (c *SandboxController) releaseSqliteDisks(ctx context.Context, id entity.Id) {
+	if c.SqliteDisks == nil {
+		return
+	}
+
+	if err := c.SqliteDisks.DeregisterOwner(ctx, id.String()); err != nil {
+		c.Log.Error("failed to stop replicating sqlite disks", "sandbox", id, "error", err)
+	}
+}
+
+// ReleaseDiskLeases releases all disk leases owned by the given sandbox.
 // This transitions leases to RELEASED status, which triggers the disk lease
 // controller to unmount the volumes and release the underlying resources.
 func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
@@ -3477,6 +3573,10 @@ func (c *SandboxController) Periodic(ctx context.Context, timeHorizon time.Durat
 					c.Log.Error("failed to release disk leases during periodic cleanup", "id", sb.ID, "error", err)
 					continue
 				}
+
+				// Catches sqlite disks belonging to sandboxes that died without
+				// a graceful stop.
+				c.releaseSqliteDisks(ctx, sb.ID)
 
 				_, err := c.EAC.Delete(ctx, sb.ID.String())
 				if err != nil {

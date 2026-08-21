@@ -273,7 +273,7 @@ node_port = 7000
 
 ### `[[services.<name>.disks]]` — Persistent Disks {#disks}
 
-Attaches persistent storage to a service. See [Persistent Storage](/disks) for details on local storage vs. Miren Disks.
+Attaches persistent storage to a service. See [Persistent Storage](/disks) for local storage and Miren Disks. A SQLite database is not declared here: the [`miren-sqlite` addon](/addons#sqlite-is-different) attaches its own storage.
 
 ```toml
 # Local storage (simple, node-local)
@@ -288,6 +288,7 @@ name = "pgdata"
 mount_path = "/var/lib/postgresql/data"
 size_gb = 20
 filesystem = "ext4"
+
 ```
 
 | Field | Type | Description | Default |
@@ -304,7 +305,8 @@ filesystem = "ext4"
 :::note[Validation]
 - `name` and `mount_path` are required.
 - `provider` must be `"miren"` (default) or `"local"`.
-- For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative; services **must** use `mode = "fixed"` and `num_instances = 1`.
+- For miren disks: `filesystem` must be `ext4`, `xfs`, or `btrfs`; `size_gb` must be non-negative.
+- Miren disks require `mode = "fixed"` and `num_instances = 1`.
 - `lease_timeout` must be a valid Go duration (e.g. `"30s"`, `"2m"`).
 :::
 
@@ -435,6 +437,7 @@ version = "16"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `variant` | string | Addon variant (e.g. `small`, `shared`) | Addon's default variant |
+| `services` | list | Services the addon's storage attaches to. Empty means every service. Only meaningful for addons that supply storage, such as `miren-sqlite` | all services |
 | `version` | string | Software version tag, or a full image reference if it contains `:` | Addon's default version |
 
 Run `miren addon variants <addon-name>` to see available variants and `miren addon list-available` to see default versions.

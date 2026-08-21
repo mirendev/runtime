@@ -297,3 +297,84 @@ func TestResolveRuntimeConfigIsDeterministicAcrossAssociations(t *testing.T) {
 			"the same stored state must always resolve to the same value")
 	}
 }
+
+func addonDisk() addon_v1alpha.Disks {
+	return addon_v1alpha.Disks{
+		Name:                 "sqlite",
+		Provider:             "sqlite",
+		MountPath:            "/data",
+		DbFile:               "data.db",
+		RequiresSingleWriter: true,
+	}
+}
+
+func serviceNamed(name string) core_v1alpha.ConfigSpecServices {
+	return core_v1alpha.ConfigSpecServices{
+		Name: name,
+		Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{
+			Mode: "fixed", NumInstances: 1,
+		},
+	}
+}
+
+func TestAttachAddonDisksReachesEveryServiceByDefault(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{serviceNamed("web"), serviceNamed("worker")},
+	}
+
+	attachAddonDisks(spec, []addonBinding{{disks: []addon_v1alpha.Disks{addonDisk()}}})
+
+	for _, svc := range spec.Services {
+		require.Len(t, svc.Disks, 1, "service %q", svc.Name)
+		require.Equal(t, "sqlite", svc.Disks[0].Name)
+		require.Equal(t, SourceAddon, svc.Disks[0].Source)
+		require.Equal(t, core_v1alpha.ConfigSpecServicesDisksSQLITE, svc.Disks[0].Provider)
+		require.Equal(t, "/data", svc.Disks[0].MountPath)
+		require.Equal(t, "data.db", svc.Disks[0].DbFile)
+	}
+}
+
+// The scoping knob is what lets an app run a worker at more than one instance
+// while a single-writer database is attached elsewhere.
+func TestAttachAddonDisksHonorsServiceSelection(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{
+		Services: []core_v1alpha.ConfigSpecServices{serviceNamed("web"), serviceNamed("worker")},
+	}
+
+	attachAddonDisks(spec, []addonBinding{{
+		disks:    []addon_v1alpha.Disks{addonDisk()},
+		services: []string{"web"},
+	}})
+
+	require.Len(t, spec.Services[0].Disks, 1, "web was selected")
+	require.Empty(t, spec.Services[1].Disks, "worker was not")
+}
+
+// Resolution runs on every read, so it has to be safe to repeat.
+func TestAttachAddonDisksIsIdempotent(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{serviceNamed("web")}}
+	binding := []addonBinding{{disks: []addon_v1alpha.Disks{addonDisk()}}}
+
+	attachAddonDisks(spec, binding)
+	attachAddonDisks(spec, binding)
+
+	require.Len(t, spec.Services[0].Disks, 1)
+	require.Equal(t, "/data", spec.Services[0].Disks[0].MountPath)
+}
+
+// A disk the user declared with the same name is left alone. Deploy-time
+// validation reports the conflict; a read path must not rewrite their config.
+func TestAttachAddonDisksLeavesUserDeclaredDiskAlone(t *testing.T) {
+	svc := serviceNamed("web")
+	svc.Disks = []core_v1alpha.ConfigSpecServicesDisks{{
+		Name:      "sqlite",
+		MountPath: "/somewhere-else",
+	}}
+	spec := &core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{svc}}
+
+	attachAddonDisks(spec, []addonBinding{{disks: []addon_v1alpha.Disks{addonDisk()}}})
+
+	require.Len(t, spec.Services[0].Disks, 1)
+	require.Equal(t, "/somewhere-else", spec.Services[0].Disks[0].MountPath)
+	require.NotEqual(t, SourceAddon, spec.Services[0].Disks[0].Source)
+}

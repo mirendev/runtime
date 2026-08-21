@@ -59,6 +59,34 @@ kinds:
           type: string
         sensitive:
           type: bool
+    # Storage an InApp addon supplies, held here for the same reason variables
+    # are: the binding follows the app rather than a version, so it survives
+    # deploys and rollbacks of versions that were built without it.
+    # ResolveRuntimeConfig reads these and attaches them to the app's services.
+    disks:
+      type: component
+      many: true
+      attrs:
+        name:
+          type: string
+          doc: Disk name within a service's spec
+        provider:
+          type: string
+          doc: Volume provider (see controllers/sandbox/volume.go)
+        mount_path:
+          type: string
+          doc: Where the disk appears inside the container
+        db_file:
+          type: string
+          doc: Database filename within the mounted directory, for providers that manage one
+        requires_single_writer:
+          type: bool
+          doc: Storage only one process may write, so a receiving service must run a single fixed instance
+    # Services the addon's disks attach to. Empty means every service, matching
+    # how addon variables reach every service.
+    services:
+      type: string
+      many: true
 
   # rotation_request drives a one-shot credential rotation for the addon server
   # backing an association. The RPC creates one with status "pending"; the

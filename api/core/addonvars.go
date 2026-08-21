@@ -63,6 +63,13 @@ func ResolveRuntimeConfig(
 		return spec, nil
 	}
 
+	attachAddonDisks(spec, bindings)
+
+	var boundVars []addon_v1alpha.Variables
+	for _, b := range bindings {
+		boundVars = append(boundVars, b.vars...)
+	}
+
 	// Only operator-set keys block a binding. An app.toml declaration does not,
 	// because blocking it would hand the app a placeholder instead of a credential.
 	kept := make([]core_v1alpha.ConfigSpecVariables, 0, len(spec.Variables)+len(bindings))
@@ -77,7 +84,7 @@ func ResolveRuntimeConfig(
 		}
 	}
 
-	for _, b := range bindings {
+	for _, b := range boundVars {
 		if _, ok := blocked[b.Key]; ok {
 			continue
 		}
@@ -103,6 +110,79 @@ func ResolveRuntimeConfig(
 
 	spec.Variables = kept
 	return spec, nil
+}
+
+// attachAddonDisks adds the storage an app's addons supply to its services.
+//
+// Storage resolves here for the same reason variables do: it belongs to the app,
+// not to a version. Writing it into a ConfigVersion at provision time would mean
+// any version built afterwards, from an app.toml that never mentions it, comes
+// back without the disk and the app starts with no database (MIR-1579 for
+// variables; the same shape for storage).
+//
+// A disk the user declared with the same name is left alone. Deploy-time
+// validation reports that conflict, which is a better place to surface it than
+// a read path the launcher depends on.
+func attachAddonDisks(spec *core_v1alpha.ConfigSpec, bindings []addonBinding) {
+	for _, b := range bindings {
+		for _, d := range b.disks {
+			for i := range spec.Services {
+				if !diskServiceSelected(b.services, spec.Services[i].Name) {
+					continue
+				}
+				spec.Services[i].Disks = upsertAddonDisk(spec.Services[i].Disks, d)
+			}
+		}
+	}
+}
+
+// diskServiceSelected reports whether an addon's storage reaches a service. An
+// empty selection means every service, matching how addon variables reach
+// every service in the app.
+func diskServiceSelected(services []string, name string) bool {
+	if len(services) == 0 {
+		return true
+	}
+	for _, s := range services {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertAddonDisk(disks []core_v1alpha.ConfigSpecServicesDisks, d addon_v1alpha.Disks) []core_v1alpha.ConfigSpecServicesDisks {
+	attached := core_v1alpha.ConfigSpecServicesDisks{
+		Name:      d.Name,
+		Provider:  diskProviderFromString(d.Provider),
+		MountPath: d.MountPath,
+		DbFile:    d.DbFile,
+		Source:    SourceAddon,
+	}
+
+	for i, existing := range disks {
+		if existing.Name != d.Name {
+			continue
+		}
+		if existing.Source != SourceAddon {
+			return disks // user-declared wins; the deploy check reports it
+		}
+		disks[i] = attached
+		return disks
+	}
+
+	return append(disks, attached)
+}
+
+func diskProviderFromString(provider string) core_v1alpha.ConfigSpecServicesDisksProvider {
+	switch provider {
+	case "local":
+		return core_v1alpha.ConfigSpecServicesDisksLOCAL
+	case "sqlite":
+		return core_v1alpha.ConfigSpecServicesDisksSQLITE
+	default:
+		return core_v1alpha.ConfigSpecServicesDisksMIREN
+	}
 }
 
 // operatorOwned reports whether a person set this value, in which case an addon
@@ -138,22 +218,26 @@ func hasAddonVars(vars []core_v1alpha.ConfigSpecVariables) bool {
 // addonsReady). A deprovisioning one is being torn down, so serving its
 // credentials would point the app at a database that is about to disappear. An
 // "error" one never finished provisioning, so its values were never known good.
+// addonBinding is one association's contribution: the variables it supplies,
+// any storage it attaches, and which services that storage goes to.
+type addonBinding struct {
+	assoc    entity.Id
+	vars     []addon_v1alpha.Variables
+	disks    []addon_v1alpha.Disks
+	services []string
+}
+
 func addonBindings(
 	ctx context.Context,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	appID entity.Id,
-) ([]addon_v1alpha.Variables, error) {
+) ([]addonBinding, error) {
 	results, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
 	if err != nil {
 		return nil, fmt.Errorf("listing addon associations for %s: %w", appID, err)
 	}
 
-	type contribution struct {
-		assoc entity.Id
-		vars  []addon_v1alpha.Variables
-	}
-
-	var found []contribution
+	var found []addonBinding
 	for _, ent := range results.Values() {
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
@@ -161,7 +245,12 @@ func addonBindings(
 		if assoc.Status != "active" {
 			continue
 		}
-		found = append(found, contribution{assoc: assoc.ID, vars: assoc.Variables})
+		found = append(found, addonBinding{
+			assoc:    assoc.ID,
+			vars:     assoc.Variables,
+			disks:    assoc.Disks,
+			services: assoc.Services,
+		})
 	}
 
 	// The first contributor to supply a key wins, so sort by association id to make
@@ -170,9 +259,5 @@ func addonBindings(
 	// rename at provision time, but it is reachable.
 	sort.Slice(found, func(i, j int) bool { return found[i].assoc < found[j].assoc })
 
-	var out []addon_v1alpha.Variables
-	for _, f := range found {
-		out = append(out, f.vars...)
-	}
-	return out, nil
+	return found, nil
 }

@@ -352,19 +352,24 @@ func (o *ConfigSpecServicesConcurrency) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	ConfigSpecServicesDisksFilesystemId    = entity.Id("dev.miren.core/component.config_spec.services.disks.filesystem")
-	ConfigSpecServicesDisksLeaseTimeoutId  = entity.Id("dev.miren.core/component.config_spec.services.disks.lease_timeout")
-	ConfigSpecServicesDisksMountPathId     = entity.Id("dev.miren.core/component.config_spec.services.disks.mount_path")
-	ConfigSpecServicesDisksNameId          = entity.Id("dev.miren.core/component.config_spec.services.disks.name")
-	ConfigSpecServicesDisksOwnerId         = entity.Id("dev.miren.core/component.config_spec.services.disks.owner")
-	ConfigSpecServicesDisksProviderId      = entity.Id("dev.miren.core/component.config_spec.services.disks.provider")
-	ConfigSpecServicesDisksProviderMirenId = entity.Id("dev.miren.core/component.config_spec.services.disks.provider.miren")
-	ConfigSpecServicesDisksProviderLocalId = entity.Id("dev.miren.core/component.config_spec.services.disks.provider.local")
-	ConfigSpecServicesDisksReadOnlyId      = entity.Id("dev.miren.core/component.config_spec.services.disks.read_only")
-	ConfigSpecServicesDisksSizeGbId        = entity.Id("dev.miren.core/component.config_spec.services.disks.size_gb")
+	ConfigSpecServicesDisksDbFileId         = entity.Id("dev.miren.core/component.config_spec.services.disks.db_file")
+	ConfigSpecServicesDisksFilesystemId     = entity.Id("dev.miren.core/component.config_spec.services.disks.filesystem")
+	ConfigSpecServicesDisksLeaseTimeoutId   = entity.Id("dev.miren.core/component.config_spec.services.disks.lease_timeout")
+	ConfigSpecServicesDisksMountPathId      = entity.Id("dev.miren.core/component.config_spec.services.disks.mount_path")
+	ConfigSpecServicesDisksNameId           = entity.Id("dev.miren.core/component.config_spec.services.disks.name")
+	ConfigSpecServicesDisksOwnerId          = entity.Id("dev.miren.core/component.config_spec.services.disks.owner")
+	ConfigSpecServicesDisksProviderId       = entity.Id("dev.miren.core/component.config_spec.services.disks.provider")
+	ConfigSpecServicesDisksProviderMirenId  = entity.Id("dev.miren.core/component.config_spec.services.disks.provider.miren")
+	ConfigSpecServicesDisksProviderLocalId  = entity.Id("dev.miren.core/component.config_spec.services.disks.provider.local")
+	ConfigSpecServicesDisksProviderSqliteId = entity.Id("dev.miren.core/component.config_spec.services.disks.provider.sqlite")
+	ConfigSpecServicesDisksReadOnlyId       = entity.Id("dev.miren.core/component.config_spec.services.disks.read_only")
+	ConfigSpecServicesDisksSizeGbId         = entity.Id("dev.miren.core/component.config_spec.services.disks.size_gb")
+	ConfigSpecServicesDisksSourceId         = entity.Id("dev.miren.core/component.config_spec.services.disks.source")
+	ConfigSpecServicesDisksSqliteIdId       = entity.Id("dev.miren.core/component.config_spec.services.disks.sqlite_id")
 )
 
 type ConfigSpecServicesDisks struct {
+	DbFile       string                          `cbor:"db_file,omitempty" json:"db_file,omitempty"`
 	Filesystem   string                          `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
 	LeaseTimeout string                          `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
 	MountPath    string                          `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
@@ -373,19 +378,25 @@ type ConfigSpecServicesDisks struct {
 	Provider     ConfigSpecServicesDisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
 	ReadOnly     bool                            `cbor:"read_only,omitempty" json:"read_only,omitempty"`
 	SizeGb       int64                           `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string                          `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string                          `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
 type ConfigSpecServicesDisksProvider string
 
 const (
-	ConfigSpecServicesDisksMIREN ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.miren"
-	ConfigSpecServicesDisksLOCAL ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.local"
+	ConfigSpecServicesDisksMIREN  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.miren"
+	ConfigSpecServicesDisksLOCAL  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.local"
+	ConfigSpecServicesDisksSQLITE ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.sqlite"
 )
 
-var ConfigSpecServicesDisksproviderFromId = map[entity.Id]ConfigSpecServicesDisksProvider{ConfigSpecServicesDisksProviderMirenId: ConfigSpecServicesDisksMIREN, ConfigSpecServicesDisksProviderLocalId: ConfigSpecServicesDisksLOCAL}
-var ConfigSpecServicesDisksproviderToId = map[ConfigSpecServicesDisksProvider]entity.Id{ConfigSpecServicesDisksMIREN: ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksLOCAL: ConfigSpecServicesDisksProviderLocalId}
+var ConfigSpecServicesDisksproviderFromId = map[entity.Id]ConfigSpecServicesDisksProvider{ConfigSpecServicesDisksProviderMirenId: ConfigSpecServicesDisksMIREN, ConfigSpecServicesDisksProviderLocalId: ConfigSpecServicesDisksLOCAL, ConfigSpecServicesDisksProviderSqliteId: ConfigSpecServicesDisksSQLITE}
+var ConfigSpecServicesDisksproviderToId = map[ConfigSpecServicesDisksProvider]entity.Id{ConfigSpecServicesDisksMIREN: ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksLOCAL: ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksSQLITE: ConfigSpecServicesDisksProviderSqliteId}
 
 func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(ConfigSpecServicesDisksDbFileId); ok && a.Value.Kind() == entity.KindString {
+		o.DbFile = a.Value.String()
+	}
 	if a, ok := e.Get(ConfigSpecServicesDisksFilesystemId); ok && a.Value.Kind() == entity.KindString {
 		o.Filesystem = a.Value.String()
 	}
@@ -410,9 +421,18 @@ func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesDisksSizeGbId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.SizeGb = a.Value.Int64()
 	}
+	if a, ok := e.Get(ConfigSpecServicesDisksSourceId); ok && a.Value.Kind() == entity.KindString {
+		o.Source = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecServicesDisksSqliteIdId); ok && a.Value.Kind() == entity.KindString {
+		o.SqliteId = a.Value.String()
+	}
 }
 
 func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.DbFile) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksDbFileId, o.DbFile))
+	}
 	if !entity.Empty(o.Filesystem) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesDisksFilesystemId, o.Filesystem))
 	}
@@ -435,10 +455,19 @@ func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.SizeGb) {
 		attrs = append(attrs, entity.Int64(ConfigSpecServicesDisksSizeGbId, o.SizeGb))
 	}
+	if !entity.Empty(o.Source) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksSourceId, o.Source))
+	}
+	if !entity.Empty(o.SqliteId) {
+		attrs = append(attrs, entity.String(ConfigSpecServicesDisksSqliteIdId, o.SqliteId))
+	}
 	return
 }
 
 func (o *ConfigSpecServicesDisks) Empty() bool {
+	if !entity.Empty(o.DbFile) {
+		return false
+	}
 	if !entity.Empty(o.Filesystem) {
 		return false
 	}
@@ -463,10 +492,17 @@ func (o *ConfigSpecServicesDisks) Empty() bool {
 	if !entity.Empty(o.SizeGb) {
 		return false
 	}
+	if !entity.Empty(o.Source) {
+		return false
+	}
+	if !entity.Empty(o.SqliteId) {
+		return false
+	}
 	return true
 }
 
 func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("db_file", "dev.miren.core/component.config_spec.services.disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/component.config_spec.services.disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/component.config_spec.services.disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease"))
 	sb.String("mount_path", "dev.miren.core/component.config_spec.services.disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
@@ -474,9 +510,12 @@ func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("owner", "dev.miren.core/component.config_spec.services.disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
 	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.miren")
 	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.local")
-	sb.Ref("provider", "dev.miren.core/component.config_spec.services.disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"), schema.Choices(ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksProviderLocalId))
+	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.sqlite")
+	sb.Ref("provider", "dev.miren.core/component.config_spec.services.disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksProviderSqliteId))
 	sb.Bool("read_only", "dev.miren.core/component.config_spec.services.disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/component.config_spec.services.disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
+	sb.String("source", "dev.miren.core/component.config_spec.services.disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
+	sb.String("sqlite_id", "dev.miren.core/component.config_spec.services.disks.sqlite_id", schema.Doc("Identity of the database a sqlite disk attaches to, scoped to the app (defaults to \"default\")"))
 }
 
 const (
@@ -1559,19 +1598,24 @@ func (o *Services) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	DisksFilesystemId    = entity.Id("dev.miren.core/disks.filesystem")
-	DisksLeaseTimeoutId  = entity.Id("dev.miren.core/disks.lease_timeout")
-	DisksMountPathId     = entity.Id("dev.miren.core/disks.mount_path")
-	DisksNameId          = entity.Id("dev.miren.core/disks.name")
-	DisksOwnerId         = entity.Id("dev.miren.core/disks.owner")
-	DisksProviderId      = entity.Id("dev.miren.core/disks.provider")
-	DisksProviderMirenId = entity.Id("dev.miren.core/provider.miren")
-	DisksProviderLocalId = entity.Id("dev.miren.core/provider.local")
-	DisksReadOnlyId      = entity.Id("dev.miren.core/disks.read_only")
-	DisksSizeGbId        = entity.Id("dev.miren.core/disks.size_gb")
+	DisksDbFileId         = entity.Id("dev.miren.core/disks.db_file")
+	DisksFilesystemId     = entity.Id("dev.miren.core/disks.filesystem")
+	DisksLeaseTimeoutId   = entity.Id("dev.miren.core/disks.lease_timeout")
+	DisksMountPathId      = entity.Id("dev.miren.core/disks.mount_path")
+	DisksNameId           = entity.Id("dev.miren.core/disks.name")
+	DisksOwnerId          = entity.Id("dev.miren.core/disks.owner")
+	DisksProviderId       = entity.Id("dev.miren.core/disks.provider")
+	DisksProviderMirenId  = entity.Id("dev.miren.core/provider.miren")
+	DisksProviderLocalId  = entity.Id("dev.miren.core/provider.local")
+	DisksProviderSqliteId = entity.Id("dev.miren.core/provider.sqlite")
+	DisksReadOnlyId       = entity.Id("dev.miren.core/disks.read_only")
+	DisksSizeGbId         = entity.Id("dev.miren.core/disks.size_gb")
+	DisksSourceId         = entity.Id("dev.miren.core/disks.source")
+	DisksSqliteIdId       = entity.Id("dev.miren.core/disks.sqlite_id")
 )
 
 type Disks struct {
+	DbFile       string        `cbor:"db_file,omitempty" json:"db_file,omitempty"`
 	Filesystem   string        `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
 	LeaseTimeout string        `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
 	MountPath    string        `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
@@ -1580,19 +1624,25 @@ type Disks struct {
 	Provider     DisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
 	ReadOnly     bool          `cbor:"read_only,omitempty" json:"read_only,omitempty"`
 	SizeGb       int64         `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string        `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string        `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
 type DisksProvider string
 
 const (
-	MIREN DisksProvider = "provider.miren"
-	LOCAL DisksProvider = "provider.local"
+	MIREN  DisksProvider = "provider.miren"
+	LOCAL  DisksProvider = "provider.local"
+	SQLITE DisksProvider = "provider.sqlite"
 )
 
-var DisksproviderFromId = map[entity.Id]DisksProvider{DisksProviderMirenId: MIREN, DisksProviderLocalId: LOCAL}
-var DisksproviderToId = map[DisksProvider]entity.Id{MIREN: DisksProviderMirenId, LOCAL: DisksProviderLocalId}
+var DisksproviderFromId = map[entity.Id]DisksProvider{DisksProviderMirenId: MIREN, DisksProviderLocalId: LOCAL, DisksProviderSqliteId: SQLITE}
+var DisksproviderToId = map[DisksProvider]entity.Id{MIREN: DisksProviderMirenId, LOCAL: DisksProviderLocalId, SQLITE: DisksProviderSqliteId}
 
 func (o *Disks) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(DisksDbFileId); ok && a.Value.Kind() == entity.KindString {
+		o.DbFile = a.Value.String()
+	}
 	if a, ok := e.Get(DisksFilesystemId); ok && a.Value.Kind() == entity.KindString {
 		o.Filesystem = a.Value.String()
 	}
@@ -1617,9 +1667,18 @@ func (o *Disks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DisksSizeGbId); ok && a.Value.Kind() == entity.KindInt64 {
 		o.SizeGb = a.Value.Int64()
 	}
+	if a, ok := e.Get(DisksSourceId); ok && a.Value.Kind() == entity.KindString {
+		o.Source = a.Value.String()
+	}
+	if a, ok := e.Get(DisksSqliteIdId); ok && a.Value.Kind() == entity.KindString {
+		o.SqliteId = a.Value.String()
+	}
 }
 
 func (o *Disks) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.DbFile) {
+		attrs = append(attrs, entity.String(DisksDbFileId, o.DbFile))
+	}
 	if !entity.Empty(o.Filesystem) {
 		attrs = append(attrs, entity.String(DisksFilesystemId, o.Filesystem))
 	}
@@ -1642,10 +1701,19 @@ func (o *Disks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.SizeGb) {
 		attrs = append(attrs, entity.Int64(DisksSizeGbId, o.SizeGb))
 	}
+	if !entity.Empty(o.Source) {
+		attrs = append(attrs, entity.String(DisksSourceId, o.Source))
+	}
+	if !entity.Empty(o.SqliteId) {
+		attrs = append(attrs, entity.String(DisksSqliteIdId, o.SqliteId))
+	}
 	return
 }
 
 func (o *Disks) Empty() bool {
+	if !entity.Empty(o.DbFile) {
+		return false
+	}
 	if !entity.Empty(o.Filesystem) {
 		return false
 	}
@@ -1670,10 +1738,17 @@ func (o *Disks) Empty() bool {
 	if !entity.Empty(o.SizeGb) {
 		return false
 	}
+	if !entity.Empty(o.Source) {
+		return false
+	}
+	if !entity.Empty(o.SqliteId) {
+		return false
+	}
 	return true
 }
 
 func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("db_file", "dev.miren.core/disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease (e.g. 5m, 10m)"))
 	sb.String("mount_path", "dev.miren.core/disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
@@ -1681,9 +1756,12 @@ func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("owner", "dev.miren.core/disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
 	sb.Singleton("dev.miren.core/provider.miren")
 	sb.Singleton("dev.miren.core/provider.local")
-	sb.Ref("provider", "dev.miren.core/disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"), schema.Choices(DisksProviderMirenId, DisksProviderLocalId))
+	sb.Singleton("dev.miren.core/provider.sqlite")
+	sb.Ref("provider", "dev.miren.core/disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(DisksProviderMirenId, DisksProviderLocalId, DisksProviderSqliteId))
 	sb.Bool("read_only", "dev.miren.core/disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
+	sb.String("source", "dev.miren.core/disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
+	sb.String("sqlite_id", "dev.miren.core/disks.sqlite_id", schema.Doc("Identity of the database a sqlite disk attaches to, scoped to the app (defaults to \"default\")"))
 }
 
 const (
@@ -3303,5 +3381,5 @@ func init() {
 		(&Secret{}).InitSchema(sb)
 		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ɲ\xec8\xd1~\x8d\xff\a\x9a\xa1\x99\x1bp\xf7\xa5\x99\x9a\xa1\x03\xd8\x10\xc1\x86Gp\xa8\xec,[\xa7l\xcb-\xa9\xea\x9eÎ\x19\x02\x9e\x82{.\xab~=X\x13\xd6d9-˒방Д\x9f\xa6\xccT*S\xe5\xe7z =\f5܊\x9er\x18\x8a\x8aq\x80\v\x1dj\xf1\xe9\xebe\xe9\xfbSiA\xc6\xf1_\x8a\x86\xa3Z2\x8e\x9a\xee?\xe7\x9a\xf5\x84\x0e\b\xf4|\xa6\xd0\xd5\xe2\x8foN\xb4~\xfcҚ\xb8 \x95\xa47(o\xc0\x05e\x83\x1e\x17*\x93O#\x9ch\xbd\tA\a*)\xe9ʊ\rg\xdah\bT\xe6C|&\x001r\xf6\x00\x95T\xb4\x8d\xcd\xf8D_\f\x10\xbdf\xfc\xd21R\x97\x9cu\xa0H\xfbe\xd1\x04p\x16\x92ӡi\xccd\x9a\xdb+ҍ-\xe9FN{\u009f\xcai\xf1*2\x8e\xaba\xa9u\x17Pq\x90z鯨\x81\xaeKY\xfd߫)|5H_TW\xcea\x90\x8b\x1d`\xb80\xb6~\x06g$\xb2UĵJ\xa5\xce\xfd\xac\xc9\x1f?\x1b\x9a\xbe\xd9\t=\xff\x1bja*S\x16\xe0wj\xe0\x9f\v\x03\x14\xec\xf5\x00\\u\x01:\x99:v\xcb)+d-3\\\xd23\xb1\xa3\xc7bekӥ\a\xaf\x90E\x98\x84Su1\xb1Q\x9ci-EO\x06z\x06\xa1\xf9\xbdu9oފ\xfe\xeb{\xf4eM\x1b\v\xc3p\xa1\x87\xf6<\xa1}~\vMH\"\xafB\x81\x9cMz\xa2\xada\xb8\xf6\x97駼\x91\xee\n\xe2\x9fg\xad\x18V˭\x89\x8c*i\t\xafZz\x83u\x87\xb6\x99\xa9\x8fnmkG\x17\xde\xdb\x1e$\xa9\x89$ή\xb5){\xfb\x87\xe0\xdaX\x84\xa2#'\xe8Dݓ\xe1\xe9\xdfz\x85LɴB\xa0\xd2A\xdev\x00J\"\xe7\x1f\xbc\xc5_آ\x8bi\xc4\xf8\xcaY\x88դ\xd4\xca\xd50v쩇\xc1\xc8\xc5\xe3\xff\xa3Vs\x83\x94\xe5\xfb\xbb\x9aŻ\x9b\x18\x93p\x94n\xfa\xad\xcb\xe1u\xc0\xca\x11!\xf8\xca\xf1\xe2\x17`\x9c\xafl㜮\xb4\xabˎ5\x9a\xd5\x1f\xbc|\x06J\xd5]\x85\x04^\xd2Z\xa3xy\x8c\xf2\xb5\b\n\xeb\xc7\x0e$\xd4%\xd1[\xdc-J\xb0\xe8FVG'\xa1.OOzu\xfc\x82\t\x87N\xc8l\x80A\xce)\xb3\xf5\b\xb6\bæk\xc8\xf0\xb2)\x90B\xd2\x1e\x84$\xbdV\x95tΦq\x82\x06\xb9\n\xe0%\xf4\x84vz\xf1\xbd<\x86\t\xb3\xa4\ac6\xb0\xb1\x994\x1e\xf0\x00\x1cW\xd39\x9bzr=X\xb4\xd3SP\xd3{;\x01\x9c3^\xf6 \x04i\x8c\x95\xb3,\xc2\xcc\x12\x11Ɔʒ\x0eg\xa6\x85\xd1\xe5v\xd8\xe4\xddm6\xb1\x10)<\xf2\xb77!Mk\x11\nr\x95-\xd3f\xc0٤\xf1\x96lҞ8\x19*m\xfd\x9cM\x1a\xd3~k\x8b\xb6b}Oe\xa9\xbb\xf4\x98K\x84*0\xea7vP\x97\\?\xaeJ1\x1e\xb6\x18\x1c\x1e\x15eM\xb9\xd42\u07ba\x9c:\xa7O\x8cu\xc1\xc3\xc4Q\xfb\xdc\xd3\x04\xf8&(1\x8e\x9a\xc3\xc8\x04\x95\x8c\xeb\xde\x1f\xbc<\xc6\xc06\x92\xc3\x10-\xd16Ҕ\xc0T\xdfܢ\x9a\xccy:4\xa5\xe4\x00eK\x84\xde\xe2O\xd6\xc5\xc9\x16cC\xe5\x84\x1c\\.\x8f\xafǖ\b\xbd\\\xa0\x93x\xc8\xc56\xad`W^A9\x97XU#\x835{,\xe0#\x87\r\xb5\f\x853\xc1\xac\xe6mo\x98\xf6P5b\x1f\xb8\xa7\xd9\x16)\xe2\xfe\x8f\xe0\x19\xe8\x81\x14\xa4\xee\xe9PJv\x01{\xb0{\x05{\xb2\xbf\x00\xda2\xc0\xbf\x1c#2\x06\xa61Llΐ?o\\v\x1d\xb9w\xd9={\x97܈\x1aEh\xc5\x1a-eY\xff\xfc6\xb4\x1a\x9a^i\x1d2Ծ\xbdں\xb2\x9dί;<\a\x9f~\xe7Ŭf\x11,\x94\xd6H6\xb3g\x1c;j\x01\xfcF+\xa3\xcfl&U\x14܊\x04\xc5\xcdL\x15\x06ɟFF\a\xcd\x1f\x0f^\x1e\x8f\x12ˉA\x18\x19\x97\xe6>>\xa5&\xaa\x8a\x0e2\xb6}f&\x8b\xedse\xf7o\x9f\x85J:\xac\xd58\xdfY\xb9\x1a4BQSq\xf1\x87\t\xba`g\x8c\x1f\xa4\x8fQ\xf7\x902ҿ\x86u\xf9D^\x9ci\a\xe2IH\xe8\xf5.z\xf9]{Q\x01t@\x04\xa8\xf3\x9a]\xf5n\xf6ˢ=\x96\xd50=\xbb\x0e\xb2t\x1e\x9a\a/\x8f\x01V\xd71\x05\xb0s\x8b\xc4,\xa8\x89b~\x95\xe7\xd0\xf6j\xb2\x91\xb3\x1b\xad\re\xebra\x97\x00t\xac\"\xdd\n\xc9R\x15\xaa\x1aT\xcdv#U\x16\xd4\xf2zD\x1cH]\xb2\xa1\xd3\xf6\a\x9d\xb3K\xf3\a\xdf\xc15\xb1\xa0\xbf\x85\xb29\x19]a2V\x1a\xa3\x8aB3\xf5ې]\xe3\xd8\x14\x86\x9b'\x06Ք\xdd\x11\x82\"C\b`\xb8\xa5\x88\xc0_\x82L\x00í8\x91j:L\xf5\xe4mf\xefh\x9d\bk\x10\x15\xa7\xa3t\x97n\xbf\x00\x01`\xc7\xe0D\x7f\x01\xbdYՔس\x12'\x02\x0e\x9f\\)\a=\xd4\xd6\xe5\xe2;<\x11\n\x18\x04\x95\xf4f\xeebsvI\x8a\xe5J\x91*{\xcc\xd8S:\x8d\x87\xfa\x7f\x012\xc5\xfaZ\xaet2\xd9\xcf\f\xc3\xedMT\xaf\xd2ޚ頓x<+כ\xa5\xdc\xd1\x10\x9bt\x1b\xc7T\xd0ٿ \xf2\xee\xbfs\x16w\x1bGP;4#\xa8\xac\x87\x10?\x82&\x92\xc5\x11\xa4\v^\xf0\bR\x80)\xf2\xf7\xa7 \x87)\xf2\xbd}\xc1\xb2g\x88X\r\xa5\xdb\x19:g\x17\xdb\x13\xeepcC\x83\n\xdfPp&Y\xc5:\xa7\xf0u.\xac\xf0+Y\x8d+\x01\xb64\x85\xac\xc6\xeaZG\x1a\\\xeb12v\xc7\x105慸\xa2V\xd4ϡk\xbe\xdbL\x93(+6\xe8\xe0J\xa5\x15\x94\bU\xec0\xd1\xc7\x19L\x14\x80Og)\xec\x16\n\x80\x15=\xab͚\xa9\x14f\xb0\x0f\x12 \xa6\xed\xa5\x83\x90d\x98\fMe\xe5,\x8b\x16l\xf7\xa3\x04\xc4I\x7f\x83\x90\xa2\x1c\x81;\x1c\x1dE\vW-z\xf80\xa1\a1\xd9\x15e\xcd^\x0fe\r\x1dћ9\xaeJ\xf1r$A\xb7W\xa9 |\xbbo\\\x95\xa6r'7}x]\xc4\xef'\x96w\x82\xeeP\xcb_\x92pY֔C\xe5\x1c3\f\x17b]\xbaq\xed\xb8\x11Nɩ\x03\xff\xda\xe1\xca\xee\xbfvX\xa8tK\x06\x1b\xd1\x16!͜\xc1\x97~G\x9dcӬ4\x98C\x89Z6\xf86騒\xcc\x1b|Z:\xeaD\x1b\a\xef\xefL\xbfo\xe8\xe0\xa3\xc1\xd1\x1e\xb6v\x1c\x0f\xc5\xe3ϚK\x82~\xc053-\xdf)\xa02\xdf\xf3\xf3~\x04\n\xc6\x16z\xe0\xa4+\xe1q\xa4\x1c\x84\r\xc2\xc8`\x8d>\x8ah\x0f\n\xf8\xbd$`\x15\x18\xd4B\x89\v\xf7\\\xc8a@);\xe3\xfb_\x14\xed\x05-|0eP\x96W\xae\x81\xe8\x9c\xdd\x13 \x1f$1r\x1d[\xa5\xdc\xe0u\xf0z\xee\x03\xfa<\xd1\x04\x02\x83Q\xfe\xf3\xa3\x89+\xf1U\x9e\xd1\v<\x95\x9cI\"g\xd7\xe8걄\xd7$\xfdt\xc7\xec\xee\xa3d\x85}\x82[\xbf@;s֗Vs\xb5.\xb7\x17{[`px\xcd\xc98\x1a\x1dF\xe7\xec\xc2\xc4\xc4\x1b\xb5\x80H}i\xf0\\\xd7lX{\xa0\xcd\x03\x82\xa9\xee|&\xb4\x83\xc0\xbdF7ѵ-\aI\xa7\xc9m=E\xb0\xf5\x0ff2SS\xcc\x03\xae\xa9m\x11\xe4\xc7\xc54%sk}6\xe9Tv\xec|\xa00?2ZW\xe5\x89\x0e5\x1d\x9a\r~\xf4\x9b$9\x95\x83Ǯ\x8f\x12\xf4\xb1+\xa3\xe2\xdb1\xaa\xaa#\xb4\x9f\x8c\xab\x9aN\x13\xf2\xefk\xe3\xaan\xc7\xd4@\x1d\x15ю\xd2]\xd4X\xdba\xa4\xf8\x81\x8f-\xf4\x15\xf5H\xa4\x04n\x94\x93ͤr\x03Sp3Z\xb0\xcb\xc5:d\xd98\x98\x89\x17HT\x88\xabq\x02\x9eMzO\xe5,\xe8#n\xc4X\\v\x81!\xae\xa7\a\xa8\x94\xa7\xd4-\"Åɢ\xe5C\xaf\x05x\x12\xad\xa5Aa\xf8\x0e[F\xcbF錆\xad\xbb%NP\xc0\x82\x1a\x15щ\x11*}\xffS\xa9\x1d!\xc2[\xe6\xea\xed\xdc'\x90\xf4#\f\x9bYA\xb8\xc4`\x8a\xd2&\xdfI\x02\xbc'P\x82z(\xe2=\xa4\xbf\x81\xfa~\xd6\xc8w\x03`j\xeb?\xca\xc5\\\xfa6.\x19>\x8d\x8f\xb2\x96\xa58\xe4\xce\xf8\xf8\xf0t\xf6\xbc\x1c\xbf:\x8e\x9c\xe7\xfc\xf8\xcd\xf1\x8e\xee\xf3\x89\xfc\xfax\xc7\a]%\xf7\xf4\xf8\xb2\x1e\x94\xc7wt\x8fS\x87\xb6?\xaf\xbb\xb7!\xc7\xce\xceh\x8f\x050?\xcc\x13\x92\xcc\x18f\xa6xd\x878\x7fq\x04?;\x02zh\x16\x19\x01R\xec~L\xc2\xdf\xf1\xc2g\xea\xd9\xc4\xf0\xeaO\x8f\xa0\x1e\x89\xbe\xfe\xf2\x9e\x8e\x16!\xda\xfb\x90\xe68\xeeώ\xe0$\x86y\x7fr\x04\xfbx\x14\xf8\xf5Z\xf7\xccq\xe1Wycɏ\x16\xbf\xca\xd38Y\x01\xe3L\xaeO\x8e'gn~n\xb89\xd7\xd2\xda\rG\xff8\x1f/ɝ\x9bɨ\x19\xc1\xecL\x1d\x98\x18\xeb\xfea>\xeaa\xe7\xf0u-U68\x9ey\x92\xef\x86̿\x9b\x87\xb7sTd\xa2\xc5\xc2\xeb\x99\xeb\x9d\x1ct\xcf\xe4g\x1d{\xf7\x0e\xf8nQr'\x97$\a\xfa3\xb7\xfdX\xf8?Ӏ\xcb|\x01\x90)\x96I\x0f\x042\x95i\xce\xfb\x81CÍ=/\xc84x\x8e\xbe>\xf8\xf9=ݸ'\n\xf7\xa1\xd8w\f\x87\xd6\xf0\xe03\x87\x80%\xa2\xf0\xe2\xd1\xe75\x91\x1a\xf8\xf7\xd2\x06~$̌\x83?ahI\xd0\rL\x17dƛ#\xd8\xe9\x17\xaf4\x9d\xae@w\xfd6oC\xff\x0e\x88\x01\xde\xff\x82p\a=\xdd L;8\x1cp\x9eՖ\xb3Ȼ&[\x9a\t8\x831N\x1b\xaa\ay6\xe9c\xe7\xda\f\x99d\x02\xa6\xa9\x87\x194\xd1\xfe˝~\x82\xf1\x97\xa6\x0ff\xc8Ö\x9f\xa7\x90\xb4\x98\x1a\xb3/\xed6\xa2\aГ\xc7\xf9Ŏ>\x8e\x06T\xb68\xe9\xd2\xdc\xd4\x1a\xfbE\xec?\r\xc5Arj\x9c\x8a\x8d\xcdD_:\xc5\xd0D\xd5B}5_:h]\xee\x9e\x01\xfaV_\xb3e\xf0e\x01r\xda4\xc6y\xd1\xd8Lz\xb4k\xc9\x19\x19\xaa\xd4>5\xf1\x0f\x14:\x17\xbe\x88Bup\xe9\n\xf5\ay\x83O\xbb^\xa7i\xe9\x19\xf4\x7f\xa0\xa5g\xf0\xa8\x96NS\xa93\xd8\v\xaa\xd4\x19\xf4EU\xaa\a\xfbR*u\x86<\xacR\xc5,8\x0e-\xfe\xe8\xc5\x1b@\xb4!zb\x15\x8e\x9a\xea/\x88\xecDM\x97\x8d\xd2\x1f%\xe0\xe7QK\x9c\xa2\xa2c\v\\£\t-z\xf9i\xf5\xe0\xf4$\x8d\xc1\x8b#\x9f\b\xe8\x02\x17\xfb?ͳI\uf17b\x11\x82\xce\x1a\x8e\xd0i?\x8c\x8b\xdf\x19`jI\xa4\xd9|\x9d\f^\x80\xde40\xa8g\x99\xc1\x87/P\x98ڶ\xa6B7[m\x83jf\xabi\rBr\xf6\xb4\xf1\xb1\x0e\xf5dR\xd7o<G^LA\r\xb1\xecIeկ\xcd\xe2\x85\xc4\x0f\x9f\x10\x8eyWT\xd6p\xd1\n\xcb/\x98w5θK\xcc\xd5\xea\xa3oa\x94\x1d\xab.\x86sW\xffAZ\xb6J\xff\x1c\x02\xbe\a!\xa0\x82TZ\xc1\xd9\xe7\x87\x17\xbf`\xf9\xeap\xfb\xfb\x00\x06*\xed+\x1b\xf8\xad\x0e\x86Y\xffg\xb9\x8f\xffY\x19\xef$\x06D\x0f,\x1fB\xcf*\xe36\x01Bč/\xa2e\\j-\xf8iE\xc6q\xeb\xf3Y\xf6;G\x91\xcf<\xb9\xcf\tž\x85\xb4\xf3a\x1a[;\x7f\x85%\xfa\xfd\x1a\xffo\xd9;\x9fkY<T\xdc\xfb\vw\xc232\xbf\xc5\xf2i\xcc\ueaf3\xa4Sa\xd9\x06\xcbc\xc2A\x82\xb7>I\x86\xff\v\x00\x00\xff\xff\x01\x00\x00\xff\xff\xf1@\x04\x88ZM\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ɒ\xf48\x11~\r\xb6a\x19\xf6\x01<3\f۰L\xb0\x1c\x88\xe0\xc2#8T\xb6\xcaV\x97my$U\xfd\xdd\xdc\xd8!\xe0)\xf8\xfb\xe74\xaf\ag\xc2\xda,\xa5e-\xae\xe6\xd2!\xc9\xcaO[f*\x95\x99]\xcf\xed\x84F<\xb5\xf8V\x8d\x84\xe1\xa9j(\xc3\xf8B\xa6\x96\x7f\xf2\xcao}wi\xad\xd0<\xff[\xd20\xf0\x15ͳ\xa2\xfb﹥#\"\x13\x00=\x9f\t\x1eZ\xfe\xa7\xd7'\xd2>~iK\\\xa1F\x90\x1b\xaeo\x98qB'5/\xd0&\x9ef|\"\xed.\x04\x99\x88 h\xa8\x1b:\x9dI\xa7 @\x9b\v\xf1\x99\x00\xc4\xcc\xe8\x03n\x84\xa4\xedL\xc5%\xfab\x80\xe8\x15e\x97\x81\xa2\xb6ft\xc0\x92t\xf4\x9b\x16\x803\x17\x8cL]\xa7\x17\xd3\xdd\xdeG\xc3ܣafdD\xec\xa9^6\xafA\U000fc656\xdcw\x8e\x1b\x86\x85\xda\xfa+蠾\xe5\xec\xfe\x1f\xe4\x12\xbe\x1a\xa4\xaf\x9a+cx\x12\xde\tP\xd8\x18\xdb?\x8d3#\xd1K\xe2V\x96r\xd7~V䏟\r-_\x9f\x84Z\xff\r\xf4\xd0\x1fs6\xe0\xf7r\xe2\x9f\v\x03T\xf4Մ\x99\x1c\x02\xabb\xee\xdc\r\xa7l\x90\x95\xcc0A\xce\xc8\xcc\x1e\x8a\x95\xf9\x9a/=p\x87\f\xc2\"\x9cr\x88\x85\x8d\xe2Lk(F4\x913\xe6\x8a\xdf{[s\xd6-鿞\xa2\xaf[\xd2\x19\x18\n\x1b\x1d\xb4\xe7\x05\xed\xf3{h\\ q\xe5\x12\xe4\xac\xcb\vm\x8b\xa7\xebxY\xfe\xd474\\1\xff\xd7Y)\x86\xcdv+\"\xadJzĚ\x9e\xdc\xf0v@\xd3M\x7f\x8f\x1emof\x17>\xdb\x11\v\xd4\"\x81\xc2gk\xbe\xe6\x9c\xed\x1f\x83{c\x10\xaa\x01\x9d\xf0\xc0\xdb\x11MO\xffQ;\xa4[\x96\x1d²\x1c\xe4m\v %r\xfd\x03\x8f\xf8\v{t1\x8d\x18\xdf9\x03\xb1Y\x94ܹ\x16\xcf\x03}\x1a\xf1\xa4\xe5\xe2\xf1Ӡ\xd7\xda!g\xfb\xfe!W\xf1\xf6.\xc6\"\x1c\xb5]~okp\x1f\xa0r\x04\b\xaer\xbc\xb8\r\x10\xe7+\xfb8\xa7+\x19\xdaz\xa0\x9db\xf5\a\xa7^\x80\xd2\fW.0\xabI\xabP\x9c:D\xf9Z\x04\x85\x8e\xf3\x80\x05nk\xa4\x8ex\xf0Z\xa0\xe8FvG\x15q[\x9f\x9e\xd4\xee\xb8\r\v\x0eY\x90\xe9\x84'\xb1\x96\xf4\xd1\x03\xd8*\f\x9b\xaf!\xc3\xdb&A*AF\xcc\x05\x1a\x95\xaa$k5\x8f\x13\x14ȕcV\xe3\x11\x91Am\xbeS\x870a\x96t`\xf4\x01v\xa6\x92\xc7\x03\x0e\x80\xe5j\xb2Vso\xae\a\x83vz\njz\xe7$0c\x94\xd5#\xe6\x1cu\xda\xca\xf1\x9b \xb3D\x84\xb1#\xa2&ә*a\xb4\xb5\x04\x9b\xbc\xbd\xcf&\x06\"\x87G\xfe\xfe:\xa4i\rB\x85\xae\xa2\xa7\xca\f8\xeb2<\x92]\xda\x13CS\xa3\xac\x9f\xb3.C\xdao\xed\xd16t\x1c\x89\xa8Ր\x0es\xf1\xd0\a\x88\xfa\x8d\x04\xaa\xcf\xf5\xf3\xa6\x15\xe2A\x8b\xc1\xe2\x11^\xb7\x84\t%㽭\xc9{\xfaD\xe9\x10\xbcL,\xb5\xcb=]\x80o\x82\x12c\xa9\x19\x9e)'\x8225\xfa\x83S\x87\x18\xd0F\xb2\x18\xbcG\xcaFZ\n\x90\xea\x9b{T\x8b9O\xa6\xae\x16\f\xe3\xbaG\\\x1d\xf1\xc7\xdb\xe6l\x8b\xb1#bA\x0en\x97\xc3\xd7s\x8f\xb8\xda.\xac\x8ap\xca\xd5>-\xa7W\xd6\xe0zm1\xaaF\x04\xbf\xa4X\xc0E\x0e\x1bj\x05\ng\x81٬ۼ0ͥ\xaa\xc5>\xf0N3=r\xc4\xfd\x9f\xc1;\xd0\x01\xa9P;\x92\xa9\x16\xf4\x82\xcd\xc5\xee4\xa4d\xdf\x03\xda3\xc0\xbf\x1c#\xd2\x06\xa66LLM\x93?\xef<v-\xb9\xf3\xd8=;\x8f܈\x1a\x05h\xd5\x16-g[\xff\xf2&\xb4\x1b\x8a^j\x1d4\xb5\xae\xbd\xda۶\xc4\xf4\xdeIN\xcf\xc2\xe7\xbfy!\xab\x19\x04\x03\xa54\x92\xa9\xa4\x8ccK\xcd1\xbb\x91F\xeb3S\xc9\x15\x05\xbb#Aq\xd3Kœ`O3%\x93\xe2\x8f\a\xa7\x0eg\t\xe5D#̔\t\xfd\x1e_J\vUC&\x11;>\xbd\x12\xef\xf8l\xdb\xfd\xc7g\xa0\xb2.k9Ϸ6\xae\x06\x85P\xb5\x84_\xdcibՐ\x98\xe3{\xf9sT#\xe4\xbf@\xe0\xfbK\x92W\xed\xa9>\x13\xed\x1b\xeaL%\xc5e\x8at\xe9ʟ\xb8\xc0\xa3b\x00\xa7\x9e45%\xc0\x80\x11\xc7\xf2\xaa\xa7W\xc5\b\xa3ߔ7\x8f\x91^'Q[\xe7\u0383S\x87\x00\x9b\x97\x9c\x04H<@!\xf7*\xa2\x98K\xe69\xc4\x19\x8alf\xf4FZM\xd9\xdbZЛ\xf0\x1a\x0f\xb4A\xc3\x06\xc9PU\xf23\x96_\xf6;ɶ3\xffx \x02o\xc4\xca\xf6R߃\xf7\x88\x9a8è\xad\xe94(\v\x87\xacU\xdf\xc0\ns\x19'\xbf\xc3uw\xd2\xdaHW\x8c\xbc\a\xcd\"M'\xcd\x01}\x9d\xabr\xea\xd6ӄr9Ƭ k5W\x05*q}\x13\x9a\x9a\x15@<\xdd\x1c\x01o\x96jB\xbc\xab\x02\xf1\xc6\xd3-G\xb8\xff\x1a\xe4Q<ݪ\x13j\x163Am\xba\xa9\xa4\xb6o!l1o\x18\x99\x85u'\xb8\r\x00\x00\xba<\x17\xfa\vVL\xd2,\x85\x94\xfd\xbb\x100\xfc\xf1\x950\xac\xa6\xda\xdbZ\x9c\xb3\x16B\x8e'N\x04\xb9\xe9W\xe6Z\xf5I\xa1\xd8K\xd24k}*@&%S\x89\xbd*f{\xd0\xf1t{\x1d\xbd1\xc8h\x1e X\x15\xe1|6NEC\x99P`\xbbt;\x17p0\x8c\xe1\x119/\xfb\xb5\n\x87\x8d#\xc8\x13Z\x11d\xd5A\x88_\xae\v\x89w\xb9\xaa\x86\x17\xbc\\%`\x8e\xfc\xfd9\xc8a\x92<u.\x1be\xac\x88h\x8bk{2d\xadz\xc7\x13\x1ep\xe7@\x83\xf7\x91\xa6`TІ\x0e\xf6>R\xb5\xb0w\xbb\x11ͼ\x11`CS\x89fn\xaem\xa4õ\x9d#s\xb7\f\xd1B^\x88+jI\xfd\x1cr`\xd8\xc3ԅ\xba\xa1\x93\n\x1b5JA\xf1Ї\x04\x13}T\xc0D\x01\xf8|\x96\x82\x0e\xaf\x00X5\xd2V\xef\x99,A\x06{/\x03b9^2q\x81\xa6ń\x96F\x98\xdf\xe4\xb1ݏ2\x10\x17\xfd\x8d\xb9\xe0\xf5\x8c\x99\xc5Q\xf1\xc1\xf0'o\x84\x0f2F\xe0\x8b\xd9S\xb7\xf4\xd5T\xb7x@\xea0\xe7M+\u070e,\xe8\xfe*$\x84k\x96Λ\xd6\\\xeedz\fg\x88\xf8\xcb\xcb\xf0N\xd0\xd1k\xf8K &\xea\x960\xdcX\x97\x13\x85\x8dP\x97\xee<\xa8n\x88\x11t\x1a\xb0\xfb\xa0\xb2m\xf7?\xa8\fT\xbe%\x03m|\x83\x90g\xce@w\x86\xa5.\xb1i6\x1a̢D-\x1b\xf8N\xb6TY\xe6\r\xbc--u\xa6\x8d\x03\xcfw\xa5O\x1b:\xf0j\xb0\xb4\x87\xad\x1d\xcbC\xf1Ⱥ⒠\x87s\xcbL~\x06\x06hs}Z\xefF\xa0\xf0\xdc\xe3\x1134\xd4\xf8q&\fs\x13^\x12\xc1/\xea*\"\xa3z\x19\xbd\x93\x05,C\x9eJ(ac\xca9\x1e\x06\x14b\xd0Q\r\xaf)\x15\x8eq\xc1\xa4AY_\x99\x02\"k5%@.HfL>\xb6K\xa5a\xf9\xa0\xf7\xc0\x05ty\xa2\v\x84<\xa3\xfc\xe7\xc6I7\xe2+}\xbe\x17\xfcT3*\x90X\x9d\xbe\x9b4\x10\xa7K\xfe\xed\x0e\xd9\xddE)\nh\x05\x8f\xdeC;3:\xd6Fs\xf5\xb6\x96\x8a*z\x18\f\xbfbh\x9e\xb5\x0e#k\xd531\xe1Ay\x10\xb99\x14\xcfmK\xa7\xado]\xa7F,\xdf\xcegD\x06\x1cxר.\xeakϰ \xcb\xe2\xf6\x92,\xcc\xf7\a\xbd\x98\xa5+\xe4\x01\xdb\xd5\xf4\b\xf2\xa3\xb7LA\xed^\x9fu9\x97\x1d\a\x17(̏\x94\xb4M}\"SK\xa6n\x87\x1f\xdd.Y\xee\xf2\xe0\xb5\xeb\xa2\x04\xa3\aҨ\xf8v\x8c\xaa\x19\x10\x19\x17\xe3\xaa%˂\xdc\xf7ڼ\xf9\x9605\xc0@Ut\xa0|\xe7;\xd4v\x10)~\xe1C\v}C=#!0\xd3\xca\xc9Tr\xb9\x81J\xb8\x15-8\xa4\xb7\x0fE6\x0edb\x0f\x89p~\xd5>ʳ.\xa7T\x8eG\x1f\xf1r\xc6\"\xce\x1e\x06\xbf\x9e\x1ep#\x1d\xb9v\x13)l\xcc\x16-\x17z+\xc0\x8bh\xf9\x06\x85\xe6;h\x19\xf9\x9d\xf2\x19\rZw>NP\xc0\x82\x1a\x15\xd0\xf1\x197\xea\xfd'K\t!\x82Gf\xbf\x9b\xb5/ \xf9W\x184\xb3\x82p\x99a\"\xa9M\xbe\x93\x05xO\b\b\x8cP\xc5Gȏ\xad|\xbfh\xe6\xc9О<\xfa\x0fK1}\xdfƥ\xc0\xa7\xf1aѶT\x87\xdc\x19\x1f\x1d^N\xca\xcb\xf1\xeb\xe3\xc8eΏ\xdf\x1e\x1f\xe8>\x9f\xc8o\x8e\x0f|\xd0Urψ/\xebAy|K\x8d\xb8\fh\xc6s\x86{\x13r\xec$f{,4\xfbA\x99\x90\x14Fg\x7fr`\ty\xc1\xdbB\xc1+\x8e\xed\xfe\xe2\b~q\xe8\xf7\xd0*\n\"\xc3б\x99\x85\x9f\xf0\xef\x17j\xf0̸\xf2O\x8f\xa0\x1e\t;\xff\U0009e07c\xd8\xf4}H^\x00\xfbWwA9Q\xee\x9f\x1d\x01\xca\f\x82\x1f\x12\xe6t\x8c\xfcǇ`\xd3\xee\xbfC[qw\x84\xfd\xd5V\xaf\xaf1\xf7\xf7˦T\x1e\x89\x7f\xbfL\x9b\x17\x05\xe3\v\xe5>;V_xN\xa5\xa1\xfcR+6\x19\xea/\xe4\xd7\xecL\x80B\xf1*H\x14(\xbc\x052\xf3\b~X\x8ez\xd8\xf1~\xddJ\x95I<(\xb4\x92\x92\xe9\b\xdf-\xc3K\\\x96\x85h\xb1ԅ\xc2\xfd\xceNh(\xe4g\x95\xd7\xe0\x988\x83\xd7r'\x97d'Q\x14\x1e\xfb\xb1ԊB\xe3\xb80\xbb\xa2P,\xb3\x92/\n\x95iInơ\xe9\xc6R7\nM\xbe\xa3\x99\x1d?\xbfg\x18\x9b\xfeq\x1f\x8a\xc9\x119\xb4\x87\aSH\x02\x96\x88ċG\xf6\xb7Dr\xe2\xdf˛\xf8\x91\x10>\f\xac\x85\xa1\x05\x02\xaf[\xd5P\x18ˏ`\xe7\xc8\xed\xdf\nt\xba\x04M\xfa\xc4ބ\xfe\xa7$\x06x\x7fvf\x02=\xdf ̻8,p\x99\xd5V\xb2\xc9I\x93-\xcf\x04\\\xc1(#\x1dQ\x93<\xeb\xf2\xb1{m\x85\xcc2\x01\xf3\xd4\xc3\n\x9ai\xff\x95.?\xc3\xf8\xcb\xd3\a+\xe4a\xcb\xcfQHJL\xb5ٗ\xf7\x1aQ\x13\x18\xd1\xe3\x9a\r\xa5\xae\xa3\t\xb4y7]^\b@a\xbf\x88\xfd\xa7\xa0\x18\x16\x8ch\x87mg*\xd1,\xb2\x18\x1aoz\xdc^\xb5\x1b\xad\xb7\xb5{&\xe8Z}ݞ\xc1W\x04\xc8H\xd7i\xf7Mg*\xf9\x91D\x9f3\nT\xa9I\xe3q/\x14\xb26\xbe\x88B\xb5p\xf9\n\xf5\ae\x93\xcf{^\xe7i\xe9\x15\xf4\xff\xa0\xa5W\xf0\xa8\x96\xceS\xa9+\xd8\v\xaa\xd4\x15\xf4EU\xaa\x03\xfbR*u\x85<\xacR\xf9*8\x16-\x9eP\xe4L \xda\x11\xa4\xaf\x85#\xd2\xeawg\x12\x11i\xbfS~\xc2\aL=\xf3q\xaa\x86\xcc=f\x02?갭S_v\x0f\x9f\x9e\x846xaT\x19\x00]\xf0\xc58\tϺ\x9cJ%\x00\b\xaa\xaa9B\x95\xdd\x109\xcc\xe1\x80\xd4\x02\t}\xf8\xaa\x18\xf6ywx\x92)\xaf\xc1\xa4\"\\\xe9\xaf}K\xb8\xea\xb69\x06\xd9\xcd|&-\xe6\x82ѧ\x9d\x9fx\x91\xe9\xa8\xea\xfbN\xaa\xb7\xb7\x049\xc5zD\x8dQ\xbf\xa6\n7\x12&\x95\x01\x1c\x9d\xb3U\xb7\xf8\xa2\x14\x96۰\x9ej\x9cq}\xcc\xcd\xee\x83_P\xa9\a\xda\\4\xe7n\xfeS\xcb\xef\x95\xff#\x1a\xf0\x1d\x04\x80*\xd4(\x05gR;/n\x83\x9fѹ\xff\xab\x12\x1a*\xef\xb7Y`\x1e\x14\x84\xd9\xfe\xa7\xfb\x18\xff\x17wx\x92\x10\x10$\xaf>\x84RV\xe36\x01@\x84\x9d/\xbc\xa7L(-\xf8I\x83\xe6y\xefG\xd7̯cE~\x1c\xcc\xfe\bU\xec\x17\xb4\x12?gd\xbe\xae\xbf\xdd\x13\xfd\xd5#\xf7\x9f\xf9\x13?\xf2\xe3%\x81\xa6\xfe\xf1?#E\xcf\xed\xe1\xa7\x1d%3\xfa\xb2n\x05\xbf\x0f\x94ǌ\x8b\x04\x1e}\x96\f\xff\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff,72ҐO\x00\x00"))
 }

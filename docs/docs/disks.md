@@ -8,9 +8,9 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Persistent Storage
 
-Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`.
+Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`. For a SQLite database, use the [`miren-sqlite` addon](/addons#sqlite-is-different) instead: it attaches its own storage and keeps it backed up, so there is no disk to declare.
 
-Both storage options are node-local — your data lives on the server where your app runs. See each section below for backup options.
+Your data lives on the server where your app runs. Local storage and Miren Disks are backed up on request; a SQLite disk is backed up continuously as you write to it. See each section below.
 
 ## Minimum working example
 
@@ -73,11 +73,12 @@ This is handy for sharing node-local state between an app's services, but if you
 
 ### When to Use Local Storage
 
-- SQLite databases
 - File uploads and user content
 - Application cache
 - Session storage
 - Any data that needs to persist across restarts
+
+For a SQLite database, prefer the [`miren-sqlite` addon](/addons#sqlite-is-different): you get the same node-local directory plus continuous backup and automatic restore, without declaring a disk.
 
 ### Limitations
 

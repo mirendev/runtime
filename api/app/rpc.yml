@@ -783,6 +783,13 @@ interfaces:
             type: string
           - name: version
             type: string
+          - name: services
+            type: list
+            element: string
+            doc: >-
+              Services the addon's storage attaches to. Empty means every
+              service. Only meaningful for addons that contribute storage to
+              the app's own containers.
         results:
           - name: id
             type: string

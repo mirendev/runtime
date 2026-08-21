@@ -6006,11 +6006,12 @@ func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteR
 }
 
 type addonsCreateInstanceArgsData struct {
-	Name    *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	Addon   *string `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
-	Variant *string `cbor:"2,keyasint,omitempty" json:"variant,omitempty"`
-	App     *string `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
-	Version *string `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
+	Name     *string   `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Addon    *string   `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
+	Variant  *string   `cbor:"2,keyasint,omitempty" json:"variant,omitempty"`
+	App      *string   `cbor:"3,keyasint,omitempty" json:"app,omitempty"`
+	Version  *string   `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
+	Services *[]string `cbor:"5,keyasint,omitempty" json:"services,omitempty"`
 }
 
 type AddonsCreateInstanceArgs struct {
@@ -6071,6 +6072,17 @@ func (v *AddonsCreateInstanceArgs) Version() string {
 		return ""
 	}
 	return *v.data.Version
+}
+
+func (v *AddonsCreateInstanceArgs) HasServices() bool {
+	return v.data.Services != nil
+}
+
+func (v *AddonsCreateInstanceArgs) Services() []string {
+	if v.data.Services == nil {
+		return nil
+	}
+	return *v.data.Services
 }
 
 func (v *AddonsCreateInstanceArgs) MarshalCBOR() ([]byte, error) {
@@ -6486,7 +6498,7 @@ func AdaptAddons(t Addons) *rpc.Interface {
 			InterfaceName: "Addons",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"name", "addon", "variant", "app", "version"},
+			Params:        []string{"name", "addon", "variant", "app", "version", "services"},
 			HTTP: &rpc.HTTPBinding{
 				Verb:       "POST",
 				Path:       "/api/v1/apps/{app}/addons",
@@ -6578,13 +6590,15 @@ func (v *AddonsClientCreateInstanceResults) Id() string {
 	return *v.data.Id
 }
 
-func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, variant string, app string, version string) (*AddonsClientCreateInstanceResults, error) {
+func (v AddonsClient) CreateInstance(ctx context.Context, name string, addon string, variant string, app string, version string, services []string) (*AddonsClientCreateInstanceResults, error) {
 	args := AddonsCreateInstanceArgs{}
 	args.data.Name = &name
 	args.data.Addon = &addon
 	args.data.Variant = &variant
 	args.data.App = &app
 	args.data.Version = &version
+	x := slices.Clone(services)
+	args.data.Services = &x
 
 	var ret addonsCreateInstanceResultsData
 

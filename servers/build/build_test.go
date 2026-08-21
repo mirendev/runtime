@@ -2985,3 +2985,72 @@ func runEntity(t *testing.T, id entity.Id, status run_v1alpha.RunStatus) *entity
 	}).Encode).Attrs())
 	return &e
 }
+
+// A name in services = [...] that matches nothing is always a mistake, and a
+// silent one: the addon's storage is filtered onto no service at all, while its
+// variables are not service-filtered and still reach every service, so the app
+// deploys green with a connection string pointing at a mount that was never
+// created.
+func TestValidateAddonServices(t *testing.T) {
+	parse := func(t *testing.T, toml string) *appconfig.AppConfig {
+		t.Helper()
+		ac, err := appconfig.Parse([]byte(toml))
+		require.NoError(t, err)
+		return ac
+	}
+
+	t.Run("rejects a name that is no service", func(t *testing.T) {
+		ac := parse(t, `
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[addons.miren-sqlite]
+services = ["wroker"]
+`)
+		err := validateAddonServices(ac, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "wroker")
+	})
+
+	t.Run("accepts a service declared in app.toml", func(t *testing.T) {
+		ac := parse(t, `
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[addons.miren-sqlite]
+services = ["web"]
+`)
+		require.NoError(t, validateAddonServices(ac, nil))
+	})
+
+	// The reason this check cannot live in appconfig.Validate: app.toml alone
+	// does not know about a service the Procfile declares, and rejecting it
+	// would break a config that is entirely valid.
+	t.Run("accepts a service declared only in the Procfile", func(t *testing.T) {
+		ac := parse(t, `
+name = "test-app"
+
+[addons.miren-postgresql]
+services = ["web"]
+`)
+		require.NoError(t, validateAddonServices(ac, map[string]string{"web": "/bin/app"}))
+	})
+
+	t.Run("no services key is unconstrained", func(t *testing.T) {
+		ac := parse(t, `
+name = "test-app"
+
+[services.web]
+
+[addons.miren-postgresql]
+variant = "standard"
+`)
+		require.NoError(t, validateAddonServices(ac, nil))
+	})
+}

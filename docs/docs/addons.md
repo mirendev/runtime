@@ -46,6 +46,7 @@ If you just need a PostgreSQL database for your app, use an addon. If you need c
 | `miren-valkey` | Managed Valkey key-value store (Redis-compatible) | 7, 8, 9 | 9 |
 | `miren-rabbitmq` | Managed RabbitMQ message broker | 3, 4 | 4 |
 | `miren-memcache` | Managed Memcached in-memory cache | 1.4, 1.5, 1.6 | 1.6 |
+| `miren-sqlite` | Embedded SQLite database, continuously backed up | n/a | n/a |
 
 List available addons on your cluster:
 
@@ -177,6 +178,17 @@ Valkey is wire-compatible with Redis, so Miren injects both `VALKEY_*` and `REDI
 | `MEMCACHE_HOST` | Server hostname | `10.10.0.196` |
 | `MEMCACHE_PORT` | Server port | `11211` |
 
+### SQLite
+
+```bash
+DATABASE_URL=file:/data/data.db
+SQLITE_PATH=/data/data.db
+```
+
+The database is a file inside your own container, not a server, so there is no
+host, port or password. Open `/data/data.db` and it is already there, already in
+WAL mode.
+
 ### Inspecting injected variables
 
 You can verify the variables are set on your app:
@@ -186,6 +198,42 @@ You can verify the variables are set on your app:
 miren env list -a myapp
 ```
 </CliCommand>
+
+## SQLite is different
+
+Every other addon runs a server your app connects to over the network. SQLite is
+an in-process library: there is no server, and nothing to connect to. The addon
+instead attaches a database file to your app's own container and replicates it
+to the coordinator as you write.
+
+```toml
+[addons.miren-sqlite]
+variant = "standard"
+```
+
+That difference has consequences worth knowing:
+
+- **One writer.** SQLite allows a single writer, so a service with a SQLite
+  database must use `mode = "fixed"` with `num_instances = 1`. Deploying without
+  that fails with the reason, rather than starting an app whose database is
+  quietly missing.
+- **One database per app.** An app gets a single SQLite database, because an app
+  gets a single instance of any addon.
+- **Scoped with `services`.** By default the database attaches to every service,
+  which means every service inherits the single-writer rule. Name the ones that
+  need it and the rest are free to scale:
+
+  ```toml
+  [addons.miren-sqlite]
+  services = ["web"]
+  ```
+- **Node-local.** The database lives on the server your app runs on, so the app
+  is pinned to the coordinator like any app with a disk.
+
+:::warning[Replication is asynchronous]
+Committed transactions reach the coordinator continuously in the background, not
+synchronously. A server that dies abruptly can lose the last moment of writes.
+:::
 
 ## Variants
 

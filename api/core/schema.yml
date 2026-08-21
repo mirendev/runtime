@@ -189,8 +189,8 @@ kinds:
                   doc: The name of the disk
                 provider:
                   type: enum
-                  choices: [miren, local]
-                  doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
+                  choices: [miren, local, sqlite]
+                  doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
                 mount_path:
                   type: string
                   doc: The path inside the container where the disk will be mounted
@@ -203,6 +203,15 @@ kinds:
                 filesystem:
                   type: string
                   doc: Filesystem type (ext4, xfs, btrfs) for auto-creating the disk
+                db_file:
+                  type: string
+                  doc: Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)
+                sqlite_id:
+                  type: string
+                  doc: Identity of the database a sqlite disk attaches to, scoped to the app (defaults to "default")
+                source:
+                  type: string
+                  doc: Where this disk came from. Empty or "config" means the user declared it; "addon" means an addon contributed it and owns its removal.
                 lease_timeout:
                   type: string
                   doc: Timeout for acquiring the disk lease (e.g. 5m, 10m)
@@ -638,8 +647,8 @@ components:
               doc: The name of the disk
             provider:
               type: enum
-              choices: [miren, local]
-              doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage"
+              choices: [miren, local, sqlite]
+              doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
             mount_path:
               type: string
               doc: The path inside the container where the disk will be mounted
@@ -652,6 +661,15 @@ components:
             filesystem:
               type: string
               doc: Filesystem type (ext4, xfs, btrfs) for auto-creating the disk
+            db_file:
+              type: string
+              doc: Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)
+            sqlite_id:
+              type: string
+              doc: Identity of the database a sqlite disk attaches to, scoped to the app (defaults to "default")
+            source:
+              type: string
+              doc: Where this disk came from. Empty or "config" means the user declared it; "addon" means an addon contributed it and owns its removal.
             lease_timeout:
               type: string
               doc: Timeout for acquiring the disk lease

@@ -1,0 +1,9 @@
+name = "sqlite-addon-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+# The database is attached by the addon; the app just opens /data/data.db.
+[addons.miren-sqlite]
+variant = "standard"

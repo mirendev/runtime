@@ -310,7 +310,7 @@ type bootContainersOut struct {
 	AllCgroups      map[string]string `json:"all_cgroups" saga:"all_cgroups"`
 }
 
-func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut, error) {
+func bootContainers(ctx context.Context, in bootContainersIn) (_ bootContainersOut, err error) {
 	deps := saga.Get[*createSandboxDeps](ctx)
 	log := saga.Get[*slog.Logger](ctx)
 
@@ -330,6 +330,17 @@ func bootContainers(ctx context.Context, in bootContainersIn) (bootContainersOut
 	if in.Revision != 0 {
 		meta.Revision = in.Revision
 	}
+
+	// ConfigureVolumes registers sqlite disks for replication as it goes, and
+	// BootContainers below can fail after it succeeded. A failure inside this
+	// action means the action's own undo never runs, so anything already
+	// registered has to be released here or it keeps replicating for a sandbox
+	// that never started.
+	defer func() {
+		if err != nil {
+			deps.runtime.ReleaseSqliteDisks(ctx, entity.Id(in.SandboxID))
+		}
+	}()
 
 	volumeMounts, err := deps.runtime.ConfigureVolumes(ctx, sb, meta)
 	if err != nil {
@@ -388,6 +399,11 @@ func undoBootContainers(ctx context.Context, in bootContainersIn, _ bootContaine
 	// container is worse than a leak -- an attaching client finds it and waits
 	// on output from a container that no longer exists.
 	deps.runtime.ReleaseHubs(entity.Id(in.SandboxID))
+
+	// ConfigureVolumes registers sqlite disks for replication during create, so
+	// undoing the create has to release them too — otherwise a failed saga
+	// leaves litestream replicating a database no live sandbox owns.
+	deps.runtime.ReleaseSqliteDisks(ctx, entity.Id(in.SandboxID))
 	return nil
 }
 

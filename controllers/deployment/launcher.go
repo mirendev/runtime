@@ -835,6 +835,8 @@ func volumesEqual(vols1, vols2 []compute_v1alpha.SandboxSpecVolume) bool {
 			v1.MountPath != v2.MountPath ||
 			v1.SizeGb != v2.SizeGb ||
 			v1.Filesystem != v2.Filesystem ||
+			v1.DbFile != v2.DbFile ||
+			v1.SqliteId != v2.SqliteId ||
 			v1.ReadOnly != v2.ReadOnly ||
 			v1.LeaseTimeout != v2.LeaseTimeout ||
 			v1.Owner != v2.Owner {

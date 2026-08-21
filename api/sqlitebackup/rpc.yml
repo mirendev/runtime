@@ -1,0 +1,133 @@
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+  stream:
+    path: ../../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+
+types:
+  - type: LTXFile
+    doc: >-
+      Metadata for a single LTX file held by the coordinator. Mirrors
+      ltx.FileInfo so the runner-side ReplicaClient can convert without loss.
+    fields:
+      - name: level
+        type: int32
+        index: 0
+        doc: Compaction level the file belongs to
+      - name: min_txid
+        type: uint64
+        index: 1
+        doc: First transaction ID covered by the file
+      - name: max_txid
+        type: uint64
+        index: 2
+        doc: Last transaction ID covered by the file
+      - name: pre_apply_checksum
+        type: uint64
+        index: 3
+        doc: Database checksum before this file is applied
+      - name: post_apply_checksum
+        type: uint64
+        index: 4
+        doc: Database checksum after this file is applied
+      - name: size
+        type: int64
+        index: 5
+        doc: Size of the file in bytes
+      - name: created_at
+        type: standard.Timestamp
+        index: 6
+        doc: When the transaction was committed
+
+interfaces:
+  - name: SqliteBackup
+    doc: >-
+      Storage for SQLite disk backups. Backs the litestream ReplicaClient that
+      runners use to replicate app databases to the coordinator. Every method
+      is scoped by a backup key identifying one app's disk.
+    methods:
+      - name: listLTXFiles
+        doc: List the LTX files held for a key at a compaction level, ordered by transaction ID
+        parameters:
+          - name: key
+            type: string
+            doc: Backup key identifying the disk
+          - name: level
+            type: int32
+            doc: Compaction level to list
+          - name: seek_txid
+            type: uint64
+            doc: Start at this transaction ID, or the next available one (0 for all)
+        results:
+          - name: files
+            type: list
+            element: LTXFile
+            doc: Matching files, ordered by min transaction ID
+
+      - name: openLTXFile
+        doc: Stream the contents of a single LTX file back to the caller
+        parameters:
+          - name: key
+            type: string
+            doc: Backup key identifying the disk
+          - name: level
+            type: int32
+            doc: Compaction level the file belongs to
+          - name: min_txid
+            type: uint64
+            doc: First transaction ID covered by the file
+          - name: max_txid
+            type: uint64
+            doc: Last transaction ID covered by the file
+          - name: offset
+            type: int64
+            doc: Byte offset to start reading from
+          - name: size
+            type: int64
+            doc: Maximum bytes to read, or 0 to read to the end
+          - name: data
+            type: stream.SendStream[[]byte]
+            doc: Stream the caller receives file contents on
+
+      - name: writeLTXFile
+        doc: Store an LTX file, replacing any existing file with the same transaction range
+        parameters:
+          - name: key
+            type: string
+            doc: Backup key identifying the disk
+          - name: level
+            type: int32
+            doc: Compaction level the file belongs to
+          - name: min_txid
+            type: uint64
+            doc: First transaction ID covered by the file
+          - name: max_txid
+            type: uint64
+            doc: Last transaction ID covered by the file
+          - name: data
+            type: stream.RecvStream[[]byte]
+            doc: Stream the server reads file contents from
+        results:
+          - name: file
+            type: '*LTXFile'
+            doc: Metadata for the stored file
+
+      - name: deleteLTXFiles
+        doc: Delete specific LTX files, ignoring any that are already absent
+        parameters:
+          - name: key
+            type: string
+            doc: Backup key identifying the disk
+          - name: files
+            type: list
+            element: LTXFile
+            doc: Files to delete, identified by level and transaction range
+
+      - name: deleteAll
+        doc: Delete every LTX file held for a key
+        parameters:
+          - name: key
+            type: string
+            doc: Backup key identifying the disk

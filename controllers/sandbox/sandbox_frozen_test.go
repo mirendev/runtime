@@ -24,6 +24,34 @@ import (
 //	sha256sum controllers/sandbox/sandbox.go controllers/sandbox/volume.go controllers/sandbox/firewall.go
 func TestSandboxControllerFrozen(t *testing.T) {
 	frozen := map[string]string{
+		// SQLite disks (loud failures): the two paths that leave a database
+		// unreplicated now say so at Error instead of returning quietly --
+		// configureSqliteVolume when a disk attaches with no backup service,
+		// and reregisterSqliteDisks when a sandbox outlives the runner that
+		// was replicating it. Neither has an error to propagate (the app is
+		// meant to keep running either way), so the log line is the only
+		// signal an operator gets. No saga edit: both are reached through
+		// sandboxOps.ConfigureVolumes and Init respectively, which both paths
+		// share.
+		//
+		// SQLite disks (revised after review): replication is now released
+		// after DestroySubContainers rather than before, so writes made during
+		// graceful shutdown still reach the coordinator; surviving sandboxes
+		// are re-registered in reconcileSandboxesOnBoot, since replication
+		// lives in the runner process and does not survive its restart; and
+		// the volume's directory mode is set explicitly because MkdirAll
+		// respects the umask.
+		//
+		// SQLite disks: ConfigureVolumes gained a "sqlite" provider arm
+		// (configureSqliteVolume), BuildSpec includes sqlite volumes in the
+		// chown-to-run-user set so the container can write its own database,
+		// and StopSandbox releases replication alongside disk leases. The saga
+		// path needs no matching edit: it reaches all three through
+		// sandboxOps.{ConfigureVolumes,BuildSpec}, which delegate to the
+		// SandboxController methods, and ReleaseSqliteDisks was added to the
+		// runtime interface and wired into the create saga's undo (see
+		// create_saga.go) the same way ReleaseTokenState is.
+		//
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
@@ -66,8 +94,8 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
 		// is only reached from Init, which both paths share, and the saga
 		// controller has no boot reconciliation of its own.
-		"sandbox.go":  "b574475091e6ea0f42be38e6b8f22ecdeda84b7c5a0b8004fa071e0a0657ae12",
-		"volume.go":   "580062fb8a34f3f7f965689467a4b0f2ed403bc63c1ecdeb44949a7ba7e08dff",
+		"sandbox.go":  "9de705f9e0b66c15db148dbd651f37e74597f2d4cc62b0f758dcf4eb139857ce",
+		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
 

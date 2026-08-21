@@ -85,7 +85,7 @@ func TestAddonsCreateInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create addon instance
-	result, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "")
+	result, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "", nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Id())
 }
@@ -98,7 +98,7 @@ func TestAddonsCreateInstanceDefaultVariant(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create with empty variant — should use default
-	result, err := client.CreateInstance(ctx, "test", "miren-postgresql", "", "myapp", "")
+	result, err := client.CreateInstance(ctx, "test", "miren-postgresql", "", "myapp", "", nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result.Id())
 }
@@ -111,11 +111,11 @@ func TestAddonsCreateInstanceDuplicatePrevented(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create first instance
-	_, err = client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "")
+	_, err = client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "", nil)
 	require.NoError(t, err)
 
 	// Attempt duplicate
-	_, err = client.CreateInstance(ctx, "test2", "miren-postgresql", "small", "myapp", "")
+	_, err = client.CreateInstance(ctx, "test2", "miren-postgresql", "small", "myapp", "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already attached")
 }
@@ -127,7 +127,7 @@ func TestAddonsCreateInstanceUnknownAddon(t *testing.T) {
 	_, err := ec.Create(ctx, "myapp", app)
 	require.NoError(t, err)
 
-	_, err = client.CreateInstance(ctx, "test", "miren-redis", "small", "myapp", "")
+	_, err = client.CreateInstance(ctx, "test", "miren-redis", "small", "myapp", "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown addon")
 }
@@ -145,7 +145,7 @@ func TestAddonsListInstances(t *testing.T) {
 	assert.Empty(t, result.Addons())
 
 	// Create an addon instance
-	_, err = client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "")
+	_, err = client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "", nil)
 	require.NoError(t, err)
 
 	// List again
@@ -164,7 +164,7 @@ func TestAddonsDeleteInstance(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create an addon instance
-	createResult, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "")
+	createResult, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", "myapp", "", nil)
 	require.NoError(t, err)
 
 	// Delete it
@@ -199,7 +199,7 @@ func TestAddonsDeleteInstanceNotFound(t *testing.T) {
 func createActiveAddon(t *testing.T, ctx context.Context, client *app_v1alpha.AddonsClient, ec *entityserver.Client, appName string) entity.Id {
 	t.Helper()
 
-	res, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", appName, "")
+	res, err := client.CreateInstance(ctx, "test", "miren-postgresql", "small", appName, "", nil)
 	require.NoError(t, err)
 
 	assocID := entity.Id(res.Id())

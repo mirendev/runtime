@@ -59,6 +59,9 @@ type ServiceConcurrencyConfig struct {
 // DiskConfig represents a disk attachment for a service.
 // Provider defaults to "miren" (network disk) when empty.
 // Use provider = "local" for node-local persistent storage.
+//
+// A SQLite database is not declared here. It comes from the miren-sqlite
+// addon, which attaches its own storage; see docs/docs/addons.md.
 type DiskConfig struct {
 	Name         string `toml:"name"`
 	Provider     string `toml:"provider"`
@@ -68,6 +71,42 @@ type DiskConfig struct {
 	Filesystem   string `toml:"filesystem"`
 	LeaseTimeout string `toml:"lease_timeout"`
 	Owner        string `toml:"owner"`
+}
+
+// Disk providers accepted in app.toml.
+const (
+	DiskProviderMiren = "miren"
+	DiskProviderLocal = "local"
+)
+
+// DefaultSqliteDbFile is the database name used when a sqlite disk does not
+// set db_file.
+const DefaultSqliteDbFile = "data.db"
+
+// DefaultSqliteId is the database identity used when a sqlite disk does not
+// set id.
+const DefaultSqliteId = "default"
+
+// singleWriterAddons are addons whose storage only one process may write, so a
+// service receiving it must run exactly one instance.
+var singleWriterAddons = map[string]bool{
+	"miren-sqlite": true,
+}
+
+// services reports whether an addon's storage reaches a named service. An empty
+// list means every service, matching how addon variables reach every service.
+func (c *AddonConfig) services() func(string) bool {
+	if c == nil || len(c.Services) == 0 {
+		return func(string) bool { return true }
+	}
+	return func(name string) bool {
+		for _, s := range c.Services {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // PortConfig represents a network port for a service
@@ -100,6 +139,15 @@ type ServiceConfig struct {
 type AddonConfig struct {
 	Variant string `toml:"variant"`
 	Version string `toml:"version"`
+
+	// Services names the services an addon's storage attaches to. Empty means
+	// every service, matching how addon variables reach every service.
+	//
+	// It exists because storage an addon supplies can carry constraints that
+	// the rest of the app should not have to inherit. A SQLite database allows
+	// one writer, so a service holding it must run a single fixed instance;
+	// without this an app could not also run a worker at three.
+	Services []string `toml:"services"`
 }
 
 // Task trigger values. A task's trigger says what starts it; the default is
@@ -485,16 +533,21 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Validate disk configurations
-		hasMirenDisks := false
+		//
+		// Miren disks are leased exclusively, so a service holding one must run
+		// a single fixed instance.
+		hasSingleWriterDisks := false
 		for i, disk := range svcConfig.Disks {
-			if disk.Provider != "" && disk.Provider != "miren" && disk.Provider != "local" {
+			switch disk.Provider {
+			case "", DiskProviderMiren, DiskProviderLocal:
+			default:
 				return &ValidationError{
 					KeyPath: svcPrefix + ".disks",
 					Message: fmt.Sprintf("service %s: disk[%d] (%s) has invalid provider %q, must be \"miren\" or \"local\"", serviceName, i, disk.Name, disk.Provider),
 				}
 			}
-			if disk.Provider == "" || disk.Provider == "miren" {
-				hasMirenDisks = true
+			if disk.Provider == "" || disk.Provider == DiskProviderMiren {
+				hasSingleWriterDisks = true
 			}
 			if disk.Name == "" {
 				return &ValidationError{
@@ -514,23 +567,23 @@ func (ac *AppConfig) Validate() error {
 					Message: fmt.Sprintf("service %s: disk[%d] (%s) mount_path must be an absolute path", serviceName, i, disk.Name),
 				}
 			}
-			if disk.Provider == "local" {
+			if disk.Provider == DiskProviderLocal {
 				if disk.SizeGB != 0 {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) size_gb is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) size_gb is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 				if disk.Filesystem != "" {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) filesystem is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) filesystem is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 				if disk.LeaseTimeout != "" {
 					return &ValidationError{
 						KeyPath: svcPrefix + ".disks",
-						Message: fmt.Sprintf("service %s: disk[%d] (%s) lease_timeout is not supported for local disks", serviceName, i, disk.Name),
+						Message: fmt.Sprintf("service %s: disk[%d] (%s) lease_timeout is not supported for %s disks", serviceName, i, disk.Name, disk.Provider),
 					}
 				}
 			} else {
@@ -558,7 +611,7 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		// Miren disks require fixed concurrency with a single instance
-		if hasMirenDisks {
+		if hasSingleWriterDisks {
 			if svcConfig.Concurrency == nil || svcConfig.Concurrency.Mode != "fixed" {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".concurrency",
@@ -576,6 +629,36 @@ func (ac *AppConfig) Validate() error {
 
 	if err := ac.validateTasks(); err != nil {
 		return err
+	}
+
+	// An addon that supplies single-writer storage constrains the services it
+	// attaches to. Catching it here means a deploy fails with the reason rather
+	// than succeeding and leaving the app with no database, which is what
+	// happens further down: appspec skips a disk on a service that can scale.
+	//
+	// The set is named here rather than read from the addon registry because
+	// app.toml is parsed client-side, where no registry exists. It is short and
+	// changes rarely; a provider joining it needs a line here too.
+	for addonName, cfg := range ac.Addons {
+		if !singleWriterAddons[addonName] {
+			continue
+		}
+
+		targets := cfg.services()
+		for serviceName, svcConfig := range ac.Services {
+			if svcConfig == nil || !targets(serviceName) {
+				continue
+			}
+			c := svcConfig.Concurrency
+			if c == nil || c.Mode != "fixed" || c.NumInstances != 1 {
+				return &ValidationError{
+					KeyPath: "services." + serviceName + ".concurrency",
+					Message: fmt.Sprintf(
+						"service %s: addon %s supplies a database that allows one writer, so the service must set mode = \"fixed\" with num_instances = 1, or the addon must name other services with services = [...]",
+						serviceName, addonName),
+				}
+			}
+		}
 	}
 
 	for name, target := range ac.Aliases {

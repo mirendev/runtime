@@ -1645,3 +1645,107 @@ comand = "bin/migrate"
 	assert.Contains(t, err.Error(), "unknown field")
 	assert.Contains(t, err.Error(), `did you mean "command"`)
 }
+
+// A SQLite database allows one writer, so a service holding it must run a
+// single fixed instance. Catching that here is the difference between a failed
+// deploy that says why and a green deploy with no database.
+func TestValidateSingleWriterAddonRequiresFixedSingleInstance(t *testing.T) {
+	t.Run("fixed single instance is accepted", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[addons.miren-sqlite]
+variant = "standard"
+`))
+		require.NoError(t, err)
+	})
+
+	t.Run("autoscaling service is rejected", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+
+[addons.miren-sqlite]
+variant = "standard"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allows one writer")
+	})
+
+	t.Run("more than one instance is rejected", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 3
+
+[addons.miren-sqlite]
+variant = "standard"
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "num_instances = 1")
+	})
+
+	// The scoping knob is what lets the rest of the app scale.
+	t.Run("services narrows the constraint", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 3
+
+[addons.miren-sqlite]
+variant = "standard"
+services = ["web"]
+`))
+		require.NoError(t, err, "worker should be free to scale when it is not named")
+		assert.Equal(t, []string{"web"}, ac.Addons["miren-sqlite"].Services)
+	})
+
+	// An addon with no single-writer storage constrains nothing.
+	t.Run("other addons are unaffected", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "auto"
+requests_per_instance = 10
+
+[addons.miren-postgresql]
+variant = "small"
+`))
+		require.NoError(t, err)
+	})
+}
+
+// provider = "sqlite" is no longer something a user writes; the addon supplies
+// the database and attaches its own storage.
+func TestValidateSqliteDiskProviderRejected(t *testing.T) {
+	_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.web.disks]]
+name = "state"
+provider = "sqlite"
+mount_path = "/data"
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `must be "miren" or "local"`)
+}

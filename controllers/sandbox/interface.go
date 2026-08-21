@@ -58,6 +58,7 @@ type SandboxContainerRuntime interface {
 	DestroySubContainers(ctx context.Context, id entity.Id) error
 	ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error
 	ReleaseHubs(id entity.Id)
+	ReleaseSqliteDisks(ctx context.Context, sandboxID entity.Id)
 	ReleaseTokenState(id entity.Id)
 	UnconfigureFirewall(sb *compute.Sandbox)
 	WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error

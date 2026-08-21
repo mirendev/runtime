@@ -257,6 +257,40 @@ func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]stri
 	return errAmbiguousWeb
 }
 
+// validateAddonServices rejects a services = [...] entry that names no service.
+//
+// A name that matches nothing is always a mistake, and a silent one: the addon's
+// storage is filtered onto no service at all, while its variables are not
+// service-filtered and still reach every service. The app deploys green with a
+// connection string pointing at a mount that was never created.
+//
+// This cannot live in appconfig.Validate, which sees app.toml alone. A service
+// may be declared only in the Procfile, and rejecting those here would break a
+// config that is entirely valid. Both sources are known at this point, and only
+// here.
+func validateAddonServices(ac *appconfig.AppConfig, procfileServices map[string]string) error {
+	if ac == nil {
+		return nil
+	}
+	for addonName, cfg := range ac.Addons {
+		if cfg == nil {
+			continue
+		}
+		for _, target := range cfg.Services {
+			if _, ok := ac.Services[target]; ok {
+				continue
+			}
+			if _, ok := procfileServices[target]; ok {
+				continue
+			}
+			return fmt.Errorf(
+				"addon %s: services lists %q, which is no service of this app",
+				addonName, target)
+		}
+	}
+	return nil
+}
+
 // migrateConsoleService moves a legacy [services.console] block to [tasks.console].
 //
 // Declaring [services.console] used to get you two things: a long-running
@@ -499,7 +533,11 @@ func validateNodePorts(ctx context.Context, eac *entityserver_v1alpha.EntityAcce
 func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, spec core_v1alpha.ConfigSpec) error {
 	for _, svc := range spec.Services {
 		for _, disk := range svc.Disks {
-			if disk.SizeGb > 0 || disk.Name == "" || disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL {
+			// Local and sqlite disks are bind-mounted host directories with no
+			// Disk entity to look up, so there is nothing to pre-validate.
+			if disk.SizeGb > 0 || disk.Name == "" ||
+				disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL ||
+				disk.Provider == core_v1alpha.ConfigSpecServicesDisksSQLITE {
 				continue
 			}
 			// size_gb == 0 means we expect the disk to already exist
@@ -517,7 +555,7 @@ func validateDiskConfigs(ctx context.Context, eac *entityserver_v1alpha.EntityAc
 
 func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvider {
 	switch provider {
-	case "local":
+	case appconfig.DiskProviderLocal:
 		return core_v1alpha.ConfigSpecServicesDisksLOCAL
 	default:
 		return core_v1alpha.ConfigSpecServicesDisksMIREN
@@ -1579,6 +1617,13 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		return nil, err
 	}
 
+	// Checked here rather than in appconfig.Validate for the same reason: a
+	// service may come from the Procfile, and only this side sees both.
+	if err := validateAddonServices(ac, procfileServices); err != nil {
+		b.sendErrorStatus(ctx, status, "%s", err)
+		return nil, err
+	}
+
 	// Build the version config from all inputs
 	configSpec := buildVersionConfig(ConfigInputs{
 		BuildResult:      res,
@@ -1875,12 +1920,14 @@ func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appco
 	for addonName, cfg := range ac.Addons {
 		variant := ""
 		version := ""
+		var services []string
 		if cfg != nil {
 			variant = cfg.Variant
 			version = cfg.Version
+			services = cfg.Services
 		}
 
-		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName, version)
+		_, err := b.addonsClient.CreateInstance(ctx, "", addonName, variant, appName, version, services)
 		if err != nil {
 			// "already attached" is expected on redeploys
 			if strings.Contains(err.Error(), "already attached") {
