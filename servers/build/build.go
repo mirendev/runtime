@@ -1206,6 +1206,52 @@ func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.I
 	)
 }
 
+// aliasedLocalMountPaths returns the sorted, distinct mount paths of the config's
+// provider="local" disks when 2+ of them exist at different paths. Local storage
+// is keyed per app, so every local disk (across all services, whatever its name
+// or mount_path) resolves to the same per-app host directory. Distinct mount
+// paths then misleadingly imply distinct storage when they are really views onto
+// the same files. Returns nil when there's nothing surprising to report: fewer
+// than two local disks, or several local disks that all share one mount path.
+func aliasedLocalMountPaths(configSpec core_v1alpha.ConfigSpec) []string {
+	seen := make(map[string]struct{})
+	for _, svc := range configSpec.Services {
+		for _, disk := range svc.Disks {
+			if disk.Provider == core_v1alpha.ConfigSpecServicesDisksLOCAL {
+				seen[disk.MountPath] = struct{}{}
+			}
+		}
+	}
+	if len(seen) < 2 {
+		return nil
+	}
+	paths := make([]string, 0, len(seen))
+	for p := range seen {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+// checkAliasedLocalDisks warns when the config declares local disks at 2+
+// distinct mount paths, which all alias to the same shared per-app store. Unlike
+// the migration warning this needs no on-disk check — the aliasing is visible in
+// the config alone.
+func (b *Builder) checkAliasedLocalDisks(ctx context.Context, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
+	paths := aliasedLocalMountPaths(configSpec)
+	if len(paths) == 0 {
+		return
+	}
+
+	b.sendLogStatus(ctx, status, "warn", "Multiple local disks share one per-app store",
+		logField("detail", "These local disks all map to the same per-app directory, so they're views onto "+
+			"the same files and a write to one shows up at the others: "+strings.Join(paths, ", ")+". "+
+			"If you want isolated areas, use subdirectories under a single local disk (like /data/cache and "+
+			"/data/uploads) instead of separate disks."),
+		logField("link", "[Configuring Disks](https://miren.md/disks)"),
+	)
+}
+
 // isSystemEnvVar returns true if the given key is a system-managed env var
 // that should not be injected as a build arg. The whole MIREN_ namespace is
 // reserved (the injected MIREN_RUNTIME_* vars are enumerated in
@@ -1808,6 +1854,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
 		b.checkLocalStorageMigration(ctx, appRec.ID, configSpec, status)
+		b.checkAliasedLocalDisks(ctx, configSpec, status)
 	}
 
 	// Log the deployment to the app's logs
