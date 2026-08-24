@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
@@ -41,6 +42,19 @@ func AppRun(ctx *Context, opts struct {
 }) error {
 	runs, err := runsClient(ctx)
 	if err != nil {
+		// Compatibility window: a server from before durable runs (<= v0.13)
+		// does not offer the app-runs capability. That specific case comes back
+		// as a lookup error -- the server answered, it just does not have the
+		// capability -- and only that case falls back to the legacy
+		// exec-by-app path. A transport or auth failure is a real error and
+		// must surface unchanged rather than be misread as an old server.
+		// Remove this fallback once v0.13 is out of the compatibility window.
+		if serverPredatesRuns(err) {
+			if opts.Task != "" || opts.Detach {
+				return fmt.Errorf("--task and --detach need a newer cluster that supports durable runs; a plain `miren app run` still works against this one")
+			}
+			return appRunLegacy(ctx, opts.App, opts.Args)
+		}
 		return err
 	}
 
@@ -74,6 +88,64 @@ func AppRun(ctx *Context, opts struct {
 	}
 
 	return reportRunExit(ctx, runs, runID)
+}
+
+// serverPredatesRuns reports whether a runsClient error means the cluster is
+// too old to offer durable runs, as opposed to being unreachable, wedged, or
+// refusing the caller.
+//
+// Only a lookup failure qualifies: the server answered and said it does not have
+// the app-runs capability. Transport and auth failures are different
+// ResolveError kinds and must not fall back -- retrying an old protocol against
+// a healthy current server would mask the real problem. RPCClient wraps the
+// error in a *ui.Diagnostic, but that unwraps to its cause, so errors.Is still
+// reaches the ResolveError underneath.
+func serverPredatesRuns(err error) bool {
+	return errors.Is(err, rpc.ErrResolveLookup)
+}
+
+// appRunLegacy runs a command through the pre-durable-runs exec-by-app path.
+//
+// It exists only for the compatibility window. A current CLI talking to a server
+// that predates durable runs (<= v0.13) cannot create a Run, so it falls back to
+// the exec protocol that server still speaks: the server creates an ephemeral
+// sandbox for the app and streams a shell into it. This reproduces the v0.13
+// client exactly, so exit codes still propagate, but none of the durable-run
+// surface (--task, --detach, retrievable outcomes) is available -- the caller
+// has already been steered away from those before reaching here.
+//
+// Remove this once v0.13 is out of the compatibility window.
+func appRunLegacy(ctx *Context, app string, args []string) error {
+	opt := new(exec_v1alpha.ShellOptions)
+	if len(args) > 0 {
+		opt.SetCommand(args)
+	}
+
+	in, out, winUpdates, cleanup := setupExecIO(ctx, opt)
+	defer cleanup()
+
+	cl, err := ctx.RPCClient("dev.miren.runtime/exec")
+	if err != nil {
+		return err
+	}
+
+	sec := exec_v1alpha.NewSandboxExecClient(cl)
+
+	results, err := sec.Exec(
+		ctx,
+		"app", app,
+		strings.Join(args, " "),
+		opt,
+		stream.ServeReader(ctx, in),
+		stream.ServeWriter(ctx, out),
+		stream.ChanReader(winUpdates),
+	)
+	if err != nil {
+		return err
+	}
+
+	ctx.SetExitCode(int(results.Code()))
+	return nil
 }
 
 // stdinIsTerminal reports whether a person is typing at this command.

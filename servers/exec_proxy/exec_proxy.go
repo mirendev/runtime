@@ -5,33 +5,47 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
+	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+// RunCreator records a durable run in-process and returns its id and the name
+// its first attempt's sandbox will have. The exec proxy uses it on the legacy
+// exec-by-app compatibility path so the run is created with the caller's own
+// identity rather than the coordinator's. *app.AppInfo satisfies it.
+type RunCreator interface {
+	CreateRunEntity(ctx context.Context, app, task string, command []string, tty bool) (entity.Id, string, error)
+}
+
 type Server struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
-	rs  *rpc.State
+	Log  *slog.Logger
+	EAC  *entityserver_v1alpha.EntityAccessClient
+	rs   *rpc.State
+	runs RunCreator
 }
 
 func NewServer(
 	log *slog.Logger,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	rs *rpc.State,
+	runs RunCreator,
 ) *Server {
 	return &Server{
-		Log: log,
-		EAC: eac,
-		rs:  rs,
+		Log:  log,
+		EAC:  eac,
+		rs:   rs,
+		runs: runs,
 	}
 }
 
@@ -82,7 +96,12 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		}
 
 	case "app":
-		return fmt.Errorf("exec by app name is no longer supported; use `miren app run` (which creates a run) or `miren sandbox exec` for an existing sandbox")
+		// Compatibility window: a pre-durable-runs client (<= v0.13) reaches an
+		// app by name here, expecting the old ephemeral-sandbox exec. Rather
+		// than restore that leak-prone path, translate the request onto a
+		// durable run and attach to it, so the run controller owns the sandbox's
+		// lifecycle. Remove this once v0.13 is out of the compatibility window.
+		return s.execByApp(ctx, req)
 	}
 
 	if found == nil {
@@ -137,6 +156,266 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 	req.Results().SetCode(eret.Code())
 
 	return nil
+}
+
+// execByAppTimeout bounds how long the legacy exec-by-app path waits for its
+// run's sandbox to come up before giving up. It matches the client's own attach
+// deadline (cli attachToRun waits 2m), so a slow image pull is tolerated while a
+// run that never starts does not pin the request handler open forever.
+const execByAppTimeout = 2 * time.Minute
+
+// execByAppPoll is how often the wait loop re-checks the entity store.
+const execByAppPoll = 250 * time.Millisecond
+
+// execByApp serves a legacy exec-by-app request by creating a durable run and
+// attaching to it. It exists only for the compatibility window (see the "app"
+// case in Exec) and reproduces the old synchronous behavior a v0.13 client
+// expects: run the app's console command, stream its terminal, return its exit
+// code.
+//
+// The run is created with the caller's identity -- CreateRunEntity gates on
+// rpc.AllowApp with this ctx -- which is stricter than the v0.13 exec-by-app
+// path that had no app guard at all, and is the safe direction. Unlike the old
+// ephemeral sandbox this replaces, an abandoned run stays owned by the run
+// controller, so a handler that dies mid-request leaks nothing.
+func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExec) error {
+	args := req.Args()
+
+	var command []string
+	tty := false
+	if opts := args.Options(); opts != nil {
+		command = opts.Command()
+		tty = opts.Terminal()
+	}
+
+	runID, sandboxName, err := s.runs.CreateRunEntity(ctx, args.Value(), "", command, tty)
+	if err != nil {
+		return err
+	}
+
+	// Bridge the incoming exec streams once and re-wrap them per attach attempt,
+	// exactly as the client's attachToRun does. A not-ready attach returns before
+	// any stdin is pumped, so re-serving the same reader across attempts is safe.
+	inR := stream.ToReader(ctx, args.Input())
+	defer inR.Close()
+	outW := stream.ToWriter(ctx, args.Output())
+	defer outW.Close()
+
+	// winCh is fed once and read by a fresh ChanReader per attach attempt. While
+	// an attempt is returning early (not ready), nothing drains it, so a resize
+	// that arrives in that gap can be dropped. That is harmless here: the next
+	// successful attach reads the current terminal size anyway, and this is a
+	// compatibility shim rather than a long-lived interactive session.
+	winCh := make(chan *exec_v1alpha.WindowSize, 1)
+	if args.HasWindowUpdates() {
+		stream.ChanWriter(ctx, args.WindowUpdates(), winCh)
+	}
+
+	// Mirror the client's attach loop: the sandbox exists only once the run
+	// controller has admitted the run, and the node reports "not running yet"
+	// until the container boots, so retry while it is simply not ready. A real
+	// error -- a denial, a transport failure -- is returned at once rather than
+	// waited out.
+	deadline := time.Now().Add(execByAppTimeout)
+	for {
+		node, ready, err := s.runSandboxNode(ctx, sandboxName)
+		if err != nil {
+			return err
+		}
+
+		if ready {
+			rcl, err := s.rs.Connect(node.ApiAddress, "dev.miren.runtime/exec")
+			if err != nil {
+				return fmt.Errorf("failed to connect to node %s: %w", node.ApiAddress, err)
+			}
+
+			sec := &exec_v1alpha.SandboxExecClient{Client: rcl}
+			_, aerr := sec.Attach(
+				ctx,
+				sandboxName, "",
+				stream.ServeReader(ctx, inR),
+				stream.ServeWriter(ctx, outW),
+				stream.ChanReader(winCh),
+			)
+			if aerr == nil {
+				break // the container ended; its exit code is on the run.
+			}
+			if !attachNotReady(aerr) {
+				return fmt.Errorf("attaching to run %s: %w", runID, aerr)
+			}
+		}
+
+		// A short command can finish before the terminal ever attaches, taking
+		// its container with it. That is not a failure -- the run did what it was
+		// asked and recorded an outcome -- so stop waiting and report it.
+		if s.runIsTerminal(ctx, runID) {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("run %s for app %s did not start within %s", runID, args.Value(), execByAppTimeout)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		time.Sleep(execByAppPoll)
+	}
+
+	code, err := s.runExitCode(ctx, runID)
+	if err != nil {
+		return err
+	}
+	req.Results().SetCode(code)
+	return nil
+}
+
+// runSandboxNode reports the node a run's sandbox is scheduled to. ready is
+// false -- with no error -- while the sandbox has not been created or scheduled
+// yet, which is the caller's cue to wait rather than fail.
+func (s *Server) runSandboxNode(ctx context.Context, sandboxName string) (compute_v1alpha.Node, bool, error) {
+	var node compute_v1alpha.Node
+
+	ret, err := s.EAC.Get(ctx, sandboxName)
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return node, false, nil
+		}
+		return node, false, fmt.Errorf("looking up run sandbox %s: %w", sandboxName, err)
+	}
+
+	var sch compute_v1alpha.Schedule
+	sch.Decode(ret.Entity().Entity())
+	if sch.Key.Node == "" {
+		return node, false, nil
+	}
+
+	nret, err := s.EAC.Get(ctx, string(sch.Key.Node))
+	if err != nil {
+		return node, false, fmt.Errorf("looking up node %s: %w", sch.Key.Node, err)
+	}
+	node.Decode(nret.Entity().Entity())
+	return node, true, nil
+}
+
+// runExitCode reads a finished run's exit code, waiting briefly for the runner
+// to record it. The container's stdio closes just before the runner writes the
+// outcome, so reading once would be a coin flip on a fast command -- and losing
+// it would report a failing command as success to whatever invoked the old CLI.
+// A run that ended without a task exit code (canceled, timed out) reports 0
+// here; its status, not this number, carries that meaning, and the old protocol
+// has nowhere to put it.
+func (s *Server) runExitCode(ctx context.Context, runID entity.Id) (int32, error) {
+	deadline := time.Now().Add(runSettleTimeout)
+	var lastErr error
+	for {
+		run, err := s.getRun(ctx, runID)
+		if err != nil {
+			lastErr = err
+		} else {
+			if reportsExitCode(run.Status) && !run.Result.At.IsZero() {
+				return clampInt32(run.Result.Code), nil
+			}
+			if isTerminalRunStatus(run.Status) {
+				return 0, nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			// A run that could never be read has just been reported as a clean
+			// zero-exit, which on the wire is indistinguishable from a real one.
+			// Leave a trace so a corrupt or missing run entity is not silently a
+			// success in the server log.
+			if lastErr != nil {
+				s.Log.Warn("could not read a run's outcome before reporting its exit; assuming 0",
+					"run", runID, "error", lastErr)
+			}
+			return 0, nil
+		}
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		time.Sleep(execByAppPoll)
+	}
+}
+
+// runIsTerminal reports whether a run has reached a terminal state. A read
+// failure answers no, so the caller keeps waiting under its own deadline rather
+// than abandoning over a transient blip.
+func (s *Server) runIsTerminal(ctx context.Context, runID entity.Id) bool {
+	run, err := s.getRun(ctx, runID)
+	if err != nil {
+		return false
+	}
+	return isTerminalRunStatus(run.Status)
+}
+
+func (s *Server) getRun(ctx context.Context, runID entity.Id) (*run_v1alpha.Run, error) {
+	ret, err := s.EAC.Get(ctx, runID.String())
+	if err != nil {
+		return nil, err
+	}
+	var run run_v1alpha.Run
+	run.Decode(ret.Entity().Entity())
+	return &run, nil
+}
+
+// runSettleTimeout bounds how long runExitCode waits for the outcome to be
+// recorded after the container is gone. The two are written by different actors,
+// so a small gap is expected and is not the run still working.
+const runSettleTimeout = 15 * time.Second
+
+// attachNotReady reports whether an attach failed only because the run's
+// sandbox is not up yet, as opposed to a reason waiting will not fix. The typed
+// error does not survive the RPC hop to the node, so this matches the node's
+// three ways of saying "not yet" by text, the same way the client's
+// attachTargetMissing does.
+func attachNotReady(err error) bool {
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "failed to find sandbox") ||
+		strings.Contains(msg, "not scheduled to a node yet") ||
+		strings.Contains(msg, "is not running yet")
+}
+
+// reportsExitCode says whether a run ended by its command exiting, the only case
+// where the recorded code describes the task rather than its teardown. It
+// mirrors the app server's own rule for the same entity.
+func reportsExitCode(s run_v1alpha.RunStatus) bool {
+	switch s {
+	case run_v1alpha.SUCCEEDED, run_v1alpha.FAILED:
+		return true
+	case run_v1alpha.PENDING, run_v1alpha.RUNNING, run_v1alpha.TIMED_OUT,
+		run_v1alpha.CANCELED, run_v1alpha.SKIPPED:
+		return false
+	}
+	return false
+}
+
+func isTerminalRunStatus(s run_v1alpha.RunStatus) bool {
+	switch s {
+	case run_v1alpha.SUCCEEDED, run_v1alpha.FAILED, run_v1alpha.TIMED_OUT,
+		run_v1alpha.CANCELED, run_v1alpha.SKIPPED:
+		return true
+	case run_v1alpha.PENDING, run_v1alpha.RUNNING:
+		return false
+	}
+	return false
+}
+
+// clampInt32 saturates rather than wrapping at the entity(int64)->wire(int32)
+// boundary. Real exit codes are a byte, so this only matters for a corrupt or
+// hostile value, where wrapping into a small plausible number is the worst
+// outcome.
+func clampInt32(v int64) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }
 
 // resolveSandboxApp returns the app a sandbox entity belongs to, or "" if it
