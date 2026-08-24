@@ -44,7 +44,18 @@
         "version": {"type": "string", "description": "Language or runtime version."},
         "dockerfile": {"type": "string", "description": "Path to a custom Dockerfile."},
         "onbuild": {"type": "array", "description": "Commands run in /app after the main build steps.", "items": {"type": "string"}},
-        "alpine_image": {"type": "string", "description": "Custom Alpine base image for the runtime stage."}
+        "alpine_image": {"type": "string", "description": "Custom Alpine base image for the runtime stage."},
+        "secrets": {"type": "array", "description": "Secrets exposed to a Dockerfile build via --mount=type=secret. Never enters an image layer, and BuildKit does not write it to the build log on its own.", "items": {"$ref": "#/$defs/build_secret"}}
+      }
+    },
+    "build_secret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ref"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]+$", "description": "Mount identifier referenced by --mount=type=secret,id=<id>. Letters, digits, and _.- only."},
+        "backend": {"type": "string", "description": "Secret backend from which to resolve the value. Defaults to the built-in cluster store when omitted."},
+        "ref": {"type": "string", "minLength": 1, "description": "Reference naming the secret within the backend."}
       }
     },
     "port": {

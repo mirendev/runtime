@@ -45,7 +45,32 @@ type BuildConfig struct {
 	Version    string   `toml:"version"`
 
 	AlpineImage string `toml:"alpine_image"`
+
+	// Secrets names secret backends to expose to the build. Each entry is mounted
+	// into the build via BuildKit's secret session, so a `RUN --mount=type=secret,id=<id>`
+	// step can read the decrypted value without it ever landing in an image layer
+	// or build log. This is distinct from a runtime [[env]] reference: a build
+	// secret reaches only the build and never becomes an environment variable in
+	// the running container.
+	Secrets []BuildSecret `toml:"secrets,omitempty"`
 }
+
+// BuildSecret exposes a secret to the build. ID is the mount identifier a
+// Dockerfile references with `--mount=type=secret,id=<id>`; Backend and Ref
+// address the secret the same way a runtime [[env]] reference does. Backend is
+// optional and defaults to the built-in "cluster" store when omitted, matching
+// the `--backend` CLI flag.
+type BuildSecret struct {
+	ID      string `json:"id" toml:"id"`
+	Backend string `json:"backend,omitempty" toml:"backend,omitempty"`
+	Ref     string `json:"ref" toml:"ref"`
+}
+
+// buildSecretIDRegexp constrains a build secret's mount id to characters
+// BuildKit accepts in `--mount=type=secret,id=<id>`. An id with a slash or space
+// would pass a bare non-empty check but fail cryptically mid-build, so it is
+// rejected up front with a clear message.
+var buildSecretIDRegexp = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
 // ServiceConcurrencyConfig represents per-service concurrency configuration
 type ServiceConcurrencyConfig struct {
@@ -362,6 +387,23 @@ func (ac *AppConfig) Validate() error {
 		}
 		if err := ev.validateReference(fmt.Sprintf("env[%d]", i)); err != nil {
 			return err
+		}
+	}
+
+	// Validate build secrets
+	if ac.Build != nil {
+		seen := make(map[string]bool, len(ac.Build.Secrets))
+		for i, bs := range ac.Build.Secrets {
+			if err := bs.validate(fmt.Sprintf("build.secrets[%d]", i)); err != nil {
+				return err
+			}
+			if seen[bs.ID] {
+				return &ValidationError{
+					KeyPath: fmt.Sprintf("build.secrets[%d].id", i),
+					Message: fmt.Sprintf("build.secrets[%d]: duplicate id %q — each build secret needs a unique mount id", i, bs.ID),
+				}
+			}
+			seen[bs.ID] = true
 		}
 	}
 
@@ -940,6 +982,30 @@ func (ev AppEnvVar) validateReference(keyPath string) error {
 		return &ValidationError{
 			KeyPath: keyPath + ".value",
 			Message: fmt.Sprintf("%s: set either value or ref, not both — a referenced secret gets its value from the backend", keyPath),
+		}
+	}
+	return nil
+}
+
+// validate checks a build secret. A build secret has no inline form, so id and
+// ref are always required. Backend is optional and defaults to the "cluster"
+// store at resolve time, so it is not checked here.
+func (bs BuildSecret) validate(keyPath string) error {
+	switch {
+	case bs.ID == "":
+		return &ValidationError{
+			KeyPath: keyPath + ".id",
+			Message: fmt.Sprintf("%s: id is required — it is the mount identifier a Dockerfile references with --mount=type=secret,id=<id>", keyPath),
+		}
+	case !buildSecretIDRegexp.MatchString(bs.ID):
+		return &ValidationError{
+			KeyPath: keyPath + ".id",
+			Message: fmt.Sprintf("%s: id %q must contain only letters, digits, and _.- — BuildKit rejects other characters in a secret mount id", keyPath, bs.ID),
+		}
+	case bs.Ref == "":
+		return &ValidationError{
+			KeyPath: keyPath + ".ref",
+			Message: fmt.Sprintf("%s: ref is required to name the secret within the backend", keyPath),
 		}
 	}
 	return nil
