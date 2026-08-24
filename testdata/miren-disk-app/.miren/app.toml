@@ -1,0 +1,11 @@
+name = "miren-disk-app"
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 1
+
+[[services.web.disks]]
+name = "data"
+provider = "miren"
+mount_path = "/data"
+size_gb = 1
