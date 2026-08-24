@@ -179,14 +179,19 @@ func (s *Server) serve(ctx context.Context, sess *session) {
 	s.sendBestEffort(TypeClose, Close{SessionID: sess.id, Reason: "session ended"})
 
 	// An ordinary ending arrives as EOF or a cancelled context: the caller hung
-	// up, or this side tore the session down. Attaching an error field to those
-	// makes every healthy session read as a fault to an operator scanning for
-	// one, so the field is kept for endings that are actually unexpected.
+	// up, or this side tore the session down. Those are the healthy lifecycle of
+	// a session and belong at Info without an error field, which would otherwise
+	// make every one of them read as a fault to an operator scanning for one.
+	//
+	// Anything else is unexpected and goes to Warn rather than Error. A session
+	// dying on a transport error is usually the far end's network rather than
+	// this cluster failing at something it is responsible for, which is the line
+	// CLAUDE.md draws between the two.
 	switch {
 	case err == nil, errors.Is(err, io.EOF), errors.Is(err, context.Canceled):
 		s.log.Info("relayed RPC session closed", "session", sess.id)
 	default:
-		s.log.Info("relayed RPC session closed", "session", sess.id, "error", err)
+		s.log.Warn("relayed RPC session closed", "session", sess.id, "error", err)
 	}
 }
 
