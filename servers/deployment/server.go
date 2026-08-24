@@ -144,14 +144,16 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	// not-found version is left alone rather than rejected. Any other lookup
 	// error fails closed — skipping the check on a transient store error would
 	// let a cross-app version slip through.
+	appVersionID := args.AppVersionId()
 	var appVersion core_v1alpha.AppVersion
-	switch err := d.EC.Get(ctx, args.AppVersionId(), &appVersion); {
+	switch err := d.getAppVersion(ctx, appVersionID, &appVersion); {
 	case err == nil:
 		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); verifyErr != nil {
 			return verifyErr
 		}
+		appVersionID = string(appVersion.ID)
 	case !errors.Is(err, cond.ErrNotFound{}):
-		d.Log.Error("Failed to look up app version", "app_version_id", args.AppVersionId(), "error", err)
+		d.Log.Error("Failed to look up app version", "app_version_id", appVersionID, "error", err)
 		return cond.Error("failed to look up app version")
 	}
 
@@ -166,7 +168,7 @@ func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment
 	rec, err := d.tracker.Begin(ctx, deploylifecycle.BeginParams{
 		AppName:    appName,
 		ClusterID:  clusterId,
-		AppVersion: normalizeAppVersion(args.AppVersionId(), ""),
+		AppVersion: normalizeAppVersion(appVersionID, ""),
 		GitInfo:    gitInfo,
 	})
 	if err != nil {
@@ -550,11 +552,12 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 	// rejected; the cross-app attack always names a real, existing version. Any
 	// other lookup error fails closed.
 	var appVersion core_v1alpha.AppVersion
-	switch err := d.EC.Get(ctx, appVersionId, &appVersion); {
+	switch err := d.getAppVersion(ctx, appVersionId, &appVersion); {
 	case err == nil:
 		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, deployment.AppName); verifyErr != nil {
 			return verifyErr
 		}
+		appVersionId = string(appVersion.ID)
 	case !errors.Is(err, cond.ErrNotFound{}):
 		d.Log.Error("Failed to look up app version", "app_version_id", appVersionId, "error", err)
 		return cond.Error("failed to look up app version")
@@ -745,8 +748,8 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 
 	appName := args.AppName()
 	clusterId := args.ClusterId()
-	appVersionId := args.AppVersionId()
-	sourceVersionId := appVersionId
+	requestedVersionId := args.AppVersionId()
+	appVersionId := requestedVersionId
 	isRollback := args.HasIsRollback() && args.IsRollback()
 
 	// Enforce app scoping: scoped callers (e.g. OIDC) can only deploy their bound app
@@ -756,7 +759,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 
 	// Verify the AppVersion entity exists
 	var appVersion core_v1alpha.AppVersion
-	if err := d.EC.Get(ctx, appVersionId, &appVersion); err != nil {
+	if err := d.getAppVersion(ctx, appVersionId, &appVersion); err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
 			results.SetError(fmt.Sprintf("app version %q not found", appVersionId))
 			return nil
@@ -764,6 +767,12 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		d.Log.Error("Failed to look up app version", "app_version_id", appVersionId, "error", err)
 		results.SetError("failed to look up app version")
 		return nil
+	}
+	appVersionId = string(appVersion.ID)
+	sourceVersionIds := map[string]struct{}{
+		requestedVersionId: {},
+		appVersionId:       {},
+		appVersion.Version: {},
 	}
 
 	// The version must belong to the app being deployed — AllowApp only
@@ -781,7 +790,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			return nil
 		}
 		appVersion = *derivedVersion
-		appVersionId = derivedVersion.Version
+		appVersionId = string(derivedVersion.ID)
 		d.Log.Info("Created derived version with env vars",
 			"original", args.AppVersionId(), "derived", appVersionId,
 			"env_var_count", len(args.EnvVars()))
@@ -874,7 +883,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		d.Log.Error("Failed to list deployments for source lookup", "error", listErr)
 	} else {
 		for _, dwe := range allDeployments {
-			if dwe.deployment.AppVersion == sourceVersionId {
+			if _, ok := sourceVersionIds[dwe.deployment.AppVersion]; ok {
 				gitInfo = dwe.deployment.GitInfo
 				sourceDeploymentID = string(dwe.deployment.ID)
 				break // listDeploymentsInternal returns newest first
@@ -1087,6 +1096,9 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 	mutResult *appclient.MutateResult, results envVarDeployResults) error {
 
 	appVersionId := mutResult.VersionID
+	if mutResult.AppVersion != nil && mutResult.AppVersion.ID != "" {
+		appVersionId = string(mutResult.AppVersion.ID)
+	}
 
 	// An env-var change has no build, so the record goes straight from Begin to
 	// active. Begin takes the deploy lock, contending with any server-owned
@@ -1360,7 +1372,11 @@ func (d *DeploymentServer) resolveShortIDs(ctx context.Context, ids []string) ma
 		if _, ok := result[id]; ok {
 			continue // already resolved
 		}
-		resp, err := d.EAC.Get(ctx, id)
+		versionID, err := appVersionRefID(id)
+		if err != nil {
+			continue
+		}
+		resp, err := d.EAC.Get(ctx, string(versionID))
 		if err != nil {
 			continue
 		}
@@ -1369,6 +1385,34 @@ func (d *DeploymentServer) resolveShortIDs(ctx context.Context, ids []string) ma
 		}
 	}
 	return result
+}
+
+// appVersionRefID turns every supported app-version reference into the entity
+// ID shape expected by EntityAccess. Deployment records historically contain a
+// mix of canonical IDs and bare version names, while operators may also supply
+// a short ID. EntityAccess resolves the latter once it is scoped to the kind.
+func appVersionRefID(ref string) (entity.Id, error) {
+	const prefix = "app_version/"
+
+	if ref == "" {
+		return "", cond.ValidationFailure("missing-field", "app_version_id is required")
+	}
+	if strings.Contains(ref, "/") {
+		if !strings.HasPrefix(ref, prefix) || len(ref) == len(prefix) {
+			return "", cond.ValidationFailure("invalid-app-version-id",
+				fmt.Sprintf("invalid app version reference %q", ref))
+		}
+		return entity.Id(ref), nil
+	}
+	return entity.Id(prefix + ref), nil
+}
+
+func (d *DeploymentServer) getAppVersion(ctx context.Context, ref string, version *core_v1alpha.AppVersion) error {
+	id, err := appVersionRefID(ref)
+	if err != nil {
+		return err
+	}
+	return d.EC.GetById(ctx, id, version)
 }
 
 type deploymentWithEntity struct {

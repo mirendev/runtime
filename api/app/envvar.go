@@ -454,6 +454,7 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver sec
 	if err != nil {
 		return nil, err
 	}
+	appVer.ID = avid
 
 	if err := ec.Patch(ctx, appRec.ID, appRev,
 		entity.Ref(core_v1alpha.AppActiveVersionId, avid),
