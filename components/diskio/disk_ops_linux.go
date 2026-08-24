@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -249,7 +250,58 @@ func (r *realDiskMountOps) LbdAttach(ctx context.Context, imagePath, logDir stri
 		return "", fmt.Errorf("lbdctl add returned empty device path")
 	}
 
+	// The kernel registers the block device in sysfs, but the /dev node is
+	// normally created by udev. Containers whose /dev is a private tmpfs have
+	// no udev, so the node never appears and the mount that follows fails with
+	// ENOENT. Create it ourselves from the major:minor sysfs reports.
+	if err := ensureDeviceNode(result.Device); err != nil {
+		return "", fmt.Errorf("lbdctl add: %w", err)
+	}
+
 	return result.Device, nil
+}
+
+// ensureDeviceNode makes sure the block device node at devicePath (e.g.
+// /dev/lbd0) exists, creating it from /sys/block/<name>/dev when it is missing.
+// This lets accelerator disks mount in environments without udev.
+func ensureDeviceNode(devicePath string) error {
+	if _, err := os.Stat(devicePath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", devicePath, err)
+	}
+
+	name := filepath.Base(devicePath)
+	sysDev := filepath.Join("/sys/block", name, "dev")
+	data, err := os.ReadFile(sysDev)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", sysDev, err)
+	}
+
+	majStr, minStr, ok := strings.Cut(strings.TrimSpace(string(data)), ":")
+	if !ok {
+		return fmt.Errorf("unexpected %s contents %q", sysDev, string(data))
+	}
+	// ParseUint with bitSize 32 bounds the values to what unix.Mkdev accepts,
+	// so the uint32 conversions below cannot overflow.
+	major, err := strconv.ParseUint(majStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse major from %q: %w", string(data), err)
+	}
+	minor, err := strconv.ParseUint(minStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse minor from %q: %w", string(data), err)
+	}
+
+	dev := int(unix.Mkdev(uint32(major), uint32(minor)))
+	if err := unix.Mknod(devicePath, unix.S_IFBLK|0o600, dev); err != nil {
+		// A concurrent udev (or a retry) may have created it already.
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return fmt.Errorf("mknod %s (%d:%d): %w", devicePath, major, minor, err)
+	}
+	return nil
 }
 
 func (r *realDiskMountOps) LbdDetach(ctx context.Context, devicePath string) error {
