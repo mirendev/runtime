@@ -414,21 +414,28 @@ func TestRapidRedeployWithDisk(t *testing.T) {
 		createAppVersion(t, ctx, h, verID, appID, version, image, diskName, diskSizeGB)
 		setActiveVersion(t, ctx, h, appID, verID)
 
-		// Launcher reconcile: creates new pool, scales old pool(s) to 0
+		// The first launcher pass scales old disk pools to 0, then waits for
+		// their sandboxes to finish teardown. The fake lifecycle advances that
+		// teardown explicitly below.
 		reconcileLauncher(t, ctx, launcher, appID)
 
-		// Retire sandboxes in scaled-down pools (release leases + mark DEAD)
+		// Retire sandboxes in scaled-down pools (release leases + mark STOPPED).
 		retireOldSandboxes(t, ctx, h)
 
-		// Manager reconcile: creates sandbox for the new pool
-		reconcileAllPools(t, ctx, h, mgr)
-
 		// Run 0-2 concurrent disk controller reconciliation rounds per iteration
-		// to create varying interleaving patterns
+		// to create varying cleanup interleavings.
 		reconcileRounds := v % 3
 		for range reconcileRounds {
 			concurrentReconcileRound(ctx, h, concWorkers)
 		}
+
+		// DEAD means sandbox shutdown and resource cleanup are complete. Only
+		// now may the launcher create the replacement disk pool.
+		finalizeStoppedSandboxes(t, ctx, h)
+		reconcileLauncher(t, ctx, launcher, appID)
+
+		// Manager reconcile: creates sandbox for the new pool.
+		reconcileAllPools(t, ctx, h, mgr)
 
 		// Boot pending sandboxes (acquire disk leases)
 		bootPendingSandboxes(t, ctx, h, appID)
