@@ -1,6 +1,7 @@
 package stackbuild
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -157,7 +158,7 @@ func (s *BunStack) Init(opts BuildOptions) {
 	}
 }
 
-func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *BunStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -170,7 +171,9 @@ func (s *BunStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(imagerefs.GetBunImage(version))
+	// Bun's image relocates node onto a PATH its Dockerfile sets, plus other
+	// runtime env; baseImage carries that environment into the final image.
+	base := s.baseImage(ctx, imagerefs.GetBunImage(version), opts)
 
 	base = s.addAppUser(base)
 

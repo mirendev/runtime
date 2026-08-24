@@ -1,6 +1,7 @@
 package stackbuild
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -189,7 +190,7 @@ func (s *GoStack) parseGoModVersion() string {
 	return ""
 }
 
-func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -198,7 +199,10 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 		llb.WithCustomName("application code"),
 	)
 
-	mr := imagemetaresolver.Default()
+	// New(), not the process-wide Default() singleton, so a long-lived build
+	// server resolves a coherent current config for this build's builder image
+	// rather than a stale cached revision of the mutable tag (see baseImage).
+	mr := imagemetaresolver.New()
 	version := "1.23"
 	if opts.Version != "" {
 		version = opts.Version
@@ -256,7 +260,7 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 	builder = builder.AddEnv("APP", "/bin/app")
 	builder = s.applyOnBuild(builder, opts)
 
-	runtime := s.assembleRuntime(h, mr, builder)
+	runtime := s.assembleRuntime(ctx, h, builder, opts)
 
 	return &runtime, nil
 }
@@ -279,9 +283,9 @@ func (s *GoStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
 // Both paths run as uid 2010 (the app user) for consistency with every other
 // stack: debian-slim creates it with adduser, distroless gets a written
 // /etc/passwd since it has no shell to run adduser.
-func (s *GoStack) assembleRuntime(h *highlevelBuilder, mr llb.ImageMetaResolver, builder llb.State) llb.State {
+func (s *GoStack) assembleRuntime(ctx context.Context, h *highlevelBuilder, builder llb.State, opts BuildOptions) llb.State {
 	if s.cgoEnabled || len(s.Augmentations()) > 0 {
-		rt := llb.Image(imagerefs.DebianSlim, llb.WithMetaResolver(mr))
+		rt := s.baseImage(ctx, imagerefs.DebianSlim, opts)
 		rt = h.aptInstall(rt, "ca-certificates")
 		rt = s.addAppUser(rt) // sets result.Config.User = "2010"
 		rt = rt.File(llb.Mkdir("/app", 0o755,
@@ -299,7 +303,7 @@ func (s *GoStack) assembleRuntime(h *highlevelBuilder, mr llb.ImageMetaResolver,
 		return rt
 	}
 
-	rt := llb.Image(imagerefs.GoRuntimeStatic, llb.WithMetaResolver(mr))
+	rt := s.baseImage(ctx, imagerefs.GoRuntimeStatic, opts)
 
 	// distroless ships no shell or coreutils, which breaks two things: the
 	// runner launches the app as `/bin/sh -c <command>` (controllers/sandbox),

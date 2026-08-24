@@ -216,7 +216,7 @@ func TestRails(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.2"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.2"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -249,7 +249,7 @@ func TestRuby(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.2"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.2"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -277,7 +277,7 @@ func TestPython(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.11"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.11"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -297,7 +297,7 @@ func TestPython(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
 	}
 
-	state, err = stack.GenerateLLB(dir, BuildOptions{Version: "3.11"})
+	state, err = stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.11"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -325,7 +325,7 @@ func TestPythonPoetry(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.11"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.11"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -361,7 +361,7 @@ func TestNode(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "20"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "20"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -392,7 +392,7 @@ func TestNode(t *testing.T) {
 			},
 		}
 
-		state, err = stack.GenerateLLB(dir, BuildOptions{Version: "20"})
+		state, err = stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "20"})
 		require.NoError(t, err)
 
 		buildLLB(t, dir, state, func(r io.Reader) {
@@ -503,7 +503,7 @@ func TestNodeNextjs(t *testing.T) {
 			// The build graph must construct and marshal cleanly, including the
 			// Next.js build step (the AddEnv loop + build.Run) for the Next
 			// cases. This covers the GenerateLLB wiring without needing Docker.
-			state, err := stack.GenerateLLB(dir, BuildOptions{EnvVars: map[string]string{"NEXT_PUBLIC_FOO": "bar"}})
+			state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{EnvVars: map[string]string{"NEXT_PUBLIC_FOO": "bar"}})
 			require.NoError(t, err)
 			_, err = state.Marshal(context.Background())
 			require.NoError(t, err)
@@ -539,7 +539,7 @@ func TestBun(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
@@ -689,7 +689,7 @@ func TestGo(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.23"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1.23"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -756,7 +756,7 @@ func TestGoRuntimeIncludesNonGoFiles(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.23"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1.23"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -806,7 +806,7 @@ func TestGoCgo(t *testing.T) {
 	stack.Init(opts)
 	require.True(t, stack.cgoEnabled)
 
-	state, err := stack.GenerateLLB(dir, opts)
+	state, err := stack.GenerateLLB(context.Background(), dir, opts)
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -872,7 +872,7 @@ func main() {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1.23"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1.23"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -1057,7 +1057,7 @@ func TestRust(t *testing.T) {
 	}
 	require.True(t, stack.Detect())
 	stack.Init(BuildOptions{Version: "1"})
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "1"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -1095,7 +1095,7 @@ func TestPythonUv(t *testing.T) {
 	// Verify uv is detected
 	require.True(t, stack.Detect())
 
-	state, err := stack.GenerateLLB(dir, BuildOptions{Version: "3.11"})
+	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.11"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
