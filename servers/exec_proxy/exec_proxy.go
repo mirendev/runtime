@@ -197,6 +197,20 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 		return err
 	}
 
+	// Until this call hands back the run's own exit code, it owns the run's fate.
+	// A v0.13 client gets no run id, so any run abandoned here -- because the
+	// startup deadline passed, the client disconnected, or a transport error cut
+	// the attach -- is one it can neither observe nor cancel, and a run still
+	// pending would execute after we reported failure, so a natural retry runs the
+	// command twice. Cancel on every early exit; the happy path clears this flag
+	// first, and CancelRunEntity is a no-op on an already-terminal run.
+	done := false
+	defer func() {
+		if !done {
+			s.cancelAbandonedRun(ctx, runID)
+		}
+	}()
+
 	// Bridge the incoming exec streams once and re-wrap them per attach attempt,
 	// exactly as the client's attachToRun does. A not-ready attach returns before
 	// any stdin is pumped, so re-serving the same reader across attempts is safe.
@@ -265,16 +279,7 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 		}
 
 		if time.Now().After(deadline) {
-			// Cancel before returning, or the run stays pending and the
-			// controller executes it later -- after this call already told the
-			// legacy client it failed. The legacy protocol hands back no run id,
-			// so the caller cannot cancel it and a natural retry would run the
-			// command twice. This mirrors the client's own attachToRun, which
-			// cancels a run that never started for the same reason.
-			if _, cerr := s.runs.CancelRunEntity(ctx, runID.String()); cerr != nil {
-				s.Log.Warn("could not cancel a run that never started",
-					"run", runID, "error", cerr)
-			}
+			// The deferred cleanup cancels the still-pending run.
 			return fmt.Errorf("run %s for app %s did not start within %s and was canceled", runID, args.Value(), execByAppTimeout)
 		}
 		if ctx.Err() != nil {
@@ -288,7 +293,29 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 		return err
 	}
 	req.Results().SetCode(code)
+	done = true
 	return nil
+}
+
+// runCleanupTimeout bounds the cancellation issued when a legacy exec-by-app
+// request abandons its run. It runs on a detached context, so without a bound a
+// wedged entity store could hold the handler open past the request itself.
+const runCleanupTimeout = 10 * time.Second
+
+// cancelAbandonedRun cancels a run this call created but is giving up on.
+//
+// It deliberately does not use the request context: that context is often
+// already canceled (the client disconnected, which is one of the reasons we are
+// abandoning the run), and cancellation issued on a canceled context would fail
+// before it recorded anything. context.WithoutCancel keeps the caller identity
+// CancelRunEntity authorizes against while dropping the cancellation.
+func (s *Server) cancelAbandonedRun(ctx context.Context, runID entity.Id) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	defer cancel()
+
+	if _, err := s.runs.CancelRunEntity(cleanupCtx, runID.String()); err != nil {
+		s.Log.Warn("could not cancel an abandoned run", "run", runID, "error", err)
+	}
 }
 
 // execTTY reports whether a legacy exec-by-app request wants a terminal. A

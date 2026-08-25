@@ -1,17 +1,60 @@
 package execproxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 )
+
+type fakeRunManager struct {
+	canceledID     string
+	cancelCtxErr   error
+	cancelCtxHasIt bool
+}
+
+func (f *fakeRunManager) CreateRunEntity(context.Context, string, string, []string, bool) (entity.Id, string, error) {
+	return "", "", nil
+}
+
+func (f *fakeRunManager) CancelRunEntity(ctx context.Context, runID string) (bool, error) {
+	f.canceledID = runID
+	// Capture liveness at call time: the cleanup helper cancels its context on
+	// return, so it can only be inspected from inside the call.
+	f.cancelCtxErr = ctx.Err()
+	f.cancelCtxHasIt = true
+	return true, nil
+}
+
+// A run abandoned by the legacy exec-by-app path has to be canceled even when
+// the request context is already canceled -- a disconnected client is one of the
+// reasons we abandon it. Cancelling on the request context would fail before it
+// recorded anything, so cleanup must run on a detached context that still keeps
+// the caller identity CancelRunEntity authorizes against.
+func TestCancelAbandonedRunUsesLiveContext(t *testing.T) {
+	fake := &fakeRunManager{}
+	s := &Server{Log: testutils.TestLogger(t), runs: fake}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the request context is already dead
+
+	s.cancelAbandonedRun(ctx, entity.Id("run/demo-x"))
+
+	assert.Equal(t, "run/demo-x", fake.canceledID, "the abandoned run must be canceled")
+	require.True(t, fake.cancelCtxHasIt, "CancelRunEntity must have been called")
+	assert.NoError(t, fake.cancelCtxErr,
+		"cancellation must run on a live context, not the canceled request context")
+}
 
 // A v0.13 client asks for a terminal by carrying an initial WinSize, never by
 // setting Terminal (its setupExecIO leaves Terminal unset and the old exec
