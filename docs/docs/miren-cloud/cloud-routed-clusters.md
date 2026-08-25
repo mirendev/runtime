@@ -33,10 +33,16 @@ miren cluster add
 ```
 
 If the cluster you pick advertises no address your machine can dial, or
-advertises addresses that do not answer, the command asks cloud whether it has a
-link to that cluster. If it does, the entry is written to route through cloud
-and it tells you so. A cluster that neither you nor cloud can reach still fails,
-because that is a real problem rather than a routing choice.
+advertises addresses that do not answer, the command tries the cloud route
+itself: it opens a session through cloud and makes a call. If the cluster
+answers, the entry is written to route through cloud and it tells you so. A
+cluster that neither you nor cloud can reach still fails, because that is a real
+problem rather than a routing choice.
+
+It tries the route rather than asking whether one exists, because those are
+different questions. Cloud can hold a link to a cluster whose runtime is older
+than this feature, and that cluster will sit there without answering. Making the
+call is what tells the two apart.
 
 To skip the direct attempt entirely, ask for it:
 
