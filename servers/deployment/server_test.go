@@ -416,6 +416,119 @@ func TestListDeployments(t *testing.T) {
 	}
 }
 
+func TestListDeploymentsResolvesShortIDsForMixedVersionRefs(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("Failed to create deployment server: %v", err)
+	}
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	legacyVersionID, err := inmem.Client.Create(ctx, "mixed-app-v1", &core_v1alpha.AppVersion{Version: "mixed-app-v1"})
+	if err != nil {
+		t.Fatalf("Failed to create legacy app version: %v", err)
+	}
+	canonicalVersionID, err := inmem.Client.Create(ctx, "mixed-app-v2", &core_v1alpha.AppVersion{Version: "mixed-app-v2"})
+	if err != nil {
+		t.Fatalf("Failed to create canonical app version: %v", err)
+	}
+
+	legacyShortID := inmem.GetEntity(legacyVersionID).ShortId()
+	canonicalShortID := inmem.GetEntity(canonicalVersionID).ShortId()
+	if legacyShortID == "" || canonicalShortID == "" {
+		t.Fatal("Expected app versions to have short IDs")
+	}
+
+	for name, deployment := range map[string]*core_v1alpha.Deployment{
+		"mixed-dep-v1": {
+			AppName:    "mixed-app",
+			ClusterId:  "cluster1",
+			AppVersion: "mixed-app-v1",
+			Status:     "succeeded",
+			DeployedBy: core_v1alpha.DeployedBy{Timestamp: time.Now().Add(-time.Hour).Format(time.RFC3339)},
+		},
+		"mixed-dep-v2": {
+			AppName:    "mixed-app",
+			ClusterId:  "cluster1",
+			AppVersion: string(canonicalVersionID),
+			Status:     "active",
+			DeployedBy: core_v1alpha.DeployedBy{Timestamp: time.Now().Format(time.RFC3339)},
+		},
+	} {
+		if _, err := inmem.Client.Create(ctx, name, deployment); err != nil {
+			t.Fatalf("Failed to create deployment %s: %v", name, err)
+		}
+	}
+
+	result, err := client.ListDeployments(ctx, "mixed-app", "cluster1", "", 20)
+	if err != nil {
+		t.Fatalf("ListDeployments failed: %v", err)
+	}
+
+	wantShortIDs := map[string]string{
+		"mixed-app-v1":             legacyShortID,
+		string(canonicalVersionID): canonicalShortID,
+	}
+	if len(result.Deployments()) != len(wantShortIDs) {
+		t.Fatalf("Expected %d deployments, got %d", len(wantShortIDs), len(result.Deployments()))
+	}
+	for _, deployment := range result.Deployments() {
+		want, ok := wantShortIDs[deployment.AppVersionId()]
+		if !ok {
+			t.Fatalf("Unexpected app version %q", deployment.AppVersionId())
+		}
+		if !deployment.HasAppVersionShortId() || deployment.AppVersionShortId() != want {
+			t.Errorf("Version %q short ID = %q, want %q", deployment.AppVersionId(), deployment.AppVersionShortId(), want)
+		}
+	}
+}
+
+func TestSetEnvVarsRecordsCanonicalVersionID(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("Failed to create deployment server: %v", err)
+	}
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	versionID, err := inmem.Client.Create(ctx, "env-app-v1", &core_v1alpha.AppVersion{Version: "env-app-v1"})
+	if err != nil {
+		t.Fatalf("Failed to create app version: %v", err)
+	}
+	if _, err := inmem.Client.Create(ctx, "env-app", &core_v1alpha.App{ActiveVersion: versionID}); err != nil {
+		t.Fatalf("Failed to create app: %v", err)
+	}
+
+	envVar := &deployment_v1alpha.EnvironmentVariable{}
+	envVar.SetKey("GREETING")
+	envVar.SetValue("hello")
+	result, err := client.SetEnvVars(ctx, "env-app", "cluster1", []*deployment_v1alpha.EnvironmentVariable{envVar}, "")
+	if err != nil {
+		t.Fatalf("SetEnvVars failed: %v", err)
+	}
+	if result.HasError() && result.Error() != "" {
+		t.Fatalf("SetEnvVars returned error: %s", result.Error())
+	}
+
+	wantVersionID := "app_version/" + result.VersionId()
+	if got := result.Deployment().AppVersionId(); got != wantVersionID {
+		t.Errorf("Deployment app version = %q, want canonical ID %q", got, wantVersionID)
+	}
+	if !result.Deployment().HasAppVersionShortId() || result.Deployment().AppVersionShortId() == "" {
+		t.Error("Expected env deployment to include an app-version short ID")
+	}
+}
+
 func TestGetDeploymentById(t *testing.T) {
 	ctx := context.Background()
 
@@ -1013,8 +1126,8 @@ func TestDeployVersion(t *testing.T) {
 		if dep.Status() != "active" {
 			t.Errorf("Expected status 'active', got %s", dep.Status())
 		}
-		if dep.AppVersionId() != "testapp-v1abc" {
-			t.Errorf("Expected version 'testapp-v1abc', got %s", dep.AppVersionId())
+		if dep.AppVersionId() != string(versionId) {
+			t.Errorf("Expected canonical version %q, got %q", versionId, dep.AppVersionId())
 		}
 		if dep.SourceDeploymentId() != string(priorId) {
 			t.Errorf("Expected source_deployment_id %s, got %s", priorId, dep.SourceDeploymentId())
@@ -1027,8 +1140,6 @@ func TestDeployVersion(t *testing.T) {
 		if dep.GitInfo().Sha() != "abc123" {
 			t.Errorf("Expected git SHA 'abc123', got %s", dep.GitInfo().Sha())
 		}
-
-		_ = versionId // used indirectly via entity name lookup
 	})
 
 	t.Run("rollback marks previous as rolled_back", func(t *testing.T) {
@@ -1040,13 +1151,13 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		appVersion := &core_v1alpha.AppVersion{Version: "rollback-app-v1"}
-		_, err = inmem.Client.Create(ctx, "rollback-app-v1", appVersion)
+		version1ID, err := inmem.Client.Create(ctx, "rollback-app-v1", appVersion)
 		if err != nil {
 			t.Fatalf("Failed to create app version: %v", err)
 		}
 
 		appVersion2 := &core_v1alpha.AppVersion{Version: "rollback-app-v2"}
-		_, err = inmem.Client.Create(ctx, "rollback-app-v2", appVersion2)
+		version2ID, err := inmem.Client.Create(ctx, "rollback-app-v2", appVersion2)
 		if err != nil {
 			t.Fatalf("Failed to create app version v2: %v", err)
 		}
@@ -1055,7 +1166,7 @@ func TestDeployVersion(t *testing.T) {
 		activeDep := &core_v1alpha.Deployment{
 			AppName:    "rollback-app",
 			ClusterId:  "cluster1",
-			AppVersion: "rollback-app-v2",
+			AppVersion: string(version2ID),
 			Status:     "active",
 			DeployedBy: core_v1alpha.DeployedBy{
 				Timestamp: time.Now().Format(time.RFC3339),
@@ -1070,7 +1181,7 @@ func TestDeployVersion(t *testing.T) {
 		_, err = inmem.Client.Create(ctx, "succeeded-dep-v1", &core_v1alpha.Deployment{
 			AppName:    "rollback-app",
 			ClusterId:  "cluster1",
-			AppVersion: "rollback-app-v1",
+			AppVersion: string(version1ID),
 			Status:     "succeeded",
 			DeployedBy: core_v1alpha.DeployedBy{
 				Timestamp: time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
@@ -1081,7 +1192,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Roll back to v1
-		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", "rollback-app-v1", true, nil, "", "")
+		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", string(version1ID), true, nil, "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion (rollback) failed: %v", err)
 		}
@@ -1092,6 +1203,9 @@ func TestDeployVersion(t *testing.T) {
 		newDep := result.Deployment()
 		if newDep.Status() != "active" {
 			t.Errorf("Expected new deployment status 'active', got %s", newDep.Status())
+		}
+		if newDep.AppVersionId() != string(version1ID) {
+			t.Errorf("Expected rollback to retain canonical version %q, got %q", version1ID, newDep.AppVersionId())
 		}
 
 		// Verify the previous active deployment was marked as rolled_back

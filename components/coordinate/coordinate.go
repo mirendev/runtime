@@ -1412,7 +1412,13 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	)
 	c.cm.AddController(runSandboxReconciler)
 
-	eps := execproxy.NewServer(c.Log, eac, rs)
+	// AppInfo is built here (ahead of its own ExposeValue calls below) because
+	// the exec proxy needs it: its legacy exec-by-app compatibility path creates
+	// a run in-process through AppInfo rather than over a loopback RPC.
+	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
+	c.appInfo = ai
+
+	eps := execproxy.NewServer(c.Log, eac, rs, ai)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
 
 	// Give the addon framework an exec client so providers whose credential lives
@@ -1527,8 +1533,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	}
 	c.schemaReindex.Start(ctx)
 
-	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
-	c.appInfo = ai
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))

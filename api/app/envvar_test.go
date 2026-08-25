@@ -90,8 +90,10 @@ func TestSetEnvVarsComposesSequentially(t *testing.T) {
 	ctx, ec := newEnvTestClient(t)
 	createEnvTestApp(t, ctx, ec, "myapp", []core_v1alpha.Variable{{Key: "BASE", Value: "1", Source: "config"}})
 
-	_, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
+	result, err := SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "FOO", Value: "a"}}, "")
 	require.NoError(t, err)
+	require.Equal(t, entity.Id("app_version/"+result.VersionID), result.AppVersion.ID,
+		"mutation result must retain the canonical entity ID for deployment tracking")
 	_, err = SetEnvVars(ctx, ec, nil, "myapp", nil, []EnvVarInput{{Key: "BAR", Value: "b"}}, "")
 	require.NoError(t, err)
 

@@ -169,6 +169,22 @@ alpine_image = "alpine:3.19"
 | `onbuild` | string[] | Commands to run in `/app` after the main build steps | — |
 | `alpine_image` | string | Custom Alpine base image for the runtime stage | Built-in default |
 
+### `[[build.secrets]]` — Build-time secrets {#build-secrets}
+
+Exposes an encrypted [secret](/secrets) to a Dockerfile build. BuildKit keeps the value out of image layers and its own logs; your `RUN` command must not print it. Each entry is mounted by its `id`, which your Dockerfile reads with `RUN --mount=type=secret,id=<id>`. Supported for Dockerfile builds only — declaring one on an auto-detected language stack is an error. See [Using a secret at build time](/secrets#using-a-secret-at-build-time) for the full contract.
+
+```toml
+[[build.secrets]]
+id = "npm_token"
+ref = "registry/npm-token"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `id` | string | Mount identifier used in `--mount=type=secret,id=<id>`. Letters, digits, and `_.-` only; unique within the list | Required |
+| `backend` | string | [Secret](/secrets) backend to resolve against | `cluster` (built-in store) |
+| `ref` | string | Reference naming the secret within the backend | Required |
+
 ## `[services.<name>]` — Service Configuration {#services}
 
 Each named section under `services` defines a process in your app. See [Services](/services) for usage patterns.

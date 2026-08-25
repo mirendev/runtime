@@ -177,11 +177,24 @@ func (b *Builder) runBuildkitBuild(
 		b.Log.Info("injecting env vars into build", "count", len(buildEnvVars))
 	}
 
+	buildSecrets, err := b.resolveBuildSecrets(ctx, in.AppConfig, in.BuildStack.Stack)
+	if err != nil {
+		b.Log.Error("failed to resolve build secrets", "error", err)
+		status.SendError("Failed to resolve build secrets: %v", err)
+		return nil, "", "", err
+	}
+	if len(buildSecrets) > 0 {
+		b.Log.Info("injecting secrets into build", "count", len(buildSecrets))
+	}
+
 	tos := []TransformOptions{
 		WithBuildArg("MIREN_VERSION", in.VersionName),
 	}
 	if len(buildEnvVars) > 0 {
 		tos = append(tos, WithBuildArgs(buildEnvVars))
+	}
+	if len(buildSecrets) > 0 {
+		tos = append(tos, WithBuildSecrets(buildSecrets))
 	}
 
 	// Pass env vars for auto-stack builds. We have to copy the stack so

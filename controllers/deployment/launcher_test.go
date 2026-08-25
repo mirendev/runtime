@@ -3205,11 +3205,10 @@ func TestDiskPoolDrainedBeforeNewPoolCreated(t *testing.T) {
 	assert.Equal(t, "local", poolV2.SandboxSpec.Volume[0].Provider)
 }
 
-// TestDiskDrainBlockedByActiveSandbox verifies that when a RUNNING sandbox
-// exists for the old pool, the drain times out and the new pool is NOT created.
-// This proves drain-before-create ordering: the launcher won't start the new
-// version while the old one still holds the disk.
-func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
+// TestDiskDrainWaitsForStoppedSandboxToDie verifies that STOPPED is only a
+// teardown request, not proof that the old process and its disk resources are
+// gone. The replacement pool must wait until the sandbox reaches DEAD.
+func TestDiskDrainWaitsForStoppedSandboxToDie(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
 
@@ -3263,12 +3262,12 @@ func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
 	require.Len(t, poolsV1, 1)
 	poolV1ID := poolsV1[0].ID
 
-	// Simulate a RUNNING sandbox for the old pool (as the sandbox controller
-	// would create). This holds the disk and blocks draining.
+	// The pool manager marks the sandbox STOPPED before the sandbox controller
+	// finishes graceful shutdown and resource cleanup.
 	sb := &compute_v1alpha.Sandbox{
-		Status: compute_v1alpha.RUNNING,
+		Status: compute_v1alpha.STOPPED,
 	}
-	_, err = server.Client.Create(ctx, "old-sandbox",
+	sbID, err := server.Client.Create(ctx, "old-sandbox",
 		sb,
 		apiserver.WithLabels(types.LabelSet(
 			"pool", poolV1ID.String(),
@@ -3276,6 +3275,7 @@ func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
 		)),
 	)
 	require.NoError(t, err)
+	sb.ID = sbID
 
 	// Deploy v2
 	v2 := &core_v1alpha.AppVersion{
@@ -3310,14 +3310,14 @@ func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
 	err = server.Client.Update(ctx, app)
 	require.NoError(t, err)
 
-	// Reconcile should NOT create a new pool because the old sandbox is
-	// still running (drain times out). The service is skipped.
+	// Reconcile should NOT create a new pool while the old sandbox is still
+	// tearing down. The drain times out and the service is skipped.
 	err = launcher.Reconcile(ctx, app, nil)
 	require.NoError(t, err)
 
-	// Only the original pool should exist — no v2 pool was created
+	// Only the original pool should exist; no v2 pool was created.
 	allPools := listAllPools(t, ctx, server)
-	require.Len(t, allPools, 1, "should not create new pool while old sandbox is running")
+	require.Len(t, allPools, 1, "should not create new pool while old sandbox is stopped but not dead")
 
 	// The old pool was marked for drain (desired=0, no refs)
 	getRes, err := server.EAC.Get(ctx, poolV1ID.String())
@@ -3328,6 +3328,18 @@ func TestDiskDrainBlockedByActiveSandbox(t *testing.T) {
 		"old pool should be scaled to 0")
 	assert.Empty(t, poolV1.ReferencedByVersions,
 		"old pool should have no version references")
+
+	// DEAD confirms shutdown and cleanup finished. The next reconcile may now
+	// create the replacement pool.
+	sb.Status = compute_v1alpha.DEAD
+	err = server.Client.Update(ctx, sb)
+	require.NoError(t, err)
+
+	err = launcher.Reconcile(ctx, app, nil)
+	require.NoError(t, err)
+
+	allPools = listAllPools(t, ctx, server)
+	require.Len(t, allPools, 2, "should create replacement pool after old sandbox is dead")
 }
 
 // TestServiceHasDisks verifies the serviceHasDisks helper.

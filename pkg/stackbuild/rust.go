@@ -1,12 +1,12 @@
 package stackbuild
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"github.com/pelletier/go-toml/v2"
 	"miren.dev/runtime/pkg/imagerefs"
 )
@@ -144,7 +144,7 @@ func (s *RustStack) parseCargoToml() *cargoToml {
 	return &cargo
 }
 
-func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *RustStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -158,12 +158,10 @@ func (s *RustStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		version = opts.Version
 	}
 
-	// NOTE: If we don't pass this in with WithMetaResolver, then
-	// buildkit doesn't add the info from the image, info like
-	// the PATH env var.
-	mr := imagemetaresolver.Default()
-
-	base := llb.Image(imagerefs.GetRustImage(version), llb.WithMetaResolver(mr))
+	// baseImage resolves the image config with a meta resolver, which is what
+	// makes buildkit add the base image's own env (PATH, CARGO_HOME, ...) to the
+	// build steps, and it also folds that env into the final image config.
+	base := s.baseImage(ctx, imagerefs.GetRustImage(version), opts)
 
 	base = s.addAppUser(base)
 

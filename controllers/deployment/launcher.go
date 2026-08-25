@@ -1627,8 +1627,9 @@ func (l *Launcher) findStalePoolsForService(
 	return stale, nil
 }
 
-// waitForPoolDrained polls until a pool has no RUNNING or PENDING sandboxes,
-// indicating that its resources (including disk leases) have been released.
+// waitForPoolDrained polls until a pool has no sandboxes that are still being
+// torn down. STOPPED requests teardown; DEAD confirms it finished and resources
+// such as local disk mounts have been released.
 func (l *Launcher) waitForPoolDrained(ctx context.Context, poolID entity.Id, service string, timeout time.Duration) error {
 	pollInterval := 500 * time.Millisecond
 	deadline := time.Now().Add(timeout)
@@ -1660,9 +1661,11 @@ func (l *Launcher) waitForPoolDrained(ctx context.Context, poolID entity.Id, ser
 	}
 }
 
-// hasActiveSandboxForPool returns true if there are any RUNNING, PENDING, or
-// NOT_READY sandboxes for the given pool. NOT_READY sandboxes may still hold
-// disk leases, so we must wait for them to fully stop.
+// hasActiveSandboxForPool returns true if any sandbox for the pool has not
+// reached DEAD. STOPPED is deliberately active here: the pool manager sets it
+// before the sandbox controller finishes graceful process shutdown and resource
+// cleanup, so starting a replacement at STOPPED can overlap access to a local
+// disk with the retiring process.
 func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id, service string) (bool, error) {
 	resp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
@@ -1673,13 +1676,8 @@ func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		switch sb.Status {
-		case compute_v1alpha.RUNNING, compute_v1alpha.PENDING, compute_v1alpha.NOT_READY:
-			// Active — may still hold disk resources
-		case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
-			// Terminal — no longer holds resources.
-			fallthrough
-		default:
+		if sb.Status == compute_v1alpha.DEAD {
+			// DEAD is set after process shutdown and resource cleanup complete.
 			continue
 		}
 

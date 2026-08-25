@@ -87,32 +87,38 @@ func TestDeploy_RejectsCrossAppVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create app-y: %v", err)
 	}
-	if _, err := inmem.Client.Create(ctx, "app-x-v1", &core_v1alpha.AppVersion{Version: "app-x-v1", App: appXID}); err != nil {
+	appXVersionID, err := inmem.Client.Create(ctx, "app-x-v1", &core_v1alpha.AppVersion{Version: "app-x-v1", App: appXID})
+	if err != nil {
 		t.Fatalf("create app-x version: %v", err)
 	}
-	if _, err := inmem.Client.Create(ctx, "app-y-v1", &core_v1alpha.AppVersion{Version: "app-y-v1", App: appYID}); err != nil {
+	appYVersionID, err := inmem.Client.Create(ctx, "app-y-v1", &core_v1alpha.AppVersion{Version: "app-y-v1", App: appYID})
+	if err != nil {
 		t.Fatalf("create app-y version: %v", err)
 	}
 
 	t.Run("DeployVersion rejects another app's version", func(t *testing.T) {
-		res, err := client.DeployVersion(ctx, "app-x", "cluster-1", "app-y-v1", false, nil, "", "")
-		// The mismatch surfaces as a hard error (ValidationFailure), not a
-		// results.Error field.
-		if err == nil {
-			if res != nil && res.HasError() {
-				t.Fatalf("expected a hard error, got results.Error=%q", res.Error())
+		for _, versionRef := range []string{"app-y-v1", string(appYVersionID)} {
+			res, err := client.DeployVersion(ctx, "app-x", "cluster-1", versionRef, false, nil, "", "")
+			// The mismatch surfaces as a hard error (ValidationFailure), not a
+			// results.Error field.
+			if err == nil {
+				if res != nil && res.HasError() {
+					t.Fatalf("ref %q: expected a hard error, got results.Error=%q", versionRef, res.Error())
+				}
+				t.Fatalf("ref %q: expected cross-app version to be rejected", versionRef)
 			}
-			t.Fatal("expected cross-app version to be rejected")
-		}
-		if !strings.Contains(err.Error(), "does not belong to app") {
-			t.Fatalf("expected ownership error, got %v", err)
+			if !strings.Contains(err.Error(), "does not belong to app") {
+				t.Fatalf("ref %q: expected ownership error, got %v", versionRef, err)
+			}
 		}
 	})
 
 	t.Run("CreateDeployment rejects another app's real version", func(t *testing.T) {
-		_, err := client.CreateDeployment(ctx, "app-x", "cluster-1", "app-y-v1", nil)
-		if err == nil || !strings.Contains(err.Error(), "does not belong to app") {
-			t.Fatalf("expected ownership error, got %v", err)
+		for _, versionRef := range []string{"app-y-v1", string(appYVersionID)} {
+			_, err := client.CreateDeployment(ctx, "app-x", "cluster-1", versionRef, nil)
+			if err == nil || !strings.Contains(err.Error(), "does not belong to app") {
+				t.Fatalf("ref %q: expected ownership error, got %v", versionRef, err)
+			}
 		}
 	})
 
@@ -136,16 +142,18 @@ func TestDeploy_RejectsCrossAppVersion(t *testing.T) {
 			t.Fatalf("create deployment: %v", err)
 		}
 
-		_, err = client.UpdateDeploymentAppVersion(ctx, string(depID), "app-y-v1")
-		if err == nil || !strings.Contains(err.Error(), "does not belong to app") {
-			t.Fatalf("expected ownership error, got %v", err)
+		for _, versionRef := range []string{"app-y-v1", string(appYVersionID)} {
+			_, err = client.UpdateDeploymentAppVersion(ctx, string(depID), versionRef)
+			if err == nil || !strings.Contains(err.Error(), "does not belong to app") {
+				t.Fatalf("ref %q: expected ownership error, got %v", versionRef, err)
+			}
 		}
 	})
 
 	t.Run("own version is accepted past the ownership check", func(t *testing.T) {
 		// app-x deploying app-x-v1 must clear the ownership check (it may still
 		// fail later for unrelated reasons, but never with a mismatch error).
-		res, err := client.DeployVersion(ctx, "app-x", "cluster-1", "app-x-v1", false, nil, "", "")
+		res, err := client.DeployVersion(ctx, "app-x", "cluster-1", string(appXVersionID), false, nil, "", "")
 		if err != nil && strings.Contains(err.Error(), "does not belong to app") {
 			t.Fatalf("own version was wrongly rejected: %v", err)
 		}

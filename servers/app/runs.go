@@ -83,31 +83,51 @@ var _ app_v1alpha.Runs = &AppInfo{}
 func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRun) error {
 	args := state.Args()
 
-	// CreateRun executes a command inside the app's image with its credentials,
+	id, sandboxName, err := r.CreateRunEntity(ctx, args.App(), args.Task(), args.Command(), args.Tty())
+	if err != nil {
+		return err
+	}
+
+	state.Results().SetId(id.String())
+	// Derived from the run and the attempt by the same helper the controller
+	// uses, so a client can attach without waiting to observe the sandbox being
+	// created -- and the two cannot drift apart.
+	state.Results().SetSandboxName(sandboxName)
+	return nil
+}
+
+// CreateRunEntity records a run and returns its id and the name its first
+// attempt's sandbox will have. It is the in-process core of CreateRun so that
+// other coordinator services -- notably the exec proxy's legacy exec-by-app
+// compatibility path -- can create a run with the caller's own identity rather
+// than re-authenticating over a loopback RPC as the coordinator.
+//
+// app is the app entity ref; taskName may be empty for the console task.
+func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, command []string, tty bool) (entity.Id, string, error) {
+	// createRun executes a command inside the app's image with its credentials,
 	// so this is the gate that matters most of the four.
-	if !rpc.AllowApp(ctx, args.App()) {
-		return rpc.AppAccessError(ctx, args.App())
+	if !rpc.AllowApp(ctx, app) {
+		return "", "", rpc.AppAccessError(ctx, app)
 	}
 
 	var appRec core_v1alpha.App
-	if err := r.EC.Get(ctx, args.App(), &appRec); err != nil {
-		return fmt.Errorf("app %s not found: %w", args.App(), err)
+	if err := r.EC.Get(ctx, app, &appRec); err != nil {
+		return "", "", fmt.Errorf("app %s not found: %w", app, err)
 	}
 	if appRec.ActiveVersion == "" {
-		return fmt.Errorf("app %s has no active version to run against", args.App())
+		return "", "", fmt.Errorf("app %s has no active version to run against", app)
 	}
 
-	appName, err := r.appName(ctx, appRec.ID, args.App())
+	appName, err := r.appName(ctx, appRec.ID, app)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	cfgSpec, err := r.resolveActiveConfig(ctx, appRec.ActiveVersion)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
-	taskName := args.Task()
 	if taskName == "" {
 		taskName = ConsoleTask
 	}
@@ -118,7 +138,7 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 	// never mentions it still gets one, resolved from the image the same way it
 	// always was. Any other name has to exist.
 	if task == nil && taskName != ConsoleTask {
-		return fmt.Errorf("app %s declares no task named %q", args.App(), taskName)
+		return "", "", fmt.Errorf("app %s declares no task named %q", app, taskName)
 	}
 
 	// Refuse rather than queue. A run held back at the limit is invisible to the
@@ -127,10 +147,10 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 	// after that message gets the command executed twice -- which for a
 	// hand-invoked migration is the failure this whole design exists to prevent.
 	if err := r.refuseIfAtLimit(ctx, appRec.ID, taskName, task); err != nil {
-		return err
+		return "", "", err
 	}
 
-	command := resolveCommand(task, args.Command())
+	resolvedCommand := resolveCommand(task, command)
 
 	timeout := ""
 	if task != nil {
@@ -149,8 +169,8 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 		Version:     appRec.ActiveVersion,
 		Task:        taskName,
 		Trigger:     run_v1alpha.MANUAL,
-		Command:     command,
-		Tty:         args.Tty(),
+		Command:     resolvedCommand,
+		Tty:         tty,
 		Status:      run_v1alpha.PENDING,
 		Timeout:     timeout,
 		MaxAttempts: manualMaxAttempts,
@@ -158,18 +178,13 @@ func (r *AppInfo) CreateRun(ctx context.Context, state *app_v1alpha.RunsCreateRu
 
 	id, err := r.EC.Create(ctx, name, run)
 	if err != nil {
-		return fmt.Errorf("creating run: %w", err)
+		return "", "", fmt.Errorf("creating run: %w", err)
 	}
 
 	r.Log.Info("created run",
 		"run", id, "app", appName, "task", taskName, "trigger", "manual")
 
-	state.Results().SetId(id.String())
-	// Derived from the run and the attempt by the same helper the controller
-	// uses, so a client can attach without waiting to observe the sandbox being
-	// created -- and the two cannot drift apart.
-	state.Results().SetSandboxName(runapi.SandboxName(id, 1).String())
-	return nil
+	return id, runapi.SandboxName(id, 1).String(), nil
 }
 
 func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns) error {
@@ -240,28 +255,40 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 // transition, so this deliberately does not write CANCELED itself -- a second
 // writer would race the reconcile that is also deciding this run's fate.
 func (r *AppInfo) CancelRun(ctx context.Context, state *app_v1alpha.RunsCancelRun) error {
-	run, _, err := r.lookupRun(ctx, state.Args().Id())
+	canceled, err := r.CancelRunEntity(ctx, state.Args().Id())
 	if err != nil {
 		return err
 	}
+	state.Results().SetCanceled(canceled)
+	return nil
+}
+
+// CancelRunEntity requests cancellation of a run and reports whether the request
+// was recorded (false if the run had already reached a terminal state). It is
+// the in-process core of CancelRun, shared so the exec proxy's legacy
+// compatibility path can cancel a run it created without re-authenticating over
+// a loopback RPC.
+func (r *AppInfo) CancelRunEntity(ctx context.Context, runID string) (bool, error) {
+	run, _, err := r.lookupRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
 	if err := r.authorizeRun(ctx, run); err != nil {
-		return err
+		return false, err
 	}
 
 	if isRunTerminal(run.Status) {
-		state.Results().SetCanceled(false)
-		return nil
+		return false, nil
 	}
 
 	if err := r.EC.Patch(ctx, run.ID, 0,
 		entity.Time(run_v1alpha.RunCancelRequestedAtId, time.Now()),
 	); err != nil {
-		return fmt.Errorf("requesting cancellation: %w", err)
+		return false, fmt.Errorf("requesting cancellation: %w", err)
 	}
 
 	r.Log.Info("cancellation requested for run", "run", run.ID, "task", run.Task)
-	state.Results().SetCanceled(true)
-	return nil
+	return true, nil
 }
 
 // authorizeRun resolves the app a run belongs to and applies the same guard the
