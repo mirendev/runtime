@@ -255,28 +255,40 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 // transition, so this deliberately does not write CANCELED itself -- a second
 // writer would race the reconcile that is also deciding this run's fate.
 func (r *AppInfo) CancelRun(ctx context.Context, state *app_v1alpha.RunsCancelRun) error {
-	run, _, err := r.lookupRun(ctx, state.Args().Id())
+	canceled, err := r.CancelRunEntity(ctx, state.Args().Id())
 	if err != nil {
 		return err
 	}
+	state.Results().SetCanceled(canceled)
+	return nil
+}
+
+// CancelRunEntity requests cancellation of a run and reports whether the request
+// was recorded (false if the run had already reached a terminal state). It is
+// the in-process core of CancelRun, shared so the exec proxy's legacy
+// compatibility path can cancel a run it created without re-authenticating over
+// a loopback RPC.
+func (r *AppInfo) CancelRunEntity(ctx context.Context, runID string) (bool, error) {
+	run, _, err := r.lookupRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
 	if err := r.authorizeRun(ctx, run); err != nil {
-		return err
+		return false, err
 	}
 
 	if isRunTerminal(run.Status) {
-		state.Results().SetCanceled(false)
-		return nil
+		return false, nil
 	}
 
 	if err := r.EC.Patch(ctx, run.ID, 0,
 		entity.Time(run_v1alpha.RunCancelRequestedAtId, time.Now()),
 	); err != nil {
-		return fmt.Errorf("requesting cancellation: %w", err)
+		return false, fmt.Errorf("requesting cancellation: %w", err)
 	}
 
 	r.Log.Info("cancellation requested for run", "run", run.ID, "task", run.Task)
-	state.Results().SetCanceled(true)
-	return nil
+	return true, nil
 }
 
 // authorizeRun resolves the app a run belongs to and applies the same guard the

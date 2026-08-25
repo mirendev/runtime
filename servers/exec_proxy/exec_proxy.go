@@ -20,26 +20,31 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
-// RunCreator records a durable run in-process and returns its id and the name
-// its first attempt's sandbox will have. The exec proxy uses it on the legacy
-// exec-by-app compatibility path so the run is created with the caller's own
-// identity rather than the coordinator's. *app.AppInfo satisfies it.
-type RunCreator interface {
+// RunManager creates and cancels durable runs in-process. The exec proxy uses
+// it on the legacy exec-by-app compatibility path so a run is created (and, when
+// abandoned, canceled) with the caller's own identity rather than the
+// coordinator's. *app.AppInfo satisfies it.
+type RunManager interface {
+	// CreateRunEntity records a run and returns its id and the name its first
+	// attempt's sandbox will have.
 	CreateRunEntity(ctx context.Context, app, task string, command []string, tty bool) (entity.Id, string, error)
+	// CancelRunEntity requests cancellation of a run, reporting whether the
+	// request was recorded (false if it was already terminal).
+	CancelRunEntity(ctx context.Context, runID string) (bool, error)
 }
 
 type Server struct {
 	Log  *slog.Logger
 	EAC  *entityserver_v1alpha.EntityAccessClient
 	rs   *rpc.State
-	runs RunCreator
+	runs RunManager
 }
 
 func NewServer(
 	log *slog.Logger,
 	eac *entityserver_v1alpha.EntityAccessClient,
 	rs *rpc.State,
-	runs RunCreator,
+	runs RunManager,
 ) *Server {
 	return &Server{
 		Log:  log,
@@ -182,13 +187,12 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 	args := req.Args()
 
 	var command []string
-	tty := false
-	if opts := args.Options(); opts != nil {
+	opts := args.Options()
+	if opts != nil {
 		command = opts.Command()
-		tty = opts.Terminal()
 	}
 
-	runID, sandboxName, err := s.runs.CreateRunEntity(ctx, args.Value(), "", command, tty)
+	runID, sandboxName, err := s.runs.CreateRunEntity(ctx, args.Value(), "", command, execTTY(opts))
 	if err != nil {
 		return err
 	}
@@ -201,12 +205,20 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 	outW := stream.ToWriter(ctx, args.Output())
 	defer outW.Close()
 
-	// winCh is fed once and read by a fresh ChanReader per attach attempt. While
-	// an attempt is returning early (not ready), nothing drains it, so a resize
-	// that arrives in that gap can be dropped. That is harmless here: the next
-	// successful attach reads the current terminal size anyway, and this is a
-	// compatibility shim rather than a long-lived interactive session.
+	// winCh is read by a fresh ChanReader per attach attempt. ChanReader is lazy,
+	// so a not-ready attempt does not drain it and a queued resize survives to the
+	// next attempt.
+	//
+	// A v0.13 client reports its initial terminal size through the shell options,
+	// not the update stream (its stream only carries later SIGWINCH events), so
+	// seed that size as the first resize -- the old exec server read the same
+	// field to size the pty. Seed before wiring the update stream so it is first
+	// in line; the buffer of one holds it until the first successful attach reads
+	// it.
 	winCh := make(chan *exec_v1alpha.WindowSize, 1)
+	if opts != nil && opts.HasWinSize() {
+		winCh <- opts.WinSize()
+	}
 	if args.HasWindowUpdates() {
 		stream.ChanWriter(ctx, args.WindowUpdates(), winCh)
 	}
@@ -253,7 +265,17 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("run %s for app %s did not start within %s", runID, args.Value(), execByAppTimeout)
+			// Cancel before returning, or the run stays pending and the
+			// controller executes it later -- after this call already told the
+			// legacy client it failed. The legacy protocol hands back no run id,
+			// so the caller cannot cancel it and a natural retry would run the
+			// command twice. This mirrors the client's own attachToRun, which
+			// cancels a run that never started for the same reason.
+			if _, cerr := s.runs.CancelRunEntity(ctx, runID.String()); cerr != nil {
+				s.Log.Warn("could not cancel a run that never started",
+					"run", runID, "error", cerr)
+			}
+			return fmt.Errorf("run %s for app %s did not start within %s and was canceled", runID, args.Value(), execByAppTimeout)
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -267,6 +289,17 @@ func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExe
 	}
 	req.Results().SetCode(code)
 	return nil
+}
+
+// execTTY reports whether a legacy exec-by-app request wants a terminal. A
+// v0.13 client never sets Terminal: it signals a pty by carrying an initial
+// WinSize, which is the field the old exec server keyed on. Accept either, so
+// both the real v0.13 signal and a well-formed Terminal flag allocate a pty.
+func execTTY(opts *exec_v1alpha.ShellOptions) bool {
+	if opts == nil {
+		return false
+	}
+	return opts.HasWinSize() || opts.Terminal()
 }
 
 // runSandboxNode reports the node a run's sandbox is scheduled to. ready is

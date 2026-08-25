@@ -8,9 +8,32 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 )
+
+// A v0.13 client asks for a terminal by carrying an initial WinSize, never by
+// setting Terminal (its setupExecIO leaves Terminal unset and the old exec
+// server keyed the pty off WinSize). Reading only Terminal, as the first cut
+// did, gives every interactive v0.13 run a non-tty: `test -t 0` reports false
+// and `stty size` fails. execTTY has to honor the WinSize signal.
+func TestExecTTY(t *testing.T) {
+	assert.False(t, execTTY(nil), "no options means no terminal")
+	assert.False(t, execTTY(&exec_v1alpha.ShellOptions{}), "neither signal set")
+
+	term := &exec_v1alpha.ShellOptions{}
+	term.SetTerminal(true)
+	assert.True(t, execTTY(term), "an explicit Terminal flag still allocates a pty")
+
+	withSize := &exec_v1alpha.ShellOptions{}
+	ws := &exec_v1alpha.WindowSize{}
+	ws.SetWidth(80)
+	ws.SetHeight(24)
+	withSize.SetWinSize(ws)
+	assert.False(t, withSize.Terminal(), "the v0.13 client leaves Terminal unset")
+	assert.True(t, execTTY(withSize), "a WinSize is how a v0.13 client asks for a pty")
+}
 
 // The legacy exec-by-app path retries an attach while the run's sandbox is
 // coming up. attachNotReady decides what is worth waiting on: the node's three
