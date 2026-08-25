@@ -49,7 +49,7 @@ func (t *msgOpTransport) controlSession(ctx context.Context) (rpcSession, error)
 	if err != nil {
 		return nil, err
 	}
-	t.ctrlSess = newMsgSession(conn, true, 0)
+	t.ctrlSess = newMsgSession(conn, true, 0, 0)
 	// A connection this transport dialed lives as long as the State does.
 	t.startAcceptLoop(t.owner.State.top, t.ctrlSess)
 	return t.ctrlSess, nil

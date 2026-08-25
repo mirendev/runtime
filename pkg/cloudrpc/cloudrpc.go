@@ -34,11 +34,19 @@ const (
 	// The depth is what separates an ordinary scheduling delay from that.
 	inboundDepth = 64
 
-	// maxPendingBytes bounds the memory those frames may hold.
+	// maxPendingBytes bounds the memory a session's frames may hold.
 	//
 	// The depth alone bounds nothing useful, because the far end chooses the
 	// frame size: sixty-four frames is a few kilobytes or most of a gigabyte
 	// depending on who is sending. This is the limit that holds either way.
+	//
+	// It is applied twice, to the two places a frame can wait. Here it covers
+	// frames queued for the session to take. Passed to rpc as
+	// WithMaxBufferedData, it covers frames taken but not yet read by a
+	// handler. Only the first was enforced originally, which made the limit
+	// describe a hop rather than the session: a caller sending faster than its
+	// handler read simply moved bytes from the accounted side to the
+	// unaccounted one, as fast as the reader drained.
 	maxPendingBytes = 8 << 20
 
 	// maxSessions bounds how many relayed sessions run at once.
@@ -173,7 +181,15 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 func (s *Server) serve(sess *session) {
 	defer s.teardown(sess)
 
-	err := s.state.ServeMessageConn(sess.ctx, sess, rpc.WithMaxFrameSize(maxFrameData))
+	err := s.state.ServeMessageConn(sess.ctx, sess,
+		rpc.WithMaxFrameSize(maxFrameData),
+		// The same number the queue above the session enforces. The two
+		// together are what make maxPendingBytes a real bound: this side
+		// accounts for frames waiting to be taken, that side for frames taken
+		// but not yet read. Setting only one moves the memory rather than
+		// limiting it.
+		rpc.WithMaxBufferedData(maxPendingBytes),
+	)
 
 	// Tell the far end, best effort: if the uplink is what failed, this goes
 	// nowhere, and the caller learns from its own broken connection instead.

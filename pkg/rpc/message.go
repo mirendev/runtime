@@ -15,6 +15,11 @@ const defaultMaxFrameData = 1 << 20 // 1 MiB
 // untrusted peer before the length is validated.
 const frameReadHeadroom = 1 << 16
 
+// defaultMaxBufferedData bounds delivered-but-unread stream data per session.
+// Generous next to what an ordinary call holds — the point is to have a
+// ceiling at all, not to police normal use. Override with WithMaxBufferedData.
+const defaultMaxBufferedData = 32 << 20 // 32 MiB
+
 // frameReadLimit is the largest inbound message a transport should accept for a
 // given payload frame cap. A zero cap uses the default.
 func frameReadLimit(maxFrame int) int64 {
@@ -85,7 +90,8 @@ func messageConnRemote(conn MessageConn) string {
 type MessageSessionOption func(*messageSessionOptions)
 
 type messageSessionOptions struct {
-	maxFrame int
+	maxFrame    int
+	maxBuffered int
 }
 
 // WithMaxFrameSize bounds the payload rpc places in a single message. Set it
@@ -96,6 +102,23 @@ type messageSessionOptions struct {
 func WithMaxFrameSize(n int) MessageSessionOption {
 	return func(o *messageSessionOptions) {
 		o.maxFrame = n
+	}
+}
+
+// WithMaxBufferedData bounds how much delivered-but-unread stream data one
+// session may hold across all its streams, before the session is torn down.
+//
+// It exists because the transport's own backpressure does not reach this far.
+// A frame handed to msgmux has already left the backend's accounting, and it
+// sits in a stream's read buffer until a handler reads it — so a peer that
+// sends faster than its handler consumes, or keeps sending after the handler
+// has stopped reading altogether, grows that buffer with nothing to stop it.
+// Any limit the transport advertises is only real if this one backs it.
+//
+// Zero leaves it at defaultMaxBufferedData.
+func WithMaxBufferedData(n int) MessageSessionOption {
+	return func(o *messageSessionOptions) {
+		o.maxBuffered = n
 	}
 }
 
@@ -120,7 +143,7 @@ func buildMessageSessionOptions(opts []MessageSessionOption) messageSessionOptio
 func (s *State) ServeMessageConn(ctx context.Context, conn MessageConn, opts ...MessageSessionOption) error {
 	o := buildMessageSessionOptions(opts)
 
-	sess := newMsgSession(conn, false, o.maxFrame)
+	sess := newMsgSession(conn, false, o.maxFrame, o.maxBuffered)
 	router := &sessionRouter{state: s, server: s.server}
 
 	ctx = contextWithMsgRemote(ctx, messageConnRemote(conn))
@@ -151,7 +174,7 @@ func (s *State) ClientFromMessageConn(
 	// dial stays nil: the connection belongs to the caller and cannot be
 	// re-established from here.
 	client.ops = &msgOpTransport{owner: client}
-	client.ops.adopt(ctx, newMsgSession(conn, true, o.maxFrame))
+	client.ops.adopt(ctx, newMsgSession(conn, true, o.maxFrame, o.maxBuffered))
 
 	if err := client.resolveCapability(name); err != nil {
 		return nil, err
