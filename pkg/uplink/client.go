@@ -217,6 +217,17 @@ func (c *Client) Send(env *Envelope) {
 // broke" has to notice the break — which, for anything session-shaped, means
 // tearing the session down and letting the caller retry.
 func (c *Client) SendContext(ctx context.Context, env *Envelope) error {
+	// Checked before the select for the same reason SendBlocking does it: with
+	// outbox room and a dead context both cases are ready, and Go picks between
+	// them at random. Here the stake is a relayed session — a sender that
+	// straddles a reconnect could land an rpc.data frame from an ended session
+	// on the *new* connection, which cloud may still route by session id. That
+	// is precisely the resume-across-a-link-break this transport promises not
+	// to do.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	select {
 	case c.outbox <- env:
 		return nil

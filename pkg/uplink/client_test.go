@@ -511,6 +511,33 @@ func TestSendBlockingRefusesADeadContextEvenWithRoom(t *testing.T) {
 	}
 }
 
+// SendContext carries relayed RPC frames, where landing one late is worse than
+// dropping it: a frame from an ended session that reaches the outbox after a
+// reconnect goes out on the new connection, and cloud may still route it by
+// session id. That is the resume-across-a-link-break the transport promises not
+// to do, so the cancellation has to win deterministically.
+func TestSendContextRefusesADeadContextEvenWithRoom(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, outboxSize),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Repeated for the same reason as the SendBlocking case above: with both
+	// select cases ready, one attempt passes half the time even unfixed.
+	for range 200 {
+		if err := c.SendContext(ctx, &Envelope{Type: "should-not-land"}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	}
+
+	if got := len(c.outbox); got != 0 {
+		t.Errorf("%d envelopes queued on a cancelled context, expected none", got)
+	}
+}
+
 // A response that unmarshals cleanly but carries no timestamps must not be
 // averaged into a nonsense offset and logged as a healthy sync. Same for an
 // org response naming no organization.

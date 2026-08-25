@@ -14,9 +14,18 @@ type session struct {
 	id  string
 	srv *Server
 
-	// ctx is the uplink connection's context, so the session dies with the link
-	// rather than lingering as a pipe to nowhere.
+	// ctx is this session's own context, a child of the uplink connection's.
+	// Inheriting means the session still dies with the link rather than
+	// lingering as a pipe to nowhere; being a child means the reverse also
+	// holds, and ending one session cannot outlive its own teardown.
 	ctx context.Context
+
+	// cancel ends ctx. Without it, tearing a session down closed its pipe but
+	// left the handlers already dispatched from it running on the uplink's
+	// context — so a build or a log stream outlived the caller that asked for
+	// it, and did so while no longer counted against maxSessions, which made
+	// repeated open-and-disconnect a way around that ceiling.
+	cancel context.CancelFunc
 
 	inbound chan []byte
 
@@ -29,6 +38,24 @@ type session struct {
 
 	closeOnce sync.Once
 	closed    chan struct{}
+}
+
+// newSession builds a session and its context together.
+//
+// A constructor rather than a struct literal because the two must not be
+// separable: a session whose cancel is missing tears down without ending the
+// work it dispatched, which is the bug this pairing exists to prevent, and a
+// literal is free to omit it.
+func newSession(ctx context.Context, id string, srv *Server) *session {
+	sessCtx, cancel := context.WithCancel(ctx)
+	return &session{
+		id:      id,
+		srv:     srv,
+		ctx:     sessCtx,
+		cancel:  cancel,
+		inbound: make(chan []byte, inboundDepth),
+		closed:  make(chan struct{}),
+	}
 }
 
 // reserve accounts for a frame about to be queued, and reports whether the
@@ -91,7 +118,12 @@ func (s *session) Close() error {
 }
 
 func (s *session) shutdown() {
-	s.closeOnce.Do(func() { close(s.closed) })
+	s.closeOnce.Do(func() {
+		close(s.closed)
+		// Cancelling after the close signal, so a reader waking on either one
+		// finds the session already marked done whichever it noticed first.
+		s.cancel()
+	})
 }
 
 // Remote names this session's far end for the audit trail.

@@ -423,6 +423,89 @@ func TestSessionEndsWithTheConnection(t *testing.T) {
 	}
 }
 
+// Introspection has to answer the same over the relay as it does over a direct
+// dial, because clients use it to decide what the far end supports.
+//
+// The message transport used to report method names alone. A missing Params map
+// does not read as "these methods take no parameters" — it reads as "this
+// server is too old to say," which is what a pre-introspection cluster looks
+// like. So a current cluster reached through cloud was mistaken for an old one,
+// and callers quietly dropped to older behaviour: `miren logs --until` refused
+// it, and deploy fell back to the deprecated client-owned deployment path.
+func TestRelayedIntrospectionReportsMethodParameters(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	link := clusterWithRelay(t, ctx, "meter", example.AdaptMeter(&testMeter{temp: 42}))
+
+	r.NoError(link.deliver(ctx, cloudrpc.TypeOpen, cloudrpc.Open{SessionID: "s1"}))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	r.NoError(err)
+
+	conn := &relayConn{link: link, sessionID: "s1", ctx: ctx}
+	c, err := cs.ClientFromMessageConn(ctx, conn, "meter")
+	r.NoError(err)
+
+	r.True(c.HasMethod(ctx, "readTemperature"),
+		"the relayed client cannot see a method the cluster exposes")
+	r.True(c.HasMethodParam(ctx, "readTemperature", "name"),
+		"the relayed client sees the method but not its parameters, "+
+			"which reads to a caller as a cluster too old to ask")
+	r.False(c.HasMethodParam(ctx, "readTemperature", "nonesuch"),
+		"a parameter the method does not take must still report false")
+}
+
+// Ending a session must end the work dispatched from it.
+//
+// Handlers used to run on the uplink's context, which outlives any one session,
+// so a build or a log stream kept going after its caller was gone. It did so
+// uncounted, too: teardown removes the session from the map first, so the work
+// no longer counted against maxSessions and repeated open-and-disconnect was a
+// way around that ceiling.
+func TestTeardownCancelsDispatchedHandlers(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	meter := &blockingMeter{
+		entered:  make(chan struct{}),
+		released: make(chan error, 1),
+	}
+	link := clusterWithRelay(t, ctx, "meter", example.AdaptMeter(meter))
+
+	r.NoError(link.deliver(ctx, cloudrpc.TypeOpen, cloudrpc.Open{SessionID: "s1"}))
+
+	cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+	r.NoError(err)
+
+	conn := &relayConn{link: link, sessionID: "s1", ctx: ctx}
+	c, err := cs.ClientFromMessageConn(ctx, conn, "meter")
+	r.NoError(err)
+
+	mc := &example.MeterClient{Client: c}
+
+	// The caller's own context stays live throughout, so nothing here can end
+	// the handler except the session teardown under test.
+	go func() { _, _ = mc.ReadTemperature(ctx, "test") }()
+
+	select {
+	case <-meter.entered:
+	case <-time.After(3 * time.Second):
+		r.Fail("the handler never ran, so there is nothing to observe")
+	}
+
+	// Cloud ends the session while the handler is parked inside it.
+	r.NoError(link.deliver(ctx, cloudrpc.TypeClose,
+		cloudrpc.Close{SessionID: "s1", Reason: "caller went away"}))
+
+	select {
+	case err := <-meter.released:
+		r.ErrorIs(err, context.Canceled)
+	case <-time.After(3 * time.Second):
+		r.Fail("the handler outlived the session it was dispatched from")
+	}
+}
+
 // A congested link must slow the writer, not silently lose a frame. RPC cannot
 // resynchronise after a hole, so Send has to block until the frame is queued.
 func TestSendWaitsOnACongestedLink(t *testing.T) {

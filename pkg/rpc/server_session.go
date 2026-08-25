@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"runtime/debug"
-	"sort"
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
@@ -181,12 +180,12 @@ func (s *Server) msgMethods(enc *cbor.Encoder, req opRequest) {
 		return
 	}
 
-	methods := make([]string, 0, len(hc.methods))
-	for name := range hc.methods {
-		methods = append(methods, name)
-	}
-	sort.Strings(methods)
-	writeReply(enc, opReply{Status: "ok"}, methodsResponse{Methods: methods})
+	// The same builder the HTTP endpoint uses, rather than a second one here.
+	// This path used to assemble the method names alone, which left Params
+	// empty on every reply — and a nil Params means "this server is too old to
+	// report parameters," not "these methods take none." A client reached this
+	// way then declined features the cluster in fact supports.
+	writeReply(enc, opReply{Status: "ok"}, newMethodsResponse(hc.methods))
 }
 
 func (s *Server) msgReresolve(dec *cbor.Decoder, enc *cbor.Encoder, req opRequest) {

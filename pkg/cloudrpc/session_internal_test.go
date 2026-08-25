@@ -21,13 +21,10 @@ func idleSession(t *testing.T, id string, depth int) (*Server, *session) {
 		log:      slog.Default(),
 		sessions: make(map[string]*session),
 	}
-	sess := &session{
-		id:      id,
-		srv:     srv,
-		ctx:     t.Context(),
-		inbound: make(chan []byte, depth),
-		closed:  make(chan struct{}),
-	}
+	sess := newSession(t.Context(), id, srv)
+	// A shallower backlog than production's, so a test can fill it without
+	// queueing inboundDepth frames to get there.
+	sess.inbound = make(chan []byte, depth)
 	srv.sessions[id] = sess
 
 	return srv, sess

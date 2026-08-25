@@ -120,10 +120,13 @@ func New(cfg Config) *Server {
 
 // handleOpen starts serving RPC on a new session.
 //
-// The context is the uplink's connection-scoped one, so a session cannot outlive
-// the link that carries it. That is the right lifetime: a dropped uplink loses
-// the frames in flight, and there is no way to resume from that. The caller sees
-// a broken connection and retries, which is honest.
+// Each session gets a child of the uplink's connection-scoped context, so it
+// cannot outlive the link that carries it and the link is not held to the
+// session's lifetime either. That is the right pair of bounds: a dropped uplink
+// loses the frames in flight and there is no way to resume from that, so the
+// caller sees a broken connection and retries, which is honest; and a session
+// that ends takes its own work down with it rather than leaving handlers
+// running for a caller that has gone.
 func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 	var req Open
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -133,23 +136,19 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 		return fmt.Errorf("rpc.open with no session id")
 	}
 
-	sess := &session{
-		id:      req.SessionID,
-		srv:     s,
-		ctx:     ctx,
-		inbound: make(chan []byte, inboundDepth),
-		closed:  make(chan struct{}),
-	}
+	sess := newSession(ctx, req.SessionID, s)
 
 	s.mu.Lock()
 	if _, exists := s.sessions[req.SessionID]; exists {
 		s.mu.Unlock()
+		sess.cancel()
 		// Cloud mints these ids, so a collision is a bug there rather than
 		// something to paper over. Refusing beats serving two callers one pipe.
 		return fmt.Errorf("session %s already open", req.SessionID)
 	}
 	if len(s.sessions) >= maxSessions {
 		s.mu.Unlock()
+		sess.cancel()
 		// Told rather than dropped, but never waited on: this runs on the link's
 		// read loop, so waiting for room would stall every other tenant — and
 		// the outbox being full is exactly the situation where a cap gets hit.
@@ -164,15 +163,17 @@ func (s *Server) handleOpen(ctx context.Context, data json.RawMessage) error {
 
 	s.log.Info("relayed RPC session opened", "session", req.SessionID)
 
-	go s.serve(ctx, sess)
+	go s.serve(sess)
 
 	return nil
 }
 
-func (s *Server) serve(ctx context.Context, sess *session) {
+// serve runs the session on its own context rather than the uplink's, so that
+// tearing the session down also cancels the handlers dispatched from it.
+func (s *Server) serve(sess *session) {
 	defer s.teardown(sess)
 
-	err := s.state.ServeMessageConn(ctx, sess, rpc.WithMaxFrameSize(maxFrameData))
+	err := s.state.ServeMessageConn(sess.ctx, sess, rpc.WithMaxFrameSize(maxFrameData))
 
 	// Tell the far end, best effort: if the uplink is what failed, this goes
 	// nowhere, and the caller learns from its own broken connection instead.
