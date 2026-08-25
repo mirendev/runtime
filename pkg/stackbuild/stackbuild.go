@@ -1,6 +1,8 @@
 package stackbuild
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/client/llb"
+	"github.com/moby/buildkit/client/llb/imagemetaresolver"
+	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/util/system"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"miren.dev/runtime/pkg/imagerefs"
@@ -17,7 +21,10 @@ import (
 
 // BuildOptions contains configuration for stack builds
 type BuildOptions struct {
-	Log interface{ Info(string, ...any) }
+	Log interface {
+		Info(string, ...any)
+		Warn(string, ...any)
+	}
 
 	// Name is the name of the application being built
 	Name string
@@ -55,7 +62,7 @@ type Stack interface {
 	// Init is called after detection to perform common initialization
 	Init(opts BuildOptions)
 	// GenerateLLB creates the BuildKit LLB for building this stack
-	GenerateLLB(dir string, opts BuildOptions) (*llb.State, error)
+	GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error)
 
 	Image() ocispecs.Image
 
@@ -179,15 +186,115 @@ func (s *MetaStack) setupResult() {
 	s.result.Variant = pl.Variant
 	s.result.RootFS.Type = "layers"
 	s.result.Config.WorkingDir = "/app"
-	s.result.Config.Env = []string{"PATH=" + system.DefaultPathEnv(pl.OS)}
+	s.setResultEnv("PATH", system.DefaultPathEnv(pl.OS))
+}
+
+// setResultEnv sets key=value in the final image config, replacing an existing
+// entry for key if present and appending otherwise.
+func (s *MetaStack) setResultEnv(key, value string) {
+	entry := key + "=" + value
+	prefix := key + "="
+	for i, e := range s.result.Config.Env {
+		if strings.HasPrefix(e, prefix) {
+			s.result.Config.Env[i] = entry
+			return
+		}
+	}
+	s.result.Config.Env = append(s.result.Config.Env, entry)
+}
+
+// hasResultEnv reports whether the final image config already sets key.
+func (s *MetaStack) hasResultEnv(key string) bool {
+	prefix := key + "="
+	for _, e := range s.result.Config.Env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathFromEnv returns the value of the PATH entry in a docker/OCI-style env
+// slice ("KEY=VALUE"), or "" if none is present.
+func pathFromEnv(env []string) string {
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "PATH="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// baseImage builds the LLB state for a base image ref and inherits the image's
+// environment into the final image config. Every stack should build the base(s)
+// that become its final image through this helper so env inheritance is
+// automatic and uniform — a new stack gets it for free.
+func (s *MetaStack) baseImage(ctx context.Context, ref string, opts BuildOptions) llb.State {
+	// New(), not Default(): Default() is a process-wide singleton whose cache
+	// lives for the process lifetime, keyed by ref+platform. The build server is
+	// long-lived and our refs are mutable tags, so a later build could inherit
+	// Env from a stale cached revision while BuildKit solves against the current
+	// one — the very PATH/config mismatch this helper exists to prevent. A fresh
+	// resolver per build resolves a coherent current config; it is still shared
+	// within the build between inheritBaseEnv and the LLB marshal below.
+	mr := imagemetaresolver.New()
+	s.inheritBaseEnv(ctx, mr, ref, opts)
+	return llb.Image(ref, llb.WithMetaResolver(mr))
+}
+
+// inheritBaseEnv resolves ref's image config and folds the environment the
+// upstream Dockerfile set into the final image config, so the exported image
+// behaves like `docker run <base>` would:
+//
+//   - PATH is always taken from the base. Upstream images (e.g. Bun's, which
+//     relocates node to a non-standard bin dir) prepend their own directories
+//     to the standard set, so the base PATH is a superset and supersedes our
+//     seeded default.
+//   - Every other var (LANG, GEM_HOME, NODE_VERSION, ...) is filled in only
+//     when the stack has not already set it deliberately, so Miren's own
+//     AddEnv choices always win regardless of call order.
+//
+// Best-effort: the base image must be pullable for the build to proceed at all,
+// so a resolve failure here is unlikely; when it happens we keep what we have
+// rather than failing the build.
+func (s *MetaStack) inheritBaseEnv(ctx context.Context, mr llb.ImageMetaResolver, ref string, opts BuildOptions) {
+	pl := platforms.Normalize(platforms.DefaultSpec())
+	_, _, cfg, err := mr.ResolveImageConfig(ctx, ref, sourceresolver.Opt{Platform: &pl})
+	if err != nil {
+		if opts.Log != nil {
+			opts.Log.Warn("could not resolve base image config for env inheritance; keeping defaults", "ref", ref, "error", err.Error())
+		}
+		return
+	}
+
+	var img ocispecs.Image
+	if err := json.Unmarshal(cfg, &img); err != nil {
+		if opts.Log != nil {
+			opts.Log.Warn("could not parse base image config for env inheritance; keeping defaults", "ref", ref, "error", err.Error())
+		}
+		return
+	}
+
+	for _, e := range img.Config.Env {
+		key, value, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if key == "PATH" || !s.hasResultEnv(key) {
+			s.setResultEnv(key, value)
+		}
+	}
 }
 
 func (s *MetaStack) Image() ocispecs.Image {
 	return s.result
 }
 
+// AddEnv sets a deliberate env var on the final image config. It replaces any
+// existing entry for key — including one inherited from the base image — so the
+// stack's explicit choice wins.
 func (s *MetaStack) AddEnv(key, value string) {
-	s.result.Config.Env = append(s.result.Config.Env, fmt.Sprintf("%s=%s", key, value))
+	s.setResultEnv(key, value)
 }
 
 func (s *MetaStack) SetEntrypoint(ep []string) {

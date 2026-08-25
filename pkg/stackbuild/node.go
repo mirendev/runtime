@@ -1,6 +1,7 @@
 package stackbuild
 
 import (
+	"context"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -155,7 +156,7 @@ func (s *NodeStack) Init(opts BuildOptions) {
 	}
 }
 
-func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *NodeStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -168,7 +169,9 @@ func (s *NodeStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 	if opts.Version != "" {
 		version = opts.Version
 	}
-	base := llb.Image(imagerefs.GetNodeImage(version))
+	// Carry the upstream node image's environment (PATH, NODE_VERSION, ...)
+	// into the final image.
+	base := s.baseImage(ctx, imagerefs.GetNodeImage(version), opts)
 
 	base = s.addAppUser(base)
 

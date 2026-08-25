@@ -2,13 +2,13 @@ package stackbuild
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
-	"github.com/moby/buildkit/client/llb/imagemetaresolver"
 	"miren.dev/runtime/pkg/imagerefs"
 )
 
@@ -242,7 +242,7 @@ func (s *RubyStack) detectGem(gem string) bool {
 	return strings.Contains(string(data), gem)
 }
 
-func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *RubyStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -251,15 +251,15 @@ func (s *RubyStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, erro
 		llb.WithCustomName("application code"),
 	)
 
-	mr := imagemetaresolver.Default()
-
 	version := "3.4"
 	if opts.Version != "" {
 		version = opts.Version
 	} else if s.rubyVersion != "" {
 		version = s.rubyVersion
 	}
-	base := llb.Image(imagerefs.GetRubyImage(version), llb.WithMetaResolver(mr))
+	// Carry the upstream ruby image's environment (PATH, GEM_HOME, LANG,
+	// BUNDLE_*, ...) into the final image; our own AddEnv calls below still win.
+	base := s.baseImage(ctx, imagerefs.GetRubyImage(version), opts)
 
 	base = s.addAppUser(base)
 

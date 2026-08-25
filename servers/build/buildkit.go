@@ -370,6 +370,7 @@ func (b *Buildkit) BuildImage(
 		solveOpt.FrontendAttrs["filename"] = bs.Input
 	} else {
 		buildOpts := stackbuild.BuildOptions{
+			Log:         b.Log,
 			Name:        app,
 			OnBuild:     bs.OnBuild,
 			Version:     bs.Version,
@@ -382,7 +383,7 @@ func (b *Buildkit) BuildImage(
 			return nil, err
 		}
 
-		state, err := stack.GenerateLLB(bs.CodeDir, buildOpts)
+		state, err := stack.GenerateLLB(ctx, bs.CodeDir, buildOpts)
 		if err != nil {
 			return nil, err
 		}

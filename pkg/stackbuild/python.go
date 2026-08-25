@@ -1,6 +1,7 @@
 package stackbuild
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -236,7 +237,7 @@ func (s *PythonStack) detectPackage(pkg string) bool {
 	return false
 }
 
-func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, error) {
+func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
@@ -250,7 +251,9 @@ func (s *PythonStack) GenerateLLB(dir string, opts BuildOptions) (*llb.State, er
 		version = opts.Version
 	}
 
-	base := llb.Image(imagerefs.GetPythonImage(version))
+	// Carry the upstream python image's environment (PATH, LANG,
+	// PYTHON_VERSION, ...) into the final image.
+	base := s.baseImage(ctx, imagerefs.GetPythonImage(version), opts)
 
 	base = s.addAppUser(base)
 
