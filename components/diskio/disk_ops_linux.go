@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -258,7 +259,11 @@ func (r *realDiskMountOps) LbdAttach(ctx context.Context, imagePath, logDir stri
 		// lbdctl add already attached the device, but the caller receives
 		// only an error (no path), so it cannot detach. Clean up here, or a
 		// repeated failure leaks a kernel device with no state to reclaim it.
-		if derr := r.LbdDetach(ctx, result.Device); derr != nil {
+		// Give the detach an independent context so it can still complete even
+		// if the caller's ctx has already been canceled.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if derr := r.LbdDetach(cleanupCtx, result.Device); derr != nil {
 			return "", fmt.Errorf("lbdctl add: %w (detach after failure also failed: %v)", err, derr)
 		}
 		return "", fmt.Errorf("lbdctl add: %w", err)
@@ -364,6 +369,11 @@ func (r *realDiskMountOps) LbdDetach(ctx context.Context, devicePath string) err
 // a malformed path can't be turned into the wrong index.
 func lbdDeviceIndex(devicePath string) (string, error) {
 	name := filepath.Base(devicePath)
+	// Only ever remove a device that lives at /dev/lbdN; a stray path like
+	// /tmp/lbd7 must not be turned into an index that detaches a real volume.
+	if devicePath != filepath.Join("/dev", name) {
+		return "", fmt.Errorf("not an lbd device path: %q", devicePath)
+	}
 	index := strings.TrimPrefix(name, "lbd")
 	if index == name || index == "" {
 		return "", fmt.Errorf("not an lbd device path: %q", devicePath)
