@@ -67,10 +67,11 @@ type addClusterOptions struct {
 // canFallBackToCloud reports whether a cluster that would not answer a direct
 // dial can be reached through cloud instead.
 //
-// A failure to ask is not the same as an answer of no, but it produces the same
-// decision, so it is reported and then treated as unreachable. That way a cloud
-// that is down leaves the user with the direct-connection error they were going
-// to get anyway, rather than a confusing one about routing.
+// The question is answered by trying it, not by asking cloud whether the
+// cluster is online — see cloudRouteWorks for why those are different claims.
+// A failure to reach it is not distinguished from an answer of no, because both
+// produce the same decision: leave the user with the direct-connection error
+// they were going to get anyway, rather than a confusing one about routing.
 func canFallBackToCloud(
 	ctx *Context,
 	config *clientconfig.Config,
@@ -78,12 +79,7 @@ func canFallBackToCloud(
 	identity *clientconfig.IdentityConfig,
 	cluster *ClusterResponse,
 ) bool {
-	online, err := clusterOnlineInCloud(ctx, config, identityName, identity, cluster.XID)
-	if err != nil {
-		ctx.Warn("Could not ask cloud whether it can reach %s: %v", cluster.Name, err)
-		return false
-	}
-	return online
+	return cloudRouteProbe(ctx, config, identityName, identity, cluster)
 }
 
 // announceClusterAdd says which cluster is being added, under what local name,
@@ -210,10 +206,18 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		clusterName = localName
 		clusterXID = selectedCluster.XID
 
-		// A cluster nothing can dial, which cloud can reach. Routing through
-		// cloud is not a fallback here so much as the only way it was ever
-		// going to work, so it is chosen without asking.
+		// A cluster nothing can dial, which cloud reports it can reach. Routing
+		// through cloud is not a fallback here so much as the only way it was
+		// ever going to work, so it is chosen without asking — but it is still
+		// confirmed by using the route, because presence in cloud does not
+		// establish that the cluster will answer over it.
 		if !opts.viaCloud && cloudRoutable[selectedCluster.XID] {
+			if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
+				return fmt.Errorf(
+					"%s advertises no address this machine can dial, and did not answer through cloud either; "+
+						"if its runtime predates cloud-routed RPC, upgrade it or add the cluster from a network that can reach it",
+					selectedCluster.Name)
+			}
 			opts.viaCloud = true
 			ctx.Info("%s advertises no address this machine can dial, and cloud can reach it.", selectedCluster.Name)
 		}

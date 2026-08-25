@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -322,6 +324,78 @@ func clusterOnlineInCloud(
 
 	return response.Online, nil
 }
+
+const (
+	// cloudProbeTimeout bounds the relayed probe. The failure it exists to
+	// catch is silence, so without a deadline the probe inherits the very hang
+	// it is there to prevent. Longer than the presence check, because this one
+	// opens a session and makes a call rather than asking a question.
+	cloudProbeTimeout = 20 * time.Second
+
+	// cloudProbeObject is what the probe resolves. Any exposed object would do;
+	// this one is the object nearly every command reaches for, so a cluster
+	// that cannot produce it is not usable through cloud in any case.
+	cloudProbeObject = "dev.miren.runtime/app"
+)
+
+// cloudRouteWorks reports whether a cloud-routed entry for this cluster would
+// actually work, by building the entry that would be written and using it.
+//
+// Cloud reporting a cluster online is a weaker claim than it appears. It says a
+// link exists; it does not say what is on the far end of that link will answer
+// a relayed call. A cluster running a runtime from before the relay shipped is
+// online and silent: it has no handler for the session, so nothing refuses the
+// call and nothing answers it either. An entry written on the strength of
+// presence alone would hang rather than fail.
+//
+// So the cloud route is probed the same way a direct address is — by using it,
+// and believing the result rather than a claim about it. This costs a round
+// trip at add time and settles the question for every command afterwards.
+func cloudRouteWorks(
+	ctx *Context,
+	config *clientconfig.Config,
+	identityName string,
+	identity *clientconfig.IdentityConfig,
+	cluster *ClusterResponse,
+) bool {
+	// The entry that would be written, not an approximation of it. Probing
+	// anything else would leave the thing actually written untested.
+	probe := &clientconfig.ClusterConfig{
+		ViaCloud: true,
+		XID:      cluster.XID,
+		Identity: identityName,
+	}
+	if identity != nil && strings.HasPrefix(identity.Issuer, "http://") {
+		probe.Insecure = true
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, cloudProbeTimeout)
+	defer cancel()
+
+	state, err := probe.State(probeCtx, config, rpc.WithLogger(ctx.Log))
+	if err != nil {
+		ctx.Warn("Could not reach %s through cloud: %v", cluster.Name, err)
+		return false
+	}
+	defer state.Close() //nolint:errcheck // a probe's teardown tells us nothing
+
+	// Resolving the object is a round trip the cluster itself has to answer.
+	// Cloud relays it and cannot satisfy it, which is what makes this evidence
+	// about the cluster rather than about the link.
+	if _, err := state.Client(cloudProbeObject); err != nil {
+		ctx.Warn("Could not reach %s through cloud: %v", cluster.Name, err)
+		return false
+	}
+
+	return true
+}
+
+// cloudRouteProbe is the check the fallback decision runs, as a variable so a
+// test can substitute one. The real probe needs a live relayed session, which
+// is the blackbox suite's job; what is worth testing here is the decision made
+// from its answer. Tests in this package run sequentially, so swapping it is
+// safe as long as none of them opts into t.Parallel.
+var cloudRouteProbe = cloudRouteWorks
 
 // cloudRoutableClusters reports which of the given clusters cannot be dialed
 // directly but can be reached through cloud, keyed by XID.

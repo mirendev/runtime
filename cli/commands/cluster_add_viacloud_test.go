@@ -147,36 +147,65 @@ func TestCloudRoutableClustersSurvivesAFailingCloud(t *testing.T) {
 		"a cloud that could not answer must say so, not silently mean no")
 }
 
+// withCloudRouteProbe substitutes the relayed probe for the duration of a test.
+// The real one needs a live session through cloud, which the blackbox suite
+// covers; what these tests are about is the decision taken from its answer.
+func withCloudRouteProbe(t *testing.T, probe func(*Context, *clientconfig.Config, string, *clientconfig.IdentityConfig, *ClusterResponse) bool) {
+	t.Helper()
+	prev := cloudRouteProbe
+	cloudRouteProbe = probe
+	t.Cleanup(func() { cloudRouteProbe = prev })
+}
+
 // The decision the RFD describes: when a cluster advertises addresses and none
-// of them answer, ask cloud, and route through it if cloud has a link.
-func TestCanFallBackToCloud(t *testing.T) {
-	srv, _ := cloudPresenceServer(t, map[string]bool{"cluster-up": true}, http.StatusOK)
-	cfg, identity := presenceTestConfig(t, srv.URL)
+// of them answer, try the cloud route, and take it if the cluster answers.
+//
+// Note what settles it. Not that cloud reports the cluster online — cloud
+// reporting a link is not the cluster agreeing to answer over it — but that a
+// call placed through the route came back.
+func TestCanFallBackToCloudWhenTheRouteAnswers(t *testing.T) {
+	cfg, identity := presenceTestConfig(t, "https://cloud.example")
 	ctx := presenceContext(t)
+
+	var asked []string
+	withCloudRouteProbe(t, func(_ *Context, _ *clientconfig.Config, _ string,
+		_ *clientconfig.IdentityConfig, c *ClusterResponse) bool {
+		asked = append(asked, c.XID)
+		return c.XID == "cluster-up"
+	})
 
 	up := &ClusterResponse{Name: "reachable-by-cloud", XID: "cluster-up"}
 	require.True(t, canFallBackToCloud(ctx, cfg, "cloud", identity, up))
 
 	down := &ClusterResponse{Name: "really-gone", XID: "cluster-down"}
 	require.False(t, canFallBackToCloud(ctx, cfg, "cloud", identity, down),
-		"a cluster cloud cannot reach must keep the direct-connection error")
+		"a cluster that did not answer through cloud must keep the direct-connection error")
+
+	require.Equal(t, []string{"cluster-up", "cluster-down"}, asked,
+		"the decision must come from probing the route, not from a cached claim about it")
 }
 
-// A cloud that cannot answer is not a cloud saying no, but it produces the same
-// decision. It has to say so, because the alternative is a user being told a
-// cluster is unreachable when the truth is that we failed to ask.
-func TestCanFallBackToCloudReportsAFailingCloud(t *testing.T) {
-	srv, _ := cloudPresenceServer(t, nil, http.StatusInternalServerError)
+// A cluster that is online in cloud but does not answer over the relay is the
+// case this probe exists for: a runtime from before the relay shipped has an
+// uplink and no handler for the session, so it is present and silent. Writing
+// via_cloud on the strength of presence produces a config that hangs.
+func TestOnlineButUnansweringClusterIsNotRouted(t *testing.T) {
+	srv, _ := cloudPresenceServer(t, map[string]bool{"cluster-old": true}, http.StatusOK)
 	cfg, identity := presenceTestConfig(t, srv.URL)
-
 	ctx := presenceContext(t)
-	out := ctx.Stdout.(*bytes.Buffer)
 
-	ok := canFallBackToCloud(ctx, cfg, "cloud", identity,
-		&ClusterResponse{Name: "behind-nat", XID: "cluster-nat"})
+	online, err := clusterOnlineInCloud(ctx, cfg, "cloud", identity, "cluster-old")
+	require.NoError(t, err)
+	require.True(t, online, "the fixture is only meaningful if cloud says it is online")
 
-	require.False(t, ok)
-	require.Contains(t, out.String(), "behind-nat")
+	withCloudRouteProbe(t, func(*Context, *clientconfig.Config, string,
+		*clientconfig.IdentityConfig, *ClusterResponse) bool {
+		return false
+	})
+
+	require.False(t, canFallBackToCloud(ctx, cfg, "cloud", identity,
+		&ClusterResponse{Name: "old-runtime", XID: "cluster-old"}),
+		"presence in cloud is not evidence the cluster will answer over the relay")
 }
 
 // What the fallback has to write, and the RFD's claim that a routed entry needs
