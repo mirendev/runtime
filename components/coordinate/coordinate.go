@@ -430,13 +430,6 @@ type Coordinator struct {
 	// dependencies — the registry and the cluster.local mapping — are
 	// ready. nil when sagas are disabled. See MIR-1285.
 	sagaBuilder *build.SagaBuilder
-
-	// appInfo is retained so app state can be reported up to cloud for
-	// visibility (MIR-1558). It is the same instance backing the app RPC
-	// surface, so cloud sees the health `miren app list` sees. nil when cloud
-	// auth is not configured, which is the disconnected case reporting must
-	// tolerate.
-	appInfo *app.AppInfo
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -1416,7 +1409,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// the exec proxy needs it: its legacy exec-by-app compatibility path creates
 	// a run in-process through AppInfo rather than over a loopback RPC.
 	ai := app.NewAppInfo(c.Log, ec, c.Cpu, c.Mem, c.HTTP, secretRegistry)
-	c.appInfo = ai
 
 	eps := execproxy.NewServer(c.Log, eac, rs, ai)
 	server.ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(eps))
@@ -1648,11 +1640,9 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.reportStatusPeriodically(ctx)
 	}
 
-	// Bring up the control-plane link to cloud, then attach its tenants. The
-	// link is owned here rather than by any one feature, because several share
-	// it: Miren Anywhere uses it to learn when to dial a POP, and app reporting
-	// uses it to push state up. Adding a tenant means registering against the
-	// link, not wrapping it.
+	// Bring up the shared control-plane link to cloud and attach Miren Anywhere.
+	// The coordinator owns the link so future tenants, including entity sync,
+	// can share its reconnect lifecycle instead of wrapping one another.
 	if c.CloudAuth.Enabled && c.authClient != nil {
 		cloudURL := c.CloudAuth.CloudURL
 		if cloudURL == "" {
@@ -1671,9 +1661,6 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			Log:        c.Log.With("component", "anywhere"),
 			Uplink:     link,
 		})
-		c.startAppReporter(link)
-		c.startDeployReporter(link)
-
 		go func() {
 			// POP connections outlive individual reconnects but not the link
 			// itself, which is why this is tied to Run returning rather than to

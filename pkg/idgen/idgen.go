@@ -3,7 +3,6 @@ package idgen
 import (
 	"crypto/rand"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -71,53 +70,6 @@ func Gen(prefix string) string {
 
 func GenNS(ns string) string {
 	return Gen(ns + "-")
-}
-
-// TimeOf recovers the moment an id was generated, and reports whether it could.
-//
-// Gen lays a UUIDv7 down under the base58, so the first six bytes are the
-// millisecond timestamp it was minted at. That makes creation time an immutable
-// property of the id itself rather than a field alongside it, recoverable for
-// records whose own timestamp field was never populated.
-//
-// This lives here rather than at the call site because this package owns the id
-// format. A reader that hand-decoded base58 and reached into byte offsets would
-// be a second, silent copy of Gen's layout, and the two would drift the first
-// time the format changed.
-//
-// It reports false rather than a zero time for anything it cannot read, so a
-// caller has to decide what an unreadable id means instead of receiving the
-// epoch and mistaking it for an answer.
-func TimeOf(id string) (time.Time, bool) {
-	// Ids are prefixed by kind (see GenNS), and the prefix is not part of the
-	// encoding. Everything through the last separator is dropped rather than
-	// the first, since a kind may contain one.
-	if idx := strings.LastIndex(id, "-"); idx >= 0 {
-		id = id[idx+1:]
-	}
-
-	// Exactly the UUID width, not merely enough bytes to read a timestamp from.
-	// base58 drops leading zero bytes, so a truncated or hand-made id can decode
-	// to something shorter whose first six bytes are not the timestamp at all,
-	// and reading them anyway would produce a confident wrong answer rather than
-	// a refusal.
-	raw, err := base58.Decode(id)
-	if err != nil || len(raw) != 16 {
-		return time.Time{}, false
-	}
-
-	milli := int64(raw[0])<<40 |
-		int64(raw[1])<<32 |
-		int64(raw[2])<<24 |
-		int64(raw[3])<<16 |
-		int64(raw[4])<<8 |
-		int64(raw[5])
-
-	if milli <= 0 {
-		return time.Time{}, false
-	}
-
-	return time.UnixMilli(milli).UTC(), true
 }
 
 // GenAdminToken generates a cryptographically secure admin token.
