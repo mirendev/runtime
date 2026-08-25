@@ -86,4 +86,14 @@ func TestGenerateConfig(t *testing.T) {
 		defaultConfig := c.generateConfig(10*1024*1024*1024, 86400, "")
 		r.Contains(defaultConfig, `[registry."cluster.local:5000"]`)
 	})
+
+	t.Run("does not hardcode DNS nameservers", func(t *testing.T) {
+		r := require.New(t)
+		// MIR-1643: DNS is delegated to buildkitd, which derives each build's
+		// resolv.conf from the host. A hardcoded nameserver directive would
+		// override that and break builds on hosts with an internal resolver.
+		r.NotContains(config, "nameservers=")
+		r.NotContains(config, "1.1.1.1")
+		r.NotContains(config, "8.8.8.8")
+	})
 }
