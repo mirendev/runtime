@@ -11,6 +11,7 @@ func DefaultConfig() *Config {
 		Etcd:            DefaultEtcdConfig(),
 		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
+		Metrics:         DefaultMetricsConfig(),
 		Mode:            new("standalone"),
 		Saga:            DefaultSagaConfig(),
 		Secrets:         DefaultSecretsConfig(),
@@ -67,6 +68,21 @@ func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
 		Address: new(""),
 		Mode:    new("tls-autoprovision"),
+	}
+}
+
+// DefaultMetricsConfig returns default MetricsConfig
+func DefaultMetricsConfig() MetricsConfig {
+	return MetricsConfig{
+		RemoteWrite: DefaultRemoteWriteConfig(),
+	}
+}
+
+// DefaultRemoteWriteConfig returns default RemoteWriteConfig
+func DefaultRemoteWriteConfig() RemoteWriteConfig {
+	return RemoteWriteConfig{
+		URL:                      new(""),
+		WorkloadIdentityAudience: new(""),
 	}
 }
 

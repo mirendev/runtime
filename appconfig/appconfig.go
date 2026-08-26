@@ -142,6 +142,23 @@ type PortConfig struct {
 	NodePort int    `toml:"node_port"`
 }
 
+const (
+	DefaultMetricsPath     = "/metrics"
+	DefaultMetricsInterval = "30s"
+	MinimumMetricsInterval = 30 * time.Second
+)
+
+// ServiceMetricsConfig describes an application's Prometheus-compatible scrape endpoint.
+// Metrics are opt-in. When enabled, the runtime resolves Path, Port, and
+// Interval before persisting the service configuration in a ConfigVersion.
+type ServiceMetricsConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	Path     string `toml:"path"`
+	Port     int    `toml:"port"`
+	Interval string `toml:"interval"`
+	Public   bool   `toml:"public"`
+}
+
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
@@ -153,6 +170,7 @@ type ServiceConfig struct {
 	EnvVars     []AppEnvVar               `toml:"env"`
 	Concurrency *ServiceConcurrencyConfig `toml:"concurrency"`
 	Disks       []DiskConfig              `toml:"disks"`
+	Metrics     *ServiceMetricsConfig     `toml:"metrics,omitempty"`
 	// PortTimeout overrides the default 15s wait for the service to bind
 	// its port during startup. Accepts a Go duration string (e.g. "60s", "2m").
 	// Empty falls back to the default; invalid duration strings are rejected
@@ -573,6 +591,49 @@ func (ac *AppConfig) Validate() error {
 			}
 		}
 
+		if metrics := svcConfig.Metrics; metrics != nil {
+			metricsPath := svcPrefix + ".metrics"
+			if metrics.Path != "" && (!strings.HasPrefix(metrics.Path, "/") || strings.ContainsAny(metrics.Path, "?#")) {
+				return &ValidationError{
+					KeyPath: metricsPath + ".path",
+					Message: fmt.Sprintf("service %s: metrics path must be an absolute URL path without a query or fragment", serviceName),
+				}
+			}
+
+			if metrics.Interval != "" {
+				interval, err := time.ParseDuration(metrics.Interval)
+				if err != nil {
+					return &ValidationError{
+						KeyPath: metricsPath + ".interval",
+						Message: fmt.Sprintf("service %s: invalid metrics interval %q: %v", serviceName, metrics.Interval, err),
+					}
+				}
+				if interval < MinimumMetricsInterval {
+					return &ValidationError{
+						KeyPath: metricsPath + ".interval",
+						Message: fmt.Sprintf("service %s: metrics interval must be at least %s", serviceName, MinimumMetricsInterval),
+					}
+				}
+			}
+
+			port := metrics.Port
+			if port == 0 {
+				port = defaultMetricsPort(serviceName, svcConfig)
+			}
+			if metrics.Enabled && port == 0 {
+				return &ValidationError{
+					KeyPath: metricsPath + ".port",
+					Message: fmt.Sprintf("service %s: metrics port is required when the service has no HTTP port", serviceName),
+				}
+			}
+			if port != 0 && !serviceHasTCPPort(serviceName, svcConfig, port) {
+				return &ValidationError{
+					KeyPath: metricsPath + ".port",
+					Message: fmt.Sprintf("service %s: metrics port %d must be a declared HTTP or TCP service port", serviceName, port),
+				}
+			}
+		}
+
 		// Validate disk configurations
 		//
 		// Miren disks are leased exclusively, so a service holding one must run
@@ -899,6 +960,59 @@ func (ac *AppConfig) ResolveDefaults(services []string) {
 			}
 		}
 	}
+
+	for _, serviceName := range services {
+		svc := ac.Services[serviceName]
+		if svc == nil || svc.Metrics == nil {
+			continue
+		}
+		if svc.Metrics.Path == "" {
+			svc.Metrics.Path = DefaultMetricsPath
+		}
+		if svc.Metrics.Interval == "" {
+			svc.Metrics.Interval = DefaultMetricsInterval
+		}
+		if svc.Metrics.Port == 0 {
+			svc.Metrics.Port = defaultMetricsPort(serviceName, svc)
+		}
+	}
+}
+
+func defaultMetricsPort(serviceName string, svc *ServiceConfig) int {
+	if len(svc.Ports) > 0 {
+		for _, port := range svc.Ports {
+			if port.Type == "" || port.Type == "http" {
+				return port.Port
+			}
+		}
+		return 0
+	}
+
+	if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
+		return svc.Port
+	}
+	if svc.Port > 0 {
+		return 0
+	}
+	if serviceName == "web" {
+		return 3000
+	}
+	return 0
+}
+
+func serviceHasTCPPort(serviceName string, svc *ServiceConfig, want int) bool {
+	if len(svc.Ports) > 0 {
+		for _, port := range svc.Ports {
+			if port.Port == want && port.Type != "udp" {
+				return true
+			}
+		}
+		return false
+	}
+	if svc.Port > 0 {
+		return svc.Port == want && svc.PortType != "udp"
+	}
+	return serviceName == "web" && want == 3000
 }
 
 // GetDefaultsForServices returns an AppConfig with defaults resolved for given service names.

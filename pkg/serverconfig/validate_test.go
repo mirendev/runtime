@@ -135,3 +135,38 @@ func TestValidateIngressCoherence(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMetricsCoherence(t *testing.T) {
+	tests := []struct {
+		name     string
+		url      string
+		audience string
+		wantErr  string
+	}{
+		{name: "disabled"},
+		{name: "configured", url: "https://metrics.example.com/api/v1/write", audience: "metrics.example.com"},
+		{name: "missing audience", url: "https://metrics.example.com/write", wantErr: "audience is required"},
+		{name: "missing url", audience: "metrics.example.com", wantErr: "url is required"},
+		{name: "relative url", url: "/api/v1/write", audience: "metrics.example.com", wantErr: "absolute http or https URL"},
+		{name: "unsupported scheme", url: "ftp://metrics.example.com/write", audience: "metrics.example.com", wantErr: "absolute http or https URL"},
+		{name: "embedded credentials", url: "https://user:password@metrics.example.com/write", audience: "metrics.example.com", wantErr: "must not contain credentials"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Metrics.RemoteWrite.SetURL(tt.url)
+			cfg.Metrics.RemoteWrite.SetWorkloadIdentityAudience(tt.audience)
+			err := cfg.ValidateMetricsCoherence()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

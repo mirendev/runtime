@@ -120,6 +120,7 @@ type Config struct {
 	Etcd            EtcdConfig            `toml:"etcd"`
 	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
+	Metrics         MetricsConfig         `toml:"metrics"`
 	Mode            *string               `toml:"mode" env:"MIREN_MODE"`
 	Saga            SagaConfig            `toml:"saga"`
 	Secrets         SecretsConfig         `toml:"secrets"`
@@ -307,6 +308,43 @@ func (c *IngressConfig) GetMode() string {
 // SetMode sets the value of Mode
 func (c *IngressConfig) SetMode(v string) {
 	c.Mode = &v
+}
+
+// MetricsConfig Managed application metrics configuration
+type MetricsConfig struct {
+	RemoteWrite RemoteWriteConfig `toml:"remote_write"`
+}
+
+// RemoteWriteConfig Destination for managed application metrics
+type RemoteWriteConfig struct {
+	URL                      *string `toml:"url" env:"MIREN_METRICS_REMOTE_WRITE_URL"`
+	WorkloadIdentityAudience *string `toml:"workload_identity_audience" env:"MIREN_METRICS_REMOTE_WRITE_AUDIENCE"`
+}
+
+// GetURL returns the value of URL or its zero value if nil
+func (c *RemoteWriteConfig) GetURL() string {
+	if c.URL != nil {
+		return *c.URL
+	}
+	return ""
+}
+
+// SetURL sets the value of URL
+func (c *RemoteWriteConfig) SetURL(v string) {
+	c.URL = &v
+}
+
+// GetWorkloadIdentityAudience returns the value of WorkloadIdentityAudience or its zero value if nil
+func (c *RemoteWriteConfig) GetWorkloadIdentityAudience() string {
+	if c.WorkloadIdentityAudience != nil {
+		return *c.WorkloadIdentityAudience
+	}
+	return ""
+}
+
+// SetWorkloadIdentityAudience sets the value of WorkloadIdentityAudience
+func (c *RemoteWriteConfig) SetWorkloadIdentityAudience(v string) {
+	c.WorkloadIdentityAudience = &v
 }
 
 // SagaConfig Saga execution retention garbage collection

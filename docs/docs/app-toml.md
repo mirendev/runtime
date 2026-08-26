@@ -211,6 +211,7 @@ image = "postgres:16"
 | `image` | string | Container image to use. On `services.web`, this selects the app's primary image unless `[build].dockerfile` is set or `Dockerfile.miren` exists | App's built image |
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
+| `metrics` | [metrics](#service-metrics) | Prometheus-compatible metrics endpoint scraped by the runtime | Disabled |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
 :::note[Validation]
@@ -220,6 +221,38 @@ You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with th
 :::note[Image selection]
 When `services.web.image` is set and neither `[build].dockerfile` nor `Dockerfile.miren` selects a Dockerfile, Miren launches that image directly instead of auto-detecting and building the project source. Images on other services do not suppress source detection. If detection finds no buildable source, a lone service image can act as the fallback; with several service images, set `services.web.image` to choose the primary one.
 :::
+
+### `[services.<name>.metrics]` — Service metrics {#service-metrics}
+
+Opts a service into managed metrics scraping. Miren scrapes the service's
+Prometheus-compatible endpoint in every running sandbox and forwards its
+samples to your cluster's configured remote-write destination.
+
+```toml
+[services.web.metrics]
+enabled = true
+path = "/metrics"
+port = 3000
+interval = "30s"
+public = false
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `enabled` | bool | Scrape every running sandbox for this service | `false` |
+| `path` | string | Absolute HTTP path to scrape | `"/metrics"` |
+| `port` | int | Declared HTTP or TCP service port to scrape | First HTTP port |
+| `interval` | duration | Time between scrapes, with a minimum of 30 seconds | `"30s"` |
+| `public` | bool | Allow the metrics path through public ingress | `false` |
+
+Metrics do not create a port or route. The selected port must already be part
+of the service configuration, and a service without an HTTP port must set
+`port` explicitly. The runtime scrapes the sandbox's private overlay address.
+
+With the default `public = false`, Miren returns 404 for the configured path at
+public ingress. Setting `public = true` lets the request continue through the
+route's normal authentication and middleware. It does not bypass route
+protection.
 
 ### `[services.<name>.concurrency]` — Scaling {#concurrency}
 

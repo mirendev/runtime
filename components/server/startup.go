@@ -38,6 +38,7 @@ type startup struct {
 	buildkit            *buildkitBoot
 	coordinator         *coordinatorBoot
 	entityAccess        *entityAccessBoot
+	appMetrics          *appMetricsBoot
 	network             *networkBoot
 	runner              *runnerBoot
 	ingress             *ingressBoot
@@ -84,6 +85,14 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 	)
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), coordinator.output, observability.output)
+	appMetrics := newAppMetricsBoot(
+		appMetricsInputs(options),
+		containerd.output,
+		registration.output,
+		workloadIdentity.output,
+		entityAccess.output,
+		observability.output,
+	)
 	runner := newRunnerBoot(
 		runnerInputs(options, resolver, secretRegistry, serverPort(options.Log, address)),
 		registration.output,
@@ -120,6 +129,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		buildkit:            buildkit,
 		coordinator:         coordinator,
 		entityAccess:        entityAccess,
+		appMetrics:          appMetrics,
 		network:             network,
 		runner:              runner,
 		ingress:             ingress,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strings"
 )
 
@@ -56,6 +57,32 @@ func (c *Config) ValidateIngressCoherence() error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateMetricsCoherence rejects half-configured or unsafe remote-write
+// destinations before the coordinator starts any managed metrics machinery.
+func (c *Config) ValidateMetricsCoherence() error {
+	remoteWriteURL := c.Metrics.RemoteWrite.GetURL()
+	audience := c.Metrics.RemoteWrite.GetWorkloadIdentityAudience()
+
+	if remoteWriteURL == "" && audience == "" {
+		return nil
+	}
+	if remoteWriteURL == "" {
+		return fmt.Errorf("metrics.remote_write.url is required when workload_identity_audience is set")
+	}
+	if audience == "" {
+		return fmt.Errorf("metrics.remote_write.workload_identity_audience is required when url is set")
+	}
+
+	destination, err := url.Parse(remoteWriteURL)
+	if err != nil || destination.Host == "" || (destination.Scheme != "http" && destination.Scheme != "https") {
+		return fmt.Errorf("metrics.remote_write.url %q must be an absolute http or https URL", remoteWriteURL)
+	}
+	if destination.User != nil {
+		return fmt.Errorf("metrics.remote_write.url must not contain credentials; authentication uses workload identity")
+	}
 	return nil
 }
 

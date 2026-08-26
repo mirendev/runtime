@@ -164,6 +164,9 @@ func generateCLI(schema *Schema) (string, error) {
 func generateLoader(schema *Schema) (string, error) {
 	tmpl, err := template.New("loader").Funcs(template.FuncMap{
 		"title": toGoName,
+		"configPath": func(configName string) string {
+			return configFieldPath(schema, configName)
+		},
 	}).Parse(loaderTemplate)
 	if err != nil {
 		return "", err
@@ -175,6 +178,46 @@ func generateLoader(schema *Schema) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// configFieldPath returns the field path from Config to a nested config type.
+// Most config types sit directly below Config (for example, "Server"), but
+// types such as RemoteWriteConfig are nested more deeply ("Metrics.RemoteWrite").
+func configFieldPath(schema *Schema, target string) string {
+	if target == "Config" {
+		return ""
+	}
+	path, ok := findConfigFieldPath(schema, "Config", target, nil, make(map[string]bool))
+	if !ok {
+		panic(fmt.Sprintf("config type %s is not reachable from Config", target))
+	}
+	return strings.Join(path, ".")
+}
+
+func findConfigFieldPath(schema *Schema, current, target string, path []string, seen map[string]bool) ([]string, bool) {
+	if seen[current] {
+		return nil, false
+	}
+	seen[current] = true
+	defer delete(seen, current)
+
+	config := schema.Configs[current]
+	if config == nil {
+		return nil, false
+	}
+	for fieldName, field := range config.Fields {
+		if schema.Configs[field.Type] == nil {
+			continue
+		}
+		next := append(append([]string(nil), path...), toGoName(fieldName))
+		if field.Type == target {
+			return next, true
+		}
+		if nested, ok := findConfigFieldPath(schema, field.Type, target, next, seen); ok {
+			return nested, true
+		}
+	}
+	return nil, false
 }
 
 // generateDefaults generates the default configuration
@@ -512,7 +555,7 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 	// Apply mode defaults based on the resolved mode
 	// Only set if not already set (nil check)
 	{{range $cname, $config := .Configs}}
-	{{- $structField := ""}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
+	{{- $structField := configPath $cname}}
 	{{- range $fname, $field := $config.Fields}}
 	{{- if $field.ModeDefault}}
 	{{- range $mode, $val := $field.ModeDefault}}
@@ -584,25 +627,25 @@ func loadConfigFile(path string, cfg *Config) error {
 
 func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 	{{range $cname, $config := .Configs}}
-	{{$structField := $cname}}{{range $k, $v := (index $.Configs "Config").Fields}}{{if eq $v.Type $cname}}{{$structField = ($k | title)}}{{end}}{{end}}
+	{{$structField := configPath $cname}}
 	{{range $fname, $field := $config.Fields}}
 	{{if and $field.CLI (not $field.CLIOnly)}}
 	{{$flagName := $fname | title}}{{if ne $cname "Config"}}{{$flagName = print $cname ($fname | title)}}{{end}}
 	{{if eq $field.Type "string"}}
 	if flags.{{$flagName}} != nil && *flags.{{$flagName}} != "" {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
+		cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "int"}}
 	if flags.{{$flagName}} != nil {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
+		cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "bool"}}
 	if flags.{{$flagName}} != nil {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
+		cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{else if eq $field.Type "[]string"}}
 	if len(flags.{{$flagName}}) > 0 {
-		cfg.{{if ne $cname "Config"}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
+		cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = flags.{{$flagName}}
 	}
 	{{end}}
 	{{end}}
@@ -636,7 +679,11 @@ func DefaultConfig() *Config {
 func Default{{$name}}() {{$name}} {
 	return {{$name}}{
 		{{- range $fname, $field := $config.Fields}}
+		{{- if $field.Nested}}
+		{{$fname | title}}: Default{{$field.Type}}(),
+		{{- else}}
 		{{$fname | title}}: {{formatDefault $field.Default $field.Type}},
+		{{- end}}
 		{{- end}}
 	}
 }

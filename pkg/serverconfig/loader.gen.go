@@ -238,6 +238,14 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Ingress.Mode = flags.IngressConfigMode
 	}
 
+	if flags.RemoteWriteConfigURL != nil && *flags.RemoteWriteConfigURL != "" {
+		cfg.Metrics.RemoteWrite.URL = flags.RemoteWriteConfigURL
+	}
+
+	if flags.RemoteWriteConfigWorkloadIdentityAudience != nil && *flags.RemoteWriteConfigWorkloadIdentityAudience != "" {
+		cfg.Metrics.RemoteWrite.WorkloadIdentityAudience = flags.RemoteWriteConfigWorkloadIdentityAudience
+	}
+
 	if flags.SagaConfigRetentionPeriod != nil && *flags.SagaConfigRetentionPeriod != "" {
 		cfg.Saga.RetentionPeriod = flags.SagaConfigRetentionPeriod
 	}

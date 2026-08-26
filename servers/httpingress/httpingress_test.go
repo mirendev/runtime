@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/httputil"
 )
@@ -544,5 +545,32 @@ func TestLeaseCacheKey(t *testing.T) {
 	}
 	if other := leaseCacheKey(app, "feat-y", true); other == resolved {
 		t.Errorf("distinct ephemeral labels must not share a key, both were %q", resolved)
+	}
+}
+
+func TestPrivateMetricsPath(t *testing.T) {
+	private := core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+		Name: "web",
+		Metrics: core_v1alpha.ConfigSpecServicesMetrics{
+			Enabled: true,
+			Path:    "/internal/metrics",
+		},
+	}}}
+	if !privateMetricsPath(&private, "/internal/metrics") {
+		t.Fatal("private configured metrics path should be hidden")
+	}
+	if privateMetricsPath(&private, "/internal/metrics/extra") {
+		t.Fatal("only the exact configured path should be hidden")
+	}
+
+	private.Services[0].Metrics.Public = true
+	if privateMetricsPath(&private, "/internal/metrics") {
+		t.Fatal("public metrics path should pass through ingress")
+	}
+
+	private.Services[0].Metrics.Public = false
+	private.Services[0].Metrics.Enabled = false
+	if privateMetricsPath(&private, "/internal/metrics") {
+		t.Fatal("disabled metrics configuration should not reserve an app path")
 	}
 }

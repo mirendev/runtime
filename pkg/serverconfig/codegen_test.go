@@ -60,6 +60,8 @@ func TestCLIFlagsParsing(t *testing.T) {
 		"--start-etcd",
 		"--data-path=/var/lib/test",
 		"--etcd-client-port=2379",
+		"--metrics-remote-write-url=https://metrics.example.com/write",
+		"--metrics-remote-write-audience=metrics.example.com",
 	}
 
 	err = fs.Parse(args)
@@ -79,6 +81,12 @@ func TestCLIFlagsParsing(t *testing.T) {
 	}
 	if opts.EtcdConfigClientPort == nil || *opts.EtcdConfigClientPort != 2379 {
 		t.Errorf("expected etcd-client-port to be 2379, got %v", opts.EtcdConfigClientPort)
+	}
+	if opts.RemoteWriteConfigURL == nil || *opts.RemoteWriteConfigURL != "https://metrics.example.com/write" {
+		t.Errorf("expected metrics remote-write URL to be parsed, got %v", opts.RemoteWriteConfigURL)
+	}
+	if opts.RemoteWriteConfigWorkloadIdentityAudience == nil || *opts.RemoteWriteConfigWorkloadIdentityAudience != "metrics.example.com" {
+		t.Errorf("expected metrics remote-write audience to be parsed, got %v", opts.RemoteWriteConfigWorkloadIdentityAudience)
 	}
 }
 

@@ -30,6 +30,10 @@ func (c *Config) Validate() error {
 	if err := c.Ingress.Validate(); err != nil {
 		return fmt.Errorf("ingress: %w", err)
 	}
+
+	if err := c.Metrics.Validate(); err != nil {
+		return fmt.Errorf("metrics: %w", err)
+	}
 	// Validate mode
 	if c.Mode != nil {
 		validModes := map[string]bool{
@@ -159,6 +163,22 @@ func (c *IngressConfig) Validate() error {
 	}
 
 	// Check for port conflicts in IngressConfig
+
+	return nil
+}
+
+// Validate validates MetricsConfig
+func (c *MetricsConfig) Validate() error {
+
+	// Check for port conflicts in MetricsConfig
+
+	return nil
+}
+
+// Validate validates RemoteWriteConfig
+func (c *RemoteWriteConfig) Validate() error {
+
+	// Check for port conflicts in RemoteWriteConfig
 
 	return nil
 }

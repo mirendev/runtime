@@ -1,6 +1,7 @@
 package httpingress
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,9 +12,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func newTestMaintenanceServer() *Server {
@@ -262,7 +266,7 @@ func TestMiddlewareChainOrder(t *testing.T) {
 		}
 
 		rec := httptest.NewRecorder()
-		s.buildRouteHandler(route, nil, serve)(rec, httptest.NewRequest("GET", "http://app.example.com/", nil))
+		s.buildRouteHandler(route, nil, nil, serve)(rec, httptest.NewRequest("GET", "http://app.example.com/", nil))
 
 		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 		assert.Contains(t, rec.Body.String(), "Upgrading the database",
@@ -281,9 +285,39 @@ func TestMiddlewareChainOrder(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "http://app.example.com/?id=1%20OR%201=1--", nil)
-		s.buildRouteHandler(route, nil, serve)(rec, req)
+		s.buildRouteHandler(route, nil, nil, serve)(rec, req)
 
 		assert.Equal(t, http.StatusForbidden, rec.Code,
 			"a maintenance window must not become an open window for scanners")
 	})
+}
+
+func TestMaintenancePrecedesTargetResolution(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	_, err := inmem.Client.Create(ctx, "app.example.com", &ingress_v1alpha.HttpRoute{
+		Host: "app.example.com",
+		App:  entity.Id("app/missing"),
+		Maintenance: ingress_v1alpha.Maintenance{
+			Reason:    "Upgrading the database",
+			StartedAt: time.Now().UTC().Format(time.RFC3339),
+		},
+	})
+	require.NoError(t, err)
+
+	rpcClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+	s := newTestMaintenanceServer()
+	s.eac = inmem.EAC
+	s.ingressClient = ingress.NewClient(s.Log, rpcClient)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://app.example.com/", nil)
+	var appName string
+	s.serveHTTPWithMetrics(rec, req, &appName)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Upgrading the database",
+		"maintenance should answer even when the route's app cannot resolve")
 }

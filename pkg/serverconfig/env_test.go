@@ -24,6 +24,8 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 	t.Setenv("MIREN_ETCD_ENDPOINTS", "http://e1:2379,http://e2:2379")
 	t.Setenv("MIREN_ETCD_CLIENT_PORT", "23790")
 	t.Setenv("MIREN_LABS", "alpha,beta")
+	t.Setenv("MIREN_METRICS_REMOTE_WRITE_URL", "https://metrics.example.com/write")
+	t.Setenv("MIREN_METRICS_REMOTE_WRITE_AUDIENCE", "metrics.example.com")
 
 	cfg, err := Load(configPath, nil, nil)
 	if err != nil {
@@ -58,6 +60,12 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 				t.Errorf("Labs[%d] = %s, want %s", i, l, wantLabs[i])
 			}
 		}
+	}
+	if got := cfg.Metrics.RemoteWrite.GetURL(); got != "https://metrics.example.com/write" {
+		t.Errorf("Metrics.RemoteWrite.URL = %q, want remote-write URL from env", got)
+	}
+	if got := cfg.Metrics.RemoteWrite.GetWorkloadIdentityAudience(); got != "metrics.example.com" {
+		t.Errorf("Metrics.RemoteWrite.WorkloadIdentityAudience = %q, want audience from env", got)
 	}
 }
 
