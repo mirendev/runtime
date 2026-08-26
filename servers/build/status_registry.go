@@ -38,8 +38,8 @@ type StatusSender interface {
 	// is the channel for the human-readable explanation.
 	SendError(format string, args ...any)
 
-	// SendLog emits a structured log entry. Currently only the
-	// pre-saga "warn" path for local storage migration uses this.
+	// SendLog emits a structured log entry, including deploy warnings that
+	// need to reach the client from either build path.
 	SendLog(level, text string, fields ...*build_v1alpha.LogField)
 
 	// SendDeployment emits the server-owned deployment record's ID and

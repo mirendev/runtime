@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,6 +208,102 @@ func TestBuildSaga_ReceiveTar_EmitsStatusUpdates(t *testing.T) {
 	wantInOrder := []string{"Reading application data", "Launching builder"}
 	if !containsInOrder(rec.Messages, wantInOrder) {
 		t.Errorf("missing expected messages in order: got %v, want subsequence %v", rec.Messages, wantInOrder)
+	}
+}
+
+func TestBuildSaga_Finalize_EmitsDeployWarnings(t *testing.T) {
+	tests := []struct {
+		name        string
+		appConfig   string
+		warningText string
+		prepare     func(*testing.T, *sagaTestHarness)
+	}{
+		{
+			name:        "local storage migration",
+			appConfig:   "name = 'demo'\n",
+			warningText: "Local storage data was automatically mounted",
+			prepare: func(t *testing.T, h *sagaTestHarness) {
+				h.builder.DataPath = t.TempDir()
+				appRec, err := h.builder.appClient.Create(context.Background(), "demo")
+				if err != nil {
+					t.Fatalf("creating app: %v", err)
+				}
+				localDir := filepath.Join(h.builder.DataPath, "data", "local", appRec.ID.String())
+				if err := os.MkdirAll(localDir, 0755); err != nil {
+					t.Fatalf("creating local storage: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(localDir, "data.db"), []byte("existing data"), 0644); err != nil {
+					t.Fatalf("seeding local storage: %v", err)
+				}
+			},
+		},
+		{
+			name: "aliased local disks",
+			appConfig: `name = "demo"
+
+[[services.web.disks]]
+name = "cache"
+provider = "local"
+mount_path = "/cache"
+
+[[services.web.disks]]
+name = "data"
+provider = "local"
+mount_path = "/data"
+`,
+			warningText: "Multiple local disks share one per-app store",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newSagaTestHarness(t)
+			if tt.prepare != nil {
+				tt.prepare(t, h)
+			}
+
+			files := dockerfileTarball(t)
+			files[".miren/app.toml"] = tt.appConfig
+			streamID := "stream-warning-" + strings.ReplaceAll(tt.name, " ", "-")
+			h.streams.Register(streamID, makeTar(t, files))
+
+			rec := &recordingSender{}
+			h.statuses.Register(streamID, rec)
+			t.Cleanup(func() { h.statuses.Unregister(streamID) })
+
+			err := h.executor.Start(sagaBuildFromTar).
+				Input("app_name", "demo").
+				Input("stream_id", streamID).
+				WithID("test-warning-" + strings.ReplaceAll(tt.name, " ", "-")).
+				Execute(ctx)
+			if err != nil {
+				t.Fatalf("saga: %v", err)
+			}
+
+			var warning *recordedLog
+			for i := range rec.Logs {
+				if rec.Logs[i].Text == tt.warningText {
+					warning = &rec.Logs[i]
+					break
+				}
+			}
+			if warning == nil {
+				t.Fatalf("missing warning %q in logs: %v", tt.warningText, rec.Logs)
+			}
+			if warning.Level != "warn" {
+				t.Errorf("warning level = %q, want warn", warning.Level)
+			}
+			fieldKeys := make(map[string]bool)
+			for _, field := range warning.Fields {
+				fieldKeys[field.Key()] = true
+			}
+			for _, key := range []string{"detail", "link"} {
+				if !fieldKeys[key] {
+					t.Errorf("warning fields missing %q: %v", key, warning.Fields)
+				}
+			}
+		})
 	}
 }
 

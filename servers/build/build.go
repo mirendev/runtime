@@ -1137,23 +1137,6 @@ func (b *Builder) sendErrorStatus(ctx context.Context, status *stream.SendStream
 	}
 }
 
-// sendLogStatus sends a structured log status update if status is not nil
-func (b *Builder) sendLogStatus(ctx context.Context, status *stream.SendStreamClient[*build_v1alpha.Status], level, text string, fields ...*build_v1alpha.LogField) {
-	if status != nil {
-		so := new(build_v1alpha.Status)
-		entry := &build_v1alpha.LogEntry{}
-		entry.SetLevel(level)
-		entry.SetText(text)
-		if len(fields) > 0 {
-			entry.SetFields(fields)
-		}
-		so.Update().SetLog(entry)
-		if _, err := status.Send(ctx, so); err != nil {
-			b.Log.Warn("error sending log status", "error", err)
-		}
-	}
-}
-
 func logField(key, value string) *build_v1alpha.LogField {
 	f := &build_v1alpha.LogField{}
 	f.SetKey(key)
@@ -1194,12 +1177,12 @@ func shouldWarnLocalStorageMigration(dataPath string, appID entity.Id, configSpe
 
 // checkLocalStorageMigration checks whether the app has existing data in
 // local storage but no explicit disk config, and sends a deploy warning.
-func (b *Builder) checkLocalStorageMigration(ctx context.Context, appID entity.Id, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
+func (b *Builder) checkLocalStorageMigration(appID entity.Id, configSpec core_v1alpha.ConfigSpec, status StatusSender) {
 	if !shouldWarnLocalStorageMigration(b.DataPath, appID, configSpec) {
 		return
 	}
 
-	b.sendLogStatus(ctx, status, "warn", "Local storage data was automatically mounted",
+	status.SendLog("warn", "Local storage data was automatically mounted",
 		logField("detail", "This app has data stored on disk, but your app.toml doesn't declare it yet. "+
 			"Add a disk config so the data continues to be available — this safety net will be removed in a future release."),
 		logField("link", "[Configuring Disks](https://miren.md/disks)"),
@@ -1237,13 +1220,13 @@ func aliasedLocalMountPaths(configSpec core_v1alpha.ConfigSpec) []string {
 // distinct mount paths, which all alias to the same shared per-app store. Unlike
 // the migration warning this needs no on-disk check — the aliasing is visible in
 // the config alone.
-func (b *Builder) checkAliasedLocalDisks(ctx context.Context, configSpec core_v1alpha.ConfigSpec, status *stream.SendStreamClient[*build_v1alpha.Status]) {
+func (b *Builder) checkAliasedLocalDisks(configSpec core_v1alpha.ConfigSpec, status StatusSender) {
 	paths := aliasedLocalMountPaths(configSpec)
 	if len(paths) == 0 {
 		return
 	}
 
-	b.sendLogStatus(ctx, status, "warn", "Multiple local disks share one per-app store",
+	status.SendLog("warn", "Multiple local disks share one per-app store",
 		logField("detail", "These local disks all map to the same per-app directory, so they're views onto "+
 			"the same files and a write to one shows up at the others: "+strings.Join(paths, ", ")+". "+
 			"If you want isolated areas, use subdirectories under a single local disk (like /data/cache and "+
@@ -1853,8 +1836,9 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 
 		b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 
-		b.checkLocalStorageMigration(ctx, appRec.ID, configSpec, status)
-		b.checkAliasedLocalDisks(ctx, configSpec, status)
+		statusSender := NewRPCStatusSender(status, b.Log)
+		b.checkLocalStorageMigration(appRec.ID, configSpec, statusSender)
+		b.checkAliasedLocalDisks(configSpec, statusSender)
 	}
 
 	// Log the deployment to the app's logs

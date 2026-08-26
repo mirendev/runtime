@@ -689,15 +689,9 @@ func finalize(ctx context.Context, in finalizeIn) (finalizeOut, error) {
 	if in.EphemeralLabel == "" {
 		spec, err := unmarshalConfigSpec(in.ConfigSpec)
 		if err == nil {
-			// checkLocalStorageMigration takes a *SendStreamClient; its
-			// signature predates StatusSender. Pass nil for now and
-			// route the migration-warning UX through the sender once
-			// the function grows a StatusSender-shaped overload. Saga
-			// deploys skip that warning until then — accepted as a
-			// temporary regression on the flagged path. The aliased-disk
-			// warning shares the same channel and the same limitation.
-			b.checkLocalStorageMigration(ctx, entity.Id(in.AppID), spec, nil)
-			b.checkAliasedLocalDisks(ctx, spec, nil)
+			status := deps.statuses.SenderFor(in.StreamID)
+			b.checkLocalStorageMigration(entity.Id(in.AppID), spec, status)
+			b.checkAliasedLocalDisks(spec, status)
 		}
 	}
 
