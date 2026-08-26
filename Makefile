@@ -177,7 +177,10 @@ measure-blackbox-times: ## Re-measure per-test blackbox times into hack/blackbox
 	python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
 
 test-blackbox: ## Run blackbox tests (requires `make dev` running)
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 ./blackbox/...
+	# The cloud-backed tests are excluded: each stands up a whole cloud on fixed
+	# ports and restarts the server, which interferes with everything after it.
+	# They have their own target below, and their own CI job.
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$$' ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \
@@ -188,8 +191,13 @@ build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	cd "$$CLOUD_REPO" && CGO_ENABLED=0 GOOS=linux go build -o $(CURDIR)/bin/bb-pop ./cmd/pop && \
 	echo "Done: bin/bb-cloud, bin/bb-pop"
 
-test-blackbox-pop: ## Run POP blackbox tests (requires `make dev` and cloud repo)
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run TestPOP ./blackbox/...
+test-blackbox-pop: ## Run cloud-backed blackbox tests (requires `make dev` and cloud repo)
+	# One invocation each: both build a cloud environment on the same fixed
+	# ports, and running them in a single process leaves the second waiting on
+	# a port the first has not finished releasing.
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestPOP$$' ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestRPCViaCloud$$' ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$$' ./blackbox/...
 
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
 	# Runs the whole blackbox suite (not just the distributed-specific tests)

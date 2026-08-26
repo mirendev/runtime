@@ -49,6 +49,9 @@ func ClusterList(ctx *Context, opts struct {
 		// thing `doctor config` used to show that nothing else did. It answers
 		// "why is this cluster even here?" when an unexpected one shows up.
 		Source string `json:"source"`
+		// ViaCloud reports that commands reach this cluster through Miren
+		// Cloud, which is why it has no address of its own.
+		ViaCloud bool `json:"via_cloud"`
 	}
 
 	var clusters []ClusterInfo
@@ -88,14 +91,19 @@ func ClusterList(ctx *Context, opts struct {
 			Identity: ccfg.Identity,
 			Active:   isActive,
 			Source:   source,
+			ViaCloud: ccfg.ViaCloud,
 		}
 		clusters = append(clusters, clusterInfo)
 
 		// Build table row with formatting
 		if !opts.IsJSON() {
-			// Format address - color port portion gray for table display
+			// A cloud-routed cluster has no address, and an empty cell reads as
+			// a broken entry rather than a deliberate one. Name the route.
 			address := ccfg.Hostname
-			if host, port, err := net.SplitHostPort(address); err == nil {
+			if ccfg.ViaCloud {
+				address = lipgloss.NewStyle().Foreground(theme.Muted).Render("via miren cloud")
+			} else if host, port, err := net.SplitHostPort(address); err == nil {
+				// Color the port portion gray for table display
 				grayPort := lipgloss.NewStyle().Foreground(theme.Muted).Render(":" + port)
 				address = host + grayPort
 			}

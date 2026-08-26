@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,8 +25,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		st, err := client.OpenStreamSync(ctx)
 		r.NoError(err)
@@ -52,8 +53,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		// server-initiated stream
 		ss, err := server.OpenStreamSync(ctx)
@@ -74,8 +75,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		st, err := client.OpenStreamSync(ctx)
 		r.NoError(err)
@@ -100,8 +101,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		// Server echoes each accepted stream.
 		go func() {
@@ -144,8 +145,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		st, err := client.OpenStreamSync(ctx)
 		r.NoError(err)
@@ -173,8 +174,8 @@ func TestMsgMux(t *testing.T) {
 		ctx := t.Context()
 
 		ca, cb := newMemPipe()
-		client := newMsgSession(ca, true, 0)
-		server := newMsgSession(cb, false, 0)
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, 0)
 
 		big := make([]byte, defaultMaxFrameData*2+1234)
 		for i := range big {
@@ -192,6 +193,61 @@ func TestMsgMux(t *testing.T) {
 		got, err := io.ReadAll(ss)
 		r.NoError(err)
 		r.Equal(big, got)
+
+		client.Close()
+		server.Close()
+	})
+
+	// A peer that sends and never reads must not be able to make the session
+	// hold unbounded memory. The transport's backpressure stops once a frame is
+	// delivered, so without a ceiling here a caller can keep one stream open,
+	// send faster than the handler consumes, and grow the read buffer for as
+	// long as it likes — which is what made the relay's advertised per-session
+	// limit describe only one of the two places a frame waits.
+	t.Run("a stream held open past the limit ends the session", func(t *testing.T) {
+		r := require.New(t)
+		ctx := t.Context()
+
+		const limit = 256 << 10
+
+		ca, cb := newMemPipe()
+		client := newMsgSession(ca, true, 0, 0)
+		server := newMsgSession(cb, false, 0, limit)
+
+		st, err := client.OpenStreamSync(ctx)
+		r.NoError(err)
+
+		// Nothing ever reads srvStream, which is the whole point: these bytes
+		// pile up in its read buffer with no handler taking them.
+		_, err = server.AcceptStream(ctx)
+		r.NoError(err)
+
+		// In a goroutine because the writer is expected to be abandoned
+		// mid-flight: the far end stops reading when it tears down, so a write
+		// may block rather than return, and that is the correct behaviour to
+		// leave running rather than to wait on.
+		go func() {
+			chunk := make([]byte, 16<<10)
+			for range (limit * 8) / len(chunk) {
+				if _, err := st.Write(chunk); err != nil {
+					return
+				}
+			}
+		}()
+
+		// The assertion is on the receiving session, since that is the side
+		// holding the memory and the side that has to act.
+		select {
+		case <-server.done:
+		case <-time.After(10 * time.Second):
+			r.Fail("the session went on buffering unread data past its ceiling")
+		}
+
+		server.mu.Lock()
+		closeErr := server.closeErr
+		server.mu.Unlock()
+		r.ErrorIs(closeErr, errSessionOverBuffered,
+			"the session ended, but not for the reason under test")
 
 		client.Close()
 		server.Close()

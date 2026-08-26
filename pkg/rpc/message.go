@@ -15,6 +15,11 @@ const defaultMaxFrameData = 1 << 20 // 1 MiB
 // untrusted peer before the length is validated.
 const frameReadHeadroom = 1 << 16
 
+// defaultMaxBufferedData bounds delivered-but-unread stream data per session.
+// Generous next to what an ordinary call holds — the point is to have a
+// ceiling at all, not to police normal use. Override with WithMaxBufferedData.
+const defaultMaxBufferedData = 32 << 20 // 32 MiB
+
 // frameReadLimit is the largest inbound message a transport should accept for a
 // given payload frame cap. A zero cap uses the default.
 func frameReadLimit(maxFrame int) int64 {
@@ -40,11 +45,53 @@ type MessageConn interface {
 	Close() error
 }
 
+// MessageRemote is an optional interface a MessageConn may implement to name
+// its far end.
+//
+// Optional because a MessageConn is a byte pipe and most backends have no
+// address to give. It exists for the audit trail, which records where a call
+// came from and had nothing to record on this transport.
+type MessageRemote interface {
+	Remote() string
+}
+
+type msgRemoteKey struct{}
+
+// contextWithMsgRemote labels a context with the far end of the message
+// session it belongs to, so code deep in dispatch can record where a call came
+// from without every layer between having to carry it.
+func contextWithMsgRemote(ctx context.Context, remote string) context.Context {
+	return context.WithValue(ctx, msgRemoteKey{}, remote)
+}
+
+// msgRemoteFromContext returns the label set by contextWithMsgRemote, or
+// "message" for a session that never set one.
+func msgRemoteFromContext(ctx context.Context) string {
+	if remote, ok := ctx.Value(msgRemoteKey{}).(string); ok && remote != "" {
+		return remote
+	}
+	return "message"
+}
+
+// messageConnRemote asks a connection to name its far end, falling back to a
+// constant. The fallback is deliberately not an address-shaped string: an audit
+// line saying "message" is honest about knowing nothing, where a fake address
+// would not be.
+func messageConnRemote(conn MessageConn) string {
+	if r, ok := conn.(MessageRemote); ok {
+		if remote := r.Remote(); remote != "" {
+			return remote
+		}
+	}
+	return "message"
+}
+
 // MessageSessionOption configures a session built over a MessageConn.
 type MessageSessionOption func(*messageSessionOptions)
 
 type messageSessionOptions struct {
-	maxFrame int
+	maxFrame    int
+	maxBuffered int
 }
 
 // WithMaxFrameSize bounds the payload rpc places in a single message. Set it
@@ -55,6 +102,23 @@ type messageSessionOptions struct {
 func WithMaxFrameSize(n int) MessageSessionOption {
 	return func(o *messageSessionOptions) {
 		o.maxFrame = n
+	}
+}
+
+// WithMaxBufferedData bounds how much delivered-but-unread stream data one
+// session may hold across all its streams, before the session is torn down.
+//
+// It exists because the transport's own backpressure does not reach this far.
+// A frame handed to msgmux has already left the backend's accounting, and it
+// sits in a stream's read buffer until a handler reads it — so a peer that
+// sends faster than its handler consumes, or keeps sending after the handler
+// has stopped reading altogether, grows that buffer with nothing to stop it.
+// Any limit the transport advertises is only real if this one backs it.
+//
+// Zero leaves it at defaultMaxBufferedData.
+func WithMaxBufferedData(n int) MessageSessionOption {
+	return func(o *messageSessionOptions) {
+		o.maxBuffered = n
 	}
 }
 
@@ -79,8 +143,10 @@ func buildMessageSessionOptions(opts []MessageSessionOption) messageSessionOptio
 func (s *State) ServeMessageConn(ctx context.Context, conn MessageConn, opts ...MessageSessionOption) error {
 	o := buildMessageSessionOptions(opts)
 
-	sess := newMsgSession(conn, false, o.maxFrame)
+	sess := newMsgSession(conn, false, o.maxFrame, o.maxBuffered)
 	router := &sessionRouter{state: s, server: s.server}
+
+	ctx = contextWithMsgRemote(ctx, messageConnRemote(conn))
 
 	return router.run(ctx, sess)
 }
@@ -108,7 +174,7 @@ func (s *State) ClientFromMessageConn(
 	// dial stays nil: the connection belongs to the caller and cannot be
 	// re-established from here.
 	client.ops = &msgOpTransport{owner: client}
-	client.ops.adopt(ctx, newMsgSession(conn, true, o.maxFrame))
+	client.ops.adopt(ctx, newMsgSession(conn, true, o.maxFrame, o.maxBuffered))
 
 	if err := client.resolveCapability(name); err != nil {
 		return nil, err

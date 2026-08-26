@@ -1,0 +1,225 @@
+//go:build blackbox
+
+package blackbox
+
+import (
+	"crypto/rand"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"testing"
+	"time"
+
+	"miren.dev/runtime/blackbox/harness"
+)
+
+// TestRPCViaCloud exercises the whole path an operator with no route to their
+// cluster takes: the CLI dials cloud, cloud relays into the socket the cluster
+// dialed outbound, and the cluster answers.
+//
+//	miren → cloud relay → cluster's uplink → cluster's RPC server
+//
+// The assertion that matters is not that a command succeeds but that it returns
+// the same thing the direct path does. A relay that quietly answered from
+// somewhere else would still exit zero.
+//
+// The RBAC grant in the setup is load-bearing evidence, not boilerplate:
+// without it the cluster refuses these calls with its own policy decision,
+// which is only reachable if it authenticated the caller's bearer and read the
+// groups out of it. Cloud never sees that token — it is inside a CBOR frame —
+// so nothing here could be cloud vouching for the traffic it carries.
+func TestRPCViaCloud(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+	env := harness.NewCloudEnv(t, m)
+
+	// Something to look at that is real cluster state rather than a constant
+	// any endpoint could produce.
+	appName := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
+
+	direct := m.MustRun("app", "list", "--format", "json")
+
+	configPath, devUserXID := env.SetupViaCloudCluster(t, "viacloud")
+	m.SetEnv("MIREN_CONFIG", configPath)
+	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
+
+	directApps := appNames(t, direct.Stdout)
+
+	// The cluster caches the RBAC policy it fetched at startup and only
+	// re-reads it once a denial tells it something may have changed, so the
+	// grant made a moment ago takes a beat to be visible. Polling waits that
+	// out; it does not paper over a relay that never works.
+	var relayedApps []string
+	harness.Poll(t, "app list via cloud", 90*time.Second, 3*time.Second, func() (bool, string) {
+		r := m.Run("app", "list", "--format", "json")
+		if !r.Success() {
+			return false, "exit " + strconv.Itoa(r.ExitCode) + ": " + r.Stderr
+		}
+
+		// Exiting zero is not the condition being waited for. The grant can
+		// land between the command being permitted and the policy being
+		// visible, and an empty list would end the poll on a result the
+		// assertions below would then reject.
+		relayedApps = appNames(t, r.Stdout)
+		if len(relayedApps) == 0 {
+			return false, "relayed app list is still empty"
+		}
+		return true, ""
+	})
+
+	if len(relayedApps) == 0 {
+		t.Fatalf("relayed app list returned nothing; direct returned %v", directApps)
+	}
+	if !slices.Equal(directApps, relayedApps) {
+		t.Fatalf("relayed app list disagrees with the direct one:\n  direct:  %v\n  relayed: %v",
+			directApps, relayedApps)
+	}
+	if !slices.Contains(relayedApps, appName) {
+		t.Fatalf("relayed app list is missing the app just deployed (%s): %v", appName, relayedApps)
+	}
+
+	// A second command on a fresh connection: the relay has to be usable more
+	// than once, not just for whatever session the first call happened to open.
+	m.MustRun("app", "list", "--format", "json")
+
+	// whoami reads no address of its own, and a cloud-routed cluster has none
+	// to give it. Commands that reach for the hostname directly are the ones
+	// this routing breaks, so one of them is exercised here.
+	var who struct {
+		Cluster string `json:"cluster"`
+		UserID  string `json:"user_id"`
+	}
+	out := m.MustRun("whoami", "--format", "json").Stdout
+	if err := json.Unmarshal([]byte(out), &who); err != nil {
+		t.Fatalf("failed to parse whoami json: %v\nraw: %s", err, out)
+	}
+	if who.UserID != devUserXID {
+		t.Fatalf("whoami reports user %q, want %q", who.UserID, devUserXID)
+	}
+}
+
+// A deploy is the demanding case for this route, and nothing had ever pushed
+// one through it. Reading state moves a few hundred bytes; a deploy pulls the
+// build context in 1-10 MB chunks, holds one RPC open for the length of a
+// build, and drives it through capabilities the server calls back into.
+//
+// The limits on this path were all sized for coordination traffic. This is what
+// tells us whether any of them starve real work, which arithmetic alone cannot:
+// the frame caps, the per-session byte budgets, and the per-envelope write
+// timeout all have to hold at once.
+//
+// Asserting the app runs, rather than that the command exited zero, is the
+// point. A deploy that uploaded nothing and reported success is exactly the
+// failure this should catch.
+func TestDeployViaCloud(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+	env := harness.NewCloudEnv(t, m)
+
+	configPath, _ := env.SetupViaCloudCluster(t, "viacloud")
+	m.SetEnv("MIREN_CONFIG", configPath)
+	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
+
+	// The cluster only re-reads its RBAC policy once a denial tells it to, so
+	// the grant made a moment ago needs a call to land first. Deploy is far too
+	// expensive to use as the thing that provokes that, so a cheap read does it.
+	harness.Poll(t, "cloud-routed cluster reachable", 90*time.Second, 3*time.Second, func() (bool, string) {
+		r := m.Run("app", "list", "--format", "json")
+		if !r.Success() {
+			return false, "exit " + strconv.Itoa(r.ExitCode) + ": " + r.Stderr
+		}
+		return true, ""
+	})
+
+	// DeployApp waits for the app to come up healthy, so returning at all means
+	// the build context arrived, the build ran, and the app started — the whole
+	// chain, over the relay.
+	appName := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
+
+	apps := appNames(t, m.MustRun("app", "list", "--format", "json").Stdout)
+	if !slices.Contains(apps, appName) {
+		t.Fatalf("deployed %s over the relay but the cluster does not list it: %v", appName, apps)
+	}
+
+	// The stock testdata apps are ~24 KB, which is one small chunk and touches
+	// none of the limits this route actually risks. A context big enough to
+	// force full-size frames is the only thing that exercises them.
+	t.Run("large build context", func(t *testing.T) {
+		big := largeContextApp(t, c, 8<<20)
+
+		bigApp := harness.DeployApp(t, m, harness.AppOptions{
+			Testdata:     big,
+			ReadyTimeout: 4 * time.Minute,
+		})
+
+		apps := appNames(t, m.MustRun("app", "list", "--format", "json").Stdout)
+		if !slices.Contains(apps, bigApp) {
+			t.Fatalf("deployed %s with a large context but the cluster does not list it: %v", bigApp, apps)
+		}
+	})
+}
+
+// largeContextApp writes a testdata app whose build context is at least size
+// bytes, and returns its directory name.
+//
+// The payload is random so it does not compress: the tar has to stay large
+// after gzip or the upload never produces the full-size frames that make this
+// worth doing. It sits beside the app rather than inside the build, so the
+// image is unchanged and only the upload path gets heavier.
+func largeContextApp(t *testing.T, c *harness.Cluster, size int) string {
+	t.Helper()
+
+	// The harness prefixes app names itself, so this one does not.
+	name := "large-context"
+	dir := filepath.Join(c.TestdataDir, name)
+
+	if err := os.MkdirAll(filepath.Join(dir, ".miren"), 0o755); err != nil {
+		t.Fatalf("failed to create the large-context app: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	src := filepath.Join(c.TestdataDir, "go-server")
+	for _, f := range []string{"Procfile", "go.mod", "main.go", ".miren/app.toml"} {
+		data, err := os.ReadFile(filepath.Join(src, f))
+		if err != nil {
+			t.Fatalf("failed to read %s from go-server: %v", f, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), data, 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", f, err)
+		}
+	}
+
+	blob := make([]byte, size)
+	if _, err := rand.Read(blob); err != nil {
+		t.Fatalf("failed to generate the payload: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "payload.bin"), blob, 0o644); err != nil {
+		t.Fatalf("failed to write the payload: %v", err)
+	}
+
+	return name
+}
+
+func appNames(t *testing.T, out string) []string {
+	t.Helper()
+
+	var apps []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &apps); err != nil {
+		t.Fatalf("failed to parse app list json: %v\nraw: %s", err, out)
+	}
+
+	names := make([]string, 0, len(apps))
+	for _, a := range apps {
+		names = append(names, a.Name)
+	}
+
+	// Sorted so the comparison is about which apps came back, not the order
+	// two independent list calls happened to produce them in.
+	slices.Sort(names)
+
+	return names
+}

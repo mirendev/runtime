@@ -139,7 +139,14 @@ func connectNoticeLabel(target string, elapsed time.Duration, withAge bool) stri
 func (c *Context) connectTarget() string {
 	addr := ""
 	if c.ClusterConfig != nil {
-		addr = c.ClusterConfig.Hostname
+		// A cloud-routed cluster's hostname is not what we dial, and is often
+		// unset or stale. Naming the route is both true and the more useful
+		// thing to read while a connection is taking a while.
+		if c.ClusterConfig.ViaCloud {
+			addr = "via miren cloud"
+		} else {
+			addr = c.ClusterConfig.Hostname
+		}
 	}
 	if addr == "" {
 		addr = c.Config.ServerAddress

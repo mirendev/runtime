@@ -33,18 +33,73 @@ func ClusterAdd(ctx *Context, opts struct {
 	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
 	Address  string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
 	Force    bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
+	ViaCloud bool   `long:"via-cloud" description:"Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to"`
 }) error {
-	return addCluster(ctx, opts.Identity, opts.Cluster, opts.Address, opts.Force)
+	return addCluster(ctx, addClusterOptions{
+		identityName: opts.Identity,
+		clusterName:  opts.Cluster,
+		address:      opts.Address,
+		force:        opts.Force,
+		viaCloud:     opts.ViaCloud,
+	})
 }
 
 // AddClusterInteractive prompts the user to select and add a cluster interactively.
 // It auto-selects the identity if only one is available.
 // Returns nil if a cluster was successfully added.
 func AddClusterInteractive(ctx *Context) error {
-	return addCluster(ctx, "", "", "", false)
+	return addCluster(ctx, addClusterOptions{})
 }
 
-func addCluster(ctx *Context, identityName, clusterName, address string, force bool) error {
+type addClusterOptions struct {
+	identityName string
+	clusterName  string
+	address      string
+	force        bool
+
+	// viaCloud writes an entry that reaches the cluster through Miren Cloud.
+	// It only makes sense in discovery mode: routing through cloud needs the
+	// cluster's XID, and asking cloud which clusters you have is the only way
+	// to learn it.
+	viaCloud bool
+}
+
+// canFallBackToCloud reports whether a cluster that would not answer a direct
+// dial can be reached through cloud instead.
+//
+// The question is answered by trying it, not by asking cloud whether the
+// cluster is online — see cloudRouteWorks for why those are different claims.
+// A failure to reach it is not distinguished from an answer of no, because both
+// produce the same decision: leave the user with the direct-connection error
+// they were going to get anyway, rather than a confusing one about routing.
+func canFallBackToCloud(
+	ctx *Context,
+	config *clientconfig.Config,
+	identityName string,
+	identity *clientconfig.IdentityConfig,
+	cluster *ClusterResponse,
+) bool {
+	return cloudRouteProbe(ctx, config, identityName, identity, cluster)
+}
+
+// announceClusterAdd says which cluster is being added, under what local name,
+// and how it will be reached. Shared so the three ways of getting here cannot
+// describe themselves differently, and so a path that ends up routed cannot
+// report an address it is not going to use.
+func announceClusterAdd(ctx *Context, remoteName, localName, how string) {
+	if localName != remoteName {
+		ctx.Info("Adding cluster '%s' as '%s' (%s)", remoteName, localName, how)
+		return
+	}
+	ctx.Info("Adding cluster '%s' (%s)", remoteName, how)
+}
+
+func addCluster(ctx *Context, opts addClusterOptions) error {
+	identityName, clusterName, address, force := opts.identityName, opts.clusterName, opts.address, opts.force
+
+	if opts.viaCloud && address != "" {
+		return fmt.Errorf("--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
+	}
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
@@ -131,8 +186,19 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 			return fmt.Errorf("no clusters available for your account")
 		}
 
+		// Which of the undialable clusters cloud can still reach. Asked before
+		// the picker so a cluster that works is offered as one, rather than
+		// greyed out for advertising no address it was never going to have.
+		//
+		// Skipped when the caller already said --via-cloud, since the answer
+		// would change nothing.
+		var cloudRoutable map[string]bool
+		if !opts.viaCloud {
+			cloudRoutable = cloudRoutableClusters(ctx, mainConfig, identityName, identity, clusters)
+		}
+
 		// Present cluster selection to user and get local name
-		selectedCluster, localName, err := selectClusterFromList(ctx, clusters)
+		selectedCluster, localName, err := selectClusterFromList(ctx, clusters, cloudRoutable)
 		if err != nil {
 			return err
 		}
@@ -140,23 +206,61 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		clusterName = localName
 		clusterXID = selectedCluster.XID
 
-		// Store all available addresses
-		allAddresses = selectedCluster.APIAddresses
-
-		// Try to connect to the cluster
-		workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
-		if err != nil {
-			return err
+		// A cluster nothing can dial, which cloud reports it can reach. Routing
+		// through cloud is not a fallback here so much as the only way it was
+		// ever going to work, so it is chosen without asking — but it is still
+		// confirmed by using the route, because presence in cloud does not
+		// establish that the cluster will answer over it.
+		if !opts.viaCloud && cloudRoutable[selectedCluster.XID] {
+			if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
+				return fmt.Errorf(
+					"%s advertises no address this machine can dial, and did not answer through cloud either; "+
+						"if its runtime predates cloud-routed RPC, upgrade it or add the cluster from a network that can reach it",
+					selectedCluster.Name)
+			}
+			opts.viaCloud = true
+			ctx.Info("%s advertises no address this machine can dial, and cloud can reach it.", selectedCluster.Name)
 		}
 
-		clusterCert = cert
-		address = workingAddress
-
-		if localName != selectedCluster.Name {
-			ctx.Info("Adding cluster '%s' as '%s' (connected to %s)", selectedCluster.Name, localName, workingAddress)
+		if opts.viaCloud {
+			// No address, no probe, no certificate. Every one of those describes
+			// dialing the cluster, which is the thing this entry exists to avoid
+			// — and probing would just fail slowly before writing the entry that
+			// was going to work.
+			announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 		} else {
-			ctx.Info("Adding cluster '%s' (connected to %s)", selectedCluster.Name, workingAddress)
+			// Store all available addresses
+			allAddresses = selectedCluster.APIAddresses
+
+			// Try to connect to the cluster
+			workingAddress, cert, err := tryConnectToCluster(ctx, selectedCluster, true)
+			if err != nil {
+				// It advertised addresses and none of them answered, which is
+				// the other shape of unreachable: a cluster on a network this
+				// machine is not on. Cloud may still hold a link to it, and if
+				// it does, the entry that works is the routed one.
+				if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
+					return err
+				}
+
+				ctx.Info("Could not reach %s directly, but cloud has a link to it.", selectedCluster.Name)
+
+				// The address and certificate belong to a route that does not
+				// work from here. Keeping either would write an entry that
+				// looks dialable and is not.
+				opts.viaCloud = true
+				allAddresses = nil
+
+				announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
+			} else {
+				clusterCert = cert
+				address = workingAddress
+
+				announceClusterAdd(ctx, selectedCluster.Name, localName, "connected to "+workingAddress)
+			}
 		}
+	} else if opts.viaCloud {
+		return fmt.Errorf("--via-cloud needs to look the cluster up in cloud, so it can't be combined with --cluster; run `miren cluster add --via-cloud` and pick from the list")
 	} else if clusterName == "" || address == "" {
 		return fmt.Errorf("both --cluster and --address must be specified, or neither (to list available clusters)")
 	} else {
@@ -178,6 +282,19 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		AllAddresses: allAddresses,
 		Identity:     identityName,
 		XID:          clusterXID,
+		ViaCloud:     opts.viaCloud,
+	}
+
+	// A cloud reached over plain HTTP is a development one, and routing through
+	// it means putting this identity's token on an unencrypted socket. The
+	// entry has to say so or it will not connect at all — and writing an entry
+	// that cannot work, or one that quietly ships a credential in the clear
+	// without recording that anywhere, are both worse than saying it out loud
+	// here and putting the admission in the file.
+	if opts.viaCloud && identity != nil && strings.HasPrefix(identity.Issuer, "http://") {
+		clusterConfig.Insecure = true
+		ctx.Warn("%s is not encrypted, so commands to this cluster will send your credentials in the clear.", identity.Issuer)
+		ctx.Warn("Recorded as insecure: true on the cluster. Use an https cloud for anything but local development.")
 	}
 
 	if clusterCert != nil {
@@ -243,7 +360,10 @@ func addCluster(ctx *Context, identityName, clusterName, address string, force b
 		return fmt.Errorf("failed to save cluster configuration: %w", err)
 	}
 
-	if identityName != "" {
+	if opts.viaCloud {
+		ctx.Completed("Successfully added cluster %q with identity %q, routed through Miren Cloud", clusterName, identityName)
+		ctx.Info("Commands reach it over the connection it holds open to cloud, so it needs no address here.")
+	} else if identityName != "" {
 		ctx.Completed("Successfully added cluster %q with identity %q at %s", clusterName, identityName, address)
 	} else {
 		ctx.Completed("Successfully added cluster %q at %s", clusterName, address)

@@ -20,6 +20,7 @@ miren cluster add [flags]
 - `--cluster, -c` — Name of the cluster to create (optional - will list available)
 - `--force, -f` — Overwrite existing cluster configuration
 - `--identity, -i` — Name of the identity to use (optional - will use the only one if single)
+- `--via-cloud` — Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to
 
 ## Global Options
 

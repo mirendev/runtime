@@ -17,8 +17,17 @@ func Whoami(ctx *Context, opts struct {
 		return fmt.Errorf("no cluster configured - use 'miren cluster add' to add a cluster")
 	}
 
-	// Get server hostname
+	// Where this cluster is reached. A cloud-routed one has no address of its
+	// own — that is the point of it — so the cloud it is reached through stands
+	// in, which is also the server the identity below authenticates against.
 	hostname := ctx.ClusterConfig.Hostname
+	if ctx.ClusterConfig.ViaCloud {
+		// Same precedence the connection itself uses, from the same place, so
+		// what this reports cannot drift from where the call actually went.
+		if cloud, err := ctx.ClusterConfig.CloudEndpoint(ctx.ClientConfig); err == nil {
+			hostname = cloud
+		}
+	}
 	if hostname == "" {
 		return fmt.Errorf("no hostname configured for cluster %s", ctx.ClusterName)
 	}

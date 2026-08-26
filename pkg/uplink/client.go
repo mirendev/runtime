@@ -19,7 +19,11 @@ import (
 )
 
 const (
-	outboxSize     = 64
+	// outboxSize is deep enough that a tenant using SendContext to apply
+	// backpressure does not immediately push the best-effort tenants over their
+	// drop threshold. The two coexist in one queue: a blocked sender waits for
+	// room, while Send discards as soon as there is none.
+	outboxSize     = 256
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 60 * time.Second
 	wsEndpoint     = "/api/v1/cluster-channel/ws"
@@ -37,6 +41,17 @@ const (
 	// Subtracting rather than adding matters: it keeps the delay bounded by the
 	// backoff schedule instead of letting the worst case drift past maxBackoff.
 	backoffJitter = 0.3
+
+	// readLimit is the largest inbound message we accept. coder/websocket
+	// defaults to 32 KiB, which is ample for coordination messages but far too
+	// small for a tenant tunnelling bulk payloads through an envelope.
+	//
+	// The size is set by the worst case such a tenant can face rather than by
+	// anything this package does: a payload it did not choose the framing for,
+	// base64'd into JSON, which costs a third again. 2 MiB leaves room for a
+	// peer framing at pkg/rpc's 1 MiB default and still keeps a bound on what an
+	// untrusted sender can make us buffer.
+	readLimit = 2 << 20
 )
 
 // Client maintains a persistent WebSocket connection to the cloud
@@ -187,6 +202,37 @@ func (c *Client) Send(env *Envelope) {
 	case c.outbox <- env:
 	default:
 		c.log.Warn("outbox full, dropping message", "type", env.Type)
+	}
+}
+
+// SendContext queues an envelope and waits for room rather than dropping, for
+// a tenant that cannot treat loss as a self-healing condition. The best-effort
+// Send above remains the right call for state a later report repairs; this one
+// is for a stream whose gap nothing downstream can reconstruct.
+//
+// What it promises is narrow: the envelope reached the outbox of the connection
+// live at the time, so it will be written unless that connection dies first. It
+// is not an acknowledgement, and a reconnect discards whatever is still queued
+// (see drainOutbox). A tenant that needs more than "delivered or the link
+// broke" has to notice the break — which, for anything session-shaped, means
+// tearing the session down and letting the caller retry.
+func (c *Client) SendContext(ctx context.Context, env *Envelope) error {
+	// Checked before the select for the same reason SendBlocking does it: with
+	// outbox room and a dead context both cases are ready, and Go picks between
+	// them at random. Here the stake is a relayed session — a sender that
+	// straddles a reconnect could land an rpc.data frame from an ended session
+	// on the *new* connection, which cloud may still route by session id. That
+	// is precisely the resume-across-a-link-break this transport promises not
+	// to do.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	select {
+	case c.outbox <- env:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -369,6 +415,8 @@ func (c *Client) connect(ctx context.Context) (*websocket.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", wsURL, err)
 	}
+
+	conn.SetReadLimit(readLimit)
 
 	c.log.Info("connected to cloud")
 	return conn, nil

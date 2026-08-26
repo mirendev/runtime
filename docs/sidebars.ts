@@ -83,6 +83,11 @@ const sidebars: SidebarsConfig = {
         'miren-cloud/connectivity',
         {
           type: 'doc',
+          id: 'miren-cloud/cloud-routed-clusters',
+          label: 'Cloud-Routed Clusters',
+        },
+        {
+          type: 'doc',
           id: 'miren-cloud/miren-anywhere',
           label: 'Miren Anywhere',
         },

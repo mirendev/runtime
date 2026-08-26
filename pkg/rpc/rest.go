@@ -152,7 +152,7 @@ func restAuthorize(w http.ResponseWriter, r *http.Request, m Method, st *State) 
 	identity := IdentityFromContext(ctx)
 	if identity == nil {
 		if st != nil {
-			logAccess(ctx, st.audit(), r, m, "unauthorized")
+			logAccess(ctx, st.audit(), r.RemoteAddr, m, "unauthorized")
 		}
 		writeRESTStatus(w, http.StatusUnauthorized, restErrorBody{
 			Error: "authentication required",
@@ -166,7 +166,7 @@ func restAuthorize(w http.ResponseWriter, r *http.Request, m Method, st *State) 
 		action := strings.ToLower(m.Name)
 
 		if err := st.authorizer.Authorize(ctx, identity, resource, action); err != nil {
-			logAccess(ctx, st.audit(), r, m, "forbidden", "error", err)
+			logAccess(ctx, st.audit(), r.RemoteAddr, m, "forbidden", "error", err)
 			writeRESTStatus(w, http.StatusForbidden, restErrorBody{
 				Error: err.Error(),
 				Code:  "forbidden",
@@ -176,7 +176,7 @@ func restAuthorize(w http.ResponseWriter, r *http.Request, m Method, st *State) 
 	}
 
 	if st != nil {
-		logAccess(ctx, st.audit(), r, m, "ok")
+		logAccess(ctx, st.audit(), r.RemoteAddr, m, "ok")
 	}
 
 	return true

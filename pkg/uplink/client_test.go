@@ -511,6 +511,33 @@ func TestSendBlockingRefusesADeadContextEvenWithRoom(t *testing.T) {
 	}
 }
 
+// SendContext carries relayed RPC frames, where landing one late is worse than
+// dropping it: a frame from an ended session that reaches the outbox after a
+// reconnect goes out on the new connection, and cloud may still route it by
+// session id. That is the resume-across-a-link-break the transport promises not
+// to do, so the cancellation has to win deterministically.
+func TestSendContextRefusesADeadContextEvenWithRoom(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, outboxSize),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Repeated for the same reason as the SendBlocking case above: with both
+	// select cases ready, one attempt passes half the time even unfixed.
+	for range 200 {
+		if err := c.SendContext(ctx, &Envelope{Type: "should-not-land"}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	}
+
+	if got := len(c.outbox); got != 0 {
+		t.Errorf("%d envelopes queued on a cancelled context, expected none", got)
+	}
+}
+
 // A response that unmarshals cleanly but carries no timestamps must not be
 // averaged into a nonsense offset and logged as a healthy sync. Same for an
 // org response naming no organization.
@@ -537,5 +564,112 @@ func TestControlPlaneHandlersRejectEmptyPayloads(t *testing.T) {
 	}
 	if got := strings.Count(out, "level=WARN"); got != 2 {
 		t.Errorf("expected both incomplete payloads to warn, got %d warnings in:\n%s", got, out)
+	}
+}
+
+// SendContext waits for room instead of discarding, which is the whole
+// difference between it and Send. Both halves matter: it must block while the
+// outbox is full, and it must come back as soon as space appears.
+func TestSendContextWaitsForRoom(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, 1),
+	}
+
+	if err := c.SendContext(t.Context(), &Envelope{Type: "first"}); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+
+	full, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := c.SendContext(full, &Envelope{Type: "second"}); err == nil {
+		t.Fatal("SendContext returned on a full outbox instead of waiting")
+	}
+
+	sent := make(chan error, 1)
+	go func() { sent <- c.SendContext(t.Context(), &Envelope{Type: "second"}) }()
+
+	if env := <-c.outbox; env.Type != "first" {
+		t.Fatalf("expected the first envelope to be queued, got %q", env.Type)
+	}
+
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatalf("second send: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SendContext did not proceed once the outbox drained")
+	}
+}
+
+// Send stays lossy on a full outbox. SendContext exists precisely because that
+// contract is wrong for some tenants, so it is worth pinning that adding one
+// did not quietly change the other.
+func TestSendStillDropsWhenFull(t *testing.T) {
+	c := &Client{
+		log:    slog.Default(),
+		outbox: make(chan *Envelope, 1),
+	}
+
+	c.Send(&Envelope{Type: "first"})
+	c.Send(&Envelope{Type: "dropped"})
+
+	if env := <-c.outbox; env.Type != "first" {
+		t.Fatalf("expected the first envelope to survive, got %q", env.Type)
+	}
+	select {
+	case env := <-c.outbox:
+		t.Fatalf("expected the second envelope to be dropped, got %q", env.Type)
+	default:
+	}
+}
+
+// coder/websocket caps reads at 32 KiB unless told otherwise, which would make
+// a tenant tunnelling bulk payloads fail at a size nothing in this package
+// names. The ceiling is ours, so prove a message well past the default arrives.
+func TestClientAcceptsLargeMessages(t *testing.T) {
+	const payload = 64 * 1024
+
+	received := make(chan int, 1)
+	router := NewMessageRouter()
+	router.Handle("test.large", func(_ context.Context, data json.RawMessage) error {
+		received <- len(data)
+		return nil
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		body, err := json.Marshal(strings.Repeat("x", payload))
+		if err != nil {
+			return
+		}
+		if err := wsjson.Write(r.Context(), conn, &Envelope{Type: "test.large", Data: body}); err != nil {
+			return
+		}
+
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	client := newTestClient(srv.URL, "test-token", router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go client.Run(ctx) //nolint:errcheck
+
+	select {
+	case n := <-received:
+		if n < payload {
+			t.Fatalf("payload arrived truncated: got %d bytes, want at least %d", n, payload)
+		}
+	case <-ctx.Done():
+		t.Fatal("large message never arrived; the read limit is probably still the default")
 	}
 }

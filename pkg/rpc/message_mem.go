@@ -102,7 +102,7 @@ func (r *memRegistry) dial(name string) (MessageConn, error) {
 	}
 
 	clientEnd, serverEnd := newMemPipe()
-	serverSess := newMsgSession(serverEnd, false, 0)
+	serverSess := newMsgSession(serverEnd, false, 0, 0)
 
 	router := &sessionRouter{state: entry.state, server: entry.state.server}
 	go router.run(entry.ctx, serverSess) //nolint:errcheck // loop ends with the session

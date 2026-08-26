@@ -671,24 +671,8 @@ func (c *NetworkClient) Close() error {
 
 // addBearerToken safely adds a bearer token to the request header if configured
 func (c *NetworkClient) addBearerToken(req *http.Request) {
-	if c.State == nil || c.State.opts == nil {
-		return
-	}
-
-	if fn := c.State.opts.bearerTokenFunc; fn != nil {
-		token, err := fn()
-		if err != nil || token == "" {
-			// Send the request unauthenticated and let the server reject it.
-			// The caller's retry then picks up a token that has since been
-			// refreshed, which a hard failure here would not.
-			return
-		}
+	if token := c.bearer(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
-		return
-	}
-
-	if c.State.opts.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.State.opts.bearerToken)
 	}
 }
 

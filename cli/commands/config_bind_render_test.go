@@ -24,7 +24,7 @@ func TestClusterPickerRendersUnreachable(t *testing.T) {
 		{Name: "oh-data", OrganizationName: "oh-data"}, // firewalled: no address
 	}
 
-	items, _, disabled, reachableCount := buildClusterPickerItems(clusters)
+	items, _, disabled, reachableCount := buildClusterPickerItems(clusters, nil)
 	require.Equal(t, 1, reachableCount)
 
 	m := ui.NewPicker(items,

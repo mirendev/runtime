@@ -262,8 +262,9 @@ jobs:
         # Tests already assigned to a shard in the checked-in manifest.
         GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups.json | sort -u)
 
-        # TestPOP runs in its own job (test-blackbox-pop); never shard it here.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vx 'TestPOP' || true)
+        # The cloud-backed tests run in their own job (test-blackbox-pop):
+        # they need the cloud repo and restart the server. Never shard them.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
 
@@ -341,13 +342,14 @@ jobs:
 
     - name: Run blackbox tests (shard ${{ matrix.group.shard }})
       # Each shard runs only its assigned subset, built into a -run regex from
-      # the matrix. TestPOP runs in its own job (test-blackbox-pop) because its
-      # server restart interferes with subsequent deploys; -skip guards against
-      # it ever slipping into a shard. Per-shard runtime is ~3 min, so 10m
-      # restores fast failure on a genuine hang.
+      # the matrix. The cloud-backed tests run in their own job
+      # (test-blackbox-pop) because their server restart interferes with
+      # subsequent deploys; -skip guards against one ever slipping into a
+      # shard. Per-shard runtime is ~3 min, so 10m restores fast failure on a
+      # genuine hang.
       run: |
         RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
-        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^TestPOP$' ./blackbox/...
+        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
@@ -435,6 +437,20 @@ jobs:
       env:
         BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
       run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestPOP$' ./blackbox/...
+
+    # A separate invocation, not another -run alternative: each of these builds
+    # a whole cloud environment on fixed ports and restarts the server, and two
+    # of them in one process leaves the second waiting on a port the first has
+    # not finished releasing.
+    - name: Run cloud RPC blackbox tests
+      env:
+        BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestRPCViaCloud$' ./blackbox/...
+
+    - name: Run cloud deploy blackbox tests
+      env:
+        BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()

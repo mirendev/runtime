@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -100,6 +101,13 @@ func (c *ClusterConfig) RPCOptions(ctx context.Context, config *Config) ([]rpc.S
 
 // RPCOptionsWithName returns RPC options with cluster name for caching
 func (c *ClusterConfig) RPCOptionsWithName(ctx context.Context, config *Config, clusterName string) ([]rpc.StateOption, error) {
+	// A cloud-routed cluster settles the matter before anything below: the
+	// address probing, the cluster CA, and the direct-dial paths all reason
+	// about a cluster we can reach, which is exactly what this cluster is not.
+	if c.ViaCloud {
+		return c.viaCloudOptions(ctx, config)
+	}
+
 	// If AllAddresses is set, find a working address
 	hostname := c.Hostname
 	if len(c.AllAddresses) > 0 && clusterName != "" {
@@ -236,6 +244,165 @@ foundAddress:
 	}
 
 	return opts, nil
+}
+
+// CloudRPCPath is where Miren Cloud relays RPC for a cluster. The cluster's XID
+// is the only thing that varies, because the relay's job is to find the socket
+// that cluster is holding open.
+const CloudRPCPath = "/api/v1/clusters/%s/rpc"
+
+// viaCloudOptions builds the options for reaching a cluster through Miren Cloud.
+//
+// The credential is the one the cluster would have seen anyway, and it is used
+// twice: cloud reads it at the handshake to decide whether to relay at all, and
+// the cluster reads it inside each operation to decide what the caller may do.
+// Nothing is minted for the detour, so a cloud-routed call is authorized exactly
+// as a direct one — which is also why cloud being satisfied means nothing about
+// what the cluster will allow.
+func (c *ClusterConfig) viaCloudOptions(ctx context.Context, config *Config) ([]rpc.StateOption, error) {
+	endpoint, token, err := c.cloudRelay(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// No cluster CA here: the certificate presented is cloud's, verified against
+	// the system roots. The cluster's own identity is not what is on the wire.
+	opts := []rpc.StateOption{
+		rpc.WithEndpoint(endpoint),
+		rpc.WithBindAddr("[::]:0"),
+		rpc.WithBearerToken(token),
+	}
+
+	// Honoured rather than ignored: on this path it is what lets a development
+	// cloud with a self-signed certificate, or none at all, be reached. It is
+	// the same admission either way — that this connection is not authenticated
+	// — so it governs both.
+	if c.Insecure {
+		opts = append(opts, rpc.WithSkipVerify)
+	}
+	if c.TLSServerName != "" {
+		opts = append(opts, rpc.WithTLSServerName(c.TLSServerName))
+	}
+
+	return opts, nil
+}
+
+// CloudEndpoint returns the cloud a via-cloud cluster is reached through.
+//
+// An explicit cloud_url wins over the identity's issuer, which is what makes a
+// cluster registered with one cloud reachable through another. Exported so the
+// commands that need to name that cloud share the rule rather than restating
+// it: two copies drift, and the copy outside this package is the one nothing
+// else would catch.
+func (c *ClusterConfig) CloudEndpoint(config *Config) (string, error) {
+	if c.CloudURL != "" {
+		return c.CloudURL, nil
+	}
+
+	if config != nil && c.Identity != "" {
+		if identity, err := config.GetIdentity(c.Identity); err == nil && identity != nil && identity.Issuer != "" {
+			return identity.Issuer, nil
+		}
+	}
+
+	return "", fmt.Errorf("cluster is routed via cloud but neither it nor identity %q names a cloud", c.Identity)
+}
+
+// cloudRelay resolves where to reach the cluster through cloud, and with what.
+func (c *ClusterConfig) cloudRelay(ctx context.Context, config *Config) (endpoint, token string, err error) {
+	if c.XID == "" {
+		return "", "", fmt.Errorf("cluster is routed via cloud but has no xid, so there is no cluster to ask for")
+	}
+	if c.Identity == "" {
+		return "", "", fmt.Errorf("cluster is routed via cloud but has no identity to authenticate with; run `miren login`")
+	}
+
+	identity, err := config.GetIdentity(c.Identity)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get identity %q: %w", c.Identity, err)
+	}
+
+	cloudURL, err := c.CloudEndpoint(config)
+	if err != nil {
+		return "", "", err
+	}
+
+	// A certificate identity has no bearer token, and the relay has nothing else
+	// to authorize with — the client certificate terminates at cloud, which is
+	// not the cluster. Saying so beats a 401 from a hop the user did not know
+	// was there.
+	token, err = config.TokenForIdentity(ctx, c.Identity, identity, cloudURL)
+	if err != nil {
+		if errors.Is(err, ErrNoBearerToken) {
+			return "", "", fmt.Errorf("identity %q authenticates with a certificate, which cannot be relayed through cloud", c.Identity)
+		}
+		return "", "", fmt.Errorf("failed to authenticate with cloud: %w", err)
+	}
+
+	endpoint, err = cloudRPCEndpoint(cloudURL, c.XID, c.Insecure)
+	if err != nil {
+		return "", "", err
+	}
+
+	return endpoint, token, nil
+}
+
+// cloudRPCEndpoint turns a cloud base URL into the relay remote for a cluster.
+// The scheme carries over: an http:// cloud is a development one with no
+// certificate, and must be dialed as plaintext rather than silently upgraded.
+//
+// Plaintext is refused beyond the loopback interface unless the entry says it
+// means it. Everything about this connection is the caller's credential — in
+// the handshake header so cloud can authorize it, and in every operation frame
+// so the cluster can — and over ws:// all of that crosses the network in the
+// clear, reusable by anyone who watched. Local development is the case that
+// justifies it; a hostname that resolves somewhere else is almost always a
+// mistake, and a silent one.
+func cloudRPCEndpoint(cloudURL, clusterXID string, allowPlaintext bool) (string, error) {
+	scheme, base := "wss://", cloudURL
+	switch {
+	case strings.HasPrefix(base, "http://"):
+		scheme, base = "ws://", strings.TrimPrefix(base, "http://")
+	case strings.HasPrefix(base, "https://"):
+		base = strings.TrimPrefix(base, "https://")
+	}
+
+	base = strings.TrimRight(base, "/")
+	if base == "" {
+		return "", fmt.Errorf("cloud url %q names no host", cloudURL)
+	}
+
+	host, _, _ := strings.Cut(base, "/")
+	if scheme == "ws://" && !allowPlaintext && !isLoopbackHost(host) {
+		return "", fmt.Errorf(
+			"cloud url %q is unencrypted, which would send your credentials to %s in the clear; "+
+				"use https, or set insecure: true on the cluster if you meant it",
+			cloudURL, host)
+	}
+
+	// Escaped because it comes from a config file. An XID holding / ? or #
+	// would otherwise redraw the URL rather than fail it, sending the request —
+	// and the bearer on it — somewhere other than the path meant here. Cloud
+	// only ever mints well-formed ones, so this needs a hand-edited config to
+	// reach, which is exactly the case where a silent redirect is worst.
+	return scheme + base + fmt.Sprintf(CloudRPCPath, url.PathEscape(clusterXID)), nil
+}
+
+// isLoopbackHost reports whether a "host" or "host:port" names this machine.
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func (c *ClusterConfig) State(ctx context.Context, config *Config, opts ...rpc.StateOption) (*rpc.State, error) {

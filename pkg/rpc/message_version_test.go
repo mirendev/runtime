@@ -30,9 +30,9 @@ func TestProtocolVersionGate(t *testing.T) {
 		r.NoError(err)
 
 		router := &sessionRouter{state: state, server: state.server}
-		go router.run(ctx, newMsgSession(serverEnd, false, 0)) //nolint:errcheck // ends with ctx
+		go router.run(ctx, newMsgSession(serverEnd, false, 0, 0)) //nolint:errcheck // ends with ctx
 
-		sess := newMsgSession(clientEnd, true, 0)
+		sess := newMsgSession(clientEnd, true, 0, 0)
 		st, err := sess.OpenStreamSync(ctx)
 		r.NoError(err)
 
@@ -61,9 +61,9 @@ func TestProtocolVersionGate(t *testing.T) {
 		r.NoError(err)
 
 		router := &sessionRouter{state: state, server: state.server}
-		go router.run(ctx, newMsgSession(serverEnd, false, 0)) //nolint:errcheck // ends with ctx
+		go router.run(ctx, newMsgSession(serverEnd, false, 0, 0)) //nolint:errcheck // ends with ctx
 
-		sess := newMsgSession(clientEnd, true, 0)
+		sess := newMsgSession(clientEnd, true, 0, 0)
 		st, err := sess.OpenStreamSync(ctx)
 		r.NoError(err)
 

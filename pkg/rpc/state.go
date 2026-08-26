@@ -236,7 +236,8 @@ func WithBindAddr(addr string) StateOption {
 // WithWSBindAddr enables an additional TCP listener serving the RPC protocol
 // over TLS as a WebSocket message session, bound to addr. Use "host:0" to bind
 // an ephemeral port; the chosen address is available via State.WSListenAddr
-// after NewState returns. Clients reach it with State.Connect("ws://host:port").
+// after NewState returns. Clients reach it with State.Connect("wss://host:port")
+// — this listener is TLS, so "ws://", which means plaintext, will not reach it.
 func WithWSBindAddr(addr string) StateOption {
 	return func(o *stateOptions) {
 		o.wsBindAddr = addr

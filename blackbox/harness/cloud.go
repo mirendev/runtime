@@ -126,6 +126,191 @@ func (env *CloudEnv) BindAppHostname(t *testing.T, hostname string) {
 	t.Logf("hostname bound: %v", result)
 }
 
+// viaCloudConfigPath is where SetupViaCloudCluster writes its config inside the
+// container. MIREN_CONFIG pointing at a file disables clientconfig.d, so this
+// config is self-contained and cannot accidentally reach the dev cluster.
+const viaCloudConfigPath = "/tmp/miren-viacloud.yaml"
+
+// SetupViaCloudCluster provisions a cloud user who can reach this cluster and
+// writes a client config that routes to it through cloud rather than dialing
+// it. It returns the config path, for MIREN_CONFIG, and the user's XID, which
+// is what the cluster should resolve a relayed caller to.
+//
+// The user is a real one as far as cloud is concerned — created through the dev
+// login endpoint, made a member of the organization that owns the cluster, and
+// granted access by an RBAC rule — because the whole point of the relay is that
+// the cluster judges the caller's own credential. A synthetic token would prove
+// nothing.
+func (env *CloudEnv) SetupViaCloudCluster(t *testing.T, clusterName string) (configPath, userXID string) {
+	t.Helper()
+
+	setupToken, userXID := env.devLogin(t)
+	configPath = viaCloudConfigPath
+
+	if _, err := env.adminCall("org.member.add", map[string]string{
+		"organization_id": env.OrgID,
+		"user_xid":        userXID,
+		"role":            "admin",
+	}); err != nil {
+		// A cloud that predates the relay cannot serve this test, and CI builds
+		// cloud from its default branch, so that is the state until the cloud
+		// side merges. Skipping keeps the signal honest in the meantime: the
+		// test starts running by itself once cloud has caught up, with no
+		// change here to remember.
+		//
+		// Narrow on purpose. Only a missing method means "cloud is too old";
+		// anything else is a real failure and still fails.
+		if strings.Contains(err.Error(), "Method not found") {
+			t.Skipf("cloud has no RPC relay yet (org.member.add is missing), so there is nothing to route through: %v", err)
+		}
+		t.Fatalf("org.member.add failed: %v", err)
+	}
+	t.Logf("cloud user %s added to org %s", userXID, env.OrgID)
+
+	env.grantClusterAccess(t, setupToken, userXID)
+
+	// A second login, after the group exists: a token carries the groups its
+	// user had when it was minted, and the first one predates the grant.
+	//
+	// It has to be the same account, or the token written below and the user
+	// the caller is told about belong to different people, and the mismatch
+	// surfaces much later as a confusing whoami failure.
+	token, secondXID := env.devLogin(t)
+	if secondXID != userXID {
+		t.Fatalf("dev login returned a different user on the second call: %s then %s", userXID, secondXID)
+	}
+
+	cfg := fmt.Sprintf(`active_cluster: %s
+identities:
+  cloud:
+    type: token
+    issuer: %s
+    token: %s
+clusters:
+  %s:
+    via_cloud: true
+    xid: %s
+    identity: cloud
+`, clusterName, env.CloudURL, token, clusterName, env.ClusterID)
+
+	env.m.RunCmdAsRoot("bash", "-c",
+		fmt.Sprintf("cat > %s << 'CFGEOF'\n%s\nCFGEOF", viaCloudConfigPath, cfg)).RequireSuccess(t)
+
+	t.Cleanup(func() {
+		env.m.RunCmdAsRoot("rm", "-f", viaCloudConfigPath)
+	})
+
+	return configPath, userXID
+}
+
+// grantClusterAccess puts the user in a group and writes an RBAC rule giving
+// that group everything on this org's clusters.
+//
+// The cluster authorizes each call against these rules, so without them a
+// relayed command is refused — correctly, but for a reason that has nothing to
+// do with the relay. Going through cloud's real APIs rather than the database
+// keeps the grant the same one a person would make.
+func (env *CloudEnv) grantClusterAccess(t *testing.T, token, userXID string) {
+	t.Helper()
+
+	group := env.cloudAPI(t, token, "POST",
+		"/api/v1/organizations/"+env.OrgID+"/groups",
+		map[string]string{
+			"name":        "blackbox",
+			"description": "blackbox test access",
+		})
+
+	// The handler serializes the group's XID as "id"; "xid" is the fallback in
+	// case that response ever grows the field under its own name.
+	created := nested(group, "group")
+	groupXID := getString(created, "id")
+	if groupXID == "" {
+		groupXID = getString(created, "xid")
+	}
+	if groupXID == "" {
+		t.Fatalf("group creation returned no identifier: %v", group)
+	}
+
+	env.cloudAPI(t, token, "POST", "/api/v1/groups/"+groupXID+"/members",
+		map[string]string{"user_xid": userXID})
+
+	// An empty tag selector matches every cluster in the org, and "*" on both
+	// resource and action is what an operator's own access looks like. The
+	// relay is not what this test is narrowing down.
+	env.cloudAPI(t, token, "POST",
+		"/api/v1/organizations/"+env.OrgID+"/rbac-rules",
+		map[string]any{
+			"name":         "blackbox-full-access",
+			"tag_selector": map[string]any{"expressions": []any{}},
+			"groups":       []string{groupXID},
+			"permissions":  []any{map[string]any{"resource": "*", "actions": []string{"*"}}},
+		})
+
+	t.Logf("granted cluster access to %s via group %s", userXID, groupXID)
+}
+
+// cloudAPI calls a cloud HTTP endpoint as an authenticated user and returns the
+// decoded response.
+func (env *CloudEnv) cloudAPI(t *testing.T, token, method, path string, body any) map[string]any {
+	t.Helper()
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal %s %s body: %v", method, path, err)
+	}
+
+	r := env.m.RunCmd("curl", "-sf", "-X", method, env.CloudURL+path,
+		"-H", "Authorization: Bearer "+token,
+		"-H", "Content-Type: application/json",
+		"-d", string(payload))
+	if !r.Success() {
+		t.Fatalf("%s %s failed (exit %d): %s", method, path, r.ExitCode, r.Stderr)
+	}
+
+	if strings.TrimSpace(r.Stdout) == "" {
+		return nil
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal([]byte(r.Stdout), &out); err != nil {
+		t.Fatalf("failed to parse %s %s response: %v\nraw: %s", method, path, err, r.Stdout)
+	}
+	return out
+}
+
+// nested returns a nested object, or the original when the key is absent, so a
+// response that is already the object works too.
+func nested(m map[string]any, key string) map[string]any {
+	if inner, ok := m[key].(map[string]any); ok {
+		return inner
+	}
+	return m
+}
+
+// devLogin mints a user and a JWT through cloud's dev-only login endpoint,
+// which is enabled for this environment (see startCloud).
+func (env *CloudEnv) devLogin(t *testing.T) (token, userXID string) {
+	t.Helper()
+
+	r := env.m.RunCmd("curl", "-sf", env.CloudURL+"/auth/dev/login?user=blackbox")
+	if !r.Success() {
+		t.Fatalf("dev login failed (exit %d): %s", r.ExitCode, r.Stderr)
+	}
+
+	var resp struct {
+		Token   string `json:"token"`
+		UserXID string `json:"user_xid"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &resp); err != nil {
+		t.Fatalf("failed to parse dev login response: %v\nraw: %s", err, r.Stdout)
+	}
+	if resp.Token == "" || resp.UserXID == "" {
+		t.Fatalf("dev login returned no credentials: %s", r.Stdout)
+	}
+
+	return resp.Token, resp.UserXID
+}
+
 func detectCloudRepo(t *testing.T, m *Miren) string {
 	t.Helper()
 
