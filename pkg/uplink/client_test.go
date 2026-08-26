@@ -127,6 +127,60 @@ func TestClientSendsMessages(t *testing.T) {
 	}
 }
 
+func TestOfferCapabilityPanicsOnDuplicateName(t *testing.T) {
+	client := newTestClient("http://unused", "test-token", NewMessageRouter())
+	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{1}})
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("duplicate capability registration did not panic")
+		}
+	}()
+	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{2}})
+}
+
+func TestLegacyClientSendsBootstrapBeforeTenantMessages(t *testing.T) {
+	received := make(chan []Envelope, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		envelopes := make([]Envelope, 3)
+		for i := range envelopes {
+			if err := wsjson.Read(r.Context(), conn, &envelopes[i]); err != nil {
+				return
+			}
+		}
+		received <- envelopes
+	}))
+	defer srv.Close()
+
+	router := NewMessageRouter()
+	client := NewClient(srv.URL, nil, router, slog.Default())
+	client.getToken = func(context.Context) (string, error) { return "test-token", nil }
+	client.OnConnect(func(context.Context) {
+		client.SendMessage("tenant.start", struct{}{}) //nolint:errcheck
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go client.Run(ctx) //nolint:errcheck
+
+	select {
+	case envelopes := <-received:
+		got := []string{envelopes[0].Type, envelopes[1].Type, envelopes[2].Type}
+		want := []string{TypeTimeRequest, TypeOrgInfoRequest, "tenant.start"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("legacy message order = %v, want %v", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for legacy bootstrap")
+	}
+}
+
 func TestClientReconnects(t *testing.T) {
 	var mu sync.Mutex
 	connectCount := 0
@@ -343,6 +397,139 @@ func TestOnConnectContextCancelledOnDisconnect(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("callback context outlived the connection")
+	}
+}
+
+func TestNegotiatedSessionStartsCallbacksAfterWelcome(t *testing.T) {
+	helloRead := make(chan SessionHello, 1)
+	allowWelcome := make(chan struct{})
+	sessionStarted := make(chan Session, 1)
+	connectStarted := make(chan struct{}, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		var env Envelope
+		if err := wsjson.Read(r.Context(), conn, &env); err != nil {
+			return
+		}
+		if env.Type != TypeSessionHello {
+			t.Errorf("first message = %s, want %s", env.Type, TypeSessionHello)
+			return
+		}
+		var hello SessionHello
+		if err := json.Unmarshal(env.Data, &hello); err != nil {
+			t.Errorf("decode hello: %v", err)
+			return
+		}
+		helloRead <- hello
+		<-allowWelcome
+
+		now := time.Now().UTC()
+		data, err := json.Marshal(SessionWelcome{
+			HandshakeVersion:   HandshakeVersion1,
+			SessionID:          "session-1",
+			OrganizationID:     "org-1",
+			ServerReceiveTime:  now,
+			ServerTransmitTime: now,
+			Capabilities: []CapabilitySelection{{
+				Name:    CapabilityPopConnect,
+				Version: 1,
+			}},
+		})
+		if err != nil {
+			t.Errorf("encode welcome: %v", err)
+			return
+		}
+		if err := wsjson.Write(r.Context(), conn, &Envelope{Type: TypeSessionWelcome, Data: data}); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	client := newTestClient(srv.URL, "test-token", NewMessageRouter())
+	WithSession("v1.2.3")(client)
+	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{1}})
+	client.OnSession(func(_ context.Context, session Session) { sessionStarted <- session })
+	client.OnConnect(func(context.Context) { connectStarted <- struct{}{} })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go client.Run(ctx) //nolint:errcheck
+
+	var hello SessionHello
+	select {
+	case hello = <-helloRead:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for session hello")
+	}
+	if hello.RuntimeVersion != "v1.2.3" {
+		t.Fatalf("runtime version = %q, want v1.2.3", hello.RuntimeVersion)
+	}
+	if len(hello.Capabilities) != 1 || hello.Capabilities[0].Name != CapabilityPopConnect {
+		t.Fatalf("capability offers = %+v", hello.Capabilities)
+	}
+	select {
+	case <-sessionStarted:
+		t.Fatal("session callback ran before welcome")
+	case <-connectStarted:
+		t.Fatal("connect callback ran before welcome")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(allowWelcome)
+	select {
+	case session := <-sessionStarted:
+		if _, ok := session.Capability(CapabilityPopConnect); !ok {
+			t.Fatalf("session lacks pop-connect selection: %+v", session)
+		}
+	case <-ctx.Done():
+		t.Fatal("session callback did not run")
+	}
+	select {
+	case <-connectStarted:
+	case <-ctx.Done():
+		t.Fatal("connect callback did not run after welcome")
+	}
+}
+
+func TestNegotiatedSessionRejectDoesNotStartTenants(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+
+		var hello Envelope
+		if err := wsjson.Read(r.Context(), conn, &hello); err != nil {
+			return
+		}
+		data, _ := json.Marshal(SessionReject{
+			Reason:                     "no common handshake version",
+			SupportedHandshakeVersions: []uint{1},
+		})
+		_ = wsjson.Write(r.Context(), conn, &Envelope{Type: TypeSessionReject, Data: data})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(srv.URL, "test-token", NewMessageRouter())
+	WithSession("test")(client)
+	started := false
+	client.OnSession(func(context.Context, Session) { started = true })
+	client.OnConnect(func(context.Context) { started = true })
+
+	err := client.runOnce(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "no common handshake version") {
+		t.Fatalf("runOnce error = %v", err)
+	}
+	if started {
+		t.Fatal("tenant callback ran for rejected session")
 	}
 }
 

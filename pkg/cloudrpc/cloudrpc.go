@@ -69,6 +69,7 @@ const (
 // every other tenant is queued behind them — so those go best-effort or not at
 // all.
 type Link interface {
+	OfferCapability(offer uplink.CapabilityOffer)
 	Handle(msgType string, handler uplink.MessageHandler)
 	SendContext(ctx context.Context, env *uplink.Envelope) error
 	Send(env *uplink.Envelope)
@@ -114,6 +115,10 @@ func New(cfg Config) *Server {
 		sessions: make(map[string]*session),
 	}
 
+	cfg.Uplink.OfferCapability(uplink.CapabilityOffer{
+		Name:     uplink.CapabilityRPCRelay,
+		Versions: []uint{1},
+	})
 	cfg.Uplink.Handle(TypeOpen, s.handleOpen)
 	cfg.Uplink.Handle(TypeData, s.handleData)
 	cfg.Uplink.Handle(TypeClose, s.handleClose)
