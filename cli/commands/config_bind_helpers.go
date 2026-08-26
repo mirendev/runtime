@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -422,21 +423,45 @@ func cloudRoutableClusters(
 		lastErr   error
 	)
 
+	// Concurrently, because these run while somebody waits at a prompt and the
+	// checks do not depend on each other. Sequentially, an account with several
+	// undialable clusters paid each one's timeout in turn before the picker
+	// appeared — worst case tens of seconds of nothing on screen. The direct
+	// path already probes its addresses this way.
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+
 	for _, cluster := range clusters {
 		if cluster.hasReachableAddress() || cluster.XID == "" {
 			continue
 		}
 
-		online, err := clusterOnlineInCloud(ctx, config, identityName, identity, cluster.XID)
-		if err != nil {
-			unchecked = append(unchecked, cluster.Name)
-			lastErr = err
-			continue
-		}
-		if online {
-			routable[cluster.XID] = true
-		}
+		wg.Add(1)
+		go func(cluster ClusterResponse) {
+			defer wg.Done()
+
+			online, err := clusterOnlineInCloud(ctx, config, identityName, identity, cluster.XID)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				unchecked = append(unchecked, cluster.Name)
+				lastErr = err
+				return
+			}
+			if online {
+				routable[cluster.XID] = true
+			}
+		}(cluster)
 	}
+
+	wg.Wait()
+
+	// Names are reported in a stable order rather than whichever request
+	// happened to fail first, so the same failure reads the same way twice.
+	sort.Strings(unchecked)
 
 	if len(unchecked) > 0 {
 		ctx.Warn("Could not ask cloud whether %s reachable through it (%v); treating as not reachable.",

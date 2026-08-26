@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,10 +15,16 @@ import (
 
 // cloudPresenceServer stands in for cloud's per-cluster presence endpoint,
 // recording which clusters were asked about.
-func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*httptest.Server, *[]string) {
+// The recorder is returned as a function rather than a slice pointer because
+// the presence checks now run concurrently: reads and writes both have to hold
+// the lock, and handing back a pointer makes it easy to forget.
+func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*httptest.Server, func() []string) {
 	t.Helper()
 
-	var asked []string
+	var (
+		mu    sync.Mutex
+		asked []string
+	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if status != http.StatusOK {
@@ -36,7 +43,9 @@ func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*htt
 				xid = parts[len(prefix) : len(parts)-len(suffix)]
 			}
 		}
+		mu.Lock()
 		asked = append(asked, xid)
+		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
 		if online[xid] {
@@ -47,7 +56,11 @@ func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*htt
 	}))
 	t.Cleanup(srv.Close)
 
-	return srv, &asked
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), asked...)
+	}
 }
 
 func presenceTestConfig(t *testing.T, issuer string) (*clientconfig.Config, *clientconfig.IdentityConfig) {
@@ -90,7 +103,7 @@ func TestClusterOnlineInCloud(t *testing.T) {
 	r.NoError(err)
 	r.False(online)
 
-	r.Equal([]string{"cluster-up", "cluster-down"}, *asked)
+	r.Equal([]string{"cluster-up", "cluster-down"}, asked())
 }
 
 // A cloud that refuses the question is not a cloud that said no, and the caller
@@ -125,7 +138,10 @@ func TestCloudRoutableClustersOnlyAsksAboutUndialableOnes(t *testing.T) {
 	r.False(routable["cluster-gone"])
 	r.NotContains(routable, "cluster-dialable")
 
-	r.Equal([]string{"cluster-nat", "cluster-gone"}, *asked,
+	// Order-independent: the checks run concurrently, so which one lands first
+	// is not something this test gets to assert. What it asserts is which
+	// clusters were asked about at all.
+	r.ElementsMatch([]string{"cluster-nat", "cluster-gone"}, asked(),
 		"a cluster with an address to dial should not cost a presence check")
 }
 
