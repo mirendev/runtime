@@ -1032,24 +1032,34 @@ func (o *ConfigSpecVariables) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	AppActiveVersionId = entity.Id("dev.miren.core/app.active_version")
-	AppInitialConfigId = entity.Id("dev.miren.core/app.initial_config")
-	AppProjectId       = entity.Id("dev.miren.core/app.project")
-	AppWorkloadRoleId  = entity.Id("dev.miren.core/app.workload_role")
+	AppActiveDeploymentId = entity.Id("dev.miren.core/app.active_deployment")
+	AppActiveVersionId    = entity.Id("dev.miren.core/app.active_version")
+	AppDeploymentLockId   = entity.Id("dev.miren.core/app.deployment_lock")
+	AppInitialConfigId    = entity.Id("dev.miren.core/app.initial_config")
+	AppProjectId          = entity.Id("dev.miren.core/app.project")
+	AppWorkloadRoleId     = entity.Id("dev.miren.core/app.workload_role")
 )
 
 type App struct {
-	ID            entity.Id `json:"id"`
-	ActiveVersion entity.Id `cbor:"active_version,omitempty" json:"active_version,omitempty"`
-	InitialConfig entity.Id `cbor:"initial_config,omitempty" json:"initial_config,omitempty"`
-	Project       entity.Id `cbor:"project,omitempty" json:"project,omitempty"`
-	WorkloadRole  string    `cbor:"workload_role,omitempty" json:"workload_role,omitempty"`
+	ID               entity.Id      `json:"id"`
+	ActiveDeployment entity.Id      `cbor:"active_deployment,omitempty" json:"active_deployment,omitempty"`
+	ActiveVersion    entity.Id      `cbor:"active_version,omitempty" json:"active_version,omitempty"`
+	DeploymentLock   DeploymentLock `cbor:"deployment_lock,omitempty" json:"deployment_lock"`
+	InitialConfig    entity.Id      `cbor:"initial_config,omitempty" json:"initial_config,omitempty"`
+	Project          entity.Id      `cbor:"project,omitempty" json:"project,omitempty"`
+	WorkloadRole     string         `cbor:"workload_role,omitempty" json:"workload_role,omitempty"`
 }
 
 func (o *App) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(AppActiveDeploymentId); ok && a.Value.Kind() == entity.KindId {
+		o.ActiveDeployment = a.Value.Id()
+	}
 	if a, ok := e.Get(AppActiveVersionId); ok && a.Value.Kind() == entity.KindId {
 		o.ActiveVersion = a.Value.Id()
+	}
+	if a, ok := e.Get(AppDeploymentLockId); ok && a.Value.Kind() == entity.KindComponent {
+		o.DeploymentLock.Decode(a.Value.Component())
 	}
 	if a, ok := e.Get(AppInitialConfigId); ok && a.Value.Kind() == entity.KindId {
 		o.InitialConfig = a.Value.Id()
@@ -1079,8 +1089,14 @@ func (o *App) EntityId() entity.Id {
 }
 
 func (o *App) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.ActiveDeployment) {
+		attrs = append(attrs, entity.Ref(AppActiveDeploymentId, o.ActiveDeployment))
+	}
 	if !entity.Empty(o.ActiveVersion) {
 		attrs = append(attrs, entity.Ref(AppActiveVersionId, o.ActiveVersion))
+	}
+	if !o.DeploymentLock.Empty() {
+		attrs = append(attrs, entity.Component(AppDeploymentLockId, o.DeploymentLock.Encode()))
 	}
 	if !entity.Empty(o.InitialConfig) {
 		attrs = append(attrs, entity.Ref(AppInitialConfigId, o.InitialConfig))
@@ -1096,7 +1112,13 @@ func (o *App) Encode() (attrs []entity.Attr) {
 }
 
 func (o *App) Empty() bool {
+	if !entity.Empty(o.ActiveDeployment) {
+		return false
+	}
 	if !entity.Empty(o.ActiveVersion) {
+		return false
+	}
+	if !o.DeploymentLock.Empty() {
 		return false
 	}
 	if !entity.Empty(o.InitialConfig) {
@@ -1112,10 +1134,69 @@ func (o *App) Empty() bool {
 }
 
 func (o *App) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Ref("active_deployment", "dev.miren.core/app.active_deployment", schema.Doc("The deployment attempt that made active_version current"))
 	sb.Ref("active_version", "dev.miren.core/app.active_version", schema.Doc("The version of the project that should be used"))
+	sb.Component("deployment_lock", "dev.miren.core/app.deployment_lock", schema.Doc("The expiring lock held by the deployment currently mutating this app"))
+	(&DeploymentLock{}).InitSchema(sb.Builder("app.deployment_lock"))
 	sb.Ref("initial_config", "dev.miren.core/app.initial_config", schema.Doc("Reference to the initial ConfigVersion entity created before the first deploy"))
 	sb.Ref("project", "dev.miren.core/app.project", schema.Doc("The project that the app belongs to"))
 	sb.String("workload_role", "dev.miren.core/app.workload_role", schema.Doc("The authorization role that identity tokens minted for this app's sandboxes authenticate as (see pkg/workloadroles). Empty means the default (app-readonly). Cluster-scoped roles may only be set by an operator, never via app.toml."))
+}
+
+const (
+	DeploymentLockAcquiredAtId   = entity.Id("dev.miren.core/deployment_lock.acquired_at")
+	DeploymentLockDeploymentIdId = entity.Id("dev.miren.core/deployment_lock.deployment_id")
+	DeploymentLockExpiresAtId    = entity.Id("dev.miren.core/deployment_lock.expires_at")
+)
+
+type DeploymentLock struct {
+	AcquiredAt   time.Time `cbor:"acquired_at,omitempty" json:"acquired_at"`
+	DeploymentId string    `cbor:"deployment_id,omitempty" json:"deployment_id,omitempty"`
+	ExpiresAt    time.Time `cbor:"expires_at,omitempty" json:"expires_at"`
+}
+
+func (o *DeploymentLock) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(DeploymentLockAcquiredAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.AcquiredAt = a.Value.Time()
+	}
+	if a, ok := e.Get(DeploymentLockDeploymentIdId); ok && a.Value.Kind() == entity.KindString {
+		o.DeploymentId = a.Value.String()
+	}
+	if a, ok := e.Get(DeploymentLockExpiresAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.ExpiresAt = a.Value.Time()
+	}
+}
+
+func (o *DeploymentLock) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.AcquiredAt) {
+		attrs = append(attrs, entity.Time(DeploymentLockAcquiredAtId, o.AcquiredAt))
+	}
+	if !entity.Empty(o.DeploymentId) {
+		attrs = append(attrs, entity.String(DeploymentLockDeploymentIdId, o.DeploymentId))
+	}
+	if !entity.Empty(o.ExpiresAt) {
+		attrs = append(attrs, entity.Time(DeploymentLockExpiresAtId, o.ExpiresAt))
+	}
+	return
+}
+
+func (o *DeploymentLock) Empty() bool {
+	if !entity.Empty(o.AcquiredAt) {
+		return false
+	}
+	if !entity.Empty(o.DeploymentId) {
+		return false
+	}
+	if !entity.Empty(o.ExpiresAt) {
+		return false
+	}
+	return true
+}
+
+func (o *DeploymentLock) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Time("acquired_at", "dev.miren.core/deployment_lock.acquired_at", schema.Doc("When the lock was taken"))
+	sb.String("deployment_id", "dev.miren.core/deployment_lock.deployment_id", schema.Doc("The deployment attempt that owns the lock"))
+	sb.Time("expires_at", "dev.miren.core/deployment_lock.expires_at", schema.Doc("When another deployment may take over the lock"))
 }
 
 const (
@@ -1130,6 +1211,7 @@ const (
 	AppVersionImageUrlId           = entity.Id("dev.miren.core/app_version.image_url")
 	AppVersionManifestId           = entity.Id("dev.miren.core/app_version.manifest")
 	AppVersionManifestDigestId     = entity.Id("dev.miren.core/app_version.manifest_digest")
+	AppVersionSourceId             = entity.Id("dev.miren.core/app_version.source")
 	AppVersionVersionId            = entity.Id("dev.miren.core/app_version.version")
 )
 
@@ -1146,6 +1228,7 @@ type AppVersion struct {
 	ImageUrl           string    `cbor:"image_url,omitempty" json:"image_url,omitempty"`
 	Manifest           string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
 	ManifestDigest     string    `cbor:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+	Source             Source    `cbor:"source,omitempty" json:"source"`
 	Version            string    `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
@@ -1183,6 +1266,9 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(AppVersionManifestDigestId); ok && a.Value.Kind() == entity.KindString {
 		o.ManifestDigest = a.Value.String()
+	}
+	if a, ok := e.Get(AppVersionSourceId); ok && a.Value.Kind() == entity.KindComponent {
+		o.Source.Decode(a.Value.Component())
 	}
 	if a, ok := e.Get(AppVersionVersionId); ok && a.Value.Kind() == entity.KindString {
 		o.Version = a.Value.String()
@@ -1239,6 +1325,9 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ManifestDigest) {
 		attrs = append(attrs, entity.String(AppVersionManifestDigestId, o.ManifestDigest))
 	}
+	if !o.Source.Empty() {
+		attrs = append(attrs, entity.Component(AppVersionSourceId, o.Source.Encode()))
+	}
 	if !entity.Empty(o.Version) {
 		attrs = append(attrs, entity.String(AppVersionVersionId, o.Version))
 	}
@@ -1280,6 +1369,9 @@ func (o *AppVersion) Empty() bool {
 	if !entity.Empty(o.ManifestDigest) {
 		return false
 	}
+	if !o.Source.Empty() {
+		return false
+	}
 	if !entity.Empty(o.Version) {
 		return false
 	}
@@ -1299,6 +1391,8 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("image_url", "dev.miren.core/app_version.image_url", schema.Doc("The OCI url for the versions code"))
 	sb.String("manifest", "dev.miren.core/app_version.manifest", schema.Doc("The OCI image manifest for the version"))
 	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
+	sb.Component("source", "dev.miren.core/app_version.source", schema.Doc("Sanitized source provenance captured when this version was built"))
+	(&Source{}).InitSchema(sb.Builder("app_version.source"))
 	sb.String("version", "dev.miren.core/app_version.version", schema.Doc("The version of this app"))
 }
 
@@ -2137,6 +2231,62 @@ func (o *Variable) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	SourceGitBranchId  = entity.Id("dev.miren.core/source.git_branch")
+	SourceGitShaId     = entity.Id("dev.miren.core/source.git_sha")
+	SourceRepositoryId = entity.Id("dev.miren.core/source.repository")
+)
+
+type Source struct {
+	GitBranch  string `cbor:"git_branch,omitempty" json:"git_branch,omitempty"`
+	GitSha     string `cbor:"git_sha,omitempty" json:"git_sha,omitempty"`
+	Repository string `cbor:"repository,omitempty" json:"repository,omitempty"`
+}
+
+func (o *Source) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(SourceGitBranchId); ok && a.Value.Kind() == entity.KindString {
+		o.GitBranch = a.Value.String()
+	}
+	if a, ok := e.Get(SourceGitShaId); ok && a.Value.Kind() == entity.KindString {
+		o.GitSha = a.Value.String()
+	}
+	if a, ok := e.Get(SourceRepositoryId); ok && a.Value.Kind() == entity.KindString {
+		o.Repository = a.Value.String()
+	}
+}
+
+func (o *Source) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.GitBranch) {
+		attrs = append(attrs, entity.String(SourceGitBranchId, o.GitBranch))
+	}
+	if !entity.Empty(o.GitSha) {
+		attrs = append(attrs, entity.String(SourceGitShaId, o.GitSha))
+	}
+	if !entity.Empty(o.Repository) {
+		attrs = append(attrs, entity.String(SourceRepositoryId, o.Repository))
+	}
+	return
+}
+
+func (o *Source) Empty() bool {
+	if !entity.Empty(o.GitBranch) {
+		return false
+	}
+	if !entity.Empty(o.GitSha) {
+		return false
+	}
+	if !entity.Empty(o.Repository) {
+		return false
+	}
+	return true
+}
+
+func (o *Source) InitSchema(sb *schema.SchemaBuilder) {
+	sb.String("git_branch", "dev.miren.core/source.git_branch", schema.Doc("Git branch used to build the version"))
+	sb.String("git_sha", "dev.miren.core/source.git_sha", schema.Doc("Git commit SHA used to build the version"))
+	sb.String("repository", "dev.miren.core/source.repository", schema.Doc("Repository URL without credentials, query parameters, or fragments"))
+}
+
+const (
 	ArtifactAppId            = entity.Id("dev.miren.core/artifact.app")
 	ArtifactManifestId       = entity.Id("dev.miren.core/artifact.manifest")
 	ArtifactManifestDigestId = entity.Id("dev.miren.core/artifact.manifest_digest")
@@ -2301,44 +2451,56 @@ func (o *ConfigVersion) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
+	DeploymentAppId                = entity.Id("dev.miren.core/deployment.app")
 	DeploymentAppNameId            = entity.Id("dev.miren.core/deployment.app_name")
 	DeploymentAppVersionId         = entity.Id("dev.miren.core/deployment.app_version")
-	DeploymentBuildLogsId          = entity.Id("dev.miren.core/deployment.build_logs")
 	DeploymentClusterIdId          = entity.Id("dev.miren.core/deployment.cluster_id")
 	DeploymentCompletedAtId        = entity.Id("dev.miren.core/deployment.completed_at")
 	DeploymentDeployedById         = entity.Id("dev.miren.core/deployment.deployed_by")
 	DeploymentErrorMessageId       = entity.Id("dev.miren.core/deployment.error_message")
+	DeploymentFinishedAtId         = entity.Id("dev.miren.core/deployment.finished_at")
 	DeploymentGitInfoId            = entity.Id("dev.miren.core/deployment.git_info")
+	DeploymentOperationId          = entity.Id("dev.miren.core/deployment.operation")
+	DeploymentOutcomeId            = entity.Id("dev.miren.core/deployment.outcome")
 	DeploymentPhaseId              = entity.Id("dev.miren.core/deployment.phase")
+	DeploymentSourceDeploymentId   = entity.Id("dev.miren.core/deployment.source_deployment")
 	DeploymentSourceDeploymentIdId = entity.Id("dev.miren.core/deployment.source_deployment_id")
+	DeploymentStartedAtId          = entity.Id("dev.miren.core/deployment.started_at")
 	DeploymentStatusId             = entity.Id("dev.miren.core/deployment.status")
+	DeploymentVersionId            = entity.Id("dev.miren.core/deployment.version")
 )
 
 type Deployment struct {
 	ID                 entity.Id  `json:"id"`
+	App                entity.Id  `cbor:"app,omitempty" json:"app,omitempty"`
 	AppName            string     `cbor:"app_name,omitempty" json:"app_name,omitempty"`
 	AppVersion         string     `cbor:"app_version,omitempty" json:"app_version,omitempty"`
-	BuildLogs          string     `cbor:"build_logs,omitempty" json:"build_logs,omitempty"`
 	ClusterId          string     `cbor:"cluster_id,omitempty" json:"cluster_id,omitempty"`
 	CompletedAt        string     `cbor:"completed_at,omitempty" json:"completed_at,omitempty"`
 	DeployedBy         DeployedBy `cbor:"deployed_by,omitempty" json:"deployed_by"`
 	ErrorMessage       string     `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	FinishedAt         time.Time  `cbor:"finished_at,omitempty" json:"finished_at"`
 	GitInfo            GitInfo    `cbor:"git_info,omitempty" json:"git_info"`
+	Operation          string     `cbor:"operation,omitempty" json:"operation,omitempty"`
+	Outcome            string     `cbor:"outcome,omitempty" json:"outcome,omitempty"`
 	Phase              string     `cbor:"phase,omitempty" json:"phase,omitempty"`
+	SourceDeployment   entity.Id  `cbor:"source_deployment,omitempty" json:"source_deployment,omitempty"`
 	SourceDeploymentId string     `cbor:"source_deployment_id,omitempty" json:"source_deployment_id,omitempty"`
+	StartedAt          time.Time  `cbor:"started_at,omitempty" json:"started_at"`
 	Status             string     `cbor:"status,omitempty" json:"status,omitempty"`
+	Version            entity.Id  `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
 func (o *Deployment) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(DeploymentAppId); ok && a.Value.Kind() == entity.KindId {
+		o.App = a.Value.Id()
+	}
 	if a, ok := e.Get(DeploymentAppNameId); ok && a.Value.Kind() == entity.KindString {
 		o.AppName = a.Value.String()
 	}
 	if a, ok := e.Get(DeploymentAppVersionId); ok && a.Value.Kind() == entity.KindString {
 		o.AppVersion = a.Value.String()
-	}
-	if a, ok := e.Get(DeploymentBuildLogsId); ok && a.Value.Kind() == entity.KindString {
-		o.BuildLogs = a.Value.String()
 	}
 	if a, ok := e.Get(DeploymentClusterIdId); ok && a.Value.Kind() == entity.KindString {
 		o.ClusterId = a.Value.String()
@@ -2352,17 +2514,35 @@ func (o *Deployment) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DeploymentErrorMessageId); ok && a.Value.Kind() == entity.KindString {
 		o.ErrorMessage = a.Value.String()
 	}
+	if a, ok := e.Get(DeploymentFinishedAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.FinishedAt = a.Value.Time()
+	}
 	if a, ok := e.Get(DeploymentGitInfoId); ok && a.Value.Kind() == entity.KindComponent {
 		o.GitInfo.Decode(a.Value.Component())
+	}
+	if a, ok := e.Get(DeploymentOperationId); ok && a.Value.Kind() == entity.KindString {
+		o.Operation = a.Value.String()
+	}
+	if a, ok := e.Get(DeploymentOutcomeId); ok && a.Value.Kind() == entity.KindString {
+		o.Outcome = a.Value.String()
 	}
 	if a, ok := e.Get(DeploymentPhaseId); ok && a.Value.Kind() == entity.KindString {
 		o.Phase = a.Value.String()
 	}
+	if a, ok := e.Get(DeploymentSourceDeploymentId); ok && a.Value.Kind() == entity.KindId {
+		o.SourceDeployment = a.Value.Id()
+	}
 	if a, ok := e.Get(DeploymentSourceDeploymentIdId); ok && a.Value.Kind() == entity.KindString {
 		o.SourceDeploymentId = a.Value.String()
 	}
+	if a, ok := e.Get(DeploymentStartedAtId); ok && a.Value.Kind() == entity.KindTime {
+		o.StartedAt = a.Value.Time()
+	}
 	if a, ok := e.Get(DeploymentStatusId); ok && a.Value.Kind() == entity.KindString {
 		o.Status = a.Value.String()
+	}
+	if a, ok := e.Get(DeploymentVersionId); ok && a.Value.Kind() == entity.KindId {
+		o.Version = a.Value.Id()
 	}
 }
 
@@ -2383,14 +2563,14 @@ func (o *Deployment) EntityId() entity.Id {
 }
 
 func (o *Deployment) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.App) {
+		attrs = append(attrs, entity.Ref(DeploymentAppId, o.App))
+	}
 	if !entity.Empty(o.AppName) {
 		attrs = append(attrs, entity.String(DeploymentAppNameId, o.AppName))
 	}
 	if !entity.Empty(o.AppVersion) {
 		attrs = append(attrs, entity.String(DeploymentAppVersionId, o.AppVersion))
-	}
-	if !entity.Empty(o.BuildLogs) {
-		attrs = append(attrs, entity.String(DeploymentBuildLogsId, o.BuildLogs))
 	}
 	if !entity.Empty(o.ClusterId) {
 		attrs = append(attrs, entity.String(DeploymentClusterIdId, o.ClusterId))
@@ -2404,30 +2584,48 @@ func (o *Deployment) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ErrorMessage) {
 		attrs = append(attrs, entity.String(DeploymentErrorMessageId, o.ErrorMessage))
 	}
+	if !entity.Empty(o.FinishedAt) {
+		attrs = append(attrs, entity.Time(DeploymentFinishedAtId, o.FinishedAt))
+	}
 	if !o.GitInfo.Empty() {
 		attrs = append(attrs, entity.Component(DeploymentGitInfoId, o.GitInfo.Encode()))
+	}
+	if !entity.Empty(o.Operation) {
+		attrs = append(attrs, entity.String(DeploymentOperationId, o.Operation))
+	}
+	if !entity.Empty(o.Outcome) {
+		attrs = append(attrs, entity.String(DeploymentOutcomeId, o.Outcome))
 	}
 	if !entity.Empty(o.Phase) {
 		attrs = append(attrs, entity.String(DeploymentPhaseId, o.Phase))
 	}
+	if !entity.Empty(o.SourceDeployment) {
+		attrs = append(attrs, entity.Ref(DeploymentSourceDeploymentId, o.SourceDeployment))
+	}
 	if !entity.Empty(o.SourceDeploymentId) {
 		attrs = append(attrs, entity.String(DeploymentSourceDeploymentIdId, o.SourceDeploymentId))
 	}
+	if !entity.Empty(o.StartedAt) {
+		attrs = append(attrs, entity.Time(DeploymentStartedAtId, o.StartedAt))
+	}
 	if !entity.Empty(o.Status) {
 		attrs = append(attrs, entity.String(DeploymentStatusId, o.Status))
+	}
+	if !entity.Empty(o.Version) {
+		attrs = append(attrs, entity.Ref(DeploymentVersionId, o.Version))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindDeployment))
 	return
 }
 
 func (o *Deployment) Empty() bool {
+	if !entity.Empty(o.App) {
+		return false
+	}
 	if !entity.Empty(o.AppName) {
 		return false
 	}
 	if !entity.Empty(o.AppVersion) {
-		return false
-	}
-	if !entity.Empty(o.BuildLogs) {
 		return false
 	}
 	if !entity.Empty(o.ClusterId) {
@@ -2442,52 +2640,86 @@ func (o *Deployment) Empty() bool {
 	if !entity.Empty(o.ErrorMessage) {
 		return false
 	}
+	if !entity.Empty(o.FinishedAt) {
+		return false
+	}
 	if !o.GitInfo.Empty() {
+		return false
+	}
+	if !entity.Empty(o.Operation) {
+		return false
+	}
+	if !entity.Empty(o.Outcome) {
 		return false
 	}
 	if !entity.Empty(o.Phase) {
 		return false
 	}
+	if !entity.Empty(o.SourceDeployment) {
+		return false
+	}
 	if !entity.Empty(o.SourceDeploymentId) {
 		return false
 	}
+	if !entity.Empty(o.StartedAt) {
+		return false
+	}
 	if !entity.Empty(o.Status) {
+		return false
+	}
+	if !entity.Empty(o.Version) {
 		return false
 	}
 	return true
 }
 
 func (o *Deployment) InitSchema(sb *schema.SchemaBuilder) {
-	sb.String("app_name", "dev.miren.core/deployment.app_name", schema.Doc("The name of the app being deployed"), schema.Indexed)
-	sb.String("app_version", "dev.miren.core/deployment.app_version", schema.Doc("The app version ID or temporary value (pending-build, failed-{id})"))
-	sb.String("build_logs", "dev.miren.core/deployment.build_logs", schema.Doc("Build logs concatenated with newlines (especially useful for failed deployments)"))
-	sb.String("cluster_id", "dev.miren.core/deployment.cluster_id", schema.Doc("The cluster where the deployment is happening"), schema.Indexed)
-	sb.String("completed_at", "dev.miren.core/deployment.completed_at", schema.Doc("When the deployment was completed (RFC3339 format)"))
+	sb.Ref("app", "dev.miren.core/deployment.app", schema.Doc("The app this attempt targeted"), schema.Indexed)
+	sb.String("app_name", "dev.miren.core/deployment.app_name", schema.Doc("[DEPRECATED] Denormalized app name retained for downgrade compatibility; canonical identity is app"), schema.Indexed)
+	sb.String("app_version", "dev.miren.core/deployment.app_version", schema.Doc("[DEPRECATED] Version value retained for downgrade compatibility; use version"))
+	sb.String("cluster_id", "dev.miren.core/deployment.cluster_id", schema.Doc("[DEPRECATED] Client-supplied cluster display value; coordinator storage is cluster-scoped"), schema.Indexed)
+	sb.String("completed_at", "dev.miren.core/deployment.completed_at", schema.Doc("[DEPRECATED] RFC3339 completion time retained for compatibility; use finished_at"))
 	sb.Component("deployed_by", "dev.miren.core/deployment.deployed_by", schema.Doc("Information about who initiated the deployment"))
 	(&DeployedBy{}).InitSchema(sb.Builder("deployment.deployed_by"))
-	sb.String("error_message", "dev.miren.core/deployment.error_message", schema.Doc("Error message if deployment failed"))
-	sb.Component("git_info", "dev.miren.core/deployment.git_info", schema.Doc("Git information at time of deployment"))
+	sb.String("error_message", "dev.miren.core/deployment.error_message", schema.Doc("[DEPRECATED] Bounded failure summary retained until lifecycle errors are queryable from the log stream"))
+	sb.Time("finished_at", "dev.miren.core/deployment.finished_at", schema.Doc("When the attempt reached a terminal outcome"))
+	sb.Component("git_info", "dev.miren.core/deployment.git_info", schema.Doc("[DEPRECATED] Build provenance retained for compatibility; stable source identity lives on AppVersion.source"))
 	(&GitInfo{}).InitSchema(sb.Builder("deployment.git_info"))
-	sb.String("phase", "dev.miren.core/deployment.phase", schema.Doc("Current phase of deployment (preparing, building, pushing, activating)"))
-	sb.String("source_deployment_id", "dev.miren.core/deployment.source_deployment_id", schema.Doc("ID of the deployment this was based on (for rollback/redeploy provenance)"))
-	sb.String("status", "dev.miren.core/deployment.status", schema.Doc("Deployment status (in_progress, active, failed, rolled_back)"), schema.Indexed)
+	sb.String("operation", "dev.miren.core/deployment.operation", schema.Doc("The intent of this attempt"))
+	sb.String("outcome", "dev.miren.core/deployment.outcome", schema.Doc("Terminal result of this attempt; absent while the attempt is in progress"), schema.Indexed)
+	sb.String("phase", "dev.miren.core/deployment.phase", schema.Doc("Last progress phase observed while the attempt was in progress"))
+	sb.Ref("source_deployment", "dev.miren.core/deployment.source_deployment", schema.Doc("Optional deployment this rollback or redeploy was based on"))
+	sb.String("source_deployment_id", "dev.miren.core/deployment.source_deployment_id", schema.Doc("[DEPRECATED] Source ID retained for downgrade compatibility; use source_deployment"))
+	sb.Time("started_at", "dev.miren.core/deployment.started_at", schema.Doc("When the attempt acquired the deployment lock"))
+	sb.String("status", "dev.miren.core/deployment.status", schema.Doc("[DEPRECATED] Mutable lifecycle status retained for downgrade compatibility; use outcome and app.active_deployment"), schema.Indexed)
+	sb.Ref("version", "dev.miren.core/deployment.version", schema.Doc("The app version produced or selected by this attempt"), schema.Indexed)
 }
 
 const (
-	DeployedByTimestampId = entity.Id("dev.miren.core/deployed_by.timestamp")
-	DeployedByUserEmailId = entity.Id("dev.miren.core/deployed_by.user_email")
-	DeployedByUserIdId    = entity.Id("dev.miren.core/deployed_by.user_id")
-	DeployedByUserNameId  = entity.Id("dev.miren.core/deployed_by.user_name")
+	DeployedByAuthMethodId = entity.Id("dev.miren.core/deployed_by.auth_method")
+	DeployedBySubjectId    = entity.Id("dev.miren.core/deployed_by.subject")
+	DeployedByTimestampId  = entity.Id("dev.miren.core/deployed_by.timestamp")
+	DeployedByUserEmailId  = entity.Id("dev.miren.core/deployed_by.user_email")
+	DeployedByUserIdId     = entity.Id("dev.miren.core/deployed_by.user_id")
+	DeployedByUserNameId   = entity.Id("dev.miren.core/deployed_by.user_name")
 )
 
 type DeployedBy struct {
-	Timestamp string `cbor:"timestamp,omitempty" json:"timestamp,omitempty"`
-	UserEmail string `cbor:"user_email,omitempty" json:"user_email,omitempty"`
-	UserId    string `cbor:"user_id,omitempty" json:"user_id,omitempty"`
-	UserName  string `cbor:"user_name,omitempty" json:"user_name,omitempty"`
+	AuthMethod string `cbor:"auth_method,omitempty" json:"auth_method,omitempty"`
+	Subject    string `cbor:"subject,omitempty" json:"subject,omitempty"`
+	Timestamp  string `cbor:"timestamp,omitempty" json:"timestamp,omitempty"`
+	UserEmail  string `cbor:"user_email,omitempty" json:"user_email,omitempty"`
+	UserId     string `cbor:"user_id,omitempty" json:"user_id,omitempty"`
+	UserName   string `cbor:"user_name,omitempty" json:"user_name,omitempty"`
 }
 
 func (o *DeployedBy) Decode(e entity.AttrGetter) {
+	if a, ok := e.Get(DeployedByAuthMethodId); ok && a.Value.Kind() == entity.KindString {
+		o.AuthMethod = a.Value.String()
+	}
+	if a, ok := e.Get(DeployedBySubjectId); ok && a.Value.Kind() == entity.KindString {
+		o.Subject = a.Value.String()
+	}
 	if a, ok := e.Get(DeployedByTimestampId); ok && a.Value.Kind() == entity.KindString {
 		o.Timestamp = a.Value.String()
 	}
@@ -2503,6 +2735,12 @@ func (o *DeployedBy) Decode(e entity.AttrGetter) {
 }
 
 func (o *DeployedBy) Encode() (attrs []entity.Attr) {
+	if !entity.Empty(o.AuthMethod) {
+		attrs = append(attrs, entity.String(DeployedByAuthMethodId, o.AuthMethod))
+	}
+	if !entity.Empty(o.Subject) {
+		attrs = append(attrs, entity.String(DeployedBySubjectId, o.Subject))
+	}
 	if !entity.Empty(o.Timestamp) {
 		attrs = append(attrs, entity.String(DeployedByTimestampId, o.Timestamp))
 	}
@@ -2519,6 +2757,12 @@ func (o *DeployedBy) Encode() (attrs []entity.Attr) {
 }
 
 func (o *DeployedBy) Empty() bool {
+	if !entity.Empty(o.AuthMethod) {
+		return false
+	}
+	if !entity.Empty(o.Subject) {
+		return false
+	}
 	if !entity.Empty(o.Timestamp) {
 		return false
 	}
@@ -2535,10 +2779,12 @@ func (o *DeployedBy) Empty() bool {
 }
 
 func (o *DeployedBy) InitSchema(sb *schema.SchemaBuilder) {
-	sb.String("timestamp", "dev.miren.core/deployed_by.timestamp", schema.Doc("When the deployment was initiated (RFC3339 format)"))
-	sb.String("user_email", "dev.miren.core/deployed_by.user_email", schema.Doc("The email of the user who deployed"))
-	sb.String("user_id", "dev.miren.core/deployed_by.user_id", schema.Doc("The ID of the user who deployed"))
-	sb.String("user_name", "dev.miren.core/deployed_by.user_name", schema.Doc("The username of the user who deployed"))
+	sb.String("auth_method", "dev.miren.core/deployed_by.auth_method", schema.Doc("Authentication method used by the initiating subject"))
+	sb.String("subject", "dev.miren.core/deployed_by.subject", schema.Doc("Stable subject from the server-authenticated RPC identity"))
+	sb.String("timestamp", "dev.miren.core/deployed_by.timestamp", schema.Doc("[DEPRECATED] RFC3339 start time retained for compatibility; use started_at"))
+	sb.String("user_email", "dev.miren.core/deployed_by.user_email", schema.Doc("[DEPRECATED] Caller-supplied email retained for compatibility"))
+	sb.String("user_id", "dev.miren.core/deployed_by.user_id", schema.Doc("[DEPRECATED] Caller-supplied user ID retained for compatibility"))
+	sb.String("user_name", "dev.miren.core/deployed_by.user_name", schema.Doc("[DEPRECATED] Caller-supplied username retained for compatibility"))
 }
 
 const (
@@ -2665,93 +2911,6 @@ func (o *GitInfo) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("repository", "dev.miren.core/git_info.repository", schema.Doc("Git repository remote URL"))
 	sb.String("sha", "dev.miren.core/git_info.sha", schema.Doc("Git commit SHA"))
 	sb.String("working_tree_hash", "dev.miren.core/git_info.working_tree_hash", schema.Doc("Hash of working tree if dirty"))
-}
-
-const (
-	DeploymentLockAcquiredAtId   = entity.Id("dev.miren.core/deployment_lock.acquired_at")
-	DeploymentLockAppNameId      = entity.Id("dev.miren.core/deployment_lock.app_name")
-	DeploymentLockDeploymentIdId = entity.Id("dev.miren.core/deployment_lock.deployment_id")
-	DeploymentLockExpiresAtId    = entity.Id("dev.miren.core/deployment_lock.expires_at")
-)
-
-type DeploymentLock struct {
-	ID           entity.Id `json:"id"`
-	AcquiredAt   time.Time `cbor:"acquired_at,omitempty" json:"acquired_at"`
-	AppName      string    `cbor:"app_name,omitempty" json:"app_name,omitempty"`
-	DeploymentId string    `cbor:"deployment_id,omitempty" json:"deployment_id,omitempty"`
-	ExpiresAt    time.Time `cbor:"expires_at,omitempty" json:"expires_at"`
-}
-
-func (o *DeploymentLock) Decode(e entity.AttrGetter) {
-	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
-	if a, ok := e.Get(DeploymentLockAcquiredAtId); ok && a.Value.Kind() == entity.KindTime {
-		o.AcquiredAt = a.Value.Time()
-	}
-	if a, ok := e.Get(DeploymentLockAppNameId); ok && a.Value.Kind() == entity.KindString {
-		o.AppName = a.Value.String()
-	}
-	if a, ok := e.Get(DeploymentLockDeploymentIdId); ok && a.Value.Kind() == entity.KindString {
-		o.DeploymentId = a.Value.String()
-	}
-	if a, ok := e.Get(DeploymentLockExpiresAtId); ok && a.Value.Kind() == entity.KindTime {
-		o.ExpiresAt = a.Value.Time()
-	}
-}
-
-func (o *DeploymentLock) Is(e entity.AttrGetter) bool {
-	return entity.Is(e, KindDeploymentLock)
-}
-
-func (o *DeploymentLock) ShortKind() string {
-	return "deployment_lock"
-}
-
-func (o *DeploymentLock) Kind() entity.Id {
-	return KindDeploymentLock
-}
-
-func (o *DeploymentLock) EntityId() entity.Id {
-	return o.ID
-}
-
-func (o *DeploymentLock) Encode() (attrs []entity.Attr) {
-	if !entity.Empty(o.AcquiredAt) {
-		attrs = append(attrs, entity.Time(DeploymentLockAcquiredAtId, o.AcquiredAt))
-	}
-	if !entity.Empty(o.AppName) {
-		attrs = append(attrs, entity.String(DeploymentLockAppNameId, o.AppName))
-	}
-	if !entity.Empty(o.DeploymentId) {
-		attrs = append(attrs, entity.String(DeploymentLockDeploymentIdId, o.DeploymentId))
-	}
-	if !entity.Empty(o.ExpiresAt) {
-		attrs = append(attrs, entity.Time(DeploymentLockExpiresAtId, o.ExpiresAt))
-	}
-	attrs = append(attrs, entity.Ref(entity.EntityKind, KindDeploymentLock))
-	return
-}
-
-func (o *DeploymentLock) Empty() bool {
-	if !entity.Empty(o.AcquiredAt) {
-		return false
-	}
-	if !entity.Empty(o.AppName) {
-		return false
-	}
-	if !entity.Empty(o.DeploymentId) {
-		return false
-	}
-	if !entity.Empty(o.ExpiresAt) {
-		return false
-	}
-	return true
-}
-
-func (o *DeploymentLock) InitSchema(sb *schema.SchemaBuilder) {
-	sb.Time("acquired_at", "dev.miren.core/deployment_lock.acquired_at", schema.Doc("When the lock was taken"))
-	sb.String("app_name", "dev.miren.core/deployment_lock.app_name", schema.Doc("The app this lock covers. The lock is app-scoped, not app+cluster: a coordinator's store only holds its own cluster's deployments, and the client-supplied cluster_id is unreliable (see MIR-1465).\n"), schema.Indexed)
-	sb.String("deployment_id", "dev.miren.core/deployment_lock.deployment_id", schema.Doc("The deployment currently holding the lock"))
-	sb.Time("expires_at", "dev.miren.core/deployment_lock.expires_at", schema.Doc("When the lock may be stolen by another deployment. A holder whose deployment reached a terminal status is stealable before this too.\n"), schema.Indexed)
 }
 
 const (
@@ -3350,19 +3509,18 @@ func (o *SecretVersion) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 var (
-	KindApp            = entity.Id("dev.miren.core/kind.app")
-	KindAppVersion     = entity.Id("dev.miren.core/kind.app_version")
-	KindArtifact       = entity.Id("dev.miren.core/kind.artifact")
-	KindConfigVersion  = entity.Id("dev.miren.core/kind.config_version")
-	KindDeployment     = entity.Id("dev.miren.core/kind.deployment")
-	KindDeploymentLock = entity.Id("dev.miren.core/kind.deployment_lock")
-	KindKeyRotation    = entity.Id("dev.miren.core/kind.key_rotation")
-	KindMetadata       = entity.Id("dev.miren.core/kind.metadata")
-	KindOidcBinding    = entity.Id("dev.miren.core/kind.oidc_binding")
-	KindProject        = entity.Id("dev.miren.core/kind.project")
-	KindSecret         = entity.Id("dev.miren.core/kind.secret")
-	KindSecretVersion  = entity.Id("dev.miren.core/kind.secret_version")
-	Schema             = entity.Id("dev.miren.core/schema.v1alpha")
+	KindApp           = entity.Id("dev.miren.core/kind.app")
+	KindAppVersion    = entity.Id("dev.miren.core/kind.app_version")
+	KindArtifact      = entity.Id("dev.miren.core/kind.artifact")
+	KindConfigVersion = entity.Id("dev.miren.core/kind.config_version")
+	KindDeployment    = entity.Id("dev.miren.core/kind.deployment")
+	KindKeyRotation   = entity.Id("dev.miren.core/kind.key_rotation")
+	KindMetadata      = entity.Id("dev.miren.core/kind.metadata")
+	KindOidcBinding   = entity.Id("dev.miren.core/kind.oidc_binding")
+	KindProject       = entity.Id("dev.miren.core/kind.project")
+	KindSecret        = entity.Id("dev.miren.core/kind.secret")
+	KindSecretVersion = entity.Id("dev.miren.core/kind.secret_version")
+	Schema            = entity.Id("dev.miren.core/schema.v1alpha")
 )
 
 func init() {
@@ -3373,7 +3531,6 @@ func init() {
 		(&Artifact{}).InitSchema(sb)
 		(&ConfigVersion{}).InitSchema(sb)
 		(&Deployment{}).InitSchema(sb)
-		(&DeploymentLock{}).InitSchema(sb)
 		(&KeyRotation{}).InitSchema(sb)
 		(&Metadata{}).InitSchema(sb)
 		(&OidcBinding{}).InitSchema(sb)
@@ -3381,5 +3538,5 @@ func init() {
 		(&Secret{}).InitSchema(sb)
 		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ɒ\xf48\x11~\r\xb6a\x19\xf6\x01<3\f۰L\xb0\x1c\x88\xe0\xc2#8T\xb6\xcaV\x97my$U\xfd\xdd\xdc\xd8!\xe0)\xf8\xfb\xe74\xaf\ag\xc2\xda,\xa5e-\xae\xe6\xd2!\xc9\xcaO[f*\x95\x99]\xcf\xed\x84F<\xb5\xf8V\x8d\x84\xe1\xa9j(\xc3\xf8B\xa6\x96\x7f\xf2\xcao}wi\xad\xd0<\xff[\xd20\xf0\x15ͳ\xa2\xfb﹥#\"\x13\x00=\x9f\t\x1eZ\xfe\xa7\xd7'\xd2>~iK\\\xa1F\x90\x1b\xaeo\x98qB'5/\xd0&\x9ef|\"\xed.\x04\x99\x88 h\xa8\x1b:\x9dI\xa7 @\x9b\v\xf1\x99\x00\xc4\xcc\xe8\x03n\x84\xa4\xedL\xc5%\xfab\x80\xe8\x15e\x97\x81\xa2\xb6ft\xc0\x92t\xf4\x9b\x16\x803\x17\x8cL]\xa7\x17\xd3\xdd\xdeG\xc3ܣafdD\xec\xa9^6\xafA\U000fc656\xdcw\x8e\x1b\x86\x85\xda\xfa+蠾\xe5\xec\xfe\x1f\xe4\x12\xbe\x1a\xa4\xaf\x9a+cx\x12\xde\tP\xd8\x18\xdb?\x8d3#\xd1K\xe2V\x96r\xd7~V䏟\r-_\x9f\x84Z\xff\r\xf4\xd0\x1fs6\xe0\xf7r\xe2\x9f\v\x03T\xf4Մ\x99\x1c\x02\xabb\xee\xdc\r\xa7l\x90\x95\xcc0A\xce\xc8\xcc\x1e\x8a\x95\xf9\x9a/=p\x87\f\xc2\"\x9cr\x88\x85\x8d\xe2Lk(F4\x913\xe6\x8a\xdf{[s\xd6-鿞\xa2\xaf[\xd2\x19\x18\n\x1b\x1d\xb4\xe7\x05\xed\xf3{h\\ q\xe5\x12\xe4\xac\xcb\vm\x8b\xa7\xebxY\xfe\xd474\\1\xff\xd7Y)\x86\xcdv+\"\xadJzĚ\x9e\xdc\xf0v@\xd3M\x7f\x8f\x1emof\x17>\xdb\x11\v\xd4\"\x81\xc2gk\xbe\xe6\x9c\xed\x1f\x83{c\x10\xaa\x01\x9d\xf0\xc0\xdb\x11MO\xffQ;\xa4[\x96\x1d²\x1c\xe4m\v %r\xfd\x03\x8f\xf8\v{t1\x8d\x18\xdf9\x03\xb1Y\x94ܹ\x16\xcf\x03}\x1a\xf1\xa4\xe5\xe2\xf1Ӡ\xd7\xda!g\xfb\xfe!W\xf1\xf6.\xc6\"\x1c\xb5]~okp\x1f\xa0r\x04\b\xaer\xbc\xb8\r\x10\xe7+\xfb8\xa7+\x19\xdaz\xa0\x9db\xf5\a\xa7^\x80\xd2\fW.0\xabI\xabP\x9c:D\xf9Z\x04\x85\x8e\xf3\x80\x05nk\xa4\x8ex\xf0Z\xa0\xe8FvG\x15q[\x9f\x9e\xd4\xee\xb8\r\v\x0eY\x90\xe9\x84'\xb1\x96\xf4\xd1\x03\xd8*\f\x9b\xaf!\xc3\xdb&A*AF\xcc\x05\x1a\x95\xaa$k5\x8f\x13\x14ȕcV\xe3\x11\x91Am\xbeS\x870a\x96t`\xf4\x01v\xa6\x92\xc7\x03\x0e\x80\xe5j\xb2Vso\xae\a\x83vz\njz\xe7$0c\x94\xd5#\xe6\x1cu\xda\xca\xf1\x9b \xb3D\x84\xb1#\xa2&ә*a\xb4\xb5\x04\x9b\xbc\xbd\xcf&\x06\"\x87G\xfe\xfe:\xa4i\rB\x85\xae\xa2\xa7\xca\f8\xeb2<\x92]\xda\x13CS\xa3\xac\x9f\xb3.C\xdao\xed\xd16t\x1c\x89\xa8Ր\x0es\xf1\xd0\a\x88\xfa\x8d\x04\xaa\xcf\xf5\xf3\xa6\x15\xe2A\x8b\xc1\xe2\x11^\xb7\x84\t%㽭\xc9{\xfaD\xe9\x10\xbcL,\xb5\xcb=]\x80o\x82\x12c\xa9\x19\x9e)'\x8225\xfa\x83S\x87\x18\xd0F\xb2\x18\xbcG\xcaFZ\n\x90\xea\x9b{T\x8b9O\xa6\xae\x16\f\xe3\xbaG\\\x1d\xf1\xc7\xdb\xe6l\x8b\xb1#bA\x0en\x97\xc3\xd7s\x8f\xb8\xda.\xac\x8ap\xca\xd5>-\xa7W\xd6\xe0zm1\xaaF\x04\xbf\xa4X\xc0E\x0e\x1bj\x05\ng\x81٬ۼ0ͥ\xaa\xc5>\xf0N3=r\xc4\xfd\x9f\xc1;\xd0\x01\xa9P;\x92\xa9\x16\xf4\x82\xcd\xc5\xee4\xa4d\xdf\x03\xda3\xc0\xbf\x1c#\xd2\x06\xa66LLM\x93?\xef<v-\xb9\xf3\xd8=;\x8f܈\x1a\x05h\xd5\x16-g[\xff\xf2&\xb4\x1b\x8a^j\x1d4\xb5\xae\xbd\xda۶\xc4\xf4\xdeIN\xcf\xc2\xe7\xbfy!\xab\x19\x04\x03\xa54\x92\xa9\xa4\x8ccK\xcd1\xbb\x91F\xeb3S\xc9\x15\x05\xbb#Aq\xd3Kœ`O3%\x93\xe2\x8f\a\xa7\x0eg\t\xe5D#̔\t\xfd\x1e_J\vUC&\x11;>\xbd\x12\xef\xf8l\xdb\xfd\xc7g\xa0\xb2.k9Ϸ6\xae\x06\x85P\xb5\x84_\xdcibՐ\x98\xe3{\xf9sT#\xe4\xbf@\xe0\xfbK\x92W\xed\xa9>\x13\xed\x1b\xeaL%\xc5e\x8at\xe9ʟ\xb8\xc0\xa3b\x00\xa7\x9e45%\xc0\x80\x11\xc7\xf2\xaa\xa7W\xc5\b\xa3ߔ7\x8f\x91^'Q[\xe7\u0383S\x87\x00\x9b\x97\x9c\x04H<@!\xf7*\xa2\x98K\xe69\xc4\x19\x8alf\xf4FZM\xd9\xdbZЛ\xf0\x1a\x0f\xb4A\xc3\x06\xc9PU\xf23\x96_\xf6;ɶ3\xffx \x02o\xc4\xca\xf6R߃\xf7\x88\x9a8è\xad\xe94(\v\x87\xacU\xdf\xc0\ns\x19'\xbf\xc3uw\xd2\xdaHW\x8c\xbc\a\xcd\"M'\xcd\x01}\x9d\xabr\xea\xd6ӄr9Ƭ k5W\x05*q}\x13\x9a\x9a\x15@<\xdd\x1c\x01o\x96jB\xbc\xab\x02\xf1\xc6\xd3-G\xb8\xff\x1a\xe4Q<ݪ\x13j\x163Am\xba\xa9\xa4\xb6o!l1o\x18\x99\x85u'\xb8\r\x00\x00\xba<\x17\xfa\vVL\xd2,\x85\x94\xfd\xbb\x100\xfc\xf1\x950\xac\xa6\xda\xdbZ\x9c\xb3\x16B\x8e'N\x04\xb9\xe9W\xe6Z\xf5I\xa1\xd8K\xd24k}*@&%S\x89\xbd*f{\xd0\xf1t{\x1d\xbd1\xc8h\x1e X\x15\xe1|6NEC\x99P`\xbbt;\x17p0\x8c\xe1\x119/\xfb\xb5\n\x87\x8d#\xc8\x13Z\x11d\xd5A\x88_\xae\v\x89w\xb9\xaa\x86\x17\xbc\\%`\x8e\xfc\xfd9\xc8a\x92<u.\x1be\xac\x88h\x8bk{2d\xadz\xc7\x13\x1ep\xe7@\x83\xf7\x91\xa6`TІ\x0e\xf6>R\xb5\xb0w\xbb\x11ͼ\x11`CS\x89fn\xaem\xa4õ\x9d#s\xb7\f\xd1B^\x88+jI\xfd\x1cr`\xd8\xc3ԅ\xba\xa1\x93\n\x1b5JA\xf1Ї\x04\x13}T\xc0D\x01\xf8|\x96\x82\x0e\xaf\x00X5\xd2V\xef\x99,A\x06{/\x03b9^2q\x81\xa6ń\x96F\x98\xdf\xe4\xb1ݏ2\x10\x17\xfd\x8d\xb9\xe0\xf5\x8c\x99\xc5Q\xf1\xc1\xf0'o\x84\x0f2F\xe0\x8b\xd9S\xb7\xf4\xd5T\xb7x@\xea0\xe7M+\u070e,\xe8\xfe*$\x84k\x96Λ\xd6\\\xeedz\fg\x88\xf8\xcb\xcb\xf0N\xd0\xd1k\xf8K &\xea\x960\xdcX\x97\x13\x85\x8dP\x97\xee<\xa8n\x88\x11t\x1a\xb0\xfb\xa0\xb2m\xf7?\xa8\fT\xbe%\x03m|\x83\x90g\xce@w\x86\xa5.\xb1i6\x1a̢D-\x1b\xf8N\xb6TY\xe6\r\xbc--u\xa6\x8d\x03\xcfw\xa5O\x1b:\xf0j\xb0\xb4\x87\xad\x1d\xcbC\xf1Ⱥ⒠\x87s\xcbL~\x06\x06hs}Z\xefF\xa0\xf0\xdc\xe3\x1134\xd4\xf8q&\fs\x13^\x12\xc1/\xea*\"\xa3z\x19\xbd\x93\x05,C\x9eJ(ac\xca9\x1e\x06\x14b\xd0Q\r\xaf)\x15\x8eq\xc1\xa4AY_\x99\x02\"k5%@.HfL>\xb6K\xa5a\xf9\xa0\xf7\xc0\x05ty\xa2\v\x84<\xa3\xfc\xe7\xc6I7\xe2+}\xbe\x17\xfcT3*\x90X\x9d\xbe\x9b4\x10\xa7K\xfe\xed\x0e\xd9\xddE)\nh\x05\x8f\xdeC;3:\xd6Fs\xf5\xb6\x96\x8a*z\x18\f\xbfbh\x9e\xb5\x0e#k\xd531\xe1Ay\x10\xb99\x14\xcfmK\xa7\xado]\xa7F,\xdf\xcegD\x06\x1cxר.\xeakϰ \xcb\xe2\xf6\x92,\xcc\xf7\a\xbd\x98\xa5+\xe4\x01\xdb\xd5\xf4\b\xf2\xa3\xb7LA\xed^\x9fu9\x97\x1d\a\x17(̏\x94\xb4M}\"SK\xa6n\x87\x1f\xdd.Y\xee\xf2\xe0\xb5\xeb\xa2\x04\xa3\aҨ\xf8v\x8c\xaa\x19\x10\x19\x17\xe3\xaa%˂\xdc\xf7ڼ\xf9\x9605\xc0@Ut\xa0|\xe7;\xd4v\x10)~\xe1C\v}C=#!0\xd3\xca\xc9Tr\xb9\x81J\xb8\x15-8\xa4\xb7\x0fE6\x0edb\x0f\x89p~\xd5>ʳ.\xa7T\x8eG\x1f\xf1r\xc6\"\xce\x1e\x06\xbf\x9e\x1ep#\x1d\xb9v\x13)l\xcc\x16-\x17z+\xc0\x8bh\xf9\x06\x85\xe6;h\x19\xf9\x9d\xf2\x19\rZw>NP\xc0\x82\x1a\x15\xd0\xf1\x197\xea\xfd'K\t!\x82Gf\xbf\x9b\xb5/ \xf9W\x184\xb3\x82p\x99a\"\xa9M\xbe\x93\x05xO\b\b\x8cP\xc5Gȏ\xad|\xbfh\xe6\xc9О<\xfa\x0fK1}\xdfƥ\xc0\xa7\xf1aѶT\x87\xdc\x19\x1f\x1d^N\xca\xcb\xf1\xeb\xe3\xc8eΏ\xdf\x1e\x1f\xe8>\x9f\xc8o\x8e\x0f|\xd0Urψ/\xebAy|K\x8d\xb8\fh\xc6s\x86{\x13r\xec$f{,4\xfbA\x99\x90\x14Fg\x7fr`\ty\xc1\xdbB\xc1+\x8e\xed\xfe\xe2\b~q\xe8\xf7\xd0*\n\"\xc3б\x99\x85\x9f\xf0\xef\x17j\xf0̸\xf2O\x8f\xa0\x1e\t;\xff\U0009e07c\xd8\xf4}H^\x00\xfbWwA9Q\xee\x9f\x1d\x01\xca\f\x82\x1f\x12\xe6t\x8c\xfcǇ`\xd3\xee\xbfC[qw\x84\xfd\xd5V\xaf\xaf1\xf7\xf7˦T\x1e\x89\x7f\xbfL\x9b\x17\x05\xe3\v\xe5>;V_xN\xa5\xa1\xfcR+6\x19\xea/\xe4\xd7\xecL\x80B\xf1*H\x14(\xbc\x052\xf3\b~X\x8ez\xd8\xf1~\xddJ\x95I<(\xb4\x92\x92\xe9\b\xdf-\xc3K\\\x96\x85h\xb1ԅ\xc2\xfd\xceNh(\xe4g\x95\xd7\xe0\x988\x83\xd7r'\x97d'Q\x14\x1e\xfb\xb1ԊB\xe3\xb80\xbb\xa2P,\xb3\x92/\n\x95iInơ\xe9\xc6R7\nM\xbe\xa3\x99\x1d?\xbfg\x18\x9b\xfeq\x1f\x8a\xc9\x119\xb4\x87\aSH\x02\x96\x88ċG\xf6\xb7Dr\xe2\xdf˛\xf8\x91\x10>\f\xac\x85\xa1\x05\x02\xaf[\xd5P\x18ˏ`\xe7\xc8\xed\xdf\nt\xba\x04M\xfa\xc4ބ\xfe\xa7$\x06x\x7fvf\x02=\xdf ̻8,p\x99\xd5V\xb2\xc9I\x93-\xcf\x04\\\xc1(#\x1dQ\x93<\xeb\xf2\xb1{m\x85\xcc2\x01\xf3\xd4\xc3\n\x9ai\xff\x95.?\xc3\xf8\xcb\xd3\a+\xe4a\xcb\xcfQHJL\xb5ٗ\xf7\x1aQ\x13\x18\xd1\xe3\x9a\r\xa5\xae\xa3\t\xb4y7]^\b@a\xbf\x88\xfd\xa7\xa0\x18\x16\x8ch\x87mg*\xd1,\xb2\x18\x1aoz\xdc^\xb5\x1b\xad\xb7\xb5{&\xe8Z}ݞ\xc1W\x04\xc8H\xd7i\xf7Mg*\xf9\x91D\x9f3\nT\xa9I\xe3q/\x14\xb26\xbe\x88B\xb5p\xf9\n\xf5\ae\x93\xcf{^\xe7i\xe9\x15\xf4\xff\xa0\xa5W\xf0\xa8\x96\xceS\xa9+\xd8\v\xaa\xd4\x15\xf4EU\xaa\x03\xfbR*u\x85<\xacR\xf9*8\x16-\x9eP\xe4L \xda\x11\xa4\xaf\x85#\xd2\xeawg\x12\x11i\xbfS~\xc2\aL=\xf3q\xaa\x86\xcc=f\x02?갭S_v\x0f\x9f\x9e\x846xaT\x19\x00]\xf0\xc58\tϺ\x9cJ%\x00\b\xaa\xaa9B\x95\xdd\x109\xcc\xe1\x80\xd4\x02\t}\xf8\xaa\x18\xf6ywx\x92)\xaf\xc1\xa4\"\\\xe9\xaf}K\xb8\xea\xb69\x06\xd9\xcd|&-\xe6\x82ѧ\x9d\x9fx\x91\xe9\xa8\xea\xfbN\xaa\xb7\xb7\x049\xc5zD\x8dQ\xbf\xa6\n7\x12&\x95\x01\x1c\x9d\xb3U\xb7\xf8\xa2\x14\x96۰\x9ej\x9cq}\xcc\xcd\xee\x83_P\xa9\a\xda\\4\xe7n\xfeS\xcb\xef\x95\xff#\x1a\xf0\x1d\x04\x80*\xd4(\x05gR;/n\x83\x9fѹ\xff\xab\x12\x1a*\xef\xb7Y`\x1e\x14\x84\xd9\xfe\xa7\xfb\x18\xff\x17wx\x92\x10\x10$\xaf>\x84RV\xe36\x01@\x84\x9d/\xbc\xa7L(-\xf8I\x83\xe6y\xefG\xd7̯cE~\x1c\xcc\xfe\bU\xec\x17\xb4\x12?gd\xbe\xae\xbf\xdd\x13\xfd\xd5#\xf7\x9f\xf9\x13?\xf2\xe3%\x81\xa6\xfe\xf1?#E\xcf\xed\xe1\xa7\x1d%3\xfa\xb2n\x05\xbf\x0f\x94ǌ\x8b\x04\x1e}\x96\f\xff\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff,72ҐO\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ɒ\xf48\xf1\x7f\x8d\xff\x1f\x18`\xd8\x19\xc03\x1f\xc36,\x13,\a\"\xb8\xf0\b\x0e\x95-\xdb\xea\xb2-\x7f\x92\xaa\xba\x8b\x1b;\x04\xc1\x81W\xe0\xfb\x9a\xcb<\x1f\x9c\tk\xb3\x94\x96-\xc9\xd5\\:\x94\x92\xf3\xa7-3\x95Je\xd7\xdbzD\x03\x1ek|-\x06\xc2\xf0XT\x94a|&c\xcd?y\xf4kߟk\v4M\xff\x92<\f\xb4\xa2iR|\xffij: 2\x02Ц!\xb8\xaf\xf9\x9fޜH\xfd\xf4\xa55s\x81*A\xae\xb8\xac\xf1\xd4\xd3ۀG!\xbby\xbd\xae\x16\xb7\t\x9fH-\x81\xde\xdd\x06\xbab\xc6\t\x1d\xd5\x04A\x9d\x86x;C|!\x00\xb1\xf4V\xf6\xb4:K\f\n+g\x10R\xd1a\xa2#\x1e\xc5RR\xeb\x03q\x8b\x00nʂ\xfd^\xce\xf3=0H\x00T\xa0\xea\xf5\x850\\\x97H-\xdb٭\x98\aZ\v2`\t\xf5\xcd\b\x94C\x93Z\x82\r~\xd5\f\xd7p\xc1\xc8\xd8J\xc0\xafG\x00\xf1\xd3D\x18\xe6fh\x0f\x0emG\xd6\xea\x9di\xaf\xafP?u\xa8\x9f\x18\x19\x10\xbb\x95\xf3\n\x8d\v\xe2\f\xb8\xb9\xf1d$\x82\xa0\xbe\xac\xe8ؐVm<\xa8se\xe7S\x01\x88\x89\xd1\a\\\xa9\x81\xb6\x86p\x99>\x1f`z\xa4\xec\xdcST\x97\x8c\xf6X\xad\x98_\xe5\xac\xd8\xeeD+4M\xabaI\xb5\xe3\xb8bXK\xd6\x05|\xa0\xdaRd\xe9wr\n_\x0e\xf2\x17Յ\xb1y\xcf\\\xbd\xa1\xb0ro\xfd4΄D'\x99kYJ\x9d{\xa3؟>\x1d\x9a\xbe\xde\t5\xff+\xf8B7\xa6,\xc0o\xe5\xc0?\x13\x06(\xe8㈙\xec\x02\xabb\xea؍\xa4\xac\x90\x95\xc9d\x824Ȍ\x1eZUӚ2\xfc?\xc8\xe1\xc3\x152\b\xb3\x85\x91]\xccb\xb4/\xb4\x86c@#i0W\xf2\xdeY\nj\xf8Wc\xfceMZ\x03Ca\xa5\x83&\r\xeeg\xb7и@\xe2\xc2%H\xa3\xcb\xd2@\xe0\xf12\x9c\xe7?\xe5\x15\xf5\x17\xcc\xff\xd9(s\xbeZnŤ\x0f\x80\x0e\xb1\xaa#W\xbc\xee\xd0|\xa6\xdbw\xb7\xb63\xa3\v\xef\xed\x80\x05\xaa\x91@\xe1\xbd5\xadIv>\xb86\x06\xa1\xe8\xd1\t\xf7\xbc\x1e\xd0x\xfb\xb7Z!]3\xaf\x10\x96\xe5\xa0l[\x00\xa9\x91\xcb\x1f\xb8ş\xdb\xe2۳\x88\xfb+g V\x93\x92+\xb7\xd8t}^\xfe\xff\xe61\x92\xb2|\xff\x90\xb3xg\x13c[9\xe0\xf9\xef\xf3\x94v\xc9:K\xc1\xb5\x83\x06\x15 \xb8\x06\xf5\xecV@\x1c\xe8\x1598U\x7f\xe1\x023s\"?84D\xf9\xca\x0e\n\x1d\xa6\x1e\x8b\xc5M\xe8\xbd\x1a\xa8\xa8;\xf3RE\\\x97\xa7\x9b\x9a\x97[\x11q\x8c\x00l\x11\x86Mw&\xc3\x13\x96 \x05\xba\x88\xae\x1c\xb0\xe8h\xad\xd7ߩ\x80+\x17\x96\x04\x05\xc4/\xa7E\r\f\x91\xb6\x81\n`\xf6r\xb8@\x83\x92B\xb2\x90iҤ@.\x1c\xb3\x12\x0f\x88\xf4J\f\x1c:g2\x92M\x8bRk\x88\x9c\xc9H\x1e\xab\x19d!SO\xcc\a\x83v\xba\x05O\x18G&0c\x94\x95\x03\xe6\x1c\xb5ڻ\xf2\xab2Ա!#\xe1\x9d\xe3&\xbb\x15\xd6\x19\r^\v\x1c\x94\x96\x88\x92\x8c\rUf\xc1R\x99\xf7\x81\x00`\x8a\xcc\xff\xf5M\xe8\x9c0\bR\xe0\xa9rb\x1a]\x86\xeb\xb3\xc9{bh\xac\x94\xef\xd6\xe82\xe4\xfd\xc6\x16oE\x87\x81\x88Ru\xe9\x88(\x0f5@ԯEP}ݙV\xb5\x10\x0f\xfa;\x16\x8f\xf0\xb2&L(\x9b\xd5YJ\xee\xfc\x89\xd2>x\x14ZnW\x06\xdb-\xe9\x83rc\xb9\x19\x9e('\x822\xd5\xfb\x83CC\f\xe8\xe1Y\f\xde!u\x88ͅ\xd8=\xccr͗\x112\xb6\xa5`\x18\x97\x1d\xe2j\x8b_\xaf\xab\x93\xfdݖ\x88\x19Yv\xfb\xc5mE\xa1\x13fH\x98\xb3\x8f,$\x1c:\xbc\u0379\x18\x17QQmhZCļ\x17\x87\x7f\xea\x10W\xdcX\x15c\"\xed\xf0rza\xd5:$\xb1\xaev\xfd\x89\"\x03\xcf\x18a\x11l\xc9\xf0\x0f\xb8@\xcc9\xd7\x1f\x1cڿ\xfdC\xd5\xf01B\xeew\xe2>\xb9^N\v\xae\x8b)G\xc1\f\xb2\xdaG\x13r2.\x936\xa5\x81\x9b\xbb\xf9\"ń\xfe=\xe868 \x05\xaa\a2\x96\x82\x9e\xb1qۜ\x8a\x98=\xf5\x80\xb6\xbcN\xa85\x1e\x93\xberh\xb7\xd3Pn\xd0*\x10\xfe\xb0\xecN\xf8\xa3q\xc2\x1e;Gӻ\xebP\x15@K\xf2ƞC\xab\xa1\xf8\xa5%Gc\xed\xde`:[\x17\x19\xde{\xd1\xe1Y\xf8\xf4(\b\x145\x83`\xa0\x94 \x1b\"fp,7\xc7\xecJ*m\xae\f\x91jW\xed\x8a\x04UUO\x15\x8f\x82\xdd&JF\x13N[h8J\xa8'\x1aa\xa2L\xe8\b\xcd\\\x9a\xb9*2\x8a\xbd\xed\xd33\xf1\xb6\xcf\xd6ݿ}\x06*\xc9\x01z\x0e\xdd\xf4\fBQ\x13~v\x87\x89UEd\x8c\x1f\xa4\x8fQ\xf5\x902ҿ\x05o䒽\xa8OeCt\xb4\xb05D\xf4X\x93\xac\xf3\xa7\xfc\xc6\x05\x1e\x94\x008t\xf4\x12 \x01z\x8c8\x96\xee\x13\xbd(A\x18\xfc\xaa\xb4q\f\xf42\x8a҆\xfb\x1e\x1c\x1a\x02\xac\xee\xf6\x12 \x12\x92\x80ҫ\x98\xf6\x82to\x831\x00\xc961z%\xb5\xe6\xec,\x15\x8c/\xbd\xc1=\xadP\xbfB2\\\x85lƲe\xfb#Y\xd7\xf0\xd7=\x11x\xa5V\xf6+\xd5\x1e<G\xd4\xc0\x19FuI\xc7^y\x8dd!}\xa75,e\x9c\xfc\x06\x97\xedI[#M\x18}\x0f\xba\x9a\x9aO\xba#\xda\x15P\xe5ة\xa7\x19\xe5t\x8c[C\x162\xd5\x04*u}\x0e\r\xcd* \x1e\xaf\x8e\x82W3\x19Q\xef\"C\xbd\xf1xMQ\xee?\ae\x14\x8f\xd7K\xd9MP\x8bn\x88\xd8\xf2͌5\xe6\x15#\x93u\x98\xcfn\x05\x00\x80A\xf0\x99\xff\x8c\x95\x90Ts!v\xa7\x98\x19\x18V\x8fDJ),\xb5/Y3#\xc7#'\x82\\\xf5\xfd\x7f!}V\xa8\xf6\x925.Z\xff\x17`\x93\x9a\xa9\xd4^\x15\x93\xdfT\xf0x\r\xc6\x06톓\xc1\\\xea\xb0*\xc2\xf1\xac\xc2̆3b\xc06\xf96\x0eࠋ\xed191\x97\x85\x8c9\xe9>\x82ܡ\x05A\xdd\x0e\x16\x84\xfd\xc3uf\xf1\x0eWU\U000421eb\x04Lѿ?\x06%L\xb2\xc7\xf6ee\x8c\x15\x13\xadqiw\x86,\xa4\xb7=\xe1\x0e764x\x1ei\x0eF\x05\xadho\xcf#E\x85\xdf;*QM+\x056<\x85\xa8\xa6\xeaR\xef|p\xa9\xa7\x9d\xb1[\x81\xa8\xa1,\xec\x1bj\xc9\xfd6t\x83\xb6\x9b\xa9\veEG\xf5\x90X)\x03\xc5C\r\x11!\xfa8C\x88\x02\xf0\xe9\"\x05C\x91\x01\xb0b\xa0\xb5^3Y\x82\x02\xf6A\x02ļ\xbdd\xe4\x02\x8d\xb3\v-\x9d0\xbf\xca\x13\xbb\x1f$ \xce\xf6\x1bs\xc1\xcb\t3\x8b\xa3^\x8c\xc3M^\x0f\x1f&\xf4\xc0g\xb7\xa7\xac\xe9\xe3XָGj3\xa7U-\\\x8e$\xe8\xee\"$\x84\xeb\x96N\xab\xdaT\xe9d\xba\x0f\xa7\x8b\xfd\x9b\x97\x91\x9d`\x04\xd9ȗ@L\x945a\xb8\xb2a<\n+\xa1-ݸP]\x11#\xe8\xd4c\xf7Be\xeb\xee\xbfP\x19\xa8tO\x06\xfa\xf8\x06!͝\x81\xe1\f˝\xe3Ӭ,\x98E\xd9\xf5l\xe0=\xd9r%\xb97\xf0\xb4\xb4܉>\x0e\xdc߅?\xee\xe8\xc0\xa3\xc1\xf2\x1e\xf6v\xac\f\xed\xe7Z()\tF\x8d\xd7\xc2\xe4gR\x81:7\xa6\xf5\xfe\x0e\x14\x9e:<`\x86\xfa\x12\xa4\x03\x89`\x8b\x1f\xb4\x84\xd9Oa`\xf9\b\xae\x94\x12V\xc6\x1e\x1c\u0080B\xf4\xfa\xbdɫ\x8a\x85e]0\xe9P\x96\x17\xa6\x80\xc8B\xc6\x14\xc8\x05I\xcc\xd2\xd8[\xa5C\x89\x1a{A\xc6\r\xe9>\x18dT\b\xe9\xe9pP\xe5\x15\xbf|Gs\x1e\xb1\x1e\x1c:\xa6z\x0e\x82ydi\r\x1138\x9a7\xed\x81'\x92\x04%\xa1\x82\xb1\x1bw\xbd6\x83\xed)\x9d\xb89\b\xab\xb9Ȉ\xfb\x19\xdfJF\x85|\xabѻ\xb7J\xcbr>I\xf7\xad\xa0\xb1qQ\xf2\x1fz\xa1\xe2yh\r\xa3Ci\u038d\xceR\xb1\xc7b\x0f\x83\xe1G\x86\xa6I\x9f d!=\a\x1fn\x94\a\x91\x9a\xd3\xf4\xb6\xae\xe9\xb8~\xd9ЩJs[\xd3 \xd2\xe3\xc0\xadR}\xa2Z;\x86\x05\x99'\xb7\x95\xf4d\xda\x1f\xf4d\xe6OW\xf2l>5_\x04\xe5ћ\xa6\xa0v\xad\x1b]N\x15\xc7\xde\x05\n\xcb#%uU\x9e\xc8X\x93\xb1ݐG\xf7\x93\xf4\xd4\x11\xe8\xf4\xb8(\xc1\xb7\x9b\xe7P\x06\xad\xc7U\xf5\x88\f\xb3k[\x93yB\xeemyZ\xb5EL&\xe8\xa8\xd8\xed(\xfd\xe9\x03\x9e5\x10i\xdf݂\xf7\xa3\x15\xf7\x84\x84\xc0L\x1b'C\xa4J\x03\x95p\vZ\xb0Ko\x1d\xb2<L(\xc4\x1e\x12\xe1\xfc\xa2#č.\xc7L\x8eǿ\x13c\xde{p\xf60tjQ\xe9.\"\x85\x95ɪ\xe5B\xaf\x15xV-ߝ\xd3r\a\x0fG\xff\xa3tA\x83\x0e\x84\x8f\x13T\xb0\xa0E\x05||\u0095\xba}\xcbRD\x89\xe0\x96\xd9v3\xf7\x19$\xfd\b\x83Nn\x10.\xf1\x91NZ\x93o%\x01\xde\xf3\x00\az(\xf6{H\x7f\xd9\xfan\xd6ȣ\x0f\xabr\xeb?\xca\xc5\xf4#K猈\xd2GY\xcbR\x1c\n&}|x:\xb1\x18\xd3/\x8f#煞~}\xbc\xa3\xfb\"R\xbf:\xde\xf1\xc1@\xd5==\xbel\xfc\xea\xe9\x1d\xd5\xe3ܡ\xe9\xcf\xe9\xee9\x14V\x8b\x8c\xf6\xd8\xc3\xf8\x87yJ\x92\xf96\xfe\xa3\x03SH{:\xcfT\xbc\xec\x97\xf5\x9f\x1d\xc1\xcf~x?4\x8b\x8cwy\x18VN\u008f\xbc\xaedZ\xf0\xc4W\xfd\x1f\x1fA=\xf2\xe8\xff\xf3{:\xf22\x03\xeeC\xf2\xd2\a~q\x17\x94\x93c\xf0\x93#@\x89)\b\x87\x949\x9e\xa1\xf0\xc3C\xb0\xf1\xe0롥\xb8;\xbf\xe1qmח\x8c\x87WyC\xcaσx\x95gͳR!2\xf5>9S\"s\x9fr\x13)r\xbd\xd8h\xa2E\xa6\xbc&\xe7ad\xaaWF\x9aF\xe6)\x90\x98\xc5\xf1\xfd|\xd4\xc3\xcf\x1e\x97\xb5V\x99\xb4\x8fL/)\x9a\f\xf2\xed<\xbc\xc8a\x99\x89\xb6\x978\x92\xb9\xde\xc9\xe9$\x99\xf2\xac\xb2J\x1c\x17\xa7\xf7j\ue512\xe4\x14\x96\xccm?\x96ؒ\xe9\x1cg\xe6\xb6d\xaaeR\xeaK\xa61\xcdɌ94ܽęL\x97\xefh^\xcdO\xef\xe9\xc6&\xdf܇b2t\x0e\xad\xe1\xc1\x04\x9e\x80'\"\xf1\xf6\xf3*\xd6Lr\xe0\xdfI\x1b\xf8\x91\x04\n\xf8\xac\x19\x86\x16\b\xdcnUEf&\xc5\x0ev\x8a\xde\xfe%æK\xd0hLL\xae\x00\xfc\x8f\xa2=\xc0\xfbsc#\xe8\xe9\x0ea\xda\xc1a\x81\U000fcd9cE\x8e\xbali.\xe0\x02F\x19i\x89\x1ad\xa3\xcb\xc7ε\x052\xc9\x05L3\x0f\vh\xa2\xff\x97;\xfd\x04\xe7/\xcd\x1e,\x90\x87=?\xc7 )5\xd5n_\xdamD\r`@OK.\x9a:\x8eFP\xe7\x9dtiO\x00\n\xfbE\xfc?\x05Ű`D\al[C\xec\xe6\xf0\xed\xa1\xf1\xaa\xc3\xf5E\x87\xd1:K\xdd3@\xd7\xebk\xb7\x1c\xbe,@F\xdaV\x87oZC\xa4\xbf$\xfa\x92\x91aJM\x12\x95{\xa0\x90\xa5\xf2E\f\xaa\x85K7\xa8\xdf\xcb\x1b|\xda\xf5:\xcdJ/\xa0\xff\x03+\xbd\x80\xefZ\xe94\x93\xba\x80\xbd\xa0I]@_Ԥ:\xb0/eR\x17\xc8\xc3&\x95/\x8ac\xd1\xf6\x13\x8a\x9c\x01\xec\xff\x90\x97\xff\x90\x1b~\x91V\xbf\x03\x15y\x91\xf6?JO\xf8\x80\x89\x7f>NQ\x91\xa9\xc3L\xe0'\xfdl\xeb\xd0\xf3\xea\xe1\xd3Mh\x87\x17\xbe*\x03\xa03>\x9b a\xa3˱T\x02\x80\xa0H-\x11\xaa\xec>\x91\xc3\x1c\x0e\xc8-\x90Л\xaf\x8a\xe1\x98w\x8bG\x99p\x1cL*\u0085n\xedj\xc2\xd5g\xabm\x90\x9f\x99fRc.\x18\xbdm\xfc\xe4\x92L\x06V\xed\x1b\x89\xf6\xde\x14\xe4\x10\xcb\x01U\xc6\xfc\x1a\x12.$L*\x038:g\xab\xac\xb1\xfa\x1d\xbf\xb3[\xb1\xec\xea\xbe\xe0\xfa\x98\xf0\xdb3\xef(\x13Jy>\xa9\xd04m\xfdt\xa2\xf9\x91\xb3\x9d\xdfx\xb3\xbf%\xb6\xf7Ch\x91_\xa52\xad\xcbO0\xed\xfex\x95\xfb\x1f\xf8\x91\xdfj\xf2r\ac\xff\xad\x9f\x90\xd9\xe5~\xe1g\xabD\x13\xc1\x92\x8c\x89\xff\r\xd8\xc6\x14\xfb\xf3_\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff5\x81#\xc1!S\x00\x00"))
 }

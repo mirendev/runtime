@@ -21,6 +21,10 @@ func newLockTestClient(t *testing.T) (*deployment_v1alpha.DeploymentClient, *tes
 
 	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
 	require.NoError(t, err)
+	_, err = inmem.Client.Create(context.Background(), "v1", &core_v1alpha.AppVersion{
+		App: "app/web", Version: "v1",
+	})
+	require.NoError(t, err)
 
 	return &deployment_v1alpha.DeploymentClient{
 		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
@@ -102,8 +106,12 @@ func TestUpdateFailedDeploymentReleasesLock(t *testing.T) {
 	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
 	require.NoError(t, err)
 
-	_, err = client.UpdateFailedDeployment(ctx, first.Deployment().Id(), "build broke", "logs")
+	updated, err := client.UpdateFailedDeployment(ctx, first.Deployment().Id(), "build broke", "logs")
 	require.NoError(t, err)
+	require.True(t, updated.HasDeployment())
+	assert.Equal(t, "build broke", updated.Deployment().ErrorMessage())
+	assert.False(t, updated.Deployment().HasBuildLogs(),
+		"the deprecated request field must not put embedded logs back into responses")
 
 	blocked, err := client.GetDeployLock(ctx, "web", "prod")
 	require.NoError(t, err)
@@ -183,25 +191,24 @@ func TestDeployVersionReleasesLockWhenDone(t *testing.T) {
 	assert.False(t, res2.HasError() && res2.Error() != "", "the next deploy must not be blocked")
 }
 
-// A DeployVersion whose activation fails must still release the lock, so the
-// failure does not block the app's next deploy. SetActiveVersion is made to fail
-// by pointing at a version whose app entity does not exist.
-func TestDeployVersionFailureReleasesLock(t *testing.T) {
+// A missing app is rejected before Begin, so it must not publish either lock
+// representation as a side effect of validating the request.
+func TestDeployVersionMissingAppDoesNotCreateLock(t *testing.T) {
 	ctx := context.Background()
 	client, inmem := newLockTestClient(t)
 
-	// A version with no corresponding app entity: activation will fail.
+	// A version with no corresponding app entity fails the preflight lookup.
 	_, err := inmem.Client.Create(ctx, "ghost-v1", &core_v1alpha.AppVersion{Version: "ghost-v1"})
 	require.NoError(t, err)
 
 	res, err := client.DeployVersion(ctx, "ghost", "prod", "ghost-v1", false, nil, "", "")
 	require.NoError(t, err)
-	require.True(t, res.HasError() && res.Error() != "", "deploy should have failed to activate")
+	require.True(t, res.HasError() && res.Error() != "", "deploy should reject the missing app")
 
-	// The failure must not have stranded the lock.
+	// Validation must not have created a lock.
 	lock, err := client.GetDeployLock(ctx, "ghost", "prod")
 	require.NoError(t, err)
-	assert.False(t, lock.Held(), "a failed DeployVersion must release the lock")
+	assert.False(t, lock.Held(), "a rejected DeployVersion must not acquire the lock")
 }
 
 // The "pending-build" placeholder an older client writes must render as empty

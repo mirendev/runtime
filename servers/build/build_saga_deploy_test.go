@@ -88,9 +88,8 @@ func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 	}
 }
 
-// A build that carries deploy_cluster_id must leave exactly one deployment
-// record, active, with its app version recorded — the whole point of the saga
-// owning the lifecycle.
+// A build that carries deploy_cluster_id must leave exactly one successful
+// deployment attempt with its app version recorded. The App owns serving state.
 func TestBuildSaga_Tracked_CreatesAndActivatesDeployment(t *testing.T) {
 	ctx := context.Background()
 
@@ -110,7 +109,7 @@ func TestBuildSaga_Tracked_CreatesAndActivatesDeployment(t *testing.T) {
 	require.Len(t, records, 1, "exactly one deployment record for a tracked build")
 
 	rec := records[0]
-	assert.Equal(t, deploylifecycle.StatusActive, rec.Status())
+	assert.Equal(t, deploylifecycle.StatusSucceeded, rec.Status())
 	assert.NotEmpty(t, rec.AppVersion(), "the built version must be recorded")
 	assert.Equal(t, "prod", rec.Deployment.ClusterId)
 
@@ -146,9 +145,13 @@ func TestBuildSaga_TrackedImage_ActivatesWithoutBuildPhases(t *testing.T) {
 	require.Len(t, records, 1)
 
 	rec := records[0]
-	assert.Equal(t, deploylifecycle.StatusActive, rec.Status())
+	assert.Equal(t, deploylifecycle.StatusSucceeded, rec.Status())
 	assert.Equal(t, string(deploylifecycle.PhaseActivating), rec.Deployment.Phase)
 	assert.NotEmpty(t, rec.AppVersion(), "the direct-image version must be recorded")
+	app, _, err := h.builder.deploy.Store().AppByName(ctx, "demo")
+	require.NoError(t, err)
+	assert.Equal(t, rec.Deployment.ID, app.ActiveDeployment)
+	assert.Equal(t, rec.Deployment.Version, app.ActiveVersion)
 
 	var phases []string
 	for _, deployment := range sender.Deployments {
@@ -192,9 +195,7 @@ func TestBuildSaga_Tracked_EmitsDeploymentProgress(t *testing.T) {
 	assert.Equal(t, string(records[0].Deployment.ID), rec.Deployments[0].DeploymentID)
 }
 
-// A build with no deploy_cluster_id (an older client, or ephemeral) must leave
-// no server-owned record — the additive-safety guarantee.
-func TestBuildSaga_Untracked_CreatesNoDeployment(t *testing.T) {
+func TestBuildSaga_WithoutClusterIDStillCreatesAttempt(t *testing.T) {
 	ctx := context.Background()
 
 	h := newDeploySagaHarness(t)
@@ -209,7 +210,7 @@ func TestBuildSaga_Untracked_CreatesNoDeployment(t *testing.T) {
 
 	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
 	require.NoError(t, err)
-	assert.Empty(t, records, "a build with no DeployRequest must not create a record")
+	assert.Len(t, records, 1)
 }
 
 // A second tracked build for the same app+cluster, started while the first
@@ -256,13 +257,7 @@ func setActiveVersionThenCancel(ctx context.Context, in setActiveVersionIn) (set
 	return out, deps.builder.deploy.Cancel(ctx, string(recs[0].Deployment.ID), "cancelled mid-deploy")
 }
 
-// A deployment record that cannot settle must not roll back a deploy that is
-// already live. The record describes the deploy; it does not control it.
-//
-// Before this was fixed, activate-deployment returned the failed settle to the
-// executor, which compensated the saga, and undoSetActiveVersion put the app
-// back on the previous version — a bookkeeping write undoing a real deploy.
-func TestBuildSaga_Tracked_SettleFailureDoesNotRevertLiveDeploy(t *testing.T) {
+func TestBuildSaga_CancellationBeforeActivationFailsDeploy(t *testing.T) {
 	ctx := context.Background()
 
 	h := newDeploySagaHarnessWith(t, setActiveVersionThenCancel)
@@ -274,12 +269,11 @@ func TestBuildSaga_Tracked_SettleFailureDoesNotRevertLiveDeploy(t *testing.T) {
 		Input("deploy_cluster_id", "prod").
 		WithID("test-settle").
 		Execute(ctx)
-	require.NoError(t, err, "a failed deployment settle must not fail the build saga")
+	require.Error(t, err)
 
 	appRec, err := h.builder.appClient.GetByName(ctx, "demo")
 	require.NoError(t, err)
-	assert.NotEmpty(t, appRec.ActiveVersion,
-		"the built version must stay live; compensation would have restored the previous one")
+	assert.Empty(t, appRec.ActiveVersion)
 
 	// The cancellation is the real account of what happened, so it stands.
 	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})

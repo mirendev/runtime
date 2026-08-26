@@ -12,6 +12,7 @@ import (
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -19,7 +20,7 @@ import (
 )
 
 // newTestDeploymentServer creates a DeploymentServer with test dependencies.
-// The returned appClient uses the same in-memory entity store for SetActiveVersion calls.
+// The app client and lifecycle tracker share the same in-memory entity store.
 func newTestDeploymentServer(t *testing.T, logger *slog.Logger, inmem *testutils.InMemEntityServer) (*DeploymentServer, error) {
 	t.Helper()
 	localClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
@@ -877,13 +878,26 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Fatalf("Failed to create deployment server: %v", err)
 	}
 
-	// First create a deployment directly in entity store for testing
+	appID, err := inmem.Client.Create(ctx, "test-app", &core_v1alpha.App{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := inmem.Client.Create(ctx, "test-app-v1", &core_v1alpha.AppVersion{App: appID, Version: "v1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First create a deployment directly in entity store for testing.
 	testDeployment := &core_v1alpha.Deployment{
+		App:        appID,
+		Version:    versionID,
+		Operation:  string(deploylifecycle.OperationBuild),
+		Phase:      string(deploylifecycle.PhasePreparing),
+		StartedAt:  time.Now(),
 		AppName:    "test-app",
 		ClusterId:  "test-cluster",
 		AppVersion: "v1.0.0",
 		Status:     "in_progress",
-		Phase:      "preparing",
 		DeployedBy: core_v1alpha.DeployedBy{
 			UserId:    "test-user",
 			UserEmail: "test@example.com",
@@ -898,6 +912,10 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Fatalf("Failed to create test deployment: %v", err)
 	}
 	testDeployment.ID = deploymentId
+	_, err = server.tracker.Locks().Acquire(ctx, "test-app", string(deploymentId))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create RPC client
 	client := &deployment_v1alpha.DeploymentClient{
@@ -921,7 +939,7 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when updating completed deployment back to in_progress")
 	}
-	if !containsString(err.Error(), "cannot update deployment in active state") {
+	if !containsString(err.Error(), "cannot transition deployment from succeeded to") {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 

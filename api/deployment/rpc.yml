@@ -14,7 +14,7 @@ interfaces:
       - name: CreateDeployment
         index: 0
         doc: >
-          DEPRECATED: The build server now owns the deployment record lifecycle
+          [DEPRECATED] The build server now owns the deployment record lifecycle
           (see the build service DeployRequest). Retained so an older CLI still
           works against a newer server. Do not add new callers.
         parameters:
@@ -44,7 +44,7 @@ interfaces:
       - name: UpdateDeploymentStatus
         index: 1
         doc: >
-          DEPRECATED: superseded by server-owned deployment lifecycle. Retained
+          [DEPRECATED] superseded by server-owned deployment lifecycle. Retained
           for older CLIs. Do not add new callers.
         parameters:
           - name: deployment_id
@@ -64,7 +64,7 @@ interfaces:
       - name: UpdateDeploymentPhase
         index: 2
         doc: >
-          DEPRECATED: superseded by server-owned deployment lifecycle. Retained
+          [DEPRECATED] superseded by server-owned deployment lifecycle. Retained
           for older CLIs. Do not add new callers.
         parameters:
           - name: deployment_id
@@ -81,7 +81,7 @@ interfaces:
       - name: UpdateFailedDeployment
         index: 3
         doc: >
-          DEPRECATED: superseded by server-owned deployment lifecycle. Retained
+          [DEPRECATED] superseded by server-owned deployment lifecycle. Retained
           for older CLIs. Do not add new callers.
         parameters:
           - name: deployment_id
@@ -92,7 +92,7 @@ interfaces:
             doc: Error message describing the failure
           - name: build_logs
             type: string
-            doc: Build logs from the failed deployment
+            doc: "[DEPRECATED] accepted and ignored; build output lives in the log stream"
         results:
           - name: deployment
             type: DeploymentInfo
@@ -101,7 +101,7 @@ interfaces:
       - name: UpdateDeploymentAppVersion
         index: 4
         doc: >
-          DEPRECATED: superseded by server-owned deployment lifecycle. Retained
+          [DEPRECATED] superseded by server-owned deployment lifecycle. Retained
           for older CLIs. Do not add new callers.
         parameters:
           - name: deployment_id
@@ -364,11 +364,11 @@ types:
       - name: error_message
         type: string
         index: 10
-        doc: Error message if deployment failed (optional)
+        doc: "[DEPRECATED] Bounded failure summary retained until lifecycle errors are queryable from the log stream"
       - name: build_logs
         type: string
         index: 11
-        doc: Build logs from the deployment (especially for failures)
+        doc: "[DEPRECATED] reserved for wire compatibility; servers no longer populate it"
       - name: git_info
         type: GitInfo
         index: 12

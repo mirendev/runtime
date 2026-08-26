@@ -44,9 +44,9 @@ func seed(t *testing.T, s *Store, app, cluster string, status Status, at time.Ti
 	return string(rec.Deployment.ID)
 }
 
-// TestIndexSelection pins the index each query shape uses. Getting this wrong
-// does not break correctness — the in-memory filters still apply — it silently
-// reintroduces the full scan this type exists to remove.
+// TestIndexSelection pins the index each query shape uses. The selected index
+// determines which records reach the in-memory compatibility filter, so this is
+// a correctness choice as well as a scan-size choice during migration.
 func TestIndexSelection(t *testing.T) {
 	s := newTestStore(t)
 
@@ -61,17 +61,14 @@ func TestIndexSelection(t *testing.T) {
 			want:  entity.String(core_v1alpha.DeploymentAppNameId, "web"),
 		},
 		{
-			// A live status is bounded by app count, so it beats the app index,
-			// which grows with that app's whole deploy history. This is the
-			// activation path's query.
-			name:  "live status wins over app name",
+			name:  "app name wins over canonical status",
 			query: Query{AppName: "web", Status: StatusActive},
-			want:  entity.String(core_v1alpha.DeploymentStatusId, "active"),
+			want:  entity.String(core_v1alpha.DeploymentAppNameId, "web"),
 		},
 		{
-			name:  "in_progress is live too",
+			name:  "app name wins for in progress too",
 			query: Query{AppName: "web", Status: StatusInProgress},
-			want:  entity.String(core_v1alpha.DeploymentStatusId, "in_progress"),
+			want:  entity.String(core_v1alpha.DeploymentAppNameId, "web"),
 		},
 		{
 			// Settled statuses accumulate forever, so the app index is narrower.
@@ -83,6 +80,11 @@ func TestIndexSelection(t *testing.T) {
 			name:  "status only",
 			query: Query{Status: StatusInProgress},
 			want:  entity.String(core_v1alpha.DeploymentStatusId, "in_progress"),
+		},
+		{
+			name:  "settled status includes legacy records",
+			query: Query{Status: StatusFailed},
+			want:  entity.Ref(entity.EntityKind, core_v1alpha.KindDeployment),
 		},
 		{
 			name:  "unfiltered falls back to a kind scan",
@@ -113,6 +115,17 @@ func TestListFiltersByAppAndStatus(t *testing.T) {
 	got, err := s.List(ctx, Query{AppName: "web", Status: StatusInProgress})
 	require.NoError(t, err)
 
+	require.Len(t, got, 1)
+	assert.Equal(t, want, string(got[0].Deployment.ID))
+}
+
+func TestSettledStatusOnlyQueryIncludesLegacyRecord(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	want := seed(t, s, "web", "prod", StatusFailed, time.Now())
+
+	got, err := s.List(ctx, Query{Status: StatusFailed})
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, want, string(got[0].Deployment.ID))
 }
@@ -187,7 +200,43 @@ func TestStatusLookup(t *testing.T) {
 	_, err = s.Status(ctx, "deployment/missing")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, cond.ErrNotFound{}),
-		"a missing record must report NotFound so the lock can steal from it; got %T", err)
+		"a missing record must remain distinguishable from an empty status; got %T", err)
+}
+
+func TestAdmissionReservationIsPrivateUntilPublished(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	id := entity.Id("deployment/reserved")
+
+	revision, err := s.ReserveAdmission(ctx, id)
+	require.NoError(t, err)
+	assert.Positive(t, revision)
+
+	status, err := s.Status(ctx, string(id))
+	require.NoError(t, err)
+	assert.Equal(t, Status(admissionReservationStatus), status)
+	assert.False(t, status.Terminal(),
+		"an older runtime must not steal the compatibility lock during admission")
+
+	listed, err := s.List(ctx, Query{})
+	require.NoError(t, err)
+	assert.Empty(t, listed, "an admission reservation is not deployment history")
+
+	dep := &core_v1alpha.Deployment{
+		ID:        id,
+		AppName:   "web",
+		Operation: string(OperationBuild),
+		StartedAt: time.Now(),
+		Status:    string(StatusInProgress),
+	}
+	rec, err := s.PublishAdmission(ctx, dep, revision)
+	require.NoError(t, err)
+	assert.Equal(t, StatusInProgress, rec.Status())
+
+	listed, err = s.List(ctx, Query{})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, id, listed[0].Deployment.ID)
 }
 
 // The Store satisfies the lock manager's StatusLookup without an adapter, which
@@ -241,10 +290,10 @@ func TestMarkPreviousActiveAs(t *testing.T) {
 
 	require.NoError(t, s.MarkPreviousActiveAs(ctx, "web", incoming, StatusSucceeded))
 
-	assertStatus(t, s, previous, StatusSucceeded)
-	assertStatus(t, s, incoming, StatusActive)
-	assertStatus(t, s, otherApp, StatusActive)
-	assertStatus(t, s, otherClusterString, StatusSucceeded)
+	assertLegacyStatus(t, s, previous, StatusSucceeded)
+	assertLegacyStatus(t, s, incoming, StatusActive)
+	assertLegacyStatus(t, s, otherApp, StatusActive)
+	assertLegacyStatus(t, s, otherClusterString, StatusSucceeded)
 
 	rec, err := s.Get(ctx, previous)
 	require.NoError(t, err)
@@ -261,7 +310,7 @@ func TestMarkPreviousActiveAsRolledBack(t *testing.T) {
 
 	require.NoError(t, s.MarkPreviousActiveAs(ctx, "web", incoming, StatusRolledBack))
 
-	assertStatus(t, s, previous, StatusRolledBack)
+	assertLegacyStatus(t, s, previous, StatusRolledBack)
 }
 
 // Only active deployments are settled. An in-progress one is someone else's
@@ -276,7 +325,7 @@ func TestMarkPreviousActiveAsLeavesInProgressAlone(t *testing.T) {
 
 	require.NoError(t, s.MarkPreviousActiveAs(ctx, "web", incoming, StatusSucceeded))
 
-	assertStatus(t, s, running, StatusInProgress)
+	assertLegacyStatus(t, s, running, StatusInProgress)
 }
 
 func TestPutRejectsStaleRevision(t *testing.T) {
@@ -308,10 +357,9 @@ func ids(records []*Record) []string {
 	return out
 }
 
-func assertStatus(t *testing.T, s *Store, id string, want Status) {
+func assertLegacyStatus(t *testing.T, s *Store, id string, want Status) {
 	t.Helper()
-
 	rec, err := s.Get(context.Background(), id)
 	require.NoError(t, err)
-	assert.Equal(t, want, rec.Status(), "status of %s", id)
+	assert.Equal(t, string(want), rec.Deployment.Status, "legacy status of %s", id)
 }

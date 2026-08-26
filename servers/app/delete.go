@@ -28,7 +28,10 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 	// 3. Launcher creates new pools
 	// 4. We delete the app
 	// 5. New pools are orphaned and keep trying to launch sandboxes
-	if err := client.Patch(ctx, appId, 0, entity.Ref(core_v1alpha.AppActiveVersionId, entity.Id(""))); err != nil {
+	if err := client.Patch(ctx, appId, 0,
+		entity.Ref(core_v1alpha.AppActiveVersionId, entity.Id("")),
+		entity.Ref(core_v1alpha.AppActiveDeploymentId, entity.Id("")),
+	); err != nil {
 		log.Warn("failed to clear active version (app may already be deleted)", "appId", appId, "error", err)
 		// Continue anyway - the app might already be partially deleted
 	}

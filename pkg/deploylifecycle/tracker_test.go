@@ -4,14 +4,18 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func newTestTracker(t *testing.T) (*Tracker, *fakeClock) {
@@ -28,11 +32,31 @@ func newTestTracker(t *testing.T) (*Tracker, *fakeClock) {
 	tracker.store.now = clock.Now
 	tracker.locks.now = clock.Now
 
+	ensureTestApp(t, tracker, "web")
+	for _, id := range []string{"app_version/v1", "app_version/v2"} {
+		_, err := inmem.EAC.Ensure(context.Background(), []entity.Attr{
+			entity.Ref(entity.DBId, entity.Id(id)),
+			entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion),
+			entity.Ref(core_v1alpha.AppVersionAppId, "app/web"),
+		})
+		require.NoError(t, err)
+	}
+
 	return tracker, clock
+}
+
+func ensureTestApp(t *testing.T, tr *Tracker, app string) {
+	t.Helper()
+	_, err := tr.store.eac.Ensure(context.Background(), []entity.Attr{
+		entity.Ref(entity.DBId, entity.Id("app/"+app)),
+		entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
+	})
+	require.NoError(t, err)
 }
 
 func begin(t *testing.T, tr *Tracker, app, cluster string) string {
 	t.Helper()
+	ensureTestApp(t, tr, app)
 
 	rec, err := tr.Begin(context.Background(), BeginParams{AppName: app, ClusterID: cluster})
 	require.NoError(t, err)
@@ -51,6 +75,9 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, StatusInProgress, rec.Status())
+	assert.Empty(t, rec.Deployment.Outcome, "an attempt has no outcome until it finishes")
+	assert.Equal(t, string(StatusInProgress), rec.Deployment.Status)
+	assert.Equal(t, entity.Id("app/web"), rec.AppID())
 	assert.Equal(t, string(PhasePreparing), rec.Deployment.Phase)
 	assert.Equal(t, "abc123", rec.Deployment.GitInfo.Sha)
 	assert.Equal(t, clock.Now().Format(time.RFC3339), rec.Deployment.DeployedBy.Timestamp)
@@ -61,8 +88,29 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, string(rec.Deployment.ID), holder.DeploymentID)
 }
 
-// The whole point of taking the lock inside Begin: the second caller must not
-// end up with a record it will never be able to finish.
+func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
+		Subject: "user-42", Method: rpc.AuthMethodOIDC,
+	})
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
+	require.NoError(t, err)
+	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
+	assert.Equal(t, "oidc", rec.Deployment.DeployedBy.AuthMethod)
+}
+
+func TestBeginPreservesCallerIdentityWithoutAuthenticatedOverride(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	rec, err := tr.Begin(context.Background(), BeginParams{
+		AppName: "web", Operation: OperationBuild,
+		DeployedBy: core_v1alpha.DeployedBy{Subject: "wired-subject", AuthMethod: "wired-method"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "wired-subject", rec.Deployment.DeployedBy.Subject)
+	assert.Equal(t, "wired-method", rec.Deployment.DeployedBy.AuthMethod)
+}
+
+// A losing contender must not end up with a record it can never finish.
 func TestBeginLeavesNoRecordWhenLockIsHeld(t *testing.T) {
 	ctx := context.Background()
 	tr, _ := newTestTracker(t)
@@ -79,9 +127,14 @@ func TestBeginLeavesNoRecordWhenLockIsHeld(t *testing.T) {
 	all, err := tr.Store().List(ctx, Query{AppName: "web"})
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "the losing deploy must not leave a record behind")
+
+	reservations, err := tr.store.eac.List(ctx,
+		entity.String(core_v1alpha.DeploymentStatusId, admissionReservationStatus))
+	require.NoError(t, err)
+	assert.Empty(t, reservations.Values(), "the losing deploy must discard its private reservation")
 }
 
-func TestBeginRequiresAppAndCluster(t *testing.T) {
+func TestBeginRequiresApp(t *testing.T) {
 	ctx := context.Background()
 	tr, _ := newTestTracker(t)
 
@@ -89,7 +142,20 @@ func TestBeginRequiresAppAndCluster(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = tr.Begin(ctx, BeginParams{AppName: "web"})
+	require.NoError(t, err, "cluster_id is legacy display metadata, not identity")
+}
+
+func TestBeginConfigChangeDoesNotCreateMissingApp(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	_, err := tr.Begin(ctx, BeginParams{
+		AppName: "missing", Operation: OperationConfigChange,
+	})
 	require.Error(t, err)
+
+	_, _, getErr := tr.store.AppByName(ctx, "missing")
+	require.Error(t, getErr)
 }
 
 func TestSetPhase(t *testing.T) {
@@ -112,7 +178,7 @@ func TestSetPhaseOnSettledDeploymentIsConflict(t *testing.T) {
 	tr, _ := newTestTracker(t)
 
 	id := begin(t, tr, "web", "prod")
-	require.NoError(t, tr.Fail(ctx, id, "build broke", ""))
+	require.NoError(t, tr.Fail(ctx, id, "build broke"))
 
 	err := tr.SetPhase(ctx, id, PhaseBuilding)
 	require.Error(t, err)
@@ -169,7 +235,10 @@ func TestActivateSettlesPreviousAndReleasesLock(t *testing.T) {
 
 	secondRec, err := tr.Store().Get(ctx, second)
 	require.NoError(t, err)
-	assert.Equal(t, StatusActive, secondRec.Status())
+	assert.Equal(t, StatusSucceeded, secondRec.Status())
+	assert.Equal(t, string(StatusSucceeded), secondRec.Deployment.Outcome)
+	assert.Equal(t, string(StatusActive), secondRec.Deployment.Status,
+		"a downgraded runtime still sees the current successful attempt as active")
 	assert.NotEmpty(t, secondRec.Deployment.CompletedAt)
 }
 
@@ -187,22 +256,22 @@ func TestActivateRollbackSettlesPreviousAsRolledBack(t *testing.T) {
 
 	firstRec, err := tr.Store().Get(ctx, first)
 	require.NoError(t, err)
-	assert.Equal(t, StatusRolledBack, firstRec.Status(),
-		"the version we rolled away from was not a success")
+	assert.Equal(t, StatusSucceeded, firstRec.Status(),
+		"serving history does not rewrite an attempt's successful outcome")
+	assert.Equal(t, string(StatusRolledBack), firstRec.Deployment.Status)
 }
 
-func TestFailRecordsErrorAndReleasesLock(t *testing.T) {
+func TestFailRecordsBoundedSummaryAndReleasesLock(t *testing.T) {
 	ctx := context.Background()
 	tr, _ := newTestTracker(t)
 
 	id := begin(t, tr, "web", "prod")
-	require.NoError(t, tr.Fail(ctx, id, "compile error", "line 1\nline 2"))
+	require.NoError(t, tr.Fail(ctx, id, "compile error"))
 
 	rec, err := tr.Store().Get(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, StatusFailed, rec.Status())
 	assert.Equal(t, "compile error", rec.Deployment.ErrorMessage)
-	assert.Equal(t, "line 1\nline 2", rec.Deployment.BuildLogs)
 	assert.NotEmpty(t, rec.Deployment.CompletedAt)
 
 	blocking, err := tr.Locks().Blocking(ctx, "web")
@@ -210,23 +279,35 @@ func TestFailRecordsErrorAndReleasesLock(t *testing.T) {
 	assert.Nil(t, blocking, "a failed deploy must not keep the lock")
 }
 
+func TestFailTruncatesSummaryAtUTF8Boundary(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	id := begin(t, tr, "web", "prod")
+	require.NoError(t, tr.Fail(ctx, id, strings.Repeat("界", maxFailureSummaryBytes)))
+
+	rec, err := tr.Store().Get(ctx, id)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(rec.Deployment.ErrorMessage), maxFailureSummaryBytes)
+	assert.True(t, utf8.ValidString(rec.Deployment.ErrorMessage))
+	assert.Contains(t, rec.Deployment.ErrorMessage, failureSummaryEllipsis)
+}
+
 // A cancelled deploy whose build then dies must still read as cancelled: the
 // operator's action is the real account of what happened.
-func TestFailAfterCancelKeepsCancelledButRecordsTheError(t *testing.T) {
+func TestFailAfterCancelKeepsCancelledReason(t *testing.T) {
 	ctx := context.Background()
 	tr, _ := newTestTracker(t)
 
 	id := begin(t, tr, "web", "prod")
 	require.NoError(t, tr.Cancel(ctx, id, "operator cancelled"))
-	require.NoError(t, tr.Fail(ctx, id, "build aborted", "some logs"))
+	require.NoError(t, tr.Fail(ctx, id, "build aborted"))
 
 	rec, err := tr.Store().Get(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, StatusCancelled, rec.Status())
 	assert.Equal(t, "operator cancelled", rec.Deployment.ErrorMessage,
 		"the cancellation reason is the real account and must survive a later build failure")
-	assert.Equal(t, "some logs", rec.Deployment.BuildLogs,
-		"the build logs are still worth keeping for diagnosis")
 }
 
 // Refusing active -> failed is correct: the version is live, so the deploy did
@@ -239,13 +320,13 @@ func TestFailAfterActivateIsRefused(t *testing.T) {
 	require.NoError(t, tr.SetAppVersion(ctx, id, "app_version/v1"))
 	require.NoError(t, tr.Activate(ctx, id))
 
-	err := tr.Fail(ctx, id, "late error", "")
+	err := tr.Fail(ctx, id, "late error")
 	require.Error(t, err)
 	assert.True(t, isConflict(err), "got %T: %v", err, err)
 
 	rec, err := tr.Store().Get(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, StatusActive, rec.Status(), "the live deployment must stay active")
+	assert.Equal(t, StatusSucceeded, rec.Status(), "the live deployment must stay successful")
 }
 
 // The deferred-handler form of the same situation: fire unconditionally, and a
@@ -257,7 +338,7 @@ func TestFailIfUnsettled(t *testing.T) {
 	t.Run("records a real failure", func(t *testing.T) {
 		id := begin(t, tr, "web", "prod")
 
-		require.NoError(t, tr.FailIfUnsettled(ctx, id, "compile error", "logs"))
+		require.NoError(t, tr.FailIfUnsettled(ctx, id, "compile error"))
 
 		rec, err := tr.Store().Get(ctx, id)
 		require.NoError(t, err)
@@ -270,73 +351,20 @@ func TestFailIfUnsettled(t *testing.T) {
 		require.NoError(t, tr.SetAppVersion(ctx, id, "app_version/v1"))
 		require.NoError(t, tr.Activate(ctx, id))
 
-		require.NoError(t, tr.FailIfUnsettled(ctx, id, "late error", "logs"),
+		require.NoError(t, tr.FailIfUnsettled(ctx, id, "late error"),
 			"a defer firing after a successful deploy is not an error")
 
 		rec, err := tr.Store().Get(ctx, id)
 		require.NoError(t, err)
-		assert.Equal(t, StatusActive, rec.Status())
+		assert.Equal(t, StatusSucceeded, rec.Status())
 		assert.Empty(t, rec.Deployment.ErrorMessage,
 			"a successful deploy must not be annotated with a spurious error")
 	})
 
 	t.Run("still surfaces errors that are not about being settled", func(t *testing.T) {
-		err := tr.FailIfUnsettled(ctx, "deployment/missing", "boom", "")
+		err := tr.FailIfUnsettled(ctx, "deployment/missing", "boom")
 		require.Error(t, err, "a missing deployment is a real problem, not a settled one")
 	})
-}
-
-// ReleaseLock is the backstop for a deploy whose activation settle failed after
-// the version already went live: it frees the lock without settling the record,
-// so the next deploy is not blocked for the full lock TTL.
-func TestReleaseLockFreesAStuckDeployment(t *testing.T) {
-	ctx := context.Background()
-	tr, _ := newTestTracker(t)
-
-	stuck := begin(t, tr, "web", "prod") // in_progress, lock held
-
-	// While that record holds the lock and has not settled, the next deploy is
-	// blocked — this is the stall the backstop exists to prevent.
-	_, err := tr.Begin(ctx, BeginParams{AppName: "web", ClusterID: "prod"})
-	require.ErrorIs(t, err, ErrLockHeld)
-
-	require.NoError(t, tr.ReleaseLock(ctx, stuck))
-
-	// The record is untouched (still in_progress) but the lock is free.
-	rec, err := tr.Store().Get(ctx, stuck)
-	require.NoError(t, err)
-	assert.Equal(t, StatusInProgress, rec.Status(), "ReleaseLock must not change the record")
-
-	next, err := tr.Begin(ctx, BeginParams{AppName: "web", ClusterID: "prod"})
-	require.NoError(t, err, "the next deploy must proceed once the lock is released")
-	assert.NotEqual(t, stuck, string(next.Deployment.ID))
-}
-
-// ReleaseLock must not free a lock a newer deployment already holds.
-func TestReleaseLockIsHolderGuarded(t *testing.T) {
-	ctx := context.Background()
-	tr, clock := newTestTracker(t)
-
-	first := begin(t, tr, "web", "prod")
-
-	// A second deploy steals the lock once the first's expires.
-	clock.Advance(DefaultLockTTL + time.Second)
-	second := begin(t, tr, "web", "prod")
-
-	// The first deployment releasing its (now superseded) lock must be a no-op.
-	require.NoError(t, tr.ReleaseLock(ctx, first))
-
-	holder, err := tr.Locks().Get(ctx, "web")
-	require.NoError(t, err)
-	assert.Equal(t, second, holder.DeploymentID, "the second deploy must still hold the lock")
-}
-
-func TestReleaseLockUnknownDeployment(t *testing.T) {
-	ctx := context.Background()
-	tr, _ := newTestTracker(t)
-
-	err := tr.ReleaseLock(ctx, "deployment/missing")
-	require.Error(t, err, "cannot release a lock for a record that does not exist")
 }
 
 func TestCancelReleasesLock(t *testing.T) {
@@ -378,7 +406,7 @@ func TestOperationsOnUnknownDeployment(t *testing.T) {
 	assert.Error(t, tr.SetPhase(ctx, missing, PhaseBuilding))
 	assert.Error(t, tr.SetAppVersion(ctx, missing, "app_version/v1"))
 	assert.Error(t, tr.Activate(ctx, missing))
-	assert.Error(t, tr.Fail(ctx, missing, "boom", ""))
+	assert.Error(t, tr.Fail(ctx, missing, "boom"))
 	assert.Error(t, tr.Cancel(ctx, missing, ""))
 
 	assert.Error(t, tr.SetPhase(ctx, "", PhaseBuilding), "an empty id is not a lookup")
@@ -397,7 +425,7 @@ func TestAbandonedLockIsReclaimedOnceRecordIsTerminal(t *testing.T) {
 	// lock in place.
 	rec, err := tr.Store().Get(ctx, id)
 	require.NoError(t, err)
-	rec.Deployment.Status = string(StatusFailed)
+	rec.setOutcome(StatusFailed)
 	require.NoError(t, tr.Store().Put(ctx, rec))
 
 	next, err := tr.Begin(ctx, BeginParams{AppName: "web", ClusterID: "prod"})
@@ -454,7 +482,67 @@ func TestBeginRecordsProvenanceForRollback(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, source, rec.Deployment.SourceDeploymentId)
+	assert.Equal(t, source, rec.SourceDeploymentID())
 	assert.Equal(t, "app_version/v1", rec.AppVersion(),
 		"a rollback knows its version up front, unlike a build")
+}
+
+func TestReconcileSettlesActivationCrashWindow(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+	previous := begin(t, tr, "web", "prod")
+	require.NoError(t, tr.SetAppVersion(ctx, previous, "app_version/v1"))
+	require.NoError(t, tr.Activate(ctx, previous))
+
+	id := begin(t, tr, "web", "prod")
+	require.NoError(t, tr.SetAppVersion(ctx, id, "app_version/v2"))
+
+	rec, err := tr.Store().Get(ctx, id)
+	require.NoError(t, err)
+	app, revision, err := tr.Store().AppByName(ctx, "web")
+	require.NoError(t, err)
+	require.NoError(t, tr.Store().SetActivePointers(ctx, app.ID, revision, "app_version/v2", rec.Deployment.ID))
+
+	require.NoError(t, tr.Reconcile(ctx, id))
+	settled, err := tr.Store().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, StatusSucceeded, settled.Status())
+	assert.False(t, settled.FinishedAt().IsZero())
+	old, err := tr.Store().Get(ctx, previous)
+	require.NoError(t, err)
+	assert.Equal(t, string(StatusSucceeded), old.Deployment.Status,
+		"reconciliation must retire the previous legacy-active record")
+}
+
+func TestReconcileInterruptsExpiredAttemptWithoutLock(t *testing.T) {
+	ctx := context.Background()
+	tr, clock := newTestTracker(t)
+	id := begin(t, tr, "web", "prod")
+	require.NoError(t, tr.Locks().Release(ctx, "web", id))
+	clock.Advance(DefaultLockTTL + time.Second)
+
+	require.NoError(t, tr.Reconcile(ctx, id))
+	settled, err := tr.Store().Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, StatusInterrupted, settled.Status())
+}
+
+func TestReconcileInterruptsAttemptAfterClaimIsStolen(t *testing.T) {
+	ctx := context.Background()
+	tr, clock := newTestTracker(t)
+	first := begin(t, tr, "web", "prod")
+
+	clock.Advance(DefaultLockTTL + time.Second)
+	second := begin(t, tr, "web", "prod")
+	require.NotEqual(t, first, second)
+
+	require.NoError(t, tr.Reconcile(ctx, first))
+	settled, err := tr.Store().Get(ctx, first)
+	require.NoError(t, err)
+	assert.Equal(t, StatusInterrupted, settled.Status())
+
+	holder, err := tr.Locks().Get(ctx, "web")
+	require.NoError(t, err)
+	assert.Equal(t, second, holder.DeploymentID,
+		"reconciling the old attempt must preserve its successor's lock")
 }

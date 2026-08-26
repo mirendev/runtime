@@ -1082,22 +1082,11 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	string,
 	error,
 ) {
-	var appRec core_v1alpha.App
-
-	err := b.ec.Get(ctx, name, &appRec)
+	app, err := b.ensureApp(ctx, name)
 	if err != nil {
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			return nil, nil, core_v1alpha.ConfigSpec{}, "", err
-		}
-
-		appRec.Project = "project/default"
-
-		id, err := b.ec.Create(ctx, name, &appRec)
-		if err != nil {
-			return nil, nil, core_v1alpha.ConfigSpec{}, "", err
-		}
-		appRec.ID = id
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 	}
+	appRec := *app
 
 	var currentCfg core_v1alpha.ConfigSpec
 
@@ -1139,6 +1128,30 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 	av.AdminToken = idgen.GenAdminToken()
 
 	return &appRec, &av, currentCfg, art, nil
+}
+
+// ensureApp makes the deployment's canonical app reference available before
+// the build takes its app-scoped lock. It preserves nextVersion's historical
+// create-on-first-deploy behavior.
+func (b *Builder) ensureApp(ctx context.Context, name string) (*core_v1alpha.App, error) {
+	var appRec core_v1alpha.App
+	if err := b.ec.Get(ctx, name, &appRec); err == nil {
+		return &appRec, nil
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
+		return nil, err
+	}
+
+	appRec.Project = "project/default"
+	id, err := b.ec.Create(ctx, name, &appRec)
+	if err != nil {
+		// A concurrent first deploy may have created it between Get and Create.
+		if getErr := b.ec.Get(ctx, name, &appRec); getErr == nil {
+			return &appRec, nil
+		}
+		return nil, err
+	}
+	appRec.ID = id
+	return &appRec, nil
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {
@@ -1814,6 +1827,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 	mrv.ConfigVersion = cvid
 	mrv.Config = core_v1alpha.Config{}
+	deploy.setSource(mrv)
 
 	id, err := b.ec.Create(createVerCtx, mrv.Version, mrv)
 	if err != nil {
@@ -1863,15 +1877,6 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			}
 		}
 
-		b.Log.Info("updating app entity with new version", "app", name, "version", mrv.Version)
-		err = b.appClient.SetActiveVersion(activateCtx, name, string(id))
-		if err != nil {
-			activateSpan.RecordError(err)
-			activateSpan.SetStatus(codes.Error, err.Error())
-			activateSpan.End()
-			return nil, fmt.Errorf("error updating app entity: %w", err)
-		}
-
 		// Apply a workload_role declared in app.toml (app-scoped only).
 		if err := b.applyWorkloadRole(activateCtx, name, ac); err != nil {
 			activateSpan.RecordError(err)
@@ -1879,10 +1884,15 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 			activateSpan.End()
 			return nil, err
 		}
+		// Swing active_version and active_deployment together. This is the
+		// activation itself; the attempt is made terminal immediately afterwards.
+		if err := deploy.activate(activateCtx); err != nil {
+			activateSpan.RecordError(err)
+			activateSpan.SetStatus(codes.Error, err.Error())
+			activateSpan.End()
+			return nil, fmt.Errorf("error activating deployment: %w", err)
+		}
 		activateSpan.End()
-
-		// The new version is running: settle the record and release the lock.
-		deploy.activate(ctx)
 
 		b.Log.Info("app version updated", "app", name, "version", mrv.Version)
 

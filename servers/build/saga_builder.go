@@ -250,13 +250,19 @@ func (s *SagaBuilder) startBuild(
 		}
 	}
 
-	// Seeding deploy_cluster_id is what turns on the server-owned deployment
-	// record: the begin-deployment action skips without it. Absent for older
-	// clients (no DeployRequest) and for ephemeral builds.
-	if deployReq != nil && eph == nil {
-		sb = sb.Input("deploy_cluster_id", deployReq.ClusterId())
-		if gitJSON := marshalDeployGitInfo(deployReq); gitJSON != "" {
-			sb = sb.Input("deploy_git_info_json", gitJSON)
+	// Every non-ephemeral build is an attempt. Seed authenticated identity into
+	// the durable saga inputs because a recovered action no longer has the
+	// initiating RPC context.
+	if eph == nil || eph.label == "" {
+		if deployReq != nil {
+			sb = sb.Input("deploy_cluster_id", deployReq.ClusterId())
+			if gitJSON := marshalDeployGitInfo(deployReq); gitJSON != "" {
+				sb = sb.Input("deploy_git_info_json", gitJSON)
+			}
+		}
+		if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
+			sb = sb.Input("deploy_subject", identity.Subject).
+				Input("deploy_auth_method", string(identity.Method))
 		}
 	}
 
@@ -310,7 +316,7 @@ func (s *SagaBuilder) settleAbandonedDeployment(ctx context.Context, executionID
 		return
 	}
 
-	if err := s.inner.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, cause.Error(), ""); err != nil {
+	if err := s.inner.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, cause.Error()); err != nil {
 		s.log.Error("failed to settle deployment after saga failure",
 			"deployment_id", out.DeploymentID, "error", err)
 	}

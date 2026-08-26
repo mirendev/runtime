@@ -48,9 +48,9 @@ type buildImageIn struct {
 	// Empty when the user didn't pass any, so optional.
 	CLIEnvVars []*build_v1alpha.EnvironmentVariable `json:"cli_env_vars,omitempty" saga:"cli_env_vars,optional"`
 	AppID      string                               `json:"app_id" saga:"app_id"`
-	// DeploymentID is empty for an untracked build. Consuming it also anchors
-	// this action after begin-deployment, so the deploy lock is taken before
-	// any buildkit work starts.
+	// Consuming DeploymentID anchors this action after begin-deployment, so the
+	// deploy lock is taken before any buildkit work starts. It is empty only for
+	// ephemeral builds and sagas created by an older runtime.
 	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 

@@ -29,7 +29,7 @@ type coordinatorBoot struct {
 	output    boot.Output[coordinatorBootOutput]
 }
 
-func coordinatorInputs(options StartOptions, resolver netresolve.Resolver, secrets *secret.Registry, address string) coordinatorBootInputs {
+func coordinatorInputs(options StartOptions, resolver netresolve.Resolver, secrets *secret.Registry, awaitDeploymentAttemptInitialSweep func(context.Context) error, address string) coordinatorBootInputs {
 	config := options.Config
 	appVersionRetentionPeriod, err := units.ParseDuration(config.AppVersion.GetRetentionPeriod())
 	if err != nil {
@@ -62,21 +62,22 @@ func coordinatorInputs(options StartOptions, resolver netresolve.Resolver, secre
 	}
 
 	return coordinatorBootInputs{config: coordinate.CoordinatorConfig{
-		Address:                   address,
-		EtcdEndpoints:             append([]string(nil), config.Etcd.Endpoints...),
-		Prefix:                    config.Etcd.GetPrefix(),
-		DataPath:                  config.Server.GetDataPath(),
-		AdditionalNames:           append([]string(nil), config.TLS.AdditionalNames...),
-		AcmeEmail:                 config.TLS.GetAcmeEmail(),
-		AcmeDNSProvider:           config.TLS.GetAcmeDNSProvider(),
-		Resolver:                  resolver,
-		TempDir:                   os.TempDir(),
-		HTTPRequestTimeout:        config.Server.HTTPRequestTimeoutDuration(),
-		Secrets:                   secrets,
-		AppVersionRetentionCount:  config.AppVersion.GetRetentionCount(),
-		AppVersionRetentionPeriod: appVersionRetentionPeriod,
-		SagaRetentionPeriod:       sagaRetentionPeriod,
-		SecretKeyRotationPeriod:   secretKeyRotationPeriod,
+		Address:                            address,
+		EtcdEndpoints:                      append([]string(nil), config.Etcd.Endpoints...),
+		Prefix:                             config.Etcd.GetPrefix(),
+		DataPath:                           config.Server.GetDataPath(),
+		AdditionalNames:                    append([]string(nil), config.TLS.AdditionalNames...),
+		AcmeEmail:                          config.TLS.GetAcmeEmail(),
+		AcmeDNSProvider:                    config.TLS.GetAcmeDNSProvider(),
+		Resolver:                           resolver,
+		TempDir:                            os.TempDir(),
+		HTTPRequestTimeout:                 config.Server.HTTPRequestTimeoutDuration(),
+		Secrets:                            secrets,
+		AwaitDeploymentAttemptInitialSweep: awaitDeploymentAttemptInitialSweep,
+		AppVersionRetentionCount:           config.AppVersion.GetRetentionCount(),
+		AppVersionRetentionPeriod:          appVersionRetentionPeriod,
+		SagaRetentionPeriod:                sagaRetentionPeriod,
+		SecretKeyRotationPeriod:            secretKeyRotationPeriod,
 	}}
 }
 

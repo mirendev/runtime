@@ -48,6 +48,7 @@ import (
 	artifactctrl "miren.dev/runtime/controllers/artifact"
 	certctrl "miren.dev/runtime/controllers/certificate"
 	deploymentctrl "miren.dev/runtime/controllers/deployment"
+	deploymentattemptsctrl "miren.dev/runtime/controllers/deploymentattempts"
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
 	keyrotationctrl "miren.dev/runtime/controllers/keyrotation"
@@ -171,6 +172,10 @@ type CoordinatorConfig struct {
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// AwaitDeploymentAttemptInitialSweep gates the first entity-sync snapshot
+	// until deployment records have completed one clean migration pass.
+	AwaitDeploymentAttemptInitialSweep func(context.Context) error
 
 	// Secrets holds the registered secret backends. The caller builds it so the
 	// runner sharing this process materializes through the same registry the
@@ -386,6 +391,7 @@ type Coordinator struct {
 
 	state *rpc.State
 	eac   *esv1.EntityAccessClient // Entity access client for querying entities
+	store entity.Store
 
 	aa            activator.AppActivator
 	spm           *sandboxpool.Manager
@@ -448,6 +454,16 @@ func (c *Coordinator) SandboxPoolManager() *sandboxpool.Manager {
 
 func (c *Coordinator) HttpIngress() *httpingress.Server {
 	return c.hs
+}
+
+// NewDeploymentAttemptController returns the migration controller after the
+// coordinator has opened its entity store. The caller owns its lifecycle and
+// receives a callback after the controller's first clean sweep.
+func (c *Coordinator) NewDeploymentAttemptController(initialSweepComplete func()) (*deploymentattemptsctrl.Controller, error) {
+	if c.store == nil || c.eac == nil {
+		return nil, errors.New("coordinator entity store is not ready")
+	}
+	return deploymentattemptsctrl.New(c.Log, c.store, c.eac, initialSweepComplete), nil
 }
 
 // RecoverBuildSagas resumes in-flight build sagas left by a previous
@@ -1034,6 +1050,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to create etcd store", "error", err)
 		return err
 	}
+	c.store = etcdStore
 
 	err = schema.Apply(ctx, etcdStore)
 	if err != nil {

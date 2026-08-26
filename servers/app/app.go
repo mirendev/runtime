@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	appclient "miren.dev/runtime/api/app"
@@ -20,6 +21,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
@@ -47,6 +49,9 @@ type AppInfo struct {
 	// Secrets resolves backend-sourced variables so a ConfigVersion minted by an
 	// env change records the exact secret version it saw.
 	Secrets secret.Resolver
+	Deploy  *deploylifecycle.Tracker
+
+	deployOnce sync.Once
 }
 
 func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage, mem *metrics.MemoryUsage, http *metrics.HTTPMetrics, secrets secret.Resolver) *AppInfo {
@@ -59,6 +64,7 @@ func NewAppInfo(log *slog.Logger, ec *entityserver.Client, cpu *metrics.CPUUsage
 		HTTP: http,
 
 		Secrets: secrets,
+		Deploy:  deploylifecycle.NewTracker(log, ec.EAC()),
 	}
 }
 
@@ -316,12 +322,25 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	attempt, err := r.deployTracker().Begin(ctx, deploylifecycle.BeginParams{
+		AppName: name, Operation: deploylifecycle.OperationConfigChange,
+	})
+	if err != nil {
+		return err
+	}
+	attemptID := string(attempt.Deployment.ID)
+	settled := false
+	defer func() {
+		if !settled {
+			_ = r.deployTracker().FailIfUnsettled(context.WithoutCancel(ctx), attemptID, "configuration change failed")
+		}
+	}()
 
-	// The read-merge-write below is retried under optimistic concurrency
-	// control: the active_version swing is guarded by a CAS on the app revision,
-	// so a concurrent writer (another SetConfiguration, an env mutation, or the
-	// addon controller injecting addon vars) that swings active_version first is
-	// detected and re-merged instead of silently clobbered.
+	// The attempt lock serializes this mutation with lifecycle-aware deploy and
+	// configuration writers. The read-merge-write still keeps its original OCC
+	// guard for downgrade-window writers that only swing active_version: if the
+	// app revision changes after the base config is read, activation conflicts and
+	// the mutation is rebuilt from the winner instead of silently clobbering it.
 	//
 	// maxAttempts is a live-lock backstop, not an expected limit: there are only
 	// ever a handful of concurrent config writers per app, so it is set high
@@ -497,9 +516,10 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 		// Swing active_version under OCC. A conflict means another writer got
 		// there first, so re-read and re-merge on the next iteration.
-		err = r.EC.Patch(ctx, appRec.ID, appRev,
-			entity.Ref(core_v1alpha.AppActiveVersionId, avid),
-		)
+		err = r.deployTracker().SetAppVersion(ctx, attemptID, string(avid))
+		if err == nil {
+			err = r.deployTracker().ActivateAtRevision(ctx, attemptID, appRev)
+		}
 		if err != nil {
 			if errors.Is(err, cond.ErrConflict{}) {
 				// This attempt lost the race, so the version pair we just minted
@@ -518,6 +538,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			}
 			return fmt.Errorf("error updating app entity: %w", err)
 		}
+		settled = true
 
 		state.Results().SetVersionId(appVer.Version)
 		if sid := r.versionShortId(ctx, string(avid)); sid != "" {
@@ -714,8 +735,22 @@ func (r *AppInfo) SetWorkloadRole(ctx context.Context, state *app_v1alpha.CrudSe
 }
 
 func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.EnvVarInput, service string) (string, error) {
-	result, err := appclient.SetEnvVars(ctx, r.EC, r.Secrets, name, nil, vars, service)
+	attempt, err := r.deployTracker().Begin(ctx, deploylifecycle.BeginParams{
+		AppName: name, Operation: deploylifecycle.OperationConfigChange,
+	})
 	if err != nil {
+		return "", err
+	}
+	attemptID := string(attempt.Deployment.ID)
+	activate := func(ctx context.Context, _ *core_v1alpha.App, revision int64, version entity.Id) error {
+		if err := r.deployTracker().SetAppVersion(ctx, attemptID, string(version)); err != nil {
+			return err
+		}
+		return r.deployTracker().ActivateAtRevision(ctx, attemptID, revision)
+	}
+	result, err := appclient.SetEnvVarsWithActivator(ctx, r.EC, r.Secrets, name, nil, vars, service, activate)
+	if err != nil {
+		_ = r.deployTracker().FailIfUnsettled(context.WithoutCancel(ctx), attemptID, err.Error())
 		return "", err
 	}
 	return result.VersionID, nil
@@ -806,8 +841,22 @@ func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDelet
 		return rpc.AppAccessError(ctx, args.App())
 	}
 
-	result, err := appclient.DeleteEnvVars(ctx, r.EC, r.Secrets, args.App(), nil, []string{args.Key()}, args.Service())
+	attempt, err := r.deployTracker().Begin(ctx, deploylifecycle.BeginParams{
+		AppName: args.App(), Operation: deploylifecycle.OperationConfigChange,
+	})
 	if err != nil {
+		return err
+	}
+	attemptID := string(attempt.Deployment.ID)
+	activate := func(ctx context.Context, _ *core_v1alpha.App, revision int64, version entity.Id) error {
+		if err := r.deployTracker().SetAppVersion(ctx, attemptID, string(version)); err != nil {
+			return err
+		}
+		return r.deployTracker().ActivateAtRevision(ctx, attemptID, revision)
+	}
+	result, err := appclient.DeleteEnvVarsWithActivator(ctx, r.EC, r.Secrets, args.App(), nil, []string{args.Key()}, args.Service(), activate)
+	if err != nil {
+		_ = r.deployTracker().FailIfUnsettled(context.WithoutCancel(ctx), attemptID, err.Error())
 		return err
 	}
 
@@ -819,6 +868,15 @@ func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDelet
 		state.Results().SetDeletedSource(result.DeletedSources[0])
 	}
 	return nil
+}
+
+func (r *AppInfo) deployTracker() *deploylifecycle.Tracker {
+	r.deployOnce.Do(func() {
+		if r.Deploy == nil {
+			r.Deploy = deploylifecycle.NewTracker(r.Log, r.EC.EAC())
+		}
+	})
+	return r.Deploy
 }
 
 func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) error {

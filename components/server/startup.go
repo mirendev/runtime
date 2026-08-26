@@ -37,6 +37,7 @@ type startup struct {
 	victoriaMetrics     *victoriaMetricsBoot
 	buildkit            *buildkitBoot
 	coordinator         *coordinatorBoot
+	deploymentAttempts  *deploymentAttemptMigrationBoot
 	entityAccess        *entityAccessBoot
 	network             *networkBoot
 	runner              *runnerBoot
@@ -53,6 +54,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	// the components that share it.
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	secretRegistry := secret.NewRegistry()
+	deploymentAttemptInitialSweep := newInitialSweepGate()
 	address := NormalizeServerAddress(options.Log, options.Config.Server.GetAddress())
 
 	// This is where we wire up the boot graph. Each component lives in a sibling
@@ -75,7 +77,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
 	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.output, registryHostMapping.output, observability.output)
 	coordinator := newCoordinatorBoot(
-		coordinatorInputs(options, resolver, secretRegistry, address),
+		coordinatorInputs(options, resolver, secretRegistry, deploymentAttemptInitialSweep.Wait, address),
 		ipDiscovery.output,
 		registration.output,
 		workloadIdentity.output,
@@ -83,6 +85,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		buildkit.output,
 		observability.output,
 	)
+	deploymentAttempts := newDeploymentAttemptMigrationBoot(coordinator.output, deploymentAttemptInitialSweep)
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), coordinator.output, observability.output)
 	runner := newRunnerBoot(
 		runnerInputs(options, resolver, secretRegistry, serverPort(options.Log, address)),
@@ -119,6 +122,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		victoriaMetrics:     victoriaMetrics,
 		buildkit:            buildkit,
 		coordinator:         coordinator,
+		deploymentAttempts:  deploymentAttempts,
 		entityAccess:        entityAccess,
 		network:             network,
 		runner:              runner,
