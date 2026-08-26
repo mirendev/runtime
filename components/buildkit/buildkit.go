@@ -321,10 +321,6 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 [log]
   format = "text"
 
-[dns]
-  nameservers=["1.1.1.1","8.8.8.8"]
-  options=["edns0"]
-
 [grpc]
   address = [ "unix:///run/buildkit/buildkitd.sock" ]
   uid = 0
