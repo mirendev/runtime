@@ -4,7 +4,9 @@ features:
     description: Schedule jobs across multiple runner nodes
     default: true
 
+  # Sagas are GA (MIR-953). The flag survives only as an escape hatch (-sagas)
+  # for one release; MIR-1460 removes it and the pre-saga code path with it.
   - name: sagas
     predicate: Sagas
     description: Use saga-based crash-recoverable workflows
-    default: false
+    default: true

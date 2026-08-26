@@ -12,6 +12,33 @@ func quiet() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
+// Sagas graduated to on-by-default in MIR-953, keeping the flag purely as an
+// escape hatch. Both halves of that contract are pinned here: nothing has to be
+// passed to get sagas, and "-sagas" on its own is enough to get the old path
+// back. MIR-1460 deletes this test along with the flag.
+func TestSagasEnabledByDefault(t *testing.T) {
+	Reset()
+
+	if !Sagas() {
+		t.Error("Sagas should be enabled by default")
+	}
+
+	Init(quiet(), nil)
+	if !Sagas() {
+		t.Error("Sagas should be enabled after Init with no flags")
+	}
+
+	Init(quiet(), []string{"distributedrunners"})
+	if !Sagas() {
+		t.Error("Sagas should stay enabled when an unrelated feature is named")
+	}
+
+	Init(quiet(), []string{"-sagas"})
+	if Sagas() {
+		t.Error("Sagas should be disabled by '-sagas' alone")
+	}
+}
+
 func TestDisableFeatureWithPrefix(t *testing.T) {
 	Reset()
 

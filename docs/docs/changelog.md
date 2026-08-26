@@ -14,6 +14,9 @@ All notable changes to Miren Runtime will be documented in this file.
 **Features**
 - **Maintenance mode for routes** - `miren route down app.example.com --reason "Upgrading the database"` takes a hostname out of service and shows visitors a holding page; `miren route up` puts it back. Visitors get a 503, which is what crawlers and uptime monitors expect from planned downtime, rather than the 500s or platform error pages the old workarounds produced, plus a `Retry-After` when you give an expected return time with `--back-at`. Your app keeps running throughout, so `miren app run` and one-shot migrations work during the window. See the [maintenance mode guide](/maintenance-mode).
 
+**Improvements**
+- **Builds and sandbox startup survive a restart** - Both are now driven by the saga engine, which journals each step as it goes, so a control-plane restart in the middle of one resumes it (or unwinds it cleanly) instead of stranding a half-built image or a sandbox that never finishes coming up. This ran behind the `sagas` labs flag on our own clusters for the last few releases and is now the default everywhere. The flag stays for one release as an escape hatch: start the server with `--labs -sagas` (or `MIREN_LABS=-sagas`) to go back to the old path, and please tell us if you need to, because the old path goes away in the release after this one. See [Miren Labs](/labs). ([#972](https://github.com/mirendev/runtime/pull/972))
+
 ---
 
 ## v0.13.0

@@ -39,7 +39,7 @@ var (
 // featureDefaults holds the default state for each feature
 var featureDefaults = map[string]bool{
 	FeatureDistributedRunners: true,
-	FeatureSagas:              false,
+	FeatureSagas:              true,
 }
 
 // Init initializes the labs feature flags from the provided flag strings.
