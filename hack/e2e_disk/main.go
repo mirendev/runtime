@@ -108,10 +108,11 @@ func main() {
 	mc := diskio.NewDiskMountController(log, *workDir, compute_v1alpha.NewNodeId("e2e-node"), diskio.NewState(), nil)
 	mc.SetUpdatesClient(updates)
 	check(mc.RestoreImageIfMissing(ctx, &diskio.VolumeState{
-		VolumeId:   volumeID,
-		Name:       "e2e-disk",
-		DiskPath:   diskPath,
-		Filesystem: "ext4",
+		VolumeId:      volumeID,
+		CloudVolumeId: volumeID,
+		Name:          "e2e-disk",
+		DiskPath:      diskPath,
+		Filesystem:    "ext4",
 	}, imagePath), "restore image")
 
 	restored, err := os.ReadFile(imagePath)

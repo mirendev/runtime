@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -249,17 +251,137 @@ func (r *realDiskMountOps) LbdAttach(ctx context.Context, imagePath, logDir stri
 		return "", fmt.Errorf("lbdctl add returned empty device path")
 	}
 
+	// The kernel registers the block device in sysfs, but the /dev node is
+	// normally created by udev. Containers whose /dev is a private tmpfs have
+	// no udev, so the node never appears and the mount that follows fails with
+	// ENOENT. Create it ourselves from the major:minor sysfs reports.
+	if err := ensureDeviceNode(result.Device); err != nil {
+		// lbdctl add already attached the device, but the caller receives
+		// only an error (no path), so it cannot detach. Clean up here, or a
+		// repeated failure leaks a kernel device with no state to reclaim it.
+		// Give the detach an independent context so it can still complete even
+		// if the caller's ctx has already been canceled.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if derr := r.LbdDetach(cleanupCtx, result.Device); derr != nil {
+			return "", fmt.Errorf("lbdctl add: %w (detach after failure also failed: %v)", err, derr)
+		}
+		return "", fmt.Errorf("lbdctl add: %w", err)
+	}
+
 	return result.Device, nil
 }
 
+// ensureDeviceNode makes sure the block device node at devicePath (e.g.
+// /dev/lbd0) exists, creating it from /sys/block/<name>/dev when it is missing.
+// This lets accelerator disks mount in environments without udev. A node that
+// already exists must be the block device sysfs describes; anything else (a
+// stale file, a character device, a different device number) is rejected so the
+// caller never mounts the wrong thing.
+func ensureDeviceNode(devicePath string) error {
+	name := filepath.Base(devicePath)
+	if name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+		return fmt.Errorf("unexpected device path %q", devicePath)
+	}
+
+	sysDev := filepath.Join("/sys/block", name, "dev")
+	data, err := os.ReadFile(sysDev)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", sysDev, err)
+	}
+
+	majStr, minStr, ok := strings.Cut(strings.TrimSpace(string(data)), ":")
+	if !ok {
+		return fmt.Errorf("unexpected %s contents %q", sysDev, string(data))
+	}
+	// ParseUint with bitSize 32 bounds the values to what unix.Mkdev accepts,
+	// so the uint32 conversions below cannot overflow.
+	major, err := strconv.ParseUint(majStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse major from %q: %w", string(data), err)
+	}
+	minor, err := strconv.ParseUint(minStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse minor from %q: %w", string(data), err)
+	}
+	want := unix.Mkdev(uint32(major), uint32(minor))
+
+	// If a node is already present, make sure it is the device we expect
+	// rather than a leftover file or a different device.
+	if fi, err := os.Stat(devicePath); err == nil {
+		return verifyBlockDevice(devicePath, fi, want)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", devicePath, err)
+	}
+
+	if err := unix.Mknod(devicePath, unix.S_IFBLK|0o660, int(want)); err != nil {
+		// A concurrent udev (or a retry) may have created it already; make
+		// sure what landed there is the right device.
+		if errors.Is(err, os.ErrExist) {
+			fi, serr := os.Stat(devicePath)
+			if serr != nil {
+				return fmt.Errorf("stat %s after mknod reported it exists: %w", devicePath, serr)
+			}
+			return verifyBlockDevice(devicePath, fi, want)
+		}
+		return fmt.Errorf("mknod %s (%d:%d): %w", devicePath, major, minor, err)
+	}
+	return nil
+}
+
+// verifyBlockDevice returns an error unless path is a block device whose device
+// number matches want.
+func verifyBlockDevice(path string, fi os.FileInfo, want uint64) error {
+	if fi.Mode()&os.ModeDevice == 0 || fi.Mode()&os.ModeCharDevice != 0 {
+		return fmt.Errorf("%s exists but is not a block device", path)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s: unexpected stat type %T", path, fi.Sys())
+	}
+	if uint64(st.Rdev) != want {
+		return fmt.Errorf("%s is device %d:%d, expected %d:%d", path,
+			unix.Major(uint64(st.Rdev)), unix.Minor(uint64(st.Rdev)),
+			unix.Major(want), unix.Minor(want))
+	}
+	return nil
+}
+
 func (r *realDiskMountOps) LbdDetach(ctx context.Context, devicePath string) error {
-	cmd := exec.CommandContext(ctx, "lbdctl", "remove", "--json", devicePath)
+	// lbdctl remove takes the numeric device index, not a path -- it parses its
+	// argument with atoi, so passing "/dev/lbd1" would remove index 0 and detach
+	// the wrong volume.
+	index, err := lbdDeviceIndex(devicePath)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "lbdctl", "remove", "--json", index)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("lbdctl remove failed: %w\noutput: %s", err, string(output))
 	}
 	_ = output // JSON output available but not needed for remove
 	return nil
+}
+
+// lbdDeviceIndex extracts the numeric index from an lbd device path, e.g.
+// "/dev/lbd7" -> "7". It errors on anything that isn't a numbered lbd device so
+// a malformed path can't be turned into the wrong index.
+func lbdDeviceIndex(devicePath string) (string, error) {
+	name := filepath.Base(devicePath)
+	// Only ever remove a device that lives at /dev/lbdN; a stray path like
+	// /tmp/lbd7 must not be turned into an index that detaches a real volume.
+	if devicePath != filepath.Join("/dev", name) {
+		return "", fmt.Errorf("not an lbd device path: %q", devicePath)
+	}
+	index := strings.TrimPrefix(name, "lbd")
+	if index == name || index == "" {
+		return "", fmt.Errorf("not an lbd device path: %q", devicePath)
+	}
+	if _, err := strconv.ParseUint(index, 10, 32); err != nil {
+		return "", fmt.Errorf("lbd device path %q has a non-numeric index: %w", devicePath, err)
+	}
+	return index, nil
 }
 
 func (r *realDiskMountOps) LbdAvailable() bool {
