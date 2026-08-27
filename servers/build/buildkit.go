@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -321,7 +322,37 @@ type BuildResult struct {
 	Command         string // The command (from image CMD)
 	ManifestDigest  string
 	WorkingDir      string
+	ExposedPorts    []string // OCI port/protocol keys, such as "4000/tcp"
 	DetectionEvents []stackbuild.DetectionEvent
+}
+
+func exposedPortNames(ports map[string]struct{}) []string {
+	if len(ports) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(ports))
+	for port := range ports {
+		names = append(names, port)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func applyImageConfig(res *BuildResult, data []byte) error {
+	var imgConfig struct {
+		Config struct {
+			WorkingDir   string              `json:"WorkingDir"`
+			ExposedPorts map[string]struct{} `json:"ExposedPorts"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(data, &imgConfig); err != nil {
+		return err
+	}
+
+	res.WorkingDir = imgConfig.Config.WorkingDir
+	res.ExposedPorts = exposedPortNames(imgConfig.Config.ExposedPorts)
+	return nil
 }
 
 func (b *Buildkit) BuildImage(
@@ -396,6 +427,7 @@ func (b *Buildkit) BuildImage(
 		}
 
 		res.WorkingDir = stack.Image().Config.WorkingDir
+		res.ExposedPorts = exposedPortNames(stack.Image().Config.ExposedPorts)
 
 		def, err = state.Marshal(ctx)
 		if err != nil {
@@ -549,18 +581,11 @@ func (b *Buildkit) BuildImage(
 			res.ManifestDigest = digest
 		}
 
-		// Extract working directory, entrypoint, and command from the image config
-		// for Dockerfile builds. The config comes from the gateway result metadata
+		// Extract working directory and exposed ports from the image config for
+		// Dockerfile builds. The config comes from the gateway result metadata
 		// captured during the solve above.
 		if len(inlineImageConfig) > 0 {
-			var imgConfig struct {
-				Config struct {
-					WorkingDir string `json:"WorkingDir"`
-				} `json:"config"`
-			}
-			if err := json.Unmarshal(inlineImageConfig, &imgConfig); err == nil {
-				res.WorkingDir = imgConfig.Config.WorkingDir
-			} else {
+			if err := applyImageConfig(&res, inlineImageConfig); err != nil {
 				b.Log.Warn("failed to parse image config", "error", err)
 			}
 			// We intentionally do not flatten the image's ENTRYPOINT/CMD into a

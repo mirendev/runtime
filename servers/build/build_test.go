@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1523,22 +1522,92 @@ func TestBuildVersionConfig(t *testing.T) {
 	}
 }
 
-func TestExtractWorkingDirFromImageConfig(t *testing.T) {
+func TestBuildVersionConfigDefaultsWebPortFromImage(t *testing.T) {
+	tests := []struct {
+		name         string
+		exposedPorts []string
+		service      *appconfig.ServiceConfig
+		wantPort     int64
+		wantPorts    int
+	}{
+		{
+			name:         "single TCP port",
+			exposedPorts: []string{"4000/tcp"},
+			wantPort:     4000,
+		},
+		{
+			name:         "bare port defaults to TCP",
+			exposedPorts: []string{"2368"},
+			wantPort:     2368,
+		},
+		{
+			name:         "explicit scalar port wins",
+			exposedPorts: []string{"4000/tcp"},
+			service:      &appconfig.ServiceConfig{Port: 8080},
+			wantPort:     8080,
+		},
+		{
+			name:         "explicit port list wins",
+			exposedPorts: []string{"4000/tcp"},
+			service: &appconfig.ServiceConfig{Ports: []appconfig.PortConfig{
+				{Port: 8080, Name: "http", Type: "http"},
+			}},
+			wantPorts: 1,
+		},
+		{
+			name:         "multiple exposed ports are ambiguous",
+			exposedPorts: []string{"4000/tcp", "4001/tcp"},
+		},
+		{
+			name:         "UDP port is not an HTTP default",
+			exposedPorts: []string{"5353/udp"},
+		},
+		{
+			name:         "custom service image does not inherit app image metadata",
+			exposedPorts: []string{"4000/tcp"},
+			service:      &appconfig.ServiceConfig{Image: "example.com/custom:latest"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ac *appconfig.AppConfig
+			if tt.service != nil {
+				ac = &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{"web": tt.service}}
+			}
+
+			spec := buildVersionConfig(ConfigInputs{
+				BuildResult: &BuildResult{ExposedPorts: tt.exposedPorts},
+				AppConfig:   ac,
+			})
+
+			require.Len(t, spec.Services, 1)
+			assert.Equal(t, "web", spec.Services[0].Name)
+			assert.Equal(t, tt.wantPort, spec.Services[0].Port)
+			assert.Len(t, spec.Services[0].Ports, tt.wantPorts)
+		})
+	}
+}
+
+func TestApplyImageConfig(t *testing.T) {
 	tests := []struct {
 		name       string
 		configJSON string
 		wantDir    string
+		wantPorts  []string
 	}{
 		{
 			name: "standard Dockerfile with WORKDIR /app",
 			configJSON: `{
 				"config": {
 					"WorkingDir": "/app",
+					"ExposedPorts": {"8080/tcp": {}, "4000/tcp": {}},
 					"Env": ["PATH=/usr/local/bin:/usr/bin:/bin"],
 					"Cmd": ["node", "server.js"]
 				}
 			}`,
-			wantDir: "/app",
+			wantDir:   "/app",
+			wantPorts: []string{"4000/tcp", "8080/tcp"},
 		},
 		{
 			name: "custom working directory",
@@ -1593,15 +1662,11 @@ func TestExtractWorkingDirFromImageConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// This mimics the parsing logic used in BuildImage for Dockerfile builds
-			var imgConfig struct {
-				Config struct {
-					WorkingDir string `json:"WorkingDir"`
-				} `json:"config"`
-			}
-			err := json.Unmarshal([]byte(tt.configJSON), &imgConfig)
+			var res BuildResult
+			err := applyImageConfig(&res, []byte(tt.configJSON))
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantDir, imgConfig.Config.WorkingDir)
+			assert.Equal(t, tt.wantDir, res.WorkingDir)
+			assert.Equal(t, tt.wantPorts, res.ExposedPorts)
 		})
 	}
 }
