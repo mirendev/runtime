@@ -236,7 +236,7 @@ func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns)
 }
 
 func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) error {
-	run, _, err := r.lookupRun(ctx, state.Args().Id())
+	run, shortId, err := r.lookupRun(ctx, state.Args().Id())
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 		return err
 	}
 
-	state.Results().SetRun(runInfo(run, r.runShortId(ctx, run.ID)))
+	state.Results().SetRun(runInfo(run, shortId))
 	return nil
 }
 
@@ -308,33 +308,27 @@ func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run) error 
 	return nil
 }
 
-// runShortId looks up one run's short-id, for the single-run paths that do not
-// already hold the entity. Returns empty when the run has none.
-func (r *AppInfo) runShortId(ctx context.Context, id entity.Id) string {
-	var run run_v1alpha.Run
-	ent, err := r.EC.GetByIdWithEntity(ctx, id, &run)
-	if err != nil {
-		return ""
-	}
-	return shortIDFromEntity(ent)
-}
-
-func (r *AppInfo) lookupRun(ctx context.Context, id string) (*run_v1alpha.Run, entity.Id, error) {
+// lookupRun resolves a run by full or bare id, and returns its short-id along
+// with it. The short-id rides on the same read rather than being recovered by a
+// second one: GetRun is polled every 250ms while an attach waits for exit
+// status, and re-reading the run to recover metadata the first read already had
+// would double that traffic. Empty for a run recorded before short-ids.
+func (r *AppInfo) lookupRun(ctx context.Context, id string) (*run_v1alpha.Run, string, error) {
 	if id == "" {
 		return nil, "", fmt.Errorf("run id is required")
 	}
 
 	var run run_v1alpha.Run
-	err := r.EC.GetById(ctx, entity.Id(id), &run)
+	ent, err := r.EC.GetByIdWithEntity(ctx, entity.Id(id), &run)
 	if err != nil && errors.Is(err, cond.ErrNotFound{}) && !strings.Contains(id, "/") {
 		// Accept a bare name as well as a full id.
-		err = r.EC.GetById(ctx, entity.Id("run/"+id), &run)
+		ent, err = r.EC.GetByIdWithEntity(ctx, entity.Id("run/"+id), &run)
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("run %s not found: %w", id, err)
 	}
 
-	return &run, run.ID, nil
+	return &run, shortIDFromEntity(ent), nil
 }
 
 // appName resolves the app's metadata name, which is what a run's entity name
