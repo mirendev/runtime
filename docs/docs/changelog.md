@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.14.0
+*2026-08-27*
+
 **Features**
 - **Secrets** - Your apps need credentials — database passwords, API tokens, signing keys — and until now the only place to put them was a plain config variable, stored in the clear. Secrets give them a real home: values are encrypted at rest, never written into your config or etcd, and dropped straight into the container's environment at startup. Manage them with `miren secret` against a built-in cluster backend, then point a config variable at one with `miren env set -e DATABASE_URL --backend cluster --ref db/url` or the `backend`/`ref` fields in app.toml. References pin to a version, so a rollback restores the value the old release ran with. Build steps can use them too: declare `[[build.secrets]]` and a `RUN --mount=type=secret` step gets the credential without it landing in an image layer or a log. See the [secrets guide](/secrets). ([#1027](https://github.com/mirendev/runtime/pull/1027), [#1028](https://github.com/mirendev/runtime/pull/1028), [#1031](https://github.com/mirendev/runtime/pull/1031), [#1078](https://github.com/mirendev/runtime/pull/1078))
 - **App Tasks** - Most apps have work that isn't serving web traffic: database migrations, a nightly cleanup, a one-off backfill. App Tasks give that work a home. Declare a `[tasks.migrate]` block with a command and a trigger — run it on every deploy, on a schedule (systemd calendar syntax), or by hand. A `deploy` task gates the version flip on its success, so a failed migration stops the rollout instead of shipping broken. `miren app run` now leaves a durable record: exit codes survive the run, you can detach and reattach, and `miren app runs` shows what happened. Apps can be task-only with no web service — set `web = false`. See the [tasks guide](/tasks). ([#1019](https://github.com/mirendev/runtime/pull/1019), [#1043](https://github.com/mirendev/runtime/pull/1043), [#1045](https://github.com/mirendev/runtime/pull/1045))
