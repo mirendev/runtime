@@ -1,0 +1,100 @@
+{
+  "environment": "peers",
+  "n_shards": 4,
+  "makespan_s": 257.15,
+  "groups": [
+    {
+      "shard": 1,
+      "estimated_s": 257.02,
+      "tests": [
+        "TestRunCarriesDeclaredTaskEnv",
+        "TestMysqlAddonDeployWithAppToml",
+        "TestSqliteAddonReplication",
+        "TestValkeyAddonCreateListDestroy",
+        "TestSecretRevocationFailsClosed",
+        "TestZeroDowntimeDeploy",
+        "TestAddonDeployWithVersionInAppToml",
+        "TestDistributedRunnerNodePort",
+        "TestSandboxExec",
+        "TestRouteWafEnableDisable",
+        "TestRouteWafInvalidLevel",
+        "TestRouteMaintenance",
+        "TestRunLogsAreReadableByRunID",
+        "TestTaskOnlyAppDeploys",
+        "TestRoutePasswordProviderLifecycle",
+        "TestSecretStoreAndRotate",
+        "TestAddonVariants",
+        "TestAddonListAvailable",
+        "TestDebugSagaShowUnknownID",
+        "TestDistributedRunnerList",
+        "TestConcurrentDeployBlockedByLock",
+        "TestServerUnregister"
+      ]
+    },
+    {
+      "shard": 2,
+      "estimated_s": 257.14,
+      "tests": [
+        "TestAttachedRunWaitsForTheCommand",
+        "TestAttachedRunPropagatesExitCode",
+        "TestEnvSetGetList",
+        "TestLocalDiskPersistence",
+        "TestAddonDeployWithAppToml",
+        "TestRabbitmqAddonCreateListDestroy",
+        "TestAddonCreateListDestroy",
+        "TestDeployAndRollback",
+        "TestRouteWafBlocksMaliciousRequest",
+        "TestDeployGoServer",
+        "TestRouteWafDefaultRoute",
+        "TestDistributedRunnerMetrics",
+        "TestDeployImageEntrypointNoCommand",
+        "TestDetachedRunSucceeds"
+      ]
+    },
+    {
+      "shard": 3,
+      "estimated_s": 257.01,
+      "tests": [
+        "TestRunPreservesArgumentBoundaries",
+        "TestMemcacheAddonCreateListDestroy",
+        "TestSecretReferencedByApp",
+        "TestRabbitmqAddonDeployWithAppToml",
+        "TestValkeyAddonDeployWithAppToml",
+        "TestAddonRotateSharedPostgresSuperuser",
+        "TestMysqlAddonCreateListDestroy",
+        "TestAddonUnknownAddon",
+        "TestDistributedRunnerDrain",
+        "TestSandboxList",
+        "TestDeployHistoryRecordsActiveVersion",
+        "TestRouteSetListRemove",
+        "TestDeployTaskGatesTheDeploy",
+        "TestRunCancellation",
+        "TestDiskUndelete",
+        "TestDistributedRunnerCordon",
+        "TestRouteDownDefaultNeedsConfirmation"
+      ]
+    },
+    {
+      "shard": 4,
+      "estimated_s": 257.15,
+      "tests": [
+        "TestAddonRotateValkey",
+        "TestAddonEnvSurvivesDeployVersion",
+        "TestAddonRotateSharedPostgresUser",
+        "TestCrashLoop",
+        "TestMemcacheAddonDeployWithAppToml",
+        "TestBadCommand",
+        "TestEphemeralDeploy",
+        "TestRouteTimeoutSetShowClear",
+        "TestRoutePasswordProtection",
+        "TestRouteTimeoutDefaultRoute",
+        "TestRouteWafJsonOutput",
+        "TestDistributedRunnerLogs",
+        "TestDistributedOverlayEncryption",
+        "TestFailingRunRecordsItsExitCode",
+        "TestBareRunOpensAConsole",
+        "TestFailedBuildLeavesFailedRecord"
+      ]
+    }
+  ]
+}

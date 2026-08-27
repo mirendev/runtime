@@ -176,6 +176,12 @@ blackbox-groups: ## Rebalance hack/blackbox-groups.json from measured blackbox t
 measure-blackbox-times: ## Re-measure per-test blackbox times into hack/blackbox-test-times.json (requires `make dev` running)
 	python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
 
+blackbox-groups-distributed: ## Rebalance hack/blackbox-groups-distributed.json from measured peers test times
+	python3 hack/calc-blackbox-groups.py hack/blackbox-test-times.json --env peers -n 4 -o hack/blackbox-groups-distributed.json
+
+measure-blackbox-times-distributed: ## Re-measure per-test blackbox times in the peers topology (requires hack/dev-distributed up)
+	BLACKBOX_MODE=peers python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
+
 test-blackbox: ## Run blackbox tests (requires `make dev` running)
 	# The cloud-backed tests are excluded: each stands up a whole cloud on fixed
 	# ports and restarts the server, which interferes with everything after it.
@@ -200,15 +206,21 @@ test-blackbox-pop: ## Run cloud-backed blackbox tests (requires `make dev` and c
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$$' ./blackbox/...
 
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
-	# Runs the whole blackbox suite (not just the distributed-specific tests)
-	# against the coordinator+runner topology, so a labs flag that breaks basic
-	# functionality is caught here too. Serial and unsharded, so it needs a
-	# larger timeout than the sharded plain suite. TestPOP is skipped: it's the
-	# Miren Anywhere cloud path (orthogonal to distributed runners) and restarts
-	# the server mid-run; it has its own dedicated job.
-	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 -skip '^TestPOP$$' ./blackbox/...
+	# Runs the blackbox suite (not just the distributed-specific tests) against
+	# the coordinator+runner topology, so a labs flag that breaks basic
+	# functionality is caught here too. TestPOP is skipped: it's the Miren
+	# Anywhere cloud path (orthogonal to distributed runners) and restarts the
+	# server mid-run; it has its own dedicated job.
+	#
+	# BLACKBOX_RUN restricts the run to a subset (a go -run alternation like
+	# 'TestA|TestB'); the sharded CI matrix sets it to one shard's tests. Unset,
+	# the whole suite runs, which is what local use wants. The timeout is a
+	# generous upper bound for the whole-suite local case; a shard finishes well
+	# inside it.
+	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 \
+		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^TestPOP$$' ./blackbox/...
 
-.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times
+.PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times blackbox-groups-distributed measure-blackbox-times-distributed
 
 #
 # Building

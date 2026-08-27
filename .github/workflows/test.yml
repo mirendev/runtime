@@ -466,33 +466,81 @@ jobs:
       if: always()
       run: make dev-stop || true
 
-  test-blackbox-distributed:
-    # Exercises the multi-node distributed runner topology (a coordinator plus a
-    # separate runner peer) with distributedrunners enabled, running the whole
-    # blackbox suite against it. Setup is heavy (iso peers, a binary build on
-    # each peer, the join dance), so it runs on main/release builds rather than
-    # every PR push: release.yml (push to main and tags) calls this workflow via
-    # workflow_call, where github.event_name is the caller's event ('push'), so
-    # excluding 'pull_request' runs it there while skipping PRs. It would also
-    # run in a merge queue if one were enabled ('merge_group').
+  blackbox-groups-distributed:
+    # Builds the shard matrix for the distributed suite and owns the decision of
+    # *whether* that suite runs at all — the shard jobs below gate on this job's
+    # result, so the condition lives here in one place.
     #
-    # On a PR it runs when the diff touches code that can break the multi-node
-    # topology, or when someone labels the PR `ci:distributed` to ask for it
-    # explicitly. This job is the only place a second node exists, so a bug
-    # there is invisible until it is already on main blocking a release, which
-    # is exactly how MIR-1469 got in.
+    # The distributed suite exercises the multi-node topology (a coordinator plus
+    # a separate runner peer) with distributedrunners enabled. Setup is heavy
+    # (iso peers, a binary build, the join dance) and it's the only place a
+    # second node exists, so a bug there is invisible until it's already on main
+    # blocking a release (exactly how MIR-1469 got in). It therefore runs on
+    # main/release builds rather than every PR push: release.yml (push to main
+    # and tags) calls this workflow via workflow_call, where github.event_name is
+    # the caller's event ('push'), so excluding 'pull_request' runs it there
+    # while skipping PRs. It would also run in a merge queue ('merge_group'). On
+    # a PR it runs when the diff touches code that can break the topology, or
+    # when someone labels the PR `ci:distributed`.
     #
-    # `!cancelled()` rather than a plain condition: it keeps the non-PR clause
-    # authoritative even if the `changes` job fails. A failed dependency would
-    # otherwise skip this job on main and tags, quietly dropping the release
-    # coverage this whole gate exists to protect.
+    # `!cancelled()` rather than a plain condition keeps the non-PR clause
+    # authoritative even if the `changes` job fails — a failed dependency would
+    # otherwise skip this on main and tags, quietly dropping the release coverage
+    # this whole gate exists to protect.
     needs: [changes]
     if: >-
       !cancelled() && (
       github.event_name != 'pull_request' ||
       needs.changes.outputs.distributed == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Set distributed blackbox shard matrix
+      id: set-matrix
+      run: |
+        # Discover all blackbox test functions by scanning source (no compile,
+        # no cluster) so a newly added test is never silently left unrun.
+        ALL_TESTS=$(grep -rhoE '^func Test[A-Za-z0-9_]+' blackbox --include='*_test.go' \
+          | sed -E 's/^func //' | sort -u)
+
+        # Tests already assigned to a shard in the checked-in manifest.
+        GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups-distributed.json | sort -u)
+
+        # The cloud-backed tests run in their own job (test-blackbox-pop): they
+        # need the cloud repo and restart the server. Never shard them.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud' || true)
+
+        MATRIX=$(jq -c '.groups' hack/blackbox-groups-distributed.json)
+
+        if [ -n "$UNGROUPED" ]; then
+          echo "::warning::Distributed blackbox tests not in blackbox-groups-distributed.json (running in extra shard, regenerate with 'make blackbox-groups-distributed'): $(echo $UNGROUPED | tr '\n' ' ')"
+          EXTRA=$(echo "$UNGROUPED" | jq -R -s 'split("\n") | map(select(. != ""))')
+          MATRIX=$(echo "$MATRIX" | jq -c --argjson tests "$EXTRA" '. + [{"shard": (length + 1), "estimated_s": 0, "tests": $tests}]')
+        fi
+
+        echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  test-blackbox-distributed:
+    name: test-blackbox-distributed (shard ${{ matrix.group.shard }})
+    # Each shard boots its own coordinator+runner topology on its own runner and
+    # runs only its assigned subset of the suite. Sharding turns a ~20-minute
+    # serial run into parallel ~6-minute shards. The gate on
+    # blackbox-groups-distributed's result carries the whole run-or-skip decision
+    # (see that job): if the builder skipped, every shard skips with it.
+    needs: [blackbox-groups-distributed]
+    if: >-
+      !cancelled() && needs.blackbox-groups-distributed.result == 'success'
     runs-on: depot-ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.blackbox-groups-distributed.outputs.matrix) }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -545,16 +593,21 @@ jobs:
     - name: Start distributed environment
       run: ISO_CACHE_DIR=/tmp/iso-cache make dev-distributed
 
-    - name: Run distributed blackbox tests
-      run: make test-blackbox-distributed
+    - name: Run distributed blackbox tests (shard ${{ matrix.group.shard }})
+      # Each shard runs only its assigned subset, built into a -run regex from
+      # the matrix and passed through BLACKBOX_RUN. -skip '^TestPOP$' stays in
+      # the make target.
+      run: |
+        RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
+        make test-blackbox-distributed BLACKBOX_RUN="$RUN"
 
     - name: Peer logs on failure
       if: failure()
       run: |
-        # The whole suite runs serially against one cluster, so a failure early
-        # on is thousands of lines from the end by the time we get here. A tail
-        # window reliably misses it (MIR-1469 was diagnosed twice from logs that
-        # started five minutes after the failure), so dump the logs whole.
+        # A shard runs its subset serially against one cluster, so a failure
+        # early on is far from the end of the log by the time we get here. A
+        # tail window reliably misses it (MIR-1469 was diagnosed twice from logs
+        # that started five minutes after the failure), so dump the logs whole.
         echo "=== Coordinator server logs ==="
         iso peers exec coordinator -- cat /tmp/miren-server.log 2>&1 || true
         echo "=== Runner logs ==="
@@ -572,7 +625,7 @@ jobs:
   # that passes only when every matrix runner and blackbox tests succeed.
   test:
     if: always()
-    needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, test-blackbox-distributed]
+    needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, blackbox-groups-distributed, test-blackbox-distributed]
     runs-on: ubuntu-latest
     steps:
     - name: Check results
@@ -581,6 +634,7 @@ jobs:
         echo "blackbox-groups result: ${{ needs.blackbox-groups.result }}"
         echo "test-blackbox result: ${{ needs.test-blackbox.result }}"
         echo "test-blackbox-pop result: ${{ needs.test-blackbox-pop.result }}"
+        echo "blackbox-groups-distributed result: ${{ needs.blackbox-groups-distributed.result }}"
         echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
         echo "changes result: ${{ needs.changes.result }}"
 
@@ -608,8 +662,16 @@ jobs:
         if [[ "${{ needs.test-blackbox-pop.result }}" != "success" && "${{ needs.test-blackbox-pop.result }}" != "skipped" ]]; then
           exit 1
         fi
+        # blackbox-groups-distributed builds the distributed shard matrix and
+        # gates whether the suite runs. It's skipped on PRs without
+        # distributed-relevant changes (accepted), but a failure would skip the
+        # shards too — which would look benign in the check below — so a run that
+        # neither succeeded nor was skipped fails the gate outright.
+        if [[ "${{ needs.blackbox-groups-distributed.result }}" != "success" && "${{ needs.blackbox-groups-distributed.result }}" != "skipped" ]]; then
+          exit 1
+        fi
         # Distributed suite is skipped on PRs (merge-queue / main only), so
-        # skipped is acceptable here; a real run must pass.
+        # skipped is acceptable here; a real run (every shard) must pass.
         if [[ "${{ needs.test-blackbox-distributed.result }}" != "success" && "${{ needs.test-blackbox-distributed.result }}" != "skipped" ]]; then
           exit 1
         fi
