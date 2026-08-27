@@ -1650,11 +1650,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 			cloudURL = DefaultCloudURL
 		}
 
+		var uplinkOptions []uplink.ClientOption
+		if labs.AppVisibility() {
+			uplinkOptions = append(uplinkOptions, uplink.WithSession(version.GetInfo().Version))
+		}
+
 		link := uplink.NewClient(
 			cloudURL,
 			c.authClient,
 			uplink.NewMessageRouter(),
 			c.Log.With("component", "uplink"),
+			uplinkOptions...,
 		)
 		anywhereConn := anywhere.New(anywhere.Config{
 			ClusterXID: c.CloudAuth.ClusterID,

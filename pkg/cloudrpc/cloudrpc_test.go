@@ -24,6 +24,7 @@ import (
 type fakeLink struct {
 	mu       sync.Mutex
 	handlers map[string]uplink.MessageHandler
+	offers   []uplink.CapabilityOffer
 
 	out chan *uplink.Envelope
 
@@ -39,6 +40,12 @@ func newFakeLink() *fakeLink {
 		// that overflows it is measuring the fake rather than the code.
 		out: make(chan *uplink.Envelope, 4096),
 	}
+}
+
+func (l *fakeLink) OfferCapability(offer uplink.CapabilityOffer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.offers = append(l.offers, offer)
 }
 
 func (l *fakeLink) Handle(msgType string, h uplink.MessageHandler) {
@@ -146,6 +153,16 @@ func (c *relayConn) Recv() ([]byte, error) {
 }
 
 func (c *relayConn) Close() error { return nil }
+
+func TestRelayOffersItsUplinkCapability(t *testing.T) {
+	link := newFakeLink()
+	cloudrpc.New(cloudrpc.Config{Uplink: link, Log: slog.Default()})
+
+	require.Equal(t, []uplink.CapabilityOffer{{
+		Name:     uplink.CapabilityRPCRelay,
+		Versions: []uint{1},
+	}}, link.offers)
+}
 
 // clusterWithRelay stands up an RPC server exposing iface, fronted by a relay on
 // a fake link, and returns the link.

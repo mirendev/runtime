@@ -23,11 +23,12 @@ const (
 	// backpressure does not immediately push the best-effort tenants over their
 	// drop threshold. The two coexist in one queue: a blocked sender waits for
 	// room, while Send discards as soon as there is none.
-	outboxSize     = 256
-	initialBackoff = 1 * time.Second
-	maxBackoff     = 60 * time.Second
-	wsEndpoint     = "/api/v1/cluster-channel/ws"
-	writeTimeout   = 10 * time.Second
+	outboxSize       = 256
+	initialBackoff   = 1 * time.Second
+	maxBackoff       = 60 * time.Second
+	wsEndpoint       = "/api/v1/cluster-channel/ws"
+	writeTimeout     = 10 * time.Second
+	handshakeTimeout = 10 * time.Second
 
 	// backoffJitter is the fraction of a delay that is randomized away.
 	//
@@ -63,42 +64,71 @@ type Client struct {
 	log        *slog.Logger
 	outbox     chan *Envelope
 
-	mu        sync.Mutex
-	onConnect []func(ctx context.Context)
+	mu           sync.Mutex
+	onConnect    []func(ctx context.Context)
+	onSession    []func(ctx context.Context, session Session)
+	capabilities []CapabilityOffer
+	session      *sessionConfig
+
+	// NewClient enables this for production's pre-handshake path. Keeping it
+	// explicit lets narrow package tests construct a Client without also having
+	// to emulate the two legacy bootstrap exchanges.
+	legacyBootstrap bool
 
 	// getToken overrides auth token acquisition for testing.
 	// When nil, authClient.GetToken is used.
 	getToken func(ctx context.Context) (string, error)
 }
 
+type sessionConfig struct {
+	runtimeVersion string
+}
+
+// ClientOption changes how a Client establishes its connections.
+type ClientOption func(*Client)
+
+// WithSession enables the negotiated session handshake. Callers should gate
+// this while the protocol is experimental; cloud must support the handshake
+// before a runtime starts requiring a welcome.
+func WithSession(runtimeVersion string) ClientOption {
+	return func(c *Client) {
+		c.session = &sessionConfig{runtimeVersion: runtimeVersion}
+	}
+}
+
 // NewClient creates a new WebSocket client.
 //
-// The returned client already handles the two exchanges that belong to the link
-// rather than to any tenant: a clock sync and an organization lookup, both
-// issued on every connect. Tenants layer their own handlers and hooks on top.
-func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *MessageRouter, log *slog.Logger) *Client {
+// Without WithSession, the client preserves the legacy clock-sync and
+// organization-lookup requests on every connection. With it, those link facts
+// arrive in session.welcome instead. Tenants layer their own handlers,
+// capability offers, and hooks on top.
+func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *MessageRouter, log *slog.Logger, opts ...ClientOption) *Client {
 	c := &Client{
-		cloudURL:   cloudURL,
-		authClient: authClient,
-		router:     router,
-		log:        log,
-		outbox:     make(chan *Envelope, outboxSize),
+		cloudURL:        cloudURL,
+		authClient:      authClient,
+		router:          router,
+		log:             log,
+		outbox:          make(chan *Envelope, outboxSize),
+		legacyBootstrap: true,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 
 	router.Handle(TypeTimeResponse, c.handleTimeResponse)
 	router.Handle(TypeOrgInfoResponse, c.handleOrgInfoResponse)
 
-	c.OnConnect(func(ctx context.Context) {
-		c.log.Info("sending initial requests")
-		//nolint:errcheck // best-effort: a dropped request is retried next connect
-		c.SendMessage(TypeTimeRequest, TimeRequest{
-			ClientTransmitTime: time.Now().UTC(),
-		})
-		//nolint:errcheck // best-effort: a dropped request is retried next connect
-		c.SendMessage(TypeOrgInfoRequest, struct{}{})
-	})
-
 	return c
+}
+
+func (c *Client) sendLegacyInitialRequests() {
+	c.log.Info("sending legacy initial requests")
+	//nolint:errcheck // best-effort: a dropped request is retried next connect
+	c.SendMessage(TypeTimeRequest, TimeRequest{
+		ClientTransmitTime: time.Now().UTC(),
+	})
+	//nolint:errcheck // best-effort: a dropped request is retried next connect
+	c.SendMessage(TypeOrgInfoRequest, struct{}{})
 }
 
 // handleTimeResponse computes the clock offset between this cluster and cloud
@@ -160,14 +190,14 @@ func (c *Client) handleOrgInfoResponse(_ context.Context, data json.RawMessage) 
 	return nil
 }
 
-// OnConnect registers a callback invoked each time a WebSocket
-// connection is established. The handler can use Send to queue
-// messages for the new connection.
+// OnConnect registers a callback invoked each time the link is ready. For a
+// negotiated connection that means after session.welcome has been validated;
+// for a legacy connection it means immediately after the WebSocket connects.
+// The handler can use Send to queue messages for the new connection.
 //
-// Callbacks accumulate rather than replace: the connector registers its
-// own for time sync and org info, and feature reporters add theirs on top.
-// They run in registration order on the connection goroutine, so a
-// callback that needs to do real work should hand off to its own.
+// Callbacks accumulate rather than replace, so each tenant can add its own.
+// They run in registration order on the connection goroutine, so a callback
+// that needs to do real work should hand off to its own goroutine.
 //
 // The context is scoped to the connection, so work handed off that way is
 // cancelled when the connection drops. That is the right lifetime for it:
@@ -179,12 +209,49 @@ func (c *Client) OnConnect(fn func(ctx context.Context)) {
 	c.onConnect = append(c.onConnect, fn)
 }
 
+// OfferCapability adds a protocol family to the next session hello. Offers
+// are snapshotted for each connection, so tenants should register before Run.
+func (c *Client) OfferCapability(offer CapabilityOffer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, existing := range c.capabilities {
+		if existing.Name == offer.Name {
+			panic(fmt.Sprintf("uplink capability %q offered more than once", offer.Name))
+		}
+	}
+	c.capabilities = append(c.capabilities, offer)
+}
+
+// OnSession registers a callback invoked after cloud's welcome has been
+// validated. It is never called for a legacy connection. The context ends with
+// the negotiated session, and the Session value does not change underneath the
+// callback. Callbacks run in registration order before the read and write loops
+// start, so any real work should be handed off to a goroutine.
+func (c *Client) OnSession(fn func(ctx context.Context, session Session)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onSession = append(c.onSession, fn)
+}
+
 // connectCallbacks returns a snapshot of the registered callbacks so they
 // can be invoked without holding the lock.
 func (c *Client) connectCallbacks() []func(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.onConnect)
+}
+
+func (c *Client) sessionSnapshot() ([]CapabilityOffer, []func(context.Context, Session)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	offers := make([]CapabilityOffer, len(c.capabilities))
+	for i, offer := range c.capabilities {
+		offers[i] = offer
+		offers[i].Versions = slices.Clone(offer.Versions)
+		offers[i].Offer = slices.Clone(offer.Offer)
+	}
+	return offers, slices.Clone(c.onSession)
 }
 
 // Handle registers a handler for an inbound message type, which is how a
@@ -376,6 +443,24 @@ func (c *Client) runOnce(ctx context.Context) error {
 
 	c.drainOutbox()
 
+	if c.session != nil {
+		session, callbacks, err := c.establishSession(ctx, conn)
+		if err != nil {
+			return fmt.Errorf("establish session: %w", err)
+		}
+		c.log.Info("session established",
+			"session_id", session.ID,
+			"organization_id", session.OrganizationID,
+			"handshake_version", session.HandshakeVersion,
+			"capabilities", len(session.Capabilities),
+			"clock_offset", session.ClockOffset)
+		for _, fn := range callbacks {
+			fn(ctx, session)
+		}
+	} else if c.legacyBootstrap {
+		c.sendLegacyInitialRequests()
+	}
+
 	for _, fn := range c.connectCallbacks() {
 		fn(ctx)
 	}
@@ -389,6 +474,53 @@ func (c *Client) runOnce(ctx context.Context) error {
 	cancel()
 	<-errCh
 	return err
+}
+
+func (c *Client) establishSession(ctx context.Context, conn *websocket.Conn) (Session, []func(context.Context, Session), error) {
+	offers, callbacks := c.sessionSnapshot()
+	hello := SessionHello{
+		HandshakeVersions: []uint{HandshakeVersion1},
+		RuntimeVersion:    c.session.runtimeVersion,
+		ClientTime:        time.Now().UTC(),
+		Capabilities:      offers,
+	}
+	raw, err := json.Marshal(hello)
+	if err != nil {
+		return Session{}, nil, fmt.Errorf("marshal hello: %w", err)
+	}
+
+	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	if err := wsjson.Write(handshakeCtx, conn, &Envelope{Type: TypeSessionHello, Data: raw}); err != nil {
+		return Session{}, nil, fmt.Errorf("write hello: %w", err)
+	}
+
+	var env Envelope
+	if err := wsjson.Read(handshakeCtx, conn, &env); err != nil {
+		return Session{}, nil, fmt.Errorf("read welcome: %w", err)
+	}
+	receivedAt := time.Now().UTC()
+
+	switch env.Type {
+	case TypeSessionReject:
+		var reject SessionReject
+		if err := json.Unmarshal(env.Data, &reject); err != nil {
+			return Session{}, nil, fmt.Errorf("decode session rejection: %w", err)
+		}
+		return Session{}, nil, fmt.Errorf("cloud rejected session: %s", reject.Reason)
+	case TypeSessionWelcome:
+		var welcome SessionWelcome
+		if err := json.Unmarshal(env.Data, &welcome); err != nil {
+			return Session{}, nil, fmt.Errorf("decode welcome: %w", err)
+		}
+		session, err := validateWelcome(hello, welcome, receivedAt)
+		if err != nil {
+			return Session{}, nil, err
+		}
+		return session, callbacks, nil
+	default:
+		return Session{}, nil, fmt.Errorf("expected %s, received %s", TypeSessionWelcome, env.Type)
+	}
 }
 
 func (c *Client) connect(ctx context.Context) (*websocket.Conn, error) {

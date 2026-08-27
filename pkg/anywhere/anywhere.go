@@ -49,6 +49,10 @@ func New(cfg Config) *Connector {
 		log:  log,
 	}
 
+	cfg.Uplink.OfferCapability(uplink.CapabilityOffer{
+		Name:     uplink.CapabilityPopConnect,
+		Versions: []uint{1},
+	})
 	cfg.Uplink.Handle(TypeConnectionRequest, c.handleConnectionRequest)
 
 	// Startup confirmation. Anywhere is otherwise silent until a POP request

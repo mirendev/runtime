@@ -11,6 +11,7 @@ import (
 
 // Feature name constants
 const (
+	FeatureAppVisibility      = "appvisibility"
 	FeatureDistributedRunners = "distributedrunners"
 	FeatureSagas              = "sagas"
 )
@@ -18,6 +19,7 @@ const (
 // AllFeatures returns a list of all known feature names
 func AllFeatures() []string {
 	return []string{
+		FeatureAppVisibility,
 		FeatureDistributedRunners,
 		FeatureSagas,
 	}
@@ -26,6 +28,7 @@ func AllFeatures() []string {
 // FeatureDescriptions returns a map of feature names to their descriptions
 func FeatureDescriptions() map[string]string {
 	return map[string]string{
+		FeatureAppVisibility:      "Negotiate app visibility protocols over the cloud uplink",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
 		FeatureSagas:              "Use saga-based crash-recoverable workflows",
 	}
@@ -38,6 +41,7 @@ var (
 
 // featureDefaults holds the default state for each feature
 var featureDefaults = map[string]bool{
+	FeatureAppVisibility:      false,
 	FeatureDistributedRunners: true,
 	FeatureSagas:              true,
 }
@@ -134,6 +138,12 @@ func IsEnabled(name string) bool {
 }
 
 // Feature predicate functions
+
+// AppVisibility returns whether the appvisibility feature is enabled.
+// Negotiate app visibility protocols over the cloud uplink
+func AppVisibility() bool {
+	return IsEnabled(FeatureAppVisibility)
+}
 
 // DistributedRunners returns whether the distributedrunners feature is enabled.
 // Schedule jobs across multiple runner nodes
