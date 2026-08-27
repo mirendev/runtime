@@ -216,9 +216,11 @@ test-blackbox-distributed: ## Run blackbox tests against distributed environment
 	# 'TestA|TestB'); the sharded CI matrix sets it to one shard's tests. Unset,
 	# the whole suite runs, which is what local use wants. The timeout is a
 	# generous upper bound for the whole-suite local case; a shard finishes well
-	# inside it.
+	# inside it. The cloud-backed tests are skipped (same set as test-blackbox):
+	# unset BLACKBOX_RUN would otherwise run them here, and they need the cloud
+	# repo and restart the server.
 	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 \
-		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^TestPOP$$' ./blackbox/...
+		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$$' ./blackbox/...
 
 .PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times blackbox-groups-distributed measure-blackbox-times-distributed
 

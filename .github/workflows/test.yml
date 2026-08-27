@@ -133,7 +133,7 @@ jobs:
         # The code paths that can break the multi-node topology, plus this
         # workflow itself so a change to the gating is exercised by the PR
         # that makes it.
-        if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
+        if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|hack/blackbox-groups-distributed\.json|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
           echo "distributed-relevant changes found"
           echo "distributed=true" >> "$GITHUB_OUTPUT"
         else

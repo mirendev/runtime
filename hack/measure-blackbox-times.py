@@ -73,12 +73,25 @@ def parse_log(lines, environment):
     return sorted(tests.values(), key=lambda t: -t["elapsed_s"])
 
 
-def run_suite():
-    """Run the full blackbox suite with -v and stream its output back."""
+def run_suite(environment):
+    """Run the full blackbox suite with -v and stream its output back.
+
+    The subprocess topology is driven by `environment` so the tests actually
+    run where their timings are recorded: peers sets BLACKBOX_MODE=peers,
+    standalone clears it. The cloud-backed tests are excluded (same set as the
+    `test-blackbox` target): they need the cloud repo and restart the server.
+    """
     cmd = ["go", "test", "-tags", "blackbox", "-timeout", "15m", "-v",
-           "-count=1", "-p", "1", "-skip", "^TestPOP$", "./blackbox/..."]
+           "-count=1", "-p", "1",
+           "-skip", "^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$",
+           "./blackbox/..."]
+    env = os.environ.copy()
+    if environment == "peers":
+        env["BLACKBOX_MODE"] = "peers"
+    else:
+        env.pop("BLACKBOX_MODE", None)
     print(f"Running: {' '.join(cmd)}\n", file=sys.stderr)
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     sys.stderr.write(proc.stderr)
     if proc.returncode != 0:
         print(f"\nWarning: suite exited {proc.returncode}; timing data may be "
@@ -123,7 +136,7 @@ def main():
             lines = f.read().splitlines()
         source = args.source or f"parsed from {args.from_log}"
     else:
-        lines = run_suite()
+        lines = run_suite(args.env)
         source = args.source or "local `go test -tags blackbox -v` run"
 
     tests = parse_log(lines, args.env)
