@@ -211,6 +211,13 @@ to the coordinator as you write.
 variant = "standard"
 ```
 
+:::warning[SQLite is still early]
+The SQLite addon's backup path still has sharp edges. Per-app backup
+authorization is not yet implemented. If a runner starts while the coordinator
+is unreachable, backups stay off until the runner restarts. Use it for data you
+can recover, and [tell us what breaks](https://github.com/mirendev/runtime/issues).
+:::
+
 That difference has consequences worth knowing:
 
 - **One writer.** SQLite allows a single writer, so a service with a SQLite
