@@ -35,6 +35,7 @@ import (
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
@@ -1337,7 +1338,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	}
 
 	if status != nil {
-		so.Update().SetMessage("Launching builder")
+		so.Update().SetMessage("Preparing deployment")
 		_, _ = status.Send(ctx, so)
 	}
 
@@ -1489,7 +1490,7 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 
 	if status != nil {
 		so := new(build_v1alpha.Status)
-		so.Update().SetMessage("Launching builder")
+		so.Update().SetMessage("Preparing deployment")
 		_, _ = status.Send(ctx, so)
 	}
 
@@ -1585,46 +1586,55 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		return nil, err
 	}
 
-	buildLog := &buildLogWriter{
-		log:      b.Log,
-		writer:   b.LogWriter,
-		entityID: appRec.ID.String(),
-		version:  mrv.Version,
-	}
+	var res *BuildResult
+	var artifactName string
+	if buildStack.Stack == "image" {
+		mrv.ImageUrl = containerdx.NormalizeImageReference(buildStack.Input)
+		NewRPCStatusSender(status, b.Log).SendImage(mrv.ImageUrl)
+		b.Log.Info("using upstream image directly", "app", name, "image", mrv.ImageUrl)
+	} else {
+		buildLog := &buildLogWriter{
+			log:      b.Log,
+			writer:   b.LogWriter,
+			entityID: appRec.ID.String(),
+			version:  mrv.Version,
+		}
 
-	deploy.setPhase(ctx, deploylifecycle.PhaseBuilding)
+		deploy.setPhase(ctx, deploylifecycle.PhaseBuilding)
 
-	// runBuildkitBuild is also the saga action's implementation, so the
-	// span structure (buildkit + locate_artifact bundled together) is
-	// slightly coarser than the pre-saga code's two separate spans.
-	// Trace continuity matters more than the extra granularity.
-	bkCtx, bkSpan := buildTracer.Start(ctx, "build.buildkit",
-		trace.WithAttributes(attribute.String("miren.build.image", mrv.ImageUrl)))
-	statusSender := NewRPCStatusSender(status, b.Log)
-	res, artifactID, finalURL, err := b.runBuildkitBuild(bkCtx, runBuildkitBuildInputs{
-		SourceDir:      path,
-		AppName:        name,
-		VersionName:    mrv.Version,
-		ImageURL:       mrv.ImageUrl,
-		BuildStack:     buildStack,
-		AppConfig:      ac,
-		ExistingConfig: existingCfg,
-		CLIEnvVars:     envVars,
-	}, statusSender, buildLog)
-	if err != nil {
-		bkSpan.RecordError(err)
-		bkSpan.SetStatus(codes.Error, err.Error())
+		// runBuildkitBuild is also the saga action's implementation, so the
+		// span structure (buildkit + locate_artifact bundled together) is
+		// slightly coarser than the pre-saga code's two separate spans.
+		// Trace continuity matters more than the extra granularity.
+		bkCtx, bkSpan := buildTracer.Start(ctx, "build.buildkit",
+			trace.WithAttributes(attribute.String("miren.build.image", mrv.ImageUrl)))
+		statusSender := NewRPCStatusSender(status, b.Log)
+		var artifactID, finalURL string
+		res, artifactID, finalURL, err = b.runBuildkitBuild(bkCtx, runBuildkitBuildInputs{
+			SourceDir:      path,
+			AppName:        name,
+			VersionName:    mrv.Version,
+			ImageURL:       mrv.ImageUrl,
+			BuildStack:     buildStack,
+			AppConfig:      ac,
+			ExistingConfig: existingCfg,
+			CLIEnvVars:     envVars,
+		}, statusSender, buildLog)
+		if err != nil {
+			bkSpan.RecordError(err)
+			bkSpan.SetStatus(codes.Error, err.Error())
+			bkSpan.End()
+			return nil, err
+		}
 		bkSpan.End()
-		return nil, err
+
+		deploy.setPhase(ctx, deploylifecycle.PhasePushing)
+
+		mrv.Artifact = entity.Id(artifactID)
+		mrv.ImageUrl = finalURL
+		artifactName = strings.TrimPrefix(artifactID, "artifact/")
+		b.Log.Debug("build complete", "image", mrv.ImageUrl)
 	}
-	bkSpan.End()
-
-	deploy.setPhase(ctx, deploylifecycle.PhasePushing)
-
-	mrv.Artifact = entity.Id(artifactID)
-	mrv.ImageUrl = finalURL
-	artifactName := strings.TrimPrefix(artifactID, "artifact/")
-	b.Log.Debug("build complete", "image", mrv.ImageUrl)
 
 	procfileServices, err := b.readProcFile(tr)
 	if err != nil {
@@ -1842,7 +1852,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 
 	// Log the deployment to the app's logs
-	b.logDeployment(ctx, name, mrv.Version, artifactName)
+	b.logDeployment(ctx, name, mrv.Version, artifactName, mrv.ImageUrl)
 
 	var ephLabel string
 	if ephemeral != nil {
@@ -2040,7 +2050,7 @@ func (b *Builder) provisionAddons(ctx context.Context, appName string, ac *appco
 	return nil
 }
 
-func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact string) {
+func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact, image string) {
 	if b.LogWriter == nil {
 		return
 	}
@@ -2053,18 +2063,26 @@ func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact 
 		return
 	}
 
-	// Format in Heroku logfmt style
+	// Format in Heroku logfmt style. Source builds name their stored artifact;
+	// direct-image deploys have no Artifact entity, so record the upstream image
+	// rather than emitting a misleading empty artifact field.
 	logMsg := fmt.Sprintf("version=%s artifact=%s status=deployed", version, artifact)
+	attrs := map[string]string{
+		"source":  "build",
+		"version": version,
+	}
+	if artifact != "" {
+		attrs["artifact"] = artifact
+	} else {
+		logMsg = fmt.Sprintf("version=%s image=%s status=deployed", version, image)
+		attrs["image"] = image
+	}
 
 	err = b.LogWriter.WriteEntry(appRec.ID.String(), observability.LogEntry{
-		Timestamp: time.Now(),
-		Stream:    observability.UserOOB,
-		Body:      logMsg,
-		Attributes: map[string]string{
-			"source":   "build",
-			"version":  version,
-			"artifact": artifact,
-		},
+		Timestamp:  time.Now(),
+		Stream:     observability.UserOOB,
+		Body:       logMsg,
+		Attributes: attrs,
 	})
 	if err != nil {
 		b.Log.Error("failed to write deployment log entry", "error", err, "app", appName)
@@ -2140,51 +2158,52 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 			result.SetEnvVars(&envKeys)
 		}
 
-		// Check for explicit dockerfile in build config
-		if ac.Build != nil && ac.Build.Dockerfile != "" {
-			result.SetBuildDockerfile(ac.Build.Dockerfile)
-		}
 	}
 
 	// Detect stack and build a BuildResult to use with buildVersionConfig
 	var stackName string
 	var buildResult BuildResult
 	var detectedStack stackbuild.Stack
-	var hasDockerfile bool
+	var directImage bool
 
-	// Check for Dockerfile.miren first
-	if f, err := tr.Open("Dockerfile.miren"); err == nil {
-		f.Close()
-		hasDockerfile = true
-		stackName = "dockerfile"
-		result.SetBuildDockerfile("Dockerfile.miren")
-	} else if ac != nil && ac.Build != nil && ac.Build.Dockerfile != "" {
-		hasDockerfile = true
-		stackName = "dockerfile"
-	}
-
-	// Always try to detect stack for analysis (env vars, events, etc.)
-	// even when dockerfile is present
-	var detectOpts stackbuild.BuildOptions
-	detectOpts.Log = b.Log
+	detectOpts := stackbuild.BuildOptions{Log: b.Log}
 	if ac != nil {
 		detectOpts.Name = ac.Name
 	}
-	stack, err := stackbuild.DetectStack(path, detectOpts)
+	recordDirectImage := func(image string) {
+		stackName = "image"
+		directImage = true
+		var event build_v1alpha.DetectionEvent
+		event.SetKind("source")
+		event.SetName("image")
+		event.SetMessage(fmt.Sprintf("Using service image %s directly", image))
+		events = append(events, event)
+	}
+
+	resolution, err := b.resolveBuildSource(path, ac, detectOpts.Name)
 	if err != nil {
-		b.Log.Debug("no stack detected", "error", err)
-		if !hasDockerfile {
+		return err
+	}
+	switch resolution.BuildStack.Stack {
+	case "dockerfile":
+		stackName = "dockerfile"
+		result.SetBuildDockerfile(resolution.BuildStack.Input)
+		// Stack detection is supplementary for Dockerfile apps: it contributes
+		// framework events and required env vars without changing the source.
+		detectedStack, _ = stackbuild.DetectStack(path, detectOpts)
+	case "image":
+		recordDirectImage(resolution.BuildStack.Input)
+	case "auto":
+		detectedStack = resolution.DetectedStack
+		if detectedStack == nil {
+			b.Log.Debug("no stack detected", "error", resolution.DetectionErr)
 			stackName = "unknown"
+			break
 		}
-	} else {
-		detectedStack = stack
-		// Only use detected stack name/config if no dockerfile
-		if !hasDockerfile {
-			stackName = stack.Name()
-			buildResult.Entrypoint = stack.Entrypoint()
-			buildResult.Command = stack.WebCommand()
-			buildResult.WorkingDir = stack.Image().Config.WorkingDir
-		}
+		stackName = detectedStack.Name()
+		buildResult.Entrypoint = detectedStack.Entrypoint()
+		buildResult.Command = detectedStack.WebCommand()
+		buildResult.WorkingDir = detectedStack.Image().Config.WorkingDir
 	}
 
 	result.SetStack(stackName)
@@ -2258,8 +2277,12 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	}
 
 	// Use buildVersionConfig to compute services - same logic as BuildFromTar
+	configBuildResult := &buildResult
+	if directImage {
+		configBuildResult = nil
+	}
 	spec := buildVersionConfig(ConfigInputs{
-		BuildResult:      &buildResult,
+		BuildResult:      configBuildResult,
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
 	})
@@ -2286,7 +2309,7 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 		if svc.Command != "" {
 			svcInfo.SetCommand(svc.Command)
 			// Determine source for this service
-			source := determineServiceSource(svc.Name, svc.Command, ac, procfileServices, &buildResult)
+			source := determineServiceSource(svc.Name, svc.Command, ac, procfileServices, configBuildResult)
 			svcInfo.SetSource(source)
 
 			// Add event when we inject a synthetic web service from stack detection

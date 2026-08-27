@@ -86,6 +86,7 @@ Create `.miren/app.toml` when you need to:
 - **Set environment variables** — configuration your app reads at runtime
 - **Tune scaling** — adjust concurrency thresholds or use fixed instance counts
 - **Attach persistent disks** — for databases or file storage
+- **Run an existing image** — deploy a prebuilt container without a Dockerfile or source build
 - **Customize builds** — specify a Dockerfile, language version, or extra build steps
 - **Configure addons** — managed databases and other backing services (see [Addons](/addons))
 
@@ -115,6 +116,14 @@ command = "node server.js"
 
 [services.worker]
 command = "node worker.js"
+```
+
+To deploy an existing image as the app, set `image` on the `web` service. Miren uses it directly when no Dockerfile is configured:
+
+```toml
+[services.web]
+image = "ghcr.io/example/myapp:latest"
+port = 8080
 ```
 
 See [Services](/services) for patterns like running databases alongside your app.

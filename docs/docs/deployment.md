@@ -1,6 +1,6 @@
 ---
 title: Deployment
-description: How miren deploy works — uploading code, building images, and activating new versions.
+description: How miren deploy uploads an app, selects or builds an image, and activates new versions.
 keywords: [deploy, build, rollback, versions, container image]
 ---
 
@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Deployment
 
-Deployment is the core workflow of Miren — it takes your application code, builds a container image, and runs it on your server.
+Deployment is the core workflow of Miren. It takes your application source or configured container image and runs it on your server.
 
 ## Minimum working example
 
@@ -26,8 +26,8 @@ That's the whole thing — Miren detects your language, builds the image on the 
 
 When you run `miren deploy`, Miren:
 
-1. **Uploads your files** — sends your source code to the server (after your first deploy, only changed files are transferred)
-2. **Detects and builds on the server** — the server inspects your source code to detect the [language, framework](/guides), and [services](/services), then builds a container image using the detected stack (or your Dockerfile)
+1. **Uploads your files** — sends your project files and app configuration to the server (after your first deploy, only changed files are transferred)
+2. **Selects or builds an image** — uses a configured web image directly, or inspects your source to build an image from a detected [language or framework](/guides) or your Dockerfile
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
@@ -82,6 +82,24 @@ You'll see the detected stack, services, entrypoint, and what files and framewor
 If a build fails, Miren displays the build errors and the deployment is marked as failed in history (visible via `miren app history`).
 
 Use `--explain` (or `-x`) to watch each build step as it runs. This is the default in non-interactive environments; in interactive terminals, Miren shows a compact progress UI instead.
+
+### Deploying an existing image
+
+If your app is already packaged as a container image, set it on the `web` service:
+
+```toml title=".miren/app.toml"
+name = "myapp"
+
+[services.web]
+image = "ghcr.io/example/myapp:latest"
+port = 8080
+```
+
+Miren normalizes the reference and launches that image directly. It does not run BuildKit, push a derived image, or create a build artifact. When `command` is unset, the container uses the image's default entrypoint and command.
+
+:::note[Image selection]
+A Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren` takes precedence over `services.web.image`. Without one, the web image takes precedence over automatic source detection, even if the project directory also contains recognizable source files. Images on other services do not suppress source detection. If detection finds no buildable source, Miren uses a lone service image as the fallback; with several service images, set `services.web.image` to choose the primary one.
+:::
 
 ## Deploy-Time Environment Variables
 

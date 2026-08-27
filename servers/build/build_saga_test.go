@@ -10,10 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -107,6 +111,14 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 // real action would have walked finds something. Real buildImage is
 // exercised by blackbox tests under iso.
 func stubBuildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
+	// Exercise the production direct-image action through the saga context. It
+	// needs no BuildKit or Artifact fixture, which is precisely the contract
+	// image-only deploys rely on. Source builds continue through the deterministic
+	// stub below.
+	if in.BuildStack.Stack == "image" {
+		return buildImage(ctx, in)
+	}
+
 	deps := saga.Get[*buildSagaDeps](ctx)
 
 	digest := "sha256:" + in.VersionName + "-digest"
@@ -150,6 +162,18 @@ func dockerfileTarball(t *testing.T) map[string]string {
 	}
 }
 
+func imageOnlyTarball(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{
+		".miren/app.toml": `name = "demo"
+
+[services.web]
+image = "nginx:alpine"
+port = 80
+`,
+	}
+}
+
 func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	ctx := context.Background()
 
@@ -182,6 +206,164 @@ func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	}
 }
 
+func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
+	ctx := context.Background()
+
+	h := newSagaTestHarness(t)
+	h.streams.Register("stream-image", makeTar(t, imageOnlyTarball(t)))
+
+	rec := &recordingSender{}
+	h.statuses.Register("stream-image", rec)
+	t.Cleanup(func() { h.statuses.Unregister("stream-image") })
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-image").
+		WithID("test-image-only").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var application core_v1alpha.App
+	require.NoError(t, h.builder.ec.Get(ctx, "demo", &application))
+	require.NotEmpty(t, application.ActiveVersion)
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Equal(t, "docker.io/library/nginx:alpine", version.ImageUrl)
+	assert.Empty(t, version.Artifact, "direct-image versions do not invent an Artifact")
+
+	var configVersion core_v1alpha.ConfigVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, version.ConfigVersion, &configVersion))
+	require.Len(t, configVersion.Spec.Services, 1)
+	assert.Equal(t, "web", configVersion.Spec.Services[0].Name)
+	assert.Equal(t, "nginx:alpine", configVersion.Spec.Services[0].Image)
+	assert.Empty(t, configVersion.Spec.Services[0].Command)
+	assert.Contains(t, rec.Images, "docker.io/library/nginx:alpine")
+}
+
+func TestImageSourceSelection(t *testing.T) {
+	t.Run("web image captures explicit intent", func(t *testing.T) {
+		ac := &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+			"web": {Image: "example/web:v1"},
+			"db":  {Image: "example/db:v1"},
+		}}
+		assert.Equal(t, "example/web:v1", webImageSource(ac))
+		assert.Empty(t, webImageSource(nil))
+	})
+
+	tests := []struct {
+		name    string
+		config  *appconfig.AppConfig
+		want    string
+		wantErr string
+	}{
+		{name: "no config"},
+		{
+			name: "one non-web image is unambiguous",
+			config: &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+				"worker": {Image: "example/worker:v1"},
+			}},
+			want: "example/worker:v1",
+		},
+		{
+			name: "several non-web images are ambiguous",
+			config: &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+				"worker": {Image: "example/worker:v1"},
+				"cron":   {Image: "example/cron:v1"},
+			}},
+			wantErr: "set services.web.image",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := fallbackImageSource(tt.config)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestDetectBuildStack_ImagePrecedence(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	b := &Builder{Log: log}
+	webImage := &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+		"web": {Image: "nginx:alpine"},
+	}}
+	sidecarImage := &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+		"db": {Image: "postgres:alpine"},
+	}}
+	writeNodeSource := func(t *testing.T, dir string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "index.js"), []byte("console.log('hello')\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"scripts":{"start":"node index.js"}}`), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
+	}
+
+	t.Run("web image when source is not buildable", func(t *testing.T) {
+		stack, err := b.detectBuildStack(t.TempDir(), webImage, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "image", stack.Stack)
+		assert.Equal(t, "nginx:alpine", stack.Input)
+	})
+
+	t.Run("web image beats detected source", func(t *testing.T) {
+		dir := t.TempDir()
+		writeNodeSource(t, dir)
+		stack, err := b.detectBuildStack(dir, webImage, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "image", stack.Stack)
+		assert.Equal(t, "nginx:alpine", stack.Input)
+	})
+
+	t.Run("sidecar image does not suppress detected source", func(t *testing.T) {
+		dir := t.TempDir()
+		writeNodeSource(t, dir)
+		stack, err := b.detectBuildStack(dir, sidecarImage, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "auto", stack.Stack)
+		assert.Empty(t, stack.Input)
+	})
+
+	t.Run("one non-web image is a fallback", func(t *testing.T) {
+		stack, err := b.detectBuildStack(t.TempDir(), sidecarImage, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "image", stack.Stack)
+		assert.Equal(t, "postgres:alpine", stack.Input)
+	})
+
+	t.Run("dockerfile retains precedence", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.miren"), []byte("FROM alpine\n"), 0o644))
+		stack, err := b.detectBuildStack(dir, webImage, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "dockerfile", stack.Stack)
+		assert.Equal(t, "Dockerfile.miren", stack.Input)
+	})
+
+	t.Run("configured dockerfile beats discovered default", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile.miren"), []byte("FROM alpine\n"), 0o644))
+		config := &appconfig.AppConfig{
+			Build:    &appconfig.BuildConfig{Dockerfile: "Dockerfile.production"},
+			Services: webImage.Services,
+		}
+		stack, err := b.detectBuildStack(dir, config, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "dockerfile", stack.Stack)
+		assert.Equal(t, "Dockerfile.production", stack.Input)
+	})
+
+	t.Run("no source and no image keeps the existing error", func(t *testing.T) {
+		_, err := b.detectBuildStack(t.TempDir(), &appconfig.AppConfig{}, "demo", nil)
+		require.ErrorContains(t, err, "no supported stack detected for app demo")
+	})
+}
+
 func TestBuildSaga_ReceiveTar_EmitsStatusUpdates(t *testing.T) {
 	ctx := context.Background()
 
@@ -205,7 +387,7 @@ func TestBuildSaga_ReceiveTar_EmitsStatusUpdates(t *testing.T) {
 	// the staging work. We don't pin exact equality on the entire slice
 	// (later actions might emit too as the saga grows) — just verify
 	// these two appeared in order.
-	wantInOrder := []string{"Reading application data", "Launching builder"}
+	wantInOrder := []string{"Reading application data", "Preparing deployment"}
 	if !containsInOrder(rec.Messages, wantInOrder) {
 		t.Errorf("missing expected messages in order: got %v, want subsequence %v", rec.Messages, wantInOrder)
 	}

@@ -120,6 +120,50 @@ func TestBuildSaga_Tracked_CreatesAndActivatesDeployment(t *testing.T) {
 	assert.Nil(t, blocking, "an activated deployment must not keep the lock")
 }
 
+// A direct-image deploy has no build or push phase to report, but it must still
+// carry the server-owned deployment record through activation and release its
+// lock. This also exercises the production image branch with BuildKit absent.
+func TestBuildSaga_TrackedImage_ActivatesWithoutBuildPhases(t *testing.T) {
+	ctx := context.Background()
+
+	h := newDeploySagaHarness(t)
+	h.streams.Register("stream-image", makeTar(t, imageOnlyTarball(t)))
+
+	sender := &recordingSender{}
+	h.statuses.Register("stream-image", sender)
+	t.Cleanup(func() { h.statuses.Unregister("stream-image") })
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-image").
+		Input("deploy_cluster_id", "prod").
+		WithID("test-tracked-image").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+
+	rec := records[0]
+	assert.Equal(t, deploylifecycle.StatusActive, rec.Status())
+	assert.Equal(t, string(deploylifecycle.PhaseActivating), rec.Deployment.Phase)
+	assert.NotEmpty(t, rec.AppVersion(), "the direct-image version must be recorded")
+
+	var phases []string
+	for _, deployment := range sender.Deployments {
+		phases = append(phases, deployment.Phase)
+	}
+	assert.Equal(t, []string{
+		string(deploylifecycle.PhasePreparing),
+		string(deploylifecycle.PhaseActivating),
+	}, phases, "a direct-image deploy must not report build or push work")
+
+	blocking, err := h.builder.deploy.Locks().Blocking(ctx, "demo")
+	require.NoError(t, err)
+	assert.Nil(t, blocking, "an activated direct-image deployment must not keep the lock")
+}
+
 // The deployment ID must reach the client over the status stream so it can
 // display and cancel a deployment it did not create.
 func TestBuildSaga_Tracked_EmitsDeploymentProgress(t *testing.T) {

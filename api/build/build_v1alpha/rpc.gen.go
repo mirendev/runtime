@@ -23,6 +23,8 @@ type StatusUpdate interface {
 	SetLog(*LogEntry)
 	Deployment() *DeploymentProgress
 	SetDeployment(*DeploymentProgress)
+	Image() string
+	SetImage(string)
 }
 
 type statusUpdate struct {
@@ -31,6 +33,7 @@ type statusUpdate struct {
 	U_Error      *string              `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
 	U_Log        **LogEntry           `cbor:"4,keyasint,omitempty" json:"log,omitempty"`
 	U_Deployment **DeploymentProgress `cbor:"5,keyasint,omitempty" json:"deployment,omitempty"`
+	U_Image      *string              `cbor:"6,keyasint,omitempty" json:"image,omitempty"`
 }
 
 func (v *statusUpdate) Which() string {
@@ -49,6 +52,9 @@ func (v *statusUpdate) Which() string {
 	if v.U_Deployment != nil {
 		return "deployment"
 	}
+	if v.U_Image != nil {
+		return "image"
+	}
 	return ""
 }
 
@@ -64,6 +70,7 @@ func (v *statusUpdate) SetMessage(val string) {
 	v.U_Error = nil
 	v.U_Log = nil
 	v.U_Deployment = nil
+	v.U_Image = nil
 	v.U_Message = &val
 }
 
@@ -79,6 +86,7 @@ func (v *statusUpdate) SetBuildkit(val []byte) {
 	v.U_Error = nil
 	v.U_Log = nil
 	v.U_Deployment = nil
+	v.U_Image = nil
 	v.U_Buildkit = &val
 }
 
@@ -94,6 +102,7 @@ func (v *statusUpdate) SetError(val string) {
 	v.U_Buildkit = nil
 	v.U_Log = nil
 	v.U_Deployment = nil
+	v.U_Image = nil
 	v.U_Error = &val
 }
 
@@ -109,6 +118,7 @@ func (v *statusUpdate) SetLog(val *LogEntry) {
 	v.U_Buildkit = nil
 	v.U_Error = nil
 	v.U_Deployment = nil
+	v.U_Image = nil
 	v.U_Log = &val
 }
 
@@ -124,7 +134,24 @@ func (v *statusUpdate) SetDeployment(val *DeploymentProgress) {
 	v.U_Buildkit = nil
 	v.U_Error = nil
 	v.U_Log = nil
+	v.U_Image = nil
 	v.U_Deployment = &val
+}
+
+func (v *statusUpdate) Image() string {
+	if v.U_Image == nil {
+		return ""
+	}
+	return *v.U_Image
+}
+
+func (v *statusUpdate) SetImage(val string) {
+	v.U_Message = nil
+	v.U_Buildkit = nil
+	v.U_Error = nil
+	v.U_Log = nil
+	v.U_Deployment = nil
+	v.U_Image = &val
 }
 
 type statusData struct {

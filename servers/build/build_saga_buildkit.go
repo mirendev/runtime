@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
@@ -64,6 +65,12 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
 	status := deps.statuses.SenderFor(in.StreamID)
+
+	if in.BuildStack.Stack == "image" {
+		image := containerdx.NormalizeImageReference(in.BuildStack.Input)
+		status.SendImage(image)
+		return buildImageOut{FinalImageURL: image}, nil
+	}
 
 	if b.BuildKit == nil {
 		status.SendError("BuildKit not configured - ensure server is running with BuildKit enabled")

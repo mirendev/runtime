@@ -300,7 +300,9 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 type BuildStack struct {
 	Stack   string
 	CodeDir string
-	Input   string
+	// Input is the Dockerfile path for dockerfile builds and the upstream image
+	// reference for direct-image deploys.
+	Input string
 
 	Version     string
 	OnBuild     []string

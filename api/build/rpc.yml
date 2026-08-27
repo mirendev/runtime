@@ -33,6 +33,12 @@ types:
           - name: deployment
             type: DeploymentProgress
             index: 5
+          - name: image
+            type: string
+            index: 6
+            doc: >
+              Normalized upstream image reference selected for a direct-image
+              deploy. No image was built or pushed by Miren.
 
   - type: DeploymentProgress
     doc: >
@@ -393,4 +399,3 @@ interfaces:
             doc: Information about how to access the deployed app
           - name: version_short_id
             type: string
-
