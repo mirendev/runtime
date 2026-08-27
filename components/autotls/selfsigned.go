@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -44,23 +45,17 @@ func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) e
 	}
 
 	server := &http.Server{
-		Addr:              ":443",
 		Handler:           h,
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	go func() {
-		log.Info("starting HTTPS server with self-signed cert", "addr", ":443")
-		err := server.ListenAndServeTLS("", "")
-		if err != nil && err != http.ErrServerClosed {
-			log.Error("error serving HTTPS", "error", err)
-		}
-	}()
+	httpsListener, err := net.Listen("tcp", ":443")
+	if err != nil {
+		return fmt.Errorf("listen :443: %w", err)
+	}
 
 	// Also start HTTP server on port 80 that redirects to HTTPS
 	httpServer := &http.Server{
-		Addr: ":80",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host := r.Host
 			if hostWithoutPort, _, err := net.SplitHostPort(host); err == nil {
@@ -71,11 +66,22 @@ func ServeTLSSelfSigned(ctx context.Context, log *slog.Logger, h http.Handler) e
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	httpListener, err := net.Listen("tcp", ":80")
+	if err != nil {
+		_ = httpsListener.Close()
+		return fmt.Errorf("listen :80: %w", err)
+	}
+
+	go func() {
+		log.Info("starting HTTPS server with self-signed cert", "addr", ":443")
+		if err := server.ServeTLS(httpsListener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
 
 	go func() {
 		log.Info("starting HTTP server for HTTPS redirect", "addr", ":80")
-		err := httpServer.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(httpListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("error serving HTTP", "error", err)
 		}
 	}()

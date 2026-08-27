@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -64,7 +66,24 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 			return ctx
 		},
 	}
-	go r.server.ListenAndServe()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+
+	go func() {
+		if err := r.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			r.Log.Error("OCI registry stopped", "error", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := r.server.Shutdown(shutdownCtx); err != nil {
+			r.Log.Warn("OCI registry shutdown", "error", err)
+		}
+	}()
 	return nil
 }
 

@@ -85,7 +85,6 @@ func NewExternalComponent(log *slog.Logger, socketPath string) *Component {
 	return &Component{
 		Log:        log,
 		socketPath: socketPath,
-		running:    true, // External daemon is assumed to be running
 		external:   true,
 	}
 }
@@ -157,6 +156,9 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	c.hostsPath = hostsPath
 	if err := c.writeHostsFile(config.RegistryIP); err != nil {
 		return fmt.Errorf("failed to write hosts file: %w", err)
+	}
+	if config.RegistryIP != "" {
+		c.Log.Info("updated buildkit hosts file with registry IP", "ip", config.RegistryIP)
 	}
 
 	// Check if container already exists

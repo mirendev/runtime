@@ -84,4 +84,4 @@ func addCommands(d *mflags.Dispatcher) {
 }
 
 // setupServerComponents is deprecated and will be removed.
-// All server components are now initialized explicitly via ServerState.
+// Server components are initialized explicitly by the server lifecycle.

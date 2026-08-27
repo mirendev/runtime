@@ -77,6 +77,7 @@ import (
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/oidcauth"
+	"miren.dev/runtime/pkg/readiness"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/secret"
@@ -147,6 +148,10 @@ type CoordinatorConfig struct {
 
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component
+
+	// Readiness gates consumers that can become reachable before all of their
+	// runtime dependencies have finished starting.
+	Readiness readiness.Waiter
 
 	// HTTPRequestTimeout is the timeout for HTTP requests to app sandboxes
 	HTTPRequestTimeout time.Duration
@@ -1565,6 +1570,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.sagaBuilder = sagaBuilder
 		buildHandler = sagaBuilder
 	}
+	buildHandler = build.WithReadiness(buildHandler, c.Readiness, c.Log)
 	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(buildHandler))
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
@@ -1575,7 +1581,8 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to create deployment server", "error", err)
 		return err
 	}
-	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+	deploymentHandler := deployment.WithReadiness(ds, c.Readiness, c.Log)
+	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(deploymentHandler))
 
 	oidcServer := oidcbindingsrv.NewServer(c.Log, ec, eac)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcServer))
