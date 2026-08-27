@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Improvements**
+- **`post_import` is gone from app.toml** - The key was parsed and validated but never read by anything, so a deploy that set it reported success while the command silently never ran. It came out of the docs in [#884](https://github.com/mirendev/runtime/pull/884); now it's out of the config itself. If your `app.toml` still has a `post_import` line, delete it — unknown keys are a parse error, so it will now fail validation instead of being quietly ignored. Move the work to a [deploy task](/tasks).
+
 ---
 
 ## v0.14.0
