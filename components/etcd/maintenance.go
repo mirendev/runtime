@@ -150,6 +150,33 @@ func (e *EtcdComponent) newMaintenanceClient(endpoint string) (*clientv3.Client,
 	return clientv3.New(cfg)
 }
 
+// waitForHealthy proves that etcd can answer its API, not just that its TCP
+// listener has appeared. Boot graph consumers use the returned endpoint
+// immediately, so a listening but still-unusable server is not ready.
+func (e *EtcdComponent) waitForHealthy(ctx context.Context) error {
+	if err := e.WaitForReady(ctx, loopbackHost, e.clientPort); err != nil {
+		return err
+	}
+
+	scheme := "http"
+	if e.config.TLS != nil {
+		scheme = "https"
+	}
+	endpoint := etcdURL(scheme, loopbackHost, e.clientPort)
+	client, err := e.newMaintenanceClient(endpoint)
+	if err != nil {
+		return fmt.Errorf("creating readiness client: %w", err)
+	}
+	defer client.Close()
+
+	readyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := client.Status(readyCtx, endpoint); err != nil {
+		return fmt.Errorf("checking etcd status: %w", err)
+	}
+	return nil
+}
+
 func buildMaintenanceTLSConfig(certsDir string) (*tls.Config, error) {
 	certFile := filepath.Join(certsDir, "server.crt")
 	keyFile := filepath.Join(certsDir, "server.key")
@@ -191,12 +218,13 @@ func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv
 	}
 
 	noSpace, alarmedMembers := e.checkNoSpace(ctx, client)
+	quotaBackendBytes := e.quotaBackendBytes.Load()
 
 	attrs := []any{
 		"db_size_bytes", dbSize,
 		"db_size_in_use_bytes", dbSizeInUse,
 		"bloat_ratio", bloatRatio,
-		"quota_bytes", e.quotaBackendBytes,
+		"quota_bytes", quotaBackendBytes,
 		"nospace_alarm", noSpace,
 	}
 
@@ -213,16 +241,16 @@ func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv
 
 	e.emitMetrics(ctx, dbSize, dbSizeInUse, bloatRatio, noSpace)
 
-	switch decideMaintenance(dbSize, dbSizeInUse, e.quotaBackendBytes, noSpace) {
+	switch decideMaintenance(dbSize, dbSizeInUse, quotaBackendBytes, noSpace) {
 	case actionRecover:
 		e.recoverFromNoSpace(ctx, client, endpoint, resp.Header.Revision, dbSize, alarmedMembers)
 	case actionReclaim:
 		e.Log.Warn("etcd backend near quota, reclaiming space",
-			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", e.quotaBackendBytes)
+			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", quotaBackendBytes)
 		e.reclaimSpace(ctx, client, endpoint, resp.Header.Revision, dbSize)
 	case actionWarnFull:
 		e.Log.Error("etcd backend near quota and mostly live data; compaction/defrag cannot reclaim enough space — raise --quota-backend-bytes or reduce the keyspace",
-			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", e.quotaBackendBytes)
+			"db_size_bytes", dbSize, "db_size_in_use_bytes", dbSizeInUse, "quota_bytes", quotaBackendBytes)
 	case actionDefrag:
 		e.defragment(ctx, client, endpoint, dbSize)
 	case actionNone:
@@ -269,7 +297,7 @@ func (e *EtcdComponent) reclaimSpace(ctx context.Context, client *clientv3.Clien
 // manual operator intervention into a self-healing event.
 func (e *EtcdComponent) recoverFromNoSpace(ctx context.Context, client *clientv3.Client, endpoint string, rev, dbSize int64, members []uint64) {
 	e.Log.Error("etcd NOSPACE alarm armed, attempting self-recovery (compact+defrag+disarm)",
-		"db_size_bytes", dbSize, "quota_bytes", e.quotaBackendBytes)
+		"db_size_bytes", dbSize, "quota_bytes", e.quotaBackendBytes.Load())
 
 	e.reclaimSpace(ctx, client, endpoint, rev, dbSize)
 
@@ -300,9 +328,10 @@ func (e *EtcdComponent) emitMetrics(ctx context.Context, dbSize, dbSizeInUse int
 	}
 
 	now := time.Now()
+	quotaBackendBytes := e.quotaBackendBytes.Load()
 	var headroom int64
-	if e.quotaBackendBytes > 0 {
-		headroom = e.quotaBackendBytes - dbSize // quota is enforced against physical DbSize
+	if quotaBackendBytes > 0 {
+		headroom = quotaBackendBytes - dbSize // quota is enforced against physical DbSize
 	}
 	alarm := 0.0
 	if noSpace {
@@ -312,7 +341,7 @@ func (e *EtcdComponent) emitMetrics(ctx context.Context, dbSize, dbSizeInUse int
 	points := []metrics.MetricPoint{
 		{Name: "etcd_db_size_bytes", Value: float64(dbSize), Timestamp: now},
 		{Name: "etcd_db_size_in_use_bytes", Value: float64(dbSizeInUse), Timestamp: now},
-		{Name: "etcd_backend_quota_bytes", Value: float64(e.quotaBackendBytes), Timestamp: now},
+		{Name: "etcd_backend_quota_bytes", Value: float64(quotaBackendBytes), Timestamp: now},
 		{Name: "etcd_quota_headroom_bytes", Value: float64(headroom), Timestamp: now},
 		{Name: "etcd_bloat_ratio", Value: bloatRatio, Timestamp: now},
 		{Name: "etcd_nospace_alarm", Value: alarm, Timestamp: now},

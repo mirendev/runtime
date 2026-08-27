@@ -59,9 +59,6 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	err := coord.Start(ctx)
 	r.NoError(err)
 
-	// Wait for coordinator to start
-	time.Sleep(1 * time.Second)
-
 	rcfg, err := coord.ServiceConfig()
 	r.NoError(err)
 

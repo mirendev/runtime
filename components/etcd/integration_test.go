@@ -47,14 +47,16 @@ func TestEtcdComponentIntegration(t *testing.T) {
 
 	// Use dynamic ports to avoid conflicts with parallel tests
 	clientPort := testutils.GetFreePort(t)
+	httpClientPort := testutils.GetFreePort(t)
 	peerPort := testutils.GetFreePort(t)
 
 	config := etcd.EtcdConfig{
-		Name:         "test-etcd",
-		ClientPort:   clientPort,
-		PeerPort:     peerPort,
-		InitialToken: "test-cluster",
-		ClusterState: "new",
+		Name:           "test-etcd",
+		ClientPort:     clientPort,
+		HTTPClientPort: httpClientPort,
+		PeerPort:       peerPort,
+		InitialToken:   "test-cluster",
+		ClusterState:   "new",
 	}
 
 	// Ensure cleanup

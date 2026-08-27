@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -49,9 +48,6 @@ func TestCoordinatorParse(t *testing.T) {
 	coord := coordinate.NewCoordinator(log, coordCfg)
 	err := coord.Start(ctx)
 	r.NoError(err)
-
-	// Wait for coordinator to start
-	time.Sleep(1 * time.Second)
 
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)

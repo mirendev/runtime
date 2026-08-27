@@ -86,8 +86,6 @@ func TestServer(t *testing.T) error {
 		return err
 	}
 
-	time.Sleep(time.Second)
-
 	// Create subnet from test deps
 	subnet := testDeps.Subnet
 

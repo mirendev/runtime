@@ -40,9 +40,6 @@ type Context struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	// ServerState holds explicit server dependencies
-	ServerState *ServerState
-
 	cancels []func()
 
 	ClientConfig  *clientconfig.Config
@@ -103,7 +100,6 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 		verbose:     len(flags.Verbose),
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
-		ServerState: NewServerState(),
 		CommandName: commandName,
 	}
 

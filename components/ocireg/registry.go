@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,14 +58,24 @@ func (r *Registry) Start(ctx context.Context, addr string) error {
 
 	r.Log.Info("Starting OCI Registry", "addr", addr, "path", path)
 
+	requestContext := context.WithoutCancel(ctx)
 	r.server = &http.Server{
 		Addr:    addr,
 		Handler: newMux(NewRegistryHandler(path, r.Log, r.EC), r.Issuer),
 		BaseContext: func(net.Listener) context.Context {
-			return ctx
+			return requestContext
 		},
 	}
-	go r.server.ListenAndServe()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+
+	go func() {
+		if err := r.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			r.Log.Error("OCI registry stopped", "error", err)
+		}
+	}()
 	return nil
 }
 

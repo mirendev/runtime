@@ -85,7 +85,6 @@ func NewExternalComponent(log *slog.Logger, socketPath string) *Component {
 	return &Component{
 		Log:        log,
 		socketPath: socketPath,
-		running:    true, // External daemon is assumed to be running
 		external:   true,
 	}
 }
@@ -157,6 +156,9 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	c.hostsPath = hostsPath
 	if err := c.writeHostsFile(config.RegistryIP); err != nil {
 		return fmt.Errorf("failed to write hosts file: %w", err)
+	}
+	if config.RegistryIP != "" {
+		c.Log.Info("updated buildkit hosts file with registry IP", "ip", config.RegistryIP)
 	}
 
 	// Check if container already exists
@@ -564,29 +566,46 @@ func (c *Component) monitorTask(monitorCtx context.Context, exitCh <-chan contai
 }
 
 func (c *Component) waitForReady(ctx context.Context) error {
-	// Wait for the Unix socket to be created and connectable
-	for range 30 {
-		// Check if socket file exists
+	// A connectable Unix socket only proves that something is listening. Make an
+	// API call so callers cannot start builds until buildkitd can serve them.
+	readyCtx, cancelReady := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelReady()
+
+	for {
 		if _, err := os.Stat(c.socketPath); err == nil {
-			// Try to connect to it
-			conn, err := net.DialTimeout("unix", c.socketPath, 2*time.Second)
-			if err == nil {
-				conn.Close()
-				c.Log.Info("buildkit daemon is ready", "socket_path", c.socketPath)
-				return nil
+			probeCtx, cancelProbe := context.WithTimeout(readyCtx, 2*time.Second)
+			conn, dialErr := (&net.Dialer{}).DialContext(probeCtx, "unix", c.socketPath)
+			if dialErr == nil {
+				_ = conn.Close()
+				client, clientErr := buildkitclient.New(probeCtx, "unix://"+c.socketPath,
+					buildkitclient.WithTracerProvider(otel.GetTracerProvider()),
+				)
+				if clientErr == nil {
+					_, clientErr = client.ListWorkers(probeCtx)
+					_ = client.Close()
+				}
+				cancelProbe()
+				if clientErr == nil {
+					c.Log.Info("buildkit daemon is ready", "socket_path", c.socketPath)
+					return nil
+				}
+			} else {
+				cancelProbe()
 			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-readyCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			c.Log.Error("buildkit daemon readiness check timed out", "socket_path", c.socketPath)
+			return fmt.Errorf("buildkit daemon failed to become ready within 60s (socket: %s)", c.socketPath)
 		case <-time.After(2 * time.Second):
-			continue
 		}
 	}
-
-	c.Log.Error("buildkit daemon readiness check timed out", "socket_path", c.socketPath)
-	return fmt.Errorf("buildkit daemon failed to become ready within 60s (socket: %s)", c.socketPath)
 }
 
 func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
