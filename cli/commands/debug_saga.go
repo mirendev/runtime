@@ -254,6 +254,9 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 	ctx.Printf("ID:         %s\n", ui.CleanEntityID(exec.ID))
 	ctx.Printf("Definition: %s (v%d)\n", exec.DefinitionName, exec.DefinitionVersion)
 	ctx.Printf("Status:     %s\n", exec.Status)
+	if exec.RecoveryScope != "" {
+		ctx.Printf("Scope:      %s\n", exec.RecoveryScope)
+	}
 	if exec.ParentExecutionID != "" {
 		ctx.Printf("Parent:     %s\n", ui.CleanEntityID(exec.ParentExecutionID))
 	}
@@ -508,6 +511,7 @@ type sagaListJSON struct {
 	ActionCount       int    `json:"action_count"`
 	LastAction        string `json:"last_action,omitempty"`
 	ParentExecutionID string `json:"parent_execution_id,omitempty"`
+	RecoveryScope     string `json:"recovery_scope,omitempty"`
 	Error             string `json:"error,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
@@ -525,6 +529,7 @@ func newSagaListJSON(r *sagaRecord) sagaListJSON {
 		ActionCount:       len(r.exec.ExecutionOrder),
 		LastAction:        r.lastAction(),
 		ParentExecutionID: r.exec.ParentExecutionID,
+		RecoveryScope:     r.exec.RecoveryScope,
 		Error:             r.exec.Error,
 		CreatedAt:         sagaJSONTime(r.createdAt),
 		UpdatedAt:         sagaJSONTime(r.updatedAt),

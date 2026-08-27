@@ -201,6 +201,30 @@ func TestStorageConformance_TimestampsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStorageConformance_RecoveryScopeRoundTrip(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			storage := backend.make(t)
+
+			exec := &Execution{
+				ID:              "create-sandbox-scoped",
+				DefinitionName:  "create-sandbox",
+				RecoveryScope:   "node/runner-a",
+				Status:          StatusRunning,
+				InitialInputs:   map[string]any{"sandbox_id": "sandbox/example"},
+				ExecutedActions: map[string]*ActionResult{},
+				ExecutionOrder:  []string{},
+			}
+			require.NoError(t, storage.Save(ctx, exec))
+
+			got, err := storage.Get(ctx, exec.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "node/runner-a", got.RecoveryScope)
+		})
+	}
+}
+
 func containsExecution(execs []*Execution, id string) bool {
 	for _, e := range execs {
 		if e != nil && e.ID == id {

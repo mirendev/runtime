@@ -507,7 +507,11 @@ func newTestHarness(t *testing.T) *testHarness {
 	err := registerCreateSandboxSaga(h.registry, h.entities, h.networking, h.runtime, h.obs, log)
 	require.NoError(t, err)
 
-	h.executor = saga.NewExecutor(h.storage, saga.WithRegistry(h.registry), saga.WithLogger(log))
+	h.executor = saga.NewExecutor(h.storage,
+		saga.WithRegistry(h.registry),
+		saga.WithLogger(log),
+		saga.WithRecoveryScope("node/test-node"),
+	)
 	return h
 }
 
@@ -539,6 +543,7 @@ func TestCreateSandboxSaga_HappyPath(t *testing.T) {
 
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusCompleted, exec.Status)
+	assert.Equal(t, "node/test-node", exec.RecoveryScope)
 
 	// All forward actions called
 	assert.Equal(t, 1, h.networking.allocateCalls)

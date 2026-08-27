@@ -177,7 +177,10 @@ func TestRunNested_ParentExecutionIDSet(t *testing.T) {
 	ctrl := &nestedTestController{}
 	registry, storage := setupNestedSagas(t, ctrl)
 
-	executor := NewExecutor(storage, WithRegistry(registry))
+	executor := NewExecutor(storage,
+		WithRegistry(registry),
+		WithRecoveryScope("node/runner-a"),
+	)
 	err := executor.Start("parent-saga").
 		Input("value", 3).
 		WithID("parent-3").
@@ -196,6 +199,7 @@ func TestRunNested_ParentExecutionIDSet(t *testing.T) {
 	childExec, err := storage.Get(context.Background(), childExecID)
 	require.NoError(t, err)
 	assert.Equal(t, "parent-3", childExec.ParentExecutionID)
+	assert.Equal(t, "node/runner-a", childExec.RecoveryScope)
 }
 
 func TestRunNested_ChildFailurePropagates(t *testing.T) {

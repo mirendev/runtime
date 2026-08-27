@@ -34,6 +34,10 @@ kinds:
       doc: Reference to the parent saga execution (set for child/nested sagas)
       indexed: true
 
+    recovery_scope:
+      type: string
+      doc: Stable identity of the executor allowed to recover this execution
+
     error:
       type: string
       doc: Error message if the saga failed

@@ -21,6 +21,11 @@ var ErrExecutionNotFound = errors.New("execution not found")
 // answer rather than read outputs that have not been written yet.
 var ErrExecutionInProgress = errors.New("execution already in progress")
 
+// ErrRecoveryScopeMismatch reports that an executor tried to continue a
+// durable execution owned by a different recovery scope. The caller must not
+// run any of that execution's actions against its own local resources.
+var ErrRecoveryScopeMismatch = errors.New("execution recovery scope mismatch")
+
 type executorCtxKey struct{}
 type executionIDCtxKey struct{}
 type actionNameCtxKey struct{}
@@ -65,9 +70,10 @@ type Storage interface {
 
 // Executor orchestrates saga execution with durable logging.
 type Executor struct {
-	storage  Storage
-	registry *Registry
-	log      *slog.Logger
+	storage       Storage
+	registry      *Registry
+	log           *slog.Logger
+	recoveryScope string
 
 	// inFlight names the executions this Executor is currently driving. A
 	// caller that names its execution after the entity it belongs to will
@@ -104,6 +110,16 @@ func WithLogger(log *slog.Logger) ExecutorOption {
 	}
 }
 
+// WithRecoveryScope gives this executor a stable recovery identity. New
+// executions persist the scope, startup recovery only considers exact scope
+// matches, and named re-entry refuses to resume another scope's execution.
+// The zero value leaves the executor unscoped and preserves existing behavior.
+func WithRecoveryScope(scope string) ExecutorOption {
+	return func(e *Executor) {
+		e.recoveryScope = scope
+	}
+}
+
 // NewExecutor creates an executor with the given storage and options.
 func NewExecutor(storage Storage, opts ...ExecutorOption) *Executor {
 	e := &Executor{
@@ -135,6 +151,22 @@ func (e *Executor) release(id string) {
 	e.inFlightMu.Lock()
 	defer e.inFlightMu.Unlock()
 	delete(e.inFlight, id)
+}
+
+// scopeForExisting checks a named execution before this executor claims it.
+// A scoped executor may adopt an old unscoped record through ordinary Execute:
+// its caller has already routed the operation to this executor. Recover never
+// adopts because every executor can see the shared incomplete set at startup.
+func (e *Executor) scopeForExisting(exec *Execution) (adopt bool, err error) {
+	switch {
+	case exec.RecoveryScope == e.recoveryScope:
+		return false, nil
+	case exec.RecoveryScope == "" && e.recoveryScope != "":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%w: execution %q has scope %q, executor has scope %q",
+			ErrRecoveryScopeMismatch, exec.ID, exec.RecoveryScope, e.recoveryScope)
+	}
 }
 
 // StartBuilder provides a fluent API for starting saga executions.
@@ -192,6 +224,25 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 		id = generateID()
 	}
 
+	// Read and scope-check an existing record before claiming it. Recovery scope
+	// is a safety boundary, not a local concurrency guard, so a mismatched
+	// executor must not claim or execute the record.
+	var existing *Execution
+	var adoptScope bool
+	loaded, err := e.storage.Get(ctx, id)
+	switch {
+	case err == nil:
+		existing = loaded
+		adoptScope, err = e.scopeForExisting(existing)
+		if err != nil {
+			return err
+		}
+	case errors.Is(err, ErrExecutionNotFound):
+		// A new execution is created below after taking the local claim.
+	default:
+		return fmt.Errorf("loading execution %q: %w", id, err)
+	}
+
 	// A caller that names its execution after the entity it belongs to calls
 	// this on every reconcile pass. Only one of those may drive at a time.
 	if !e.claim(id) {
@@ -204,13 +255,22 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 	// Naming an execution that already exists means continue it, not replace
 	// it. Overwriting would discard the record of what a previous attempt
 	// built, leaving those resources with nothing that knows to undo them.
-	switch existing, err := e.storage.Get(ctx, id); {
-	case err == nil:
+	if existing != nil {
+		if existing.DefinitionName != def.Name {
+			return fmt.Errorf("execution %q belongs to saga %q, not %q", existing.ID, existing.DefinitionName, def.Name)
+		}
+		if adoptScope {
+			existing.RecoveryScope = e.recoveryScope
+			existing.UpdatedAt = time.Now()
+			if err := e.storage.Save(ctx, existing); err != nil {
+				return fmt.Errorf("persisting recovery scope for execution %q: %w", id, err)
+			}
+			e.log.Info("adopted legacy unscoped execution",
+				"saga", defName, "execution", id, "recovery_scope", e.recoveryScope)
+		}
 		e.log.Info("continuing existing execution",
 			"saga", defName, "execution", id, "status", existing.Status)
 		return e.resume(ctx, def, existing)
-	case !errors.Is(err, ErrExecutionNotFound):
-		return fmt.Errorf("loading execution %q: %w", id, err)
 	}
 
 	// Create execution
@@ -220,6 +280,7 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 		DefinitionName:    defName,
 		DefinitionVersion: def.Version,
 		InitialInputs:     inputs,
+		RecoveryScope:     e.recoveryScope,
 		Status:            StatusPending,
 		ExecutedActions:   make(map[string]*ActionResult),
 		ExecutionOrder:    []string{},
@@ -540,6 +601,19 @@ func (e *Executor) Recover(ctx context.Context) error {
 
 	var recoverErrors []error
 	for _, exec := range incomplete {
+		// The shared store contains every runner's incomplete sandbox sagas.
+		// Scope is checked before even taking the local claim so this executor
+		// cannot drive another runner's record. Empty is an exact value here,
+		// not a wildcard; legacy records are adopted later by routed Execute.
+		if exec.RecoveryScope != e.recoveryScope {
+			e.log.Debug("skipping saga outside this recovery scope",
+				"saga", exec.DefinitionName,
+				"execution", exec.ID,
+				"execution_scope", exec.RecoveryScope,
+				"executor_scope", e.recoveryScope)
+			continue
+		}
+
 		// Skip child executions — they will be driven by their parent's recovery
 		// via RunNested. Recovering them independently would cause double-execution.
 		if exec.ParentExecutionID != "" {
