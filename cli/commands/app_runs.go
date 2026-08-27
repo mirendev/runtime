@@ -106,7 +106,7 @@ func AppRuns(ctx *Context, opts struct {
 		}
 
 		rows = append(rows, ui.Row{
-			ui.CleanEntityID(r.Id()),
+			ui.DisplayShortID(r.ShortId(), r.Id()),
 			r.Task(),
 			r.Trigger(),
 			r.Status(),

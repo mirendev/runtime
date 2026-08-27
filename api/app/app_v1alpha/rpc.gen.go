@@ -2121,6 +2121,7 @@ type runInfoData struct {
 	EndedAt   *int64  `cbor:"9,keyasint,omitempty" json:"ended_at,omitempty"`
 	Sandbox   *string `cbor:"10,keyasint,omitempty" json:"sandbox,omitempty"`
 	Version   *string `cbor:"11,keyasint,omitempty" json:"version,omitempty"`
+	ShortId   *string `cbor:"12,keyasint,omitempty" json:"short_id,omitempty"`
 }
 
 type RunInfo struct {
@@ -2290,6 +2291,21 @@ func (v *RunInfo) Version() string {
 
 func (v *RunInfo) SetVersion(version string) {
 	v.data.Version = &version
+}
+
+func (v *RunInfo) HasShortId() bool {
+	return v.data.ShortId != nil
+}
+
+func (v *RunInfo) ShortId() string {
+	if v.data.ShortId == nil {
+		return ""
+	}
+	return *v.data.ShortId
+}
+
+func (v *RunInfo) SetShortId(short_id string) {
+	v.data.ShortId = &short_id
 }
 
 func (v *RunInfo) MarshalCBOR() ([]byte, error) {

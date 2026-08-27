@@ -212,21 +212,18 @@ func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns)
 		if args.Task() != "" && run.Task != args.Task() {
 			continue
 		}
-		runs = append(runs, runInfo(&run))
+		runs = append(runs, runInfo(&run, results.Entity().ShortId()))
 	}
 
-	// Failures first, then newest. The reason someone opens this list is almost
-	// always a failure, and a list where they are buried under successful
-	// console sessions is a list nobody reads.
+	// Newest first, with no special place for failures. Grouping failures ahead
+	// of everything else made the most recent run's position depend on the
+	// outcome of older ones, so the row someone had just triggered could sit
+	// halfway down the table. One consistent order is easier to scan, and the
+	// status column already says which runs failed.
+	//
+	// cmp.Compare rather than subtraction: these are Unix milliseconds, and
+	// their difference does not fit an int on a 32-bit build.
 	slices.SortStableFunc(runs, func(a, b *app_v1alpha.RunInfo) int {
-		if af, bf := isFailure(a.Status()), isFailure(b.Status()); af != bf {
-			if af {
-				return -1
-			}
-			return 1
-		}
-		// cmp.Compare rather than subtraction: these are Unix milliseconds, and
-		// their difference does not fit an int on a 32-bit build.
 		return cmp.Compare(b.StartedAt(), a.StartedAt())
 	})
 
@@ -247,7 +244,7 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 		return err
 	}
 
-	state.Results().SetRun(runInfo(run))
+	state.Results().SetRun(runInfo(run, r.runShortId(ctx, run.ID)))
 	return nil
 }
 
@@ -309,6 +306,17 @@ func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run) error 
 		return rpc.AppAccessError(ctx, md.Name)
 	}
 	return nil
+}
+
+// runShortId looks up one run's short-id, for the single-run paths that do not
+// already hold the entity. Returns empty when the run has none.
+func (r *AppInfo) runShortId(ctx context.Context, id entity.Id) string {
+	var run run_v1alpha.Run
+	ent, err := r.EC.GetByIdWithEntity(ctx, id, &run)
+	if err != nil {
+		return ""
+	}
+	return shortIDFromEntity(ent)
 }
 
 func (r *AppInfo) lookupRun(ctx context.Context, id string) (*run_v1alpha.Run, entity.Id, error) {
@@ -407,9 +415,14 @@ func shellQuote(args []string) string {
 	return strings.Join(quoted, " ")
 }
 
-func runInfo(run *run_v1alpha.Run) *app_v1alpha.RunInfo {
+// runInfo renders a run for the wire. shortId is the run entity's short-id,
+// empty for a run recorded before short-ids existed; it is passed in rather than
+// looked up because the list path already has the entity in hand and a
+// per-row lookup would be a query per run.
+func runInfo(run *run_v1alpha.Run, shortId string) *app_v1alpha.RunInfo {
 	var info app_v1alpha.RunInfo
 	info.SetId(run.ID.String())
+	info.SetShortId(shortId)
 	info.SetTask(run.Task)
 	info.SetTrigger(strings.TrimPrefix(string(run.Trigger), "trigger."))
 	info.SetStatus(strings.TrimPrefix(string(run.Status), "status."))
@@ -471,14 +484,6 @@ func reportsExitCode(s run_v1alpha.RunStatus) bool {
 	case run_v1alpha.PENDING, run_v1alpha.RUNNING, run_v1alpha.TIMED_OUT,
 		run_v1alpha.CANCELED, run_v1alpha.SKIPPED:
 		return false
-	}
-	return false
-}
-
-func isFailure(status string) bool {
-	switch status {
-	case "failed", "timed_out", "canceled":
-		return true
 	}
 	return false
 }

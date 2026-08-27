@@ -28,20 +28,20 @@ func TestRunInfoOnlyReportsCommandExitCodes(t *testing.T) {
 	}
 
 	t.Run("succeeded reports it", func(t *testing.T) {
-		info := runInfo(base(run_v1alpha.SUCCEEDED))
+		info := runInfo(base(run_v1alpha.SUCCEEDED), "")
 		assert.True(t, info.HasExitCode())
 		assert.Equal(t, int32(2), info.ExitCode())
 	})
 
 	t.Run("failed reports it", func(t *testing.T) {
-		assert.True(t, runInfo(base(run_v1alpha.FAILED)).HasExitCode())
+		assert.True(t, runInfo(base(run_v1alpha.FAILED), "").HasExitCode())
 	})
 
 	for _, status := range []run_v1alpha.RunStatus{
 		run_v1alpha.CANCELED, run_v1alpha.TIMED_OUT, run_v1alpha.SKIPPED,
 	} {
 		t.Run(string(status)+" does not", func(t *testing.T) {
-			assert.False(t, runInfo(base(status)).HasExitCode(),
+			assert.False(t, runInfo(base(status), "").HasExitCode(),
 				"the status carries the meaning; the killed process's code is teardown noise")
 		})
 	}
@@ -53,7 +53,7 @@ func TestRunInfoWithNoObservedExit(t *testing.T) {
 	info := runInfo(&run_v1alpha.Run{
 		ID:     "run/demo-x-1",
 		Status: run_v1alpha.FAILED,
-	})
+	}, "")
 	assert.False(t, info.HasExitCode())
 }
 
@@ -64,7 +64,7 @@ func TestRunInfoReportsAZeroExitCode(t *testing.T) {
 		ID:     "run/demo-x-1",
 		Status: run_v1alpha.SUCCEEDED,
 		Result: run_v1alpha.Result{Code: 0, At: time.Now()},
-	})
+	}, "")
 	assert.True(t, info.HasExitCode())
 	assert.Equal(t, int32(0), info.ExitCode())
 }
@@ -78,7 +78,7 @@ func TestRunInfoSaturatesRatherThanWrapping(t *testing.T) {
 		Status:  run_v1alpha.FAILED,
 		Attempt: math.MaxInt32 + 1,
 		Result:  run_v1alpha.Result{Code: math.MaxInt32 + 1, At: time.Now()},
-	})
+	}, "")
 
 	assert.Equal(t, int32(math.MaxInt32), info.Attempt(), "must not wrap to a negative attempt")
 	assert.Equal(t, int32(math.MaxInt32), info.ExitCode(), "must not wrap to a small exit code")
@@ -88,7 +88,7 @@ func TestRunInfoSaturatesRatherThanWrapping(t *testing.T) {
 		Status:  run_v1alpha.FAILED,
 		Attempt: math.MinInt32 - 1,
 		Result:  run_v1alpha.Result{Code: math.MinInt32 - 1, At: time.Now()},
-	})
+	}, "")
 	assert.Equal(t, int32(math.MinInt32), info.ExitCode())
 }
 
