@@ -103,7 +103,6 @@ func AppStatus(ctx *Context, opts struct {
 	// Configuration
 	if appConfig != nil {
 		ctx.Printf("\n%s\n", labelStyle.Render("Configuration:"))
-
 		// Environment variables: show keys only. Values live behind the one
 		// masked surface, 'miren env'. See MIR-1356.
 		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
