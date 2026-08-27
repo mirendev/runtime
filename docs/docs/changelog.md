@@ -11,9 +11,6 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
-**Improvements**
-- **`miren app runs` is easier to scan** - The table now shows each run's short id instead of its full entity id, and every run is ordered newest-started first. Failures used to be pulled to the top, which meant the run you had just triggered could sit halfway down the list depending on how older ones ended. `--format json` still carries full ids.
-
 ---
 
 ## v0.14.0
