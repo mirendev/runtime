@@ -83,45 +83,6 @@ func (v *LogTarget) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
-type autoConcurrencyData struct {
-	Factor *int32 `cbor:"1,keyasint,omitempty" json:"factor,omitempty"`
-}
-
-type AutoConcurrency struct {
-	data autoConcurrencyData
-}
-
-func (v *AutoConcurrency) HasFactor() bool {
-	return v.data.Factor != nil
-}
-
-func (v *AutoConcurrency) Factor() int32 {
-	if v.data.Factor == nil {
-		return 0
-	}
-	return *v.data.Factor
-}
-
-func (v *AutoConcurrency) SetFactor(factor int32) {
-	v.data.Factor = &factor
-}
-
-func (v *AutoConcurrency) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(v.data)
-}
-
-func (v *AutoConcurrency) UnmarshalCBOR(data []byte) error {
-	return cbor.Unmarshal(data, &v.data)
-}
-
-func (v *AutoConcurrency) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.data)
-}
-
-func (v *AutoConcurrency) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &v.data)
-}
-
 type serviceCommandData struct {
 	Service *string `cbor:"0,keyasint,omitempty" json:"service,omitempty"`
 	Command *string `cbor:"1,keyasint,omitempty" json:"command,omitempty"`
@@ -266,12 +227,10 @@ func (v *ServiceConfig) UnmarshalJSON(data []byte) error {
 }
 
 type configurationData struct {
-	EnvVars         *[]*NamedValue     `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
-	Concurrency     *int32             `cbor:"1,keyasint,omitempty" json:"concurrency,omitempty"`
-	AutoConcurrency *AutoConcurrency   `cbor:"2,keyasint,omitempty" json:"auto_concurrency,omitempty"`
-	Commands        *[]*ServiceCommand `cbor:"3,keyasint,omitempty" json:"commands,omitempty"`
-	Entrypoint      *string            `cbor:"4,keyasint,omitempty" json:"entrypoint,omitempty"`
-	Services        *[]*ServiceConfig  `cbor:"5,keyasint,omitempty" json:"services,omitempty"`
+	EnvVars    *[]*NamedValue     `cbor:"0,keyasint,omitempty" json:"env_vars,omitempty"`
+	Commands   *[]*ServiceCommand `cbor:"3,keyasint,omitempty" json:"commands,omitempty"`
+	Entrypoint *string            `cbor:"4,keyasint,omitempty" json:"entrypoint,omitempty"`
+	Services   *[]*ServiceConfig  `cbor:"5,keyasint,omitempty" json:"services,omitempty"`
 }
 
 type Configuration struct {
@@ -292,33 +251,6 @@ func (v *Configuration) EnvVars() []*NamedValue {
 func (v *Configuration) SetEnvVars(env_vars []*NamedValue) {
 	x := slices.Clone(env_vars)
 	v.data.EnvVars = &x
-}
-
-func (v *Configuration) HasConcurrency() bool {
-	return v.data.Concurrency != nil
-}
-
-func (v *Configuration) Concurrency() int32 {
-	if v.data.Concurrency == nil {
-		return 0
-	}
-	return *v.data.Concurrency
-}
-
-func (v *Configuration) SetConcurrency(concurrency int32) {
-	v.data.Concurrency = &concurrency
-}
-
-func (v *Configuration) HasAutoConcurrency() bool {
-	return v.data.AutoConcurrency != nil
-}
-
-func (v *Configuration) AutoConcurrency() *AutoConcurrency {
-	return v.data.AutoConcurrency
-}
-
-func (v *Configuration) SetAutoConcurrency(auto_concurrency *AutoConcurrency) {
-	v.data.AutoConcurrency = auto_concurrency
 }
 
 func (v *Configuration) HasCommands() bool {
