@@ -38,6 +38,7 @@ func TestEACStorageSaveAndGet(t *testing.T) {
 	exec := &Execution{
 		ID:              "create-sandbox-sandbox/my-app-web-abc123",
 		DefinitionName:  "create-sandbox",
+		RecoveryScope:   "node/runner-a",
 		Status:          StatusPending,
 		InitialInputs:   map[string]any{"sandbox_id": "sandbox/my-app-web-abc123"},
 		ExecutedActions: map[string]*ActionResult{},
@@ -53,6 +54,7 @@ func TestEACStorageSaveAndGet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, exec.ID, got.ID)
 	assert.Equal(t, exec.DefinitionName, got.DefinitionName)
+	assert.Equal(t, exec.RecoveryScope, got.RecoveryScope)
 	assert.Equal(t, exec.Status, got.Status)
 }
 

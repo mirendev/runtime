@@ -42,6 +42,7 @@ func NewSagaSandboxController(
 	executor := saga.NewExecutor(storage,
 		saga.WithRegistry(registry),
 		saga.WithLogger(log.With("module", "saga-sandbox")),
+		saga.WithRecoveryScope(cfg.NodeId.String()),
 	)
 
 	return &SagaSandboxController{

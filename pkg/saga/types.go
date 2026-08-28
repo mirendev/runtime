@@ -78,6 +78,11 @@ type Execution struct {
 	// ParentExecutionID links this execution to a parent saga when run as a nested child.
 	ParentExecutionID string `json:"parent_execution_id,omitempty"`
 
+	// RecoveryScope is the stable identity of the executor allowed to recover
+	// this execution. An empty scope preserves the unscoped behavior used by
+	// executors that have no distributed ownership boundary.
+	RecoveryScope string `json:"recovery_scope,omitempty"`
+
 	// Error is set if the saga failed.
 	Error string `json:"error,omitempty"`
 

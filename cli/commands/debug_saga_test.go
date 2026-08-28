@@ -37,6 +37,7 @@ func sagaEntityFor(t *testing.T, exec *saga.Execution, createdAt, updatedAt time
 		DefinitionName:    exec.DefinitionName,
 		DefinitionVersion: int64(exec.DefinitionVersion),
 		ParentExecutionId: entity.Id(exec.ParentExecutionID),
+		RecoveryScope:     exec.RecoveryScope,
 		Status:            status,
 		InitialInputs:     initialInputs,
 		ExecutedActions:   executedActions,
@@ -81,6 +82,7 @@ func wedgedSaga() *saga.Execution {
 		ID:                "saga/sg-Wedged1",
 		DefinitionName:    "provision_mysql_dedicated",
 		DefinitionVersion: 2,
+		RecoveryScope:     "node/runner-a",
 		Status:            saga.StatusRunning,
 		InitialInputs: map[string]any{
 			"app_id": "app/checkout",
@@ -113,6 +115,7 @@ func TestDecodeSagaRecordRoundTrip(t *testing.T) {
 	assert.Equal(t, "provision_mysql_dedicated", record.exec.DefinitionName)
 	assert.Equal(t, 2, record.exec.DefinitionVersion)
 	assert.Equal(t, saga.StatusRunning, record.exec.Status)
+	assert.Equal(t, "node/runner-a", record.exec.RecoveryScope)
 	assert.Equal(t, []string{"create_disk", "attach_disk"}, record.exec.ExecutionOrder)
 	assert.Equal(t, "attach_disk", record.lastAction())
 	assert.Equal(t, "app/checkout", record.exec.InitialInputs["app_id"])
@@ -164,6 +167,7 @@ func TestPrintSagaShow(t *testing.T) {
 	assert.NotContains(t, out, "saga/sg-Wedged1")
 	assert.Contains(t, out, "provision_mysql_dedicated (v2)")
 	assert.Contains(t, out, "running")
+	assert.Contains(t, out, "node/runner-a")
 	assert.Contains(t, out, "app_id")
 
 	// Both actions, in execution order, with their outcomes.
@@ -316,6 +320,7 @@ func TestSagaListJSONReportsProgress(t *testing.T) {
 
 	assert.Equal(t, "saga/sg-Wedged1", item.ID)
 	assert.Equal(t, "running", item.Status)
+	assert.Equal(t, "node/runner-a", item.RecoveryScope)
 	assert.Equal(t, 2, item.ActionCount)
 	assert.Equal(t, "attach_disk", item.LastAction)
 }

@@ -294,6 +294,162 @@ func TestExecutor_Recovery(t *testing.T) {
 	assert.Equal(t, StatusCompleted, exec.Status)
 }
 
+func TestExecutor_RecoveryScope(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	require.NoError(t, Define("runner-scoped").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("multiply", Multiply).Undo(UndoMultiply).
+		RegisterTo(registry))
+
+	ctx := context.Background()
+	storage := NewMemoryStorage()
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "runner-a-execution",
+		DefinitionName:    "runner-scoped",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(2), "b": float64(3), "factor": float64(4)},
+		RecoveryScope:     "node/runner-a",
+		Status:            StatusRunning,
+		ExecutedActions: map[string]*ActionResult{
+			"add": {
+				Output:     []byte(`{"Sum":5}`),
+				ExecutedAt: time.Now(),
+			},
+		},
+		ExecutionOrder: []string{"add"},
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}))
+	require.NoError(t, storage.Save(ctx, &Execution{
+		ID:                "runner-b-execution",
+		DefinitionName:    "runner-scoped",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": float64(6), "b": float64(7), "factor": float64(2)},
+		RecoveryScope:     "node/runner-b",
+		Status:            StatusRunning,
+		ExecutedActions: map[string]*ActionResult{
+			"add": {
+				Output:     []byte(`{"Sum":13}`),
+				ExecutedAt: time.Now(),
+			},
+		},
+		ExecutionOrder: []string{"add"},
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}))
+
+	runnerB := NewExecutor(storage,
+		WithRegistry(registry),
+		WithRecoveryScope("node/runner-b"),
+	)
+	require.NoError(t, runnerB.Recover(ctx))
+	assert.Empty(t, ctrl.addCalls)
+	require.Equal(t, []MultiplyIn{{Sum: 13, Factor: 2}}, ctrl.multiplyCalls,
+		"runner B must only resume its own execution")
+
+	stillRunning, err := storage.Get(ctx, "runner-a-execution")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRunning, stillRunning.Status)
+	assert.Equal(t, "node/runner-a", stillRunning.RecoveryScope)
+	runnerBCompleted, err := storage.Get(ctx, "runner-b-execution")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, runnerBCompleted.Status)
+
+	runnerA := NewExecutor(storage,
+		WithRegistry(registry),
+		WithRecoveryScope("node/runner-a"),
+	)
+	require.NoError(t, runnerA.Recover(ctx))
+	assert.Empty(t, ctrl.addCalls, "the completed action must not run again")
+	require.Equal(t, []MultiplyIn{
+		{Sum: 13, Factor: 2},
+		{Sum: 5, Factor: 4},
+	}, ctrl.multiplyCalls, "runner A must only add its own execution")
+
+	completed, err := storage.Get(ctx, "runner-a-execution")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, completed.Status)
+}
+
+func TestExecutor_NamedReentryHonorsRecoveryScope(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	require.NoError(t, Define("scoped-reentry").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		RegisterTo(registry))
+
+	ctx := context.Background()
+
+	t.Run("different scope is rejected before execution", func(t *testing.T) {
+		storage := NewMemoryStorage()
+		require.NoError(t, storage.Save(ctx, &Execution{
+			ID:                "owned-by-a",
+			DefinitionName:    "scoped-reentry",
+			DefinitionVersion: 1,
+			InitialInputs:     map[string]any{"a": float64(2), "b": float64(3)},
+			RecoveryScope:     "node/runner-a",
+			Status:            StatusRunning,
+			ExecutedActions:   map[string]*ActionResult{},
+			ExecutionOrder:    []string{},
+			CreatedAt:         time.Now(),
+			UpdatedAt:         time.Now(),
+		}))
+
+		runnerB := NewExecutor(storage,
+			WithRegistry(registry),
+			WithRecoveryScope("node/runner-b"),
+		)
+		err := runnerB.Start("scoped-reentry").
+			Input("a", 2).
+			Input("b", 3).
+			WithID("owned-by-a").
+			Execute(ctx)
+
+		assert.ErrorIs(t, err, ErrRecoveryScopeMismatch)
+		assert.Empty(t, ctrl.addCalls)
+	})
+
+	t.Run("routed execute adopts a legacy unscoped record", func(t *testing.T) {
+		storage := NewMemoryStorage()
+		require.NoError(t, storage.Save(ctx, &Execution{
+			ID:                "legacy-unscoped",
+			DefinitionName:    "scoped-reentry",
+			DefinitionVersion: 1,
+			InitialInputs:     map[string]any{"a": float64(5), "b": float64(7)},
+			Status:            StatusRunning,
+			ExecutedActions:   map[string]*ActionResult{},
+			ExecutionOrder:    []string{},
+			CreatedAt:         time.Now(),
+			UpdatedAt:         time.Now(),
+		}))
+
+		runnerA := NewExecutor(storage,
+			WithRegistry(registry),
+			WithRecoveryScope("node/runner-a"),
+		)
+		require.NoError(t, runnerA.Recover(ctx))
+		assert.Empty(t, ctrl.addCalls,
+			"startup recovery must not let a scoped executor claim a legacy record")
+
+		require.NoError(t, runnerA.Start("scoped-reentry").
+			Input("a", 999).
+			Input("b", 999).
+			WithID("legacy-unscoped").
+			Execute(ctx))
+
+		adopted, err := storage.Get(ctx, "legacy-unscoped")
+		require.NoError(t, err)
+		assert.Equal(t, "node/runner-a", adopted.RecoveryScope)
+		assert.Equal(t, StatusCompleted, adopted.Status)
+		require.Len(t, ctrl.addCalls, 1)
+		assert.Equal(t, AddNumbersIn{A: 5, B: 7}, ctrl.addCalls[0],
+			"adoption must keep the first attempt's durable inputs")
+	})
+}
+
 func TestExecutor_ContextCancellation(t *testing.T) {
 	registry := NewRegistry()
 
@@ -1120,11 +1276,19 @@ func TestExecutor_ReExecuteRejectsADifferentDefinitionUnderTheSameName(t *testin
 		UpdatedAt:         time.Now(),
 	}))
 
-	executor := NewExecutor(storage, WithRegistry(registry))
+	executor := NewExecutor(storage,
+		WithRegistry(registry),
+		WithRecoveryScope("node/runner-a"),
+	)
 	err := executor.Start("calc-a").Input("a", 2).Input("b", 3).
 		WithID("shared-name").Execute(ctx)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "calc-b")
 	assert.Empty(t, ctrl.addCalls, "and no action runs against the other saga's record")
+
+	unchanged, getErr := storage.Get(ctx, "shared-name")
+	require.NoError(t, getErr)
+	assert.Empty(t, unchanged.RecoveryScope,
+		"a rejected re-entry must not adopt the other saga's legacy record")
 }

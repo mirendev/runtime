@@ -106,6 +106,10 @@ func (e *Executor) createChildExecution(ctx context.Context, def *Definition, in
 	exec, err := e.storage.Get(ctx, id)
 	if err == nil {
 		// Execution already exists (idempotent retry) — validate it matches the expected definition and parent.
+		adoptScope, scopeErr := e.scopeForExisting(exec)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		if exec.DefinitionName != def.Name || exec.DefinitionVersion != def.Version {
 			return nil, fmt.Errorf("existing execution %s has definition %s@%d, expected %s@%d",
 				id, exec.DefinitionName, exec.DefinitionVersion, def.Name, def.Version)
@@ -113,6 +117,13 @@ func (e *Executor) createChildExecution(ctx context.Context, def *Definition, in
 		if exec.ParentExecutionID != parentExecID {
 			return nil, fmt.Errorf("execution %s already exists for parent %s, expected parent %s",
 				id, exec.ParentExecutionID, parentExecID)
+		}
+		if adoptScope {
+			exec.RecoveryScope = e.recoveryScope
+			exec.UpdatedAt = time.Now()
+			if err := e.storage.Save(ctx, exec); err != nil {
+				return nil, fmt.Errorf("persisting recovery scope for nested execution %q: %w", id, err)
+			}
 		}
 		return exec, nil
 	}
@@ -127,6 +138,7 @@ func (e *Executor) createChildExecution(ctx context.Context, def *Definition, in
 		DefinitionVersion: def.Version,
 		InitialInputs:     inputs,
 		ParentExecutionID: parentExecID,
+		RecoveryScope:     e.recoveryScope,
 		Status:            StatusPending,
 		ExecutedActions:   make(map[string]*ActionResult),
 		ExecutionOrder:    []string{},

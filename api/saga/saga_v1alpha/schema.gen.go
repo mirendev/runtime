@@ -16,6 +16,7 @@ const (
 	SagaExecutionOrderId    = entity.Id("dev.miren.saga/saga.execution_order")
 	SagaInitialInputsId     = entity.Id("dev.miren.saga/saga.initial_inputs")
 	SagaParentExecutionIdId = entity.Id("dev.miren.saga/saga.parent_execution_id")
+	SagaRecoveryScopeId     = entity.Id("dev.miren.saga/saga.recovery_scope")
 	SagaStatusId            = entity.Id("dev.miren.saga/saga.status")
 	SagaStatusPendingId     = entity.Id("dev.miren.saga/status.pending")
 	SagaStatusRunningId     = entity.Id("dev.miren.saga/status.running")
@@ -35,6 +36,7 @@ type Saga struct {
 	ExecutionOrder    []byte     `cbor:"execution_order,omitempty" json:"execution_order,omitempty"`
 	InitialInputs     []byte     `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
 	ParentExecutionId entity.Id  `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
+	RecoveryScope     string     `cbor:"recovery_scope,omitempty" json:"recovery_scope,omitempty"`
 	Status            SagaStatus `cbor:"status,omitempty" json:"status,omitempty"`
 	UpdatedAt         time.Time  `cbor:"updated_at,omitempty" json:"updated_at"`
 }
@@ -77,6 +79,9 @@ func (o *Saga) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(SagaParentExecutionIdId); ok && a.Value.Kind() == entity.KindId {
 		o.ParentExecutionId = a.Value.Id()
+	}
+	if a, ok := e.Get(SagaRecoveryScopeId); ok && a.Value.Kind() == entity.KindString {
+		o.RecoveryScope = a.Value.String()
 	}
 	if a, ok := e.Get(SagaStatusId); ok && a.Value.Kind() == entity.KindId {
 		o.Status = sagastatusFromId[a.Value.Id()]
@@ -127,6 +132,9 @@ func (o *Saga) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ParentExecutionId) {
 		attrs = append(attrs, entity.Ref(SagaParentExecutionIdId, o.ParentExecutionId))
 	}
+	if !entity.Empty(o.RecoveryScope) {
+		attrs = append(attrs, entity.String(SagaRecoveryScopeId, o.RecoveryScope))
+	}
 	if a, ok := sagastatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SagaStatusId, a))
 	}
@@ -162,6 +170,9 @@ func (o *Saga) Empty() bool {
 	if !entity.Empty(o.ParentExecutionId) {
 		return false
 	}
+	if !entity.Empty(o.RecoveryScope) {
+		return false
+	}
 	if o.Status != "" {
 		return false
 	}
@@ -180,6 +191,7 @@ func (o *Saga) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Bytes("execution_order", "dev.miren.saga/saga.execution_order", schema.Doc("JSON-encoded array of action names in execution order"))
 	sb.Bytes("initial_inputs", "dev.miren.saga/saga.initial_inputs", schema.Doc("JSON-encoded initial inputs for the saga"))
 	sb.Ref("parent_execution_id", "dev.miren.saga/saga.parent_execution_id", schema.Doc("Reference to the parent saga execution (set for child/nested sagas)"), schema.Indexed)
+	sb.String("recovery_scope", "dev.miren.saga/saga.recovery_scope", schema.Doc("Stable identity of the executor allowed to recover this execution"))
 	sb.Singleton("dev.miren.saga/status.pending")
 	sb.Singleton("dev.miren.saga/status.running")
 	sb.Singleton("dev.miren.saga/status.undoing")
@@ -198,5 +210,5 @@ func init() {
 	schema.Register("dev.miren.saga", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Saga{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94[n\xdb0\x10E\xb7\xd1\x16}\x00m\xd1\xfe)Ȋ\x04Z3\xa4'\x96\x86\x04\x1f\x82\xbc\x85\xec\"\x88\x93%\xe6;\xe0P\xf0\x83\xa1\x9d\x1f\x83\xbas\xef\xe1\xd0\xe0\xf0\x00\xac&d\xc0\xb9\x9b\xc8#wA\x19\x85;b\bO˗K\xf9.˲z\x95T\xa8ʧ\xe8\x9b\x06;)⊫5\xe1\b\xe1\xf1yC\xb0\xfcl\xa4\xbb\xc1\xa3\x8a\b\xbd\x8a\xb2\xc3\xc3\xd9w\xdc;\x84H\x13J\xfaO+\r\xa8\x89)\x92\xe5>\xa7\x05ak1st\x88\x9e\xd8\b\xe9\xdf'\xa4\x19} \xcb\x02\xf3\r=\xf3\x06\xe2(\xb0\xaf-\x18zo\xbd\xe4\xb1,\xeb\x16\xfe6S\v\x0eI\xce>\xe4\xfd\x82\x00\xdc\a5\xb3p\xb3\x8f\x18\xae\xff/%\x94\x9b\xb6\x1e\xb0\xb4bk\xb1\x02\xfdn\x81\xe4\xecj\xec\x89]\x8a\xa5#\xae\xb4\n\xf3\xbf\x85q\xca#\xc7\xfe\xd4\x01A\xb9P\xadB\x06n\b\x0e\x99\xf6\xadE\vQ\xc5T\x9a\xd1\xebZ\xee\nr\x9av\xf9\xa7\x9f\u05580\xbch\xadhDX\xbe\xd7\x14\tu\xa5j\x1c2\x10\x9b\xe5G۵\x96\x8dO\xcc7lk\xd9$\x06{ö\x96i\xb0\x93\x1b1\",\xbf\xdaƣ\xe1\xfa\xec$\a\x17\xb3s\xf6}\x9c\x1d\xb3\xdeZ3߫\xd1m\xd5\xe8<M\xca\xef\xfb<\xb6\x901\xb5c\x17\xb6\xd6Ǿ\xbc\b\xe2\xb8\xfe,\xbc\x03\x00\x00\xff\xff\x01\x00\x00\xff\xff\xb3r?\xd8M\x04\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94]\xce\xd5 \x10\x86\xb7\xa1ƟD\x8d\xdeո\"\xc2\xe9\f|\xe3i\a2@Ӯ\xc1U\x18?]\xa2\xd7\x06h\xce\x0f\xd2\xe3M\x03\xef\xcc\xfb0P\x86g`=#\x03.\xc3L\x82<\x04m5\x9e\x89!\xfcX_\xdc\xcb_\xb2\\F\xbf\x8b+4\xe1\xab\xf5\x8f\x017k\xe2\x86k\f\xe1\x04\xe1\xfb\xcf\x13\xc1\xfa\xb6\xe3\x1eFA\x1d\x11\x94\x8ee\x85o7\xf3\xb8y\x84H3\x16\xf7\x87\x9e\x1b\xd0\x10S$\xc7*\xbb\vµb\xe6\x98\x10\x85\xd8\x16ҧ\xff\x90\x16\x94@\x8e\vL:z\xe6\x8dı\xc0^\xf6`(\xe2\xa4\xf8\xb1\x0e\xdb\x12>v]+\x8e\xa9\xec}\xcc\xeb\x85\x02\xf0\xff\xa8\x99\x85\xa7-b8>\x97j\xcaE;\x01\xac\xa5\xb8Vl@\xef{\xa0\xb2w=)b\x9fb\xad\x88\x1b\xad\xc1|\xeea\xbc\x16䨮\x15\x10\xd4\v\xd5\vd\xe0\x89\xe0\xb8(\xc1\xd1-(\x9b\n\xa3\xf3\xf5\xa7s\xa3\xdd\x1c\xf8s\xe6\xbc\xeaqB\xd41\xd5M\x99}\\\xee\x1cr\x9a\xcf\xf9\xa3\x16=%\f\xbf\x8c\xd14!\xac\xaf[J1\r5j=2\x10\xdb\xf5M?k\x0f[I\xcc\x0f\xd2\xf6\xb0M\f\xeeA\xda\x1e\xa6\xd1\xcd~\u0088\xb0\xbe\xeb'^\x12\x8e{0y\xb8\xeb\xc1\x9b\xf9\xa5\a\xed~\xfb\xed\xf2UO\xfeIO^hֲ\xa9\xdc\xfe\x901m\xc69<9\x89\xaa\xbe,%\xe3\xf8y\xf9\v\x00\x00\xff\xff\x01\x00\x00\xff\xff\x9f+\xaaǕ\x04\x00\x00"))
 }
