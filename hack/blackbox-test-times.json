@@ -1,10 +1,419 @@
 {
   "summary": {
-    "total_test_time_s": 526.23,
-    "test_count": 33,
-    "source": "CI run 29856793428 job 88723011745 (green merge of PR #946)"
+    "standalone": {
+      "total_test_time_s": 526.23,
+      "test_count": 33,
+      "source": "CI run 29856793428 job 88723011745 (green merge of PR #946)"
+    },
+    "peers": {
+      "total_test_time_s": 1028.3,
+      "test_count": 67,
+      "source": "CI run 32993856200 job 98265119043 (green, mir-1580 branch)"
+    }
   },
   "tests": [
+    {
+      "name": "TestRunCarriesDeclaredTaskEnv",
+      "environment": "peers",
+      "elapsed_s": 60.01,
+      "status": "pass"
+    },
+    {
+      "name": "TestAttachedRunWaitsForTheCommand",
+      "environment": "peers",
+      "elapsed_s": 60.0,
+      "status": "pass"
+    },
+    {
+      "name": "TestRunPreservesArgumentBoundaries",
+      "environment": "peers",
+      "elapsed_s": 58.12,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonRotateValkey",
+      "environment": "peers",
+      "elapsed_s": 40.71,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonEnvSurvivesDeployVersion",
+      "environment": "peers",
+      "elapsed_s": 39.53,
+      "status": "pass"
+    },
+    {
+      "name": "TestMemcacheAddonCreateListDestroy",
+      "environment": "peers",
+      "elapsed_s": 35.24,
+      "status": "pass"
+    },
+    {
+      "name": "TestAttachedRunPropagatesExitCode",
+      "environment": "peers",
+      "elapsed_s": 34.15,
+      "status": "pass"
+    },
+    {
+      "name": "TestMysqlAddonDeployWithAppToml",
+      "environment": "peers",
+      "elapsed_s": 32.57,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonRotateSharedPostgresUser",
+      "environment": "peers",
+      "elapsed_s": 31.36,
+      "status": "pass"
+    },
+    {
+      "name": "TestSqliteAddonReplication",
+      "environment": "peers",
+      "elapsed_s": 30.29,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretReferencedByApp",
+      "environment": "peers",
+      "elapsed_s": 30.13,
+      "status": "pass"
+    },
+    {
+      "name": "TestEnvSetGetList",
+      "environment": "peers",
+      "elapsed_s": 28.94,
+      "status": "pass"
+    },
+    {
+      "name": "TestCrashLoop",
+      "environment": "peers",
+      "elapsed_s": 22.88,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonCreateListDestroy",
+      "environment": "peers",
+      "elapsed_s": 22.41,
+      "status": "pass"
+    },
+    {
+      "name": "TestLocalDiskPersistence",
+      "environment": "peers",
+      "elapsed_s": 20.88,
+      "status": "pass"
+    },
+    {
+      "name": "TestRabbitmqAddonDeployWithAppToml",
+      "environment": "peers",
+      "elapsed_s": 20.51,
+      "status": "pass"
+    },
+    {
+      "name": "TestMemcacheAddonDeployWithAppToml",
+      "environment": "peers",
+      "elapsed_s": 20.34,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonDeployWithAppToml",
+      "environment": "peers",
+      "elapsed_s": 20.14,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonDeployWithAppToml",
+      "environment": "peers",
+      "elapsed_s": 20.13,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretRevocationFailsClosed",
+      "environment": "peers",
+      "elapsed_s": 20.12,
+      "status": "pass"
+    },
+    {
+      "name": "TestBadCommand",
+      "environment": "peers",
+      "elapsed_s": 19.99,
+      "status": "pass"
+    },
+    {
+      "name": "TestRabbitmqAddonCreateListDestroy",
+      "environment": "peers",
+      "elapsed_s": 19.5,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonRotateSharedPostgresSuperuser",
+      "environment": "peers",
+      "elapsed_s": 19.3,
+      "status": "pass"
+    },
+    {
+      "name": "TestZeroDowntimeDeploy",
+      "environment": "peers",
+      "elapsed_s": 18.6,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralDeploy",
+      "environment": "peers",
+      "elapsed_s": 18.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestMysqlAddonCreateListDestroy",
+      "environment": "peers",
+      "elapsed_s": 17.41,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonCreateListDestroy",
+      "environment": "peers",
+      "elapsed_s": 17.15,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonDeployWithVersionInAppToml",
+      "environment": "peers",
+      "elapsed_s": 17.1,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteTimeoutSetShowClear",
+      "environment": "peers",
+      "elapsed_s": 12.06,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployAndRollback",
+      "environment": "peers",
+      "elapsed_s": 11.54,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonUnknownAddon",
+      "environment": "peers",
+      "elapsed_s": 11.48,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerNodePort",
+      "environment": "peers",
+      "elapsed_s": 10.79,
+      "status": "pass"
+    },
+    {
+      "name": "TestRoutePasswordProtection",
+      "environment": "peers",
+      "elapsed_s": 10.1,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxExec",
+      "environment": "peers",
+      "elapsed_s": 10.04,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafBlocksMaliciousRequest",
+      "environment": "peers",
+      "elapsed_s": 9.94,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerDrain",
+      "environment": "peers",
+      "elapsed_s": 9.87,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteTimeoutDefaultRoute",
+      "environment": "peers",
+      "elapsed_s": 9.82,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafEnableDisable",
+      "environment": "peers",
+      "elapsed_s": 9.82,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxList",
+      "environment": "peers",
+      "elapsed_s": 9.78,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployGoServer",
+      "environment": "peers",
+      "elapsed_s": 9.72,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafJsonOutput",
+      "environment": "peers",
+      "elapsed_s": 9.72,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafInvalidLevel",
+      "environment": "peers",
+      "elapsed_s": 9.69,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafDefaultRoute",
+      "environment": "peers",
+      "elapsed_s": 9.65,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployHistoryRecordsActiveVersion",
+      "environment": "peers",
+      "elapsed_s": 9.59,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerLogs",
+      "environment": "peers",
+      "elapsed_s": 9.55,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteMaintenance",
+      "environment": "peers",
+      "elapsed_s": 8.54,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteSetListRemove",
+      "environment": "peers",
+      "elapsed_s": 7.88,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerMetrics",
+      "environment": "peers",
+      "elapsed_s": 7.61,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedOverlayEncryption",
+      "environment": "peers",
+      "elapsed_s": 5.58,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployImageEntrypointNoCommand",
+      "environment": "peers",
+      "elapsed_s": 4.24,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployTaskGatesTheDeploy",
+      "environment": "peers",
+      "elapsed_s": 4.15,
+      "status": "pass"
+    },
+    {
+      "name": "TestFailingRunRecordsItsExitCode",
+      "environment": "peers",
+      "elapsed_s": 4.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestRunLogsAreReadableByRunID",
+      "environment": "peers",
+      "elapsed_s": 3.7,
+      "status": "pass"
+    },
+    {
+      "name": "TestDetachedRunSucceeds",
+      "environment": "peers",
+      "elapsed_s": 3.68,
+      "status": "pass"
+    },
+    {
+      "name": "TestRunCancellation",
+      "environment": "peers",
+      "elapsed_s": 2.18,
+      "status": "pass"
+    },
+    {
+      "name": "TestTaskOnlyAppDeploys",
+      "environment": "peers",
+      "elapsed_s": 2.16,
+      "status": "pass"
+    },
+    {
+      "name": "TestBareRunOpensAConsole",
+      "environment": "peers",
+      "elapsed_s": 1.85,
+      "status": "pass"
+    },
+    {
+      "name": "TestFailedBuildLeavesFailedRecord",
+      "environment": "peers",
+      "elapsed_s": 1.56,
+      "status": "pass"
+    },
+    {
+      "name": "TestDiskUndelete",
+      "environment": "peers",
+      "elapsed_s": 0.94,
+      "status": "pass"
+    },
+    {
+      "name": "TestRoutePasswordProviderLifecycle",
+      "environment": "peers",
+      "elapsed_s": 0.44,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretStoreAndRotate",
+      "environment": "peers",
+      "elapsed_s": 0.28,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonVariants",
+      "environment": "peers",
+      "elapsed_s": 0.26,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerCordon",
+      "environment": "peers",
+      "elapsed_s": 0.25,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonListAvailable",
+      "environment": "peers",
+      "elapsed_s": 0.08,
+      "status": "pass"
+    },
+    {
+      "name": "TestDebugSagaShowUnknownID",
+      "environment": "peers",
+      "elapsed_s": 0.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestDistributedRunnerList",
+      "environment": "peers",
+      "elapsed_s": 0.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteDownDefaultNeedsConfirmation",
+      "environment": "peers",
+      "elapsed_s": 0.05,
+      "status": "pass"
+    },
     {
       "name": "TestAddonDeployWithVersionInAppToml",
       "environment": "standalone",

@@ -27,9 +27,13 @@ import json
 import subprocess
 import sys
 
-# Tests that never participate in the sharded standalone job. TestPOP runs in
-# its own CI job (different environment: cloud repo + secret + server restart).
-ALWAYS_SKIP = {"TestPOP"}
+# Cloud-backed tests never participate in any sharded job, in either
+# environment: they need the cloud repo + secret and restart the server
+# mid-run, so they run in their own CI job (test-blackbox-pop). This mirrors the
+# `-skip` list in the Makefile and the ungrouped-test filter in
+# .github/workflows/test.yml; without it, `-list` discovery would fold them into
+# the lightest shard as untimed tests.
+ALWAYS_SKIP = {"TestPOP", "TestRPCViaCloud", "TestDeployViaCloud"}
 
 
 def load_times(path):
