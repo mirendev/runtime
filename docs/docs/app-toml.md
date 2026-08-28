@@ -208,13 +208,17 @@ image = "postgres:16"
 | `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
 | `ports` | [[port]](#ports) | Multi-port configuration array | — |
 | `port_timeout` | duration | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `"15s"` |
-| `image` | string | Container image to use instead of the app's built image | App's built image |
+| `image` | string | Container image to use. On `services.web`, this selects the app's primary image unless `[build].dockerfile` is set or `Dockerfile.miren` exists | App's built image |
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
 :::note[Validation]
 You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
+:::
+
+:::note[Image selection]
+When `services.web.image` is set and neither `[build].dockerfile` nor `Dockerfile.miren` selects a Dockerfile, Miren launches that image directly instead of auto-detecting and building the project source. Images on other services do not suppress source detection. If detection finds no buildable source, a lone service image can act as the fallback; with several service images, set `services.web.image` to choose the primary one.
 :::
 
 ### `[services.<name>.concurrency]` — Scaling {#concurrency}

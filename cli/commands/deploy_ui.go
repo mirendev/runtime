@@ -78,10 +78,10 @@ type updateMsg struct {
 	msg string
 }
 
-// buildDoneMsg tells the model the build finished: it finalizes the build
-// phase from its own step state and shows an "activating" spinner until the
-// health phase begins. Sent instead of quitting the program after the build.
-type buildDoneMsg struct{}
+// buildDoneMsg tells the model preparation finished. image is populated when
+// Miren selected an upstream image directly, allowing the summary to describe
+// what actually happened rather than treating a zero-step build as cached.
+type buildDoneMsg struct{ image string }
 
 // healthWaitMsg sets the in-progress label for the health phase (e.g.
 // "Waiting for version X to become healthy" or "1/3 instances ready").
@@ -370,13 +370,13 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phaseStart = time.Now()
 		}
 
-		// Commit the build phase, then show an "activating" spinner until the
-		// health phase reports in.
-		phasePrints = append(phasePrints, m.completePhase(phaseSummary{
-			name:     "Build & push image",
-			duration: time.Since(m.phaseStart),
-			details:  buildStepsSummary(m.buildSteps),
-		}))
+		// Commit the build or direct-image phase, then show an "activating"
+		// spinner until the health phase reports in.
+		phasePrints = append(phasePrints, m.completePhase(buildPhaseSummary(
+			msg.image,
+			m.buildSteps,
+			time.Since(m.phaseStart),
+		)))
 		cmds = append(cmds, tea.Sequence(phasePrints...))
 
 		m.isUploading = false
@@ -489,4 +489,19 @@ func renderPhaseSummary(phase phaseSummary) string {
 		return fmt.Sprintf("%s %s - %s", phaseStr, timeStr, phase.details)
 	}
 	return fmt.Sprintf("%s %s", phaseStr, timeStr)
+}
+
+func buildPhaseSummary(image string, steps int, duration time.Duration) phaseSummary {
+	if image != "" {
+		return phaseSummary{
+			name:     "Use image",
+			duration: duration,
+			details:  image,
+		}
+	}
+	return phaseSummary{
+		name:     "Build & push image",
+		duration: duration,
+		details:  buildStepsSummary(steps),
+	}
 }

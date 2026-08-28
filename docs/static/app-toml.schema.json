@@ -109,7 +109,7 @@
         "port_type": {"type": "string", "enum": ["http", "tcp"]},
         "ports": {"type": "array", "items": {"$ref": "#/$defs/port"}},
         "port_timeout": {"$ref": "#/$defs/duration"},
-        "image": {"type": "string"},
+        "image": {"type": "string", "description": "Container image to use. On services.web, this also selects the app's primary image when no Dockerfile is configured."},
         "env": {"type": "array", "items": {"$ref": "#/$defs/env"}},
         "concurrency": {"$ref": "#/$defs/concurrency"},
         "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}}

@@ -22,12 +22,16 @@ import (
 // progress when the original CLI invocation is long gone.
 type StatusSender interface {
 	// SendMessage emits a free-form progress message ("Reading
-	// application data", "Launching builder", etc.).
+	// application data", "Preparing deployment", etc.).
 	SendMessage(msg string)
 
 	// SendPhase translates a buildkit phase name into a user-facing
 	// progress message, matching the mapping the pre-saga path used.
 	SendPhase(phase string)
+
+	// SendImage announces that the deploy will use this normalized upstream
+	// image directly, without a Miren build or registry push.
+	SendImage(image string)
 
 	// SendBuildkit emits the raw buildkit JSON status payload so the
 	// CLI can render live vertex/log output.
@@ -54,6 +58,7 @@ type noopStatusSender struct{}
 
 func (noopStatusSender) SendMessage(string)                                 {}
 func (noopStatusSender) SendPhase(string)                                   {}
+func (noopStatusSender) SendImage(string)                                   {}
 func (noopStatusSender) SendBuildkit([]byte)                                {}
 func (noopStatusSender) SendError(string, ...any)                           {}
 func (noopStatusSender) SendLog(string, string, ...*build_v1alpha.LogField) {}
@@ -108,6 +113,12 @@ func (r *rpcStatusSender) SendPhase(phase string) {
 		msg = phase
 	}
 	r.SendMessage(msg)
+}
+
+func (r *rpcStatusSender) SendImage(image string) {
+	so := new(build_v1alpha.Status)
+	so.Update().SetImage(image)
+	r.send(so)
 }
 
 func (r *rpcStatusSender) SendBuildkit(payload []byte) {

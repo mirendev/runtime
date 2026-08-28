@@ -481,6 +481,22 @@ func Deploy(ctx *Context, opts struct {
 		ctx.Log.Info("Server-owned deployment", "deployment_id", id, "phase", phase)
 	}
 
+	// The build status stream announces a normalized upstream image when the
+	// server bypasses BuildKit. Keep that semantic signal separate from the
+	// free-form progress text so the TUI can render a truthful phase summary.
+	var directImage atomic.Pointer[string]
+	onImage := func(image string) {
+		if image != "" {
+			directImage.Store(&image)
+		}
+	}
+	selectedImage := func() string {
+		if image := directImage.Load(); image != nil {
+			return *image
+		}
+		return ""
+	}
+
 	// Parse environment variables to pass to build server
 	var envVars []*build_v1alpha.EnvironmentVariable
 	if len(opts.Env) > 0 || len(opts.Sensitive) > 0 {
@@ -794,7 +810,7 @@ func Deploy(ctx *Context, opts struct {
 			return safeStatus.Send(buildCtx, status)
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment)
+		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(buildCtx, r, cb)
 		if err != nil {
@@ -842,6 +858,12 @@ func Deploy(ctx *Context, opts struct {
 			uploadSpan.End()
 			return pw.Err()
 		}
+		if image := selectedImage(); image != "" {
+			// A direct-image deploy emits no BuildKit status for the explain
+			// printer to render. Clear any in-place upload line and state the
+			// actual operation before health waiting begins.
+			fmt.Fprintf(os.Stderr, "\r\033[K%s\n", renderPhaseSummary(buildPhaseSummary(image, 0, 0)))
+		}
 	} else {
 		var (
 			updateCh         = make(chan string, 1)
@@ -884,7 +906,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler, onDeployment)
+		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(deployCtx, r, cb)
 
@@ -936,7 +958,7 @@ func Deploy(ctx *Context, opts struct {
 		// Build succeeded: fold the build phase into the model and keep the
 		// program alive, so the activate + health steps render as continuations
 		// of the same TUI rather than flat text printed below it.
-		buildProg.Send(buildDoneMsg{})
+		buildProg.Send(buildDoneMsg{image: selectedImage()})
 		updateDeploymentPhase("pushing")
 	}
 
@@ -1274,12 +1296,24 @@ func createBuildStatusCallback(
 	deployWarnings *[]*build_v1alpha.LogEntry,
 	progressHandler func(*client.SolveStatus) error,
 	onDeployment func(deploymentID, phase string),
+	onImage func(image string),
 ) stream.SendStream[*build_v1alpha.Status] {
 	vertices := map[string]bool{} // digest → completed
 	return stream.Callback(func(su *build_v1alpha.Status) error {
 		update := su.Update()
 
 		switch update.Which() {
+		case "image":
+			image := update.Image()
+			if onImage != nil {
+				onImage(image)
+			}
+			if updateCh != nil {
+				select {
+				case updateCh <- fmt.Sprintf("Using image %s", image):
+				default:
+				}
+			}
 		case "deployment":
 			// The server-owned deployment record announced itself. This arm only
 			// ever arrives when the server was handed a DeployRequest (an older

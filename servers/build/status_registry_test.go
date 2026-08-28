@@ -14,6 +14,7 @@ type recordingSender struct {
 	mu          sync.Mutex
 	Messages    []string
 	Phases      []string
+	Images      []string
 	Buildkit    [][]byte
 	Errors      []string
 	Logs        []recordedLog
@@ -41,6 +42,12 @@ func (r *recordingSender) SendPhase(phase string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Phases = append(r.Phases, phase)
+}
+
+func (r *recordingSender) SendImage(image string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Images = append(r.Images, image)
 }
 
 func (r *recordingSender) SendBuildkit(payload []byte) {
@@ -75,6 +82,7 @@ func TestStatusRegistry_UnregisteredIDReturnsNoop(t *testing.T) {
 	// Calling every method should not panic.
 	sender.SendMessage("hi")
 	sender.SendPhase("solving")
+	sender.SendImage("example/app:v1")
 	sender.SendBuildkit([]byte("x"))
 	sender.SendError("oops")
 	sender.SendLog("info", "text")
@@ -88,6 +96,7 @@ func TestStatusRegistry_RegisteredSenderReceives(t *testing.T) {
 	sender := reg.SenderFor("s1")
 	sender.SendMessage("hello")
 	sender.SendPhase("solving")
+	sender.SendImage("example/app:v1")
 	sender.SendBuildkit([]byte("payload"))
 	sender.SendError("bad %s", "thing")
 
@@ -96,6 +105,9 @@ func TestStatusRegistry_RegisteredSenderReceives(t *testing.T) {
 	}
 	if got, want := rec.Phases, []string{"solving"}; !equalStringSlice(got, want) {
 		t.Errorf("Phases = %v, want %v", got, want)
+	}
+	if got, want := rec.Images, []string{"example/app:v1"}; !equalStringSlice(got, want) {
+		t.Errorf("Images = %v, want %v", got, want)
 	}
 	if len(rec.Buildkit) != 1 || string(rec.Buildkit[0]) != "payload" {
 		t.Errorf("Buildkit = %v, want one entry with payload bytes", rec.Buildkit)

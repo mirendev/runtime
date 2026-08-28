@@ -8,6 +8,33 @@ import (
 	"miren.dev/runtime/pkg/progress/upload"
 )
 
+func TestBuildPhaseSummary(t *testing.T) {
+	duration := 250 * time.Millisecond
+
+	t.Run("direct image names the upstream reference", func(t *testing.T) {
+		got := buildPhaseSummary("docker.io/library/nginx:alpine", 0, duration)
+		if got.name != "Use image" {
+			t.Errorf("name = %q, want %q", got.name, "Use image")
+		}
+		if got.details != "docker.io/library/nginx:alpine" {
+			t.Errorf("details = %q, want normalized image reference", got.details)
+		}
+		if got.duration != duration {
+			t.Errorf("duration = %s, want %s", got.duration, duration)
+		}
+	})
+
+	t.Run("source build retains build summary", func(t *testing.T) {
+		got := buildPhaseSummary("", 3, duration)
+		if got.name != "Build & push image" {
+			t.Errorf("name = %q, want %q", got.name, "Build & push image")
+		}
+		if got.details != "3 steps completed" {
+			t.Errorf("details = %q, want %q", got.details, "3 steps completed")
+		}
+	})
+}
+
 func TestEnrichUploadProgress(t *testing.T) {
 	const total int64 = 1_000_000
 

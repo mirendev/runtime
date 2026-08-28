@@ -134,7 +134,23 @@ command = "celery -A myapp worker --loglevel=info"
 command = "celery -A myapp beat --loglevel=info"
 ```
 
-### Different Images
+### Existing and Different Images
+
+If your web app already exists as a container image, you can deploy it without source detection or a Dockerfile:
+
+```toml
+name = "myapp"
+
+[services.web]
+image = "ghcr.io/example/myapp:latest"
+port = 8080
+```
+
+:::note[Image selection]
+Without a Dockerfile, `services.web.image` selects the app's primary image and Miren launches it directly. This explicit image wins over automatic source detection. A `[build].dockerfile` setting or a discovered `Dockerfile.miren` still wins over both.
+
+An image on another service does not override a buildable source stack. This keeps database and cache sidecars from changing how the web app is built. Only when source detection finds no buildable stack can a lone service image become the fallback; with several service images, set `services.web.image` to choose the primary one.
+:::
 
 :::tip[Use addons for databases]
 If you just need a PostgreSQL database, consider using an [addon](/addons) instead of running it as a service. Addons are fully managed — Miren provisions the database, injects credentials, and handles cleanup. Use a service when you need full control over the database configuration.
@@ -160,7 +176,7 @@ mode = "fixed"
 num_instances = 1
 ```
 
-When you specify an `image`, Miren pulls that container image instead of using your app's built image. This lets you run standard database images alongside your application code.
+When you specify an `image` on a sidecar service, Miren pulls that container image instead of using your app's built image. This lets you run standard database images alongside your application code.
 
 #### Example: Full Stack with PostgreSQL and Redis
 

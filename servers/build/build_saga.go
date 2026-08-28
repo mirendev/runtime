@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -98,7 +99,7 @@ func receiveTar(ctx context.Context, in receiveTarIn) (receiveTarOut, error) {
 		}
 	}
 
-	status.SendMessage("Launching builder")
+	status.SendMessage("Preparing deployment")
 	return receiveTarOut{SourceDir: path}, nil
 }
 
@@ -442,7 +443,7 @@ type createVersionIn struct {
 	AppID              string `json:"app_id" saga:"app_id"`
 	VersionName        string `json:"version_name" saga:"version_name"`
 	FinalImageURL      string `json:"final_image_url" saga:"final_image_url"`
-	ArtifactID         string `json:"artifact_id" saga:"artifact_id"`
+	ArtifactID         string `json:"artifact_id" saga:"artifact_id,optional"`
 	AdminToken         string `json:"admin_token" saga:"admin_token"`
 	ConfigVersionID    string `json:"config_version_id" saga:"config_version_id"`
 	EphemeralLabel     string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
@@ -674,7 +675,8 @@ type finalizeIn struct {
 	StreamID       string    `json:"stream_id" saga:"stream_id"`
 	AppID          string    `json:"app_id" saga:"app_id"`
 	VersionName    string    `json:"version_name" saga:"version_name"`
-	ArtifactID     string    `json:"artifact_id" saga:"artifact_id"`
+	ArtifactID     string    `json:"artifact_id,omitempty" saga:"artifact_id,optional"`
+	FinalImageURL  string    `json:"final_image_url" saga:"final_image_url"`
 	ConfigSpec     string    `json:"config_spec_json" saga:"config_spec_json"`
 	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	ActiveReady    saga.Edge `saga:"set_active_skipped"`
@@ -696,7 +698,7 @@ func finalize(ctx context.Context, in finalizeIn) (finalizeOut, error) {
 	}
 
 	artifactName := strings.TrimPrefix(in.ArtifactID, "artifact/")
-	b.logDeployment(ctx, in.AppName, in.VersionName, artifactName)
+	b.logDeployment(ctx, in.AppName, in.VersionName, artifactName, in.FinalImageURL)
 
 	if err := deps.streams.Cleanup(in.StreamID); err != nil {
 		b.Log.Warn("cleanup staged tar", "stream", in.StreamID, "error", err)
@@ -857,12 +859,20 @@ func undoActivateDeployment(_ context.Context, _ activateDeploymentIn, _ activat
 	return nil
 }
 
-// detectBuildStack assembles the BuildStack the same way buildFromDir
-// does (app.toml.build > Dockerfile.miren > auto) and performs the
-// supported-stack check for auto so the saga can fail fast rather than
-// waste a buildkit launch. Extracted here so the saga action and the
-// pre-saga path share one source of truth.
-func (b *Builder) detectBuildStack(path string, ac *appconfig.AppConfig, name string, _ fsutil.FS) (BuildStack, error) {
+// buildSourceResolution is the shared source-selection result for deploy and
+// analyze. DetectionErr is populated only when no buildable source or fallback
+// image was found: deploy turns that into an error, while analyze reports the
+// source as unknown.
+type buildSourceResolution struct {
+	BuildStack    BuildStack
+	DetectedStack stackbuild.Stack
+	DetectionErr  error
+}
+
+// resolveBuildSource owns the source-precedence policy shared by deploy and
+// analyze: configured Dockerfile, discovered Dockerfile.miren, explicit web
+// image, detected source, then a lone non-web image fallback.
+func (b *Builder) resolveBuildSource(path string, ac *appconfig.AppConfig, name string) (buildSourceResolution, error) {
 	var stack BuildStack
 	stack.CodeDir = path
 
@@ -875,36 +885,111 @@ func (b *Builder) detectBuildStack(path string, ac *appconfig.AppConfig, name st
 			stack.Stack = "dockerfile"
 			stack.Input = ac.Build.Dockerfile
 			b.Log.Info("using dockerfile from app config", "dockerfile", ac.Build.Dockerfile)
+			return buildSourceResolution{BuildStack: stack}, nil
 		}
 	}
 
-	if stack.Stack == "" {
-		// Look on disk rather than through fsutil so test/error paths
-		// don't have to fabricate an fsutil.FS just to peek for a file.
-		if _, err := osStat(path, "Dockerfile.miren"); err == nil {
-			stack.Stack = "dockerfile"
-			stack.Input = "Dockerfile.miren"
-		} else {
-			stack.Stack = "auto"
-		}
+	// Look on disk rather than through fsutil so test/error paths don't have to
+	// fabricate an fsutil.FS just to peek for a file.
+	if _, err := osStat(path, "Dockerfile.miren"); err == nil {
+		stack.Stack = "dockerfile"
+		stack.Input = "Dockerfile.miren"
+		return buildSourceResolution{BuildStack: stack}, nil
+	}
+	stack.Stack = "auto"
+
+	if image := webImageSource(ac); image != "" {
+		stack.Stack = "image"
+		stack.Input = image
+		b.Log.Info("using explicitly configured web image as build source", "image", image, "app", name)
+		return buildSourceResolution{BuildStack: stack}, nil
 	}
 
-	if stack.Stack == "auto" {
-		detectOpts := stackbuild.BuildOptions{
-			Log:         b.Log,
-			Name:        name,
-			OnBuild:     stack.OnBuild,
-			Version:     stack.Version,
-			AlpineImage: stack.AlpineImage,
-		}
-		if _, err := stackbuild.DetectStack(stack.CodeDir, detectOpts); err != nil {
-			b.Log.Error("stack detection failed", "error", err, "app", name, "codeDir", stack.CodeDir)
-			return stack, fmt.Errorf("no supported stack detected for app %s: %w", name, err)
-		}
+	detectOpts := stackbuild.BuildOptions{
+		Log:         b.Log,
+		Name:        name,
+		OnBuild:     stack.OnBuild,
+		Version:     stack.Version,
+		AlpineImage: stack.AlpineImage,
+	}
+	detected, detectErr := stackbuild.DetectStack(stack.CodeDir, detectOpts)
+	if detectErr == nil {
 		b.Log.Debug("stack detection successful")
+		return buildSourceResolution{BuildStack: stack, DetectedStack: detected}, nil
 	}
 
-	return stack, nil
+	image, imageErr := fallbackImageSource(ac)
+	if imageErr != nil {
+		return buildSourceResolution{BuildStack: stack, DetectionErr: detectErr}, imageErr
+	}
+	if image != "" {
+		stack.Stack = "image"
+		stack.Input = image
+		b.Log.Info("using service image as build source", "image", image, "app", name)
+		return buildSourceResolution{BuildStack: stack}, nil
+	}
+
+	return buildSourceResolution{BuildStack: stack, DetectionErr: detectErr}, nil
+}
+
+// detectBuildStack adapts the shared source resolution to deploy's fail-fast
+// contract. Analyze uses the same resolution but may report an unknown stack.
+func (b *Builder) detectBuildStack(path string, ac *appconfig.AppConfig, name string, _ fsutil.FS) (BuildStack, error) {
+	resolution, err := b.resolveBuildSource(path, ac, name)
+	if err != nil {
+		return resolution.BuildStack, err
+	}
+	if resolution.DetectionErr != nil {
+		b.Log.Error("stack detection failed", "error", resolution.DetectionErr, "app", name, "codeDir", path)
+		return resolution.BuildStack, fmt.Errorf("no supported stack detected for app %s: %w", name, resolution.DetectionErr)
+	}
+	return resolution.BuildStack, nil
+}
+
+// webImageSource captures explicit primary-image intent. Unlike a non-web
+// service image, it outranks auto-detection: a user who names what web should
+// run should not have an incidental package.json or main.go turn that request
+// into a source build whose artifact is never used by web.
+func webImageSource(ac *appconfig.AppConfig) string {
+	if ac == nil {
+		return ""
+	}
+	if web := ac.Services["web"]; web != nil && web.Image != "" {
+		return web.Image
+	}
+	return ""
+}
+
+// fallbackImageSource chooses an image only after auto-detection found no
+// buildable source. This is what lets a worker-only image app deploy without
+// allowing a database sidecar image to suppress a perfectly good source build.
+// Refuse to guess among several images: map iteration order is not a
+// source-selection policy.
+func fallbackImageSource(ac *appconfig.AppConfig) (string, error) {
+	if ac == nil {
+		return "", nil
+	}
+	images := make(map[string]struct{})
+	for _, svc := range ac.Services {
+		if svc != nil && svc.Image != "" {
+			images[svc.Image] = struct{}{}
+		}
+	}
+	if len(images) == 0 {
+		return "", nil
+	}
+	if len(images) == 1 {
+		for image := range images {
+			return image, nil
+		}
+	}
+
+	refs := make([]string, 0, len(images))
+	for image := range images {
+		refs = append(refs, image)
+	}
+	slices.Sort(refs)
+	return "", fmt.Errorf("app has no buildable source and declares multiple service images (%s); set services.web.image to choose the app's primary image", strings.Join(refs, ", "))
 }
 
 // registerBuildSaga assembles the build-from-tar saga definition with all

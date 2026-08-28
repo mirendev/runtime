@@ -1,0 +1,7 @@
+name = "image-only"
+
+[services.web]
+image = "nginx:alpine"
+# MIR-1445 owns inheriting EXPOSE. Keep this fixture focused on using the image
+# as the source without a Dockerfile or stack build.
+port = 80
