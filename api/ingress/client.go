@@ -258,8 +258,13 @@ func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 		if svc.Name != service {
 			continue
 		}
-		if len(svc.Ports) == 0 && svc.Port > 0 {
-			if svc.PortType == "" || svc.PortType == "http" {
+		if len(svc.Ports) == 0 {
+			// The deployment launcher gives a web service with no port declaration
+			// its historical HTTP default of port 3000.
+			if service == "web" && svc.Port == 0 {
+				return nil
+			}
+			if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
 				return nil
 			}
 		} else {

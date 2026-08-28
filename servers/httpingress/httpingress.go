@@ -1461,7 +1461,7 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 	}
 
 	var targetAppId entity.Id
-	service := "web"
+	var service string
 	if route != nil {
 		targetAppId = route.App
 		service = routeService(route)

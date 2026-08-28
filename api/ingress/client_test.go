@@ -472,10 +472,21 @@ func TestHTTPService(t *testing.T) {
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
 		},
 		{
+			name:    "implicit web port defaults to HTTP",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}}},
+		},
+		{
 			name:    "missing service",
 			service: "api",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
 			wantErr: `app service "api" does not exist`,
+		},
+		{
+			name:    "non-web service without a port is not HTTP capable",
+			service: "worker",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "worker"}}},
+			wantErr: `app service "worker" has no HTTP port`,
 		},
 		{
 			name:    "TCP-only service",
