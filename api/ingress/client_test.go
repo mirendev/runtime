@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -41,6 +42,7 @@ func TestClientLookupCaseInsensitive(t *testing.T) {
 
 		// Verify the route was stored with lowercase host
 		require.Equal(t, "example.com", route.Host, "expected host to be stored as lowercase")
+		require.Empty(t, route.Service, "legacy SetRoute call must leave service absent")
 
 		// Test lookup with exact case as stored (lowercase)
 		result, err := client.Lookup(ctx, "example.com")
@@ -448,4 +450,62 @@ func TestRouteRequestTimeout(t *testing.T) {
 		require.Equal(t, testAppID, got.App)
 		require.Equal(t, host, got.Host)
 	})
+}
+
+func TestHTTPService(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		service string
+		spec    core_v1alpha.ConfigSpec
+		wantErr string
+	}{
+		{
+			name:    "HTTP port in ports array",
+			service: "api",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+				Name: "api", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 8080, Type: "http"}},
+			}}},
+		},
+		{
+			name:    "legacy scalar port defaults to HTTP",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
+		},
+		{
+			name:    "missing service",
+			service: "api",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
+			wantErr: `app service "api" does not exist`,
+		},
+		{
+			name:    "TCP-only service",
+			service: "irc",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+				Name: "irc", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 6667, Type: "tcp"}},
+			}}},
+			wantErr: `app service "irc" has no HTTP port`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := HTTPService(&tc.spec, tc.service)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestClientSetRouteStoresService(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	client := &Client{log: slog.Default(), ec: entityserver.NewClient(slog.Default(), inmem.EAC), eac: inmem.EAC}
+
+	_, err := client.SetRoute(ctx, "api.example.com", entity.Id("app-api"), "api")
+	require.NoError(t, err)
+	route, err := client.Lookup(ctx, "api.example.com")
+	require.NoError(t, err)
+	require.Equal(t, "api", route.Service)
 }

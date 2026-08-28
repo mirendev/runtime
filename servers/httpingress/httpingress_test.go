@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/httputil"
 )
@@ -530,21 +531,38 @@ func TestLeaseCacheKey(t *testing.T) {
 	// Two distinct wildcard subdomains that did not resolve to an ephemeral
 	// version must land on the same base key so they share one active-version
 	// lease pool instead of fragmenting per tenant.
-	tenant1 := leaseCacheKey(app, "tenant1", false)
-	tenant2 := leaseCacheKey(app, "tenant2", false)
-	labelFree := leaseCacheKey(app, "", false)
+	tenant1 := leaseCacheKey(app, "web", "tenant1", false)
+	tenant2 := leaseCacheKey(app, "web", "tenant2", false)
+	labelFree := leaseCacheKey(app, "web", "", false)
 	if tenant1 != labelFree || tenant2 != labelFree {
 		t.Errorf("unresolved labels should share the base key %q, got tenant1=%q tenant2=%q", labelFree, tenant1, tenant2)
 	}
 
 	// A resolved ephemeral version stays scoped per label and never collides
 	// with the base key or another label.
-	resolved := leaseCacheKey(app, "feat-x", true)
+	resolved := leaseCacheKey(app, "web", "feat-x", true)
 	if resolved == labelFree {
 		t.Errorf("resolved ephemeral key %q must differ from the base key %q", resolved, labelFree)
 	}
-	if other := leaseCacheKey(app, "feat-y", true); other == resolved {
+	if other := leaseCacheKey(app, "web", "feat-y", true); other == resolved {
 		t.Errorf("distinct ephemeral labels must not share a key, both were %q", resolved)
+	}
+
+	api := leaseCacheKey(app, "api", "", false)
+	if api == labelFree {
+		t.Errorf("different services must not share a lease cache key, both were %q", api)
+	}
+}
+
+func TestRouteService(t *testing.T) {
+	if got := routeService(nil); got != "web" {
+		t.Errorf("nil route service = %q, want web", got)
+	}
+	if got := routeService(&ingress_v1alpha.HttpRoute{}); got != "web" {
+		t.Errorf("legacy route service = %q, want web", got)
+	}
+	if got := routeService(&ingress_v1alpha.HttpRoute{Service: "api"}); got != "api" {
+		t.Errorf("selected route service = %q, want api", got)
 	}
 }
 

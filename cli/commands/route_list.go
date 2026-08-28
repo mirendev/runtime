@@ -41,6 +41,7 @@ func RouteList(ctx *Context, opts struct {
 		type RouteInfo struct {
 			Host           string `json:"host"`
 			App            string `json:"app"`
+			Service        string `json:"service"`
 			Default        bool   `json:"default"`
 			WafLevel       int    `json:"waf_level"`
 			RequestTimeout string `json:"request_timeout,omitempty"`
@@ -63,6 +64,7 @@ func RouteList(ctx *Context, opts struct {
 			routeInfos = append(routeInfos, RouteInfo{
 				Host:           host,
 				App:            string(r.Route.App),
+				Service:        routeService(r.Route),
 				Default:        r.Route.Default,
 				WafLevel:       resolveWAFLevel(r.Route),
 				RequestTimeout: r.Route.RequestTimeout,
@@ -81,7 +83,7 @@ func RouteList(ctx *Context, opts struct {
 	}
 
 	var rows []ui.Row
-	headers := []string{"HOST", "APP", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
+	headers := []string{"HOST", "APP", "SERVICE", "DEFAULT", "WAF", "TIMEOUT", "SERVING", "CREATED", "UPDATED"}
 
 	for _, r := range routes {
 		route := r.Route
@@ -141,4 +143,11 @@ func RouteList(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 	return nil
+}
+
+func routeService(route *ingress_v1alpha.HttpRoute) string {
+	if route.Service == "" {
+		return "web"
+	}
+	return route.Service
 }

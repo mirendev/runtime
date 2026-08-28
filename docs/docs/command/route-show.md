@@ -1,12 +1,12 @@
 ---
 title: "miren route show"
 sidebar_label: "route show"
-description: "Show details of an HTTP route"
+description: "Show details of an HTTP route, including its target app service"
 ---
 
 # miren route show
 
-Show details of an HTTP route
+Show details of an HTTP route, including its target app service
 
 ## Usage
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -250,11 +251,41 @@ func (c *Client) List(ctx context.Context) ([]*RouteWithMeta, error) {
 	return routes, nil
 }
 
-// SetRoute creates or updates an http_route for the given host and app
-func (c *Client) SetRoute(ctx context.Context, host string, appId entity.Id) (*ingress_v1alpha.HttpRoute, error) {
+// HTTPService validates that service exists and exposes an HTTP port. Legacy
+// scalar ports default to HTTP, matching deployment-time resolution.
+func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
+	for _, svc := range spec.Services {
+		if svc.Name != service {
+			continue
+		}
+		if len(svc.Ports) == 0 && svc.Port > 0 {
+			if svc.PortType == "" || svc.PortType == "http" {
+				return nil
+			}
+		} else {
+			for _, port := range svc.Ports {
+				if port.Type == "http" {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("app service %q has no HTTP port", service)
+	}
+	return fmt.Errorf("app service %q does not exist in the active configuration", service)
+}
+
+// SetRoute creates or updates an http_route for the given host, app, and service.
+// An empty service is retained as empty so routes written before service selection
+// continue to decode and route to web.
+func (c *Client) SetRoute(ctx context.Context, host string, appId entity.Id, services ...string) (*ingress_v1alpha.HttpRoute, error) {
+	service := ""
+	if len(services) > 0 {
+		service = services[0]
+	}
 	route := &ingress_v1alpha.HttpRoute{
-		Host: strings.ToLower(host),
-		App:  appId,
+		Host:    strings.ToLower(host),
+		App:     appId,
+		Service: service,
 	}
 
 	// Use the host as the route name/ID

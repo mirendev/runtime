@@ -23,6 +23,7 @@ miren route set <host> <appname> [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--service` — HTTP-capable app service to route to (default: `web`)
 
 ## Global Options
 
@@ -37,6 +38,14 @@ miren route set <host> <appname> [flags]
 ```bash
 miren route set example.com myapp
 ```
+
+**Route a domain to another HTTP app service:**
+
+```bash
+miren route set api.example.com myapp --service api
+```
+
+The selected app service must exist in the app's active configuration and expose an HTTP port. The default `web` service keeps existing route commands and stored routes compatible.
 
 ## See also
 

@@ -11,6 +11,9 @@ kinds:
       doc: The application to route to
       indexed: true
       tags: [dev.miren.app_ref]
+    service:
+      type: string
+      doc: The HTTP-capable app service to route to. Empty defaults to web for routes stored before this field existed.
     default:
       type: bool
       indexed: true

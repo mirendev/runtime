@@ -594,12 +594,14 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	}
 
 	var targetAppId entity.Id
+	var service = "web"
 	var routeType string
 	var ephemeralLabel string
 
 	if route != nil {
 		// Exact or wildcard route matched
 		targetAppId = route.App
+		service = routeService(route)
 		routeType = "route"
 
 		// Check for ephemeral subdomain label (only relevant for wildcard routes)
@@ -609,6 +611,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		// matched an existing route — this is an ephemeral subdomain request.
 		route = baseRoute
 		targetAppId = baseRoute.App
+		service = routeService(baseRoute)
 		routeType = "route"
 		ephemeralLabel = label
 	} else {
@@ -630,6 +633,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 		route = defaultRoute
 		targetAppId = defaultRoute.App
+		service = routeService(defaultRoute)
 		routeType = "default"
 		h.Log.Debug("using default route", "host", onlyHost, "app", targetAppId)
 	}
@@ -656,7 +660,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	}
 
 	handler := h.buildRouteHandler(route, appName, prepare, func(w http.ResponseWriter, r *http.Request) {
-		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, target, appName, requestTimeout)
+		h.serveAuthenticatedRequest(w, r, targetAppId, service, routeType, target, appName, requestTimeout)
 	})
 
 	handler(w, req)
@@ -897,21 +901,31 @@ func resolveVersionStrategy(ephemeralLabel string, wildcardRoute bool) versionRe
 	return resolveEphemeralStrict
 }
 
+// routeService returns the selected app service. Empty is the on-disk
+// representation of the historical web-only route and remains web-compatible.
+func routeService(route *ingress_v1alpha.HttpRoute) string {
+	if route == nil || route.Service == "" {
+		return "web"
+	}
+	return route.Service
+}
+
 // leaseCacheKey returns the lease cache key for a request. A request that
 // resolved an ephemeral version is scoped per label so it never shares a lease
 // with the active version or another label. Everything else, including a
-// wildcard subdomain that fell back to the active version, shares the app base
-// key so those requests reuse one active-version lease pool instead of
-// fragmenting into a per-tenant entry.
-func leaseCacheKey(appID entity.Id, ephemeralLabel string, ephemeralResolved bool) string {
+// wildcard subdomain that fell back to the active version, shares the app-service
+// base key so those requests reuse one active-version lease pool instead of
+// fragmenting into a per-tenant entry. Every key includes the selected service.
+func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralResolved bool) string {
+	key := appID.String() + ":service:" + service
 	if ephemeralResolved {
-		return appID.String() + ":eph:" + ephemeralLabel
+		return key + ":eph:" + ephemeralLabel
 	}
-	return appID.String()
+	return key
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
 	ctx := req.Context()
 	ephemeralLabel := target.ephemeralLabel
 
@@ -929,7 +943,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	// active version and shares its lease pool rather than fragmenting into a
 	// per-tenant entry. Label-free requests skip the lookup and stay on the
 	// fast active path.
-	leaseKey := leaseCacheKey(targetAppId, ephemeralLabel, target.ephemeralResolved)
+	leaseKey := leaseCacheKey(targetAppId, service, ephemeralLabel, target.ephemeralResolved)
 
 	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
 	// invalidate all cached leases and retry once to acquire a fresh lease.
@@ -991,7 +1005,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
 		defer actCancel()
 
-		actLease, err := h.aa.AcquireLease(actContext, &av, "web")
+		actLease, err := h.aa.AcquireLease(actContext, &av, service)
 		if err != nil {
 			if errors.Is(err, activator.ErrSandboxDiedEarly) {
 				h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
@@ -1332,7 +1346,8 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	av.Decode(vr.Entity().Entity())
 
 	// Try to use an existing lease, with retry on stale cached lease
-	curLease, err := h.useLease(ctx, appId)
+	leaseKey := appId + ":service:" + service
+	curLease, err := h.useLease(ctx, leaseKey)
 	if err != nil {
 		resp.SetError(fmt.Sprintf("error taking lease: %v", err))
 		return resp, nil
@@ -1342,8 +1357,8 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 	if curLease != nil {
 		httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
 		if err != nil && isProxyConnectionError(err) {
-			// Stale cached lease — invalidate all app leases and fall through to acquire fresh
-			h.invalidateAppLeases(context.Background(), appId)
+			// Stale cached lease — invalidate all cached leases for this app service and fall through to acquire fresh
+			h.invalidateAppLeases(context.Background(), leaseKey)
 			h.Log.Warn("stale lease on internal request, retrying with fresh lease",
 				"stale_url", curLease.Lease.URL, "app", appId)
 			curLease = nil
@@ -1377,7 +1392,7 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 		return resp, nil
 	}
 
-	curLease = h.retainLease(ctx, appId, actLease)
+	curLease = h.retainLease(ctx, leaseKey, actLease)
 
 	// Execute the HTTP request with fresh lease (no retry)
 	httpResp, err := h.executeInternalRequest(ctx, curLease, req, method, path, appId)
@@ -1385,7 +1400,7 @@ func (h *Server) DoRequest(ctx context.Context, req *httpingress_v1alpha.Interna
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			h.releaseLease(ctx, curLease)
 		} else if isProxyConnectionError(err) {
-			h.invalidateLease(context.Background(), appId, curLease)
+			h.invalidateLease(context.Background(), leaseKey, curLease)
 		} else {
 			h.releaseLease(ctx, curLease)
 		}
@@ -1446,8 +1461,10 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 	}
 
 	var targetAppId entity.Id
+	service := "web"
 	if route != nil {
 		targetAppId = route.App
+		service = routeService(route)
 
 		if !entity.Empty(route.AuthProvider) {
 			return nil, fmt.Errorf("tunneling not supported for auth-protected routes (host: %s)", onlyHost)
@@ -1464,6 +1481,7 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 			return nil, fmt.Errorf("tunneling not supported for auth-protected routes (host: %s)", onlyHost)
 		}
 		targetAppId = defaultRoute.App
+		service = routeService(defaultRoute)
 	}
 
 	appId := targetAppId.String()
@@ -1490,7 +1508,8 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 	av.Decode(vr.Entity().Entity())
 
 	// Try cached lease first
-	curLease, err := h.useLease(ctx, appId)
+	leaseKey := appId + ":service:" + service
+	curLease, err := h.useLease(ctx, leaseKey)
 	if err != nil {
 		return nil, fmt.Errorf("lease lookup failed: %w", err)
 	}
@@ -1508,7 +1527,7 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 	actContext, actCancel := context.WithTimeout(ctx, leaseAcquisitionTimeout)
 	defer actCancel()
 
-	actLease, err := h.aa.AcquireLease(actContext, &av, "web")
+	actLease, err := h.aa.AcquireLease(actContext, &av, service)
 	if err != nil {
 		return nil, fmt.Errorf("lease acquisition failed: %w", err)
 	}
@@ -1517,7 +1536,7 @@ func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*Tun
 		return nil, fmt.Errorf("no lease available for app %s", appId)
 	}
 
-	retained := h.retainLease(ctx, appId, actLease)
+	retained := h.retainLease(ctx, leaseKey, actLease)
 
 	return &TunnelConn{
 		URL:    actLease.URL,
