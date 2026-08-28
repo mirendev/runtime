@@ -1828,6 +1828,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	mrv.ConfigVersion = cvid
 	mrv.Config = core_v1alpha.Config{}
 	deploy.setSource(mrv)
+	mrv.Source.Kind, mrv.Source.Value = sourceFromBuildStack(buildStack)
 
 	id, err := b.ec.Create(createVerCtx, mrv.Version, mrv)
 	if err != nil {
@@ -2257,6 +2258,11 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 	}
 
 	result.SetStack(stackName)
+	if stackName != "unknown" {
+		sourceKind, sourceValue := sourceFromBuildStack(resolution.BuildStack)
+		result.SetSourceKind(sourceKind)
+		result.SetSourceValue(sourceValue)
+	}
 	if buildResult.Entrypoint != "" {
 		result.SetEntrypoint(buildResult.Entrypoint)
 	}

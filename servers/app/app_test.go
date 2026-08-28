@@ -54,6 +54,38 @@ func TestDeployTrackerInitializesOnceConcurrently(t *testing.T) {
 	require.NotNil(t, first)
 }
 
+func TestGetConfigurationReportsBuildSource(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	appInfo := &AppInfo{Log: slog.Default(), EC: ec}
+	client := &app_v1alpha.CrudClient{Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo))}
+
+	appID, err := ec.Create(ctx, "demo", &core_v1alpha.App{})
+	require.NoError(t, err)
+	versionID, err := ec.Create(ctx, "demo-v1", &core_v1alpha.AppVersion{
+		App:     appID,
+		Version: "demo-v1",
+		Source: core_v1alpha.Source{
+			Kind:  "image",
+			Value: "docker.io/library/nginx:alpine",
+		},
+	})
+	require.NoError(t, err)
+
+	var appRec core_v1alpha.App
+	require.NoError(t, ec.Get(ctx, "demo", &appRec))
+	appRec.ActiveVersion = versionID
+	require.NoError(t, ec.Update(ctx, &appRec))
+
+	result, err := client.GetConfiguration(ctx, "demo")
+	require.NoError(t, err)
+	assert.Equal(t, "image", result.SourceKind())
+	assert.Equal(t, "docker.io/library/nginx:alpine", result.SourceValue())
+}
+
 func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 	ctx := context.Background()
 

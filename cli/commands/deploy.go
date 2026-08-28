@@ -1745,10 +1745,13 @@ func analyzeApp(ctx *Context, bc *build_v1alpha.BuilderClient, dir string) error
 		return fmt.Errorf("no analysis result returned")
 	}
 
-	// Stack
+	sourceKind, sourceValue := analysisSource(
+		analysisResult.Stack(), analysisResult.SourceKind(), analysisResult.SourceValue())
+
+	// Source
 	ctx.Printf("%s %s\n",
-		analyzeLabelStyle.Render("Stack:"),
-		analyzeValueStyle.Render(analysisResult.Stack()))
+		analyzeLabelStyle.Render("Source:"),
+		analyzeValueStyle.Render(formatSource(sourceKind, sourceValue)))
 
 	// App name (if from app.toml)
 	if analysisResult.AppName() != "" {

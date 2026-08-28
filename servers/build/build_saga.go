@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
@@ -128,6 +129,8 @@ type loadSourceOut struct {
 	AppConfig        *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config"`
 	BuildStack       BuildStack           `json:"build_stack" saga:"build_stack"`
 	ProcfileServices map[string]string    `json:"procfile_services,omitempty" saga:"procfile_services"`
+	SourceKind       string               `json:"source_kind" saga:"source_kind"`
+	SourceValue      string               `json:"source_value,omitempty" saga:"source_value,optional"`
 }
 
 func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
@@ -164,10 +167,13 @@ func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
 		return loadSourceOut{}, err
 	}
 
+	sourceKind, sourceValue := sourceFromBuildStack(stack)
 	return loadSourceOut{
 		AppConfig:        ac,
 		BuildStack:       stack,
 		ProcfileServices: procfile,
+		SourceKind:       sourceKind,
+		SourceValue:      sourceValue,
 	}, nil
 }
 
@@ -447,6 +453,8 @@ type createVersionIn struct {
 	AdminToken         string `json:"admin_token" saga:"admin_token"`
 	ConfigVersionID    string `json:"config_version_id" saga:"config_version_id"`
 	GitInfo            string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+	SourceKind         string `json:"source_kind,omitempty" saga:"source_kind,optional"`
+	SourceValue        string `json:"source_value,omitempty" saga:"source_value,optional"`
 	EphemeralLabel     string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	EphemeralTTL       string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
 	EphemeralExpiresAt string `json:"ephemeral_expires_at,omitempty" saga:"ephemeral_expires_at,optional"`
@@ -477,6 +485,8 @@ func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, e
 			av.Source = deploylifecycle.SourceFromGitInfo(gitInfo)
 		}
 	}
+	av.Source.Kind = in.SourceKind
+	av.Source.Value = in.SourceValue
 	if in.EphemeralLabel != "" {
 		av.EphemeralLabel = in.EphemeralLabel
 		av.EphemeralTtl = in.EphemeralTTL
@@ -903,6 +913,7 @@ func (b *Builder) resolveBuildSource(path string, ac *appconfig.AppConfig, name 
 	detected, detectErr := stackbuild.DetectStack(stack.CodeDir, detectOpts)
 	if detectErr == nil {
 		b.Log.Debug("stack detection successful")
+		stack.DetectedStack = detected.Name()
 		return buildSourceResolution{BuildStack: stack, DetectedStack: detected}, nil
 	}
 
@@ -932,6 +943,19 @@ func (b *Builder) detectBuildStack(path string, ac *appconfig.AppConfig, name st
 		return resolution.BuildStack, fmt.Errorf("no supported stack detected for app %s: %w", name, resolution.DetectionErr)
 	}
 	return resolution.BuildStack, nil
+}
+
+func sourceFromBuildStack(stack BuildStack) (string, string) {
+	switch stack.Stack {
+	case "image":
+		return "image", containerdx.NormalizeImageReference(stack.Input)
+	case "dockerfile":
+		return "dockerfile", ""
+	case "auto":
+		return "stack", stack.DetectedStack
+	default:
+		return "", ""
+	}
 }
 
 // webImageSource captures explicit primary-image intent. Unlike a non-web

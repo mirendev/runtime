@@ -90,6 +90,9 @@ func AppStatus(ctx *Context, opts struct {
 	} else {
 		ctx.Printf("%s %s\n", labelStyle.Render("Current Version:"), yellowStyle.Render("No version deployed"))
 	}
+	if source := formatSource(appResult.SourceKind(), appResult.SourceValue()); source != "" {
+		ctx.Printf("%s %s\n", labelStyle.Render("Source:"), source)
+	}
 
 	if role := appResult.WorkloadRole(); role != "" {
 		ctx.Printf("%s %s\n", labelStyle.Render("Workload Role:"), role)
@@ -304,6 +307,10 @@ func printAppStatusJSON(
 		Concurrency int32    `json:"concurrency,omitempty"`
 		EnvVars     []string `json:"env_vars,omitempty"`
 	}
+	type sourceJSON struct {
+		Kind  string `json:"kind"`
+		Value string `json:"value,omitempty"`
+	}
 	type deploymentJSON struct {
 		ID           string   `json:"id"`
 		Status       string   `json:"status"`
@@ -388,6 +395,7 @@ func printAppStatusJSON(
 		App               string           `json:"app"`
 		Cluster           string           `json:"cluster"`
 		CurrentVersion    string           `json:"current_version,omitempty"`
+		Source            *sourceJSON      `json:"source,omitempty"`
 		WorkloadRole      string           `json:"workload_role,omitempty"`
 		MaintenanceRoutes []string         `json:"maintenance_routes,omitempty"`
 		Configuration     *configuration   `json:"configuration,omitempty"`
@@ -402,6 +410,9 @@ func printAppStatusJSON(
 
 	if appResult.HasVersionId() && appResult.VersionId() != "" {
 		output.CurrentVersion = appResult.VersionId()
+	}
+	if kind := appResult.SourceKind(); kind != "" {
+		output.Source = &sourceJSON{Kind: kind, Value: appResult.SourceValue()}
 	}
 
 	if appConfig != nil {

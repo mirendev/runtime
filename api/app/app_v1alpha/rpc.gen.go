@@ -2510,6 +2510,8 @@ type crudGetConfigurationResultsData struct {
 	VersionShortId    *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
 	WorkloadRole      *string        `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
 	MaintenanceRoutes *[]string      `cbor:"4,keyasint,omitempty" json:"maintenanceRoutes,omitempty"`
+	SourceKind        *string        `cbor:"5,keyasint,omitempty" json:"sourceKind,omitempty"`
+	SourceValue       *string        `cbor:"6,keyasint,omitempty" json:"sourceValue,omitempty"`
 }
 
 type CrudGetConfigurationResults struct {
@@ -2536,6 +2538,14 @@ func (v *CrudGetConfigurationResults) SetWorkloadRole(workloadRole string) {
 func (v *CrudGetConfigurationResults) SetMaintenanceRoutes(maintenanceRoutes []string) {
 	x := slices.Clone(maintenanceRoutes)
 	v.data.MaintenanceRoutes = &x
+}
+
+func (v *CrudGetConfigurationResults) SetSourceKind(sourceKind string) {
+	v.data.SourceKind = &sourceKind
+}
+
+func (v *CrudGetConfigurationResults) SetSourceValue(sourceValue string) {
+	v.data.SourceValue = &sourceValue
 }
 
 func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -4008,6 +4018,28 @@ func (v *CrudClientGetConfigurationResults) MaintenanceRoutes() []string {
 		return nil
 	}
 	return *v.data.MaintenanceRoutes
+}
+
+func (v *CrudClientGetConfigurationResults) HasSourceKind() bool {
+	return v.data.SourceKind != nil
+}
+
+func (v *CrudClientGetConfigurationResults) SourceKind() string {
+	if v.data.SourceKind == nil {
+		return ""
+	}
+	return *v.data.SourceKind
+}
+
+func (v *CrudClientGetConfigurationResults) HasSourceValue() bool {
+	return v.data.SourceValue != nil
+}
+
+func (v *CrudClientGetConfigurationResults) SourceValue() string {
+	if v.data.SourceValue == nil {
+		return ""
+	}
+	return *v.data.SourceValue
 }
 
 func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {

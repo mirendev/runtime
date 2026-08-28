@@ -94,6 +94,12 @@ kinds:
       type: component
       doc: Sanitized source provenance captured when this version was built
       attrs:
+        kind:
+          type: string
+          doc: Build source kind (image, dockerfile, or stack)
+        value:
+          type: string
+          doc: Normalized image reference or auto-detected stack name, depending on kind
         git_sha:
           type: string
           doc: Git commit SHA used to build the version

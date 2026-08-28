@@ -179,6 +179,16 @@ port = 80
 	}
 }
 
+func autoStackTarball(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{
+		".miren/app.toml": "name = 'demo'\n",
+		"go.mod":          "module example.com/demo\n\ngo 1.26\n",
+		"main.go":         "package main\n\nfunc main() {}\n",
+		"Procfile":        "web: ./demo\n",
+	}
+}
+
 func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	ctx := context.Background()
 
@@ -209,6 +219,11 @@ func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	if application.ActiveVersion == "" {
 		t.Error("expected app to have an active version after build saga")
 	}
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Equal(t, "dockerfile", version.Source.Kind)
+	assert.Empty(t, version.Source.Value)
 }
 
 func TestBuildSaga_MalformedGitInfoDoesNotBlockDeployment(t *testing.T) {
@@ -231,7 +246,10 @@ func TestBuildSaga_MalformedGitInfoDoesNotBlockDeployment(t *testing.T) {
 
 	var version core_v1alpha.AppVersion
 	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
-	assert.Empty(t, version.Source)
+	assert.Empty(t, version.Source.GitSha)
+	assert.Empty(t, version.Source.GitBranch)
+	assert.Empty(t, version.Source.Repository)
+	assert.Equal(t, "dockerfile", version.Source.Kind)
 }
 
 func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
@@ -259,6 +277,8 @@ func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
 	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
 	assert.Equal(t, "docker.io/library/nginx:alpine", version.ImageUrl)
 	assert.Empty(t, version.Artifact, "direct-image versions do not invent an Artifact")
+	assert.Equal(t, "image", version.Source.Kind)
+	assert.Equal(t, "docker.io/library/nginx:alpine", version.Source.Value)
 
 	var configVersion core_v1alpha.ConfigVersion
 	require.NoError(t, h.builder.ec.GetById(ctx, version.ConfigVersion, &configVersion))
@@ -267,6 +287,28 @@ func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
 	assert.Equal(t, "nginx:alpine", configVersion.Spec.Services[0].Image)
 	assert.Empty(t, configVersion.Spec.Services[0].Command)
 	assert.Contains(t, rec.Images, "docker.io/library/nginx:alpine")
+}
+
+func TestBuildSaga_AutoStackRecordsDetectedSource(t *testing.T) {
+	ctx := context.Background()
+
+	h := newSagaTestHarness(t)
+	h.streams.Register("stream-auto", makeTar(t, autoStackTarball(t)))
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-auto").
+		WithID("test-auto-stack").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var application core_v1alpha.App
+	require.NoError(t, h.builder.ec.Get(ctx, "demo", &application))
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Equal(t, "stack", version.Source.Kind)
+	assert.Equal(t, "go", version.Source.Value)
 }
 
 func TestImageSourceSelection(t *testing.T) {
