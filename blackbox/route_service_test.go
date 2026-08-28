@@ -3,6 +3,7 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,10 +22,34 @@ func TestRouteSetService(t *testing.T) {
 	m.MustRun("route", "set", host, name, "--service", "echo")
 
 	shown := m.MustRun("route", "show", host, "--format", "json")
-	shown.RequireContains(t, `"service":"echo"`)
+	var shownRoute struct {
+		Service string `json:"service"`
+	}
+	if err := json.Unmarshal([]byte(shown.Stdout), &shownRoute); err != nil {
+		t.Fatalf("decode route show JSON: %v", err)
+	}
+	if shownRoute.Service != "echo" {
+		t.Fatalf("route show service = %q, want echo", shownRoute.Service)
+	}
 
 	listed := m.MustRun("route", "list", "--format", "json")
-	listed.RequireContains(t, `"service":"echo"`)
+	var listedRoutes []struct {
+		Host    string `json:"host"`
+		Service string `json:"service"`
+	}
+	if err := json.Unmarshal([]byte(listed.Stdout), &listedRoutes); err != nil {
+		t.Fatalf("decode route list JSON: %v", err)
+	}
+	foundRoute := false
+	for _, route := range listedRoutes {
+		if route.Host == host && route.Service == "echo" {
+			foundRoute = true
+			break
+		}
+	}
+	if !foundRoute {
+		t.Fatalf("route list has no route for %q with service echo: %s", host, listed.Stdout)
+	}
 
 	textList := m.MustRun("route", "list")
 	assertRouteListService(t, textList.Stdout, host, "echo")
@@ -34,7 +59,7 @@ func TestRouteSetService(t *testing.T) {
 		if err != nil {
 			return false, err.Error()
 		}
-		if code != 200 || body != "ok" {
+		if code != 200 || strings.TrimSpace(body) != "ok" {
 			return false, fmt.Sprintf("HTTP %d: %q", code, body)
 		}
 		return true, ""
