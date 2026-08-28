@@ -470,6 +470,10 @@ types:
       - name: version
         type: string
         index: 11
+      - name: short_id
+        type: string
+        index: 12
+        doc: Short, human-typeable form of the run id; empty for runs recorded before short-ids
 
 interfaces:
   - name: Crud
