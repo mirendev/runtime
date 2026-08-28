@@ -69,7 +69,6 @@ func RouteSet(ctx *Context, opts struct {
 		return err
 	}
 
-	// Create/update the route
 	ic := ingress.NewClient(ctx.Log, client)
 	_, err = ic.SetRoute(ctx, opts.Host, appEntity.ID, opts.Service)
 	if err != nil {

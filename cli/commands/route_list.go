@@ -121,6 +121,7 @@ func RouteList(ctx *Context, opts struct {
 		rows = append(rows, ui.Row{
 			host,
 			appDisplay,
+			routeService(route),
 			defaultDisplay,
 			wafDisplay,
 			timeoutDisplay,

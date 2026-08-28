@@ -25,6 +25,10 @@ func TestRouteSetService(t *testing.T) {
 	listed := m.MustRun("route", "list", "--format", "json")
 	listed.RequireContains(t, `"service":"echo"`)
 
+	textList := m.MustRun("route", "list")
+	textList.RequireContains(t, "SERVICE")
+	textList.RequireContains(t, "echo")
+
 	harness.Poll(t, "named HTTP service responds via route", 30*time.Second, 2*time.Second, func() (bool, string) {
 		code, body, err := harness.HTTPGet(m, host, "/")
 		if err != nil {

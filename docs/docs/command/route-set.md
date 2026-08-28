@@ -45,7 +45,9 @@ miren route set example.com myapp
 miren route set api.example.com myapp --service api
 ```
 
-The selected app service must exist in the app's active configuration and expose an HTTP port. The default `web` service keeps existing route commands and stored routes compatible.
+:::info[Service requirements]
+The selected app service must exist in the active app configuration and expose an HTTP port. The default `web` service keeps existing route commands and stored routes compatible.
+:::
 
 ## See also
 
