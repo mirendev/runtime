@@ -39,16 +39,6 @@ miren route set <host> <appname> [flags]
 miren route set example.com myapp
 ```
 
-**Route a domain to another HTTP app service:**
-
-```bash
-miren route set api.example.com myapp --service api
-```
-
-:::info[Service requirements]
-The selected app service must exist in the active app configuration and expose an HTTP port. The default `web` service keeps existing route commands and stored routes compatible.
-:::
-
 ## See also
 
 - [`miren route`](/command/route)

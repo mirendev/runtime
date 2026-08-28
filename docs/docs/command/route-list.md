@@ -1,12 +1,12 @@
 ---
 title: "miren route list"
 sidebar_label: "route list"
-description: "List all HTTP routes, including each route's target app service"
+description: "List all HTTP routes"
 ---
 
 # miren route list
 
-List all HTTP routes, including each route's target app service
+List all HTTP routes
 
 ## Usage
 
