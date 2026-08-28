@@ -4,9 +4,6 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/app"
-	compute "miren.dev/runtime/api/core"
-	"miren.dev/runtime/api/core/core_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/appconfig"
 )
@@ -48,25 +45,6 @@ func RouteSet(ctx *Context, opts struct {
 	appEntity, err := appClient.GetByName(ctx, appName)
 	if err != nil {
 		return fmt.Errorf("failed to find app %q: %w", appName, err)
-	}
-
-	if appEntity.ActiveVersion == "" {
-		return fmt.Errorf("app %q has no active configuration", appName)
-	}
-
-	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	version, err := eac.Get(ctx, appEntity.ActiveVersion.String())
-	if err != nil {
-		return fmt.Errorf("failed to get active configuration for app %q: %w", appName, err)
-	}
-	var appVersion core_v1alpha.AppVersion
-	appVersion.Decode(version.Entity().Entity())
-	spec, err := compute.ResolveRuntimeConfig(ctx, eac, &appVersion)
-	if err != nil {
-		return fmt.Errorf("failed to resolve active configuration for app %q: %w", appName, err)
-	}
-	if err := ingress.HTTPService(spec, opts.Service); err != nil {
-		return err
 	}
 
 	ic := ingress.NewClient(ctx.Log, client)

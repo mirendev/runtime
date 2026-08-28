@@ -477,6 +477,16 @@ func TestHTTPService(t *testing.T) {
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}}},
 		},
 		{
+			name:    "port array without type defaults to HTTP",
+			service: "api",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "api", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 8080}}}}},
+		},
+		{
+			name:    "web with only TCP ports keeps implicit HTTP port",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 7000, Type: "tcp"}}}}},
+		},
+		{
 			name:    "missing service",
 			service: "api",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
@@ -514,7 +524,21 @@ func TestClientSetRouteStoresService(t *testing.T) {
 	defer cleanup()
 	client := &Client{log: slog.Default(), ec: entityserver.NewClient(slog.Default(), inmem.EAC), eac: inmem.EAC}
 
-	_, err := client.SetRoute(ctx, "api.example.com", entity.Id("app-api"), "api")
+	appID, err := client.ec.Create(ctx, "app-api", &core_v1alpha.App{})
+	require.NoError(t, err)
+	configID, err := client.ec.Create(ctx, "app-api-config", &core_v1alpha.ConfigVersion{
+		App: appID,
+		Spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "api", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 8080, Type: "http"}},
+		}}},
+	})
+	require.NoError(t, err)
+	versionID, err := client.ec.Create(ctx, "app-api-version", &core_v1alpha.AppVersion{App: appID, ConfigVersion: configID})
+	require.NoError(t, err)
+	app := &core_v1alpha.App{ID: appID, ActiveVersion: versionID}
+	require.NoError(t, client.ec.Update(ctx, app))
+
+	_, err = client.SetRoute(ctx, "api.example.com", appID, "api")
 	require.NoError(t, err)
 	route, err := client.Lookup(ctx, "api.example.com")
 	require.NoError(t, err)

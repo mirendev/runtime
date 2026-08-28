@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	compute "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -251,28 +252,32 @@ func (c *Client) List(ctx context.Context) ([]*RouteWithMeta, error) {
 	return routes, nil
 }
 
-// HTTPService validates that service exists and exposes an HTTP port. Legacy
-// scalar ports default to HTTP, matching deployment-time resolution.
+// HTTPService validates that service exists and is HTTP-capable. It matches
+// appspec.Build: omitted port types default to HTTP, and web receives an
+// implicit HTTP port when it has no HTTP port declaration.
 func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 	for _, svc := range spec.Services {
 		if svc.Name != service {
 			continue
 		}
-		if len(svc.Ports) == 0 {
-			// The deployment launcher gives a web service with no port declaration
-			// its historical HTTP default of port 3000.
-			if service == "web" && svc.Port == 0 {
-				return nil
-			}
-			if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
-				return nil
-			}
-		} else {
+
+		if len(svc.Ports) > 0 {
 			for _, port := range svc.Ports {
-				if port.Type == "http" {
+				if port.Type == "" || port.Type == "http" {
 					return nil
 				}
 			}
+			if service == "web" {
+				return nil
+			}
+			return fmt.Errorf("app service %q has no HTTP port", service)
+		}
+
+		if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
+			return nil
+		}
+		if service == "web" {
+			return nil
 		}
 		return fmt.Errorf("app service %q has no HTTP port", service)
 	}
@@ -280,20 +285,44 @@ func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 }
 
 // SetRoute creates or updates an http_route for the given host, app, and service.
-// An empty service is retained as empty so routes written before service selection
-// continue to decode and route to web.
-func (c *Client) SetRoute(ctx context.Context, host string, appId entity.Id, services ...string) (*ingress_v1alpha.HttpRoute, error) {
+// A caller that supplies a service gets active-configuration validation at the
+// ingress write boundary. Calls without one retain the legacy web route shape.
+func (c *Client) SetRoute(ctx context.Context, host string, appID entity.Id, services ...string) (*ingress_v1alpha.HttpRoute, error) {
 	service := ""
 	if len(services) > 0 {
 		service = services[0]
+
+		appRecord, err := c.eac.Get(ctx, appID.String())
+		if err != nil {
+			return nil, fmt.Errorf("get app %s: %w", appID, err)
+		}
+		var app core_v1alpha.App
+		app.Decode(appRecord.Entity().Entity())
+		if app.ActiveVersion == "" {
+			return nil, fmt.Errorf("app %q has no active configuration", appID)
+		}
+
+		versionRecord, err := c.eac.Get(ctx, app.ActiveVersion.String())
+		if err != nil {
+			return nil, fmt.Errorf("get active configuration for app %s: %w", appID, err)
+		}
+		var version core_v1alpha.AppVersion
+		version.Decode(versionRecord.Entity().Entity())
+		spec, err := compute.ResolveRuntimeConfig(ctx, c.eac, &version)
+		if err != nil {
+			return nil, fmt.Errorf("resolve active configuration for app %s: %w", appID, err)
+		}
+		if err := HTTPService(spec, service); err != nil {
+			return nil, err
+		}
 	}
+
 	route := &ingress_v1alpha.HttpRoute{
 		Host:    strings.ToLower(host),
-		App:     appId,
+		App:     appID,
 		Service: service,
 	}
 
-	// Use the host as the route name/ID
 	_, err := c.ec.CreateOrUpdate(ctx, host, route)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create/update route: %w", err)
