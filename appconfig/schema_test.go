@@ -35,9 +35,7 @@ func TestPublishedSchemaFieldsMatchConfig(t *testing.T) {
 		got    map[string]any
 		skip   map[string]bool
 	}{
-		// post_import is intentionally absent: it is legacy dead config that is
-		// parsed but never used. Keep the public schema from advertising a no-op.
-		{name: "root", typeOf: reflect.TypeFor[AppConfig](), got: schema.Properties, skip: map[string]bool{"post_import": true}},
+		{name: "root", typeOf: reflect.TypeFor[AppConfig](), got: schema.Properties},
 		{name: "env", typeOf: reflect.TypeFor[AppEnvVar](), got: schema.Defs["env"].Properties},
 		{name: "build", typeOf: reflect.TypeFor[BuildConfig](), got: schema.Defs["build"].Properties},
 		{name: "service", typeOf: reflect.TypeFor[ServiceConfig](), got: schema.Defs["service"].Properties},

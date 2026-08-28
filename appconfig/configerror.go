@@ -347,7 +347,7 @@ func validFieldsForPath(path string) ([]string, bool) {
 
 // validFields maps section paths to their valid field names.
 var validFields = map[string][]string{
-	"":                       {"name", "post_import", "env", "concurrency", "services", "tasks", "web", "build", "include", "addons", "aliases", "workload_role"},
+	"":                       {"name", "env", "concurrency", "services", "tasks", "web", "build", "include", "addons", "aliases", "workload_role"},
 	"services.*":             {"command", "port", "port_name", "port_type", "ports", "image", "env", "concurrency", "disks", "port_timeout"},
 	"services.*.concurrency": {"mode", "requests_per_instance", "scale_down_delay", "num_instances", "shutdown_timeout"},
 	"services.*.disks":       {"name", "provider", "mount_path", "read_only", "size_gb", "filesystem", "lease_timeout"},

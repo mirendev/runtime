@@ -280,7 +280,6 @@ func (tc *TaskConfig) ResolvedMaxConcurrent() int {
 
 type AppConfig struct {
 	Name         string                    `toml:"name"`
-	PostImport   string                    `toml:"post_import,omitempty"`
 	EnvVars      []AppEnvVar               `toml:"env,omitempty"`
 	Concurrency  *int                      `toml:"concurrency,omitempty"`
 	Services     map[string]*ServiceConfig `toml:"services,omitempty"`
