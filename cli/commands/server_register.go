@@ -16,6 +16,11 @@ type RegisterOptions struct {
 	CloudURL    string            `short:"u" long:"url" description:"Cloud URL" default:"https://miren.cloud"`
 	Tags        map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 	OutputDir   string            `short:"o" long:"output" description:"Output directory for registration" default:"/var/lib/miren/server"`
+
+	// EnrollToken, when set, registers unattended: no browser approval, no
+	// polling. It is minted by an org admin in miren.cloud and normally arrives
+	// via the cloud-init bootstrap payload rather than being typed by hand.
+	EnrollToken string `long:"enroll-token" description:"Unattended enroll token from miren.cloud"`
 }
 
 // RegisterStandalone is the CLI entrypoint for `miren server register`. It runs
@@ -50,6 +55,13 @@ func Register(ctx *Context, opts RegisterOptions) error {
 	}
 
 	opts.Tags = clean
+
+	// An enroll token takes the unattended path: cloud creates the cluster in
+	// the initiate response, so there is no browser approval and nothing to
+	// poll. It is a fully separate flow from the interactive one below.
+	if opts.EnrollToken != "" {
+		return registerWithEnrollToken(ctx, opts)
+	}
 
 	// Check if already registered
 	existing, err := registration.LoadRegistration(opts.OutputDir)
@@ -221,6 +233,119 @@ func Register(ctx *Context, opts RegisterOptions) error {
 		ctx.Info("DNS Hostname: %s", status.DNSHostname)
 	}
 	reportIdentityAnchor(ctx, status.IdentityIssuerURL)
+	ctx.Info("Configuration saved to: %s", opts.OutputDir)
+
+	return nil
+}
+
+// registerWithEnrollToken handles the unattended registration path. A valid
+// enroll token means an org admin already approved this cluster when they
+// minted the token, so cloud creates the cluster in the initiate response and
+// there is nothing to approve in a browser or poll for.
+//
+// A token that cloud rejects is terminal here: this never falls back to the
+// interactive flow. A machine booted from a cloud-init payload has no human at
+// a browser, so falling back would strand it waiting for an approval nobody
+// knows to give.
+func registerWithEnrollToken(ctx *Context, opts RegisterOptions) error {
+	existing, err := registration.LoadRegistration(opts.OutputDir)
+	if err != nil {
+		return fmt.Errorf("failed to check existing registration: %w", err)
+	}
+	if existing != nil && existing.Status == "approved" {
+		return fmt.Errorf("cluster already registered as %s (ID: %s); run 'miren server unregister' to detach it first",
+			existing.ClusterName, existing.ClusterID)
+	}
+
+	// Reuse a keypair left behind by an interrupted attempt. Presenting the same
+	// public key is what lets cloud replay the original registration instead of
+	// refusing a token it already spent, so a retry after a lost response lands
+	// on the same cluster rather than an error.
+	var privateKey, publicKey string
+	if existing != nil && existing.PrivateKey != "" {
+		privateKey = existing.PrivateKey
+		publicKey, err = registration.PublicKeyFromPrivateKeyPEM(privateKey)
+		if err != nil {
+			return fmt.Errorf("failed to derive public key from saved private key: %w", err)
+		}
+		ctx.Info("Reusing the keypair from a previous enrollment attempt")
+	} else {
+		privateKey, publicKey, err = registration.GenerateKeyPair()
+		if err != nil {
+			return fmt.Errorf("failed to generate key pair: %w", err)
+		}
+	}
+
+	// Save the key before the request, so a crash mid-flight still leaves us
+	// able to retry with the same key.
+	initial := &registration.StoredRegistration{
+		ClusterName: opts.ClusterName,
+		PrivateKey:  privateKey,
+		CloudURL:    opts.CloudURL,
+		Tags:        opts.Tags,
+		Status:      "initializing",
+	}
+	if err := registration.SaveRegistration(opts.OutputDir, initial); err != nil {
+		return fmt.Errorf("cannot save registration to %s: %w", opts.OutputDir, err)
+	}
+
+	ctx.Info("Registering cluster '%s' with %s using an enroll token...", opts.ClusterName, opts.CloudURL)
+
+	config := registration.Config{
+		ClusterName: opts.ClusterName,
+		Tags:        opts.Tags,
+		PublicKey:   publicKey,
+		EnrollToken: opts.EnrollToken,
+	}
+	client := registration.NewClient(opts.CloudURL, config)
+
+	result, err := client.StartRegistration(context.Background())
+	if err != nil {
+		return fmt.Errorf("enrollment failed: %w", err)
+	}
+
+	if result.Status != registration.StatusRegistered {
+		// Cloud answered with the interactive shape despite the token, which
+		// means the token was ignored — an older server, or enroll tokens
+		// disabled. Treat it as terminal for the reason above.
+		return fmt.Errorf("cloud did not honor the enroll token (status %q); unattended enrollment is not available at %s",
+			result.Status, opts.CloudURL)
+	}
+
+	// The response carries the authoritative tag set: grant defaults an admin
+	// stamped on the token, merged over what this node asserted. Prefer it over
+	// the node's own tags when present.
+	tags := opts.Tags
+	if len(result.Tags) > 0 {
+		tags = result.Tags
+	}
+
+	stored := &registration.StoredRegistration{
+		ClusterID:         result.ClusterID,
+		ClusterName:       opts.ClusterName,
+		OrganizationID:    result.OrganizationID,
+		ServiceAccountID:  result.ServiceAccountID,
+		DNSHostname:       result.DNSHostname,
+		IdentityIssuerURL: result.IdentityIssuerURL,
+		IdentityAnchor:    anchorForRegistration(result.IdentityIssuerURL),
+		PrivateKey:        privateKey,
+		CloudURL:          opts.CloudURL,
+		RegisteredAt:      time.Now(),
+		Tags:              tags,
+		Status:            "approved",
+	}
+	if err := registration.SaveRegistration(opts.OutputDir, stored); err != nil {
+		return fmt.Errorf("failed to save registration: %w", err)
+	}
+
+	ctx.Completed("Registration successful!")
+	ctx.Info("Cluster ID: %s", result.ClusterID)
+	ctx.Info("Organization ID: %s", result.OrganizationID)
+	ctx.Info("Service Account ID: %s", result.ServiceAccountID)
+	if result.DNSHostname != "" {
+		ctx.Info("DNS Hostname: %s", result.DNSHostname)
+	}
+	reportIdentityAnchor(ctx, result.IdentityIssuerURL)
 	ctx.Info("Configuration saved to: %s", opts.OutputDir)
 
 	return nil

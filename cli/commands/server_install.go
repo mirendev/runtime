@@ -337,6 +337,7 @@ func ServerInstall(ctx *Context, opts struct {
 	CloudURL        string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags            map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 	SkipSystemCheck bool              `long:"skip-system-check" description:"Skip minimum system requirements check"`
+	EnrollToken     string            `long:"enroll-token" description:"Unattended enroll token from miren.cloud (registers without browser approval)"`
 }) error {
 	if opts.Branch == "" {
 		if br := version.Branch(); br != "" {
@@ -397,6 +398,7 @@ func ServerInstall(ctx *Context, opts struct {
 				CloudURL:    opts.CloudURL,
 				Tags:        opts.Tags,
 				OutputDir:   "/var/lib/miren/server",
+				EnrollToken: opts.EnrollToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
@@ -424,6 +426,7 @@ func ServerInstall(ctx *Context, opts struct {
 				CloudURL:    opts.CloudURL,
 				Tags:        opts.Tags,
 				OutputDir:   "/var/lib/miren/server",
+				EnrollToken: opts.EnrollToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {

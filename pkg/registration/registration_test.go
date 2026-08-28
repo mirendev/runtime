@@ -1,6 +1,10 @@
 package registration
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +12,63 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// The unattended (enroll-token) response fills in the cluster identity directly
+// and carries no auth_url or poll_url. StartRegistration has to surface those
+// fields and mark the result as registered so the caller skips polling.
+func TestStartRegistrationDecodesRegisteredResponse(t *testing.T) {
+	var gotBody Config
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/clusters/register/initiate", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		json.NewEncoder(w).Encode(Result{
+			Status:           StatusRegistered,
+			ClusterID:        "cluster-abc",
+			OrganizationID:   "org-xyz",
+			ServiceAccountID: "sa-123",
+			DNSHostname:      "prod.example.miren.cloud",
+			Tags:             map[string]string{"env": "prod"},
+		})
+	}))
+	defer ts.Close()
+
+	client := NewClient(ts.URL, Config{
+		ClusterName: "prod",
+		PublicKey:   "PUBKEY",
+		EnrollToken: "met_testtoken",
+	})
+
+	result, err := client.StartRegistration(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, StatusRegistered, result.Status)
+	assert.Equal(t, "cluster-abc", result.ClusterID)
+	assert.Equal(t, "org-xyz", result.OrganizationID)
+	assert.Equal(t, "sa-123", result.ServiceAccountID)
+	assert.Equal(t, "prod.example.miren.cloud", result.DNSHostname)
+	assert.Equal(t, map[string]string{"env": "prod"}, result.Tags)
+	assert.Empty(t, result.AuthURL, "registered response carries no auth_url")
+	assert.Empty(t, result.PollURL, "registered response carries no poll_url")
+
+	assert.Equal(t, "met_testtoken", gotBody.EnrollToken, "token must be sent to cloud")
+}
+
+// PublicKeyFromPrivateKeyPEM must derive exactly the public key that
+// GenerateKeyPair paired with the private key, so a retry reuses the same
+// identity cloud already saw.
+func TestPublicKeyFromPrivateKeyPEMRoundTrips(t *testing.T) {
+	priv, pub, err := GenerateKeyPair()
+	require.NoError(t, err)
+
+	derived, err := PublicKeyFromPrivateKeyPEM(priv)
+	require.NoError(t, err)
+	assert.Equal(t, pub, derived)
+}
+
+func TestPublicKeyFromPrivateKeyPEMRejectsGarbage(t *testing.T) {
+	_, err := PublicKeyFromPrivateKeyPEM("not a pem block")
+	require.Error(t, err)
+}
 
 func TestClearRegistration(t *testing.T) {
 	dir := t.TempDir()
