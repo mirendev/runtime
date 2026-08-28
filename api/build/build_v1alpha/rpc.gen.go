@@ -903,6 +903,8 @@ type analysisResultData struct {
 	EnvVars         *[]string         `cbor:"6,keyasint,omitempty" json:"env_vars,omitempty"`
 	Events          *[]DetectionEvent `cbor:"7,keyasint,omitempty" json:"events,omitempty"`
 	Tasks           *[]TaskInfo       `cbor:"8,keyasint,omitempty" json:"tasks,omitempty"`
+	SourceKind      *string           `cbor:"9,keyasint,omitempty" json:"source_kind,omitempty"`
+	SourceValue     *string           `cbor:"10,keyasint,omitempty" json:"source_value,omitempty"`
 }
 
 type AnalysisResult struct {
@@ -1030,6 +1032,36 @@ func (v *AnalysisResult) Tasks() *[]TaskInfo {
 
 func (v *AnalysisResult) SetTasks(tasks *[]TaskInfo) {
 	v.data.Tasks = tasks
+}
+
+func (v *AnalysisResult) HasSourceKind() bool {
+	return v.data.SourceKind != nil
+}
+
+func (v *AnalysisResult) SourceKind() string {
+	if v.data.SourceKind == nil {
+		return ""
+	}
+	return *v.data.SourceKind
+}
+
+func (v *AnalysisResult) SetSourceKind(source_kind string) {
+	v.data.SourceKind = &source_kind
+}
+
+func (v *AnalysisResult) HasSourceValue() bool {
+	return v.data.SourceValue != nil
+}
+
+func (v *AnalysisResult) SourceValue() string {
+	if v.data.SourceValue == nil {
+		return ""
+	}
+	return *v.data.SourceValue
+}
+
+func (v *AnalysisResult) SetSourceValue(source_value string) {
+	v.data.SourceValue = &source_value
 }
 
 func (v *AnalysisResult) MarshalCBOR() ([]byte, error) {

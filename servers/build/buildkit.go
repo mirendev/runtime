@@ -304,6 +304,8 @@ type BuildStack struct {
 	// Input is the Dockerfile path for dockerfile builds and the upstream image
 	// reference for direct-image deploys.
 	Input string
+	// DetectedStack names the language stack selected for automatic builds.
+	DetectedStack string
 
 	Version     string
 	OnBuild     []string

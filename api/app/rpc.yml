@@ -516,6 +516,12 @@ interfaces:
             type: list
             element: string
             doc: "Hostnames of this app's routes currently in maintenance, serving a holding page instead of the app. The default route appears as an empty string."
+          - name: sourceKind
+            type: string
+            doc: "Build source kind: image, dockerfile, or stack"
+          - name: sourceValue
+            type: string
+            doc: "Normalized image reference or auto-detected stack name, depending on sourceKind"
       - name: setHost
         http:
           put: /apps/{app}/host

@@ -651,6 +651,8 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	if sid := r.versionShortId(ctx, string(appRec.ActiveVersion)); sid != "" {
 		state.Results().SetVersionShortId(sid)
 	}
+	state.Results().SetSourceKind(appVer.Source.Kind)
+	state.Results().SetSourceValue(appVer.Source.Value)
 
 	role := appRec.WorkloadRole
 	if role == "" {

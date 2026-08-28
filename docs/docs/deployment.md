@@ -77,7 +77,15 @@ miren deploy --analyze
 ```
 </CliCommand>
 
-You'll see the detected stack, services, entrypoint, and what files and frameworks influenced the result. Handy when a build isn't doing what you expect.
+You'll see the selected source, services, entrypoint, and what files and frameworks influenced the result. Automatic builds name the detected stack, while image deploys show the normalized image reference:
+
+```text
+Source: python (auto-detected)
+Source: dockerfile
+Source: image ghcr.io/example/myapp:latest
+```
+
+The same source appears in `miren app status` after deployment, so it remains visible after the build finishes.
 
 If a build fails, Miren displays the build errors and the deployment is marked as failed in history (visible via `miren app history`).
 
