@@ -4,6 +4,7 @@ package blackbox
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,8 +27,7 @@ func TestRouteSetService(t *testing.T) {
 	listed.RequireContains(t, `"service":"echo"`)
 
 	textList := m.MustRun("route", "list")
-	textList.RequireContains(t, "SERVICE")
-	textList.RequireContains(t, "echo")
+	assertRouteListService(t, textList.Stdout, host, "echo")
 
 	harness.Poll(t, "named HTTP service responds via route", 30*time.Second, 2*time.Second, func() (bool, string) {
 		code, body, err := harness.HTTPGet(m, host, "/")
@@ -45,4 +45,28 @@ func TestRouteSetService(t *testing.T) {
 		t.Fatalf("expected unknown service to be rejected\nstdout: %s\nstderr: %s", missing.Stdout, missing.Stderr)
 	}
 	missing.RequireContains(t, "does not exist in the active configuration")
+}
+
+// assertRouteListService finds one route-list row and checks the service column.
+// The harness uses TERM=dumb, so text output has no terminal styling and each
+// cell is separated by whitespace. Route hosts and service names cannot contain
+// spaces, making Fields a stable way to assert the rendered row.
+func assertRouteListService(t *testing.T, output, host, service string) {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != host {
+			continue
+		}
+		if len(fields) < 3 {
+			t.Fatalf("route list row for %q has %d fields, want at least 3: %q", host, len(fields), line)
+		}
+		if fields[2] != service {
+			t.Fatalf("route list service for %q = %q, want %q: %q", host, fields[2], service, line)
+		}
+		return
+	}
+
+	t.Fatalf("route list has no row for %q: %s", host, output)
 }
