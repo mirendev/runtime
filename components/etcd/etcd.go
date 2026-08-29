@@ -93,8 +93,9 @@ type EtcdComponent struct {
 	config     EtcdConfig
 
 	// quotaBackendBytes is the effective backend quota the container was started with;
-	// the maintenance loop uses it for the near-quota reclaim trigger.
-	quotaBackendBytes int64
+	// the maintenance loop uses it for the near-quota reclaim trigger. Start can
+	// update it while a previous maintenance loop is winding down during restart.
+	quotaBackendBytes atomic.Int64
 
 	// writer, when set, receives etcd health gauges from the maintenance loop. It is set
 	// via SetMetricsWriter after the metrics subsystem comes up (which happens after etcd
@@ -193,6 +194,27 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 		return fmt.Errorf("etcd component already running")
 	}
 
+	// Resolve defaults before inspecting an existing container. The restart path
+	// uses these ports for its readiness check just like the create path does.
+	if config.Name == "" {
+		config.Name = "etcd1"
+	}
+	if config.DataDir == "" {
+		config.DataDir = etcdDataDir
+	}
+	if config.ClientPort == 0 {
+		config.ClientPort = defaultEtcdPort
+	}
+	if config.HTTPClientPort == 0 {
+		config.HTTPClientPort = defaultEtcdHTTPPort
+	}
+	if config.PeerPort == 0 {
+		config.PeerPort = defaultPeerPort
+	}
+	if config.ClusterState == "" {
+		config.ClusterState = "new"
+	}
+
 	ctx = namespaces.WithNamespace(ctx, e.Namespace)
 
 	// Pull etcd image
@@ -213,7 +235,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// backend quota honors an explicit config override when set.
 	tuning := computeTuning(detectSystemRAMBytes(), config.QuotaBackendBytes)
 	tuningSignature := tuning.signature()
-	e.quotaBackendBytes = tuning.QuotaBackendBytes
+	e.quotaBackendBytes.Store(tuning.QuotaBackendBytes)
 
 	// Check if the container config has changed since last start. If so, we
 	// must recreate the container since env vars and args are baked into the spec.
@@ -257,27 +279,8 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 			// If restart failed (e.g., port mismatch), try deleting the container and creating fresh
 			e.Log.Warn("restart of existing container failed, recreating", "error", err)
 			e.CleanupExistingContainer(ctx, existingContainer)
+			e.ClearRuntimeState()
 		}
-	}
-
-	// Set defaults
-	if config.Name == "" {
-		config.Name = "etcd1"
-	}
-	if config.DataDir == "" {
-		config.DataDir = etcdDataDir
-	}
-	if config.ClientPort == 0 {
-		config.ClientPort = defaultEtcdPort
-	}
-	if config.HTTPClientPort == 0 {
-		config.HTTPClientPort = defaultEtcdHTTPPort
-	}
-	if config.PeerPort == 0 {
-		config.PeerPort = defaultPeerPort
-	}
-	if config.ClusterState == "" {
-		config.ClusterState = "new"
 	}
 
 	// Store ports and TLS state for later use
@@ -313,9 +316,11 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	e.SetTask(task)
 	e.Log.Info("etcd server started", "container_id", container.ID(), "client_port", config.ClientPort)
 
-	// Wait for etcd to be ready before returning
-	if err := e.WaitForReady(ctx, "localhost", config.ClientPort); err != nil {
-		e.Log.Warn("etcd readiness check failed, continuing anyway", "error", err)
+	// Wait for etcd to answer its API before returning.
+	if err := e.waitForHealthy(ctx); err != nil {
+		e.CleanupExistingContainer(ctx, container)
+		e.ClearRuntimeState()
+		return fmt.Errorf("etcd failed readiness check: %w", err)
 	}
 
 	// Start monitoring for unexpected exits
@@ -377,8 +382,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 		} else if status.Status == containerd.Running {
 			e.Log.Info("etcd container is already running")
 			e.SetTask(task)
-			if err := e.WaitForReady(ctx, "localhost", config.ClientPort); err != nil {
-				e.Log.Warn("etcd readiness check failed, continuing anyway", "error", err)
+			if err := e.waitForHealthy(ctx); err != nil {
+				return fmt.Errorf("etcd failed readiness check: %w", err)
 			}
 			e.StartExitMonitor(ctx)
 			return nil
@@ -390,8 +395,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 		if err == nil {
 			e.SetTask(task)
 			e.Log.Info("etcd server restarted", "container_id", container.ID(), "client_port", config.ClientPort)
-			if err := e.WaitForReady(ctx, "localhost", config.ClientPort); err != nil {
-				e.Log.Warn("etcd readiness check failed, continuing anyway", "error", err)
+			if err := e.waitForHealthy(ctx); err != nil {
+				return fmt.Errorf("etcd failed readiness check: %w", err)
 			}
 			e.StartExitMonitor(ctx)
 			return nil
@@ -419,8 +424,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	e.Log.Info("etcd server restarted with new task", "container_id", container.ID(), "client_port", config.ClientPort)
 
 	// Wait for etcd to be ready
-	if err := e.WaitForReady(ctx, "localhost", config.ClientPort); err != nil {
-		e.Log.Warn("etcd readiness check failed, continuing anyway", "error", err)
+	if err := e.waitForHealthy(ctx); err != nil {
+		return fmt.Errorf("etcd failed readiness check: %w", err)
 	}
 
 	// Start monitoring for unexpected exits

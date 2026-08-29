@@ -37,19 +37,10 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 	}
 
 	server := &http.Server{
-		Addr:              ":443",
 		Handler:           h,
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	go func() {
-		log.Info("starting HTTPS server", "addr", ":443")
-		err := server.ListenAndServeTLS("", "")
-		if err != nil && err != http.ErrServerClosed {
-			log.Error("error serving HTTPS", "error", err)
-		}
-	}()
 
 	// Build the port-80 handler: HTTPS redirect, optionally wrapped with ACME challenges
 	redirectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +65,6 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 	}
 
 	httpServer := &http.Server{
-		Addr:              ":80",
 		Handler:           port80Handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -82,10 +72,27 @@ func ServeTLSWithController(ctx context.Context, log *slog.Logger, certProvider 
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	httpsListener, err := net.Listen("tcp", ":443")
+	if err != nil {
+		return fmt.Errorf("listen :443: %w", err)
+	}
+	httpListener, err := net.Listen("tcp", ":80")
+	if err != nil {
+		httpsListener.Close()
+		return fmt.Errorf("listen :80: %w", err)
+	}
 
 	go func() {
-		log.Info("starting HTTP server for HTTPS redirect", "addr", ":80")
-		err := httpServer.ListenAndServe()
+		log.Info("starting HTTPS server", "addr", httpsListener.Addr().String())
+		err := server.ServeTLS(httpsListener, "", "")
+		if err != nil && err != http.ErrServerClosed {
+			log.Error("error serving HTTPS", "error", err)
+		}
+	}()
+
+	go func() {
+		log.Info("starting HTTP server for HTTPS redirect", "addr", httpListener.Addr().String())
+		err := httpServer.Serve(httpListener)
 		if err != nil && err != http.ErrServerClosed {
 			log.Error("error serving HTTP", "error", err)
 		}

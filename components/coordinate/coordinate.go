@@ -431,6 +431,11 @@ type Coordinator struct {
 	// dependencies — the registry and the cluster.local mapping — are
 	// ready. nil when sagas are disabled. See MIR-1285.
 	sagaBuilder *build.SagaBuilder
+
+	// These handlers are built with the coordinator, then exposed by the boot
+	// graph only after the runtime capabilities they depend on are available.
+	buildHandler      *rpc.Interface
+	deploymentHandler *rpc.Interface
 }
 
 func (c *Coordinator) Activator() activator.AppActivator {
@@ -459,6 +464,18 @@ func (c *Coordinator) RecoverBuildSagas(ctx context.Context) {
 	if err := c.sagaBuilder.Recover(ctx); err != nil {
 		c.Log.Error("build saga recovery completed with errors", "error", err)
 	}
+}
+
+// ExposeWorkServices admits build and deployment requests after the boot graph
+// has produced the capabilities those requests need.
+func (c *Coordinator) ExposeWorkServices() error {
+	if c.state == nil || c.buildHandler == nil || c.deploymentHandler == nil {
+		return errors.New("work services are not initialized")
+	}
+	server := c.state.Server()
+	server.ExposeValue("dev.miren.runtime/build", c.buildHandler)
+	server.ExposeValue("dev.miren.runtime/deployment", c.deploymentHandler)
+	return nil
 }
 
 // Stop stops the coordinator and all managed controllers
@@ -1565,7 +1582,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.sagaBuilder = sagaBuilder
 		buildHandler = sagaBuilder
 	}
-	server.ExposeValue("dev.miren.runtime/build", build_v1alpha.AdaptBuilder(buildHandler))
+	c.buildHandler = build_v1alpha.AdaptBuilder(buildHandler)
 
 	ls := logs.NewServer(c.Log, ec, c.Logs)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(ls))
@@ -1575,7 +1592,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		c.Log.Error("failed to create deployment server", "error", err)
 		return err
 	}
-	server.ExposeValue("dev.miren.runtime/deployment", deployment_v1alpha.AdaptDeployment(ds))
+	c.deploymentHandler = deployment_v1alpha.AdaptDeployment(ds)
 
 	oidcServer := oidcbindingsrv.NewServer(c.Log, ec, eac)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcServer))

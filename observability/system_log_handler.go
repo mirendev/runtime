@@ -3,7 +3,6 @@ package observability
 import (
 	"context"
 	"log/slog"
-	"time"
 )
 
 // SystemLogEntityID is the well-known entity ID for system/server logs.
@@ -101,29 +100,5 @@ func (h *SystemLogHandler) WithGroup(name string) slog.Handler {
 		writer: h.writer,
 		attrs:  h.attrs,
 		groups: append(h.groups[:len(h.groups):len(h.groups)], name),
-	}
-}
-
-// WaitForVictoriaLogs blocks until VictoriaLogs is reachable or the context
-// is cancelled. Returns true if VictoriaLogs became available.
-func WaitForVictoriaLogs(ctx context.Context, address string, timeout time.Duration) bool {
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	reader := NewLogReader(address, 5*time.Second)
-
-	for {
-		select {
-		case <-waitCtx.Done():
-			return false
-		case <-ticker.C:
-			_, err := reader.Read(waitCtx, "health-check", WithLimit(1))
-			if err == nil {
-				return true
-			}
-		}
 	}
 }

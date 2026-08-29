@@ -159,6 +159,16 @@ func (b *BaseComponent) SetRunning(running bool) {
 	b.running = running
 }
 
+// ClearRuntimeState forgets a task and container after their resources have
+// been cleaned up, so a failed start can be retried on the same component.
+func (b *BaseComponent) ClearRuntimeState() {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	b.task = nil
+	b.container = nil
+	b.running = false
+}
+
 // IsRunning returns whether the component is currently running.
 func (b *BaseComponent) IsRunning() bool {
 	b.stateMu.Lock()
