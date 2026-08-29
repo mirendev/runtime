@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -805,6 +806,9 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	}
 
 	spec.Services = buildServicesConfig(ac, procfileServices, res != nil, webDefault)
+	if res != nil {
+		defaultServicePortFromImage(&spec, res.ExposedPorts)
+	}
 	spec.Tasks = buildTasksConfig(ac, inputs.Log)
 
 	// Merge env vars: preserve manual vars from existing services
@@ -829,6 +833,42 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	spec.Variables = mergeCliEnvVars(spec.Variables, inputs.CliEnvVars)
 
 	return spec
+}
+
+// defaultServicePortFromImage folds a single TCP EXPOSE declaration into the
+// resolved web service config. Persisting the resolved scalar port means every
+// launcher path gets the same container port and PORT value without needing to
+// carry transient build metadata any further.
+func defaultServicePortFromImage(spec *core_v1alpha.ConfigSpec, exposedPorts []string) {
+	port, ok := singleExposedTCPPort(exposedPorts)
+	if !ok {
+		return
+	}
+
+	for i := range spec.Services {
+		svc := &spec.Services[i]
+		if svc.Name != "web" || svc.Image != "" || svc.Port != 0 || len(svc.Ports) != 0 {
+			continue
+		}
+		svc.Port = port
+	}
+}
+
+func singleExposedTCPPort(exposedPorts []string) (int64, bool) {
+	if len(exposedPorts) != 1 {
+		return 0, false
+	}
+
+	portText, protocol, hasProtocol := strings.Cut(exposedPorts[0], "/")
+	if hasProtocol && !strings.EqualFold(protocol, "tcp") {
+		return 0, false
+	}
+
+	port, err := strconv.ParseInt(portText, 10, 64)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, false
+	}
+	return port, true
 }
 
 func buildVariablesFromAppConfig(appConfig *appconfig.AppConfig) []core_v1alpha.ConfigSpecVariables {

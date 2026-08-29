@@ -317,6 +317,7 @@ func TestBuildImageWorkingDir(t *testing.T) {
 	testDir := t.TempDir()
 	dockerfile := `FROM alpine:latest
 WORKDIR /custom/workdir
+EXPOSE 4000
 RUN echo "test" > /custom/workdir/test.txt
 `
 	err := os.WriteFile(filepath.Join(testDir, "Dockerfile.miren"), []byte(dockerfile), 0644)
@@ -346,6 +347,7 @@ RUN echo "test" > /custom/workdir/test.txt
 	// Verify the working directory was extracted
 	require.NotEmpty(t, res.ManifestDigest, "ManifestDigest should be set")
 	assert.Equal(t, "/custom/workdir", res.WorkingDir, "WorkingDir should match the WORKDIR in Dockerfile")
+	assert.Equal(t, []string{"4000/tcp"}, res.ExposedPorts, "ExposedPorts should match EXPOSE in Dockerfile")
 }
 
 func TestBuildImageWorkingDirRoot(t *testing.T) {
