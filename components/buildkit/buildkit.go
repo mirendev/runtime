@@ -48,6 +48,9 @@ type Config struct {
 
 	// RegistryHost is the hostname for the cluster-local registry (e.g., cluster.local:5000)
 	RegistryHost string
+
+	// DNSServer is the Miren interface DNS server used by build containers.
+	DNSServer string
 }
 
 // Component manages a persistent BuildKit daemon as a containerd container,
@@ -145,7 +148,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	}
 
 	// Generate buildkitd.toml config
-	configContent := c.generateConfig(gcKeepStorage, gcKeepDuration, config.RegistryHost)
+	configContent := c.generateConfig(gcKeepStorage, gcKeepDuration, config.RegistryHost, config.DNSServer)
 	configPath := filepath.Join(dataPath, "buildkitd.toml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write buildkit config: %w", err)
@@ -310,7 +313,7 @@ func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) 
 //     least-recently-used first. This is what breaks the pinning above, since
 //     removing a fresh leaf frees the ancestors under it.
 //  4. Last resort: sweep internal and frontend cache too, to hold the line.
-func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost string) string {
+func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost, dnsServer string) string {
 	if registryHost == "" {
 		registryHost = "cluster.local:5000"
 	}
@@ -322,6 +325,9 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 
 [log]
   format = "text"
+
+[dns]
+  nameservers = [ "%[4]s" ]
 
 [grpc]
   address = [ "unix:///run/buildkit/buildkitd.sock" ]
@@ -360,7 +366,7 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 [registry."%[3]s"]
   insecure = true
   http = true
-`, gcKeepStorage, gcKeepDuration, registryHost)
+`, gcKeepStorage, gcKeepDuration, registryHost, dnsServer)
 }
 
 // writeHostsFile creates or updates the custom /etc/hosts file for the BuildKit container.

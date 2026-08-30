@@ -34,12 +34,12 @@ func buildkitInputs(options StartOptions) buildkitBootInputs {
 	return buildkitBootInputs{config: options.Config.Buildkit, dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput]) *buildkitBoot {
+func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput]) *buildkitBoot {
 	b := &buildkitBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
 	switch {
 	case inputs.config.GetStartEmbedded():
-		b.component, b.output = boot.Provide3("buildkit", containerd, registryHostMapping, observability, b.startEmbedded, stop)
+		b.component, b.output = boot.Provide4("buildkit", containerd, network, registryHostMapping, observability, b.startEmbedded, stop)
 	case inputs.config.GetSocketPath() != "":
 		b.component, b.output = boot.Provide1("buildkit", observability, b.start, stop)
 	default:
@@ -64,7 +64,7 @@ func (b *buildkitBoot) startDisabled(context.Context) (buildkitBootOutput, error
 	return buildkitBootOutput{}, nil
 }
 
-func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
+func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, network networkBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
 	b.observability = observability
 	log := observability.log
 	log.Info("starting embedded buildkit daemon", "socket-dir", b.inputs.config.GetSocketDir())
@@ -89,6 +89,7 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 		GCKeepStorage:  int64(gcStorage.Bytes()),
 		GCKeepDuration: int64(gcDuration.Seconds()),
 		RegistryHost:   ocireg.Host,
+		DNSServer:      network.routerAddress.String(),
 	}); err != nil {
 		return buildkitBootOutput{}, err
 	}

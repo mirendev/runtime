@@ -9,7 +9,7 @@ import (
 
 func TestGenerateConfig(t *testing.T) {
 	c := &Component{}
-	config := c.generateConfig(10*1024*1024*1024, 86400, "registry.example.com:5000")
+	config := c.generateConfig(10*1024*1024*1024, 86400, "registry.example.com:5000", "10.8.0.1")
 
 	// gcPolicyBlocks splits the config into its individual gcpolicy bodies
 	// (text from one "[[worker.oci.gcpolicy]]" header to the next section).
@@ -83,16 +83,14 @@ func TestGenerateConfig(t *testing.T) {
 
 	t.Run("uses default registry host when empty", func(t *testing.T) {
 		r := require.New(t)
-		defaultConfig := c.generateConfig(10*1024*1024*1024, 86400, "")
+		defaultConfig := c.generateConfig(10*1024*1024*1024, 86400, "", "10.8.0.1")
 		r.Contains(defaultConfig, `[registry."cluster.local:5000"]`)
 	})
 
-	t.Run("does not hardcode DNS nameservers", func(t *testing.T) {
+	t.Run("uses the configured Miren interface DNS server", func(t *testing.T) {
 		r := require.New(t)
-		// MIR-1643: DNS is delegated to buildkitd, which derives each build's
-		// resolv.conf from the host. A hardcoded nameserver directive would
-		// override that and break builds on hosts with an internal resolver.
-		r.NotContains(config, "nameservers=")
+		r.Contains(config, "[dns]")
+		r.Contains(config, `nameservers = [ "10.8.0.1" ]`)
 		r.NotContains(config, "1.1.1.1")
 		r.NotContains(config, "8.8.8.8")
 	})
