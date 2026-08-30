@@ -9,7 +9,7 @@ import (
 
 func TestGenerateConfig(t *testing.T) {
 	c := &Component{}
-	config := c.generateConfig(10*1024*1024*1024, 86400, "registry.example.com:5000")
+	config := c.generateConfig(10*1024*1024*1024, 86400, "registry.example.com:5000", nil)
 
 	// gcPolicyBlocks splits the config into its individual gcpolicy bodies
 	// (text from one "[[worker.oci.gcpolicy]]" header to the next section).
@@ -83,17 +83,36 @@ func TestGenerateConfig(t *testing.T) {
 
 	t.Run("uses default registry host when empty", func(t *testing.T) {
 		r := require.New(t)
-		defaultConfig := c.generateConfig(10*1024*1024*1024, 86400, "")
+		defaultConfig := c.generateConfig(10*1024*1024*1024, 86400, "", nil)
 		r.Contains(defaultConfig, `[registry."cluster.local:5000"]`)
 	})
 
-	t.Run("does not hardcode DNS nameservers", func(t *testing.T) {
+	t.Run("omits the dns section when no nameservers are supplied", func(t *testing.T) {
 		r := require.New(t)
-		// MIR-1643: DNS is delegated to buildkitd, which derives each build's
-		// resolv.conf from the host. A hardcoded nameserver directive would
-		// override that and break builds on hosts with an internal resolver.
-		r.NotContains(config, "nameservers=")
+		// With no nameserver we leave buildkit's default resolv.conf handling in
+		// place rather than hardcoding public DNS.
+		r.NotContains(config, "[dns]")
+		r.NotContains(config, "nameservers")
 		r.NotContains(config, "1.1.1.1")
 		r.NotContains(config, "8.8.8.8")
+	})
+
+	t.Run("emits a dns section pointing at the supplied nameservers", func(t *testing.T) {
+		r := require.New(t)
+		// MIR-1643: build RUN steps run in the host netns, but buildkit strips
+		// the host's loopback stub resolver (e.g. 127.0.0.53) and substitutes
+		// public DNS, which breaks builds behind an internal/egress-filtered
+		// resolver. We override that by pointing builds at miren's bridge DNS.
+		withDNS := c.generateConfig(10*1024*1024*1024, 86400, "", []string{"10.8.13.1"})
+		r.Contains(withDNS, "[dns]")
+		r.Contains(withDNS, `nameservers = [ "10.8.13.1" ]`)
+		// It must not fall back to public DNS.
+		r.NotContains(withDNS, "8.8.8.8")
+	})
+
+	t.Run("quotes multiple nameservers as a toml array", func(t *testing.T) {
+		r := require.New(t)
+		withDNS := c.generateConfig(10*1024*1024*1024, 86400, "", []string{"10.8.13.1", "fd47:ace::1"})
+		r.Contains(withDNS, `nameservers = [ "10.8.13.1", "fd47:ace::1" ]`)
 	})
 }
