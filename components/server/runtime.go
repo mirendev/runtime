@@ -79,6 +79,7 @@ func (s *startup) addComponents() error {
 		s.buildkit.component,
 		s.coordinator.component,
 		s.entityAccess.component,
+		s.appMetrics.component,
 		s.network.component,
 		s.runner.component,
 		s.ingress.component,

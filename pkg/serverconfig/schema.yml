@@ -62,6 +62,11 @@ configs:
         toml: victoriametrics
         nested: true
 
+      metrics:
+        type: MetricsConfig
+        toml: metrics
+        nested: true
+
       containerd:
         type: ContainerdConfig
         toml: containerd
@@ -148,7 +153,7 @@ configs:
         cli:
           long: config-cluster-name
           short: C
-          description: Name of the cluster in client config
+          description: Name for this cluster in client config and as the telemetry label fallback when it is not registered with Miren Cloud
         env: MIREN_SERVER_CONFIG_CLUSTER_NAME
         toml: config_cluster_name
 
@@ -445,6 +450,35 @@ configs:
         toml: address
         validation:
           format: host:port
+
+  MetricsConfig:
+    description: Managed application metrics configuration
+    fields:
+      remote_write:
+        type: RemoteWriteConfig
+        toml: remote_write
+        nested: true
+
+  RemoteWriteConfig:
+    description: Destination for managed application metrics
+    fields:
+      url:
+        type: string
+        default: ""
+        cli:
+          long: metrics-remote-write-url
+          description: Prometheus Remote Write destination for managed application metrics
+        env: MIREN_METRICS_REMOTE_WRITE_URL
+        toml: url
+
+      workload_identity_audience:
+        type: string
+        default: ""
+        cli:
+          long: metrics-remote-write-audience
+          description: Workload identity audience for the managed metrics destination
+        env: MIREN_METRICS_REMOTE_WRITE_AUDIENCE
+        toml: workload_identity_audience
 
   ContainerdConfig:
     description: Containerd configuration

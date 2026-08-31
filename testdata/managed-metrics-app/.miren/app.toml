@@ -1,0 +1,15 @@
+name = "managed-metrics-smoke"
+
+[services.web]
+port = 3000
+
+[services.web.concurrency]
+mode = "fixed"
+num_instances = 2
+
+[services.web.metrics]
+enabled = true
+path = "/metrics"
+port = 3000
+interval = "30s"
+public = false

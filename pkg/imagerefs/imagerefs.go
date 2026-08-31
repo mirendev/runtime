@@ -30,6 +30,9 @@ const (
 	// VictoriaMetrics metrics storage server (docker.io/victoriametrics/victoria-metrics)
 	VictoriaMetrics = "oci.miren.cloud/victoria-metrics:v1.106.1"
 
+	// vmagent Prometheus scraper and remote-write forwarder (docker.io/victoriametrics/vmagent)
+	VMagent = "oci.miren.cloud/vmagent:v1.150.0"
+
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"
 )

@@ -833,6 +833,28 @@ func TestBuildServicesConfig(t *testing.T) {
 	}
 }
 
+func TestBuildServicesConfigPersistsResolvedMetrics(t *testing.T) {
+	config := &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+		"web": {
+			Port: 8080,
+			Metrics: &appconfig.ServiceMetricsConfig{
+				Enabled: true,
+				Public:  true,
+			},
+		},
+	}}
+
+	services := buildServicesConfig(config, nil, false, "")
+	require.Len(t, services, 1)
+	assert.Equal(t, core_v1alpha.ConfigSpecServicesMetrics{
+		Enabled:  true,
+		Path:     "/metrics",
+		Port:     8080,
+		Interval: "30s",
+		Public:   true,
+	}, services[0].Metrics)
+}
+
 func TestMergeVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name         string

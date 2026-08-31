@@ -645,6 +645,16 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 		// Map from appconfig to entity schema
 		// After ResolveDefaults(), every service is guaranteed to have config
 		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil {
+			if serviceConfig.Metrics != nil {
+				svc.Metrics = core_v1alpha.ConfigSpecServicesMetrics{
+					Enabled:  serviceConfig.Metrics.Enabled,
+					Path:     serviceConfig.Metrics.Path,
+					Port:     int64(serviceConfig.Metrics.Port),
+					Interval: serviceConfig.Metrics.Interval,
+					Public:   serviceConfig.Metrics.Public,
+				}
+			}
+
 			// Copy image if specified
 			if serviceConfig.Image != "" {
 				svc.Image = serviceConfig.Image

@@ -79,7 +79,7 @@ In standalone mode, embedded services start automatically unless explicitly disa
 | `data_path` | string | `/var/lib/miren` | Root data directory | `MIREN_SERVER_DATA_PATH` | `--data-path`, `-d` |
 | `runner_id` | string | `miren` | Runner identifier | `MIREN_SERVER_RUNNER_ID` | `--runner-id`, `-r` |
 | `release_path` | string | — | Path to release directory containing binaries | `MIREN_SERVER_RELEASE_PATH` | `--release-path` |
-| `config_cluster_name` | string | `local` | Cluster name in client config | `MIREN_SERVER_CONFIG_CLUSTER_NAME` | `--config-cluster-name`, `-C` |
+| `config_cluster_name` | string | `local` | Name for this cluster in client config and as the telemetry label fallback when it is not registered with Miren Cloud | `MIREN_SERVER_CONFIG_CLUSTER_NAME` | `--config-cluster-name`, `-C` |
 | `skip_client_config` | bool | `false` | Skip writing client config to `clientconfig.d` | `MIREN_SERVER_SKIP_CLIENT_CONFIG` | `--skip-client-config` |
 | `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1). Cluster-wide default; override per route with `miren route timeout` — see [Request Timeouts](/traffic-routing#request-timeouts) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
 | `stop_sandboxes_on_shutdown` | bool | `false` | Stop all sandboxes when server shuts down (useful in development) | `MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN` | `--stop-sandboxes-on-shutdown` |
@@ -182,7 +182,9 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 
-Controls the embedded VictoriaMetrics instance used for application metrics.
+Controls the embedded VictoriaMetrics instance used for Miren's own runtime
+metrics. Managed application metrics are sent directly to their remote-write
+destination and are not copied into this instance.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
@@ -192,6 +194,37 @@ Controls the embedded VictoriaMetrics instance used for application metrics.
 | `address` | string | `victoriametrics:8428` | Address when not using embedded | `MIREN_VICTORIAMETRICS_ADDRESS` | `--victoriametrics-addr` |
 
 \* Defaults to `true` in standalone mode only.
+
+## `[metrics.remote_write]` — Managed Application Metrics {#managed-app-metrics}
+
+Configures the Prometheus Remote Write destination for services that enable
+managed metrics in `app.toml`. When this section is absent, Miren does not start
+vmagent and does not scrape application endpoints.
+
+```toml
+[metrics.remote_write]
+url = "https://metrics.example.com/api/v1/write"
+workload_identity_audience = "metrics.example.com"
+```
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `url` | string | — | Absolute HTTP or HTTPS remote-write endpoint | `MIREN_METRICS_REMOTE_WRITE_URL` | `--metrics-remote-write-url` |
+| `workload_identity_audience` | string | — | Audience for the short-lived `system:telemetrywriter` bearer token | `MIREN_METRICS_REMOTE_WRITE_AUDIENCE` | `--metrics-remote-write-audience` |
+
+:::warning[Remote-write requirements]
+Both fields must be set together. URLs containing credentials are rejected;
+authentication always uses the cluster's workload identity.
+:::
+
+The coordinator runs one supervised vmagent and keeps its on-disk retry queue
+under `<data_path>/app-metrics`.
+
+:::info[Cluster label selection]
+Registered clusters use their Miren Cloud cluster ID for the `miren_cluster`
+label. Other clusters use [`server.config_cluster_name`](#server), so set it to
+a stable name when several clusters write to the same destination.
+:::
 
 ## `[app_version]` — Version Retention {#app-version}
 

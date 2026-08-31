@@ -443,6 +443,131 @@ func TestResolveDefaults_NilAppConfig(t *testing.T) {
 	})
 }
 
+func TestServiceMetricsDefaultsAndValidation(t *testing.T) {
+	t.Run("web defaults", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+[services.web.metrics]
+enabled = true
+`))
+		require.NoError(t, err)
+
+		ac.ResolveDefaults([]string{"web"})
+		metrics := ac.Services["web"].Metrics
+		require.NotNil(t, metrics)
+		assert.True(t, metrics.Enabled)
+		assert.Equal(t, "/metrics", metrics.Path)
+		assert.Equal(t, 3000, metrics.Port)
+		assert.Equal(t, "30s", metrics.Interval)
+		assert.False(t, metrics.Public)
+	})
+
+	t.Run("first http port", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+[[services.api.ports]]
+port = 7000
+name = "rpc"
+type = "tcp"
+
+[[services.api.ports]]
+port = 8080
+name = "http"
+type = "http"
+
+[services.api.metrics]
+enabled = true
+`))
+		require.NoError(t, err)
+		ac.ResolveDefaults([]string{"api"})
+		assert.Equal(t, 8080, ac.Services["api"].Metrics.Port)
+	})
+
+	t.Run("port with omitted type defaults to http", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+[[services.api.ports]]
+port = 8080
+name = "http"
+
+[services.api.metrics]
+enabled = true
+`))
+		require.NoError(t, err)
+		ac.ResolveDefaults([]string{"api"})
+		assert.Equal(t, 8080, ac.Services["api"].Metrics.Port)
+	})
+
+	t.Run("explicit port list has no implicit web port", func(t *testing.T) {
+		_, err := Parse([]byte(`
+[[services.web.ports]]
+port = 7000
+name = "rpc"
+type = "tcp"
+
+[services.web.metrics]
+enabled = true
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "metrics port is required")
+	})
+
+	t.Run("explicit tcp port has no implicit web port", func(t *testing.T) {
+		_, err := Parse([]byte(`
+[services.web]
+port = 7000
+port_type = "tcp"
+
+[services.web.metrics]
+enabled = true
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "metrics port is required")
+	})
+
+	tests := []struct {
+		name    string
+		metrics string
+		wantErr string
+	}{
+		{"short interval", `interval = "15s"`, "must be at least 30s"},
+		{"invalid interval", `interval = "sometimes"`, "invalid metrics interval"},
+		{"relative path", `path = "metrics"`, "absolute URL path"},
+		{"query in path", `path = "/metrics?format=prom"`, "absolute URL path"},
+		{"undeclared port", `port = 9090`, "must be a declared HTTP or TCP service port"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(`
+[services.web]
+port = 8080
+
+[services.web.metrics]
+enabled = true
+` + tt.metrics + "\n"))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+
+	t.Run("explicit tcp port", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+[[services.worker.ports]]
+port = 9090
+name = "prometheus"
+type = "tcp"
+
+[services.worker.metrics]
+enabled = true
+port = 9090
+path = "/internal/metrics"
+interval = "1m"
+public = true
+`))
+		require.NoError(t, err)
+		ac.ResolveDefaults([]string{"worker"})
+		assert.Equal(t, "/internal/metrics", ac.Services["worker"].Metrics.Path)
+		assert.Equal(t, "1m", ac.Services["worker"].Metrics.Interval)
+	})
+}
+
 func TestParseAppConfigWithEnvVars(t *testing.T) {
 	tests := []struct {
 		name     string

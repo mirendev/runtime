@@ -19,12 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"miren.dev/runtime/api/app"
+	computeapi "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/httpingress/httpingress_v1alpha"
@@ -98,6 +100,12 @@ type Server struct {
 	// would otherwise be handed to a request that wants the 60s default.
 	transportMu sync.Mutex
 	transports  map[time.Duration]http.RoundTripper
+
+	// versionConfigs keeps a bounded cache of immutable AppVersion and
+	// ConfigVersion data. The app entity is still resolved for every request so
+	// an active-version switch takes effect immediately, while the metrics
+	// privacy check does not add a ConfigVersion lookup to every request.
+	versionConfigs *lru.Cache[entity.Id, *cachedVersionConfig]
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -174,6 +182,7 @@ func NewServer(
 		connectorHandlers:  make(map[string]*connectorHandler),
 		workloadIssuer:     config.WorkloadIssuer,
 	}
+	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
 
 	if httpMetrics == nil {
 		serv.Log.Warn("HTTPMetrics is nil in httpingress")
@@ -627,33 +636,173 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 
 	requestTimeout := routeRequestTimeout(route)
 
-	// A wildcard route also serves as a multi-tenant subdomain, so a failed
-	// ephemeral lookup should fall back to the active version rather than 404.
-	wildcardRoute := route != nil && ingress.IsWildcardHost(route.Host)
+	var target *resolvedIngressTarget
+	prepare := func(w http.ResponseWriter, r *http.Request) bool {
+		// A wildcard route also serves as a multi-tenant subdomain, so a failed
+		// ephemeral lookup should fall back to the active version rather than 404.
+		wildcardRoute := route != nil && ingress.IsWildcardHost(route.Host)
+		resolved, ok := h.resolveIngressTarget(w, r, targetAppId, ephemeralLabel, wildcardRoute)
+		if !ok {
+			return false
+		}
+		target = resolved
+		*appName = target.appMetadata.Name
 
-	handler := h.buildRouteHandler(route, appName, func(w http.ResponseWriter, r *http.Request) {
-		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, ephemeralLabel, wildcardRoute, appName, requestTimeout)
+		if privateMetricsPath(target.config, r.URL.Path) {
+			http.NotFound(w, r)
+			return false
+		}
+		return true
+	}
+
+	handler := h.buildRouteHandler(route, appName, prepare, func(w http.ResponseWriter, r *http.Request) {
+		h.serveAuthenticatedRequest(w, r, targetAppId, routeType, target, appName, requestTimeout)
 	})
 
 	handler(w, req)
 }
 
+type resolvedIngressTarget struct {
+	app               core_v1alpha.App
+	appMetadata       core_v1alpha.Metadata
+	version           core_v1alpha.AppVersion
+	config            *core_v1alpha.ConfigSpec
+	ephemeralLabel    string
+	ephemeralResolved bool
+}
+
+type cachedVersionConfig struct {
+	version core_v1alpha.AppVersion
+	config  core_v1alpha.ConfigSpec
+}
+
+func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, appID entity.Id, ephemeralLabel string, wildcardRoute bool) (*resolvedIngressTarget, bool) {
+	ctx := req.Context()
+	gr, err := h.eac.Get(ctx, appID.String())
+	if err != nil {
+		h.Log.Error("error looking up application", "error", err, "app", appID)
+		http.Error(w, fmt.Sprintf("error looking up application: %s", appID), http.StatusInternalServerError)
+		return nil, false
+	}
+
+	target := &resolvedIngressTarget{ephemeralLabel: ephemeralLabel}
+	target.app.Decode(gr.Entity().Entity())
+	target.appMetadata.Decode(gr.Entity().Entity())
+
+	strategy := resolveVersionStrategy(ephemeralLabel, wildcardRoute)
+	if strategy != resolveActive {
+		ephemeralVersion, err := ephemeralx.LookupByLabel(ctx, h.eac, appID, ephemeralLabel)
+		if err != nil {
+			h.Log.Error("error looking up ephemeral version", "error", err, "label", ephemeralLabel)
+			http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+			return nil, false
+		}
+		if ephemeralVersion == nil && strategy == resolveEphemeralStrict {
+			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", appID)
+			http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			return nil, false
+		}
+		if ephemeralVersion != nil {
+			resolved, err := h.resolveVersionConfig(ctx, ephemeralVersion.ID, ephemeralVersion)
+			if err != nil {
+				h.Log.Error("error resolving ephemeral application configuration", "error", err, "version", ephemeralVersion.ID)
+				http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+				return nil, false
+			}
+			target.version = resolved.version
+			target.config = &resolved.config
+			target.ephemeralResolved = true
+			return target, true
+		}
+	}
+
+	if target.app.ActiveVersion == "" {
+		h.Log.Debug("no active version for app", "app", appID)
+		http.Error(w, fmt.Sprintf("no active version for app: %s", appID), http.StatusNotFound)
+		return nil, false
+	}
+
+	resolved, err := h.resolveVersionConfig(ctx, target.app.ActiveVersion, nil)
+	if err != nil {
+		h.Log.Error("error resolving active application configuration", "error", err, "version", target.app.ActiveVersion)
+		http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+		return nil, false
+	}
+	target.version = resolved.version
+	target.config = &resolved.config
+	return target, true
+}
+
+func (h *Server) resolveVersionConfig(ctx context.Context, versionID entity.Id, known *core_v1alpha.AppVersion) (*cachedVersionConfig, error) {
+	if h.versionConfigs != nil {
+		if cached, ok := h.versionConfigs.Get(versionID); ok {
+			return cached, nil
+		}
+	}
+
+	var version core_v1alpha.AppVersion
+	if known != nil {
+		version = *known
+	} else {
+		response, err := h.eac.Get(ctx, versionID.String())
+		if err != nil {
+			return nil, fmt.Errorf("looking up application version %s: %w", versionID, err)
+		}
+		version.Decode(response.Entity().Entity())
+	}
+
+	config, err := computeapi.ResolveConfig(ctx, h.eac, &version)
+	if err != nil {
+		return nil, fmt.Errorf("resolving configuration for version %s: %w", versionID, err)
+	}
+	resolved := &cachedVersionConfig{version: version, config: *config}
+	if h.versionConfigs != nil {
+		h.versionConfigs.Add(versionID, resolved)
+	}
+	return resolved, nil
+}
+
+func privateMetricsPath(config *core_v1alpha.ConfigSpec, requestPath string) bool {
+	if config == nil {
+		return false
+	}
+	// Public HTTP ingress only routes the web service. If that ever expands to
+	// other services, their private metrics paths must be checked here too.
+	for _, service := range config.Services {
+		if service.Name == "web" && service.Metrics.Enabled && !service.Metrics.Public && service.Metrics.Path == requestPath {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRouteHandler composes the per-request middleware chain around serve.
 // Each call wraps the previous handler, so the last one applied runs first and
-// the execution order is WAF → maintenance → auth → serve.
+// the execution order is WAF → maintenance → preparation → auth → serve.
 //
 // Both boundaries are load-bearing. WAF stays outermost so a maintenance window
 // doesn't become an open window for scanners. Maintenance runs ahead of auth
 // because a holding page is public information: otherwise a visitor completes a
 // full round trip to an identity provider only to be told the site is down, and
-// an API client gets a 401 when the honest answer is 503.
+// an API client gets a 401 when the honest answer is 503. Preparation resolves
+// the app target and hides private metrics before authentication without
+// allowing either lookup to obscure a maintenance response.
 //
 // The order lives here, rather than inline, so it is something a test can hold
 // onto — see TestMiddlewareChainOrder.
-func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *string, serve http.HandlerFunc) http.HandlerFunc {
+func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *string, prepare func(http.ResponseWriter, *http.Request) bool, serve http.HandlerFunc) http.HandlerFunc {
 	handler := serve
 
 	handler = h.authMiddleware(route, handler)
+
+	if prepare != nil {
+		next := handler
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			if prepare(w, r) {
+				next(w, r)
+			}
+		}
+	}
 
 	handler = h.maintenanceMiddleware(route, appName, handler)
 
@@ -762,25 +911,9 @@ func leaseCacheKey(appID entity.Id, ephemeralLabel string, ephemeralResolved boo
 }
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
-func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, ephemeralLabel string, wildcardRoute bool, appName *string, requestTimeout time.Duration) {
+func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
 	ctx := req.Context()
-
-	// Get app details first to have the name for metrics
-	gr, err := h.eac.Get(ctx, targetAppId.String())
-	if err != nil {
-		h.Log.Error("error looking up application", "error", err, "app", targetAppId)
-		http.Error(w, fmt.Sprintf("error looking up application: %s", targetAppId), http.StatusInternalServerError)
-		return
-	}
-
-	var app core_v1alpha.App
-	app.Decode(gr.Entity().Entity())
-
-	var appMD core_v1alpha.Metadata
-	appMD.Decode(gr.Entity().Entity())
-
-	// Store app name for metrics
-	*appName = appMD.Name
+	ephemeralLabel := target.ephemeralLabel
 
 	ctx, leaseSpan := httpingressTracer.Start(ctx, "httpingress.lease",
 		trace.WithAttributes(
@@ -796,27 +929,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	// active version and shares its lease pool rather than fragmenting into a
 	// per-tenant entry. Label-free requests skip the lookup and stay on the
 	// fast active path.
-	strategy := resolveVersionStrategy(ephemeralLabel, wildcardRoute)
-	var ephVer *core_v1alpha.AppVersion
-
-	if strategy != resolveActive {
-		ev, err := ephemeralx.LookupByLabel(ctx, h.eac, targetAppId, ephemeralLabel)
-		if err != nil {
-			h.Log.Error("error looking up ephemeral version", "error", err, "label", ephemeralLabel)
-			http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
-			return
-		}
-		if ev == nil && strategy == resolveEphemeralStrict {
-			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", targetAppId)
-			http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
-			return
-		}
-		// ev may be nil here for a resolveEphemeralOrActive miss, which leaves
-		// the request on the active version and its shared lease pool.
-		ephVer = ev
-	}
-
-	leaseKey := leaseCacheKey(targetAppId, ephemeralLabel, ephVer != nil)
+	leaseKey := leaseCacheKey(targetAppId, ephemeralLabel, target.ephemeralResolved)
 
 	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
 	// invalidate all cached leases and retry once to acquire a fresh lease.
@@ -860,34 +973,16 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		// No cached lease — acquire a fresh one
 		leaseSpan.SetAttributes(attribute.Bool("miren.lease.cached", false))
 
-		var av core_v1alpha.AppVersion
+		av := target.version
 
-		if ephVer != nil {
-			av = *ephVer
+		if target.ephemeralResolved {
 			leaseSpan.SetAttributes(
 				attribute.String("miren.app.version", string(av.ID)),
 				attribute.String("miren.ephemeral.label", ephemeralLabel),
 			)
 		} else {
-			// Active version: either a label-free request or a wildcard
-			// subdomain whose ephemeral label did not resolve.
-			if app.ActiveVersion == "" {
-				h.Log.Debug("no active version for app", "app", targetAppId)
-				http.Error(w, fmt.Sprintf("no active version for app: %s", targetAppId), http.StatusNotFound)
-				return
-			}
-
-			vr, err := h.eac.Get(ctx, app.ActiveVersion.String())
-			if err != nil {
-				h.Log.Error("error looking up application version", "error", err, "version", app.ActiveVersion)
-				http.Error(w, fmt.Sprintf("error looking up application version: %s", app.ActiveVersion), http.StatusInternalServerError)
-				return
-			}
-
-			av.Decode(vr.Entity().Entity())
-
 			leaseSpan.SetAttributes(
-				attribute.String("miren.app.version", app.ActiveVersion.String()),
+				attribute.String("miren.app.version", target.version.ID.String()),
 			)
 		}
 

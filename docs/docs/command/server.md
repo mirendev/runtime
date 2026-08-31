@@ -26,7 +26,7 @@ miren server [flags]
 - `--buildkit-socket` — Path to external BuildKit Unix socket (for distributed mode)
 - `--buildkit-socket-dir` — Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)
 - `--config` — Path to configuration file
-- `--config-cluster-name, -C` — Name of the cluster in client config
+- `--config-cluster-name, -C` — Name for this cluster in client config and as the telemetry label fallback when it is not registered with Miren Cloud
 - `--containerd-binary` — Path to containerd binary
 - `--containerd-socket` — Path to containerd socket
 - `--data-path, -d` — Data path
@@ -43,6 +43,8 @@ miren server [flags]
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)
 - `--ips` — Additional IPs assigned to the server cert
 - `--labs` — Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable.
+- `--metrics-remote-write-audience` — Workload identity audience for the managed metrics destination
+- `--metrics-remote-write-url` — Prometheus Remote Write destination for managed application metrics
 - `--mode, -m` — Server mode: standalone (default), distributed (experimental)
 - `--release-path` — Path to release directory containing binaries
 - `--runner-address` — Runner address (host:port). For IPv6 use brackets, e.g. "[::1]:8444".

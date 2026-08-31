@@ -571,6 +571,25 @@ components:
         port_timeout:
           type: string
           doc: Custom port-wait timeout (e.g. "60s", "2m"). Empty falls back to the 15s default; invalid duration strings are rejected at parse time.
+        metrics:
+          type: component
+          doc: Prometheus scrape endpoint for this service
+          attrs:
+            enabled:
+              type: bool
+              doc: Whether the runtime should scrape this service
+            path:
+              type: string
+              doc: HTTP path to scrape
+            port:
+              type: int
+              doc: Declared TCP service port to scrape
+            interval:
+              type: string
+              doc: Interval between scrapes
+            public:
+              type: bool
+              doc: Whether public ingress may serve the metrics path
         ports:
           type: component
           doc: Network ports this service listens on. Overrides scalar port/port_name/port_type.

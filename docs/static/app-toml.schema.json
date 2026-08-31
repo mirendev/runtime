@@ -84,6 +84,17 @@
         {"if": {"properties": {"mode": {"const": "fixed"}}, "required": ["mode"]}, "then": {"not": {"anyOf": [{"required": ["requests_per_instance"]}, {"required": ["scale_down_delay"]}]}}}
       ]
     },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "path": {"type": "string", "pattern": "^/[^?#]*$", "default": "/metrics"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "interval": {"$ref": "#/$defs/duration", "default": "30s"},
+        "public": {"type": "boolean", "default": false}
+      }
+    },
     "disk": {
       "type": "object",
       "additionalProperties": false,
@@ -112,6 +123,7 @@
         "image": {"type": "string", "description": "Container image to use. On services.web, this also selects the app's primary image when no Dockerfile is configured."},
         "env": {"type": "array", "items": {"$ref": "#/$defs/env"}},
         "concurrency": {"$ref": "#/$defs/concurrency"},
+        "metrics": {"$ref": "#/$defs/metrics"},
         "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}}
       },
       "allOf": [
