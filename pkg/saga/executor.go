@@ -29,6 +29,8 @@ var ErrRecoveryScopeMismatch = errors.New("execution recovery scope mismatch")
 type executorCtxKey struct{}
 type executionIDCtxKey struct{}
 type actionNameCtxKey struct{}
+type controlContextCtxKey struct{}
+type dedicatedActionContextCtxKey struct{}
 
 func executorFromContext(ctx context.Context) (*Executor, bool) {
 	e, ok := ctx.Value(executorCtxKey{}).(*Executor)
@@ -43,6 +45,19 @@ func executionIDFromContext(ctx context.Context) (string, bool) {
 func actionNameFromContext(ctx context.Context) (string, bool) {
 	name, ok := ctx.Value(actionNameCtxKey{}).(string)
 	return name, ok
+}
+
+func controlContextFromContext(ctx context.Context) context.Context {
+	controlCtx, ok := ctx.Value(controlContextCtxKey{}).(context.Context)
+	if !ok {
+		return ctx
+	}
+	return controlCtx
+}
+
+func hasDedicatedActionContext(ctx context.Context) bool {
+	dedicated, _ := ctx.Value(dedicatedActionContextCtxKey{}).(bool)
+	return dedicated
 }
 
 // Storage persists saga execution state.
@@ -171,10 +186,11 @@ func (e *Executor) scopeForExisting(exec *Execution) (adopt bool, err error) {
 
 // StartBuilder provides a fluent API for starting saga executions.
 type StartBuilder struct {
-	executor *Executor
-	defName  string
-	inputs   map[string]any
-	id       string
+	executor  *Executor
+	defName   string
+	inputs    map[string]any
+	id        string
+	actionCtx context.Context
 }
 
 // Start begins building a saga execution.
@@ -206,13 +222,27 @@ func (sb *StartBuilder) WithID(id string) *StartBuilder {
 	return sb
 }
 
+// WithActionContext gives actions a cancellation boundary separate from the
+// executor's control context. Persistence and compensation continue on the
+// control context passed to Execute. The default is to use that same context
+// for both, preserving existing saga behavior.
+func (sb *StartBuilder) WithActionContext(ctx context.Context) *StartBuilder {
+	sb.actionCtx = ctx
+	return sb
+}
+
 // Execute runs the saga to completion or failure.
 func (sb *StartBuilder) Execute(ctx context.Context) error {
-	return sb.executor.execute(ctx, sb.defName, sb.inputs, sb.id)
+	return sb.executor.execute(ctx, sb.actionCtx, sb.defName, sb.inputs, sb.id)
 }
 
 // execute runs a saga with the given definition and inputs.
-func (e *Executor) execute(ctx context.Context, defName string, inputs map[string]any, id string) error {
+func (e *Executor) execute(ctx, actionCtx context.Context, defName string, inputs map[string]any, id string) error {
+	if actionCtx == nil {
+		actionCtx = ctx
+	} else {
+		actionCtx = context.WithValue(actionCtx, dedicatedActionContextCtxKey{}, true)
+	}
 	// Look up definition
 	def, ok := e.registry.Get(defName)
 	if !ok {
@@ -270,7 +300,7 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 		}
 		e.log.Info("continuing existing execution",
 			"saga", defName, "execution", id, "status", existing.Status)
-		return e.resume(ctx, def, existing)
+		return e.resumeWithActionContext(ctx, actionCtx, def, existing)
 	}
 
 	// Create execution
@@ -293,11 +323,11 @@ func (e *Executor) execute(ctx context.Context, defName string, inputs map[strin
 		return fmt.Errorf("persisting initial state: %w", err)
 	}
 
-	return e.runExecution(ctx, def, exec)
+	return e.runExecution(ctx, actionCtx, def, exec)
 }
 
 // runExecution executes or resumes a saga.
-func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Execution) error {
+func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition, exec *Execution) error {
 	log := e.log.With("saga", def.Name, "execution", exec.ID)
 
 	// Update status to running
@@ -311,6 +341,10 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 	ctx = injectDependencies(ctx, def.dependencies)
 	ctx = context.WithValue(ctx, executorCtxKey{}, e)
 	ctx = context.WithValue(ctx, executionIDCtxKey{}, exec.ID)
+	actionCtx = injectDependencies(actionCtx, def.dependencies)
+	actionCtx = context.WithValue(actionCtx, executorCtxKey{}, e)
+	actionCtx = context.WithValue(actionCtx, executionIDCtxKey{}, exec.ID)
+	actionCtx = context.WithValue(actionCtx, controlContextCtxKey{}, ctx)
 
 	// Build outputs map from already-executed actions
 	outputs := make(map[string]json.RawMessage)
@@ -359,13 +393,26 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 
 		log.Info("executing action", "action", actionName)
 
-		// Execute the action
-		actionCtx := context.WithValue(ctx, actionNameCtxKey{}, actionName)
-		output, err := node.Action.Execute(actionCtx, actionInputs)
+		// Execute the action. Cancellation of a dedicated action context is a
+		// normal saga failure, even if it lands between steps. Do not let an
+		// action that ignores its context mutate more state after cancellation.
+		currentActionCtx := context.WithValue(actionCtx, actionNameCtxKey{}, actionName)
+		var output any
+		var err error
+		if actionErr := currentActionCtx.Err(); actionErr != nil {
+			err = actionErr
+		} else {
+			output, err = node.Action.Execute(currentActionCtx, actionInputs)
+		}
 		now := time.Now()
 
 		if err != nil {
-			log.Error("action failed", "action", actionName, "error", err)
+			actionErr := currentActionCtx.Err()
+			if hasDedicatedActionContext(currentActionCtx) && actionErr != nil && errors.Is(err, actionErr) {
+				log.Info("action cancelled, starting compensation", "action", actionName, "error", err)
+			} else {
+				log.Error("action failed", "action", actionName, "error", err)
+			}
 
 			// Record the failure
 			exec.ExecutedActions[actionName] = &ActionResult{
@@ -455,12 +502,45 @@ func (e *Executor) runExecution(ctx context.Context, def *Definition, exec *Exec
 			return e.runUndo(ctx, def, exec)
 		}
 
+		// An action may ignore cancellation and still return success after mutating
+		// state. Its output must be durable before we compensate it. Only a
+		// dedicated action context takes this path; cancellation of the shared
+		// control context keeps the historical interruption-and-recovery behavior.
+		if hasDedicatedActionContext(currentActionCtx) {
+			if actionErr := currentActionCtx.Err(); actionErr != nil {
+				log.Info("action completed after cancellation, starting compensation", "action", actionName, "error", actionErr)
+				exec.Error = fmt.Sprintf("action %q completed after cancellation: %v", actionName, actionErr)
+				exec.Status = StatusUndoing
+				exec.UpdatedAt = time.Now()
+				if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
+					log.Error("failed to persist undoing state", "error", saveErr)
+				}
+				return e.runUndo(ctx, def, exec)
+			}
+		}
+
 		// Add outputs to the map for subsequent actions
 		if err := extractOutputs(node, outputBytes, outputs); err != nil {
 			log.Warn("failed to extract outputs", "action", actionName, "error", err)
 		}
 
 		log.Info("action completed", "action", actionName)
+	}
+
+	// A resumed execution may skip every already-persisted action, so the
+	// per-action cancellation checkpoint above never runs. Do not let that path
+	// turn a cancelled deployment into a completed saga with live side effects.
+	if hasDedicatedActionContext(actionCtx) {
+		if actionErr := actionCtx.Err(); actionErr != nil {
+			log.Info("action context cancelled before completion, starting compensation", "error", actionErr)
+			exec.Error = fmt.Sprintf("action context cancelled before completion: %v", actionErr)
+			exec.Status = StatusUndoing
+			exec.UpdatedAt = time.Now()
+			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
+				log.Error("failed to persist undoing state", "error", saveErr)
+			}
+			return e.runUndo(ctx, def, exec)
+		}
 	}
 
 	// All actions completed successfully
@@ -669,6 +749,10 @@ func (e *Executor) Recover(ctx context.Context) error {
 // retrying that is a decision for whoever owns the operation, not something to
 // do implicitly under the same name.
 func (e *Executor) resume(ctx context.Context, def *Definition, exec *Execution) error {
+	return e.resumeWithActionContext(ctx, ctx, def, exec)
+}
+
+func (e *Executor) resumeWithActionContext(ctx, actionCtx context.Context, def *Definition, exec *Execution) error {
 	// A name that means one saga to the caller and another to the record is an
 	// id collision, and resuming across it would run this definition's actions
 	// against the other's recorded outputs. Naming executions after entities
@@ -695,7 +779,7 @@ func (e *Executor) resume(ctx context.Context, def *Definition, exec *Execution)
 				"saga", exec.DefinitionName, "error", exec.Error)
 			return e.runUndo(ctx, def, exec)
 		}
-		return e.runExecution(ctx, def, exec)
+		return e.runExecution(ctx, actionCtx, def, exec)
 	case StatusUndoing:
 		return e.runUndo(ctx, def, exec)
 	case StatusCompleted:

@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -176,6 +178,25 @@ func TestFailOnErrorSettlesEvenWhenContextCancelled(t *testing.T) {
 	rec, err := b.deploy.Store().Get(context.Background(), dt.deploymentID)
 	require.NoError(t, err)
 	assert.Equal(t, deploylifecycle.StatusFailed, rec.Status())
+}
+
+func TestDeploymentContextCancelsWhenRecordIsCancelled(t *testing.T) {
+	b := newDeployTestBuilder(t)
+	work := newDeploymentContext(context.Background())
+	defer work.Close()
+
+	dt, err := b.beginDeploy(work.action, "web", deployRequest("prod"), nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, b.deploy.Cancel(context.Background(), dt.deploymentID, "operator cancelled"))
+
+	require.Eventually(t, func() bool {
+		return errors.Is(context.Cause(work.action), errDeploymentCancelled)
+	}, 5*time.Second, 10*time.Millisecond)
+
+	remote, ok := errors.AsType[cond.ErrRemote](work.result(work.action.Err()))
+	require.True(t, ok)
+	assert.Equal(t, "deployment", remote.Category)
+	assert.Equal(t, "cancelled", remote.Code)
 }
 
 // When activation fails after the version is already live, the plain path must

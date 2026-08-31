@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -221,6 +222,80 @@ func TestRunNested_ChildFailurePropagates(t *testing.T) {
 	// Child step was called, and parent undo should not call UndoNested
 	// because ParentStep itself failed (so ParentStepOut is empty)
 	assert.Equal(t, 1, ctrl.childCalls)
+}
+
+func TestRunNested_ActionCancellationStillCompensatesChild(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	started := make(chan struct{}, 1)
+	waitForCancellation := func(ctx context.Context, _ MultiplyIn) (MultiplyOut, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return MultiplyOut{}, ctx.Err()
+	}
+
+	err := Define("cancel-child").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("wait", waitForCancellation).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	runChild := func(ctx context.Context, in AddNumbersIn) (AddNumbersOut, error) {
+		_, err := RunNested(ctx, "cancel-child",
+			WithNestedID("cancel-child-1"),
+			WithNestedInput("a", in.A),
+			WithNestedInput("b", in.B),
+			WithNestedInput("factor", 2),
+		)
+		return AddNumbersOut{}, err
+	}
+	undoParent := func(context.Context, AddNumbersIn, AddNumbersOut) error { return nil }
+	err = Define("cancel-parent").
+		Using(ctrl).
+		Action("nested", runChild).Undo(undoParent).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	actionCtx, cancelAction := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.Start("cancel-parent").
+			Input("a", 2).
+			Input("b", 3).
+			WithActionContext(actionCtx).
+			WithID("cancel-parent-1").
+			Execute(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nested child did not reach cancellable action")
+	}
+	cancelAction()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("nested child did not finish compensation")
+	}
+
+	child, err := storage.Get(context.Background(), "cancel-child-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, child.Status)
+	assert.NotNil(t, child.ExecutedActions["add"].UndoneAt)
+	assert.Len(t, ctrl.undoAddCalls, 1)
+
+	parent, err := storage.Get(context.Background(), "cancel-parent-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, parent.Status)
 }
 
 func TestRunNested_ChildUsesParentStorage(t *testing.T) {

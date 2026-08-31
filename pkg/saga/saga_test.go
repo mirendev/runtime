@@ -246,6 +246,146 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 	assert.Equal(t, StatusFailed, exec.Status)
 }
 
+func TestExecutor_ActionCancellationStillCompensates(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	started := make(chan struct{})
+	waitForCancellation := func(ctx context.Context, _ MultiplyIn) (MultiplyOut, error) {
+		close(started)
+		<-ctx.Done()
+		return MultiplyOut{}, ctx.Err()
+	}
+
+	err := Define("action-context-cancel").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		Action("wait", waitForCancellation).Undo(UndoMultiply).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	actionCtx, cancelAction := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.Start("action-context-cancel").
+			Input("a", 2).
+			Input("b", 3).
+			Input("factor", 4).
+			WithActionContext(actionCtx).
+			WithID("action-context-cancel-1").
+			Execute(context.Background())
+	}()
+
+	<-started
+	cancelAction()
+	require.Error(t, <-done)
+	assert.Len(t, ctrl.undoAddCalls, 1,
+		"the live control context must carry compensation after action cancellation")
+
+	exec, err := storage.Get(context.Background(), "action-context-cancel-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status)
+}
+
+func TestExecutor_ActionCancellationAfterSuccessCompensates(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	started := make(chan struct{}, 1)
+	completeAfterCancellation := func(ctx context.Context, in AddNumbersIn) (AddNumbersOut, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		ctrl.recordAdd(in)
+		return AddNumbersOut{Sum: in.A + in.B}, nil
+	}
+
+	err := Define("action-context-success-after-cancel").
+		Using(ctrl).
+		Action("add", completeAfterCancellation).Undo(UndoAddNumbers).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	actionCtx, cancelAction := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.Start("action-context-success-after-cancel").
+			Input("a", 2).
+			Input("b", 3).
+			WithActionContext(actionCtx).
+			WithID("action-context-success-after-cancel-1").
+			Execute(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("action did not start")
+	}
+	cancelAction()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("successful action did not finish compensation")
+	}
+
+	assert.Len(t, ctrl.undoAddCalls, 1)
+	exec, err := storage.Get(context.Background(), "action-context-success-after-cancel-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status)
+	assert.NotNil(t, exec.ExecutedActions["add"].UndoneAt)
+}
+
+func TestExecutor_ResumedExecutionChecksActionCancellationBeforeCompletion(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &testController{}
+	err := Define("resumed-action-context-cancel").
+		Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	now := time.Now()
+	require.NoError(t, storage.Save(context.Background(), &Execution{
+		ID:                "resumed-action-context-cancel-1",
+		DefinitionName:    "resumed-action-context-cancel",
+		DefinitionVersion: 1,
+		InitialInputs:     map[string]any{"a": 2, "b": 3},
+		Status:            StatusRunning,
+		ExecutedActions: map[string]*ActionResult{
+			"add": {
+				Output:     []byte(`{"Sum":5}`),
+				ExecutedAt: now,
+			},
+		},
+		ExecutionOrder: []string{"add"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}))
+
+	actionCtx, cancelAction := context.WithCancel(context.Background())
+	cancelAction()
+	executor := NewExecutor(storage, WithRegistry(registry))
+	err = executor.Start("resumed-action-context-cancel").
+		WithActionContext(actionCtx).
+		WithID("resumed-action-context-cancel-1").
+		Execute(context.Background())
+	require.Error(t, err)
+
+	assert.Len(t, ctrl.undoAddCalls, 1)
+	exec, err := storage.Get(context.Background(), "resumed-action-context-cancel-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status)
+	assert.NotNil(t, exec.ExecutedActions["add"].UndoneAt)
+}
+
 func TestExecutor_Recovery(t *testing.T) {
 	registry := NewRegistry()
 

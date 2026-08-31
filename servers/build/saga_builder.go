@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -53,11 +52,6 @@ type SagaBuilder struct {
 	streams  *StreamRegistry
 	statuses *StatusRegistry
 	log      *slog.Logger
-
-	// storage is the same handle the executor holds. It is retained so a
-	// failed build can read its own execution back, which ExecutionOutputs
-	// cannot do — that helper requires a completed saga.
-	storage saga.Storage
 }
 
 // NewSagaBuilder constructs a SagaBuilder over an existing Builder. The
@@ -80,7 +74,6 @@ func NewSagaBuilder(inner *Builder, sagaStorage saga.Storage, log *slog.Logger) 
 		streams:  streams,
 		statuses: statuses,
 		log:      log.With("module", "saga-builder"),
-		storage:  sagaStorage,
 	}
 }
 
@@ -114,12 +107,15 @@ func (s *SagaBuilder) Recover(ctx context.Context) error {
 // Stream registration, status sender registration, and saga start all
 // key off the same generated stream ID so the saga's actions can find
 // the live reader and status sink by ID alone.
-func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.BuilderBuildFromTar) error {
+func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.BuilderBuildFromTar) (retErr error) {
 	args := state.Args()
 	name := args.Application()
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+	defer func() { retErr = work.result(retErr) }()
 
 	streamID := idgen.Gen("bt")
 	status := args.Status()
@@ -144,11 +140,11 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 	}
 
 	executionID := "build-from-tar-" + streamID
-	if err := s.startBuild(ctx, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
+	if err := s.startBuild(work.control, work.action, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
 		return err
 	}
 
-	return s.populateResults(ctx, executionID, name, state.Results(), ephemeralLabelFromArgs(args))
+	return s.populateResults(work.control, executionID, name, state.Results(), ephemeralLabelFromArgs(args))
 }
 
 // BuildFromPrepared mirrors BuildFromTar but starts from an upload
@@ -156,7 +152,7 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 // stays out of the saga (it's a pre-flight check, not a step we'd
 // want to retry on recovery), then MarkStaged tells the registry the
 // path is ready so the saga's receive-tar action returns it directly.
-func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) error {
+func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) (retErr error) {
 	args := state.Args()
 	sessionID := args.SessionId()
 
@@ -171,6 +167,9 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+	defer func() { retErr = work.result(retErr) }()
 
 	status := args.Status()
 	sender := NewRPCStatusSender(status, s.inner.Log)
@@ -209,11 +208,11 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 	}
 
 	executionID := "build-from-prepared-" + sessionID
-	if err := s.startBuild(ctx, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
+	if err := s.startBuild(work.control, work.action, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
 		return err
 	}
 
-	return s.populateResults(ctx, executionID, name, state.Results(), ephemeralLabelFromArgs(args))
+	return s.populateResults(work.control, executionID, name, state.Results(), ephemeralLabelFromArgs(args))
 }
 
 // PrepareUpload is a session-management op, not a build, so it routes
@@ -229,7 +228,7 @@ func (s *SagaBuilder) AnalyzeApp(ctx context.Context, state *build_v1alpha.Build
 
 // startBuild fans out the initial inputs and runs the saga.
 func (s *SagaBuilder) startBuild(
-	ctx context.Context,
+	ctx, actionCtx context.Context,
 	executionID, appName, streamID string,
 	cliEnvVars []*build_v1alpha.EnvironmentVariable,
 	eph *ephemeralOpts,
@@ -238,6 +237,7 @@ func (s *SagaBuilder) startBuild(
 	sb := s.executor.Start(sagaBuildFromTar).
 		Input("app_name", appName).
 		Input("stream_id", streamID).
+		WithActionContext(actionCtx).
 		WithID(executionID)
 
 	if len(cliEnvVars) > 0 {
@@ -267,59 +267,9 @@ func (s *SagaBuilder) startBuild(
 	}
 
 	if err := sb.Execute(ctx); err != nil {
-		s.settleAbandonedDeployment(ctx, executionID, err)
 		return fmt.Errorf("build saga: %w", err)
 	}
 	return nil
-}
-
-// settleAbandonedDeployment settles the server-owned deployment record for a
-// saga that failed without compensating it.
-//
-// The case that needs this is a client disconnect. It cancels the saga's
-// context, and the executor's undo loop bails out on a cancelled context by
-// design, leaving the execution in Undoing for recovery to finish after a
-// restart. That is the right call for the build's own artifacts, but it means
-// undoBeginDeployment never runs, so the deployment record stays in_progress
-// and holds the app's deploy lock for the full TTL, blocking every later deploy
-// of that app. The plain build path settles from a defer for the same reason.
-//
-// Best effort throughout: the lock's TTL remains the final backstop, and a saga
-// that did compensate normally has already settled the record, which
-// FailIfUnsettled treats as a no-op.
-func (s *SagaBuilder) settleAbandonedDeployment(ctx context.Context, executionID string, cause error) {
-	// Detached: the whole point is to run after the client's context died.
-	settleCtx, cancel := settleContext(ctx)
-	defer cancel()
-
-	exec, err := s.storage.Get(settleCtx, executionID)
-	if err != nil {
-		s.log.Warn("could not load saga execution to settle its deployment",
-			"execution", executionID, "error", err)
-		return
-	}
-
-	result, ok := exec.ExecutedActions[actionBeginDeploy]
-	if !ok || result.Error != "" || len(result.Output) == 0 {
-		// Untracked build, or begin-deployment never completed, so there is no
-		// record of ours to settle.
-		return
-	}
-
-	var out beginDeploymentOut
-	if err := json.Unmarshal(result.Output, &out); err != nil {
-		s.log.Warn("could not decode begin-deployment output",
-			"execution", executionID, "error", err)
-		return
-	}
-	if out.DeploymentID == "" {
-		return
-	}
-
-	if err := s.inner.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, cause.Error()); err != nil {
-		s.log.Error("failed to settle deployment after saga failure",
-			"deployment_id", out.DeploymentID, "error", err)
-	}
 }
 
 // populateResults fishes the saga's outputs back out of storage to

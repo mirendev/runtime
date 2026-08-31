@@ -778,8 +778,11 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 	}
 
 	id := string(rec.Deployment.ID)
-	b.trackDeployment(id, deps.statuses.SenderFor(in.StreamID)).
-		emit(string(deploylifecycle.PhasePreparing))
+	tracking := b.trackDeployment(id, deps.statuses.SenderFor(in.StreamID))
+	if work := deploymentContextFrom(ctx); work != nil {
+		work.attach(tracking)
+	}
+	tracking.emit(string(deploylifecycle.PhasePreparing))
 	return beginDeploymentOut{DeploymentID: id}, nil
 }
 

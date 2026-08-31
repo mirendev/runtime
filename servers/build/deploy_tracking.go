@@ -8,6 +8,7 @@ import (
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -19,6 +20,7 @@ import (
 // saga that predates server-owned attempts). Every method is then a no-op.
 type deployTracking struct {
 	tracker      *deploylifecycle.Tracker
+	eac          *entityserver_v1alpha.EntityAccessClient
 	deploymentID string
 	source       core_v1alpha.Source
 	status       StatusSender
@@ -40,6 +42,7 @@ func (b *Builder) trackDeployment(deploymentID string, status StatusSender) *dep
 	}
 	return &deployTracking{
 		tracker:      b.deploy,
+		eac:          b.EAS,
 		deploymentID: deploymentID,
 		status:       status,
 		log:          b.Log.With("deployment_id", deploymentID),
@@ -89,6 +92,9 @@ func (b *Builder) beginDeploy(
 
 	dt := b.trackDeployment(string(rec.Deployment.ID), NewRPCStatusSender(status, b.Log))
 	dt.source = deploylifecycle.SourceFromGitInfo(gitInfo)
+	if work := deploymentContextFrom(ctx); work != nil {
+		work.attach(dt)
+	}
 
 	// Announce the record and its opening phase so the client can display and
 	// cancel a deployment it did not create.

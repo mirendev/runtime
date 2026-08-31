@@ -2,9 +2,11 @@ package build
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +14,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -27,8 +30,7 @@ func newDeploySagaHarness(t *testing.T) *sagaTestHarness {
 }
 
 // newDeploySagaHarnessWith is newDeploySagaHarness with a substitute
-// set-active-version action, so a test can wedge behaviour into the window
-// between the version going live and the deployment record settling.
+// set-active-version action, so tests can control the activation window.
 func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -287,21 +289,15 @@ func TestBuildSaga_CancellationBeforeActivationFailsDeploy(t *testing.T) {
 	assert.Nil(t, blocking, "a failed settle must not strand the deploy lock")
 }
 
-// A client that disappears mid-build must not leave the app locked.
-//
-// A disconnect cancels the saga's context, and the executor's undo loop bails
-// on a cancelled context by design, so undoBeginDeployment never runs and the
-// deployment record would be left in_progress holding the deploy lock for its
-// full TTL. The saga entry point settles it directly for exactly this case,
-// mirroring the plain path's deferred failOnError.
-func TestBuildSaga_Tracked_ClientDisconnectDoesNotStrandLock(t *testing.T) {
+// A client that disappears after upload must not stop the server-owned build.
+func TestBuildSaga_Tracked_ClientDisconnectStillActivates(t *testing.T) {
 	ctx, disconnect := context.WithCancel(context.Background())
 
-	// Stand in for the client vanishing partway through: cancel the saga's
-	// context from inside an action and fail the way a cancelled call would.
+	// Stand in for the client vanishing partway through, while the server still
+	// has everything it needs to finish.
 	dropped := func(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
 		disconnect()
-		return setActiveVersionOut{}, context.Canceled
+		return setActiveVersion(ctx, in)
 	}
 
 	h := newDeploySagaHarnessWith(t, dropped)
@@ -310,26 +306,94 @@ func TestBuildSaga_Tracked_ClientDisconnectDoesNotStrandLock(t *testing.T) {
 	sb := &SagaBuilder{
 		inner:    h.builder,
 		executor: h.executor,
-		storage:  h.storage,
 		log:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	}
 
 	req := &build_v1alpha.DeployRequest{}
 	req.SetClusterId("prod")
 
-	err := sb.startBuild(ctx, "test-drop", "demo", "stream-drop", nil, nil, req)
-	require.Error(t, err, "a cancelled build must still fail the RPC")
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+	err := sb.startBuild(work.control, work.action, "test-drop", "demo", "stream-drop", nil, nil, req)
+	require.NoError(t, err)
 
 	// Reads below use a live context; the saga's is deliberately dead.
 	records, err := h.builder.deploy.Store().List(context.Background(), deploylifecycle.Query{AppName: "demo"})
 	require.NoError(t, err)
 	require.Len(t, records, 1)
-	assert.Equal(t, deploylifecycle.StatusFailed, records[0].Status(),
-		"an abandoned deployment must settle rather than linger in_progress")
+	assert.Equal(t, deploylifecycle.StatusSucceeded, records[0].Status())
 
 	blocking, err := h.builder.deploy.Locks().Blocking(context.Background(), "demo")
 	require.NoError(t, err)
-	assert.Nil(t, blocking, "the next deploy of this app must not wait out the lock TTL")
+	assert.Nil(t, blocking)
+}
+
+// Cancelling the deployment record is the build's control plane. It stops the
+// current action, but the saga's server-owned context remains live long enough
+// to persist the failure and compensate everything it already created.
+func TestBuildSaga_Tracked_RecordCancellationCompensates(t *testing.T) {
+	ctx := context.Background()
+	activeStarted := make(chan struct{}, 1)
+	waitForCancellation := func(ctx context.Context, _ setActiveVersionIn) (setActiveVersionOut, error) {
+		select {
+		case activeStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return setActiveVersionOut{}, ctx.Err()
+	}
+
+	h := newDeploySagaHarnessWith(t, waitForCancellation)
+	h.streams.Register("stream-cancel", makeTar(t, dockerfileTarball(t)))
+	sb := &SagaBuilder{
+		inner:    h.builder,
+		executor: h.executor,
+		log:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	req := &build_v1alpha.DeployRequest{}
+	req.SetClusterId("prod")
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- sb.startBuild(work.control, work.action, "test-cancel", "demo", "stream-cancel", nil, nil, req)
+	}()
+	select {
+	case <-activeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("build did not reach the cancellable action")
+	}
+
+	records, err := h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.NoError(t, h.builder.deploy.Cancel(ctx, string(records[0].Deployment.ID), "operator cancelled"))
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		remote, ok := errors.AsType[cond.ErrRemote](work.result(err))
+		require.True(t, ok)
+		assert.Equal(t, "deployment", remote.Category)
+		assert.Equal(t, "cancelled", remote.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled build did not finish compensation")
+	}
+
+	exec, err := h.storage.Get(ctx, "test-cancel")
+	require.NoError(t, err)
+	assert.Equal(t, saga.StatusFailed, exec.Status)
+	assert.NotNil(t, exec.ExecutedActions[actionCreateVersion].UndoneAt)
+
+	records, err = h.builder.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, deploylifecycle.StatusCancelled, records[0].Status())
+
+	blocking, err := h.builder.deploy.Locks().Blocking(ctx, "demo")
+	require.NoError(t, err)
+	assert.Nil(t, blocking)
 }
 
 // The saga path must advance the record's phase, not park it at "preparing"
