@@ -79,6 +79,11 @@ func TestInitialPassMigratesCanonicalGraphAndProvenance(t *testing.T) {
 	for range 4 {
 		require.NoError(t, controller.Step(ctx))
 	}
+	select {
+	case <-controller.Ready():
+	default:
+		t.Fatal("controller did not report its first clean sweep")
+	}
 
 	rawDep, err := inmem.Store.GetEntity(ctx, dep.ID)
 	require.NoError(t, err)
@@ -201,12 +206,22 @@ func TestMigrationFailureDoesNotBlockLaterPhases(t *testing.T) {
 	for range 3 {
 		require.NoError(t, controller.Step(ctx))
 	}
+	select {
+	case <-controller.Ready():
+		t.Fatal("controller reported readiness after a failed sweep")
+	default:
+	}
 	assert.Equal(t, phaseDeployments, controller.phase,
 		"a bad record must not prevent later phases from running")
 
 	failing.fail = ""
 	for range 4 {
 		require.NoError(t, controller.Step(ctx))
+	}
+	select {
+	case <-controller.Ready():
+	default:
+		t.Fatal("controller did not report readiness after a clean retry")
 	}
 }
 

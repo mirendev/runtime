@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"slices"
 	"strings"
 
 	j "github.com/dave/jennifer/jen"
@@ -13,9 +14,10 @@ import (
 )
 
 const (
-	top  = "miren.dev/runtime/pkg/entity"
-	topt = "miren.dev/runtime/pkg/entity/types"
-	sch  = "miren.dev/runtime/pkg/entity/schema"
+	top       = "miren.dev/runtime/pkg/entity"
+	topt      = "miren.dev/runtime/pkg/entity/types"
+	sch       = "miren.dev/runtime/pkg/entity/schema"
+	exportpkg = "miren.dev/runtime/pkg/entity/export"
 )
 
 type schemaFile struct {
@@ -24,6 +26,17 @@ type schemaFile struct {
 	Major      string                 `yaml:"kind-major"`
 	Components map[string]schemaAttrs `yaml:"components"`
 	Kinds      map[string]schemaAttrs `yaml:"kinds"`
+	Exports    map[string]exportSpec  `yaml:"exports"`
+}
+
+type exportSpec struct {
+	Marker string                `yaml:"marker"`
+	Kinds  map[string]exportKind `yaml:"kinds"`
+}
+
+type exportKind struct {
+	Lifecycle string   `yaml:"lifecycle"`
+	Include   []string `yaml:"include"`
 }
 
 type schemaAttrs map[string]*schemaAttr
@@ -71,15 +84,31 @@ type gen struct {
 	decl   []j.Code
 	fields []j.Code
 
-	decodeouter []j.Code
-	decoders    []j.Code
-	encoders    []j.Code
-	emptyChecks []emptyCheck // per-field emptiness checks
+	decodeouter   []j.Code
+	decoders      []j.Code
+	encoders      []j.Code
+	emptyChecks   []emptyCheck // per-field emptiness checks
+	exportMarkers []string
 
 	subgen []*gen // for nested attributes
 }
 
 func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
+	exportContracts, err := GenerateExportContracts(sf)
+	if err != nil {
+		return "", err
+	}
+	exportMarkers := make(map[string][]string)
+	for _, target := range mapx.StableOrder(sf.Exports) {
+		for kind := range target.Kinds {
+			exportMarkers[kind] = append(exportMarkers[kind], target.Marker)
+		}
+	}
+	for kind := range exportMarkers {
+		slices.Sort(exportMarkers[kind])
+		exportMarkers[kind] = slices.Compact(exportMarkers[kind])
+	}
+
 	var ed entity.EncodedDomain
 	ed.Name = sf.Domain
 	ed.Version = sf.Version
@@ -146,6 +175,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 		g.local = toCamal(kind)
 		g.sf = sf
 		g.f = jf
+		g.exportMarkers = exportMarkers[kind]
 		g.ec = &entity.EncodedSchema{
 			Domain:  sf.Domain,
 			Name:    sf.Domain + "/" + kind,
@@ -197,6 +227,10 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 		b.Id("Schema").Op("=").Qual(top, "Id").Call(j.Lit(sf.Domain + "/schema." + sf.Version))
 	})
 
+	for target, contract := range mapx.StableOrder(exportContracts) {
+		jf.Var().Id(toCamal(target)+"ExportContract").Op("=").Qual(exportpkg, "MustParse").Call(j.Lit(string(contract)))
+	}
+
 	jf.Func().Id("init").Params().BlockFunc(func(b *j.Group) {
 		b.Add(j.Qual(sch, "Register").Call(
 			j.Lit(sf.Domain),
@@ -232,7 +266,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 	})
 
 	var buf bytes.Buffer
-	err := jf.Render(&buf)
+	err = jf.Render(&buf)
 	if err != nil {
 		return "", fmt.Errorf("failed to render generated code: %w", err)
 	}
@@ -991,6 +1025,12 @@ func (g *gen) generate() {
 					j.Id("attrs"),
 					j.Qual(top, "Ref").Call(j.Qual(top, "EntityKind"), j.Id("Kind"+toCamal(g.kind))),
 				)
+				for _, marker := range g.exportMarkers {
+					b.Id("attrs").Op("=").Append(
+						j.Id("attrs"),
+						j.Qual(top, "Bool").Call(j.Qual(top, "Id").Call(j.Lit(marker)), j.True()),
+					)
+				}
 			}
 			b.Return()
 		})

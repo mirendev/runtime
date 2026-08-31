@@ -11,9 +11,11 @@ import (
 )
 
 var (
-	fInput  = flag.String("input", "", "Input file for schema generation")
-	fPkg    = flag.String("pkg", "entity", "Package name for generated code")
-	fOutput = flag.String("output", "", "output file")
+	fInput          = flag.String("input", "", "Input file for schema generation")
+	fPkg            = flag.String("pkg", "entity", "Package name for generated code")
+	fOutput         = flag.String("output", "", "output file")
+	fExportContract = flag.String("export-contract", "", "optional output file for one export contract")
+	fExportTarget   = flag.String("export-target", "", "export target written by -export-contract")
 )
 
 func main() {
@@ -66,6 +68,23 @@ func main() {
 	} else {
 		err = os.WriteFile(*fOutput, formatted, 0644)
 		if err != nil {
+			panic(err)
+		}
+	}
+
+	if *fExportContract != "" {
+		if *fExportTarget == "" {
+			panic("-export-target is required with -export-contract")
+		}
+		contracts, err := GenerateExportContracts(&sf)
+		if err != nil {
+			panic(err)
+		}
+		contract, ok := contracts[*fExportTarget]
+		if !ok {
+			panic(fmt.Sprintf("export target %q is not declared", *fExportTarget))
+		}
+		if err := os.WriteFile(*fExportContract, append(contract, '\n'), 0644); err != nil {
 			panic(err)
 		}
 	}

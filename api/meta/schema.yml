@@ -1,6 +1,13 @@
 domain: dev.miren.meta
 version: v1alpha
 kinds:
+  cloud:
+    export:
+      attr: cloud.export
+      type: bool
+      indexed: true
+      doc: Marks an entity as eligible for the generated cloud export contract
+
   session:
     unique_id:
       type: string
@@ -19,4 +26,3 @@ kinds:
       type: string
       doc: The unique identifer for the session bound to this entity
       bind_to: db/attr.session
-

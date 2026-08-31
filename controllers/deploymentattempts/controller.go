@@ -52,14 +52,22 @@ type Controller struct {
 	cursor              string
 	passFailed          bool
 	firstCleanSweepOnce sync.Once
+	ready               chan struct{}
 }
 
 func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityAccessClient) *Controller {
 	return &Controller{
 		Log: log.With("module", "deployment-attempts"), Store: store,
 		Tracker: deploylifecycle.NewTracker(log, eac), Config: DefaultConfig(),
+		ready: make(chan struct{}),
 	}
 }
+
+// Ready closes after the first complete migration and reconciliation sweep
+// with no skipped records. Consumers that expose canonical deployment data may
+// wait on it without making the controller's ongoing repair loop part of their
+// own lifecycle.
+func (c *Controller) Ready() <-chan struct{} { return c.ready }
 
 func (c *Controller) Start(ctx context.Context) {
 	if c.Config.Interval <= 0 {
@@ -138,6 +146,7 @@ func (c *Controller) Step(ctx context.Context) error {
 		} else {
 			c.firstCleanSweepOnce.Do(func() {
 				c.Log.Info("deployment-attempt migration and reconciliation initial pass complete")
+				close(c.ready)
 			})
 		}
 		// Keep scanning forever. This catches records written by a downgraded

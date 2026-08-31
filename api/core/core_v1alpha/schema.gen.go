@@ -4,6 +4,7 @@ import (
 	"time"
 
 	entity "miren.dev/runtime/pkg/entity"
+	export "miren.dev/runtime/pkg/entity/export"
 	schema "miren.dev/runtime/pkg/entity/schema"
 	types "miren.dev/runtime/pkg/entity/types"
 )
@@ -1211,6 +1212,7 @@ func (o *App) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(AppWorkloadRoleId, o.WorkloadRole))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindApp))
+	attrs = append(attrs, entity.Bool(entity.Id("dev.miren.meta/cloud.export"), true))
 	return
 }
 
@@ -1435,6 +1437,7 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(AppVersionVersionId, o.Version))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindAppVersion))
+	attrs = append(attrs, entity.Bool(entity.Id("dev.miren.meta/cloud.export"), true))
 	return
 }
 
@@ -2734,6 +2737,7 @@ func (o *Deployment) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Ref(DeploymentVersionId, o.Version))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindDeployment))
+	attrs = append(attrs, entity.Bool(entity.Id("dev.miren.meta/cloud.export"), true))
 	return
 }
 
@@ -3637,6 +3641,7 @@ var (
 	KindSecretVersion = entity.Id("dev.miren.core/kind.secret_version")
 	Schema            = entity.Id("dev.miren.core/schema.v1alpha")
 )
+var CloudExportContract = export.MustParse("{\"version\":1,\"target\":\"cloud\",\"marker\":\"dev.miren.meta/cloud.export\",\"kinds\":[{\"id\":\"dev.miren.core/kind.app\",\"lifecycle\":\"mirror\",\"attributes\":[{\"id\":\"dev.miren.core/app.active_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app.active_version\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/metadata.name\",\"type\":\"string\"}]},{\"id\":\"dev.miren.core/kind.app_version\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/app_version.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app_version.source\",\"type\":\"component\"},{\"id\":\"dev.miren.core/app_version.version\",\"type\":\"string\"},{\"id\":\"dev.miren.core/source.git_branch\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.git_sha\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.kind\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.repository\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.value\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"}]},{\"id\":\"dev.miren.core/kind.deployment\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployed_by.auth_method\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployed_by.subject\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployment.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.app_name\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.completed_at\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.deployed_by\",\"type\":\"component\"},{\"id\":\"dev.miren.core/deployment.operation\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.outcome\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.parent_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.phase\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.started_at\",\"type\":\"time\"},{\"id\":\"dev.miren.core/deployment.version\",\"type\":\"ref\"}]}]}")
 
 func init() {
 	schema.Register("dev.miren.core", "v1alpha", func(sb *schema.SchemaBuilder) {

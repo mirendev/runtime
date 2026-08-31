@@ -6,6 +6,52 @@ import (
 )
 
 const (
+	CloudExportId = entity.Id("dev.miren.meta/cloud.export")
+)
+
+type Cloud struct {
+	ID     entity.Id `json:"id"`
+	Export bool      `cbor:"export,omitempty" json:"export,omitempty"`
+}
+
+func (o *Cloud) Decode(e entity.AttrGetter) {
+	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
+	if a, ok := e.Get(CloudExportId); ok && a.Value.Kind() == entity.KindBool {
+		o.Export = a.Value.Bool()
+	}
+}
+
+func (o *Cloud) Is(e entity.AttrGetter) bool {
+	return entity.Is(e, KindCloud)
+}
+
+func (o *Cloud) ShortKind() string {
+	return "cloud"
+}
+
+func (o *Cloud) Kind() entity.Id {
+	return KindCloud
+}
+
+func (o *Cloud) EntityId() entity.Id {
+	return o.ID
+}
+
+func (o *Cloud) Encode() (attrs []entity.Attr) {
+	attrs = append(attrs, entity.Bool(CloudExportId, o.Export))
+	attrs = append(attrs, entity.Ref(entity.EntityKind, KindCloud))
+	return
+}
+
+func (o *Cloud) Empty() bool {
+	return entity.Empty(o.Export)
+}
+
+func (o *Cloud) InitSchema(sb *schema.SchemaBuilder) {
+	sb.Bool("export", "dev.miren.meta/cloud.export", schema.Doc("Marks an entity as eligible for the generated cloud export contract"), schema.Indexed)
+}
+
+const (
 	LeasedSessionIdId = entity.Id("db/attr.session")
 	LeasedTtlId       = entity.Id("db/entity.ttl")
 )
@@ -132,6 +178,7 @@ func (o *Session) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 var (
+	KindCloud   = entity.Id("dev.miren.meta/kind.cloud")
 	KindLeased  = entity.Id("dev.miren.meta/kind.leased")
 	KindSession = entity.Id("dev.miren.meta/kind.session")
 	Schema      = entity.Id("dev.miren.meta/schema.v1alpha")
@@ -139,8 +186,9 @@ var (
 
 func init() {
 	schema.Register("dev.miren.meta", "v1alpha", func(sb *schema.SchemaBuilder) {
+		(&Cloud{}).InitSchema(sb)
 		(&Leased{}).InitSchema(sb)
 		(&Session{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.meta", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x9c\x92KN\xc40\f\x86\xcf\xc1c\xc1\t\x828Qe\xc6N\xc6L\xe2\x968\xad:[\x8e\x02\x88#\xb2FIZ1D\xa5\x8b\xd9\xe5\xe1\xefK~˟(\x10H\x90&\x138\x92\x98@\t\xe8Ă\xfa>\xdf\xfe=~\xcc\xc7\xc6\x13(\xe1W\xe1Ʀ\xa0\xdeU\xfc\xdbb\x1f\x80\xa5q[\xcb\xe4Q\xdf>\x9e\x19\xe7\x87M\xde(\xa9r/\x1dcy\xe5\xe5b\x9f\xce\x03YM\x91\xc5\x15\xc3Ͷ!%_\xd0C^d\xe6\xc0\x92\xdcD1{\xdc\xf4\x04~8\x82\x1f\"\a\x88\xe7.\xff\xd7Vr\xbe\xdbʼ|\xa0\x86\x9e\x9a\x8a\xe5\xf2\xfaԋ\xc0\x8c¯#\xad\xa9\xf9wۆ\xbe\xffO\xa0\xe0\xa8\xc0T\x97\x17\xe0nx\xb7\x18ڢ\x93\x1e\xfb\x98\xba:\x0ek\x87v\xa6b\xf5\xecv\xf1\a\x00\x00\xff\xff\x01\x00\x00\xff\xffK\x19y\xdfs\x02\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.meta", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x9c\x92MN\xc40\f\x85\xcf\xc1ς\x13\x04q\xa2*\xd38\x193\xf9)\x89[u\x96p\x95A\x1c\x915\x8a\x93\x8a!\xb4\x15b\x97\xc4\xf9\x9e߳\xfc\xae\xbct\xe0\x15L\xc2a\x04/\x1c\x90\x84\x13z\x95.\xf3\xcd\xcf\xe7\xc7\xfc,z\x1bF\xf5\xc1\x185u.\x15\xf8S\xab\xe0$\xfaFYk\x04\xab\xd2\xeb\xe5\x80j\xbe[\xc3\x05\xccC\x88\xc4\xfa\xba\x9e\xe9<\x80:\x84`\xcd\x041a\xf0fz\x92v8J;Dt2\x9e\xbb\xdc\x13\x98\x9fo\xd7L[\x90\t\xaa\xeb\xb1\xf9Pj\x7f\xb1\xfdƶ\x1fVy\x91 ek\x1d*\xee\xf2|u\xcf\xfeu\xa2\x88ްB;ת@d\x19\xed\xf3!3=zڍ\xac\v\xf9k\x92\x9c\xb9\x1a(\xa1\xa7\xe6G-\xfe?u\x15\x10\xa3Ǘ\x11\x96\xd4\xf8}mC\xdfo\t$i\x80a(\xc7+p7\xbc\xa9\n\xed\xa7S:\x86H]\xd9\xe1\xba\x14ۛ\xbc\x8cpgm\x96F\xbbc\xfe\x02\x00\x00\xff\xff\x01\x00\x00\xff\xff\x9e8\x17\x82I\x03\x00\x00"))
 }
