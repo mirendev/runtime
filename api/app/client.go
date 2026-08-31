@@ -111,23 +111,6 @@ func (c *Client) SetHost(ctx context.Context, appName, host string) error {
 	return nil
 }
 
-// SetActiveVersion updates the active version of an app
-func (c *Client) SetActiveVersion(ctx context.Context, appName, versionID string) error {
-	app, err := c.GetByName(ctx, appName)
-	if err != nil {
-		return fmt.Errorf("failed to get app %s: %w", appName, err)
-	}
-
-	app.ActiveVersion = entity.Id(versionID)
-
-	err = c.entityClient.Update(ctx, app)
-	if err != nil {
-		return fmt.Errorf("failed to update app %s: %w", appName, err)
-	}
-
-	return nil
-}
-
 // List returns all apps
 func (c *Client) List(ctx context.Context) ([]*core_v1alpha.App, error) {
 	// List would need to be implemented using the List method on entityClient

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,11 +13,46 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/secret"
 )
+
+func TestDeployTrackerInitializesOnceConcurrently(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	appInfo := &AppInfo{
+		Log: slog.Default(),
+		EC:  entityserver.NewClient(slog.Default(), inmem.EAC),
+	}
+
+	const callers = 20
+	start := make(chan struct{})
+	results := make(chan *deploylifecycle.Tracker, callers)
+	var workers sync.WaitGroup
+	workers.Add(callers)
+	for range callers {
+		go func() {
+			defer workers.Done()
+			<-start
+			results <- appInfo.deployTracker()
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	var first *deploylifecycle.Tracker
+	for tracker := range results {
+		if first == nil {
+			first = tracker
+		}
+		assert.Same(t, first, tracker)
+	}
+	require.NotNil(t, first)
+}
 
 func TestSetConfiguration_DuplicateEnvVars(t *testing.T) {
 	ctx := context.Background()

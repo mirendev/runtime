@@ -446,6 +446,7 @@ type createVersionIn struct {
 	ArtifactID         string `json:"artifact_id" saga:"artifact_id,optional"`
 	AdminToken         string `json:"admin_token" saga:"admin_token"`
 	ConfigVersionID    string `json:"config_version_id" saga:"config_version_id"`
+	GitInfo            string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
 	EphemeralLabel     string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	EphemeralTTL       string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
 	EphemeralExpiresAt string `json:"ephemeral_expires_at,omitempty" saga:"ephemeral_expires_at,optional"`
@@ -467,6 +468,14 @@ func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, e
 		Artifact:      entity.Id(in.ArtifactID),
 		ConfigVersion: entity.Id(in.ConfigVersionID),
 		Config:        core_v1alpha.Config{},
+	}
+	if in.GitInfo != "" {
+		var gitInfo core_v1alpha.GitInfo
+		if err := json.Unmarshal([]byte(in.GitInfo), &gitInfo); err != nil {
+			b.Log.Warn("ignoring unparseable git info on app version", "version", in.VersionName, "error", err)
+		} else {
+			av.Source = deploylifecycle.SourceFromGitInfo(gitInfo)
+		}
 	}
 	if in.EphemeralLabel != "" {
 		av.EphemeralLabel = in.EphemeralLabel
@@ -535,10 +544,9 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 	return nil
 }
 
-// setActiveVersion makes the newly-created AppVersion the app's active
-// one. Skipped for ephemeral deploys (their whole point is to coexist
-// with the active version, not replace it). Records the previous
-// active version so undo can restore it on failure.
+// setActiveVersion keeps the persisted saga action name, but no longer writes
+// either app pointer. It runs the last promotion checks; activateDeployment
+// performs the paired active_version and active_deployment update later.
 
 // runDeployTasksIn gates the version flip on every deploy-triggered task.
 //
@@ -609,18 +617,17 @@ type setActiveVersionIn struct {
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	AddonsReady    saga.Edge            `saga:"addons_provisioned"`
-	// DeployTasksRan puts the version flip strictly after every
+	// DeployTasksRan puts the promotion gate strictly after every
 	// deploy-triggered task has succeeded, so a failed task means a failed
 	// deploy rather than a half-promoted one.
 	DeployTasksRan saga.Edge `saga:"deploy_tasks_ran"`
-	// DeploymentID is empty for an untracked build. Consuming it also anchors
-	// this action after begin-deployment, which is where the record is created.
+	// Consuming DeploymentID anchors this action after begin-deployment. It is
+	// empty only for ephemeral builds and sagas created by an older runtime.
 	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 
 type setActiveVersionOut struct {
-	PreviousVersionID string `json:"previous_version_id,omitempty" saga:"previous_version_id"`
-	Skipped           bool   `json:"skipped" saga:"set_active_skipped"`
+	Skipped bool `json:"skipped" saga:"set_active_skipped"`
 }
 
 func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
@@ -634,31 +641,17 @@ func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVers
 	b.trackDeployment(in.DeploymentID, deps.statuses.SenderFor(in.StreamID)).
 		setPhase(ctx, deploylifecycle.PhaseActivating)
 
-	app, err := b.appClient.GetByName(ctx, in.AppName)
-	if err != nil {
-		return setActiveVersionOut{}, fmt.Errorf("looking up app %s: %w", in.AppName, err)
-	}
-	previous := string(app.ActiveVersion)
-
-	if err := b.appClient.SetActiveVersion(ctx, in.AppName, in.AppVersionID); err != nil {
-		return setActiveVersionOut{}, fmt.Errorf("setting active version on %s: %w", in.AppName, err)
-	}
-
 	// Apply a workload_role declared in app.toml (app-scoped only) so it takes
 	// effect on this deploy. A cluster-scoped value fails the deploy.
 	if err := b.applyWorkloadRole(ctx, in.AppName, in.AppConfig); err != nil {
 		return setActiveVersionOut{}, err
 	}
-	return setActiveVersionOut{PreviousVersionID: previous}, nil
+	return setActiveVersionOut{}, nil
 }
 
 func undoSetActiveVersion(ctx context.Context, in setActiveVersionIn, out setActiveVersionOut) error {
 	if out.Skipped {
 		return nil
-	}
-	deps := saga.Get[*buildSagaDeps](ctx)
-	if err := deps.builder.appClient.SetActiveVersion(ctx, in.AppName, out.PreviousVersionID); err != nil {
-		return fmt.Errorf("restoring previous active version on %s: %w", in.AppName, err)
 	}
 	return nil
 }
@@ -725,24 +718,20 @@ func undoFinalize(_ context.Context, _ finalizeIn, _ finalizeOut) error {
 // it deployment_id stays empty and every downstream action skips. Ephemeral
 // builds are never tracked.
 //
-// Only begin-deployment may fail the saga. The record describes the deploy; it
-// must never be able to undo one. Once begin has succeeded the later actions
-// log their failures and return nil, because returning an error here would
-// compensate the saga, and the compensation for set-active-version restores the
-// previous app version — so a failed bookkeeping write would roll back a deploy
-// that is already live. The plain path enforces the same rule in
-// deployTracking.activate; these match it.
-//
-// For the same reason the settles run on a context detached from the saga's:
-// the most likely cause of failure is the client disconnecting, which is
-// exactly when the record most needs to reach a terminal state and drop the
-// deploy lock.
+// Lifecycle actions use detached settle contexts so a client disconnect cannot
+// strand an attempt. Activation is still a real saga gate until the paired app
+// pointers commit. Once they do, a failed terminal-record write is logged and
+// left for continuous reconciliation rather than compensating a live deploy.
 
 type beginDeploymentIn struct {
-	AppName   string `json:"app_name" saga:"app_name"`
-	StreamID  string `json:"stream_id" saga:"stream_id"`
-	ClusterID string `json:"deploy_cluster_id,omitempty" saga:"deploy_cluster_id,optional"`
-	GitInfo   string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+	AppName        string `json:"app_name" saga:"app_name"`
+	AppID          string `json:"app_id" saga:"app_id"`
+	StreamID       string `json:"stream_id" saga:"stream_id"`
+	ClusterID      string `json:"deploy_cluster_id,omitempty" saga:"deploy_cluster_id,optional"`
+	GitInfo        string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+	Subject        string `json:"deploy_subject,omitempty" saga:"deploy_subject,optional"`
+	AuthMethod     string `json:"deploy_auth_method,omitempty" saga:"deploy_auth_method,optional"`
+	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 }
 
 type beginDeploymentOut struct {
@@ -750,8 +739,7 @@ type beginDeploymentOut struct {
 }
 
 func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeploymentOut, error) {
-	// No cluster id means the client did not ask the server to own a record.
-	if in.ClusterID == "" {
+	if in.EphemeralLabel != "" {
 		return beginDeploymentOut{}, nil
 	}
 
@@ -766,9 +754,13 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 	}
 
 	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
-		AppName:   in.AppName,
-		ClusterID: in.ClusterID,
-		GitInfo:   gitInfo,
+		AppName:    in.AppName,
+		AppID:      entity.Id(in.AppID),
+		ClusterID:  in.ClusterID,
+		Operation:  deploylifecycle.OperationBuild,
+		GitInfo:    gitInfo,
+		Subject:    in.Subject,
+		AuthMethod: in.AuthMethod,
 	})
 	if err != nil {
 		return beginDeploymentOut{}, fmt.Errorf("begin deployment for %s: %w", in.AppName, err)
@@ -795,7 +787,7 @@ func undoBeginDeployment(ctx context.Context, in beginDeploymentIn, out beginDep
 	// FailIfUnsettled: if a later action already activated the record, leave it
 	// active — the version is live, and undoSetActiveVersion handles reverting
 	// that separately.
-	if err := deps.builder.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, "build rolled back", ""); err != nil {
+	if err := deps.builder.deploy.FailIfUnsettled(settleCtx, out.DeploymentID, "build rolled back"); err != nil {
 		return fmt.Errorf("failing rolled-back deployment %s: %w", out.DeploymentID, err)
 	}
 	return nil
@@ -816,9 +808,8 @@ func recordAppVersion(ctx context.Context, in recordAppVersionIn) (recordAppVers
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
 
-	// Delegated so the detached context and the log-rather-than-fail policy live
-	// in one place. A failure here is not fatal: activate-deployment will refuse
-	// to settle a record with no version and release the lock instead.
+	// Delegated so the detached context lives in one place. Activation remains
+	// the gate if recording the version failed.
 	deps.builder.trackDeployment(in.DeploymentID, nil).setAppVersion(ctx, in.AppVersionID)
 	return recordAppVersionOut{}, nil
 }
@@ -838,24 +829,21 @@ type activateDeploymentIn struct {
 type activateDeploymentOut struct{}
 
 func activateDeployment(ctx context.Context, in activateDeploymentIn) (activateDeploymentOut, error) {
-	// Not tracked, or an ephemeral build whose activation was skipped: nothing
-	// to activate.
+	// Ephemeral or pre-upgrade saga: nothing to activate.
 	if in.DeploymentID == "" || in.SetActiveSkipped {
 		return activateDeploymentOut{}, nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
 
-	// Delegated: the version is live by now, so activate detaches its context,
-	// logs rather than returns, and drops the lock as a backstop. See the
-	// failure-policy note at the top of this section.
-	deps.builder.trackDeployment(in.DeploymentID, nil).activate(ctx)
+	if err := deps.builder.trackDeployment(in.DeploymentID, nil).activate(ctx); err != nil {
+		return activateDeploymentOut{}, fmt.Errorf("activating deployment: %w", err)
+	}
 	return activateDeploymentOut{}, nil
 }
 
 func undoActivateDeployment(_ context.Context, _ activateDeploymentIn, _ activateDeploymentOut) error {
-	// The record is already active and the lock released. If a later step fails,
-	// undoSetActiveVersion reverts the running version; the record is left as the
-	// historical account of a deploy that did go live. No compensation here.
+	// The paired app pointers are already committed and the attempt is historical
+	// fact. A later best-effort finalizer must not compensate activation.
 	return nil
 }
 

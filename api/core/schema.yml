@@ -27,6 +27,24 @@ kinds:
       type: ref
       doc: The version of the project that should be used
 
+    active_deployment:
+      type: ref
+      doc: The deployment attempt that made active_version current
+
+    deployment_lock:
+      type: component
+      doc: The expiring lock held by the deployment currently mutating this app
+      attrs:
+        deployment_id:
+          type: string
+          doc: The deployment attempt that owns the lock
+        acquired_at:
+          type: time
+          doc: When the lock was taken
+        expires_at:
+          type: time
+          doc: When another deployment may take over the lock
+
     initial_config:
       type: ref
       doc: Reference to the initial ConfigVersion entity created before the first deploy
@@ -71,6 +89,20 @@ kinds:
     version:
       type: string
       doc: The version of this app
+
+    source:
+      type: component
+      doc: Sanitized source provenance captured when this version was built
+      attrs:
+        git_sha:
+          type: string
+          doc: Git commit SHA used to build the version
+        git_branch:
+          type: string
+          doc: Git branch used to build the version
+        repository:
+          type: string
+          doc: Repository URL without credentials, query parameters, or fragments
 
     image_url:
       type: string
@@ -289,65 +321,95 @@ kinds:
       indexed: true
 
   deployment:
-    app_name:
-      type: string
-      doc: The name of the app being deployed
+    # Canonical immutable-attempt fields.
+    app:
+      type: ref
+      doc: The app this attempt targeted
       indexed: true
-    
-    app_version:
-      type: string
-      doc: The app version ID or temporary value (pending-build, failed-{id})
-    
-    cluster_id:
-      type: string
-      doc: The cluster where the deployment is happening
+
+    version:
+      type: ref
+      doc: The app version produced or selected by this attempt
       indexed: true
-    
-    status:
+
+    parent_deployment:
+      type: ref
+      doc: Optional deployment this attempt was based on
+
+    operation:
       type: string
-      doc: Deployment status (in_progress, active, failed, rolled_back)
+      doc: The intent of this attempt
+
+    outcome:
+      type: string
+      doc: Terminal result of this attempt; absent while the attempt is in progress
       indexed: true
-    
+
     phase:
       type: string
-      doc: Current phase of deployment (preparing, building, pushing, activating)
-    
+      doc: Last progress phase observed while the attempt was in progress
+
+    started_at:
+      type: time
+      doc: When the attempt acquired the deployment lock
+
+    completed_at:
+      type: string
+      doc: RFC3339 time when the attempt reached a terminal outcome
+
+    app_name:
+      type: string
+      doc: "[DEPRECATED] Denormalized app name retained for downgrade compatibility; canonical identity is app"
+      indexed: true
+
+    app_version:
+      type: string
+      doc: "[DEPRECATED] Version value retained for downgrade compatibility; use version"
+
+    cluster_id:
+      type: string
+      doc: "[DEPRECATED] Client-supplied cluster display value; coordinator storage is cluster-scoped"
+      indexed: true
+
+    status:
+      type: string
+      doc: "[DEPRECATED] Mutable lifecycle status retained for downgrade compatibility; use outcome and app.active_deployment"
+      indexed: true
+
     deployed_by:
       type: component
       doc: Information about who initiated the deployment
       attrs:
         user_id:
           type: string
-          doc: The ID of the user who deployed
+          doc: "[DEPRECATED] Caller-supplied user ID retained for compatibility"
         user_name:
           type: string
-          doc: The username of the user who deployed
+          doc: "[DEPRECATED] Caller-supplied username retained for compatibility"
         user_email:
           type: string
-          doc: The email of the user who deployed
+          doc: "[DEPRECATED] Caller-supplied email retained for compatibility"
         timestamp:
           type: string
-          doc: When the deployment was initiated (RFC3339 format)
-    
-    completed_at:
-      type: string
-      doc: When the deployment was completed (RFC3339 format)
-    
+          doc: "[DEPRECATED] RFC3339 start time retained for compatibility; use started_at"
+        subject:
+          type: string
+          doc: Stable subject from the server-authenticated RPC identity
+        auth_method:
+          type: string
+          doc: Authentication method used by the initiating subject
+
     error_message:
       type: string
-      doc: Error message if deployment failed
-    
-    build_logs:
-      type: string
-      doc: Build logs concatenated with newlines (especially useful for failed deployments)
+      doc: "[DEPRECATED] Bounded failure summary retained until lifecycle errors are queryable from the log stream"
 
     source_deployment_id:
       type: string
-      doc: ID of the deployment this was based on (for rollback/redeploy provenance)
+      doc: "[DEPRECATED] Lineage ID retained for downgrade compatibility; use parent_deployment"
 
     git_info:
       type: component
-      doc: Git information at time of deployment
+      doc: "[DEPRECATED] Build provenance retained for compatibility; stable source identity lives on AppVersion.source"
       attrs:
         sha:
           type: string
@@ -376,30 +438,6 @@ kinds:
         repository:
           type: string
           doc: Git repository remote URL
-
-  deployment_lock:
-    app_name:
-      type: string
-      doc: >
-        The app this lock covers. The lock is app-scoped, not app+cluster: a
-        coordinator's store only holds its own cluster's deployments, and the
-        client-supplied cluster_id is unreliable (see MIR-1465).
-      indexed: true
-
-    deployment_id:
-      type: string
-      doc: The deployment currently holding the lock
-
-    acquired_at:
-      type: time
-      doc: When the lock was taken
-
-    expires_at:
-      type: time
-      doc: >
-        When the lock may be stolen by another deployment. A holder whose
-        deployment reached a terminal status is stealable before this too.
-      indexed: true
 
   config_version:
     app:

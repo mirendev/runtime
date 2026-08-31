@@ -27,19 +27,22 @@ func isConflict(err error) bool {
 // restatement of validTransitions.
 var allowedTransitions = map[Status]map[Status]bool{
 	StatusInProgress: {
-		StatusInProgress: true,
-		StatusActive:     true,
-		StatusFailed:     true,
-		StatusCancelled:  true,
+		StatusInProgress:  true,
+		StatusActive:      true,
+		StatusSucceeded:   true,
+		StatusFailed:      true,
+		StatusCancelled:   true,
+		StatusInterrupted: true,
 	},
 	StatusActive: {
 		StatusSucceeded:  true,
 		StatusRolledBack: true,
 	},
-	StatusSucceeded:  {},
-	StatusFailed:     {},
-	StatusRolledBack: {},
-	StatusCancelled:  {},
+	StatusSucceeded:   {},
+	StatusFailed:      {},
+	StatusRolledBack:  {},
+	StatusCancelled:   {},
+	StatusInterrupted: {},
 }
 
 // TestTransitionMatrix exercises every (from, to) pair, so a new status or a
@@ -85,10 +88,12 @@ func TestTransitionFromUnknownStatusIsRejected(t *testing.T) {
 
 func TestTerminal(t *testing.T) {
 	terminal := map[Status]bool{
-		StatusSucceeded:  true,
-		StatusFailed:     true,
-		StatusRolledBack: true,
-		StatusCancelled:  true,
+		StatusSucceeded:   true,
+		StatusFailed:      true,
+		StatusRolledBack:  true,
+		StatusCancelled:   true,
+		StatusInterrupted: true,
+		StatusActive:      true,
 	}
 
 	for _, s := range allStatuses {

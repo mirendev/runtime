@@ -2,8 +2,8 @@ package deployment
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -19,7 +20,7 @@ import (
 )
 
 // newTestDeploymentServer creates a DeploymentServer with test dependencies.
-// The returned appClient uses the same in-memory entity store for SetActiveVersion calls.
+// The app client and lifecycle tracker share the same in-memory entity store.
 func newTestDeploymentServer(t *testing.T, logger *slog.Logger, inmem *testutils.InMemEntityServer) (*DeploymentServer, error) {
 	t.Helper()
 	localClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
@@ -28,106 +29,25 @@ func newTestDeploymentServer(t *testing.T, logger *slog.Logger, inmem *testutils
 	return NewDeploymentServer(logger, inmem.EAC, ec, ac, "", nil)
 }
 
-func TestCreateDeploymentWithGitInfo(t *testing.T) {
+func TestCreateDeploymentRequiresClientUpgrade(t *testing.T) {
 	ctx := context.Background()
-
-	// Setup in-memory entity server
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	// Create deployment server
-	logger := slog.Default()
-	server, err := newTestDeploymentServer(t, logger, inmem)
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
 	if err != nil {
-		t.Fatalf("Failed to create deployment server: %v", err)
+		t.Fatalf("create deployment server: %v", err)
 	}
-
-	// Create RPC client
 	client := &deployment_v1alpha.DeploymentClient{
 		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
 	}
 
-	tests := []struct {
-		name          string
-		gitInfo       *deployment_v1alpha.GitInfo
-		expectedDirty bool
-		expectedHash  string
-	}{
-		{
-			name: "clean git state",
-			gitInfo: func() *deployment_v1alpha.GitInfo {
-				gi := &deployment_v1alpha.GitInfo{}
-				gi.SetSha("e0bdb661891c2e4f5e7e6c5c5d5c5d5c5d5c5d5c")
-				gi.SetBranch("main")
-				gi.SetIsDirty(false)
-				gi.SetCommitMessage("Initial commit")
-				gi.SetCommitAuthorName("Test User")
-				return gi
-			}(),
-			expectedDirty: false,
-			expectedHash:  "",
-		},
-		{
-			name: "dirty git state",
-			gitInfo: func() *deployment_v1alpha.GitInfo {
-				gi := &deployment_v1alpha.GitInfo{}
-				gi.SetSha("e0bdb661891c2e4f5e7e6c5c5d5c5d5c5d5c5d5c")
-				gi.SetBranch("feature-branch")
-				gi.SetIsDirty(true)
-				gi.SetWorkingTreeHash("abc12345")
-				gi.SetCommitMessage("Work in progress")
-				gi.SetCommitAuthorName("Test User")
-				return gi
-			}(),
-			expectedDirty: true,
-			expectedHash:  "abc12345",
-		},
-		{
-			name:          "no git info",
-			gitInfo:       nil,
-			expectedDirty: false,
-			expectedHash:  "",
-		},
+	_, err = client.CreateDeployment(ctx, "test-app", "test-cluster", "pending-build", nil)
+	if err == nil {
+		t.Fatal("expected CreateDeployment to require a client upgrade")
 	}
-
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create deployment with unique app name to avoid deployment lock conflicts
-			appName := fmt.Sprintf("test-app-%d", i)
-			results, err := client.CreateDeployment(ctx, appName, "test-cluster", "v1.0.0", tt.gitInfo)
-			if err != nil {
-				t.Fatalf("CreateDeployment failed: %v", err)
-			}
-
-			// Verify the deployment was created with correct git info
-			if !results.HasDeployment() {
-				t.Fatal("Expected deployment in results")
-			}
-
-			deploymentInfo := results.Deployment()
-
-			if tt.gitInfo == nil {
-				if deploymentInfo.HasGitInfo() {
-					t.Error("Expected no git info, but got some")
-				}
-			} else {
-				if !deploymentInfo.HasGitInfo() {
-					t.Fatal("Expected git info, but got none")
-				}
-
-				gitInfo := deploymentInfo.GitInfo()
-
-				// Check IsDirty flag
-				if gitInfo.IsDirty() != tt.expectedDirty {
-					t.Errorf("Expected IsDirty = %v, got %v", tt.expectedDirty, gitInfo.IsDirty())
-				}
-
-				// Check WorkingTreeHash
-				if gitInfo.WorkingTreeHash() != tt.expectedHash {
-					t.Errorf("Expected WorkingTreeHash = %s, got %s", tt.expectedHash, gitInfo.WorkingTreeHash())
-				}
-			}
-		})
+	if !strings.Contains(err.Error(), "run 'miren upgrade'") {
+		t.Fatalf("expected actionable upgrade error, got %v", err)
 	}
 }
 
@@ -236,70 +156,6 @@ func TestToDeploymentInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			info := server.toDeploymentInfo(tt.deployment)
 			tt.checkFunc(t, info)
-		})
-	}
-}
-
-func TestCreateDeploymentErrorCases(t *testing.T) {
-	ctx := context.Background()
-
-	// Setup in-memory entity server
-	inmem, cleanup := testutils.NewInMemEntityServer(t)
-	defer cleanup()
-
-	// Create deployment server
-	logger := slog.Default()
-	server, err := newTestDeploymentServer(t, logger, inmem)
-	if err != nil {
-		t.Fatalf("Failed to create deployment server: %v", err)
-	}
-
-	// Create RPC client
-	client := &deployment_v1alpha.DeploymentClient{
-		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
-	}
-
-	tests := []struct {
-		name          string
-		appName       string
-		clusterId     string
-		appVersionId  string
-		expectedError string
-	}{
-		{
-			name:          "missing app name",
-			appName:       "",
-			clusterId:     "test-cluster",
-			appVersionId:  "v1.0.0",
-			expectedError: "app_name is required",
-		},
-		{
-			name:          "missing cluster id",
-			appName:       "test-app",
-			clusterId:     "",
-			appVersionId:  "v1.0.0",
-			expectedError: "cluster_id is required",
-		},
-		{
-			name:          "missing app version id",
-			appName:       "test-app",
-			clusterId:     "test-cluster",
-			appVersionId:  "",
-			expectedError: "app_version_id is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := client.CreateDeployment(ctx, tt.appName, tt.clusterId, tt.appVersionId, nil)
-
-			if err == nil {
-				t.Fatal("Expected error but got none")
-			}
-
-			if !containsError(err.Error(), tt.expectedError) {
-				t.Errorf("Expected error containing '%s', got '%s'", tt.expectedError, err.Error())
-			}
 		})
 	}
 }
@@ -877,13 +733,26 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Fatalf("Failed to create deployment server: %v", err)
 	}
 
-	// First create a deployment directly in entity store for testing
+	appID, err := inmem.Client.Create(ctx, "test-app", &core_v1alpha.App{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionID, err := inmem.Client.Create(ctx, "test-app-v1", &core_v1alpha.AppVersion{App: appID, Version: "v1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First create a deployment directly in entity store for testing.
 	testDeployment := &core_v1alpha.Deployment{
+		App:        appID,
+		Version:    versionID,
+		Operation:  string(deploylifecycle.OperationBuild),
+		Phase:      string(deploylifecycle.PhasePreparing),
+		StartedAt:  time.Now(),
 		AppName:    "test-app",
 		ClusterId:  "test-cluster",
 		AppVersion: "v1.0.0",
 		Status:     "in_progress",
-		Phase:      "preparing",
 		DeployedBy: core_v1alpha.DeployedBy{
 			UserId:    "test-user",
 			UserEmail: "test@example.com",
@@ -898,6 +767,10 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 		t.Fatalf("Failed to create test deployment: %v", err)
 	}
 	testDeployment.ID = deploymentId
+	_, err = server.tracker.Locks().Acquire(ctx, "test-app", string(deploymentId))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create RPC client
 	client := &deployment_v1alpha.DeploymentClient{
@@ -921,7 +794,7 @@ func TestUpdateDeploymentStatusToInProgress(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when updating completed deployment back to in_progress")
 	}
-	if !containsString(err.Error(), "cannot update deployment in active state") {
+	if !containsString(err.Error(), "cannot transition deployment from succeeded to") {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 
@@ -1232,15 +1105,13 @@ func TestDeployVersion(t *testing.T) {
 			t.Fatalf("Failed to create app version: %v", err)
 		}
 
-		// Establish a blocking in-progress deployment that actually holds the
-		// deploy lock, via the same path a real deploy uses. A bare in_progress
-		// record no longer blocks — the lock does.
-		blockRes, err := client.CreateDeployment(ctx, "locked-app", "cluster1", "pending-build", nil)
+		// Establish a blocking in-progress deployment through the server-owned
+		// lifecycle. A bare in_progress record no longer blocks; the lock does.
+		_, err = server.tracker.Begin(ctx, deploylifecycle.BeginParams{
+			AppName: "locked-app", ClusterID: "cluster1", Operation: deploylifecycle.OperationBuild,
+		})
 		if err != nil {
 			t.Fatalf("Failed to create blocking deployment: %v", err)
-		}
-		if blockRes.HasError() && blockRes.Error() != "" {
-			t.Fatalf("Blocking deployment unexpectedly failed: %s", blockRes.Error())
 		}
 
 		// Try to deploy — should be blocked

@@ -14,7 +14,7 @@ import (
 )
 
 // DefaultLockTTL is how long a lock survives without its holder finishing. It
-// backstops a deploy whose driver died without releasing; a holder that reaches
+// backstops a deploy whose driver died without releasing. A holder that reaches
 // a terminal status is stealable sooner than this.
 const DefaultLockTTL = 30 * time.Minute
 
@@ -66,17 +66,16 @@ func (h *Holder) Expired(now time.Time) bool {
 	return !h.ExpiresAt.After(now)
 }
 
-// StatusLookup reports the stored status of a deployment record. Acquire uses it
-// so a lock whose holder has already finished — the record says failed, the lock
-// says running — can be taken immediately instead of waiting out the TTL.
+// StatusLookup reports the stored status of a deployment record. Acquire uses
+// it so a lock whose holder has already finished can be taken immediately
+// instead of waiting out the TTL.
 type StatusLookup func(ctx context.Context, deploymentID string) (Status, error)
 
-// Locks manages the deploy lock entity for an app.
+// Locks manages the expiring deployment lock stored on an app.
 //
-// Acquisition is a compare-and-create against the entity store, so two callers
-// racing to start a deploy cannot both win. That is the whole point of the type:
-// the previous scheme listed in-progress deployments and then created a record,
-// which admitted an interleaving where both callers saw an empty list.
+// The app is the single compare-and-swap point for acquisition. A
+// revision-guarded patch ensures that two callers racing to deploy the same app
+// cannot both become its lock holder.
 //
 // The lock is scoped to the app, not app+cluster: a coordinator's entity store
 // is a loopback into its own etcd, so it only ever holds this cluster's
@@ -155,18 +154,6 @@ func NewLocks(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, st
 	}
 }
 
-// LockID is the deterministic entity id for an app's deploy lock. Determinism is
-// what makes create-if-absent a mutual exclusion primitive: every contender
-// computes the same key.
-//
-// The app name is the sole variable component, so it is used raw. It must not be
-// rewritten (e.g. slashes to underscores): that would let two distinct names
-// collide on one lock. As the last path segment the name is unambiguous even
-// when it contains a slash.
-func LockID(appName string) entity.Id {
-	return entity.Id("deploy-lock/" + appName)
-}
-
 // Acquire takes the deploy lock for deploymentID, returning the holder it
 // established.
 //
@@ -179,55 +166,73 @@ func (l *Locks) Acquire(ctx context.Context, appName, deploymentID string) (*Hol
 			"app_name and deployment_id are both required to acquire a deploy lock")
 	}
 
-	id := LockID(appName)
+	// Take the downgrade-compatible shadow first. An older binary only knows
+	// about that entity, so holding it closes the cross-version acquisition race
+	// before we touch the canonical App lock.
+	legacy, shadowCreated, err := l.acquireLegacy(ctx, appName, deploymentID)
+	if err != nil {
+		return legacy, err
+	}
+
+	holder, err := l.acquireApp(ctx, appName, deploymentID)
+	if err != nil && shadowCreated {
+		// We introduced this shadow during the failed attempt, so unwind it. A
+		// shadow that already belonged to deploymentID may protect an existing
+		// worker retrying this call and must stay in place.
+		if releaseErr := l.releaseLegacy(ctx, appName, deploymentID); releaseErr != nil {
+			l.log.Error("failed to release compatibility lock after app lock acquisition failed",
+				"app", appName, "deployment_id", deploymentID, "error", releaseErr)
+		}
+	}
+	return holder, err
+}
+
+func (l *Locks) acquireApp(ctx context.Context, appName, deploymentID string) (*Holder, error) {
 
 	for attempt := range lockAcquireLimit {
 		mine := l.holderFor(appName, deploymentID)
-
-		res, err := l.eac.Ensure(ctx, l.encode(id, mine))
+		current, app, err := l.readApp(ctx, appName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire deploy lock: %w", err)
 		}
 
-		if res.Created() {
-			mine.Revision = res.Revision()
-			l.log.Debug("acquired deploy lock",
-				"app", appName, "deployment_id", deploymentID)
-			return mine, nil
-		}
-
-		// Someone holds it. Whether we may take it over depends on who they are
-		// and whether they are still alive.
-		current, err := l.Get(ctx, appName)
-		if err != nil {
-			if errors.Is(err, cond.ErrNotFound{}) {
-				// Released between our Ensure and our read — try again.
+		if current.DeploymentID == deploymentID {
+			// Refresh extends the authority boundary without rewriting when the
+			// lock originally began.
+			mine.AcquiredAt = current.AcquiredAt
+			refreshed, err := l.replace(ctx, app.ID, current.Revision, mine)
+			if err == nil {
+				return refreshed, nil
+			}
+			if errors.Is(err, cond.ErrConflict{}) {
 				l.backoff(attempt + 1)
 				continue
 			}
 			return nil, err
 		}
 
-		if current.DeploymentID == deploymentID {
-			return l.refresh(ctx, id, current, mine)
+		reason := "unclaimed"
+		if current.DeploymentID != "" {
+			stealable, why := l.stealable(ctx, current)
+			if !stealable {
+				return current, &LockHeldError{Holder: current}
+			}
+			reason = why
 		}
 
-		stealable, reason := l.stealable(ctx, current)
-		if !stealable {
-			return current, &LockHeldError{Holder: current}
+		if current.DeploymentID != "" {
+			l.log.Warn("stealing deploy lock",
+				"app", appName,
+				"from_deployment_id", current.DeploymentID,
+				"to_deployment_id", deploymentID,
+				"reason", reason)
 		}
-
-		l.log.Warn("stealing deploy lock",
-			"app", appName,
-			"from_deployment_id", current.DeploymentID,
-			"to_deployment_id", deploymentID,
-			"reason", reason)
 
 		if l.stealRace != nil {
 			l.stealRace()
 		}
 
-		taken, err := l.replace(ctx, id, current.Revision, mine)
+		taken, err := l.replace(ctx, app.ID, current.Revision, mine)
 		if err != nil {
 			if errors.Is(err, cond.ErrConflict{}) {
 				// Another contender moved the lock first. Re-read and decide
@@ -237,25 +242,13 @@ func (l *Locks) Acquire(ctx context.Context, appName, deploymentID string) (*Hol
 			}
 			return nil, err
 		}
+		l.log.Debug("acquired deploy lock",
+			"app", appName, "deployment_id", deploymentID)
 		return taken, nil
 	}
 
 	return nil, fmt.Errorf("gave up acquiring deploy lock for %s after %d attempts",
 		appName, lockAcquireLimit)
-}
-
-// refresh extends an expiry for the deployment that already holds the lock.
-func (l *Locks) refresh(ctx context.Context, id entity.Id, current, mine *Holder) (*Holder, error) {
-	refreshed, err := l.replace(ctx, id, current.Revision, mine)
-	if err != nil {
-		if errors.Is(err, cond.ErrConflict{}) {
-			// Someone rewrote the lock under us. current is still ours by
-			// deployment id, so report it rather than failing the deploy.
-			return current, nil
-		}
-		return nil, err
-	}
-	return refreshed, nil
 }
 
 // stealable reports whether a held lock may be taken over, and why.
@@ -265,7 +258,7 @@ func (l *Locks) stealable(ctx context.Context, h *Holder) (bool, string) {
 	}
 
 	if h.DeploymentID == "" {
-		// A lock with no owner cannot be reconciled against a record; treat it
+		// A lock with no owner cannot be reconciled against a record. Treat it
 		// as debris rather than an indefinite block.
 		return true, "no owner recorded"
 	}
@@ -277,8 +270,10 @@ func (l *Locks) stealable(ctx context.Context, h *Holder) (bool, string) {
 	status, err := l.status(ctx, h.DeploymentID)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
-			// The record is gone, so nothing will ever release this lock.
-			return true, "holding deployment no longer exists"
+			// Absence is not positive evidence that the holder is dead. Direct lock
+			// callers may still be publishing their record, so the lease remains the
+			// recovery bound when there is nothing to reconcile.
+			return false, ""
 		}
 		l.log.Warn("could not read holding deployment; treating lock as held",
 			"deployment_id", h.DeploymentID, "error", err)
@@ -292,58 +287,74 @@ func (l *Locks) stealable(ctx context.Context, h *Holder) (bool, string) {
 	return false, ""
 }
 
-// Release drops the lock, but only if deploymentID still holds it.
-//
-// The release is a revision-guarded write rather than a delete: between reading
-// the holder and acting on it, another deployment may legitimately steal the
-// lock — a deployment that has just finished is exactly what makes a lock
-// stealable — and an unguarded delete would then remove the successor's lock,
-// letting a third deployment start alongside it. The entity server's delete
-// takes no caller revision, so the write has to be a Replace to be safe.
-//
-// The released lock is left behind as a tombstone: owned by nobody, already
-// expired. Acquire treats that as free.
-func (l *Locks) Release(ctx context.Context, appName, deploymentID string) error {
-	current, err := l.Get(ctx, appName)
+// Owns reports whether deploymentID is the current, unexpired holder.
+func (l *Locks) Owns(ctx context.Context, appName, deploymentID string) (bool, error) {
+	holder, err := l.Get(ctx, appName)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
-			return nil
+			return false, nil
 		}
+		return false, err
+	}
+	return holder.DeploymentID == deploymentID && !holder.Expired(l.now.Now()), nil
+}
+
+// Release clears the canonical App lock, then its downgrade-compatible shadow,
+// but only if deploymentID still holds them. Releasing in this order keeps old
+// binaries excluded until the canonical lock is safely clear.
+func (l *Locks) Release(ctx context.Context, appName, deploymentID string) error {
+	if err := l.releaseApp(ctx, appName, deploymentID); err != nil {
 		return err
 	}
+	return l.releaseLegacy(ctx, appName, deploymentID)
+}
 
-	if current.DeploymentID != deploymentID {
-		l.log.Debug("not releasing deploy lock held by another deployment",
-			"app", appName,
-			"holder", current.DeploymentID, "caller", deploymentID)
+// releaseApp clears the app lock, but only if deploymentID still holds it.
+//
+// The revision guard matters because another deployment may legitimately take
+// over between our read and write. App revisions can also move for unrelated
+// changes, so a conflict is re-read rather than assumed to mean the lock moved.
+func (l *Locks) releaseApp(ctx context.Context, appName, deploymentID string) error {
+	for attempt := range lockAcquireLimit {
+		current, app, err := l.readApp(ctx, appName)
+		if err != nil {
+			if errors.Is(err, cond.ErrNotFound{}) {
+				return nil
+			}
+			return err
+		}
+
+		if current.DeploymentID == "" {
+			return nil
+		}
+		if current.DeploymentID != deploymentID {
+			l.log.Debug("not releasing deploy lock held by another deployment",
+				"app", appName,
+				"holder", current.DeploymentID, "caller", deploymentID)
+			return nil
+		}
+
+		if l.releaseRace != nil {
+			l.releaseRace()
+		}
+
+		if _, err := l.replace(ctx, app.ID, current.Revision, &Holder{AppName: appName}); err != nil {
+			if errors.Is(err, cond.ErrConflict{}) {
+				// App revisions also move for unrelated app changes. Re-read so we
+				// can distinguish that from a successor taking over the lock.
+				l.backoff(attempt + 1)
+				continue
+			}
+			return fmt.Errorf("failed to release deploy lock: %w", err)
+		}
+
+		l.log.Debug("released deploy lock",
+			"app", appName, "deployment_id", deploymentID)
 		return nil
 	}
 
-	if l.releaseRace != nil {
-		l.releaseRace()
-	}
-
-	// No DeploymentID: the lock is owned by nobody once released.
-	released := &Holder{
-		AppName:    appName,
-		AcquiredAt: current.AcquiredAt,
-		ExpiresAt:  l.now.Now(),
-	}
-
-	if _, err := l.replace(ctx, LockID(appName), current.Revision, released); err != nil {
-		if errors.Is(err, cond.ErrConflict{}) {
-			// The lock moved between our read and our write, so it is no longer
-			// ours to release. Whoever holds it now keeps it.
-			l.log.Debug("deploy lock moved before release; leaving it alone",
-				"app", appName, "caller", deploymentID)
-			return nil
-		}
-		return fmt.Errorf("failed to release deploy lock: %w", err)
-	}
-
-	l.log.Debug("released deploy lock",
-		"app", appName, "deployment_id", deploymentID)
-	return nil
+	return fmt.Errorf("gave up releasing deploy lock for %s after %d attempts",
+		appName, lockAcquireLimit)
 }
 
 // Blocking returns the holder that would block a new deployment for this app, or
@@ -351,10 +362,18 @@ func (l *Locks) Release(ctx context.Context, appName, deploymentID string) error
 //
 // This is the question callers actually have — a pre-flight check before
 // uploading a build context, or the lock info rendered in a "deployment
-// blocked" message — and it is not the same as "a lock entity exists". A
-// released tombstone, an expired lock, and a lock whose deployment already
-// finished all read as free.
+// blocked" message. An empty lock, an expired lock, and a lock whose
+// deployment already finished all read as free.
 func (l *Locks) Blocking(ctx context.Context, appName string) (*Holder, error) {
+	legacy, err := l.getLegacy(ctx, appName)
+	if err == nil {
+		if stealable, _ := l.stealable(ctx, legacy); !stealable {
+			return legacy, nil
+		}
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
+		return nil, err
+	}
+
 	current, err := l.Get(ctx, appName)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
@@ -370,25 +389,34 @@ func (l *Locks) Blocking(ctx context.Context, appName string) (*Holder, error) {
 	return current, nil
 }
 
-// Get returns the current holder, or cond.ErrNotFound if the lock is free.
+// Get returns the current holder, or cond.ErrNotFound if the app is unlocked.
 func (l *Locks) Get(ctx context.Context, appName string) (*Holder, error) {
-	id := LockID(appName)
-
-	res, err := l.eac.Get(ctx, string(id))
+	holder, _, err := l.readApp(ctx, appName)
 	if err != nil {
 		return nil, err
 	}
+	if holder.DeploymentID == "" {
+		return nil, cond.NotFound("deployment lock", appName)
+	}
+	return holder, nil
+}
 
-	var stored core_v1alpha.DeploymentLock
-	stored.Decode(&entityAttrs{entity: res.Entity()})
+func (l *Locks) readApp(ctx context.Context, appName string) (*Holder, *core_v1alpha.App, error) {
+	res, err := l.eac.Get(ctx, "app/"+appName)
+	if err != nil {
+		return nil, nil, err
+	}
 
+	var app core_v1alpha.App
+	app.Decode(&entityAttrs{entity: res.Entity()})
+	lock := app.DeploymentLock
 	return &Holder{
-		AppName:      stored.AppName,
-		DeploymentID: stored.DeploymentId,
-		AcquiredAt:   stored.AcquiredAt,
-		ExpiresAt:    stored.ExpiresAt,
+		AppName:      appName,
+		DeploymentID: lock.DeploymentId,
+		AcquiredAt:   lock.AcquiredAt,
+		ExpiresAt:    lock.ExpiresAt,
 		Revision:     res.Entity().Revision(),
-	}, nil
+	}, &app, nil
 }
 
 func (l *Locks) holderFor(appName, deploymentID string) *Holder {
@@ -401,21 +429,20 @@ func (l *Locks) holderFor(appName, deploymentID string) *Holder {
 	}
 }
 
-func (l *Locks) encode(id entity.Id, h *Holder) []entity.Attr {
-	stored := &core_v1alpha.DeploymentLock{
-		AppName:      h.AppName,
+// replace updates the app's lock under a revision guard, so two callers that
+// both judged it available cannot both succeed. An empty holder writes an empty
+// component, which decodes as no lock while preserving patch semantics for
+// unrelated app attributes.
+func (l *Locks) replace(ctx context.Context, appID entity.Id, revision int64, h *Holder) (*Holder, error) {
+	lock := core_v1alpha.DeploymentLock{
 		DeploymentId: h.DeploymentID,
 		AcquiredAt:   h.AcquiredAt,
 		ExpiresAt:    h.ExpiresAt,
 	}
-
-	return append(stored.Encode(), entity.Ref(entity.DBId, id))
-}
-
-// replace takes over the lock entity under a revision guard, so two callers that
-// both judged the lock stealable cannot both succeed.
-func (l *Locks) replace(ctx context.Context, id entity.Id, revision int64, h *Holder) (*Holder, error) {
-	res, err := l.eac.Replace(ctx, l.encode(id, h), revision)
+	res, err := l.eac.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, appID),
+		entity.Component(core_v1alpha.AppDeploymentLockId, lock.Encode()),
+	}, revision)
 	if err != nil {
 		return nil, err
 	}
@@ -423,6 +450,63 @@ func (l *Locks) replace(ctx context.Context, id entity.Id, revision int64, h *Ho
 	taken := *h
 	taken.Revision = res.Revision()
 	return &taken, nil
+}
+
+// CommitActivation swings the serving pointers while the same app revision
+// still proves that deploymentID owns the lock. The lock deliberately stays
+// in place until the attempt's terminal outcome is durable. That preserves a
+// recovery witness if the process dies between these two entity writes.
+func (l *Locks) CommitActivation(ctx context.Context, appName string, appID, versionID entity.Id, deploymentID string) error {
+	return l.commitActivation(ctx, appName, appID, versionID, deploymentID, 0)
+}
+
+// CommitActivationAtRevision preserves optimistic concurrency for a version
+// derived from a particular app snapshot. Unlike a regular deployment, a
+// configuration mutation must be rebuilt if that snapshot has moved.
+func (l *Locks) CommitActivationAtRevision(ctx context.Context, appName string, appID, versionID entity.Id,
+	deploymentID string, expectedRevision int64) error {
+	return l.commitActivation(ctx, appName, appID, versionID, deploymentID, expectedRevision)
+}
+
+func (l *Locks) commitActivation(ctx context.Context, appName string, appID, versionID entity.Id,
+	deploymentID string, expectedRevision int64) error {
+	for attempt := range updateRetryLimit {
+		current, app, err := l.readApp(ctx, appName)
+		if err != nil {
+			return err
+		}
+		if app.ID != appID {
+			return cond.Conflict("deployment-app", "deployment app reference no longer matches app name")
+		}
+		if app.ActiveVersion == versionID && app.ActiveDeployment == entity.Id(deploymentID) {
+			return nil
+		}
+		if expectedRevision != 0 && current.Revision != expectedRevision {
+			return cond.Conflict("app-revision", "app changed after deployment version was derived")
+		}
+		if current.DeploymentID != deploymentID || current.Expired(l.now.Now()) {
+			return cond.Conflict("deployment-lock", "deployment no longer owns its app lock")
+		}
+
+		_, err = l.eac.Patch(ctx, []entity.Attr{
+			entity.Ref(entity.DBId, app.ID),
+			entity.Ref(core_v1alpha.AppActiveVersionId, versionID),
+			entity.Ref(core_v1alpha.AppActiveDeploymentId, entity.Id(deploymentID)),
+		}, current.Revision)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return fmt.Errorf("failed to update active deployment pointers: %w", err)
+		}
+		if expectedRevision != 0 {
+			return err
+		}
+		l.backoff(attempt + 1)
+	}
+
+	return fmt.Errorf("gave up activating deployment %s after %d attempts",
+		deploymentID, updateRetryLimit)
 }
 
 // entityAttrs adapts an RPC entity to the AttrGetter the generated decoders want.

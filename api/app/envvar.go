@@ -41,6 +41,12 @@ type DeleteResult struct {
 	DeletedSources []string
 }
 
+// VersionActivator commits a newly minted AppVersion. Deployment-aware RPC
+// paths supply an activator that records the version on an attempt and swings
+// both app pointers together. The legacy wrappers below retain their original
+// single-pointer behavior for internal callers during the downgrade window.
+type VersionActivator func(context.Context, *core_v1alpha.App, int64, entity.Id) error
+
 // envMutateMaxAttempts is a live-lock backstop for the optimistic-concurrency
 // retry loop shared by SetEnvVars and DeleteEnvVars — it is not an expected
 // limit. Each conflict just means another writer swung the app's active version
@@ -72,6 +78,11 @@ var testHookAfterResolve func()
 // rather than composing onto the winner.
 func SetEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	baseVersion *core_v1alpha.AppVersion, vars []EnvVarInput, service string) (*MutateResult, error) {
+	return SetEnvVarsWithActivator(ctx, ec, resolver, appName, baseVersion, vars, service, nil)
+}
+
+func SetEnvVarsWithActivator(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
+	baseVersion *core_v1alpha.AppVersion, vars []EnvVarInput, service string, activate VersionActivator) (*MutateResult, error) {
 
 	for _, v := range vars {
 		if strings.HasPrefix(v.Key, "MIREN_") {
@@ -93,7 +104,7 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Re
 			testHookAfterResolve()
 		}
 
-		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev)
+		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev, activate)
 		if err == nil {
 			return result, nil
 		}
@@ -117,6 +128,11 @@ func SetEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Re
 // only when baseVersion is nil; a pinned baseVersion is re-applied as-is.
 func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
 	baseVersion *core_v1alpha.AppVersion, keys []string, service string) (*DeleteResult, error) {
+	return DeleteEnvVarsWithActivator(ctx, ec, resolver, appName, baseVersion, keys, service, nil)
+}
+
+func DeleteEnvVarsWithActivator(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
+	baseVersion *core_v1alpha.AppVersion, keys []string, service string, activate VersionActivator) (*DeleteResult, error) {
 
 	for range envMutateMaxAttempts {
 		appVer, spec, appRec, appRev, err := resolveBaseVersion(ctx, ec, appName, baseVersion)
@@ -174,7 +190,7 @@ func DeleteEnvVars(ctx context.Context, ec *entityserver.Client, resolver secret
 			}
 		}
 
-		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev)
+		result, err := createNewVersion(ctx, ec, resolver, appName, appVer, spec, appRec, appRev, activate)
 		if err == nil {
 			return &DeleteResult{
 				MutateResult:   *result,
@@ -428,7 +444,8 @@ func mergeIntoSpec(spec *core_v1alpha.ConfigSpec, vars []EnvVarInput, service st
 // the winner's version instead of silently clobbering it. Returns cond.ErrConflict
 // on a lost race.
 func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver secret.Resolver, appName string,
-	appVer *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, appRec *core_v1alpha.App, appRev int64) (*MutateResult, error) {
+	appVer *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, appRec *core_v1alpha.App, appRev int64,
+	activators ...VersionActivator) (*MutateResult, error) {
 
 	// Freeze every backend-sourced variable to the version it resolves to right
 	// now, so this ConfigVersion records exactly which secret it was built with.
@@ -456,9 +473,16 @@ func createNewVersion(ctx context.Context, ec *entityserver.Client, resolver sec
 	}
 	appVer.ID = avid
 
-	if err := ec.Patch(ctx, appRec.ID, appRev,
-		entity.Ref(core_v1alpha.AppActiveVersionId, avid),
-	); err != nil {
+	var activate VersionActivator
+	if len(activators) > 0 {
+		activate = activators[0]
+	}
+	if activate == nil {
+		activate = func(ctx context.Context, app *core_v1alpha.App, revision int64, version entity.Id) error {
+			return ec.Patch(ctx, app.ID, revision, entity.Ref(core_v1alpha.AppActiveVersionId, version))
+		}
+	}
+	if err := activate(ctx, appRec, appRev, avid); err != nil {
 		if errors.Is(err, cond.ErrConflict{}) {
 			// This attempt lost the race, so the version pair we just minted was
 			// never activated. Best-effort delete it, AppVersion first: only drop

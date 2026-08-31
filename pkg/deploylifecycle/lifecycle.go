@@ -17,12 +17,24 @@ import (
 type Status string
 
 const (
-	StatusInProgress Status = "in_progress"
-	StatusActive     Status = "active"
-	StatusSucceeded  Status = "succeeded"
-	StatusFailed     Status = "failed"
-	StatusRolledBack Status = "rolled_back"
-	StatusCancelled  Status = "cancelled"
+	StatusInProgress  Status = "in_progress"
+	StatusActive      Status = "active"
+	StatusSucceeded   Status = "succeeded"
+	StatusFailed      Status = "failed"
+	StatusRolledBack  Status = "rolled_back"
+	StatusCancelled   Status = "cancelled"
+	StatusInterrupted Status = "interrupted"
+)
+
+// Operation records why an attempt was started. Unlike a status, it never
+// changes as work progresses.
+type Operation string
+
+const (
+	OperationBuild        Operation = "build"
+	OperationRedeploy     Operation = "redeploy"
+	OperationRollback     Operation = "rollback"
+	OperationConfigChange Operation = "config_change"
 )
 
 // Phase is the fine-grained progress of a deployment that is still in_progress.
@@ -40,7 +52,7 @@ const (
 var (
 	allStatuses = []Status{
 		StatusInProgress, StatusActive, StatusSucceeded,
-		StatusFailed, StatusRolledBack, StatusCancelled,
+		StatusFailed, StatusRolledBack, StatusCancelled, StatusInterrupted,
 	}
 	allPhases = []Phase{PhasePreparing, PhaseBuilding, PhasePushing, PhaseActivating}
 )
@@ -50,10 +62,11 @@ var (
 // missing validTransitions entry — is what makes the init check below able to
 // catch a status that was added without deciding whether it is terminal.
 var terminalStatuses = map[Status]struct{}{
-	StatusSucceeded:  {},
-	StatusFailed:     {},
-	StatusRolledBack: {},
-	StatusCancelled:  {},
+	StatusSucceeded:   {},
+	StatusFailed:      {},
+	StatusRolledBack:  {},
+	StatusCancelled:   {},
+	StatusInterrupted: {},
 }
 
 // validTransitions maps a status to the statuses reachable from it.
@@ -61,7 +74,7 @@ var terminalStatuses = map[Status]struct{}{
 // in_progress is reachable from itself so that a no-op update (the client
 // re-asserting the state it is already in) is not an error.
 var validTransitions = map[Status][]Status{
-	StatusInProgress: {StatusInProgress, StatusActive, StatusFailed, StatusCancelled},
+	StatusInProgress: {StatusInProgress, StatusActive, StatusSucceeded, StatusFailed, StatusCancelled, StatusInterrupted},
 	StatusActive:     {StatusSucceeded, StatusRolledBack},
 }
 
@@ -96,8 +109,35 @@ func (s Status) Valid() bool {
 // Terminal reports whether s admits no further transitions. A deployment in a
 // terminal status holds no lock and will not change again.
 func (s Status) Terminal() bool {
+	// Legacy active records have completed their attempt even though an older
+	// runtime may later rewrite their serving-state status. Treat them as
+	// terminal for lock ownership; canonical records use succeeded instead.
+	if s == StatusActive {
+		return true
+	}
 	_, ok := terminalStatuses[s]
 	return ok
+}
+
+// Canonical removes serving-state history from a legacy status.
+func (s Status) Canonical() Status {
+	switch s {
+	case StatusActive, StatusRolledBack:
+		return StatusSucceeded
+	case StatusInProgress, StatusSucceeded, StatusFailed, StatusCancelled, StatusInterrupted:
+		return s
+	default:
+		return s
+	}
+}
+
+func (o Operation) Valid() bool {
+	switch o {
+	case OperationBuild, OperationRedeploy, OperationRollback, OperationConfigChange:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s Status) String() string { return string(s) }
