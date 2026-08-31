@@ -402,6 +402,14 @@ func ServerInstall(ctx *Context, opts struct {
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
+				// An enroll token means this is unattended enrollment, usually
+				// driven by cloud-init. A bad or spent token has to fail the
+				// command so the caller learns the machine never enrolled,
+				// instead of leaving an unregistered server behind a success
+				// exit code. Interactive registration stays best-effort.
+				if opts.EnrollToken != "" {
+					return fmt.Errorf("unattended enrollment failed: %w", err)
+				}
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
 				ctx.Info("You can register later with: miren server register")
@@ -430,6 +438,14 @@ func ServerInstall(ctx *Context, opts struct {
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
+				// An enroll token means this is unattended enrollment, usually
+				// driven by cloud-init. A bad or spent token has to fail the
+				// command so the caller learns the machine never enrolled,
+				// instead of leaving an unregistered server behind a success
+				// exit code. Interactive registration stays best-effort.
+				if opts.EnrollToken != "" {
+					return fmt.Errorf("unattended enrollment failed: %w", err)
+				}
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
 				ctx.Info("You can register later with: miren server register")

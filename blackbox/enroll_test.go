@@ -59,13 +59,16 @@ func TestServerEnrollWithToken(t *testing.T) {
 		PrivateKey       string `json:"private_key"`
 	}
 	if err := json.Unmarshal([]byte(raw.Stdout), &reg); err != nil {
-		t.Fatalf("failed to parse registration.json: %v\nraw: %s", err, raw.Stdout)
+		// Deliberately not logging raw.Stdout: registration.json holds the
+		// service-account private key, and this failure output lands in CI logs.
+		t.Fatalf("failed to parse registration.json: %v", err)
 	}
 	if reg.Status != "approved" {
 		t.Errorf("registration status = %q, want approved", reg.Status)
 	}
 	if reg.ClusterID == "" {
-		t.Errorf("registration has no cluster_id: %+v", reg)
+		t.Errorf("registration has no cluster_id: status=%q organization_id=%q service_account_id=%q",
+			reg.Status, reg.OrganizationID, reg.ServiceAccountID)
 	}
 	// The token was minted for a specific org; the cluster must land there and
 	// not in some other org the token had no authority over.
@@ -73,7 +76,8 @@ func TestServerEnrollWithToken(t *testing.T) {
 		t.Errorf("registration organization = %q, want %q (the token's org)", reg.OrganizationID, orgID)
 	}
 	if reg.ServiceAccountID == "" {
-		t.Errorf("registration has no service_account_id: %+v", reg)
+		t.Errorf("registration has no service_account_id: status=%q cluster_id=%q organization_id=%q",
+			reg.Status, reg.ClusterID, reg.OrganizationID)
 	}
 	if reg.PrivateKey == "" {
 		t.Errorf("registration has no private key")
