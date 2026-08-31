@@ -1,0 +1,11 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache python3
+
+WORKDIR /srv/direct-image
+COPY serve.sh /usr/local/bin/serve
+COPY index.html .
+RUN chmod +x /usr/local/bin/serve
+
+EXPOSE 4321
+ENTRYPOINT ["/usr/local/bin/serve"]

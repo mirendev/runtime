@@ -325,24 +325,11 @@ func (h *RegistryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // getManifest handles GET requests for manifests
 func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, reference string) {
-	var artifact core_v1alpha.Artifact
-
-	if strings.HasPrefix(reference, "sha256:") {
-		err := h.ec.OneAtIndex(r.Context(), entity.String(core_v1alpha.ArtifactManifestDigestId, reference), &artifact)
-		if err != nil {
-			h.log.Error("Error getting artifact by digest", "digest", reference, "error", err)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		h.log.Info("Found app version by digest", "digest", reference, "appVer", artifact.ID)
-	} else {
-		err := h.ec.Get(r.Context(), reference, &artifact)
-		if err != nil {
-			h.log.Error("Error getting artifact", "reference", reference, "error", err)
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
+	artifact, err := h.getArtifactForManifest(r.Context(), reference)
+	if err != nil {
+		h.log.Error("Error getting artifact", "reference", reference, "error", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
 	}
 
 	data := []byte(artifact.Manifest)
@@ -370,15 +357,13 @@ func (h *RegistryHandler) getManifest(w http.ResponseWriter, r *http.Request, re
 
 // headManifest handles HEAD requests for manifests
 func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, reference string) {
-	var appVer core_v1alpha.Artifact
-
-	err := h.ec.Get(r.Context(), reference, &appVer)
+	artifact, err := h.getArtifactForManifest(r.Context(), reference)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	data := []byte(appVer.Manifest)
+	data := []byte(artifact.Manifest)
 	/*
 		manifestPath := filepath.Join(h.storageRoot, "manifests", name, reference)
 
@@ -396,6 +381,17 @@ func (h *RegistryHandler) headManifest(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(sum[:]))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *RegistryHandler) getArtifactForManifest(ctx context.Context, reference string) (core_v1alpha.Artifact, error) {
+	var artifact core_v1alpha.Artifact
+	if strings.HasPrefix(reference, "sha256:") {
+		err := h.ec.OneAtIndex(ctx, entity.String(core_v1alpha.ArtifactManifestDigestId, reference), &artifact)
+		return artifact, err
+	}
+
+	err := h.ec.Get(ctx, reference, &artifact)
+	return artifact, err
 }
 
 // putManifest handles PUT requests for manifests

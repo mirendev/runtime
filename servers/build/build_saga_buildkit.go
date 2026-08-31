@@ -11,7 +11,6 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
-	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
@@ -67,9 +66,17 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 	status := deps.statuses.SenderFor(in.StreamID)
 
 	if in.BuildStack.Stack == "image" {
-		image := containerdx.NormalizeImageReference(in.BuildStack.Input)
+		image, res, err := b.resolveDirectImage(ctx, in.BuildStack.Input)
+		if err != nil {
+			status.SendError("Failed to resolve image: %v", err)
+			return buildImageOut{}, err
+		}
 		status.SendImage(image)
-		return buildImageOut{FinalImageURL: image}, nil
+		return buildImageOut{
+			ManifestDigest: res.ManifestDigest,
+			FinalImageURL:  image,
+			BuildResult:    res,
+		}, nil
 	}
 
 	if b.BuildKit == nil {

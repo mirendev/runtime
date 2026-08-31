@@ -254,6 +254,8 @@ type prepareConfigIn struct {
 	ProcfileServices map[string]string                    `json:"procfile_services,omitempty" saga:"procfile_services,optional"`
 	ExistingConfig   string                               `json:"existing_config_json" saga:"existing_config_json"`
 	CLIEnvVars       []*build_v1alpha.EnvironmentVariable `json:"cli_env_vars,omitempty" saga:"cli_env_vars,optional"`
+	SourceKind       string                               `json:"source_kind,omitempty" saga:"source_kind,optional"`
+	SourceValue      string                               `json:"source_value,omitempty" saga:"source_value,optional"`
 }
 
 type prepareConfigOut struct {
@@ -272,6 +274,8 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 
 	spec := buildVersionConfig(ConfigInputs{
 		BuildResult:      in.BuildResult,
+		SourceKind:       in.SourceKind,
+		SourceValue:      in.SourceValue,
 		AppConfig:        in.AppConfig,
 		ProcfileServices: in.ProcfileServices,
 		ExistingConfig:   existing,
@@ -449,6 +453,7 @@ type createVersionIn struct {
 	AppID              string `json:"app_id" saga:"app_id"`
 	VersionName        string `json:"version_name" saga:"version_name"`
 	FinalImageURL      string `json:"final_image_url" saga:"final_image_url"`
+	ManifestDigest     string `json:"manifest_digest,omitempty" saga:"manifest_digest,optional"`
 	ArtifactID         string `json:"artifact_id" saga:"artifact_id,optional"`
 	AdminToken         string `json:"admin_token" saga:"admin_token"`
 	ConfigVersionID    string `json:"config_version_id" saga:"config_version_id"`
@@ -469,13 +474,14 @@ func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, e
 	b := deps.builder
 
 	av := &core_v1alpha.AppVersion{
-		App:           entity.Id(in.AppID),
-		Version:       in.VersionName,
-		ImageUrl:      in.FinalImageURL,
-		AdminToken:    in.AdminToken,
-		Artifact:      entity.Id(in.ArtifactID),
-		ConfigVersion: entity.Id(in.ConfigVersionID),
-		Config:        core_v1alpha.Config{},
+		App:            entity.Id(in.AppID),
+		Version:        in.VersionName,
+		ImageUrl:       in.FinalImageURL,
+		ManifestDigest: in.ManifestDigest,
+		AdminToken:     in.AdminToken,
+		Artifact:       entity.Id(in.ArtifactID),
+		ConfigVersion:  entity.Id(in.ConfigVersionID),
+		Config:         core_v1alpha.Config{},
 	}
 	if in.GitInfo != "" {
 		var gitInfo core_v1alpha.GitInfo

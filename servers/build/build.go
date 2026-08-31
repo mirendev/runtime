@@ -115,6 +115,11 @@ type Builder struct {
 
 	WorkloadIssuer *workloadidentity.Issuer
 
+	// imageMetadataResolver is injectable for focused direct-image tests. A nil
+	// value creates a fresh registry resolver per deployment so mutable tags are
+	// never served from a cross-deployment metadata cache.
+	imageMetadataResolver imageMetadataResolver
+
 	// Secrets resolves backend-sourced variables so a minted ConfigVersion
 	// records the exact secret version it saw. Nil on a cluster with no secret
 	// backends registered, in which case a config that references one fails
@@ -753,6 +758,12 @@ type ConfigInputs struct {
 	// BuildResult contains entrypoint, working dir, and image entrypoint/cmd from the build
 	BuildResult *BuildResult
 
+	// SourceKind and SourceValue identify the configured build source. For an
+	// image source, SourceValue remains the user-facing tag while BuildResult
+	// describes the separately resolved runtime image.
+	SourceKind  string
+	SourceValue string
+
 	// AppConfig is the parsed app.toml configuration (may be nil)
 	AppConfig *appconfig.AppConfig
 
@@ -815,7 +826,11 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 			"file", appconfig.AppConfigPath)
 	}
 
-	spec.Services = buildServicesConfig(ac, procfileServices, res != nil, webDefault)
+	ensureWeb := res != nil && inputs.SourceKind != "image"
+	spec.Services = buildServicesConfig(ac, procfileServices, ensureWeb, webDefault)
+	if inputs.SourceKind == "image" {
+		inheritPrimaryImage(&spec, inputs.SourceValue)
+	}
 	if res != nil {
 		defaultServicePortFromImage(&spec, res.ExposedPorts)
 	}
@@ -843,6 +858,22 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	spec.Variables = mergeCliEnvVars(spec.Variables, inputs.CliEnvVars)
 
 	return spec
+}
+
+// inheritPrimaryImage removes service-level references to the selected image
+// source from the effective config. Those services then inherit the pinned
+// AppVersion image exactly like services backed by a Miren-built artifact.
+func inheritPrimaryImage(spec *core_v1alpha.ConfigSpec, source string) {
+	if source == "" {
+		return
+	}
+	source = containerdx.NormalizeImageReference(source)
+	for i := range spec.Services {
+		if spec.Services[i].Image != "" &&
+			containerdx.NormalizeImageReference(spec.Services[i].Image) == source {
+			spec.Services[i].Image = ""
+		}
+	}
 }
 
 // defaultServicePortFromImage folds a single TCP EXPOSE declaration into the
@@ -1638,6 +1669,7 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		b.sendErrorStatus(ctx, status, "No supported stack detected for app %s: %v", name, err)
 		return nil, err
 	}
+	sourceKind, sourceValue := sourceFromBuildStack(buildStack)
 
 	setupSpan.SetAttributes(attribute.String("miren.build.stack", buildStack.Stack))
 	setupSpan.End()
@@ -1652,7 +1684,11 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	var res *BuildResult
 	var artifactName string
 	if buildStack.Stack == "image" {
-		mrv.ImageUrl = containerdx.NormalizeImageReference(buildStack.Input)
+		mrv.ImageUrl, res, err = b.resolveDirectImage(ctx, buildStack.Input)
+		if err != nil {
+			b.sendErrorStatus(ctx, status, "Failed to resolve image: %v", err)
+			return nil, err
+		}
 		NewRPCStatusSender(status, b.Log).SendImage(mrv.ImageUrl)
 		b.Log.Info("using upstream image directly", "app", name, "image", mrv.ImageUrl)
 	} else {
@@ -1729,6 +1765,8 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	// Build the version config from all inputs
 	configSpec := buildVersionConfig(ConfigInputs{
 		BuildResult:      res,
+		SourceKind:       sourceKind,
+		SourceValue:      sourceValue,
 		AppConfig:        ac,
 		ProcfileServices: procfileServices,
 		ExistingConfig:   existingCfg,
@@ -1837,8 +1875,11 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 	}
 	mrv.ConfigVersion = cvid
 	mrv.Config = core_v1alpha.Config{}
+	if res != nil {
+		mrv.ManifestDigest = res.ManifestDigest
+	}
 	deploy.setSource(mrv)
-	mrv.Source.Kind, mrv.Source.Value = sourceFromBuildStack(buildStack)
+	mrv.Source.Kind, mrv.Source.Value = sourceKind, sourceValue
 
 	id, err := b.ec.Create(createVerCtx, mrv.Version, mrv)
 	if err != nil {

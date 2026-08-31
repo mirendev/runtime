@@ -199,6 +199,34 @@ func TestGetManifest_ByDigest(t *testing.T) {
 	assert.Equal(t, manifestData, body)
 }
 
+func TestHeadManifest_ByDigest(t *testing.T) {
+	entServer, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	manifestData := []byte(`{"schemaVersion":2}`)
+	sum := sha256.Sum256(manifestData)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+
+	artifact := core_v1alpha.Artifact{
+		Manifest:       string(manifestData),
+		ManifestDigest: digest,
+	}
+	_, err := entServer.Client.Create(context.Background(), "test-artifact", &artifact)
+	require.NoError(t, err)
+
+	handler := NewRegistryHandler(t.TempDir(), testutils.TestLogger(t), entServer.Client)
+	req := httptest.NewRequest(http.MethodHead, fmt.Sprintf("/v2/test-app/manifests/%s", digest), nil)
+	rec := httptest.NewRecorder()
+
+	handler.headManifest(rec, req, digest)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/vnd.oci.image.manifest.v1+json", rec.Header().Get("Content-Type"))
+	assert.Equal(t, digest, rec.Header().Get("Docker-Content-Digest"))
+	assert.Equal(t, fmt.Sprintf("%d", len(manifestData)), rec.Header().Get("Content-Length"))
+	assert.Empty(t, rec.Body.Bytes())
+}
+
 func TestGetManifest_ByReference(t *testing.T) {
 	// Setup in-memory entity server
 	entServer, cleanup := testutils.NewInMemEntityServer(t)

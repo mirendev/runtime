@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	digest "github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,11 +52,15 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 
 	rpcClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
 	builder := &Builder{
-		Log:        log,
-		EAS:        inmem.EAC,
-		ec:         entityserver.NewClient(log, inmem.EAC),
-		appClient:  app.NewClient(log, rpcClient),
-		TempDir:    tempDir,
+		Log:       log,
+		EAS:       inmem.EAC,
+		ec:        entityserver.NewClient(log, inmem.EAC),
+		appClient: app.NewClient(log, rpcClient),
+		TempDir:   tempDir,
+		imageMetadataResolver: &staticImageMetadataResolver{
+			digest: digest.Digest(testDirectImageDigest),
+			config: []byte(`{"config":{"WorkingDir":"/srv/app","ExposedPorts":{"4321/tcp":{}}}}`),
+		},
 		cacheLocks: newAppLocks(),
 		deploy:     deploylifecycle.NewTracker(log, inmem.EAC),
 	}
@@ -174,7 +179,6 @@ func imageOnlyTarball(t *testing.T) map[string]string {
 
 [services.web]
 image = "nginx:alpine"
-port = 80
 `,
 	}
 }
@@ -275,7 +279,8 @@ func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
 
 	var version core_v1alpha.AppVersion
 	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
-	assert.Equal(t, "docker.io/library/nginx:alpine", version.ImageUrl)
+	assert.Equal(t, "docker.io/library/nginx@"+testDirectImageDigest, version.ImageUrl)
+	assert.Equal(t, testDirectImageDigest, version.ManifestDigest)
 	assert.Empty(t, version.Artifact, "direct-image versions do not invent an Artifact")
 	assert.Equal(t, "image", version.Source.Kind)
 	assert.Equal(t, "docker.io/library/nginx:alpine", version.Source.Value)
@@ -284,9 +289,11 @@ func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {
 	require.NoError(t, h.builder.ec.GetById(ctx, version.ConfigVersion, &configVersion))
 	require.Len(t, configVersion.Spec.Services, 1)
 	assert.Equal(t, "web", configVersion.Spec.Services[0].Name)
-	assert.Equal(t, "nginx:alpine", configVersion.Spec.Services[0].Image)
+	assert.Empty(t, configVersion.Spec.Services[0].Image, "the primary service inherits the pinned version image")
+	assert.Equal(t, int64(4321), configVersion.Spec.Services[0].Port)
+	assert.Equal(t, "/srv/app", configVersion.Spec.StartDirectory)
 	assert.Empty(t, configVersion.Spec.Services[0].Command)
-	assert.Contains(t, rec.Images, "docker.io/library/nginx:alpine")
+	assert.Contains(t, rec.Images, "docker.io/library/nginx@"+testDirectImageDigest)
 }
 
 func TestBuildSaga_AutoStackRecordsDetectedSource(t *testing.T) {
