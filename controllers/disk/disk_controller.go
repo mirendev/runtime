@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"strings"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -235,13 +234,11 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 	}
 
 	// Create new disk_volume entity
-	filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
-
 	diskVolume := &storage_v1alpha.DiskVolume{
 		Name:         disk.Name,
 		DiskId:       disk.ID,
 		SizeGb:       disk.SizeGb,
-		Filesystem:   filesystem,
+		Filesystem:   disk.Filesystem,
 		VolumeMode:   diskModeToVolumeMode(d.diskMode),
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		ActualState:  storage_v1alpha.DV_PENDING,
@@ -254,7 +251,7 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 		"disk", disk.ID,
 		"volume_id", volumeId,
 		"size_gb", disk.SizeGb,
-		"filesystem", filesystem,
+		"filesystem", disk.Filesystem,
 		"node_id", d.NodeId)
 
 	createAttrs := entity.New(

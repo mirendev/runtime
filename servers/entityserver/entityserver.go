@@ -784,12 +784,9 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 		}
 
 	case entity.TypeEnum:
-		value = entity.RefValue(id)
-
-		// Look up the enum value in the schema
-		if !slices.ContainsFunc(schema.EnumValues, func(v entity.Value) bool {
-			return v.Equal(value)
-		}) {
+		var ok bool
+		value, ok = enumValueFromString(schema.EnumValues, schema.ElemType, args.Value())
+		if !ok {
 			return fmt.Errorf("invalid enum value: %s", args.Value())
 		}
 
@@ -797,9 +794,62 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 		return fmt.Errorf("unsupported attribute type: %s", schema.Type)
 	}
 
+	if schema.Type != entity.TypeEnum && len(schema.EnumValues) > 0 && !slices.ContainsFunc(schema.EnumValues, func(candidate entity.Value) bool {
+		return candidate.Equal(value)
+	}) {
+		return fmt.Errorf("invalid enum value: %s", args.Value())
+	}
+
 	req.Results().SetAttr(&entity.Attr{ID: id, Value: value})
 
 	return nil
+}
+
+func enumValueFromString(values []entity.Value, preferredType entity.Id, input string) (entity.Value, bool) {
+	// Ref-backed enum values accept their short member names as input.
+	if preferredType == entity.TypeRef {
+		for _, value := range values {
+			if value.Kind() == entity.KindId && string(value.Id()) == input {
+				return value, true
+			}
+		}
+
+		var match entity.Value
+		matches := 0
+		for _, value := range values {
+			if value.Kind() == entity.KindId && strings.HasSuffix(string(value.Id()), "."+input) {
+				match = value
+				matches++
+			}
+		}
+		if matches == 1 {
+			return match, true
+		}
+		if matches > 1 {
+			return entity.Value{}, false
+		}
+	}
+
+	for _, value := range values {
+		var encoded string
+		//exhaustive:ignore enum metadata supports only ref, string, and keyword values
+		switch value.Kind() {
+		case entity.KindId:
+			encoded = string(value.Id())
+		case entity.KindString:
+			encoded = value.Any().(string)
+		case entity.KindKeyword:
+			encoded = string(value.Keyword())
+		default:
+			continue
+		}
+
+		if encoded == input {
+			return value, true
+		}
+	}
+
+	return entity.Value{}, false
 }
 
 func (e *EntityServer) LookupKind(ctx context.Context, req *entityserver_v1alpha.EntityAccessLookupKind) error {

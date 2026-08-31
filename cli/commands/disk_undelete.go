@@ -160,7 +160,7 @@ func DiskUndelete(ctx *Context, opts struct {
 		DiskId:       diskEntityId,
 		VolumeId:     volId,
 		SizeGb:       meta.SizeGb,
-		Filesystem:   filesystem,
+		Filesystem:   fs,
 		VolumeMode:   storage_v1alpha.DiskVolumeVolumeMode(meta.VolumeMode),
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		// Start PENDING, not READY. The runner's DiskVolumeController drives

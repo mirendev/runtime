@@ -1,5 +1,13 @@
 domain: dev.miren.core
 version: v1alpha
+enums:
+  port_protocol:
+    member-prefix: protocol
+    values: [tcp, udp]
+  disk_provider:
+    member-prefix: provider
+    values: [miren, local, sqlite]
+
 exports:
   cloud:
     marker: dev.miren.meta/cloud.export
@@ -200,7 +208,8 @@ kinds:
                   required: true
                 protocol:
                   type: enum
-                  choices: [tcp, udp]
+                  enum: port_protocol
+                  legacy-encoding: ref
                 type:
                   type: string
                 node_port:
@@ -263,7 +272,8 @@ kinds:
                   doc: The name of the disk
                 provider:
                   type: enum
-                  choices: [miren, local, sqlite]
+                  enum: disk_provider
+                  legacy-encoding: ref
                   doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
                 mount_path:
                   type: string
@@ -688,7 +698,8 @@ components:
               required: true
             protocol:
               type: enum
-              choices: [tcp, udp]
+              enum: port_protocol
+              legacy-encoding: ref
             type:
               type: string
             node_port:
@@ -751,7 +762,8 @@ components:
               doc: The name of the disk
             provider:
               type: enum
-              choices: [miren, local, sqlite]
+              enum: disk_provider
+              legacy-encoding: ref
               doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
             mount_path:
               type: string

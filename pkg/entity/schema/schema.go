@@ -184,6 +184,18 @@ func Choices(choices ...entity.Id) AttrOption {
 	}
 }
 
+// EnumValues records the allowed stored values for an enum-backed attribute.
+func EnumValues(values ...any) AttrOption {
+	return AdditionalAttrs(
+		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values...)},
+	)
+}
+
+// ElementType records the canonical physical value type for an enum or array.
+func ElementType(typ entity.Id) AttrOption {
+	return AdditionalAttrs(entity.Ref(entity.EntityElemType, typ))
+}
+
 func AdditionalAttrs(attrs ...entity.Attr) AttrOption {
 	return func(b *attrBuilder) {
 		b.extra = append(b.extra, attrs...)
@@ -285,10 +297,8 @@ func (s *SchemaBuilder) Duration(name, id string, opts ...AttrOption) entity.Id 
 	return s.Attr(name, id, entity.TypeDuration, opts...)
 }
 
-func (s *SchemaBuilder) Enum(name, id string, values any, opts ...AttrOption) entity.Id {
-	opts = append(opts, AdditionalAttrs(
-		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values)},
-	))
+func (s *SchemaBuilder) Enum(name, id string, values []any, opts ...AttrOption) entity.Id {
+	opts = append(opts, EnumValues(values...))
 
 	return s.Attr(name, id, entity.TypeEnum, opts...)
 }
@@ -303,7 +313,9 @@ func (s *SchemaBuilder) Ref(name, id string, opts ...AttrOption) entity.Id {
 
 func (s *SchemaBuilder) Singleton(id string, opts ...AttrOption) entity.Id {
 	eid := entity.Id(id)
-	s.singletons = append(s.singletons, eid)
+	if !slices.Contains(s.singletons, eid) {
+		s.singletons = append(s.singletons, eid)
+	}
 	return eid
 }
 

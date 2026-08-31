@@ -7,12 +7,31 @@ import (
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
+type DiskFilesystem string
+
+const (
+	DiskFilesystemExt4  DiskFilesystem = "ext4"
+	DiskFilesystemXfs   DiskFilesystem = "xfs"
+	DiskFilesystemBtrfs DiskFilesystem = "btrfs"
+)
+const (
+	DiskFilesystemExt4MemberId  = entity.Id("dev.miren.storage/filesystem.ext4")
+	DiskFilesystemXfsMemberId   = entity.Id("dev.miren.storage/filesystem.xfs")
+	DiskFilesystemBtrfsMemberId = entity.Id("dev.miren.storage/filesystem.btrfs")
+)
+
+func initEnumMembers(sb *schema.SchemaBuilder) {
+	sb.Singleton("dev.miren.storage/filesystem.ext4")
+	sb.Singleton("dev.miren.storage/filesystem.xfs")
+	sb.Singleton("dev.miren.storage/filesystem.btrfs")
+}
+
 const (
 	DiskCreatedById          = entity.Id("dev.miren.storage/disk.created_by")
 	DiskFilesystemId         = entity.Id("dev.miren.storage/disk.filesystem")
-	DiskFilesystemExt4Id     = entity.Id("dev.miren.storage/filesystem.ext4")
-	DiskFilesystemXfsId      = entity.Id("dev.miren.storage/filesystem.xfs")
-	DiskFilesystemBtrfsId    = entity.Id("dev.miren.storage/filesystem.btrfs")
+	DiskFilesystemExt4Id     = DiskFilesystemExt4MemberId
+	DiskFilesystemXfsId      = DiskFilesystemXfsMemberId
+	DiskFilesystemBtrfsId    = DiskFilesystemBtrfsMemberId
 	DiskModeId               = entity.Id("dev.miren.storage/disk.mode")
 	DiskModeUniversalId      = entity.Id("dev.miren.storage/mode.universal")
 	DiskModeAcceleratorId    = entity.Id("dev.miren.storage/mode.accelerator")
@@ -42,16 +61,14 @@ type Disk struct {
 	VolumeId   string         `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
 }
 
-type DiskFilesystem string
-
 const (
-	EXT4  DiskFilesystem = "filesystem.ext4"
-	XFS   DiskFilesystem = "filesystem.xfs"
-	BTRFS DiskFilesystem = "filesystem.btrfs"
+	EXT4  DiskFilesystem = DiskFilesystemExt4
+	XFS   DiskFilesystem = DiskFilesystemXfs
+	BTRFS DiskFilesystem = DiskFilesystemBtrfs
 )
 
-var diskfilesystemFromId = map[entity.Id]DiskFilesystem{DiskFilesystemExt4Id: EXT4, DiskFilesystemXfsId: XFS, DiskFilesystemBtrfsId: BTRFS}
-var diskfilesystemToId = map[DiskFilesystem]entity.Id{EXT4: DiskFilesystemExt4Id, XFS: DiskFilesystemXfsId, BTRFS: DiskFilesystemBtrfsId}
+var DiskFilesystemFromId = map[entity.Id]DiskFilesystem{DiskFilesystemExt4MemberId: DiskFilesystemExt4, DiskFilesystemXfsMemberId: DiskFilesystemXfs, DiskFilesystemBtrfsMemberId: DiskFilesystemBtrfs}
+var DiskFilesystemToId = map[DiskFilesystem]entity.Id{DiskFilesystemExt4: DiskFilesystemExt4MemberId, DiskFilesystemXfs: DiskFilesystemXfsMemberId, DiskFilesystemBtrfs: DiskFilesystemBtrfsMemberId}
 
 type DiskMode string
 
@@ -84,7 +101,7 @@ func (o *Disk) Decode(e entity.AttrGetter) {
 		o.CreatedBy = a.Value.Id()
 	}
 	if a, ok := e.Get(DiskFilesystemId); ok && a.Value.Kind() == entity.KindId {
-		o.Filesystem = diskfilesystemFromId[a.Value.Id()]
+		o.Filesystem = DiskFilesystemFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskModeId); ok && a.Value.Kind() == entity.KindId {
 		o.Mode = diskmodeFromId[a.Value.Id()]
@@ -126,7 +143,7 @@ func (o *Disk) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.CreatedBy) {
 		attrs = append(attrs, entity.Ref(DiskCreatedById, o.CreatedBy))
 	}
-	if a, ok := diskfilesystemToId[o.Filesystem]; ok {
+	if a, ok := DiskFilesystemToId[o.Filesystem]; ok {
 		attrs = append(attrs, entity.Ref(DiskFilesystemId, a))
 	}
 	if a, ok := diskmodeToId[o.Mode]; ok {
@@ -176,11 +193,9 @@ func (o *Disk) Empty() bool {
 }
 
 func (o *Disk) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.Ref("created_by", "dev.miren.storage/disk.created_by", schema.Doc("Application that created this disk (for tracking purposes)"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
-	sb.Singleton("dev.miren.storage/filesystem.ext4")
-	sb.Singleton("dev.miren.storage/filesystem.xfs")
-	sb.Singleton("dev.miren.storage/filesystem.btrfs")
-	sb.Ref("filesystem", "dev.miren.storage/disk.filesystem", schema.Doc("Filesystem type for the disk"), schema.Choices(DiskFilesystemExt4Id, DiskFilesystemXfsId, DiskFilesystemBtrfsId))
+	sb.Enum("filesystem", "dev.miren.storage/disk.filesystem", []any{DiskFilesystemExt4MemberId, DiskFilesystemXfsMemberId, DiskFilesystemBtrfsMemberId}, schema.Doc("Filesystem type for the disk"), schema.ElementType(entity.TypeRef))
 	sb.Singleton("dev.miren.storage/mode.universal")
 	sb.Singleton("dev.miren.storage/mode.accelerator")
 	sb.Ref("mode", "dev.miren.storage/disk.mode", schema.Doc("Disk I/O mode"), schema.Indexed, schema.Choices(DiskModeUniversalId, DiskModeAcceleratorId))
@@ -647,7 +662,7 @@ type DiskVolume struct {
 	DesiredState  DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
 	DiskId        entity.Id              `cbor:"disk_id" json:"disk_id"`
 	ErrorMessage  string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Filesystem    string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	Filesystem    DiskFilesystem         `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
 	ImagePath     string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
 	MountId       string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
 	Name          string                 `cbor:"name,omitempty" json:"name,omitempty"`
@@ -680,6 +695,9 @@ const (
 
 var disk_volumedesired_stateFromId = map[entity.Id]DiskVolumeDesiredState{DiskVolumeDesiredStateDvPresentId: DV_PRESENT, DiskVolumeDesiredStateDvAbsentId: DV_ABSENT}
 var disk_volumedesired_stateToId = map[DiskVolumeDesiredState]entity.Id{DV_PRESENT: DiskVolumeDesiredStateDvPresentId, DV_ABSENT: DiskVolumeDesiredStateDvAbsentId}
+var DiskVolumeFilesystemFromId = map[entity.Id]DiskFilesystem{DiskFilesystemExt4MemberId: DiskFilesystemExt4, DiskFilesystemXfsMemberId: DiskFilesystemXfs, DiskFilesystemBtrfsMemberId: DiskFilesystemBtrfs}
+var DiskVolumeFilesystemToId = map[DiskFilesystem]entity.Id{DiskFilesystemExt4: DiskFilesystemExt4MemberId, DiskFilesystemXfs: DiskFilesystemXfsMemberId, DiskFilesystemBtrfs: DiskFilesystemBtrfsMemberId}
+var DiskVolumeFilesystemFromString = map[string]DiskFilesystem{"ext4": DiskFilesystemExt4, "xfs": DiskFilesystemXfs, "btrfs": DiskFilesystemBtrfs}
 
 type DiskVolumeVolumeMode string
 
@@ -708,8 +726,11 @@ func (o *DiskVolume) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DiskVolumeErrorMessageId); ok && a.Value.Kind() == entity.KindString {
 		o.ErrorMessage = a.Value.String()
 	}
+	if a, ok := e.Get(DiskVolumeFilesystemId); ok && a.Value.Kind() == entity.KindId {
+		o.Filesystem = DiskVolumeFilesystemFromId[a.Value.Id()]
+	}
 	if a, ok := e.Get(DiskVolumeFilesystemId); ok && a.Value.Kind() == entity.KindString {
-		o.Filesystem = a.Value.String()
+		o.Filesystem = DiskVolumeFilesystemFromString[a.Value.String()]
 	}
 	if a, ok := e.Get(DiskVolumeImagePathId); ok && a.Value.Kind() == entity.KindString {
 		o.ImagePath = a.Value.String()
@@ -766,8 +787,8 @@ func (o *DiskVolume) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ErrorMessage) {
 		attrs = append(attrs, entity.String(DiskVolumeErrorMessageId, o.ErrorMessage))
 	}
-	if !entity.Empty(o.Filesystem) {
-		attrs = append(attrs, entity.String(DiskVolumeFilesystemId, o.Filesystem))
+	if a, ok := DiskVolumeFilesystemToId[o.Filesystem]; ok {
+		attrs = append(attrs, entity.Ref(DiskVolumeFilesystemId, a))
 	}
 	if !entity.Empty(o.ImagePath) {
 		attrs = append(attrs, entity.String(DiskVolumeImagePathId, o.ImagePath))
@@ -808,7 +829,7 @@ func (o *DiskVolume) Empty() bool {
 	if !entity.Empty(o.ErrorMessage) {
 		return false
 	}
-	if !entity.Empty(o.Filesystem) {
+	if o.Filesystem != "" {
 		return false
 	}
 	if !entity.Empty(o.ImagePath) {
@@ -836,6 +857,7 @@ func (o *DiskVolume) Empty() bool {
 }
 
 func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.Singleton("dev.miren.storage/actual_state.dv_pending")
 	sb.Singleton("dev.miren.storage/actual_state.dv_creating")
 	sb.Singleton("dev.miren.storage/actual_state.dv_ready")
@@ -849,7 +871,7 @@ func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("desired_state", "dev.miren.storage/disk_volume.desired_state", schema.Doc("What state should this volume be in"), schema.Indexed, schema.Choices(DiskVolumeDesiredStateDvPresentId, DiskVolumeDesiredStateDvAbsentId))
 	sb.Ref("disk_id", "dev.miren.storage/disk_volume.disk_id", schema.Doc("Reference to the parent Disk entity"), schema.Required, schema.Indexed)
 	sb.String("error_message", "dev.miren.storage/disk_volume.error_message", schema.Doc("Error details if actual_state is error"))
-	sb.String("filesystem", "dev.miren.storage/disk_volume.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs)"))
+	sb.Enum("filesystem", "dev.miren.storage/disk_volume.filesystem", []any{DiskFilesystemExt4MemberId, DiskFilesystemXfsMemberId, DiskFilesystemBtrfsMemberId}, schema.Doc("Filesystem type (ext4, xfs, btrfs)"), schema.ElementType(entity.TypeRef))
 	sb.String("image_path", "dev.miren.storage/disk_volume.image_path", schema.Doc("Path to backing image file"))
 	sb.String("mount_id", "dev.miren.storage/disk_volume.mount_id", schema.Doc("Override for the mount point directory name (defaults to entity suffix if empty)"))
 	sb.String("name", "dev.miren.storage/disk_volume.name", schema.Doc("Human-readable name for the volume (from parent disk)"))
@@ -876,5 +898,5 @@ func init() {
 		(&DiskMount{}).InitSchema(sb)
 		(&DiskVolume{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacXۮ\xad&\x14\xfd\x90\xde\xefwON\xd2\xff!(Se)\xe0\x06\xb4\xee\xbe\xf6\xa5iҟ\xe8^9M\x7f\xb0\xcf\r7e\xb9X\xc8>\xe9\x8b\x11\x1cc8\x81\xe9\x98ȕp\xcc\xe0\x89\xc0R1*\x81WJ\v\x89;\x80\x81r\xa2\xae\xeb\awOޘ'\x15\xa1jxg\xb9\xcb=\xc2<t\x02\xff\xb6D0L\xf9\xfd\vږ\xc2H\xd4\xef/5%\xebgi\x8d\xaa\x91\x805\x10T?\xdbW]\xa2\xb6~\x9e\xa0\xa6䚣\xb7t\x04\xf5\xac40G\x8fچN\x80\xcfl0\x17\xb4\xe0q\x06\xf5Ҭ\xadZ?\xbdWۉ\xd5\xda*\x02\xab\xfe9\xf5\xd2\bf Pk٪\xf5\xf3,\xd0b\xec(\x12SmG\xc1\x04\x01\x1b?\xb1w\xc9\xc8\xff\xa23\xa7\vH\x85\xc7T\xfc\x86Xm\x88\x017\r\x8c \xb1\x162\x15\x9dEG\x98\x97\\t6\xb0\xfdb\xa2k\x95\x96\x94w\x96\x96\x90\xb74\tLh@\x82\x8fni\x87\xb8\xc3\x0e\xb1\x16b\xb4\x12\x1f?\x90P\xf4W@]m\xe9]h\x18jC\xb9\xb63\xfa\xd1#\xa6\xc6zV\x96\xd8\xfa\xfb\xe4\xac\xfe\r \xa5\x90\xa9\b\x1c\xad\xb2\xcf{\xac5nzH&\xa2\a\x06HO`\x04My\x97\xc1\x06HO\xe0T7@\xa8\x04\xf3\xc4\b'\xa6܃7\xcc0I\xb1PE\x05\a\xb2~\xf9\x10\x1f\xa1\xc6\xed\u07bc\xe2\xabsJH\x80D6\xda5X\xc483@\x94\xd8e\xa0{3ʠ\xce\xe4+\x15\xbc[\xde\xe2q\xea\xf18Iʰ|F\xc6[\x88\x91I\xcd\xcc\xe6Oh\x04\xac\xc0\xb9\xd4\xfaa:\x0e\x87y\x95Y}\x9bS\xaap\xf34S\t\x04a\xed\x12;\xee\xb0Y\xa6)\x03+\xf4E^h\x9a\xc2\xec\xb4\xfe\xde{\x9e%'V-\"\xdb[\xcf\xeeB#\xa6\x7f\x9f\xa5۴F\f\x94\u009d\xfb\xb0\xd9mW\xb4H\xd7\xccg\xee嘘\xb9\x9b\rp\xb7\x86N\x1b\xc1&\xc1\x81\xeb\xfdίսZuT+\\\xb1\xdf\xec`?Iy\xdc\xccu%&M\x05wNЅ\xc6\xd1\xc2\x12\x99\xe3\xd8\x13ֽs={w\xe4%R\xd3\xf1$`\xb2;\x1fݛ\x9b\xefe\x13\xdf\xcdaA\x12pA\xb6\x0f\xac\v\x8d8\t\xbe\xc9\xd2\x15\xe6\xa4\x16kP\xb8D\xed\xb8\xf8泸\xd4j\xafP\x8b\x99'\xcd\xde;\x8b}\u07b6\x98\x8e\x90\\Q\x0fs\x80n\x02N\x8cS%\xec'8\x95C\xf4\x12l\xa49\x93\r\x90\xec\xb2\\\xf6Q\xe7]\xc9.߉+\xbd&\xc7\xff\xb0\xcb\xf0]N\xa9\u008d\x9e\xf1\x88\xccx\xdc\xf7<\xde\xf4$\x97䟞0\xe4\n`\"Qb~\x15\x80\x17\xc2|\xe8ɀ\x8e\x1c\x0f5\xac\xb0^\x05,\x0f\x1d\bC[\xe1M\xd8ّ\x16\xb0\x86\xb7\x15\xd6\x02^\xc0\x0e!`\x13f\x01/`\xc7\xed݆\xf8Ci\xa0\x9e\xe9\xde^\xc8\xdc\xc0\x8c04\xf3-\xda\x1fϩ;\xfa\x9a+\x0f.\x9b\b([\xd1\xf6tb\xb7]\xe9=\xaa \f\xfd\x82\xb9\xdeR\xe4M\xe2-\xb1Nu <\x85\xb6\x8f\x16\xc8\xfa\xb6Tb\xa3dkx\x18\xdfB\x1b@\x9b\xbf\x0fq\xc7\xd1\xe6O\xa6j3\x85\xe0\xa3춫\xa4(;\xa9\xd7\x14\xe5\x82A\x8eBL\xc8\r\xcc\r2\xee8J=\xaa\x14N\xca^\xf7\xe9\xbaD\xed\xa3У\x8a\xe5\x84N+\xd6\xd7Y\xfaya-\x10\xc9nLkZR\x04\xacPjO\xb4\x17\x01'\xeb\xab\xc0\x83\xff\x14\x0f*,\x03\x7ff?\\'\xf5^u\xe0]O\x96\xd2:\xe0\x81\x86af\xff\xb9\x84a\x81\x17\xb2 \xfb\xdfSR96\xa8a\x15W\x8ee\xaf\x1c\v\xb2'\tEN\xbec\x87\xf0\xe2B^\xc0ڤ\xfb)\xbf0\xcd(f\x82nsO\x1c;\x8f\xbb\xeeDI\x885\xdfӦ)Y\x10\xae\x15p\x9d\xdcTܺk\x80ڕ\x90`Y\xa9\x1c<\xb2<\xd6NM\xe2o\xf2f\x18g\xff2'\xd3\xf0\xbf\xf9\xa6\xd7;9Uz\x85\x12e\xb8\x8b\xca\xcc%j\x1f\x95\x1ey\x96Wr\x8e\xeb'\xa9\xdfZ\x85\xa71A\xe5\xe4,\xe7d\x9dN\xcd\xfb\x84\x9f=\xcf\xc9V!/Pr\xa4\x90\xdd+\xdf\xeal\xe7nCܑ\xfef\xc6\xc5l\xa1\xc2\t\\\xe2\x03\x88$\xaa\x18\xcb\x17\x86\xe2\xe3\xb8\xc4V\xed@\x8d\xd0\xd9R4DC:\x02\a\xd5\v\xa9\x91;\xe3u\a)\xb9\x83\xde\xe2_\x1b\v\x89k\xe0\xf9\x8fP\x1cfI\xc9\xfc\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xffTh\xcf;\xb1\x16\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xecX\xcb\xd2\xdc&\x13]\xf9)\xfe?\xf7\xfbM.W\xe5}T\x8chi\x18\t\x18\x03R4\xd9\xd9ޤR\x95\x97\x88\xa7\x9c\xf8\x05\xb3Nр\xc4h\x18\xc4\xe7u6S\x80\xce94MO7p\xa5\x82pxIa\xaa8S *m\xa4\"\x1d@\xcf\x04\xd5\xd7\xf9\x7fw_\x9e\xdb/\x15e\xba\x7f\x87\xdc\xe9\x1ea?:\x81\x7fZ*9a\xe2~\x82\xb6e0P\xfd\xdb\xdb\x03\xa3\xf3gi\x8d\xaaQ@\f\xd0\xfap\xc1\xa9NQ\xdf\\\xcep`\xf4\xef\x1c\xbde\x03\xe8\x8b6\xc0)\x88\x91\xcf_\xdf\xe3\xec8.\xa6\x8e\xc08WԷs\xa1Bo\x7f\xea\x89\f#\xe8\xb7\xcd\xdc\xea\xf9\xd3{ɕXͭ\xa60\x9b\x9fS\x16F0\v\x81\x83Q\xad\x9e?\xcf\x02\x113\xa0\x11\x1c\xf8\x01\x94~\x83\xfa\xd6\x14'\xc0\xf1#\x88FR&\xbaFAkpd\x80\x8e4\x97\x9b\x0fW\xeb\xba\xc4\xfe\xa2븤\x80~\xa0\xd8Jz\xe0O6\n6\x81\xd2dH\xf9\xc1\x12\xab\x05ѓ\xa6\x81\x01\x141R\xa5V\x89\xe8\b\xf36g\x1d\x1a\xb6\xfeX\xebZm\x14\x13\x1d\xd2\x12\xf2HS\xc0\xa5\x81Z\x8a\xc1\xc5S\x1f\x0f\xe0\x12\x0fR\x0e(\xf1\xf1\x03\t\xcd~\x85\xba; \xbd\v\x1dKm\x980\xe8я\x1e1\r1\xa3Fb\xeb\xdbI\xaf\xfe\x05\xa0\x94T)\v\x1c\xad\xc2\xefGb\fi\x8e\x90\x8c~\x0f\f\x90#\x85\x01\f\x13]\x06\x1b G\n\xbb\xba\x01\xc2\x14\xd8/V8\xe1r\x0f^0\xfdYɉi&\x05\xd0\xf9ˇ\xf8\b5,m;\xc5W\xfb\x94\x10\x00\x89h\xc4=\x98\xe40r\xa8\x19\xc5m`k7\x8a\xa0\xce\xc6+\x93\xa2\x9b^\x90\xe1|$\xc3Y1Nԥ\xb6\t\x8dZ\x99\x94g\x96\xa4X\x0f@4\xb8\xd48\xff?m\x87\xc3<)C~\x9bS\xaaH\xf3rd\nhM\x8c\v\xecx\x00\xa3\xcc0\x0e(\xf4E^\xe8|\x0e\xdei}\xdb'Z$'v-\"cӳ\xbbЉ\xe9\xdfg\xe9\x18\xd65\a\xadI\xe7\xfe\xd8\xfcv(ڤk\xe6o\xee\xe5\xb8\x1c\x85\xf3\x06\xb8\xa6\xa5\xb3F\xf2\xb3\x14 \xcc\xda\xf2{u\xafVm\xd5\nw\xec\r.\xf6\x93T\x8e\x1b\x85\xa9\xe4\xd90)\\&\xe8Bg\x9b\xc2\x12\x91\xe3\xd8gb\x8e.\xebak\xcbK\x84\xa6\xe3) t\xcd|l\xed.y/\x1b\xf8·\x05A $]\xfe`]\xe8\xc4A\xf0M\x96\xae\x89\xa0\a9\a\x85S\xd4\xf7\"\xd7\xfd(.M\xb5W8\xc8Q$\x93\xbd\xcf,\xf8\xbdm\t\x1b \xb9\xa3\x1e\xe6\x00\xdd\x19\x84-\xae\xa9\xf4\x132\x95C\x1c\x15\xa0\xa5\xb9$\x1b \xd9m9\xad\xab\xceg%ܾ\x9d\xac\xf4\x94\x18\xff\x1d\xb7ỜRE\x1a3\x92\xa1\xb6\xebq\xff\xe7\xe1f$\xb9%\uf3d4\u05ee\x00&\x02%\xe6W\x01x\xa2ܛ\x9e4h\xcb\xf1P\xcb\n\xfbU\xc0\xf2О\xf2z)\xbc\x89t\xb6\xa5\x05\xac\xe5-\x85\xb5\x80\x17\xb0}0ؚY\xc0\v\xd8a\x99\xdb\x12\x7f(5\xd43\xdd\xec\x85\xcc\x05\xcc)\xafG\xb1X\xfb\xe3>uE_s\xe5\xc1E\x13\x05\x8d\x15m\r'~;\x94>\xa3J\xca\xeb_\x880K\x88<O\xcc\x12\xebT\x1b\xc2\xcb\xd0\xf7\xd6\x02\x9d_\x94J,\x94l\r\x0f\xeb\x9bX\x03\xf5\x92\xdf\xfbx`\x9b\xe6w\\\xb5$\x85\x90G\xf9\xedPIQvRO)\xca\x05\x8b\x1c\xa4<\xd7nan\x91\xf1\xc0V\xeaQ\xa5pR\xf8\xbb\xba\xeb\x14\xf5\xb7B\x8f*\x96\x13ڭX\x89kcD\xdf/\xac\x05\"ك違\x14\x01\x14J\x9d\x89\xd6\"\xe0d}\x15xpO\xf1\xa0\xc22\xf0G\xf6\x8f\xeb\xa4>\xa8\x0e\xbc;ҩ\xb4\x0ex\xa0eX\xef_J\x18\b<ѩ\xc6{OI\xe5X\xa0\x96U\\9\xa6\xb5rL5>_\x14e\xf2\x15ۇ\x89\vy\x01\x8bA\xf7S~c\x9aA\x8e\xb4\xbe\x8d=\xb9\x1dܞ\xba\x13%!\xd6\xfc\xc04\xcd\xe8T\x93\x83\x06a\x92\x87\x8a\xdb\xec\x1a\xa0\xb8\x13\n\x90\x95\x8a\xc1-\xcbc\xd15\x89\xdb\xe4\xcd2\xf6\xee2;nxJ\xde|\x9f˛^\uffe7,\x05\xad\x8a\x9f\xb2\"\xd3_\xbd~\xd6\x04\xfb^\xbd~FW#^\xbd~\xe6\x1a\xc9W\xb0\x92\xba\xe5\xfd\xcf8\xe9\xa2\xe2|\x8a\xfa\xdbj\xf3(\xd3{%W\xa7|h\x1d\x97^\xe1\x1bVP\xd9y\x01ۉ\xeeݒ\xb7\xc3Ͼ\x82ek\xb7\x17(y\x88\xc9\xde0nu\x96\xd7\xca>\x1eHg\x9aa\xb2\a\xcf\xf0n\x99H\x1b\x91D\x15c\xc5\xc4\xeb\xf8\x113q\xc0\xddP#t\xb6\x80\xf7ђ\xb6\xc0^\x1f\xa52\xb5{\x8ew\xcfO\xb97\xf9\xe2\v!B\xe2\x93\xc3\xfe\xf516\xb3\xe4\xa0\xf1/\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff/\x8c*.\\\x18\x00\x00"))
 }

@@ -93,6 +93,47 @@ func TestRefChoicesEmitsEnumValues(t *testing.T) {
 	assert.Equal(t, entity.Id("test-choices/status.b"), vals[1].Any())
 }
 
+func TestEnumEmitsHeterogeneousValues(t *testing.T) {
+	sb := &SchemaBuilder{
+		domain: "test-enum",
+		attrs:  make(map[entity.Id]*entity.Entity),
+	}
+
+	id := sb.Enum("state", "test-enum/state", []any{
+		entity.Id("test-enum/state.ready"),
+		"legacy",
+		entity.MustKeyword("test-enum/state.disabled"),
+	}, ElementType(entity.TypeRef))
+
+	ent := sb.attrs[id]
+	require.NotNil(t, ent)
+	typeAttr, ok := ent.Get(entity.Type)
+	require.True(t, ok)
+	assert.Equal(t, entity.TypeEnum, typeAttr.Value.Id())
+	elemType, ok := ent.Get(entity.EntityElemType)
+	require.True(t, ok)
+	assert.Equal(t, entity.TypeRef, elemType.Value.Id())
+
+	choices, ok := ent.Get(entity.EnumValues)
+	require.True(t, ok)
+	values, ok := choices.Value.Any().([]entity.Value)
+	require.True(t, ok)
+	require.Len(t, values, 3)
+	assert.Equal(t, entity.KindId, values[0].Kind())
+	assert.Equal(t, entity.KindString, values[1].Kind())
+	assert.Equal(t, entity.KindKeyword, values[2].Kind())
+}
+
+func TestSingletonDeduplicatesSharedEnumMembers(t *testing.T) {
+	sb := &SchemaBuilder{}
+
+	first := sb.Singleton("test-enum/state.ready")
+	second := sb.Singleton("test-enum/state.ready")
+
+	assert.Equal(t, first, second)
+	assert.Equal(t, []entity.Id{"test-enum/state.ready"}, sb.singletons)
+}
+
 func TestIndexHash_Deterministic(t *testing.T) {
 	hash1 := IndexHash()
 	hash2 := IndexHash()

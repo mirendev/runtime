@@ -406,19 +406,6 @@ func (c *SandboxController) diagnoseListening(id string) (routable []int, loopba
 	return c.portMonitor.DiagnoseListening(id)
 }
 
-// mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
-func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainerPortProtocol {
-	switch legacy {
-	case compute.TCP, "tcp":
-		return compute.SandboxSpecContainerPortTCP
-	case compute.UDP, "udp":
-		return compute.SandboxSpecContainerPortUDP
-	default:
-		// Default to TCP for unknown protocols
-		return compute.SandboxSpecContainerPortTCP
-	}
-}
-
 // reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
 // This is called during controller initialization to clean up after containerd restarts
 func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error {
@@ -1039,9 +1026,8 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 	return false
 }
 
-// portIsTCP returns true for ports declared as TCP. Empty Protocol defaults
-// to TCP (matches mapLegacyProtocol), so ports without a protocol set are
-// treated as TCP as well.
+// portIsTCP returns true for ports declared as TCP. Ports without a protocol
+// also default to TCP.
 func portIsTCP(p compute.SandboxSpecContainerPort) bool {
 	return p.Protocol == "" || p.Protocol == compute.SandboxSpecContainerPortTCP
 }
