@@ -36,10 +36,9 @@ type DeploymentServer struct {
 	// env change records the exact secret version it saw.
 	Secrets secret.Resolver
 
-	// tracker owns the deployment record state machine and the deploy lock. The
-	// build server holds its own Tracker over the same entity store, and both
-	// acquire the same app-scoped lock, so a client that drives a record through
-	// the deprecated RPCs still contends with a server-owned build.
+	// tracker owns the deployment record state machine and the deploy lock for
+	// non-build rollouts and for settling records created before the build server
+	// took over. The build server holds its own Tracker over the same entity store.
 	tracker *deploylifecycle.Tracker
 }
 
@@ -102,87 +101,9 @@ func (d *DeploymentServer) reportLockBlocked(ctx context.Context, results lockBl
 	results.SetError("deployment blocked by existing in-progress deployment")
 }
 
-func (d *DeploymentServer) CreateDeployment(ctx context.Context, req *deployment_v1alpha.DeploymentCreateDeployment) error {
-	args := req.Args()
-	results := req.Results()
-
-	// Validate required fields
-	if !args.HasAppName() || args.AppName() == "" {
-		return cond.ValidationFailure("missing-field", "app_name is required")
-	}
-	if !args.HasClusterId() || args.ClusterId() == "" {
-		return cond.ValidationFailure("missing-field", "cluster_id is required")
-	}
-	if !args.HasAppVersionId() || args.AppVersionId() == "" {
-		return cond.ValidationFailure("missing-field", "app_version_id is required")
-	}
-
-	appName := args.AppName()
-	clusterId := args.ClusterId()
-
-	if !rpc.AllowApp(ctx, appName) {
-		return rpc.AppAccessError(ctx, appName)
-	}
-
-	// If the referenced version resolves to a real AppVersion, it must belong to
-	// this app — AllowApp confined the target app, not the source version, so
-	// without this a caller could point a deployment at another app's built
-	// version. The normal flow passes a "pending-build" placeholder here (no
-	// entity yet) and attaches the real version later via
-	// UpdateDeploymentAppVersion, which enforces the same ownership; so a
-	// not-found version is left alone rather than rejected. Any other lookup
-	// error fails closed — skipping the check on a transient store error would
-	// let a cross-app version slip through.
-	appVersionID := args.AppVersionId()
-	canonicalVersionID := ""
-	var appVersion core_v1alpha.AppVersion
-	switch err := d.getAppVersion(ctx, appVersionID, &appVersion); {
-	case err == nil:
-		if verifyErr := d.verifyVersionOwnedByApp(ctx, &appVersion, appName); verifyErr != nil {
-			return verifyErr
-		}
-		appVersionID = string(appVersion.ID)
-		canonicalVersionID = appVersionID
-	case !errors.Is(err, cond.ErrNotFound{}):
-		d.Log.Error("Failed to look up app version", "app_version_id", appVersionID, "error", err)
-		return cond.Error("failed to look up app version")
-	}
-
-	var gitInfo core_v1alpha.GitInfo
-	if args.HasGitInfo() {
-		gitInfo = gitInfoFromRPC(args.GitInfo())
-	}
-
-	// Begin admits the deployment under the app-scoped lock. The "pending-build"
-	// sentinel an older CLI passes is normalized away because app_version is
-	// optional until the build produces one.
-	rec, err := d.tracker.Begin(ctx, deploylifecycle.BeginParams{
-		AppName:    appName,
-		ClusterID:  clusterId,
-		Operation:  deploylifecycle.OperationBuild,
-		AppVersion: canonicalVersionID,
-		GitInfo:    gitInfo,
-	})
-	if err != nil {
-		if holder, ok := deploylifecycle.HolderFrom(err); ok {
-			d.reportLockBlocked(ctx, results, holder)
-			return nil
-		}
-		d.Log.Error("Failed to create deployment", "error", err)
-		return cond.Error("failed to create deployment")
-	}
-
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
-	versionShortIDs := d.resolveShortIDs(ctx, []string{rec.Deployment.AppVersion})
-	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
-	results.SetDeployment(deploymentInfo)
-
-	d.Log.Info("Created deployment",
-		"deployment_id", rec.Deployment.ID,
-		"app", appName,
-		"cluster", clusterId)
-
-	return nil
+func (*DeploymentServer) CreateDeployment(_ context.Context, _ *deployment_v1alpha.DeploymentCreateDeployment) error {
+	return cond.ValidationFailure("client-upgrade-required",
+		"this server requires a newer miren client; run 'miren upgrade' and try again")
 }
 
 func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *deployment_v1alpha.DeploymentUpdateDeploymentStatus) error {
@@ -1174,29 +1095,6 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 		deployments = append(deployments, deploymentWithEntity{deployment: rec.Deployment, entity: rec.Entity})
 	}
 	return deployments, nil
-}
-
-// gitInfoFromRPC converts the deployment-service git shape into the core entity
-// shape stored on the record.
-func gitInfoFromRPC(gi *deployment_v1alpha.GitInfo) core_v1alpha.GitInfo {
-	if gi == nil {
-		return core_v1alpha.GitInfo{}
-	}
-
-	info := core_v1alpha.GitInfo{
-		Sha:               gi.Sha(),
-		Branch:            gi.Branch(),
-		Message:           gi.CommitMessage(),
-		Author:            gi.CommitAuthorName(),
-		IsDirty:           gi.IsDirty(),
-		WorkingTreeHash:   gi.WorkingTreeHash(),
-		CommitAuthorEmail: gi.CommitAuthorEmail(),
-		Repository:        gi.Repository(),
-	}
-	if gi.HasCommitTimestamp() && gi.CommitTimestamp() != nil {
-		info.CommitTimestamp = standard.FromTimestamp(gi.CommitTimestamp()).Format(time.RFC3339)
-	}
-	return info
 }
 
 func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment) *deployment_v1alpha.DeploymentInfo {

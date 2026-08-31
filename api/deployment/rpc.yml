@@ -14,9 +14,9 @@ interfaces:
       - name: CreateDeployment
         index: 0
         doc: >
-          [DEPRECATED] The build server now owns the deployment record lifecycle
-          (see the build service DeployRequest). Retained so an older CLI still
-          works against a newer server. Do not add new callers.
+          [DEPRECATED] The build server owns the deployment record lifecycle
+          (see the build service DeployRequest). Retained on the wire so older
+          clients receive an explicit upgrade error. Do not add new callers.
         parameters:
           - name: app_name
             type: string

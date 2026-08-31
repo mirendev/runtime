@@ -113,24 +113,6 @@ func TestDeploy_RejectsCrossAppVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("CreateDeployment rejects another app's real version", func(t *testing.T) {
-		for _, versionRef := range []string{"app-y-v1", string(appYVersionID)} {
-			_, err := client.CreateDeployment(ctx, "app-x", "cluster-1", versionRef, nil)
-			if err == nil || !strings.Contains(err.Error(), "does not belong to app") {
-				t.Fatalf("ref %q: expected ownership error, got %v", versionRef, err)
-			}
-		}
-	})
-
-	t.Run("CreateDeployment allows a pending-build placeholder", func(t *testing.T) {
-		// The normal flow passes a non-existent placeholder version; it must not
-		// be rejected (the real version is attached and checked later).
-		_, err := client.CreateDeployment(ctx, "app-x", "cluster-1", "pending-build", nil)
-		if err != nil && strings.Contains(err.Error(), "does not belong to app") {
-			t.Fatalf("placeholder version must not trip the ownership check: %v", err)
-		}
-	})
-
 	t.Run("UpdateDeploymentAppVersion rejects another app's version", func(t *testing.T) {
 		depID, err := inmem.Client.Create(ctx, "dep-x", &core_v1alpha.Deployment{
 			AppName:    "app-x",

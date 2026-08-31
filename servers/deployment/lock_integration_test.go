@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -31,60 +32,28 @@ func newLockTestClient(t *testing.T) (*deployment_v1alpha.DeploymentClient, *tes
 	}, inmem
 }
 
-// A second CreateDeployment for the same app+cluster must be blocked by the
-// lock the first one took, and must return structured lock info.
-func TestCreateDeploymentTakesAndReportsLock(t *testing.T) {
-	ctx := context.Background()
-	client, _ := newLockTestClient(t)
-
-	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
+func beginLockTestDeployment(t *testing.T, inmem *testutils.InMemEntityServer, app, cluster string) *deploylifecycle.Record {
+	t.Helper()
+	tracker := deploylifecycle.NewTracker(slog.Default(), inmem.EAC)
+	rec, err := tracker.Begin(context.Background(), deploylifecycle.BeginParams{
+		AppName: app, ClusterID: cluster, Operation: deploylifecycle.OperationBuild,
+	})
 	require.NoError(t, err)
-	require.False(t, first.HasError() && first.Error() != "", "first deploy should succeed: %s", first.Error())
-
-	second, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
-	require.True(t, second.HasError() && second.Error() != "", "second deploy must be blocked")
-	assert.Contains(t, second.Error(), "blocked")
-	require.True(t, second.HasLockInfo() && second.LockInfo() != nil)
-	assert.Equal(t, first.Deployment().Id(), second.LockInfo().BlockingDeploymentId())
-}
-
-// The lock is app-scoped: a different app is a different lock, but the same app
-// with a different client cluster string is still the same lock (a coordinator
-// serves one cluster, and the client cluster string is unreliable — MIR-1465).
-func TestCreateDeploymentLockIsScopedPerApp(t *testing.T) {
-	ctx := context.Background()
-	client, _ := newLockTestClient(t)
-
-	_, err := client.CreateDeployment(ctx, "web", "garden", "pending-build", nil)
-	require.NoError(t, err)
-
-	otherApp, err := client.CreateDeployment(ctx, "api", "garden", "pending-build", nil)
-	require.NoError(t, err)
-	assert.False(t, otherApp.HasError() && otherApp.Error() != "", "a different app is a different lock")
-
-	// Same app, a different cluster_id string (the CI/manual split) must still
-	// be blocked — otherwise the two would deploy the same app concurrently.
-	sameAppOtherClusterString, err := client.CreateDeployment(ctx, "web", "34.122.229.118:8443", "pending-build", nil)
-	require.NoError(t, err)
-	assert.True(t, sameAppOtherClusterString.HasError() && sameAppOtherClusterString.Error() != "",
-		"the same app is a single lock regardless of the cluster string")
-	assert.Contains(t, sameAppOtherClusterString.Error(), "blocked")
+	return rec
 }
 
 // Settling a deployment through the deprecated status update must release the
 // lock, so the next deploy proceeds.
 func TestUpdateStatusReleasesLock(t *testing.T) {
 	ctx := context.Background()
-	client, _ := newLockTestClient(t)
+	client, inmem := newLockTestClient(t)
 
-	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
-	deploymentID := first.Deployment().Id()
+	first := beginLockTestDeployment(t, inmem, "web", "prod")
+	deploymentID := string(first.Deployment.ID)
 
 	// A version must be recorded before activation is meaningful; the old CLI
 	// did this via UpdateDeploymentAppVersion.
-	_, err = client.UpdateDeploymentAppVersion(ctx, deploymentID, "app_version/v1")
+	_, err := client.UpdateDeploymentAppVersion(ctx, deploymentID, "app_version/v1")
 	require.NoError(t, err)
 
 	_, err = client.UpdateDeploymentStatus(ctx, deploymentID, "active", "")
@@ -94,19 +63,16 @@ func TestUpdateStatusReleasesLock(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, blocked.Held(), "an activated deployment must not keep the lock")
 
-	next, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
-	assert.False(t, next.HasError() && next.Error() != "", "the next deploy must not be blocked")
+	beginLockTestDeployment(t, inmem, "web", "prod")
 }
 
 func TestUpdateFailedDeploymentReleasesLock(t *testing.T) {
 	ctx := context.Background()
-	client, _ := newLockTestClient(t)
+	client, inmem := newLockTestClient(t)
 
-	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
+	first := beginLockTestDeployment(t, inmem, "web", "prod")
 
-	updated, err := client.UpdateFailedDeployment(ctx, first.Deployment().Id(), "build broke", "logs")
+	updated, err := client.UpdateFailedDeployment(ctx, string(first.Deployment.ID), "build broke", "logs")
 	require.NoError(t, err)
 	require.True(t, updated.HasDeployment())
 	assert.Equal(t, "build broke", updated.Deployment().ErrorMessage())
@@ -120,12 +86,11 @@ func TestUpdateFailedDeploymentReleasesLock(t *testing.T) {
 
 func TestCancelDeploymentReleasesLock(t *testing.T) {
 	ctx := context.Background()
-	client, _ := newLockTestClient(t)
+	client, inmem := newLockTestClient(t)
 
-	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
+	first := beginLockTestDeployment(t, inmem, "web", "prod")
 
-	cancel, err := client.CancelDeployment(ctx, first.Deployment().Id(), "")
+	cancel, err := client.CancelDeployment(ctx, string(first.Deployment.ID), "")
 	require.NoError(t, err)
 	require.True(t, cancel.Success())
 
@@ -136,20 +101,19 @@ func TestCancelDeploymentReleasesLock(t *testing.T) {
 
 func TestGetDeployLockReportsHolder(t *testing.T) {
 	ctx := context.Background()
-	client, _ := newLockTestClient(t)
+	client, inmem := newLockTestClient(t)
 
 	free, err := client.GetDeployLock(ctx, "web", "prod")
 	require.NoError(t, err)
 	assert.False(t, free.Held(), "no deploy has run, so nothing is held")
 
-	first, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
-	require.NoError(t, err)
+	first := beginLockTestDeployment(t, inmem, "web", "prod")
 
 	held, err := client.GetDeployLock(ctx, "web", "prod")
 	require.NoError(t, err)
 	require.True(t, held.Held())
 	require.True(t, held.HasLockInfo() && held.LockInfo() != nil)
-	assert.Equal(t, first.Deployment().Id(), held.LockInfo().BlockingDeploymentId())
+	assert.Equal(t, string(first.Deployment.ID), held.LockInfo().BlockingDeploymentId())
 }
 
 func TestGetDeployLockValidatesArgs(t *testing.T) {
@@ -215,14 +179,13 @@ func TestDeployVersionMissingAppDoesNotCreateLock(t *testing.T) {
 // in history, not as the sentinel.
 func TestPendingBuildSentinelNormalizedInHistory(t *testing.T) {
 	ctx := context.Background()
-	client, _ := newLockTestClient(t)
+	client, inmem := newLockTestClient(t)
 
-	created, err := client.CreateDeployment(ctx, "web", "prod", "pending-build", nil)
+	_, err := inmem.Client.Create(ctx, "legacy-dep", &core_v1alpha.Deployment{
+		AppName: "web", ClusterId: "prod", AppVersion: "pending-build", Status: "in_progress",
+	})
 	require.NoError(t, err)
-	assert.Equal(t, "", created.Deployment().AppVersionId(),
-		"the pending-build placeholder must not surface to clients")
 
-	// And through the list path.
 	list, err := client.ListDeployments(ctx, "web", "prod", "", 10)
 	require.NoError(t, err)
 	require.Len(t, list.Deployments(), 1)
