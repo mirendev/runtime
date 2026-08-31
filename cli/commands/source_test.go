@@ -13,6 +13,7 @@ func TestFormatSource(t *testing.T) {
 		{name: "dockerfile", kind: "dockerfile", want: "dockerfile"},
 		{name: "detected stack", kind: "stack", value: "python", want: "python (auto-detected)"},
 		{name: "unknown kind", kind: "archive", value: "source.tar.gz", want: "archive source.tar.gz"},
+		{name: "unknown kind without value", kind: "archive", want: "archive"},
 		{name: "missing", want: ""},
 	}
 
