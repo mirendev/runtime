@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -132,11 +133,9 @@ func AppHistory(ctx *Context, opts struct {
 	AppCentric
 	FormatOptions
 
-	Limit      int    `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
-	All        bool   `long:"all" description:"Show all deployments (ignore limit)"`
-	Status     string `short:"s" long:"status" description:"Filter by status (active, failed, rolled_back)"`
-	HideFailed bool   `long:"hide-failed" description:"Hide failed deployments"`
-	Detailed   bool   `long:"detailed" description:"Show all columns including git information"`
+	Limit    int  `short:"n" long:"limit" description:"Maximum number of deployments to show" default:"10"`
+	All      bool `long:"all" description:"Show all deployments (ignore limit)"`
+	Detailed bool `long:"detailed" description:"Show all columns including git information"`
 }) error {
 	depCl, err := ctx.RPCClient("dev.miren.runtime/deployment")
 	if err != nil {
@@ -146,22 +145,15 @@ func AppHistory(ctx *Context, opts struct {
 
 	limit := int32(opts.Limit)
 	if opts.All {
-		limit = 0
+		limit = math.MaxInt32
 	}
 
-	result, err := depClient.ListDeployments(ctx, opts.App, ctx.ClusterName, opts.Status, limit)
+	result, err := depClient.ListDeployments(ctx, opts.App, ctx.ClusterName, "", limit)
 	if err != nil {
 		return fmt.Errorf("failed to list deployments: %w", err)
 	}
 
 	deployments := result.Deployments()
-
-	// Filter out failed deployments if requested
-	if opts.HideFailed {
-		deployments = filterDeployments(deployments, func(d *deployment_v1alpha.DeploymentInfo) bool {
-			return d.Status() != "failed"
-		})
-	}
 
 	// Sort by time (most recent first)
 	sortDeployments(deployments)
@@ -172,7 +164,7 @@ func AppHistory(ctx *Context, opts struct {
 	}
 
 	if len(deployments) == 0 {
-		printNoDeploymentsMessage(ctx, opts.App, opts.Status, opts.HideFailed)
+		printNoDeploymentsMessage(ctx, opts.App)
 		return nil
 	}
 
@@ -195,25 +187,8 @@ func AppHistory(ctx *Context, opts struct {
 	return nil
 }
 
-func printNoDeploymentsMessage(ctx *Context, app string, status string, hiddenFailed bool) {
-	ctx.Printf("No deployments found for app '%s' on cluster '%s'", app, ctx.ClusterName)
-	if status != "" {
-		ctx.Printf(" with status '%s'", status)
-	}
-	if hiddenFailed {
-		ctx.Printf(" (failed deployments hidden)")
-	}
-	ctx.Printf("\n")
-}
-
-func filterDeployments(deps []*deployment_v1alpha.DeploymentInfo, keep func(*deployment_v1alpha.DeploymentInfo) bool) []*deployment_v1alpha.DeploymentInfo {
-	var filtered []*deployment_v1alpha.DeploymentInfo
-	for _, d := range deps {
-		if keep(d) {
-			filtered = append(filtered, d)
-		}
-	}
-	return filtered
+func printNoDeploymentsMessage(ctx *Context, app string) {
+	ctx.Printf("No deployments found for app '%s' on cluster '%s'\n", app, ctx.ClusterName)
 }
 
 func sortDeployments(deployments []*deployment_v1alpha.DeploymentInfo) {
