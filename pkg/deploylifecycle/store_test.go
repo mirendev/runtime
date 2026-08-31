@@ -11,10 +11,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+type failingRPCMethodClient struct {
+	rpc.Client
+	method string
+	err    error
+}
+
+func (c *failingRPCMethodClient) Call(ctx context.Context, method string, args, result any) error {
+	if method == c.method {
+		return c.err
+	}
+	return c.Client.Call(ctx, method, args, result)
+}
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -208,9 +223,21 @@ func TestLockReservationIsPrivateUntilPublished(t *testing.T) {
 	s := newTestStore(t)
 	id := entity.Id("deployment/reserved")
 
-	revision, err := s.ReserveLockOwner(ctx, id)
+	reservation, err := s.ReserveLockOwner(ctx, id)
 	require.NoError(t, err)
-	assert.Positive(t, revision)
+	require.NotNil(t, reservation)
+	assert.Positive(t, reservation.revision)
+	assert.NotEmpty(t, reservation.shortID)
+
+	reserved, err := s.eac.Get(ctx, string(id))
+	require.NoError(t, err)
+	assert.True(t, entity.Is(reserved.Entity().Entity(), lockOwnerReservationKind))
+	assert.False(t, entity.Is(reserved.Entity().Entity(), core_v1alpha.KindDeployment))
+
+	resolved, err := s.eac.List(ctx, entity.String(entity.DBShortId, reservation.shortID))
+	require.NoError(t, err)
+	require.Len(t, resolved.Values(), 1)
+	assert.Equal(t, string(id), resolved.Values()[0].Id())
 
 	status, err := s.Status(ctx, string(id))
 	require.NoError(t, err)
@@ -229,14 +256,39 @@ func TestLockReservationIsPrivateUntilPublished(t *testing.T) {
 		StartedAt: time.Now(),
 		Status:    string(StatusInProgress),
 	}
-	rec, err := s.PublishLockOwner(ctx, dep, revision)
+	rec, err := s.PublishLockOwner(ctx, dep, reservation)
 	require.NoError(t, err)
 	assert.Equal(t, StatusInProgress, rec.Status())
+	assert.Equal(t, reservation.shortID, rec.Entity.Entity().ShortId())
+	assert.True(t, entity.Is(rec.Entity.Entity(), core_v1alpha.KindDeployment))
+	assert.False(t, entity.Is(rec.Entity.Entity(), lockOwnerReservationKind))
 
 	listed, err = s.List(ctx, Query{})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, id, listed[0].Deployment.ID)
+}
+
+func TestLockReservationIsDiscardedWhenReadBackFails(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	readErr := errors.New("read failed")
+	eac := entityserver_v1alpha.NewEntityAccessClient(&failingRPCMethodClient{
+		Client: inmem.EAC.Client,
+		method: "get",
+		err:    readErr,
+	})
+	s := NewStore(testutils.TestLogger(t), eac)
+	id := entity.Id("deployment/failed-read-back")
+
+	_, err := s.ReserveLockOwner(ctx, id)
+	require.ErrorIs(t, err, readErr)
+
+	_, err = inmem.EAC.Get(ctx, string(id))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, cond.ErrNotFound{})
 }
 
 // The Store satisfies the lock manager's StatusLookup without an adapter, which

@@ -360,6 +360,9 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 	}
 
 	// Create new entity
+	if err := m.ensureShortIdLocked(entity); err != nil {
+		return nil, false, err
+	}
 	entity.SetRevision(1)
 	entity.SetCreatedAt(m.Now())
 	entity.SetUpdatedAt(m.Now())

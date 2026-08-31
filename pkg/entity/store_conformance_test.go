@@ -314,6 +314,37 @@ func TestStoreConformance_EnsureEntity(t *testing.T) {
 	})
 }
 
+func TestStoreConformance_EnsureAndReplaceKindedEntityCarriesShortID(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		initialKind := Id("conf/kind.ensure-short-id")
+		replacementKind := Id("conf/kind.replace-short-id")
+		_, err := store.CreateEntity(ctx, New(Any(Ident, initialKind)))
+		require.NoError(t, err)
+		_, err = store.CreateEntity(ctx, New(Any(Ident, replacementKind)))
+		require.NoError(t, err)
+
+		ent, created, err := store.EnsureEntity(ctx, New(
+			Ref(DBId, Id("conf-ensure-short-id")),
+			Ref(EntityKind, initialKind),
+		))
+		require.NoError(t, err)
+		assert.True(t, created)
+		shortID := ent.ShortId()
+		require.NotEmpty(t, shortID)
+
+		replaced, err := store.ReplaceEntity(ctx, New(
+			Ref(DBId, ent.Id()),
+			Ref(EntityKind, replacementKind),
+			String(DBShortId, shortID),
+		), WithFromRevision(ent.GetRevision()))
+		require.NoError(t, err)
+		assert.Equal(t, shortID, replaced.ShortId())
+		assert.False(t, Is(replaced, initialKind))
+		assert.True(t, Is(replaced, replacementKind))
+	})
+}
+
 func TestStoreConformance_EnsureRequiresDBId(t *testing.T) {
 	runStoreConformance(t, func(t *testing.T, store Store) {
 		_, _, err := store.EnsureEntity(t.Context(), New(

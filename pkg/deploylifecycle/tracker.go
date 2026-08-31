@@ -200,7 +200,7 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	}
 
 	deploymentID := string(dep.ID)
-	lockReservationRevision, err := t.store.ReserveLockOwner(ctx, dep.ID)
+	lockReservation, err := t.store.ReserveLockOwner(ctx, dep.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +216,7 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		return nil, err
 	}
 
-	rec, err := t.store.PublishLockOwner(ctx, dep, lockReservationRevision)
+	rec, err := t.store.PublishLockOwner(ctx, dep, lockReservation)
 	if err != nil {
 		if releaseErr := t.locks.Release(ctx, params.AppName, deploymentID); releaseErr != nil {
 			t.log.Error("failed to release lock after deployment publication failed", "error", releaseErr)
