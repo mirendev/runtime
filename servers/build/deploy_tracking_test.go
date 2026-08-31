@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/build/build_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -37,36 +38,30 @@ func deployRequest(cluster string) *build_v1alpha.DeployRequest {
 	return req
 }
 
-// The ownership signal: a build with no DeployRequest must leave the server
-// managing no deployment record at all, so an older client keeps driving its
-// own and there is never a second record.
-func TestBeginDeployWithoutRequestTracksNothing(t *testing.T) {
+func TestBeginDeployWithoutRequestStillTracksAttempt(t *testing.T) {
 	ctx := context.Background()
 	b := newDeployTestBuilder(t)
 
 	dt, err := b.beginDeploy(ctx, "web", nil, nil, nil)
 	require.NoError(t, err)
-	assert.Nil(t, dt, "no request means no server-owned record")
+	require.NotNil(t, dt)
 
 	all, err := b.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "web"})
 	require.NoError(t, err)
-	assert.Empty(t, all, "the server must not have created a record")
+	assert.Len(t, all, 1)
 }
 
-// A DeployRequest with an empty cluster_id means "not tracked", so the plain
-// path agrees with the saga path (whose begin-deployment action skips on the
-// same condition) instead of creating a lock-holding record.
-func TestBeginDeploySkipsEmptyClusterID(t *testing.T) {
+func TestBeginDeployAllowsEmptyLegacyClusterID(t *testing.T) {
 	ctx := context.Background()
 	b := newDeployTestBuilder(t)
 
 	dt, err := b.beginDeploy(ctx, "web", deployRequest(""), nil, nil)
 	require.NoError(t, err)
-	assert.Nil(t, dt, "an empty cluster_id must not create a server-owned record")
+	require.NotNil(t, dt)
 
 	all, err := b.deploy.Store().List(ctx, deploylifecycle.Query{AppName: "web"})
 	require.NoError(t, err)
-	assert.Empty(t, all)
+	assert.Len(t, all, 1)
 }
 
 // Ephemeral builds have no deployment record by design, even when a request is
@@ -187,7 +182,7 @@ func TestFailOnErrorSettlesEvenWhenContextCancelled(t *testing.T) {
 // release the lock as a backstop so the app is not stalled behind a record that
 // will never settle. Activation is forced to fail deterministically by moving
 // the record to a state Transition-to-active rejects while the lock is held.
-func TestActivateReleasesLockWhenSettleFails(t *testing.T) {
+func TestActivateKeepsLockWhenActivationDidNotCommit(t *testing.T) {
 	ctx := context.Background()
 	b := newDeployTestBuilder(t)
 
@@ -208,12 +203,13 @@ func TestActivateReleasesLockWhenSettleFails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, blocking, "lock should still be held before the backstop runs")
 
-	rec.activate(ctx)
+	require.Error(t, rec.activate(ctx))
 
-	// The backstop released the lock even though the settle failed.
+	// A failure before the activation commit leaves the lock with this attempt,
+	// so the caller can still settle the record.
 	blocking, err = b.deploy.Locks().Blocking(ctx, "web")
 	require.NoError(t, err)
-	assert.Nil(t, blocking, "a failed activation must still free the lock")
+	assert.NotNil(t, blocking, "a pre-commit failure must not pretend the deploy is over")
 }
 
 // A client disconnect (cancelled context) at activation must not prevent the
@@ -224,16 +220,19 @@ func TestActivateSurvivesCancelledContext(t *testing.T) {
 
 	rec, err := b.beginDeploy(ctx, "web", deployRequest("prod"), nil, nil)
 	require.NoError(t, err)
+	version := &core_v1alpha.AppVersion{App: "app/web", Version: "v1"}
+	_, err = b.ec.Create(ctx, "v1", version)
+	require.NoError(t, err)
 	require.NoError(t, b.deploy.SetAppVersion(ctx, rec.deploymentID, "app_version/v1"))
 
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 
-	rec.activate(cancelled)
+	require.NoError(t, rec.activate(cancelled))
 
 	settled, err := b.deploy.Store().Get(ctx, rec.deploymentID)
 	require.NoError(t, err)
-	assert.Equal(t, deploylifecycle.StatusActive, settled.Status(),
+	assert.Equal(t, deploylifecycle.StatusSucceeded, settled.Status(),
 		"activation must complete on a detached context despite a cancelled parent")
 
 	blocking, err := b.deploy.Locks().Blocking(ctx, "web")

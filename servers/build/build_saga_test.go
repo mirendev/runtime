@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -56,6 +57,7 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 		appClient:  app.NewClient(log, rpcClient),
 		TempDir:    tempDir,
 		cacheLocks: newAppLocks(),
+		deploy:     deploylifecycle.NewTracker(log, inmem.EAC),
 	}
 
 	streams := NewStreamRegistry(tempDir, log)
@@ -82,6 +84,9 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
+		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
+		Action(actionRecordVersion, recordAppVersion).Undo(undoRecordAppVersion).
+		Action(actionActivateDeploy, activateDeployment).Undo(undoActivateDeployment).
 		RegisterTo(registry); err != nil {
 		t.Fatalf("registering build saga: %v", err)
 	}
@@ -204,6 +209,29 @@ func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	if application.ActiveVersion == "" {
 		t.Error("expected app to have an active version after build saga")
 	}
+}
+
+func TestBuildSaga_MalformedGitInfoDoesNotBlockDeployment(t *testing.T) {
+	ctx := context.Background()
+
+	h := newSagaTestHarness(t)
+	h.streams.Register("stream-malformed-git-info", makeTar(t, dockerfileTarball(t)))
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-malformed-git-info").
+		Input("deploy_git_info_json", "{").
+		WithID("test-malformed-git-info").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var application core_v1alpha.App
+	require.NoError(t, h.builder.ec.Get(ctx, "demo", &application))
+	require.NotEmpty(t, application.ActiveVersion)
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Empty(t, version.Source)
 }
 
 func TestBuildSaga_ImageOnly_SkipsBuildKitAndCreatesVersion(t *testing.T) {

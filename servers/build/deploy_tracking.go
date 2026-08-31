@@ -15,25 +15,22 @@ import (
 
 // deployTracking threads the server-owned deployment record through a build.
 //
-// A nil *deployTracking means this build is not tracked — an ephemeral build, or
-// an older client that still drives its own deployment record — and every method
-// is then a no-op. Call sites therefore never branch on whether tracking is
-// active; they call through unconditionally and a nil receiver does the right
-// thing.
+// A nil *deployTracking means this is an ephemeral build (or recovery of an old
+// saga that predates server-owned attempts). Every method is then a no-op.
 type deployTracking struct {
 	tracker      *deploylifecycle.Tracker
 	deploymentID string
+	source       core_v1alpha.Source
 	status       StatusSender
 	log          *slog.Logger
 }
 
 // trackDeployment binds a deployment record to the build that owns it.
 //
-// An empty deploymentID yields nil, which is the "not tracked" case every
-// method treats as a no-op, so callers never branch. Both build paths build
-// their tracking through here: the plain path wraps its RPC stream, the saga
-// path looks its sender up by stream ID. That shared construction is what keeps
-// the two paths from drifting on phases, contexts, or failure policy.
+// An empty deploymentID yields nil, which every method treats as a no-op, so
+// ephemeral and pre-upgrade saga paths need no branches at later call sites.
+// Both build paths construct tracking here, keeping their phases, contexts, and
+// failure policy aligned.
 func (b *Builder) trackDeployment(deploymentID string, status StatusSender) *deployTracking {
 	if deploymentID == "" {
 		return nil
@@ -49,13 +46,15 @@ func (b *Builder) trackDeployment(deploymentID string, status StatusSender) *dep
 	}
 }
 
-// beginDeploy creates and locks a deployment record when the client asked the
-// server to own it, and returns a tracker for the rest of the build.
-//
-// It returns nil (not an error) when the build is not server-tracked: no
-// DeployRequest, or an ephemeral build, which has no deployment record by
-// design. A lock already held by a live deployment is a real error and is
-// returned as such — the build must not proceed alongside another one.
+func (t *deployTracking) setSource(version *core_v1alpha.AppVersion) {
+	if t != nil {
+		version.Source = t.source
+	}
+}
+
+// beginDeploy creates and locks an attempt for every non-ephemeral build. A
+// lock already held by a live deployment is a real error: the build must not
+// proceed alongside another one.
 func (b *Builder) beginDeploy(
 	ctx context.Context,
 	appName string,
@@ -63,29 +62,33 @@ func (b *Builder) beginDeploy(
 	ephemeral *ephemeralOpts,
 	status *stream.SendStreamClient[*build_v1alpha.Status],
 ) (*deployTracking, error) {
-	if req == nil || (ephemeral != nil && ephemeral.label != "") {
+	if ephemeral != nil && ephemeral.label != "" {
 		return nil, nil
 	}
 
-	clusterID := req.ClusterId()
-	// An empty cluster_id means "not tracked", matching the saga path's
-	// begin-deployment action (which skips on the same condition). Without this
-	// the two paths would disagree: the plain path would create a lock-holding
-	// record for an empty cluster_id while the saga path created none.
-	if clusterID == "" {
-		return nil, nil
+	app, err := b.ensureApp(ctx, appName)
+	if err != nil {
+		return nil, err
 	}
+	clusterID := ""
+	if req != nil {
+		clusterID = req.ClusterId()
+	}
+	gitInfo := gitInfoFromRequest(req)
 
 	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
 		AppName:   appName,
+		AppID:     app.ID,
 		ClusterID: clusterID,
-		GitInfo:   gitInfoFromRequest(req),
+		Operation: deploylifecycle.OperationBuild,
+		GitInfo:   gitInfo,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	dt := b.trackDeployment(string(rec.Deployment.ID), NewRPCStatusSender(status, b.Log))
+	dt.source = deploylifecycle.SourceFromGitInfo(gitInfo)
 
 	// Announce the record and its opening phase so the client can display and
 	// cancel a deployment it did not create.
@@ -132,26 +135,21 @@ func (t *deployTracking) setAppVersion(ctx context.Context, appVersionID string)
 	}
 }
 
-// activate marks the deployment live once the new version is running.
-//
-// The version is already live by the time this runs, so the settle uses a
-// detached context and, if it still fails, releases the lock directly as a
-// backstop — a live deploy must never leave the app stalled behind a record that
-// will not settle.
-func (t *deployTracking) activate(ctx context.Context) {
+// activate swings the app's version and deployment pointers together, then
+// records the successful outcome. The detached context lets that commit finish
+// after the initiating client disconnects.
+func (t *deployTracking) activate(ctx context.Context) error {
 	if t == nil {
-		return
+		return nil
 	}
 
 	settleCtx, cancel := settleContext(ctx)
 	defer cancel()
 
 	if err := t.tracker.Activate(settleCtx, t.deploymentID); err != nil {
-		t.log.Error("failed to activate deployment; releasing lock as backstop", "error", err)
-		if relErr := t.tracker.ReleaseLock(settleCtx, t.deploymentID); relErr != nil {
-			t.log.Error("failed to release lock after activation error", "error", relErr)
-		}
+		return err
 	}
+	return nil
 }
 
 // failOnError settles the deployment as failed when a build returned an error,
@@ -169,7 +167,7 @@ func (t *deployTracking) failOnError(ctx context.Context, retErr error) {
 	settleCtx, cancel := settleContext(ctx)
 	defer cancel()
 
-	if err := t.tracker.FailIfUnsettled(settleCtx, t.deploymentID, retErr.Error(), ""); err != nil {
+	if err := t.tracker.FailIfUnsettled(settleCtx, t.deploymentID, retErr.Error()); err != nil {
 		t.log.Error("failed to record deployment failure", "error", err)
 	}
 }

@@ -11,7 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
@@ -44,6 +46,13 @@ func newTestLocks(t *testing.T, status StatusLookup) (*Locks, *fakeClock) {
 	locks := NewLocks(log, inmem.EAC, status)
 	locks.now = clock.Now
 	locks.sleep = func(time.Duration) {} // don't add real latency to contention tests
+	for _, appName := range []string{"web", "api"} {
+		_, err := inmem.EAC.Ensure(context.Background(), []entity.Attr{
+			entity.Ref(entity.DBId, entity.Id("app/"+appName)),
+			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
+		})
+		require.NoError(t, err)
+	}
 
 	return locks, clock
 }
@@ -91,6 +100,8 @@ func TestAcquireIsIdempotentForSameDeployment(t *testing.T) {
 	second, err := locks.Acquire(ctx, "web", "dep-1")
 	require.NoError(t, err)
 	assert.Equal(t, "dep-1", second.DeploymentID)
+	assert.Equal(t, first.AcquiredAt, second.AcquiredAt,
+		"refreshing authority must preserve when the lock began")
 	assert.True(t, second.ExpiresAt.After(first.ExpiresAt),
 		"re-acquiring should extend the expiry")
 }
@@ -110,6 +121,35 @@ func TestAcquireStealsExpiredLock(t *testing.T) {
 	holder, err := locks.Acquire(ctx, "web", "dep-2")
 	require.NoError(t, err)
 	assert.Equal(t, "dep-2", holder.DeploymentID)
+}
+
+func TestCommitActivationAtRevisionRejectsChangedBase(t *testing.T) {
+	ctx := context.Background()
+	locks, _ := newTestLocks(t, nil)
+
+	_, err := locks.Acquire(ctx, "web", "dep-1")
+	require.NoError(t, err)
+
+	base, err := locks.eac.Get(ctx, "app/web")
+	require.NoError(t, err)
+	baseRevision := base.Entity().Revision()
+
+	_, err = locks.eac.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, "app/web"),
+		entity.Ref(core_v1alpha.AppActiveVersionId, "app_version/concurrent"),
+	}, 0)
+	require.NoError(t, err)
+
+	err = locks.CommitActivationAtRevision(ctx, "web", "app/web", "app_version/ours", "dep-1", baseRevision)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, cond.ErrConflict{}), "got %T: %v", err, err)
+
+	current, err := locks.eac.Get(ctx, "app/web")
+	require.NoError(t, err)
+	var app core_v1alpha.App
+	app.Decode(&entityAttrs{entity: current.Entity()})
+	assert.Equal(t, entity.Id("app_version/concurrent"), app.ActiveVersion)
+	assert.Empty(t, app.ActiveDeployment)
 }
 
 // Lock and record can drift apart: the build failed but the lock outlived it.
@@ -135,17 +175,21 @@ func TestAcquireStealsLockWhoseDeploymentIsTerminal(t *testing.T) {
 	assert.Equal(t, "dep-2", holder.DeploymentID)
 }
 
-func TestAcquireStealsLockWhoseDeploymentIsGone(t *testing.T) {
+func TestAcquireWaitsForMissingDeploymentCreateWindow(t *testing.T) {
 	ctx := context.Background()
-	locks, _ := newTestLocks(t, func(context.Context, string) (Status, error) {
+	locks, clock := newTestLocks(t, func(context.Context, string) (Status, error) {
 		return "", cond.NotFound("deployment", "dep-1")
 	})
 
 	_, err := locks.Acquire(ctx, "web", "dep-1")
 	require.NoError(t, err)
 
+	_, err = locks.Acquire(ctx, "web", "dep-2")
+	require.ErrorIs(t, err, ErrLockHeld, "Begin acquires the lock just before creating its record")
+
+	clock.Advance(DefaultLockTTL + time.Second)
 	holder, err := locks.Acquire(ctx, "web", "dep-2")
-	require.NoError(t, err, "nothing will ever release a lock whose record vanished")
+	require.NoError(t, err)
 	assert.Equal(t, "dep-2", holder.DeploymentID)
 }
 
@@ -266,7 +310,35 @@ func TestReleaseDoesNotFreeALockStolenInTheReadWindow(t *testing.T) {
 		"a third deploy must not be able to start alongside dep-2")
 }
 
-// A released lock leaves a tombstone rather than disappearing, so the free/held
+func TestReleaseRetriesAfterUnrelatedAppWrite(t *testing.T) {
+	ctx := context.Background()
+	locks, _ := newTestLocks(t, nil)
+
+	_, err := locks.Acquire(ctx, "web", "dep-1")
+	require.NoError(t, err)
+
+	locks.releaseRace = func() {
+		locks.releaseRace = nil
+		_, err := locks.eac.Patch(ctx, []entity.Attr{
+			entity.Ref(entity.DBId, "app/web"),
+			entity.String(core_v1alpha.AppWorkloadRoleId, "app-writer"),
+		}, 0)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, locks.Release(ctx, "web", "dep-1"))
+	blocking, err := locks.Blocking(ctx, "web")
+	require.NoError(t, err)
+	assert.Nil(t, blocking)
+
+	res, err := locks.eac.Get(ctx, "app/web")
+	require.NoError(t, err)
+	var app core_v1alpha.App
+	app.Decode(&entityAttrs{entity: res.Entity()})
+	assert.Equal(t, "app-writer", app.WorkloadRole)
+}
+
+// A released lock is represented by an empty component, so the free/held
 // distinction has to survive that.
 func TestBlockingReportsOnlyRealBlockers(t *testing.T) {
 	ctx := context.Background()
@@ -298,7 +370,7 @@ func TestBlockingReportsOnlyRealBlockers(t *testing.T) {
 
 	blocking, err = locks.Blocking(ctx, "web")
 	require.NoError(t, err)
-	assert.Nil(t, blocking, "a released tombstone blocks nobody")
+	assert.Nil(t, blocking, "a released lock blocks nobody")
 
 	_, err = locks.Acquire(ctx, "web", "dep-2")
 	require.NoError(t, err)
@@ -340,8 +412,7 @@ func TestGetFreeLockReportsNotFound(t *testing.T) {
 	assert.True(t, errors.Is(err, cond.ErrNotFound{}), "got %T: %v", err, err)
 }
 
-// The race the old list-then-create scheme lost: many callers starting a deploy
-// for the same app+cluster at once.
+// Concurrent contenders for one app must produce exactly one admitted owner.
 func TestConcurrentAcquireYieldsExactlyOneWinner(t *testing.T) {
 	ctx := context.Background()
 	locks, _ := newTestLocks(t, func(context.Context, string) (Status, error) {
@@ -427,9 +498,39 @@ func TestAcquireRequiresIdentifiers(t *testing.T) {
 	}
 }
 
-func TestLockIDIsStable(t *testing.T) {
-	assert.Equal(t, LockID("web"), LockID("web"))
-	assert.NotEqual(t, LockID("web"), LockID("api"))
+func TestLockIsCanonicalOnAppAndShadowedForDowngrade(t *testing.T) {
+	ctx := context.Background()
+	locks, _ := newTestLocks(t, nil)
+
+	_, err := locks.Acquire(ctx, "web", "dep-1")
+	require.NoError(t, err)
+
+	res, err := locks.eac.Get(ctx, "app/web")
+	require.NoError(t, err)
+	var app core_v1alpha.App
+	app.Decode(&entityAttrs{entity: res.Entity()})
+	assert.Equal(t, "dep-1", app.DeploymentLock.DeploymentId)
+
+	legacy, err := locks.getLegacy(ctx, "web")
+	require.NoError(t, err)
+	assert.Equal(t, "dep-1", legacy.DeploymentID)
+}
+
+func TestLegacyOnlyLockBlocksCurrentAcquire(t *testing.T) {
+	ctx := context.Background()
+	locks, _ := newTestLocks(t, nil)
+
+	legacy := locks.holderFor("web", "old-deployment")
+	_, err := locks.eac.Ensure(ctx, encodeLegacyLock(legacyLockID("web"), legacy))
+	require.NoError(t, err)
+
+	holder, err := locks.Acquire(ctx, "web", "new-deployment")
+	require.ErrorIs(t, err, ErrLockHeld)
+	require.NotNil(t, holder)
+	assert.Equal(t, "old-deployment", holder.DeploymentID)
+
+	_, err = locks.Get(ctx, "web")
+	assert.ErrorIs(t, err, cond.ErrNotFound{}, "blocked acquire must not publish the canonical app lock")
 }
 
 // The lock is app-scoped: the same app is one lock regardless of cluster, but

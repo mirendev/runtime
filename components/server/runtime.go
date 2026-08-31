@@ -78,6 +78,7 @@ func (s *startup) addComponents() error {
 		s.victoriaMetrics.component,
 		s.buildkit.component,
 		s.coordinator.component,
+		s.deploymentAttempts.component,
 		s.entityAccess.component,
 		s.appMetrics.component,
 		s.network.component,
