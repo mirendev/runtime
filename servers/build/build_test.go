@@ -1629,6 +1629,48 @@ func TestBuildVersionConfigDefaultsWebPortFromImage(t *testing.T) {
 	}
 }
 
+func TestBuildVersionConfigInheritsPrimaryDirectImage(t *testing.T) {
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{
+			WorkingDir:   "/srv/app",
+			ExposedPorts: []string{"4321/tcp"},
+		},
+		SourceKind:  "image",
+		SourceValue: "docker.io/example/app:latest",
+		AppConfig: &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+			"web":    {Image: "example/app:latest"},
+			"worker": {Image: "docker.io/example/app:latest", Command: "work"},
+			"db":     {Image: "postgres:17"},
+		}},
+	})
+
+	assert.Equal(t, "/srv/app", spec.StartDirectory)
+	require.Len(t, spec.Services, 3)
+	services := make(map[string]core_v1alpha.ConfigSpecServices, len(spec.Services))
+	for _, svc := range spec.Services {
+		services[svc.Name] = svc
+	}
+	assert.Empty(t, services["web"].Image)
+	assert.Equal(t, int64(4321), services["web"].Port)
+	assert.Empty(t, services["worker"].Image)
+	assert.Equal(t, "postgres:17", services["db"].Image)
+}
+
+func TestBuildVersionConfigDirectWorkerImageDoesNotSynthesizeWeb(t *testing.T) {
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{WorkingDir: "/worker"},
+		SourceKind:  "image",
+		SourceValue: "example/worker:latest",
+		AppConfig: &appconfig.AppConfig{Services: map[string]*appconfig.ServiceConfig{
+			"worker": {Image: "example/worker:latest"},
+		}},
+	})
+
+	require.Len(t, spec.Services, 1)
+	assert.Equal(t, "worker", spec.Services[0].Name)
+	assert.Empty(t, spec.Services[0].Image)
+}
+
 func TestApplyImageConfig(t *testing.T) {
 	tests := []struct {
 		name       string
