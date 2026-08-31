@@ -182,21 +182,14 @@ func (o Options) buildFields(es *entity.EncodedSchema, byId map[entity.Id][]enti
 // schema knows things the value does not, like which enum member an id names
 // and what a component's nested fields are called.
 func (o Options) renderField(f *entity.SchemaField, v entity.Value) (any, bool, int) {
+	if f.Enum != "" || f.Type == "enum" {
+		if member, ok := f.EnumMember(v); ok {
+			return member, false, 0
+		}
+		return o.renderValue(v)
+	}
+
 	switch f.Type {
-	case "enum":
-		if v.Kind() != entity.KindId {
-			return o.renderValue(v)
-		}
-
-		id := v.Id()
-		for name, enumId := range f.EnumValues {
-			if enumId == id {
-				return name, false, 0
-			}
-		}
-
-		return string(id), false, 0
-
 	case "component":
 		if v.Kind() != entity.KindComponent {
 			return o.renderValue(v)

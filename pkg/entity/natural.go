@@ -1,5 +1,7 @@
 package entity
 
+import "slices"
+
 type SchemaField struct {
 	Name string `json:"name" cbor:"name"`
 	Type string `json:"type" cbor:"type"`
@@ -8,8 +10,11 @@ type SchemaField struct {
 
 	Many bool `json:"many,omitempty" cbor:"many,omitempty"`
 
-	EnumValues map[string]Id  `json:"enum_values,omitempty" cbor:"enum_values,omitempty"`
-	Component  *EncodedSchema `json:"component,omitempty" cbor:"component,omitempty"`
+	Enum         string         `json:"enum,omitempty" cbor:"enum,omitempty"`
+	EnumEncoding string         `json:"enum_encoding,omitempty" cbor:"enum_encoding,omitempty"`
+	EnumMembers  []string       `json:"enum_members,omitempty" cbor:"enum_members,omitempty"`
+	EnumValues   map[string]Id  `json:"enum_values,omitempty" cbor:"enum_values,omitempty"`
+	Component    *EncodedSchema `json:"component,omitempty" cbor:"component,omitempty"`
 }
 
 type EncodedDomain struct {
@@ -36,4 +41,51 @@ func (es *EncodedSchema) GetField(name string) *SchemaField {
 		}
 	}
 	return nil
+}
+
+// EnumValue maps a schema-facing enum member to its physical entity value.
+func (f *SchemaField) EnumValue(member string) (Value, bool) {
+	if !slices.Contains(f.EnumMembers, member) {
+		// Older encoded schemas only carried the ref mapping.
+		if _, ok := f.EnumValues[member]; !ok {
+			return Value{}, false
+		}
+	}
+
+	switch f.EnumEncoding {
+	case "string":
+		return StringValue(member), true
+	case "keyword":
+		keyword := f.Enum + "." + member
+		if !ValidKeyword(keyword) {
+			return Value{}, false
+		}
+		return KeywordValue(keyword), true
+	case "", "ref":
+		id, ok := f.EnumValues[member]
+		if !ok {
+			return Value{}, false
+		}
+		return RefValue(id), true
+	default:
+		return Value{}, false
+	}
+}
+
+// EnumMember maps a physical entity value back to its schema-facing member.
+func (f *SchemaField) EnumMember(value Value) (string, bool) {
+	for _, member := range f.EnumMembers {
+		candidate, ok := f.EnumValue(member)
+		if ok && candidate.Equal(value) {
+			return member, true
+		}
+	}
+
+	// Older encoded schemas only carried the ref mapping.
+	for member, id := range f.EnumValues {
+		if value.Equal(RefValue(id)) {
+			return member, true
+		}
+	}
+	return "", false
 }

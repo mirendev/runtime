@@ -1,5 +1,18 @@
 domain: dev.miren.core
 version: v1alpha
+
+enums:
+  artifact_status:
+    values: [active, archived]
+  port_protocol:
+    values: [tcp, udp]
+  disk_provider:
+    values: [miren, local, sqlite]
+  secret_version_state:
+    values: [enabled, disabled, destroyed]
+  key_rotation_status:
+    values: [rewrapping, retiring, done, failed]
+
 kinds:
   metadata:
     name:
@@ -75,8 +88,9 @@ kinds:
 
     status:
       type: enum
+      enum: artifact_status
+      encoding: ref
       doc: Artifact lifecycle status
-      choices: [active, archived]
       indexed: true
 
   app_version:
@@ -164,7 +178,8 @@ kinds:
                   required: true
                 protocol:
                   type: enum
-                  choices: [tcp, udp]
+                  enum: port_protocol
+                  encoding: ref
                 type:
                   type: string
                 node_port:
@@ -227,7 +242,8 @@ kinds:
                   doc: The name of the disk
                 provider:
                   type: enum
-                  choices: [miren, local, sqlite]
+                  enum: disk_provider
+                  encoding: ref
                   doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
                 mount_path:
                   type: string
@@ -515,8 +531,9 @@ kinds:
 
     state:
       type: enum
+      enum: secret_version_state
+      encoding: ref
       doc: Whether this version may still be resolved
-      choices: [enabled, disabled, destroyed]
       indexed: true
 
     ciphertext:
@@ -552,8 +569,9 @@ kinds:
 
     status:
       type: enum
+      enum: key_rotation_status
+      encoding: ref
       doc: rewrapping | retiring | done | failed
-      choices: [rewrapping, retiring, done, failed]
       indexed: true
 
     rewrapped:
@@ -651,7 +669,8 @@ components:
               required: true
             protocol:
               type: enum
-              choices: [tcp, udp]
+              enum: port_protocol
+              encoding: ref
             type:
               type: string
             node_port:
@@ -714,7 +733,8 @@ components:
               doc: The name of the disk
             provider:
               type: enum
-              choices: [miren, local, sqlite]
+              enum: disk_provider
+              encoding: ref
               doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
             mount_path:
               type: string

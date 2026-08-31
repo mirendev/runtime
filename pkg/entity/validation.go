@@ -273,9 +273,15 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 		default:
 			return fmt.Errorf("attribute %s must be a keyword or string, got %T", name, v)
 		}
+		if len(schema.EnumValues) > 0 && (exempt == nil || !exempt(*attr)) && !matchesChoice(schema.EnumValues, attr.Value) {
+			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
+		}
 	case TypeStr:
 		if _, ok := attr.Value.Any().(string); !ok {
 			return fmt.Errorf("attribute %s must be a string (is %T)", name, attr.Value.Any())
+		}
+		if len(schema.EnumValues) > 0 && (exempt == nil || !exempt(*attr)) && !matchesChoice(schema.EnumValues, attr.Value) {
+			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
 		}
 	case TypeBytes:
 		if _, ok := attr.Value.Any().([]byte); !ok {
@@ -341,7 +347,7 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 			return fmt.Errorf("attribute %s must be a timestamp (int64 or RFC3339 string), got %T", name, v)
 		}
 	case TypeEnum:
-		if !matchesChoice(schema.EnumValues, attr.Value) {
+		if (exempt == nil || !exempt(*attr)) && !matchesChoice(schema.EnumValues, attr.Value) {
 			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
 		}
 	case TypeArray:

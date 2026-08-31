@@ -95,6 +95,17 @@ func DiskUndelete(ctx *Context, opts struct {
 		fs = storage_v1alpha.EXT4
 	}
 
+	var volumeMode storage_v1alpha.DiskVolumeVolumeMode
+	switch meta.VolumeMode {
+	case "":
+	case "vm_universal":
+		volumeMode = storage_v1alpha.VM_UNIVERSAL
+	case "vm_accelerator":
+		volumeMode = storage_v1alpha.VM_ACCELERATOR
+	default:
+		return fmt.Errorf("deleted disk has unsupported volume mode %q", meta.VolumeMode)
+	}
+
 	// Create the disk entity in RESTORING state
 	diskId := idgen.GenNS("disk")
 	disk := &storage_v1alpha.Disk{
@@ -160,8 +171,8 @@ func DiskUndelete(ctx *Context, opts struct {
 		DiskId:       diskEntityId,
 		VolumeId:     volId,
 		SizeGb:       meta.SizeGb,
-		Filesystem:   filesystem,
-		VolumeMode:   storage_v1alpha.DiskVolumeVolumeMode(meta.VolumeMode),
+		Filesystem:   fs,
+		VolumeMode:   volumeMode,
 		DesiredState: storage_v1alpha.DV_PRESENT,
 		// Start PENDING, not READY. The runner's DiskVolumeController drives
 		// the restored volume through the same mount-then-READY ordering as a

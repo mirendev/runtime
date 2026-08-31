@@ -1,6 +1,18 @@
 domain: dev.miren.compute
 version: v1alpha
 
+enums:
+  restart_policy:
+    values: [always, never]
+  port_protocol:
+    values: [tcp, udp]
+  sandbox_status:
+    values: [pending, not_ready, running, stopped, dead]
+  node_status:
+    values: [unknown, ready, disabled, unhealthy]
+  node_scheduling:
+    values: [schedulable, cordoned]
+
 components:
   # Immutable build-time sandbox configuration
   # Shared between Sandbox (as spec field) and SandboxPool (as template)
@@ -34,7 +46,8 @@ components:
 
     restart_policy:
       type: enum
-      choices: [always, never]
+      enum: restart_policy
+      encoding: ref
       doc: |
         Whether the sandbox controller may reboot this sandbox's containers if
         they have disappeared while the entity still reads RUNNING. Empty means
@@ -169,8 +182,9 @@ components:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              encoding: ref
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: High-level port type (e.g., http)
@@ -214,8 +228,9 @@ kinds:
     # Runtime fields
     status:
       type: enum
+      enum: sandbox_status
+      encoding: ref
       doc: The status of the pod
-      choices: [pending, not_ready, running, stopped, dead]
 
     last_activity:
       type: time
@@ -386,8 +401,9 @@ kinds:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              encoding: ref
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: The highlevel type of the port
@@ -510,8 +526,9 @@ kinds:
 
     status:
       type: enum
+      enum: node_status
+      encoding: ref
       doc: The status of the node
-      choices: [unknown, ready, disabled, unhealthy]
       session: true
 
     api_address:
@@ -537,6 +554,8 @@ kinds:
 
     scheduling:
       type: enum
+      enum: node_scheduling
+      encoding: ref
       doc: |
         Operator-controlled scheduling eligibility for the node. Unlike status
         (which is session-scoped and reset to ready on every runner rejoin),
@@ -544,7 +563,6 @@ kinds:
         runner restarts until an operator uncordons it. The zero value (unset)
         is treated as schedulable. A future "draining" value can be added here
         when drain becomes asynchronous.
-      choices: [schedulable, cordoned]
 
   schedule:
     key:

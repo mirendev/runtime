@@ -8,6 +8,45 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type ArtifactStatus string
+
+const (
+	ArtifactStatusActive   ArtifactStatus = "active"
+	ArtifactStatusArchived ArtifactStatus = "archived"
+)
+
+type DiskProvider string
+
+const (
+	DiskProviderMiren  DiskProvider = "miren"
+	DiskProviderLocal  DiskProvider = "local"
+	DiskProviderSqlite DiskProvider = "sqlite"
+)
+
+type KeyRotationStatus string
+
+const (
+	KeyRotationStatusRewrapping KeyRotationStatus = "rewrapping"
+	KeyRotationStatusRetiring   KeyRotationStatus = "retiring"
+	KeyRotationStatusDone       KeyRotationStatus = "done"
+	KeyRotationStatusFailed     KeyRotationStatus = "failed"
+)
+
+type PortProtocol string
+
+const (
+	PortProtocolTcp PortProtocol = "tcp"
+	PortProtocolUdp PortProtocol = "udp"
+)
+
+type SecretVersionState string
+
+const (
+	SecretVersionStateEnabled   SecretVersionState = "enabled"
+	SecretVersionStateDisabled  SecretVersionState = "disabled"
+	SecretVersionStateDestroyed SecretVersionState = "destroyed"
+)
+
 const (
 	ConfigSpecEntrypointId     = entity.Id("dev.miren.core/component.config_spec.entrypoint")
 	ConfigSpecServicesId       = entity.Id("dev.miren.core/component.config_spec.services")
@@ -396,29 +435,29 @@ const (
 )
 
 type ConfigSpecServicesDisks struct {
-	DbFile       string                          `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string                          `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string                          `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string                          `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string                          `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string                          `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     ConfigSpecServicesDisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool                            `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64                           `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string                          `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string                          `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type ConfigSpecServicesDisksProvider string
+type ConfigSpecServicesDisksProvider = DiskProvider
 
 const (
-	ConfigSpecServicesDisksMIREN  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.miren"
-	ConfigSpecServicesDisksLOCAL  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.local"
-	ConfigSpecServicesDisksSQLITE ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.sqlite"
+	ConfigSpecServicesDisksMIREN  DiskProvider = DiskProviderMiren
+	ConfigSpecServicesDisksLOCAL  DiskProvider = DiskProviderLocal
+	ConfigSpecServicesDisksSQLITE DiskProvider = DiskProviderSqlite
 )
 
-var ConfigSpecServicesDisksproviderFromId = map[entity.Id]ConfigSpecServicesDisksProvider{ConfigSpecServicesDisksProviderMirenId: ConfigSpecServicesDisksMIREN, ConfigSpecServicesDisksProviderLocalId: ConfigSpecServicesDisksLOCAL, ConfigSpecServicesDisksProviderSqliteId: ConfigSpecServicesDisksSQLITE}
-var ConfigSpecServicesDisksproviderToId = map[ConfigSpecServicesDisksProvider]entity.Id{ConfigSpecServicesDisksMIREN: ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksLOCAL: ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksSQLITE: ConfigSpecServicesDisksProviderSqliteId}
+var ConfigSpecServicesDisksProviderFromId = map[entity.Id]DiskProvider{ConfigSpecServicesDisksProviderMirenId: DiskProviderMiren, ConfigSpecServicesDisksProviderLocalId: DiskProviderLocal, ConfigSpecServicesDisksProviderSqliteId: DiskProviderSqlite}
+var ConfigSpecServicesDisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: ConfigSpecServicesDisksProviderMirenId, DiskProviderLocal: ConfigSpecServicesDisksProviderLocalId, DiskProviderSqlite: ConfigSpecServicesDisksProviderSqliteId}
 
 func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesDisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -440,7 +479,7 @@ func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = ConfigSpecServicesDisksproviderFromId[a.Value.Id()]
+		o.Provider = ConfigSpecServicesDisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -475,7 +514,7 @@ func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesDisksOwnerId, o.Owner))
 	}
-	if a, ok := ConfigSpecServicesDisksproviderToId[o.Provider]; ok {
+	if a, ok := ConfigSpecServicesDisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesDisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesDisksReadOnlyId, o.ReadOnly))
@@ -732,22 +771,22 @@ const (
 )
 
 type ConfigSpecServicesPorts struct {
-	Name     string                          `cbor:"name" json:"name"`
-	NodePort int64                           `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64                           `cbor:"port" json:"port"`
-	Protocol ConfigSpecServicesPortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string                          `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type ConfigSpecServicesPortsProtocol string
+type ConfigSpecServicesPortsProtocol = PortProtocol
 
 const (
-	ConfigSpecServicesPortsTCP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.tcp"
-	ConfigSpecServicesPortsUDP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.udp"
+	ConfigSpecServicesPortsTCP PortProtocol = PortProtocolTcp
+	ConfigSpecServicesPortsUDP PortProtocol = PortProtocolUdp
 )
 
-var ConfigSpecServicesPortsprotocolFromId = map[entity.Id]ConfigSpecServicesPortsProtocol{ConfigSpecServicesPortsProtocolTcpId: ConfigSpecServicesPortsTCP, ConfigSpecServicesPortsProtocolUdpId: ConfigSpecServicesPortsUDP}
-var ConfigSpecServicesPortsprotocolToId = map[ConfigSpecServicesPortsProtocol]entity.Id{ConfigSpecServicesPortsTCP: ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsUDP: ConfigSpecServicesPortsProtocolUdpId}
+var ConfigSpecServicesPortsProtocolFromId = map[entity.Id]PortProtocol{ConfigSpecServicesPortsProtocolTcpId: PortProtocolTcp, ConfigSpecServicesPortsProtocolUdpId: PortProtocolUdp}
+var ConfigSpecServicesPortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: ConfigSpecServicesPortsProtocolTcpId, PortProtocolUdp: ConfigSpecServicesPortsProtocolUdpId}
 
 func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesPortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -760,7 +799,7 @@ func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = ConfigSpecServicesPortsprotocolFromId[a.Value.Id()]
+		o.Protocol = ConfigSpecServicesPortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -775,7 +814,7 @@ func (o *ConfigSpecServicesPorts) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsPortId, o.Port))
-	if a, ok := ConfigSpecServicesPortsprotocolToId[o.Protocol]; ok {
+	if a, ok := ConfigSpecServicesPortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesPortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -1812,29 +1851,29 @@ const (
 )
 
 type Disks struct {
-	DbFile       string        `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string        `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string        `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string        `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string        `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string        `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     DisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool          `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64         `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string        `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string        `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type DisksProvider string
+type DisksProvider = DiskProvider
 
 const (
-	MIREN  DisksProvider = "provider.miren"
-	LOCAL  DisksProvider = "provider.local"
-	SQLITE DisksProvider = "provider.sqlite"
+	MIREN  DiskProvider = DiskProviderMiren
+	LOCAL  DiskProvider = DiskProviderLocal
+	SQLITE DiskProvider = DiskProviderSqlite
 )
 
-var DisksproviderFromId = map[entity.Id]DisksProvider{DisksProviderMirenId: MIREN, DisksProviderLocalId: LOCAL, DisksProviderSqliteId: SQLITE}
-var DisksproviderToId = map[DisksProvider]entity.Id{MIREN: DisksProviderMirenId, LOCAL: DisksProviderLocalId, SQLITE: DisksProviderSqliteId}
+var DisksProviderFromId = map[entity.Id]DiskProvider{DisksProviderMirenId: DiskProviderMiren, DisksProviderLocalId: DiskProviderLocal, DisksProviderSqliteId: DiskProviderSqlite}
+var DisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: DisksProviderMirenId, DiskProviderLocal: DisksProviderLocalId, DiskProviderSqlite: DisksProviderSqliteId}
 
 func (o *Disks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -1856,7 +1895,7 @@ func (o *Disks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(DisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = DisksproviderFromId[a.Value.Id()]
+		o.Provider = DisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -1891,7 +1930,7 @@ func (o *Disks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(DisksOwnerId, o.Owner))
 	}
-	if a, ok := DisksproviderToId[o.Provider]; ok {
+	if a, ok := DisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(DisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(DisksReadOnlyId, o.ReadOnly))
@@ -2072,22 +2111,22 @@ const (
 )
 
 type Ports struct {
-	Name     string        `cbor:"name" json:"name"`
-	NodePort int64         `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64         `cbor:"port" json:"port"`
-	Protocol PortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string        `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type PortsProtocol string
+type PortsProtocol = PortProtocol
 
 const (
-	TCP PortsProtocol = "protocol.tcp"
-	UDP PortsProtocol = "protocol.udp"
+	TCP PortProtocol = PortProtocolTcp
+	UDP PortProtocol = PortProtocolUdp
 )
 
-var PortsprotocolFromId = map[entity.Id]PortsProtocol{PortsProtocolTcpId: TCP, PortsProtocolUdpId: UDP}
-var PortsprotocolToId = map[PortsProtocol]entity.Id{TCP: PortsProtocolTcpId, UDP: PortsProtocolUdpId}
+var PortsProtocolFromId = map[entity.Id]PortProtocol{PortsProtocolTcpId: PortProtocolTcp, PortsProtocolUdpId: PortProtocolUdp}
+var PortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortsProtocolTcpId, PortProtocolUdp: PortsProtocolUdpId}
 
 func (o *Ports) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(PortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -2100,7 +2139,7 @@ func (o *Ports) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(PortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = PortsprotocolFromId[a.Value.Id()]
+		o.Protocol = PortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(PortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -2115,7 +2154,7 @@ func (o *Ports) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(PortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(PortsPortId, o.Port))
-	if a, ok := PortsprotocolToId[o.Protocol]; ok {
+	if a, ok := PortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -2430,15 +2469,13 @@ type Artifact struct {
 	Status         ArtifactStatus `cbor:"status,omitempty" json:"status,omitempty"`
 }
 
-type ArtifactStatus string
-
 const (
-	ACTIVE   ArtifactStatus = "status.active"
-	ARCHIVED ArtifactStatus = "status.archived"
+	ACTIVE   ArtifactStatus = ArtifactStatusActive
+	ARCHIVED ArtifactStatus = ArtifactStatusArchived
 )
 
-var artifactstatusFromId = map[entity.Id]ArtifactStatus{ArtifactStatusActiveId: ACTIVE, ArtifactStatusArchivedId: ARCHIVED}
-var artifactstatusToId = map[ArtifactStatus]entity.Id{ACTIVE: ArtifactStatusActiveId, ARCHIVED: ArtifactStatusArchivedId}
+var ArtifactStatusFromId = map[entity.Id]ArtifactStatus{ArtifactStatusActiveId: ArtifactStatusActive, ArtifactStatusArchivedId: ArtifactStatusArchived}
+var ArtifactStatusToId = map[ArtifactStatus]entity.Id{ArtifactStatusActive: ArtifactStatusActiveId, ArtifactStatusArchived: ArtifactStatusArchivedId}
 
 func (o *Artifact) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -2452,7 +2489,7 @@ func (o *Artifact) Decode(e entity.AttrGetter) {
 		o.ManifestDigest = a.Value.String()
 	}
 	if a, ok := e.Get(ArtifactStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = artifactstatusFromId[a.Value.Id()]
+		o.Status = ArtifactStatusFromId[a.Value.Id()]
 	}
 }
 
@@ -2482,7 +2519,7 @@ func (o *Artifact) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ManifestDigest) {
 		attrs = append(attrs, entity.String(ArtifactManifestDigestId, o.ManifestDigest))
 	}
-	if a, ok := artifactstatusToId[o.Status]; ok {
+	if a, ok := ArtifactStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(ArtifactStatusId, a))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindArtifact))
@@ -3049,17 +3086,15 @@ type KeyRotation struct {
 	ToKey        string            `cbor:"to_key,omitempty" json:"to_key,omitempty"`
 }
 
-type KeyRotationStatus string
-
 const (
-	REWRAPPING KeyRotationStatus = "status.rewrapping"
-	RETIRING   KeyRotationStatus = "status.retiring"
-	DONE       KeyRotationStatus = "status.done"
-	FAILED     KeyRotationStatus = "status.failed"
+	REWRAPPING KeyRotationStatus = KeyRotationStatusRewrapping
+	RETIRING   KeyRotationStatus = KeyRotationStatusRetiring
+	DONE       KeyRotationStatus = KeyRotationStatusDone
+	FAILED     KeyRotationStatus = KeyRotationStatusFailed
 )
 
-var key_rotationstatusFromId = map[entity.Id]KeyRotationStatus{KeyRotationStatusRewrappingId: REWRAPPING, KeyRotationStatusRetiringId: RETIRING, KeyRotationStatusDoneId: DONE, KeyRotationStatusFailedId: FAILED}
-var key_rotationstatusToId = map[KeyRotationStatus]entity.Id{REWRAPPING: KeyRotationStatusRewrappingId, RETIRING: KeyRotationStatusRetiringId, DONE: KeyRotationStatusDoneId, FAILED: KeyRotationStatusFailedId}
+var KeyRotationStatusFromId = map[entity.Id]KeyRotationStatus{KeyRotationStatusRewrappingId: KeyRotationStatusRewrapping, KeyRotationStatusRetiringId: KeyRotationStatusRetiring, KeyRotationStatusDoneId: KeyRotationStatusDone, KeyRotationStatusFailedId: KeyRotationStatusFailed}
+var KeyRotationStatusToId = map[KeyRotationStatus]entity.Id{KeyRotationStatusRewrapping: KeyRotationStatusRewrappingId, KeyRotationStatusRetiring: KeyRotationStatusRetiringId, KeyRotationStatusDone: KeyRotationStatusDoneId, KeyRotationStatusFailed: KeyRotationStatusFailedId}
 
 func (o *KeyRotation) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -3073,7 +3108,7 @@ func (o *KeyRotation) Decode(e entity.AttrGetter) {
 		o.Rewrapped = a.Value.Int64()
 	}
 	if a, ok := e.Get(KeyRotationStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = key_rotationstatusFromId[a.Value.Id()]
+		o.Status = KeyRotationStatusFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(KeyRotationToKeyId); ok && a.Value.Kind() == entity.KindString {
 		o.ToKey = a.Value.String()
@@ -3106,7 +3141,7 @@ func (o *KeyRotation) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Rewrapped) {
 		attrs = append(attrs, entity.Int64(KeyRotationRewrappedId, o.Rewrapped))
 	}
-	if a, ok := key_rotationstatusToId[o.Status]; ok {
+	if a, ok := KeyRotationStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(KeyRotationStatusId, a))
 	}
 	if !entity.Empty(o.ToKey) {
@@ -3517,16 +3552,14 @@ type SecretVersion struct {
 	WrappedDek []byte             `cbor:"wrapped_dek,omitempty" json:"wrapped_dek,omitempty"`
 }
 
-type SecretVersionState string
-
 const (
-	ENABLED   SecretVersionState = "state.enabled"
-	DISABLED  SecretVersionState = "state.disabled"
-	DESTROYED SecretVersionState = "state.destroyed"
+	ENABLED   SecretVersionState = SecretVersionStateEnabled
+	DISABLED  SecretVersionState = SecretVersionStateDisabled
+	DESTROYED SecretVersionState = SecretVersionStateDestroyed
 )
 
-var secret_versionstateFromId = map[entity.Id]SecretVersionState{SecretVersionStateEnabledId: ENABLED, SecretVersionStateDisabledId: DISABLED, SecretVersionStateDestroyedId: DESTROYED}
-var secret_versionstateToId = map[SecretVersionState]entity.Id{ENABLED: SecretVersionStateEnabledId, DISABLED: SecretVersionStateDisabledId, DESTROYED: SecretVersionStateDestroyedId}
+var SecretVersionStateFromId = map[entity.Id]SecretVersionState{SecretVersionStateEnabledId: SecretVersionStateEnabled, SecretVersionStateDisabledId: SecretVersionStateDisabled, SecretVersionStateDestroyedId: SecretVersionStateDestroyed}
+var SecretVersionStateToId = map[SecretVersionState]entity.Id{SecretVersionStateEnabled: SecretVersionStateEnabledId, SecretVersionStateDisabled: SecretVersionStateDisabledId, SecretVersionStateDestroyed: SecretVersionStateDestroyedId}
 
 func (o *SecretVersion) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -3540,7 +3573,7 @@ func (o *SecretVersion) Decode(e entity.AttrGetter) {
 		o.Secret = a.Value.Id()
 	}
 	if a, ok := e.Get(SecretVersionStateId); ok && a.Value.Kind() == entity.KindId {
-		o.State = secret_versionstateFromId[a.Value.Id()]
+		o.State = SecretVersionStateFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(SecretVersionValueMacId); ok && a.Value.Kind() == entity.KindString {
 		o.ValueMac = a.Value.String()
@@ -3576,7 +3609,7 @@ func (o *SecretVersion) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Secret) {
 		attrs = append(attrs, entity.Ref(SecretVersionSecretId, o.Secret))
 	}
-	if a, ok := secret_versionstateToId[o.State]; ok {
+	if a, ok := SecretVersionStateToId[o.State]; ok {
 		attrs = append(attrs, entity.Ref(SecretVersionStateId, a))
 	}
 	if !entity.Empty(o.ValueMac) {
@@ -3653,5 +3686,5 @@ func init() {
 		(&Secret{}).InitSchema(sb)
 		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ے\xf46\xf1\x7f\x8d\x7f\xfe\x10 \x9c\t\xe0$\x84\x00\xe1\x90\xe2pA\x157<\x82Kc˶vl˟\xa4\x99\xdd\xe1\x8e3\x14E\x15\xcf\xc0\xb7\x1f7y>\xb8\xa6\xac\x93\xa5\xb6lI\x9e\xe5fK-\xb9\x7f:u\xb7Z\xad\xdey\xaeG4\xe0\xb1\xc6\xd7b \f\x8fEE\x19\xc6g2\xd6\xfc\xd3G\xbf\xf6\xbd\xb9\xb6@\xd3\xf4/\xc9\xc3@+\x9a&\xc5\xf7\x9f\xa6\xa6\x03\"#\x00m\x1a\x82\xfb\x9a\xff\xe9\xf5\x89\xd4O_^3\x17\xa8\x12\xe4\x8a\xcb\x1aO=\xbd\rx\x14\xb2\x9bW\xebjq\x9b\xf0\x89\xd4\x12\xe8\x9dm\xa0+f\x9c\xd0QM\x10\xd4i\x88\xe7\x19\xe2\x8b\x01\x88\xa5\xb7\xb2\xa7\xd5YbPX9\x83\x90\x8a\x0e\x13\x1d\xf1(\x96\x92Z\x1f\x88[\x04pS\x16\xec\xf7r\x9e\xef\x82A\x02\xa0\x02U\xaf.\x84\xe1\xbaDj\xd9\xcen\xc5<\xd0Z\x90\x01K\xa8oE\xa0\x1c\x9a\xd4\x12l\xf0\xabf\xb8\x86\vF\xc6V\x02~#\x02\x88\x9f&\xc207C{ph;\xb2V\xefL{\xfd\x00\xf5S\x87\xfa\x89\x91\x01\xb1[9\xafи \u0380\x9b\x1bOF\"\b\xeaˊ\x8e\ri\xd5ƃ:Wv\xfe?\x0011\xfa\x80+5\xd0\xd6\x10.\xd3\x17\x02L\x8f\x94\x9d{\x8a\xea\x92\xd1\x1e\xab\x15\xf3\xab\x9c\x15\u06ddh\x85\xa6i5,\xa9v\x1cW\fkɺ\x80\x0fT[\x8a,\xfdNN\xe1+A\xfe\xa2\xba06\uf66b7\x14V\ueb5fƙ\x90\xe8$s-K\xa9so\x14\xfb\xd3gB\xd3\xd7;\xa1\xe6\x7f\x05_\xe8Ɣ\x05\xf8\xad\x1c\xf8g\xc3\x00\x05}\x1c1\x93]`UL\x1d\xbb\x91\x94\x15\xb22\x99L\x90\x06\x99\xd1C\xabjZS\x86\xff\a9|\xb8B\x06a\xb60\xb2\x8bY\x8c\xf6\x85\xd6p\fh$\r\xe6J\xde;KA\r\xffZ\x8c\xbf\xacIk`(\xactФ\xc1\xfd\xdc\x16\x1a\x17H\\\xb8\x04itY\x1a\b<^\x86\xf3\xfc\xa7\xbc\xa2\xfe\x82\xf9?\x1be\xceW˭\x98\xf4\x01\xd0!Vu\xe4\x8a\xd7\x1d\x9a\xcft\xfb\xee\xd6vft\xe1\xbd\x1d\xb0@5\x12(\xbc\xb7\xa65\xc9\xce\a\xd7\xc6 \x14=:\xe1\x9e\xd7\x03\x1ao\xffV+\xa4k\xe6\x15²\x1c\x94m\v 5r\xf9\x03\xb7\xf8\xf3[|{\x16q\x7f\xe5\f\xc4jRr\xe5\x16\x9b\xae\xcf˷6\x8f\x91\x94\xe5\xfb\x87\x9c\xc5ۛ\x18\xdb\xca\x01\xcf\x7f\x9f\xa7\xb4K\xd6Y\n\xae\x1d4\xa8\x00\xc15\xa8g\xb7\x02\xe2@\xaf\xc8\xc1\xa9\xfa\v\x17\x98\x99\x13\xf9\xc1\xa1!\xcaWwP\xe80\xf5X,nB\xef\xd5@Eݙ\x97*\xe2\xba<\xddԼ܊\x88c\x04`\x8b0l\xba3\x19\x9e\xb0\x04)\xd0Et\xe5\x80EGk\xbd\xfeN\x05\\\xb9\xb0$( ~9-j`\x88\xb4\rT\x00\xb3\x97\xc3\x05\x1a\x94\x14\x92\x85L\x93&\x05rᘕx@\xa4Wb\xe0\xd09\x93\x91lZ\x94ZC\xe4LF\xf2X\xcd \v\x99zb>\x18\xb4\xd3-x\xc282\x81\x19\xa3\xac\x1c0\xe7\xa8\xd5ޕ_\x05\xc5vG\xa1[\"J26T)\xb4\xa52=\xf9\x00`\x8a\xb4\xfe\xf5u\xc8\xc2\x1b\x04)\xaaT\xb9\x1f\x8d.\xc3-\xd9\xe4=14V\xca\xebjt\x19\xf2~s\x8b\xb7\xa2\xc3@D\xa9\xbat\x84\x8b\x87\x1a \xea\xd7#\xa8\xbe\xd4O\xabZ\x88\a=\x15\x8bGxY\x13&\x94\xb5\xe9,%\xfd\x83\x13\xa5}\xf0\x10\xb3ܮ\xf4\xb4\x01\xb9\tj\x8c\xe5fx\xa2\x9c\b\xcaT\xef\x0f\x0e\r1\xa0of1x\x87\xd4\xf13\x17b7(\xcb5_#\xc8ؖ\x82a\\v\x88\xab-~\xb5\xaeN\xf6T[\"fd\xd9헶\x15\x85N\x98!aN-\xb2\x90p\xe8\xf0\x1e\xe6b\\DE\xb5\x89h\r\x11\x13K\x87\x7fB\xf2\xea\x01\x03\x02\xebj\xf74\x87\"\xe0\xe2u\x88\xab\xd1`U\x84c)\xb6y9\xbd\xb0ʍB\x18\xf3)\x82-\x19';\x17\x889'\xf2\x83C\xfb\xf7v\xa8\x1a>F\xc8qN\xdc'\xd7?i\xc1E/ň\xcf \xabu7\xc1\"\xe3\xechS\x1a\xb8s\x9b/RL\xe8߃\a\xbe\x03R\xa0z c)\xe8\x19\x1b\x87˩\x88\xd9S\x0fh\xcb_\x84Z\xe31\xe9˂v\x18\r军\x02\x81\v\xcb\xee\x04.\x1a'`\xb1s4\xbd\xb3\x0e2\x01\xb4$?\xeaMh5\x14\xbf\xb4\xe4h\xacݻGg\xeb\"\xc3{7:<\v\x9f\x1e\xbf\x80\xa2f\x10\f\x94\x12dC\xc4.:\x96\x9bcv%\x956W\x86H\xb5\xabvE\x82\xaa\xaa\xa7\x8aG\xc1n\x13%\xa3\t\x84-4\x1c%\xd4\x13\x8d0Q&tle.\xcd\\\x15\x19\xc5\xde\xf6\xe9\x99x\xdbg\xeb\xee\xdf>\x03\x95\xe4\x00\xbd\t\xdd\xd1\fBQ\x13~v\x87\x89UEd\x8c紐Q\xf5\x902ҿ\x05\xefҒ\xbd\xa8OeCt\x9c\xaf5DL\xca\x14\xeb\xfc)\xbfq\x81\a%\x00\x0e\x1du\xdf%@\x8f\x11\xc7\xd2}\xa2\x17%\b\x83_\x956\x8e\x81^FQ\xda@݃CC\x80խ\\\x02D\x82\tPz\x15\xd3^x\xed9x{\x97l\x13\xa3WRk\xce\xceR\xc1\xc8\xd0k\xdc\xd3\n\xf5+$\xc3U\xc8f,[\xb6?\x92u\r\x7f\xd5\x13\x81Wje\xbfR\xed\xc1sD\r\x9caT\x97t\xec\x95\xd7H\x16\xd2wZ\xc3R\xc6\xc9opٞ\xb45҄\xd1\xf7\xa0\xab\xa9\xf9\xa4;\xa2]\x01U\x8e\x9dz\x9aQNǸ5d!SM\xa0R\xd77\xa1\xa1Y\x05\xc4\xe3\xd5Q\xf0j&#\xea]d\xa87\x1e\xaf)\xca\xfd砌\xe2\xf1Z\x9cP5\xbb\tj\xd1\r\x11[\xbe\x99\xb1Ƽbd\xb2\x0e\xf3٭\x00\x000|=\xf3\x9f\xb1\x12\x92j.\xc4\xee\x143\x03\xc3\xeayG)\x85\xa5\xf6%kf\xe4x\xe4D\x90\xab\xbe\xb9/\xa4\xcf\n\xd5^\xb2\xc6E\xeb\xff\x02lR3\x95ګb\xf2k\b\x1e\xaf\xc1\xa8\x9e\xddp2\x98K\x1dVE8\x9eU\x80\xd8pF\f\xd8&\xdf\xc6\x01\x1ct\xb1=&'Z\xb2\x901'\xddG\x90;\xb4 \xa8\xdb\xc1\x82\xb0\x7f\xb8\xce,\xde\xe1\xaa*^\xf0p\x95\x80)\xfa\xf7Ǡ\x84I\xf6ؾ\xac\x8c\xb1b\xa25.\xedΐ\x85\xf4\xb6'\xdc\xe1Ɔ\x06\xcf#\xcd\xc1\xa8\xa0\x15\xed\xedy\xa4\xa8\xf0KE%\xaai\xa5\xc0\x86\xa7\x10\xd5T]\xea\x9d\x0f.\xf5\xb43v+\x105\x94\x85}C-\xb9\x9fC\xb7o\xbb\x99\xbaPVtTO\x80\x952P<\xd4\x10\x11\xa2O2\x84(\x00\x9f.R0\x88\x18\x00+\x06Z\xeb5\x93%(`\xef'@\xcc\xdbKF.\xd08\xbb\xd0\xd2\t\xf3\xab<\xb1\xfbA\x02\xe2l\xbf1\x17\xbc\x9c0\xb38\xea\xad7\xdc\xe4\xf5\xf0aB\x0f|v{ʚ>\x8ee\x8d{\xa46sZ\xd5\xc2\xe5H\x82\xee.BB\xb8n鴪M\x95N\xa6\xfbp\xbaؿy\x19\xd9\t\x06ύ|\t\xc4DY\x13\x86+\x1bƣ\xb0\x12\xdaҍ\v\xd5\x151\x82N=v/T\xb6\xee\xfe\v\x95\x81J\xf7d\xa0\x8fo\x10\xd2\xdc\x19\x18ΰ\xdc9>\xcdʂY\x94]\xcf\x06ޓ-W\x92{\x03OK˝\xe8\xe3\xc0\xfd]\xf8\xe3\x8e\x0e<\x1a,\xefao\xc7\xca\xd0~\x96\x84\x92\x92`\xd4x-L~\x0e\x14\xa8scZ\xef\xed@\xe1\xa9\xc3\x03f\xa8/A\"\x8f\b\xb6\xf8AK\x98\xb7\x14\x06\x96\xcf\xd7J)ae\xec\xc1!\f(D\xaf_\x8a\xbc\xaaXX\xd6\x05\x93\x0eeya\n\x88,dL\x81\\\x90\xc4\xfc\x8a\xbdU:\x94b\xb1\x17dܐ\xee\x83AF\x85\x90~FC\x95W\xfc\xf2\x1d\xcdy\xc4zp\xe8\x98\xea9\b摥5D,0\xa1y\xe7\xd1+\xa7@\x96bfJs\xdd\xf1,\xa4\x11\x0e\x1b\v\xbdq\xc1H\x91\xbb;\x9b\xa1\xfd\x94N\xdc\\\x85\xd5\x1a\xc8\xf8\xfe\x19\xdfJF\x85|\x19Ҳ\xb2J\xdfr>I\x97\x12h\xda\\\x94\xac\a\u181a{h\r\xa3CiN\xa9\xceR\xb1Wy\x0f\x83\xe1G\x86\xa6I\x9fWd!\xbd\xeb\x04\xdc(\x0f\"5\xf7鹮\xe9\xb8~G\xd1)Ms[\xd3 \xd2\xe3\xc0\x1dV}\xa2Z;\x86\x05\x99'\xb7\x95\x1ce\xda\x1f\xf4d\xe6OWz`>5_\x04\xe5ћ\xa6\xa0v\xad\x1b]N\x15\xc7\xde\x05\n\xcb#%uU\x9e\xc8X\x93\xb1ݐG\xf7\x93\xf4\x14\x13\xe8b\xb9(\xc1\x97\xa27\xa1L[\x8f\xab\xea\x11\x19fG\xba&\xf3\x84ܻ\xf9\xb4j\x8b\x18h\xd0Q\xb1\xdbQ\xfaC\v<\xd9 Ҿs\aoc+\xee\t\t\x81\x996N\x86H\x95\x06*\xe1\x16\xb4`\x97\xde:d\xf9\xb3P\x88=$\xc2\xf9Eǣ\x1b]\x8e\x99\x1c\x8f\x7f'\xa2\xbd\xf74\xeea\xe8\x14\xa4\xd2]D\n+\x93U˅^+\xf0\xacZ\xbe\xf3\xa8\xe5\x0e\x1e\xc5\xfeG\xe9\x82\x06\xdd\x15\x1f'\xa8`A\x8b\n\xf8\xf8\x84+u\xac\xcbRD\x89\xe0\x96\xd9v3\xf7\x19$\xfd\b\x83.u\x10.\xf1IPZ\x93o'\x01\xde\xf3\xdc\az(\xf6{Hz\xaf\x97\xdb\xf4\x9d\xac\x91\x17\x88\xb5\xee\xf0kIC\xe5\xf8(\x0f3\xf64,\xc7\xf9q.\xa6\x1f\x1b;g\xc4\xc4>\xceZ\xea\xe2P8\xec\x93\xc3ӉE\xc9~y\x1c9/x\xf6\xeb\xe3\x1d\xdd\x17S\xfb\xd5\xf1\x8e\x0f\x86\xda\xee\xe9\xf1e#pOo\xab\x1e\xe7\x0eM\x7fNwoB\x81\xc1\xc8h\x8f=\xed\x7f\x98\xa7$\x99\xaf\xfb?:0\x85\xb4\xc7\xffL\xc5\xcb\xce\r\xf8\xd9\x11\xfc\xecԁC\xb3\xc8\xc8,\x80\x81\xf1$\xfc\xc8\xfbP\xa6\x05O\xccK\xf8\xf1\x11\xd4#i\v?\xbf\xa7#/\xb7\xe1>$/\x01\xe2\x17wA9Y\x12?9\x02\x94\x98DqH\x99\xe39\x16?<\x04\x1b\x0f\x1f\x1fZ\x8a\xbb34\x1e\xd7v}\xc9\xd9\xf8 oH\xf9\x99\x1c\x1f\xe4Y\xf3\xacd\x8eL\xbdO\xce\xf5\xc8ܧ\xdcT\x90\\/6\x9a*\x92)\xafə$\x99ꕑh\x92y\n$\xe6\xa1|?\x1f\xf5p,\xf6\xb2\xd6*\x93\xb8\x92\xe9%\xed\xa5\xb3<\x1f\x10\x97\x01\vF*\xe5e\xb7\x86\x88h\xe9GyZ\xaaQ\xd3/%\x99\x1a\xa5\xf1\v<\xca\xe7U5\x15C\xf8\x92\x94\xe9\xaf\x18d2\n̮H\xa7sX\xeaN\xcd2\xe8\xdb\xff\f}\x17\xeaN\x16R\xa6\xb3b!/\xa7\x9e\xa8hI\xa3\xcbvy\xf7o\vo\xad\xe5_\x83\xbe>p\xf9\x8f8x\x99h{\v\x95i#\x92\x93\xb82\xf7T\xe5r9ny\xef\xd5\xdciْ\x13\xc72Mձt\xb2\xcc\v]fFY\xe6Q\x92\x94p\x96i\xaer\xf2\xd1\x0e\rw/]-S\xf3\x8ff\xb3\xfd\xf4\x9enl\xca\xdb}(&/\xee\xd0\x1a\x1eL\x9b\vx\xcf\x12o?\x9bi\xcd$\a\xfeݴ\x81\x1fI[\x82\xc9\x04ah\x81@DFUd\xe6/\xed`\xa7\xe8\xed_2l\xba\x04\x8d\xc6q\xe5\n\xc0\xff\xe3\xdb\x03\xbc?#=\x82\x9e~\x89I;8,p\xdeM#g\x91\xa3\u05cc4?t\x01\xa3\x8c\xb4D\r\xb2\xd1\xe5c\xe7\xda\x02\x99tmI3\x0f\vh\xe2\x9d%w\xfa\t\x17\x964{\xb0@\x1e\xbe\xad8\x06I\xa9\xa9\xbe\xaa\xa4ݠ\xd5\x00\x06\xf4\xb4d\x80\xaa\xe3h\x04u\xdeI\x97\xf6\x14\xa6\xb0_\xc4\xffSPl\xf6B\xf5#Ck\x88\xdd\xcc\xd9=4^u\xb8\xbe\xe8\xd0og\xa9{\x06\xe8z}\xed\x96×\x05\xc8H\xdb\xea\x90ck\x88\xf4\x17u_22L\xa9I]t\x0f\x14\xb2T\xbe\x88A\xb5p\xe9\x06\xf5{y\x83O\v\t\xa5Y\xe9\x05\xf4\x7f`\xa5\x17\xf0]+\x9dfR\x17\xb0\x174\xa9\v苚T\a\xf6\xa5L\xea\x02yؤ\xf2Eq,\xda~b\x9d3\x80\xfd\x1f\xbe\xf3\x13\x1a\u0099\x19\xeaw\xd3\"\x99\x19\xfeG\xe9\x89O0\xdd\xd6\xc7)*2u\x98\t\xfc\xa4\xd3\x17\x1cz^=|\xba\t\xed\xf0\xc2\xec\n\x00t\xc6g\x13\xd8nt9\x96R\x03\x10\x14\xa9%B\x95\xddT\x11\x98\xcb\x04\xb9\x05\x12z\xf3U1\xfcNcBO\xc1\xe4:l\xa2T]M\xb8\xfal\xb5\r\xf23\xd3Lj\xcc\x05\xa3\xb7\x8d\x9f(\x93)\xf8\xaa}\xe3\xdf[\xbc)\xc8!\x96\x03\xaa\x8c\xf95$\\H\x98\\\tpt\xeebYc\xf5\xbb\x97g\xb7b\xd9\xd5}\xc1\xf51\xe1\xb7g\xdeQ&\x94\xf2|Z\xa1i\xda\xfa\xa9Q\xf3\xa3\x80;\xbf\x89h\x7f{o\xef\x87\x03#\xbf\xe2fZ\x97\x9f,\xdb\xfd\xb17\xf7w/\"\xbfm\xe6\xe5\xd0\xc6~##!\xc3\xd1\xfd\xc2\xcfڊ&D&\x19\x13\xff\x1b\xb0\x8d)\xf6\xe7\xbf\x00\x00\x00\xff\xff\x01\x00\x00\xff\xffS\xedYVQV\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\ے\xf46\x11~\r\x02\x04\bg\x02L\x12B\x80pHq\xb8\xa0\x8a\x1b\x1e\xc1\xa5\xb1e\x8fvl˿\xa4\x99\xdd\xe5\x8e$\x9c\x8a\xa2\x8ag\xe0ߟ\\\xf0|pM\xe9h\xa9-[\x92g\xff\x9b-\xb5\xac\xfet\xean\xb5Z\xbd\xf3Ԍh\xc0c\x83\xaf\x87\x810<\x1ej\xca0>\x93\xb1\xe1\xff\xb9\x0fkߑ\xb5\a4M\xffV<\f|EӤ\xf9\xfe\xd76t@d\x04\xa0mKp\xdf\xf0?\xbf<\x92\xe6\xe1\xebK\xe6\x03\xaa\x05\xb9\xe2\xaa\xc1SO\x1f\a<\n\xd5͋e\xb5x\x9c\xf0\x914\n\xe8\xadu\xa0+f\x9c\xd0QO\x10\xd4\x19\x88'\t\xf1\xd5\b\xc4\xdc[\xd5\xd3\xfa\xac0(\xac\x94 \xa4\xa6\xc3DG<\x8a\xb9\xa4\xd7\a\xe2\x1e\"\xb89\v\xf6\x89\x9a\xe7\xdb`\x90\x00\xe8\x80\xea\x17\x17\xc2pS!\xbdlg\xbfB\x0e\xb4\x11d\xc0\n\xea{\t(\x8f&\x8d\x02\x1b\xc2*\t\xd7r\xc1\xc8\xd8)\xc0\xef$\x00\xf1\xc3D\x18\xe6vhw\x1e\xedF֙\x9d\xe9\xae\xef\xa1~:\xa1~bd@챒+4Έ\x12pu\xe3\xc9H\x04A}Uӱ%\x9d\xdexP\xe7\xcb\xce\xe7#\x10\x13\xa3w\xb8\xd6\x03\xed,\xe13}%\xc2tOٹ\xa7\xa8\xa9\x18\xed\xb1^\xb1\xb0\xca[\xb1͉\xd6h\x9a\x16\xc3Rj\xc7qͰ\x91\xac\vh\xa0\xbf\xe5\xc8\xd2\xc7j\n߈\xf2\x1f\xea\vcr\xcf|\xbd\xa1\xb0rk\xfd\f΄\xc4I17\xaa\x94;\xf7V\xb3?|!6}\xb3\x13z\xfeW\xd0\xc2|\xccY\x80?\xaa\x81\x7f1\x0ep\xa0\xf7#f\xaa\v\xac\x8b\xb9c\xb7\x92\xb2@\xd6&\x93\t\xd2\";zhU\xedל\xe1\x7f\xaa\x86\x0fW\xc8\"H\v\xa3\xba\x90b\xb4-\xb4\x96c@#i1\xd7\xf2~r\x14\xd4\xf0o\xa5\xf8\xab\x86t\x16\x86\xc2J\x0f\xed3\x89\xf6\xa554.\x90\xb8\xf0\x06\x8f\x97\xe1\xe1k\xa0\x91\xact+Y\x99\x96\xb2\xbb֔\x95)\x91\xad\xce\xf2OuE\xfd\x05\xf3\x7f\xb5\xda\xf0/6F3\x99\xa3\xe2\x84X}\"W\xbc\x1c\x9amf\xbe\xf7\nz\xc0\xc3\x113\xfeq\v\xb8\a\xf5\x15\x8f5m\xc8\xd8\xd5\f\xb7\x9bBs\xb2\xb3\x89K̀\x05j\x90@q\xa9\xb1_\xb3N\x90\xa7ت[\x84C\x8f\x8e\xb8\xe7̀\xc6\xc7\xff\xea\x1555rE\xb1*G\xb5\xc6\x01(]\x9f\xff@\xe1\xf9\xf2\x1aߖ\xad\xdd^9\v\xb1\x98\x94Z\xb9\xf9\xb40'\xf1\x1b\xab\aT\xce\xf2\xfdS\xcd\xe2\xcdU\x8cu\xb5\x83\x9eE\xc8S\xb9%;9\n\xae\x1d4\xd5\x00\xc17\xd5g\xbf\x02\xe2@\x7f\xcbé\xfb\v\x17\x98ٳ\xfeΣ!\xca77P\xe80\xf5X\xcc\x0eH\x1f\xd4xHO\x89y\xe9\"n\xaa㣞\x97_\x91p\xb9\x00\xec!\x0e\x9b\xef\xa6\xc6'\xac@\x0e\xe8\"NՀŉ6f\xfd\xbd\n\xb8rqI\xd0@\xfcr\x9c\xd5\xc0\x12y\x1b\xa8\x01\xa4\xff\xc4\x05\x1a\xb4\x14\x92\x99̓&\rr\xe1\x98Ux@\xa4\xd7b\xe0\xd1%\x93QlF\x94:K\x94LF\xf18\xcd 3\x99{\x16\xdfY\xb4\xe3c\xf4\xec\xf2d\x023FY5`\xceQg\xfc\xb6\xb0\n\x8a\xed\x86BwDTdl\xa9VhG\x15\xde\x11\"\x809\xd2\xfa\xb7\x971\vo\x11\x94\xa8R\xedش\xa6\f\xb7d\x95\xf7\xc8\xd0Xk\x7f\xae5e\xc8\xfb\xdd5ޚ\x0e\x03\x11\x95\xee\xd2\x13.\x1e\xfb\x00Q\xbf\x9d@\r\xa5~Z\xd4B<\xe8\x039<«\x860\xa1\xad\xcd\xc9Qʟ8R\xdaG\x0f1\xc7\xedKO\x17\x91\x9b\xa8\xc68n\x86'ʉ\xa0L\xf7~\xe7\xd1\x10\x03z}\x0e\x83\x9f\x90>~d!u7s\\\xf2\x82BƮ\x12\f\xe3ꄸ\xde\xe2\x17\xcb\xeal\x1f\xb8#B\"\xabn\xa1\xf7\xe6\xc95\x9d0C\u009eZd&\xe1\xd0\xe1\r\xcfǸ\x88\x9a\x1a\x13\xd1Y\"%\x96\x1e\xff\x84ԥ\x06\x86\x1a\x96\xd5\xfei\x0eE\xc0\xc7;!\xaeG\x83u\x11\x8e\xe5\xb0\xce\xcb\xe9\x85\xd5~|ÚO\x11\xfdRp\xb2s\x81\x98w\"\xdfyt\x18\x11\x80\xaa\x11b\xc4\x1c\xed\xcc}\xf2\xfd\x93\x0e\\!s\x8c\xb8\x04Y\xac\xbb\rCYgǘ\xd2\xc8m\u07b6\xc81\xa1\xff\x88\x1e\xf8\x1e\xc8\x015\x03\x19+A\xcf\xd8:\\^Eʞ\x06@k\xfe\"Ԛ\x80\xc9\\\x16\x8c\xc3h)?\x90\x15\t\x898v/$\xd2z\xa1\x90\x8d\xa3\xe9\xade\xf8\n\xa0e\xf9Q\xafb\xab\xa1\xf9\x95%Gc\xe3\xdf=N\xae.1\xbc\xb7\x93\xc3s\xf0\xf9\x91\x11(j\x16\xc1BiA\xb6D\xea\xa2\xe3\xb89fWR\x1bse\x89\\\xbb\xeaV$\xaa\xaaf\xaax\x14\xecq\xa2d\xb4!\xb6\x99\x86\xa3\x84zb\x10&ʄ\x89\xdaȒ\xe4\xaa\xc9(\xb6\xb6\xcf\xcc$\xd8>Ww\xfb\xf6Y\xa8,\a\xe8U\xec\x8ef\x11\x0e\r\xe1g\x7f\x98XW$\xc6\xf8n\xfe\x18u\x0f9#\xfd{\xf4.\xad\xd8\x0fͱj\x89\x89 v\x96HI\x99f\x95M\xf9#\x17x\xd0\x02\xe0\xd1I\xf7]\x01\xf4\x18q\xac\xdc'zт0\x84Uy\xe3\x18\xe8e\x14\x95\v\x01\xdey4\x04X\xdc\xca\x15@\"\x98\x00\xa5W3m\x05\xee>\x8b\xde\xde\x15\xdb\xc4\xe8\x954\x98\xe9\x88\x134\x9f*\xe2$\x1bV\xae\x9d\x12qGE#N/qOk\xd4/z\xb4\\\a\xf5\x19\xab/\xeb\x8dT]\xcb_\xf4D\xe0\x85\xfa\xb9V\xfa{\x10\x94\xfaD#\xebA\x18\x80e\\*zD\xe95a\x185\x15\x1d{퐒\x99\f\xfd\xe1\xb8\x00s\xf2\a\\uGc\xe8\faMIԋ5|\xca\xd31^\x86.\xa7\x0eTè&h=&2\x93\xb9\xd6U[\x82W\xb1\xa19\xdd\xc6\xe3ճ\x1d\xb5$\x13\x96\xe3P`9\xf0xͱ\x1b\x7f\x89\x8a?\x1e\xaf\x87#\xaa\xa5\a\xa2\x17\xdd\x12\xa9哌\r\xe65#\x93\xf3\xc5\xcf~\x05\x00\x801w\xc9\x7f\xc6ZHjYH]W$\x03\xc3\xfaMJ둣\xb6%K2r<r\"\xc8\xd5\x04\x05f2d\x85\x16E\xb1\xa6E\xebs\x116\xa5\xccڢ\xe8b\xf6\x13\x0e\x1e\xafр\xa1\xdbp2\xd8\xfb\"\xd6E8\x9eE\xac\xdar&l\xe3*\xdf\xca\xd9\x1e\xf5\xde\x03&/\x103\x93)\xff?DP;4#\xe8\x8bǌ\xb0}nK\x96\xe0\xdc\xd6\x15\xcfxn+\xc0\x1c\xfd\xfbST\xc2\x14{j_\x16\xf6[3\xd1\x06Wng\xc8L\x06\xdb\x13\xefpeC\xa3G\x9d\xe1`TК\xf6\x1bG\x9d\xda\x1f\xd7\xce\x1eu\x9a\x8a?\xaeԢ\x9e\x16\x8any\x0e\xa2\x9e\xeaK\xb3\xd1\xe0\xd2L\xe1\x83JmXV\x0e\xac\xf8Z8\x01k\xa0lm\x1b~\xc5\xfd\x14\v\x148\xe10\x85\xaa\xa6\xa3~\a\xad\xb5\xc1\xe3\xb1\x0f\t\xa1\xfc\xa8@(#\xf0\xf9\"\n\xe3\x9d\x11\xb0\xc3@\x1b\xb3f\xaa\x04\x05\xf6\xdd\f\b\xb9Cd\xe4\x02\x8d\xd2\xdbW\xfebX\x15\x88\xf1O2\x10\xe5y\x80\xb9\xe0Մ\x99\xc3\xd1\x0f\xde\xf1OA\x0f\xefg\xf4\xc0\xa5\xe7U5\xf4~\xac\x1a\xdc#\xbd\x99Ӣ\x16.G\x16\xf4\xe9\"\x14\x84\xefAO\x8b\xda\\\xe9d\xa6\x0f\xaf\x8b\xedK\xa2\x95\x9dh\x9c\xdfʗ@LT\ra\xb8v\x11G\n+\xa1m^\xb9\xfb]\x11#\xe8\xd8c\xff\xee\xe7\xean\xbf\xfbY\xa8|\xcf\b^G,B\x9e{\x04#/\x8e\xbb\xc4GZX:\x87\xb2\xe9)\xc1+\xbd\xe3\xcar\x97\xa0)wܙ>\x13\xdcߙ?\xed8\xc1\xa3\xc6\xf1\xee\xf6\x9e\x9c\fm\xa7\x8ah)\x89\x06\xb8\x97\xc2\x14&\x82\x81:?\xfc\xf6\xce\x06\x14\x9eNx\xc0\f\xf5\x15\xc8f\x12\xd1/a|\x15&oŁ\xd5K\xbbVJX\x99z\x1b\x89\x03\nћG\xad\xa0*\x15A\xf6\xc1\x94\x83Z]\x98\x06\"3\x99R \x1f$3\xc9dk\x95J\xf3L\x92\xf1\xd0\x15\xe9\xde\x19\x0f\xd5\b\xf9g4Tyͯ\x9e\xfc\xbc\xf7\xb6;\x8fN\xa9\x9e\x87`߃:K\xa4b(\x86W\x8e^;\x05\xaa\x942S\x86\xeb\x86\x17,\x83\xb0\xdbX\x98\x8d\x8b\x06\xb5\xfc\xddY}\x85\xc8\xe9\xc4O\xabX\xac\x81z\x8a8\xe3ǊQ\xa1\x1e\xb1\x8c\xac,rؼ&\xf9R\x02M\x9b\x8fR\xf4v\x1dU\xf3\x00\xadet\xa8\xec)urT*\x81 \xc0`\xf8\x9e\xa1i2\xe7\x15\x99\xc9\xe0z\x027*\x80\xf0\x13\xc0\xa0\x1f\xab\xee(~\xeb\xec$\xb0\xa7\xa6\xa1\xe3\xf2\x81\xc8\xe4v\xc9om\x8bH\x8f#7h\xddD\x7f=1,\x88\\\x8a\xb5,1\xfb\xfd\xceL]6]h\x8dmj[\x047\xa0O=V\xd7]\xe3\x8dp\xe5f\xb4\xb9\xa8\x82\xba\x9dmM9W\xf8{\x1f(.\xfd\x944uu$\xa3\x1cϊ\xf4\xfbM\xf2so\xa0C\xe7\xa3D\x9f\xd0^Œ\x9b\x03\xae\xbaGd\x90n{C\xe4\x84\xfc\xc8´\xf8\x968\x0e@G\x87͎\xf2_\xa0\xe09\n\x91\xb6]I\xa83\v\xee\t\t\x81\x991\x85\x96ȕ\x06\xaa\xe0f\xb4h\x97\xc1:\x14y\xcfP\x88\x03$\xc2\xf9\xc5\x04\xe0[SN\x19\xb8\x80\x7f#\x84\xbf\x953\x10`\x98ܬ\xca_D\n+\xb3Uˇ^*\xb0T\xad\xd0U5r\a\x0f\xfe\xb0Q\xbe\xa0A\xe7(ĉ*X4\x05\n\xf0\xf1\t\xd7ډP\xa5\x84\x12\xc1-s\xdf\xed\xdc%H\xfe\x81\t\x1d\xf8(\\\xe6[\xa9\xb2&\xdf\xcf\x02\xbc\xe5\x1d\x14\xf4p\xd8\xee!+\x91Am\xd3\x0f\x8aF~@\xac\xf3\x87\xdf(\x1a*\xc7\ae\x98\xa97s5\xce\x0fK1\xc3Hܹ \x02\xf7a\xd1R\x1fv\x05\xdf>\xda=\x9dTL\xee\xb7\xfb\x91\xcbBu\xbf\xdf\xdf\xd1m\x11\xbc\xdf\xed\xefxg`\xef\x96\x1e\x9f7\xde\xf7\xf0\xa6\xeeQvh\xfb\xf3\xba{\x15\vC&F\xbb/\xe7\xe1\xfd2%)L{\xf8َ)\xe4eE\x14*^q\xd2į\xf6\xe0\x17\xe7T\xec\x9aEA\xca\x05\f\xc3g\xe1'^\xb7\n-xf\xc2\xc6\xcf\xf7\xa0\xbe\xce|\x8e_\xdf2\xa0 \xe9\xe36$\xc5h3C~s\x13\xd4m\xe9#\xbf\xd8\xd3wfv\xc9.;\x91N>\xf9\xe9.\xd8t\x1c|\xd7Rܜ\xbar\xbf<2\xe6d\x96\xf7ʆT\x9e\xe2\xf2^\xd9AQ\x94\xe5RhR\xb2\x93`\n\xf7\xa94G\xa6\xd4AN\xe6\xd0\x14\xcakv\x8aM\xa1z\x15d\xe0\x14\x1e0\x99\t:?.G\xdd\x1dT\xbe,\xb5\xcaf\xf4\x14:`[y>O;\xc4e\xc0\x82\x91Z;\xf0\x9d%\x12Z\xfaA\x99\x96\x1a\xd4\xfc\xfbN\xa1F\x19\xfc\x03\x1e\xd5;\xb1\x9e\x8a%BI*t\x85,2\x19\x05fWd\xf2W\x1cu\xa3fY\xf4\xf5\x7fm\xbf\tu#=\xab\xd0\x0fr\x90\x97cOt \xa65e\xb7\xbc\xdb\x17\x917\x96\xf2o@_\xee\x88+$|\xc7B\xb4\xad\x85*\xb4\x11\xd9\xd9m\x85{\xaa\x93\xdc<\x8f\xbf\x0fjn\xb4l\xd9\x19u\x85\xa6j_\x9e]\xe1]\xb10ծ\xf0(\xc9\xca\xc4+4W%\x89z\xbb\x86\xbb\x95\xc7W\xa8\xf9\xaf;\xcd\uf5f7\f\xc7\xe5\x02ކR\x9a0\xb8kOv\xe6\x13F\xbcq\x85\xb7\x9d\xe6\xb5dR\x03\xffa\xde\xc0\xf7\xe4s\xc1,\x8b8\xb4@ x\xa4+\n\x13\xbb6\xb0s\xec\xc0_\v\xce\b\x05\x9a\f9\xab\x15\x80\xff\x8b\xb9\x05x{\xea\x7f\x02=\xffR\x94w\x109ಛK\xc9\"'\xaf-y~\xed\fF\x19\xe9\x88\x1edk\xca\xfb\xce\xc9\x192\xeb\x1a\x94g\x1ef\xd0\xcc;P\xe9\xf43.@y\xf6`\x86\xdc}\xfb\xf1\f\x92VSs\xf5ɻ\x91\xeb\x01\f\xe8aN\x8d\xd5\xc7\xdb\bꂓ3\xef\xd5Nc?\x8b?\xa9\xa1\x98\xf4j\xcd{Hg\x89͔\xe2-4^\x9fps1Qꓣn\x19\xa0\xefEvk\x0ed\x11 #]g\xa2\x9e\x9d%\xf2\x1f\xffC\xc9(0\xa56\xa7\xd3?P\xc8\\\xf9,\x06\xd5\xc1\xe5\x1b\xd4\x1f\x95\r>/Ĕg\xa5g\xd0\xd7`\xa5g\xf0M+\x9dgRg\xb0g4\xa93賚T\x0f\xf6\xb9L\xea\f\xb9ۤ\xf2Yq\x1c\xdavơ7\x80\xed\x9fE\fs/\xe2I$\xfaW\xf5\x12I$a\xa3\xfc\x1c-\x98\x87\x1c\xe2\x1cj2\x9d0\x13\xf8\xc1dZx\xb4\\=||\x14\xc6ᅉ \x00\xe8\x8c\xcf6Pޚr*\xfb\a h\xd2H\x84.\x9b\xac\x96\xcfbiW\x90[ \xa1/F\x8b)\xab;Uؼ\xd2͕\xac\xe8b\xfce\xc9F\xbe\xa2i\x87\xd8\x06\xc9N\r\xe1\xba\xd9b\xd7T3\xfb\x994\x98\vF\x1fW~\xc5N\xfd+\x83\xfe\x1e\xbe\xf8t\xb0\x9f\x19h\xe5Z\xb5\xfc\x0f\xa3`\xb1\xd4\xec\xaa\x01\xd5\xd6\xd0[\x12n\x19\xcco\x058&}\xb4j\xb0\xfe\xfdճ_1\xcb϶\x8a\x84\x98\xb0홟\xe4mX\xff\xdcm\x8d\xa6i\xed'o\xed\x8fSn\xfc6\xa7\xfb\rȭ\x1f\xb0L\xfc\xe6\x9f\xfd:\xff\xc0\xdd\xe6O\x03\xfa\xbf\x92\x92\xf8%\xbc \x8d9\xf5\x8b*\x19i\x9f~\x8b0\x95-\x99%\x9ae\xb6\xc26`\x1bs,\xdd\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x98\xb0\x98\x02\xd9X\x00\x00"))
 }

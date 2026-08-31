@@ -25,7 +25,7 @@ var allowedEnumWraps = map[string]bool{}
 // SandboxStatusStoppedId = "dev.miren.compute/status.stopped"). The recurring
 // bug is wrapping the *short* enum value constant instead —
 // entity.Ref(SandboxStatusId, entity.Id(compute_v1alpha.STOPPED)) — which
-// yields "status.stopped", a value no schema.Choices set contains. The runtime
+// yields "stopped", a value no schema.Choices set contains. The runtime
 // validator now rejects that on any write it exercises; this scan catches the
 // shape everywhere at CI time, including non-write contexts (comparisons) the
 // validator never sees.

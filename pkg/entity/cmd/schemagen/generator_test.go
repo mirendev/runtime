@@ -631,12 +631,16 @@ func TestEnumFieldEmptiness(t *testing.T) {
 	sf := &schemaFile{
 		Domain:  "test",
 		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"deployment_status": {Values: []string{"pending", "running", "completed", "failed"}},
+		},
 		Kinds: map[string]schemaAttrs{
 			"deployment": {
 				"status": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"pending", "running", "completed", "failed"},
-					Doc:     "Deployment status",
+					Type:     "enum",
+					Enum:     "deployment_status",
+					Encoding: "ref",
+					Doc:      "Deployment status",
 				},
 			},
 		},
@@ -1398,27 +1402,28 @@ func TestRefFieldWithMany(t *testing.T) {
 	})
 }
 
-func TestEnumInNestedComponentsNamespacing(t *testing.T) {
-	// Test that enum constants in nested components are properly namespaced
-	// to avoid collisions when component and kind have same nested structure with enums
-	// Key behavior: standalone components get prefixed enums (PortSpecTCP),
-	// kinds get simple enums (TCP) for backward compatibility
+func TestNamedEnumSharedAcrossFieldsPreservesRefEncoding(t *testing.T) {
 	sf := &schemaFile{
 		Domain:  "test.example",
 		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"port_protocol": {Values: []string{"tcp", "udp"}},
+		},
 		Components: map[string]schemaAttrs{
 			"port_spec": {
 				"protocol": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"tcp", "udp"},
+					Type:     "enum",
+					Enum:     "port_protocol",
+					Encoding: "ref",
 				},
 			},
 		},
 		Kinds: map[string]schemaAttrs{
 			"port": {
 				"protocol": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"tcp", "udp"},
+					Type:     "enum",
+					Enum:     "port_protocol",
+					Encoding: "ref",
 				},
 				"spec": &schemaAttr{
 					Type: "port_spec",
@@ -1433,22 +1438,14 @@ func TestEnumInNestedComponentsNamespacing(t *testing.T) {
 		t.Fatalf("Failed to generate schema: %v", err)
 	}
 
-	// Component enum constants should be prefixed with PortSpec
-	if !strings.Contains(code, "PortSpecTCP") {
-		t.Error("Component enum constants should be prefixed with parent context (PortSpecTCP)")
-		t.Logf("Generated code:\n%s", code)
+	if count := strings.Count(code, "type PortProtocol string"); count != 1 {
+		t.Fatalf("expected one shared PortProtocol declaration, got %d\n%s", count, code)
 	}
-	if !strings.Contains(code, "PortSpecUDP") {
-		t.Error("Component enum constants should be prefixed with parent context (PortSpecUDP)")
+	if !strings.Contains(code, `PortProtocolTcp PortProtocol = "tcp"`) {
+		t.Errorf("named enum constants should use the member name as their semantic value\n%s", code)
 	}
-
-	// Kind enum constants should be simple (backward compatibility)
-	if !strings.Contains(code, "\tTCP ") {
-		t.Error("Kind enum constants should be simple (TCP) for backward compatibility")
-		t.Logf("Generated code:\n%s", code)
-	}
-	if !strings.Contains(code, "\tUDP ") {
-		t.Error("Kind enum constants should be simple (UDP) for backward compatibility")
+	if count := strings.Count(code, "Protocol PortProtocol"); count != 2 {
+		t.Errorf("both fields should use the shared PortProtocol type, got %d\n%s", count, code)
 	}
 
 	// Check that enum attribute IDs
@@ -1461,13 +1458,154 @@ func TestEnumInNestedComponentsNamespacing(t *testing.T) {
 		t.Error("Kind enum attribute IDs should have simple path for backward compatibility")
 	}
 
-	// Check enum constant values
-	// Components should have full path in constant value
-	if !strings.Contains(code, `PortSpecTCP PortSpecProtocol = "component.port_spec.protocol.tcp"`) {
-		t.Error("Component enum constant values should use full attribute path")
+	if !strings.Contains(code, `sb.Ref("protocol"`) || !strings.Contains(code, "schema.Choices(") {
+		t.Error("ref-backed named enums should preserve the TypeRef schema and choice constraint")
 	}
-	// Kinds should have simple path in constant value (backward compatibility)
-	if !strings.Contains(code, `TCP PortProtocol = "protocol.tcp"`) {
-		t.Error("Kind enum constant values should use simple path for backward compatibility")
+}
+
+func TestNamedEnumStringEncoding(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"mode": {Values: []string{"auto", "fixed"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"service": {
+				"mode": {
+					Type:     "enum",
+					Enum:     "mode",
+					Encoding: "string",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("GenerateSchema() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"Mode Mode",
+		"a.Value.Kind() == entity.KindString",
+		"entity.String(ServiceModeId, a)",
+		`sb.String("mode", "test.example/service.mode", schema.EnumValues("auto", "fixed"))`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("generated string-backed enum missing %q\n%s", want, code)
+		}
+	}
+	if strings.Contains(code, `sb.Singleton("test.example/mode.`) {
+		t.Error("string-backed enum should not create singleton entities")
+	}
+}
+
+func TestNamedEnumKeywordEncoding(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"state": {Values: []string{"on", "off"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"switch": {
+				"state": {
+					Type:     "enum",
+					Enum:     "state",
+					Encoding: "keyword",
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("GenerateSchema() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"a.Value.Kind() == entity.KindKeyword",
+		"entity.Keyword(SwitchStateId, a)",
+		`entity.MustKeyword("test.example/enum.state.on")`,
+		`sb.Keyword("state", "test.example/switch.state", schema.EnumValues(entity.MustKeyword("test.example/enum.state.on"), entity.MustKeyword("test.example/enum.state.off")))`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("generated keyword-backed enum missing %q\n%s", want, code)
+		}
+	}
+}
+
+func TestNamedEnumKeywordEncodingRejectsInvalidKeyword(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"state": {Values: []string{"bad_"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"switch": {
+				"state": {
+					Type:     "enum",
+					Enum:     "state",
+					Encoding: "keyword",
+				},
+			},
+		},
+	}
+
+	_, err := GenerateSchema(sf, "test")
+	if err == nil || !strings.Contains(err.Error(), `enum "state" value "bad_" produces invalid keyword "test.example/enum.state.bad_"`) {
+		t.Fatalf("GenerateSchema() error = %v, want invalid keyword", err)
+	}
+
+	sf.Kinds["switch"]["state"].Encoding = "string"
+	if _, err := GenerateSchema(sf, "test"); err != nil {
+		t.Fatalf("string-backed enum should accept the same value: %v", err)
+	}
+}
+
+func TestNamedEnumRejectsGeneratedStructNameCollision(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"run": {Values: []string{"pending"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"run": {},
+		},
+	}
+
+	_, err := GenerateSchema(sf, "test")
+	if err == nil || !strings.Contains(err.Error(), "both generate Go type Run") {
+		t.Fatalf("GenerateSchema() error = %v, want generated type collision", err)
+	}
+}
+
+func TestEnumFieldRequiresNamedDefinitionAndEncoding(t *testing.T) {
+	base := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"state": {Values: []string{"on", "off"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"switch": {
+				"state": {Type: "enum", Enum: "missing", Encoding: "ref"},
+			},
+		},
+	}
+
+	_, err := GenerateSchema(base, "test")
+	if err == nil || !strings.Contains(err.Error(), `references unknown enum "missing"`) {
+		t.Fatalf("GenerateSchema() error = %v, want unknown enum", err)
+	}
+
+	base.Kinds["switch"]["state"].Enum = "state"
+	base.Kinds["switch"]["state"].Encoding = ""
+	_, err = GenerateSchema(base, "test")
+	if err == nil || !strings.Contains(err.Error(), `invalid encoding ""`) {
+		t.Fatalf("GenerateSchema() error = %v, want invalid encoding", err)
 	}
 }

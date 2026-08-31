@@ -90,13 +90,13 @@ func RunnerList(ctx *Context, opts struct {
 
 		status := r.Status()
 		switch status {
-		case "status.ready":
+		case "ready", "status.ready":
 			status = infoGreen.Render("ready")
-		case "status.unknown":
+		case "unknown", "status.unknown":
 			status = infoGray.Render("unknown")
-		case "status.disabled":
+		case "disabled", "status.disabled":
 			status = infoLabel.Render("disabled")
-		case "status.unhealthy":
+		case "unhealthy", "status.unhealthy":
 			status = infoRed.Render("unhealthy")
 		}
 		if r.Scheduling() == "cordoned" {

@@ -262,7 +262,7 @@ func (c *DiskVolumeController) reconcileVolumePresent(ctx context.Context, volum
 			Name:          volume.Name,
 			DiskPath:      volumePath,
 			SizeBytes:     units.GigaBytes(volume.SizeGb).Bytes().Int64(),
-			Filesystem:    volume.Filesystem,
+			Filesystem:    string(volume.Filesystem),
 			Mode:          volume.VolumeMode,
 		}
 		c.state.SetVolume(entityId, volState)
@@ -375,7 +375,7 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 		Name:          volume.Name,
 		DiskPath:      volumePath,
 		SizeBytes:     sizeBytes,
-		Filesystem:    volume.Filesystem,
+		Filesystem:    string(volume.Filesystem),
 		Mode:          volume.VolumeMode,
 	}
 	c.state.SetVolume(entityId, volState)
@@ -483,7 +483,7 @@ func (c *DiskVolumeController) softDeleteVolume(ctx context.Context, volume *sto
 		DiskID:     string(volume.DiskId),
 		DiskName:   volume.Name,
 		SizeGb:     volume.SizeGb,
-		Filesystem: volume.Filesystem,
+		Filesystem: string(volume.Filesystem),
 		VolumeID:   volState.VolumeId,
 		VolumeMode: string(volume.VolumeMode),
 		NodeID:     compute.NewNodeId(string(volume.NodeId)),

@@ -1,5 +1,8 @@
 domain: dev.miren.saga
 version: v1alpha
+enums:
+  execution_status:
+    values: [pending, running, undoing, completed, failed]
 kinds:
   saga:
     definition_name:
@@ -13,8 +16,9 @@ kinds:
 
     status:
       type: enum
+      enum: execution_status
+      encoding: ref
       doc: Current execution status
-      choices: [pending, running, undoing, completed, failed]
       indexed: true
 
     initial_inputs:

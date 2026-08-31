@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"miren.dev/runtime/api/storage/storage_v1alpha"
@@ -149,11 +150,43 @@ func LoadState(dataPath string) (*State, error) {
 	// captures the backfill, and because Save serializes volumes and mounts
 	// together, no save can persist a volume deletion without also persisting
 	// the mounts we just backfilled.
+	changed := state.normalizeLegacyVolumeModes()
 	if state.backfillMountCloudVolumeIds() {
+		changed = true
+	}
+	if changed {
 		_ = state.Save()
 	}
 
 	return &state, nil
+}
+
+// normalizeLegacyVolumeModes upgrades enum strings persisted before named
+// enums switched Go-facing values from path-shaped names to semantic members.
+func (s *State) normalizeLegacyVolumeModes() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	changed := false
+	for _, volume := range s.Volumes {
+		normalized := storage_v1alpha.DiskVolumeVolumeMode(normalizeVolumeMode(string(volume.Mode)))
+		if normalized != volume.Mode {
+			volume.Mode = normalized
+			changed = true
+		}
+	}
+	for _, mount := range s.Mounts {
+		normalized := storage_v1alpha.DiskVolumeVolumeMode(normalizeVolumeMode(string(mount.Mode)))
+		if normalized != mount.Mode {
+			mount.Mode = normalized
+			changed = true
+		}
+	}
+	return changed
+}
+
+func normalizeVolumeMode(mode string) string {
+	return strings.TrimPrefix(strings.ToLower(mode), "volume_mode.")
 }
 
 // backfillMountCloudVolumeIds copies each volume's cloud id onto any mount that

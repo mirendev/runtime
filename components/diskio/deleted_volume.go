@@ -62,6 +62,7 @@ func LoadDeletedVolumeMetadata(dir string) (*DeletedVolumeMetadata, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted volume metadata from %s: %w", path, err)
 	}
+	meta.VolumeMode = normalizeVolumeMode(meta.VolumeMode)
 
 	return &meta, nil
 }

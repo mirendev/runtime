@@ -7,6 +7,16 @@ import (
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
+type ExecutionStatus string
+
+const (
+	ExecutionStatusPending   ExecutionStatus = "pending"
+	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusUndoing   ExecutionStatus = "undoing"
+	ExecutionStatusCompleted ExecutionStatus = "completed"
+	ExecutionStatusFailed    ExecutionStatus = "failed"
+)
+
 const (
 	SagaCreatedAtId         = entity.Id("dev.miren.saga/saga.created_at")
 	SagaDefinitionNameId    = entity.Id("dev.miren.saga/saga.definition_name")
@@ -27,32 +37,32 @@ const (
 )
 
 type Saga struct {
-	ID                entity.Id  `json:"id"`
-	CreatedAt         time.Time  `cbor:"created_at,omitempty" json:"created_at"`
-	DefinitionName    string     `cbor:"definition_name,omitempty" json:"definition_name,omitempty"`
-	DefinitionVersion int64      `cbor:"definition_version,omitempty" json:"definition_version,omitempty"`
-	Error             string     `cbor:"error,omitempty" json:"error,omitempty"`
-	ExecutedActions   []byte     `cbor:"executed_actions,omitempty" json:"executed_actions,omitempty"`
-	ExecutionOrder    []byte     `cbor:"execution_order,omitempty" json:"execution_order,omitempty"`
-	InitialInputs     []byte     `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
-	ParentExecutionId entity.Id  `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
-	RecoveryScope     string     `cbor:"recovery_scope,omitempty" json:"recovery_scope,omitempty"`
-	Status            SagaStatus `cbor:"status,omitempty" json:"status,omitempty"`
-	UpdatedAt         time.Time  `cbor:"updated_at,omitempty" json:"updated_at"`
+	ID                entity.Id       `json:"id"`
+	CreatedAt         time.Time       `cbor:"created_at,omitempty" json:"created_at"`
+	DefinitionName    string          `cbor:"definition_name,omitempty" json:"definition_name,omitempty"`
+	DefinitionVersion int64           `cbor:"definition_version,omitempty" json:"definition_version,omitempty"`
+	Error             string          `cbor:"error,omitempty" json:"error,omitempty"`
+	ExecutedActions   []byte          `cbor:"executed_actions,omitempty" json:"executed_actions,omitempty"`
+	ExecutionOrder    []byte          `cbor:"execution_order,omitempty" json:"execution_order,omitempty"`
+	InitialInputs     []byte          `cbor:"initial_inputs,omitempty" json:"initial_inputs,omitempty"`
+	ParentExecutionId entity.Id       `cbor:"parent_execution_id,omitempty" json:"parent_execution_id,omitempty"`
+	RecoveryScope     string          `cbor:"recovery_scope,omitempty" json:"recovery_scope,omitempty"`
+	Status            ExecutionStatus `cbor:"status,omitempty" json:"status,omitempty"`
+	UpdatedAt         time.Time       `cbor:"updated_at,omitempty" json:"updated_at"`
 }
 
-type SagaStatus string
+type SagaStatus = ExecutionStatus
 
 const (
-	PENDING   SagaStatus = "status.pending"
-	RUNNING   SagaStatus = "status.running"
-	UNDOING   SagaStatus = "status.undoing"
-	COMPLETED SagaStatus = "status.completed"
-	FAILED    SagaStatus = "status.failed"
+	PENDING   ExecutionStatus = ExecutionStatusPending
+	RUNNING   ExecutionStatus = ExecutionStatusRunning
+	UNDOING   ExecutionStatus = ExecutionStatusUndoing
+	COMPLETED ExecutionStatus = ExecutionStatusCompleted
+	FAILED    ExecutionStatus = ExecutionStatusFailed
 )
 
-var sagastatusFromId = map[entity.Id]SagaStatus{SagaStatusPendingId: PENDING, SagaStatusRunningId: RUNNING, SagaStatusUndoingId: UNDOING, SagaStatusCompletedId: COMPLETED, SagaStatusFailedId: FAILED}
-var sagastatusToId = map[SagaStatus]entity.Id{PENDING: SagaStatusPendingId, RUNNING: SagaStatusRunningId, UNDOING: SagaStatusUndoingId, COMPLETED: SagaStatusCompletedId, FAILED: SagaStatusFailedId}
+var SagaStatusFromId = map[entity.Id]ExecutionStatus{SagaStatusPendingId: ExecutionStatusPending, SagaStatusRunningId: ExecutionStatusRunning, SagaStatusUndoingId: ExecutionStatusUndoing, SagaStatusCompletedId: ExecutionStatusCompleted, SagaStatusFailedId: ExecutionStatusFailed}
+var SagaStatusToId = map[ExecutionStatus]entity.Id{ExecutionStatusPending: SagaStatusPendingId, ExecutionStatusRunning: SagaStatusRunningId, ExecutionStatusUndoing: SagaStatusUndoingId, ExecutionStatusCompleted: SagaStatusCompletedId, ExecutionStatusFailed: SagaStatusFailedId}
 
 func (o *Saga) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -84,7 +94,7 @@ func (o *Saga) Decode(e entity.AttrGetter) {
 		o.RecoveryScope = a.Value.String()
 	}
 	if a, ok := e.Get(SagaStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = sagastatusFromId[a.Value.Id()]
+		o.Status = SagaStatusFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(SagaUpdatedAtId); ok && a.Value.Kind() == entity.KindTime {
 		o.UpdatedAt = a.Value.Time()
@@ -135,7 +145,7 @@ func (o *Saga) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.RecoveryScope) {
 		attrs = append(attrs, entity.String(SagaRecoveryScopeId, o.RecoveryScope))
 	}
-	if a, ok := sagastatusToId[o.Status]; ok {
+	if a, ok := SagaStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SagaStatusId, a))
 	}
 	if !entity.Empty(o.UpdatedAt) {
@@ -210,5 +220,5 @@ func init() {
 	schema.Register("dev.miren.saga", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&Saga{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94]\xce\xd5 \x10\x86\xb7\xa1ƟD\x8d\xdeո\"\xc2\xe9\f|\xe3i\a2@Ӯ\xc1U\x18?]\xa2\xd7\x06h\xce\x0f\xd2\xe3M\x03\xef\xcc\xfb0P\x86g`=#\x03.\xc3L\x82<\x04m5\x9e\x89!\xfcX_\xdc\xcb_\xb2\\F\xbf\x8b+4\xe1\xab\xf5\x8f\x017k\xe2\x86k\f\xe1\x04\xe1\xfb\xcf\x13\xc1\xfa\xb6\xe3\x1eFA\x1d\x11\x94\x8ee\x85o7\xf3\xb8y\x84H3\x16\xf7\x87\x9e\x1b\xd0\x10S$\xc7*\xbb\vµb\xe6\x98\x10\x85\xd8\x16ҧ\xff\x90\x16\x94@\x8e\vL:z\xe6\x8dı\xc0^\xf6`(\xe2\xa4\xf8\xb1\x0e\xdb\x12>v]+\x8e\xa9\xec}\xcc\xeb\x85\x02\xf0\xff\xa8\x99\x85\xa7-b8>\x97j\xcaE;\x01\xac\xa5\xb8Vl@\xef{\xa0\xb2w=)b\x9fb\xad\x88\x1b\xad\xc1|\xeea\xbc\x16䨮\x15\x10\xd4\v\xd5\vd\xe0\x89\xe0\xb8(\xc1\xd1-(\x9b\n\xa3\xf3\xf5\xa7s\xa3\xdd\x1c\xf8s\xe6\xbc\xeaqB\xd41\xd5M\x99}\\\xee\x1cr\x9a\xcf\xf9\xa3\x16=%\f\xbf\x8c\xd14!\xac\xaf[J1\r5j=2\x10\xdb\xf5M?k\x0f[I\xcc\x0f\xd2\xf6\xb0M\f\xeeA\xda\x1e\xa6\xd1\xcd~\u0088\xb0\xbe\xeb'^\x12\x8e{0y\xb8\xeb\xc1\x9b\xf9\xa5\a\xed~\xfb\xed\xf2UO\xfeIO^hֲ\xa9\xdc\xfe\x901m\xc69<9\x89\xaa\xbe,%\xe3\xf8y\xf9\v\x00\x00\xff\xff\x01\x00\x00\xff\xff\x9f+\xaaǕ\x04\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.saga", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x84\x94]\xae\x14!\x10\x85\xb7\xa1ƟD\x8d\xbe\x8dqE\x1d\x86*\xb8\xe54\x05)\xe8N\xcf\x02|r\x15ƿ\x1d\xfal(:\xf7\xcee\x98\xebK\x87>u\xceGA7\xfc\x046\x01\x19p=\x04\x12\xe4C6\xde\xe0\x89\x18\xf2\xf7\xed\xd9c\xf9S\x95u\xf4[S\xb9+?D\xff:\x88\xc1\x10w\\\xe7\bg\xc8\xdf~\x1c\t\xb6׃\xf4\xc1\n\x9a\x820\x99\xa23|\xb9x/\xe7\x84P(\xa0\xa6ߍҀ\x8e\x98\nE\x9ejZ\x11\xb1\x17+\xc7\xe5\"\xc4^I\x1f\xfeCZQ2EV\x98\f\xf4ʳ\xc4Ea\xcfG0\x14\x89\xa2ylþ\x85\xf7\xc3Ԇvѵ\xdb:_V@\xbaR+\v\x8f\xe7\x82\xf9\xf6\xbe\xb4Pm:\n`k%\xf6b\az;\x02\xe9\xda\xcd<\x11\xa7\xa5\xb4\x8e\xb8\xd3:\xcc\xc7\x11&\x19A.\xd3C\a\x04\xed\x87\x1a\x15*\xf0Hp\xbb)A\x1bW\x94\xf3\x94mL\xed\xa3s\xa7]l\xf8\x9f\xcay1\xe2\xe4bʒ\x01y\tW_\xa4\x8a\x17۸[\xebTn\x1f\xeb\xefYm\xa7\xfa\x98V3/\x98\x7f9ghF\xd8^\xf6\x13j\xe8Ъ>!\x03\xb1\xdf^\x8d]{\xd9\xcb\xc2\xfc\x84m/\xfb\x85!>a\xdb\xcbdcH3\x16\x84\xed\xcd\xd8xo\x98uE\x01\xc3\x11%\x7f\xf5];\xfe\n\xb8/:h\f\xd9\xc6j\xb7\x82\xee\xf6\xb9_\x12<:\xf7\x17\xef\xf7\xe7\xde\xef'ί\x9f͜\xee̜\x84\x82\x91\xf3T\xaf\x1c\xa8\x98\xdeq\xcawQ\xca\xd4n3uܾ\xd2\xfe\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x173\xb7\x9a\t\x05\x00\x00"))
 }

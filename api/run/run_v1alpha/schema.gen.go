@@ -7,6 +7,33 @@ import (
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
+type ExitSource string
+
+const (
+	ExitSourceTask ExitSource = "task"
+	ExitSourceExec ExitSource = "exec"
+)
+
+type RunStatus string
+
+const (
+	RunStatusPending   RunStatus = "pending"
+	RunStatusRunning   RunStatus = "running"
+	RunStatusSucceeded RunStatus = "succeeded"
+	RunStatusFailed    RunStatus = "failed"
+	RunStatusTimedOut  RunStatus = "timed_out"
+	RunStatusCanceled  RunStatus = "canceled"
+	RunStatusSkipped   RunStatus = "skipped"
+)
+
+type Trigger string
+
+const (
+	TriggerDeploy   Trigger = "deploy"
+	TriggerSchedule Trigger = "schedule"
+	TriggerManual   Trigger = "manual"
+)
+
 const (
 	RunAppId               = entity.Id("dev.miren.run/run.app")
 	RunAttemptId           = entity.Id("dev.miren.run/run.attempt")
@@ -55,36 +82,34 @@ type Run struct {
 	Task              string          `cbor:"task,omitempty" json:"task,omitempty"`
 	Tick              string          `cbor:"tick,omitempty" json:"tick,omitempty"`
 	Timeout           string          `cbor:"timeout,omitempty" json:"timeout,omitempty"`
-	Trigger           RunTrigger      `cbor:"trigger,omitempty" json:"trigger,omitempty"`
+	Trigger           Trigger         `cbor:"trigger,omitempty" json:"trigger,omitempty"`
 	Tty               bool            `cbor:"tty,omitempty" json:"tty,omitempty"`
 	Version           entity.Id       `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
-type RunStatus string
-
 const (
-	PENDING   RunStatus = "status.pending"
-	RUNNING   RunStatus = "status.running"
-	SUCCEEDED RunStatus = "status.succeeded"
-	FAILED    RunStatus = "status.failed"
-	TIMED_OUT RunStatus = "status.timed_out"
-	CANCELED  RunStatus = "status.canceled"
-	SKIPPED   RunStatus = "status.skipped"
+	PENDING   RunStatus = RunStatusPending
+	RUNNING   RunStatus = RunStatusRunning
+	SUCCEEDED RunStatus = RunStatusSucceeded
+	FAILED    RunStatus = RunStatusFailed
+	TIMED_OUT RunStatus = RunStatusTimedOut
+	CANCELED  RunStatus = RunStatusCanceled
+	SKIPPED   RunStatus = RunStatusSkipped
 )
 
-var runstatusFromId = map[entity.Id]RunStatus{RunStatusPendingId: PENDING, RunStatusRunningId: RUNNING, RunStatusSucceededId: SUCCEEDED, RunStatusFailedId: FAILED, RunStatusTimedOutId: TIMED_OUT, RunStatusCanceledId: CANCELED, RunStatusSkippedId: SKIPPED}
-var runstatusToId = map[RunStatus]entity.Id{PENDING: RunStatusPendingId, RUNNING: RunStatusRunningId, SUCCEEDED: RunStatusSucceededId, FAILED: RunStatusFailedId, TIMED_OUT: RunStatusTimedOutId, CANCELED: RunStatusCanceledId, SKIPPED: RunStatusSkippedId}
+var RunStatusFromId = map[entity.Id]RunStatus{RunStatusPendingId: RunStatusPending, RunStatusRunningId: RunStatusRunning, RunStatusSucceededId: RunStatusSucceeded, RunStatusFailedId: RunStatusFailed, RunStatusTimedOutId: RunStatusTimedOut, RunStatusCanceledId: RunStatusCanceled, RunStatusSkippedId: RunStatusSkipped}
+var RunStatusToId = map[RunStatus]entity.Id{RunStatusPending: RunStatusPendingId, RunStatusRunning: RunStatusRunningId, RunStatusSucceeded: RunStatusSucceededId, RunStatusFailed: RunStatusFailedId, RunStatusTimedOut: RunStatusTimedOutId, RunStatusCanceled: RunStatusCanceledId, RunStatusSkipped: RunStatusSkippedId}
 
-type RunTrigger string
+type RunTrigger = Trigger
 
 const (
-	DEPLOY   RunTrigger = "trigger.deploy"
-	SCHEDULE RunTrigger = "trigger.schedule"
-	MANUAL   RunTrigger = "trigger.manual"
+	DEPLOY   Trigger = TriggerDeploy
+	SCHEDULE Trigger = TriggerSchedule
+	MANUAL   Trigger = TriggerManual
 )
 
-var runtriggerFromId = map[entity.Id]RunTrigger{RunTriggerDeployId: DEPLOY, RunTriggerScheduleId: SCHEDULE, RunTriggerManualId: MANUAL}
-var runtriggerToId = map[RunTrigger]entity.Id{DEPLOY: RunTriggerDeployId, SCHEDULE: RunTriggerScheduleId, MANUAL: RunTriggerManualId}
+var RunTriggerFromId = map[entity.Id]Trigger{RunTriggerDeployId: TriggerDeploy, RunTriggerScheduleId: TriggerSchedule, RunTriggerManualId: TriggerManual}
+var RunTriggerToId = map[Trigger]entity.Id{TriggerDeploy: RunTriggerDeployId, TriggerSchedule: RunTriggerScheduleId, TriggerManual: RunTriggerManualId}
 
 func (o *Run) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -126,7 +151,7 @@ func (o *Run) Decode(e entity.AttrGetter) {
 		o.StartedAt = a.Value.Time()
 	}
 	if a, ok := e.Get(RunStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = runstatusFromId[a.Value.Id()]
+		o.Status = RunStatusFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(RunTaskId); ok && a.Value.Kind() == entity.KindString {
 		o.Task = a.Value.String()
@@ -138,7 +163,7 @@ func (o *Run) Decode(e entity.AttrGetter) {
 		o.Timeout = a.Value.String()
 	}
 	if a, ok := e.Get(RunTriggerId); ok && a.Value.Kind() == entity.KindId {
-		o.Trigger = runtriggerFromId[a.Value.Id()]
+		o.Trigger = RunTriggerFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(RunTtyId); ok && a.Value.Kind() == entity.KindBool {
 		o.Tty = a.Value.Bool()
@@ -198,7 +223,7 @@ func (o *Run) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.StartedAt) {
 		attrs = append(attrs, entity.Time(RunStartedAtId, o.StartedAt))
 	}
-	if a, ok := runstatusToId[o.Status]; ok {
+	if a, ok := RunStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(RunStatusId, a))
 	}
 	if !entity.Empty(o.Task) {
@@ -210,7 +235,7 @@ func (o *Run) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Timeout) {
 		attrs = append(attrs, entity.String(RunTimeoutId, o.Timeout))
 	}
-	if a, ok := runtriggerToId[o.Trigger]; ok {
+	if a, ok := RunTriggerToId[o.Trigger]; ok {
 		attrs = append(attrs, entity.Ref(RunTriggerId, a))
 	}
 	attrs = append(attrs, entity.Bool(RunTtyId, o.Tty))
@@ -409,20 +434,20 @@ const (
 )
 
 type Result struct {
-	At     time.Time    `cbor:"at,omitempty" json:"at"`
-	Code   int64        `cbor:"code" json:"code"`
-	Source ResultSource `cbor:"source,omitempty" json:"source,omitempty"`
+	At     time.Time  `cbor:"at,omitempty" json:"at"`
+	Code   int64      `cbor:"code" json:"code"`
+	Source ExitSource `cbor:"source,omitempty" json:"source,omitempty"`
 }
 
-type ResultSource string
+type ResultSource = ExitSource
 
 const (
-	TASK ResultSource = "source.task"
-	EXEC ResultSource = "source.exec"
+	TASK ExitSource = ExitSourceTask
+	EXEC ExitSource = ExitSourceExec
 )
 
-var ResultsourceFromId = map[entity.Id]ResultSource{ResultSourceTaskId: TASK, ResultSourceExecId: EXEC}
-var ResultsourceToId = map[ResultSource]entity.Id{TASK: ResultSourceTaskId, EXEC: ResultSourceExecId}
+var ResultSourceFromId = map[entity.Id]ExitSource{ResultSourceTaskId: ExitSourceTask, ResultSourceExecId: ExitSourceExec}
+var ResultSourceToId = map[ExitSource]entity.Id{ExitSourceTask: ResultSourceTaskId, ExitSourceExec: ResultSourceExecId}
 
 func (o *Result) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ResultAtId); ok && a.Value.Kind() == entity.KindTime {
@@ -432,7 +457,7 @@ func (o *Result) Decode(e entity.AttrGetter) {
 		o.Code = a.Value.Int64()
 	}
 	if a, ok := e.Get(ResultSourceId); ok && a.Value.Kind() == entity.KindId {
-		o.Source = ResultsourceFromId[a.Value.Id()]
+		o.Source = ResultSourceFromId[a.Value.Id()]
 	}
 }
 
@@ -441,7 +466,7 @@ func (o *Result) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Time(ResultAtId, o.At))
 	}
 	attrs = append(attrs, entity.Int64(ResultCodeId, o.Code))
-	if a, ok := ResultsourceToId[o.Source]; ok {
+	if a, ok := ResultSourceToId[o.Source]; ok {
 		attrs = append(attrs, entity.Ref(ResultSourceId, a))
 	}
 	return
@@ -566,5 +591,5 @@ func init() {
 		(&Run{}).InitSchema(sb)
 		(&RunSlot{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.run", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8cVI\xb2\xd3<\x10\xbe\xc6\xfb\x7f\x86\xa2\x18w\xa68\x91K\x91ڶ\x88\x06GCH\xd6P\x1c\x80#\xbc\x17\xe0\x84\xb0\xa64Ŗe9٤\xba\xdd\xfd}\xeaQх\bā\x1386\x9c*\x10\x8d\xb2\x02\xf6T\x10\xfdx\xcc>~t\x1f\x9d\xf0\xcb#\x0e\xb9\xf1\x8a\xfa\xdb\x11\xc9\x11\x159c\xd7Q`D\xffx\xdaQb\vd\x83\xc6ѓb'\x98\xf3\b;J\x9c\xeb\xe9\xbf\x15_c\x80\x8f\xc6\xfb\xf7Iq\x18L\x85\xf9\xe9@\xaf\xaa\xa0V\x01\x96\x8a\x10\x8e\xc4\xf9\x8fg\x10\v\x8b#\xa2X\xf2Q\n\x10f\x92B\xd2\vꦤ\xbe\xa3\b\xdf}fo\xf3 s\x96\xed$=\xfe\xdd&\x1e\x04\x01Ң@0\\5\xc7@\f\xe5\xe0)\xdeoS\x9c\xa8i\xb1$\xe09\xe8\xa4fal\xa7\xa1\x91 ;y\ni$e\xde\xdf\x0f\xdbp\x83\x94\x99\xf2\xf8<\xd3\xf3L\xdeܢ1V{\x8a.\xca\x0e\xdei\xa3\xa8\xe8\xfb#(M\xa5菟\x10\x1b\a\xc4FE9R\xe7\xd6u\x92G\xaa\xc0\xb4Vx7\x02\x18\t\f\xacUp\xb0\xa0g\x01\xeb5C\x1e\xf9ʀc\xc99\x12$\x14-)\xb3\x80=\xee\xff\x12wW\xcf_\x968\x8eNmL3\x14\x89e_\xb2v?+\xe1\a\vv:\x97N\xea\xf5\xe0\x8bC>\x94H\x05ڲ\x00\xeb\xa2|c\xfd\x1e\xca\xf5\v\xc0;\xd6\xee\xabK\xe0\xcb\"\n\x0fnb컛\xdd\t\xeeץ \xd9>\\\xd6\n\x14\x10ZZ\x85!N`\x90\xfdA ,\u07fb\x9f\xf6\x88\x98\x05\xfdH\xe0\x04xyl@4\xceD\f\xd2\xfb\x8aݙ6\x879\x16\xb96w7\x97\xf5\xf9\n\xe6\x8e\r\xad\xb5\xbf\xb2\x96EQ~w\x1d\xa2\f\x8a\xda\x06L\x13\x8c\xfd\b\x82P\xd1/\x83\x8cN\xd1\xda++D\xdd+Z{\xbd\xa7\xe3\bE\xc2\xd1+Z\x87\xb0\xdc@N/Vݒ\x99j\x8b1\x00\x81b\xf9\x12_\xb2SW-\xd2Jk*\x9eW\xbbkǱ\xac\xa8\x9b\x800\x98^Z\xdc\x19k\x00\x8a\x13\xc0I\xcbKfeH\\\b\xd2\xc6?\xa6\xa4\xccp\x97\x1aNѾ\a\x15qQYm\xf7SG`d\xf2\xbc\xac~\x045\xc1\xdaq$,b5\xa7`\x1d4\x1e\x80X\x06\xcbz&\xb7d\xaf<K\x8c9\x87g\x89\x13|\xb0;)Y\xad4q\xf5B\x8aI\x89\xfb\xb3\xb9\x97XY\xb1\x1c\xee\xf4\xd8j5\x93\xf1\xf6+\xfb\xe7\x8dw\\}\xdf|ȯ\xd7\xf1\r\xc2\aKմ\xc4\xfb\xf9\x87\xfc>,\xffu\"E\xed\xfdV\x03(\x1b\xea\xe4R\xcf\x00\xe5\x1fL\x00\xd4G{\xb3\xb4C\"Xz\xed\xf5 \x95i\xc3C\xd7EQy\xec^\t6\x1b\xf4\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff\\\x90K\x8dE\v\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.run", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x8cW˒\xdb*\x10\xfd\x8d\xb9s\xefM\xa5\xf2\xdc)\x95/Rah\xc9\xc4\x02d\x1e\x8e\xbdͤ\x92}>af\x12\x7fa\xb2N\xf1\x92\x8c\x00\xd9\x1b\x17M\xf79\xea'\xe0g\xc2\x11\x03F\xe0\xd00*\x817\xd2p\xd8QN\xd4\xe3!\xd9\xfc`7\xed\xe2\x97C\xecS\xe5\x84\xfa\xd3\x11\xc1\x10\xe5)c\xd7Q\x18\x88\xfa\xf1\xb4\xa1\xc4d\xc8\x06\x8d\xa3#\xc5v\xa1O#l(\xb1\xa6\xc7\x7f\n\xb6Z\x03\x1b\xb5\xb3\xef\xa3`1\x98r\xfdӂ^VA\xad\x04,$!\f\xf1\xd3o\xc7\xc0\x17\x1aKD\xb1`\xa3\xe0\xc0\xf5\xbc\xf2A/\xa8\x9b\x9c\xfa\x86$|s\x91\xbdI\x9dLYփt\xf8\xb7\xabx\xe0\x04H\x8b<\xc1v\x92,\x03є\x81\xa3x\xb7Nq\xa4\xbał\x80㠳\x98\xb8\xb1\x1e\x86B\x9cl\xc4ч\x11\x85\xcb\xfa\xbe_\x87k$\xf5\x1cǧ\v9\x8d\xe4\xf55\x1am\x94\xa3\xe8\xc2\xda\xc2;\xa5%\xe5}\x7f\x00\xa9\xa8\xe0\xfd\xe1#\x1a\xc6-\x1aFI\x19\x92\xa7\xd6V\x92\x05*\xcfTJ\xbcm\x01\x8c8\x86\xa1\x95\xb07\xa0.\x1cV%E\xeay\xa1\xc1\xb1`\fq\xe2\x93\x16\x85\v\x87\x1d\xee>\xc7\xddT\xf3\x179\x8e\xa1c\x1b\xc2\xf4I\x1a\x92\x9d\xa4\xdc\xff\xe6\xf0\xbd\x013\x7f\x97\xce\xe2\xf4\xe1g\x8b\xbcˑ\x12\x94\x19<\xac\v\xeb+\xe3w\x97\x8f\x9f\a\xde0v\x0f6\x80\xcf\v/\x1c\xb8\t\xbeo\xaeVǛOCA\x92y8\x97\x12\xe4\x11J\x18\x89\x81\x007lY\x01\xbb\xe7g-\x18\xf96\xf5k獵\xd8ٟ\xf6\x80\x06\x03\xea\x91\xc0\x11\xf0\xd27\x8fh\xac\x8ah\xa4v\x15\xbdU\r\x8e\x8c\x01ۀT_\x9c\xb5\xa3dn\x1f8\x16\x84\xf2\x1eK\xe8Vg#Ԭ\xd6\xc6Wg\xff\xbf\x02憁?W\xba)L\xb6\xcb\xf1\xff\x85\x1cK\xc3\xdb\xcaI\x90\xa5\xf8\xdcu\x88\x0e\x90\x95\xd3c\x1a\xaf\xecG\xe06Q\xcb@\x82Q\xd0\xf6\xd2p^\xb7\n\xda^\xed\xe88B\x96\x94`\x15\xb4[\x7f\x9e\x00Y\x06\x18̢\x9a*\x831\x00\x81l\xde#_\xd4S\x9bQ\xd2\n\xa3+\x96\x93>i\x9a\xef\xfd\"\xba\xf9\x8b!s3\xf1\xe4t\x8c1o3\xdb\x0e\x87\xbc\xa2\xae1ݜ\xb9\xd5\xe2\b,\x01(\x8e\x00\xbbZ\x9e\x99\x85&\xb5^\n\x13\xee\xd9(\\\xe0\xce5\x9c\xa4}\x0f\xd2w\xdb}\xa1ۢ\x81'\x0eB\xb1מ:\x02\xe3 N\xcb\xd2\aP\xe3\xb5\x1dCܠ\xa1f\xe4\xb5[\x85\xb7@\xcc\x00\xcbbF\xb3\xa8O\x8a\xf9\x10\x1c\x98\xd0\xe1[\xe5:\x15^oZ\x9f\xfc\xeb\xcd.\\\x8c\x1b!\x86Z\xcaÑ\xe23\x13\x85p.\xac\x9e7X\x1a\xbe\x1c\xc8\xf8&m\xd5 \xc2%\x91\xf7\x85S\xdepC|u.\xbf*\xe3\x1b\x84\xf7\x86\xca\xf9p\xda]n\xa4\xd7F~9\a\x8a\xda3\xb7\x06\x90\xc6\xe7Ɇ\x9e\x00\xf2{\xd8\x03\xea#\xb3\x9a\xdam$XZ\xed\xd4VH\xdd\xfa\xff\x03\u058b\xca\x7f\x82\x89`\xb5@\x7f\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff\x00gb\x0fl\f\x00\x00"))
 }

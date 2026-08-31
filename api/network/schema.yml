@@ -1,5 +1,8 @@
 domain: dev.miren.network
 version: v1alpha
+enums:
+  port_protocol:
+    values: [tcp, udp]
 kinds:
   service:
     match:
@@ -30,8 +33,9 @@ kinds:
           required: true
         protocol:
           type: enum
+          enum: port_protocol
+          encoding: ref
           doc: Port protocol
-          choices: [tcp, udp]
         type:
           type: string
           doc: The highlevel type of the port
@@ -57,4 +61,3 @@ kinds:
         port:
           type: int
           doc: The port number
-

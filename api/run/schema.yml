@@ -1,6 +1,14 @@
 domain: dev.miren.run
 version: v1alpha
 
+enums:
+  trigger:
+    values: [deploy, schedule, manual]
+  run_status:
+    values: [pending, running, succeeded, failed, timed_out, canceled, skipped]
+  exit_source:
+    values: [task, exec]
+
 kinds:
   # A Run is one execution of a task: one sandbox built from the app's deployed
   # image and config, one command, one exit code, then teardown.
@@ -26,7 +34,8 @@ kinds:
 
     trigger:
       type: enum
-      choices: [deploy, schedule, manual]
+      enum: trigger
+      encoding: ref
       doc: What started this run
 
     command:
@@ -56,7 +65,8 @@ kinds:
 
     status:
       type: enum
-      choices: [pending, running, succeeded, failed, timed_out, canceled, skipped]
+      enum: run_status
+      encoding: ref
       indexed: true
       doc: |
         Indexed because the deadline sweep lists non-terminal runs on a short
@@ -133,7 +143,8 @@ kinds:
           doc: When the exit was observed. Always set, or a zero-code result encodes to nothing.
         source:
           type: enum
-          choices: [task, exec]
+          enum: exit_source
+          encoding: ref
           doc: >-
             Which reporter observed the exit: "task" is the container's own
             primary process, "exec" is a process run for an attached client.

@@ -7,6 +7,88 @@ import (
 	schema "miren.dev/runtime/pkg/entity/schema"
 )
 
+type DiskFilesystem string
+
+const (
+	DiskFilesystemExt4  DiskFilesystem = "ext4"
+	DiskFilesystemXfs   DiskFilesystem = "xfs"
+	DiskFilesystemBtrfs DiskFilesystem = "btrfs"
+)
+
+type DiskLeaseStatus string
+
+const (
+	DiskLeaseStatusPending  DiskLeaseStatus = "pending"
+	DiskLeaseStatusBound    DiskLeaseStatus = "bound"
+	DiskLeaseStatusFailed   DiskLeaseStatus = "failed"
+	DiskLeaseStatusReleased DiskLeaseStatus = "released"
+)
+
+type DiskMode string
+
+const (
+	DiskModeUniversal   DiskMode = "universal"
+	DiskModeAccelerator DiskMode = "accelerator"
+)
+
+type DiskStatus string
+
+const (
+	DiskStatusProvisioning DiskStatus = "provisioning"
+	DiskStatusProvisioned  DiskStatus = "provisioned"
+	DiskStatusAttached     DiskStatus = "attached"
+	DiskStatusDetached     DiskStatus = "detached"
+	DiskStatusDeleting     DiskStatus = "deleting"
+	DiskStatusError        DiskStatus = "error"
+	DiskStatusRestoring    DiskStatus = "restoring"
+)
+
+type MountActualState string
+
+const (
+	MountActualStateDmPending    MountActualState = "dm_pending"
+	MountActualStateDmAttaching  MountActualState = "dm_attaching"
+	MountActualStateDmAttached   MountActualState = "dm_attached"
+	MountActualStateDmMounting   MountActualState = "dm_mounting"
+	MountActualStateDmMounted    MountActualState = "dm_mounted"
+	MountActualStateDmUnmounting MountActualState = "dm_unmounting"
+	MountActualStateDmDetaching  MountActualState = "dm_detaching"
+	MountActualStateDmDetached   MountActualState = "dm_detached"
+	MountActualStateDmError      MountActualState = "dm_error"
+)
+
+type MountDesiredState string
+
+const (
+	MountDesiredStateDmWantMounted   MountDesiredState = "dm_want_mounted"
+	MountDesiredStateDmWantUnmounted MountDesiredState = "dm_want_unmounted"
+)
+
+type VolumeActualState string
+
+const (
+	VolumeActualStateDvPending  VolumeActualState = "dv_pending"
+	VolumeActualStateDvCreating VolumeActualState = "dv_creating"
+	VolumeActualStateDvReady    VolumeActualState = "dv_ready"
+	VolumeActualStateDvDeleting VolumeActualState = "dv_deleting"
+	VolumeActualStateDvDeleted  VolumeActualState = "dv_deleted"
+	VolumeActualStateDvError    VolumeActualState = "dv_error"
+)
+
+type VolumeDesiredState string
+
+const (
+	VolumeDesiredStateDvPresent VolumeDesiredState = "dv_present"
+	VolumeDesiredStateDvAbsent  VolumeDesiredState = "dv_absent"
+)
+
+type VolumeMode string
+
+const (
+	VolumeModeVmUniversal   VolumeMode = "vm_universal"
+	VolumeModeVmAccelerator VolumeMode = "vm_accelerator"
+)
+
 const (
 	DiskCreatedById          = entity.Id("dev.miren.storage/disk.created_by")
 	DiskFilesystemId         = entity.Id("dev.miren.storage/disk.filesystem")
@@ -42,41 +124,35 @@ type Disk struct {
 	VolumeId   string         `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
 }
 
-type DiskFilesystem string
-
 const (
-	EXT4  DiskFilesystem = "filesystem.ext4"
-	XFS   DiskFilesystem = "filesystem.xfs"
-	BTRFS DiskFilesystem = "filesystem.btrfs"
+	EXT4  DiskFilesystem = DiskFilesystemExt4
+	XFS   DiskFilesystem = DiskFilesystemXfs
+	BTRFS DiskFilesystem = DiskFilesystemBtrfs
 )
 
-var diskfilesystemFromId = map[entity.Id]DiskFilesystem{DiskFilesystemExt4Id: EXT4, DiskFilesystemXfsId: XFS, DiskFilesystemBtrfsId: BTRFS}
-var diskfilesystemToId = map[DiskFilesystem]entity.Id{EXT4: DiskFilesystemExt4Id, XFS: DiskFilesystemXfsId, BTRFS: DiskFilesystemBtrfsId}
-
-type DiskMode string
+var DiskFilesystemFromId = map[entity.Id]DiskFilesystem{DiskFilesystemExt4Id: DiskFilesystemExt4, DiskFilesystemXfsId: DiskFilesystemXfs, DiskFilesystemBtrfsId: DiskFilesystemBtrfs}
+var DiskFilesystemToId = map[DiskFilesystem]entity.Id{DiskFilesystemExt4: DiskFilesystemExt4Id, DiskFilesystemXfs: DiskFilesystemXfsId, DiskFilesystemBtrfs: DiskFilesystemBtrfsId}
 
 const (
-	UNIVERSAL   DiskMode = "mode.universal"
-	ACCELERATOR DiskMode = "mode.accelerator"
+	UNIVERSAL   DiskMode = DiskModeUniversal
+	ACCELERATOR DiskMode = DiskModeAccelerator
 )
 
-var diskmodeFromId = map[entity.Id]DiskMode{DiskModeUniversalId: UNIVERSAL, DiskModeAcceleratorId: ACCELERATOR}
-var diskmodeToId = map[DiskMode]entity.Id{UNIVERSAL: DiskModeUniversalId, ACCELERATOR: DiskModeAcceleratorId}
-
-type DiskStatus string
+var DiskModeFromId = map[entity.Id]DiskMode{DiskModeUniversalId: DiskModeUniversal, DiskModeAcceleratorId: DiskModeAccelerator}
+var DiskModeToId = map[DiskMode]entity.Id{DiskModeUniversal: DiskModeUniversalId, DiskModeAccelerator: DiskModeAcceleratorId}
 
 const (
-	PROVISIONING DiskStatus = "status.provisioning"
-	PROVISIONED  DiskStatus = "status.provisioned"
-	ATTACHED     DiskStatus = "status.attached"
-	DETACHED     DiskStatus = "status.detached"
-	DELETING     DiskStatus = "status.deleting"
-	ERROR        DiskStatus = "status.error"
-	RESTORING    DiskStatus = "status.restoring"
+	PROVISIONING DiskStatus = DiskStatusProvisioning
+	PROVISIONED  DiskStatus = DiskStatusProvisioned
+	ATTACHED     DiskStatus = DiskStatusAttached
+	DETACHED     DiskStatus = DiskStatusDetached
+	DELETING     DiskStatus = DiskStatusDeleting
+	ERROR        DiskStatus = DiskStatusError
+	RESTORING    DiskStatus = DiskStatusRestoring
 )
 
-var diskstatusFromId = map[entity.Id]DiskStatus{DiskStatusProvisioningId: PROVISIONING, DiskStatusProvisionedId: PROVISIONED, DiskStatusAttachedId: ATTACHED, DiskStatusDetachedId: DETACHED, DiskStatusDeletingId: DELETING, DiskStatusErrorId: ERROR, DiskStatusRestoringId: RESTORING}
-var diskstatusToId = map[DiskStatus]entity.Id{PROVISIONING: DiskStatusProvisioningId, PROVISIONED: DiskStatusProvisionedId, ATTACHED: DiskStatusAttachedId, DETACHED: DiskStatusDetachedId, DELETING: DiskStatusDeletingId, ERROR: DiskStatusErrorId, RESTORING: DiskStatusRestoringId}
+var DiskStatusFromId = map[entity.Id]DiskStatus{DiskStatusProvisioningId: DiskStatusProvisioning, DiskStatusProvisionedId: DiskStatusProvisioned, DiskStatusAttachedId: DiskStatusAttached, DiskStatusDetachedId: DiskStatusDetached, DiskStatusDeletingId: DiskStatusDeleting, DiskStatusErrorId: DiskStatusError, DiskStatusRestoringId: DiskStatusRestoring}
+var DiskStatusToId = map[DiskStatus]entity.Id{DiskStatusProvisioning: DiskStatusProvisioningId, DiskStatusProvisioned: DiskStatusProvisionedId, DiskStatusAttached: DiskStatusAttachedId, DiskStatusDetached: DiskStatusDetachedId, DiskStatusDeleting: DiskStatusDeletingId, DiskStatusError: DiskStatusErrorId, DiskStatusRestoring: DiskStatusRestoringId}
 
 func (o *Disk) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -84,10 +160,10 @@ func (o *Disk) Decode(e entity.AttrGetter) {
 		o.CreatedBy = a.Value.Id()
 	}
 	if a, ok := e.Get(DiskFilesystemId); ok && a.Value.Kind() == entity.KindId {
-		o.Filesystem = diskfilesystemFromId[a.Value.Id()]
+		o.Filesystem = DiskFilesystemFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskModeId); ok && a.Value.Kind() == entity.KindId {
-		o.Mode = diskmodeFromId[a.Value.Id()]
+		o.Mode = DiskModeFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskNameId); ok && a.Value.Kind() == entity.KindString {
 		o.Name = a.Value.String()
@@ -99,7 +175,7 @@ func (o *Disk) Decode(e entity.AttrGetter) {
 		o.SizeGb = a.Value.Int64()
 	}
 	if a, ok := e.Get(DiskStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = diskstatusFromId[a.Value.Id()]
+		o.Status = DiskStatusFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskVolumeIdId); ok && a.Value.Kind() == entity.KindString {
 		o.VolumeId = a.Value.String()
@@ -126,10 +202,10 @@ func (o *Disk) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.CreatedBy) {
 		attrs = append(attrs, entity.Ref(DiskCreatedById, o.CreatedBy))
 	}
-	if a, ok := diskfilesystemToId[o.Filesystem]; ok {
+	if a, ok := DiskFilesystemToId[o.Filesystem]; ok {
 		attrs = append(attrs, entity.Ref(DiskFilesystemId, a))
 	}
-	if a, ok := diskmodeToId[o.Mode]; ok {
+	if a, ok := DiskModeToId[o.Mode]; ok {
 		attrs = append(attrs, entity.Ref(DiskModeId, a))
 	}
 	if !entity.Empty(o.Name) {
@@ -137,7 +213,7 @@ func (o *Disk) Encode() (attrs []entity.Attr) {
 	}
 	attrs = append(attrs, entity.Bool(DiskRemoteOnlyId, o.RemoteOnly))
 	attrs = append(attrs, entity.Int64(DiskSizeGbId, o.SizeGb))
-	if a, ok := diskstatusToId[o.Status]; ok {
+	if a, ok := DiskStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(DiskStatusId, a))
 	}
 	if !entity.Empty(o.VolumeId) {
@@ -225,17 +301,15 @@ type DiskLease struct {
 	Status       DiskLeaseStatus `cbor:"status,omitempty" json:"status,omitempty"`
 }
 
-type DiskLeaseStatus string
-
 const (
-	PENDING  DiskLeaseStatus = "status.pending"
-	BOUND    DiskLeaseStatus = "status.bound"
-	FAILED   DiskLeaseStatus = "status.failed"
-	RELEASED DiskLeaseStatus = "status.released"
+	PENDING  DiskLeaseStatus = DiskLeaseStatusPending
+	BOUND    DiskLeaseStatus = DiskLeaseStatusBound
+	FAILED   DiskLeaseStatus = DiskLeaseStatusFailed
+	RELEASED DiskLeaseStatus = DiskLeaseStatusReleased
 )
 
-var disk_leasestatusFromId = map[entity.Id]DiskLeaseStatus{DiskLeaseStatusPendingId: PENDING, DiskLeaseStatusBoundId: BOUND, DiskLeaseStatusFailedId: FAILED, DiskLeaseStatusReleasedId: RELEASED}
-var disk_leasestatusToId = map[DiskLeaseStatus]entity.Id{PENDING: DiskLeaseStatusPendingId, BOUND: DiskLeaseStatusBoundId, FAILED: DiskLeaseStatusFailedId, RELEASED: DiskLeaseStatusReleasedId}
+var DiskLeaseStatusFromId = map[entity.Id]DiskLeaseStatus{DiskLeaseStatusPendingId: DiskLeaseStatusPending, DiskLeaseStatusBoundId: DiskLeaseStatusBound, DiskLeaseStatusFailedId: DiskLeaseStatusFailed, DiskLeaseStatusReleasedId: DiskLeaseStatusReleased}
+var DiskLeaseStatusToId = map[DiskLeaseStatus]entity.Id{DiskLeaseStatusPending: DiskLeaseStatusPendingId, DiskLeaseStatusBound: DiskLeaseStatusBoundId, DiskLeaseStatusFailed: DiskLeaseStatusFailedId, DiskLeaseStatusReleased: DiskLeaseStatusReleasedId}
 
 func (o *DiskLease) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -261,7 +335,7 @@ func (o *DiskLease) Decode(e entity.AttrGetter) {
 		o.SandboxId = a.Value.Id()
 	}
 	if a, ok := e.Get(DiskLeaseStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = disk_leasestatusFromId[a.Value.Id()]
+		o.Status = DiskLeaseStatusFromId[a.Value.Id()]
 	}
 }
 
@@ -303,7 +377,7 @@ func (o *DiskLease) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.SandboxId) {
 		attrs = append(attrs, entity.Ref(DiskLeaseSandboxIdId, o.SandboxId))
 	}
-	if a, ok := disk_leasestatusToId[o.Status]; ok {
+	if a, ok := DiskLeaseStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(DiskLeaseStatusId, a))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindDiskLease))
@@ -433,53 +507,53 @@ const (
 )
 
 type DiskMount struct {
-	ID           entity.Id             `json:"id"`
-	ActualState  DiskMountActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
-	DesiredState DiskMountDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
-	DevicePath   string                `cbor:"device_path,omitempty" json:"device_path,omitempty"`
-	DiskLeaseId  entity.Id             `cbor:"disk_lease_id,omitempty" json:"disk_lease_id,omitempty"`
-	ErrorMessage string                `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	LoopDevice   string                `cbor:"loop_device,omitempty" json:"loop_device,omitempty"`
-	MountPath    string                `cbor:"mount_path" json:"mount_path"`
-	NodeId       entity.Id             `cbor:"node_id" json:"node_id"`
-	ReadOnly     bool                  `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	VolumeId     entity.Id             `cbor:"volume_id" json:"volume_id"`
+	ID           entity.Id         `json:"id"`
+	ActualState  MountActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
+	DesiredState MountDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
+	DevicePath   string            `cbor:"device_path,omitempty" json:"device_path,omitempty"`
+	DiskLeaseId  entity.Id         `cbor:"disk_lease_id,omitempty" json:"disk_lease_id,omitempty"`
+	ErrorMessage string            `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	LoopDevice   string            `cbor:"loop_device,omitempty" json:"loop_device,omitempty"`
+	MountPath    string            `cbor:"mount_path" json:"mount_path"`
+	NodeId       entity.Id         `cbor:"node_id" json:"node_id"`
+	ReadOnly     bool              `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	VolumeId     entity.Id         `cbor:"volume_id" json:"volume_id"`
 }
 
-type DiskMountActualState string
+type DiskMountActualState = MountActualState
 
 const (
-	DM_PENDING    DiskMountActualState = "actual_state.dm_pending"
-	DM_ATTACHING  DiskMountActualState = "actual_state.dm_attaching"
-	DM_ATTACHED   DiskMountActualState = "actual_state.dm_attached"
-	DM_MOUNTING   DiskMountActualState = "actual_state.dm_mounting"
-	DM_MOUNTED    DiskMountActualState = "actual_state.dm_mounted"
-	DM_UNMOUNTING DiskMountActualState = "actual_state.dm_unmounting"
-	DM_DETACHING  DiskMountActualState = "actual_state.dm_detaching"
-	DM_DETACHED   DiskMountActualState = "actual_state.dm_detached"
-	DM_ERROR      DiskMountActualState = "actual_state.dm_error"
+	DM_PENDING    MountActualState = MountActualStateDmPending
+	DM_ATTACHING  MountActualState = MountActualStateDmAttaching
+	DM_ATTACHED   MountActualState = MountActualStateDmAttached
+	DM_MOUNTING   MountActualState = MountActualStateDmMounting
+	DM_MOUNTED    MountActualState = MountActualStateDmMounted
+	DM_UNMOUNTING MountActualState = MountActualStateDmUnmounting
+	DM_DETACHING  MountActualState = MountActualStateDmDetaching
+	DM_DETACHED   MountActualState = MountActualStateDmDetached
+	DM_ERROR      MountActualState = MountActualStateDmError
 )
 
-var disk_mountactual_stateFromId = map[entity.Id]DiskMountActualState{DiskMountActualStateDmPendingId: DM_PENDING, DiskMountActualStateDmAttachingId: DM_ATTACHING, DiskMountActualStateDmAttachedId: DM_ATTACHED, DiskMountActualStateDmMountingId: DM_MOUNTING, DiskMountActualStateDmMountedId: DM_MOUNTED, DiskMountActualStateDmUnmountingId: DM_UNMOUNTING, DiskMountActualStateDmDetachingId: DM_DETACHING, DiskMountActualStateDmDetachedId: DM_DETACHED, DiskMountActualStateDmErrorId: DM_ERROR}
-var disk_mountactual_stateToId = map[DiskMountActualState]entity.Id{DM_PENDING: DiskMountActualStateDmPendingId, DM_ATTACHING: DiskMountActualStateDmAttachingId, DM_ATTACHED: DiskMountActualStateDmAttachedId, DM_MOUNTING: DiskMountActualStateDmMountingId, DM_MOUNTED: DiskMountActualStateDmMountedId, DM_UNMOUNTING: DiskMountActualStateDmUnmountingId, DM_DETACHING: DiskMountActualStateDmDetachingId, DM_DETACHED: DiskMountActualStateDmDetachedId, DM_ERROR: DiskMountActualStateDmErrorId}
+var DiskMountActualStateFromId = map[entity.Id]MountActualState{DiskMountActualStateDmPendingId: MountActualStateDmPending, DiskMountActualStateDmAttachingId: MountActualStateDmAttaching, DiskMountActualStateDmAttachedId: MountActualStateDmAttached, DiskMountActualStateDmMountingId: MountActualStateDmMounting, DiskMountActualStateDmMountedId: MountActualStateDmMounted, DiskMountActualStateDmUnmountingId: MountActualStateDmUnmounting, DiskMountActualStateDmDetachingId: MountActualStateDmDetaching, DiskMountActualStateDmDetachedId: MountActualStateDmDetached, DiskMountActualStateDmErrorId: MountActualStateDmError}
+var DiskMountActualStateToId = map[MountActualState]entity.Id{MountActualStateDmPending: DiskMountActualStateDmPendingId, MountActualStateDmAttaching: DiskMountActualStateDmAttachingId, MountActualStateDmAttached: DiskMountActualStateDmAttachedId, MountActualStateDmMounting: DiskMountActualStateDmMountingId, MountActualStateDmMounted: DiskMountActualStateDmMountedId, MountActualStateDmUnmounting: DiskMountActualStateDmUnmountingId, MountActualStateDmDetaching: DiskMountActualStateDmDetachingId, MountActualStateDmDetached: DiskMountActualStateDmDetachedId, MountActualStateDmError: DiskMountActualStateDmErrorId}
 
-type DiskMountDesiredState string
+type DiskMountDesiredState = MountDesiredState
 
 const (
-	DM_WANT_MOUNTED   DiskMountDesiredState = "desired_state.dm_want_mounted"
-	DM_WANT_UNMOUNTED DiskMountDesiredState = "desired_state.dm_want_unmounted"
+	DM_WANT_MOUNTED   MountDesiredState = MountDesiredStateDmWantMounted
+	DM_WANT_UNMOUNTED MountDesiredState = MountDesiredStateDmWantUnmounted
 )
 
-var disk_mountdesired_stateFromId = map[entity.Id]DiskMountDesiredState{DiskMountDesiredStateDmWantMountedId: DM_WANT_MOUNTED, DiskMountDesiredStateDmWantUnmountedId: DM_WANT_UNMOUNTED}
-var disk_mountdesired_stateToId = map[DiskMountDesiredState]entity.Id{DM_WANT_MOUNTED: DiskMountDesiredStateDmWantMountedId, DM_WANT_UNMOUNTED: DiskMountDesiredStateDmWantUnmountedId}
+var DiskMountDesiredStateFromId = map[entity.Id]MountDesiredState{DiskMountDesiredStateDmWantMountedId: MountDesiredStateDmWantMounted, DiskMountDesiredStateDmWantUnmountedId: MountDesiredStateDmWantUnmounted}
+var DiskMountDesiredStateToId = map[MountDesiredState]entity.Id{MountDesiredStateDmWantMounted: DiskMountDesiredStateDmWantMountedId, MountDesiredStateDmWantUnmounted: DiskMountDesiredStateDmWantUnmountedId}
 
 func (o *DiskMount) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
 	if a, ok := e.Get(DiskMountActualStateId); ok && a.Value.Kind() == entity.KindId {
-		o.ActualState = disk_mountactual_stateFromId[a.Value.Id()]
+		o.ActualState = DiskMountActualStateFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskMountDesiredStateId); ok && a.Value.Kind() == entity.KindId {
-		o.DesiredState = disk_mountdesired_stateFromId[a.Value.Id()]
+		o.DesiredState = DiskMountDesiredStateFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskMountDevicePathId); ok && a.Value.Kind() == entity.KindString {
 		o.DevicePath = a.Value.String()
@@ -524,10 +598,10 @@ func (o *DiskMount) EntityId() entity.Id {
 }
 
 func (o *DiskMount) Encode() (attrs []entity.Attr) {
-	if a, ok := disk_mountactual_stateToId[o.ActualState]; ok {
+	if a, ok := DiskMountActualStateToId[o.ActualState]; ok {
 		attrs = append(attrs, entity.Ref(DiskMountActualStateId, a))
 	}
-	if a, ok := disk_mountdesired_stateToId[o.DesiredState]; ok {
+	if a, ok := DiskMountDesiredStateToId[o.DesiredState]; ok {
 		attrs = append(attrs, entity.Ref(DiskMountDesiredStateId, a))
 	}
 	if !entity.Empty(o.DevicePath) {
@@ -641,66 +715,68 @@ const (
 )
 
 type DiskVolume struct {
-	ID            entity.Id              `json:"id"`
-	ActualState   DiskVolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
-	CloudVolumeId string                 `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
-	DesiredState  DiskVolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
-	DiskId        entity.Id              `cbor:"disk_id" json:"disk_id"`
-	ErrorMessage  string                 `cbor:"error_message,omitempty" json:"error_message,omitempty"`
-	Filesystem    string                 `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	ImagePath     string                 `cbor:"image_path,omitempty" json:"image_path,omitempty"`
-	MountId       string                 `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
-	Name          string                 `cbor:"name,omitempty" json:"name,omitempty"`
-	NodeId        entity.Id              `cbor:"node_id" json:"node_id"`
-	SizeGb        int64                  `cbor:"size_gb" json:"size_gb"`
-	VolumeId      string                 `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
-	VolumeMode    DiskVolumeVolumeMode   `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
+	ID            entity.Id          `json:"id"`
+	ActualState   VolumeActualState  `cbor:"actual_state,omitempty" json:"actual_state,omitempty"`
+	CloudVolumeId string             `cbor:"cloud_volume_id,omitempty" json:"cloud_volume_id,omitempty"`
+	DesiredState  VolumeDesiredState `cbor:"desired_state,omitempty" json:"desired_state,omitempty"`
+	DiskId        entity.Id          `cbor:"disk_id" json:"disk_id"`
+	ErrorMessage  string             `cbor:"error_message,omitempty" json:"error_message,omitempty"`
+	Filesystem    DiskFilesystem     `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	ImagePath     string             `cbor:"image_path,omitempty" json:"image_path,omitempty"`
+	MountId       string             `cbor:"mount_id,omitempty" json:"mount_id,omitempty"`
+	Name          string             `cbor:"name,omitempty" json:"name,omitempty"`
+	NodeId        entity.Id          `cbor:"node_id" json:"node_id"`
+	SizeGb        int64              `cbor:"size_gb" json:"size_gb"`
+	VolumeId      string             `cbor:"volume_id,omitempty" json:"volume_id,omitempty"`
+	VolumeMode    VolumeMode         `cbor:"volume_mode,omitempty" json:"volume_mode,omitempty"`
 }
 
-type DiskVolumeActualState string
+type DiskVolumeActualState = VolumeActualState
 
 const (
-	DV_PENDING  DiskVolumeActualState = "actual_state.dv_pending"
-	DV_CREATING DiskVolumeActualState = "actual_state.dv_creating"
-	DV_READY    DiskVolumeActualState = "actual_state.dv_ready"
-	DV_DELETING DiskVolumeActualState = "actual_state.dv_deleting"
-	DV_DELETED  DiskVolumeActualState = "actual_state.dv_deleted"
-	DV_ERROR    DiskVolumeActualState = "actual_state.dv_error"
+	DV_PENDING  VolumeActualState = VolumeActualStateDvPending
+	DV_CREATING VolumeActualState = VolumeActualStateDvCreating
+	DV_READY    VolumeActualState = VolumeActualStateDvReady
+	DV_DELETING VolumeActualState = VolumeActualStateDvDeleting
+	DV_DELETED  VolumeActualState = VolumeActualStateDvDeleted
+	DV_ERROR    VolumeActualState = VolumeActualStateDvError
 )
 
-var disk_volumeactual_stateFromId = map[entity.Id]DiskVolumeActualState{DiskVolumeActualStateDvPendingId: DV_PENDING, DiskVolumeActualStateDvCreatingId: DV_CREATING, DiskVolumeActualStateDvReadyId: DV_READY, DiskVolumeActualStateDvDeletingId: DV_DELETING, DiskVolumeActualStateDvDeletedId: DV_DELETED, DiskVolumeActualStateDvErrorId: DV_ERROR}
-var disk_volumeactual_stateToId = map[DiskVolumeActualState]entity.Id{DV_PENDING: DiskVolumeActualStateDvPendingId, DV_CREATING: DiskVolumeActualStateDvCreatingId, DV_READY: DiskVolumeActualStateDvReadyId, DV_DELETING: DiskVolumeActualStateDvDeletingId, DV_DELETED: DiskVolumeActualStateDvDeletedId, DV_ERROR: DiskVolumeActualStateDvErrorId}
+var DiskVolumeActualStateFromId = map[entity.Id]VolumeActualState{DiskVolumeActualStateDvPendingId: VolumeActualStateDvPending, DiskVolumeActualStateDvCreatingId: VolumeActualStateDvCreating, DiskVolumeActualStateDvReadyId: VolumeActualStateDvReady, DiskVolumeActualStateDvDeletingId: VolumeActualStateDvDeleting, DiskVolumeActualStateDvDeletedId: VolumeActualStateDvDeleted, DiskVolumeActualStateDvErrorId: VolumeActualStateDvError}
+var DiskVolumeActualStateToId = map[VolumeActualState]entity.Id{VolumeActualStateDvPending: DiskVolumeActualStateDvPendingId, VolumeActualStateDvCreating: DiskVolumeActualStateDvCreatingId, VolumeActualStateDvReady: DiskVolumeActualStateDvReadyId, VolumeActualStateDvDeleting: DiskVolumeActualStateDvDeletingId, VolumeActualStateDvDeleted: DiskVolumeActualStateDvDeletedId, VolumeActualStateDvError: DiskVolumeActualStateDvErrorId}
 
-type DiskVolumeDesiredState string
+type DiskVolumeDesiredState = VolumeDesiredState
 
 const (
-	DV_PRESENT DiskVolumeDesiredState = "desired_state.dv_present"
-	DV_ABSENT  DiskVolumeDesiredState = "desired_state.dv_absent"
+	DV_PRESENT VolumeDesiredState = VolumeDesiredStateDvPresent
+	DV_ABSENT  VolumeDesiredState = VolumeDesiredStateDvAbsent
 )
 
-var disk_volumedesired_stateFromId = map[entity.Id]DiskVolumeDesiredState{DiskVolumeDesiredStateDvPresentId: DV_PRESENT, DiskVolumeDesiredStateDvAbsentId: DV_ABSENT}
-var disk_volumedesired_stateToId = map[DiskVolumeDesiredState]entity.Id{DV_PRESENT: DiskVolumeDesiredStateDvPresentId, DV_ABSENT: DiskVolumeDesiredStateDvAbsentId}
+var DiskVolumeDesiredStateFromId = map[entity.Id]VolumeDesiredState{DiskVolumeDesiredStateDvPresentId: VolumeDesiredStateDvPresent, DiskVolumeDesiredStateDvAbsentId: VolumeDesiredStateDvAbsent}
+var DiskVolumeDesiredStateToId = map[VolumeDesiredState]entity.Id{VolumeDesiredStateDvPresent: DiskVolumeDesiredStateDvPresentId, VolumeDesiredStateDvAbsent: DiskVolumeDesiredStateDvAbsentId}
+var DiskVolumeFilesystemFromString = map[string]DiskFilesystem{"ext4": DiskFilesystemExt4, "xfs": DiskFilesystemXfs, "btrfs": DiskFilesystemBtrfs}
+var DiskVolumeFilesystemToString = map[DiskFilesystem]string{DiskFilesystemExt4: "ext4", DiskFilesystemXfs: "xfs", DiskFilesystemBtrfs: "btrfs"}
 
-type DiskVolumeVolumeMode string
+type DiskVolumeVolumeMode = VolumeMode
 
 const (
-	VM_UNIVERSAL   DiskVolumeVolumeMode = "volume_mode.vm_universal"
-	VM_ACCELERATOR DiskVolumeVolumeMode = "volume_mode.vm_accelerator"
+	VM_UNIVERSAL   VolumeMode = VolumeModeVmUniversal
+	VM_ACCELERATOR VolumeMode = VolumeModeVmAccelerator
 )
 
-var disk_volumevolume_modeFromId = map[entity.Id]DiskVolumeVolumeMode{DiskVolumeVolumeModeVmUniversalId: VM_UNIVERSAL, DiskVolumeVolumeModeVmAcceleratorId: VM_ACCELERATOR}
-var disk_volumevolume_modeToId = map[DiskVolumeVolumeMode]entity.Id{VM_UNIVERSAL: DiskVolumeVolumeModeVmUniversalId, VM_ACCELERATOR: DiskVolumeVolumeModeVmAcceleratorId}
+var DiskVolumeVolumeModeFromId = map[entity.Id]VolumeMode{DiskVolumeVolumeModeVmUniversalId: VolumeModeVmUniversal, DiskVolumeVolumeModeVmAcceleratorId: VolumeModeVmAccelerator}
+var DiskVolumeVolumeModeToId = map[VolumeMode]entity.Id{VolumeModeVmUniversal: DiskVolumeVolumeModeVmUniversalId, VolumeModeVmAccelerator: DiskVolumeVolumeModeVmAcceleratorId}
 
 func (o *DiskVolume) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
 	if a, ok := e.Get(DiskVolumeActualStateId); ok && a.Value.Kind() == entity.KindId {
-		o.ActualState = disk_volumeactual_stateFromId[a.Value.Id()]
+		o.ActualState = DiskVolumeActualStateFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskVolumeCloudVolumeIdId); ok && a.Value.Kind() == entity.KindString {
 		o.CloudVolumeId = a.Value.String()
 	}
 	if a, ok := e.Get(DiskVolumeDesiredStateId); ok && a.Value.Kind() == entity.KindId {
-		o.DesiredState = disk_volumedesired_stateFromId[a.Value.Id()]
+		o.DesiredState = DiskVolumeDesiredStateFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DiskVolumeDiskIdId); ok && a.Value.Kind() == entity.KindId {
 		o.DiskId = a.Value.Id()
@@ -709,7 +785,7 @@ func (o *DiskVolume) Decode(e entity.AttrGetter) {
 		o.ErrorMessage = a.Value.String()
 	}
 	if a, ok := e.Get(DiskVolumeFilesystemId); ok && a.Value.Kind() == entity.KindString {
-		o.Filesystem = a.Value.String()
+		o.Filesystem = DiskVolumeFilesystemFromString[a.Value.String()]
 	}
 	if a, ok := e.Get(DiskVolumeImagePathId); ok && a.Value.Kind() == entity.KindString {
 		o.ImagePath = a.Value.String()
@@ -730,7 +806,7 @@ func (o *DiskVolume) Decode(e entity.AttrGetter) {
 		o.VolumeId = a.Value.String()
 	}
 	if a, ok := e.Get(DiskVolumeVolumeModeId); ok && a.Value.Kind() == entity.KindId {
-		o.VolumeMode = disk_volumevolume_modeFromId[a.Value.Id()]
+		o.VolumeMode = DiskVolumeVolumeModeFromId[a.Value.Id()]
 	}
 }
 
@@ -751,13 +827,13 @@ func (o *DiskVolume) EntityId() entity.Id {
 }
 
 func (o *DiskVolume) Encode() (attrs []entity.Attr) {
-	if a, ok := disk_volumeactual_stateToId[o.ActualState]; ok {
+	if a, ok := DiskVolumeActualStateToId[o.ActualState]; ok {
 		attrs = append(attrs, entity.Ref(DiskVolumeActualStateId, a))
 	}
 	if !entity.Empty(o.CloudVolumeId) {
 		attrs = append(attrs, entity.String(DiskVolumeCloudVolumeIdId, o.CloudVolumeId))
 	}
-	if a, ok := disk_volumedesired_stateToId[o.DesiredState]; ok {
+	if a, ok := DiskVolumeDesiredStateToId[o.DesiredState]; ok {
 		attrs = append(attrs, entity.Ref(DiskVolumeDesiredStateId, a))
 	}
 	if !entity.Empty(o.DiskId) {
@@ -766,8 +842,8 @@ func (o *DiskVolume) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.ErrorMessage) {
 		attrs = append(attrs, entity.String(DiskVolumeErrorMessageId, o.ErrorMessage))
 	}
-	if !entity.Empty(o.Filesystem) {
-		attrs = append(attrs, entity.String(DiskVolumeFilesystemId, o.Filesystem))
+	if a, ok := DiskVolumeFilesystemToString[o.Filesystem]; ok {
+		attrs = append(attrs, entity.String(DiskVolumeFilesystemId, a))
 	}
 	if !entity.Empty(o.ImagePath) {
 		attrs = append(attrs, entity.String(DiskVolumeImagePathId, o.ImagePath))
@@ -785,7 +861,7 @@ func (o *DiskVolume) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.VolumeId) {
 		attrs = append(attrs, entity.String(DiskVolumeVolumeIdId, o.VolumeId))
 	}
-	if a, ok := disk_volumevolume_modeToId[o.VolumeMode]; ok {
+	if a, ok := DiskVolumeVolumeModeToId[o.VolumeMode]; ok {
 		attrs = append(attrs, entity.Ref(DiskVolumeVolumeModeId, a))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindDiskVolume))
@@ -808,7 +884,7 @@ func (o *DiskVolume) Empty() bool {
 	if !entity.Empty(o.ErrorMessage) {
 		return false
 	}
-	if !entity.Empty(o.Filesystem) {
+	if o.Filesystem != "" {
 		return false
 	}
 	if !entity.Empty(o.ImagePath) {
@@ -849,7 +925,7 @@ func (o *DiskVolume) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("desired_state", "dev.miren.storage/disk_volume.desired_state", schema.Doc("What state should this volume be in"), schema.Indexed, schema.Choices(DiskVolumeDesiredStateDvPresentId, DiskVolumeDesiredStateDvAbsentId))
 	sb.Ref("disk_id", "dev.miren.storage/disk_volume.disk_id", schema.Doc("Reference to the parent Disk entity"), schema.Required, schema.Indexed)
 	sb.String("error_message", "dev.miren.storage/disk_volume.error_message", schema.Doc("Error details if actual_state is error"))
-	sb.String("filesystem", "dev.miren.storage/disk_volume.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs)"))
+	sb.String("filesystem", "dev.miren.storage/disk_volume.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs)"), schema.EnumValues("ext4", "xfs", "btrfs"))
 	sb.String("image_path", "dev.miren.storage/disk_volume.image_path", schema.Doc("Path to backing image file"))
 	sb.String("mount_id", "dev.miren.storage/disk_volume.mount_id", schema.Doc("Override for the mount point directory name (defaults to entity suffix if empty)"))
 	sb.String("name", "dev.miren.storage/disk_volume.name", schema.Doc("Human-readable name for the volume (from parent disk)"))
@@ -876,5 +952,5 @@ func init() {
 		(&DiskMount{}).InitSchema(sb)
 		(&DiskVolume{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacXۮ\xad&\x14\xfd\x90\xde\xefwON\xd2\xff!(Se)\xe0\x06\xb4\xee\xbe\xf6\xa5iҟ\xe8^9M\x7f\xb0\xcf\r7e\xb9X\xc8>\xe9\x8b\x11\x1cc8\x81\xe9\x98ȕp\xcc\xe0\x89\xc0R1*\x81WJ\v\x89;\x80\x81r\xa2\xae\xeb\awOޘ'\x15\xa1jxg\xb9\xcb=\xc2<t\x02\xff\xb6D0L\xf9\xfd\vږ\xc2H\xd4\xef/5%\xebgi\x8d\xaa\x91\x805\x10T?\xdbW]\xa2\xb6~\x9e\xa0\xa6䚣\xb7t\x04\xf5\xac40G\x8fچN\x80\xcfl0\x17\xb4\xe0q\x06\xf5Ҭ\xadZ?\xbdWۉ\xd5\xda*\x02\xab\xfe9\xf5\xd2\bf Pk٪\xf5\xf3,\xd0b\xec(\x12SmG\xc1\x04\x01\x1b?\xb1w\xc9\xc8\xff\xa23\xa7\vH\x85\xc7T\xfc\x86Xm\x88\x017\r\x8c \xb1\x162\x15\x9dEG\x98\x97\\t6\xb0\xfdb\xa2k\x95\x96\x94w\x96\x96\x90\xb74\tLh@\x82\x8fni\x87\xb8\xc3\x0e\xb1\x16b\xb4\x12\x1f?\x90P\xf4W@]m\xe9]h\x18jC\xb9\xb63\xfa\xd1#\xa6\xc6zV\x96\xd8\xfa\xfb\xe4\xac\xfe\r \xa5\x90\xa9\b\x1c\xad\xb2\xcf{\xac5nzH&\xa2\a\x06HO`\x04My\x97\xc1\x06HO\xe0T7@\xa8\x04\xf3\xc4\b'\xa6܃7\xcc0I\xb1PE\x05\a\xb2~\xf9\x10\x1f\xa1\xc6\xed\u07bc\xe2\xabsJH\x80D6\xda5X\xc483@\x94\xd8e\xa0{3ʠ\xce\xe4+\x15\xbc[\xde\xe2q\xea\xf18Iʰ|F\xc6[\x88\x91I\xcd\xcc\xe6Oh\x04\xac\xc0\xb9\xd4\xfaa:\x0e\x87y\x95Y}\x9bS\xaap\xf34S\t\x04a\xed\x12;\xee\xb0Y\xa6)\x03+\xf4E^h\x9a\xc2\xec\xb4\xfe\xde{\x9e%'V-\"\xdb[\xcf\xeeB#\xa6\x7f\x9f\xa5۴F\f\x94\u009d\xfb\xb0\xd9mW\xb4H\xd7\xccg\xee嘘\xb9\x9b\rp\xb7\x86N\x1b\xc1&\xc1\x81\xeb\xfdίսZuT+\\\xb1\xdf\xec`?Iy\xdc\xccu%&M\x05wNЅ\xc6\xd1\xc2\x12\x99\xe3\xd8\x13ֽs={w\xe4%R\xd3\xf1$`\xb2;\x1fݛ\x9b\xefe\x13\xdf\xcdaA\x12pA\xb6\x0f\xac\v\x8d8\t\xbe\xc9\xd2\x15\xe6\xa4\x16kP\xb8D\xed\xb8\xf8泸\xd4j\xafP\x8b\x99'\xcd\xde;\x8b}\u07b6\x98\x8e\x90\\Q\x0fs\x80n\x02N\x8cS%\xec'8\x95C\xf4\x12l\xa49\x93\r\x90\xec\xb2\\\xf6Q\xe7]\xc9.߉+\xbd&\xc7\xff\xb0\xcb\xf0]N\xa9\u008d\x9e\xf1\x88\xccx\xdc\xf7<\xde\xf4$\x97䟞0\xe4\n`\"Qb~\x15\x80\x17\xc2|\xe8ɀ\x8e\x1c\x0f5\xac\xb0^\x05,\x0f\x1d\bC[\xe1M\xd8ّ\x16\xb0\x86\xb7\x15\xd6\x02^\xc0\x0e!`\x13f\x01/`\xc7\xed݆\xf8Ci\xa0\x9e\xe9\xde^\xc8\xdc\xc0\x8c04\xf3-\xda\x1fϩ;\xfa\x9a+\x0f.\x9b\b([\xd1\xf6tb\xb7]\xe9=\xaa \f\xfd\x82\xb9\xdeR\xe4M\xe2-\xb1Nu <\x85\xb6\x8f\x16\xc8\xfa\xb6Tb\xa3dkx\x18\xdfB\x1b@\x9b\xbf\x0fq\xc7\xd1\xe6O\xa6j3\x85\xe0\xa3춫\xa4(;\xa9\xd7\x14\xe5\x82A\x8eBL\xc8\r\xcc\r2\xee8J=\xaa\x14N\xca^\xf7\xe9\xbaD\xed\xa3У\x8a\xe5\x84N+\xd6\xd7Y\xfaya-\x10\xc9nLkZR\x04\xacPjO\xb4\x17\x01'\xeb\xab\xc0\x83\xff\x14\x0f*,\x03\x7ff?\\'\xf5^u\xe0]O\x96\xd2:\xe0\x81\x86af\xff\xb9\x84a\x81\x17\xb2 \xfb\xdfSR96\xa8a\x15W\x8ee\xaf\x1c\v\xb2'\tEN\xbec\x87\xf0\xe2B^\xc0ڤ\xfb)\xbf0\xcd(f\x82nsO\x1c;\x8f\xbb\xeeDI\x885\xdfӦ)Y\x10\xae\x15p\x9d\xdcTܺk\x80ڕ\x90`Y\xa9\x1c<\xb2<\xd6NM\xe2o\xf2f\x18g\xff2'\xd3\xf0\xbf\xf9\xa6\xd7;9Uz\x85\x12e\xb8\x8b\xca\xcc%j\x1f\x95\x1ey\x96Wr\x8e\xeb'\xa9\xdfZ\x85\xa71A\xe5\xe4,\xe7d\x9dN\xcd\xfb\x84\x9f=\xcf\xc9V!/Pr\xa4\x90\xdd+\xdf\xeal\xe7nCܑ\xfef\xc6\xc5l\xa1\xc2\t\\\xe2\x03\x88$\xaa\x18\xcb\x17\x86\xe2\xe3\xb8\xc4V\xed@\x8d\xd0\xd9R4DC:\x02\a\xd5\v\xa9\x91;\xe3u\a)\xb9\x83\xde\xe2_\x1b\v\x89k\xe0\xf9\x8fP\x1cfI\xc9\xfc\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xffTh\xcf;\xb1\x16\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.storage", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xacYێ\xe4&\x13~\x90\xff\xcf\xf9|\xf2j\xa5\xbc\x8fE\x9b\xb2M\xdb@\xaf\xc1\x8e'\x97\xd9(')/\x91\x1d\xcd*/\x98\xeb\x88\x02l\xecƘY\xe5fd\xe8\xef\xfb(\x8a\xa2\n\x98G*\b\x87W\x14\xa6\x82\xb3\x01D\xa1\xb4\x1cH\x03\xd01A\xd5\xe3\xfc\xbf\xbb_^\x98_\n\xcaT\xf7\x84\xdc\xe9\x1ea~\xb4\x02\xff\xd4Tr\xc2\xc4\xfd\x00u͠\xa7\xea\xb77\x17F\xe7\x8f\xe2\x1aE5\x00\xd1@\xcb\xcb\x03\x0eu\r\xda\xfa\xe1\x06\x17Fߦ\xe85\xebA=(\r\x9c\x82\x18\xf9\xfc\xf9=\xce\xf4\xe3d\xca\x00\x8cc\x05m3\x16*t\xe6O9\x91~\x04\xf5\xa6\x9ak5\x7fx/\xb9\x12\x8b\xb9V\x14f\xfd}\xcc\xc2\x00f p\xd1C\xad揓@\xc4\xf4h\x04\a~\x81A\xbdF}c\x8a\x15\xe0\xf8#\x88JR&\x9aj\x80\x1a=\x14YF\xf4\x10\x97\xd4\xce,6\x91\xd57\b3^\xa1\xf8\x15\xf5\xc7_l\x14l\x82A\x91>&f\x88ł\xe8HUA\x0f\x03\xd1r\x88\xcd\x19\xd1\x01f3\xe7\x9fXT\xe7~\xeaoRS\xc7\xe9\xac\x7f̜j\xa5\a&\x1a\xa4E\x8cB\xda\x00\\j(\xa5\xe8mLva\a:\xe6\"e\x8f\x12\xef\x1fH(\xf6#\x94\xcd\x05\xe9\x8do\x18jń\xc6\xe5z\uf229\x89\x1e\x95]\xb0\x88\x81\xeb\x829\xa0\x19\xa1v\xdf\xd1E{\v0\fr\x88\x99ji\x05\xfe\xde\x12\xadI\xd5Bt\xab9\xa0\x87\xb4\x14z\xd0L4\t\xac\x87\xb4\x14Nu=\x84\r`~1\u0091\xa9;\xf0\x82\xe9n\x83\x9c\x98bR\x00\x9d?=\xc4\a\xa8~\xf96C|vNa\xa2ل\xe5\xaf\x1b\x85Ѐ6\xf0\xcd\xceI\xd6\xff\xeb\xdc\x0e\x828\xb2\xa10 &ُ\x1cJFq\xa9\xd9\xda\f¹1[\x85I\xd1L/I\x7fkI\x7f\x1b\x18'\xc3Ci24521\xef/Y\xbe\xec\x81(\xb0\xb9~\xfe\x7f\xdc\x0e\x8byV\xca\xff2\xa5T\x90\xea\xd5\xc8\x06\xa0%\xd1v\x97\x85\x1d\x18ɚq@\xa1O\xd2B\xb7\x9b\xf7N\xed\xbe]\xe5@r$2\x022~:v\xe3\x1b!\xfd\xeb$\x1d\x97\xb6\xe4\xa0\x14il\x96\xe1ۮ`\x91\x1e\x139\xc7\xc9q9\n\xeb\r\xb0\x9f\x86\xce*\xc9oR\x80\xd0\xeb\x97[\xab{\xb5b\xaf\x96\xb9b\xafq\xb2\x1f\xc4\xd2\xf4(t!o\x9aIa\xb3M\xe3\x1b\xfb|\x1a\x89\x1c˾\x11\xdd\xda\x14\x8c_{^$4-o\x00B\xd74\xcc\xd6撄\x93\x81o}\x98\x11\x04B\xd2e\x835\xbe\x11\x06\xc1\x17I\xba\"\x82^\xe4\xec\x15\xaeA;<¤\xa38\xcc\xfb\x91\x8d\xb3\xe6}\x84gg\xffG\xb8\xc8QD\v\x95Kv\xf8{]\x13\xd6C4\x00\x1c\xcc\x02\x9a\x1b\b\x93\xb5b\xd9\xca'O\x8bh\a@KSy\xdfC69\xf6g?\x06\x84\x96-r\xf7\xd93\x19\x03\xd7\xd5g\xe9\x14\x88\xb1r\x92\x02\x9f\xb3\xa1\xfe\xc05\xff*\xa5T\x90J\x8f\xa4ǵtG\xb4\b\x1eW\x1e\xf1\xe5\x06o,\xed7=\xd1\x00\xf8\xbb\xa5\xbc\xb4'\x80H\x14\x87\xfc\xc2\x03\xaf\x94\xbb\xa9F'\xb0\xe78\xa8a\xf9\xe8\xc8`9hGy\xb9\x9c<\"\xb9vO\xf3X\xc3[N\x16\x19<\x8f\xed\xbc\xc1\xc6\xcc\f\x9e\xc7\xf6\xcb؆\xf8M\xae\xa1\x8eiG\xcfd.`Ny9\x8a\xc5\xdaoϩ+z\xb3\xa5~\x0f\xd6f3\x91n\xe7Q\xcf\x0e\"`k\xc4f2\xe1\x1a,Qvp;9*\xa3v#PPX\xf9\x83\x9d\x10!\x04;aK\xc0\xba\xbb\xed\x8a\xdf_$\xe5\xe5\x0fD\xe8%\xbc_D\xcc\nu\x8a\x1d\xe1\x95o;\x97\x00\x9d_\xe6J,\x94\xedMgo\xd3\xfd\x10\a\aƣ\xe3\x95w\xe9\xc4*(\x97\xd2ۅ\x1d\xfb\n|\xb2:k\xd9q%\x8eo\xbbr\xceKV\xea9祌I\xf6R\xdeJ;1;ɰc/uTĭ\x94\x8d\xab\xc5]נ\xbd\x17::LX\xa1\xd3\xc3D\xe4\x89\"\xa0\x9f\x9fy2D\x92w\x86\v\xa3\x19%\x13\x85b\xc7յdZYW3\x0f\xee\xb3\x0e\x94Y4\xffL\xe6\n+\x15\xa9\x9aG\xb9\xc2\xcd\xfb]\xca\xe6SK\xa7ܲ逆a\x96\xeb!\x87\x81\xc0+\x9dJ\xbc%\xe6\x14\xda\x05jXمvZ\v\xedT\xe2\xdbZV\xe1[\xb1\x9d\x1f8\x93籛$\xf7\xcb5n\xc8\xe2\xb2p\x94\xc0+\xcb\"\x1c\xa4\xc0\xefґR\xf5r\xa4\xe5v3\xc8}g\xb0\xbb1\xfa\"\x15:Ԍ\x94\xaa\b#\f\xbfw\xacU\x8cN%\xb9(\x10:z\x8aܖ\x18\x0fE?\x0f\x80\xac\xd86ڳ\x1cv[\x91\x02\x91Ո\x83\x15\x88<\xa2l\xbcuv\xbd>\xf1\xf6s\xea\xc5S\xaa^8\xbd\xff\xf2\xb9\xd8\r\xfb\x8c\xb7ڜ\xc2\xe6\fe\x9c4A\xf5\xbe\x06\xed}9:*\x05N\xc9\x162\xb7\x06\xed\xd2\xca|\f\xf5*'O\xa9'apZ\x13O\xf8\xc9\xe7\xd4dqw\x029\x8fh\xc9\v\xdbVg}S?z\xa2\r\x81x2\t;\xe2\x1b\xbe\x9f\xccIۿ\xafGvo Q\x84X1\xf12|l\x8f\\\x14v\xd4\xc3g\xf7>\xa1\xfb̛w\x17\xf8m\x0f\xecT+\a]\xda\x7f@\xd9\xf7\xc9\xd4\x7f\xa1\xb2/\xf1\b\t\xcf/\xe7W\xfe\xd0̜\xe3ο\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\x9d\x93W\xf8N\x1b\x00\x00"))
 }

@@ -42,7 +42,7 @@ func TestSaveAndLoadDeletedVolumeMetadata(t *testing.T) {
 	assert.Equal(t, meta.SizeGb, loaded.SizeGb)
 	assert.Equal(t, meta.Filesystem, loaded.Filesystem)
 	assert.Equal(t, meta.VolumeID, loaded.VolumeID)
-	assert.Equal(t, meta.VolumeMode, loaded.VolumeMode)
+	assert.Equal(t, "vm_universal", loaded.VolumeMode)
 	assert.Equal(t, meta.CreatedBy, loaded.CreatedBy)
 	assert.Equal(t, meta.NodeID, loaded.NodeID)
 	assert.True(t, meta.DeletedAt.Equal(loaded.DeletedAt))

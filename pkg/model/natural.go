@@ -138,6 +138,21 @@ func decodeNaturalValue(f *entity.SchemaField, v any) ([]entity.Attr, error) {
 		err   error
 	)
 
+	// New schemas identify named enums independently from their physical
+	// encoding. Keep accepting legacy encoded schemas, which represented
+	// ref-backed enums solely as Type "enum" plus EnumValues.
+	if f.Enum != "" || f.Type == "enum" {
+		enum, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v)
+		}
+		value, ok := f.EnumValue(enum)
+		if !ok {
+			return nil, fmt.Errorf("enum %s not found in schema", enum)
+		}
+		return []entity.Attr{{ID: f.Id, Value: value}}, nil
+	}
+
 	switch f.Type {
 	case "string":
 		str, ok := v.(string)
@@ -167,18 +182,6 @@ func decodeNaturalValue(f *entity.SchemaField, v any) ([]entity.Attr, error) {
 			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected float64, got %T", f.Name, v))
 		} else {
 			attrs = append(attrs, entity.Float64(f.Id, d))
-		}
-	case "enum":
-		enum, ok := v.(string)
-		if !ok {
-			err = multierror.Append(err, fmt.Errorf("failed to decode field %s: expected string, got %T", f.Name, v))
-		} else {
-			id, ok := f.EnumValues[enum]
-			if !ok {
-				err = multierror.Append(err, fmt.Errorf("enum %s not found in schema", enum))
-			}
-
-			attrs = append(attrs, entity.Ref(f.Id, id))
 		}
 	case "label":
 		switch label := v.(type) {

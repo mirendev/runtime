@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	etypes "miren.dev/runtime/pkg/entity/types"
 )
 
 func TestValidateComponentAttribute(t *testing.T) {
@@ -390,6 +391,62 @@ func TestValidateUpdateRefChoicesExempt(t *testing.T) {
 
 	// But changing that attribute to a still-invalid value is rejected.
 	r.Error(validator.ValidateUpdate(ctx, []Attr{legacy}, nil))
+}
+
+func TestValidateUpdateEnumChoicesExempt(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/enum-status",
+		Doc, "status",
+		Cardinality, CardinalityOne,
+		Type, TypeEnum,
+		EnumValues, ArrayValue(Id("test/status.a"), Id("test/status.b")),
+	))
+	require.NoError(t, err)
+
+	validator := NewValidator(store)
+	legacy := Ref("test/enum-status", "test/status.legacy")
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{legacy}, []Attr{legacy}))
+	require.Error(t, validator.ValidateUpdate(ctx, []Attr{legacy}, nil))
+}
+
+func TestValidatePhysicalEnumChoices(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/string-mode",
+		Doc, "mode",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		EnumValues, ArrayValue("auto", "fixed"),
+	))
+	require.NoError(t, err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/keyword-mode",
+		Doc, "mode",
+		Cardinality, CardinalityOne,
+		Type, TypeKeyword,
+		EnumValues, ArrayValue(etypes.Keyword("test/mode.auto"), etypes.Keyword("test/mode.fixed")),
+	))
+	require.NoError(t, err)
+
+	validator := NewValidator(store)
+	validString := String("test/string-mode", "auto")
+	invalidString := String("test/string-mode", "legacy")
+	require.NoError(t, validator.ValidateAttribute(ctx, &validString))
+	require.Error(t, validator.ValidateAttribute(ctx, &invalidString))
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{invalidString}, []Attr{invalidString}))
+
+	validKeyword := Keyword("test/keyword-mode", etypes.Keyword("test/mode.auto"))
+	invalidKeyword := Keyword("test/keyword-mode", etypes.Keyword("test/mode.legacy"))
+	require.NoError(t, validator.ValidateAttribute(ctx, &validKeyword))
+	require.Error(t, validator.ValidateAttribute(ctx, &invalidKeyword))
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{invalidKeyword}, []Attr{invalidKeyword}))
 }
 
 func TestValidate_EntityAttrs(t *testing.T) {

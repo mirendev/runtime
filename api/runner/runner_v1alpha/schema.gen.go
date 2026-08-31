@@ -8,6 +8,15 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type InviteStatus string
+
+const (
+	InviteStatusPending InviteStatus = "pending"
+	InviteStatusClaimed InviteStatus = "claimed"
+	InviteStatusRevoked InviteStatus = "revoked"
+	InviteStatusExpired InviteStatus = "expired"
+)
+
 const (
 	RunnerInviteClaimedAtId       = entity.Id("dev.miren.runner/runner_invite.claimed_at")
 	RunnerInviteClaimedById       = entity.Id("dev.miren.runner/runner_invite.claimed_by")
@@ -26,30 +35,30 @@ const (
 )
 
 type RunnerInvite struct {
-	ID              entity.Id          `json:"id"`
-	ClaimedAt       time.Time          `cbor:"claimed_at,omitempty" json:"claimed_at"`
-	ClaimedBy       string             `cbor:"claimed_by,omitempty" json:"claimed_by,omitempty"`
-	CodeHash        string             `cbor:"code_hash,omitempty" json:"code_hash,omitempty"`
-	CreatedAt       time.Time          `cbor:"created_at,omitempty" json:"created_at"`
-	EnrollmentCount int64              `cbor:"enrollment_count,omitempty" json:"enrollment_count,omitempty"`
-	ExpiresAt       time.Time          `cbor:"expires_at,omitempty" json:"expires_at"`
-	Labels          types.Labels       `cbor:"labels,omitempty" json:"labels,omitempty"`
-	Name            string             `cbor:"name,omitempty" json:"name,omitempty"`
-	Reusable        bool               `cbor:"reusable,omitempty" json:"reusable,omitempty"`
-	Status          RunnerInviteStatus `cbor:"status,omitempty" json:"status,omitempty"`
+	ID              entity.Id    `json:"id"`
+	ClaimedAt       time.Time    `cbor:"claimed_at,omitempty" json:"claimed_at"`
+	ClaimedBy       string       `cbor:"claimed_by,omitempty" json:"claimed_by,omitempty"`
+	CodeHash        string       `cbor:"code_hash,omitempty" json:"code_hash,omitempty"`
+	CreatedAt       time.Time    `cbor:"created_at,omitempty" json:"created_at"`
+	EnrollmentCount int64        `cbor:"enrollment_count,omitempty" json:"enrollment_count,omitempty"`
+	ExpiresAt       time.Time    `cbor:"expires_at,omitempty" json:"expires_at"`
+	Labels          types.Labels `cbor:"labels,omitempty" json:"labels,omitempty"`
+	Name            string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Reusable        bool         `cbor:"reusable,omitempty" json:"reusable,omitempty"`
+	Status          InviteStatus `cbor:"status,omitempty" json:"status,omitempty"`
 }
 
-type RunnerInviteStatus string
+type RunnerInviteStatus = InviteStatus
 
 const (
-	PENDING RunnerInviteStatus = "status.pending"
-	CLAIMED RunnerInviteStatus = "status.claimed"
-	REVOKED RunnerInviteStatus = "status.revoked"
-	EXPIRED RunnerInviteStatus = "status.expired"
+	PENDING InviteStatus = InviteStatusPending
+	CLAIMED InviteStatus = InviteStatusClaimed
+	REVOKED InviteStatus = InviteStatusRevoked
+	EXPIRED InviteStatus = InviteStatusExpired
 )
 
-var runner_invitestatusFromId = map[entity.Id]RunnerInviteStatus{RunnerInviteStatusPendingId: PENDING, RunnerInviteStatusClaimedId: CLAIMED, RunnerInviteStatusRevokedId: REVOKED, RunnerInviteStatusExpiredId: EXPIRED}
-var runner_invitestatusToId = map[RunnerInviteStatus]entity.Id{PENDING: RunnerInviteStatusPendingId, CLAIMED: RunnerInviteStatusClaimedId, REVOKED: RunnerInviteStatusRevokedId, EXPIRED: RunnerInviteStatusExpiredId}
+var RunnerInviteStatusFromId = map[entity.Id]InviteStatus{RunnerInviteStatusPendingId: InviteStatusPending, RunnerInviteStatusClaimedId: InviteStatusClaimed, RunnerInviteStatusRevokedId: InviteStatusRevoked, RunnerInviteStatusExpiredId: InviteStatusExpired}
+var RunnerInviteStatusToId = map[InviteStatus]entity.Id{InviteStatusPending: RunnerInviteStatusPendingId, InviteStatusClaimed: RunnerInviteStatusClaimedId, InviteStatusRevoked: RunnerInviteStatusRevokedId, InviteStatusExpired: RunnerInviteStatusExpiredId}
 
 func (o *RunnerInvite) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -83,7 +92,7 @@ func (o *RunnerInvite) Decode(e entity.AttrGetter) {
 		o.Reusable = a.Value.Bool()
 	}
 	if a, ok := e.Get(RunnerInviteStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = runner_invitestatusFromId[a.Value.Id()]
+		o.Status = RunnerInviteStatusFromId[a.Value.Id()]
 	}
 }
 
@@ -129,7 +138,7 @@ func (o *RunnerInvite) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(RunnerInviteNameId, o.Name))
 	}
 	attrs = append(attrs, entity.Bool(RunnerInviteReusableId, o.Reusable))
-	if a, ok := runner_invitestatusToId[o.Status]; ok {
+	if a, ok := RunnerInviteStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(RunnerInviteStatusId, a))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindRunnerInvite))
@@ -196,5 +205,5 @@ func init() {
 	schema.Register("dev.miren.runner", "v1alpha", func(sb *schema.SchemaBuilder) {
 		(&RunnerInvite{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.runner", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x94\xdfN\xeb0\f\xc6\xdf\xe4\x9c\v\x84\x80\x9bM<Q\xe5.nj\x9a8Q\x92V\xed+\xf0\x16\x88\x897\x84k\x94?lk+\xd6qS\xd9\xc9\xe7_\xfcEn\x8e\x82A\xa3\x158\xec49\xe4\x9d\xeb\x99\xd1aG,\xfc\xdbx\xb7\xdc\xd8Ǎ\x12W\xc4\x03\x05\xfcH\x88\xf1\xdfJ:Se\xe2W#\x8c\x06\xe2ՁMC\xa8\x84\x7f}\xafI\x8cO\xd7Q\xbb\x83\x02\xd2(*\b\xe9藋<L\x16E \x8d\x7f\x02\xd5\xd3\x1cTO\t\xd4\xf8\xe0\x88eB=n\xa1\x8c\xc0\xaa\x05\xdf&\x12\x9d\xd3%h\xb3'\x87\x10.͝\xf3\xb9\xb9\xfd\x06\b\xd9\x19\xa54r\xa8\x0e\xa6猳\xab\xd5\b=\x10\x87\x9b\x9a\xc3ђC\x7fj\xee\"?5w\x8c\xa0\xfb\r\x90\x82\x1a\x95\x17\x1ax\xfaL\xa8\xa6\xacD\f\xa685\xb4\x1e\xc09'\x96\x8a\xf3gy\xd9\x0f\x1b\xe5\x0e{\x0f\xb5\xca\xd5\xed)K^jc\xd4M^|\x80\xd0\xfb\xec\xa2\xc4\t\x80\xdc\xeb.~\xaa\x01T\x8f\xfe(\xcb|\x8d\xffW\xc4\\\xf73\x902\xdf\xeb\x15a\x11H\x8b,\x88\xe5\xef\xc2\"\x90\x0e\a\xd3]#\x16\x81\x1c\xd0y2,\x87gP\xb6\x05e\x1dipS\x15\xff_=3\xbe\x94v\xbe5.T\xf9\xe9\x98KozH\xbe\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff;\x8d\xf7\x10\x8c\x04\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.runner", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\x94\x94\xc1\x92\x9c \x10\x86\xdf$9\xa4RI.N\xe5\x89(\x94\x16;Bc5h\xe9=\xa7\xbcE*S\xd9'\xdc=o\x8183\xea\xee8{\xb1h\xfc\xf8\xf8[)Ί\xa4\x85N\xc1PXd\xa0\x82{\"`h\x91\x94\xff;~پ8\xc5\x17y,\x90\x06\f\xf0?)\xc6O;tE\xcdƗZ9+\x91v\x1b\xd65\x82Q\xfeϿ\x12\xd5\xf8㾪\xa8\x8cD\vJȐ\xb6\xfeuS\x87\xa9\x03\x15\xd0\u0087D\xe5\xb4\x16\x95S\x12\xd5>0\x92N\xaa\xefG*\xa7@4\xd27Ʉ\xd7r+:\xcc\xc4 \xc3ms\xd7z\xdd\xdc\xe9@\x04\xc4\xce\x18\v\x14D\xe5z\x9au\xddn6J+\xa4\xf0P8\x18;d\xf0\x97p7\xf5%\xdc9\x8a\xbe\x1e\x88\x8c,\xc1xe%M\xcfIU癨\x814N\x81\xf6\ap\xed\x89K\xd5\xf5\xb1\xfd\xd8\xdf\x0e\x963\xf4^\x96f^\xdd\\\xaa\xd4K\xe9\x9cyz\xa4\x17\x1fd\xe8\xbd\x02\xea\xed\x1by\xe3t1\x93\"\x93\xa9\xdf<N[E\xa6\x8d\x0f1HӃ?\xeb|\x12\xc7\xcf;\u07fcn9\xbaz\xfe\x03w\xc0\f\xe8\x0eH!\xe9\xf7\xc1\fh\x86\xc1\xb5\xf7\x8c\x190)\xb0\x05[\x02\xfbߋ\x7fI\xbeh\x96\x806\xd1@\x95\x8bT\xc5P\xeb\x01أ#=\xfc\x94\xa6k\xa4\xe9\x18\xad\xe4Iě®>\xf1\x16m}\xe38\x88\xf9\x92Z\xa3\x0f]Y\xaf\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\b\x8b\x83G\xf6\x04\x00\x00"))
 }

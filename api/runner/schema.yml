@@ -1,6 +1,10 @@
 domain: dev.miren.runner
 version: v1alpha
 
+enums:
+  invite_status:
+    values: [pending, claimed, revoked, expired]
+
 kinds:
   runner_invite:
     code_hash:
@@ -19,8 +23,9 @@ kinds:
 
     status:
       type: enum
+      enum: invite_status
+      encoding: ref
       doc: Status of the invite
-      choices: [pending, claimed, revoked, expired]
       indexed: true
 
     claimed_by:

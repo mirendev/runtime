@@ -8,6 +8,46 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type NodeScheduling string
+
+const (
+	NodeSchedulingSchedulable NodeScheduling = "schedulable"
+	NodeSchedulingCordoned    NodeScheduling = "cordoned"
+)
+
+type NodeStatus string
+
+const (
+	NodeStatusUnknown   NodeStatus = "unknown"
+	NodeStatusReady     NodeStatus = "ready"
+	NodeStatusDisabled  NodeStatus = "disabled"
+	NodeStatusUnhealthy NodeStatus = "unhealthy"
+)
+
+type PortProtocol string
+
+const (
+	PortProtocolTcp PortProtocol = "tcp"
+	PortProtocolUdp PortProtocol = "udp"
+)
+
+type RestartPolicy string
+
+const (
+	RestartPolicyAlways RestartPolicy = "always"
+	RestartPolicyNever  RestartPolicy = "never"
+)
+
+type SandboxStatus string
+
+const (
+	SandboxStatusPending  SandboxStatus = "pending"
+	SandboxStatusNotReady SandboxStatus = "not_ready"
+	SandboxStatusRunning  SandboxStatus = "running"
+	SandboxStatusStopped  SandboxStatus = "stopped"
+	SandboxStatusDead     SandboxStatus = "dead"
+)
+
 const (
 	SandboxSpecContainerId           = entity.Id("dev.miren.compute/component.sandbox_spec.container")
 	SandboxSpecHostNetworkId         = entity.Id("dev.miren.compute/component.sandbox_spec.hostNetwork")
@@ -24,27 +64,27 @@ const (
 )
 
 type SandboxSpec struct {
-	Container       []SandboxSpecContainer   `cbor:"container" json:"container"`
-	HostNetwork     bool                     `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
-	LogAttribute    types.Labels             `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
-	LogEntity       string                   `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
-	PortWaitTimeout string                   `cbor:"port_wait_timeout,omitempty" json:"port_wait_timeout,omitempty"`
-	RestartPolicy   SandboxSpecRestartPolicy `cbor:"restart_policy,omitempty" json:"restart_policy,omitempty"`
-	Route           []SandboxSpecRoute       `cbor:"route,omitempty" json:"route,omitempty"`
-	StaticHost      []SandboxSpecStaticHost  `cbor:"static_host,omitempty" json:"static_host,omitempty"`
-	Version         entity.Id                `cbor:"version,omitempty" json:"version,omitempty"`
-	Volume          []SandboxSpecVolume      `cbor:"volume,omitempty" json:"volume,omitempty"`
+	Container       []SandboxSpecContainer  `cbor:"container" json:"container"`
+	HostNetwork     bool                    `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
+	LogAttribute    types.Labels            `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
+	LogEntity       string                  `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
+	PortWaitTimeout string                  `cbor:"port_wait_timeout,omitempty" json:"port_wait_timeout,omitempty"`
+	RestartPolicy   RestartPolicy           `cbor:"restart_policy,omitempty" json:"restart_policy,omitempty"`
+	Route           []SandboxSpecRoute      `cbor:"route,omitempty" json:"route,omitempty"`
+	StaticHost      []SandboxSpecStaticHost `cbor:"static_host,omitempty" json:"static_host,omitempty"`
+	Version         entity.Id               `cbor:"version,omitempty" json:"version,omitempty"`
+	Volume          []SandboxSpecVolume     `cbor:"volume,omitempty" json:"volume,omitempty"`
 }
 
-type SandboxSpecRestartPolicy string
+type SandboxSpecRestartPolicy = RestartPolicy
 
 const (
-	SandboxSpecALWAYS SandboxSpecRestartPolicy = "component.sandbox_spec.restart_policy.always"
-	SandboxSpecNEVER  SandboxSpecRestartPolicy = "component.sandbox_spec.restart_policy.never"
+	SandboxSpecALWAYS RestartPolicy = RestartPolicyAlways
+	SandboxSpecNEVER  RestartPolicy = RestartPolicyNever
 )
 
-var sandbox_specrestart_policyFromId = map[entity.Id]SandboxSpecRestartPolicy{SandboxSpecRestartPolicyAlwaysId: SandboxSpecALWAYS, SandboxSpecRestartPolicyNeverId: SandboxSpecNEVER}
-var sandbox_specrestart_policyToId = map[SandboxSpecRestartPolicy]entity.Id{SandboxSpecALWAYS: SandboxSpecRestartPolicyAlwaysId, SandboxSpecNEVER: SandboxSpecRestartPolicyNeverId}
+var SandboxSpecRestartPolicyFromId = map[entity.Id]RestartPolicy{SandboxSpecRestartPolicyAlwaysId: RestartPolicyAlways, SandboxSpecRestartPolicyNeverId: RestartPolicyNever}
+var SandboxSpecRestartPolicyToId = map[RestartPolicy]entity.Id{RestartPolicyAlways: SandboxSpecRestartPolicyAlwaysId, RestartPolicyNever: SandboxSpecRestartPolicyNeverId}
 
 func (o *SandboxSpec) Decode(e entity.AttrGetter) {
 	for _, a := range e.GetAll(SandboxSpecContainerId) {
@@ -69,7 +109,7 @@ func (o *SandboxSpec) Decode(e entity.AttrGetter) {
 		o.PortWaitTimeout = a.Value.String()
 	}
 	if a, ok := e.Get(SandboxSpecRestartPolicyId); ok && a.Value.Kind() == entity.KindId {
-		o.RestartPolicy = sandbox_specrestart_policyFromId[a.Value.Id()]
+		o.RestartPolicy = SandboxSpecRestartPolicyFromId[a.Value.Id()]
 	}
 	for _, a := range e.GetAll(SandboxSpecRouteId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -111,7 +151,7 @@ func (o *SandboxSpec) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.PortWaitTimeout) {
 		attrs = append(attrs, entity.String(SandboxSpecPortWaitTimeoutId, o.PortWaitTimeout))
 	}
-	if a, ok := sandbox_specrestart_policyToId[o.RestartPolicy]; ok {
+	if a, ok := SandboxSpecRestartPolicyToId[o.RestartPolicy]; ok {
 		attrs = append(attrs, entity.Ref(SandboxSpecRestartPolicyId, a))
 	}
 	for _, v := range o.Route {
@@ -494,22 +534,22 @@ const (
 )
 
 type SandboxSpecContainerPort struct {
-	Name     string                           `cbor:"name" json:"name"`
-	NodePort int64                            `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64                            `cbor:"port" json:"port"`
-	Protocol SandboxSpecContainerPortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string                           `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type SandboxSpecContainerPortProtocol string
+type SandboxSpecContainerPortProtocol = PortProtocol
 
 const (
-	SandboxSpecContainerPortTCP SandboxSpecContainerPortProtocol = "component.sandbox_spec.container.port.protocol.tcp"
-	SandboxSpecContainerPortUDP SandboxSpecContainerPortProtocol = "component.sandbox_spec.container.port.protocol.udp"
+	SandboxSpecContainerPortTCP PortProtocol = PortProtocolTcp
+	SandboxSpecContainerPortUDP PortProtocol = PortProtocolUdp
 )
 
-var SandboxSpecContainerPortprotocolFromId = map[entity.Id]SandboxSpecContainerPortProtocol{SandboxSpecContainerPortProtocolTcpId: SandboxSpecContainerPortTCP, SandboxSpecContainerPortProtocolUdpId: SandboxSpecContainerPortUDP}
-var SandboxSpecContainerPortprotocolToId = map[SandboxSpecContainerPortProtocol]entity.Id{SandboxSpecContainerPortTCP: SandboxSpecContainerPortProtocolTcpId, SandboxSpecContainerPortUDP: SandboxSpecContainerPortProtocolUdpId}
+var SandboxSpecContainerPortProtocolFromId = map[entity.Id]PortProtocol{SandboxSpecContainerPortProtocolTcpId: PortProtocolTcp, SandboxSpecContainerPortProtocolUdpId: PortProtocolUdp}
+var SandboxSpecContainerPortProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: SandboxSpecContainerPortProtocolTcpId, PortProtocolUdp: SandboxSpecContainerPortProtocolUdpId}
 
 func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SandboxSpecContainerPortNameId); ok && a.Value.Kind() == entity.KindString {
@@ -522,7 +562,7 @@ func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(SandboxSpecContainerPortProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = SandboxSpecContainerPortprotocolFromId[a.Value.Id()]
+		o.Protocol = SandboxSpecContainerPortProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(SandboxSpecContainerPortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -537,7 +577,7 @@ func (o *SandboxSpecContainerPort) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(SandboxSpecContainerPortPortId, o.Port))
-	if a, ok := SandboxSpecContainerPortprotocolToId[o.Protocol]; ok {
+	if a, ok := SandboxSpecContainerPortProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(SandboxSpecContainerPortProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -931,27 +971,23 @@ type Node struct {
 	Version      string         `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
-type NodeScheduling string
-
 const (
-	SCHEDULABLE NodeScheduling = "scheduling.schedulable"
-	CORDONED    NodeScheduling = "scheduling.cordoned"
+	SCHEDULABLE NodeScheduling = NodeSchedulingSchedulable
+	CORDONED    NodeScheduling = NodeSchedulingCordoned
 )
 
-var nodeschedulingFromId = map[entity.Id]NodeScheduling{NodeSchedulingSchedulableId: SCHEDULABLE, NodeSchedulingCordonedId: CORDONED}
-var nodeschedulingToId = map[NodeScheduling]entity.Id{SCHEDULABLE: NodeSchedulingSchedulableId, CORDONED: NodeSchedulingCordonedId}
-
-type NodeStatus string
+var NodeSchedulingFromId = map[entity.Id]NodeScheduling{NodeSchedulingSchedulableId: NodeSchedulingSchedulable, NodeSchedulingCordonedId: NodeSchedulingCordoned}
+var NodeSchedulingToId = map[NodeScheduling]entity.Id{NodeSchedulingSchedulable: NodeSchedulingSchedulableId, NodeSchedulingCordoned: NodeSchedulingCordonedId}
 
 const (
-	UNKNOWN   NodeStatus = "status.unknown"
-	READY     NodeStatus = "status.ready"
-	DISABLED  NodeStatus = "status.disabled"
-	UNHEALTHY NodeStatus = "status.unhealthy"
+	UNKNOWN   NodeStatus = NodeStatusUnknown
+	READY     NodeStatus = NodeStatusReady
+	DISABLED  NodeStatus = NodeStatusDisabled
+	UNHEALTHY NodeStatus = NodeStatusUnhealthy
 )
 
-var nodestatusFromId = map[entity.Id]NodeStatus{NodeStatusUnknownId: UNKNOWN, NodeStatusReadyId: READY, NodeStatusDisabledId: DISABLED, NodeStatusUnhealthyId: UNHEALTHY}
-var nodestatusToId = map[NodeStatus]entity.Id{UNKNOWN: NodeStatusUnknownId, READY: NodeStatusReadyId, DISABLED: NodeStatusDisabledId, UNHEALTHY: NodeStatusUnhealthyId}
+var NodeStatusFromId = map[entity.Id]NodeStatus{NodeStatusUnknownId: NodeStatusUnknown, NodeStatusReadyId: NodeStatusReady, NodeStatusDisabledId: NodeStatusDisabled, NodeStatusUnhealthyId: NodeStatusUnhealthy}
+var NodeStatusToId = map[NodeStatus]entity.Id{NodeStatusUnknown: NodeStatusUnknownId, NodeStatusReady: NodeStatusReadyId, NodeStatusDisabled: NodeStatusDisabledId, NodeStatusUnhealthy: NodeStatusUnhealthyId}
 
 func (o *Node) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -973,10 +1009,10 @@ func (o *Node) Decode(e entity.AttrGetter) {
 		o.RunnerId = a.Value.String()
 	}
 	if a, ok := e.Get(NodeSchedulingId); ok && a.Value.Kind() == entity.KindId {
-		o.Scheduling = nodeschedulingFromId[a.Value.Id()]
+		o.Scheduling = NodeSchedulingFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(NodeStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = nodestatusFromId[a.Value.Id()]
+		o.Status = NodeStatusFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(NodeVersionId); ok && a.Value.Kind() == entity.KindString {
 		o.Version = a.Value.String()
@@ -1015,10 +1051,10 @@ func (o *Node) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.RunnerId) {
 		attrs = append(attrs, entity.String(NodeRunnerIdId, o.RunnerId))
 	}
-	if a, ok := nodeschedulingToId[o.Scheduling]; ok {
+	if a, ok := NodeSchedulingToId[o.Scheduling]; ok {
 		attrs = append(attrs, entity.Ref(NodeSchedulingId, a))
 	}
-	if a, ok := nodestatusToId[o.Status]; ok {
+	if a, ok := NodeStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(NodeStatusId, a))
 	}
 	if !entity.Empty(o.Version) {
@@ -1113,18 +1149,16 @@ type Sandbox struct {
 	Volume       []Volume      `cbor:"volume,omitempty" json:"volume,omitempty"`
 }
 
-type SandboxStatus string
-
 const (
-	PENDING   SandboxStatus = "status.pending"
-	NOT_READY SandboxStatus = "status.not_ready"
-	RUNNING   SandboxStatus = "status.running"
-	STOPPED   SandboxStatus = "status.stopped"
-	DEAD      SandboxStatus = "status.dead"
+	PENDING   SandboxStatus = SandboxStatusPending
+	NOT_READY SandboxStatus = SandboxStatusNotReady
+	RUNNING   SandboxStatus = SandboxStatusRunning
+	STOPPED   SandboxStatus = SandboxStatusStopped
+	DEAD      SandboxStatus = SandboxStatusDead
 )
 
-var sandboxstatusFromId = map[entity.Id]SandboxStatus{SandboxStatusPendingId: PENDING, SandboxStatusNotReadyId: NOT_READY, SandboxStatusRunningId: RUNNING, SandboxStatusStoppedId: STOPPED, SandboxStatusDeadId: DEAD}
-var sandboxstatusToId = map[SandboxStatus]entity.Id{PENDING: SandboxStatusPendingId, NOT_READY: SandboxStatusNotReadyId, RUNNING: SandboxStatusRunningId, STOPPED: SandboxStatusStoppedId, DEAD: SandboxStatusDeadId}
+var SandboxStatusFromId = map[entity.Id]SandboxStatus{SandboxStatusPendingId: SandboxStatusPending, SandboxStatusNotReadyId: SandboxStatusNotReady, SandboxStatusRunningId: SandboxStatusRunning, SandboxStatusStoppedId: SandboxStatusStopped, SandboxStatusDeadId: SandboxStatusDead}
+var SandboxStatusToId = map[SandboxStatus]entity.Id{SandboxStatusPending: SandboxStatusPendingId, SandboxStatusNotReady: SandboxStatusNotReadyId, SandboxStatusRunning: SandboxStatusRunningId, SandboxStatusStopped: SandboxStatusStoppedId, SandboxStatusDead: SandboxStatusDeadId}
 
 func (o *Sandbox) Decode(e entity.AttrGetter) {
 	o.ID = entity.MustGet(e, entity.DBId).Value.Id()
@@ -1189,7 +1223,7 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 		}
 	}
 	if a, ok := e.Get(SandboxStatusId); ok && a.Value.Kind() == entity.KindId {
-		o.Status = sandboxstatusFromId[a.Value.Id()]
+		o.Status = SandboxStatusFromId[a.Value.Id()]
 	}
 	for _, a := range e.GetAll(SandboxVolumeId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -1251,7 +1285,7 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	for _, v := range o.StaticHost {
 		attrs = append(attrs, entity.Component(SandboxStaticHostId, v.Encode()))
 	}
-	if a, ok := sandboxstatusToId[o.Status]; ok {
+	if a, ok := SandboxStatusToId[o.Status]; ok {
 		attrs = append(attrs, entity.Ref(SandboxStatusId, a))
 	}
 	for _, v := range o.Volume {
@@ -1685,15 +1719,13 @@ type Port struct {
 	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type PortProtocol string
-
 const (
-	TCP PortProtocol = "protocol.tcp"
-	UDP PortProtocol = "protocol.udp"
+	TCP PortProtocol = PortProtocolTcp
+	UDP PortProtocol = PortProtocolUdp
 )
 
-var PortprotocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpId: TCP, PortProtocolUdpId: UDP}
-var PortprotocolToId = map[PortProtocol]entity.Id{TCP: PortProtocolTcpId, UDP: PortProtocolUdpId}
+var PortProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpId: PortProtocolTcp, PortProtocolUdpId: PortProtocolUdp}
+var PortProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpId, PortProtocolUdp: PortProtocolUdpId}
 
 func (o *Port) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(PortNameId); ok && a.Value.Kind() == entity.KindString {
@@ -1706,7 +1738,7 @@ func (o *Port) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(PortProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = PortprotocolFromId[a.Value.Id()]
+		o.Protocol = PortProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(PortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -1721,7 +1753,7 @@ func (o *Port) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(PortNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(PortPortId, o.Port))
-	if a, ok := PortprotocolToId[o.Protocol]; ok {
+	if a, ok := PortProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -2311,5 +2343,5 @@ func init() {
 		(&SandboxPool{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\َ\xec<\x11~\r\x0e\xcba\xdf\x04d\x00\xb1\x8b\xed\b\xb8\xe5\x15\"w\\\x9d\xf6tbgl\xa7\x17\xee\x00!!\x04<\x04g\x867\x84k\xe4%\x89\x93؉\xe3F\xfaor3\xb2ݮ\xcfv\xb9\\U.\xd7\xe4\x15ST\xc3\v\x86KV\x13\x0e4+Xݴ\x12\xe0L(\x16o\xb7\xcf\xcc~yR\xbfd\x94a\xf8\xb7\xa6\xbd\xcc{\xa8\x1f\r\xc0\x7f\x8f\x98Ո\xd0\xf9\x00\xc7#\x81\n\x8b\xbf~<\x10|\xfb\x92\x1f#C\r\xc9\x11\xc6\x1c\x84\xd0c\x9d\xdd\x06yo\xe0($'\xb4|]\x02)\x18\x15\x92#B\xa5\xc05\xa2\xf7\xff\x18(\xb7YAA\x85\x0eP\xe9\xe9x\x16\xad\x91\x14\x1d\x1e\xfe8\x13\xd0d_\t\x90q(\x89\x90\xc0\x01\xe7Hj\xd2zܤ\x80\xb0$5h\x98/\x84`ZJ\x81\xe7\x04k\b2T\xa7\x8c\xf8b\x00@\x14'\xc0mEh\xa9\x11\x9e\x9d\xba\x9e\x01ж>\xab?\xf9\x05U-\x88\x7f\x9d\n\xc61\xa3\x80o_\x9dC\x0e\xd4Y\xd7\xedl\xdbС\x82\xdb7\x16I\x9c\x9ezΟ\v\xcdY\"ٚ\xcd?ڲw\xae\xaf\xc0\x01\xe1\xfb\xed\xbdgTM\x96\xe9\xdf˖\x9e)\xbbR\x1f\x93m?\xdbㄉP\xb3\xf3\xb2\xd3v\xed\xba\x90\x96\x9e\x00U\xf2t\xf7\ta\x8fk\xfb\xe8M\xf6\xccS\xaf\xf7\x02\\\x10F\xf5\x82ˮ\xe2lp\xd7V^\xbe\x87\xaa愪\x86\x93\x1a\xf1{\xae\x8e\x1bV\x10\xb7\xcf\x06\x8el\x05H\xd83{\x9dwѿF\x1e\xda?\xeb%|-\x00\x92UH\xc8\xfc\x04\x88\xcb\x03X\x81\xa7\x93\xb6\xb1\xc4\x7f>\x84\xd4p\xf6\f\x85\x81(\xbb\x8a\xa2=\x10\xbcL)\x10\xc5\av3\x94]\xc5R.\xf2\x104\xbdo\x7f4\x13-\x94a\xe3\xed\x9dg\xb7M\x87HN\xfe\xf3-\xa08,Lv`-\xc5yøtt׳Ӫ\xd6D\x14\x15\xa3@\xe5P\xb23\x9cCgs\xe8\xc8\xc9\xfe)\xa4\xe5\x06\xa4\xcc\xd5֥GS\x7f\f((\aB/K+\xd8~\x81\x05\xa1rq\u05c8\xa6W\xfd5C\xbf\x1cfh\xc1\xa8D\x84\x02w\xf8I\x86\xc6\x15v\u0381\xb3\x19p$7\xff\xf110\xd3\x1eH\xb5Ԉ\x1a}_v\x15\x87\x99z\xad__F\xa0GR\xe6GR\xc1\xc4\xf6\xf5\xcd++~\x8aX\xb1;\xcc&\x15\xe2і\x0eT\x86\x91DF\x12ti*F+\xd45\xc3\xd6P\xeb\xd2F\xea\x06ɓ\x95BU\x8aU\xc1\xcf\x06CA\xe8Q<\x86s`\x1b&\x1c\n\xc9\xf8\xddH\xe1P\x9dZt\x8f\x9a\x1bP\x80^\x9c\xbd-T5\xe2\xc0\r\xf4\xa4F\xa5a\x14\x98\xe2T\xc2\x16\xa9k\xd6RW7\x81iX\x91\xaao\xc6H\x95Fڤ\x9b<\xa7I\x83d\x18\x84$\x14\xc9δ\x9e݆)\xb7<\xbaߠ\b\xd6\xf2\x02\xac3bʱra\xd8\x12\xf2\xef\x865\xaf\xb8\x98\x8b\xe2\xc4X\x9d\x8b\x82qCK\x86j\xa7B\xdfV\x87\x9f\x18\x1a\x1ccb掞g/7\x98\x99\xbf\x84|pm\x1dV\x18\xe4Y\x9d!c\x18\xf2\u07b2\x90\xa1\xda\xf1fqЀI\n\x9dMCÙd\x05\xab4ݩ\xaf\xf9=\xedB\x16\x8dO\xee:\xb2L\x16M\xd1\xe2\xe5>-n\x16W\xa1\x87\xee\xb9\x16\xefU*\xe2\x90\xc7\xe7\xec0'\x17RA\t\xc6^=;u=܁1s\xbb\xfa\xf6\x12\x8a8\xb5\x12\xb3+͕s\xc8Z\xc3\xf5fֺI\xc1\t\x89\x899\xf6`\x8a\xe3\xf9,*W)\x8dr.T\xa1\xa7[\xf6Ez\xea׀6\xe9\x8e\a܈\x15+]Z9gs\xa0\xcc\x05\xdadx=\x8e\xab\xc2Ȭ\xbb~\x98\xb9\xe8\x1e\x99\xd2\x04Eod\x8b\xce\xc8\xf6\xa7\xc9s\x16-M\xe7my\x9c\xaf(\x89T0!}\xd8\xf1\xe4Ą\xfc=\xc8+\xe3g\xa3\xf2݆~'_\x03\x13\xedPtP\xc0\x8d\x1b\x1cm\xcbT\x02=n\u0600!d\x8e\nI.\xc4JS=n\xeaY\xfd\x1a8e=\x12+?H\xc9ɡ\x95\xae?W\x8d\xda'\xc1\x8c\x05_\xb8b\xe5\xef\xa8\xec&E\x86j\x84\a\xd0aP\xcb\xd1a6%u\x98\xbc \xcfs\xd0l\x02\xba\xc9\xf6\xfb\xa2\x1e\x06&\xeeR\xe2\v\xbbXz\xd1\x1e(Hk\xf7M9VT;f\xbc\x054M\xb7b\xce\xc6[\n\xa6a\x85\x85s\xc0l\x04\xf8\xa8\xf3\xa4A\xb69O\x9e5\x1a\x94\x12I\xb8\"#jeW\x89v\x9f4ƚ>\x15\r\x14F\x19\xe9\xd2f\xbf\xe5\xa9\xefұ1W@\x91\\\xfc\x9b\xde\xe3\xefǢ>x\x13\x9d\x8f\x93\xad\x8d\x13\x1b\x93\xd0l\xfe\xf1\xf6ud\x88\x97\xae\xaaĺ>\x15\x90\x9f%\x00G]\x84\x7f\x99\x04\xfc\xe8\xfdx>\xea\xea>$_\x97\x7f\xf3\xd8\n\xd7\xeeӏ¯\\\xb8\x1f\x85O\xbc\x91\xdf\xde[l\x05\xdd#O\xae\xe9?O\x98[\xf4\xed\xfdG\t\xe0\x11\x97\xfa\x9f$\xc0\xae\xde\xf5S@\xd3B\x00\xf3\x91\xd6\x0f\xce\xf6\x88\xc0oS׳\xcd\xea\xfd*y\x98\ab\n\xb7w>\xc9\x1e\x02\r)*|\xe5z\x9drN\xe2\xc2\x12)\x93M\x89V\xcc\xc7Y\x17\xbb\xcd\xc1\x8b\x146\xc5D7>$\xe3F\x85?\x92\xa7\xbd\x14\x1f\xf9u2\xe8\xe6\x00J\xcaa\x1f\rՇY\x1eG\xea\x821\xc9<M\x8c\xd6\xdc>\xe5S\n}\b\xe7\x17)Ӊ\x8d\xec\xa4X\xf8ĀO\x8a\x9dZ\x89\x03\xa5\x98\xe9\x84\xf0\x90\xf4폞\xc0\x0f\xa2'\xb0!\xb6\xf1\xc3hД\xe0B\xfcm'&ְ\xf1~\xa0\x84:\xbf\"\"G\xb2\xf32o\x9e:d\U00076183\x90\x88˼a\x15)\xcc\xd4\xe9\xa4ͯ\x8f\x80\xc2\x05\xf8\x86\xe36F\xcd4\xf9\x11UWt\x17\x1bn6\x13\x14C\xaf\xedk\x16\x8f\x91\x14\x8a\x98\xe3\x87\xec\xea\xf6\xc8D\xbcH$\x04,\xe2\x8f\xfd\xff!\x8e\xd18\x87_ým;\xf8B\"I\x8a\\\x1dw\xf7\xbe\xea6\xaf\xec\xd3|\xac\xd0>9\xa0\x9bv\xeb\xa7)\xab\xd1*͘\xbb~\x15\xee.\xc5\x1fY\x17\x944&\x9cM\x9a\xe8\x1dj\x9d\x1d2P\nI\xcf\xe1\xbb\xd1s\bf\xf1\x1c\b\xd6;>\x7fU\x0fB\xb1\xaa\xad\xdd\xe3x\xb4-\xdb\xdf\xed\x17G\x88\xdc\xe2\xbfo\xdc\r\x03\x9e\xe1\x83\t\xa6h\x86t\x95\xe9\x1e\xc7\vN\x87J\xc49\xef\xbde2T\xd3m\x8aEV\xf3\x13w!\xa16.\x8fSO\xbf\xdd[\xec\xc5'\x05Ƕ\xc6ێ\x0e\x18\x90\x80\x91-\xac\xc7M\x0f\xb3E\xdf-\xf3>\x10\xf3\xecԧ\xd8\xf1:\xcdb\xaf\\}\xe2\xfd\x18\x8bǮ\xdd\v\x13\x98b\xba\vi\x11\x1b\xce.\x04[\xd0S_{X\x8c9 \x9c3ZY\xd7h\xa8\x8e\xfd\xd3͇N\x90?@^\x1el\x0e\x9c\xad\x8c.|\x9b\xa7*^*\"\xa1\xcfA\x1d\xaa\xb1\xea\xf5\xc5Q\xaf\x06s\xb1{\xe5N\xe2m\xe5\xc5\xefq\xe38\a\xcf<\xe0\x9b\xaca !4\xd2\xec\x05\xd2T\x1f\xb0oσQ[{\xfb\x8cͽ}\xc3\x18\x907\x85\xb7˓\x05\x84\xcb\x06(&\xb4\\ȼ\xb5=J\xdeR\xba\xdc\xd3\xf6(\x85dM\x03A6\xb5\"\xb3=\be27\x19\xc2\xe1\fݾO(O\xa6cL\xaaM\x9eCfc\xc8\xd8׀P\xe2\xc9F\v\xe3ٱ8e\xecyk\x8d֑\x8b\xd2y\x8c\xd0\t]:\xaf\x8f\x01&G\xd7\xe4\x96\xdb\\\xe7ۧ=\x1bi{D\xf2\xfb\x8f\xc1\x87G\x8b\x93\x9d\xc1\xc6\x01T!!\x8f\xc3\xc1٤]<k;\xc3=3\xc9\xe0j\xe7t\xc9͘\x0eP\xd0\xfe\xed\x86vo7k\x99\xd2j\xad\x8b\x1dNݲ|O\xcbn6u\xde0V\x05\xb9\xf3\xe4\xf6ڔ\\\xeb;\xea\x0eV\x86\x1a\xa3?\vUp\x99\xe4\xf1\xe9F\x84\x05\xa3\x02\x8aV\x92\v\xe4\x05G\xe2\x94\x17\xfa\xc9C\x81]C?\x8e,\xefwVG`\x95\x0e\x80\xb5T\x12\x13\x02\xa5\x93\xb6q\x82\x8e\xe7r2\x06l9\a*sB\x85D\xb4\x00\xa3\xd7_\xe6ͣi\xae\xa1b\x10\x84\x03\x9e\xa2ΛG\xa8\xbe\x7f\rqQ\xa19A\r\x1c\x99u\x93\xa1:v\x88<!\x8d\x11\x8cN\xb21;\xa0ؤ\xc1شq\xcc\xc55Hm\x1e&\xabe\xd3\xc6Q\xf8\xdb\xe3\xb7N\x10\x8f\xc0\x81\x16\x80\xf3\xc3=\xb7\xc7\xc9\xd5ݗ@\x0f+\xaf\xaf1\xd2\xd4Uf\x86\x81N~\x99\x18\x88X܆Ñ\xdcƈ\xb6mz]\xfaV$d\x9f\xcb1r\x01\xf7\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf鈄\xfc$s:B\xdf\x15\x18\xbf\t\x00\xbf\x10\x1bP)\xbbJ\xec\xec*\x17j\xda\xf3,Nʳ4\x1f\xbb3\x9f\xcfZ\xfa\xe2\x9d\xfd8\xd4\xe2\x17\xb6\xfa\xe7\xe9\x95OH\r\xaf\xa3k\xefأ\x15D\xbd\xa5\xfe\x0f\x00\x00\xff\xff\x01\x00\x00\xff\xff\x90\x04\xd7[\xd6O\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\ٮ\xf48\x11~\r\x86e\xd87\x01\xf9\x01\xb1\x8bm\x04\xdc\xf2\n\x91;\xaeN\xfbtb\xe7\xd8N/\xdc10\x12B\xc0C\xf0\x9f\xc3\xff\x84p\x8d\xbc$q\x12;q\xdc\xff\xdc\xe5\xe6(vW}\xb6\xcb\xe5\xaar\xa5N^0E5<c\xb8d5\xe1@\xb3\x82\xd5M+\x01΄b\xf1z\xfb\xdc\xec\x977ꗌ2\f\xffѼ\x979\x85\xfa\xd1\x00\xfc\xef\x88Y\x8d\b\x9d\x0fp<\x12\xa8\xb0\xf8\xdb\xdb\x03\xc1\xb7\xaf\xf812Ԑ\x1ca\xccA\b=\xd6\xd9\xed\x90\xf7\x06\x8eBrB˗%\x90\x82Q!9\"T\n\\#z\xff\xaf\x81r\xbb\x15\x14T\xe8\x00\x95\x9e\x8eg\xd1\x1aI\xf1\xe1\xe1\x8f3\x01\xcd\xf6\xb5\x00\x1b\x87\x92\b\t\x1cp\x8e\xa4f\xad\xc7]\n\bKR\x83\x86\xf9R\b\xa6\xa5\x14xN\xb0\x86 Cә\xc7;\x05\xf0\xe5\x00\x80(N\x80ۊ\xd0\x12\x03m\xeb\xdb7\xe6t\xaa_\xefm\xee\x10\xabវ\xb6\x9e\xae\xa2<\xab?\xf9\x05U-\x88\x7f\x9f\n\xc61\xa3\x80o_\x9f\xe3\x0e\xdcYGv\xb6}\xe8P\xc1\xed[\x8b,\x0ee\xa5\x87\xac\xa1>\x00\x17\x1f\xbb\x18\xfd\xf8\xb5&\x01Z0LhYp8j\xa9|!$\x15\x89d+\x8cD<*\xe4H\xc4\x10*i\x1c\xed\xb3W\x12/\xc0\x01\xe1\xfb\xedCϚ4[\xa6\x7f/[z\xa6\xecJ}\xfbm\xe9,\xc5\t\x13\xa1V\xe8\xddYKڑ\x90\x96\x9e\x00U\xf2t\xf7-\xa6ǵ4#i\xfe\xb5\x9b\x91\x99\xffi\x0e9\x97\xacVX\xcfB\xb5d/\xc0\x05aTK\xac\xec\x1a\x8e\xb2v}\xe5\xe5\a\xa8jN\xa8j8\xa9\x11\xbf\xe7\xcat`\x05q\xfb|\xc0\xfcT\x80\x84\xb5?\xd79\x89\xfe5\xd2\x00\xfdE/\xc1s\x144HV!!\xf3\x13 .\x0f`\x0f/\x9d\xf4\x8dO\xef\x17CH\rgOP\x18\x88\xb2k(\xde\x03\xc1˜\x02Q|`7\xc3\xd95,\xe7\xa2\fA\xf3\xfb\xf6G\v\xd1B\x191\xde>\xf0\xa8\x8b!\x88\x94\xe4\xbf^\x03F\xd0\xc2d\a\xd6R\x9c7\x8cK\xc7\x0e?9\xbdjMDq1\nT\x0eOv\x86s\xe8l\x0e\x1d9ُC\x16{@\xca\\\xcfSz\xbc\xceۀ\xb1u \xf4\xb2\xb4\xb3\xe8\x17X\x10*\x17w\x8dh~E\xaf\x05\xfaհ@\vF%\"\x14\xb8#O2t\xae\x88s\x0e\x9c̀#\xa5\xf9Ϸ\x81\x99\xf6@\xaa\xa7F\xd4\xf8\xae\xb2k8\xc2\xd4k\xfd\xe62\x02=\x922?\x92\n&~\xbc\xef^Y\xf1\x9b\x88\x15\xbb\xc3l2!\x1es\xeb@e\x18Id4A?M\xd5h\x85\xbbf\xd8\x06\x1d\xfai#w\x83\xe4\xc9j\xa1z\x8a5\xc1O\x06CA\xe8Q<~}\x10\x1b&\x1c\n\xc9\xf8\xddh\xe1М\x86i\x1e37\xa0\x00\xbd8{[\xa8fā\x1b\xf8I\x8dJ#(0\x8fS\r[\xe4\xaeYK]\xdb\x04\xa6cE\xab\xbe\x1d\xa3U\x1ai\x93m\xf2\x9c&\r\x92a\x10\x92P$;\xd7zv;\xa6\xd2\xf2\xd8~\x83\"X\xcb\v\xb0ьy\x8e\xd5\v#\x96P\xac:\xacy%\\^T'\xc6\xea\\\x14\x8c\x1b^24;\x13\xfa\xba:\xfc\xc4\xd1\xe0\x18\x173\x8fC={\xb9\xc1\xcd|\x12\xbaOh\xef\xb0\" \xcf\xea\f\x9b\x8aF{\xcfB\x86f'\x9b\xc5A\x03.\xe9]\xe0l\x1a\x1e\xce$+Xe\xa2d\x8f\xd7\xd4Q\xb2\"\xcd{R5ĩo\xf9\xef\f\x85,\x1a\x9f\x8avl\x99,\x9a\xa2\xc5\xcb4-nƷ\x82\xc2r\x05\xc2Ր`\xf4\x14\xfb\x8d\x88\x0fT\x15s(\x88t\x94\x86\x93\v\xa9\xa0\x04\xe3\x02\x9f\x9c\xb6\x1e\xee\xc0\x98\xb9|~w\tE\x9cZ\x89ٕ\xe6*\xded\xad\xd9\xc8fֻ\xc9f\n\x89\x89\xb1$`\x1e\xc7\xf3Y\xb4\xd7R\x1a{_\xa8\x87\x9eo9\xbc\xe9\xb9_\x02\x06\xaa;qp#VS\xf5\xd3\xcaѝ\x03e.\xd0&_\ue245\x15Ffo\x00\x87Y\xd4\xef\xd1)\xcdP\xf4~\xbb\xe8\xfcv\x7f@=\xc7\xdb\xf2t\x01\x9c'\x9e\x8b\xd2H\x05\x132\xb1\x9dLNL\xc8?\x82\xbc2~6^\xc4\xed\xe8w\xf2%0\xd1\x0eE\xe7Lܴ\xca\xd1\xf6L5\xd0\x13\xd9\r\x18B樐\xe4B\xac6\xd5\xe3\xae^\xd4/\x81S\xd6#\xb1\xf2#)99\xb4\xd2\r\x11\xabQ\xff$׳\x10^W\xac\xfc\x03\x95ݤ\xc8Ќ\b*:\fj%:̦\xa4\x8e\x90\x17\xf4y\x0e\x9aM@7\x85\x13\xbe\xa4\x90\x81\x89\xbb\xe7\xf8\xb2R\x96_\xb4\a\n҆\x12\xe69VU;a\xbc\x06,M\xb7b\xce\xc6[\n\xa6cE\x84s\xc0l\x04\xf8h<\xa6A\xb6\xc5c\x9e5\x1a\x94\x12I\xb8\"\xa3je\u05c8\x8e\xc84ƚ=\x15\r\x14\xc6\x18\xe9\xa7͡Л\x9e\xa4\x13c\xae\x80\"\xa5\xf8w\xbd\xc7?\x8cE}\xf0r;\x1f'[\x1b'6͡\xc5\xfc\xd3\xed\xeb\xc8\x10/]S\x89u{\xaa \xbfH\x00\x8e\xba[\xff:\t\xf8\xd1+\xf7|\xd4\xd5}H\xbe\x81\xff\xee\xb1\x15\xae]\xd1\x1f\x85_\xb9\xc3?\n\x9fxɿ}h\xb1\x15t\x8f<\xb9\xf9\xff2an\xd1\t\x81\x9f$\x80G\xe4\t~\x96\x00\xbb\x9a>H\x01M\xcb*\xccGZ?8ۓ\f\xbfO]\xcf6\xaf\xf7\x9b\xe4a\x1eHS\xdc>\xf0i\xf6\x90\xbbH1\xe1+7\xf6\x94s\x12\x97\xe9H\x99lJ\x02d>κ\xdam·\xa4\x88)&a\xf2Q2nTF%y\xdaK)\x97\xdf&\x83~\x9a9\x99\x14\xbb0\x9aU\x9f\xb9y\x1cik~'y\x9b\x12\x13@\xb7\xcf\xf8\xecL\x9f\x15\xfaU\xcatb\x93E)ACb\x0e)\xc5\xf5\xad\xa4\x96R<\x7fB\xc6I\xfa\xf6GO\xe0G\xd1\x13ؐ.\xf9q4hJ\xbe\"\xfe\x02\x15\x93\xbe\xd8x\xe5\xd0\xd6䊈\x1c\xe9\xce\xf3\xbc{Z\x92\x12\xef\xbe8\b\x89\x94\xcdb\x15)\xeeƸy\xd2XڸMh\xf5\xcb\xf9I\x9f\xdf\xc6\x01\x85\v\xf0\rGs\x8c\x9ai\xf6#\xaa\xae\xe8.6\\\xac&(\x86\x7fl\xdb,\xa8\x99\xe0\xdc\xc0\xe9X \x8b\x1f0)m2\xc7\x0f\xc5\x00۳(\U0007a590\\\x89\xb7'\xef!\xe7\xd28VEýn\xb3(B\"I\x8a\\\xd9\x11\xf7n\xedv\xaf\xec\xd3|\xac\xd0>9\xa0\x9bv\xeb\xe7)\xabѶ\xd2\xf8\xd1~\x15\xee.\xc5\xdb\x02\x17\x944&\xf5N\x9a\xe8\x1dj\x9d\x1d2P\nI\xcf\xe1\xfb\xd1s\b\x161\x1d\b\xd6;>/*\bB\xb1\xaa\xad\xdd\xe3x\xb4=\xdb\xcb\x16\x16G\x88\xdc\xe2\x7fl\xdc\r\x03\x9e\xe1\x83I\xfch\x81t\x8d\xe9\x1e\xc7+N\x87J\xc49\xef#{24ӝ\x95EV\xf3\x13w!\xa16\xb1\x94\xd3N\xcfDX\xec\xc5\xd7\x1f\x8eӎw4\x1d0 \x01#'[\x8f\xbb\x1e\x16\x8b\xbe\a\xe7}\xd2\xe8\xc9iO\xb1\xe3m\x9a\xc5^\xb9\xa6\xc5\aH\x16O\xd7$\x1a\af\x1e\xd3cS\x8b\xd8pv!\u0602\x9e\xfa\xd6\xc3j\xcc\x01\xe1\x9c\xd1\xca\xc6\\Cs\x1c\xf8n>t\x82\xfc\t\xf2\xf2`K\x00mct9\xdd<U\xf1\\\x11\t}9\xf1Ќ5\xafώy5\x98\x8b\xe4\x95;\x89ו\xb7\x93\x8f;\xc79x\xe6\x01\xdf\xe4\r\x03\x05\xb5\x91n/P\xe6\xfb\x80\x7f{\x1a\x9cڻ\x95\xf7\xb4n\x91s(\x9a\xee\xf7'\xb2\xce\xf9\x15c@\u07ba\xea\xae&\x19\x10.\x1b\xa0*x]\xa8r\xb6\x14%o)]\xa6\xb4\x14\xa5\x90\xaci (\xd2Vd\x96\x82P&sS\x8d\x1d\xae\x86\xeeiF\x91\xf8'\xdd\xcc\a\x8cr2\xbe^\x7f F_؋\xd40`\x0e\x99\x8d!c_\x96\x84\xca\xf06:5\xcf\xc6\xc7\xd9\x7fϫ\xe8h\xb3\xbcx \x8e\x11f\xa8+\xa0\xf6\t\xc0TE\x9b\x7f)\xb0\xd5\xe5\xb7\xcfz6\xd2RD\xca\xfb\xcf\xc1\xf7\xb2\x16';\x83\xcdi\xa8\x87\x842\x17\ag\x93A\xf3\xac\xed\f\xf7̔߫\x9d\xd3On\x8dz\x80\x83\xf6\xaf\xb6h\xf7jk\xad6]\xadu\x91\xe0\xd4-\xcb\xf7\xe6ݭ_\xcf\x1bƪ\xa0t\u07b8T\x9bʙ}\x16\xc3\xc1\xcaPcLv\xa1\x1e\\!y\xc2\xc8\x11c\xc1\xa8\x80\xa2\x95\xe4\x02y\xc1\x918\xe5\x85~#\xa4\xc0\xae\xa1\x1fG\xce\xfe{\xab#\xb0J'\xf3Z*\x89I\xfb\xd2I߸~\xc9s\x1f\x1a\x03\xb6\x9c\x03\x959\xa1B\"Z\x80q\x0f\xcf\xf3\xee\xd14\xd7P1\b\xc2\x01OQ\xe7\xdd#T\xdf\xff\n\xb9\xa8М\xa0\x06\x8e̺\xc9\xd0\x1c\xc7`\x9e,\xca\bF\xd7 \x99\x1dPb\xd2`l\xda9\x96\xe2\x1a\xa4\xf6\"\x93ղig\xb7\xd6P.q\x82x\x04\x0e\xb4\x00\x9c\x1f\xee\xb9=N\xae\xed\xbe\x04(\xac\xbe\xbe\xc4hSט9\x06:\xf9e\xe2 bq\x1b\x0eGr\x1b#ھ\xe9\r\xed;\x91\x90}\xa9\xcb(\xea\xdcK^\xf6\x92\x97\xbd\xe4e/y\xd9K^\xf6\x92\x97\xbd\xe4e/y\xd9K^\xf6\x92\x97\xbd\xe4e/y\xd9K^\xf6\x92\x97\xbd\xe4e/y\xd9K^\xf6\x92\x97\xbd\xe4e/y\xd9K^\xf6\x92\x97\xbd\xe4e/yy\xaf%/\xa1OD\x8c\xdf_\x00\xbf\x10\x9b\xfc)\xbbF\xec\xec*\x17jJy\x16'\x15\xb2\x9a\xcf:\x9a\x8f\xab-}\xdb\xd1~:l\xf1\xfbk\xfd\xab\xf4\x95\x0f\x8c\ror\xd7\u07b9\x8fV\x10\xf5\xde\xf7\xff\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xd49RU\xc0R\x00\x00"))
 }

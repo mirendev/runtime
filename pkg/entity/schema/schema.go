@@ -184,6 +184,14 @@ func Choices(choices ...entity.Id) AttrOption {
 	}
 }
 
+// EnumValues records the allowed physical values for an enum-backed
+// attribute without changing the attribute's physical schema type.
+func EnumValues(values ...any) AttrOption {
+	return AdditionalAttrs(
+		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values...)},
+	)
+}
+
 func AdditionalAttrs(attrs ...entity.Attr) AttrOption {
 	return func(b *attrBuilder) {
 		b.extra = append(b.extra, attrs...)
@@ -285,10 +293,8 @@ func (s *SchemaBuilder) Duration(name, id string, opts ...AttrOption) entity.Id 
 	return s.Attr(name, id, entity.TypeDuration, opts...)
 }
 
-func (s *SchemaBuilder) Enum(name, id string, values any, opts ...AttrOption) entity.Id {
-	opts = append(opts, AdditionalAttrs(
-		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values)},
-	))
+func (s *SchemaBuilder) Enum(name, id string, values []any, opts ...AttrOption) entity.Id {
+	opts = append(opts, EnumValues(values...))
 
 	return s.Attr(name, id, entity.TypeEnum, opts...)
 }

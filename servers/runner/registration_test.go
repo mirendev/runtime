@@ -320,7 +320,7 @@ func TestReusableInviteMultipleJoins(t *testing.T) {
 	if !inv.Reusable() {
 		t.Error("invite should be marked reusable")
 	}
-	if inv.Status() != "status.pending" {
+	if inv.Status() != "pending" {
 		t.Errorf("reusable invite should stay pending, got %q", inv.Status())
 	}
 }

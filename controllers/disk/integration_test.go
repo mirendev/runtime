@@ -134,7 +134,7 @@ func TestDiskControllerUpgradeProvisionedToUniversal(t *testing.T) {
 		assert.Equal(t, "my-data", volume.Name)
 		assert.Equal(t, disk.ID, volume.DiskId)
 		assert.Equal(t, int64(10), volume.SizeGb)
-		assert.Equal(t, "ext4", volume.Filesystem)
+		assert.Equal(t, storage_v1alpha.DiskFilesystemExt4, volume.Filesystem)
 		assert.Equal(t, storage_v1alpha.DV_PRESENT, volume.DesiredState)
 		assert.Equal(t, storage_v1alpha.DV_PENDING, volume.ActualState)
 	})

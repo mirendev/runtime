@@ -1,5 +1,24 @@
 domain: dev.miren.storage
 version: v1alpha
+enums:
+  disk_filesystem:
+    values: [ext4, xfs, btrfs]
+  disk_status:
+    values: [provisioning, provisioned, attached, detached, deleting, error, restoring]
+  disk_mode:
+    values: [universal, accelerator]
+  disk_lease_status:
+    values: [pending, bound, failed, released]
+  volume_mode:
+    values: [vm_universal, vm_accelerator]
+  volume_desired_state:
+    values: [dv_present, dv_absent]
+  volume_actual_state:
+    values: [dv_pending, dv_creating, dv_ready, dv_deleting, dv_deleted, dv_error]
+  mount_desired_state:
+    values: [dm_want_mounted, dm_want_unmounted]
+  mount_actual_state:
+    values: [dm_pending, dm_attaching, dm_attached, dm_mounting, dm_mounted, dm_unmounting, dm_detaching, dm_detached, dm_error]
 kinds:
   disk:
     name:
@@ -15,21 +34,24 @@ kinds:
 
     filesystem:
       type: enum
+      enum: disk_filesystem
+      encoding: ref
       doc: Filesystem type for the disk
-      choices: [ext4, xfs, btrfs]
       default: ext4
 
     status:
       type: enum
+      enum: disk_status
+      encoding: ref
       doc: Current state of the disk
-      choices: [provisioning, provisioned, attached, detached, deleting, error, restoring]
       default: provisioning
       indexed: true
 
     mode:
       type: enum
+      enum: disk_mode
+      encoding: ref
       doc: Disk I/O mode
-      choices: [universal, accelerator]
       default: universal
       indexed: true
 
@@ -69,8 +91,9 @@ kinds:
 
     status:
       type: enum
+      enum: disk_lease_status
+      encoding: ref
       doc: Current state of the lease
-      choices: [pending, bound, failed, released]
       default: pending
       indexed: true
       # pending - Lease requested but not yet bound
@@ -130,14 +153,17 @@ kinds:
       required: true
 
     filesystem:
-      type: string
+      type: enum
+      enum: disk_filesystem
+      encoding: string
       doc: Filesystem type (ext4, xfs, btrfs)
       default: ext4
 
     volume_mode:
       type: enum
+      enum: volume_mode
+      encoding: ref
       doc: Disk I/O mode
-      choices: [vm_universal, vm_accelerator]
       default: vm_universal
 
     image_path:
@@ -146,15 +172,17 @@ kinds:
 
     desired_state:
       type: enum
+      enum: volume_desired_state
+      encoding: ref
       doc: What state should this volume be in
-      choices: [dv_present, dv_absent]
       default: dv_present
       indexed: true
 
     actual_state:
       type: enum
+      enum: volume_actual_state
+      encoding: ref
       doc: Current state of the volume
-      choices: [dv_pending, dv_creating, dv_ready, dv_deleting, dv_deleted, dv_error]
       default: dv_pending
       indexed: true
 
@@ -208,15 +236,17 @@ kinds:
 
     desired_state:
       type: enum
+      enum: mount_desired_state
+      encoding: ref
       doc: What state should this mount be in
-      choices: [dm_want_mounted, dm_want_unmounted]
       default: dm_want_mounted
       indexed: true
 
     actual_state:
       type: enum
+      enum: mount_actual_state
+      encoding: ref
       doc: Current state of the mount
-      choices: [dm_pending, dm_attaching, dm_attached, dm_mounting, dm_mounted, dm_unmounting, dm_detaching, dm_detached, dm_error]
       default: dm_pending
       indexed: true
 

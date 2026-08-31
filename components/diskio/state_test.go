@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
 func TestStateNewState(t *testing.T) {
@@ -91,6 +92,34 @@ func TestStateSaveAndLoad(t *testing.T) {
 	assert.True(t, mnt.Mounted)
 	assert.False(t, mnt.ReadOnly)
 	assert.Equal(t, "nonce-abc", mnt.LeaseNonce)
+}
+
+func TestLoadStateNormalizesLegacyVolumeModes(t *testing.T) {
+	dir := t.TempDir()
+	seed := NewState()
+	seed.SetPath(dir)
+	seed.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId: "disk_volume/vol1",
+		Mode:     storage_v1alpha.DiskVolumeVolumeMode("volume_mode.vm_universal"),
+	})
+	seed.SetMount("disk_mount/mnt1", &MountState{
+		EntityId: "disk_mount/mnt1",
+		VolumeId: "disk_volume/vol1",
+		Mode:     storage_v1alpha.DiskVolumeVolumeMode("volume_mode.vm_accelerator"),
+	})
+	require.NoError(t, seed.Save())
+
+	loaded, err := LoadState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, storage_v1alpha.VM_UNIVERSAL, loaded.GetVolume("disk_volume/vol1").Mode)
+	assert.Equal(t, storage_v1alpha.VM_ACCELERATOR, loaded.GetMount("disk_mount/mnt1").Mode)
+
+	raw, err := os.ReadFile(filepath.Join(dir, stateFileName))
+	require.NoError(t, err)
+	var persisted State
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	assert.Equal(t, storage_v1alpha.VM_UNIVERSAL, persisted.Volumes["disk_volume/vol1"].Mode)
+	assert.Equal(t, storage_v1alpha.VM_ACCELERATOR, persisted.Mounts["disk_mount/mnt1"].Mode)
 }
 
 func TestStateDeleteVolume(t *testing.T) {

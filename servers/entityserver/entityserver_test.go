@@ -19,6 +19,7 @@ import (
 	saga "miren.dev/runtime/api/saga/saga_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
+	etypes "miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/model"
 	"miren.dev/runtime/pkg/rpc"
@@ -198,6 +199,66 @@ func TestEntityServer_Delete(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestEntityServer_MakeAttrEnumEncodings(t *testing.T) {
+	store := entity.NewMockStore()
+	sb := schema.Builder("make_attr_enum_test", "v1")
+	sb.Ref("Ref", "make_attr_enum_test/ref", schema.EnumValues(entity.Id("make_attr_enum_test/ref.ready")))
+	sb.String("String", "make_attr_enum_test/string", schema.EnumValues("ready"))
+	sb.Keyword("Keyword", "make_attr_enum_test/keyword", schema.EnumValues(etypes.Keyword("ready")))
+	sb.Enum("TypeEnum", "make_attr_enum_test/type_enum", []any{"ready"})
+	require.NoError(t, sb.Apply(t.Context(), store))
+
+	client := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(&EntityServer{
+			Log:   slog.Default(),
+			Store: store,
+		})),
+	}
+
+	tests := []struct {
+		name  string
+		id    string
+		input string
+		want  entity.Value
+	}{
+		{
+			name:  "ref",
+			id:    "make_attr_enum_test/ref",
+			input: "make_attr_enum_test/ref.ready",
+			want:  entity.RefValue("make_attr_enum_test/ref.ready"),
+		},
+		{
+			name:  "string",
+			id:    "make_attr_enum_test/string",
+			input: "ready",
+			want:  entity.StringValue("ready"),
+		},
+		{
+			name:  "keyword",
+			id:    "make_attr_enum_test/keyword",
+			input: "ready",
+			want:  entity.KeywordValue("ready"),
+		},
+		{
+			name:  "type enum",
+			id:    "make_attr_enum_test/type_enum",
+			input: "ready",
+			want:  entity.StringValue("ready"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := client.MakeAttr(t.Context(), tt.id, tt.input)
+			require.NoError(t, err)
+			assert.True(t, tt.want.Equal(result.Attr().Value))
+		})
+	}
+
+	_, err := client.MakeAttr(t.Context(), "make_attr_enum_test/string", "nope")
+	require.ErrorContains(t, err, "invalid enum value: nope")
 }
 
 func TestEntityServer_WatchIndex(t *testing.T) {
