@@ -1,5 +1,9 @@
 domain: dev.miren.compute
 version: v1alpha
+enums:
+  port_protocol:
+    member-prefix: protocol
+    values: [tcp, udp]
 
 # Nodes are the cluster's runner inventory. Cloud mirrors them so the console
 # can count them, list them, and watch versions and health converge during an
@@ -191,8 +195,9 @@ components:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              legacy-choices: true
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: High-level port type (e.g., http)
@@ -413,8 +418,9 @@ kinds:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              legacy-choices: true
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: The highlevel type of the port

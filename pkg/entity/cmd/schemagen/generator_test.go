@@ -631,12 +631,16 @@ func TestEnumFieldEmptiness(t *testing.T) {
 	sf := &schemaFile{
 		Domain:  "test",
 		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"deployment_status": {Values: []string{"pending", "running", "completed", "failed"}},
+		},
 		Kinds: map[string]schemaAttrs{
 			"deployment": {
 				"status": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"pending", "running", "completed", "failed"},
-					Doc:     "Deployment status",
+					Type:          "enum",
+					Enum:          "deployment_status",
+					LegacyChoices: true,
+					Doc:           "Deployment status",
 				},
 			},
 		},
@@ -1398,27 +1402,62 @@ func TestRefFieldWithMany(t *testing.T) {
 	})
 }
 
-func TestEnumInNestedComponentsNamespacing(t *testing.T) {
-	// Test that enum constants in nested components are properly namespaced
-	// to avoid collisions when component and kind have same nested structure with enums
-	// Key behavior: standalone components get prefixed enums (PortSpecTCP),
-	// kinds get simple enums (TCP) for backward compatibility
+func TestInlineEnumChoicesRemainFieldOwned(t *testing.T) {
 	sf := &schemaFile{
 		Domain:  "test.example",
 		Version: "v1",
+		Kinds: map[string]schemaAttrs{
+			"switch": {
+				"state": {
+					Type:    "enum",
+					Choices: []string{"on", "off"},
+				},
+			},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("GenerateSchema() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"type SwitchState string",
+		`ON  SwitchState = "state.on"`,
+		`SwitchStateOnId  = entity.Id("test.example/state.on")`,
+		`sb.Ref("state", "test.example/switch.state", schema.Choices(SwitchStateOnId, SwitchStateOffId))`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("generated inline enum missing %q\n%s", want, code)
+		}
+	}
+	if strings.Contains(code, "sb.Enum(") {
+		t.Error("inline choices should keep the field-owned ref schema")
+	}
+}
+
+func TestNamedEnumSharedAcrossFieldsUsesCanonicalMemberRefs(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"port_protocol": {MemberPrefix: "protocol", Values: []string{"tcp", "udp"}},
+		},
 		Components: map[string]schemaAttrs{
 			"port_spec": {
 				"protocol": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"tcp", "udp"},
+					Type:          "enum",
+					Enum:          "port_protocol",
+					LegacyChoices: true,
 				},
 			},
 		},
 		Kinds: map[string]schemaAttrs{
 			"port": {
 				"protocol": &schemaAttr{
-					Type:    "enum",
-					Choices: []string{"tcp", "udp"},
+					Type:          "enum",
+					Enum:          "port_protocol",
+					LegacyChoices: true,
 				},
 				"spec": &schemaAttr{
 					Type: "port_spec",
@@ -1433,41 +1472,156 @@ func TestEnumInNestedComponentsNamespacing(t *testing.T) {
 		t.Fatalf("Failed to generate schema: %v", err)
 	}
 
-	// Component enum constants should be prefixed with PortSpec
-	if !strings.Contains(code, "PortSpecTCP") {
-		t.Error("Component enum constants should be prefixed with parent context (PortSpecTCP)")
-		t.Logf("Generated code:\n%s", code)
+	if count := strings.Count(code, "type PortProtocol string"); count != 1 {
+		t.Fatalf("expected one shared PortProtocol declaration, got %d\n%s", count, code)
 	}
-	if !strings.Contains(code, "PortSpecUDP") {
-		t.Error("Component enum constants should be prefixed with parent context (PortSpecUDP)")
+	if !strings.Contains(code, `PortProtocolTcp PortProtocol = "tcp"`) {
+		t.Errorf("named enum constants should use the member name as their semantic value\n%s", code)
 	}
-
-	// Kind enum constants should be simple (backward compatibility)
-	if !strings.Contains(code, "\tTCP ") {
-		t.Error("Kind enum constants should be simple (TCP) for backward compatibility")
-		t.Logf("Generated code:\n%s", code)
-	}
-	if !strings.Contains(code, "\tUDP ") {
-		t.Error("Kind enum constants should be simple (UDP) for backward compatibility")
+	if count := strings.Count(code, "Protocol PortProtocol"); count != 2 {
+		t.Errorf("both fields should use the shared PortProtocol type, got %d\n%s", count, code)
 	}
 
-	// Check that enum attribute IDs
-	// Components should have full path
+	// The component's historical IDs remain readable, while both writers use
+	// the kind field's existing IDs as the canonical shared members.
 	if !strings.Contains(code, `"test.example/component.port_spec.protocol.tcp"`) {
-		t.Error("Component enum attribute IDs should have full path")
+		t.Error("component legacy enum IDs should remain available")
 	}
-	// Kinds should have simple path (backward compatibility)
-	if !strings.Contains(code, `"test.example/protocol.tcp"`) {
-		t.Error("Kind enum attribute IDs should have simple path for backward compatibility")
+	if !strings.Contains(code, `PortProtocolTcpMemberId = entity.Id("test.example/protocol.tcp")`) {
+		t.Error("named enum should declare one canonical member ID")
+	}
+	if count := strings.Count(code, `PortProtocolTcp: PortProtocolTcpMemberId`); count != 2 {
+		t.Errorf("both fields should encode the canonical member ID, got %d mappings\n%s", count, code)
+	}
+	for _, legacyValue := range []string{
+		`PortProtocol("protocol.tcp"): PortProtocolTcpMemberId`,
+		`PortProtocol("component.port_spec.protocol.tcp"): PortProtocolTcpMemberId`,
+	} {
+		if !strings.Contains(code, legacyValue) {
+			t.Errorf("named enum should preserve old serialized Go value %q\n%s", legacyValue, code)
+		}
+	}
+	if !strings.Contains(code, `sb.Enum("protocol"`) || !strings.Contains(code, `[]entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId}`) {
+		t.Error("named enum fields should install as TypeEnum with canonical ref values")
+	}
+	if strings.Contains(code, `sb.Singleton("test.example/component.port_spec.protocol.tcp")`) {
+		t.Error("legacy enum members should remain read aliases without being installed on fresh clusters")
+	}
+}
+
+func TestNamedEnumQualifiesCollidingLegacyConstants(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"port_protocol": {Values: []string{"tcp", "udp"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"listener": {
+				"protocol": {Type: "enum", Enum: "port_protocol", LegacyChoices: true},
+			},
+			"route": {
+				"transport": {Type: "enum", Enum: "port_protocol", LegacyChoices: true},
+			},
+		},
 	}
 
-	// Check enum constant values
-	// Components should have full path in constant value
-	if !strings.Contains(code, `PortSpecTCP PortSpecProtocol = "component.port_spec.protocol.tcp"`) {
-		t.Error("Component enum constant values should use full attribute path")
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("GenerateSchema() error = %v", err)
 	}
-	// Kinds should have simple path in constant value (backward compatibility)
-	if !strings.Contains(code, `TCP PortProtocol = "protocol.tcp"`) {
-		t.Error("Kind enum constant values should use simple path for backward compatibility")
+	for _, constant := range []string{"ListenerProtocolTCP", "ListenerProtocolUDP", "RouteTransportTCP", "RouteTransportUDP"} {
+		if !strings.Contains(code, constant+" PortProtocol") {
+			t.Errorf("generated named enum missing qualified legacy constant %s\n%s", constant, code)
+		}
+	}
+	if strings.Contains(code, "\n\tTCP PortProtocol =") || strings.Contains(code, "\n\tUDP PortProtocol =") {
+		t.Errorf("colliding legacy constants should not remain unqualified\n%s", code)
+	}
+}
+
+func TestNamedEnumRejectsGeneratedStructNameCollision(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"run": {Values: []string{"pending"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"run": {},
+		},
+	}
+
+	_, err := GenerateSchema(sf, "test")
+	if err == nil || !strings.Contains(err.Error(), "both generate Go type Run") {
+		t.Fatalf("GenerateSchema() error = %v, want generated type collision", err)
+	}
+}
+
+func TestNamedEnumRejectsValueIdentifierCollision(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"schedule": {Values: []string{"on_call", "onCall"}},
+		},
+	}
+
+	_, err := GenerateSchema(sf, "test")
+	if err == nil || !strings.Contains(err.Error(), `values "on_call" and "onCall" both generate Go identifier ScheduleOnCall`) {
+		t.Fatalf("GenerateSchema() error = %v, want generated identifier collision", err)
+	}
+}
+
+func TestUnreferencedNamedEnumDoesNotEmitMemberInitializer(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"mode": {Values: []string{"auto", "fixed"}},
+		},
+	}
+
+	code, err := GenerateSchema(sf, "test")
+	if err != nil {
+		t.Fatalf("GenerateSchema() error = %v", err)
+	}
+	if !strings.Contains(code, "type Mode string") {
+		t.Fatal("unreferenced enum declaration should still be generated")
+	}
+	if strings.Contains(code, "func initEnumMembers(") {
+		t.Fatal("unreferenced enums should not emit an unused member initializer")
+	}
+}
+
+func TestNamedEnumFieldRequiresDefinition(t *testing.T) {
+	base := &schemaFile{
+		Domain:  "test.example",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"state": {Values: []string{"on", "off"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"switch": {
+				"state": {Type: "enum", Enum: "missing", LegacyChoices: true},
+			},
+		},
+	}
+
+	_, err := GenerateSchema(base, "test")
+	if err == nil || !strings.Contains(err.Error(), `references unknown enum "missing"`) {
+		t.Fatalf("GenerateSchema() error = %v, want unknown enum", err)
+	}
+
+	base.Kinds["switch"]["state"].Enum = "state"
+	base.Kinds["switch"]["state"].LegacyChoices = false
+	if _, err = GenerateSchema(base, "test"); err != nil {
+		t.Fatalf("new named enum should not require legacy choices: %v", err)
+	}
+
+	base.Kinds["switch"]["state"] = &schemaAttr{Type: "enum", Choices: []string{"on", "off"}, LegacyChoices: true}
+	_, err = GenerateSchema(base, "test")
+	if err == nil || !strings.Contains(err.Error(), "cannot declare legacy choices") {
+		t.Fatalf("GenerateSchema() error = %v, want inline legacy choices error", err)
 	}
 }
