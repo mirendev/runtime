@@ -2899,8 +2899,13 @@ func (c *SandboxController) buildSubContainerSpec(
 		}
 	}
 
+	imageConfigOpt := oci.WithImageConfig(img)
+	if len(co.Args) > 0 {
+		imageConfigOpt = oci.WithImageConfigArgs(img, co.Args)
+	}
+
 	specOpts := []oci.SpecOpts{
-		oci.WithImageConfig(img),
+		imageConfigOpt,
 		oci.WithDefaultUnixDevices,
 		oci.WithoutMounts("/sys"),
 		oci.WithMounts(mounts),

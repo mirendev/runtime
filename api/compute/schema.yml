@@ -143,6 +143,10 @@ components:
         command:
           type: string
           doc: Command to run
+        args:
+          type: string
+          many: true
+          doc: Arguments that replace the image CMD while preserving its ENTRYPOINT
         directory:
           type: string
           doc: Working directory
@@ -567,4 +571,3 @@ kinds:
     last_heartbeat:
       type: time
       doc: The last time the lease was updated
-

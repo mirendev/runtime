@@ -51,14 +51,16 @@ Miren detects services in this order:
 2. **`Procfile`** — Services inferred from Procfile entries
 3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust), Miren synthesizes a `web` service from the start command it detects for your framework
 
-If none of these provide a service definition, the deploy fails with
-`no services defined: please define at least one service in a Procfile or .miren/app.toml`.
+If none of these provide a service definition, Miren usually synthesizes a `web` service
+for a runnable container image. That service uses the image's `ENTRYPOINT` and `CMD`
+unchanged. Set `web = false` to suppress it. An app with tasks but no services must set
+`web` explicitly, so Miren does not guess whether it needs a long-running process.
 
-:::warning[A custom Dockerfile needs an explicit service]
-When you build from a `Dockerfile.miren` (or a `[build] dockerfile`), Miren does **not**
-use the image's `CMD`/`ENTRYPOINT` as the service command — you must define the service
-yourself in a `Procfile` or `[services.*]`. Only auto-detected stacks get a `web` service
-synthesized for them.
+:::note[Custom images keep their startup defaults]
+An image built from `Dockerfile.miren` (or a `[build] dockerfile`) can run without an
+explicit service. Unless `web = false`, Miren creates a `web` service and uses the image's
+`ENTRYPOINT` and `CMD`. Add `[services.web]` when you need to customize how it runs. An app
+with tasks but no services must set `web` to `true` or `false` explicitly.
 :::
 
 ### Using a Procfile
@@ -143,6 +145,7 @@ name = "myapp"
 
 [services.web]
 image = "ghcr.io/example/myapp:latest"
+args = ["serve", "--port", "8080"]
 port = 8080
 ```
 
@@ -225,7 +228,8 @@ Each service can configure:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `command` | Command to run | For a service with an explicit `image`, the image's default entrypoint; for a service built from your own Dockerfile, there is no default — you must set a command (see the note above) |
+| `command` | Shell command that replaces the image startup command (`/bin/sh -c`) | (none) |
+| `args` | Exec-form arguments that replace image `CMD` while preserving `ENTRYPOINT`; mutually exclusive with `command` | (none) |
 | `image` | Container image to use | App's built image |
 | `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
@@ -234,6 +238,9 @@ Each service can configure:
 | `concurrency` | Scaling configuration | See [Scaling](/scaling) |
 | `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |
 | `disks` | Persistent disk attachments (experimental, see [Disks](/disks)) | (none) |
+
+With neither `command` nor `args`, the image's `ENTRYPOINT` and `CMD` run
+unchanged. `args` preserves each array element exactly, without shell expansion.
 
 ### Environment Variables
 

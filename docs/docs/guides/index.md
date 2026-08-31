@@ -148,10 +148,12 @@ RUN echo "building $MIREN_VERSION"
 Build arguments apply to `Dockerfile.miren` builds only — auto-detected stacks don't run
 a Dockerfile.
 
-:::info[Custom Dockerfiles need an explicit service]
-Even with a `Dockerfile.miren`, you must define at least one service — a `Procfile` or a
-`[services.web]` block. Miren does not use the image's `CMD`/`ENTRYPOINT` as the start
-command; that fallback applies only to auto-detected stacks.
+:::info[Custom Dockerfiles keep their startup defaults]
+A `Dockerfile.miren` can run without an explicit service. Miren synthesizes a `web`
+service that uses the image's `ENTRYPOINT` and `CMD`. Add a `Procfile` or
+`[services.web]` block when you need to customize how the image starts. Set `web = false`
+to suppress the synthesized service. An app with tasks but no services must set `web`
+explicitly.
 :::
 
 ## What every guide assumes

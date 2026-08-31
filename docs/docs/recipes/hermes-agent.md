@@ -1,6 +1,6 @@
 ---
 title: Deploy the Hermes agent
-description: A worked example — run Nous Research's Hermes AI agent on Miren by wrapping its Docker image, with a persistent disk and an auth-protected dashboard.
+description: Run Nous Research's Hermes AI agent image on Miren with a persistent disk and an auth-protected dashboard.
 keywords: [hermes, nous research, ai agent, docker image, disk, dashboard, example, deploy]
 ---
 
@@ -11,19 +11,19 @@ import CliCommand from '@site/src/components/CliCommand';
 This worked example deploys Nous Research's
 [Hermes agent](https://hermes-agent.nousresearch.com/docs/user-guide/docker) (Docker
 image `nousresearch/hermes-agent:latest`) onto a Miren cluster. Hermes ships only as a
-Docker image, so you wrap it in a thin `Dockerfile` and let Miren build and run it.
+Docker image, so Miren pulls and runs that image directly.
 
 The end state: the Hermes **dashboard** served over HTTPS behind basic auth, the
 OpenAI-compatible **API server intentionally disabled**, and all agent state persisted
 on a Miren disk at `/opt/data`.
 
-Along the way it exercises a lot of real Miren behavior — custom Dockerfile builds,
+Along the way it exercises a lot of real Miren behavior: direct image deploys,
 the `web` service convention, `0.0.0.0` binding, `port_timeout`, and network disks — so
 it doubles as a tour of what matters when you bring your own image.
 
 :::info[This is an application recipe, not a language guide]
 For getting your own source code onto Miren, start with [Deployment](/deployment) and the
-[Language Guides](/guides). This page is about wrapping a prebuilt third-party image.
+[Language Guides](/guides). This page is about running a prebuilt third-party image.
 :::
 
 ## Prerequisites
@@ -53,36 +53,14 @@ miren whoami -C hermes
 The commands below target it explicitly with `-C hermes`. Omit `-C` to use your default
 cluster.
 
-## The Dockerfile
-
-Wrap the upstream image and clear its entrypoint:
-
-```dockerfile
-FROM nousresearch/hermes-agent:latest
-ENTRYPOINT []
-```
-
-:::warning[Miren drops the image's ENTRYPOINT]
-The upstream image's real entrypoint is s6-overlay:
-`["/init", "/opt/hermes/docker/main-wrapper.sh"]`. `/init` seeds `/opt/data` on first
-boot and drops privileges; `main-wrapper.sh` maps `gateway run` → `hermes gateway run`.
-But Miren's Dockerfile stack does **not** carry an inherited ENTRYPOINT — it runs the
-service command via `/bin/sh -c "<cmd>"`. So `CMD ["gateway","run"]` gives
-`/bin/sh: gateway: not found`, because `gateway` is only resolved by the wrapper, not a
-PATH binary. Clear the entrypoint here and reconstruct the real invocation in the service
-command below, using `exec` so `/init` becomes PID 1.
-:::
-
 ## The app.toml
 
 ```toml
 name = "hermes"
 
-[build]
-dockerfile = "Dockerfile"
-
 [services.web]
-command = "exec /init /opt/hermes/docker/main-wrapper.sh gateway run"
+image = "nousresearch/hermes-agent:latest"
+args = ["gateway", "run"]
 port = 9119
 port_type = "http"
 port_timeout = "180s"
@@ -125,6 +103,12 @@ key = "OPENAI_API_KEY"
 sensitive = true
 ```
 
+The image's `ENTRYPOINT` is s6-overlay:
+`["/init", "/opt/hermes/docker/main-wrapper.sh"]`. `/init` seeds `/opt/data` on first
+boot and drops privileges; `main-wrapper.sh` maps `gateway run` to `hermes gateway run`.
+The `args` field replaces only the image's default `CMD`, so that entrypoint stays intact
+and receives `gateway` and `run` as separate arguments.
+
 :::warning[The HTTP service must be named `web`]
 Miren's HTTP ingress routes an app's hostname to the service named `web`. Name it anything
 else and every request returns `error acquiring lease: app/hermes` (HTTP 500) even though
@@ -156,15 +140,6 @@ Hermes warns that a network-accessible OpenAI-compatible API server with the def
 access**. This config leaves it off. Enable it only deliberately and sandboxed
 (`terminal.backend: docker`) with the port firewalled.
 :::
-
-Add a `.dockerignore` to keep your local `.env` and `.miren` directory out of the build
-context (secrets are passed with `miren env set -s` / `-s` deploy flags, never baked into
-the image). Extend it with any other local secret or config paths your project has:
-
-```text
-.env
-.miren
-```
 
 ## Deploy
 
@@ -239,7 +214,7 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 
 ## Roadblock checklist
 
-1. Clear `ENTRYPOINT []` and run `exec /init /opt/hermes/docker/main-wrapper.sh gateway run` — don't rely on the image entrypoint/CMD.
+1. Set `args = ["gateway", "run"]` so Miren preserves the image's s6 `ENTRYPOINT` and replaces only its default `CMD`.
 2. Name the HTTP service `web`, or ingress returns `error acquiring lease`.
 3. Bind services to `0.0.0.0`, not `127.0.0.1`.
 4. `port_timeout = "180s"` for the slow s6 first boot.
@@ -252,4 +227,4 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 - [App Configuration](/app-configuration) — the full `app.toml` reference in context
 - [Persistent Storage](/disks) — Miren disks vs. local disks
 - [Traffic Routing](/traffic-routing) — how the `web` service and routes fit together
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — building from your own Dockerfile
+- [Services](/services) — image defaults, `args`, and full command overrides

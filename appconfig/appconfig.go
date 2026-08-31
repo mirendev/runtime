@@ -162,6 +162,7 @@ type ServiceMetricsConfig struct {
 // ServiceConfig represents configuration for a specific service
 type ServiceConfig struct {
 	Command     string                    `toml:"command"`
+	Args        []string                  `toml:"args"`
 	Port        int                       `toml:"port"`
 	PortName    string                    `toml:"port_name"`
 	PortType    string                    `toml:"port_type"`
@@ -431,6 +432,27 @@ func (ac *AppConfig) Validate() error {
 		}
 
 		svcPrefix := "services." + serviceName
+
+		if svcConfig.Args != nil {
+			if serviceName == ConsoleName {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".args",
+					Message: "service console: args is not supported on deprecated [services.console]; use [tasks.console] with a command instead",
+				}
+			}
+			if len(svcConfig.Args) == 0 {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".args",
+					Message: fmt.Sprintf("service %s: args must contain at least one argument", serviceName),
+				}
+			}
+			if svcConfig.Command != "" {
+				return &ValidationError{
+					KeyPath: svcPrefix + ".args",
+					Message: fmt.Sprintf("service %s: command and args cannot both be set", serviceName),
+				}
+			}
+		}
 
 		// Validate concurrency if present
 		if svcConfig.Concurrency != nil {

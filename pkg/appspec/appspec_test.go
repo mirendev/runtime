@@ -129,6 +129,33 @@ func TestBuildCommandOverrideWithoutEntrypoint(t *testing.T) {
 	assert.Equal(t, "bin/reindex", spec.Container[0].Command)
 }
 
+func TestBuildServiceArgsRemainExecForm(t *testing.T) {
+	opts := baseOptions()
+	opts.Config.Entrypoint = "/cnb/lifecycle/launcher"
+	opts.Config.Services[0].Command = ""
+	opts.Config.Services[0].Args = []string{"gateway", "run", "--label=two words", "--literal=$PORT", ""}
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+	require.Len(t, spec.Container, 1)
+	assert.Empty(t, spec.Container[0].Command)
+	assert.Equal(t,
+		[]string{"gateway", "run", "--label=two words", "--literal=$PORT", ""},
+		spec.Container[0].Args)
+}
+
+func TestBuildExplicitCommandOverrideWinsOverServiceArgs(t *testing.T) {
+	opts := baseOptions()
+	opts.Config.Services[0].Command = ""
+	opts.Config.Services[0].Args = []string{"image", "args"}
+	opts.Command = "bin/rails db:migrate"
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, "bin/rails db:migrate", spec.Container[0].Command)
+	assert.Empty(t, spec.Container[0].Args)
+}
+
 // Layering order is the part most easily broken by a refactor: per-service env
 // overrides global config, and the platform's own variables override both.
 func TestBuildEnvLayering(t *testing.T) {

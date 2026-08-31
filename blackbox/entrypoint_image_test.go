@@ -37,3 +37,33 @@ func TestDeployImageEntrypointNoCommand(t *testing.T) {
 		},
 	)
 }
+
+// TestDeployImageEntrypointWithArgs verifies that service args replace the
+// image CMD without replacing its ENTRYPOINT or passing through a shell.
+func TestDeployImageEntrypointWithArgs(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.DeployApp(t, m, harness.AppOptions{
+		Testdata: "entrypoint-args-image",
+	})
+
+	harness.Poll(t, "entrypoint override argv logged", 30*time.Second, 2*time.Second,
+		func() (bool, string) {
+			r := m.Run("logs", "-a", name)
+			if !r.OutputContains("entrypoint-args-image: arg[0]=<serve>") {
+				return false, "image entrypoint did not receive the overridden CMD"
+			}
+			if !r.OutputContains("arg[1]=<--note=$ARGS_SHOULD_NOT_EXPAND>") {
+				return false, "dollar literal was expanded or lost"
+			}
+			if !r.OutputContains("arg[2]=<--label=two words>") {
+				return false, "argument boundary was not preserved"
+			}
+			if r.OutputContains("wrong-default") {
+				return false, "image default CMD was not replaced"
+			}
+			return true, ""
+		},
+	)
+}

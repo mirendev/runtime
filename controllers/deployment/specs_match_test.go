@@ -42,7 +42,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "baf75d2ef62d08ac", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
+	assert.Equal(t, "be8d0ed7171ec698", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 
@@ -81,6 +81,15 @@ func TestSpecsMatch(t *testing.T) {
 			},
 			wantMatch:  false,
 			wantReason: "image mismatch",
+		},
+		{
+			name: "different args do not match",
+			modify: func(a, b *compute_v1alpha.SandboxSpec) {
+				a.Container[0].Args = []string{"serve", "--port", "3000"}
+				b.Container[0].Args = []string{"serve", "--port", "4000"}
+			},
+			wantMatch:  false,
+			wantReason: "args mismatch",
 		},
 		{
 			name: "shutdown timeout change does not match",
