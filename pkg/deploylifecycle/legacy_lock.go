@@ -15,11 +15,12 @@ import (
 // older binary only checks deploy-lock/<app>. Writing both prevents an upgrade
 // or downgrade boundary from splitting mutual exclusion across two locations.
 const (
-	legacyLockKind         = entity.Id("dev.miren.core/deployment_lock")
-	legacyLockAppName      = entity.Id("dev.miren.core/deployment_lock.app_name")
-	legacyLockDeploymentID = entity.Id("dev.miren.core/deployment_lock.deployment_id")
-	legacyLockAcquiredAt   = entity.Id("dev.miren.core/deployment_lock.acquired_at")
-	legacyLockExpiresAt    = entity.Id("dev.miren.core/deployment_lock.expires_at")
+	legacyLockKind           = entity.Id("dev.miren.core/deployment_lock")
+	lockOwnerReservationKind = entity.Id("dev.miren.core/deployment_lock_owner_reservation")
+	legacyLockAppName        = entity.Id("dev.miren.core/deployment_lock.app_name")
+	legacyLockDeploymentID   = entity.Id("dev.miren.core/deployment_lock.deployment_id")
+	legacyLockAcquiredAt     = entity.Id("dev.miren.core/deployment_lock.acquired_at")
+	legacyLockExpiresAt      = entity.Id("dev.miren.core/deployment_lock.expires_at")
 )
 
 func init() {
@@ -29,6 +30,7 @@ func init() {
 	// the canonical API.
 	schema.Register("dev.miren.core.deployment-lock-compat", "v1alpha", func(sb *schema.SchemaBuilder) {
 		sb.Singleton(string(legacyLockKind))
+		sb.Singleton(string(lockOwnerReservationKind))
 		sb.String("app_name", string(legacyLockAppName), schema.Indexed)
 		sb.String("deployment_id", string(legacyLockDeploymentID))
 		sb.Time("acquired_at", string(legacyLockAcquiredAt))

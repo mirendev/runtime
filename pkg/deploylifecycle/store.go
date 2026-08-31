@@ -20,12 +20,16 @@ import (
 // they are normalized away on read rather than migrated.
 const pendingBuildSentinel = "pending-build"
 
-// lockReservationStatus is written on the otherwise anonymous entity that
+// lockReservationStatus is written on the private transition entity that
 // reserves a deployment ID for the lock owner. It is deliberately not a
 // public lifecycle status: an older runtime only needs to see a non-terminal
-// record while the compatibility lock points at the ID. Omitting entity/kind
-// and app_name keeps the reservation out of deployment history and migration.
+// record while the compatibility lock points at the ID.
 const lockReservationStatus = "_locking"
+
+type lockOwnerReservation struct {
+	revision int64
+	shortID  string
+}
 
 // Record is a deployment entity together with what a caller needs to write it
 // back: the revision it was read at, and the raw entity for short-id rendering.
@@ -257,31 +261,53 @@ func (s *Store) Create(ctx context.Context, dep *core_v1alpha.Deployment) (*Reco
 	return s.Get(ctx, string(dep.ID))
 }
 
-// ReserveLockOwner creates an anonymous placeholder for a deployment ID before
-// lock acquisition. During a rolling upgrade, an older runtime treats a legacy
-// lock whose deployment record is missing as abandoned and steals it. The
-// placeholder closes that publication window without making an unsuccessful
-// lock attempt appear in deployment history.
-func (s *Store) ReserveLockOwner(ctx context.Context, deploymentID entity.Id) (int64, error) {
+// ReserveLockOwner creates a private transition entity for a deployment ID
+// before lock acquisition. During a rolling upgrade, an older runtime treats a
+// legacy lock whose deployment record is missing as abandoned and steals it.
+// The transition entity closes that publication window without making an
+// unsuccessful lock attempt appear in deployment history.
+func (s *Store) ReserveLockOwner(ctx context.Context, deploymentID entity.Id) (*lockOwnerReservation, error) {
 	attrs := []entity.Attr{
 		entity.Ref(entity.DBId, deploymentID),
+		entity.Ref(entity.EntityKind, lockOwnerReservationKind),
 		entity.String(core_v1alpha.DeploymentStatusId, string(lockReservationStatus)),
 	}
 	res, err := s.eac.Ensure(ctx, attrs)
 	if err != nil {
-		return 0, fmt.Errorf("failed to reserve deployment lock owner: %w", err)
+		return nil, fmt.Errorf("failed to reserve deployment lock owner: %w", err)
 	}
 	if !res.Created() {
-		return 0, cond.Conflict("deployment-id", string(deploymentID))
+		return nil, cond.Conflict("deployment-id", string(deploymentID))
 	}
-	return res.Revision(), nil
+
+	rec, err := s.Get(ctx, string(deploymentID))
+	if err != nil {
+		s.discardLockOwnerReservation(ctx, deploymentID, "read-back failed")
+		return nil, fmt.Errorf("failed to read deployment lock owner reservation: %w", err)
+	}
+	shortID := rec.Entity.Entity().ShortId()
+	if shortID == "" {
+		s.discardLockOwnerReservation(ctx, deploymentID, "short id missing")
+		return nil, fmt.Errorf("deployment lock owner reservation has no short id")
+	}
+	return &lockOwnerReservation{revision: rec.Revision, shortID: shortID}, nil
+}
+
+func (s *Store) discardLockOwnerReservation(ctx context.Context, deploymentID entity.Id, reason string) {
+	if _, err := s.eac.Delete(ctx, string(deploymentID)); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+		s.log.Error("failed to discard deployment lock owner reservation",
+			"deployment_id", deploymentID, "reason", reason, "error", err)
+	}
 }
 
 // PublishLockOwner atomically replaces a lock-owner reservation with the full
 // deployment record after both the compatibility and canonical locks are held.
-func (s *Store) PublishLockOwner(ctx context.Context, dep *core_v1alpha.Deployment, revision int64) (*Record, error) {
-	attrs := append(dep.Encode(), entity.Ref(entity.DBId, dep.ID))
-	if _, err := s.eac.Replace(ctx, attrs, revision); err != nil {
+func (s *Store) PublishLockOwner(ctx context.Context, dep *core_v1alpha.Deployment, reservation *lockOwnerReservation) (*Record, error) {
+	attrs := append(dep.Encode(),
+		entity.Ref(entity.DBId, dep.ID),
+		entity.String(entity.DBShortId, reservation.shortID),
+	)
+	if _, err := s.eac.Replace(ctx, attrs, reservation.revision); err != nil {
 		return nil, fmt.Errorf("failed to publish deployment lock owner: %w", err)
 	}
 	return s.Get(ctx, string(dep.ID))
