@@ -425,6 +425,10 @@ func (c *Context) DisplayTable(headers []string, rows [][]string) {
 }
 
 func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
+	return c.rpcClient(c, name)
+}
+
+func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkClient, error) {
 	// Nothing is printed unless this takes long enough to look like a hang.
 	defer c.startConnectNotice().Stop()
 
@@ -453,7 +457,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 	// believing you were looking at something else. An error about the cluster
 	// you named beats correct-looking data about a cluster you didn't.
 	if c.ClusterConfig != nil && c.ClientConfig != nil {
-		cs, err = c.ClusterConfig.State(c, c.ClientConfig, opts...)
+		cs, err = c.ClusterConfig.State(rpcCtx, c.ClientConfig, opts...)
 		if err != nil {
 			return nil, c.unusableClusterError(c.ClusterName, err)
 		}
@@ -475,7 +479,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 			return nil, c.noActiveClusterError()
 		}
 
-		cs, err = c.ClientConfig.State(c, opts...)
+		cs, err = c.ClientConfig.State(rpcCtx, opts...)
 		if err == nil {
 			client, err := cs.Client(name)
 			if err != nil {
@@ -500,7 +504,7 @@ func (c *Context) RPCClient(name string) (*rpc.NetworkClient, error) {
 		c.Log.Debug("Client config could not provide RPC state", "error", err)
 	}
 
-	cs, err = rpc.NewState(c, append(opts, rpc.WithSkipVerify)...)
+	cs, err = rpc.NewState(rpcCtx, append(opts, rpc.WithSkipVerify)...)
 	if err != nil {
 		return nil, err
 	}

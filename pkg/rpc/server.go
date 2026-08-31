@@ -1182,6 +1182,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 // panic over the control stream. It is transport-neutral: both the HTTP
 // callstream handler and the message-transport router use it.
 func (s *Server) runCallStream(ctx context.Context, cs *controlStream, mm Method, call *NetworkCall) {
+	ctx = contextWithServerLifetime(ctx, s.state.top)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -1329,6 +1330,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 		}
 
+		ctx = contextWithServerLifetime(ctx, s.state.top)
 		err := mm.Handler(ctx, call)
 		if err != nil {
 			w.Header().Add("rpc-status", "error")

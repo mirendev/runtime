@@ -43,6 +43,43 @@ import (
 
 var deployTracer = otel.Tracer("miren.dev/runtime/cli/deploy")
 
+func isDeploymentCancelled(err error) bool {
+	remote, ok := errors.AsType[cond.ErrRemote](err)
+	return ok && remote.Category == "deployment" && remote.Code == "cancelled"
+}
+
+type deploymentCancellationOutcome int
+
+const (
+	deploymentCancellationUnknown deploymentCancellationOutcome = iota
+	deploymentCancellationConfirmed
+	deploymentCancellationCompleted
+)
+
+// reconcileDeploymentCancellation resolves a failed or ambiguous cancellation
+// request against the authoritative deployment record. The deploy may have
+// finished between the client's interrupt and the server handling its request.
+func reconcileDeploymentCancellation(
+	ctx context.Context,
+	deploymentID string,
+	getter deploymentStatusGetter,
+	cancelErr error,
+) (deploymentCancellationOutcome, error) {
+	status, statusErr := getter.GetStatus(ctx, deploymentID)
+	if statusErr != nil {
+		return deploymentCancellationUnknown, fmt.Errorf("%w; re-reading deployment status: %v", cancelErr, statusErr)
+	}
+
+	switch status {
+	case "cancelled":
+		return deploymentCancellationConfirmed, nil
+	case "succeeded", "active":
+		return deploymentCancellationCompleted, nil
+	default:
+		return deploymentCancellationUnknown, cancelErr
+	}
+}
+
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
@@ -421,10 +458,18 @@ func Deploy(ctx *Context, opts struct {
 	// status arm). A mutex guards it because that arm is handled in a stream
 	// goroutine while the main goroutine reads it for the summary.
 	var deploymentMu sync.Mutex
+	deploymentIDReady := make(chan struct{})
+	var deploymentIDReadyOnce sync.Once
+	if deploymentId != "" {
+		deploymentIDReadyOnce.Do(func() { close(deploymentIDReady) })
+	}
 	setDeploymentID := func(id string) {
 		deploymentMu.Lock()
 		deploymentId = id
 		deploymentMu.Unlock()
+		if id != "" {
+			deploymentIDReadyOnce.Do(func() { close(deploymentIDReady) })
+		}
 	}
 	getDeploymentID := func() string {
 		deploymentMu.Lock()
@@ -432,9 +477,9 @@ func Deploy(ctx *Context, opts struct {
 		return deploymentId
 	}
 
-	// The cancellation poller starts once we know the deployment id, which is
-	// immediately on the legacy path and on the first deployment status arm on
-	// the server-owned path.
+	// Older servers need the CLI to poll the record and cancel its local build
+	// context. Newer servers watch their own record, so their cancellation does
+	// not depend on this process staying connected.
 	var (
 		pollerOnce          sync.Once
 		externallyCancelled atomic.Bool
@@ -460,25 +505,64 @@ func Deploy(ctx *Context, opts struct {
 	// Helper to check if we were externally cancelled
 	wasExternallyCancelled := externallyCancelled.Load
 
-	// onDeployment records the server-created deployment on the server-owned
-	// path: it captures the id and starts the cancellation poller the first time
-	// the build reports it.
+	// onDeployment records the server-created deployment ID. The CLI needs it
+	// for summaries and to turn a local Ctrl-C into an explicit cancellation.
 	//
-	// Degradation note: on the server-owned path this is the ONLY thing that
-	// starts the poller and sets deploymentId. The server emits the deployment
-	// arm at the very start of the build (right after it takes the lock), so in
-	// practice it always arrives. But if it never does — a dropped arm, or a
-	// server that advertises the param yet never emits it — external
-	// `miren deploy cancel` cannot interrupt this CLI build and --summary-json's
-	// deploy_id is empty. The deploy itself is unaffected: the server still owns
-	// and settles the record. This is an accepted degradation, not a failure.
+	// On the server-owned path this is the only thing that sets deploymentId.
+	// Ctrl-C waits for this handoff before sending the explicit cancellation, so
+	// it never claims success while detached work can still be running.
 	onDeployment := func(id, phase string) {
 		if id == "" {
 			return
 		}
 		setDeploymentID(id)
-		startPoller(id)
+		if !serverOwnsDeployment {
+			startPoller(id)
+		}
 		ctx.Log.Info("Server-owned deployment", "deployment_id", id, "phase", phase)
+	}
+
+	requestDeploymentCancellation := func() (deploymentCancellationOutcome, error) {
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx.Context), 10*time.Second)
+		defer cancel()
+
+		id := getDeploymentID()
+		if id == "" {
+			select {
+			case <-deploymentIDReady:
+				id = getDeploymentID()
+			case <-cancelCtx.Done():
+				return deploymentCancellationUnknown, fmt.Errorf("waiting for the server to report the deployment ID: %w", cancelCtx.Err())
+			}
+		}
+		if id == "" {
+			return deploymentCancellationUnknown, fmt.Errorf("server reported an empty deployment ID")
+		}
+
+		client := depClient
+		if ctx.Err() != nil {
+			fresh, connectErr := ctx.rpcClient(cancelCtx, "dev.miren.runtime/deployment")
+			if connectErr != nil {
+				return deploymentCancellationUnknown, fmt.Errorf("reconnecting to cancel deployment %s: %w", id, connectErr)
+			}
+			defer fresh.Close()
+			client = deployment_v1alpha.NewDeploymentClient(fresh)
+		}
+
+		result, cancelErr := client.CancelDeployment(cancelCtx, id, "")
+		if cancelErr != nil {
+			cancelErr = fmt.Errorf("cancelling deployment %s: %w", id, cancelErr)
+			return reconcileDeploymentCancellation(cancelCtx, id, newDepClientStatusGetter(client, ctx.Log), cancelErr)
+		}
+		if result.HasError() && result.Error() != "" {
+			cancelErr = fmt.Errorf("cancelling deployment %s: %s", id, result.Error())
+			return reconcileDeploymentCancellation(cancelCtx, id, newDepClientStatusGetter(client, ctx.Log), cancelErr)
+		}
+		if !result.HasSuccess() || !result.Success() {
+			cancelErr = fmt.Errorf("server did not confirm cancellation of deployment %s", id)
+			return reconcileDeploymentCancellation(cancelCtx, id, newDepClientStatusGetter(client, ctx.Log), cancelErr)
+		}
+		return deploymentCancellationConfirmed, nil
 	}
 
 	// The build status stream announces a normalized upstream image when the
@@ -820,12 +904,27 @@ func Deploy(ctx *Context, opts struct {
 
 			// Check if this was a context cancellation
 			if buildCtx.Err() != nil {
+				if serverOwnsDeployment {
+					outcome, cancelErr := requestDeploymentCancellation()
+					if cancelErr != nil {
+						ctx.Printf("\n\n❌ Deploy interrupted, but cancellation could not be confirmed.\n%s\n", cancelErr)
+						return fmt.Errorf("deploy interrupted without confirmed cancellation: %w", cancelErr)
+					}
+					if outcome == deploymentCancellationCompleted {
+						ctx.Printf("\n\n✅ Deploy completed before cancellation.\n")
+						return nil
+					}
+				}
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
 				// Don't update deployment status - it's already cancelled
 				if !wasExternallyCancelled() {
 					updateDeploymentOnError("Deploy cancelled by user")
 				}
 				return buildCtx.Err()
+			}
+			if serverOwnsDeployment && isDeploymentCancelled(err) {
+				ctx.Printf("\n\n❌ Deploy cancelled.\n")
+				return err
 			}
 
 			// Check if this was a server panic
@@ -921,6 +1020,17 @@ func Deploy(ctx *Context, opts struct {
 			// Check if this was a user interruption (via UI flag or context cancellation)
 			dm, isDeploy := buildFinalModel.(*deployInfo)
 			if (isDeploy && dm.interrupted) || deployCtx.Err() != nil {
+				if serverOwnsDeployment {
+					outcome, cancelErr := requestDeploymentCancellation()
+					if cancelErr != nil {
+						ctx.Printf("\n\n❌ Deploy interrupted, but cancellation could not be confirmed.\n%s\n", cancelErr)
+						return fmt.Errorf("deploy interrupted without confirmed cancellation: %w", cancelErr)
+					}
+					if outcome == deploymentCancellationCompleted {
+						ctx.Printf("\n\n✅ Deploy completed before cancellation.\n")
+						return nil
+					}
+				}
 				ctx.Printf("\n\n❌ Deploy cancelled.\n")
 				// Don't update deployment status if externally cancelled - it's already cancelled
 				if !wasExternallyCancelled() {
@@ -933,6 +1043,10 @@ func Deploy(ctx *Context, opts struct {
 					return buildCtx.Err()
 				}
 				return context.Canceled
+			}
+			if serverOwnsDeployment && isDeploymentCancelled(err) {
+				ctx.Printf("\n\n❌ Deploy cancelled.\n")
+				return err
 			}
 
 			// Check if this was a server panic

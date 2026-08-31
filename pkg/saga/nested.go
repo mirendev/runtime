@@ -88,13 +88,14 @@ func RunNested(ctx context.Context, sagaName string, opts ...NestedOption) (*Nes
 		actionName, _ := actionNameFromContext(ctx)
 		childID = deriveChildID(parentExecID, sagaName, actionName)
 	}
-	exec, err := parent.createChildExecution(ctx, def, cfg.inputs, childID, parentExecID)
+	controlCtx := controlContextFromContext(ctx)
+	exec, err := parent.createChildExecution(controlCtx, def, cfg.inputs, childID, parentExecID)
 	if err != nil {
 		return nil, fmt.Errorf("creating nested execution: %w", err)
 	}
 
 	// Run the child saga
-	if err := parent.runExecution(ctx, def, exec); err != nil {
+	if err := parent.runExecution(controlCtx, ctx, def, exec); err != nil {
 		return nil, err
 	}
 

@@ -2,11 +2,63 @@ package commands
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"miren.dev/runtime/pkg/cond"
 )
+
+func TestIsDeploymentCancelled(t *testing.T) {
+	err := fmt.Errorf("build failed: %w", cond.RemoteError("deployment", "cancelled", "deployment cancelled"))
+	if !isDeploymentCancelled(err) {
+		t.Fatal("expected the deployment cancellation condition to survive wrapping")
+	}
+	if isDeploymentCancelled(cond.RemoteError("deployment", "conflict", "already active")) {
+		t.Fatal("a different deployment condition must not look cancelled")
+	}
+}
+
+func TestReconcileDeploymentCancellation(t *testing.T) {
+	cancelErr := errors.New("cancellation rejected")
+
+	tests := []struct {
+		name        string
+		status      string
+		statusErr   error
+		wantOutcome deploymentCancellationOutcome
+		wantErr     bool
+	}{
+		{name: "cancelled confirms cancellation", status: "cancelled", wantOutcome: deploymentCancellationConfirmed},
+		{name: "succeeded reports completion", status: "succeeded", wantOutcome: deploymentCancellationCompleted},
+		{name: "legacy active reports completion", status: "active", wantOutcome: deploymentCancellationCompleted},
+		{name: "in progress preserves cancellation error", status: "in_progress", wantOutcome: deploymentCancellationUnknown, wantErr: true},
+		{name: "status read failure preserves cancellation error", statusErr: context.DeadlineExceeded, wantOutcome: deploymentCancellationUnknown, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getter := &mockStatusGetter{
+				statuses: []string{tt.status},
+				errors:   []error{tt.statusErr},
+			}
+
+			outcome, err := reconcileDeploymentCancellation(t.Context(), "dep-123", getter, cancelErr)
+			if outcome != tt.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", outcome, tt.wantOutcome)
+			}
+			if tt.wantErr && !errors.Is(err, cancelErr) {
+				t.Fatalf("error = %v, want wrapped cancellation error", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
 
 // mockStatusGetter is a test mock for deploymentStatusGetter
 type mockStatusGetter struct {

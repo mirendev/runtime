@@ -1376,6 +1376,12 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 		return rpc.AppAccessError(ctx, name)
 	}
 
+	requestCtx := ctx
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+	defer func() { retErr = work.result(retErr) }()
+	ctx = work.action
+
 	status := args.Status()
 
 	eph := ephemeralOptsFromArgs(args.HasEphemeralLabel(), args.EphemeralLabel(),
@@ -1415,7 +1421,7 @@ func (b *Builder) BuildFromTar(ctx context.Context, state *build_v1alpha.Builder
 	// -- build.receive_tar span
 	ctx, recvSpan := buildTracer.Start(ctx, "build.receive_tar",
 		trace.WithAttributes(attribute.String("miren.app.name", name)))
-	r := stream.ToReader(ctx, td)
+	r := stream.ToReader(requestCtx, td)
 
 	_, err = tarx.TarFS(r, path)
 	if err != nil {
@@ -1544,6 +1550,12 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 		return rpc.AppAccessError(ctx, name)
 	}
 
+	requestCtx := ctx
+	work := newDeploymentContext(ctx)
+	defer work.Close()
+	defer func() { retErr = work.result(retErr) }()
+	ctx = work.action
+
 	status := args.Status()
 
 	eph := ephemeralOptsFromArgs(args.HasEphemeralLabel(), args.EphemeralLabel(),
@@ -1570,7 +1582,7 @@ func (b *Builder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.Bu
 			_, _ = status.Send(ctx, so)
 		}
 
-		r := stream.ToReader(ctx, td)
+		r := stream.ToReader(requestCtx, td)
 		_, err := tarx.TarFS(r, sess.dir)
 		if err != nil {
 			b.sendErrorStatus(ctx, status, "Error extracting changed files: %v", err)

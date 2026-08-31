@@ -470,6 +470,7 @@ func (s *Server) msgCall(ctx context.Context, dec *cbor.Decoder, enc *cbor.Encod
 // invokeUnary runs a unary handler, mirroring handleCalls (no cond.Wrap; panic
 // recovery), and returns the outcome.
 func (s *Server) invokeUnary(ctx context.Context, mm Method, call *NetworkCall) (oc callOutcome) {
+	ctx = contextWithServerLifetime(ctx, s.state.top)
 	defer func() {
 		if r := recover(); r != nil {
 			s.state.log.Error("panic in RPC handler",
