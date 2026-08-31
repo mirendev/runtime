@@ -34,12 +34,12 @@ func buildkitInputs(options StartOptions) buildkitBootInputs {
 	return buildkitBootInputs{config: options.Config.Buildkit, dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput]) *buildkitBoot {
+func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *buildkitBoot {
 	b := &buildkitBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
 	switch {
 	case inputs.config.GetStartEmbedded():
-		b.component, b.output = boot.Provide3("buildkit", containerd, registryHostMapping, observability, b.startEmbedded, stop)
+		b.component, b.output = boot.Provide4("buildkit", containerd, registryHostMapping, network, observability, b.startEmbedded, stop)
 	case inputs.config.GetSocketPath() != "":
 		b.component, b.output = boot.Provide1("buildkit", observability, b.start, stop)
 	default:
@@ -64,7 +64,7 @@ func (b *buildkitBoot) startDisabled(context.Context) (buildkitBootOutput, error
 	return buildkitBootOutput{}, nil
 }
 
-func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
+func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, network networkBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
 	b.observability = observability
 	log := observability.log
 	log.Info("starting embedded buildkit daemon", "socket-dir", b.inputs.config.GetSocketDir())
@@ -83,12 +83,20 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 	if socketDir == "" {
 		socketDir = filepath.Join(b.inputs.dataPath, "buildkit", "socket")
 	}
+	// Point build steps at miren's bridge DNS server so they resolve against the
+	// host's real upstream (and *.app.miren) instead of the public DNS buildkit
+	// would otherwise substitute for the host's loopback stub resolver.
+	var dnsNameservers []string
+	if network.routerAddress.IsValid() {
+		dnsNameservers = []string{network.routerAddress.String()}
+	}
 	if err := b.result.component.Start(ctx, buildkit.Config{
 		SocketDir:      socketDir,
 		RegistryIP:     hostMapping.registryIP.String(),
 		GCKeepStorage:  int64(gcStorage.Bytes()),
 		GCKeepDuration: int64(gcDuration.Seconds()),
 		RegistryHost:   ocireg.Host,
+		DNSNameservers: dnsNameservers,
 	}); err != nil {
 		return buildkitBootOutput{}, err
 	}

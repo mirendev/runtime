@@ -75,7 +75,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.output, observability.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
-	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.output, registryHostMapping.output, observability.output)
+	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.output, registryHostMapping.output, network.output, observability.output)
 	coordinator := newCoordinatorBoot(
 		coordinatorInputs(options, resolver, secretRegistry, address),
 		ipDiscovery.output,

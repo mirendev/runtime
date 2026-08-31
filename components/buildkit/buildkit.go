@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,10 @@ type Config struct {
 
 	// RegistryHost is the hostname for the cluster-local registry (e.g., cluster.local:5000)
 	RegistryHost string
+
+	// DNSNameservers are the nameserver addresses build steps resolve against.
+	// See generateConfig for why we override buildkit's default here.
+	DNSNameservers []string
 }
 
 // Component manages a persistent BuildKit daemon as a containerd container,
@@ -145,7 +150,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	}
 
 	// Generate buildkitd.toml config
-	configContent := c.generateConfig(gcKeepStorage, gcKeepDuration, config.RegistryHost)
+	configContent := c.generateConfig(gcKeepStorage, gcKeepDuration, config.RegistryHost, config.DNSNameservers)
 	configPath := filepath.Join(dataPath, "buildkitd.toml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		return fmt.Errorf("failed to write buildkit config: %w", err)
@@ -310,9 +315,25 @@ func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) 
 //     least-recently-used first. This is what breaks the pinning above, since
 //     removing a fresh leaf frees the ancestors under it.
 //  4. Last resort: sweep internal and frontend cache too, to hold the line.
-func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost string) string {
+//
+// The [dns] section points buildkit at miren's bridge DNS server. Without it,
+// buildkit strips the host's loopback stub resolver (e.g. systemd-resolved's
+// 127.0.0.53) from build steps and falls back to public DNS, breaking builds
+// behind an internal or egress-filtered resolver (MIR-1643). The bridge address
+// is reachable from the host netns and forwards to the host's real upstream.
+// With no nameserver supplied we emit no [dns] section.
+func (c *Component) generateConfig(gcKeepStorage, gcKeepDuration int64, registryHost string, dnsNameservers []string) string {
 	if registryHost == "" {
 		registryHost = "cluster.local:5000"
+	}
+
+	dnsSection := ""
+	if len(dnsNameservers) > 0 {
+		quoted := make([]string, len(dnsNameservers))
+		for i, ns := range dnsNameservers {
+			quoted[i] = fmt.Sprintf("%q", ns)
+		}
+		dnsSection = fmt.Sprintf("\n[dns]\n  nameservers = [ %s ]\n", strings.Join(quoted, ", "))
 	}
 
 	return fmt.Sprintf(`# BuildKit daemon configuration
@@ -322,7 +343,7 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 
 [log]
   format = "text"
-
+%[4]s
 [grpc]
   address = [ "unix:///run/buildkit/buildkitd.sock" ]
   uid = 0
@@ -360,7 +381,7 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
 [registry."%[3]s"]
   insecure = true
   http = true
-`, gcKeepStorage, gcKeepDuration, registryHost)
+`, gcKeepStorage, gcKeepDuration, registryHost, dnsSection)
 }
 
 // writeHostsFile creates or updates the custom /etc/hosts file for the BuildKit container.
