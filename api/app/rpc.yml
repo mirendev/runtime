@@ -23,12 +23,6 @@ types:
         optional: true
 
 
-  - type: AutoConcurrency
-    fields:
-      - name: factor
-        type: int32
-        index: 1
-
   - type: ServiceCommand
     fields:
       - name: service
@@ -60,12 +54,10 @@ types:
         type: list
         element: NamedValue
         index: 0
-      - name: concurrency
-        type: int32
-        index: 1
-      - name: auto_concurrency
-        type: AutoConcurrency
-        index: 2
+      # Indices 1 and 2 held concurrency and auto_concurrency, from before
+      # concurrency became per-service. Nothing populated them. Left unused
+      # rather than reassigned, so an old client cannot read a new field
+      # through an old index.
       - name: commands
         type: list
         element: ServiceCommand

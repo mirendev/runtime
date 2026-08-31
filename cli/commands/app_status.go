@@ -103,10 +103,6 @@ func AppStatus(ctx *Context, opts struct {
 	// Configuration
 	if appConfig != nil {
 		ctx.Printf("\n%s\n", labelStyle.Render("Configuration:"))
-		if appConfig.HasConcurrency() && appConfig.Concurrency() > 0 {
-			ctx.Printf("  Concurrency: %d\n", appConfig.Concurrency())
-		}
-
 		// Environment variables: show keys only. Values live behind the one
 		// masked surface, 'miren env'. See MIR-1356.
 		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
@@ -301,8 +297,7 @@ func printAppStatusJSON(
 		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
 	}
 	type configuration struct {
-		Concurrency int32    `json:"concurrency,omitempty"`
-		EnvVars     []string `json:"env_vars,omitempty"`
+		EnvVars []string `json:"env_vars,omitempty"`
 	}
 	type deploymentJSON struct {
 		ID           string   `json:"id"`
@@ -406,9 +401,6 @@ func printAppStatusJSON(
 
 	if appConfig != nil {
 		cfg := &configuration{}
-		if appConfig.HasConcurrency() && appConfig.Concurrency() > 0 {
-			cfg.Concurrency = appConfig.Concurrency()
-		}
 		if appConfig.HasEnvVars() && len(appConfig.EnvVars()) > 0 {
 			for _, kv := range appConfig.EnvVars() {
 				if kv.HasKey() {
@@ -417,7 +409,7 @@ func printAppStatusJSON(
 			}
 			sort.Strings(cfg.EnvVars)
 		}
-		if cfg.Concurrency > 0 || len(cfg.EnvVars) > 0 {
+		if len(cfg.EnvVars) > 0 {
 			output.Configuration = cfg
 		}
 	}
