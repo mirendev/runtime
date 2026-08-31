@@ -58,6 +58,10 @@ func addCommands(d *mflags.Dispatcher) {
 			Name: "Install without cloud (local only)",
 			Body: "miren server install --without-cloud",
 		}),
+		WithExample(mflags.Example{
+			Name: "Install with an unattended enroll token",
+			Body: `miren server install --enroll-token "$(cat /etc/miren/enroll-token)"`,
+		}),
 	))
 
 	d.Dispatch("server uninstall", Infer("server uninstall", "Remove systemd service for miren server", ServerUninstall,

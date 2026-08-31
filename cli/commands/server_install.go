@@ -337,6 +337,7 @@ func ServerInstall(ctx *Context, opts struct {
 	CloudURL        string            `short:"u" long:"url" description:"Cloud URL for registration" default:"https://miren.cloud"`
 	Tags            map[string]string `short:"t" long:"tag" description:"Tags for the cluster (key:value)"`
 	SkipSystemCheck bool              `long:"skip-system-check" description:"Skip minimum system requirements check"`
+	EnrollToken     string            `long:"enroll-token" description:"Unattended enroll token from miren.cloud (registers without browser approval)"`
 }) error {
 	if opts.Branch == "" {
 		if br := version.Branch(); br != "" {
@@ -397,9 +398,18 @@ func ServerInstall(ctx *Context, opts struct {
 				CloudURL:    opts.CloudURL,
 				Tags:        opts.Tags,
 				OutputDir:   "/var/lib/miren/server",
+				EnrollToken: opts.EnrollToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
+				// An enroll token means this is unattended enrollment, usually
+				// driven by cloud-init. A bad or spent token has to fail the
+				// command so the caller learns the machine never enrolled,
+				// instead of leaving an unregistered server behind a success
+				// exit code. Interactive registration stays best-effort.
+				if opts.EnrollToken != "" {
+					return fmt.Errorf("unattended enrollment failed: %w", err)
+				}
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
 				ctx.Info("You can register later with: miren server register")
@@ -424,9 +434,18 @@ func ServerInstall(ctx *Context, opts struct {
 				CloudURL:    opts.CloudURL,
 				Tags:        opts.Tags,
 				OutputDir:   "/var/lib/miren/server",
+				EnrollToken: opts.EnrollToken,
 			}
 
 			if err := Register(ctx, registerOpts); err != nil {
+				// An enroll token means this is unattended enrollment, usually
+				// driven by cloud-init. A bad or spent token has to fail the
+				// command so the caller learns the machine never enrolled,
+				// instead of leaving an unregistered server behind a success
+				// exit code. Interactive registration stays best-effort.
+				if opts.EnrollToken != "" {
+					return fmt.Errorf("unattended enrollment failed: %w", err)
+				}
 				ctx.Warn("Cloud registration failed: %v", err)
 				ctx.Info("Continuing with installation without cloud registration")
 				ctx.Info("You can register later with: miren server register")

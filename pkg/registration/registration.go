@@ -23,6 +23,12 @@ type Config struct {
 	OrganizationID string            `json:"organization_id,omitempty"` // Optional - user will select in UI
 	Tags           map[string]string `json:"tags,omitempty"`
 	PublicKey      string            `json:"public_key,omitempty"` // PEM encoded public key
+
+	// EnrollToken, when set, requests the unattended path: cloud spends the
+	// token and creates the cluster in the same request instead of handing back
+	// an auth_url for a human to approve. An org admin already made the decision
+	// when they minted the token, so there is nothing to poll for.
+	EnrollToken string `json:"enroll_token,omitempty"`
 }
 
 // GenerateKeyPair generates a new ED25519 key pair for registration
@@ -59,12 +65,76 @@ func GenerateKeyPair() (privateKey string, publicKey string, err error) {
 	return privateKey, publicKey, nil
 }
 
-// Result contains the result of registration initiation
+// PublicKeyFromPrivateKeyPEM derives the PEM-encoded public key from a
+// PEM-encoded ED25519 private key. It exists so an interrupted enrollment can
+// retry with the keypair it already saved to disk — presenting the same public
+// key is what lets cloud replay the original registration instead of refusing a
+// spent token.
+func PublicKeyFromPrivateKeyPEM(privPEM string) (string, error) {
+	block, _ := pem.Decode([]byte(privPEM))
+	if block == nil {
+		return "", fmt.Errorf("no PEM block found in private key")
+	}
+
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	priv, ok := key.(ed25519.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("private key is not an ED25519 key")
+	}
+
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(priv.Public())
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	pubBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubKeyBytes,
+	}
+	return string(pem.EncodeToMemory(pubBlock)), nil
+}
+
+// Registration status values returned by the initiate endpoint. A response
+// that predates unattended enrollment carries no status field at all, which
+// decodes to the empty string and is treated as StatusPendingApproval — the
+// only behavior those older responses ever had.
+const (
+	// StatusPendingApproval means a human still has to approve this
+	// registration in a browser. This is the interactive path.
+	StatusPendingApproval = "pending_approval"
+
+	// StatusRegistered means a valid enroll token was presented and the cluster
+	// already exists. Only the unattended path returns this, and there is
+	// nothing to poll for.
+	StatusRegistered = "registered"
+)
+
+// Result contains the result of registration initiation. It covers both
+// shapes the initiate endpoint can return: the interactive response populates
+// AuthURL/PollURL and leaves the registered fields empty, while the unattended
+// (enroll-token) response sets Status to StatusRegistered and fills in the
+// cluster identity directly with no auth_url to visit.
 type Result struct {
+	Status         string    `json:"status"`
 	RegistrationID string    `json:"registration_id"`
 	AuthURL        string    `json:"auth_url"`
 	PollURL        string    `json:"poll_url"`
 	ExpiresAt      time.Time `json:"expires_at"`
+
+	// Set only on the unattended (StatusRegistered) response. There is no
+	// credential here: service-account auth is a challenge-response against the
+	// public key the node supplied, so the private key it already holds is the
+	// whole secret.
+	ClusterID         string            `json:"cluster_id,omitempty"`
+	OrganizationID    string            `json:"organization_id,omitempty"`
+	ServiceAccountID  string            `json:"service_account_id,omitempty"`
+	DNSHostname       string            `json:"dns_hostname,omitempty"`
+	IdentityIssuerURL string            `json:"identity_issuer_url,omitempty"`
+	Tags              map[string]string `json:"tags,omitempty"`
 }
 
 // Status represents the status of a registration during polling

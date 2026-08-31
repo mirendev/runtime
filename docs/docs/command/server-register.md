@@ -16,6 +16,7 @@ miren server register [flags]
 
 ## Flags
 
+- `--enroll-token` — Unattended enroll token from miren.cloud
 - `--name, -n` — Cluster name
 - `--output, -o` — Output directory for registration (default: `/var/lib/miren/server`)
 - `--url, -u` — Cloud URL (default: `https://miren.cloud`)
