@@ -38,6 +38,7 @@ type startup struct {
 	buildkit            *buildkitBoot
 	coordinator         *coordinatorBoot
 	deploymentAttempts  *deploymentAttemptMigrationBoot
+	cloudUplink         *cloudUplinkBoot
 	entityAccess        *entityAccessBoot
 	appMetrics          *appMetricsBoot
 	network             *networkBoot
@@ -86,6 +87,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 	)
 	deploymentAttempts := newDeploymentAttemptMigrationBoot(coordinator.output)
+	cloudUplink := newCloudUplinkBoot(coordinator.output, deploymentAttempts.output)
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), coordinator.output, observability.output)
 	appMetrics := newAppMetricsBoot(
 		appMetricsInputs(options),
@@ -131,6 +133,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		buildkit:            buildkit,
 		coordinator:         coordinator,
 		deploymentAttempts:  deploymentAttempts,
+		cloudUplink:         cloudUplink,
 		entityAccess:        entityAccess,
 		appMetrics:          appMetrics,
 		network:             network,

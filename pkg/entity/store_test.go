@@ -858,6 +858,66 @@ func TestListIndexRevision(t *testing.T) {
 	require.Greater(t, rev, int64(0), "ListIndexRevision must return the etcd revision")
 }
 
+func TestListIndexPageAtRevisionPinsContinuationPages(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setupTestEtcdStore(t)
+
+	attr, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-pinned-page"),
+		Ref(Type, TypeStr),
+		Bool(Index, true),
+	))
+	require.NoError(t, err)
+	index := String(attr.Id(), "value")
+
+	want := make(map[Id]struct{})
+	for i := range 4 {
+		created, err := store.CreateEntity(ctx, New(
+			index,
+			String(Ident, fmt.Sprintf("pinned-page-%d", i)),
+		))
+		require.NoError(t, err)
+		want[created.Id()] = struct{}{}
+	}
+
+	first, err := store.ListIndexPageAtRevision(ctx, index, "", 2, 0)
+	require.NoError(t, err)
+	require.Len(t, first.Ids, 2)
+	require.NotEmpty(t, first.Cursor)
+	require.Greater(t, first.Revision, int64(0))
+
+	var deleted Id
+	for id := range want {
+		if !slices.Contains(first.Ids, id) {
+			deleted = id
+			break
+		}
+	}
+	require.NotEmpty(t, deleted)
+	require.NoError(t, store.DeleteEntity(ctx, deleted))
+	createdAfterHead, err := store.CreateEntity(ctx, New(
+		index,
+		String(Ident, "pinned-page-late"),
+	))
+	require.NoError(t, err)
+
+	got := append([]Id(nil), first.Ids...)
+	cursor := first.Cursor
+	for cursor != "" {
+		page, err := store.ListIndexPageAtRevision(ctx, index, cursor, 2, first.Revision)
+		require.NoError(t, err)
+		require.Equal(t, first.Revision, page.Revision)
+		got = append(got, page.Ids...)
+		cursor = page.Cursor
+	}
+
+	require.Len(t, got, len(want))
+	for id := range want {
+		require.Contains(t, got, id, "the pinned scan must retain entries deleted after its head")
+	}
+	require.NotContains(t, got, createdAfterHead.Id(), "the pinned scan must exclude entries created after its head")
+}
+
 // TestWatchIndexFromRevision verifies that starting a watch at a prior revision
 // replays changes made after that revision (gap-free resume), and that starting
 // at the current revision does not replay earlier changes.

@@ -75,7 +75,9 @@ import (
 	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
+	entityexport "miren.dev/runtime/pkg/entity/export"
 	"miren.dev/runtime/pkg/entity/schema"
+	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
@@ -459,6 +461,21 @@ func (c *Coordinator) NewDeploymentAttemptController() (*deploymentattemptsctrl.
 		return nil, errors.New("coordinator entity store is not ready")
 	}
 	return deploymentattemptsctrl.New(c.Log, c.store, c.eac), nil
+}
+
+// BackfillCloudExportMarker makes existing apps and app versions visible
+// through the shared export index. The deployment migration owns its kind's
+// marker so a downgraded writer cannot race generic backfill and expose an old
+// unsafe shape.
+func (c *Coordinator) BackfillCloudExportMarker(ctx context.Context) error {
+	if c.store == nil {
+		return errors.New("coordinator entity store is not ready")
+	}
+	_, err := entityexport.BackfillMarker(
+		ctx, c.Log, c.store, core_v1alpha.CloudExportContract, 0,
+		entityexport.ExcludingKinds(core_v1alpha.KindDeployment),
+	)
+	return err
 }
 
 // RecoverBuildSagas resumes in-flight build sagas left by a previous
@@ -1670,56 +1687,59 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.reportStatusPeriodically(ctx)
 	}
 
-	// Bring up the shared control-plane link to cloud and attach Miren Anywhere.
-	// The coordinator owns the link so future tenants, including entity sync,
-	// can share its reconnect lifecycle instead of wrapping one another.
-	if c.CloudAuth.Enabled && c.authClient != nil {
-		cloudURL := c.CloudAuth.CloudURL
-		if cloudURL == "" {
-			cloudURL = DefaultCloudURL
-		}
+	return nil
+}
 
-		var uplinkOptions []uplink.ClientOption
-		if labs.AppVisibility() {
-			uplinkOptions = append(uplinkOptions, uplink.WithSession(version.GetInfo().Version))
-		}
-
-		link := uplink.NewClient(
-			cloudURL,
-			c.authClient,
-			uplink.NewMessageRouter(),
-			c.Log.With("component", "uplink"),
-			uplinkOptions...,
-		)
-		anywhereConn := anywhere.New(anywhere.Config{
-			ClusterXID: c.CloudAuth.ClusterID,
-			Ingress:    c.hs,
-			Log:        c.Log.With("component", "anywhere"),
-			Uplink:     link,
-		})
-		// Serving RPC over the link is what lets an operator reach a cluster
-		// they have no route to. It hands out no new authority: calls arriving
-		// this way land on the same objects the network listener serves, and are
-		// authenticated and authorized by the same chain.
-		cloudrpc.New(cloudrpc.Config{
-			Uplink: link,
-			State:  c.state,
-			Log:    c.Log.With("component", "cloudrpc"),
-		})
-
-		go func() {
-			// POP connections outlive individual reconnects but not the link
-			// itself, which is why this is tied to Run returning rather than to
-			// this function, which returns as soon as everything is wired.
-			defer anywhereConn.Close()
-
-			if err := link.Run(ctx); err != nil && ctx.Err() == nil {
-				c.Log.Error("cloud uplink exited with error", "error", err)
-			}
-		}()
+// RunCloudUplink owns the shared cloud connection and all of its tenants.
+// Entity sync alone waits for its source preparation; Anywhere and cloud RPC
+// remain independent of that background migration.
+func (c *Coordinator) RunCloudUplink(ctx context.Context, entitySyncReady <-chan struct{}) error {
+	if !c.CloudAuth.Enabled || c.authClient == nil {
+		return nil
+	}
+	cloudURL := c.CloudAuth.CloudURL
+	if cloudURL == "" {
+		cloudURL = DefaultCloudURL
 	}
 
-	return nil
+	var uplinkOptions []uplink.ClientOption
+	if labs.AppVisibility() {
+		uplinkOptions = append(uplinkOptions, uplink.WithSession(version.GetInfo().Version))
+	}
+	link := uplink.NewClient(
+		cloudURL,
+		c.authClient,
+		uplink.NewMessageRouter(),
+		c.Log.With("component", "uplink"),
+		uplinkOptions...,
+	)
+	if labs.AppVisibility() {
+		if err := entitysync.NewExporter(
+			c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
+			entitysync.WithStartGate(entitySyncReady),
+		).Register(ctx, link); err != nil {
+			// Entity visibility is additive. Local source metadata should not take
+			// Anywhere or cloud RPC off the shared link when it is unavailable.
+			c.Log.Warn("entity sync is unavailable for this uplink session", "error", err)
+		}
+	}
+	anywhereConn := anywhere.New(anywhere.Config{
+		ClusterXID: c.CloudAuth.ClusterID,
+		Ingress:    c.hs,
+		Log:        c.Log.With("component", "anywhere"),
+		Uplink:     link,
+	})
+	defer anywhereConn.Close()
+
+	// Serving RPC over the link is what lets an operator reach a cluster it has
+	// no route to. Calls land on the same objects as the network listener and
+	// pass through the same authentication and authorization chain.
+	cloudrpc.New(cloudrpc.Config{
+		Uplink: link,
+		State:  c.state,
+		Log:    c.Log.With("component", "cloudrpc"),
+	})
+	return link.Run(ctx)
 }
 
 // runNetcheck calls the cloud's netcheck endpoint over both IPv4 and IPv6

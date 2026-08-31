@@ -46,6 +46,10 @@ func NewMockStore() *MockStore {
 	}
 }
 
+func (m *MockStore) SourceEpoch(context.Context) (string, error) {
+	return "mock-source-epoch", nil
+}
+
 func (m *MockStore) Now() time.Time {
 	if m.NowFunc != nil {
 		return m.NowFunc()
@@ -611,9 +615,21 @@ func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int
 // invisible to callers, but it is why IndexPage.Cursor promises only that a
 // cursor is opaque and resumable.
 func (m *MockStore) ListIndexPage(ctx context.Context, attr Attr, cursor string, limit int64) (*IndexPage, error) {
+	return m.ListIndexPageAtRevision(ctx, attr, cursor, limit, 0)
+}
+
+func (m *MockStore) ListIndexPageAtRevision(
+	ctx context.Context,
+	attr Attr,
+	cursor string,
+	limit, revision int64,
+) (*IndexPage, error) {
 	ids, rev, err := m.ListIndexRevision(ctx, attr)
 	if err != nil {
 		return nil, err
+	}
+	if revision > 0 {
+		rev = revision
 	}
 
 	slices.Sort(ids)

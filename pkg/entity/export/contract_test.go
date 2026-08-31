@@ -36,6 +36,35 @@ func TestFilterDropsUnlistedAndNestedAttributes(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestFilterEmitsOnlyTheSelectedExportedKind(t *testing.T) {
+	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[{"id":"test/app.name","type":"string"}]}]}`))
+	source := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		entity.Ref(entity.EntityKind, "test/kind.app"),
+		entity.Ref(entity.EntityKind, "test/kind.metadata"),
+		entity.String("test/app.name", "web"),
+	)
+
+	filtered, policy, err := contract.Filter(source)
+	require.NoError(t, err)
+	require.Equal(t, entity.Id("test/kind.app"), policy.Kind)
+	require.Equal(t, []entity.Attr{
+		entity.Ref(entity.EntityKind, "test/kind.app"),
+	}, filtered.GetAll(entity.EntityKind))
+}
+
+func TestFilterRejectsMultipleExportedKinds(t *testing.T) {
+	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[]},{"id":"test/kind.other","lifecycle":"archive","attributes":[]}]}`))
+	source := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		entity.Ref(entity.EntityKind, "test/kind.app"),
+		entity.Ref(entity.EntityKind, "test/kind.other"),
+	)
+
+	_, _, err := contract.Filter(source)
+	require.ErrorIs(t, err, ErrKindNotExported)
+}
+
 func TestFilterRejectsWrongAllowedValueShape(t *testing.T) {
 	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[{"id":"test/app.name","type":"string"}]}]}`))
 	source := entity.New(

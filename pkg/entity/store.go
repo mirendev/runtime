@@ -30,6 +30,9 @@ type EtcdStore struct {
 }
 
 type Store interface {
+	// SourceEpoch identifies the revision history served by this store. Revisions
+	// are comparable only while this value remains unchanged.
+	SourceEpoch(ctx context.Context) (string, error)
 	GetEntity(ctx context.Context, id Id) (*Entity, error)
 	GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error)
 	GetEntities(ctx context.Context, ids []Id) ([]*Entity, error)
@@ -50,12 +53,35 @@ type Store interface {
 	// not materialize the whole index, so paging through a large one costs
 	// O(page) per call rather than O(index).
 	ListIndexPage(ctx context.Context, attr Attr, cursor string, limit int64) (*IndexPage, error)
+	// ListIndexPageAtRevision reads a bounded page at revision. Passing zero on
+	// the first call establishes the revision reported by the returned page;
+	// passing that revision to every continuation produces one consistent scan.
+	ListIndexPageAtRevision(ctx context.Context, attr Attr, cursor string, limit, revision int64) (*IndexPage, error)
 	ListCollection(ctx context.Context, collection string) ([]Id, error)
 
 	CreateSession(ctx context.Context, ttl int64) ([]byte, error)
 	RevokeSession(ctx context.Context, session []byte) error
 	PingSession(ctx context.Context, session []byte) error
 	ListSessionEntities(ctx context.Context, session []byte) ([]Id, error)
+}
+
+// SourceEpoch identifies one etcd revision history. Snapshot restore creates a
+// new logical etcd cluster and therefore a new epoch, preventing a cloud cursor
+// from being reused against an unrelated revision sequence.
+func (s *EtcdStore) SourceEpoch(ctx context.Context) (string, error) {
+	endpoints := s.client.Endpoints()
+	if len(endpoints) == 0 {
+		return "", errors.New("etcd has no endpoints")
+	}
+	var endpointErrors []error
+	for _, endpoint := range endpoints {
+		status, err := s.client.Status(ctx, endpoint)
+		if err == nil {
+			return fmt.Sprintf("%016x", status.Header.ClusterId), nil
+		}
+		endpointErrors = append(endpointErrors, fmt.Errorf("%s: %w", endpoint, err))
+	}
+	return "", fmt.Errorf("read etcd source epoch: %w", errors.Join(endpointErrors...))
 }
 
 var ErrNotFound = errors.New("entity not found")
@@ -1571,14 +1597,45 @@ type IndexPage struct {
 // carry a revision that outlives the compaction window, which is the wrong
 // trade for a debug listing; within a single page the read is consistent.
 func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string, limit int64) (*IndexPage, error) {
+	return s.ListIndexPageAtRevision(ctx, attr, cursor, limit, 0)
+}
+
+// ListIndexPageAtRevision reads one index page from a caller-selected store
+// revision. A zero revision establishes a snapshot at the first read. Callers
+// can then pass the returned revision with each continuation cursor so writes
+// during a long scan cannot make entries disappear or repeat between pages.
+func (s *EtcdStore) ListIndexPageAtRevision(
+	ctx context.Context,
+	attr Attr,
+	cursor string,
+	limit, revision int64,
+) (*IndexPage, error) {
+	if revision < 0 {
+		return nil, cond.ValidationFailure("revision", "must not be negative")
+	}
+
 	// A db/id index holds at most one entry, so there is nothing to page.
 	if attr.ID == DBId {
-		ids, rev, err := s.ListIndexRevision(ctx, attr)
+		if attr.Value.Kind() != KindId {
+			return nil, cond.ValidationFailure("attribute", "invalid value type for ID")
+		}
+		opts := []clientv3.OpOption{clientv3.WithCountOnly()}
+		if revision > 0 {
+			opts = append(opts, clientv3.WithRev(revision))
+		}
+		gr, err := s.client.Get(ctx, s.buildKey(attr.Value.Id()), opts...)
 		if err != nil {
 			return nil, err
 		}
-
-		return &IndexPage{Ids: ids, Total: int64(len(ids)), Revision: rev}, nil
+		ids := []Id(nil)
+		if gr.Count > 0 {
+			ids = append(ids, attr.Value.Id())
+		}
+		pageRevision := revision
+		if pageRevision == 0 {
+			pageRevision = gr.Header.Revision
+		}
+		return &IndexPage{Ids: ids, Total: int64(len(ids)), Revision: pageRevision}, nil
 	}
 
 	prefix, err := s.IndexPrefix(ctx, attr)
@@ -1586,20 +1643,26 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 		return nil, err
 	}
 
-	page := &IndexPage{}
+	page := &IndexPage{Revision: revision}
 
 	// Counting is the only thing here that scales with the index, so only pay
 	// for it when it can actually tell the caller something. An unlimited read
 	// returns everything, so the total is just what came back; and past the
 	// first page the caller already has it.
 	if cursor == "" && limit > 0 {
-		cr, err := s.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithCountOnly())
+		countOpts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithCountOnly()}
+		if revision > 0 {
+			countOpts = append(countOpts, clientv3.WithRev(revision))
+		}
+		cr, err := s.client.Get(ctx, prefix, countOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to count index entries: %w", err)
 		}
 
 		page.Total = cr.Count
-		page.Revision = cr.Header.Revision
+		if page.Revision == 0 {
+			page.Revision = cr.Header.Revision
+		}
 	}
 
 	// errPageFull stops the scan once we have what we asked for; scanPagedFunc
@@ -1617,6 +1680,14 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 	resumeKey := ""
 	prevKey := ""
 
+	scanOptions := []scanOption{
+		withStartKey(cursor),
+		withPageSize(pageSizeFor(limit)),
+		withRevisionSink(&scanRev),
+	}
+	if page.Revision > 0 {
+		scanOptions = append(scanOptions, withReadRevision(page.Revision))
+	}
 	scanErr := scanPagedFunc(ctx, s.client, prefix, func(kv *mvccpb.KeyValue) error {
 		id := Id(kv.Value)
 		if _, dup := seen[id]; dup {
@@ -1634,7 +1705,7 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 		prevKey = string(kv.Key)
 
 		return nil
-	}, withStartKey(cursor), withPageSize(pageSizeFor(limit)), withRevisionSink(&scanRev))
+	}, scanOptions...)
 
 	switch {
 	case scanErr == nil:
@@ -1653,7 +1724,7 @@ func (s *EtcdStore) ListIndexPage(ctx context.Context, attr Attr, cursor string,
 	// Every page reports a revision, not just the counted one. A caller that
 	// resumes a watch from a zero revision restarts from the beginning of
 	// history, which is the opposite of what the field is for.
-	if scanRev > 0 {
+	if page.Revision == 0 && scanRev > 0 {
 		page.Revision = scanRev
 	}
 

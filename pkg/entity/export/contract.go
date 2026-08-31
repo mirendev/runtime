@@ -175,11 +175,21 @@ func (c *Contract) Policy(kind entity.Id) (*Policy, bool) {
 }
 
 func (c *Contract) PolicyFor(source entity.AttrGetter) (*Policy, bool) {
-	attr, ok := source.Get(entity.EntityKind)
-	if !ok || attr.Value.Kind() != entity.KindId {
-		return nil, false
+	var selected *Policy
+	for _, attr := range source.GetAll(entity.EntityKind) {
+		if attr.Value.Kind() != entity.KindId {
+			continue
+		}
+		policy, ok := c.Policy(attr.Value.Id())
+		if !ok {
+			continue
+		}
+		if selected != nil {
+			return nil, false
+		}
+		selected = policy
 	}
-	return c.Policy(attr.Value.Id())
+	return selected, selected != nil
 }
 
 // Filter returns a complete entity containing the source identity metadata and
@@ -193,11 +203,10 @@ func (c *Contract) Filter(source *entity.Entity) (*entity.Entity, *Policy, error
 	}
 
 	mandatory := map[entity.Id]struct{}{
-		entity.DBId:       {},
-		entity.Revision:   {},
-		entity.CreatedAt:  {},
-		entity.UpdatedAt:  {},
-		entity.EntityKind: {},
+		entity.DBId:      {},
+		entity.Revision:  {},
+		entity.CreatedAt: {},
+		entity.UpdatedAt: {},
 	}
 	filtered := make([]entity.Attr, 0, len(source.Attrs()))
 	for _, attr := range source.Attrs() {
@@ -215,6 +224,10 @@ func (c *Contract) Filter(source *entity.Entity) (*entity.Entity, *Policy, error
 		}
 		filtered = append(filtered, got)
 	}
+	// Source entities commonly compose a model kind with metadata and other
+	// behavioral kinds. The wire contract has exactly one lifecycle policy, so
+	// emit only the selected exported kind instead of making consumers guess.
+	filtered = append(filtered, entity.Ref(entity.EntityKind, policy.Kind))
 	return entity.New(filtered), policy, nil
 }
 

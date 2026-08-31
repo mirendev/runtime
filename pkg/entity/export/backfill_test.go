@@ -56,3 +56,30 @@ func TestBackfillMarkerSelectsOnlyContractKinds(t *testing.T) {
 	require.Zero(t, stats.Marked)
 	require.Equal(t, int64(3), stats.AlreadyMarked)
 }
+
+func TestBackfillMarkerCanLeaveDeploymentSelectionToItsMigration(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	deployment := &core_v1alpha.Deployment{ID: "deployment/legacy", AppName: "web", Status: "failed"}
+	source := entity.New(entity.Ref(entity.DBId, deployment.ID), deployment.Encode())
+	source.Remove(marker)
+	_, err := inmem.Store.CreateEntity(ctx, source)
+	require.NoError(t, err)
+
+	stats, err := entityexport.BackfillMarker(
+		ctx,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		inmem.Store,
+		core_v1alpha.CloudExportContract,
+		1,
+		entityexport.ExcludingKinds(core_v1alpha.KindDeployment),
+	)
+	require.NoError(t, err)
+	require.Zero(t, stats.Scanned)
+	stored, err := inmem.Store.GetEntity(ctx, deployment.ID)
+	require.NoError(t, err)
+	_, marked := stored.Get(marker)
+	require.False(t, marked)
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +224,70 @@ func TestMigrationFailureDoesNotBlockLaterPhases(t *testing.T) {
 	default:
 		t.Fatal("controller did not report readiness after a clean retry")
 	}
+}
+
+func TestCleanSweepMarksLegacyEntitiesForExport(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	dep := &core_v1alpha.Deployment{
+		ID: "deployment/legacy-unmarked", AppName: "web", Status: "failed",
+	}
+	attrs := dep.Encode()
+	attrs = slices.DeleteFunc(attrs, func(attr entity.Attr) bool { return attr.ID == marker })
+	_, err := inmem.Store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, dep.ID), attrs))
+	require.NoError(t, err)
+
+	controller := New(log, inmem.Store, inmem.EAC)
+	controller.Config.BatchSize = 100
+	for range 4 {
+		require.NoError(t, controller.Step(ctx))
+	}
+	select {
+	case <-controller.Ready():
+	default:
+		t.Fatal("controller did not report its clean sweep")
+	}
+
+	migrated, err := inmem.Store.GetEntity(ctx, dep.ID)
+	require.NoError(t, err)
+	attr, ok := migrated.Get(marker)
+	require.True(t, ok)
+	assert.True(t, attr.Value.Bool())
+}
+
+func TestUnknownLegacyDeploymentKeepsExportGateClosed(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	dep := &core_v1alpha.Deployment{
+		ID: "deployment/future-legacy", AppName: "web", Status: "future-state",
+	}
+	attrs := dep.Encode()
+	attrs = slices.DeleteFunc(attrs, func(attr entity.Attr) bool { return attr.ID == marker })
+	_, err := inmem.Store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, dep.ID), attrs))
+	require.NoError(t, err)
+
+	controller := New(log, inmem.Store, inmem.EAC)
+	controller.Config.BatchSize = 100
+	require.ErrorContains(t, controller.Step(ctx), "unknown legacy status")
+	for range 3 {
+		require.NoError(t, controller.Step(ctx))
+	}
+	select {
+	case <-controller.Ready():
+		t.Fatal("controller opened the export gate with an old-style deployment remaining")
+	default:
+	}
+
+	unmigrated, err := inmem.Store.GetEntity(ctx, dep.ID)
+	require.NoError(t, err)
+	_, marked := unmigrated.Get(marker)
+	assert.False(t, marked)
 }
 
 func TestMigrationLeavesRunningAttemptWithoutOutcome(t *testing.T) {
