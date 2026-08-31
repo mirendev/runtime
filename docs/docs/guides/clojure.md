@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this Clojure app on Miren" after installing 
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Clojure, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -35,7 +35,7 @@ support, [request it](https://linear.miren.garden/suggest).
 Miren injects `PORT` and routes traffic to it, so read `PORT` and bind `0.0.0.0`:
 
 ```clojure
-;; src/app.clj — deps.edn searches "src" and the Procfile runs the `app` namespace
+;; src/app.clj — deps.edn searches "src" and the image CMD runs the `app` namespace
 (ns app
   (:require [ring.adapter.jetty :as jetty]))
 
@@ -71,6 +71,7 @@ RUN clojure -P
 COPY . /app
 
 EXPOSE 8080
+CMD ["clojure", "-M", "-m", "app"]
 ```
 
 ### .dockerignore
@@ -80,17 +81,12 @@ EXPOSE 8080
 .cpcache
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` that runs the main
-namespace:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: clojure -M -m app
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "clojure-bench"
@@ -101,12 +97,6 @@ name = "clojure-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 For faster startup you can instead build an uberjar (via `tools.build` or `depstar`) and
 run `java -jar`, but running the `clojure` CLI directly with cached deps works fine.
@@ -139,7 +129,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `clojure:temurin-21-tools-deps`; `clojure -P` caches deps in the build
-- **Service is required:** define a `Procfile` (`web: clojure -M -m app`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `(System/getenv "PORT")`; `run-jetty handler {:host "0.0.0.0"}`
 - **Env vars:** `miren env set -e/-s`; read with `(System/getenv "KEY")`
 

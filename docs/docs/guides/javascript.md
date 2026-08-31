@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this app on Miren" after installing the
 wires up environment variables, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects your project and builds the image automatically. Provide a
 `Dockerfile.miren` only for custom build steps — see

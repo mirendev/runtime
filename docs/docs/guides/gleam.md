@@ -19,7 +19,7 @@ server binds `0.0.0.0:$PORT`, wire up environment variables, and deploy — usin
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
 project root. Miren builds from it instead of guessing the stack — see
@@ -142,21 +142,16 @@ Keep build artifacts out of the image context:
 build
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` next to your
-`Dockerfile.miren`:
-
-```procfile
-web: /app/entrypoint.sh run
-```
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
 The command is the release entrypoint the shipment generated. Use the absolute path
 (`/app/entrypoint.sh`, matching the Dockerfile's `WORKDIR /app`); the script resolves
 its own release directory, so it works regardless of the working directory.
 
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "gleam-bench"
@@ -167,13 +162,6 @@ name = "gleam-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a Procfile fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`. Defining `[services.web]` with the same `command` in `app.toml`
-works too.
-:::
 
 ## Environment variables
 
@@ -208,7 +196,7 @@ injects `DATABASE_URL` for you. See
 - **Detection:** none — requires `Dockerfile.miren` (Erlang shipment)
 - **Build:** `gleam export erlang-shipment` → `build/erlang-shipment/` with `entrypoint.sh`
 - **Runtime image:** Erlang major version **must match** the builder's OTP (the pinned v1.15.0 image ships OTP 28 → `erlang:28-alpine`)
-- **Service is required:** define a `Procfile` (`web: /app/entrypoint.sh run`) or `[services.web]` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** read `PORT` via `envoy.get("PORT")`; bind `mist`/`wisp` to `0.0.0.0`
 - **mist API:** v6 ends the builder with `mist.start`; older versions use `mist.start_http`
 - **Env vars:** `miren env set -e/-s`, or `[[env]]` in `app.toml`; read with `envoy.get/1`

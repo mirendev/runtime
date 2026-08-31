@@ -17,7 +17,7 @@ Ask your AI coding agent to "set up this Raku app on Miren" after installing the
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Raku, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -66,6 +66,7 @@ WORKDIR /app
 RUN zef install --/test Cro::HTTP
 COPY . /app
 EXPOSE 8080
+CMD ["raku", "/app/app.raku"]
 ```
 
 :::warning[Cro needs the OpenSSL headers]
@@ -80,16 +81,12 @@ symlink Cro's native bindings look for.
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: raku /app/app.raku
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "raku-bench"
@@ -100,12 +97,6 @@ name = "raku-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -126,7 +117,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `rakudo-star:latest` (Rakudo + zef); `zef install --/test Cro::HTTP`
 - **OpenSSL:** install `libssl-dev` before `zef install` or Cro::TLS fails to build
-- **Service is required:** define a `Procfile` (`web: raku /app/app.raku`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Keep-alive:** end with `sleep;` so the process stays up after `$service.start`
 - **Port:** `%*ENV<PORT>`; `Cro::HTTP::Server.new(:host('0.0.0.0'), :port(...))`
 - **Env vars:** `miren env set -e/-s`; read with `%*ENV<KEY>`

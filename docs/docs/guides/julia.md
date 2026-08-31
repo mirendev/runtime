@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this Julia app on Miren" after installing th
 binds `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Julia, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -58,6 +58,7 @@ RUN julia -e 'using Pkg; Pkg.add("HTTP"); using HTTP'
 COPY . /app
 
 EXPOSE 8080
+CMD ["julia", "/app/app.jl"]
 ```
 
 :::info[Cold-start compile]
@@ -72,16 +73,12 @@ heavier apps, consider `PackageCompiler.jl` to bake a sysimage.
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: julia /app/app.jl
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "julia-bench"
@@ -92,12 +89,6 @@ name = "julia-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -127,7 +118,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `julia:1.10`; `Pkg.add` + `using` in the build to precompile
-- **Service is required:** define a `Procfile` (`web: julia /app/app.jl`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `get(ENV, "PORT", "8080")`; `HTTP.serve("0.0.0.0", port)`
 - **Cold start:** JIT compiles on first request; precompile in build or use `PackageCompiler.jl`
 - **Env vars:** `miren env set -e/-s`; read with `ENV["KEY"]`

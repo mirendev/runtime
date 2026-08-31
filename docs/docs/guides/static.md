@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this Vite app on Miren" after installing the
 configures the SPA fallback, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
@@ -57,6 +57,7 @@ COPY site /site
 COPY Caddyfile /etc/caddy/Caddyfile
 
 EXPOSE 8080
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 ```
 
 For a built SPA (Vite, Astro, Create React App), add a build stage and copy the output
@@ -76,6 +77,7 @@ FROM caddy:2-alpine
 COPY --from=builder /app/dist /site
 COPY Caddyfile /etc/caddy/Caddyfile
 EXPOSE 8080
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 ```
 
 Point the `COPY --from=builder` at your framework's output directory (`dist` for Vite,
@@ -89,20 +91,19 @@ node_modules
 dist
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` that runs Caddy
-with your Caddyfile:
+The Dockerfile's `CMD` starts the app, so you don't need a `Procfile` or service command.
+The Caddy base image exposes several HTTP, HTTPS, and admin ports; select this app's HTTP
+port explicitly.
 
-```procfile
-web: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "static-bench"
+
+[services.web]
+port = 8080
 ```
 
 <CliCommand context="client">
@@ -110,12 +111,6 @@ name = "static-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -132,7 +127,7 @@ configuration.
 - **Detection:** none — requires `Dockerfile.miren`
 - **Serve:** `caddy:2-alpine` with a `Caddyfile` using `:{$PORT:8080}` and `try_files {path} /index.html`
 - **SPA build:** add a `node:20-alpine` build stage, copy the output dir into `/site`
-- **Service is required:** `Procfile` `web: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** Caddy binds `:{$PORT}` from the environment
 - **Runtime env:** not visible to the browser; use build-time `VITE_*` vars or a runtime config API
 

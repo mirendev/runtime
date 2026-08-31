@@ -24,7 +24,7 @@ command = "npm start"
 command = "npm run worker"
 ```
 
-Deploy, and both processes run from your app's built image — `web` receives HTTP traffic, `worker` runs alongside it, and each scales independently.
+Deploy, and both processes run from your app version's primary image. `web` receives HTTP traffic, `worker` runs alongside it, and each scales independently.
 
 ## What is a Service?
 
@@ -102,7 +102,7 @@ command = "npm start"
 command = "npm run worker"
 ```
 
-Both services use your app's built image. The `web` service runs your HTTP server, while `worker` runs a background processor.
+Both services use your app version's primary image. The `web` service runs your HTTP server, while `worker` runs a background processor.
 
 #### Example: Rails with Sidekiq
 
@@ -145,9 +145,12 @@ name = "myapp"
 
 [services.web]
 image = "ghcr.io/example/myapp:latest"
-args = ["serve", "--port", "8080"]
-port = 8080
 ```
+
+With no other service fields, Miren keeps the image's working directory, `ENTRYPOINT`,
+and `CMD`. A single exposed TCP port becomes the web port automatically. Set `port`
+when the image exposes no ports or several, and use `args` or `command` only when its
+startup defaults need to change.
 
 :::note[Image selection]
 Without a Dockerfile, `services.web.image` selects the app's primary image and Miren launches it directly. This explicit image wins over automatic source detection. A `[build].dockerfile` setting or a discovered `Dockerfile.miren` still wins over both.
@@ -179,7 +182,7 @@ mode = "fixed"
 num_instances = 1
 ```
 
-When you specify an `image` on a sidecar service, Miren pulls that container image instead of using your app's built image. This lets you run standard database images alongside your application code.
+When you specify an `image` on a sidecar service, Miren pulls that container image instead of using your app version's primary image. This lets you run standard database images alongside your application code.
 
 #### Example: Full Stack with PostgreSQL and Redis
 
@@ -230,8 +233,8 @@ Each service can configure:
 |--------|-------------|---------|
 | `command` | Shell command that replaces the image startup command (`/bin/sh -c`) | (none) |
 | `args` | Exec-form arguments that replace image `CMD` while preserving `ENTRYPOINT`; mutually exclusive with `command` | (none) |
-| `image` | Container image to use | App's built image |
-| `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
+| `image` | Container image to use | App version's primary image |
+| `port` | Port the service listens on (single-port shorthand) | For `web` inheriting the primary image: its single exposed TCP port, otherwise 3000 |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
 | `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
 | `env` | Service-specific environment variables | (none) |
@@ -323,7 +326,8 @@ miren route add myapp.example.com --app myapp
 ```
 </CliCommand>
 
-The web service defaults to port 3000. Override it if your app listens elsewhere:
+When `web` does not inherit a single exposed TCP port from the primary image, it
+defaults to port 3000. Override it if your app listens elsewhere:
 
 ```toml
 [services.web]

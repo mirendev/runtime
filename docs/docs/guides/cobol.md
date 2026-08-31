@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this COBOL program on Miren" after installin
 front-end, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
@@ -56,11 +56,8 @@ the body — to standard output. `X"0D0A"` is CRLF:
 
 The program itself doesn't listen on a port — `socat` does. For each connection, `socat`
 runs the program and pipes its stdout back to the client. Miren injects `PORT`, and
-`socat`'s `TCP-LISTEN` binds all interfaces:
-
-```procfile
-web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello
-```
+`socat`'s `TCP-LISTEN` binds all interfaces. The Dockerfile's `CMD` starts that socket
+front-end.
 
 This `socat` pattern works for any language that can print an HTTP response to stdout.
 
@@ -89,6 +86,7 @@ COPY hello.cob .
 RUN cobc -x -o /app/hello hello.cob
 
 EXPOSE 8080
+CMD ["sh", "-c", "exec socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello"]
 ```
 
 ### .dockerignore
@@ -98,6 +96,9 @@ EXPOSE 8080
 ```
 
 ## Deploy
+
+Miren uses the image's `CMD` and infers the web port from `EXPOSE 8080`, so you don't
+need a `Procfile` or service command.
 
 Create `.miren/app.toml` naming your app and deploy from your project root:
 
@@ -111,17 +112,12 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
-line above. Without it the deploy stops with `no services defined`.
-:::
-
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** `cobc -x -o /app/hello hello.cob` on `debian:12-slim` with `gnucobol`
 - **Serving:** the program prints a full HTTP response; `socat` handles the socket
-- **Service is required:** `Procfile` `web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello`
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `socat TCP-LISTEN:$PORT` binds `0.0.0.0`
 - **Pattern:** the same `socat` front-end works for any language that writes an HTTP response to stdout
 

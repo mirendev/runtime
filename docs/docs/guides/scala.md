@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this Scala app on Miren" after installing th
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Scala, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -79,16 +79,12 @@ CMD ["java", "-jar", "app.jar"]
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: java -jar /app/app.jar
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "scala-bench"
@@ -99,12 +95,6 @@ name = "scala-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -134,7 +124,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** `scala-cli --power package app.scala -o app.jar --assembly`; run on a JRE image
-- **Service is required:** define a `Procfile` (`web: java -jar /app/app.jar`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `sys.env.getOrElse("PORT", "8080").toInt`; Cask `override def host = "0.0.0.0"`
 - **Env vars:** `miren env set -e/-s`; read with `sys.env.get`
 

@@ -35,7 +35,7 @@ the browser) and connect it to this server.
 3. A client (Agent Canvas or the SDK) creates a conversation, passing the LLM model + key and
    the agent's tools. The agent runs **in this container**, reading/writing its workspace on
    the mounted disk.
-4. Conversations, the agent workspace, and bash-event history persist under `/data`.
+4. Conversations, the agent workspace, and bash-event history persist under `/workspace`.
 
 ## Prerequisites
 
@@ -57,21 +57,12 @@ miren whoami -C openhands
 
 The commands below target it with `-C openhands`. Omit `-C` to use your default cluster.
 
-## The Dockerfile
+## Use the upstream image
 
-The agent server ships as a prebuilt image; wrap it and clear the entrypoint so Miren runs the
-service command from `app.toml`:
-
-```dockerfile
-FROM ghcr.io/openhands/agent-server:main-python
-ENTRYPOINT []
-```
-
-:::tip[Pin a version]
-`main-python` tracks the latest `main` build of the Python agent-server variant. For
-reproducible deploys, pin one of the commit-tagged images (e.g.
-`ghcr.io/openhands/agent-server:<sha>-python`) instead and bump it deliberately.
-:::
+OpenHands publishes a ready-to-run Python agent-server image. Miren can use its working
+directory, entrypoint, and server defaults directly, so this recipe doesn't need a Dockerfile
+or a shell command. The versioned tag keeps deploys reproducible. Bump it deliberately when
+you want a newer OpenHands release.
 
 ## The app.toml
 
@@ -80,11 +71,9 @@ This file lives at `.miren/app.toml`.
 ```toml
 name = "openhands-agent-server"
 
-[build]
-dockerfile = "Dockerfile"
-
 [services.web]
-command = "exec /usr/local/bin/openhands-agent-server --host 0.0.0.0 --port 8000"
+image = "ghcr.io/openhands/agent-server:1.44.1-python"
+# The image exposes the API and noVNC ports, so select the API port explicitly.
 port = 8000
 port_type = "http"
 port_timeout = "300s"
@@ -97,19 +86,7 @@ num_instances = 1
 [[services.web.disks]]
 name = "workspace"
 provider = "local"
-mount_path = "/data"
-
-# The server's default state paths are RELATIVE to its working directory and fail to create;
-# point them at absolute paths on the writable disk.
-[[env]]
-key = "OH_CONVERSATIONS_PATH"
-value = "/data/conversations"
-[[env]]
-key = "OH_WORKSPACE_PATH"
-value = "/data/project"
-[[env]]
-key = "OH_BASH_EVENTS_DIR"
-value = "/data/bash_events"
+mount_path = "/workspace"
 
 # CORS origin for a browser-based Agent Canvas client (set to your frontend's URL).
 [[env]]
@@ -126,35 +103,26 @@ required = true
 sensitive = true
 ```
 
-:::warning[Set absolute workspace paths]
-The server's `conversations_path` / `workspace_path` / `bash_events_dir` default to paths
-**relative to the process working directory** (`workspace/…`), which it can't create at
-startup — the server exits with `PermissionError: 'workspace'`. Set `OH_CONVERSATIONS_PATH`,
-`OH_WORKSPACE_PATH`, and `OH_BASH_EVENTS_DIR` to absolute paths on the mounted disk.
-:::
+The server defaults to port 8000. Setting `OH_SESSION_API_KEYS_0` enables authentication and
+also makes it listen on `0.0.0.0`, so no command-line override is needed.
 
 :::warning[Use a `local` disk, and let it run as the image's user]
-Mount the workspace with `provider = "local"`. Don't add a `USER root` to the Dockerfile — the
-image runs as its own `openhands` user, and a writable disk is made writable for the run user
-automatically; forcing root opts out of that.
+Mount the image's `/workspace` directory with `provider = "local"`. The server's default
+conversation, project, and bash-event paths all live below that directory. The image runs as
+its own `openhands` user, and Miren makes the disk writable for that user automatically.
 :::
 
 :::warning[The agent runs arbitrary shell in this container]
-A client can make the agent execute shell commands as the container user against `/data`. Use
-a dedicated, revocable session key, treat the workspace as untrusted, and keep the server
-reachable only over its authenticated API.
+A client can make the agent execute shell commands against `/workspace`. The pinned image
+grants the `openhands` user passwordless `sudo`, so those commands can become root inside the
+container. Treat the container as the isolation boundary and the workspace as untrusted. Use
+a dedicated, revocable session key and keep the server reachable only over its authenticated
+API.
 :::
 
 Unlike a typical app, the agent server takes no `LLM_API_KEY` of its own — the client passes the
 model and key when it creates a conversation, and `OH_SECRET_KEY` encrypts those secrets where
 the server persists them.
-
-Add a `.dockerignore` so local secrets stay out of the build context:
-
-```text
-.env
-.miren
-```
 
 ## Deploy
 
@@ -227,9 +195,9 @@ You can also drive the server directly with the OpenHands SDK, which sends the s
 
 ## Roadblock checklist
 
-1. The agent server runs on **port 8000**, not 3000 — set `port = 8000`.
-2. Set `OH_CONVERSATIONS_PATH` / `OH_WORKSPACE_PATH` / `OH_BASH_EVENTS_DIR` to absolute paths, or the server exits with `PermissionError: 'workspace'`.
-3. Use a `provider = "local"` disk; don't force `USER root` (it opts out of the disk being made writable for the run user).
+1. The image exposes both **8000** (API) and **8002** (noVNC), so select `port = 8000` explicitly.
+2. Mount the disk at `/workspace` so the image's default state paths land on it.
+3. Use a `provider = "local"` disk and keep the image's `openhands` user.
 4. Clients authenticate with the `X-Session-API-Key` header; set `OH_SESSION_API_KEYS_0` and `OH_SECRET_KEY`.
 5. For a browser frontend, set `OH_ALLOW_CORS_ORIGINS_0` to its origin.
 6. The client — not the server — supplies the LLM model and key.

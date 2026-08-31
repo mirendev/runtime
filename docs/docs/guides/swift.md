@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this Vapor app on Miren" after installing th
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Swift, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -105,17 +105,12 @@ are faster.
 .build
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. The executable target `App` compiles
-to `/app/App`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /app/App
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "swift-bench"
@@ -126,12 +121,6 @@ name = "swift-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -162,7 +151,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** `swift build -c release --static-swift-stdlib` on `swift:5.10-jammy` (slow — BoringSSL)
 - **Runtime:** `ubuntu:jammy` + `ca-certificates libcurl4`; binary at `.build/release/<target>`
-- **Service is required:** define a `Procfile` (`web: /app/App`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `Environment.get("PORT")`; set `app.http.server.configuration.hostname = "0.0.0.0"`
 - **Env vars:** `miren env set -e/-s`; read with `Environment.get`
 

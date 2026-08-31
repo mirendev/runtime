@@ -20,7 +20,7 @@ at `0.0.0.0:$PORT`, wires up environment variables, and deploys — using this p
 reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect PHP, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -44,6 +44,7 @@ WORKDIR /app
 COPY . /app
 
 EXPOSE 8080
+CMD ["sh", "-c", "exec frankenphp php-server --listen 0.0.0.0:$PORT --root /app/public"]
 ```
 
 For a Laravel or Composer app, install dependencies during the build:
@@ -65,6 +66,7 @@ COPY . /app
 RUN composer dump-autoload --optimize --no-interaction
 
 EXPOSE 8080
+CMD ["sh", "-c", "exec frankenphp php-server --listen 0.0.0.0:$PORT --root /app/public"]
 ```
 
 (`install-php-extensions` ships with the FrankenPHP image.)
@@ -76,21 +78,19 @@ EXPOSE 8080
 vendor
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. FrankenPHP's `php-server` command
-takes the listen address and document root; point it at Miren's injected `$PORT` and
-`0.0.0.0` in a `Procfile`:
+The Dockerfile's `CMD` starts the app, so you don't need a `Procfile` or service command.
+The FrankenPHP base image exposes several HTTP, HTTPS, and admin ports; select this app's
+HTTP port explicitly.
 
-```procfile
-web: frankenphp php-server --listen 0.0.0.0:$PORT --root /app/public
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "php-bench"
+
+[services.web]
+port = 8080
 ```
 
 <CliCommand context="client">
@@ -98,12 +98,6 @@ name = "php-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -137,7 +131,7 @@ injects `DATABASE_URL` for you. See
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `dunglas/frankenphp:1-php8.3`; use `install-php-extensions` for pdo_pgsql, etc.
 - **Composer:** `composer install --no-dev --optimize-autoloader` during the build
-- **Service is required:** `Procfile` `web: frankenphp php-server --listen 0.0.0.0:$PORT --root /app/public` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** FrankenPHP `--listen 0.0.0.0:$PORT`
 - **Env vars:** `miren env set -e/-s`; read with `getenv()` / Laravel `env()`
 - **Database:** optional `[addons.miren-postgresql]` injects `DATABASE_URL`

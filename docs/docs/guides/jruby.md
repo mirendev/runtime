@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this app on JRuby on Miren" after installing
 the server, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes — to run on JRuby specifically. (Miren's auto-detection would pick MRI Ruby.) Add a
 `Dockerfile.miren` built on the `jruby` image. See
@@ -72,8 +72,8 @@ require './app'
 run App
 ```
 
-Miren injects `PORT` and routes to it; you bind it via the Puma command in the Procfile
-below (`0.0.0.0` on `$PORT`).
+Miren injects `PORT` and routes to it; the Dockerfile's Puma `CMD` below binds
+`0.0.0.0` on that port.
 
 ## The Dockerfile
 
@@ -86,6 +86,7 @@ COPY Gemfile ./
 RUN bundle install
 COPY . /app
 EXPOSE 8080
+CMD ["sh", "-c", "exec bundle exec puma -b tcp://0.0.0.0:$PORT"]
 ```
 
 ### .dockerignore
@@ -94,14 +95,10 @@ EXPOSE 8080
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run Puma bound to the injected port:
-
-```procfile
-web: bundle exec puma -b tcp://0.0.0.0:$PORT
-```
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
 JRuby's JVM startup plus Bundler and Puma can take longer than the default 15-second
 port-wait, so raise `port_timeout`. Keeping one instance always warm (fixed scaling) also
@@ -150,7 +147,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** MRI Ruby is auto-detected from a `Gemfile`; use `Dockerfile.miren` to pin JRuby
 - **Base image:** `jruby:9.4`; `bundle install` at build time
-- **Service is required:** `Procfile` `web: bundle exec puma -b tcp://0.0.0.0:$PORT` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Slow boot:** raise `port_timeout` (e.g. `"120s"`) past the 15s default, and pin `num_instances = 1` to stay warm
 - **Port:** Puma `-b tcp://0.0.0.0:$PORT`
 - **Env vars:** `miren env set -e/-s`; read with `ENV['KEY']`
