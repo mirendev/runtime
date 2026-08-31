@@ -52,6 +52,12 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// runtime interface and wired into the create saga's undo (see
 		// create_saga.go) the same way ReleaseTokenState is.
 		//
+		// Service image args (MIR-1697): buildSubContainerSpec now selects
+		// WithImageConfigArgs when the sandbox container carries an argv override.
+		// The saga path needs no matching edit: create_saga.go reaches this exact
+		// function through sandboxOps.BootContainers, which delegates to
+		// SandboxController.BootContainers.
+		//
 		// Workload identity: BuildSpec mounts the cluster CA and injects
 		// MIREN_IN_CLUSTER/MIREN_API_ADDRESS/MIREN_CA_CERT_PATH, Init opens the
 		// API port on the bridge, and mint now resolves the app's workload role
@@ -94,7 +100,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
 		// is only reached from Init, which both paths share, and the saga
 		// controller has no boot reconciliation of its own.
-		"sandbox.go":  "9de705f9e0b66c15db148dbd651f37e74597f2d4cc62b0f758dcf4eb139857ce",
+		"sandbox.go":  "5a553e6a9c1594a5f75fbf4e753ee8c0eaffbfa80a779d12542d9c77e57ee798",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

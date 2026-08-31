@@ -123,8 +123,14 @@ To deploy an existing image as the app, set `image` on the `web` service. Miren 
 ```toml
 [services.web]
 image = "ghcr.io/example/myapp:latest"
+args = ["serve", "--port", "8080"]
 port = 8080
 ```
+
+The optional `args` array replaces the image's `CMD` while preserving its
+`ENTRYPOINT`. Miren passes the array directly, without shell expansion. Leave both
+`args` and `command` unset to use the image's defaults unchanged; use `command` for
+the existing full `/bin/sh -c` override.
 
 See [Services](/services) for patterns like running databases alongside your app.
 

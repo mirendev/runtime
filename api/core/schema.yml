@@ -603,6 +603,10 @@ components:
         command:
           type: string
           doc: The command to run for the service
+        args:
+          type: string
+          many: true
+          doc: Arguments that replace the image CMD while preserving its ENTRYPOINT
         port:
           type: int
           doc: The TCP port the service listens on

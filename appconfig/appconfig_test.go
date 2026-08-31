@@ -1225,6 +1225,56 @@ num_instances = 1
 	})
 }
 
+func TestServiceArgsValidationAndParsing(t *testing.T) {
+	t.Run("preserves argv boundaries", func(t *testing.T) {
+		ac, err := Parse([]byte(`
+name = "test-app"
+
+[services.web]
+args = ["gateway", "run", "--label=two words", "--literal=$PORT", ""]
+`))
+		require.NoError(t, err)
+		assert.Equal(t,
+			[]string{"gateway", "run", "--label=two words", "--literal=$PORT", ""},
+			ac.Services["web"].Args)
+	})
+
+	t.Run("rejects an empty list", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web]
+args = []
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "args must contain at least one argument")
+	})
+
+	t.Run("rejects args on the deprecated console service", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.console]
+args = ["rails", "console"]
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "args is not supported on deprecated [services.console]")
+		assert.Contains(t, err.Error(), "use [tasks.console] with a command instead")
+	})
+
+	t.Run("rejects command and args together", func(t *testing.T) {
+		_, err := Parse([]byte(`
+name = "test-app"
+
+[services.web]
+command = "gateway run"
+args = ["gateway", "run"]
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "command and args cannot both be set")
+	})
+}
+
 func TestValidatePortsConfig(t *testing.T) {
 	t.Run("mutual exclusion with scalar port", func(t *testing.T) {
 		config := `

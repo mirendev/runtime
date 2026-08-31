@@ -1,0 +1,4 @@
+name = "entrypoint-args-image"
+
+[services.web]
+args = ["serve", "--note=$ARGS_SHOULD_NOT_EXPAND", "--label=two words"]

@@ -397,6 +397,7 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 			for i := range spec.Services {
 				if spec.Services[i].Name == s.Service() {
 					spec.Services[i].Command = s.Command()
+					spec.Services[i].Args = nil
 					found = true
 					break
 				}

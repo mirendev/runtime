@@ -198,11 +198,13 @@ port_type = "http"
 
 [services.postgres]
 image = "postgres:16"
+args = ["postgres", "-c", "shared_buffers=256MB"]
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `command` | string | Command to run | Image's default entrypoint |
+| `command` | string | Shell command that replaces the image startup command (`/bin/sh -c`) | — |
+| `args` | string[] | Exec-form arguments that replace the image `CMD` while preserving its `ENTRYPOINT` | — |
 | `port` | int | Port the service listens on (single-port shorthand) | `3000` (web only) |
 | `port_name` | string | Named port identifier (single-port shorthand) | Service name |
 | `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
@@ -215,8 +217,13 @@ image = "postgres:16"
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
 :::note[Validation]
-You cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
+You cannot set both `command` and `args`, and `args` cannot be empty. You also cannot mix the single-port fields (`port`, `port_name`, `port_type`) with the `ports` array on the same service.
 :::
+
+With neither `command` nor `args`, Miren runs the image's `ENTRYPOINT` and `CMD`
+unchanged. Use `args` when the image supplies a stable executable in `ENTRYPOINT`
+and only its deployment-specific arguments need to change. Argument boundaries are
+preserved exactly; Miren does not perform shell expansion.
 
 :::note[Image selection]
 When `services.web.image` is set and neither `[build].dockerfile` nor `Dockerfile.miren` selects a Dockerfile, Miren launches that image directly instead of auto-detecting and building the project source. Images on other services do not suppress source detection. If detection finds no buildable source, a lone service image can act as the fallback; with several service images, set `services.web.image` to choose the primary one.

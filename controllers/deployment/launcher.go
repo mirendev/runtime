@@ -770,6 +770,9 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		if c1.Command != c2.Command {
 			return fmt.Sprintf("container[%d] command mismatch: %s vs %s", i, c1.Command, c2.Command), false
 		}
+		if !slices.Equal(c1.Args, c2.Args) {
+			return fmt.Sprintf("container[%d] args mismatch", i), false
+		}
 		if c1.Directory != c2.Directory {
 			return fmt.Sprintf("container[%d] directory mismatch: %s vs %s", i, c1.Directory, c2.Directory), false
 		}

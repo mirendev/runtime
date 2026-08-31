@@ -16,6 +16,7 @@ package appspec
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
@@ -307,14 +308,20 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 		appCont.Env = append(appCont.Env, "ADMIN_TOKEN="+ver.AdminToken)
 	}
 
-	// Find the command: an explicit override wins, otherwise the service's.
-	// Either way the config entrypoint is prepended, because that is what makes
-	// a stack-built image runnable at all.
+	// Find the process override. An explicit command supplied by a caller wins;
+	// otherwise args replace the image CMD in exec form, or command retains the
+	// historical shell-form override. Config.Entrypoint is a stack-build shell
+	// prefix and only applies to command. Args preserve the OCI image entrypoint
+	// later through oci.WithImageConfigArgs.
 	command := opts.Command
 	if command == "" {
 		for _, svc := range cfgSpec.Services {
-			if svc.Name == serviceName && svc.Command != "" {
-				command = svc.Command
+			if svc.Name == serviceName {
+				if len(svc.Args) > 0 {
+					appCont.Args = slices.Clone(svc.Args)
+				} else if svc.Command != "" {
+					command = svc.Command
+				}
 				break
 			}
 		}

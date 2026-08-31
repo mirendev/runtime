@@ -573,11 +573,13 @@ func mapDiskProvider(provider string) core_v1alpha.ConfigSpecServicesDisksProvid
 // default may be empty, which is the image/Dockerfile case where the image's
 // own ENTRYPOINT+CMD run in exec form at launch (MIR-1444).
 func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[string]string, ensureWeb bool, webDefault string) []core_v1alpha.ConfigSpecServices {
-	// Build command map from app config
+	// Build command map from app config. An args override claims the service
+	// even though its shell command is empty, so a same-named Procfile entry
+	// cannot replace it below.
 	srvMap := map[string]string{}
 	if appConfig != nil {
 		for k, v := range appConfig.Services {
-			if v != nil && v.Command != "" {
+			if v != nil && (v.Command != "" || v.Args != nil) {
 				srvMap[k] = v.Command
 			}
 		}
@@ -645,6 +647,8 @@ func buildServicesConfig(appConfig *appconfig.AppConfig, procfileServices map[st
 		// Map from appconfig to entity schema
 		// After ResolveDefaults(), every service is guaranteed to have config
 		if serviceConfig, ok := ac.Services[serviceName]; ok && serviceConfig != nil {
+			svc.Args = slices.Clone(serviceConfig.Args)
+
 			if serviceConfig.Metrics != nil {
 				svc.Metrics = core_v1alpha.ConfigSpecServicesMetrics{
 					Enabled:  serviceConfig.Metrics.Enabled,

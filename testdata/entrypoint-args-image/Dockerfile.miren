@@ -1,0 +1,8 @@
+FROM alpine:3.20
+RUN apk add --no-cache python3
+COPY entrypoint.sh /entrypoint.sh
+COPY www /www
+RUN chmod +x /entrypoint.sh
+EXPOSE 3000
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["wrong-default", "--note=wrong"]

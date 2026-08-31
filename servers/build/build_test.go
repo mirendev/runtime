@@ -1399,6 +1399,24 @@ func TestBuildVersionConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "app config args replace procfile command and carry into version config",
+			inputs: ConfigInputs{
+				BuildResult: &BuildResult{WorkingDir: "/app"},
+				AppConfig: &appconfig.AppConfig{
+					Services: map[string]*appconfig.ServiceConfig{
+						"web": {Args: []string{"gateway", "run", "--label=two words"}},
+					},
+				},
+				ProcfileServices: map[string]string{"web": "wrong shell command"},
+				ExistingConfig:   core_v1alpha.ConfigSpec{},
+			},
+			validate: func(t *testing.T, spec core_v1alpha.ConfigSpec) {
+				require.Len(t, spec.Services, 1)
+				assert.Empty(t, spec.Services[0].Command)
+				assert.Equal(t, []string{"gateway", "run", "--label=two words"}, spec.Services[0].Args)
+			},
+		},
+		{
 			// A build that produced an image but carries no command is the
 			// image/Dockerfile case: we still materialize a web service, with an
 			// empty command, so the image's own ENTRYPOINT+CMD run in exec form
