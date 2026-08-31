@@ -23,6 +23,7 @@ miren route set <host> <appname> [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--service` — HTTP-capable app service to route to (default: `web`)
 
 ## Global Options
 

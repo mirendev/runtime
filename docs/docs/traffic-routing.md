@@ -20,7 +20,7 @@ miren route set myapp.example.com myapp
 ```
 </CliCommand>
 
-Requests to that hostname now reach your `web` service, with TLS provisioned automatically. For a non-HTTP service, expose a port directly in `.miren/app.toml`:
+Requests to that hostname now reach your `web` app service, with TLS provisioned automatically. Omit `--service` to keep using `web`. For a non-HTTP service, expose a port directly in `.miren/app.toml`:
 
 ```toml
 [[services.irc.ports]]
@@ -44,7 +44,19 @@ miren route set myapp.example.com myapp
 ```
 </CliCommand>
 
-Requests to that hostname are forwarded to your `web` service. TLS certificates are provisioned automatically (see [TLS Certificates](/tls)).
+Requests to that hostname are forwarded to your `web` app service. TLS certificates are provisioned automatically (see [TLS Certificates](/tls)).
+
+### Routing to another HTTP app service
+
+A hostname can target one named HTTP-capable app service. Use `--service` when the process you want to expose is not named `web`:
+
+<CliCommand context="client">
+```miren
+miren route set api.myapp.example.com myapp --service api
+```
+</CliCommand>
+
+The selected app service must be present in the active configuration and expose a port with `type = "http"`. Older scalar `port` settings count as HTTP unless their `port_type` says otherwise. Each hostname still has one target service; Miren does not select a service automatically or route paths to different services.
 
 ### Wildcard Routes
 

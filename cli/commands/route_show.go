@@ -102,6 +102,7 @@ func RouteShow(ctx *Context, opts struct {
 		type RouteJSON struct {
 			Host            string              `json:"host"`
 			App             string              `json:"app"`
+			Service         string              `json:"service"`
 			Default         bool                `json:"default"`
 			Protected       bool                `json:"protected"`
 			ProtectionType  string              `json:"protection_type"`
@@ -128,6 +129,7 @@ func RouteShow(ctx *Context, opts struct {
 		r := RouteJSON{
 			Host:           routeLabel,
 			App:            ui.CleanEntityID(string(route.App)),
+			Service:        routeService(route),
 			Default:        route.Default,
 			Protected:      protected,
 			ProtectionType: protectionType,
@@ -168,6 +170,7 @@ func RouteShow(ctx *Context, opts struct {
 
 	ctx.Printf("Route: %s\n", routeLabel)
 	ctx.Printf("  App:       %s\n", ui.CleanEntityID(string(route.App)))
+	ctx.Printf("  Service:   %s\n", routeService(route))
 	ctx.Printf("  Default:   %v\n", route.Default)
 	ctx.Printf("  Protected: %v\n", protected)
 	if wafProfile != nil {
