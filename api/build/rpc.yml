@@ -251,6 +251,14 @@ types:
         type: '[]TaskInfo'
         index: 8
         doc: Tasks declared in app.toml
+      - name: source_kind
+        type: string
+        index: 9
+        doc: "Build source kind: image, dockerfile, or stack"
+      - name: source_value
+        type: string
+        index: 10
+        doc: "Normalized image reference or auto-detected stack name, depending on source_kind"
 
   - type: EnvironmentVariable
     doc: An environment variable to set on the app during deploy
