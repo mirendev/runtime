@@ -255,10 +255,6 @@ miren deploy --analyze
 			Name: "Show detailed history with git info",
 			Body: "miren app history --detailed",
 		}),
-		WithExample(mflags.Example{
-			Name: "Show only active deployments, limited to 5",
-			Body: "miren app history --status active --limit 5",
-		}),
 	))
 	d.Dispatch("app versions", Infer("app versions", "List app versions with status", AppVersions,
 		WithExample(mflags.Example{

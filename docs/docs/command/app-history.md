@@ -19,10 +19,8 @@ miren app history [flags]
 - `--all` — Show all deployments (ignore limit)
 - `--detailed` — Show all columns including git information
 - `--format` — Output format (text, json) (default: `text`)
-- `--hide-failed` — Hide failed deployments
 - `--json` — Shorthand for --format json
 - `--limit, -n` — Maximum number of deployments to show (default: `10`)
-- `--status, -s` — Filter by status (active, failed, rolled_back)
 
 ## Config Options
 
@@ -52,12 +50,6 @@ miren app history
 
 ```bash
 miren app history --detailed
-```
-
-**Show only active deployments, limited to 5:**
-
-```bash
-miren app history --status active --limit 5
 ```
 
 ## See also

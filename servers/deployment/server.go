@@ -163,7 +163,11 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	if err != nil {
 		return err
 	}
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	// New clients activate with succeeded; active and rolled_back are legacy aliases for the same transition.
+	serving := status == deploylifecycle.StatusActive ||
+		status == deploylifecycle.StatusSucceeded ||
+		status == deploylifecycle.StatusRolledBack
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment, serving)
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Updated deployment status",
@@ -211,7 +215,7 @@ func (d *DeploymentServer) UpdateDeploymentPhase(ctx context.Context, req *deplo
 	if err != nil {
 		return err
 	}
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment, false)
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Updated deployment phase",
@@ -255,7 +259,7 @@ func (d *DeploymentServer) UpdateFailedDeployment(ctx context.Context, req *depl
 	if err != nil {
 		return err
 	}
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment, false)
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Updated failed deployment",
@@ -300,11 +304,27 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 		versionIDs = append(versionIDs, (&deploylifecycle.Record{Deployment: dwe.deployment}).AppVersion())
 	}
 	versionShortIDs := d.resolveShortIDs(ctx, versionIDs)
+	activeDeployments := make(map[string]entity.Id)
+	resolvedApps := make(map[string]struct{})
+	for _, dwe := range deployments {
+		deployAppName := dwe.deployment.AppName
+		if _, resolved := resolvedApps[deployAppName]; resolved {
+			continue
+		}
+		resolvedApps[deployAppName] = struct{}{}
+		activeDeployment, err := d.activeDeploymentID(ctx, deployAppName)
+		if err != nil {
+			return err
+		}
+		activeDeployments[deployAppName] = activeDeployment
+	}
 
 	// Convert to deployment info list
 	deploymentInfos := make([]*deployment_v1alpha.DeploymentInfo, 0, len(deployments))
 	for _, dwe := range deployments {
-		info := d.toDeploymentInfo(dwe.deployment)
+		activeDeployment := activeDeployments[dwe.deployment.AppName]
+		serving := activeDeployment != "" && activeDeployment == dwe.deployment.ID
+		info := d.toDeploymentInfo(dwe.deployment, serving)
 		enrichDeploymentShortIDs(info, dwe.entity, versionShortIDs)
 		deploymentInfos = append(deploymentInfos, info)
 	}
@@ -333,7 +353,12 @@ func (d *DeploymentServer) GetDeploymentById(ctx context.Context, req *deploymen
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	activeDeployment, err := d.activeDeploymentID(ctx, rec.Deployment.AppName)
+	if err != nil {
+		return err
+	}
+	serving := activeDeployment != "" && activeDeployment == rec.Deployment.ID
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment, serving)
 	versionShortIDs := d.resolveShortIDs(ctx, []string{rec.AppVersion()})
 	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
@@ -392,7 +417,7 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 	if err != nil {
 		return err
 	}
-	deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+	deploymentInfo := d.toDeploymentInfo(rec.Deployment, false)
 	results.SetDeployment(deploymentInfo)
 
 	d.Log.Info("Updated deployment app version",
@@ -430,7 +455,7 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 		if err != nil {
 			return err
 		}
-		deploymentInfo := d.toDeploymentInfo(rec.Deployment)
+		deploymentInfo := d.toDeploymentInfo(rec.Deployment, true)
 		versionShortIDs := d.resolveShortIDs(ctx, []string{rec.AppVersion()})
 		enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 		results.SetDeployment(deploymentInfo)
@@ -447,7 +472,7 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 		return cond.NotFound("active-deployment", fmt.Sprintf("%s/%s", appName, clusterId))
 	}
 	dwe := legacy[0]
-	deploymentInfo := d.toDeploymentInfo(dwe.deployment)
+	deploymentInfo := d.toDeploymentInfo(dwe.deployment, true)
 	versionShortIDs := d.resolveShortIDs(ctx, []string{(&deploylifecycle.Record{Deployment: dwe.deployment}).AppVersion()})
 	enrichDeploymentShortIDs(deploymentInfo, dwe.entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
@@ -703,7 +728,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			AppVersion: string(ephID),
 			ClusterId:  clusterId,
 			Status:     "active",
-		})
+		}, true)
 		results.SetDeployment(deploymentInfo)
 
 		accessInfo := d.getAccessInfo(ctx, appName, ephLabel)
@@ -814,7 +839,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		rec = settled
 	}
 
-	deploymentInfo := d.toDeploymentInfo(deployment)
+	deploymentInfo := d.toDeploymentInfo(deployment, true)
 	versionShortIDs := d.resolveShortIDs(ctx, []string{rec.AppVersion()})
 	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
@@ -984,7 +1009,7 @@ func (d *DeploymentServer) createEnvVarDeployment(ctx context.Context, appName, 
 		rec = settled
 	}
 
-	deploymentInfo := d.toDeploymentInfo(deployment)
+	deploymentInfo := d.toDeploymentInfo(deployment, true)
 	versionShortIDs := d.resolveShortIDs(ctx, []string{rec.AppVersion()})
 	enrichDeploymentShortIDs(deploymentInfo, rec.Entity, versionShortIDs)
 	results.SetDeployment(deploymentInfo)
@@ -1097,7 +1122,18 @@ func (d *DeploymentServer) listDeploymentsInternal(ctx context.Context, appName,
 	return deployments, nil
 }
 
-func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment) *deployment_v1alpha.DeploymentInfo {
+func (d *DeploymentServer) activeDeploymentID(ctx context.Context, appName string) (entity.Id, error) {
+	app, _, err := d.tracker.Store().AppByName(ctx, appName)
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return app.ActiveDeployment, nil
+}
+
+func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment, serving bool) *deployment_v1alpha.DeploymentInfo {
 	info := &deployment_v1alpha.DeploymentInfo{}
 	rec := &deploylifecycle.Record{Deployment: deployment}
 
@@ -1110,11 +1146,8 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment)
 	status := rec.Status()
 	// Keep the old RPC vocabulary: a succeeded attempt that currently owns the
 	// app pointer is presented as active to downgrade-era clients.
-	if status == deploylifecycle.StatusSucceeded {
-		status = deploylifecycle.Status(deployment.Status)
-		if status == "" {
-			status = deploylifecycle.StatusSucceeded
-		}
+	if serving && status == deploylifecycle.StatusSucceeded {
+		status = deploylifecycle.StatusActive
 	}
 	info.SetStatus(string(status))
 	info.SetPhase(string(rec.Phase()))

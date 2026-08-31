@@ -154,8 +154,65 @@ func TestToDeploymentInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := server.toDeploymentInfo(tt.deployment)
+			info := server.toDeploymentInfo(tt.deployment, true)
 			tt.checkFunc(t, info)
+		})
+	}
+}
+
+func TestToDeploymentInfoStatus(t *testing.T) {
+	server := &DeploymentServer{}
+	tests := []struct {
+		name       string
+		deployment *core_v1alpha.Deployment
+		serving    bool
+		want       string
+	}{
+		{
+			name:       "serving legacy active deployment",
+			deployment: &core_v1alpha.Deployment{ID: "deployment/current", Status: "active"},
+			serving:    true,
+			want:       "active",
+		},
+		{
+			name:       "stale legacy active deployment",
+			deployment: &core_v1alpha.Deployment{ID: "deployment/stale", Status: "active"},
+			want:       "succeeded",
+		},
+		{
+			name:       "legacy rolled back deployment",
+			deployment: &core_v1alpha.Deployment{ID: "deployment/rolled-back", Status: "rolled_back"},
+			want:       "succeeded",
+		},
+		{
+			name: "serving canonical succeeded deployment",
+			deployment: &core_v1alpha.Deployment{
+				ID: "deployment/canonical-current", Outcome: "succeeded", Status: "active",
+			},
+			serving: true,
+			want:    "active",
+		},
+		{
+			name: "stale canonical succeeded deployment",
+			deployment: &core_v1alpha.Deployment{
+				ID: "deployment/canonical-stale", Outcome: "succeeded", Status: "active",
+			},
+			want: "succeeded",
+		},
+		{
+			name:       "failed deployment remains failed even if pointed to",
+			deployment: &core_v1alpha.Deployment{ID: "deployment/failed", Status: "failed"},
+			serving:    true,
+			want:       "failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := server.toDeploymentInfo(tt.deployment, tt.serving).Status()
+			if got != tt.want {
+				t.Fatalf("status = %q, want %q", got, tt.want)
+			}
 		})
 	}
 }
@@ -269,6 +326,64 @@ func TestListDeployments(t *testing.T) {
 				t.Errorf("Expected %d deployments, got %d", tt.expectedCount, len(deployments))
 			}
 		})
+	}
+}
+
+func TestListDeploymentsMarksOnlyServingLegacyDeploymentActive(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("create deployment server: %v", err)
+	}
+	client := &deployment_v1alpha.DeploymentClient{
+		Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server)),
+	}
+
+	var deploymentIDs []entity.Id
+	for i, deployedAt := range []time.Time{
+		time.Now().Add(-2 * time.Hour),
+		time.Now().Add(-time.Hour),
+		time.Now(),
+	} {
+		id, err := inmem.Client.Create(ctx, "history-deployment-"+string(rune('a'+i)), &core_v1alpha.Deployment{
+			AppName:    "history-app",
+			ClusterId:  "test-cluster",
+			AppVersion: "version",
+			Status:     "active",
+			DeployedBy: core_v1alpha.DeployedBy{Timestamp: deployedAt.Format(time.RFC3339)},
+		})
+		if err != nil {
+			t.Fatalf("create deployment: %v", err)
+		}
+		deploymentIDs = append(deploymentIDs, id)
+	}
+
+	servingID := deploymentIDs[1]
+	if _, err := inmem.Client.Create(ctx, "history-app", &core_v1alpha.App{
+		ActiveDeployment: servingID,
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	result, err := client.ListDeployments(ctx, "history-app", "test-cluster", "", 20)
+	if err != nil {
+		t.Fatalf("list deployments: %v", err)
+	}
+	if len(result.Deployments()) != len(deploymentIDs) {
+		t.Fatalf("got %d deployments, want %d", len(result.Deployments()), len(deploymentIDs))
+	}
+
+	for _, deployment := range result.Deployments() {
+		want := "succeeded"
+		if deployment.Id() == string(servingID) {
+			want = "active"
+		}
+		if got := deployment.Status(); got != want {
+			t.Errorf("deployment %q status = %q, want %q", deployment.Id(), got, want)
+		}
 	}
 }
 
@@ -1081,13 +1196,23 @@ func TestDeployVersion(t *testing.T) {
 			t.Errorf("Expected rollback to retain canonical version %q, got %q", version1ID, newDep.AppVersionId())
 		}
 
-		// Verify the previous active deployment was marked as rolled_back
+		previous, err := server.tracker.Store().Get(ctx, string(activeDepId))
+		if err != nil {
+			t.Fatalf("Failed to get previous deployment record: %v", err)
+		}
+		if previous.Deployment.Status != "rolled_back" {
+			t.Errorf("Expected legacy status 'rolled_back', got %s", previous.Deployment.Status)
+		}
+
+		// The previous deployment still succeeded as an attempt. Serving state
+		// moved to the new rollback deployment, so the RPC reports the canonical
+		// outcome rather than its legacy rolled_back bookkeeping status.
 		prevResult, err := client.GetDeploymentById(ctx, string(activeDepId))
 		if err != nil {
 			t.Fatalf("Failed to get previous deployment: %v", err)
 		}
-		if prevResult.Deployment().Status() != "rolled_back" {
-			t.Errorf("Expected previous deployment status 'rolled_back', got %s", prevResult.Deployment().Status())
+		if prevResult.Deployment().Status() != "succeeded" {
+			t.Errorf("Expected previous deployment status 'succeeded', got %s", prevResult.Deployment().Status())
 		}
 	})
 
