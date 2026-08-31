@@ -135,7 +135,7 @@ command = "bin/reindex"
 
 `web = false` says so out loud. Without it, Miren would synthesize a web service from your image's entrypoint and keep it running forever — so declaring tasks with no services and no `web` setting is a build error rather than a guess.
 
-Deploying such an app builds the image and provisions addons; that's all. Nothing runs, and nothing is billed for compute, between invocations. `miren app list` reports it as `ready` — deployed and available to invoke, as opposed to `idle`, which means an app that scaled itself to zero.
+Deploying such an app selects or builds its image, provisions addons, and runs any deploy-triggered tasks. No long-running service starts, so nothing runs or is billed for compute between task invocations. `miren app list` reports it as `ready` — deployed and available to invoke, as opposed to `idle`, which means an app that scaled itself to zero.
 
 ## Migrating from `[services.console]`
 

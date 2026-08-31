@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this Rails app on Miren" after installing th
 using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects Ruby from your `Gemfile` and builds the image automatically. The
 default Ruby version is **3.4**; override it in [`.miren/app.toml`](/app-configuration)

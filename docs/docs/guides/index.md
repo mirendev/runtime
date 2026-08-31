@@ -8,7 +8,7 @@ keywords: [guides, languages, python, javascript, node, bun, go, ruby, rust, eli
 
 These guides take you from a project on your laptop to a running app on Miren, one
 language at a time. Each one covers the same three things: **how to set up the app**,
-**how to set environment variables**, and **whether you need a Dockerfile**.
+**how to set environment variables**, and **whether its source build needs a Dockerfile**.
 
 :::tip[Let your agent do this]
 If you use an AI coding agent (Claude Code, Codex, Amp, and others), you don't have to
@@ -92,6 +92,19 @@ like Miren to detect and build another language first-class — no Dockerfile ne
 [tell us what to build next](https://linear.miren.garden/suggest).
 :::
 
+## Already have a runnable image?
+
+These language guides assume Miren starts with your source code. If you already publish a
+runnable container image, skip both language detection and `Dockerfile.miren`: set
+`services.web.image` and Miren launches the image directly.
+
+Keep the image's defaults when they already start the right process. Add `args` when its
+`ENTRYPOINT` is right but the deployment needs different arguments. Use `command` when you
+need to replace the whole process with a shell command. Build a derived image only when the
+deployment adds files or packages, or when the upstream image's startup contract is
+incomplete. See [Deploying an existing image](/deployment#deploying-an-existing-image) for
+the complete example.
+
 ## Using Dockerfile.miren {#using-dockerfilemiren}
 
 For applications that require custom build steps or don't fit the automatic detection,
@@ -123,11 +136,12 @@ EXPOSE 3000
 CMD ["node", "dist/index.js"]
 ```
 
-### Build priority
+### Deployment source priority
 
 1. `build.dockerfile` setting in `app.toml` (if specified)
 2. `Dockerfile.miren` in project root
-3. Automatic language detection
+3. `services.web.image` in `app.toml`
+4. Automatic language detection
 
 ### Build arguments
 

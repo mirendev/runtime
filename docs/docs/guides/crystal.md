@@ -19,7 +19,7 @@ server binds `0.0.0.0:$PORT`, wires up environment variables, and deploys — us
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Crystal yet, so add a `Dockerfile.miren` to your project
 root. Miren builds from it instead of guessing the stack — see
@@ -100,15 +100,12 @@ bin
 lib
 ```
 
-## Set up the app
+## Deploy
 
-Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /usr/local/bin/app
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "crystal-bench"
@@ -152,7 +149,7 @@ injects `DATABASE_URL` for you. See
 - **Detection:** none — requires `Dockerfile.miren` (static binary)
 - **Build:** `shards build --release --static --no-debug` on `crystallang/crystal:*-alpine`
 - **Runtime:** copy `bin/<target>` to a minimal Alpine image
-- **Service is required:** define a `Procfile` (`web: /usr/local/bin/app`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** read `ENV["PORT"]`; bind `0.0.0.0`
 - **Env vars:** `miren env set -e/-s`, or `[[env]]` in `app.toml`; read with `ENV["KEY"]`
 - **Database:** optional `[addons.miren-postgresql]` injects `DATABASE_URL`

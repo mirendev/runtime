@@ -17,7 +17,7 @@ Ask your AI coding agent to "set up this Go app on Miren" after installing the
 command, wires up environment variables, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects Go from `go.mod` and compiles the binary for you. The Go version
 comes from the `go` directive in your `go.mod` (falling back to 1.23). Provide a
