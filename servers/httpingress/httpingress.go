@@ -479,15 +479,8 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 	defer func() {
-		if r := recover(); r != nil {
-			h.Log.Error("panic in request handler",
-				"error", r,
-				"stack", string(debug.Stack()),
-				"method", req.Method,
-				"path", req.URL.Path,
-				"host", req.Host,
-			)
-			panic(r)
+		if recovered := recover(); recovered != nil {
+			h.handleRequestPanic(req, recovered)
 		}
 	}()
 
@@ -564,6 +557,28 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 			h.Log.Error("Failed to record HTTP request", "error", err, "app", appName)
 		}
 	}
+}
+
+func (h *Server) handleRequestPanic(req *http.Request, recovered any) {
+	if recovered == nil {
+		return
+	}
+
+	// net/http uses this sentinel to abort a response that can no longer be
+	// completed and deliberately suppresses its own panic log. Do the same here
+	// to avoid scary panic output for a routine client disconnect.
+	recoveredErr, isError := recovered.(error)
+	if !isError || recoveredErr != http.ErrAbortHandler {
+		h.Log.Error("panic in request handler",
+			"error", recovered,
+			"stack", string(debug.Stack()),
+			"method", req.Method,
+			"path", req.URL.Path,
+			"host", req.Host,
+		)
+	}
+
+	panic(recovered)
 }
 
 func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, appName *string) {
