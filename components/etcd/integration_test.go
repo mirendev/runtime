@@ -14,6 +14,8 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -528,6 +530,104 @@ func TestEtcdRecreateAfterUncleanShutdown(t *testing.T) {
 	assert.Equal(t, "recreate-value", string(resp.Kvs[0].Value), "value should round-trip after recreate")
 
 	t.Log("Recreate after unclean shutdown succeeded!")
+}
+
+// TestEtcdCanceledRestartCleansUpRunningTask is the regression test for MIR-1710.
+//
+// The boot graph can cancel component startup while an existing etcd task is
+// still in its readiness check. Cleanup used to reuse that cancelled context,
+// fail to load and stop the task, fail to delete its running container, then
+// clear the component's resource handles. The subsequent graph Stop therefore
+// had nothing left to clean up and the next boot adopted the orphaned task.
+func TestEtcdCanceledRestartCleansUpRunningTask(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+
+	cc := testDeps.CC
+	tmpDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	testNamespace := fmt.Sprintf("miren-etcd-cancel-test-%d", time.Now().UnixNano())
+	ctx := namespaces.WithNamespace(context.Background(), testNamespace)
+	defer cleanupContainer(t, cc, testNamespace)
+
+	image, err := cc.Pull(ctx, imagerefs.Etcd, containerd.WithPullUnpack)
+	if err != nil && strings.Contains(err.Error(), "permission denied") {
+		t.Skip("permission denied error, skipping test")
+	}
+	require.NoError(t, err, "failed to pull etcd image")
+
+	seedClientPort := testutils.GetFreePort(t)
+	seedPeerPort := testutils.GetFreePort(t)
+	seedName := "seed-etcd"
+	container, err := cc.NewContainer(ctx, "miren-etcd",
+		containerd.WithImage(image),
+		containerd.WithNewSnapshot("miren-etcd-snapshot", image),
+		containerd.WithNewSpec(
+			oci.WithImageConfig(image),
+			oci.WithHostNamespace(specs.NetworkNamespace),
+			oci.WithProcessArgs(
+				"/usr/local/bin/etcd",
+				"--name="+seedName,
+				"--data-dir=/tmp/seed-etcd",
+				fmt.Sprintf("--listen-client-urls=http://127.0.0.1:%d", seedClientPort),
+				fmt.Sprintf("--advertise-client-urls=http://127.0.0.1:%d", seedClientPort),
+				fmt.Sprintf("--listen-peer-urls=http://127.0.0.1:%d", seedPeerPort),
+				fmt.Sprintf("--initial-advertise-peer-urls=http://127.0.0.1:%d", seedPeerPort),
+				fmt.Sprintf("--initial-cluster=%s=http://127.0.0.1:%d", seedName, seedPeerPort),
+			),
+		),
+	)
+	require.NoError(t, err, "failed to seed existing etcd container")
+
+	task, err := container.NewTask(ctx, cio.NullIO)
+	require.NoError(t, err, "failed to create seed task")
+	_, err = task.Wait(ctx)
+	require.NoError(t, err, "failed to wait on seed task")
+	require.NoError(t, task.Start(ctx), "failed to start seed task")
+	require.Eventually(t, func() bool {
+		status, statusErr := task.Status(ctx)
+		return statusErr == nil && status.Status == containerd.Running
+	}, 10*time.Second, 100*time.Millisecond, "seed etcd task did not start")
+
+	component := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+	clientPort := testutils.GetFreePort(t)
+	for clientPort == seedClientPort {
+		clientPort = testutils.GetFreePort(t)
+	}
+	config := etcd.EtcdConfig{
+		Name:           "cancel-test-etcd",
+		ClientPort:     clientPort,
+		HTTPClientPort: testutils.GetFreePort(t),
+		PeerPort:       testutils.GetFreePort(t),
+		InitialToken:   "cancel-test-cluster",
+		ClusterState:   "new",
+	}
+
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	defer cancelStart()
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- component.Start(startCtx, config)
+	}()
+
+	// restartExistingContainer marks the adopted task running immediately before
+	// entering the readiness loop. Cancel at that exact point.
+	require.Eventually(t, component.IsRunning, 30*time.Second, 100*time.Millisecond,
+		"component never adopted the existing etcd task")
+	cancelStart()
+
+	select {
+	case startErr := <-startDone:
+		require.ErrorIs(t, startErr, context.Canceled)
+	case <-time.After(90 * time.Second):
+		t.Fatal("cancelled etcd start did not return")
+	}
+
+	require.False(t, component.IsRunning(), "component should clear state after successful cleanup")
+	_, err = cc.LoadContainer(ctx, "miren-etcd")
+	require.True(t, errdefs.IsNotFound(err), "cancelled startup must not leave the etcd container behind: %v", err)
 }
 
 func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
