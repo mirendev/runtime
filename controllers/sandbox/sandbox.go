@@ -2085,6 +2085,7 @@ func (c *SandboxController) writeResolve(path string, ep *network.EndpointConfig
 
 	// Add search domain for app.miren
 	fmt.Fprintf(f, "search app.miren\n")
+	fmt.Fprintf(f, "options timeout:2 attempts:3\n")
 
 	for _, addr := range ep.Bridge.Addresses {
 		if !addr.Addr().IsValid() {
