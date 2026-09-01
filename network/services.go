@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"slices"
 	"sync"
@@ -63,7 +64,7 @@ func (sm *ServiceManager) SetupDNS(ctx context.Context, bc *BridgeConfig) error 
 
 	for _, addr := range bs.ips {
 		// Create and start DNS server with entity client and logger
-		server, err := dns.New(fmt.Sprintf("%s:53", addr.Addr().String()), sm.EAC, sm.Log)
+		server, err := dns.New(net.JoinHostPort(addr.Addr().String(), "53"), sm.EAC, sm.Log)
 		if err != nil {
 			return fmt.Errorf("creating DNS server for bridge %s: %w", bridgeName, err)
 		}

@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
+	"golang.org/x/net/netutil"
 	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/indexwatch"
@@ -40,12 +43,92 @@ type sandboxMapping struct {
 	seq     uint64
 }
 
+const (
+	forwardTimeout     = 1500 * time.Millisecond
+	forwardLogInterval = time.Minute
+	// DNS-over-TCP connections are normally brief. This leaves ample room for
+	// bursts while bounding the goroutines held by buggy sandbox clients.
+	maxTCPConnections = 256
+)
+
+type exchanger interface {
+	ExchangeContext(context.Context, *dns.Msg, string) (*dns.Msg, time.Duration, error)
+}
+
+type forwardLogKey struct {
+	upstream string
+	network  string
+	reason   string
+}
+
+type forwardLogState struct {
+	last       time.Time
+	suppressed int64
+}
+
+// forwardLogDeduper keeps a broken resolver or tenant-controlled query loop from
+// flooding Warn while still periodically recording that the failure continues.
+// Its key space is bounded by the server's configured upstreams and the small set
+// of failure reasons below.
+type forwardLogDeduper struct {
+	mu       sync.Mutex
+	interval time.Duration
+	seen     map[forwardLogKey]*forwardLogState
+	now      func() time.Time
+}
+
+func newForwardLogDeduper() *forwardLogDeduper {
+	return &forwardLogDeduper{
+		interval: forwardLogInterval,
+		seen:     make(map[forwardLogKey]*forwardLogState),
+	}
+}
+
+func (d *forwardLogDeduper) record(key forwardLogKey) (bool, int64) {
+	if d == nil {
+		return true, 0
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := time.Now()
+	if d.now != nil {
+		now = d.now()
+	}
+	if state, ok := d.seen[key]; ok {
+		if now.Sub(state.last) < d.interval {
+			state.suppressed++
+			return false, 0
+		}
+		suppressed := state.suppressed
+		state.last = now
+		state.suppressed = 0
+		return true, suppressed
+	}
+
+	d.seen[key] = &forwardLogState{last: now}
+	return true, 0
+}
+
 type Server struct {
-	*dns.Server
-	client       *dns.Client
-	upstreams    []string
-	entityClient *entityserver_v1alpha.EntityAccessClient
-	log          *slog.Logger
+	addr          string
+	boundAddr     string
+	udpServer     *dns.Server
+	tcpServer     *dns.Server
+	udpClient     exchanger
+	tcpClient     exchanger
+	forwardBudget time.Duration
+	forwardLogs   *forwardLogDeduper
+	upstreams     []string
+	entityClient  *entityserver_v1alpha.EntityAccessClient
+	log           *slog.Logger
+	ready         chan struct{}
+	listenDone    chan struct{}
+	listenStarted atomic.Bool
+	stopRequested atomic.Bool
+	shutdownOnce  sync.Once
+	shutdownErr   error
 
 	mu              sync.RWMutex
 	ipToApp         map[string]string              // source IP → app name
@@ -74,15 +157,21 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		return nil, fmt.Errorf("no nameservers found in /etc/resolv.conf")
 	}
 
+	return newServer(addr, upstreams, entityClient, log), nil
+}
+
+func newServer(addr string, upstreams []string, entityClient *entityserver_v1alpha.EntityAccessClient, log *slog.Logger) *Server {
 	s := &Server{
-		Server: &dns.Server{
-			Addr: addr,
-			Net:  "udp",
-		},
-		client:          &dns.Client{},
+		addr:            addr,
+		udpClient:       &dns.Client{Net: "udp", Timeout: forwardTimeout},
+		tcpClient:       &dns.Client{Net: "tcp", Timeout: forwardTimeout},
+		forwardBudget:   forwardTimeout,
+		forwardLogs:     newForwardLogDeduper(),
 		upstreams:       upstreams,
 		entityClient:    entityClient,
 		log:             log.With("module", "dns"),
+		ready:           make(chan struct{}),
+		listenDone:      make(chan struct{}),
 		ipToApp:         make(map[string]string),
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
@@ -90,8 +179,10 @@ func New(addr string, entityClient *entityserver_v1alpha.EntityAccessClient, log
 		sandboxes:       make(map[string]sandboxMapping),
 	}
 
-	s.Handler = dns.HandlerFunc(s.handleRequest)
-	return s, nil
+	handler := dns.HandlerFunc(s.handleRequest)
+	s.udpServer = &dns.Server{Handler: handler}
+	s.tcpServer = &dns.Server{Handler: handler}
+	return s
 }
 
 func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
@@ -138,34 +229,7 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// Not an app.miren query, forward to upstream
-	var response *dns.Msg
-	var err error
-
-	for _, upstream := range s.upstreams {
-		// Ensure upstream address has port 53
-		upstream = net.JoinHostPort(upstream, "53")
-		response, _, err = s.client.Exchange(r, upstream)
-		if err == nil && response != nil {
-			break
-		}
-	}
-
-	if err != nil || response == nil {
-		// If all upstreams failed, return SERVFAIL
-		response = new(dns.Msg)
-		response.SetReply(r)
-		response.Rcode = dns.RcodeServerFailure
-		w.WriteMsg(response)
-		return
-	}
-
-	// Ensure the response has the correct id and is marked as a response
-	response.Id = r.Id
-	response.RecursionAvailable = true
-	response.Response = true
-
-	w.WriteMsg(response)
+	s.forwardToUpstream(w, r)
 }
 
 func (s *Server) handleServiceListQuery(w dns.ResponseWriter, r *dns.Msg) {
@@ -330,29 +394,177 @@ func (s *Server) handlePTRQuery(w dns.ResponseWriter, r *dns.Msg, qname string) 
 }
 
 func (s *Server) forwardToUpstream(w dns.ResponseWriter, r *dns.Msg) {
-	var response *dns.Msg
-	var err error
+	budget := s.forwardBudget
+	if budget <= 0 {
+		budget = forwardTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
 
-	for _, upstream := range s.upstreams {
-		upstream = net.JoinHostPort(upstream, "53")
-		response, _, err = s.client.Exchange(r, upstream)
-		if err == nil && response != nil {
+	var truncatedFallback *dns.Msg
+	deadline, _ := ctx.Deadline()
+	for i, upstream := range s.upstreams {
+		if ctx.Err() != nil {
 			break
 		}
-	}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		upstreamsLeft := len(s.upstreams) - i
+		upstreamCtx, upstreamCancel := context.WithTimeout(ctx, remaining/time.Duration(upstreamsLeft))
 
-	if err != nil || response == nil {
-		response = new(dns.Msg)
-		response.SetReply(r)
-		response.Rcode = dns.RcodeServerFailure
-		w.WriteMsg(response)
+		endpoint := net.JoinHostPort(upstream, "53")
+		response, ok := s.exchange(upstreamCtx, r, w, s.udpClient, endpoint, "udp")
+		if !ok {
+			upstreamCancel()
+			continue
+		}
+
+		if response.Truncated {
+			if truncatedFallback == nil {
+				truncatedFallback = response
+			}
+			s.log.Debug("DNS upstream response truncated; retrying over TCP",
+				s.queryAttrs(r, w, endpoint, "tcp")...)
+			response, ok = s.exchange(upstreamCtx, r, w, s.tcpClient, endpoint, "tcp")
+			if !ok {
+				upstreamCancel()
+				continue
+			}
+		}
+
+		upstreamCancel()
+		s.writeForwardedResponse(w, r, response)
 		return
 	}
 
-	response.Id = r.Id
+	if truncatedFallback != nil && responseWriterNetwork(w) == "udp" {
+		s.writeForwardedResponse(w, r, truncatedFallback)
+		return
+	}
+
+	qname, qtype := queryNameAndType(r)
+	s.logForwardWarning("DNS forwarding failed; returning SERVFAIL",
+		forwardLogKey{reason: "exhausted"},
+		"qname", qname,
+		"qtype", qtype,
+		"client_ip", responseWriterIP(w),
+		"upstreams", s.upstreams,
+	)
+	response := new(dns.Msg)
+	response.SetReply(r)
+	response.Rcode = dns.RcodeServerFailure
+	w.WriteMsg(response)
+}
+
+func (s *Server) writeForwardedResponse(w dns.ResponseWriter, request, response *dns.Msg) {
+	response.Id = request.Id
 	response.RecursionAvailable = true
 	response.Response = true
+	if responseWriterNetwork(w) == "udp" {
+		size := dns.MinMsgSize
+		if opt := request.IsEdns0(); opt != nil {
+			size = int(opt.UDPSize())
+		}
+		response.Truncate(size)
+	}
 	w.WriteMsg(response)
+}
+
+func (s *Server) exchange(ctx context.Context, r *dns.Msg, w dns.ResponseWriter, client exchanger, upstream, network string) (*dns.Msg, bool) {
+	response, _, err := client.ExchangeContext(ctx, r, upstream)
+	if err != nil {
+		s.logForwardWarning("DNS upstream query failed",
+			forwardLogKey{upstream: upstream, network: network, reason: "exchange"},
+			append(s.queryAttrs(r, w, upstream, network), "error", err)...)
+		return nil, false
+	}
+	if response == nil {
+		s.logForwardWarning("DNS upstream query returned no response",
+			forwardLogKey{upstream: upstream, network: network, reason: "empty"},
+			s.queryAttrs(r, w, upstream, network)...)
+		return nil, false
+	}
+	// SERVFAIL from one upstream may be a resolver failure rather than an
+	// authoritative answer, so try the next one. When every resolver agrees,
+	// this trades some latency for protection against a broken upstream.
+	if response.Rcode == dns.RcodeServerFailure {
+		s.logForwardWarning("DNS upstream returned SERVFAIL",
+			forwardLogKey{upstream: upstream, network: network, reason: "servfail"},
+			s.queryAttrs(r, w, upstream, network)...)
+		return nil, false
+	}
+
+	return response, true
+}
+
+func (s *Server) logForwardWarning(message string, key forwardLogKey, attrs ...any) {
+	shouldLog, suppressed := s.forwardLogs.record(key)
+	if !shouldLog {
+		return
+	}
+	if suppressed > 0 {
+		attrs = append(attrs, "suppressed", suppressed)
+	}
+	s.log.Warn(message, attrs...)
+}
+
+func (s *Server) queryAttrs(r *dns.Msg, w dns.ResponseWriter, upstream, network string) []any {
+	qname, qtype := queryNameAndType(r)
+	return []any{
+		"qname", qname,
+		"qtype", qtype,
+		"client_ip", responseWriterIP(w),
+		"upstream", upstream,
+		"network", network,
+	}
+}
+
+func queryNameAndType(r *dns.Msg) (string, string) {
+	if r == nil || len(r.Question) == 0 {
+		return "", ""
+	}
+	question := r.Question[0]
+	qtype, ok := dns.TypeToString[question.Qtype]
+	if !ok {
+		qtype = fmt.Sprintf("TYPE%d", question.Qtype)
+	}
+	return strings.ToLower(question.Name), qtype
+}
+
+func responseWriterIP(w dns.ResponseWriter) string {
+	if w == nil || w.RemoteAddr() == nil {
+		return ""
+	}
+	switch addr := w.RemoteAddr().(type) {
+	case *net.UDPAddr:
+		return addr.IP.String()
+	case *net.TCPAddr:
+		return addr.IP.String()
+	default:
+		host, _, err := net.SplitHostPort(w.RemoteAddr().String())
+		if err == nil {
+			return host
+		}
+		return w.RemoteAddr().String()
+	}
+}
+
+func responseWriterNetwork(w dns.ResponseWriter) string {
+	if w == nil {
+		return "unknown"
+	}
+	if addr := w.RemoteAddr(); addr != nil {
+		network := addr.Network()
+		if strings.HasPrefix(network, "udp") {
+			return "udp"
+		}
+		if strings.HasPrefix(network, "tcp") {
+			return "tcp"
+		}
+	}
+	return "unknown"
 }
 
 func (s *Server) handleAppMirenQuery(w dns.ResponseWriter, r *dns.Msg, qname string) {
@@ -614,6 +826,8 @@ func (s *Server) handleSandboxUpdate(ctx context.Context, sb *compute_v1alpha.Sa
 func NewTestServer() *Server {
 	return &Server{
 		log:             slog.Default(),
+		ready:           make(chan struct{}),
+		listenDone:      make(chan struct{}),
 		ipToApp:         make(map[string]string),
 		ipToSandbox:     make(map[string]string),
 		ipToService:     make(map[string]string),
@@ -937,11 +1151,72 @@ func (s *Server) RemoveSandboxMapping(sandboxID string) {
 
 // ListenAndServe starts the DNS server
 func (s *Server) ListenAndServe() error {
-	return s.Server.ListenAndServe()
+	if !s.listenStarted.CompareAndSwap(false, true) {
+		return errors.New("dns server already started")
+	}
+	defer close(s.listenDone)
+	if s.stopRequested.Load() {
+		return nil
+	}
+
+	tcpListener, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return fmt.Errorf("listening for TCP DNS: %w", err)
+	}
+	tcpListener = netutil.LimitListener(tcpListener, maxTCPConnections)
+
+	// Binding TCP first lets an address ending in :0 pick one port that both
+	// transports share. Production addresses name port 53 explicitly, but the
+	// shared ephemeral port keeps the same invariant in tests.
+	boundAddr := tcpListener.Addr().String()
+	udpConn, err := net.ListenPacket("udp", boundAddr)
+	if err != nil {
+		tcpListener.Close()
+		return fmt.Errorf("listening for UDP DNS: %w", err)
+	}
+	s.boundAddr = boundAddr
+
+	started := make(chan struct{}, 2)
+	s.udpServer.PacketConn = udpConn
+	s.udpServer.NotifyStartedFunc = func() { started <- struct{}{} }
+	s.tcpServer.Listener = tcpListener
+	s.tcpServer.NotifyStartedFunc = func() { started <- struct{}{} }
+
+	errs := make(chan error, 2)
+	go func() { errs <- s.udpServer.ActivateAndServe() }()
+	go func() { errs <- s.tcpServer.ActivateAndServe() }()
+
+	for range 2 {
+		select {
+		case <-started:
+		case serveErr := <-errs:
+			udpConn.Close()
+			tcpListener.Close()
+			return serveErr
+		}
+	}
+	close(s.ready)
+	if s.stopRequested.Load() {
+		s.shutdownListeners()
+	}
+
+	firstErr := <-errs
+	shutdownErr := s.shutdownListeners()
+	secondErr := <-errs
+	return errors.Join(firstErr, secondErr, shutdownErr)
+}
+
+func (s *Server) shutdownListeners() error {
+	s.shutdownOnce.Do(func() {
+		s.shutdownErr = errors.Join(s.udpServer.Shutdown(), s.tcpServer.Shutdown())
+	})
+	return s.shutdownErr
 }
 
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown() error {
+	s.stopRequested.Store(true)
+
 	// Cancel the watch context to stop the watcher goroutine
 	if s.watchCancel != nil {
 		s.watchCancel()
@@ -954,6 +1229,16 @@ func (s *Server) Shutdown() error {
 	// Wait for the watcher goroutine to finish
 	s.watchWg.Wait()
 
-	// Shutdown the DNS server
-	return s.Server.Shutdown()
+	if s.udpServer == nil || s.tcpServer == nil {
+		return nil
+	}
+	if !s.listenStarted.Load() {
+		return nil
+	}
+	select {
+	case <-s.ready:
+		return s.shutdownListeners()
+	case <-s.listenDone:
+		return nil
+	}
 }
