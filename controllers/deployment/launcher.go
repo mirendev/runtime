@@ -205,34 +205,13 @@ func (l *Launcher) AddonAssociationHandler() controller.HandlerFunc {
 		l.Log.Info("addon association changed, reconciling app",
 			"association", assoc.ID, "status", assoc.Status, "app", assoc.App)
 
-		// Fetch the app and run the same reconcile logic
-		appResp, err := l.EAC.Get(ctx, assoc.App.String())
-		if err != nil {
-			if errors.Is(err, cond.ErrNotFound{}) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("failed to get app: %w", err)
-		}
-
-		var app core_v1alpha.App
-		app.Decode(appResp.Entity().Entity())
-
-		if app.ActiveVersion == "" {
-			return nil, nil
-		}
-
-		ready, err := l.addonsReady(ctx, app.ID)
-		if err != nil {
-			l.Log.Error("failed to check addon readiness", "app", app.ID, "error", err)
-			return nil, nil
-		}
-		if !ready {
-			l.Log.Info("addons still not ready, deferring", "app", app.ID)
-			return nil, nil
-		}
-
-		l.Log.Info("addons ready, triggering app reconciliation", "app", app.ID)
-		return nil, l.reconcileAppVersion(ctx, &app)
+		// Reconcile re-reads the app and checks all addon associations under the
+		// same per-app lock used by watch events and on-demand pool creation.
+		// Controller watch callbacks only enqueue events, so this handler cannot
+		// synchronously re-enter a launcher reconcile that already holds the lock.
+		// Calling reconcileAppVersion directly here used to let an addon event race
+		// the main deployment launcher for the same app.
+		return nil, l.Reconcile(ctx, &core_v1alpha.App{ID: assoc.App}, nil)
 	}
 }
 
@@ -455,9 +434,10 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		// Steady-state reuse is a no-op; only log (below) when reuse actually
 		// mutates the pool.
 		needsUpdate := false
+		versionChanged := poolWithEntity.Pool.SandboxSpec.Version != ver.ID
 
 		// Update the pool's sandbox spec version to track the current AppVersion
-		if poolWithEntity.Pool.SandboxSpec.Version != ver.ID {
+		if versionChanged {
 			poolWithEntity.Pool.SandboxSpec.Version = ver.ID
 			needsUpdate = true
 		}
@@ -489,13 +469,12 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		}
 
 		// A deploy should boot the new version so we can verify it, even when
-		// reusing a pool that drained to zero (an autoscale app gone idle).
-		// Floor a drained pool back to 1, the same way a fresh pool seeds; the
-		// autoscaler scales it down again afterward. Without this, a redeploy of
-		// a scaled-to-zero app would just point the pool at the new version
-		// without ever booting it, so we'd never know if it actually works.
+		// reusing a pool that drained to zero (an autoscale app gone idle). A
+		// steady-state resync of the same version must leave it drained; otherwise
+		// the minutely resync repeatedly cold-starts every idle app and blocks the
+		// launcher's worker while it waits for readiness.
 		bootForVerification := false
-		if poolWithEntity.Pool.DesiredInstances < 1 {
+		if versionChanged && poolWithEntity.Pool.DesiredInstances < 1 {
 			poolWithEntity.Pool.DesiredInstances = 1
 			l.Log.Info("flooring drained pool to one instance for deploy verification",
 				"service", serviceName,
