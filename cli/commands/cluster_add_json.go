@@ -150,13 +150,16 @@ const clusterAddJSONDoc = "With `--format json`, the command prints one result d
 	"on stdout; progress and warnings go to stderr. A failure is reported both as a " +
 	"document and as a non-zero exit status.\n\n" +
 	"```json\n" +
-	"{\"ok\": true, \"cluster\": {\"name\": \"prod\", \"cloud_name\": \"prod\", \"xid\": \"cluster-...\",\n" +
-	"                          \"organization\": \"Acme\", \"address\": \"10.0.0.1:8443\",\n" +
-	"                          \"via_cloud\": false, \"identity\": \"cloud\", \"active\": true,\n" +
+	"{\"ok\": true, \"cluster\": {\"name\": \"prod\", \"xid\": \"cluster-...\", \"organization\": \"Acme\",\n" +
+	"                          \"address\": \"10.0.0.1:8443\", \"via_cloud\": false,\n" +
+	"                          \"identity\": \"cloud\", \"active\": true,\n" +
 	"                          \"config_file\": \"~/.config/miren/clientconfig.d/prod.yaml\"}}\n" +
 	"\n" +
 	"{\"ok\": false, \"error\": {\"code\": \"cluster_not_found\", \"message\": \"no cluster named ...\"}}\n" +
 	"```\n\n" +
+	"`name` is the local name, which is what every other command takes. `cloud_name` " +
+	"appears alongside it only when `--as` stored the cluster under a different name than " +
+	"it has in Miren Cloud, and `address` is absent for a cluster reached through cloud.\n\n" +
 	"Messages are written for people and will be reworded. The code is the stable part:\n\n" +
 	"| Code | Meaning |\n" +
 	"|------|---------|\n" +

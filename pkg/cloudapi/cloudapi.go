@@ -137,7 +137,10 @@ func (c *Client) get(ctx context.Context, timeout time.Duration, out any, pathPa
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		// Bounded: the body here only ever goes into an error message, and a
+		// proxy having a bad day can answer with something enormous. Reading
+		// all of it would turn a failed request into a failed process.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		return fmt.Errorf("cloud returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 

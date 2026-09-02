@@ -11,13 +11,15 @@ Add a new cluster configuration
 With `--format json`, the command prints one result document and nothing else on stdout; progress and warnings go to stderr. A failure is reported both as a document and as a non-zero exit status.
 
 ```json
-{"ok": true, "cluster": {"name": "prod", "cloud_name": "prod", "xid": "cluster-...",
-                          "organization": "Acme", "address": "10.0.0.1:8443",
-                          "via_cloud": false, "identity": "cloud", "active": true,
+{"ok": true, "cluster": {"name": "prod", "xid": "cluster-...", "organization": "Acme",
+                          "address": "10.0.0.1:8443", "via_cloud": false,
+                          "identity": "cloud", "active": true,
                           "config_file": "~/.config/miren/clientconfig.d/prod.yaml"}}
 
 {"ok": false, "error": {"code": "cluster_not_found", "message": "no cluster named ..."}}
 ```
+
+`name` is the local name, which is what every other command takes. `cloud_name` appears alongside it only when `--as` stored the cluster under a different name than it has in Miren Cloud, and `address` is absent for a cluster reached through cloud.
 
 Messages are written for people and will be reworded. The code is the stable part:
 
