@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"regexp"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -236,4 +239,42 @@ func TestClusterAddRejectsAddressWithoutClusterBeforeIdentities(t *testing.T) {
 	r.Equal(1, exitCode)
 	r.Equal(codeInvalidFlags, result.Error.Code)
 	r.Contains(result.Error.Message, "--address needs --cluster")
+}
+
+// The documented table is what callers write against, so it has to list every
+// code the command can emit and nothing it can't. Drift here is worse than a
+// missing doc: a caller branches on a code that never arrives.
+func TestDocumentedCodesMatchTheConstants(t *testing.T) {
+	r := require.New(t)
+
+	emitted := []string{
+		codeInvalidFlags,
+		codeInteractiveRequired,
+		codeNoIdentities,
+		codeIdentityError,
+		codeCloudRequestFailed,
+		codeClusterNotFound,
+		codeAmbiguousCluster,
+		codeUnknownOrganization,
+		codeClusterUnreachable,
+		codeClusterExists,
+		codeConfigError,
+		codeUnknown,
+	}
+
+	var documented []string
+	for _, line := range strings.Split(clusterAddJSONDoc, "\n") {
+		if m := regexp.MustCompile("^\\| `([a-z_]+)` \\|").FindStringSubmatch(line); m != nil {
+			documented = append(documented, m[1])
+		}
+	}
+
+	sort.Strings(emitted)
+	sort.Strings(documented)
+	r.Equal(emitted, documented, "every code the command emits is documented, and nothing else is")
+
+	// And every documented code is a constant that some path actually uses.
+	for _, code := range documented {
+		r.NotEmpty(code)
+	}
 }

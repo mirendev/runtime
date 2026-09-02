@@ -8,6 +8,34 @@ description: "Add a new cluster configuration"
 
 Add a new cluster configuration
 
+With `--format json`, the command prints one result document and nothing else on stdout; progress and warnings go to stderr. A failure is reported both as a document and as a non-zero exit status.
+
+```json
+{"ok": true, "cluster": {"name": "prod", "cloud_name": "prod", "xid": "cluster-...",
+                          "organization": "Acme", "address": "10.0.0.1:8443",
+                          "via_cloud": false, "identity": "cloud", "active": true,
+                          "config_file": "~/.config/miren/clientconfig.d/prod.yaml"}}
+
+{"ok": false, "error": {"code": "cluster_not_found", "message": "no cluster named ..."}}
+```
+
+Messages are written for people and will be reworded. The code is the stable part:
+
+| Code | Meaning |
+|------|---------|
+| `invalid_flags` | The flags given can't mean anything together. |
+| `interactive_required` | Answering needs a person. Name a cluster with `--cluster`, or use `--force` to overwrite. |
+| `no_identities` | Nobody is logged in. Run `miren login`. |
+| `identity_error` | The identity named wasn't found, or one has to be named with `--identity`. |
+| `cloud_request_failed` | Miren Cloud didn't answer. Worth retrying. |
+| `cluster_not_found` | No cluster by that name, or none on the account. |
+| `ambiguous_cluster` | The name exists in more than one organization. Add `--organization`. |
+| `unknown_organization` | No organization by that name. |
+| `cluster_unreachable` | The cluster exists and couldn't be reached. Worth retrying. |
+| `cluster_exists` | That local name is taken. Use `--force`, or `--as` to pick another. |
+| `config_error` | The local config couldn't be read or written. |
+| `unknown` | A failure with no code. Treat it as uninterpretable. |
+
 ## Usage
 
 ```bash

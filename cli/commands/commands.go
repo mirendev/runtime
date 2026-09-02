@@ -796,6 +796,7 @@ miren deploy --analyze
 		}),
 	))
 	d.Dispatch("cluster add", Infer("cluster add", "Add a new cluster configuration", ClusterAdd,
+		WithDescription(clusterAddJSONDoc),
 		WithExample(mflags.Example{
 			Name: "Add a cluster interactively",
 			Body: "miren cluster add",

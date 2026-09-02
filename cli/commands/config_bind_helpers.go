@@ -208,7 +208,7 @@ func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, sug
 	case 0:
 		return "", noIdentities
 	default:
-		return "", codedErrorf(codeMultipleIdentities, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+		return "", codedErrorf(codeIdentityError, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
 	}
 }
 
@@ -216,15 +216,15 @@ func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, sug
 // it is not among them.
 func lookupIdentity(config *clientconfig.Config, name string) (*clientconfig.IdentityConfig, error) {
 	if config == nil {
-		return nil, codedErrorf(codeIdentityNotFound, "identity %q not found in configuration", name)
+		return nil, codedErrorf(codeIdentityError, "identity %q not found in configuration", name)
 	}
 
 	identity, err := config.GetIdentity(name)
 	if err != nil {
 		if available := config.GetIdentityNames(); len(available) > 0 {
-			return nil, codedErrorf(codeIdentityNotFound, "identity %q not found. Available identities: %v", name, available)
+			return nil, codedErrorf(codeIdentityError, "identity %q not found. Available identities: %v", name, available)
 		}
-		return nil, codedErrorf(codeIdentityNotFound, "identity %q not found in configuration", name)
+		return nil, codedErrorf(codeIdentityError, "identity %q not found in configuration", name)
 	}
 
 	return identity, nil

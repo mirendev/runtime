@@ -14,21 +14,33 @@ const (
 	codeInvalidFlags = "invalid_flags"
 
 	// codeInteractiveRequired is a request that can only be answered by asking
-	// a person — picking from a list, or confirming an overwrite.
+	// a person: picking from a list, or confirming an overwrite.
 	codeInteractiveRequired = "interactive_required"
 
-	codeNoIdentities       = "no_identities"
-	codeMultipleIdentities = "multiple_identities"
-	codeIdentityNotFound   = "identity_not_found"
+	// codeNoIdentities means nobody is logged in. It is separate from
+	// codeIdentityError because the fix is a person running `miren login`,
+	// not a different argument.
+	codeNoIdentities = "no_identities"
+
+	// codeIdentityError is an identity that was named and not found, or one
+	// that has to be named and was not. Either way the caller passes a
+	// different --identity, and the message says which.
+	codeIdentityError = "identity_error"
 
 	// codeCloudRequestFailed is cloud failing to answer, as opposed to
 	// answering with something unwelcome.
 	codeCloudRequestFailed = "cloud_request_failed"
 
-	codeNoClusters          = "no_clusters"
+	// codeClusterNotFound covers both a name that matched nothing and an
+	// account with no clusters at all. The distinction changes the message,
+	// not what the caller can do about it.
+	codeClusterNotFound = "cluster_not_found"
+
+	// codeAmbiguousCluster means the name matched clusters in more than one
+	// organization, cleared by --organization.
+	codeAmbiguousCluster = "ambiguous_cluster"
+
 	codeUnknownOrganization = "unknown_organization"
-	codeClusterNotFound     = "cluster_not_found"
-	codeAmbiguousCluster    = "ambiguous_cluster"
 
 	// codeClusterUnreachable is a cluster that exists and could not be reached,
 	// which is the one failure worth retrying later.
@@ -38,9 +50,9 @@ const (
 	// by choosing another name with --as.
 	codeClusterExists = "cluster_exists"
 
-	codeConfigLoadFailed  = "config_load_failed"
-	codeConfigWriteFailed = "config_write_failed"
-	codeCancelled         = "cancelled"
+	// codeConfigError is the local config failing to load or to save. The
+	// caller cannot fix either one by asking differently.
+	codeConfigError = "config_error"
 
 	// codeUnknown is what an error that was never given a code reports as.
 	// Callers should treat it as a failure they cannot interpret.
@@ -130,3 +142,33 @@ func reportClusterAdd(ctx *Context, added *addedCluster, err error) error {
 
 	return PrintJSON(clusterAddResult{OK: true, Cluster: added})
 }
+
+// clusterAddJSONDoc is the extended description the docs generator renders on
+// the command's page. The codes are a contract callers write against, so they
+// belong somewhere a caller can read without opening the source.
+const clusterAddJSONDoc = "With `--format json`, the command prints one result document and nothing else " +
+	"on stdout; progress and warnings go to stderr. A failure is reported both as a " +
+	"document and as a non-zero exit status.\n\n" +
+	"```json\n" +
+	"{\"ok\": true, \"cluster\": {\"name\": \"prod\", \"cloud_name\": \"prod\", \"xid\": \"cluster-...\",\n" +
+	"                          \"organization\": \"Acme\", \"address\": \"10.0.0.1:8443\",\n" +
+	"                          \"via_cloud\": false, \"identity\": \"cloud\", \"active\": true,\n" +
+	"                          \"config_file\": \"~/.config/miren/clientconfig.d/prod.yaml\"}}\n" +
+	"\n" +
+	"{\"ok\": false, \"error\": {\"code\": \"cluster_not_found\", \"message\": \"no cluster named ...\"}}\n" +
+	"```\n\n" +
+	"Messages are written for people and will be reworded. The code is the stable part:\n\n" +
+	"| Code | Meaning |\n" +
+	"|------|---------|\n" +
+	"| `invalid_flags` | The flags given can't mean anything together. |\n" +
+	"| `interactive_required` | Answering needs a person. Name a cluster with `--cluster`, or use `--force` to overwrite. |\n" +
+	"| `no_identities` | Nobody is logged in. Run `miren login`. |\n" +
+	"| `identity_error` | The identity named wasn't found, or one has to be named with `--identity`. |\n" +
+	"| `cloud_request_failed` | Miren Cloud didn't answer. Worth retrying. |\n" +
+	"| `cluster_not_found` | No cluster by that name, or none on the account. |\n" +
+	"| `ambiguous_cluster` | The name exists in more than one organization. Add `--organization`. |\n" +
+	"| `unknown_organization` | No organization by that name. |\n" +
+	"| `cluster_unreachable` | The cluster exists and couldn't be reached. Worth retrying. |\n" +
+	"| `cluster_exists` | That local name is taken. Use `--force`, or `--as` to pick another. |\n" +
+	"| `config_error` | The local config couldn't be read or written. |\n" +
+	"| `unknown` | A failure with no code. Treat it as uninterpretable. |"

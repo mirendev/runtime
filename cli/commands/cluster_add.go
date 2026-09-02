@@ -270,7 +270,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
-		return nil, codedErrorf(codeConfigLoadFailed, "failed to load configuration: %w", err)
+		return nil, codedErrorf(codeConfigError, "failed to load configuration: %w", err)
 	}
 
 	// Detect manual mode: an address was given, so the cluster is dialed
@@ -292,7 +292,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	} else if identityName != "" {
 		// Manual mode with explicit --identity: validate it exists
 		if mainConfig == nil || !mainConfig.HasIdentities() {
-			return nil, codedErrorf(codeIdentityNotFound, "identity %q not found: no identities configured", identityName)
+			return nil, codedErrorf(codeIdentityError, "identity %q not found: no identities configured", identityName)
 		}
 	} else if mainConfig != nil {
 		// Manual mode with no --identity. Optional isn't the same as unwanted:
@@ -308,7 +308,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 			identityName = names[0]
 			ctx.Info("Using identity '%s' (only one available)", identityName)
 		default:
-			return nil, codedErrorf(codeMultipleIdentities, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+			return nil, codedErrorf(codeIdentityError, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
 		}
 	}
 
@@ -341,7 +341,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		}
 
 		if len(clusters) == 0 {
-			return nil, codedErrorf(codeNoClusters, "no clusters available for your account")
+			return nil, codedErrorf(codeClusterNotFound, "no clusters available for your account")
 		}
 
 		var (
@@ -499,7 +499,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		if err == clientconfig.ErrNoConfig {
 			mainConfig = clientconfig.NewConfig()
 		} else {
-			return nil, codedErrorf(codeConfigLoadFailed, "failed to load client config: %w", err)
+			return nil, codedErrorf(codeConfigError, "failed to load client config: %w", err)
 		}
 	}
 
@@ -521,7 +521,10 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 				return nil, codedErrorf(codeInteractiveRequired, "failed to run picker: %w", err)
 			}
 			if selected == nil || selected.ID() == "Cancel" {
-				return nil, codedErrorf(codeCancelled, "cancelled")
+				// No code: this branch only runs for a person answering a
+				// prompt, and JSON mode never opens one, so a code here would
+				// be a contract entry that can never appear in a document.
+				return nil, fmt.Errorf("cancelled")
 			}
 			// User chose to overwrite, continue
 		} else {
@@ -542,14 +545,14 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	if mainConfig.GetClusterCount() == 1 {
 		// If this is the first cluster, set it as active
 		if err := mainConfig.SetActiveCluster(clusterName); err != nil {
-			return nil, codedErrorf(codeConfigWriteFailed, "failed to set active cluster: %w", err)
+			return nil, codedErrorf(codeConfigError, "failed to set active cluster: %w", err)
 		}
 		ctx.Info("Setting %q as the active cluster", clusterName)
 	}
 
 	// Save the main config (which will also save the leaf config)
 	if err := mainConfig.Save(); err != nil {
-		return nil, codedErrorf(codeConfigWriteFailed, "failed to save cluster configuration: %w", err)
+		return nil, codedErrorf(codeConfigError, "failed to save cluster configuration: %w", err)
 	}
 
 	if opts.viaCloud {
