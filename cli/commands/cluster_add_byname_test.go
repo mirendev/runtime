@@ -62,7 +62,7 @@ func TestAddClusterByNameRoutedThroughCloud(t *testing.T) {
 	}, nil)
 	configWithIdentity(t, srv.URL)
 
-	err := addCluster(presenceContext(t), addClusterOptions{
+	_, err := addCluster(presenceContext(t), addClusterOptions{
 		clusterName: "prod",
 		localName:   "acme-prod",
 		viaCloud:    true,
@@ -96,7 +96,7 @@ func TestAddClusterByNameRefusesAnUnreachableCluster(t *testing.T) {
 	}, map[string]bool{"cluster-prod": false})
 	configWithIdentity(t, srv.URL)
 
-	err := addCluster(presenceContext(t), addClusterOptions{clusterName: "prod"})
+	_, err := addCluster(presenceContext(t), addClusterOptions{clusterName: "prod"})
 	r.Error(err)
 	r.Contains(err.Error(), unreachableAddressNote)
 	r.Contains(err.Error(), unreachableAddressHelp)
@@ -117,7 +117,7 @@ func TestAddClusterByNameReportsAnUnknownName(t *testing.T) {
 	}, nil)
 	configWithIdentity(t, srv.URL)
 
-	err := addCluster(presenceContext(t), addClusterOptions{clusterName: "produciton"})
+	_, err := addCluster(presenceContext(t), addClusterOptions{clusterName: "produciton"})
 	r.Error(err)
 	r.Contains(err.Error(), `no cluster named "produciton"`)
 	r.Contains(err.Error(), "prod (Acme)")

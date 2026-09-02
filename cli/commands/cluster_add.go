@@ -28,7 +28,8 @@ var skipAddresses = map[string]bool{
 	"localhost.localdomain": true,
 }
 
-func ClusterAdd(ctx *Context, opts struct {
+type clusterAddOpts struct {
+	FormatOptions
 	Identity     string `short:"i" long:"identity" description:"Name of the identity to use (optional - will use the only one if single)"`
 	Cluster      string `short:"c" long:"cluster" description:"Name of the cluster to add, looked up in Miren Cloud unless --address is given (optional - will list available)"`
 	Address      string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
@@ -36,8 +37,16 @@ func ClusterAdd(ctx *Context, opts struct {
 	Organization string `long:"organization" description:"Organization the named cluster belongs to, for when the same name exists in more than one"`
 	Force        bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
 	ViaCloud     bool   `long:"via-cloud" description:"Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to"`
-}) error {
-	return addCluster(ctx, addClusterOptions{
+}
+
+func ClusterAdd(ctx *Context, opts clusterAddOpts) error {
+	// Adding a cluster narrates itself as it goes, and in JSON mode stdout
+	// belongs to the result document alone.
+	if opts.IsJSON() {
+		defer ctx.ProgressToStderr()()
+	}
+
+	added, err := addCluster(ctx, addClusterOptions{
 		identityName: opts.Identity,
 		clusterName:  opts.Cluster,
 		address:      opts.Address,
@@ -45,14 +54,22 @@ func ClusterAdd(ctx *Context, opts struct {
 		organization: opts.Organization,
 		force:        opts.Force,
 		viaCloud:     opts.ViaCloud,
+		jsonOutput:   opts.IsJSON(),
 	})
+
+	if !opts.IsJSON() {
+		return err
+	}
+
+	return reportClusterAdd(ctx, added, err)
 }
 
 // AddClusterInteractive prompts the user to select and add a cluster interactively.
 // It auto-selects the identity if only one is available.
 // Returns nil if a cluster was successfully added.
 func AddClusterInteractive(ctx *Context) error {
-	return addCluster(ctx, addClusterOptions{})
+	_, err := addCluster(ctx, addClusterOptions{})
+	return err
 }
 
 type addClusterOptions struct {
@@ -75,6 +92,12 @@ type addClusterOptions struct {
 	// cluster's XID, and asking cloud which clusters you have is the only way
 	// to learn it.
 	viaCloud bool
+
+	// jsonOutput means the caller wants a document, not a conversation. The
+	// steps that would put a question on the screen — the cluster picker, the
+	// overwrite prompt — become errors it can act on instead, even when there
+	// is a terminal attached and asking would have worked.
+	jsonOutput bool
 }
 
 // canFallBackToCloud reports whether a cluster that would not answer a direct
@@ -132,10 +155,10 @@ func findClusterByName(clusters []ClusterResponse, name, organization string) (*
 	case 1:
 		return matches[0], nil
 	case 0:
-		return nil, fmt.Errorf("no cluster named %q. Available clusters: %s",
+		return nil, codedErrorf(codeClusterNotFound, "no cluster named %q. Available clusters: %s",
 			name, describeClusters(candidates))
 	default:
-		return nil, fmt.Errorf("%d clusters are named %q (%s). Pick one with --organization",
+		return nil, codedErrorf(codeAmbiguousCluster, "%d clusters are named %q (%s). Pick one with --organization",
 			len(matches), name, describeClusters(derefClusters(matches)))
 	}
 }
@@ -161,7 +184,7 @@ func clustersInOrganization(clusters []ClusterResponse, organization string) ([]
 	}
 
 	if len(matched) == 0 {
-		return nil, fmt.Errorf("no clusters in organization %q. Your clusters are in: %s",
+		return nil, codedErrorf(codeUnknownOrganization, "no clusters in organization %q. Your clusters are in: %s",
 			organization, organizationNames(clusters))
 	}
 
@@ -210,30 +233,44 @@ func organizationNames(clusters []ClusterResponse) string {
 	return strings.Join(names, ", ")
 }
 
-func addCluster(ctx *Context, opts addClusterOptions) error {
+func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	identityName, clusterName, address, force := opts.identityName, opts.clusterName, opts.address, opts.force
 
 	if opts.viaCloud && address != "" {
-		return fmt.Errorf("--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
+		return nil, codedErrorf(codeInvalidFlags, "--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
 	}
 	if opts.localName != "" && address != "" {
-		return fmt.Errorf("--as and --address are mutually exclusive: with --address nothing is looked up in cloud, so --cluster is already the local name")
+		return nil, codedErrorf(codeInvalidFlags, "--as and --address are mutually exclusive: with --address nothing is looked up in cloud, so --cluster is already the local name")
 	}
 	if opts.organization != "" && address != "" {
-		return fmt.Errorf("--organization and --address are mutually exclusive: with --address nothing is looked up in cloud")
+		return nil, codedErrorf(codeInvalidFlags, "--organization and --address are mutually exclusive: with --address nothing is looked up in cloud")
 	}
 	if opts.localName != "" && clusterName == "" {
-		return fmt.Errorf("--as needs --cluster to say which cluster to rename; the picker asks for a local name itself")
+		return nil, codedErrorf(codeInvalidFlags, "--as needs --cluster to say which cluster to rename; the picker asks for a local name itself")
 	}
 	// Silently ignoring it would be worse: it reads as a filter that was
 	// applied, and the picker shows every cluster either way.
 	if opts.organization != "" && clusterName == "" {
-		return fmt.Errorf("--organization only narrows the lookup for --cluster; the picker already shows which organization each cluster is in")
+		return nil, codedErrorf(codeInvalidFlags, "--organization only narrows the lookup for --cluster; the picker already shows which organization each cluster is in")
+	}
+	// Checked here with the other flag combinations rather than where the
+	// address is used: an address with nothing to call it is wrong on its face,
+	// and leaving it until after identity resolution meant reporting whatever
+	// that found instead — "multiple identities available" for a command whose
+	// real problem was a missing --cluster.
+	if address != "" && clusterName == "" {
+		return nil, codedErrorf(codeInvalidFlags, "--address needs --cluster to say what to call the cluster locally; drop --address to look one up in Miren Cloud instead")
+	}
+	// The picker cannot answer to a caller that wanted a document, so say what
+	// to do instead of opening a list nobody is watching.
+	if opts.jsonOutput && clusterName == "" && address == "" {
+		return nil, codedErrorf(codeInteractiveRequired,
+			"choosing a cluster from a list needs a person; name one with --cluster (run 'miren cluster available' to see them) or give --cluster and --address")
 	}
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return nil, codedErrorf(codeConfigLoadFailed, "failed to load configuration: %w", err)
 	}
 
 	// Detect manual mode: an address was given, so the cluster is dialed
@@ -250,12 +287,12 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		identityName, err = pickCloudIdentity(ctx, mainConfig, identityName,
 			", or use --cluster and --address to add a cluster directly")
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else if identityName != "" {
 		// Manual mode with explicit --identity: validate it exists
 		if mainConfig == nil || !mainConfig.HasIdentities() {
-			return fmt.Errorf("identity %q not found: no identities configured", identityName)
+			return nil, codedErrorf(codeIdentityNotFound, "identity %q not found: no identities configured", identityName)
 		}
 	} else if mainConfig != nil {
 		// Manual mode with no --identity. Optional isn't the same as unwanted:
@@ -271,7 +308,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			identityName = names[0]
 			ctx.Info("Using identity '%s' (only one available)", identityName)
 		default:
-			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+			return nil, codedErrorf(codeMultipleIdentities, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
 		}
 	}
 
@@ -280,7 +317,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	if identityName != "" {
 		identity, err = lookupIdentity(mainConfig, identityName)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -291,16 +328,20 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	var allAddresses []string
 	var clusterXID string
 
+	// What the cluster is called in cloud, and whose it is. Empty in manual
+	// mode, where cloud is never asked and neither is knowable.
+	var cloudName, organizationName string
+
 	if address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
 		clusters, err := fetchAvailableClusters(ctx, mainConfig, identityName, identity)
 		if err != nil {
-			return fmt.Errorf("failed to fetch available clusters: %w", err)
+			return nil, codedErrorf(codeCloudRequestFailed, "failed to fetch available clusters: %w", err)
 		}
 
 		if len(clusters) == 0 {
-			return fmt.Errorf("no clusters available for your account")
+			return nil, codedErrorf(codeNoClusters, "no clusters available for your account")
 		}
 
 		var (
@@ -315,7 +356,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		if clusterName != "" {
 			selectedCluster, err = findClusterByName(clusters, clusterName, opts.organization)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			localName = clusterName
@@ -335,7 +376,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			// on a dev machine can pin whatever is listening there under a
 			// remote cluster's name.
 			if !opts.viaCloud && !selectedCluster.hasReachableAddress() && !cloudRoutable[selectedCluster.XID] {
-				return fmt.Errorf("%s has %s, and cloud cannot reach it either; to connect: %s",
+				return nil, codedErrorf(codeClusterUnreachable, "%s has %s, and cloud cannot reach it either; to connect: %s",
 					selectedCluster.Name, unreachableAddressNote, unreachableAddressHelp)
 			}
 		} else {
@@ -349,12 +390,14 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			// Present cluster selection to user and get local name
 			selectedCluster, localName, err = selectClusterFromList(ctx, clusters, cloudRoutable)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		clusterName = localName
 		clusterXID = selectedCluster.XID
+		cloudName = selectedCluster.Name
+		organizationName = selectedCluster.OrganizationName
 
 		// A cluster nothing can dial, which cloud reports it can reach. Routing
 		// through cloud is not a fallback here so much as the only way it was
@@ -363,7 +406,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		// establish that the cluster will answer over it.
 		if !opts.viaCloud && cloudRoutable[selectedCluster.XID] {
 			if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
-				return fmt.Errorf(
+				return nil, codedErrorf(codeClusterUnreachable,
 					"%s advertises no address this machine can dial, and did not answer through cloud either; "+
 						"if its runtime predates cloud-routed RPC, upgrade it or add the cluster from a network that can reach it",
 					selectedCluster.Name)
@@ -390,7 +433,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 				// machine is not on. Cloud may still hold a link to it, and if
 				// it does, the entry that works is the routed one.
 				if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
-					return err
+					return nil, codedErrorf(codeClusterUnreachable, "%w", err)
 				}
 
 				ctx.Info("Could not reach %s directly, but cloud has a link to it.", selectedCluster.Name)
@@ -409,8 +452,6 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 				announceClusterAdd(ctx, selectedCluster.Name, localName, "connected to "+workingAddress)
 			}
 		}
-	} else if clusterName == "" {
-		return fmt.Errorf("--address needs --cluster to say what to call the cluster locally; drop --address to look one up in Miren Cloud instead")
 	} else {
 		// Manual mode - address was specified directly
 		ctx.Info("Connecting to %s to extract TLS certificate...", address)
@@ -418,7 +459,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		// Extract the TLS certificate from the server
 		cert, err := extractTLSCertificate(ctx, address)
 		if err != nil {
-			return fmt.Errorf("failed to extract TLS certificate: %w", err)
+			return nil, codedErrorf(codeClusterUnreachable, "failed to extract TLS certificate: %w", err)
 		}
 		clusterCert = cert
 		ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", cert.Fingerprint)
@@ -458,13 +499,16 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		if err == clientconfig.ErrNoConfig {
 			mainConfig = clientconfig.NewConfig()
 		} else {
-			return fmt.Errorf("failed to load client config: %w", err)
+			return nil, codedErrorf(codeConfigLoadFailed, "failed to load client config: %w", err)
 		}
 	}
 
 	// Check if the leaf config already exists (by trying to get the cluster)
 	if mainConfig.HasCluster(clusterName) && !force {
-		if ui.IsInteractive() {
+		// A caller wanting a document gets the decision handed back rather than
+		// a prompt, even at a terminal: overwriting somebody's cluster entry is
+		// not a call to make on their behalf because nobody was watching.
+		if ui.IsInteractive() && !opts.jsonOutput {
 			// Prompt user to choose: overwrite or cancel
 			items := []ui.PickerItem{
 				ui.SimplePickerItem{Text: "Overwrite existing configuration"},
@@ -474,14 +518,14 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			title := fmt.Sprintf("Cluster %q already exists", clusterName)
 			selected, err := ui.RunPicker(items, ui.WithTitle(title))
 			if err != nil {
-				return fmt.Errorf("failed to run picker: %w", err)
+				return nil, codedErrorf(codeInteractiveRequired, "failed to run picker: %w", err)
 			}
 			if selected == nil || selected.ID() == "Cancel" {
-				return fmt.Errorf("cancelled")
+				return nil, codedErrorf(codeCancelled, "cancelled")
 			}
 			// User chose to overwrite, continue
 		} else {
-			return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", clusterName)
+			return nil, codedErrorf(codeClusterExists, "cluster configuration %q already exists. Use --force to overwrite", clusterName)
 		}
 	}
 
@@ -498,14 +542,14 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	if mainConfig.GetClusterCount() == 1 {
 		// If this is the first cluster, set it as active
 		if err := mainConfig.SetActiveCluster(clusterName); err != nil {
-			return fmt.Errorf("failed to set active cluster: %w", err)
+			return nil, codedErrorf(codeConfigWriteFailed, "failed to set active cluster: %w", err)
 		}
 		ctx.Info("Setting %q as the active cluster", clusterName)
 	}
 
 	// Save the main config (which will also save the leaf config)
 	if err := mainConfig.Save(); err != nil {
-		return fmt.Errorf("failed to save cluster configuration: %w", err)
+		return nil, codedErrorf(codeConfigWriteFailed, "failed to save cluster configuration: %w", err)
 	}
 
 	if opts.viaCloud {
@@ -527,7 +571,22 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		ctx.Info("  miren cluster switch %s", clusterName)
 	}
 
-	return nil
+	added := &addedCluster{
+		Name:       clusterName,
+		XID:        clusterXID,
+		Address:    address,
+		ViaCloud:   opts.viaCloud,
+		Identity:   identityName,
+		Insecure:   clusterConfig.Insecure,
+		Active:     mainConfig.ActiveCluster() == clusterName,
+		ConfigFile: mainConfig.GetClusterSource(clusterName),
+	}
+	if cloudName != "" && cloudName != clusterName {
+		added.CloudName = cloudName
+	}
+	added.Organization = organizationName
+
+	return added, nil
 }
 
 // normalizeAddress handles robust address normalization for various formats:

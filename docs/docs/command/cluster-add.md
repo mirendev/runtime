@@ -20,7 +20,9 @@ miren cluster add [flags]
 - `--as` — Local name to store the cluster under, when it should differ from its name in Miren Cloud
 - `--cluster, -c` — Name of the cluster to add, looked up in Miren Cloud unless --address is given (optional - will list available)
 - `--force, -f` — Overwrite existing cluster configuration
+- `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Name of the identity to use (optional - will use the only one if single)
+- `--json` — Shorthand for --format json
 - `--organization` — Organization the named cluster belongs to, for when the same name exists in more than one
 - `--via-cloud` — Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to
 
@@ -48,6 +50,12 @@ miren cluster add --cluster my-cluster
 
 ```bash
 miren cluster add --cluster my-cluster --as staging
+```
+
+**Add a cluster, reporting the result (and any failure) as JSON:**
+
+```bash
+miren cluster add --cluster my-cluster --format json
 ```
 
 **Add a cluster with a specific address:**

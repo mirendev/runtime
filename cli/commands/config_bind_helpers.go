@@ -211,7 +211,7 @@ func isPrivateAddress(host string) bool {
 // something to offer besides logging in, so each command can point at its own
 // way out while the rest of the message stays the same.
 func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, suggestion string) (string, error) {
-	noIdentities := fmt.Errorf("no identities configured. Please run 'miren login' first%s", suggestion)
+	noIdentities := codedErrorf(codeNoIdentities, "no identities configured. Please run 'miren login' first%s", suggestion)
 
 	if config == nil || !config.HasIdentities() {
 		return "", noIdentities
@@ -228,7 +228,7 @@ func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, sug
 	case 0:
 		return "", noIdentities
 	default:
-		return "", fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+		return "", codedErrorf(codeMultipleIdentities, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
 	}
 }
 
@@ -236,15 +236,15 @@ func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, sug
 // it is not among them.
 func lookupIdentity(config *clientconfig.Config, name string) (*clientconfig.IdentityConfig, error) {
 	if config == nil {
-		return nil, fmt.Errorf("identity %q not found in configuration", name)
+		return nil, codedErrorf(codeIdentityNotFound, "identity %q not found in configuration", name)
 	}
 
 	identity, err := config.GetIdentity(name)
 	if err != nil {
 		if available := config.GetIdentityNames(); len(available) > 0 {
-			return nil, fmt.Errorf("identity %q not found. Available identities: %v", name, available)
+			return nil, codedErrorf(codeIdentityNotFound, "identity %q not found. Available identities: %v", name, available)
 		}
-		return nil, fmt.Errorf("identity %q not found in configuration", name)
+		return nil, codedErrorf(codeIdentityNotFound, "identity %q not found in configuration", name)
 	}
 
 	return identity, nil

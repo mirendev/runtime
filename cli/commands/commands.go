@@ -809,6 +809,10 @@ miren deploy --analyze
 			Body: "miren cluster add --cluster my-cluster --as staging",
 		}),
 		WithExample(mflags.Example{
+			Name: "Add a cluster, reporting the result (and any failure) as JSON",
+			Body: "miren cluster add --cluster my-cluster --format json",
+		}),
+		WithExample(mflags.Example{
 			Name: "Add a cluster with a specific address",
 			Body: "miren cluster add --cluster my-cluster --address 10.0.0.1:8443",
 		}),

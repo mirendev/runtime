@@ -270,11 +270,16 @@ func TestClusterAddFlagValidation(t *testing.T) {
 			opts:    addClusterOptions{clusterName: "prod", address: "10.0.0.1:8443", viaCloud: true},
 			wantErr: "--via-cloud and --address are mutually exclusive",
 		},
+		{
+			name:    "address without cluster",
+			opts:    addClusterOptions{address: "10.0.0.1:8443"},
+			wantErr: "--address needs --cluster",
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := addCluster(presenceContext(t), test.opts)
+			_, err := addCluster(presenceContext(t), test.opts)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), test.wantErr)
 		})
