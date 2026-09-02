@@ -4,6 +4,7 @@ package victorialogs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -107,7 +108,14 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 		}
 		// If restart failed (e.g., port mismatch), try deleting the container and creating fresh
 		c.Log.Warn("restart of existing container failed, recreating", "error", err)
-		c.CleanupExistingContainer(ctx, existingContainer)
+		cleanupErr := c.CleanupExistingContainer(ctx, existingContainer)
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("cleaning up failed victorialogs restart: %w", cleanupErr))
+		}
+		c.ClearRuntimeState()
+		if ctx.Err() != nil {
+			return err
+		}
 	}
 
 	c.Log.Info("starting victorialogs with host networking", "http_port", config.HTTPPort)
@@ -123,22 +131,31 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 	// Start container with structured logging
 	task, err := c.createTask(ctx, container)
 	if err != nil {
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return fmt.Errorf("failed to create victorialogs task: %w", err)
+		startErr := fmt.Errorf("failed to create victorialogs task: %w", err)
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
+		return errors.Join(startErr, cleanupErr)
 	}
 
 	err = task.Start(ctx)
 	if err != nil {
-		task.Delete(ctx)
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return fmt.Errorf("failed to start victorialogs task: %w", err)
+		startErr := fmt.Errorf("failed to start victorialogs task: %w", err)
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
+		return errors.Join(startErr, cleanupErr)
 	}
 
 	// Wait for VictoriaLogs to be ready
 	if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
-		task.Delete(ctx)
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return err
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
+		return errors.Join(err, cleanupErr)
 	}
 
 	c.SetTask(task)

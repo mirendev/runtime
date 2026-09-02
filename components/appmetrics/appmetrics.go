@@ -4,6 +4,7 @@ package appmetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -141,7 +142,10 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 		// The destination and mounted config are part of the container spec. A
 		// server restart must recreate it so an operator's config change cannot
 		// leave an old destination running indefinitely.
-		c.CleanupExistingContainer(ctx, existing)
+		if cleanupErr := c.CleanupExistingContainer(ctx, existing); cleanupErr != nil {
+			c.stopBackground()
+			return fmt.Errorf("cleaning up existing vmagent container: %w", cleanupErr)
+		}
 	}
 
 	container, err := c.createContainer(ctx, image, dataPath, config.RemoteWriteURL, config.HTTPPort)
@@ -153,23 +157,31 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 
 	task, err := c.createTask(ctx, container)
 	if err != nil {
-		c.CleanupExistingContainer(ctx, container)
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
 		c.stopBackground()
-		return fmt.Errorf("creating vmagent task: %w", err)
+		return errors.Join(fmt.Errorf("creating vmagent task: %w", err), cleanupErr)
 	}
 	if err := task.Start(ctx); err != nil {
-		task.Delete(ctx)
-		c.CleanupExistingContainer(ctx, container)
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
 		c.stopBackground()
-		return fmt.Errorf("starting vmagent task: %w", err)
+		return errors.Join(fmt.Errorf("starting vmagent task: %w", err), cleanupErr)
 	}
 	c.SetTask(task)
 	if err := c.WaitForReady(ctx, "127.0.0.1", config.HTTPPort); err != nil {
 		c.stopBackground()
-		c.StopTask(ctx, task)
-		c.CleanupExistingContainer(ctx, container)
-		c.SetRunning(false)
-		return err
+		// CleanupExistingContainer reloads and stops the running task itself;
+		// calling StopTask first would run the same task cleanup twice.
+		cleanupErr := c.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			c.ClearRuntimeState()
+		}
+		return errors.Join(err, cleanupErr)
 	}
 
 	c.wg.Add(1)

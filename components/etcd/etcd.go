@@ -6,6 +6,7 @@ package etcd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -268,7 +269,9 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 				}(),
 				"current_config_version", currentConfigVersion,
 				"tuning_changed", prevState != nil && prevState.TuningSignature != tuningSignature)
-			e.CleanupExistingContainer(ctx, existingContainer)
+			if cleanupErr := e.CleanupExistingContainer(ctx, existingContainer); cleanupErr != nil {
+				return fmt.Errorf("cleaning up outdated etcd container: %w", cleanupErr)
+			}
 		} else {
 			e.Log.Info("found existing etcd container, attempting restart", "container_id", existingContainer.ID())
 			err = e.restartExistingContainer(ctx, existingContainer, config)
@@ -278,8 +281,14 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 			}
 			// If restart failed (e.g., port mismatch), try deleting the container and creating fresh
 			e.Log.Warn("restart of existing container failed, recreating", "error", err)
-			e.CleanupExistingContainer(ctx, existingContainer)
+			cleanupErr := e.CleanupExistingContainer(ctx, existingContainer)
+			if cleanupErr != nil {
+				return errors.Join(err, fmt.Errorf("cleaning up failed etcd restart: %w", cleanupErr))
+			}
 			e.ClearRuntimeState()
+			if ctx.Err() != nil {
+				return err
+			}
 		}
 	}
 
@@ -302,15 +311,22 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 	// Start container with structured logging for JSON output
 	task, err := e.createTask(ctx, container)
 	if err != nil {
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return fmt.Errorf("failed to create etcd task: %w", err)
+		startErr := fmt.Errorf("failed to create etcd task: %w", err)
+		cleanupErr := e.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			e.ClearRuntimeState()
+		}
+		return errors.Join(startErr, cleanupErr)
 	}
 
 	err = task.Start(ctx)
 	if err != nil {
-		task.Delete(ctx)
-		container.Delete(ctx, containerd.WithSnapshotCleanup)
-		return fmt.Errorf("failed to start etcd task: %w", err)
+		startErr := fmt.Errorf("failed to start etcd task: %w", err)
+		cleanupErr := e.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			e.ClearRuntimeState()
+		}
+		return errors.Join(startErr, cleanupErr)
 	}
 
 	e.SetTask(task)
@@ -318,9 +334,12 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 
 	// Wait for etcd to answer its API before returning.
 	if err := e.waitForHealthy(ctx); err != nil {
-		e.CleanupExistingContainer(ctx, container)
-		e.ClearRuntimeState()
-		return fmt.Errorf("etcd failed readiness check: %w", err)
+		readinessErr := fmt.Errorf("etcd failed readiness check: %w", err)
+		cleanupErr := e.CleanupExistingContainer(ctx, container)
+		if cleanupErr == nil {
+			e.ClearRuntimeState()
+		}
+		return errors.Join(readinessErr, cleanupErr)
 	}
 
 	// Start monitoring for unexpected exits
