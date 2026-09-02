@@ -787,6 +787,14 @@ miren deploy --analyze
 			Body: "miren cluster add",
 		}),
 		WithExample(mflags.Example{
+			Name: "Add a cluster by name, without the picker",
+			Body: "miren cluster add --cluster my-cluster",
+		}),
+		WithExample(mflags.Example{
+			Name: "Add a cluster by name under a different local name",
+			Body: "miren cluster add --cluster my-cluster --as staging",
+		}),
+		WithExample(mflags.Example{
 			Name: "Add a cluster with a specific address",
 			Body: "miren cluster add --cluster my-cluster --address 10.0.0.1:8443",
 		}),

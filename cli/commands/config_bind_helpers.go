@@ -562,7 +562,8 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse, cloudRoutab
 			}
 			ctx.Printf("\n")
 		}
-		ctx.Printf("Re-run with --cluster and --address flags to select a specific cluster\n")
+		ctx.Printf("Re-run with --cluster <name> to add one of these without the picker\n")
+		ctx.Printf("(add --organization when the same name appears in more than one, or --address to dial a cluster directly)\n")
 		return nil, "", fmt.Errorf("interactive mode not available")
 	}
 
