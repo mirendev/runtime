@@ -110,10 +110,10 @@ func ClusterAvailable(ctx *Context, opts clusterAvailableOpts) error {
 			Description:       cluster.Description,
 			APIAddresses:      cluster.APIAddresses,
 			CACertFingerprint: cluster.CACertFingerprint,
-			Reachable:         cluster.hasReachableAddress(),
+			Reachable:         cluster.HasReachableAddress(),
 		}
 
-		if opts.Check && !cluster.hasReachableAddress() {
+		if opts.Check && !cluster.HasReachableAddress() {
 			routable := cloudRoutable[cluster.XID]
 			entry.ViaCloud = &routable
 		}

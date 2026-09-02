@@ -375,7 +375,7 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 			// falling through would probe localhost as a last resort — which
 			// on a dev machine can pin whatever is listening there under a
 			// remote cluster's name.
-			if !opts.viaCloud && !selectedCluster.hasReachableAddress() && !cloudRoutable[selectedCluster.XID] {
+			if !opts.viaCloud && !selectedCluster.HasReachableAddress() && !cloudRoutable[selectedCluster.XID] {
 				return nil, codedErrorf(codeClusterUnreachable, "%s has %s, and cloud cannot reach it either; to connect: %s",
 					selectedCluster.Name, unreachableAddressNote, unreachableAddressHelp)
 			}

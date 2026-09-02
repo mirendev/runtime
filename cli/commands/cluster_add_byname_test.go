@@ -1,35 +1,21 @@
 package commands
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cloudapi/cloudapitest"
 )
 
-// fakeCloud serves the two endpoints `miren cluster add` asks about in
-// discovery mode: the list of clusters on the account, and whether cloud
-// currently holds a link to a given one.
-func fakeCloud(t *testing.T, clusters []ClusterResponse, online map[string]bool) *httptest.Server {
+// fakeCloud stands up a cloud holding the given clusters, reporting online for
+// the ones set to true.
+func fakeCloud(t *testing.T, clusters []ClusterResponse, online map[string]bool) *cloudapitest.Server {
 	t.Helper()
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/api/v1/users/clusters", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"clusters": clusters})
-	})
-
-	mux.HandleFunc("/api/v1/clusters/{xid}/online", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"online": online[r.PathValue("xid")]})
-	})
-
-	srv := httptest.NewServer(mux)
+	srv := cloudapitest.NewServer(clusters, online, http.StatusOK)
 	t.Cleanup(srv.Close)
 
 	return srv
