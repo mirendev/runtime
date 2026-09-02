@@ -5,6 +5,7 @@ package base
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -201,7 +202,7 @@ func (b *BaseComponent) Stop(ctx context.Context) error {
 // stopInternal performs the stop operation. Caller must hold opMu.
 func (b *BaseComponent) stopInternal(ctx context.Context) error {
 	b.stateMu.Lock()
-	if !b.running {
+	if !b.running && b.task == nil && b.container == nil && b.stopMonitor == nil {
 		b.stateMu.Unlock()
 		return nil
 	}
@@ -229,35 +230,59 @@ func (b *BaseComponent) stopInternal(ctx context.Context) error {
 	container := b.container
 	b.stateMu.Unlock()
 
-	ctx = namespaces.WithNamespace(ctx, b.Namespace)
+	// Cleanup must outlive the Start or Stop context that triggered it. Each
+	// containerd operation below has its own deadline, so removing cancellation
+	// here cannot make shutdown wait forever.
+	ctx = namespaces.WithNamespace(context.WithoutCancel(ctx), b.Namespace)
 
+	var taskErr, containerErr error
 	if task != nil {
-		b.stopTask(ctx, task)
-		b.stateMu.Lock()
-		b.task = nil
-		b.stateMu.Unlock()
+		taskErr = b.stopTask(ctx, task)
+		if taskErr == nil {
+			b.stateMu.Lock()
+			b.task = nil
+			b.stateMu.Unlock()
+		}
 	}
 
 	if container != nil {
-		b.deleteContainerWithRetry(ctx, container)
-		b.stateMu.Lock()
-		b.container = nil
-		b.stateMu.Unlock()
+		containerErr = b.deleteContainerWithRetry(ctx, container)
+		if containerErr == nil {
+			b.stateMu.Lock()
+			// A deleted container cannot retain a task. Treat successful container
+			// deletion as authoritative if task cleanup reported a transient error.
+			b.task = nil
+			b.container = nil
+			b.stateMu.Unlock()
+			taskErr = nil
+		}
 	}
 
 	b.stateMu.Lock()
-	b.running = false
+	b.running = taskErr != nil || containerErr != nil
 	b.stateMu.Unlock()
 
-	b.Log.Info(b.ComponentName + " server stopped")
+	if taskErr == nil && containerErr == nil {
+		b.Log.Info(b.ComponentName + " server stopped")
+	}
 
-	return nil
+	return errors.Join(taskErr, containerErr)
 }
 
 // stopTask gracefully stops a task with SIGTERM, escalating to SIGKILL if needed.
-func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
-	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) error {
+	// Some callers arrive here directly with a live cancellable context. This is
+	// intentionally harmless when stopInternal already detached it for us.
+	shutdownBase := namespaces.WithNamespace(context.WithoutCancel(ctx), b.Namespace)
+	shutdownCtx, cancel := context.WithTimeout(shutdownBase, 30*time.Second)
 	defer cancel()
+
+	// Register the wait before signalling. Otherwise a fast exit can race with
+	// Wait and leave cleanup blocked until the shutdown deadline.
+	status, waitErr := task.Wait(shutdownCtx)
+	if waitErr != nil {
+		b.Log.Warn("failed to wait for "+b.ComponentName+" task, proceeding to delete", "error", waitErr)
+	}
 
 	if err := task.Kill(shutdownCtx, unix.SIGTERM); err != nil {
 		// The init process may already be gone — e.g. the previous server died
@@ -267,31 +292,28 @@ func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
 		// removed and the next plain→TLS recreate wedges on "snapshot already
 		// exists". See MIR-1463.
 		b.Log.Warn("failed to send SIGTERM to "+b.ComponentName+" task, proceeding to delete", "error", err)
-	} else {
-		status, err := task.Wait(shutdownCtx)
-		if err == nil {
-			select {
-			case es := <-status:
-				b.Log.Info(b.ComponentName+" task exited", "code", es.ExitCode())
+	} else if waitErr == nil {
+		select {
+		case es := <-status:
+			b.Log.Info(b.ComponentName+" task exited", "code", es.ExitCode())
 
-			case <-shutdownCtx.Done():
-				b.Log.Warn(b.ComponentName + " task did not exit gracefully, sending SIGKILL")
-				killCtx, killCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 10*time.Second)
-				defer killCancel()
+		case <-shutdownCtx.Done():
+			b.Log.Warn(b.ComponentName + " task did not exit gracefully, sending SIGKILL")
+			killCtx, killCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), b.Namespace), 10*time.Second)
+			defer killCancel()
 
-				if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
-					b.Log.Error("failed to send SIGKILL to "+b.ComponentName+" task", "error", err)
+			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
+				b.Log.Error("failed to send SIGKILL to "+b.ComponentName+" task", "error", err)
+			} else {
+				statusCh, waitErr := task.Wait(killCtx)
+				if waitErr != nil {
+					b.Log.Error(b.ComponentName+" task wait channel after SIGKILL failed", "error", waitErr)
 				} else {
-					statusCh, waitErr := task.Wait(killCtx)
-					if waitErr != nil {
-						b.Log.Error(b.ComponentName+" task wait channel after SIGKILL failed", "error", waitErr)
-					} else {
-						select {
-						case <-statusCh:
-							// Task exited
-						case <-killCtx.Done():
-							b.Log.Warn(b.ComponentName + " task did not exit after SIGKILL within timeout")
-						}
+					select {
+					case <-statusCh:
+						// Task exited
+					case <-killCtx.Done():
+						b.Log.Warn(b.ComponentName + " task did not exit after SIGKILL within timeout")
 					}
 				}
 			}
@@ -306,12 +328,15 @@ func (b *BaseComponent) stopTask(ctx context.Context, task containerd.Task) {
 	// A not-found task is already gone — treat that as success.
 	if _, err := task.Delete(deleteCtx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
 		b.Log.Error("failed to delete "+b.ComponentName+" task", "error", err)
+		return fmt.Errorf("delete %s task: %w", b.ComponentName, err)
 	}
+
+	return nil
 }
 
 // StopTask is the exported version of stopTask for use by components.
-func (b *BaseComponent) StopTask(ctx context.Context, task containerd.Task) {
-	b.stopTask(ctx, task)
+func (b *BaseComponent) StopTask(ctx context.Context, task containerd.Task) error {
+	return b.stopTask(ctx, task)
 }
 
 // deleteContainerAndSnapshot deletes the container and makes sure its snapshot is
@@ -354,10 +379,11 @@ func (b *BaseComponent) deleteContainerAndSnapshot(container containerd.Containe
 }
 
 // deleteContainerWithRetry deletes the container (and its snapshot) with retry logic.
-func (b *BaseComponent) deleteContainerWithRetry(ctx context.Context, container containerd.Container) {
+func (b *BaseComponent) deleteContainerWithRetry(ctx context.Context, container containerd.Container) error {
 	const maxRetries = 3
 	const retryDelay = 2 * time.Second
 
+	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		// The delete itself runs on a detached context so it always finishes; ctx
 		// only governs whether we keep retrying, so a shutdown stops the backoff
@@ -365,8 +391,9 @@ func (b *BaseComponent) deleteContainerWithRetry(ctx context.Context, container 
 		err := b.deleteContainerAndSnapshot(container)
 		if err == nil {
 			b.Log.Info(b.ComponentName + " container deleted successfully")
-			return
+			return nil
 		}
+		lastErr = err
 		b.Log.Error("failed to delete "+b.ComponentName+" container", "error", err, "attempt", attempt, "max_retries", maxRetries)
 
 		if attempt < maxRetries {
@@ -374,35 +401,52 @@ func (b *BaseComponent) deleteContainerWithRetry(ctx context.Context, container 
 			case <-time.After(retryDelay):
 			case <-ctx.Done():
 				b.Log.Warn(b.ComponentName+" container delete retries cancelled", "error", ctx.Err())
-				return
+				return errors.Join(lastErr, ctx.Err())
 			}
 		}
 	}
 
 	b.Log.Error("failed to delete " + b.ComponentName + " container after all retries, potential snapshot leak")
+	return fmt.Errorf("delete %s container after %d attempts: %w", b.ComponentName, maxRetries, lastErr)
 }
 
 // DeleteContainerWithRetry is the exported version for use by components.
-func (b *BaseComponent) DeleteContainerWithRetry(ctx context.Context) {
+func (b *BaseComponent) DeleteContainerWithRetry(ctx context.Context) error {
 	b.stateMu.Lock()
 	container := b.container
 	b.stateMu.Unlock()
 	if container != nil {
-		b.deleteContainerWithRetry(ctx, container)
+		return b.deleteContainerWithRetry(ctx, container)
 	}
+	return nil
 }
 
 // CleanupExistingContainer stops the task and deletes a container during restart scenarios.
 // It shares the same task-delete and snapshot-cleanup path as the graceful Stop flow, so
 // a task left registered by an unclean shutdown still gets force-deleted and its snapshot
 // removed rather than stranding both and wedging the recreate (MIR-1463).
-func (b *BaseComponent) CleanupExistingContainer(ctx context.Context, container containerd.Container) {
-	task, err := container.Task(ctx, nil)
+func (b *BaseComponent) CleanupExistingContainer(ctx context.Context, container containerd.Container) error {
+	// Startup commonly reaches this path because ctx was cancelled. Detach the
+	// cleanup work from that lifecycle while preserving values such as tracing.
+	cleanupCtx := namespaces.WithNamespace(context.WithoutCancel(ctx), b.Namespace)
+	taskCtx, cancel := context.WithTimeout(cleanupCtx, 10*time.Second)
+	task, err := container.Task(taskCtx, nil)
+	cancel()
+
+	var taskErr error
 	if err == nil {
-		b.stopTask(ctx, task)
+		taskErr = b.stopTask(cleanupCtx, task)
+	} else if !errdefs.IsNotFound(err) {
+		taskErr = fmt.Errorf("load %s task for cleanup: %w", b.ComponentName, err)
 	}
 
-	b.deleteContainerWithRetry(ctx, container)
+	containerErr := b.deleteContainerWithRetry(cleanupCtx, container)
+	if containerErr == nil {
+		// Removing the container proves no task remains, even if loading or
+		// deleting its task returned a transient error on the way there.
+		return nil
+	}
+	return errors.Join(taskErr, containerErr)
 }
 
 // WaitForReady waits until the component is ready by checking TCP connectivity.
