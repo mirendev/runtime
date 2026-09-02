@@ -136,7 +136,7 @@ func (c *NetworkClient) setupTransport() {
 	c.qc = DefaultQUICConfig
 	c.qc.HandshakeIdleTimeout = handshakeTimeoutFor(c.remote)
 	c.htr.QUICConfig = &c.qc
-	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+	dial := func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config, early bool) (*quic.Conn, error) {
 		uaddr, err := resolveUDPAddr(ctx, "udp", addr)
 		if err != nil {
 			return nil, err
@@ -144,17 +144,33 @@ func (c *NetworkClient) setupTransport() {
 
 		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
-		conn, err := c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
+		var conn *quic.Conn
+		if early {
+			conn, err = c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
+		} else {
+			conn, err = c.transport.Dial(ctx, uaddr, tlsCfg, cfg)
+		}
 		if err != nil {
 			return nil, err
 		}
 		c.trackConn(conn)
 		return conn, nil
 	}
+	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+		return dial(ctx, addr, tlsCfg, cfg, true)
+	}
 
 	c.ws.TLSClientConfig = c.tlsCfg
 	c.ws.QUICConfig = &c.qc
-	c.ws.DialAddr = c.htr.Dial
+	// webtransport.Dialer waits for HTTP/3 settings on its own lifetime
+	// context after DialAddr returns. An early connection can therefore leave
+	// Dial blocked forever when the handshake subsequently fails, even after
+	// the request context is canceled. Complete the handshake here so failed
+	// reconnects remain bounded by the caller's context. Ordinary HTTP/3 RPCs
+	// keep their 0-RTT path above.
+	c.ws.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+		return dial(ctx, addr, tlsCfg, cfg, false)
+	}
 }
 
 func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
