@@ -88,6 +88,7 @@ func (s *startup) addComponents() error {
 		s.ociRegistry.component,
 		s.workAdmission.component,
 		s.buildSagaRecovery.component,
+		s.cloudUplink.component,
 	}
 
 	for _, component := range components {

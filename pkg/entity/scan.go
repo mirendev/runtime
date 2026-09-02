@@ -15,6 +15,7 @@ type scanConfig struct {
 	pageSize int64
 	keysOnly bool
 	startKey string
+	readRev  int64
 	revision *int64
 }
 
@@ -54,6 +55,12 @@ func withStartKey(key string) scanOption {
 	return func(c *scanConfig) { c.startKey = key }
 }
 
+// withReadRevision pins the scan to an existing store revision. It is useful
+// when a caller pages a logical snapshot across several scanPagedFunc calls.
+func withReadRevision(revision int64) scanOption {
+	return func(c *scanConfig) { c.readRev = revision }
+}
+
 // scanPaged reads every key/value under prefix in ascending key order, fetching
 // them in bounded pages rather than a single Get(WithPrefix()).
 //
@@ -91,6 +98,9 @@ func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, 
 		clientv3.WithLimit(cfg.pageSize),
 		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend),
 	}
+	if cfg.readRev > 0 {
+		getOpts = append(getOpts, clientv3.WithRev(cfg.readRev))
+	}
 	if cfg.keysOnly {
 		getOpts = append(getOpts, clientv3.WithKeysOnly())
 	}
@@ -110,9 +120,13 @@ func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, 
 		// through. A scan that outruns the compaction window will then fail
 		// loudly (ErrCompacted) rather than return a torn result.
 		if first {
-			getOpts = append(getOpts, clientv3.WithRev(resp.Header.Revision))
+			pinnedRevision := cfg.readRev
+			if pinnedRevision == 0 {
+				pinnedRevision = resp.Header.Revision
+				getOpts = append(getOpts, clientv3.WithRev(pinnedRevision))
+			}
 			if cfg.revision != nil {
-				*cfg.revision = resp.Header.Revision
+				*cfg.revision = pinnedRevision
 			}
 			first = false
 		}

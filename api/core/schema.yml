@@ -1,5 +1,41 @@
 domain: dev.miren.core
 version: v1alpha
+exports:
+  cloud:
+    marker: dev.miren.meta/cloud.export
+    kinds:
+      app:
+        lifecycle: mirror
+        include:
+          - dev.miren.core/metadata.name
+          - dev.miren.core/app.active_version
+          - dev.miren.core/app.active_deployment
+      app_version:
+        lifecycle: archive
+        include:
+          - db/short-id
+          - dev.miren.core/app_version.app
+          - dev.miren.core/app_version.version
+          - dev.miren.core/source.kind
+          - dev.miren.core/source.value
+          - dev.miren.core/source.git_sha
+          - dev.miren.core/source.git_branch
+          - dev.miren.core/source.repository
+      deployment:
+        lifecycle: archive
+        include:
+          - db/short-id
+          - dev.miren.core/deployment.app
+          - dev.miren.core/deployment.app_name
+          - dev.miren.core/deployment.version
+          - dev.miren.core/deployment.parent_deployment
+          - dev.miren.core/deployment.operation
+          - dev.miren.core/deployment.outcome
+          - dev.miren.core/deployment.phase
+          - dev.miren.core/deployment.started_at
+          - dev.miren.core/deployment.completed_at
+          - dev.miren.core/deployed_by.subject
+          - dev.miren.core/deployed_by.auth_method
 kinds:
   metadata:
     name:

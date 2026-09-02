@@ -52,14 +52,22 @@ type Controller struct {
 	cursor              string
 	passFailed          bool
 	firstCleanSweepOnce sync.Once
+	ready               chan struct{}
 }
 
 func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityAccessClient) *Controller {
 	return &Controller{
 		Log: log.With("module", "deployment-attempts"), Store: store,
 		Tracker: deploylifecycle.NewTracker(log, eac), Config: DefaultConfig(),
+		ready: make(chan struct{}),
 	}
 }
+
+// Ready closes after the first complete migration and reconciliation sweep
+// with no skipped records. Consumers that expose canonical deployment data may
+// wait on it without making the controller's ongoing repair loop part of their
+// own lifecycle.
+func (c *Controller) Ready() <-chan struct{} { return c.ready }
 
 func (c *Controller) Start(ctx context.Context) {
 	if c.Config.Interval <= 0 {
@@ -109,7 +117,11 @@ func (c *Controller) Step(ctx context.Context) error {
 	}
 	var migrateErrs []error
 	for _, ent := range entities {
-		if err := migrate(ctx, ent); err != nil {
+		err := migrate(ctx, ent)
+		if err == nil && c.phase != phaseReconcile {
+			err = c.ensureCloudExportMarker(ctx, ent.Id())
+		}
+		if err != nil {
 			wrapped := fmt.Errorf("migrating %s in phase %s: %w", ent.Id(), c.phase, err)
 			migrateErrs = append(migrateErrs, wrapped)
 			c.passFailed = true
@@ -138,6 +150,7 @@ func (c *Controller) Step(ctx context.Context) error {
 		} else {
 			c.firstCleanSweepOnce.Do(func() {
 				c.Log.Info("deployment-attempt migration and reconciliation initial pass complete")
+				close(c.ready)
 			})
 		}
 		// Keep scanning forever. This catches records written by a downgraded
@@ -192,7 +205,7 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 	case deploylifecycle.StatusInterrupted:
 		outcome = string(deploylifecycle.StatusInterrupted)
 	default:
-		return nil
+		return fmt.Errorf("deployment has unknown legacy status %q", dep.Status)
 	}
 
 	attrs := []entity.Attr{entity.Ref(entity.DBId, dep.ID)}
@@ -219,6 +232,22 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 		attrs = append(attrs, entity.Time(core_v1alpha.DeploymentStartedAtId, started))
 	}
 	_, err := c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
+	return err
+}
+
+func (c *Controller) ensureCloudExportMarker(ctx context.Context, id entity.Id) error {
+	current, err := c.Store.GetEntity(ctx, id)
+	if err != nil {
+		return err
+	}
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	if attr, ok := current.Get(marker); ok && attr.Value.Kind() == entity.KindBool && attr.Value.Bool() {
+		return nil
+	}
+	_, err = c.Store.PatchEntity(ctx, entity.New(
+		entity.Ref(entity.DBId, id),
+		entity.Bool(marker, true),
+	), entity.WithFromRevision(current.GetRevision()))
 	return err
 }
 
