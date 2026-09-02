@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"net/http"
 	"testing"
 
@@ -107,4 +108,31 @@ func TestAddClusterByNameReportsAnUnknownName(t *testing.T) {
 	r.Error(err)
 	r.Contains(err.Error(), `no cluster named "produciton"`)
 	r.Contains(err.Error(), "prod (Acme)")
+}
+
+// `--via-cloud` records how a cluster is reached, not that it is up, so the
+// entry is written even when the route does not answer. The warning is what
+// keeps that from surfacing later as an unrelated command failing.
+func TestAddClusterByNameWarnsWhenTheCloudRouteIsSilent(t *testing.T) {
+	r := require.New(t)
+
+	srv := fakeCloud(t, []ClusterResponse{
+		{Name: "prod", XID: "cluster-prod", OrganizationName: "Acme"},
+	}, nil)
+	configWithIdentity(t, srv.URL)
+
+	ctx := presenceContext(t)
+	added, err := addCluster(ctx, addClusterOptions{clusterName: "prod", viaCloud: true})
+	r.NoError(err)
+	r.True(added.ViaCloud)
+
+	said := ctx.Stdout.(*bytes.Buffer).String()
+	r.Contains(said, "did not answer through cloud")
+	r.Contains(said, "Adding it anyway")
+
+	cfg, err := clientconfig.LoadConfig()
+	r.NoError(err)
+	cluster, err := cfg.GetCluster("prod")
+	r.NoError(err, "the entry is written even though the route did not answer")
+	r.True(cluster.ViaCloud)
 }

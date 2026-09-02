@@ -332,6 +332,12 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	// mode, where cloud is never asked and neither is knowable.
 	var cloudName, organizationName string
 
+	// Whether the caller asked for cloud routing, as opposed to the code
+	// choosing it below. Captured before opts.viaCloud can be set, because the
+	// two cases warrant different treatment: a route chosen here has already
+	// been probed, while one the caller named has not been checked at all.
+	explicitViaCloud := opts.viaCloud
+
 	if address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
@@ -416,10 +422,22 @@ func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 		}
 
 		if opts.viaCloud {
-			// No address, no probe, no certificate. Every one of those describes
-			// dialing the cluster, which is the thing this entry exists to avoid
-			// — and probing would just fail slowly before writing the entry that
-			// was going to work.
+			// No address and no certificate: both describe dialing the cluster,
+			// which is the thing this entry exists to avoid.
+			//
+			// The route itself is checked when the caller asked for it by name,
+			// rather than when it was chosen above (which already probed). The
+			// entry is written either way, because --via-cloud says how this
+			// cluster is reached and not that it answers this minute, and a
+			// cluster can reasonably be offline while somebody sets it up. But
+			// an entry that cannot work right now is worth saying out loud,
+			// since otherwise the first sign of it is an unrelated command
+			// failing later.
+			if explicitViaCloud && !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
+				ctx.Warn("%s did not answer through cloud just now, so commands to it will fail until it reconnects.", selectedCluster.Name)
+				ctx.Warn("Adding it anyway, since --via-cloud records how to reach it rather than that it is up.")
+			}
+
 			announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 		} else {
 			// Store all available addresses
