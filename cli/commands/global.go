@@ -262,6 +262,20 @@ func (c *Context) Warn(format string, args ...any) {
 	fmt.Fprintf(c.Stdout, "W "+format+"\n", args...)
 }
 
+// ProgressToStderr sends running commentary — Info, Warn, Completed, Printf —
+// to stderr, and returns a function restoring it.
+//
+// A command printing a machine-readable document has to keep stdout to itself:
+// one "Using identity 'cloud'" line in front of a JSON array turns it into
+// something no parser will accept, and the caller only finds out at the parse
+// error. The context is redirected in place rather than copied, because it
+// carries a live log level that must not be copied.
+func (c *Context) ProgressToStderr() (restore func()) {
+	previous := c.Stdout
+	c.Stdout = c.Stderr
+	return func() { c.Stdout = previous }
+}
+
 // printConfigWarning renders a config error to stderr. Uses TerminalError
 // for rich output when available, otherwise falls back to a plain warning.
 //

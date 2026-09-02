@@ -203,6 +203,53 @@ func isPrivateAddress(host string) bool {
 	return ip.IsPrivate()
 }
 
+// pickCloudIdentity chooses which configured identity to ask cloud with. A
+// lone identity is adopted, several are refused rather than guessed between,
+// and none is an error — every question for cloud is asked as somebody.
+//
+// suggestion is appended to the "no identities" error by callers that have
+// something to offer besides logging in, so each command can point at its own
+// way out while the rest of the message stays the same.
+func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, suggestion string) (string, error) {
+	noIdentities := fmt.Errorf("no identities configured. Please run 'miren login' first%s", suggestion)
+
+	if config == nil || !config.HasIdentities() {
+		return "", noIdentities
+	}
+
+	if requested != "" {
+		return requested, nil
+	}
+
+	switch names := config.GetIdentityNames(); len(names) {
+	case 1:
+		ctx.Info("Using identity '%s' (only one available)", names[0])
+		return names[0], nil
+	case 0:
+		return "", noIdentities
+	default:
+		return "", fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+	}
+}
+
+// lookupIdentity resolves a named identity, naming the ones that do exist when
+// it is not among them.
+func lookupIdentity(config *clientconfig.Config, name string) (*clientconfig.IdentityConfig, error) {
+	if config == nil {
+		return nil, fmt.Errorf("identity %q not found in configuration", name)
+	}
+
+	identity, err := config.GetIdentity(name)
+	if err != nil {
+		if available := config.GetIdentityNames(); len(available) > 0 {
+			return nil, fmt.Errorf("identity %q not found. Available identities: %v", name, available)
+		}
+		return nil, fmt.Errorf("identity %q not found in configuration", name)
+	}
+
+	return identity, nil
+}
+
 // fetchAvailableClusters queries the identity server for available clusters.
 // identityName may be "" for an anonymous in-memory identity (e.g. during login
 // before it has been named), in which case token refreshes are not persisted.

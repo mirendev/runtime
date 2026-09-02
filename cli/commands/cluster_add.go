@@ -118,18 +118,9 @@ func announceClusterAdd(ctx *Context, remoteName, localName, how string) {
 // as a fallback, so a name that is exactly right can never lose to one that
 // merely differs in case.
 func findClusterByName(clusters []ClusterResponse, name, organization string) (*ClusterResponse, error) {
-	candidates := clusters
-	if organization != "" {
-		candidates = nil
-		for _, cluster := range clusters {
-			if strings.EqualFold(cluster.OrganizationName, organization) || cluster.OrganizationXID == organization {
-				candidates = append(candidates, cluster)
-			}
-		}
-		if len(candidates) == 0 {
-			return nil, fmt.Errorf("no clusters in organization %q. Your clusters are in: %s",
-				organization, organizationNames(clusters))
-		}
+	candidates, err := clustersInOrganization(clusters, organization)
+	if err != nil {
+		return nil, err
 	}
 
 	matches := matchClusterName(candidates, func(clusterName string) bool { return clusterName == name })
@@ -147,6 +138,34 @@ func findClusterByName(clusters []ClusterResponse, name, organization string) (*
 		return nil, fmt.Errorf("%d clusters are named %q (%s). Pick one with --organization",
 			len(matches), name, describeClusters(derefClusters(matches)))
 	}
+}
+
+// clustersInOrganization narrows a cluster list to one organization, named
+// either by its display name or by its id. An organization that matches nothing
+// is an error rather than an empty list, because the overwhelmingly likely
+// cause is a misspelled name, and an empty list reads as "you have no clusters
+// there" — a different and more alarming claim.
+//
+// Shared by the commands that take --organization so the flag means the same
+// thing whether it is narrowing a lookup or a listing.
+func clustersInOrganization(clusters []ClusterResponse, organization string) ([]ClusterResponse, error) {
+	if organization == "" {
+		return clusters, nil
+	}
+
+	var matched []ClusterResponse
+	for _, cluster := range clusters {
+		if strings.EqualFold(cluster.OrganizationName, organization) || cluster.OrganizationXID == organization {
+			matched = append(matched, cluster)
+		}
+	}
+
+	if len(matched) == 0 {
+		return nil, fmt.Errorf("no clusters in organization %q. Your clusters are in: %s",
+			organization, organizationNames(clusters))
+	}
+
+	return matched, nil
 }
 
 func matchClusterName(clusters []ClusterResponse, match func(name string) bool) []*ClusterResponse {
@@ -228,20 +247,10 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	// In discovery mode, identity is required to fetch available clusters.
 	if !manualMode {
 		// Discovery mode — identity is required
-		if mainConfig == nil || !mainConfig.HasIdentities() {
-			return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
-		}
-
-		if identityName == "" {
-			availableIdentities := mainConfig.GetIdentityNames()
-			if len(availableIdentities) == 1 {
-				identityName = availableIdentities[0]
-				ctx.Info("Using identity '%s' (only one available)", identityName)
-			} else if len(availableIdentities) > 1 {
-				return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
-			} else {
-				return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
-			}
+		identityName, err = pickCloudIdentity(ctx, mainConfig, identityName,
+			", or use --cluster and --address to add a cluster directly")
+		if err != nil {
+			return err
 		}
 	} else if identityName != "" {
 		// Manual mode with explicit --identity: validate it exists
@@ -269,17 +278,9 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	// Look up identity if one was specified (skip if manual mode with no identity)
 	var identity *clientconfig.IdentityConfig
 	if identityName != "" {
-		if mainConfig == nil {
-			return fmt.Errorf("identity %q not found in configuration", identityName)
-		}
-		var err error
-		identity, err = mainConfig.GetIdentity(identityName)
+		identity, err = lookupIdentity(mainConfig, identityName)
 		if err != nil {
-			availableIdentities := mainConfig.GetIdentityNames()
-			if len(availableIdentities) > 0 {
-				return fmt.Errorf("identity %q not found. Available identities: %v", identityName, availableIdentities)
-			}
-			return fmt.Errorf("identity %q not found in configuration", identityName)
+			return err
 		}
 	}
 
