@@ -29,15 +29,15 @@ func TestWorkAdmissionWaitsForExecutionCapabilities(t *testing.T) {
 		}
 	})
 
-	runnerStarted := make(chan struct{})
-	releaseRunner := make(chan struct{})
-	runnerComponent, _ := boot.Provide0("runner", func(ctx context.Context) (nodePresenceBootOutput, error) {
-		close(runnerStarted)
+	nodePresenceStarted := make(chan struct{})
+	releaseNodePresence := make(chan struct{})
+	nodePresenceComponent, _ := boot.Provide0("node-presence", func(ctx context.Context) (struct{}, error) {
+		close(nodePresenceStarted)
 		select {
 		case <-ctx.Done():
-			return nodePresenceBootOutput{}, ctx.Err()
-		case <-releaseRunner:
-			return nodePresenceBootOutput{}, nil
+			return struct{}{}, ctx.Err()
+		case <-releaseNodePresence:
+			return struct{}{}, nil
 		}
 	})
 
@@ -59,12 +59,12 @@ func TestWorkAdmissionWaitsForExecutionCapabilities(t *testing.T) {
 	hostMappingComponent, _ := boot.Provide0("registry-host-mapping", func(context.Context) (registryHostMappingBootOutput, error) {
 		return registryHostMappingBootOutput{}, nil
 	})
-	admission := newWorkAdmissionBoot(applicationsOutput, workloadsComponent, runnerComponent, buildkitComponent, ociRegistryComponent, hostMappingComponent)
+	admission := newWorkAdmissionBoot(applicationsOutput, workloadsComponent, nodePresenceComponent, buildkitComponent, ociRegistryComponent, hostMappingComponent)
 
 	for _, component := range []*boot.Component{
 		applicationsComponent,
 		workloadsComponent,
-		runnerComponent,
+		nodePresenceComponent,
 		buildkitComponent,
 		ociRegistryComponent,
 		hostMappingComponent,
@@ -77,7 +77,7 @@ func TestWorkAdmissionWaitsForExecutionCapabilities(t *testing.T) {
 	go func() { done <- graph.Start(t.Context()) }()
 	require.Eventually(t, func() bool {
 		select {
-		case <-runnerStarted:
+		case <-nodePresenceStarted:
 			return true
 		default:
 			return false
@@ -109,7 +109,7 @@ func TestWorkAdmissionWaitsForExecutionCapabilities(t *testing.T) {
 		}
 	}
 	assertStillBooting()
-	close(releaseRunner)
+	close(releaseNodePresence)
 	assertStillBooting()
 	close(releaseBuildkit)
 	assertStillBooting()

@@ -68,7 +68,7 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 	b.observability = observability
 	log := observability.log
 	log.Info("starting embedded buildkit daemon", "socket-dir", b.inputs.config.GetSocketDir())
-	b.result.component = buildkit.NewComponent(log, containerd.client, containerd.namespace, b.inputs.dataPath)
+	b.result.component = buildkit.NewComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	gcStorage, err := units.ParseData(b.inputs.config.GetGcKeepStorage())
 	if err != nil {
 		log.Warn("invalid buildkit.gc_keep_storage, falling back to default",
