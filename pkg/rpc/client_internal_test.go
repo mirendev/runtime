@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,6 +134,112 @@ func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) 
 	case <-time.After(3 * time.Second):
 		t.Fatal("WebTransport dial hung after the peer died post-handshake and the caller context expired")
 	}
+}
+
+// TestWebTransportDialHonorsContextAfterSettingsWithoutResponse covers the
+// phase behind the settings wait. Here the peer is a real WebTransport server,
+// so SETTINGS arrive and the dial gets past the wait that the two tests above
+// exercise — then the handler never answers the CONNECT, leaving the dial
+// blocked in http3.RequestStream.ReadResponse, which takes no context.
+//
+// Closing the per-call Dialer does nothing for this state, and neither does
+// waiting: DefaultQUICConfig keepalives are shorter than its idle timeout, so
+// the connection stays healthy indefinitely. Only tearing the connection down
+// releases the read. The test asserts both halves of that: the caller returns
+// on its deadline, and the connection the dial created is actually closed, which
+// is what lets the dial goroutine exit instead of being stranded for the life of
+// the process on every reconnect attempt.
+func TestWebTransportDialHonorsContextAfterSettingsWithoutResponse(t *testing.T) {
+	r := require.New(t)
+
+	// Held open for the whole test so the handler never returns a response.
+	// The timer is a backstop: nothing should reach it, but a handler blocked
+	// forever would wedge the server's own shutdown rather than fail the test.
+	blocked := make(chan struct{})
+	addr := webTransportServer(t, func(http.ResponseWriter, *http.Request) {
+		select {
+		case <-blocked:
+		case <-time.After(30 * time.Second):
+		}
+	})
+	// Registered after the server so cleanup (which runs last-registered
+	// first) releases the handler before shutting the server down.
+	t.Cleanup(func() { close(blocked) })
+
+	client := newTestWebTransportClient(t, addr)
+
+	// Wrap the client's DialAddr so the test can see the connection the dial
+	// creates and assert it gets torn down.
+	inner := client.ws.DialAddr
+	var (
+		mu       sync.Mutex
+		dialConn *quic.Conn
+	)
+	client.ws.DialAddr = func(ctx context.Context, a string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+		conn, err := inner(ctx, a, tlsCfg, cfg)
+		if err == nil {
+			mu.Lock()
+			dialConn = conn
+			mu.Unlock()
+		}
+		return conn, err
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.dialWebTransport(ctx, "https://"+addr+"/", nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		r.Error(err)
+		r.ErrorIs(err, context.DeadlineExceeded)
+	case <-time.After(3 * time.Second):
+		t.Fatal("WebTransport dial hung after SETTINGS arrived but the CONNECT went unanswered")
+	}
+
+	mu.Lock()
+	conn := dialConn
+	mu.Unlock()
+	r.NotNil(conn, "the dial must have created a connection to get this far")
+
+	// The abandoned connection must be closed, not left alive by keepalives.
+	r.Eventually(func() bool {
+		return conn.Context().Err() != nil
+	}, time.Second, 10*time.Millisecond,
+		"the connection an abandoned dial was reading from must be torn down")
+}
+
+// webTransportServer starts a real webtransport.Server on 127.0.0.1 whose
+// HTTP/3 handler is handler, and returns the address to dial. Because it is a
+// genuine WebTransport server, a client reaches it with SETTINGS negotiated —
+// so a handler that never writes a response leaves the dial past the settings
+// wait and blocked on the CONNECT response.
+func webTransportServer(t *testing.T, handler http.HandlerFunc) string {
+	t.Helper()
+	r := require.New(t)
+
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	r.NoError(err)
+	t.Cleanup(func() { _ = packetConn.Close() })
+
+	srv := &webtransport.Server{
+		H3: http3.Server{
+			Handler:    handler,
+			TLSConfig:  testServerTLSConfig(t),
+			QUICConfig: &quic.Config{EnableDatagrams: true},
+		},
+		// The test client dials a bare IP:port; accept it.
+		CheckOrigin: func(*http.Request) bool { return true },
+	}
+	go func() { _ = srv.Serve(packetConn) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	return packetConn.LocalAddr().String()
 }
 
 // TestWebTransportDialSucceedsWhenServerAnswers guards the success path: with a

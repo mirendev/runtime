@@ -170,13 +170,17 @@ func (c *NetworkClient) setupTransport() {
 	//      whose handshake later fails; and
 	//   2. the HTTP/3 SETTINGS wait, if the peer completes the handshake but
 	//      never delivers a control-stream SETTINGS frame (e.g. it dies in the
-	//      one-RTT window after the handshake).
+	//      one-RTT window after the handshake); and
+	//   3. the CONNECT exchange after that wait, which reads the response off
+	//      the request stream through an API that takes no context.
 	//
 	// Completing the handshake here (phase 1) is necessary but not sufficient:
-	// it just moves the unbounded wait to phase 2. dialWebTransport bounds
-	// phase 2 by giving the dial its own Dialer per call and closing it when the
-	// caller's ctx expires, so the streaming dial is abortable at every stage.
-	// Ordinary HTTP/3 RPCs keep their 0-RTT path above.
+	// it just moves the unbounded wait to the phases behind it.
+	// dialWebTransport bounds those by giving the dial its own Dialer per call
+	// and, when the caller's ctx expires, closing both that Dialer (which
+	// releases phase 2) and the connection (which releases phase 3) — so the
+	// streaming dial is abortable at every stage. Ordinary HTTP/3 RPCs keep
+	// their 0-RTT path above.
 	c.ws.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 		return dial(ctx, addr, tlsCfg, cfg, false)
 	}
@@ -861,14 +865,55 @@ type InlineCapability struct {
 // against ctx. The returned *webtransport.Session owns a context rooted at
 // context.Background and is unaffected by closing this Dialer, so a per-call
 // Dialer is observationally equivalent to the shared one for a single session.
+//
+// Closing the Dialer only releases the settings wait. The phases after it —
+// OpenRequestStream, SendRequestHeader, ReadResponse — talk to the HTTP/3
+// request stream directly, and http3.RequestStream.ReadResponse takes no
+// context at all, so nothing there watches the caller's ctx. Nor does the
+// connection time out underneath them: DefaultQUICConfig sets a KeepAlivePeriod
+// shorter than its MaxIdleTimeout, so a peer that answers SETTINGS and then
+// never answers the CONNECT keeps the connection alive indefinitely. We
+// therefore also close the QUIC connection this dial created, which is what
+// makes the read fail and the goroutine exit. Without it a peer in that state
+// would strand the dial goroutine and pin the connection (and its entry in
+// c.conns) for the life of the process, once per reconnect attempt.
 func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header http.Header) (*http.Response, *webtransport.Session, error) {
+	// Records the connection the dial below creates, so the ctx.Done path can
+	// tear it down. Guarded because the dial runs on its own goroutine.
+	var (
+		connMu   sync.Mutex
+		dialConn *quic.Conn
+	)
+	dialAddr := c.ws.DialAddr
+
 	ws := &webtransport.Dialer{
 		TLSClientConfig:         c.ws.TLSClientConfig,
 		QUICConfig:              c.ws.QUICConfig,
 		StreamReorderingTimeout: c.ws.StreamReorderingTimeout,
-		DialAddr:                c.ws.DialAddr,
+		DialAddr: func(dctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			conn, err := dialAddr(dctx, addr, tlsCfg, cfg)
+			if err != nil {
+				return nil, err
+			}
+			connMu.Lock()
+			dialConn = conn
+			connMu.Unlock()
+			return conn, nil
+		},
 	}
 	defer ws.Close()
+
+	// abandonDial tears down the connection an abandoned dial is sitting on.
+	// Safe to call for a dial that has not created one yet, and safe to call
+	// more than once: quic-go's CloseWithError is idempotent.
+	abandonDial := func() {
+		connMu.Lock()
+		conn := dialConn
+		connMu.Unlock()
+		if conn != nil {
+			_ = conn.CloseWithError(0, "")
+		}
+	}
 
 	type dialResult struct {
 		hr  *http.Response
@@ -895,15 +940,18 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 		return r.hr, r.s, r.err
 	case <-ctx.Done():
 		cause := context.Cause(ctx)
-		// The dial is still in flight. defer ws.Close() cancels this Dialer's
-		// lifetime context, which unblocks webtransport-go's settings-wait;
-		// the request stream carries ctx, so any phase past the settings wait
-		// unwinds on its own. The buffered channel guarantees the dial
-		// goroutine exits without blocking. If the dial finished at the same
-		// instant the caller gave up, collect and close its session now;
-		// otherwise reap the eventual result in the background so a session
-		// produced by the race is released rather than pinning a connection
-		// until its idle timeout.
+		// The dial is still in flight, and two different things can be holding
+		// it. If it is in the settings wait, defer ws.Close() cancels this
+		// Dialer's lifetime context and releases it. If it is past that, on the
+		// request stream, only the connection going away releases it — see the
+		// function comment — so tear the connection down here. Doing both
+		// covers every phase; each is a no-op for a dial stuck in the other.
+		abandonDial()
+		// The buffered channel guarantees the dial goroutine exits without
+		// blocking. If the dial finished at the same instant the caller gave
+		// up, collect and close its session now; otherwise reap the eventual
+		// result in the background so a session produced by the race is
+		// released rather than pinning a connection until its idle timeout.
 		select {
 		case r := <-ch:
 			if r.s != nil {
