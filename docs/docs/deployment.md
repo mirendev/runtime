@@ -189,7 +189,6 @@ STATUS  VERSION                              WHEN     DEPLOYED BY
 Status icons:
 - **✓** — active (currently running) or succeeded
 - **✗** — failed
-- **↩** — rolled back
 - **⟳** — in progress
 - **⊘** — cancelled
 
