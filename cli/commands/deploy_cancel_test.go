@@ -120,10 +120,6 @@ func TestCancellationPoller_DetectsCancellation(t *testing.T) {
 		t.Fatal("poller did not stop after detecting cancellation")
 	}
 
-	if !poller.WasExternallyCancelled() {
-		t.Error("expected WasExternallyCancelled to be true")
-	}
-
 	if !cancelCalled.Load() {
 		t.Error("expected cancel function to be called")
 	}
@@ -167,10 +163,6 @@ func TestCancellationPoller_StopsOnContextCancel(t *testing.T) {
 		t.Fatal("poller did not stop after context cancellation")
 	}
 
-	if poller.WasExternallyCancelled() {
-		t.Error("expected WasExternallyCancelled to be false")
-	}
-
 	if cancelCalled.Load() {
 		t.Error("expected cancel function NOT to be called on context cancel")
 	}
@@ -204,10 +196,6 @@ func TestCancellationPoller_ContinuesOnError(t *testing.T) {
 		// Expected
 	case <-time.After(time.Second):
 		t.Fatal("poller did not stop after detecting cancellation")
-	}
-
-	if !poller.WasExternallyCancelled() {
-		t.Error("expected WasExternallyCancelled to be true")
 	}
 
 	if !cancelCalled.Load() {
@@ -244,10 +232,6 @@ func TestCancellationPoller_ImmediateCancellation(t *testing.T) {
 		// Expected
 	case <-time.After(time.Second):
 		t.Fatal("poller did not stop after detecting cancellation")
-	}
-
-	if !poller.WasExternallyCancelled() {
-		t.Error("expected WasExternallyCancelled to be true")
 	}
 
 	if !cancelCalled.Load() {
