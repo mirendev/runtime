@@ -1231,6 +1231,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	))
 	d.Dispatch("debug colors", Infer("debug colors", "Print some colors", Colors))
 	d.Dispatch("debug bundle", Infer("debug bundle", "Create a support bundle with system debug information", DebugBundle))
+	d.Dispatch("debug cloud-sync", Infer("debug cloud-sync", "Show runtime entity sync diagnostics", DebugCloudSync))
 
 	// Debug RBAC commands
 	d.Dispatch("debug rbac", Infer("debug rbac", "Fetch and display RBAC rules from miren.cloud", DebugRBAC))

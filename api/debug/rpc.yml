@@ -52,7 +52,58 @@ types:
         index: 4
         doc: Total capacity of subnet
 
+  - type: CloudSyncEvent
+    doc: A recent event worth showing in an entity sync diagnostic report
+    fields:
+      - name: kind
+        type: string
+        index: 0
+      - name: at
+        type: standard.Timestamp
+        index: 1
+      - name: summary
+        type: string
+        index: 2
+
+  - type: CloudSyncFact
+    doc: One named value in an entity sync diagnostic report
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
+
+  - type: CloudSyncReport
+    doc: Extensible operator-facing entity sync diagnostics
+    fields:
+      - name: state
+        type: string
+        index: 0
+      - name: summary
+        type: string
+        index: 1
+      - name: facts
+        type: list
+        element: CloudSyncFact
+        index: 2
+      - name: events
+        type: list
+        element: CloudSyncEvent
+        index: 3
+
 interfaces:
+  - name: CloudSync
+    doc: Debug interface for runtime entity sync diagnostics
+    methods:
+      - name: getStatus
+        doc: Get current runtime-side entity sync status
+        results:
+          - name: report
+            type: CloudSyncReport
+            doc: Current entity sync diagnostic report
+
   - name: NetDB
     doc: Debug interface for network database inspection and management
     methods:

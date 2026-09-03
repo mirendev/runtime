@@ -3,6 +3,9 @@ package coordinate
 import (
 	"context"
 	"time"
+
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/entitysync"
 )
 
 type ControlPlaneParts struct {
@@ -22,6 +25,15 @@ func NewControlPlane(foundation *Foundation, supplied ...ControlPlaneParts) *Con
 	if len(supplied) > 0 {
 		parts = supplied[0]
 	}
+	diagnostics := entitysync.NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
+	if parts.Cloud != nil {
+		diagnostics = parts.Cloud.EntitySyncDiagnostics()
+	} else if parts.Applications != nil && parts.Applications.entitySyncDiagnostics != nil {
+		diagnostics = parts.Applications.entitySyncDiagnostics
+	}
+	if parts.Applications != nil && parts.Applications.entitySyncDiagnostics == nil {
+		parts.Applications.entitySyncDiagnostics = diagnostics
+	}
 	if parts.Secrets == nil {
 		parts.Secrets = NewSecretStore(foundation)
 	}
@@ -29,7 +41,7 @@ func NewControlPlane(foundation *Foundation, supplied ...ControlPlaneParts) *Con
 		parts.RunnerEndpoints = NewRunnerEndpoints(foundation)
 	}
 	if parts.Applications == nil {
-		parts.Applications = NewApplicationManagement(foundation, parts.Secrets)
+		parts.Applications = NewApplicationManagement(foundation, parts.Secrets, diagnostics)
 	}
 	if parts.Workloads == nil {
 		parts.Workloads = NewWorkloadControl(foundation, parts.Applications)
@@ -38,7 +50,7 @@ func NewControlPlane(foundation *Foundation, supplied ...ControlPlaneParts) *Con
 		parts.Maintenance = NewEntityMaintenance(foundation)
 	}
 	if parts.Cloud == nil {
-		parts.Cloud = NewCloudControl(foundation)
+		parts.Cloud = NewCloudControl(foundation, diagnostics)
 	}
 	return &ControlPlane{
 		Foundation:      foundation,

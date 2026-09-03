@@ -84,15 +84,14 @@ func (c *Foundation) NewDeploymentAttemptController() (*deploymentattemptsctrl.C
 // that no specialized migration covers. The deployment-attempt controller has
 // already marked the apps, app versions, and deployments in its clean sweep;
 // excluding deployments here preserves its ownership of validating old shapes.
-func (c *Foundation) BackfillCloudExportMarker(ctx context.Context) error {
+func (c *Foundation) BackfillCloudExportMarker(ctx context.Context) (entityexport.BackfillStats, error) {
 	if c.store == nil {
-		return errors.New("cluster foundation entity store is not ready")
+		return entityexport.BackfillStats{}, errors.New("cluster foundation entity store is not ready")
 	}
-	_, err := entityexport.BackfillMarker(
+	return entityexport.BackfillMarker(
 		ctx, c.Log, c.store, core_v1alpha.CloudExportContract, 0,
 		entityexport.ExcludingKinds(core_v1alpha.KindDeployment),
 	)
-	return err
 }
 
 // Stop drains RPC after all dependent components stop, then releases etcd.
