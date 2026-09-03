@@ -2,6 +2,7 @@ package httpingress
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +15,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/httputil"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func TestIngressConfigDefault(t *testing.T) {
@@ -574,21 +582,276 @@ func TestPrivateMetricsPath(t *testing.T) {
 			Path:    "/internal/metrics",
 		},
 	}}}
-	if !privateMetricsPath(&private, "/internal/metrics") {
+	if !privateMetricsPath(&private, "web", "/internal/metrics") {
 		t.Fatal("private configured metrics path should be hidden")
 	}
-	if privateMetricsPath(&private, "/internal/metrics/extra") {
+	if privateMetricsPath(&private, "web", "/internal/metrics/extra") {
 		t.Fatal("only the exact configured path should be hidden")
 	}
 
 	private.Services[0].Metrics.Public = true
-	if privateMetricsPath(&private, "/internal/metrics") {
+	if privateMetricsPath(&private, "web", "/internal/metrics") {
 		t.Fatal("public metrics path should pass through ingress")
 	}
 
 	private.Services[0].Metrics.Public = false
 	private.Services[0].Metrics.Enabled = false
-	if privateMetricsPath(&private, "/internal/metrics") {
+	if privateMetricsPath(&private, "web", "/internal/metrics") {
 		t.Fatal("disabled metrics configuration should not reserve an app path")
 	}
+}
+
+// TestPrivateMetricsPathSelectedService exercises the privacy guard against the
+// whichever service the matched route selects — not a hardcoded "web". A
+// non-"web" service with private metrics must have its configured path hidden
+// just as "web" does, and a request selecting a different service must not be
+// hidden by an unrelated service's private metrics block.
+func TestPrivateMetricsPathSelectedService(t *testing.T) {
+	privateService := func(name, path string) core_v1alpha.ConfigSpecServices {
+		return core_v1alpha.ConfigSpecServices{
+			Name: name,
+			Metrics: core_v1alpha.ConfigSpecServicesMetrics{
+				Enabled: true,
+				Public:  false,
+				Path:    path,
+			},
+		}
+	}
+	config := func(services ...core_v1alpha.ConfigSpecServices) *core_v1alpha.ConfigSpec {
+		return &core_v1alpha.ConfigSpec{Services: services}
+	}
+
+	const apiMetrics = "/metrics"
+	api := config(privateService("api", apiMetrics))
+
+	// A route selecting the "api" service must hide its private metrics path,
+	// mirroring the historic "web" behavior. This is the regression that
+	// previously leaked Prometheus exposition for any non-"web" service.
+	if !privateMetricsPath(api, "api", apiMetrics) {
+		t.Fatalf("non-%q service private metrics path should be hidden", "web")
+	}
+	// A differently-named configured path on the same service still passes
+	// through, and a sibling path is not reserved.
+	if privateMetricsPath(api, "api", apiMetrics+"/extra") {
+		t.Fatal("only the exact configured path should be hidden")
+	}
+
+	// A route selecting a service with no configured metrics (or a different
+	// service entirely) must not be hidden by another service's private block.
+	if privateMetricsPath(api, "web", apiMetrics) {
+		t.Fatal("a request to an unconfigured service must not be hidden by an unrelated service")
+	}
+
+	// Public metrics pass through regardless of the selected service name.
+	public := config(privateService("api", apiMetrics))
+	public.Services[0].Metrics.Public = true
+	if privateMetricsPath(public, "api", apiMetrics) {
+		t.Fatalf("public metrics path should pass through ingress even for non-%q services", "web")
+	}
+
+	// Disabled metrics never reserve a path, for any selected service.
+	disabled := config(privateService("api", apiMetrics))
+	disabled.Services[0].Metrics.Enabled = false
+	if privateMetricsPath(disabled, "api", apiMetrics) {
+		t.Fatal("disabled metrics configuration should not reserve an app path")
+	}
+
+	// A multi-service config: the guard scopes to the selected service only.
+	// Selecting "web" must not be hidden by the "api" service's block, and
+	// vice versa; each selection hides only its own configured path.
+	multi := config(
+		privateService("web", "/web-metrics"),
+		privateService("api", "/api-metrics"),
+	)
+	if !privateMetricsPath(multi, "web", "/web-metrics") {
+		t.Fatal("web service private metrics path should be hidden when web is selected")
+	}
+	if !privateMetricsPath(multi, "api", "/api-metrics") {
+		t.Fatal("api service private metrics path should be hidden when api is selected")
+	}
+	if privateMetricsPath(multi, "web", "/api-metrics") {
+		t.Fatal("selecting web must not be hidden by the api service's private metrics block")
+	}
+	if privateMetricsPath(multi, "api", "/web-metrics") {
+		t.Fatal("selecting api must not be hidden by the web service's private metrics block")
+	}
+}
+
+// notFoundBody is the body http.NotFound writes, used to distinguish the
+// guard's 404 from any response that reaches the proxied lease path.
+const notFoundBody = "404 page not found\n"
+
+// stubActivator satisfies activator.AppActivator so the e2e test can prove a
+// request that the privacy guard does NOT hide reaches the lease-acquisition
+// path (past prepare) rather than vanishing into a 404. It never returns a
+// lease, so a request that proceeds past the guard fails with a 5xx —
+// distinctly not the guard's 404.
+type stubActivator struct{}
+
+func (stubActivator) AcquireLease(context.Context, *core_v1alpha.AppVersion, string) (*activator.Lease, error) {
+	return nil, errors.New("test stub: no sandbox wired")
+}
+func (stubActivator) ReleaseLease(context.Context, *activator.Lease) error { return nil }
+func (stubActivator) RenewLease(context.Context, *activator.Lease) (*activator.Lease, error) {
+	return nil, nil
+}
+func (stubActivator) Invalidations() <-chan activator.SandboxInvalidation {
+	return make(chan activator.SandboxInvalidation)
+}
+func (stubActivator) SetPoolCreator(activator.PoolCreator) {}
+
+// TestPrivateMetricsPathE2E drives the public ingress end-to-end through
+// serveHTTPWithMetrics — the real prepare closure, resolveIngressTarget, and
+// the privateMetricsPath call site — for routes that select a non-"web"
+// service with private metrics. The bug (commit 6134136f) leaked these paths
+// for any service not literally named "web"; after the fix the privacy
+// contract holds for the service the matched route selects regardless of its
+// name.
+func TestPrivateMetricsPathE2E(t *testing.T) {
+	const metricsPath = "/metrics"
+
+	// apiService is a non-"web" HTTP service with metrics enabled on the
+	// default http port — the unsafe default configuration where the metrics
+	// listener is the proxied listener.
+	apiService := func(name string, public bool) core_v1alpha.ConfigSpecServices {
+		return core_v1alpha.ConfigSpecServices{
+			Name:  name,
+			Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 8080, Type: "http"}},
+			Metrics: core_v1alpha.ConfigSpecServicesMetrics{
+				Enabled: true,
+				Public:  public,
+				Path:    metricsPath,
+			},
+		}
+	}
+
+	// setup builds an app + ConfigVersion + active AppVersion carrying the given
+	// services through the in-memory entity server, plus a public route
+	// selecting `service`, and returns a minimally-wired ingress Server whose
+	// serveHTTPWithMetrics drives the real prepare chain. A stub activator is
+	// wired so a request the guard does not hide reaches lease acquisition and
+	// returns a 5xx (rather than panicking on a nil activator) — that 5xx is the
+	// signal the guard declined to hide it. When ephemeralLabel is non-empty it
+	// also creates an ephemeral AppVersion carrying the same config, so the
+	// request host `<ephemeralLabel>.<host>` resolves via lookupEphemeralRoute.
+	setup := func(t *testing.T, services []core_v1alpha.ConfigSpecServices, service, host, authProvider string, defaultRoute bool, ephemeralLabel string) (*Server, func()) {
+		t.Helper()
+		inmem, cleanup := testutils.NewInMemEntityServer(t)
+		ctx := context.Background()
+
+		appID, err := inmem.Client.Create(ctx, "app", &core_v1alpha.App{})
+		require.NoError(t, err)
+		cvID, err := inmem.Client.Create(ctx, "cfg", &core_v1alpha.ConfigVersion{
+			App:  appID,
+			Spec: core_v1alpha.ConfigSpec{Services: services},
+		})
+		require.NoError(t, err)
+		verID, err := inmem.Client.Create(ctx, "ver", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cvID})
+		require.NoError(t, err)
+		require.NoError(t, inmem.Client.Update(ctx, &core_v1alpha.App{ID: appID, ActiveVersion: verID}))
+		if ephemeralLabel != "" {
+			_, err = inmem.Client.Create(ctx, "ver-"+ephemeralLabel, &core_v1alpha.AppVersion{
+				App:            appID,
+				ConfigVersion:  cvID,
+				EphemeralLabel: ephemeralLabel,
+			})
+			require.NoError(t, err)
+		}
+
+		route := &ingress_v1alpha.HttpRoute{
+			Host:         host,
+			App:          appID,
+			Service:      service,
+			AuthProvider: entity.Id(authProvider),
+		}
+		routeID := host
+		if defaultRoute {
+			route.Default = true
+			routeID = "default-route"
+		}
+		_, err = inmem.Client.Create(ctx, routeID, route)
+		require.NoError(t, err)
+
+		rpcClient := rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+		s := &Server{Log: slog.Default()}
+		s.eac = inmem.EAC
+		s.ingressClient = ingress.NewClient(s.Log, rpcClient)
+		s.aa = stubActivator{}
+		return s, cleanup
+	}
+
+	do := func(t *testing.T, s *Server, host, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		var appName string
+		s.serveHTTPWithMetrics(rec, httptest.NewRequest("GET", "http://"+host+path, nil), &appName)
+		return rec
+	}
+
+	// G1: a public request to a non-"web" service's private metrics path is
+	// hidden (404) — the regression. Pre-fix this proxied the Prometheus body.
+	// A 404 (rather than the stub activator's 5xx) also proves the request
+	// never reached lease acquisition.
+	t.Run("non-web private metrics hidden (exact route)", func(t *testing.T) {
+		s, cleanup := setup(t, []core_v1alpha.ConfigSpecServices{apiService("api", false)}, "api", "api.example.com", "", false, "")
+		defer cleanup()
+		rec := do(t, s, "api.example.com", metricsPath)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, notFoundBody, rec.Body.String(),
+			"private metrics path must be hidden by the guard, not proxied to the sandbox")
+	})
+
+	// G7c: the default-route branch selects the service too (service =
+	// routeService(defaultRoute)), so the guard hides the default route's
+	// selected-service private metrics path.
+	t.Run("non-web private metrics hidden (default route)", func(t *testing.T) {
+		s, cleanup := setup(t, []core_v1alpha.ConfigSpecServices{apiService("api", false)}, "api", "", "", true, "")
+		defer cleanup()
+		// A host with no matching route falls back to the default route.
+		rec := do(t, s, "nomatch.example.com", metricsPath)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, notFoundBody, rec.Body.String())
+	})
+
+	// G7b: the ephemeral-subdomain branch (lookupEphemeralRoute) resolves an
+	// ephemeral version for the label and applies the guard to its resolved
+	// config + the route's selected service. A request to a non-"web" service's
+	// private metrics path via an ephemeral subdomain is hidden too.
+	t.Run("non-web private metrics hidden (ephemeral route)", func(t *testing.T) {
+		s, cleanup := setup(t, []core_v1alpha.ConfigSpecServices{apiService("api", false)}, "api", "api.example.com", "", false, "feat")
+		defer cleanup()
+		// "<label>.<base>" — no exact route, so lookupEphemeralRoute strips the
+		// label and matches the base route.
+		rec := do(t, s, "feat.api.example.com", metricsPath)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Equal(t, notFoundBody, rec.Body.String())
+	})
+
+	// G9: the guard runs in prepare, BEFORE auth. The route carries an auth
+	// provider whose entity does not exist. If the guard hides first the
+	// response is a clean 404; if auth ran first it would try to load the
+	// missing provider and return 503 ("Authentication service unavailable").
+	// Asserting 404 proves prepare precedes auth and hides the path pre-auth.
+	t.Run("private metrics hidden before auth (auth-protected route)", func(t *testing.T) {
+		s, cleanup := setup(t, []core_v1alpha.ConfigSpecServices{apiService("api", false)}, "api", "api.example.com", "oidc_provider/does-not-exist", false, "")
+		defer cleanup()
+		rec := do(t, s, "api.example.com", metricsPath)
+		assert.Equal(t, http.StatusNotFound, rec.Code,
+			"prepare must hide the private path (404) before auth runs; a 503 would mean auth ran first and failed to load the missing provider")
+		assert.Equal(t, notFoundBody, rec.Body.String())
+	})
+
+	// G4 (e2e boundary): public metrics are NOT hidden. The unit test proves
+	// privateMetricsPath returns false for Public=true; this confirms the e2e
+	// path does not over-block — a public-metrics request proceeds past the
+	// guard to the proxied lease path (a 5xx here only because no sandbox is
+	// wired, never a guard 404).
+	t.Run("public metrics not hidden (over-block boundary)", func(t *testing.T) {
+		s, cleanup := setup(t, []core_v1alpha.ConfigSpecServices{apiService("api", true)}, "api", "api.example.com", "", false, "")
+		defer cleanup()
+		rec := do(t, s, "api.example.com", metricsPath)
+		assert.NotEqual(t, http.StatusNotFound, rec.Code)
+		assert.NotEqual(t, notFoundBody, rec.Body.String(),
+			"public metrics path must pass through; Public=true must not be hidden by the guard")
+	})
 }
