@@ -69,7 +69,7 @@ miren top [flags]
 - `--samples` — Stop after this many refreshes (0 for unlimited) (default: `0`)
 - `--service` — Only show sandboxes of this service (e.g. web, worker)
 - `--since` — Measure over this window, e.g. 30s, 5m, 1h (default 1m)
-- `--sort` — Sort by: cpu, memory, app, service, node (default: `cpu`)
+- `--sort` — Sort by: cpu, memory, name, app, service, node (default: `cpu`)
 - `--status` — Only show sandboxes in this status
 - `--system` — Include addon and platform sandboxes
 - `--watch, -w` — Refresh continuously until interrupted

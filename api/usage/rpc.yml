@@ -394,9 +394,12 @@ types:
         type: string
         index: 0
         doc: |
-          Sandboxes: cpu, memory, app, service or node.
+          Sandboxes: cpu, memory, name, app, service or node.
           Nodes: cpu, memory, load, sandboxes or name.
           Apps: cpu, memory, sandboxes or name.
+
+          A usage key sorts busiest first and a name sorts A to Z unless order
+          says otherwise.
       - name: order
         type: string
         index: 1

@@ -321,24 +321,39 @@ func (t totals) encode() *usage_v1alpha.ResourceTotals {
 // the client because a limit is only meaningful against a known order: taking
 // the first 20 of an unsorted listing returns 20 arbitrary sandboxes, not the
 // 20 busiest.
-func sortSandboxes(rows []*usage_v1alpha.SandboxUsage, ord ordering) {
-	key := ord.sort
-	desc := ord.descending()
-
-	less := func(a, b *usage_v1alpha.SandboxUsage) bool {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "memory", "mem":
-			return a.Memory().Bytes() < b.Memory().Bytes()
-		case "app":
-			return a.Ref().App() < b.Ref().App()
-		case "service":
-			return a.Ref().Service() < b.Ref().Service()
-		case "node", "runner":
-			return a.Ref().NodeName() < b.Ref().NodeName()
-		default:
-			return a.Cpu().Cores() < b.Cpu().Cores()
-		}
+// sandboxName is what a person calls a sandbox: the short id they type and see
+// in a listing, falling back to the full entity id for one too old to have one.
+func sandboxName(ref *usage_v1alpha.SandboxRef) string {
+	if short := ref.SandboxShortId(); short != "" {
+		return short
 	}
+	return ref.Sandbox()
+}
+
+func sortSandboxes(rows []*usage_v1alpha.SandboxUsage, ord ordering) {
+	// Each key states the direction that reads naturally for it, so a name
+	// never inherits a usage column's busiest-first default.
+	var (
+		less      func(a, b *usage_v1alpha.SandboxUsage) bool
+		ascending bool
+	)
+
+	switch strings.ToLower(strings.TrimSpace(ord.sort)) {
+	case "memory", "mem":
+		less = func(a, b *usage_v1alpha.SandboxUsage) bool { return a.Memory().Bytes() < b.Memory().Bytes() }
+	case "app":
+		less, ascending = func(a, b *usage_v1alpha.SandboxUsage) bool { return a.Ref().App() < b.Ref().App() }, true
+	case "service":
+		less, ascending = func(a, b *usage_v1alpha.SandboxUsage) bool { return a.Ref().Service() < b.Ref().Service() }, true
+	case "node", "runner":
+		less, ascending = func(a, b *usage_v1alpha.SandboxUsage) bool { return a.Ref().NodeName() < b.Ref().NodeName() }, true
+	case "name":
+		less, ascending = func(a, b *usage_v1alpha.SandboxUsage) bool { return sandboxName(a.Ref()) < sandboxName(b.Ref()) }, true
+	default:
+		less = func(a, b *usage_v1alpha.SandboxUsage) bool { return a.Cpu().Cores() < b.Cpu().Cores() }
+	}
+
+	desc := ord.direction(ascending)
 
 	sort.SliceStable(rows, func(i, j int) bool {
 		if desc {

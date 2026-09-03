@@ -340,23 +340,25 @@ func max0i(v int64) int64 {
 }
 
 func sortNodes(rows []*usage_v1alpha.NodeUsage, ord ordering) {
-	key := ord.sort
-	desc := ord.descending()
+	var (
+		less      func(a, b *usage_v1alpha.NodeUsage) bool
+		ascending bool
+	)
 
-	less := func(a, b *usage_v1alpha.NodeUsage) bool {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "memory", "mem":
-			return a.Total().MemoryBytes() < b.Total().MemoryBytes()
-		case "load":
-			return a.Load1() < b.Load1()
-		case "sandboxes":
-			return a.SandboxCount() < b.SandboxCount()
-		case "name":
-			return a.NodeName() < b.NodeName()
-		default:
-			return a.Total().CpuCores() < b.Total().CpuCores()
-		}
+	switch strings.ToLower(strings.TrimSpace(ord.sort)) {
+	case "memory", "mem":
+		less = func(a, b *usage_v1alpha.NodeUsage) bool { return a.Total().MemoryBytes() < b.Total().MemoryBytes() }
+	case "load":
+		less = func(a, b *usage_v1alpha.NodeUsage) bool { return a.Load1() < b.Load1() }
+	case "sandboxes":
+		less = func(a, b *usage_v1alpha.NodeUsage) bool { return a.SandboxCount() < b.SandboxCount() }
+	case "name", "node", "runner":
+		less, ascending = func(a, b *usage_v1alpha.NodeUsage) bool { return a.NodeName() < b.NodeName() }, true
+	default:
+		less = func(a, b *usage_v1alpha.NodeUsage) bool { return a.Total().CpuCores() < b.Total().CpuCores() }
 	}
+
+	desc := ord.direction(ascending)
 
 	sort.SliceStable(rows, func(i, j int) bool {
 		if desc {

@@ -160,7 +160,7 @@ func (a *ActorClient) Call(ctx context.Context, name string, arg, ret any) error
 	iface := hc.Interface
 
 	m, ok := iface.rpcMethod(name)
-	if !ok {
+	if !ok || m.Handler == nil {
 		return cond.NotFound("method", name)
 	}
 
