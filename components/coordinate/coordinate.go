@@ -101,6 +101,7 @@ import (
 	routessrv "miren.dev/runtime/servers/routes"
 	runnerserver "miren.dev/runtime/servers/runner"
 	"miren.dev/runtime/servers/runnertelemetry"
+	sandboxserver "miren.dev/runtime/servers/sandbox"
 	secretsrv "miren.dev/runtime/servers/secret"
 	sqlitebackupsrv "miren.dev/runtime/servers/sqlitebackup"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
@@ -1575,6 +1576,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
+	server.ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(c.Log, ec)))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))

@@ -3,6 +3,7 @@ package compute
 import "miren.dev/runtime/api/compute/compute_v1alpha"
 
 //go:generate go run ../../pkg/entity/cmd/schemagen -input schema.yml -output compute_v1alpha/schema.gen.go -pkg compute_v1alpha
+//go:generate go run ../../pkg/rpc/cmd/rpcgen -pkg compute_v1alpha -input rpc.yml -output compute_v1alpha/rpc.gen.go
 
 // SandboxActive reports whether a sandbox status indicates the sandbox
 // may be actively running (PENDING, NOT_READY, or RUNNING).

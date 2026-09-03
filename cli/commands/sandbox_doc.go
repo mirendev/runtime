@@ -2,6 +2,10 @@ package commands
 
 const sandboxSectionDescription = `Sandboxes are the underlying execution environments for your applications. Most of the time you'll work with apps directly, but these commands are useful for debugging and advanced use cases.`
 
+const sandboxListDescription = `List the sandboxes currently known to the cluster. Dead sandboxes are hidden unless you pass ` + "`" + `--all` + "`" + ` or ask for the ` + "`" + `dead` + "`" + ` status explicitly.
+
+The JSON form is a stable inventory view with the same operational fields as the table. It deliberately excludes the raw sandbox execution spec, which contains resolved environment values and may include secrets. For low-level inspection, use the explicitly privileged ` + "`" + `miren debug entity list -k sandbox` + "`" + ` command.`
+
 const sandboxExecDescription = `This command connects to an existing sandbox and runs a command inside it. Unlike ` + "`" + `miren app run` + "`" + ` which creates a new ephemeral sandbox, this connects to a sandbox that's already running (typically one serving production traffic).
 
 ## Letting miren pick the sandbox

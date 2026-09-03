@@ -104,6 +104,7 @@ var (
 		"runnerregistration": set("listinvites", "listrunners", "workloadissuerinfo"),
 		"netdb":              set("listleases", "status"),
 		"sandboxmetrics":     set("snapshot"),
+		"sandboxes":          set("list"),
 		"outboardcontrol":    set("health"),
 		"userquery":          set("whoami"),
 		"builder":            set("analyzeapp"),

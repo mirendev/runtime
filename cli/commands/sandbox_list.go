@@ -1,36 +1,27 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
 
-// sandboxFilter narrows a sandbox listing to one app and/or service. Both
-// match against the values shown in the APP and SERVICE columns, so what you
-// filter on is what you see — including the "-" cases, which simply match
-// nothing rather than matching everything.
+// sandboxFilter owns the CLI's presentation policy. The inventory RPC returns
+// every safe summary; flags decide which of those records this invocation
+// shows and which terminal records count as hidden.
 type sandboxFilter struct {
-	app     string
-	service string
-}
-
-func (f sandboxFilter) keep(app, service string) bool {
-	if f.app != "" && app != f.app {
-		return false
-	}
-
-	if f.service != "" && service != f.service {
-		return false
-	}
-
-	return true
+	includeDead bool
+	status      string
+	app         string
+	service     string
 }
 
 func (f sandboxFilter) describe() string {
@@ -46,6 +37,58 @@ func (f sandboxFilter) describe() string {
 	}
 }
 
+func (f sandboxFilter) apply(entries []sandboxListEntry) ([]sandboxListEntry, int64) {
+	filtered := make([]sandboxListEntry, 0, len(entries))
+	var hiddenDead int64
+
+	for _, entry := range entries {
+		if f.app != "" && entry.App != f.app {
+			continue
+		}
+		if f.service != "" && entry.Service != f.service {
+			continue
+		}
+
+		if !f.includeDead && f.status == "" && sandboxTerminal(entry.Status) {
+			hiddenDead++
+			continue
+		}
+		if f.status != "" && entry.Status != f.status {
+			continue
+		}
+
+		filtered = append(filtered, entry)
+	}
+
+	return filtered, hiddenDead
+}
+
+func sandboxTerminal(status string) bool {
+	return status == "stopped" || status == "dead"
+}
+
+// sandboxListEntry is the complete public contract of `sandbox list --json`.
+// Keep this an allow-list. In particular, never embed compute_v1alpha.Sandbox:
+// its execution spec contains resolved container environment values.
+type sandboxListEntry struct {
+	ID        string `json:"id"`
+	App       string `json:"app,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Service   string `json:"service,omitempty"`
+	Pool      string `json:"pool,omitempty"`
+	Address   string `json:"address,omitempty"`
+	Runner    string `json:"runner,omitempty"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+
+	shortID        string
+	versionShortID string
+	poolShortID    string
+	createdAt      time.Time
+	updatedAt      time.Time
+}
+
 func SandboxList(ctx *Context, opts struct {
 	All     bool   `short:"a" long:"all" description:"Include dead sandboxes (excluded by default)"`
 	Status  string `short:"s" long:"status" description:"Filter by status (pending, not_ready, running, stopped, dead)"`
@@ -54,284 +97,85 @@ func SandboxList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	filter := sandboxFilter{app: opts.App, service: opts.Service}
-
-	client, err := ctx.RPCClient("entities")
-	if err != nil {
-		return err
+	filter := sandboxFilter{
+		includeDead: opts.All,
+		status:      opts.Status,
+		app:         opts.App,
+		service:     opts.Service,
 	}
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-
-	// Get the sandbox kind attribute
-	kindRes, err := eac.LookupKind(ctx, "sandbox")
+	entries, err := listSandboxesRPC(ctx)
 	if err != nil {
-		return err
-	}
-
-	// List all sandboxes
-	res, err := eac.List(ctx, kindRes.Attr())
-	if err != nil {
-		return err
-	}
-
-	// Get all sandbox pools to map pool ID -> service
-	poolKindRes, err := eac.LookupKind(ctx, "sandbox_pool")
-	if err != nil {
-		return err
-	}
-	poolsRes, err := eac.List(ctx, poolKindRes.Attr())
-	if err != nil {
-		return err
-	}
-
-	// Create maps of pool ID -> service and pool ID -> short ID
-	poolServiceMap := make(map[string]string)
-	poolShortIdMap := make(map[string]string)
-	for _, e := range poolsRes.Values() {
-		var pool compute_v1alpha.SandboxPool
-		pool.Decode(e.Entity())
-		poolServiceMap[pool.ID.String()] = pool.Service
-		if sid := e.Entity().ShortId(); sid != "" {
-			poolShortIdMap[pool.ID.String()] = sid
+		if !serverPredatesSandboxInventory(err) {
+			return err
+		}
+		entries, err = listSandboxesLegacy(ctx)
+		if err != nil {
+			return err
 		}
 	}
+	entries, deadCount := filter.apply(entries)
 
-	// Build maps of version ID -> short ID and version ID -> app name (best-effort for display)
-	versionShortIdMap := make(map[string]string)
-	versionAppMap := make(map[string]string)
-	if versionKindRes, err := eac.LookupKind(ctx, "app_version"); err == nil {
-		if versionsRes, err := eac.List(ctx, versionKindRes.Attr()); err == nil {
-			for _, e := range versionsRes.Values() {
-				var v core_v1alpha.AppVersion
-				v.Decode(e.Entity())
-				if sid := e.Entity().ShortId(); sid != "" {
-					versionShortIdMap[v.ID.String()] = sid
-				}
-				if !entity.Empty(v.App) {
-					versionAppMap[v.ID.String()] = v.App.String()
-				}
-			}
-		}
-	}
-
-	// Build a map of node entity ID -> human-readable name
-	nodeKindRes, err := eac.LookupKind(ctx, "node")
-	if err != nil {
-		return err
-	}
-	nodesRes, err := eac.List(ctx, nodeKindRes.Attr())
-	if err != nil {
-		return err
-	}
-	nodeNameMap := make(map[entity.Id]string)
-	for _, e := range nodesRes.Values() {
-		var node compute_v1alpha.Node
-		node.Decode(e.Entity())
-		name := node.Name
-		if name == "" {
-			name = node.RunnerId
-			if len(name) > 12 {
-				name = name[:12]
-			}
-		}
-		if name != "" {
-			nodeNameMap[node.ID] = name
-		}
-	}
-
-	// Determine whether to exclude dead sandboxes.
-	// Dead sandboxes are excluded by default unless --all is passed
-	// or --status explicitly requests a dead state.
-	excludeDead := !opts.All && opts.Status == ""
-
-	// For JSON output, just filter and return the raw sandbox structs with pool info
 	if opts.IsJSON() {
-		var sandboxes []struct {
-			compute_v1alpha.Sandbox
-			App     string `json:"app,omitempty"`
-			Pool    string `json:"pool,omitempty"`
-			Service string `json:"service,omitempty"`
-			Address string `json:"address,omitempty"`
-			Runner  string `json:"runner,omitempty"`
-		}
-
-		for _, e := range res.Values() {
-			var sandbox compute_v1alpha.Sandbox
-			sandbox.Decode(e.Entity())
-
-			// Extract pool label from metadata
-			var md core_v1alpha.Metadata
-			md.Decode(e.Entity())
-			poolLabel, _ := md.Labels.Get("pool")
-
-			// Get service from pool
-			service := poolServiceMap[poolLabel]
-
-			if !filter.keep(ui.CleanEntityID(versionAppMap[sandbox.Spec.Version.String()]), service) {
-				continue
-			}
-
-			if excludeDead && compute.SandboxDead(sandbox.Status) {
-				continue
-			}
-
-			// Apply status filter if specified
-			if opts.Status != "" {
-				status := string(sandbox.Status)
-				cleanStatus := ui.CleanStatus(status)
-				if cleanStatus != opts.Status {
-					continue
-				}
-			}
-
-			// Get network address
-			address := ""
-			if len(sandbox.Network) > 0 && sandbox.Network[0].Address != "" {
-				address = sandbox.Network[0].Address
-			}
-
-			// Resolve runner from schedule
-			var sch compute_v1alpha.Schedule
-			sch.Decode(e.Entity())
-			runner := ""
-			if !entity.Empty(sch.Key.Node) {
-				runner = nodeNameMap[sch.Key.Node]
-			}
-
-			// Resolve app name from version
-			appName := ""
-			if name, ok := versionAppMap[sandbox.Spec.Version.String()]; ok {
-				appName = name
-			}
-
-			entry := struct {
-				compute_v1alpha.Sandbox
-				App     string `json:"app,omitempty"`
-				Pool    string `json:"pool,omitempty"`
-				Service string `json:"service,omitempty"`
-				Address string `json:"address,omitempty"`
-				Runner  string `json:"runner,omitempty"`
-			}{
-				Sandbox: sandbox,
-				App:     appName,
-				Pool:    poolLabel,
-				Service: service,
-				Address: address,
-				Runner:  runner,
-			}
-			sandboxes = append(sandboxes, entry)
-		}
-
-		return PrintJSON(sandboxes)
+		return PrintJSONTo(ctx.Stdout, entries)
 	}
 
-	// Table output - all the UI formatting logic
-	var rows []ui.Row
-	var deadCount int
+	rows := make([]ui.Row, 0, len(entries))
 	headers := []string{"ID", "APP", "VERSION", "SERVICE", "POOL", "ADDRESS", "RUNNER", "STATUS", "CREATED", "UPDATED"}
 
-	for _, e := range res.Values() {
-		// Decode the sandbox entity
-		var sandbox compute_v1alpha.Sandbox
-		sandbox.Decode(e.Entity())
-
-		// Extract pool label from metadata
-		var md core_v1alpha.Metadata
-		md.Decode(e.Entity())
-		poolLabel, _ := md.Labels.Get("pool")
-
-		// Resolve app name from version
-		appName := ui.CleanEntityID(versionAppMap[sandbox.Spec.Version.String()])
-
-		// Narrowing comes before the dead check so that the "N dead hidden"
-		// tally counts what this listing is actually about. Reporting the
-		// cluster's dead sandboxes under `--app foo` would be a non-sequitur.
-		if !filter.keep(appName, poolServiceMap[poolLabel]) {
-			continue
-		}
-
-		if excludeDead && compute.SandboxDead(sandbox.Status) {
-			deadCount++
-			continue
-		}
-
-		// Get status string
-		status := string(sandbox.Status)
-		if status == "" {
-			status = "unknown"
-		}
-
-		// Clean status for filtering (removes "status." prefix)
-		cleanStatus := ui.CleanStatus(status)
-
-		// Filter by status if specified
-		if opts.Status != "" && cleanStatus != opts.Status {
-			continue
-		}
-
-		poolLabelDisplay := poolLabel
+	for _, entry := range entries {
+		poolLabelDisplay := entry.Pool
 		if poolLabelDisplay == "" {
 			poolLabelDisplay = "-"
 		} else {
 			poolLabelDisplay = ui.CleanEntityID(poolLabelDisplay)
 		}
 
-		// Get service from pool
-		service := poolServiceMap[poolLabel]
+		service := entry.Service
 		if service == "" {
 			service = "-"
 		}
 
-		// Get network address
-		address := "-"
-		if len(sandbox.Network) > 0 && sandbox.Network[0].Address != "" {
-			address = sandbox.Network[0].Address
+		address := entry.Address
+		if address == "" {
+			address = "-"
 		}
 
-		// Resolve runner from schedule
-		var sch compute_v1alpha.Schedule
-		sch.Decode(e.Entity())
-		runnerName := "-"
-		if !entity.Empty(sch.Key.Node) {
-			if name, ok := nodeNameMap[sch.Key.Node]; ok {
-				runnerName = name
-			}
+		runnerName := entry.Runner
+		if runnerName == "" {
+			runnerName = "-"
 		}
 
-		// Apply all UI formatting for table display
-		sandboxId := ui.CleanEntityID(sandbox.ID.String())
-		if !ctx.Verbose() {
-			sandboxId = ui.BriefId(e.Entity())
+		sandboxID := ui.CleanEntityID(entry.ID)
+		if !ctx.Verbose() && entry.shortID != "" {
+			sandboxID = entry.shortID
 		}
 
-		// Resolve version display: prefer short ID
-		versionDisplay := ui.DisplayAppVersion(sandbox.Spec.Version.String())
-		if shortId, ok := versionShortIdMap[sandbox.Spec.Version.String()]; ok {
-			versionDisplay = shortId
+		versionDisplay := ui.DisplayAppVersion(entry.Version)
+		if entry.versionShortID != "" {
+			versionDisplay = entry.versionShortID
 		}
 
-		// Resolve pool display: prefer short ID
-		if shortId, ok := poolShortIdMap[poolLabel]; ok {
-			poolLabelDisplay = shortId
+		if entry.poolShortID != "" {
+			poolLabelDisplay = entry.poolShortID
 		}
 
-		appDisplay := appName
+		appDisplay := entry.App
 		if appDisplay == "" {
 			appDisplay = "-"
 		}
 
 		rows = append(rows, ui.Row{
-			sandboxId,
+			sandboxID,
 			appDisplay,
 			versionDisplay,
 			service,
 			poolLabelDisplay,
 			address,
 			runnerName,
-			ui.DisplayStatus(status),
-			humanFriendlyTimestamp(time.UnixMilli(e.CreatedAt())),
-			humanFriendlyTimestamp(time.UnixMilli(e.UpdatedAt())),
+			ui.DisplayStatus(entry.Status),
+			humanFriendlyTimestamp(entry.createdAt),
+			humanFriendlyTimestamp(entry.updatedAt),
 		})
 	}
 
@@ -360,6 +204,187 @@ func SandboxList(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// serverPredatesSandboxInventory distinguishes an old server from a current
+// server refusing or failing the request. Falling back after an authorization
+// error would turn the raw entity API into a privilege bypass.
+func serverPredatesSandboxInventory(err error) bool {
+	return errors.Is(err, rpc.ErrResolveLookup)
+}
+
+func listSandboxesRPC(ctx *Context) ([]sandboxListEntry, error) {
+	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	result, err := compute_v1alpha.NewSandboxesClient(client).List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]sandboxListEntry, 0, len(result.Sandboxes()))
+	for _, sb := range result.Sandboxes() {
+		entries = append(entries, newSandboxListEntry(
+			sb.Id(), sb.ShortId(), sb.App(), sb.Version(), sb.VersionShortId(),
+			sb.Service(), sb.Pool(), sb.PoolShortId(), sb.Address(), sb.Runner(),
+			sb.Status(), sb.CreatedAt(), sb.UpdatedAt(),
+		))
+	}
+
+	return entries, nil
+}
+
+// listSandboxesLegacy keeps a current CLI useful against a server from before
+// the sandbox inventory capability. Although it must read raw entities, it
+// converts each one into the allow-listed entry immediately; rendering never
+// receives the Sandbox and therefore cannot serialize its execution spec.
+func listSandboxesLegacy(ctx *Context) ([]sandboxListEntry, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	return listSandboxesFromEntities(ctx, entityserver_v1alpha.NewEntityAccessClient(client))
+}
+
+func listSandboxesFromEntities(
+	ctx context.Context,
+	eac *entityserver_v1alpha.EntityAccessClient,
+) ([]sandboxListEntry, error) {
+	kindRes, err := eac.LookupKind(ctx, "sandbox")
+	if err != nil {
+		return nil, err
+	}
+	res, err := eac.List(ctx, kindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+
+	poolKindRes, err := eac.LookupKind(ctx, "sandbox_pool")
+	if err != nil {
+		return nil, err
+	}
+	poolsRes, err := eac.List(ctx, poolKindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+	poolServices := make(map[string]string)
+	poolShortIDs := make(map[string]string)
+	for _, e := range poolsRes.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(e.Entity())
+		poolServices[pool.ID.String()] = pool.Service
+		if shortID := e.Entity().ShortId(); shortID != "" {
+			poolShortIDs[pool.ID.String()] = shortID
+		}
+	}
+
+	versionShortIDs := make(map[string]string)
+	versionApps := make(map[string]string)
+	if versionKindRes, err := eac.LookupKind(ctx, "app_version"); err == nil {
+		if versionsRes, err := eac.List(ctx, versionKindRes.Attr()); err == nil {
+			for _, e := range versionsRes.Values() {
+				var version core_v1alpha.AppVersion
+				version.Decode(e.Entity())
+				if shortID := e.Entity().ShortId(); shortID != "" {
+					versionShortIDs[version.ID.String()] = shortID
+				}
+				if !entity.Empty(version.App) {
+					versionApps[version.ID.String()] = ui.CleanEntityID(version.App.String())
+				}
+			}
+		}
+	}
+
+	nodeKindRes, err := eac.LookupKind(ctx, "node")
+	if err != nil {
+		return nil, err
+	}
+	nodesRes, err := eac.List(ctx, nodeKindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+	nodeNames := make(map[entity.Id]string)
+	for _, e := range nodesRes.Values() {
+		var node compute_v1alpha.Node
+		node.Decode(e.Entity())
+		name := node.Name
+		if name == "" {
+			name = node.RunnerId
+			if len(name) > 12 {
+				name = name[:12]
+			}
+		}
+		if name != "" {
+			nodeNames[node.ID] = name
+		}
+	}
+
+	entries := make([]sandboxListEntry, 0, len(res.Values()))
+	for _, e := range res.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(e.Entity())
+
+		var metadata core_v1alpha.Metadata
+		metadata.Decode(e.Entity())
+		pool, _ := metadata.Labels.Get("pool")
+		service := poolServices[pool]
+		app := versionApps[sb.Spec.Version.String()]
+
+		address := ""
+		if len(sb.Network) > 0 {
+			address = sb.Network[0].Address
+		}
+
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(e.Entity())
+		runner := ""
+		if !entity.Empty(schedule.Key.Node) {
+			runner = nodeNames[schedule.Key.Node]
+		}
+
+		entries = append(entries, newSandboxListEntry(
+			sb.ID.String(), e.Entity().ShortId(), app, sb.Spec.Version.String(),
+			versionShortIDs[sb.Spec.Version.String()], service, pool, poolShortIDs[pool],
+			address, runner, string(sb.Status), e.CreatedAt(), e.UpdatedAt(),
+		))
+	}
+
+	return entries, nil
+}
+
+func newSandboxListEntry(
+	id, shortID, app, version, versionShortID, service, pool, poolShortID,
+	address, runner, status string,
+	createdAtMillis, updatedAtMillis int64,
+) sandboxListEntry {
+	createdAt := time.UnixMilli(createdAtMillis)
+	updatedAt := time.UnixMilli(updatedAtMillis)
+	status = ui.CleanStatus(status)
+	if status == "" {
+		status = "unknown"
+	}
+	return sandboxListEntry{
+		ID:             id,
+		App:            app,
+		Version:        version,
+		Service:        service,
+		Pool:           pool,
+		Address:        address,
+		Runner:         runner,
+		Status:         status,
+		CreatedAt:      createdAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      updatedAt.UTC().Format(time.RFC3339),
+		shortID:        shortID,
+		versionShortID: versionShortID,
+		poolShortID:    poolShortID,
+		createdAt:      createdAt,
+		updatedAt:      updatedAt,
+	}
 }
 
 // humanFriendlyTimestamp formats a timestamp into a human-friendly format like Docker's
