@@ -105,9 +105,22 @@ var (
 		"netdb":              set("listleases", "status"),
 		"sandboxmetrics":     set("snapshot"),
 		"sandboxes":          set("list"),
-		"outboardcontrol":    set("health"),
-		"userquery":          set("whoami"),
-		"builder":            set("analyzeapp"),
+
+		// Usage reads span every app on the cluster, so they can only sit in a
+		// cluster-scoped block; there is no way to confine them to the calling
+		// app the way rpc.AllowApp confines the blocks above.
+		"resourceusage": set(
+			// RPC surface.
+			"listsandboxes", "getsandbox", "listnodes", "listapps",
+			// The same six questions over plain HTTP GET.
+			"httplistsandboxes", "httpgetsandbox",
+			"httplistnodes", "httpgetnode",
+			"httplistapps", "httpgetapp",
+		),
+
+		"outboardcontrol": set("health"),
+		"userquery":       set("whoami"),
+		"builder":         set("analyzeapp"),
 	}
 )
 

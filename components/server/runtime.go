@@ -97,6 +97,7 @@ func (s *startup) addComponents() error {
 		s.foundation.component,
 		s.appData.component,
 		s.secretStore.component,
+		s.resourceUsage.component,
 		s.runnerEndpoints.component,
 		s.clusterAccess.component,
 		s.nodeStorage.component,
