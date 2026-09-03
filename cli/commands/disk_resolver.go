@@ -135,13 +135,35 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 		ImagePath: imagePath,
 		Created:   true,
 		Cleanup: func(cctx context.Context) error {
+			// The restore's own context is already cancelled when the
+			// operator interrupts the restore, and the rollback is exactly
+			// what has to run then. Detach so cleanup is not defeated by
+			// the failure it is cleaning up after.
+			cctx = context.WithoutCancel(cctx)
+
+			// Finalize is the last fallible step of a restore, so cleanup
+			// only ever runs when it did not complete — and its
+			// disk_volume Create is its last write. Nothing owns the image
+			// at this point, and the restore already renamed it into
+			// place, so the temp-file removal in disk_restore.go is a
+			// no-op for it. Remove it before touching the disk: a
+			// PROVISIONED disk still carrying its VolumeId can be
+			// self-healed into a disk_volume by the controller, and there
+			// is no reason to let that adopt an image on its way to being
+			// torn down. Tolerate "not present" — the rename may never
+			// have happened.
+			imageErr := os.Remove(imagePath)
+			if os.IsNotExist(imageErr) {
+				imageErr = nil
+			}
+
 			// Transition the disk to DELETING rather than deleting the
 			// entity outright. A direct Delete bypasses the disk
 			// controller's DELETING-driven handleDeletion path, which is
 			// the only writer of disk_volume.desired_state=DV_ABSENT; once
-			// the disk is gone, a disk_volume Finalize (or the
-			// controller's own self-heal) committed has no reaper and is
-			// left reconciled by the coordinator as a live mount / volume
+			// the disk is gone, a disk_volume the controller self-healed
+			// from the PROVISIONED disk has no reaper and is left
+			// reconciled by the coordinator as a live mount / volume
 			// directory / phantom cloud volume. Marking the disk DELETING
 			// keeps it alive to drive that existing contract, which tears
 			// the disk_volume down via the coordinator's
@@ -153,6 +175,14 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 			}, 0)
 			if err != nil {
 				return fmt.Errorf("transitioning disk to deleting during cleanup: %w", err)
+			}
+
+			// Reported only once the authoritative step is done, so a
+			// failure to reclaim the image never costs us the disk
+			// rollback — a leftover image is disk space, a stuck
+			// RESTORING disk blocks every same-name retry.
+			if imageErr != nil {
+				return fmt.Errorf("removing restored image during cleanup: %w", imageErr)
 			}
 			return nil
 		},

@@ -3,6 +3,8 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -53,6 +55,21 @@ func (f *faultRPC) Call(ctx context.Context, method string, args, result any) er
 		}
 	}
 	return f.Client.Call(ctx, method, args, result)
+}
+
+// cancelAwareRPC fails every call made with an already-cancelled context, the
+// way a real transport does. The in-memory entity server ignores the context
+// it is handed, so without this a test could not tell whether cleanup detaches
+// from the cancellation that triggered it.
+type cancelAwareRPC struct {
+	rpc.Client
+}
+
+func (c cancelAwareRPC) Call(ctx context.Context, method string, args, result any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.Client.Call(ctx, method, args, result)
 }
 
 // setupResolver builds an in-memory entity server, seeds a coordinator node so
@@ -273,4 +290,86 @@ func TestCreateDiskAndVolume_CleanupDoesNotHardDeleteDisk(t *testing.T) {
 	require.NoError(t, target.Cleanup(ctx))
 	disk = getTestDisk(t, ctx, es.EAC, diskID)
 	assert.Equal(t, storage_v1alpha.DELETING, disk.Status)
+}
+
+// writeTestImage stands in for the restore having renamed its image into
+// place: disk_restore.go only removes the temp file, so once the rename
+// commits, this is the file nothing else will reclaim.
+func writeTestImage(t *testing.T, path string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("disk image"), 0o644))
+}
+
+// TestCreateDiskAndVolume_CleanupRemovesRestoredImage covers the other half of
+// the rollback. Cleanup runs only when Finalize did not complete, and with the
+// reordered Finalize that means no disk_volume was ever committed — so nothing
+// owns the image at target.ImagePath and no controller will ever reclaim it.
+// Cleanup has to remove it itself or the failed restore leaks a full-size disk
+// image for good.
+func TestCreateDiskAndVolume_CleanupRemovesRestoredImage(t *testing.T) {
+	ctx := t.Context()
+	es, resolver := setupResolver(t, nil)
+
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
+	require.NoError(t, err)
+	diskID := listTestDisks(t, ctx, es.EAC)[0].ID
+
+	writeTestImage(t, target.ImagePath)
+
+	require.NoError(t, target.Cleanup(ctx))
+
+	_, statErr := os.Stat(target.ImagePath)
+	assert.True(t, os.IsNotExist(statErr), "the restored image must be removed, got %v", statErr)
+	assert.Equal(t, storage_v1alpha.DELETING, getTestDisk(t, ctx, es.EAC, diskID).Status)
+}
+
+// TestCreateDiskAndVolume_CleanupToleratesMissingImage guards the removal
+// against over-reach: a restore that failed before the rename committed has no
+// image to reclaim, and that is not a cleanup failure.
+func TestCreateDiskAndVolume_CleanupToleratesMissingImage(t *testing.T) {
+	ctx := t.Context()
+	es, resolver := setupResolver(t, nil)
+
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
+	require.NoError(t, err)
+	diskID := listTestDisks(t, ctx, es.EAC)[0].ID
+
+	require.NoError(t, target.Cleanup(ctx))
+	assert.Equal(t, storage_v1alpha.DELETING, getTestDisk(t, ctx, es.EAC, diskID).Status)
+}
+
+// TestCreateDiskAndVolume_CleanupRunsAfterCancellation is the operator-Ctrl-C
+// path. disk_restore.go hands Cleanup the restore's own context, which is
+// already dead by the time an interrupt triggers the rollback. If cleanup
+// inherited that cancellation the disk would stay stuck in RESTORING and block
+// every same-name retry, which is the failure the rollback exists to prevent.
+func TestCreateDiskAndVolume_CleanupRunsAfterCancellation(t *testing.T) {
+	ctx := t.Context()
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	_, err := es.Client.Create(ctx, "coordinator", &compute.Node{ApiAddress: ":8444"})
+	require.NoError(t, err)
+
+	// The resolver talks through a client that honours cancellation, so a
+	// cleanup that inherited the dead context would fail its Patch.
+	eac := entityserver_v1alpha.NewEntityAccessClient(cancelAwareRPC{Client: es.EAC.Client})
+	resolver := newEntityDiskResolver(eac, entityserver.NewClient(testutils.TestLogger(t), eac))
+
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
+	require.NoError(t, err)
+	diskID := listTestDisks(t, ctx, es.EAC)[0].ID
+
+	writeTestImage(t, target.ImagePath)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.NoError(t, target.Cleanup(cancelled),
+		"cleanup must not inherit the cancellation that triggered it")
+
+	assert.Equal(t, storage_v1alpha.DELETING, getTestDisk(t, ctx, es.EAC, diskID).Status)
+	_, statErr := os.Stat(target.ImagePath)
+	assert.True(t, os.IsNotExist(statErr), "the restored image must be removed, got %v", statErr)
 }
