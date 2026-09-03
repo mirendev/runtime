@@ -112,6 +112,14 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// saga does not mint duplicate Endpoints and double-DNAT. No saga edit:
 		// actionUpdateSvcs reaches this through sandboxOps.UpdateServices.
 		//
+		// Resource attribution (revised after review): the sandbox's own log
+		// attributes are copied in FIRST so the controller-owned identity keys
+		// overwrite them rather than the other way round. A spec carrying
+		// miren.node could otherwise report its usage against a host it never
+		// ran on. The kind classification moved to api/compute.SandboxKind,
+		// which the usage service now shares, so the two cannot drift into
+		// disagreeing about what a sandbox is.
+		//
 		// Resource attribution: sandboxMetricsIdentity now takes the node the
 		// sandbox runs on and stamps miren.node and miren.kind onto every
 		// metric series, so cluster-wide usage can say which host a workload's
@@ -125,7 +133,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// directly, so createSandboxDeps gained a nodeID field, set from
 		// SandboxController.NodeId where the saga is registered in
 		// saga_controller.go.
-		"sandbox.go":  "2e97940b3d8d5b95a2cba712a6197b3552addda37db7ed76d8135135babd307e",
+		"sandbox.go":  "5138024c3f1904fe397cbf6600ffe9f7b4ca5f3ff6328d9141e86c2e67563850",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

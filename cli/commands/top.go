@@ -60,7 +60,7 @@ type topOptions struct {
 	Aggregate string `long:"aggregate" description:"How to collapse the window: avg, max, min, last" default:"avg"`
 
 	Sort  string `long:"sort" description:"Sort by: cpu, memory, app, service, node" default:"cpu"`
-	Order string `long:"order" description:"Sort direction: desc or asc" default:"desc"`
+	Order string `long:"order" description:"Sort direction: desc or asc (default: desc for usage, asc for names)"`
 	Limit int    `long:"limit" description:"Show at most this many rows (0 for all)"`
 
 	Watch    bool   `short:"w" long:"watch" description:"Refresh continuously until interrupted"`

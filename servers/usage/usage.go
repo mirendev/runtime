@@ -154,7 +154,7 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 	}
 
 	out.total = int32(len(rows))
-	sortSandboxes(rows, ord.sort, ord.order)
+	sortSandboxes(rows, ord)
 	out.rows = rows[:ord.truncate(len(rows))]
 
 	return out, nil
@@ -164,18 +164,19 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 func (s *Server) ListSandboxes(ctx context.Context, state *usage_v1alpha.ResourceUsageListSandboxes) error {
 	args := state.Args()
 
-	listing, err := s.listSandboxes(ctx,
-		selectorToFilter(args.Selector()),
-		windowFrom(args.Window()),
-		orderingFrom(args.Ordering()),
-	)
+	// Resolved once. An unset end means now, so calling windowFrom again for
+	// the response would resolve a later instant than the one the metrics were
+	// queried at, and the reported window would not be the measured one.
+	w := windowFrom(args.Window())
+
+	listing, err := s.listSandboxes(ctx, selectorToFilter(args.Selector()), w, orderingFrom(args.Ordering()))
 	if err != nil {
 		return err
 	}
 
 	res := state.Results()
 	res.SetSandboxes(listing.rows)
-	res.SetWindow(windowFrom(args.Window()).encode())
+	res.SetWindow(w.encode())
 	res.SetCluster(listing.cluster.encode())
 	res.SetTotalCount(listing.total)
 	res.SetCollectedAt(standard.ToTimestamp(time.Now()))
@@ -320,8 +321,9 @@ func (t totals) encode() *usage_v1alpha.ResourceTotals {
 // the client because a limit is only meaningful against a known order: taking
 // the first 20 of an unsorted listing returns 20 arbitrary sandboxes, not the
 // 20 busiest.
-func sortSandboxes(rows []*usage_v1alpha.SandboxUsage, key, order string) {
-	desc := !strings.EqualFold(order, "asc")
+func sortSandboxes(rows []*usage_v1alpha.SandboxUsage, ord ordering) {
+	key := ord.sort
+	desc := ord.descending()
 
 	less := func(a, b *usage_v1alpha.SandboxUsage) bool {
 		switch strings.ToLower(strings.TrimSpace(key)) {

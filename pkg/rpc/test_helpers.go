@@ -79,7 +79,7 @@ func (l *localClient) listMethods() methodsResponse {
 }
 
 func (l *localClient) Call(ctx context.Context, name string, arg, ret any) error {
-	m, ok := l.iface.methods[name]
+	m, ok := l.iface.rpcMethod(name)
 	if !ok {
 		panic("method not found")
 	}

@@ -129,7 +129,7 @@ func (s *Server) listNodes(ctx context.Context, f filter, w window, ord ordering
 		rows = append(rows, &row)
 	}
 
-	sortNodes(rows, ord.sort, ord.order)
+	sortNodes(rows, ord)
 	out.rows = rows[:ord.truncate(len(rows))]
 
 	if clusterCapacity.cores > 0 {
@@ -339,8 +339,9 @@ func max0i(v int64) int64 {
 	return v
 }
 
-func sortNodes(rows []*usage_v1alpha.NodeUsage, key, order string) {
-	desc := !strings.EqualFold(order, "asc")
+func sortNodes(rows []*usage_v1alpha.NodeUsage, ord ordering) {
+	key := ord.sort
+	desc := ord.descending()
 
 	less := func(a, b *usage_v1alpha.NodeUsage) bool {
 		switch strings.ToLower(strings.TrimSpace(key)) {
@@ -351,9 +352,7 @@ func sortNodes(rows []*usage_v1alpha.NodeUsage, key, order string) {
 		case "sandboxes":
 			return a.SandboxCount() < b.SandboxCount()
 		case "name":
-			// Names sort ascending even under the default descending order:
-			// nobody wants a reverse-alphabetical node list.
-			return a.NodeName() > b.NodeName()
+			return a.NodeName() < b.NodeName()
 		default:
 			return a.Total().CpuCores() < b.Total().CpuCores()
 		}

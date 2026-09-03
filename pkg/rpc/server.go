@@ -225,14 +225,15 @@ func (i *Interface) Methods() []Method {
 // rpcMethod resolves a method for dispatch over the RPC transport.
 //
 // A rest-only method is reported as absent, so the caller sees the same
-// "unknown method" a typo would produce. The zero Method has a nil Handler,
-// which is what every dispatch site already treats as not found.
-func (i *Interface) rpcMethod(name string) Method {
-	m := i.methods[name]
-	if m.RestOnly {
-		return Method{}
+// "unknown method" a typo would produce. Every path that invokes a handler by
+// name must go through here rather than reading i.methods directly, or the
+// method stays reachable by whichever route was missed.
+func (i *Interface) rpcMethod(name string) (Method, bool) {
+	m, ok := i.methods[name]
+	if !ok || m.RestOnly {
+		return Method{}, false
 	}
-	return m
+	return m, true
 }
 
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
@@ -1117,8 +1118,8 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	iface.touch()
 
-	mm := iface.rpcMethod(method)
-	if mm.Handler == nil {
+	mm, ok := iface.rpcMethod(method)
+	if !ok || mm.Handler == nil {
 		w.Header().Add("rpc-status", "unknown")
 		w.Header().Add("rpc-error", "unknown method: "+method)
 		w.WriteHeader(http.StatusNotFound)
@@ -1282,8 +1283,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		iface.touch()
 
-		mm := iface.rpcMethod(method)
-		if mm.Handler == nil {
+		mm, ok := iface.rpcMethod(method)
+		if !ok || mm.Handler == nil {
 			w.Header().Add("rpc-status", "unknown")
 			w.Header().Add("rpc-error", "unknown method: "+method)
 			w.WriteHeader(http.StatusNotFound)

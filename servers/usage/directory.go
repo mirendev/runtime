@@ -97,22 +97,13 @@ func (f filter) matches(ref *usage_v1alpha.SandboxRef) bool {
 	// explicit --kind for one of them is a direct request and overrides that.
 	if !f.includeSystem && f.kind == "" {
 		switch ref.Kind() {
-		case sandboxKindAddon, sandboxKindRun, sandboxKindOther:
+		case string(compute.KindAddon), string(compute.KindRun), string(compute.KindOther):
 			return false
 		}
 	}
 
 	return true
 }
-
-// Sandbox kinds, matching the miren.kind attribute the sandbox controller
-// stamps on every metric series.
-const (
-	sandboxKindApp   = "app"
-	sandboxKindAddon = "addon"
-	sandboxKindRun   = "run"
-	sandboxKindOther = "other"
-)
 
 // loadDirectory resolves the entity view of the cluster.
 //
@@ -235,7 +226,7 @@ func (s *Server) buildRef(
 	}
 	ref.SetApp(appName)
 
-	ref.SetKind(classifySandbox(sb, md))
+	ref.SetKind(string(compute.SandboxKind(sb)))
 
 	if !entity.Empty(sch.Key.Node) {
 		ref.SetNode(sch.Key.Node.String())
@@ -246,44 +237,6 @@ func (s *Server) buildRef(
 	}
 
 	return &ref
-}
-
-// classifySandbox separates a user's own services from the platform running
-// underneath them.
-//
-// This deliberately mirrors sandboxWorkloadKind in the sandbox controller,
-// which stamps the same value onto the metric series. The two must agree, or a
-// --kind filter would select different rows than the metrics behind them.
-func classifySandbox(sb *computev1.Sandbox, md *core_v1alpha.Metadata) string {
-	if _, ok := md.Labels.Get("addon"); ok {
-		return sandboxKindAddon
-	}
-	if _, ok := md.Labels.Get("run"); ok {
-		return sandboxKindRun
-	}
-
-	var stage string
-	for _, lbl := range sb.Spec.LogAttribute {
-		switch lbl.Key {
-		case "addon":
-			return sandboxKindAddon
-		case "miren.stage":
-			stage = lbl.Value
-		}
-	}
-
-	switch stage {
-	case "run":
-		return sandboxKindRun
-	case "app-run":
-		return sandboxKindApp
-	}
-
-	if !entity.Empty(sb.Spec.Version) {
-		return sandboxKindApp
-	}
-
-	return sandboxKindOther
 }
 
 type poolInfo struct {
@@ -379,11 +332,35 @@ func (s *Server) loadNodes(ctx context.Context) (map[entity.Id]*nodeInfo, error)
 // matchNode resolves whatever identifier a caller had to hand: the entity id,
 // the runner id, or the display name. Operators type the name, scripts hold the
 // id, and requiring one form would make the filter useless to the other.
+//
+// The fields are tried in precedence order rather than first-match, because
+// ranging a map returns matches in a random order. If one node's name happened
+// to equal another's runner id, first-match would pick either, and a refreshing
+// view would alternate between two hosts for the same argument.
 func matchNode(nodes map[entity.Id]*nodeInfo, query string) *nodeInfo {
-	for _, n := range nodes {
-		if string(n.id) == query || n.runnerID == query || n.name == query || n.displayName() == query {
-			return n
+	if query == "" {
+		return nil
+	}
+
+	for _, match := range []func(*nodeInfo) bool{
+		func(n *nodeInfo) bool { return string(n.id) == query },
+		func(n *nodeInfo) bool { return n.runnerID == query },
+		func(n *nodeInfo) bool { return n.name == query },
+		func(n *nodeInfo) bool { return n.displayName() == query },
+	} {
+		// Within one field, ties are broken by id so the answer is the same on
+		// every call even when two nodes share a name.
+		var found *nodeInfo
+		for _, id := range sortedNodeIds(nodes) {
+			if n := nodes[id]; match(n) {
+				found = n
+				break
+			}
+		}
+		if found != nil {
+			return found
 		}
 	}
+
 	return nil
 }

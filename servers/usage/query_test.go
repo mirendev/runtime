@@ -150,3 +150,23 @@ func TestMaxUsesAShortRateWindowSteppedAcrossTheWindow(t *testing.T) {
 	avg := cpuCoresQuery(labelSandbox, "", time.Hour, aggregateAvg)
 	r.Equal("sum by (miren_sandbox) (rate(cpu_usage_seconds_total[3600s]))", avg)
 }
+
+// The sensible default direction depends on what is being sorted: a usage
+// column wants the busiest first, a name wants A to Z. An earlier version
+// inverted the name comparator to fake that, which meant an explicit order=asc
+// produced reverse-alphabetical output.
+func TestOrderingDefaultsPerSortKey(t *testing.T) {
+	r := require.New(t)
+
+	r.True(ordering{sort: "cpu"}.descending(), "busiest first when unspecified")
+	r.True(ordering{sort: ""}.descending(), "cpu is the default key, so descending")
+	r.False(ordering{sort: "name"}.descending(), "names read A to Z")
+	r.False(ordering{sort: "app"}.descending())
+	r.False(ordering{sort: "service"}.descending())
+
+	// An explicit direction always wins, in both directions and for both
+	// families of key.
+	r.False(ordering{sort: "cpu", order: "asc"}.descending())
+	r.True(ordering{sort: "name", order: "desc"}.descending())
+	r.False(ordering{sort: "name", order: "ASC"}.descending(), "case-insensitive")
+}

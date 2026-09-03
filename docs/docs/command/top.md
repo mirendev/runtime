@@ -64,7 +64,7 @@ miren top [flags]
 - `--limit` — Show at most this many rows (0 for all) (default: `0`)
 - `--no-addons` — With --apps, exclude each app's dedicated addons from its total
 - `--nodes` — Show per-node usage instead of per-sandbox
-- `--order` — Sort direction: desc or asc (default: `desc`)
+- `--order` — Sort direction: desc or asc (default: desc for usage, asc for names)
 - `--runner` — Only show sandboxes on this runner (name, ID, or short ID)
 - `--samples` — Stop after this many refreshes (0 for unlimited) (default: `0`)
 - `--service` — Only show sandboxes of this service (e.g. web, worker)
