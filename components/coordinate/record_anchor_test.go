@@ -11,7 +11,7 @@ import (
 
 const reportedAnchor = "https://api.miren.cloud/identity/cluster-abc"
 
-func registeredCoordinator(t *testing.T, stored string) (*Coordinator, string) {
+func registeredCloudControl(t *testing.T, stored string) (*CloudControl, string) {
 	t.Helper()
 
 	dataPath := t.TempDir()
@@ -24,7 +24,7 @@ func registeredCoordinator(t *testing.T, stored string) (*Coordinator, string) {
 		PrivateKey:        "unused",
 	}))
 
-	c := &Coordinator{Log: testLogger()}
+	c := NewCloudControl(&Foundation{Log: testLogger()})
 	c.DataPath = dataPath
 	c.CloudAuth = CloudAuthConfig{Enabled: true, ClusterID: "cluster-abc", IdentityIssuerURL: stored}
 	return c, dir
@@ -34,7 +34,7 @@ func registeredCoordinator(t *testing.T, stored string) (*Coordinator, string) {
 // none recorded, and without learning one from a status report it could never
 // be moved to the cloud anchor without re-registering.
 func TestRecordIdentityAnchorPersistsForAPreexistingRegistration(t *testing.T) {
-	c, dir := registeredCoordinator(t, "")
+	c, dir := registeredCloudControl(t, "")
 
 	c.recordIdentityAnchor(reportedAnchor)
 
@@ -60,7 +60,7 @@ func TestRecordIdentityAnchorIgnoresNoOps(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, dir := registeredCoordinator(t, tt.stored)
+			c, dir := registeredCloudControl(t, tt.stored)
 			before, err := registration.LoadRegistration(dir)
 			require.NoError(t, err)
 
@@ -76,7 +76,7 @@ func TestRecordIdentityAnchorIgnoresNoOps(t *testing.T) {
 // An unregistered cluster has no file to write, and must not gain one.
 func TestRecordIdentityAnchorOnUnregisteredClusterIsInert(t *testing.T) {
 	dataPath := t.TempDir()
-	c := &Coordinator{Log: testLogger()}
+	c := NewCloudControl(&Foundation{Log: testLogger()})
 	c.DataPath = dataPath
 
 	require.NotPanics(t, func() { c.recordIdentityAnchor(reportedAnchor) })

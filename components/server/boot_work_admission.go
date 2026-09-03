@@ -8,18 +8,21 @@ import (
 	"miren.dev/runtime/pkg/boot"
 )
 
-// workAdmissionBoot exposes build and deployment only after every capability
-// those request paths may use has finished booting.
+// workAdmissionBoot exposes build and deployment operations only after every
+// capability those work-creating paths may use has finished booting.
 type workAdmissionBoot struct {
 	component *boot.Component
 }
 
-func newWorkAdmissionBoot(coordinator boot.Output[coordinatorBootOutput], runner boot.Output[runnerBootOutput], buildkit boot.Output[buildkitBootOutput], ociRegistry boot.Output[struct{}], hostMapping boot.Output[registryHostMappingBootOutput]) *workAdmissionBoot {
+func newWorkAdmissionBoot(applications boot.Output[applicationManagementBootOutput], workloads, runner, buildkit, ociRegistry, hostMapping *boot.Component) *workAdmissionBoot {
 	b := &workAdmissionBoot{}
-	b.component = boot.Run5("work-admission", coordinator, runner, buildkit, ociRegistry, hostMapping, b.start)
+	b.component = boot.Run1(
+		"work-admission", applications, b.start,
+		boot.DependsOn(workloads, runner, buildkit, ociRegistry, hostMapping),
+	)
 	return b
 }
 
-func (b *workAdmissionBoot) start(_ context.Context, coordinator coordinatorBootOutput, _ runnerBootOutput, _ buildkitBootOutput, _ struct{}, _ registryHostMappingBootOutput) error {
-	return coordinator.coordinator.ExposeWorkServices()
+func (b *workAdmissionBoot) start(_ context.Context, applications applicationManagementBootOutput) error {
+	return applications.applications.ExposeBuildAndDeployment()
 }

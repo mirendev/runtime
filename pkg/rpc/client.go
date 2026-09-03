@@ -193,6 +193,9 @@ func (c *NetworkClient) trackConn(conn *quic.Conn) {
 	c.connMu.Lock()
 	c.conns = append(c.conns, conn)
 	c.connMu.Unlock()
+	if c.State != nil {
+		c.State.trackOutboundConn(conn)
+	}
 }
 
 // reachedServer reports whether any connection this client dialed finished its

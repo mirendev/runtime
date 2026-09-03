@@ -2,43 +2,35 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/netip"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	es "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
-	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
-	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/coordinate"
-	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/sqlitedisk"
-	"miren.dev/runtime/controllers/disk"
-	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
@@ -159,7 +151,9 @@ type stopCloser struct{ s interface{ Stop() } }
 
 func (c stopCloser) Close() error { c.s.Stop(); return nil }
 
-func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, error) {
+// NewClusterAccess constructs the runner's connection to cluster-owned state
+// and capabilities.
+func NewClusterAccess(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*ClusterAccess, error) {
 	if cfg.DataPath == "" {
 		return nil, fmt.Errorf("data_path is required")
 	}
@@ -168,31 +162,96 @@ func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, er
 		return nil, fmt.Errorf("id is required")
 	}
 
-	if deps.CC == nil {
-		return nil, fmt.Errorf("containerd client is required")
-	}
-
-	return &Runner{
+	return &ClusterAccess{
 		RunnerConfig: cfg,
 		Log:          log.With("module", "runner"),
 		deps:         deps,
 	}, nil
 }
 
+// NewSandboxHost constructs the part of a runner that owns local workload
+// execution. Starting it joins the distributed network when needed, adopts
+// surviving containers, and exposes the node-local exec endpoints. It does not
+// publish the node as schedulable; NodePresence owns that later transition.
+func NewSandboxHost(access *ClusterAccess, storage *NodeStorage, deps RunnerDeps, cfg RunnerConfig) (*SandboxHost, error) {
+	if access == nil {
+		return nil, fmt.Errorf("cluster access is required")
+	}
+	if storage == nil {
+		return nil, fmt.Errorf("node storage is required")
+	}
+	if deps.CC == nil {
+		return nil, fmt.Errorf("containerd client is required")
+	}
+	return &SandboxHost{
+		RunnerConfig: cfg,
+		Log:          access.Log,
+		deps:         deps,
+		access:       access,
+		storage:      storage,
+	}, nil
+}
+
+// Runner reconstitutes the independently startable pieces of the runner role.
+// The standalone runner command keeps this convenience API; the server boot
+// graph starts and stops the pieces as separate owned components.
 type Runner struct {
+	Access       *ClusterAccess
+	Storage      *NodeStorage
+	Host         *SandboxHost
+	StorageAgent *StorageAgent
+	SandboxAgent *SandboxAgent
+	Presence     *NodePresence
+}
+
+func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, error) {
+	access, err := NewClusterAccess(log, deps, cfg)
+	if err != nil {
+		return nil, err
+	}
+	storage, err := NewNodeStorage(access, deps, cfg)
+	if err != nil {
+		return nil, err
+	}
+	host, err := NewSandboxHost(access, storage, deps, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Runner{
+		Access:       access,
+		Storage:      storage,
+		Host:         host,
+		StorageAgent: NewStorageAgent(storage),
+		SandboxAgent: NewSandboxAgent(host),
+		Presence:     NewNodePresence(host),
+	}, nil
+}
+
+// ClusterAccess owns the RPC state and cluster-backed capabilities used by a
+// runner. It has no container or host-network responsibilities.
+type ClusterAccess struct {
+	RunnerConfig
+	Log  *slog.Logger
+	deps RunnerDeps
+
+	state       *rpc.State
+	eac         *es.EntityAccessClient
+	entityBase  *entityserver.Client
+	sqliteDisks *sqlitedisk.Manager
+	closers     []io.Closer
+}
+
+// SandboxHost owns the node-local execution substrate.
+type SandboxHost struct {
 	RunnerConfig
 
 	Log *slog.Logger
 
-	deps RunnerDeps
+	deps    RunnerDeps
+	access  *ClusterAccess
+	storage *NodeStorage
 
 	cc *containerd.Client
-
-	// sessMu guards ec/se, which are swapped when the health session is
-	// re-established after a lost lease (see superviseSession).
-	sessMu sync.Mutex
-	ec     *entityserver.Client
-	se     *entityserver.Session
 
 	closers []io.Closer
 
@@ -206,17 +265,64 @@ type Runner struct {
 	// in-memory registry the right shape.
 	hubs *sandbox.HubRegistry
 
-	// Disk controllers, stored for SetRestartMode propagation
-	dvc    *diskio.DiskVolumeController
-	dmc    *diskio.DiskMountController
-	diskGC *diskio.DeletedVolumeGC
+	controllers *controller.ControllerManager
+}
 
-	// Replicates SQLite-provider disks to the coordinator. Nil when the backup
-	// service is unreachable, in which case it is inert and disks still attach.
-	sqliteDisks *sqlitedisk.Manager
+// NodePresence owns the session-scoped node registration. The graph starts it
+// only after the node's storage and sandbox agents are running.
+type NodePresence struct {
+	host *SandboxHost
+
+	// sessMu guards ec/se and closed. The session pointers are swapped when the health session is
+	// re-established after a lost lease (see superviseSession).
+	sessMu sync.Mutex
+	ec     *entityserver.Client
+	se     *entityserver.Session
+	closed bool
+}
+
+var errNodePresenceClosed = errors.New("node presence is closed")
+
+// NewNodePresence constructs the node registration boundary for a restored host.
+func NewNodePresence(host *SandboxHost) *NodePresence {
+	return &NodePresence{host: host}
+}
+
+func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
+	if err := r.Access.Start(ctx); err != nil {
+		return err
+	}
+	if err := r.Storage.Start(ctx); err != nil {
+		return err
+	}
+	if err := r.Host.Start(ctx, eg...); err != nil {
+		return err
+	}
+	if err := r.StorageAgent.Start(ctx); err != nil {
+		return err
+	}
+	if err := r.SandboxAgent.Start(ctx); err != nil {
+		return err
+	}
+	return r.Presence.Start(ctx)
 }
 
 func (r *Runner) Close() error {
+	return errors.Join(
+		r.Presence.Close(), r.SandboxAgent.Close(), r.StorageAgent.Close(),
+		r.Host.Close(), r.Storage.Close(), r.Access.Close(),
+	)
+}
+
+func (r *Runner) SetRestartMode(v bool)           { r.Storage.SetRestartMode(v) }
+func (r *Runner) Drain(ctx context.Context) error { return r.Presence.Drain(ctx) }
+func (r *Runner) ContainerdNamespace() string     { return r.Host.ContainerdNamespace() }
+func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
+	return r.Host.ContainerdContainerForSandbox(ctx, id)
+}
+func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer { return r.Access.WorkloadIssuer() }
+
+func (r *SandboxHost) Close() error {
 	var err error
 
 	for _, c := range r.closers {
@@ -229,20 +335,9 @@ func (r *Runner) Close() error {
 	return err
 }
 
-// SetRestartMode sets whether outboard processes should be preserved when closing.
-// When true, disk mounts are left in place so the replacement process can pick them up.
-func (r *Runner) SetRestartMode(v bool) {
-	if r.dvc != nil {
-		r.dvc.SetKeepMounts(v)
-	}
-	if r.dmc != nil {
-		r.dmc.SetKeepMounts(v)
-	}
-}
-
 // entityClient returns the current session-scoped entity client, which may be
 // swapped out when the health session is re-established (see superviseSession).
-func (r *Runner) entityClient() *entityserver.Client {
+func (r *NodePresence) entityClient() *entityserver.Client {
 	r.sessMu.Lock()
 	defer r.sessMu.Unlock()
 	return r.ec
@@ -252,39 +347,40 @@ func (r *Runner) entityClient() *entityserver.Client {
 // form. r.Id is the raw runner id from config; everything that references this
 // node in the entity store goes through here so the node-id prefix is applied
 // consistently in exactly one place (see compute_v1alpha.NewNodeId).
-func (r *Runner) nodeId() compute_v1alpha.NodeId {
+func (r *SandboxHost) nodeId() compute_v1alpha.NodeId {
 	return compute_v1alpha.NewNodeId(r.Id)
 }
 
 // Drain sets the runner's node status to disabled and stops all running sandboxes
-func (r *Runner) Drain(ctx context.Context) error {
+func (r *NodePresence) Drain(ctx context.Context) error {
+	h := r.host
 	ec := r.entityClient()
-	if ec == nil || r.Id == "" {
+	if ec == nil || h.Id == "" {
 		return fmt.Errorf("runner not initialized with entity client")
 	}
 
-	r.Log.Info("draining runner", "id", r.Id)
+	h.Log.Info("draining runner", "id", h.Id)
 
 	// Set node status to disabled
-	r.Log.Info("setting node status to disabled", "id", r.Id)
-	err := ec.UpdateAttrs(ctx, r.nodeId().Id(), (&compute_v1alpha.Node{
+	h.Log.Info("setting node status to disabled", "id", h.Id)
+	err := ec.UpdateAttrs(ctx, h.nodeId().Id(), (&compute_v1alpha.Node{
 		Status: compute_v1alpha.DISABLED,
 	}).Encode)
 	if err != nil {
 		return fmt.Errorf("failed to set node status to disabled: %w", err)
 	}
 
-	r.Log.Info("node status set to disabled", "id", r.Id)
+	h.Log.Info("node status set to disabled", "id", h.Id)
 
 	// List all sandboxes scheduled to this node
-	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, r.nodeId().Id())
+	idx := compute_v1alpha.Index(compute_v1alpha.KindSandbox, h.nodeId().Id())
 	results, err := ec.List(ctx, idx)
 	if err != nil {
 		return fmt.Errorf("failed to query sandboxes on node: %w", err)
 	}
 
 	sandboxCount := results.Length()
-	r.Log.Info("found sandboxes to drain", "count", sandboxCount, "node", r.Id)
+	h.Log.Info("found sandboxes to drain", "count", sandboxCount, "node", h.Id)
 
 	// Stop each sandbox
 	var drainErr error
@@ -295,13 +391,13 @@ func (r *Runner) Drain(ctx context.Context) error {
 			continue
 		}
 
-		r.Log.Info("stopping sandbox", "id", md.ID)
-		err := r.sbController.Delete(ctx, md.ID, nil)
+		h.Log.Info("stopping sandbox", "id", md.ID)
+		err := h.sbController.Delete(ctx, md.ID, nil)
 		if err != nil {
-			r.Log.Error("failed to stop sandbox", "id", md.ID, "error", err)
+			h.Log.Error("failed to stop sandbox", "id", md.ID, "error", err)
 			drainErr = multierror.Append(drainErr, fmt.Errorf("failed to stop sandbox %s: %w", md.ID, err))
 		} else {
-			r.Log.Info("stopped sandbox", "id", md.ID)
+			h.Log.Info("stopped sandbox", "id", md.ID)
 			stoppedCount++
 		}
 	}
@@ -310,15 +406,15 @@ func (r *Runner) Drain(ctx context.Context) error {
 		return fmt.Errorf("errors during drain: %w", drainErr)
 	}
 
-	r.Log.Info("runner drained successfully", "id", r.Id, "sandboxes_stopped", stoppedCount)
+	h.Log.Info("runner drained successfully", "id", h.Id, "sandboxes_stopped", stoppedCount)
 	return nil
 }
 
-func (r *Runner) ContainerdNamespace() string {
+func (r *SandboxHost) ContainerdNamespace() string {
 	return r.namespace
 }
 
-func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
+func (r *SandboxHost) ContainerdContainerForSandbox(ctx context.Context, id entity.Id) (containerd.Container, error) {
 	cl, err := r.cc.ContainerService().List(ctx)
 	if err != nil {
 		return nil, err
@@ -333,11 +429,73 @@ func (r *Runner) ContainerdContainerForSandbox(ctx context.Context, id entity.Id
 	return nil, nil
 }
 
-// Start initializes and starts the runner.
+func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
+	var (
+		rs     *rpc.State
+		err    error
+		client *rpc.NetworkClient
+	)
+
+	r.Log.Info("establishing cluster access", "listen", r.ListenAddress, "distributed", r.Config != nil)
+	if r.Config == nil {
+		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
+	} else {
+		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
+	}
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr == nil || rs == nil {
+			return
+		}
+		if err := rs.Close(); err != nil {
+			r.Log.Warn("failed to close cluster access after startup failure", "error", err)
+		}
+		if r.state == rs {
+			r.state = nil
+		}
+	}()
+	if r.Config == nil {
+		client, err = rs.Connect("", "entities")
+	} else {
+		client, err = rs.Client("entities")
+	}
+	if err != nil {
+		return err
+	}
+
+	r.state = rs
+	r.eac = es.NewEntityAccessClient(client)
+	r.entityBase = entityserver.NewClient(r.Log, r.eac)
+	if err := r.setupRemoteWorkloadIssuer(ctx, rs); err != nil {
+		r.Log.Warn("failed to set up workload identity issuer", "error", err)
+	}
+	if err := r.setupRemoteSecrets(rs); err != nil {
+		return fmt.Errorf("setting up secret resolution: %w", err)
+	}
+	r.setupSqliteDisks(rs)
+	r.Log.Info("cluster access ready")
+	return nil
+}
+
+func (r *ClusterAccess) Close() error {
+	var errs []error
+	for _, closer := range r.closers {
+		errs = append(errs, closer.Close())
+	}
+	if r.state != nil {
+		errs = append(errs, r.state.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// Start restores the local execution substrate without making the node
+// schedulable. The optional errgroup runs distributed-network background work.
 // The optional errgroup parameter is used for running background tasks like the Flannel network.
 // If eg is nil and the runner needs to join a Flannel network, an internal errgroup will be created.
-func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
-	r.Log.Info("Starting runner", "id", r.Id)
+func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
+	r.Log.Info("starting sandbox host", "id", r.Id)
 
 	// Initialize Flannel/WireGuard network if distributed runner configuration is provided
 	if len(r.deps.EtcdEndpoints) > 0 {
@@ -346,85 +504,74 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 		}
 	}
 
-	var (
-		rs     *rpc.State
-		err    error
-		client *rpc.NetworkClient
-	)
-
-	r.Log.Info("Establishing RPC connection", "listen", r.ListenAddress, "distributed", r.Config != nil)
-
-	if r.Config == nil {
-		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
-		if err != nil {
-			return err
-		}
-
-		client, err = rs.Connect("", "entities")
-		if err != nil {
-			return err
-		}
-	} else {
-		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
-		if err != nil {
-			return err
-		}
-
-		client, err = rs.Client("entities")
-		if err != nil {
-			return err
-		}
+	if r.access.state == nil || r.access.eac == nil || r.access.entityBase == nil {
+		return errors.New("cluster access is not ready")
 	}
+	r.deps.WorkloadIssuer = r.access.deps.WorkloadIssuer
+	r.deps.Secrets = r.access.deps.Secrets
 
-	r.Log.Info("Connected to entity server")
-
-	eas := es.NewEntityAccessClient(client)
-
-	ec := entityserver.NewClient(r.Log, eas)
-
-	// Distributed runners mint workload identity tokens via the coordinator,
-	// since they do not hold the cluster signing key. A failure here degrades
-	// to no sandbox tokens rather than blocking runner startup.
-	if err := r.setupRemoteWorkloadIssuer(ctx, rs); err != nil {
-		r.Log.Warn("failed to set up workload identity issuer", "error", err)
-	}
-
-	// Likewise for secrets: a distributed runner can reach the entity store but
-	// not the cluster keyring, so it resolves through the coordinator. This one
-	// must not degrade quietly — a runner without it starts sandboxes whose
-	// referenced secrets can never materialize.
-	if err := r.setupRemoteSecrets(rs); err != nil {
-		return fmt.Errorf("setting up secret resolution: %w", err)
-	}
-
-	r.setupSqliteDisks(rs)
-
-	cm, err := r.SetupControllers(ctx, eas, rs.Server())
+	cm, err := r.SetupControllers(ctx, r.access.eac, r.access.state.Server())
 	if err != nil {
 		return err
 	}
 
-	r.Log.Info("Controllers initialized")
-
-	err = r.setupEntity(ctx, ec)
-	if err != nil {
-		return err
-	}
+	r.Log.Info("sandbox host restored")
+	r.controllers = cm
 
 	// Create exec server with explicit dependencies
-	execServer := exec.NewServer(r.Log, r.deps.CC, eas, r.deps.Namespace, r.hubs)
+	execServer := exec.NewServer(r.Log, r.deps.CC, r.access.eac, r.deps.Namespace, r.hubs)
 
-	rs.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
+	r.access.state.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
 
 	r.Log.Info("Registered exec server")
 
-	err = cm.Start(ctx)
-	if err != nil {
+	return nil
+}
+
+// SandboxAgent owns desired-state reconciliation for sandboxes and services.
+// SandboxHost has already adopted surviving containers before this starts.
+type SandboxAgent struct{ host *SandboxHost }
+
+// NewSandboxAgent constructs reconciliation over a restored sandbox host.
+func NewSandboxAgent(host *SandboxHost) *SandboxAgent { return &SandboxAgent{host: host} }
+
+func (a *SandboxAgent) Start(ctx context.Context) error {
+	if a.host.controllers == nil {
+		return errors.New("sandbox host is not ready")
+	}
+	return a.host.controllers.Start(ctx)
+}
+
+func (a *SandboxAgent) Close() error {
+	if a.host.controllers != nil {
+		a.host.controllers.Stop()
+	}
+	return nil
+}
+
+// Start advertises the node only after the graph has started its storage and
+// sandbox agents.
+func (r *NodePresence) Start(ctx context.Context) error {
+	if r.host.access.entityBase == nil {
+		return errors.New("cluster access is not ready")
+	}
+	if err := r.setupEntity(ctx, r.host.access.entityBase); err != nil {
 		return err
 	}
+	r.host.Log.Info("node presence published", "id", r.host.Id)
+	return nil
+}
 
-	r.Log.Info("Runner running", "id", r.Id)
-
+func (r *NodePresence) Close() error {
+	r.sessMu.Lock()
+	r.closed = true
+	se := r.se
+	r.se = nil
+	r.ec = nil
+	r.sessMu.Unlock()
+	if se != nil {
+		return se.Close()
+	}
 	return nil
 }
 
@@ -435,7 +582,7 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 // acquires its issuer from the coordinator. Callers that build something
 // needing tokens before then should hold a source they can arm afterwards
 // rather than reading this early and caching a nil.
-func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer {
+func (r *ClusterAccess) WorkloadIssuer() workloadidentity.TokenIssuer {
 	return r.deps.WorkloadIssuer
 }
 
@@ -450,7 +597,7 @@ func (r *Runner) WorkloadIssuer() workloadidentity.TokenIssuer {
 // lifetime of the process and an operator has to restart the runner once the
 // coordinator is reachable. That is why the failure logs at Error rather than
 // Warn, and why each sqlite disk says so again as it attaches.
-func (r *Runner) setupSqliteDisks(rs *rpc.State) {
+func (r *ClusterAccess) setupSqliteDisks(rs *rpc.State) {
 	var (
 		client *rpc.NetworkClient
 		err    error
@@ -489,7 +636,7 @@ func (c sqliteDiskCloser) Close() error {
 // coordinator reports no issuer is configured, token issuance stays disabled
 // (deps.WorkloadIssuer remains nil). The coordinator's embedded runner
 // (r.Config == nil) keeps the concrete issuer it was constructed with.
-func (r *Runner) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) error {
+func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) error {
 	if r.Config == nil || r.deps.WorkloadIssuer != nil {
 		return nil
 	}
@@ -547,7 +694,7 @@ func queryWorkloadIssuerInfo(ctx context.Context, regClient *runner_v1alpha.Runn
 //
 // The coordinator's embedded runner (r.Config == nil) already holds the local
 // backend registry it was constructed with, and keeps it.
-func (r *Runner) setupRemoteSecrets(rs *rpc.State) error {
+func (r *ClusterAccess) setupRemoteSecrets(rs *rpc.State) error {
 	if r.Config == nil || r.deps.Secrets != nil {
 		return nil
 	}
@@ -564,7 +711,7 @@ func (r *Runner) setupRemoteSecrets(rs *rpc.State) error {
 
 // initializeNetwork sets up the Flannel network for distributed runners.
 // This is only called when EtcdEndpoints are configured (distributed runner mode).
-func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
+func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("Initializing distributed runner network",
 		"etcd_endpoints", r.deps.EtcdEndpoints,
 		"etcd_prefix", r.deps.EtcdPrefix)
@@ -637,8 +784,8 @@ func (r *Runner) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) e
 // registration, then supervises the session so a lost lease (e.g. from a
 // coordinator restart) is transparently re-established. base is the plain,
 // non-session entity client; each session is minted from it.
-func (r *Runner) setupEntity(ctx context.Context, base *entityserver.Client) error {
-	if r.Id == "" {
+func (r *NodePresence) setupEntity(ctx context.Context, base *entityserver.Client) error {
+	if r.host.Id == "" {
 		return nil
 	}
 
@@ -656,8 +803,15 @@ func (r *Runner) setupEntity(ctx context.Context, base *entityserver.Client) err
 // lives under the etcd lease and vanishes when the lease dies, so this must be
 // re-run to bring the runner back after a lost session. base is the plain
 // (non-session) client; the session-scoped client it returns is stored on r.ec.
-func (r *Runner) establishSession(ctx context.Context, base *entityserver.Client) error {
-	r.Log.Info("Creating health session")
+func (r *NodePresence) establishSession(ctx context.Context, base *entityserver.Client) error {
+	h := r.host
+	r.sessMu.Lock()
+	closed := r.closed
+	r.sessMu.Unlock()
+	if closed {
+		return errNodePresenceClosed
+	}
+	h.Log.Info("Creating health session")
 
 	sess, ec, err := base.NewSession(ctx, "runner health")
 	if err != nil {
@@ -675,26 +829,26 @@ func (r *Runner) establishSession(ctx context.Context, base *entityserver.Client
 		revokeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if rerr := sess.Revoke(revokeCtx); rerr != nil {
-			r.Log.Warn("failed to revoke unregistered health session", "error", rerr)
+			h.Log.Warn("failed to revoke unregistered health session", "error", rerr)
 		}
 	}()
 
 	role := "runner"
-	if r.deps.IsCoordinator {
+	if h.deps.IsCoordinator {
 		role = "coordinator"
 	}
 
 	node := compute_v1alpha.Node{
-		RunnerId:    r.Id,
-		Name:        r.Name,
+		RunnerId:    h.Id,
+		Name:        h.Name,
 		Constraints: types.LabelSet("compute", "generic", "role", role),
-		ApiAddress:  r.ListenAddress,
+		ApiAddress:  h.ListenAddress,
 		Version:     version.GetInfo().Version,
 	}
 
-	r.Log.Info("Registering node entity", "role", role, "address", r.ListenAddress)
+	h.Log.Info("Registering node entity", "role", role, "address", h.ListenAddress)
 
-	res, err := ec.CreateOrUpdate(ctx, r.Id, &node)
+	res, err := ec.CreateOrUpdate(ctx, h.Id, &node)
 	if err != nil {
 		return err
 	}
@@ -707,12 +861,16 @@ func (r *Runner) establishSession(ctx context.Context, base *entityserver.Client
 	}
 
 	r.sessMu.Lock()
+	if r.closed {
+		r.sessMu.Unlock()
+		return errNodePresenceClosed
+	}
 	r.ec = ec
 	r.se = sess
 	published = true
 	r.sessMu.Unlock()
 
-	r.Log.Info("Runner registered and ready", "id", res, "status", "ready")
+	h.Log.Info("Runner registered and ready", "id", res, "status", "ready")
 
 	return nil
 }
@@ -723,12 +881,14 @@ func (r *Runner) establishSession(ctx context.Context, base *entityserver.Client
 // stays not-ready until manually restarted (MIR-1305). Re-establishing well
 // within nodehealth's grace period keeps the runner's sandboxes from being
 // evacuated.
-func (r *Runner) superviseSession(ctx context.Context, base *entityserver.Client) {
+func (r *NodePresence) superviseSession(ctx context.Context, base *entityserver.Client) {
+	h := r.host
 	for {
 		r.sessMu.Lock()
 		se := r.se
+		closed := r.closed
 		r.sessMu.Unlock()
-		if se == nil {
+		if closed || se == nil {
 			return
 		}
 
@@ -741,19 +901,24 @@ func (r *Runner) superviseSession(ctx context.Context, base *entityserver.Client
 		// No explicit Close on the old session: by the time Dead() fires its
 		// keepalive goroutine has already stopped and revoked what it could,
 		// so establishSession can simply overwrite r.se with a fresh one.
-		r.Log.Warn("runner health session lease lost, re-establishing", "id", r.Id)
+		h.Log.Warn("runner health session lease lost, re-establishing", "id", h.Id)
 
 		backoff := time.Second
 		for {
-			if ctx.Err() != nil {
+			r.sessMu.Lock()
+			closed := r.closed
+			r.sessMu.Unlock()
+			if ctx.Err() != nil || closed {
 				return
 			}
 
 			if err := r.establishSession(ctx, base); err == nil {
-				r.Log.Info("runner health session re-established", "id", r.Id)
+				h.Log.Info("runner health session re-established", "id", h.Id)
 				break
+			} else if errors.Is(err, errNodePresenceClosed) {
+				return
 			} else {
-				r.Log.Error("failed to re-establish runner health session, retrying",
+				h.Log.Error("failed to re-establish runner health session, retrying",
 					"error", err, "backoff", backoff)
 			}
 
@@ -772,7 +937,7 @@ func (r *Runner) superviseSession(ctx context.Context, base *entityserver.Client
 	}
 }
 
-func (r *Runner) SetupControllers(
+func (r *SandboxHost) SetupControllers(
 	ctx context.Context,
 	eas *es.EntityAccessClient,
 	rs *rpc.Server,
@@ -811,7 +976,7 @@ func (r *Runner) SetupControllers(
 		ApiAddress:     r.deps.ApiAddress,
 		CACert:         r.deps.CACert,
 		Secrets:        r.deps.Secrets,
-		SqliteDisks:    r.sqliteDisks,
+		SqliteDisks:    r.access.sqliteDisks,
 	}
 
 	var sbc sandbox.SandboxLifecycle
@@ -852,183 +1017,10 @@ func (r *Runner) SetupControllers(
 
 	log := r.Log
 
-	defaultRouteAppController := ingress.NewDefaultRouteAppController(log, eas)
-	defaultRouteController := ingress.NewDefaultRouteController(log, eas)
-
 	workers := r.Workers
 	if workers <= 0 {
 		workers = DefaulWorkers
 	}
-
-	// Initialize disk I/O controllers for universal mode (loop devices)
-	dataPath := filepath.Join(r.DataPath, "disk-data")
-	err = os.MkdirAll(dataPath, 0700)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create disk data path: %w", err)
-	}
-
-	// Ensure loop device nodes exist (they may be missing in containers)
-	if err := diskio.EnsureLoopDevices(log); err != nil {
-		log.Warn("Loop devices not available, disk mounts will fail", "error", err)
-	}
-
-	// Try to set up lbd devices for accelerator mode
-	if err := diskio.EnsureLbdDevices(log); err != nil {
-		log.Info("lbd devices not available, accelerator mode will not work", "error", err)
-	}
-
-	diskioState, err := diskio.LoadState(dataPath)
-	if err != nil {
-		log.Warn("failed to load disk state, starting fresh", "error", err)
-		diskioState = diskio.NewState()
-		diskioState.SetPath(dataPath)
-	}
-
-	volOps := diskio.NewRealDiskVolumeOps(log)
-	mntOps := diskio.NewRealDiskMountOps(log)
-
-	r.dvc = diskio.NewDiskVolumeController(log, dataPath, r.nodeId(), diskioState, volOps, mntOps)
-	r.dvc.SetEAC(eas)
-
-	if err := r.dvc.Init(ctx); err != nil {
-		return nil, fmt.Errorf("disk volume controller init: %w", err)
-	}
-
-	r.dmc = diskio.NewDiskMountController(log, dataPath, r.nodeId(), diskioState, mntOps)
-	r.dmc.SetEAC(eas)
-
-	// Prepare deleted volume GC (started after all controller init succeeds)
-	r.diskGC = &diskio.DeletedVolumeGC{
-		Log:      log.With("module", "deleted-volume-gc"),
-		DataPath: dataPath,
-		Config:   diskio.DefaultDeletedVolumeGCConfig(),
-	}
-
-	// Register volume controller shutdown before mount controller so mounts
-	// owned by the volume controller are cleaned up first
-	r.closers = append(r.closers, shutdownCloser{r.dvc})
-	r.closers = append(r.closers, shutdownCloser{r.dmc})
-
-	// Set up cloud auth for disk replication if configured
-	var logUploader diskio.LogSegmentUploader
-	var updatesClient diskio.CloudUpdatesClient
-	if r.CloudAuth != nil && r.CloudAuth.Enabled && r.CloudAuth.PrivateKey != "" {
-		cloudURL := r.CloudAuth.CloudURL
-		if cloudURL == "" {
-			cloudURL = coordinate.DefaultCloudURL
-		}
-
-		var keyData []byte
-		if strings.HasPrefix(r.CloudAuth.PrivateKey, "-----BEGIN PRIVATE KEY-----") {
-			keyData = []byte(r.CloudAuth.PrivateKey)
-		} else {
-			keyData, err = os.ReadFile(r.CloudAuth.PrivateKey)
-			if err != nil {
-				log.Warn("failed to load cloud auth private key for log watcher", "error", err)
-			}
-		}
-
-		if keyData != nil {
-			keyPair, kerr := cloudauth.LoadKeyPairFromPEM(string(keyData))
-			if kerr != nil {
-				log.Warn("failed to parse cloud auth private key for log watcher", "error", kerr)
-			} else {
-				authClient, aerr := cloudauth.NewAuthClient(cloudURL, keyPair)
-				if aerr != nil {
-					log.Warn("failed to create auth client for log watcher", "error", aerr)
-				} else {
-					// One client serves both kinds: lbd log segments for
-					// accelerator mode, image snapshots for universal mode.
-					updatesClient = diskio.NewCloudUpdatesClient(log, cloudURL, authClient)
-
-					cloudDiskClient := diskio.NewCloudDiskClientWithUpdates(log, cloudURL, authClient, updatesClient)
-					r.dmc.SetCloudClient(cloudDiskClient)
-					r.dmc.SetUpdatesClient(updatesClient)
-
-					// Universal volumes are mounted by the volume controller, so
-					// that is where a lost image has to be noticed.
-					r.dvc.SetUpdatesClient(updatesClient)
-
-					// Give local disks an identity in the cloud. Without this
-					// every backup call would carry an id the cloud has never
-					// heard of.
-					r.dvc.SetCloudVolumeRegistrar(
-						diskio.NewCloudVolumeRegistrar(log, cloudURL, authClient),
-						r.CloudAuth.ClusterID,
-					)
-
-					logUploader = diskio.NewCloudSegmentUploaderWithClient(log, updatesClient, diskioState)
-				}
-			}
-		}
-	}
-
-	// Reconcile only after the cloud clients above are in place. Startup is
-	// precisely when a host that lost its disks has images to restore, and a
-	// pass that ran before the updates client was wired would see no cloud,
-	// mount the volume, and format a fresh empty image over the gap.
-	//
-	// This also re-mounts universal volumes that were mounted before the last
-	// shutdown, and gives unregistered volumes their first shot at a cloud id.
-	if err := r.dvc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk volumes on startup", "error", err)
-	}
-
-	// Reconcile mounts with entity server on startup to re-mount any
-	// accelerator volumes that were mounted before the last shutdown.
-	if err := r.dmc.ReconcileWithEntities(ctx); err != nil {
-		log.Warn("failed to reconcile disk mounts on startup", "error", err)
-	}
-
-	// Always start the log watcher so accelerator mode log segments are
-	// cleaned up even when cloud is not configured (nil uploader = delete only).
-	watcher := diskio.NewLogWatcher(log, diskioState, logUploader, 5*time.Second)
-	go func() {
-		if werr := watcher.Run(ctx); werr != nil {
-			log.Error("log watcher stopped", "error", werr)
-		}
-	}()
-	r.closers = append(r.closers, waitCloser{watcher})
-	if logUploader != nil {
-		log.Info("started log watcher with cloud upload")
-	} else {
-		log.Info("started log watcher in delete-only mode (no cloud configured)")
-	}
-
-	// Universal-mode volumes are not backed up on a timer. Snapshotting a
-	// mounted image means reading it while the loop device is still writing,
-	// which yields a state that never existed on disk -- see ImageSnapshotter.
-	// `miren disk backup --cloud` takes one when an operator decides it is safe.
-
-	volHandler := controller.AdaptReconcileController[storage_v1alpha.DiskVolume](r.dvc)
-	cm.AddController(controller.NewReconcileController(
-		"disk-volume", log, r.dvc.Index(), eas, volHandler, 5*time.Minute, workers,
-	))
-
-	mntHandler := controller.AdaptReconcileController[storage_v1alpha.DiskMount](r.dmc)
-	mntController := controller.NewReconcileController(
-		"disk-mount", log, r.dmc.Index(), eas, mntHandler, 5*time.Minute, workers,
-	)
-	// Record the mount controller's direct entity writes so the watch skips its
-	// own events instead of self-retriggering reconcile in a tight loop (MIR-1345).
-	r.dmc.SetWriteTracker(mntController.WriteTracker())
-	// Periodically delete mounts whose backing volume is gone. Such a mount can
-	// never reach its desired state; sweeping bounds how long an orphan lingers
-	// and re-attempts a failing reconcile (MIR-1345).
-	mntController.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
-		if err := r.dmc.ReconcileOrphanMounts(ctx, diskio.OrphanMountSweepGracePeriod); err != nil {
-			log.Warn("periodic orphan mount sweep failed", "error", err)
-		}
-		return nil
-	})
-	cm.AddController(mntController)
-
-	// Use entity mode controllers
-	diskController := disk.NewDiskController(log, eas, r.nodeId(), r.DiskMode, r.deps.IsCoordinator)
-	diskLeaseController := disk.NewDiskLeaseController(log, eas, r.nodeId(), r.DiskMode)
-
-	// Add disk controller to closers list so it gets cleaned up on shutdown
-	r.closers = append(r.closers, diskController)
 
 	err = sbc.Init(ctx)
 	if err != nil {
@@ -1039,20 +1031,6 @@ func (r *Runner) SetupControllers(
 	if err != nil {
 		return nil, err
 	}
-
-	err = diskController.Init(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	err = diskLeaseController.Init(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// All controllers initialized — safe to start the GC goroutine now
-	r.diskGC.Start(ctx)
-	r.closers = append(r.closers, stopCloser{r.diskGC})
 
 	r.cc = r.deps.CC
 	r.namespace = r.deps.Namespace
@@ -1098,111 +1076,6 @@ func (r *Runner) SetupControllers(
 			serviceController.UpdateEndpoints,
 			0,
 			workers,
-		),
-	)
-
-	cm.AddController(
-		controller.NewReconcileController(
-			"default-route-app",
-			log,
-			entity.Ref(entity.EntityKind, core_v1alpha.KindApp),
-			eas,
-			controller.AdaptController(defaultRouteAppController),
-			0, // No periodic resync needed
-			1, // Single worker is sufficient for this controller
-		),
-	)
-
-	cm.AddController(
-		controller.NewReconcileController(
-			"default-route",
-			log,
-			entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute),
-			eas,
-			controller.AdaptController(defaultRouteController),
-			0, // No periodic resync needed
-			1, // Single worker is sufficient for this controller
-		),
-	)
-
-	// Add disk controller
-	diskRC := controller.NewReconcileController(
-		"disk",
-		log,
-		entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
-		eas,
-		controller.AdaptController(diskController),
-		time.Minute,
-		workers,
-	)
-	cm.AddController(diskRC)
-
-	// Add disk lease controller
-	diskLeaseRC := controller.NewReconcileController(
-		"disk-lease",
-		log,
-		entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskLease),
-		eas,
-		controller.AdaptController(diskLeaseController),
-		time.Minute,
-		workers,
-	)
-
-	// Set up periodic lease maintenance (every 5 minutes): sweep orphan leases
-	// stranded by sandboxes that died without releasing (SIGKILL, boot failure),
-	// then clean up old released leases. The orphan sweep also runs at Init, but
-	// the periodic tick bounds the worst-case wedge to one interval for sandboxes
-	// that die while the controller is already running.
-	diskLeaseRC.SetPeriodic(5*time.Minute, func(ctx context.Context) error {
-		if err := diskLeaseController.ReconcileOrphanLeases(ctx, disk.OrphanSweepGracePeriod); err != nil {
-			log.Warn("periodic orphan lease sweep failed", "error", err)
-		}
-		return diskLeaseController.CleanupOldReleasedLeases(ctx)
-	})
-
-	cm.AddController(diskLeaseRC)
-
-	// Add disk watch controller to trigger lease reconciliation on disk changes
-	diskWatchController := disk.NewDiskWatchController(log, eas, diskLeaseRC)
-	cm.AddController(
-		controller.NewReconcileController(
-			"disk-watch",
-			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk),
-			eas,
-			controller.AdaptController(diskWatchController),
-			time.Minute,
-			1,
-		),
-	)
-
-	// Add disk_volume watch controller to trigger disk re-reconciliation when
-	// disk_volume entities change (e.g. volume becomes DV_READY after provisioning)
-	diskVolumeWatchController := disk.NewDiskVolumeWatchController(log, eas, diskRC, r.nodeId())
-	cm.AddController(
-		controller.NewReconcileController(
-			"disk-volume-watch",
-			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskVolume),
-			eas,
-			controller.AdaptController(diskVolumeWatchController),
-			0,
-			1,
-		),
-	)
-
-	// Add disk_mount watch controller to trigger disk lease re-reconciliation when
-	// disk_mount entities change (e.g. mount becomes DM_MOUNTED after mounting)
-	diskMountWatchController := disk.NewDiskMountWatchController(log, eas, diskLeaseRC, r.nodeId())
-	cm.AddController(
-		controller.NewReconcileController(
-			"disk-mount-watch",
-			log,
-			entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskMount),
-			eas,
-			controller.AdaptController(diskMountWatchController),
-			0,
-			1,
 		),
 	)
 

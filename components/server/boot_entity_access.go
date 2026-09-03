@@ -11,7 +11,6 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/ipalloc"
-	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -22,9 +21,9 @@ type entityAccessBootInputs struct {
 }
 
 type entityAccessBootOutput struct {
-	access     *entityserver_v1alpha.EntityAccessClient
-	client     *entityserver.Client
-	netService *network.ServiceManager
+	access    *entityserver_v1alpha.EntityAccessClient
+	client    *entityserver.Client
+	rpcClient rpc.Client
 }
 
 type entityAccessBoot struct {
@@ -40,14 +39,14 @@ func entityAccessInputs(options StartOptions) entityAccessBootInputs {
 	}
 }
 
-func newEntityAccessBoot(inputs entityAccessBootInputs, coordinator boot.Output[coordinatorBootOutput], observability boot.Output[observabilityBootOutput]) *entityAccessBoot {
+func newEntityAccessBoot(inputs entityAccessBootInputs, foundation boot.Output[foundationBootOutput], observability boot.Output[observabilityBootOutput]) *entityAccessBoot {
 	b := &entityAccessBoot{inputs: inputs}
-	b.component, b.output = boot.Provide2("entity-access", coordinator, observability, b.start)
+	b.component, b.output = boot.Provide2("entity-access", foundation, observability, b.start)
 	return b
 }
 
-func (b *entityAccessBoot) start(ctx context.Context, coordinator coordinatorBootOutput, observability observabilityBootOutput) (entityAccessBootOutput, error) {
-	config, err := coordinator.coordinator.ServiceConfig()
+func (b *entityAccessBoot) start(ctx context.Context, foundation foundationBootOutput, observability observabilityBootOutput) (entityAccessBootOutput, error) {
+	config, err := foundation.foundation.ServiceConfig()
 	if err != nil {
 		return entityAccessBootOutput{}, fmt.Errorf("getting service config: %w", err)
 	}
@@ -61,9 +60,9 @@ func (b *entityAccessBoot) start(ctx context.Context, coordinator coordinatorBoo
 	}
 
 	result := entityAccessBootOutput{}
+	result.rpcClient = client
 	result.access = entityserver_v1alpha.NewEntityAccessClient(client)
 	result.client = entityserver.NewClient(observability.log, result.access)
-	result.netService = network.NewServiceManager(observability.log, result.access)
 
 	allocator := ipalloc.NewAllocator(observability.log, b.inputs.servicePrefixes)
 	b.inputs.group.Go(func() error {

@@ -14,49 +14,76 @@ import (
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/serverconfig"
+	"miren.dev/runtime/servers/httpingress"
 )
 
 type ingressBootInputs struct {
-	ingress serverconfig.IngressConfig
-	tls     serverconfig.TLSConfig
-	group   *errgroup.Group
+	ingress        serverconfig.IngressConfig
+	tls            serverconfig.TLSConfig
+	group          *errgroup.Group
+	dataPath       string
+	requestTimeout time.Duration
 }
 
 type ingressBoot struct {
 	component     *boot.Component
 	inputs        ingressBootInputs
 	observability observabilityBootOutput
+	output        boot.Output[ingressBootOutput]
+}
+
+type ingressBootOutput struct {
+	server *httpingress.Server
 }
 
 func ingressInputs(options StartOptions) ingressBootInputs {
-	return ingressBootInputs{ingress: options.Config.Ingress, tls: options.Config.TLS, group: options.Group}
+	return ingressBootInputs{
+		ingress:        options.Config.Ingress,
+		tls:            options.Config.TLS,
+		group:          options.Group,
+		dataPath:       options.Config.Server.GetDataPath(),
+		requestTimeout: options.Config.Server.HTTPRequestTimeoutDuration(),
+	}
 }
 
-func newIngressBoot(inputs ingressBootInputs, coordinator boot.Output[coordinatorBootOutput], observability boot.Output[observabilityBootOutput]) *ingressBoot {
+func newIngressBoot(inputs ingressBootInputs, workloadControl boot.Output[workloadControlBootOutput], runnerReady *boot.Component, identity boot.Output[workloadIdentityBootOutput], entityAccess boot.Output[entityAccessBootOutput], observability boot.Output[observabilityBootOutput]) *ingressBoot {
 	b := &ingressBoot{inputs: inputs}
-	b.component = boot.Run2("ingress", coordinator, observability, b.start)
+	b.component, b.output = boot.Provide4(
+		"ingress", workloadControl, identity, entityAccess, observability, b.start,
+		boot.DependsOn(runnerReady),
+	)
 	return b
 }
 
-func (b *ingressBoot) start(ctx context.Context, coordinatorOutput coordinatorBootOutput, observability observabilityBootOutput) error {
+func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadControlBootOutput, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, observability observabilityBootOutput) (ingressBootOutput, error) {
 	b.observability = observability
-	coordinator := coordinatorOutput.coordinator
-	handler := coordinator.HttpIngress()
-	log := observability.log
+	workloadControl := workloadControlOutput.workloadControl
+	handler := httpingress.NewServer(ctx, observability.log, httpingress.IngressConfig{
+		RequestTimeout: b.inputs.requestTimeout,
+		DataPath:       b.inputs.dataPath,
+		WorkloadIssuer: identity.issuer,
+	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
+	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
+		return ingressBootOutput{}, err
+	}
+	return ingressBootOutput{server: handler}, nil
+}
+
+func (b *ingressBoot) serve(ctx context.Context, handler http.Handler, provider autotls.CertificateProvider, autocertReady func()) error {
+	log := b.observability.log
 	switch mode := b.inputs.ingress.GetMode(); mode {
 	case serverconfig.IngressModeAutoprovision:
 		if b.inputs.tls.GetSelfSigned() {
 			return autotls.ServeTLSSelfSigned(ctx, log, handler)
 		}
-		provider := coordinator.CertificateProvider()
 		if provider == nil {
 			return errors.New("no certificate provider available")
 		}
 		if err := autotls.ServeTLSWithController(ctx, log, provider, handler); err != nil {
 			return err
 		}
-		if ready := coordinator.AutocertReadySignal(); ready != nil {
-			ready()
+		if autocertReady != nil {
+			autocertReady()
 		}
 		return nil
 
@@ -71,7 +98,6 @@ func (b *ingressBoot) start(ctx context.Context, coordinatorOutput coordinatorBo
 		if b.inputs.tls.GetAcmeDNSProvider() == "" {
 			return errors.New("ingress.mode behind-proxy-https requires tls.self_signed or tls.acme_dns_provider because it does not bind port 80 for HTTP-01")
 		}
-		provider := coordinator.CertificateProvider()
 		if provider == nil {
 			return errors.New("no certificate provider available")
 		}

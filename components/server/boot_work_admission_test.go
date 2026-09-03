@@ -12,27 +12,38 @@ import (
 	"miren.dev/runtime/pkg/boot"
 )
 
-func TestWorkAdmissionWaitsForBuildAndSandboxCapabilities(t *testing.T) {
+func TestWorkAdmissionWaitsForExecutionCapabilities(t *testing.T) {
 	graph := boot.NewGraph()
-	coordinatorComponent, coordinatorOutput := boot.Provide0("coordinator", func(context.Context) (coordinatorBootOutput, error) {
-		return coordinatorBootOutput{coordinator: new(coordinate.Coordinator)}, nil
+	applicationsComponent, applicationsOutput := boot.Provide0("application-management", func(context.Context) (applicationManagementBootOutput, error) {
+		return applicationManagementBootOutput{applications: coordinate.NewApplicationManagement(new(coordinate.Foundation), nil)}, nil
+	})
+	workloadsStarted := make(chan struct{})
+	releaseWorkloads := make(chan struct{})
+	workloadsComponent, _ := boot.Provide0("workload-control", func(ctx context.Context) (workloadControlBootOutput, error) {
+		close(workloadsStarted)
+		select {
+		case <-ctx.Done():
+			return workloadControlBootOutput{}, ctx.Err()
+		case <-releaseWorkloads:
+			return workloadControlBootOutput{}, nil
+		}
 	})
 
 	runnerStarted := make(chan struct{})
 	releaseRunner := make(chan struct{})
-	runnerComponent, runnerOutput := boot.Provide0("runner", func(ctx context.Context) (runnerBootOutput, error) {
+	runnerComponent, _ := boot.Provide0("runner", func(ctx context.Context) (nodePresenceBootOutput, error) {
 		close(runnerStarted)
 		select {
 		case <-ctx.Done():
-			return runnerBootOutput{}, ctx.Err()
+			return nodePresenceBootOutput{}, ctx.Err()
 		case <-releaseRunner:
-			return runnerBootOutput{}, nil
+			return nodePresenceBootOutput{}, nil
 		}
 	})
 
 	buildkitStarted := make(chan struct{})
 	releaseBuildkit := make(chan struct{})
-	buildkitComponent, buildkitOutput := boot.Provide0("buildkit", func(ctx context.Context) (buildkitBootOutput, error) {
+	buildkitComponent, _ := boot.Provide0("buildkit", func(ctx context.Context) (buildkitBootOutput, error) {
 		close(buildkitStarted)
 		select {
 		case <-ctx.Done():
@@ -42,16 +53,17 @@ func TestWorkAdmissionWaitsForBuildAndSandboxCapabilities(t *testing.T) {
 		}
 	})
 
-	ociRegistryComponent, ociRegistryOutput := boot.Provide0("oci-registry", func(context.Context) (struct{}, error) {
+	ociRegistryComponent, _ := boot.Provide0("oci-registry", func(context.Context) (struct{}, error) {
 		return struct{}{}, nil
 	})
-	hostMappingComponent, hostMappingOutput := boot.Provide0("registry-host-mapping", func(context.Context) (registryHostMappingBootOutput, error) {
+	hostMappingComponent, _ := boot.Provide0("registry-host-mapping", func(context.Context) (registryHostMappingBootOutput, error) {
 		return registryHostMappingBootOutput{}, nil
 	})
-	admission := newWorkAdmissionBoot(coordinatorOutput, runnerOutput, buildkitOutput, ociRegistryOutput, hostMappingOutput)
+	admission := newWorkAdmissionBoot(applicationsOutput, workloadsComponent, runnerComponent, buildkitComponent, ociRegistryComponent, hostMappingComponent)
 
 	for _, component := range []*boot.Component{
-		coordinatorComponent,
+		applicationsComponent,
+		workloadsComponent,
 		runnerComponent,
 		buildkitComponent,
 		ociRegistryComponent,
@@ -66,6 +78,14 @@ func TestWorkAdmissionWaitsForBuildAndSandboxCapabilities(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case <-runnerStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-workloadsStarted:
 			return true
 		default:
 			return false
@@ -92,5 +112,7 @@ func TestWorkAdmissionWaitsForBuildAndSandboxCapabilities(t *testing.T) {
 	close(releaseRunner)
 	assertStillBooting()
 	close(releaseBuildkit)
-	require.ErrorContains(t, <-done, "work services are not initialized")
+	assertStillBooting()
+	close(releaseWorkloads)
+	require.ErrorContains(t, <-done, "build and deployment APIs are not initialized")
 }

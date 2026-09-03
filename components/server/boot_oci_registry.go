@@ -26,15 +26,16 @@ func ociRegistryInputs(options StartOptions) ociRegistryBootInputs {
 	return ociRegistryBootInputs{dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newOCIRegistryBoot(inputs ociRegistryBootInputs, identity boot.Output[workloadIdentityBootOutput], entityAccess boot.Output[entityAccessBootOutput], hostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput]) *ociRegistryBoot {
+func newOCIRegistryBoot(inputs ociRegistryBootInputs, identity boot.Output[workloadIdentityBootOutput], entityAccess boot.Output[entityAccessBootOutput], hostMapping *boot.Component, observability boot.Output[observabilityBootOutput]) *ociRegistryBoot {
 	b := &ociRegistryBoot{inputs: inputs}
-	b.component, b.output = boot.Provide4("oci-registry", identity, entityAccess, hostMapping, observability, b.start,
+	b.component, b.output = boot.Provide3("oci-registry", identity, entityAccess, observability, b.start,
+		boot.DependsOn(hostMapping),
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *ociRegistryBoot) start(ctx context.Context, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, _ registryHostMappingBootOutput, observability observabilityBootOutput) (struct{}, error) {
+func (b *ociRegistryBoot) start(ctx context.Context, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, observability observabilityBootOutput) (struct{}, error) {
 	b.registry = ocireg.NewRegistry(
 		b.inputs.dataPath,
 		observability.log,
