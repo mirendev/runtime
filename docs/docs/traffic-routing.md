@@ -56,7 +56,7 @@ miren route set api.myapp.example.com myapp --service api
 ```
 </CliCommand>
 
-The selected app service must be present in the active configuration and expose a port with `type = "http"`. Older scalar `port` settings count as HTTP unless their `port_type` says otherwise. Each hostname still has one target service; Miren does not select a service automatically or route paths to different services.
+The selected app service must be present in the active configuration and expose an HTTP port. Omitted port types default to `"http"`, and the older scalar `port` field counts as HTTP unless its `port_type` says otherwise. Each hostname still has one target service; Miren does not select a service automatically or route paths to different services.
 
 ### Wildcard Routes
 
