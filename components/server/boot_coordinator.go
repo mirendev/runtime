@@ -113,9 +113,9 @@ func (b *coordinatorBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBoot
 	return b.result, nil
 }
 
-func (b *coordinatorBoot) stop(context.Context) error {
+func (b *coordinatorBoot) stop(ctx context.Context) error {
 	if b.result.coordinator != nil {
-		b.result.coordinator.Stop()
+		return b.result.coordinator.Stop(ctx)
 	}
 	return nil
 }

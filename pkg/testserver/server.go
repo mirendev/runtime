@@ -85,6 +85,18 @@ func TestServer(t *testing.T) error {
 		ctxCancel()
 		return err
 	}
+	// Cleanup runs in reverse registration order. Register the coordinator now
+	// so the HTTP and OCI servers below drain before coordinator RPC shuts down.
+	t.Cleanup(func() {
+		log.Info("Stopping coordinator and controllers")
+		ctxCancel()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := co.Stop(shutdownCtx); err != nil {
+			log.Error("failed to stop coordinator", "error", err)
+		}
+	})
 
 	// Create subnet from test deps
 	subnet := testDeps.Subnet
@@ -241,15 +253,6 @@ func TestServer(t *testing.T) error {
 	hm.SetHost("cluster.local", regAddr)
 
 	log.Info("Starting test server", "address", optsAddress, "runner_id", optsRunnerId)
-
-	// Register cleanup for running components
-	t.Cleanup(func() {
-		log.Info("Stopping coordinator and controllers")
-		co.Stop()
-
-		log.Info("Canceling context to stop all components")
-		ctxCancel()
-	})
 
 	// Wait in a separate goroutine for any errors from the errgroup
 	eg.Go(func() error {

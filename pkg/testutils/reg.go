@@ -265,6 +265,11 @@ func NewTestDeps() (*TestDeps, func()) {
 
 	cleanup := func() {
 		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := coord.Stop(shutdownCtx); err != nil {
+			log.Error("failed to stop test coordinator", "error", err)
+		}
+		shutdownCancel()
 
 		if netServ != nil {
 			netServ.ShutdownAll()

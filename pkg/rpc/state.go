@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -115,15 +117,20 @@ func (s *StateCommon) audit() *slog.Logger {
 type State struct {
 	*StateCommon
 
+	cancel         context.CancelFunc
 	transport      *quic.Transport
 	localTransport *quic.Transport
 
 	defaultEndpoint string
 
-	server *Server
-	hs     *http3.Server
-	ws     *webtransport.Server
-	li     *quic.EarlyListener
+	server    *Server
+	hs        *http3.Server
+	ws        *webtransport.Server
+	li        *quic.EarlyListener
+	localHS   *http3.Server
+	localLI   *quic.EarlyListener
+	localLn   net.Listener
+	localPath string
 
 	httpSrv *http.Server
 	tcpLn   net.Listener
@@ -138,6 +145,13 @@ type State struct {
 	msgContact string
 
 	localMP *packet.PacketConnMultiplex
+
+	// explicitStop tells the context-owned cleanup goroutines that an explicit
+	// Shutdown or Close has taken ownership of teardown. In particular, this
+	// keeps a coordinator-owned lifetime cancellation from racing a second
+	// HTTP/3 Shutdown after the ordered boot stop has already drained it.
+	explicitStop     chan struct{}
+	explicitStopOnce sync.Once
 }
 
 // contactAddr returns the address embedded in capabilities this server mints,
@@ -479,10 +493,11 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 	if err := server.mountHTTPHandlers(so.httpHandlers); err != nil {
 		return nil, err
 	}
+	stateCtx, cancelState := context.WithCancel(ctx)
 
 	s := &State{
 		StateCommon: &StateCommon{
-			top:           ctx,
+			top:           stateCtx,
 			log:           so.log,
 			auditLog:      newAuditLogger(so.log),
 			certAuth:      newCertAuthDeduper(),
@@ -494,54 +509,62 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 			authorizer:    so.authorizer,
 		},
 
+		cancel:          cancelState,
 		defaultEndpoint: so.endpoint,
 		server:          server,
 		transport:       &quic.Transport{Conn: udpConn},
+		explicitStop:    make(chan struct{}),
 	}
 
 	s.qc = DefaultQUICConfig
 
-	err = s.startListener(ctx, &so)
+	err = s.startListener(stateCtx, &so)
 	if err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 
-	err = s.setupLocal(ctx)
+	err = s.setupLocal(stateCtx)
 	if err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 
 	if so.serverLocalAddr != "" {
-		err := s.startLocalListener(ctx, so.serverLocalAddr)
+		err := s.startLocalListener(stateCtx, so.serverLocalAddr)
 		if err != nil {
+			_ = s.Close()
 			return nil, err
 		}
 	}
 
 	if so.wsBindAddr != "" {
-		err := s.startWSListener(ctx, so.wsBindAddr)
+		err := s.startWSListener(stateCtx, so.wsBindAddr)
 		if err != nil {
+			_ = s.Close()
 			return nil, err
 		}
 	}
 
 	if so.tcpBindAddr != "" {
-		err := s.startTCPListener(ctx, so.tcpBindAddr)
+		err := s.startTCPListener(stateCtx, so.tcpBindAddr)
 		if err != nil {
+			_ = s.Close()
 			return nil, err
 		}
 	}
 
 	if so.restBindAddr != "" {
-		err := s.startRESTListener(ctx, so.restBindAddr)
+		err := s.startRESTListener(stateCtx, so.restBindAddr)
 		if err != nil {
+			_ = s.Close()
 			return nil, err
 		}
 	}
 
 	if so.memServerName != "" {
 		s.msgContact = "mem://" + so.memServerName
-		defaultMemRegistry.register(ctx, so.memServerName, s)
+		defaultMemRegistry.register(stateCtx, so.memServerName, s)
 	}
 
 	return s, nil
@@ -675,8 +698,9 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	s.server.ws = s.ws
 
 	go func() {
-		<-ctx.Done()
-		s.hs.Shutdown(context.Background())
+		if s.contextOwnsShutdown(ctx) {
+			_ = s.hs.Shutdown(context.Background())
+		}
 	}()
 
 	// Trigger webtransport server initialization by calling Serve with a stub PacketConn.
@@ -689,33 +713,144 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	return nil
 }
 
-func (s *State) Close() error {
-	s.li.Close()
+// Shutdown gracefully stops every network server owned by this State. Unlike
+// cancellation of the context passed to NewState, callers can place Shutdown
+// precisely in an ordered component teardown and give in-flight requests a
+// bounded drain window.
+func (s *State) Shutdown(ctx context.Context) error {
+	s.disableContextShutdown()
+	// Stop server-owned background work and streaming RPCs before asking the
+	// network servers to drain. Unary request contexts remain transport-owned,
+	// so in-flight calls can still finish during the graceful shutdown window.
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.localLn != nil {
+		_ = s.localLn.Close()
+	}
+
+	var (
+		errs []error
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+	)
+	shutdown := func(fn func(context.Context) error) {
+		if fn == nil {
+			return
+		}
+		wg.Go(func() {
+			if err := fn(ctx); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		})
+	}
+
 	if s.hs != nil {
-		s.hs.Close()
+		shutdown(s.hs.Shutdown)
+	}
+	if s.localHS != nil {
+		shutdown(s.localHS.Shutdown)
+	}
+	if s.httpSrv != nil {
+		shutdown(s.httpSrv.Shutdown)
+	}
+	if s.restSrv != nil {
+		shutdown(s.restSrv.Shutdown)
+	}
+	if s.msgLn != nil {
+		_ = s.msgLn.Close()
+	}
+
+	wg.Wait()
+	if s.li != nil {
+		_ = s.li.Close()
+	}
+	if s.localLI != nil {
+		_ = s.localLI.Close()
+	}
+	if s.localPath != "" {
+		_ = os.Remove(s.localPath)
+	}
+	if s.transport != nil && s.transport.Conn != nil {
+		_ = s.transport.Conn.Close()
+	}
+
+	return errors.Join(errs...)
+}
+
+func (s *State) Close() error {
+	s.disableContextShutdown()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.li != nil {
+		_ = s.li.Close()
+	}
+	if s.hs != nil {
+		_ = s.hs.Close()
+	}
+
+	if s.localLI != nil {
+		_ = s.localLI.Close()
+	}
+	if s.localLn != nil {
+		_ = s.localLn.Close()
+	}
+	if s.localHS != nil {
+		_ = s.localHS.Close()
+	}
+	if s.localPath != "" {
+		_ = os.Remove(s.localPath)
 	}
 
 	if s.httpSrv != nil {
-		s.httpSrv.Close()
+		_ = s.httpSrv.Close()
 	}
 
 	if s.tcpLn != nil {
-		s.tcpLn.Close()
+		_ = s.tcpLn.Close()
 	}
 
 	if s.msgLn != nil {
-		s.msgLn.Close()
+		_ = s.msgLn.Close()
 	}
 
 	if s.restSrv != nil {
-		s.restSrv.Close()
+		_ = s.restSrv.Close()
 	}
 
 	if s.restLn != nil {
-		s.restLn.Close()
+		_ = s.restLn.Close()
 	}
 
 	return s.transport.Conn.Close()
+}
+
+func (s *State) disableContextShutdown() {
+	s.explicitStopOnce.Do(func() {
+		if s.explicitStop != nil {
+			close(s.explicitStop)
+		}
+	})
+}
+
+func (s *State) contextOwnsShutdown(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		// If explicit shutdown and context cancellation become ready together,
+		// the select above may choose either. Re-check ownership so cancellation
+		// never starts a duplicate shutdown after an explicit caller took it.
+		select {
+		case <-s.explicitStop:
+			return false
+		default:
+			return true
+		}
+	case <-s.explicitStop:
+		return false
+	}
 }
 
 func (s *State) Client(name string) (*NetworkClient, error) {

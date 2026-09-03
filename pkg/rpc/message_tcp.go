@@ -105,8 +105,9 @@ func (s *State) startTCPListener(ctx context.Context, addr string) error {
 	s.msgLn = ln
 
 	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
+		if s.contextOwnsShutdown(ctx) {
+			_ = ln.Close()
+		}
 	}()
 
 	s.log.Info("starting tcp message listener", "addr", ln.Addr().String())

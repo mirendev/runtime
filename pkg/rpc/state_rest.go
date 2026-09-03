@@ -50,8 +50,9 @@ func (s *State) startRESTListener(ctx context.Context, addr string) error {
 	s.restLn = tcpLn
 
 	go func() {
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		if s.contextOwnsShutdown(ctx) {
+			_ = srv.Shutdown(context.Background())
+		}
 	}()
 
 	s.log.Info("starting rest/tcp listener", "addr", tcpLn.Addr().String())
