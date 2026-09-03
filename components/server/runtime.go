@@ -72,7 +72,7 @@ func (s *startup) addComponents() error {
 		s.tracing.component,
 		s.observability.component,
 		s.pprof.component,
-		s.containerd.component,
+		s.containerd.Component,
 		s.etcd.component,
 		s.victoriaLogs.component,
 		s.victoriaMetrics.component,

@@ -5,12 +5,16 @@ package server
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 
 	"golang.org/x/sync/errgroup"
+	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/serverconfig"
 )
+
+type containerdBootOutput = containerdcomp.Capability
 
 // StartOptions contains the resolved inputs used to assemble one fixed server
 // boot graph.
@@ -31,7 +35,7 @@ type startup struct {
 	tracing             *tracingBoot
 	observability       *observabilityBoot
 	pprof               *pprofBoot
-	containerd          *containerdBoot
+	containerd          *containerdcomp.Boot
 	etcd                *etcdBoot
 	victoriaLogs        *victoriaLogsBoot
 	victoriaMetrics     *victoriaMetricsBoot
@@ -58,9 +62,10 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	secretRegistry := secret.NewRegistry()
 	address := NormalizeServerAddress(options.Log, options.Config.Server.GetAddress())
 
-	// This is where we wire up the boot graph. Each component lives in a sibling
-	// boot_*.go file. Its input helper narrows external config and shared
-	// resources to what it needs. The remaining constructor arguments are typed
+	// This is where we wire up the boot graph. Server-specific components live
+	// in sibling boot_*.go files; reusable adapters live with the component they
+	// manage. Input helpers narrow external config and shared resources to what
+	// each component needs. The remaining constructor arguments are typed
 	// upstream outputs: they show both the values delivered to the component and
 	// the dataflow edges that determine startup and shutdown order. The graph
 	// does not change after startup begins.
@@ -68,15 +73,15 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	registration := newRegistrationBoot(registrationInputs(options))
 	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
 	tracing := newTracingBoot(tracingInputs(options), registration.output)
-	containerd := newContainerdBoot(containerdInputs(options))
-	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.output)
-	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.output)
+	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
+	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
+	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
 	observability := newObservabilityBoot(observabilityInputs(options), tracing.output, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
-	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.output, observability.output)
+	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
-	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.output, registryHostMapping.output, network.output, observability.output)
+	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output)
 	coordinator := newCoordinatorBoot(
 		coordinatorInputs(options, resolver, secretRegistry, address),
 		ipDiscovery.output,
@@ -91,7 +96,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), coordinator.output, observability.output)
 	appMetrics := newAppMetricsBoot(
 		appMetricsInputs(options),
-		containerd.output,
+		containerd.Output,
 		registration.output,
 		workloadIdentity.output,
 		entityAccess.output,
@@ -101,7 +106,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		runnerInputs(options, resolver, secretRegistry, serverPort(options.Log, address)),
 		registration.output,
 		workloadIdentity.output,
-		containerd.output,
+		containerd.Output,
 		coordinator.output,
 		entityAccess.output,
 		network.output,
@@ -144,4 +149,23 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workAdmission:       workAdmission,
 		buildSagaRecovery:   buildSagaRecovery,
 	}
+}
+
+func containerdBootConfig(options StartOptions) containerdcomp.BootConfig {
+	config := options.Config.Containerd
+	dataPath := options.Config.Server.GetDataPath()
+	socketPath := config.GetSocketPath()
+	if socketPath == "" {
+		socketPath = filepath.Join(dataPath, "containerd", "containerd.sock")
+	}
+
+	var bootConfig containerdcomp.BootConfig
+	if config.GetStartEmbedded() {
+		bootConfig = containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
+			config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
+	} else {
+		bootConfig = containerdcomp.ExternalBootConfig(options.Log, dataPath, socketPath)
+	}
+	bootConfig.StopTimeout = componentStopTimeout
+	return bootConfig
 }

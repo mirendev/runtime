@@ -97,8 +97,8 @@ func (b *runnerBoot) start(ctx context.Context, registration registrationBootOut
 
 	dependencies := runner.RunnerDeps{
 		Secrets:         b.inputs.secrets,
-		CC:              containerdOutput.client,
-		Namespace:       containerdOutput.namespace,
+		CC:              containerdOutput.Client,
+		Namespace:       containerdOutput.Namespace,
 		Bridge:          b.inputs.bridge,
 		Tempdir:         b.inputs.tempDir,
 		Subnet:          network.subnet,
@@ -141,8 +141,8 @@ func (b *runnerBoot) stop(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	if b.cleanupOnStop && b.started {
-		if client := b.containerd.client; client != nil {
-			if err := stopAllSandboxContainers(ctx, b.log, client); err != nil {
+		if client := b.containerd.Client; client != nil {
+			if err := stopAllSandboxContainers(ctx, b.log, client, b.containerd.Namespace); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -154,11 +154,11 @@ func (b *runnerBoot) enableShutdownCleanup() {
 	b.cleanupOnStop = b.inputs.stopSandboxesOnShutdown
 }
 
-func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *containerd.Client) error {
+func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *containerd.Client, namespace string) error {
 	log.Info("stopping all sandbox containers via containerd")
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
+	ctx = namespaces.WithNamespace(ctx, namespace)
 
 	containers, err := client.Containers(ctx)
 	if err != nil {
