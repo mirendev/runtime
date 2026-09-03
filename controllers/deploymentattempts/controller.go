@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
+	entityexport "miren.dev/runtime/pkg/entity/export"
 )
 
 const (
@@ -116,10 +117,17 @@ func (c *Controller) Step(ctx context.Context) error {
 		return err
 	}
 	var migrateErrs []error
+	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, ent := range entities {
+		if ent == nil {
+			continue
+		}
 		err := migrate(ctx, ent)
 		if err == nil && c.phase != phaseReconcile {
-			err = c.ensureCloudExportMarker(ctx, ent.Id())
+			attr, marked := ent.Get(marker)
+			if !marked || attr.Value.Kind() != entity.KindBool || !attr.Value.Bool() {
+				_, err = entityexport.EnsureMarker(ctx, c.Store, ent.Id(), marker)
+			}
 		}
 		if err != nil {
 			wrapped := fmt.Errorf("migrating %s in phase %s: %w", ent.Id(), c.phase, err)
@@ -232,22 +240,6 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 		attrs = append(attrs, entity.Time(core_v1alpha.DeploymentStartedAtId, started))
 	}
 	_, err := c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
-	return err
-}
-
-func (c *Controller) ensureCloudExportMarker(ctx context.Context, id entity.Id) error {
-	current, err := c.Store.GetEntity(ctx, id)
-	if err != nil {
-		return err
-	}
-	marker := core_v1alpha.CloudExportContract.MarkerID()
-	if attr, ok := current.Get(marker); ok && attr.Value.Kind() == entity.KindBool && attr.Value.Bool() {
-		return nil
-	}
-	_, err = c.Store.PatchEntity(ctx, entity.New(
-		entity.Ref(entity.DBId, id),
-		entity.Bool(marker, true),
-	), entity.WithFromRevision(current.GetRevision()))
 	return err
 }
 

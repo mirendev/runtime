@@ -139,6 +139,30 @@ func TestOfferCapabilityPanicsOnDuplicateName(t *testing.T) {
 	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{2}})
 }
 
+func TestOfferCapabilityFuncRefreshesAndCanOmitAnOffer(t *testing.T) {
+	client := newTestClient("http://unused", "test-token", NewMessageRouter())
+	include := false
+	payload := json.RawMessage(`{"epoch":"one"}`)
+	client.OfferCapabilityFunc(CapabilityEntitySync, []uint{1}, func(context.Context) (json.RawMessage, bool) {
+		return payload, include
+	})
+
+	offers, _ := client.sessionSnapshot(t.Context())
+	if len(offers) != 0 {
+		t.Fatalf("omitted capability offers = %+v, want none", offers)
+	}
+	include = true
+	offers, _ = client.sessionSnapshot(t.Context())
+	if len(offers) != 1 || string(offers[0].Offer) != string(payload) {
+		t.Fatalf("capability offers = %+v, want refreshed entity-sync offer", offers)
+	}
+	payload = json.RawMessage(`{"epoch":"two"}`)
+	offers, _ = client.sessionSnapshot(t.Context())
+	if string(offers[0].Offer) != string(payload) {
+		t.Fatalf("capability offer = %s, want %s", offers[0].Offer, payload)
+	}
+}
+
 func TestLegacyClientSendsBootstrapBeforeTenantMessages(t *testing.T) {
 	received := make(chan []Envelope, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
