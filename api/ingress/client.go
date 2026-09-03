@@ -276,7 +276,7 @@ func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 		if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
 			return nil
 		}
-		if service == "web" {
+		if service == "web" && svc.Port == 0 {
 			return nil
 		}
 		return fmt.Errorf("app service %q has no HTTP port", service)

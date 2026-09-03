@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -487,6 +488,19 @@ func TestHTTPService(t *testing.T) {
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 7000, Type: "tcp"}}}}},
 		},
 		{
+			name:    "scalar web with explicit non-HTTP port_type is rejected",
+			service: "web",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+				Name: "web", Port: 8080, PortType: "tcp",
+			}}},
+			wantErr: `app service "web" has no HTTP port`,
+		},
+		{
+			name:    "scalar web with no port but non-HTTP port_type is admitted",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", PortType: "tcp"}}},
+		},
+		{
 			name:    "missing service",
 			service: "api",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
@@ -516,6 +530,32 @@ func TestHTTPService(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHTTPServiceRejectsScalarWebNonHTTPPortTypeMatchesAppspecBuild(t *testing.T) {
+	spec := &core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+		Name: "web", Port: 8080, PortType: "tcp",
+	}}}
+
+	err := HTTPService(spec, "web")
+	require.Error(t, err)
+	require.ErrorContains(t, err, `app service "web" has no HTTP port`)
+
+	sb, buildErr := appspec.Build(slog.Default(), appspec.Options{
+		AppID:   entity.Id("app/demo"),
+		AppName: "demo",
+		Version: &core_v1alpha.AppVersion{ID: entity.Id("app_version/v1")},
+		Config:  spec, Service: "web", Image: "img",
+	})
+	require.NoError(t, buildErr)
+
+	httpPorts := 0
+	for _, cp := range sb.Container[0].Port {
+		if cp.Type == "http" {
+			httpPorts++
+		}
+	}
+	require.Equal(t, 0, httpPorts, "appspec.Build emits no http port for scalar web with a non-HTTP port_type")
 }
 
 func TestClientSetRouteStoresService(t *testing.T) {
