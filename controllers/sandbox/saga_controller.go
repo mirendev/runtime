@@ -110,14 +110,14 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 				// every pre-upgrade "legacy" in-flight saga (empty scope) is skipped
 				// at startup. The only route left to resume them is a routed
 				// Execute -- createSandboxViaSaga -- which the case below used to
-				// bypass by returning early. Route a surviving legacy record that
-				// still has forward work left (Pending/Running) through that resume
-				// path so its tail actions run. A record that is Undoing is left
-				// alone here: resuming compensation would unwind the surviving
-				// containers this process did not boot, which is strictly worse than
-				// leaving a healthy-but-incomplete record for a later pass.
+				// bypass by returning early. Route a surviving legacy record
+				// through that resume path so its tail actions run.
+				// sagaResumeNeeded decides which records qualify, and is
+				// deliberately narrow: only ones whose containers are already
+				// booted and recorded as such, so the resume cannot re-run
+				// container creation against a live sandbox.
 				if s.sagaResumeNeeded(ctx, co) {
-					return s.createSandboxViaSaga(ctx, co)
+					return s.createSandboxViaSaga(ctx, co, true)
 				}
 
 				if co.Status == compute.PENDING {
@@ -179,7 +179,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 			return s.inner.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
-		return s.createSandboxViaSaga(ctx, co)
+		return s.createSandboxViaSaga(ctx, co, false)
 	case compute.NOT_READY:
 		// Transient boot state; nothing to reconcile until it resolves.
 		fallthrough
@@ -196,19 +196,34 @@ func createSandboxSagaID(co *compute.Sandbox) string {
 	return fmt.Sprintf("create-sandbox-%s", co.ID)
 }
 
-// sagaResumeNeeded reports whether a non-terminal create-sandbox saga exists
-// for co AND still has forward work left to run (Pending or Running). When
-// CheckSandbox reports the containers as healthy ("same"), such a record means
-// a previous attempt crashed mid-creation with its containers surviving:
-// "containers healthy" only proves actionBootCtrs persisted, not that the tail
-// (actionUpdateSvcs → Endpoints) ran. The record is the only thing that knows
-// there is more to do, so it must drive the resume.
+// sagaResumeNeeded reports whether a create-sandbox saga record exists for co
+// that is safe to resume against containers that are already healthy. When
+// CheckSandbox reports the containers as "same", such a record means a previous
+// attempt crashed mid-creation with its containers surviving: "containers
+// healthy" only proves actionBootCtrs ran, not that the tail (actionUpdateSvcs
+// → Endpoints) did. The record is the only thing that knows there is more to
+// do, so it must drive the resume.
 //
-// Records in StatusUndoing are deliberately not resumed from here: their
-// compensation undoes booted containers, and resuming that against surviving
+// Two conditions, and the second is the one that keeps this safe.
+//
+// The record must have forward work left: Pending or Running. Records in
+// StatusUndoing are deliberately not resumed from here, because their
+// compensation undoes booted containers and running it against surviving
 // containers this process did not boot would be net-destructive. A scoped
 // startup Recover (or an explicit re-entry by an operator) owns that path.
-// Completed/Failed records are terminal and need no resume.
+// Completed and Failed are terminal.
+//
+// And actionBootCtrs must already be recorded as executed, which confines the
+// resume to the tail the bug actually lives in — add-metrics, wait-ports,
+// set-running, update-services, each of which tolerates re-execution. Resuming
+// earlier than that would re-run createContainer or bootContainers against a
+// live sandbox; every action in this saga has an Undo, so an action that
+// errored on re-execution would unwind the whole saga and tear down the very
+// containers that were healthy, and createSandboxViaSaga would then mark the
+// sandbox DEAD. Turning an unroutable sandbox into a destroyed one is a bad
+// trade, and the executor persists after each action, so a record that has not
+// recorded actionBootCtrs cannot be distinguished from one where it never ran.
+// Those are left alone for a scoped Recover to handle.
 func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *compute.Sandbox) bool {
 	exec, err := s.storage.Get(ctx, createSandboxSagaID(co))
 	if err != nil {
@@ -218,25 +233,46 @@ func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *comput
 		}
 		return false
 	}
-	// Only forward-incomplete records (Pending/Running) are resumed from a
-	// surviving-container reconcile. A Undoing record's compensation would
-	// unwind the surviving containers this process did not boot; Completed and
-	// Failed records are terminal.
-	return exec.Status == saga.StatusPending || exec.Status == saga.StatusRunning
+
+	if exec.Status != saga.StatusPending && exec.Status != saga.StatusRunning {
+		return false
+	}
+
+	if _, booted := exec.ExecutedActions[actionBootCtrs]; !booted {
+		// Debug, not Info: this is a property of the record, not an event,
+		// and it would repeat identically on every reconcile pass for as long
+		// as the sandbox lives.
+		s.log.Debug("not resuming create-sandbox saga: containers survive but the record predates boot-containers",
+			"id", co.ID, "status", exec.Status)
+		return false
+	}
+	return true
 }
 
 // createSandboxViaSaga runs sandbox creation as a saga for crash recovery.
-func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox) error {
+// resuming marks the call as adopting a record whose containers are still
+// alive, which changes how a pre-existing record is treated below.
+func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox, resuming bool) error {
 	s.log.Info("creating sandbox via saga", "id", co.ID)
 
 	execID := createSandboxSagaID(co)
 
-	// We only get here once CheckSandbox has found the containers missing, so a
-	// record of a previous successful creation describes resources that are no
-	// longer there. Left in place it would resume straight to success and the
-	// sandbox would never be rebuilt, which the old overwrite-on-start hid.
-	if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
-		return fmt.Errorf("clearing stale creation record: %w", err)
+	// Reached either because CheckSandbox found the containers missing, or
+	// because sagaResumeNeeded found a forward-incomplete record for containers
+	// that survived. In the first case a record of a previous successful
+	// creation describes resources that are no longer there: left in place it
+	// would resume straight to success and the sandbox would never be rebuilt,
+	// which the old overwrite-on-start hid.
+	//
+	// The second case must not drop anything — its record is Pending or Running
+	// by construction, and dropping a record whose containers are alive would
+	// restart the saga from alloc-network against a live sandbox. Passing the
+	// status sagaResumeNeeded already read closes the window where a record
+	// completes between that read and this call.
+	if !resuming {
+		if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
+			return fmt.Errorf("clearing stale creation record: %w", err)
+		}
 	}
 
 	err := s.executor.Start(sagaCreateSandbox).

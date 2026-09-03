@@ -1649,15 +1649,10 @@ func (c *SandboxController) UpdateServices(
 	// one), so re-running it against a sandbox whose previous create-sandbox saga
 	// crashed before actionUpdateSvcs persisted would create a second Endpoints
 	// entity per (service, port) — and the service controller installs a DNAT
-	// chain per Endpoints value, so duplicates double-DNAT. Collect the endpoints
-	// already registered for this sandbox's IPs so addEndpoint only creates the
-	// ones missing. On a first create this set is empty, so behaviour is
-	// unchanged for the non-saga synchronous path.
-	existing, err := c.sandboxEndpointKeys(ctx, ep)
-	if err != nil {
-		return fmt.Errorf("listing existing endpoints: %w", err)
-	}
-
+	// chain per Endpoints value, so duplicates double-DNAT. addEndpoint looks up
+	// what this sandbox already registered for the service it is about to touch
+	// and creates only the rest. On a first create nothing is registered, so
+	// behaviour is unchanged for the non-saga synchronous path.
 	for _, ent := range sresp.Values() {
 		var srv network_v1alpha.Service
 		srv.Decode(ent.Entity())
@@ -1667,7 +1662,7 @@ func (c *SandboxController) UpdateServices(
 			continue
 		}
 
-		err = c.addEndpoint(ctx, co, ep, &srv, existing)
+		err = c.addEndpoint(ctx, co, ep, &srv)
 		if err != nil {
 			return fmt.Errorf("failed to add endpoint: %w", err)
 		}
@@ -1676,23 +1671,27 @@ func (c *SandboxController) UpdateServices(
 	return nil
 }
 
-// sandboxEndpointKeys lists existing Endpoints entities and returns the set of
-// (service, ip, port) keys for the ones that belong to this sandbox, identified
-// by IP. Each sandbox owns a distinct subnet IP, so a (service, ip, port) key
-// whose ip is one of this sandbox's addresses uniquely identifies an endpoint
-// this sandbox already registered. Used by UpdateServices to keep addEndpoint
-// idempotent across a resumed create-sandbox saga.
-func (c *SandboxController) sandboxEndpointKeys(ctx context.Context, ep *network.EndpointConfig) (map[string]bool, error) {
+// serviceEndpointKeys returns the (service, ip, port) keys already registered
+// against srv for this sandbox, identified by IP. Each sandbox owns a distinct
+// subnet IP, so a key whose ip is one of this sandbox's addresses is one this
+// sandbox registered.
+//
+// The lookup is per service rather than over every Endpoints entity in the
+// cluster because endpoints.service is indexed and nothing else here is. This
+// runs on every sandbox boot, so a full-kind scan would cost the whole cluster's
+// endpoint count per boot — and the whole cluster's count squared across a mass
+// rollout, when every sandbox is booting at once.
+func (c *SandboxController) serviceEndpointKeys(
+	ctx context.Context,
+	srv *network_v1alpha.Service,
+	ips map[string]bool,
+) (map[string]bool, error) {
 	keys := make(map[string]bool)
-	if ep == nil || len(ep.Addresses) == 0 {
+	if len(ips) == 0 {
 		return keys, nil
 	}
-	ips := make(map[string]bool, len(ep.Addresses))
-	for _, a := range ep.Addresses {
-		ips[a.Addr().String()] = true
-	}
 
-	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+	resp, err := c.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsServiceId, srv.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -1720,12 +1719,25 @@ func (c *SandboxController) addEndpoint(
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	srv *network_v1alpha.Service,
-	existing map[string]bool,
 ) error {
 	if len(ep.Addresses) == 0 {
+		// Nothing to register against. Worth saying out loud: a sandbox that
+		// reached service registration without an address is not a state any
+		// caller sets up on purpose.
+		c.Log.Warn("skipping endpoint registration, sandbox has no addresses",
+			"service", srv.ID, "sandbox", sb.ID)
 		return nil
 	}
 	ip := ep.Addresses[0].Addr().String()
+
+	ips := make(map[string]bool, len(ep.Addresses))
+	for _, a := range ep.Addresses {
+		ips[a.Addr().String()] = true
+	}
+	existing, err := c.serviceEndpointKeys(ctx, srv, ips)
+	if err != nil {
+		return fmt.Errorf("listing existing endpoints for service %s: %w", srv.ID, err)
+	}
 
 	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Spec.Container))
 
@@ -1767,9 +1779,8 @@ func (c *SandboxController) addEndpoint(
 				return fmt.Errorf("failed to update service: %w", err)
 			}
 
-			// Record the key so a later port in this pass, or a re-entered
-			// UpdateServices before the List above reflects this create, does
-			// not mint a duplicate.
+			// Record the key so a later port in this pass, matching the same
+			// service port twice, does not mint a duplicate.
 			existing[key] = true
 
 			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)

@@ -121,7 +121,7 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// create-sandbox's actionUpdateSvcs reaches this through
 		// sandboxOps.UpdateServices, so it inherits the fix; the matching
 		// case-same resume route lives in saga_controller.go.
-		"sandbox.go":  "PLACEHOLDER",
+		"sandbox.go":  "7060769a06aa10963c1241a539d1d8236361fcfa988b973df222a738996a2607",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

@@ -43,26 +43,42 @@ func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 	ctx := context.Background()
 	co := &compute.Sandbox{ID: entity.Id("sb-1")}
 
+	// bootedActions is the record shape of a saga that got its containers up
+	// and persisted that fact — the only shape safe to resume against
+	// containers that are already healthy.
+	bootedActions := map[string]*saga.ActionResult{actionBootCtrs: {}}
+
 	cases := []struct {
-		name   string
-		status saga.Status
-		scope  string
-		want   bool
+		name     string
+		status   saga.Status
+		scope    string
+		executed map[string]*saga.ActionResult
+		want     bool
 	}{
-		// The bug's symptom window: a forward-running legacy saga that crashed
-		// before actionUpdateSvcs persisted, with healthy containers surviving.
-		{"legacy running is resumed", saga.StatusRunning, "", true},
-		{"scoped running is resumed", saga.StatusRunning, "node/a", true},
-		{"pending is resumed", saga.StatusPending, "", true},
+		// The bug's symptom window: a forward-running legacy saga that got
+		// past boot-containers and crashed before actionUpdateSvcs persisted,
+		// with healthy containers surviving.
+		{"legacy running past boot is resumed", saga.StatusRunning, "", bootedActions, true},
+		{"scoped running past boot is resumed", saga.StatusRunning, "node/a", bootedActions, true},
+		{"pending past boot is resumed", saga.StatusPending, "", bootedActions, true},
 
 		// Terminal records need no resume.
-		{"completed is not resumed", saga.StatusCompleted, "", false},
-		{"failed is not resumed", saga.StatusFailed, "", false},
+		{"completed is not resumed", saga.StatusCompleted, "", bootedActions, false},
+		{"failed is not resumed", saga.StatusFailed, "", bootedActions, false},
 
 		// A record mid-compensation is deliberately not resumed from here:
 		// resuming compensation unwinds the surviving containers this process
 		// did not boot, which is strictly worse than leaving a healthy record.
-		{"undoing is not resumed from reconcile", saga.StatusUndoing, "", false},
+		{"undoing is not resumed from reconcile", saga.StatusUndoing, "", bootedActions, false},
+
+		// A record that never recorded boot-containers would resume into
+		// createContainer/bootContainers against a live sandbox. Every action
+		// here has an Undo, so one that errored on re-execution would unwind
+		// the saga and destroy the healthy containers. Left for a scoped
+		// Recover instead.
+		{"running before boot is not resumed", saga.StatusRunning, "", map[string]*saga.ActionResult{}, false},
+		{"running with only earlier actions is not resumed", saga.StatusRunning, "",
+			map[string]*saga.ActionResult{actionAllocNetwork: {}, actionCreateCtr: {}}, false},
 	}
 
 	for _, tc := range cases {
@@ -75,7 +91,7 @@ func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 				InitialInputs:     map[string]any{"sandbox_id": co.ID.String()},
 				RecoveryScope:     tc.scope,
 				Status:            tc.status,
-				ExecutedActions:   map[string]*saga.ActionResult{},
+				ExecutedActions:   tc.executed,
 				ExecutionOrder:    []string{},
 				CreatedAt:         time.Now(),
 				UpdatedAt:         time.Now(),
