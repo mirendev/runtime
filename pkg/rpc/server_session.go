@@ -354,7 +354,7 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 
 	iface.touch()
 
-	mm := iface.methods[req.Method]
+	mm := iface.rpcMethod(req.Method)
 	if mm.Handler == nil {
 		return ctx, nil, Method{}, nil, opReply{Status: "error", Error: "unknown method: " + req.Method}, false
 	}
