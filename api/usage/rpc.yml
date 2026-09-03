@@ -1,0 +1,881 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+# Cluster-wide resource usage for sandboxes and nodes.
+#
+# This is deliberately separate from api/metric, which is a node-local,
+# cgroup-shaped probe exposed on every runner. This one is cluster-scoped and
+# query-shaped, and lives only on the coordinator. Different audience, different
+# auth surface.
+#
+# Two conventions run through everything below.
+#
+# Values are in base units and never pre-formatted: CPU in cores (which may
+# exceed 1.0 for a multi-core sandbox), memory in bytes, rates per second.
+# Rendering "178%" or "3.2 GiB" is the caller's job, because a billing job and a
+# dashboard want the number, not the string.
+#
+# Missing data is reported, not faked. A sandbox with no samples in the window
+# comes back with zeroed usage and stale=true rather than being dropped, and a
+# node whose capacity is unknown reports zero capacity rather than a plausible
+# guess. Operators reach for this when something is already broken, so a partial
+# answer that says which part is missing beats a clean answer that quietly
+# omits the broken host.
+
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: UsageWindow
+    doc: |
+      The time span a measurement covers, as the server resolved it. Every
+      response carries one so a caller that asked for a default can tell what it
+      actually got, and so a chart can label its axis without guessing.
+    fields:
+      - name: start
+        type: standard.Timestamp
+        index: 0
+      - name: end
+        type: standard.Timestamp
+        index: 1
+      - name: aggregate
+        type: string
+        index: 2
+        doc: How the window was collapsed to one number - avg, max, min or last
+      - name: step_seconds
+        type: int64
+        index: 3
+        doc: Resolution of any returned series; 0 when no series was requested
+
+  - type: SandboxRef
+    doc: |
+      Identity of one sandbox. Both ids and names are present throughout: an
+      automated caller joins on the id, which is stable, while a human-facing
+      one prints the name, which is not.
+    fields:
+      - name: sandbox
+        type: string
+        index: 0
+        doc: Sandbox entity id
+      - name: sandbox_short_id
+        type: string
+        index: 1
+      - name: app
+        type: string
+        index: 2
+        doc: App name; empty for sandboxes that belong to no app
+      - name: app_id
+        type: string
+        index: 3
+      - name: service
+        type: string
+        index: 4
+        doc: Service name within the app, such as web or worker
+      - name: pool
+        type: string
+        index: 5
+        doc: Sandbox pool entity id; the unit a replacement happens within
+      - name: version
+        type: string
+        index: 6
+      - name: version_short_id
+        type: string
+        index: 7
+      - name: node
+        type: string
+        index: 8
+        doc: Node entity id the sandbox is scheduled on
+      - name: node_name
+        type: string
+        index: 9
+      - name: runner_id
+        type: string
+        index: 10
+      - name: kind
+        type: string
+        index: 11
+        doc: |
+          What sort of sandbox this is: app for a deployed service, addon for
+          managed infrastructure such as a database, run for a one-off task, or
+          other when it cannot be classified. This is what separates a user's
+          own load from the platform running underneath it.
+      - name: status
+        type: string
+        index: 12
+      - name: started_at
+        type: standard.Timestamp
+        index: 13
+
+  - type: CpuUsage
+    doc: |
+      CPU measured in cores, not percent: a sandbox using two full cores reads
+      2.0 whether the host has 4 cores or 64. percent_of_node is the same figure
+      expressed against the host it runs on, which is the number that says
+      whether it matters.
+
+      Throttling and configured limits are deliberately absent. Miren sets no
+      per-sandbox CPU ceiling today, so both would be a constant zero, and a
+      zero here would read as "never throttled" rather than "never measured".
+      They belong here when limits do.
+    fields:
+      - name: cores
+        type: float64
+        index: 0
+      - name: percent_of_node
+        type: float64
+        index: 1
+        doc: Zero when the node's core count is unknown, not when usage is zero
+
+  - type: MemoryUsage
+    doc: |
+      percent_of_node, not percent_of_limit: Miren sets no per-sandbox memory
+      ceiling, so the host is the only meaningful denominator.
+
+      Peak, swap and OOM-kill counts are not here. The collector reads them from
+      the cgroup but does not publish them, so the service has nothing to report
+      and a zero would be a measurement nobody took.
+    fields:
+      - name: bytes
+        type: int64
+        index: 0
+      - name: percent_of_node
+        type: float64
+        index: 1
+
+  - type: SandboxUsage
+    doc: One row of a top-style listing.
+    fields:
+      - name: ref
+        type: SandboxRef
+        index: 0
+      - name: cpu
+        type: CpuUsage
+        index: 1
+      - name: memory
+        type: MemoryUsage
+        index: 2
+      - name: measured_at
+        type: standard.Timestamp
+        index: 3
+      - name: stale
+        type: bool
+        index: 4
+        doc: |
+          True when no samples landed in the window. The row is still returned,
+          with zeroed usage, because a sandbox that stopped reporting is itself
+          the finding - dropping it would make a broken metrics pipeline look
+          like an idle cluster.
+
+  - type: ResourceTotals
+    doc: A rolled-up slice of resource use, in the same units as a single sandbox.
+    fields:
+      - name: cpu_cores
+        type: float64
+        index: 0
+      - name: cpu_percent
+        type: float64
+        index: 1
+      - name: memory_bytes
+        type: int64
+        index: 2
+      - name: memory_percent
+        type: float64
+        index: 3
+
+  - type: NodeCapacity
+    doc: What a host physically has. Zero means unknown, not absent.
+    fields:
+      - name: cpu_cores
+        type: float64
+        index: 0
+      - name: memory_bytes
+        type: int64
+        index: 1
+      - name: storage_bytes
+        type: int64
+        index: 2
+
+  - type: NodeUsage
+    doc: |
+      One host, split four ways. total is the whole machine; sandboxes is the
+      sum of everything running in a sandbox cgroup; system is the remainder,
+      which is the container runtime, the image builder, the registry, the log
+      pipeline and miren itself. That remainder is the answer to "the node is
+      hot but no app is" and is why all four are reported rather than just the
+      two that were measured directly.
+
+      system is floored at zero. Page-cache accounting means the parts do not
+      reconcile exactly, and a negative number would be worse than a rounded one.
+    fields:
+      - name: node
+        type: string
+        index: 0
+        doc: Node entity id
+      - name: node_name
+        type: string
+        index: 1
+      - name: runner_id
+        type: string
+        index: 2
+      - name: role
+        type: string
+        index: 3
+        doc: coordinator or runner
+      - name: status
+        type: string
+        index: 4
+      - name: scheduling
+        type: string
+        index: 5
+        doc: Empty or schedulable when accepting work, cordoned when parked
+      - name: capacity
+        type: NodeCapacity
+        index: 6
+      - name: total
+        type: ResourceTotals
+        index: 7
+      - name: sandboxes
+        type: ResourceTotals
+        index: 8
+      - name: system
+        type: ResourceTotals
+        index: 9
+      - name: load1
+        type: float64
+        index: 10
+      - name: load5
+        type: float64
+        index: 11
+      - name: load15
+        type: float64
+        index: 12
+      - name: storage_used_bytes
+        type: int64
+        index: 13
+      - name: sandbox_count
+        type: int64
+        index: 14
+      - name: running_sandbox_count
+        type: int64
+        index: 15
+      - name: measured_at
+        type: standard.Timestamp
+        index: 16
+      - name: stale
+        type: bool
+        index: 17
+        doc: |
+          True when this host reported no samples in the window. A runner that
+          has stopped reporting still gets a row, because its silence is the
+          finding.
+
+  - type: AppUsage
+    doc: |
+      One app's total resource use, summed across every sandbox that belongs to
+      it, split into the app's own services and the addons it depends on.
+
+      The split is the point. A dedicated database exists because the app asked
+      for it, so a capacity or cost question wants it counted; a "what is my code
+      doing" question does not. Reporting both means one number answers either,
+      and "2.1 cores, 1.6 of it Postgres" is a far more actionable sentence than
+      "2.1 cores".
+    fields:
+      - name: app
+        type: string
+        index: 0
+        doc: App name, which is how metrics label it
+      - name: app_id
+        type: string
+        index: 1
+        doc: App entity id; empty for an app seen only in metrics
+      - name: total
+        type: ResourceTotals
+        index: 2
+        doc: services plus addons
+      - name: services
+        type: ResourceTotals
+        index: 3
+        doc: The app's own deployed sandboxes
+      - name: addons
+        type: ResourceTotals
+        index: 4
+        doc: Managed infrastructure this app owns, such as a dedicated database
+      - name: sandbox_count
+        type: int64
+        index: 5
+      - name: service_count
+        type: int64
+        index: 6
+      - name: addon_count
+        type: int64
+        index: 7
+      - name: stale
+        type: bool
+        index: 8
+        doc: |
+          True when no sandbox of this app reported a sample in the window. The
+          app still gets a row: an app that has stopped reporting is a finding,
+          and dropping it would make a broken telemetry pipeline look like an
+          idle cluster.
+
+  - type: Selector
+    doc: |
+      What to include in a listing. Every field is optional, and an empty field
+      means unconstrained.
+
+      Grouping these into one type is not decoration. As loose parameters they
+      were six adjacent strings on the generated client, where transposing app
+      and service compiled cleanly and silently returned the wrong rows.
+    fields:
+      - name: app
+        type: string
+        index: 0
+      - name: service
+        type: string
+        index: 1
+      - name: node
+        type: string
+        index: 2
+        doc: Node entity id, runner id, or node name - whichever the caller has
+      - name: kind
+        type: string
+        index: 3
+        doc: app, addon, run or other
+      - name: status
+        type: string
+        index: 4
+      - name: include_system
+        type: bool
+        index: 5
+        doc: |
+          Include addon and platform sandboxes. Off by default so a listing
+          answers "what are my apps doing".
+
+          Setting kind explicitly overrides this: asking for kind=addon is a
+          direct request and is honoured whether or not include_system is set.
+      - name: include_addons
+        type: bool
+        index: 6
+        doc: |
+          App rollups only. Whether an app's dedicated addons count toward its
+          total. Unset means yes -- a database exists because the app asked for
+          it -- and the addons block reports zero rather than being hidden when
+          this is false.
+
+  - type: Window
+    doc: |
+      The span to measure over, and how to collapse it to one number.
+
+      start and end are absolute so there is exactly one way to express a
+      window. An unset start means the server default of one minute back from
+      end; an unset end means now.
+    fields:
+      - name: start
+        type: standard.Timestamp
+        index: 0
+      - name: end
+        type: standard.Timestamp
+        index: 1
+      - name: aggregate
+        type: string
+        index: 2
+        doc: |
+          avg (default), max, min or last. max is what finds a spike that has
+          already passed, which a live view cannot. An unrecognized value falls
+          back to avg rather than failing the call.
+
+  - type: Ordering
+    doc: How to sort and truncate a listing. Sorting happens server-side, because
+      a limit is only meaningful against a known order.
+    fields:
+      - name: sort
+        type: string
+        index: 0
+        doc: |
+          Sandboxes: cpu, memory, app, service or node.
+          Nodes: cpu, memory, load, sandboxes or name.
+          Apps: cpu, memory, sandboxes or name.
+      - name: order
+        type: string
+        index: 1
+        doc: desc (default) or asc
+      - name: limit
+        type: int32
+        index: 2
+        doc: 0 means no limit
+
+  - type: DetailOptions
+    doc: What to include alongside one sandbox's current usage.
+    fields:
+      - name: include_series
+        type: bool
+        index: 0
+      - name: include_containers
+        type: bool
+        index: 1
+        doc: |
+          Per-container breakdown. The stored series sum a sandbox's containers
+          before they are written, so this needs the live per-node probe and is
+          not yet served from the metrics store.
+      - name: step_seconds
+        type: int64
+        index: 2
+        doc: Resolution of any returned series; 0 derives one from the window
+
+  - type: ContainerUsage
+    doc: |
+      Per-container breakdown within one sandbox. A sandbox is usually one app
+      container plus a pause container, but a sandbox with sidecars can have
+      several, and the top-level figures sum across all of them.
+    fields:
+      - name: name
+        type: string
+        index: 0
+        doc: Container name; empty for the sandbox's pause container
+      - name: cpu
+        type: CpuUsage
+        index: 1
+      - name: memory
+        type: MemoryUsage
+        index: 2
+
+  - type: UsagePoint
+    fields:
+      - name: at
+        type: standard.Timestamp
+        index: 0
+      - name: value
+        type: float64
+        index: 1
+
+  - type: UsageSeries
+    doc: One metric over time, for charting a sandbox's recent history.
+    fields:
+      - name: metric
+        type: string
+        index: 0
+        doc: cpu_cores or memory_bytes
+      - name: points
+        type: list
+        element: "*UsagePoint"
+        index: 1
+
+  - type: SandboxExit
+    doc: Why a sandbox stopped, when it has.
+    fields:
+      - name: code
+        type: int32
+        index: 0
+      - name: at
+        type: standard.Timestamp
+        index: 1
+      - name: container
+        type: string
+        index: 2
+        doc: Which container exited first and so took the sandbox down
+
+  - type: CrashLoopState
+    doc: |
+      The pool's view of repeated failure, which is where a crash loop is
+      visible: Miren replaces a failed sandbox rather than restarting it, so no
+      single sandbox accumulates a restart count. consecutive_crashes resets on
+      a successful start, so a non-zero value means this service is failing
+      right now rather than having failed once last week.
+    fields:
+      - name: consecutive_crashes
+        type: int32
+        index: 0
+      - name: last_crash_at
+        type: standard.Timestamp
+        index: 1
+      - name: cooldown_until
+        type: standard.Timestamp
+        index: 2
+        doc: When set and in the future, the pool is deliberately not restarting
+
+interfaces:
+  - name: ResourceUsage
+    doc: |
+      Cluster-wide resource usage. Exposed only on the coordinator, which is the
+      only place that holds a view of every node.
+
+      This interface carries two shapes of the same four questions, because the
+      two callers want opposite things.
+
+      The verb-prefixed methods -- listSandboxes, getSandbox, listNodes,
+      listApps -- are the RPC surface. They take grouped types, so a Go caller
+      names what it is passing and the compiler catches a transposition.
+
+      The http-prefixed methods are the same six questions asked over plain
+      HTTP GET. They take flat scalars, because a query string names every
+      argument at the call site and a nested object cannot bind to one at all,
+      and they accept a duration string (since=1h) rather than timestamps,
+      because that is what a URL should look like. A Go caller should reach for
+      the RPC form instead; these exist for the URL.
+
+      Both shapes run the same implementation. If they ever disagree that is a
+      bug, not a feature.
+    http:
+      prefix: /api/v1
+    methods:
+      # NOTE: parameter and result lists are positionally encoded on the wire,
+      # so they are append-only. Never insert or reorder an entry; a new field
+      # goes on the end or it breaks every deployed client.
+
+      # --- RPC surface: grouped types, no HTTP binding ---
+
+      - name: listSandboxes
+        doc: One row per live sandbox, cluster-wide.
+        parameters:
+          - name: selector
+            type: Selector
+          - name: window
+            type: Window
+          - name: ordering
+            type: Ordering
+        results:
+          - name: sandboxes
+            type: list
+            element: SandboxUsage
+          - name: window
+            type: UsageWindow
+          - name: cluster
+            type: ResourceTotals
+            doc: Sum across every matching row, before any limit was applied
+          - name: total_count
+            type: int32
+            doc: Rows matching the selector, which exceeds len(sandboxes) when limited
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+            doc: |
+              Problems that degraded the answer without invalidating it, such as
+              a node that reported nothing. Populated instead of failing the
+              call, because a partial answer naming its own gaps is more use to
+              someone debugging than an error.
+
+      - name: getSandbox
+        doc: One sandbox in detail, optionally with its recent history.
+        parameters:
+          - name: sandbox
+            type: string
+          - name: window
+            type: Window
+          - name: options
+            type: DetailOptions
+        results:
+          - name: usage
+            type: SandboxUsage
+          - name: containers
+            type: list
+            element: ContainerUsage
+          - name: series
+            type: list
+            element: UsageSeries
+          - name: exit
+            type: SandboxExit
+          - name: crash_loop
+            type: CrashLoopState
+          - name: image
+            type: string
+          - name: restart_policy
+            type: string
+          - name: window
+            type: UsageWindow
+          - name: warnings
+            type: list
+            element: string
+
+      - name: listNodes
+        doc: |
+          One row per host, each split into sandbox and system use. This is the
+          first question of an investigation - which machine is hot - and the
+          split answers the second, whether it is an app's fault.
+        parameters:
+          - name: selector
+            type: Selector
+          - name: window
+            type: Window
+          - name: ordering
+            type: Ordering
+        results:
+          - name: nodes
+            type: list
+            element: NodeUsage
+          - name: cluster
+            type: ResourceTotals
+          - name: capacity
+            type: NodeCapacity
+            doc: Sum of every reporting node's capacity
+          - name: window
+            type: UsageWindow
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+
+      - name: listApps
+        doc: |
+          One row per app, summed across all of its sandboxes. This answers
+          "what is app X costing me" without the caller having to add up rows
+          itself, and without it having to know that an app's database is a
+          separate sandbox.
+        parameters:
+          - name: selector
+            type: Selector
+          - name: window
+            type: Window
+          - name: ordering
+            type: Ordering
+        results:
+          - name: apps
+            type: list
+            element: AppUsage
+          - name: cluster
+            type: ResourceTotals
+          - name: total_count
+            type: int32
+          - name: window
+            type: UsageWindow
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+
+      # --- REST surface: flat scalars, GET bindings ---
+      #
+      # since and until are duration strings here ("30s", "5m", "1h") rather
+      # than timestamps: a URL should read as a URL. Everything else is a
+      # scalar because only scalars bind to a query parameter.
+
+      - name: httpListSandboxes
+        rest_only: true
+        doc: |
+          GET /api/v1/usage/sandboxes?app=web&sort=cpu&limit=20
+
+          The HTTP form of listSandboxes.
+        http:
+          get: /usage/sandboxes
+        parameters:
+          - name: app
+            type: string
+          - name: service
+            type: string
+          - name: node
+            type: string
+          - name: kind
+            type: string
+          - name: status
+            type: string
+          - name: include_system
+            type: bool
+          - name: since
+            type: string
+            doc: How far back to measure, as a duration ("1h"). Defaults to 1m.
+          - name: until
+            type: string
+            doc: How long ago the window ends, as a duration ("10m"). Defaults to now.
+          - name: aggregate
+            type: string
+          - name: sort
+            type: string
+          - name: order
+            type: string
+          - name: limit
+            type: int32
+        results:
+          - name: sandboxes
+            type: list
+            element: SandboxUsage
+          - name: window
+            type: UsageWindow
+          - name: cluster
+            type: ResourceTotals
+          - name: total_count
+            type: int32
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+
+      - name: httpGetSandbox
+        rest_only: true
+        doc: GET /api/v1/usage/sandboxes/{sandbox}
+        http:
+          get: /usage/sandboxes/{sandbox}
+        parameters:
+          - name: sandbox
+            type: string
+          - name: since
+            type: string
+          - name: until
+            type: string
+          - name: aggregate
+            type: string
+          - name: series
+            type: bool
+            doc: Include CPU and memory history
+          - name: containers
+            type: bool
+          - name: step
+            type: string
+            doc: Series resolution as a duration ("30s"); derived from the window when empty
+        results:
+          - name: usage
+            type: SandboxUsage
+          - name: containers
+            type: list
+            element: ContainerUsage
+          - name: series
+            type: list
+            element: UsageSeries
+          - name: exit
+            type: SandboxExit
+          - name: crash_loop
+            type: CrashLoopState
+          - name: image
+            type: string
+          - name: restart_policy
+            type: string
+          - name: window
+            type: UsageWindow
+          - name: warnings
+            type: list
+            element: string
+
+      - name: httpListNodes
+        rest_only: true
+        doc: GET /api/v1/usage/nodes?sort=cpu
+        http:
+          get: /usage/nodes
+        parameters:
+          - name: since
+            type: string
+          - name: until
+            type: string
+          - name: aggregate
+            type: string
+          - name: sort
+            type: string
+          - name: order
+            type: string
+          - name: limit
+            type: int32
+        results:
+          - name: nodes
+            type: list
+            element: NodeUsage
+          - name: cluster
+            type: ResourceTotals
+          - name: capacity
+            type: NodeCapacity
+          - name: window
+            type: UsageWindow
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+
+      - name: httpGetNode
+        rest_only: true
+        doc: |
+          GET /api/v1/usage/nodes/{node}
+
+          One host, addressed by entity id, runner id, or name.
+        http:
+          get: /usage/nodes/{node}
+        parameters:
+          - name: node
+            type: string
+          - name: since
+            type: string
+          - name: until
+            type: string
+          - name: aggregate
+            type: string
+        results:
+          - name: usage
+            type: NodeUsage
+          - name: window
+            type: UsageWindow
+          - name: warnings
+            type: list
+            element: string
+
+      - name: httpListApps
+        rest_only: true
+        doc: GET /api/v1/usage/apps?sort=cpu
+        http:
+          get: /usage/apps
+        parameters:
+          - name: since
+            type: string
+          - name: until
+            type: string
+          - name: aggregate
+            type: string
+          - name: sort
+            type: string
+          - name: order
+            type: string
+          - name: limit
+            type: int32
+          - name: addons
+            type: bool
+            doc: |
+              Count each app's dedicated addons toward its total. Absent means
+              yes; pass addons=false for the app's own code alone.
+          - name: node
+            type: string
+            doc: Count only the sandboxes on this node, for a per-host breakdown
+        results:
+          - name: apps
+            type: list
+            element: AppUsage
+          - name: cluster
+            type: ResourceTotals
+          - name: total_count
+            type: int32
+          - name: window
+            type: UsageWindow
+          - name: collected_at
+            type: standard.Timestamp
+          - name: warnings
+            type: list
+            element: string
+
+      - name: httpGetApp
+        rest_only: true
+        doc: |
+          GET /api/v1/usage/apps/{app}
+
+          One app's total, split into its own services and the addons it owns.
+        http:
+          get: /usage/apps/{app}
+        parameters:
+          - name: app
+            type: string
+          - name: since
+            type: string
+          - name: until
+            type: string
+          - name: aggregate
+            type: string
+          - name: addons
+            type: bool
+        results:
+          - name: usage
+            type: AppUsage
+          - name: window
+            type: UsageWindow
+          - name: warnings
+            type: list
+            element: string
