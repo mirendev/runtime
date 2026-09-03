@@ -1758,6 +1758,14 @@ func (g *Generator) generateClient(f *j.File, i *DescInterface) error {
 	f.Line()
 
 	for _, m := range i.Method {
+		// A rest-only method has no client: the RPC transport would answer
+		// "unknown method", so a generated caller could only ever fail at
+		// runtime. Leaving it out turns that into a compile error, and steers
+		// Go callers to the grouped RPC form the URL shape exists to avoid.
+		if m.RestOnly {
+			continue
+		}
+
 		tn := expName + capitalize(m.Name)
 
 		sname, _ := i.addGeneric(tn + "Results")
@@ -2011,6 +2019,9 @@ func (g *Generator) generateInterfaces(f *j.File) error {
 						g.Line().Id("InterfaceName").Op(":").Lit(i.Name)
 						g.Line().Id("Index").Op(":").Lit(m.Index)
 						g.Line().Id("Public").Op(":").Lit(m.Public)
+						if m.RestOnly {
+							g.Line().Id("RestOnly").Op(":").Lit(true)
+						}
 						g.Line().Id("Params").Op(":").Index().String().ValuesFunc(func(g *j.Group) {
 							for _, p := range m.Parameters {
 								g.Lit(p.Name)
@@ -2366,8 +2377,20 @@ type DescMethods struct {
 	// Public marks this method as accessible without TLS client certificate authentication.
 	// Public methods still require capability-level auth (Ed25519 signatures) but allow
 	// unauthenticated callers (e.g., for registration flows where the client doesn't have certs yet).
-	Public bool            `yaml:"public,omitempty"`
-	HTTP   *DescHTTPMethod `yaml:"http,omitempty"`
+	Public bool `yaml:"public,omitempty"`
+	// RestOnly marks this method as reachable only through its http: binding.
+	// It is not dispatched over the RPC transport, not advertised in the
+	// method list, and no client method is generated for it.
+	//
+	// Use it for a method shaped for a URL rather than for a program: flat
+	// scalars a query string can carry, where the RPC surface offers the same
+	// answer through grouped arguments. Without it the URL form becomes a
+	// second, worse way for a Go caller to ask the same question.
+	//
+	// A rest_only method with no http: binding is unreachable and is rejected
+	// at generation time.
+	RestOnly bool            `yaml:"rest_only,omitempty"`
+	HTTP     *DescHTTPMethod `yaml:"http,omitempty"`
 }
 
 // DescHTTPMethod holds method-level REST configuration from the IDL http: block.
@@ -2467,6 +2490,13 @@ func (g *Generator) validateHTTP() error {
 	for _, i := range g.Interfaces {
 		for _, m := range i.Method {
 			if m.HTTP == nil {
+				// rest_only removes a method from the RPC transport, so
+				// without an http: binding there is nothing left that can
+				// reach it. Catching that here beats shipping a method no
+				// caller can invoke by any route.
+				if m.RestOnly {
+					return fmt.Errorf("%s.%s: rest_only requires an http: binding, or the method is unreachable", i.Name, m.Name)
+				}
 				continue
 			}
 

@@ -135,6 +135,16 @@ type Method struct {
 	// Public marks this method as accessible without TLS client certificate authentication.
 	// The RPC layer will reject unauthenticated calls to non-public methods automatically.
 	Public bool
+	// RestOnly marks this method as reachable through its HTTP binding and
+	// nowhere else. The RPC transport reports it as unknown and it is left out
+	// of the advertised method list, so it is invisible to an RPC caller.
+	//
+	// It exists for methods that are shaped for a URL rather than for a
+	// program: flat scalars a query string can carry, where the RPC surface
+	// offers the same answer through grouped arguments a caller cannot
+	// transpose. Marking the URL form rest-only stops it from becoming a second
+	// way to call the same thing badly.
+	RestOnly bool
 	// Params lists the method's parameter names in schema order. It powers
 	// parameter-level capability detection: a client can ask whether a server
 	// understands a specific parameter (e.g. one added after the method first
@@ -210,6 +220,19 @@ func (i *Interface) Methods() []Method {
 		methods = append(methods, m)
 	}
 	return methods
+}
+
+// rpcMethod resolves a method for dispatch over the RPC transport.
+//
+// A rest-only method is reported as absent, so the caller sees the same
+// "unknown method" a typo would produce. The zero Method has a nil Handler,
+// which is what every dispatch site already treats as not found.
+func (i *Interface) rpcMethod(name string) Method {
+	m := i.methods[name]
+	if m.RestOnly {
+		return Method{}
+	}
+	return m
 }
 
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
@@ -736,6 +759,11 @@ func newMethodsResponse(m map[string]Method) methodsResponse {
 	methods := make([]string, 0, len(m))
 	params := make(map[string][]string, len(m))
 	for name, mm := range m {
+		// A rest-only method is not part of the RPC surface, so advertising it
+		// would invite a client to call something that will answer "unknown".
+		if mm.RestOnly {
+			continue
+		}
 		methods = append(methods, name)
 		if len(mm.Params) > 0 {
 			params[name] = mm.Params
@@ -1089,7 +1117,7 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	iface.touch()
 
-	mm := iface.methods[method]
+	mm := iface.rpcMethod(method)
 	if mm.Handler == nil {
 		w.Header().Add("rpc-status", "unknown")
 		w.Header().Add("rpc-error", "unknown method: "+method)
@@ -1254,7 +1282,7 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		iface.touch()
 
-		mm := iface.methods[method]
+		mm := iface.rpcMethod(method)
 		if mm.Handler == nil {
 			w.Header().Add("rpc-status", "unknown")
 			w.Header().Add("rpc-error", "unknown method: "+method)
