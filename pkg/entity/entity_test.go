@@ -165,10 +165,76 @@ func TestUpdateEntity(t *testing.T) {
 	assert.Equal(t, entity.GetRevision()+1, updated.GetRevision())
 	assert.True(t, updated.GetUpdatedAt().After(entity.GetUpdatedAt()))
 
-	// Verify the update
+	// The caller's update must actually take effect on the returned entity.
+	// Regression guard for the dropped-updates bug introduced by commit
+	// e2ec516e, where `updates` was bound but never merged.
+	docAttr, ok := updated.Get(Doc)
+	require.True(t, ok)
+	assert.Equal(t, "Updated description", docAttr.Value.Any())
+
+	// Verify the update persisted to disk
 	retrieved, err := store.GetEntity(t.Context(), Id(entity.Id()))
 	require.NoError(t, err)
 	assertEntityEqual(t, updated, retrieved)
+
+	// The re-read entity must also carry the new Doc value.
+	docAttr, ok = retrieved.Get(Doc)
+	require.True(t, ok)
+	assert.Equal(t, "Updated description", docAttr.Value.Any())
+}
+
+// TestUpdateEntity_AccumulatesCardMany verifies a card-many attribute (Tag is
+// CardinalityMany) accumulates new values alongside existing ones. Covers G6.
+func TestUpdateEntity_AccumulatesCardMany(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	entity, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, "test/person"),
+		String(Tag, "t1"),
+	))
+	require.NoError(t, err)
+
+	updated, err := store.UpdateEntity(t.Context(), Id(entity.Id()), New(String(Tag, "t2")))
+	require.NoError(t, err)
+
+	tagAttrs := updated.GetAll(Tag)
+	require.Len(t, tagAttrs, 2, "card-many Tag must accumulate, not replace")
+	vals := []string{tagAttrs[0].Value.String(), tagAttrs[1].Value.String()}
+	assert.ElementsMatch(t, []string{"t1", "t2"}, vals)
+
+	retrieved, err := store.GetEntity(t.Context(), Id(entity.Id()))
+	require.NoError(t, err)
+	retrievedTagAttrs := retrieved.GetAll(Tag)
+	require.Len(t, retrievedTagAttrs, 2, "card-many Tag must accumulate on re-read")
+	rvals := []string{retrievedTagAttrs[0].Value.String(), retrievedTagAttrs[1].Value.String()}
+	assert.ElementsMatch(t, []string{"t1", "t2"}, rvals)
+}
+
+// TestUpdateEntity_RejectsInvalidUpdate verifies a type-mismatched update is
+// rejected by ValidateAttributes (run on the merged attrs) and the on-disk
+// entity is left untouched. Covers G4, G15.
+func TestUpdateEntity_RejectsInvalidUpdate(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	entity, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, "test/person"),
+		String(Doc, "A"),
+	))
+	require.NoError(t, err)
+
+	// Doc is TypeStr; an int value must be rejected by validation.
+	_, err = store.UpdateEntity(t.Context(), Id(entity.Id()), New(Int(Doc, 123)))
+	assert.Error(t, err, "invalid (wrong-typed) update must be rejected")
+
+	// On-disk entity must be unchanged (no partial save).
+	retrieved, err := store.GetEntity(t.Context(), Id(entity.Id()))
+	require.NoError(t, err)
+	docAttr, ok := retrieved.Get(Doc)
+	require.True(t, ok)
+	assert.Equal(t, "A", docAttr.Value.Any(), "on-disk Doc must be unchanged after rejected update")
+	assert.Equal(t, entity.GetRevision(), retrieved.GetRevision(), "revision must not advance on rejected update")
 }
 
 func TestDeleteEntity(t *testing.T) {
