@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -22,6 +23,39 @@ import (
 type migrationFailStore struct {
 	entity.Store
 	fail entity.Id
+}
+
+type missingEntityStore struct {
+	entity.Store
+}
+
+func (s *missingEntityStore) GetEntities(context.Context, []entity.Id) ([]*entity.Entity, error) {
+	return []*entity.Entity{nil}, nil
+}
+
+type markerConflictStore struct {
+	entity.Store
+	patchCalls int
+}
+
+type countingGetStore struct {
+	entity.Store
+	getEntityCalls int
+}
+
+func (s *countingGetStore) GetEntity(ctx context.Context, id entity.Id) (*entity.Entity, error) {
+	s.getEntityCalls++
+	return s.Store.GetEntity(ctx, id)
+}
+
+func (s *markerConflictStore) PatchEntity(ctx context.Context, ent *entity.Entity, opts ...entity.EntityOption) (*entity.Entity, error) {
+	if _, ok := ent.Get(core_v1alpha.CloudExportContract.MarkerID()); ok {
+		s.patchCalls++
+		if s.patchCalls == 1 {
+			return nil, cond.Conflict("entity", ent.Id())
+		}
+	}
+	return s.Store.PatchEntity(ctx, ent, opts...)
 }
 
 func (s *migrationFailStore) ReplaceEntity(ctx context.Context, ent *entity.Entity, opts ...entity.EntityOption) (*entity.Entity, error) {
@@ -256,6 +290,55 @@ func TestCleanSweepMarksLegacyEntitiesForExport(t *testing.T) {
 	attr, ok := migrated.Get(marker)
 	require.True(t, ok)
 	assert.True(t, attr.Value.Bool())
+}
+
+func TestMigrationSkipsEntityRemovedAfterIndexRead(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	dep := &core_v1alpha.Deployment{ID: "deployment/disappeared", Status: "failed"}
+	_, err := inmem.Store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, dep.ID), dep.Encode()))
+	require.NoError(t, err)
+
+	controller := New(slog.New(slog.NewTextHandler(io.Discard, nil)), &missingEntityStore{Store: inmem.Store}, inmem.EAC)
+	require.NoError(t, controller.Step(ctx))
+	require.Equal(t, phaseVersions, controller.phase)
+}
+
+func TestMigrationMarkerWriteRetriesRevisionConflict(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	app := &core_v1alpha.App{ID: "app/web"}
+	source := entity.New(entity.Ref(entity.DBId, app.ID), app.Encode())
+	source.Remove(core_v1alpha.CloudExportContract.MarkerID())
+	_, err := inmem.Store.CreateEntity(ctx, source)
+	require.NoError(t, err)
+
+	store := &markerConflictStore{Store: inmem.Store}
+	controller := New(slog.New(slog.NewTextHandler(io.Discard, nil)), store, inmem.EAC)
+	controller.phase = phaseApps
+	require.NoError(t, controller.Step(ctx))
+	require.Equal(t, 2, store.patchCalls)
+
+	stored, err := inmem.Store.GetEntity(ctx, app.ID)
+	require.NoError(t, err)
+	require.True(t, entity.MustGet(stored, core_v1alpha.CloudExportContract.MarkerID()).Value.Bool())
+}
+
+func TestMigrationSkipsMarkerReadForMarkedEntity(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	app := &core_v1alpha.App{ID: "app/already-marked"}
+	_, err := inmem.Store.CreateEntity(ctx, entity.New(entity.Ref(entity.DBId, app.ID), app.Encode()))
+	require.NoError(t, err)
+
+	store := &countingGetStore{Store: inmem.Store}
+	controller := New(slog.New(slog.NewTextHandler(io.Discard, nil)), store, inmem.EAC)
+	controller.phase = phaseApps
+	require.NoError(t, controller.Step(ctx))
+	require.Zero(t, store.getEntityCalls)
 }
 
 func TestUnknownLegacyDeploymentKeepsExportGateClosed(t *testing.T) {

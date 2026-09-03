@@ -1,11 +1,14 @@
 package entitysync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,13 +28,56 @@ type sentMessage struct {
 }
 
 type fakeLink struct {
-	mu        sync.Mutex
-	offers    []uplink.CapabilityOffer
-	handlers  map[string]uplink.MessageHandler
-	sessions  []func(context.Context, uplink.Session)
-	messages  []sentMessage
-	onSend    func(string, any)
-	sendError func(string, any) error
+	mu            sync.Mutex
+	registrations []fakeCapabilityRegistration
+	handlers      map[string]uplink.MessageHandler
+	sessions      []func(context.Context, uplink.Session)
+	messages      []sentMessage
+	onSend        func(string, any)
+	sendError     func(string, any) error
+}
+
+type fakeCapabilityRegistration struct {
+	name     string
+	versions []uint
+	provide  uplink.CapabilityOfferFunc
+}
+
+type mutableEpochStore struct {
+	*entity.MockStore
+	mu    sync.Mutex
+	epoch string
+	err   error
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (s *mutableEpochStore) SourceEpoch(context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch, s.err
+}
+
+func (s *mutableEpochStore) setEpoch(epoch string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.epoch = epoch
+	s.err = err
 }
 
 type controlledWatchStore struct {
@@ -137,8 +183,24 @@ func newFakeLink() *fakeLink {
 	return &fakeLink{handlers: make(map[string]uplink.MessageHandler)}
 }
 
-func (f *fakeLink) OfferCapability(offer uplink.CapabilityOffer) {
-	f.offers = append(f.offers, offer)
+func (f *fakeLink) OfferCapabilityFunc(name string, versions []uint, provide uplink.CapabilityOfferFunc) {
+	f.registrations = append(f.registrations, fakeCapabilityRegistration{
+		name: name, versions: versions, provide: provide,
+	})
+}
+
+func (f *fakeLink) sessionOffers(ctx context.Context) []uplink.CapabilityOffer {
+	var offers []uplink.CapabilityOffer
+	for _, registration := range f.registrations {
+		offer, ok := registration.provide(ctx)
+		if !ok {
+			continue
+		}
+		offers = append(offers, uplink.CapabilityOffer{
+			Name: registration.name, Versions: registration.versions, Offer: offer,
+		})
+	}
+	return offers
 }
 
 func (f *fakeLink) OnSession(fn func(context.Context, uplink.Session)) {
@@ -172,9 +234,7 @@ func (f *fakeLink) sent() []sentMessage {
 
 func testExporter(store entity.Store) *Exporter {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	tenant := NewExporter(log, store, core_v1alpha.CloudExportContract)
-	tenant.sourceEpoch = "mock-source-epoch"
-	return tenant
+	return NewExporter(log, store, core_v1alpha.CloudExportContract)
 }
 
 func TestRegisterOffersGeneratedContract(t *testing.T) {
@@ -182,15 +242,34 @@ func TestRegisterOffersGeneratedContract(t *testing.T) {
 	link := newFakeLink()
 	require.NoError(t, tenant.Register(t.Context(), link))
 
-	require.Len(t, link.offers, 1)
-	require.Equal(t, uplink.CapabilityEntitySync, link.offers[0].Name)
-	require.Equal(t, []uint{Version1}, link.offers[0].Versions)
+	offers := link.sessionOffers(t.Context())
+	require.Len(t, offers, 1)
+	require.Equal(t, uplink.CapabilityEntitySync, offers[0].Name)
+	require.Equal(t, []uint{Version1}, offers[0].Versions)
 	var offer Offer
-	require.NoError(t, json.Unmarshal(link.offers[0].Offer, &offer))
+	require.NoError(t, json.Unmarshal(offers[0].Offer, &offer))
 	require.Equal(t, []string{core_v1alpha.CloudExportContract.Digest()}, offer.ExportSchemas)
 	require.Equal(t, "mock-source-epoch", offer.SourceEpoch)
 	require.Contains(t, link.handlers, TypeAck)
 	require.Len(t, link.sessions, 1)
+}
+
+func TestCapabilityOfferRetriesEpochDiscoveryAndRefreshesAfterRestore(t *testing.T) {
+	store := &mutableEpochStore{MockStore: entity.NewMockStore()}
+	store.setEpoch("", errors.New("etcd unavailable"))
+	exporter := testExporter(store)
+	link := newFakeLink()
+	require.NoError(t, exporter.Register(t.Context(), link))
+
+	require.Empty(t, link.sessionOffers(t.Context()), "a failed epoch read omits only entity sync")
+	for _, epoch := range []string{"epoch-before-restore", "epoch-after-restore"} {
+		store.setEpoch(epoch, nil)
+		offers := link.sessionOffers(t.Context())
+		require.Len(t, offers, 1)
+		var offer Offer
+		require.NoError(t, json.Unmarshal(offers[0].Offer, &offer))
+		require.Equal(t, epoch, offer.SourceEpoch)
+	}
 }
 
 func TestSessionWaitsForSourcePreparation(t *testing.T) {
@@ -204,7 +283,6 @@ func TestSessionWaitsForSourcePreparation(t *testing.T) {
 		core_v1alpha.CloudExportContract,
 		WithStartGate(ready),
 	)
-	tenant.sourceEpoch = "mock-source-epoch"
 	link := newFakeLink()
 	link.onSend = func(typ string, payload any) {
 		if typ != TypeSnapshotComplete {
@@ -240,6 +318,67 @@ func TestSessionWaitsForSourcePreparation(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestSessionLogsWhileSourcePreparationRemainsBlocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs lockedBuffer
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		entity.NewMockStore(),
+		core_v1alpha.CloudExportContract,
+		WithStartGate(make(chan struct{})),
+	)
+	exporter.preparationLogInterval = 10 * time.Millisecond
+	link := newFakeLink()
+	config, err := json.Marshal(Config{
+		ExportSchema: core_v1alpha.CloudExportContract.Digest(),
+		SourceEpoch:  "mock-source-epoch",
+	})
+	require.NoError(t, err)
+
+	go exporter.runSession(ctx, uplink.Session{Capabilities: []uplink.CapabilitySelection{{
+		Name: uplink.CapabilityEntitySync, Version: Version1, Config: config,
+	}}}, link)
+	require.Eventually(t, func() bool {
+		return bytes.Contains([]byte(logs.String()), []byte("entity sync still waiting for source preparation"))
+	}, time.Second, time.Millisecond)
+}
+
+func TestSessionValidatesEpochAfterSourcePreparation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs lockedBuffer
+	store := &mutableEpochStore{MockStore: entity.NewMockStore(), epoch: "epoch-before-restore"}
+	ready := make(chan struct{})
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		store,
+		core_v1alpha.CloudExportContract,
+		WithStartGate(ready),
+	)
+	config, err := json.Marshal(Config{
+		ExportSchema:     core_v1alpha.CloudExportContract.Digest(),
+		SourceEpoch:      "epoch-before-restore",
+		SnapshotRequired: true,
+	})
+	require.NoError(t, err)
+	link := newFakeLink()
+
+	go exporter.runSession(ctx, uplink.Session{Capabilities: []uplink.CapabilitySelection{{
+		Name: uplink.CapabilityEntitySync, Version: Version1, Config: config,
+	}}}, link)
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "entity sync waiting for source preparation")
+	}, time.Second, time.Millisecond)
+
+	store.setEpoch("epoch-after-restore", nil)
+	close(ready)
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "cloud selected an unexpected entity source epoch")
+	}, time.Second, time.Millisecond)
+	require.Empty(t, link.sent(), "the restored source must not be sent under the negotiated old epoch")
+}
+
 func TestSnapshotFiltersEntities(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -263,7 +402,7 @@ func TestSnapshotFiltersEntities(t *testing.T) {
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
-	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	s := &stream{exporter: tenant, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
 	tenant.active = s
 	link := newFakeLink()
 	link.onSend = func(typ string, payload any) {
@@ -317,7 +456,7 @@ func TestSnapshotReadsAndSendsOnePinnedPageAtATime(t *testing.T) {
 	}
 
 	exporter := testExporter(store)
-	stream := &stream{exporter: exporter, ctx: ctx, waiters: make(map[string]chan Ack)}
+	stream := &stream{exporter: exporter, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
 	exporter.active = stream
 	link := newFakeLink()
 	var readsAtSend []int
@@ -354,7 +493,7 @@ func TestSnapshotSkipsStaleMarkerIndexEntry(t *testing.T) {
 	defer cancel()
 	store := &staleIndexStore{MockStore: entity.NewMockStore(), stale: "app/missing"}
 	tenant := testExporter(store)
-	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	s := &stream{exporter: tenant, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
 	tenant.active = s
 	link := newFakeLink()
 	link.onSend = func(typ string, payload any) {
@@ -386,7 +525,7 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
-	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	s := &stream{exporter: tenant, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
 	tenant.active = s
 	link := newFakeLink()
 	link.onSend = func(typ string, payload any) {
@@ -771,4 +910,139 @@ func TestSessionSnapshotsWhenCursorIsAheadOfSource(t *testing.T) {
 		return len(link.sent()) >= 2
 	}, time.Second, time.Millisecond)
 	require.Equal(t, []int64{11}, store.WatchFromRevsCopy(), "a regressed source snapshots instead of watching beyond its head")
+}
+
+func TestWatchBatchStopsAtLastDeliveredEvent(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
+		store.AddEntity(id, entity.New(
+			entity.Ref(entity.DBId, id),
+			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
+			entity.Bool(marker, true),
+		))
+	}
+	exporter := testExporter(store)
+	stream := &stream{
+		exporter: exporter, ctx: t.Context(), sourceEpoch: "mock-source-epoch",
+		waiters: make(map[string]chan Ack),
+	}
+	exporter.active = stream
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ == TypeChangeBatch {
+			batch := payload.(ChangeBatch)
+			stream.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+		}
+	}
+
+	cursor, err := stream.sendWatchResponse(link, clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 100},
+		Events: []*clientv3.Event{
+			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/a"), ModRevision: 10}},
+			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/b"), ModRevision: 20}},
+		},
+	}, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(20), cursor)
+	require.Len(t, link.sent(), 1)
+	require.Equal(t, int64(20), link.sent()[0].payload.(ChangeBatch).ToRevision)
+}
+
+func TestTailDeliversEveryCatchUpChunkBeforeStoreHead(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
+		store.AddEntity(id, entity.New(
+			entity.Ref(entity.DBId, id),
+			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
+			entity.Bool(marker, true),
+		))
+	}
+	exporter := testExporter(store)
+	stream := &stream{
+		exporter: exporter, ctx: t.Context(), sourceEpoch: "mock-source-epoch",
+		waiters: make(map[string]chan Ack),
+	}
+	exporter.active = stream
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ == TypeChangeBatch {
+			batch := payload.(ChangeBatch)
+			stream.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+		}
+	}
+	watcher := make(chan clientv3.WatchResponse, 2)
+	watcher <- clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 100},
+		Events: []*clientv3.Event{{
+			Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/a"), ModRevision: 10},
+		}},
+	}
+	watcher <- clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 100},
+		Events: []*clientv3.Event{{
+			Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/b"), ModRevision: 20},
+		}},
+	}
+	close(watcher)
+
+	cursor, err := stream.tail(link, watcher, 0, time.Time{})
+	require.ErrorContains(t, err, "watch closed")
+	require.Equal(t, int64(20), cursor)
+	messages := link.sent()
+	require.Len(t, messages, 2)
+	require.Equal(t, int64(10), messages[0].payload.(ChangeBatch).ToRevision)
+	require.Equal(t, int64(20), messages[1].payload.(ChangeBatch).ToRevision)
+}
+
+func TestSendAndWaitTimesOutWithoutAcknowledgment(t *testing.T) {
+	exporter := testExporter(entity.NewMockStore())
+	exporter.ackTimeout = 10 * time.Millisecond
+	stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+
+	_, err := stream.sendAndWait(newFakeLink(), TypeChangeBatch, struct{}{}, "message-1")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "await entity.change.batch ack")
+}
+
+func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
+	t.Run("session cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		exporter := testExporter(entity.NewMockStore())
+		exporter.ackTimeout = time.Hour
+		stream := &stream{exporter: exporter, ctx: ctx, waiters: make(map[string]chan Ack)}
+
+		_, err := stream.sendAndWait(newFakeLink(), TypeChangeBatch, struct{}{}, "message-1")
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("cloud rejection", func(t *testing.T) {
+		exporter := testExporter(entity.NewMockStore())
+		exporter.ackTimeout = time.Hour
+		stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+		link := newFakeLink()
+		link.onSend = func(string, any) {
+			stream.deliver(Ack{MessageID: "message-1", Error: "not accepted"})
+		}
+
+		_, err := stream.sendAndWait(link, TypeChangeBatch, struct{}{}, "message-1")
+		require.ErrorContains(t, err, "cloud rejected entity.change.batch: not accepted")
+	})
+}
+
+func TestRetryDoesNotWarnAfterSessionCancellation(t *testing.T) {
+	var logs lockedBuffer
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		entity.NewMockStore(),
+		core_v1alpha.CloudExportContract,
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	stream := &stream{exporter: exporter, ctx: ctx}
+
+	require.False(t, stream.retry(ctx, "start entity sync session", context.Canceled))
+	require.NotContains(t, logs.String(), "start entity sync session")
 }

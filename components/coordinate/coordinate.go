@@ -463,10 +463,10 @@ func (c *Coordinator) NewDeploymentAttemptController() (*deploymentattemptsctrl.
 	return deploymentattemptsctrl.New(c.Log, c.store, c.eac), nil
 }
 
-// BackfillCloudExportMarker makes existing apps and app versions visible
-// through the shared export index. The deployment migration owns its kind's
-// marker so a downgraded writer cannot race generic backfill and expose an old
-// unsafe shape.
+// BackfillCloudExportMarker is the contract-wide safety net for exported kinds
+// that no specialized migration covers. The deployment-attempt controller has
+// already marked the apps, app versions, and deployments in its clean sweep;
+// excluding deployments here preserves its ownership of validating old shapes.
 func (c *Coordinator) BackfillCloudExportMarker(ctx context.Context) error {
 	if c.store == nil {
 		return errors.New("coordinator entity store is not ready")

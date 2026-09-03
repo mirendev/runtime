@@ -67,7 +67,7 @@ type Client struct {
 	mu           sync.Mutex
 	onConnect    []func(ctx context.Context)
 	onSession    []func(ctx context.Context, session Session)
-	capabilities []CapabilityOffer
+	capabilities []capabilityRegistration
 	session      *sessionConfig
 
 	// NewClient enables this for production's pre-handshake path. Keeping it
@@ -82,6 +82,17 @@ type Client struct {
 
 type sessionConfig struct {
 	runtimeVersion string
+}
+
+// CapabilityOfferFunc builds the connection-specific payload for an offered
+// capability. Returning false omits the capability from that connection.
+type CapabilityOfferFunc func(context.Context) (json.RawMessage, bool)
+
+type capabilityRegistration struct {
+	name     string
+	versions []uint
+	offer    json.RawMessage
+	provide  CapabilityOfferFunc
 }
 
 // ClientOption changes how a Client establishes its connections.
@@ -212,14 +223,31 @@ func (c *Client) OnConnect(fn func(ctx context.Context)) {
 // OfferCapability adds a protocol family to the next session hello. Offers
 // are snapshotted for each connection, so tenants should register before Run.
 func (c *Client) OfferCapability(offer CapabilityOffer) {
+	c.registerCapability(capabilityRegistration{
+		name: offer.Name, versions: offer.Versions, offer: offer.Offer,
+	})
+}
+
+// OfferCapabilityFunc adds a capability whose offer payload is rebuilt before
+// each connection's session handshake. Returning false omits only that
+// capability from the connection, so temporary source failures do not prevent
+// other tenants from negotiating.
+func (c *Client) OfferCapabilityFunc(name string, versions []uint, provide CapabilityOfferFunc) {
+	if provide == nil {
+		panic(fmt.Sprintf("uplink capability %q has no offer provider", name))
+	}
+	c.registerCapability(capabilityRegistration{name: name, versions: versions, provide: provide})
+}
+
+func (c *Client) registerCapability(capability capabilityRegistration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, existing := range c.capabilities {
-		if existing.Name == offer.Name {
-			panic(fmt.Sprintf("uplink capability %q offered more than once", offer.Name))
+		if existing.name == capability.name {
+			panic(fmt.Sprintf("uplink capability %q offered more than once", capability.name))
 		}
 	}
-	c.capabilities = append(c.capabilities, offer)
+	c.capabilities = append(c.capabilities, capability)
 }
 
 // OnSession registers a callback invoked after cloud's welcome has been
@@ -241,17 +269,29 @@ func (c *Client) connectCallbacks() []func(ctx context.Context) {
 	return slices.Clone(c.onConnect)
 }
 
-func (c *Client) sessionSnapshot() ([]CapabilityOffer, []func(context.Context, Session)) {
+func (c *Client) sessionSnapshot(ctx context.Context) ([]CapabilityOffer, []func(context.Context, Session)) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	capabilities := slices.Clone(c.capabilities)
+	callbacks := slices.Clone(c.onSession)
+	c.mu.Unlock()
 
-	offers := make([]CapabilityOffer, len(c.capabilities))
-	for i, offer := range c.capabilities {
-		offers[i] = offer
-		offers[i].Versions = slices.Clone(offer.Versions)
-		offers[i].Offer = slices.Clone(offer.Offer)
+	offers := make([]CapabilityOffer, 0, len(capabilities))
+	for _, capability := range capabilities {
+		offer := capability.offer
+		if capability.provide != nil {
+			var ok bool
+			offer, ok = capability.provide(ctx)
+			if !ok {
+				continue
+			}
+		}
+		offers = append(offers, CapabilityOffer{
+			Name:     capability.name,
+			Versions: slices.Clone(capability.versions),
+			Offer:    slices.Clone(offer),
+		})
 	}
-	return offers, slices.Clone(c.onSession)
+	return offers, callbacks
 }
 
 // Handle registers a handler for an inbound message type, which is how a
@@ -477,7 +517,7 @@ func (c *Client) runOnce(ctx context.Context) error {
 }
 
 func (c *Client) establishSession(ctx context.Context, conn *websocket.Conn) (Session, []func(context.Context, Session), error) {
-	offers, callbacks := c.sessionSnapshot()
+	offers, callbacks := c.sessionSnapshot(ctx)
 	hello := SessionHello{
 		HandshakeVersions: []uint{HandshakeVersion1},
 		RuntimeVersion:    c.session.runtimeVersion,

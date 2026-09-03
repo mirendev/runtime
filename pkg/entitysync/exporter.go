@@ -25,12 +25,15 @@ const snapshotBatchSize = 100
 const maxLiveBatchesBetweenSnapshotBatches = 8
 const sessionRetryDelay = time.Second
 const defaultMinimumResnapshotInterval = time.Hour
+const defaultAckTimeout = 30 * time.Second
+const defaultPreparationLogInterval = time.Minute
+const sourceEpochTimeout = 5 * time.Second
 
 var errCompacted = errors.New("entity sync cursor compacted")
 var errResnapshotDue = errors.New("entity sync anti-entropy snapshot due")
 
 type Link interface {
-	OfferCapability(uplink.CapabilityOffer)
+	OfferCapabilityFunc(string, []uint, uplink.CapabilityOfferFunc)
 	OnSession(func(context.Context, uplink.Session))
 	Handle(string, uplink.MessageHandler)
 	SendMessageBlocking(context.Context, string, any) error
@@ -40,17 +43,19 @@ type Exporter struct {
 	log                       *slog.Logger
 	store                     entity.Store
 	contract                  *entityexport.Contract
-	sourceEpoch               string
 	startGate                 <-chan struct{}
 	minimumResnapshotInterval time.Duration
+	ackTimeout                time.Duration
+	preparationLogInterval    time.Duration
 
 	mu     sync.Mutex
 	active *stream
 }
 
 type stream struct {
-	exporter *Exporter
-	ctx      context.Context
+	exporter    *Exporter
+	ctx         context.Context
+	sourceEpoch string
 
 	mu      sync.Mutex
 	waiters map[string]chan Ack
@@ -69,6 +74,8 @@ func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Co
 	exporter := &Exporter{
 		log: log, store: store, contract: contract,
 		minimumResnapshotInterval: defaultMinimumResnapshotInterval,
+		ackTimeout:                defaultAckTimeout,
+		preparationLogInterval:    defaultPreparationLogInterval,
 	}
 	for _, option := range options {
 		option(exporter)
@@ -76,19 +83,14 @@ func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Co
 	return exporter
 }
 
-func (t *Exporter) Register(ctx context.Context, link Link) error {
-	sourceEpoch, err := t.store.SourceEpoch(ctx)
-	if err != nil {
-		return err
-	}
-	if sourceEpoch == "" {
-		return errors.New("entity store returned an empty source epoch")
-	}
-	t.sourceEpoch = sourceEpoch
-	link.OfferCapability(uplink.CapabilityOffer{
-		Name:     uplink.CapabilityEntitySync,
-		Versions: []uint{Version1},
-		Offer:    marshalOffer(t.contract.Digest(), sourceEpoch),
+func (t *Exporter) Register(_ context.Context, link Link) error {
+	link.OfferCapabilityFunc(uplink.CapabilityEntitySync, []uint{Version1}, func(ctx context.Context) (json.RawMessage, bool) {
+		sourceEpoch, err := t.readSourceEpoch(ctx)
+		if err != nil {
+			t.log.Warn("entity sync source epoch unavailable; omitting capability", "error", err)
+			return nil, false
+		}
+		return marshalOffer(t.contract.Digest(), sourceEpoch), true
 	})
 	link.Handle(TypeAck, t.handleAck)
 	link.OnSession(func(ctx context.Context, session uplink.Session) {
@@ -113,23 +115,22 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 			"selected", config.ExportSchema, "local", t.contract.Digest())
 		return
 	}
-	if config.SourceEpoch != t.sourceEpoch {
-		t.log.Warn("cloud selected an unexpected entity source epoch",
-			"selected", config.SourceEpoch, "local", t.sourceEpoch)
+	resnapshotInterval, nextSnapshot := t.resnapshotSchedule(config)
+	if !t.waitForStartGate(ctx) {
 		return
 	}
-	resnapshotInterval, nextSnapshot := t.resnapshotSchedule(config)
-	if t.startGate != nil {
-		t.log.Info("entity sync waiting for source preparation")
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.startGate:
-			t.log.Info("entity sync source is ready")
-		}
+	sourceEpoch, err := t.readSourceEpoch(ctx)
+	if err != nil {
+		t.log.Warn("entity sync source epoch unavailable for selected session", "error", err)
+		return
+	}
+	if config.SourceEpoch != sourceEpoch {
+		t.log.Warn("cloud selected an unexpected entity source epoch",
+			"selected", config.SourceEpoch, "local", sourceEpoch)
+		return
 	}
 
-	s := &stream{exporter: t, ctx: ctx, waiters: make(map[string]chan Ack)}
+	s := &stream{exporter: t, ctx: ctx, sourceEpoch: sourceEpoch, waiters: make(map[string]chan Ack)}
 	t.mu.Lock()
 	t.active = s
 	t.mu.Unlock()
@@ -241,6 +242,9 @@ func durationSeconds(seconds int64) time.Duration {
 }
 
 func (s *stream) retry(ctx context.Context, message string, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	if err != nil {
 		s.exporter.log.Warn(message, "error", err, "retry_in", sessionRetryDelay)
 	}
@@ -252,6 +256,39 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+func (t *Exporter) waitForStartGate(ctx context.Context) bool {
+	if t.startGate == nil {
+		return true
+	}
+	t.log.Info("entity sync waiting for source preparation")
+	ticker := time.NewTicker(t.preparationLogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.startGate:
+			t.log.Info("entity sync source is ready")
+			return true
+		case <-ticker.C:
+			t.log.Warn("entity sync still waiting for source preparation")
+		}
+	}
+}
+
+func (t *Exporter) readSourceEpoch(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, sourceEpochTimeout)
+	defer cancel()
+	sourceEpoch, err := t.store.SourceEpoch(ctx)
+	if err != nil {
+		return "", err
+	}
+	if sourceEpoch == "" {
+		return "", errors.New("entity store returned an empty source epoch")
+	}
+	return sourceEpoch, nil
 }
 
 func (t *Exporter) marker() entity.Attr {
@@ -296,7 +333,7 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 	snapshotID := uuid.NewString()
 	if err := link.SendMessageBlocking(s.ctx, TypeSnapshotBegin, SnapshotBegin{
 		SnapshotID: snapshotID, SourceHead: head, ExportSchemaDigest: s.exporter.contract.Digest(),
-		SourceEpoch: s.exporter.sourceEpoch,
+		SourceEpoch: s.sourceEpoch,
 	}); err != nil {
 		return 0, nil, err
 	}
@@ -427,10 +464,15 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	if err := response.Err(); err != nil {
 		return cursor, fmt.Errorf("watch cloud export index: %w", err)
 	}
+	// During catch-up, etcd stamps the response header with the current store
+	// head, which can be newer than the events in this chunk. Match the client's
+	// own resume logic by advancing through the last delivered event; an empty
+	// progress notification still advances through its header.
 	to := response.Header.Revision
-	for _, event := range response.Events {
-		if event.Kv != nil && event.Kv.ModRevision > to {
-			to = event.Kv.ModRevision
+	if n := len(response.Events); n > 0 {
+		last := response.Events[n-1]
+		if last.Kv != nil && last.Kv.ModRevision > 0 {
+			to = last.Kv.ModRevision
 		}
 	}
 	if to <= cursor {
@@ -444,7 +486,7 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	ack, err := s.sendAndWait(link, TypeChangeBatch, ChangeBatch{
 		MessageID: messageID, FromRevision: cursor + 1, ToRevision: to,
 		ExportSchemaDigest: s.exporter.contract.Digest(),
-		Changes:            changes, SourceEpoch: s.exporter.sourceEpoch,
+		Changes:            changes, SourceEpoch: s.sourceEpoch,
 	}, messageID)
 	if err != nil {
 		return cursor, err
@@ -528,9 +570,11 @@ func (s *stream) sendAndWait(link Link, messageType string, payload any, message
 	if err := link.SendMessageBlocking(s.ctx, messageType, payload); err != nil {
 		return Ack{}, err
 	}
+	waitCtx, cancelWait := context.WithTimeout(s.ctx, s.exporter.ackTimeout)
+	defer cancelWait()
 	select {
-	case <-s.ctx.Done():
-		return Ack{}, s.ctx.Err()
+	case <-waitCtx.Done():
+		return Ack{}, fmt.Errorf("await %s ack: %w", messageType, waitCtx.Err())
 	case ack := <-waiter:
 		if ack.Error != "" {
 			return Ack{}, fmt.Errorf("cloud rejected %s: %s", messageType, ack.Error)

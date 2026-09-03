@@ -79,7 +79,7 @@ func BackfillMarker(
 					stats.AlreadyMarked++
 					continue
 				}
-				marked, err := ensureMarker(ctx, store, source.Id(), contract.MarkerID())
+				marked, err := EnsureMarker(ctx, store, source.Id(), contract.MarkerID())
 				if err != nil {
 					return stats, fmt.Errorf("mark %s for cloud export: %w", source.Id(), err)
 				}
@@ -102,7 +102,9 @@ func BackfillMarker(
 	return stats, nil
 }
 
-func ensureMarker(ctx context.Context, store entity.Store, id, marker entity.Id) (bool, error) {
+// EnsureMarker adds marker to id, retrying if a concurrent writer changes the
+// entity between the read and patch. It reports whether this call added it.
+func EnsureMarker(ctx context.Context, store entity.Store, id, marker entity.Id) (bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return false, err
