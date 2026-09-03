@@ -97,6 +97,29 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 						"id", co.ID, "error", err)
 				}
 
+				// "Containers healthy" does not mean "creation finished" on the
+				// saga path: the saga decomposed the synchronous createSandbox tail
+				// into separately-persisted actions, and the executor saves after
+				// each one. A crash between booting the containers (actionBootCtrs)
+				// and registering the service endpoints (actionUpdateSvcs) leaves
+				// healthy containers plus a RUNNING entity but no Endpoints, so the
+				// sandbox reads healthy while staying unroutable.
+				//
+				// Since 9bf10a18 startup Recover skips any record whose
+				// RecoveryScope does not exactly match this executor's, which means
+				// every pre-upgrade "legacy" in-flight saga (empty scope) is skipped
+				// at startup. The only route left to resume them is a routed
+				// Execute -- createSandboxViaSaga -- which the case below used to
+				// bypass by returning early. Route a surviving legacy record that
+				// still has forward work left (Pending/Running) through that resume
+				// path so its tail actions run. A record that is Undoing is left
+				// alone here: resuming compensation would unwind the surviving
+				// containers this process did not boot, which is strictly worse than
+				// leaving a healthy-but-incomplete record for a later pass.
+				if s.sagaResumeNeeded(ctx, co) {
+					return s.createSandboxViaSaga(ctx, co)
+				}
+
 				if co.Status == compute.PENDING {
 					createdAt := meta.GetCreatedAt()
 					age := time.Since(createdAt)
@@ -166,11 +189,47 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 	}
 }
 
+// createSandboxSagaID is the durable execution name for a sandbox's
+// create-sandbox saga. Naming it after the entity makes a re-entered reconcile
+// pass resume the same run rather than starting a second one.
+func createSandboxSagaID(co *compute.Sandbox) string {
+	return fmt.Sprintf("create-sandbox-%s", co.ID)
+}
+
+// sagaResumeNeeded reports whether a non-terminal create-sandbox saga exists
+// for co AND still has forward work left to run (Pending or Running). When
+// CheckSandbox reports the containers as healthy ("same"), such a record means
+// a previous attempt crashed mid-creation with its containers surviving:
+// "containers healthy" only proves actionBootCtrs persisted, not that the tail
+// (actionUpdateSvcs → Endpoints) ran. The record is the only thing that knows
+// there is more to do, so it must drive the resume.
+//
+// Records in StatusUndoing are deliberately not resumed from here: their
+// compensation undoes booted containers, and resuming that against surviving
+// containers this process did not boot would be net-destructive. A scoped
+// startup Recover (or an explicit re-entry by an operator) owns that path.
+// Completed/Failed records are terminal and need no resume.
+func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *compute.Sandbox) bool {
+	exec, err := s.storage.Get(ctx, createSandboxSagaID(co))
+	if err != nil {
+		if !errors.Is(err, saga.ErrExecutionNotFound) {
+			s.log.Warn("checking for incomplete create-sandbox saga",
+				"id", co.ID, "error", err)
+		}
+		return false
+	}
+	// Only forward-incomplete records (Pending/Running) are resumed from a
+	// surviving-container reconcile. A Undoing record's compensation would
+	// unwind the surviving containers this process did not boot; Completed and
+	// Failed records are terminal.
+	return exec.Status == saga.StatusPending || exec.Status == saga.StatusRunning
+}
+
 // createSandboxViaSaga runs sandbox creation as a saga for crash recovery.
 func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox) error {
 	s.log.Info("creating sandbox via saga", "id", co.ID)
 
-	execID := fmt.Sprintf("create-sandbox-%s", co.ID)
+	execID := createSandboxSagaID(co)
 
 	// We only get here once CheckSandbox has found the containers missing, so a
 	// record of a previous successful creation describes resources that are no

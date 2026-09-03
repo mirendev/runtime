@@ -1644,6 +1644,20 @@ func (c *SandboxController) UpdateServices(
 
 	c.Log.Debug("updating services", "id", co.ID, "labels", md.Labels, "services", len(sresp.Values()))
 
+	// Idempotency against a resumed create. addEndpoint mints a fresh entity ID
+	// per EAC.Create (Endpoints.Encode sets no db/id, so the store auto-generates
+	// one), so re-running it against a sandbox whose previous create-sandbox saga
+	// crashed before actionUpdateSvcs persisted would create a second Endpoints
+	// entity per (service, port) — and the service controller installs a DNAT
+	// chain per Endpoints value, so duplicates double-DNAT. Collect the endpoints
+	// already registered for this sandbox's IPs so addEndpoint only creates the
+	// ones missing. On a first create this set is empty, so behaviour is
+	// unchanged for the non-saga synchronous path.
+	existing, err := c.sandboxEndpointKeys(ctx, ep)
+	if err != nil {
+		return fmt.Errorf("listing existing endpoints: %w", err)
+	}
+
 	for _, ent := range sresp.Values() {
 		var srv network_v1alpha.Service
 		srv.Decode(ent.Entity())
@@ -1653,7 +1667,7 @@ func (c *SandboxController) UpdateServices(
 			continue
 		}
 
-		err = c.addEndpoint(ctx, co, ep, &srv)
+		err = c.addEndpoint(ctx, co, ep, &srv, existing)
 		if err != nil {
 			return fmt.Errorf("failed to add endpoint: %w", err)
 		}
@@ -1662,12 +1676,57 @@ func (c *SandboxController) UpdateServices(
 	return nil
 }
 
+// sandboxEndpointKeys lists existing Endpoints entities and returns the set of
+// (service, ip, port) keys for the ones that belong to this sandbox, identified
+// by IP. Each sandbox owns a distinct subnet IP, so a (service, ip, port) key
+// whose ip is one of this sandbox's addresses uniquely identifies an endpoint
+// this sandbox already registered. Used by UpdateServices to keep addEndpoint
+// idempotent across a resumed create-sandbox saga.
+func (c *SandboxController) sandboxEndpointKeys(ctx context.Context, ep *network.EndpointConfig) (map[string]bool, error) {
+	keys := make(map[string]bool)
+	if ep == nil || len(ep.Addresses) == 0 {
+		return keys, nil
+	}
+	ips := make(map[string]bool, len(ep.Addresses))
+	for _, a := range ep.Addresses {
+		ips[a.Addr().String()] = true
+	}
+
+	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
+	if err != nil {
+		return nil, err
+	}
+	for _, ent := range resp.Values() {
+		var eps network_v1alpha.Endpoints
+		eps.Decode(ent.Entity())
+		for _, e := range eps.Endpoint {
+			if !ips[e.Ip] {
+				continue
+			}
+			keys[endpointKey(eps.Service, e.Ip, e.Port)] = true
+		}
+	}
+	return keys, nil
+}
+
+// endpointKey is the (service, sandbox-ip, port) identity of an Endpoints
+// entry, used by UpdateServices to skip a Create whose effect already exists.
+func endpointKey(service entity.Id, ip string, port int64) string {
+	return service.String() + "|" + ip + "|" + strconv.FormatInt(port, 10)
+}
+
 func (c *SandboxController) addEndpoint(
 	ctx context.Context,
 	sb *compute.Sandbox,
 	ep *network.EndpointConfig,
 	srv *network_v1alpha.Service,
+	existing map[string]bool,
 ) error {
+	if len(ep.Addresses) == 0 {
+		return nil
+	}
+	ip := ep.Addresses[0].Addr().String()
+
 	c.Log.Debug("adding endpoint to service", "service", srv.ID, "sandbox", sb.ID, "containers", len(sb.Spec.Container))
 
 	for _, co := range sb.Spec.Container {
@@ -1685,11 +1744,18 @@ func (c *SandboxController) addEndpoint(
 				continue
 			}
 
+			key := endpointKey(srv.ID, ip, p.Port)
+			if existing[key] {
+				c.Log.Debug("skipping endpoint, already registered",
+					"service", srv.ID, "sandbox", sb.ID, "ip", ip, "port", p.Port)
+				continue
+			}
+
 			var eps network_v1alpha.Endpoints
 
 			eps.Service = srv.ID
 			eps.Endpoint = append(eps.Endpoint, network_v1alpha.Endpoint{
-				Ip:   ep.Addresses[0].Addr().String(),
+				Ip:   ip,
 				Port: p.Port,
 			})
 
@@ -1700,6 +1766,11 @@ func (c *SandboxController) addEndpoint(
 			if err != nil {
 				return fmt.Errorf("failed to update service: %w", err)
 			}
+
+			// Record the key so a later port in this pass, or a re-entered
+			// UpdateServices before the List above reflects this create, does
+			// not mint a duplicate.
+			existing[key] = true
 
 			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)
 		}
