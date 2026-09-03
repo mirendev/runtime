@@ -1644,15 +1644,8 @@ func (c *SandboxController) UpdateServices(
 
 	c.Log.Debug("updating services", "id", co.ID, "labels", md.Labels, "services", len(sresp.Values()))
 
-	// Idempotency against a resumed create. addEndpoint mints a fresh entity ID
-	// per EAC.Create (Endpoints.Encode sets no db/id, so the store auto-generates
-	// one), so re-running it against a sandbox whose previous create-sandbox saga
-	// crashed before actionUpdateSvcs persisted would create a second Endpoints
-	// entity per (service, port) — and the service controller installs a DNAT
-	// chain per Endpoints value, so duplicates double-DNAT. addEndpoint looks up
-	// what this sandbox already registered for the service it is about to touch
-	// and creates only the rest. On a first create nothing is registered, so
-	// behaviour is unchanged for the non-saga synchronous path.
+	// addEndpoint skips endpoints this sandbox already registered, so a
+	// resumed create-sandbox saga does not mint duplicates.
 	for _, ent := range sresp.Values() {
 		var srv network_v1alpha.Service
 		srv.Decode(ent.Entity())
@@ -1671,16 +1664,11 @@ func (c *SandboxController) UpdateServices(
 	return nil
 }
 
-// serviceEndpointKeys returns the (service, ip, port) keys already registered
-// against srv for this sandbox, identified by IP. Each sandbox owns a distinct
-// subnet IP, so a key whose ip is one of this sandbox's addresses is one this
-// sandbox registered.
-//
-// The lookup is per service rather than over every Endpoints entity in the
-// cluster because endpoints.service is indexed and nothing else here is. This
-// runs on every sandbox boot, so a full-kind scan would cost the whole cluster's
-// endpoint count per boot — and the whole cluster's count squared across a mass
-// rollout, when every sandbox is booting at once.
+// serviceEndpointKeys returns the keys already registered against srv for this
+// sandbox, identified by IP: each sandbox owns a distinct subnet IP. Scoped to
+// one service because endpoints.service is indexed and this runs on every
+// sandbox boot; a full-kind scan would cost the cluster's endpoint count each
+// time.
 func (c *SandboxController) serviceEndpointKeys(
 	ctx context.Context,
 	srv *network_v1alpha.Service,
@@ -1708,8 +1696,7 @@ func (c *SandboxController) serviceEndpointKeys(
 	return keys, nil
 }
 
-// endpointKey is the (service, sandbox-ip, port) identity of an Endpoints
-// entry, used by UpdateServices to skip a Create whose effect already exists.
+// endpointKey is the (service, sandbox-ip, port) identity of an Endpoints entry.
 func endpointKey(service entity.Id, ip string, port int64) string {
 	return service.String() + "|" + ip + "|" + strconv.FormatInt(port, 10)
 }
@@ -1721,9 +1708,7 @@ func (c *SandboxController) addEndpoint(
 	srv *network_v1alpha.Service,
 ) error {
 	if len(ep.Addresses) == 0 {
-		// Nothing to register against. Worth saying out loud: a sandbox that
-		// reached service registration without an address is not a state any
-		// caller sets up on purpose.
+		// Not a state any caller sets up on purpose, so say so.
 		c.Log.Warn("skipping endpoint registration, sandbox has no addresses",
 			"service", srv.ID, "sandbox", sb.ID)
 		return nil
@@ -1779,8 +1764,7 @@ func (c *SandboxController) addEndpoint(
 				return fmt.Errorf("failed to update service: %w", err)
 			}
 
-			// Record the key so a later port in this pass, matching the same
-			// service port twice, does not mint a duplicate.
+			// So a later port matching the same service port does not duplicate.
 			existing[key] = true
 
 			c.Log.Debug("updated service", "id", pr.Id(), "service", eps.Service)

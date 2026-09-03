@@ -14,11 +14,8 @@ import (
 	"miren.dev/runtime/pkg/saga"
 )
 
-// newSagaControllerForResume builds a SagaSandboxController with just enough
-// wired up to exercise the resume-decision logic (storage + log) without
-// constructing the full inner *SandboxController (which needs a live containerd
-// client). sagaResumeNeeded consults only s.storage and s.log, so this is a
-// faithful stand-in for that decision.
+// newSagaControllerForResume wires up only what sagaResumeNeeded reads
+// (storage + log), so no live containerd client is needed.
 func newSagaControllerForResume(t *testing.T) *SagaSandboxController {
 	t.Helper()
 	return &SagaSandboxController{
@@ -29,23 +26,17 @@ func newSagaControllerForResume(t *testing.T) *SagaSandboxController {
 
 func TestCreateSandboxSagaID_StableAndNamedAfterEntity(t *testing.T) {
 	co := &compute.Sandbox{ID: entity.Id("sandbox/abc-123")}
-	// The execution name is the stable resume key the reconciler re-enters on
-	// every pass; it must be a pure function of the entity ID.
+	// The resume key must be a pure function of the entity ID.
 	assert.Equal(t, "create-sandbox-sandbox/abc-123", createSandboxSagaID(co))
 }
 
-// TestSagaResumeNeeded_DecidesOnForwardIncomplete verifies the routing
-// decision the SagaSandboxController makes in its case-same branch. A
-// surviving-container reconcile that finds an incomplete create-sandbox saga
-// must route through the resume path instead of returning early; the bug
-// introduced by 9bf10a18 left no route to resume legacy (empty-scope) records.
+// The routing decision the case-same branch makes: which incomplete records a
+// surviving-container reconcile may resume.
 func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 	ctx := context.Background()
 	co := &compute.Sandbox{ID: entity.Id("sb-1")}
 
-	// bootedActions is the record shape of a saga that got its containers up
-	// and persisted that fact — the only shape safe to resume against
-	// containers that are already healthy.
+	// The only shape safe to resume: containers up and recorded as such.
 	bootedActions := map[string]*saga.ActionResult{actionBootCtrs: {}}
 
 	cases := []struct {
@@ -55,9 +46,7 @@ func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 		executed map[string]*saga.ActionResult
 		want     bool
 	}{
-		// The bug's symptom window: a forward-running legacy saga that got
-		// past boot-containers and crashed before actionUpdateSvcs persisted,
-		// with healthy containers surviving.
+		// The bug's symptom window.
 		{"legacy running past boot is resumed", saga.StatusRunning, "", bootedActions, true},
 		{"scoped running past boot is resumed", saga.StatusRunning, "node/a", bootedActions, true},
 		{"pending past boot is resumed", saga.StatusPending, "", bootedActions, true},
@@ -66,16 +55,11 @@ func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 		{"completed is not resumed", saga.StatusCompleted, "", bootedActions, false},
 		{"failed is not resumed", saga.StatusFailed, "", bootedActions, false},
 
-		// A record mid-compensation is deliberately not resumed from here:
-		// resuming compensation unwinds the surviving containers this process
-		// did not boot, which is strictly worse than leaving a healthy record.
+		// Resuming compensation would unwind the surviving containers.
 		{"undoing is not resumed from reconcile", saga.StatusUndoing, "", bootedActions, false},
 
-		// A record that never recorded boot-containers would resume into
-		// createContainer/bootContainers against a live sandbox. Every action
-		// here has an Undo, so one that errored on re-execution would unwind
-		// the saga and destroy the healthy containers. Left for a scoped
-		// Recover instead.
+		// Would resume into createContainer/bootContainers against a live
+		// sandbox, and an error there unwinds the saga and destroys it.
 		{"running before boot is not resumed", saga.StatusRunning, "", map[string]*saga.ActionResult{}, false},
 		{"running with only earlier actions is not resumed", saga.StatusRunning, "",
 			map[string]*saga.ActionResult{actionAllocNetwork: {}, actionCreateCtr: {}}, false},
@@ -108,29 +92,21 @@ func TestSagaResumeNeeded_NoRecord(t *testing.T) {
 	co := &compute.Sandbox{ID: entity.Id("sb-none")}
 	s := newSagaControllerForResume(t)
 
-	// No persisted execution: nothing to resume, and no error surfaced. This
-	// is the common case (a sandbox whose saga already completed, or one that
-	// never had a saga) and must not route through createSandboxViaSaga.
+	// The common case: nothing to resume, and no error surfaced.
 	assert.False(t, s.sagaResumeNeeded(ctx, co))
 }
 
-// TestSagaResume_DrivesLegacyRecordToCompletion is the central resume-plumbing
-// proof: a legacy (empty RecoveryScope) create-sandbox saga that crashed in the
-// #7->#9 window (persisted through actionSetRunning, actionUpdateSvcs not run)
-// is resumed by a scoped executor's routed Execute -- the very path the
-// reconciler's case-same branch now routes to. It is adopted (scope stamped),
-// the already-persisted tail actions are NOT re-run, the pending tail
-// (updateServices) runs exactly once, and the saga reaches StatusCompleted.
+// The resume plumbing end to end: a legacy record that startup Recover skips is
+// adopted by a routed Execute, its persisted actions are not re-run, and the
+// pending tail runs exactly once.
 func TestSagaResume_DrivesLegacyRecordToCompletion(t *testing.T) {
 	h := newTestHarness(t)
 	ctx := context.Background()
 	execID := "create-sandbox-" + h.sandboxID
 
 	now := time.Now()
-	// Persist a legacy record as if it crashed immediately after actionSetRunning
-	// (#8) persisted and before actionUpdateSvcs (#9) ran -- the report's
-	// missing-Endpoints symptom window. Empty RecoveryScope marks it legacy
-	// (pre-9bf10a18), so startup Recover would skip it on a scoped executor.
+	// Crashed after actionSetRunning, before actionUpdateSvcs. Empty
+	// RecoveryScope marks it legacy, so a scoped Recover skips it.
 	legacy := &saga.Execution{
 		ID:                execID,
 		DefinitionName:    sagaCreateSandbox,
@@ -160,9 +136,7 @@ func TestSagaResume_DrivesLegacyRecordToCompletion(t *testing.T) {
 	}
 	require.NoError(t, h.storage.Save(ctx, legacy))
 
-	// A scoped startup Recover must make no progress on the legacy record --
-	// this is the skip half of the bug, and it is the reason the reconciler
-	// must route to resume. The record is left running and unscoped.
+	// The skip half of the bug: Recover makes no progress on a legacy record.
 	require.NoError(t, h.executor.Recover(ctx))
 	assert.Equal(t, 0, h.obs.updateSvcsCalls,
 		"startup Recover must not resume a legacy unscoped record")
@@ -171,8 +145,7 @@ func TestSagaResume_DrivesLegacyRecordToCompletion(t *testing.T) {
 	assert.Equal(t, saga.StatusRunning, stillLegacy.Status)
 	assert.Equal(t, "", stillLegacy.RecoveryScope, "Recover must not adopt a legacy record")
 
-	// The resume route the reconciler now reaches: a routed Execute under the
-	// scoped executor adopts the legacy record and drives it to completion.
+	// The resume route: a routed Execute adopts the record and completes it.
 	require.NoError(t, h.executor.Start(sagaCreateSandbox).
 		Input("sandbox_id", h.sandboxID).
 		WithID(execID).
@@ -185,9 +158,7 @@ func TestSagaResume_DrivesLegacyRecordToCompletion(t *testing.T) {
 	assert.Equal(t, "node/test-node", resumed.RecoveryScope,
 		"the routed resume must adopt the legacy record by stamping the scope")
 
-	// Only the pending tail action ran; every already-persisted forward action
-	// was skipped. In particular updateServices ran exactly once (the
-	// missing-Endpoints step) and addMetrics did not run again.
+	// Only the pending tail ran; persisted actions were skipped.
 	assert.Equal(t, 1, h.obs.updateSvcsCalls, "the updateServices tail action must run once")
 	assert.Equal(t, 0, h.obs.addMetricsCalls, "already-completed addMetrics must not re-run")
 	assert.Equal(t, 0, h.runtime.bootContainersCalls, "already-completed bootContainers must not re-run")

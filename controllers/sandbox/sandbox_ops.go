@@ -174,13 +174,8 @@ func (o *sandboxOps) DiagnoseListening(id string) (routable []int, loopback []in
 // --- SandboxObservability ---
 
 func (o *sandboxOps) AddMetrics(logEntity string, cgroups map[string]string, attrs map[string]string) error {
-	// The create-sandbox saga's add-metrics action can re-run against an
-	// already-monitored sandbox: a legacy incomplete record resumed after an
-	// upgrade re-runs its tail actions, and the reconciler's case-same path
-	// registers metrics via ensureMetrics before routing to the resume. Add
-	// would overwrite the existing Cgroups entry and discard the accumulated
-	// CPU baseline (MIR-1013), so use the idempotent registration that leaves
-	// an already-monitored sandbox alone.
+	// add-metrics re-runs on a resumed saga, and Add would overwrite the
+	// Cgroups entry and reset the accumulated CPU baseline (MIR-1013).
 	_, err := o.ctrl.Metrics.AddIfAbsent(logEntity, cgroups, attrs)
 	return err
 }

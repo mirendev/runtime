@@ -107,21 +107,11 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// sandboxOps.WaitForPort → SandboxController.WaitForPort, so no
 		// separate saga edit is needed.
 		//
-		// Resume-safe UpdateServices (saga crash recovery): addEndpoint now
-		// looks up the Endpoints already registered against the service it is
-		// about to touch, keyed by this sandbox's IPs, and skips EAC.Create for
-		// any (service, ip, port) that already exists. It mints a fresh entity
-		// ID per Create, so a resumed create-sandbox saga whose actionUpdateSvcs
-		// never persisted would have created a second Endpoints entity per port
-		// and the service controller would install duplicate DNAT chains. The
-		// lookup goes through the indexed endpoints.service attribute rather
-		// than scanning every Endpoints entity, because it runs on every sandbox
-		// boot. The non-saga synchronous create path is unchanged: on a first
-		// create nothing is registered. Saga path audited for parity:
-		// create-sandbox's actionUpdateSvcs reaches this through
-		// sandboxOps.UpdateServices, so it inherits the fix; the matching
-		// case-same resume route lives in saga_controller.go.
-		"sandbox.go":  "7060769a06aa10963c1241a539d1d8236361fcfa988b973df222a738996a2607",
+		// Resume-safe UpdateServices: addEndpoint skips a Create for a
+		// (service, ip, port) that already exists, so a resumed create-sandbox
+		// saga does not mint duplicate Endpoints and double-DNAT. No saga edit:
+		// actionUpdateSvcs reaches this through sandboxOps.UpdateServices.
+		"sandbox.go":  "fa9c00356596acc5a3fe5ea2134da374f17ba74f258c456374e9805c8ae1f3bd",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

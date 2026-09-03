@@ -17,11 +17,8 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
-// sandboxForUpdateServices builds a SandboxController with only the fields
-// UpdateServices/addEndpoint touch, plus the sandbox entity metadata the
-// service-matching code reads. addEndpoint consults c.EAC and c.Log only, so a
-// live containerd client is not needed; this is the seam the saga's
-// actionUpdateSvcs reaches through sandboxOps.UpdateServices.
+// sandboxForUpdateServices builds a controller with only the fields
+// UpdateServices touches, so no live containerd client is needed.
 func sandboxForUpdateServices(t *testing.T) (*SandboxController, *testutils.InMemEntityServer) {
 	t.Helper()
 	es, cleanup := testutils.NewInMemEntityServer(t)
@@ -30,8 +27,7 @@ func sandboxForUpdateServices(t *testing.T) (*SandboxController, *testutils.InMe
 	return ctrl, es
 }
 
-// listEndpoints returns every Endpoints entity in the store, decoded, used to
-// count what UpdateServices actually created.
+// listEndpoints returns every Endpoints entity in the store, decoded.
 func listEndpoints(t *testing.T, ctx context.Context, es *testutils.InMemEntityServer) []*network_v1alpha.Endpoints {
 	t.Helper()
 	resp, err := es.EAC.List(ctx, entity.Ref(entity.EntityKind, network_v1alpha.KindEndpoints))
@@ -45,13 +41,9 @@ func listEndpoints(t *testing.T, ctx context.Context, es *testutils.InMemEntityS
 	return out
 }
 
-// TestUpdateServices_NoDuplicateEndpointsOnResume proves the idempotency fix
-// in addEndpoint: a resumed create-sandbox saga re-runs actionUpdateSvcs
-// against surviving containers, and addEndpoint mints a fresh Endpoints entity
-// ID per EAC.Create. Without a dedup guard the re-run would create a second
-// Endpoints entity per (service, port) and the service controller would install
-// duplicate DNAT chains. Re-running UpdateServices against the same sandbox
-// must produce the same single set of endpoints, not a duplicate.
+// A resumed saga re-runs actionUpdateSvcs against surviving containers.
+// addEndpoint mints a fresh entity ID per Create, so without the dedup the
+// re-run would duplicate every (service, port) and double-DNAT it.
 func TestUpdateServices_NoDuplicateEndpointsOnResume(t *testing.T) {
 	ctx := context.Background()
 	ctrl, es := sandboxForUpdateServices(t)
@@ -93,8 +85,6 @@ func TestUpdateServices_NoDuplicateEndpointsOnResume(t *testing.T) {
 		Addresses: []netip.Prefix{netip.MustParsePrefix(sbIP + "/32")},
 	}
 
-	// First run -- mirrors the non-saga synchronous create, or the first time
-	// the saga's actionUpdateSvcs persists.
 	require.NoError(t, ctrl.UpdateServices(ctx, co, meta, ep))
 	first := listEndpoints(t, ctx, es)
 	require.Len(t, first, 2, "one Endpoints entity per matched (service, port) on first run")
@@ -108,12 +98,9 @@ func TestUpdateServices_NoDuplicateEndpointsOnResume(t *testing.T) {
 	}
 	assert.True(t, ports[8080] && ports[9090], "both ports must be registered once")
 
-	// Second run -- mirrors a resumed actionUpdateSvcs re-running against the
-	// same surviving, already-listening sandbox. This is the regression guard:
-	// without the dedup it would mint a second Endpoints entity per port.
+	// The regression guard: a resumed actionUpdateSvcs re-running.
 	require.NoError(t, ctrl.UpdateServices(ctx, co, meta, ep))
 	second := listEndpoints(t, ctx, es)
-	// Same count, no duplicates.
 	require.Len(t, second, 2, "re-running UpdateServices must not create duplicate Endpoints")
 	for _, e := range second {
 		assert.Equal(t, svcID, e.Service)
@@ -122,10 +109,8 @@ func TestUpdateServices_NoDuplicateEndpointsOnResume(t *testing.T) {
 	}
 }
 
-// TestUpdateServices_DedupIsPerSandboxIP verifies the dedup is keyed on the
-// sandbox's own IP, so registering a different sandbox on a different IP is
-// not skipped by an existing endpoint for the first sandbox. This guards
-// against an over-broad dedup that would leave later sandboxes unroutable.
+// Guards against an over-broad dedup: keying on the sandbox's own IP means a
+// second sandbox still registers rather than being skipped and left unroutable.
 func TestUpdateServices_DedupIsPerSandboxIP(t *testing.T) {
 	ctx := context.Background()
 	ctrl, es := sandboxForUpdateServices(t)
@@ -158,8 +143,6 @@ func TestUpdateServices_DedupIsPerSandboxIP(t *testing.T) {
 	require.NoError(t, ctrl.UpdateServices(ctx, sb1, m1, ep1))
 	require.Len(t, listEndpoints(t, ctx, es), 1, "first sandbox registers its endpoint")
 
-	// A second re-run for sb1 is a no-op (dedup), and a second sandbox on a
-	// different IP still creates its own endpoint.
 	require.NoError(t, ctrl.UpdateServices(ctx, sb1, m1, ep1))
 	require.Len(t, listEndpoints(t, ctx, es), 1, "re-running sb1 must not duplicate")
 
