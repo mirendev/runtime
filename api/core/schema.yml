@@ -368,6 +368,7 @@ kinds:
       type: ref
       doc: The app this attempt targeted
       indexed: true
+      tags: [dev.miren.app_ref]
 
     version:
       type: ref
