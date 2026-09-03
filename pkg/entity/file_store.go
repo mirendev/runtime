@@ -155,8 +155,30 @@ func (s *FileStore) UpdateEntity(ctx context.Context, id Id, updates *Entity, op
 		return nil, err
 	}
 
+	// Remove existing card-one attrs that the update replaces, mirroring
+	// EtcdStore.UpdateEntity (store.go:716-723). A bare entity.Merge would
+	// append rather than replace card-one attrs (Merge's default case appends
+	// and Fixup does not dedup), so the schema.AllowMany-driven Remove step is
+	// required.
+	for _, attr := range updates.attrs {
+		schema, err := s.GetAttributeSchema(ctx, attr.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+		if !schema.AllowMany {
+			if _, ok := entity.Get(attr.ID); ok {
+				entity.Remove(attr.ID)
+			}
+		}
+	}
+
+	// Apply the caller's updates. Merge preserves store-managed Revision and
+	// CreatedAt when already set and appends card-many attrs.
+	if err := entity.Merge(updates); err != nil {
+		return nil, fmt.Errorf("failed to update entity: %w", err)
+	}
+
 	entity.SetRevision(entity.GetRevision() + 1)
-	entity.SetUpdatedAt(time.Now())
 
 	// Validate attributes against schemas
 	err = s.validator.ValidateAttributes(ctx, entity.attrs)
@@ -164,6 +186,9 @@ func (s *FileStore) UpdateEntity(ctx context.Context, id Id, updates *Entity, op
 		return nil, err
 	}
 
+	// saveEntity owns UpdatedAt (it stamps every save), so there is no
+	// SetUpdatedAt here; an earlier redundant call survived only because
+	// saveEntity overwrote it.
 	if err := s.saveEntity(entity); err != nil {
 		return nil, err
 	}
