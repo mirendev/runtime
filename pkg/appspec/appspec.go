@@ -121,6 +121,20 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 		logAttrs = types.LabelSet("miren.stage", "app-run", "miren.service", serviceName)
 	}
 
+	// miren.app is appended outside the default above because it identifies the
+	// sandbox rather than describing it: a task run supplies its own attributes
+	// and would otherwise lose the app it belongs to.
+	//
+	// The app *name* is used, not its entity id. These attributes become metric
+	// labels, and an app's dedicated addons already label themselves by name
+	// (see the addon providers) -- an app and the database it depends on can
+	// only be summed together if both spell the app the same way.
+	if opts.AppName != "" {
+		if _, ok := logAttrs.Get("miren.app"); !ok {
+			logAttrs = append(logAttrs, types.Label{Key: "miren.app", Value: opts.AppName})
+		}
+	}
+
 	sbSpec := &compute_v1alpha.SandboxSpec{
 		Version:       ver.ID,
 		LogEntity:     opts.AppID.String(),

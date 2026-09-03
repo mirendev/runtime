@@ -93,7 +93,7 @@ func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateS
 		SandboxLabels:    spec.Labels,
 		SandboxPrefix:    spec.SandboxPrefix,
 		SandboxSpec: compute_v1alpha.SandboxSpec{
-			LogAttribute:    spec.Labels,
+			LogAttribute:    metricLabels(spec.Labels),
 			PortWaitTimeout: spec.PortWaitTimeout,
 		},
 	}
@@ -123,6 +123,30 @@ func (fw *ProviderFramework) CreateSandboxPool(ctx context.Context, spec CreateS
 	}
 
 	return poolID, nil
+}
+
+// metricLabels adapts an addon's labels for use as metric attributes.
+//
+// Providers label their sandboxes with a plain "app" key, which is right for an
+// entity label but wrong for a metric: deployed services publish the same fact
+// as "miren.app", and a rollup can only sum an app together with the database it
+// depends on if both spell it the same way. The original key is kept so nothing
+// reading the entity has to change.
+func metricLabels(labels types.Labels) types.Labels {
+	app, ok := labels.Get("app")
+	if !ok || app == "" {
+		return labels
+	}
+	if _, exists := labels.Get("miren.app"); exists {
+		return labels
+	}
+
+	// Copied rather than appended in place: the caller's slice is also stored
+	// as the pool's SandboxLabels, and appending could write through to it.
+	out := make(types.Labels, len(labels), len(labels)+1)
+	copy(out, labels)
+
+	return append(out, types.Label{Key: "miren.app", Value: app})
 }
 
 // WaitForPool watches a pool entity until it has at least one ready instance

@@ -111,7 +111,21 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// (service, ip, port) that already exists, so a resumed create-sandbox
 		// saga does not mint duplicate Endpoints and double-DNAT. No saga edit:
 		// actionUpdateSvcs reaches this through sandboxOps.UpdateServices.
-		"sandbox.go":  "fa9c00356596acc5a3fe5ea2134da374f17ba74f258c456374e9805c8ae1f3bd",
+		//
+		// Resource attribution: sandboxMetricsIdentity now takes the node the
+		// sandbox runs on and stamps miren.node and miren.kind onto every
+		// metric series, so cluster-wide usage can say which host a workload's
+		// load landed on and whether it is an app, an addon or a task run.
+		// Neither label adds a time series -- both are functionally dependent
+		// on miren.sandbox, which was already there.
+		//
+		// Saga path audited: this one is NOT inherited, because the node id has
+		// to reach a function that previously needed only the sandbox.
+		// create_saga.go's addMetrics action calls sandboxMetricsIdentity
+		// directly, so createSandboxDeps gained a nodeID field, set from
+		// SandboxController.NodeId where the saga is registered in
+		// saga_controller.go.
+		"sandbox.go":  "2e97940b3d8d5b95a2cba712a6197b3552addda37db7ed76d8135135babd307e",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}

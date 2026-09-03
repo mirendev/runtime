@@ -1070,7 +1070,12 @@ func (c *SandboxController) pauseContainerPID(ctx context.Context, pauseID strin
 // keyed by, plus the attributes those metrics carry. Every registration site
 // shares this so the key always matches the one StopSandbox removes, and so
 // new attributes reach all of them at once.
-func sandboxMetricsIdentity(sb *compute.Sandbox) (string, map[string]string) {
+//
+// nodeID is the node this sandbox's cgroups live on. It is passed in rather
+// than read off the sandbox because the sandbox entity does not carry one --
+// the schedule that assigns it is a separate component -- and the controller
+// registering the metrics is by definition running on that node.
+func sandboxMetricsIdentity(sb *compute.Sandbox, nodeID string) (string, map[string]string) {
 	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
@@ -1078,6 +1083,14 @@ func sandboxMetricsIdentity(sb *compute.Sandbox) (string, map[string]string) {
 
 	attrs := map[string]string{
 		"miren.sandbox": sb.ID.String(),
+	}
+
+	// Without this, usage can be attributed to a workload but not to a host,
+	// which is what makes "which node is hot" unanswerable. It costs no extra
+	// time series: it is functionally dependent on miren.sandbox, which is
+	// already an attribute here.
+	if nodeID != "" {
+		attrs["miren.node"] = nodeID
 	}
 
 	if sb.Spec.Version != "" {
@@ -1088,7 +1101,40 @@ func sandboxMetricsIdentity(sb *compute.Sandbox) (string, map[string]string) {
 		attrs[lbl.Key] = lbl.Value
 	}
 
+	attrs["miren.kind"] = sandboxWorkloadKind(sb)
+
 	return le, attrs
+}
+
+// sandboxWorkloadKind classifies a sandbox as an app service, an addon server,
+// or a task run, so a usage report can separate a user's web process from the
+// database sitting behind it.
+//
+// The classification is read back out of attributes the sandbox already
+// carries rather than stored on it: appspec stamps miren.stage=app-run on
+// deployed services and the run controller stamps miren.stage=run, while the
+// addon framework passes the addon's own labels through as log attributes and
+// sets no stage.
+func sandboxWorkloadKind(sb *compute.Sandbox) string {
+	var stage string
+
+	for _, lbl := range sb.Spec.LogAttribute {
+		switch lbl.Key {
+		case "addon":
+			return "addon"
+		case "miren.stage":
+			stage = lbl.Value
+		}
+	}
+
+	switch stage {
+	case "run":
+		return "run"
+	case "app-run":
+		return "app"
+	default:
+		return "other"
+	}
 }
 
 // sandboxCgroups reads the cgroup path of each of a sandbox's live containers
@@ -1131,7 +1177,7 @@ func (c *SandboxController) sandboxCgroups(ctx context.Context, sb *compute.Sand
 // every reconcile for adopted sandboxes, and re-adding would reset the CPU
 // delta baseline each time (MIR-1013).
 func (c *SandboxController) ensureMetrics(ctx context.Context, sb *compute.Sandbox) error {
-	le, attrs := sandboxMetricsIdentity(sb)
+	le, attrs := sandboxMetricsIdentity(sb, c.NodeId.String())
 
 	// Cheap bail-out so the common case doesn't ask containerd for a spec per
 	// container on every reconcile. AddIfAbsent below is what actually keeps
@@ -1535,7 +1581,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	le, attrs := sandboxMetricsIdentity(co)
+	le, attrs := sandboxMetricsIdentity(co, c.NodeId.String())
 
 	err = c.Metrics.Add(le, cgroups, attrs)
 	if err != nil {

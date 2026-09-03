@@ -456,7 +456,7 @@ func TestSandbox(t *testing.T) {
 		_, err = co.EAC.Put(ctx, &runningE)
 		r.NoError(err)
 
-		le, _ := sandboxMetricsIdentity(&tco)
+		le, _ := sandboxMetricsIdentity(&tco, co.NodeId.String())
 
 		// The process that booted the sandbox is gone, and its cgroup
 		// monitoring went with it. The containers keep running.
@@ -1988,4 +1988,47 @@ func TestShouldRetireInsteadOfRestart(t *testing.T) {
 
 	// The default policy never retires; services depend on being rebooted.
 	r.False(shouldRetireInsteadOfRestart(&compute.Sandbox{Status: compute.RUNNING}))
+}
+
+func TestSandboxWorkloadKind(t *testing.T) {
+	withAttrs := func(kv ...string) *compute.Sandbox {
+		sb := &compute.Sandbox{}
+		sb.Spec.LogAttribute = types.LabelSet(kv...)
+		return sb
+	}
+
+	r := require.New(t)
+
+	r.Equal("app", sandboxWorkloadKind(withAttrs("miren.stage", "app-run", "miren.service", "web")),
+		"appspec stamps app-run on every deployed service")
+	r.Equal("run", sandboxWorkloadKind(withAttrs("miren.stage", "run", "miren.task", "migrate")),
+		"the run controller stamps run on one-off tasks")
+
+	// Addon servers set no stage at all, so the addon label is the only signal
+	// that a sandbox is infrastructure rather than someone's app.
+	r.Equal("addon", sandboxWorkloadKind(withAttrs("addon", "postgresql", "app", "myapp")),
+		"an addon is infrastructure even though it carries an app label")
+
+	r.Equal("other", sandboxWorkloadKind(withAttrs()),
+		"an unclassifiable sandbox is reported as such rather than assumed to be an app")
+}
+
+func TestSandboxMetricsIdentityLabelsNode(t *testing.T) {
+	sb := &compute.Sandbox{ID: "sb_abc"}
+	sb.Spec.LogEntity = "app_xyz"
+	sb.Spec.LogAttribute = types.LabelSet("miren.stage", "app-run")
+
+	r := require.New(t)
+
+	le, attrs := sandboxMetricsIdentity(sb, "node/runner-1")
+	r.Equal("app_xyz", le)
+	r.Equal("sb_abc", attrs["miren.sandbox"])
+	r.Equal("node/runner-1", attrs["miren.node"])
+	r.Equal("app", attrs["miren.kind"])
+
+	// Callers that genuinely do not know their node must not emit an empty
+	// label: a series tagged miren.node="" would roll up under a nonexistent
+	// host rather than being visibly absent.
+	_, attrs = sandboxMetricsIdentity(sb, "")
+	r.NotContains(attrs, "miren.node")
 }
