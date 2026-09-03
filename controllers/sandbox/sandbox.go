@@ -374,6 +374,21 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 		c.portCond.Broadcast() // Wake up the waiting goroutine
 		return fmt.Errorf("context cancelled while waiting for port %d: %w", port, ctx.Err())
 	case <-time.After(time.Until(deadline)):
+		// Re-check under the lock before declaring timeout: the wait goroutine
+		// may have already observed the port bound and closed done at (close
+		// to) the same instant this timer became ready. Go's select picks
+		// uniformly at random among ready cases, so without this check it can
+		// return a spurious timeout even though the port is in fact bound.
+		c.portMu.Lock()
+		if ports, ok := c.portMap[id]; ok {
+			for _, p := range ports.Ports {
+				if p.Port == port {
+					c.portMu.Unlock()
+					return nil
+				}
+			}
+		}
+		c.portMu.Unlock()
 		close(cancelled)
 		c.portCond.Broadcast() // Wake up the waiting goroutine
 		return fmt.Errorf("timeout waiting for port %d to be bound after %v", port, timeout)
