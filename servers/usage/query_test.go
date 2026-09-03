@@ -174,13 +174,18 @@ func TestOrderingDirection(t *testing.T) {
 // the default branch silently sorts by CPU, and if the key was name-like it
 // also inherits an ascending direction, so the caller gets ascending CPU order
 // with no indication anything was ignored.
+//
+// Each row's four name-like fields disagree on purpose, and each key has a
+// different expected winner. A fixture that gave every field the same value
+// would pass even if the app comparator read the service, because the two would
+// sort identically.
 func TestEverySortKeyHasAComparator(t *testing.T) {
-	sandbox := func(id string, cores float64) *usage_v1alpha.SandboxUsage {
+	sandbox := func(short, app, service, node string, cores float64) *usage_v1alpha.SandboxUsage {
 		var ref usage_v1alpha.SandboxRef
-		ref.SetSandboxShortId(id)
-		ref.SetApp(id)
-		ref.SetService(id)
-		ref.SetNodeName(id)
+		ref.SetSandboxShortId(short)
+		ref.SetApp(app)
+		ref.SetService(service)
+		ref.SetNodeName(node)
 
 		var cpu usage_v1alpha.CpuUsage
 		cpu.SetCores(cores)
@@ -192,18 +197,37 @@ func TestEverySortKeyHasAComparator(t *testing.T) {
 		return &row
 	}
 
-	// "a" is the alphabetical first but the CPU last. Any key that falls
-	// through to the CPU comparator puts "c" first instead.
-	for _, key := range []string{"name", "app", "service", "node", "runner"} {
-		rows := []*usage_v1alpha.SandboxUsage{sandbox("c", 3), sandbox("a", 1), sandbox("b", 2)}
-		sortSandboxes(rows, ordering{sort: key})
+	// Rows are identified by short id. "filler" holds the lowest CPU and sorts
+	// last on every name-like field, so it is what an ascending CPU fallthrough
+	// would surface and it can never be the right answer for a name key.
+	rows := func() []*usage_v1alpha.SandboxUsage {
+		return []*usage_v1alpha.SandboxUsage{
+			sandbox("d", "a", "c", "b", 4),
+			sandbox("a", "d", "b", "c", 3),
+			sandbox("c", "b", "a", "d", 2),
+			sandbox("b", "c", "d", "a", 1),
+			sandbox("filler", "filler", "filler", "filler", 0),
+		}
+	}
 
-		assert.Equalf(t, "a", rows[0].Ref().SandboxShortId(),
-			"sort=%s fell through to the CPU comparator", key)
+	// Each key wins on a different row, so a comparator reading the wrong
+	// name-like field is caught rather than passing by coincidence.
+	for key, wantFirst := range map[string]string{
+		"name":    "a",
+		"app":     "d",
+		"service": "c",
+		"node":    "b",
+		"runner":  "b",
+	} {
+		got := rows()
+		sortSandboxes(got, ordering{sort: key})
+
+		assert.Equalf(t, wantFirst, got[0].Ref().SandboxShortId(),
+			"sort=%s picked the wrong row; it may be reading another field, or falling through to CPU", key)
 	}
 
 	// A usage key still reads busiest first.
-	rows := []*usage_v1alpha.SandboxUsage{sandbox("a", 1), sandbox("c", 3)}
-	sortSandboxes(rows, ordering{sort: "cpu"})
-	assert.Equal(t, "c", rows[0].Ref().SandboxShortId())
+	got := rows()
+	sortSandboxes(got, ordering{sort: "cpu"})
+	assert.Equal(t, "d", got[0].Ref().SandboxShortId(), "cpu sorts busiest first")
 }
