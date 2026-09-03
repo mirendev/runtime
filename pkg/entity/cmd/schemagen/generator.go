@@ -24,6 +24,7 @@ type schemaFile struct {
 	Domain     string                 `yaml:"domain"`
 	Version    string                 `yaml:"version"`
 	Major      string                 `yaml:"kind-major"`
+	Enums      map[string]schemaEnum  `yaml:"enums"`
 	Components map[string]schemaAttrs `yaml:"components"`
 	Kinds      map[string]schemaAttrs `yaml:"kinds"`
 	Exports    map[string]exportSpec  `yaml:"exports"`
@@ -39,19 +40,27 @@ type exportKind struct {
 	Include   []string `yaml:"include"`
 }
 
+type schemaEnum struct {
+	Doc          string   `yaml:"doc,omitempty"`
+	MemberPrefix string   `yaml:"member-prefix,omitempty"`
+	Values       []string `yaml:"values"`
+}
+
 type schemaAttrs map[string]*schemaAttr
 
 type schemaAttr struct {
-	Type     string   `yaml:"type"`
-	Doc      string   `yaml:"doc"`
-	Attr     string   `yaml:"attr,omitempty"`     // for attribute name
-	Many     bool     `yaml:"many,omitempty"`     // for repeated attributes
-	Required bool     `yaml:"required,omitempty"` // for required attributes
-	Choices  []string `yaml:"choices,omitempty"`  // for enum attributes
-	Indexed  bool     `yaml:"indexed,omitempty"`  // for indexed attributes
-	Session  bool     `yaml:"session,omitempty"`  // for session attributes
-	BindTo   string   `yaml:"bind_to,omitempty"`  // for binding to other attributes
-	Tags     []string `yaml:"tags,omitempty"`     // for attribute tags
+	Type           string   `yaml:"type"`
+	Doc            string   `yaml:"doc"`
+	Attr           string   `yaml:"attr,omitempty"`            // for attribute name
+	Many           bool     `yaml:"many,omitempty"`            // for repeated attributes
+	Required       bool     `yaml:"required,omitempty"`        // for required attributes
+	Choices        []string `yaml:"choices,omitempty"`         // for enum attributes
+	Enum           string   `yaml:"enum,omitempty"`            // named enum type
+	LegacyEncoding string   `yaml:"legacy-encoding,omitempty"` // accepted pre-canonical representation
+	Indexed        bool     `yaml:"indexed,omitempty"`         // for indexed attributes
+	Session        bool     `yaml:"session,omitempty"`         // for session attributes
+	BindTo         string   `yaml:"bind_to,omitempty"`         // for binding to other attributes
+	Tags           []string `yaml:"tags,omitempty"`            // for attribute tags
 
 	Attrs map[string]*schemaAttr `yaml:"attrs,omitempty"` // for nested attributes
 }
@@ -89,11 +98,16 @@ type gen struct {
 	encoders      []j.Code
 	emptyChecks   []emptyCheck // per-field emptiness checks
 	exportMarkers []string
+	hasEnums      bool
 
 	subgen []*gen // for nested attributes
 }
 
 func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
+	if err := validateEnums(sf); err != nil {
+		return "", err
+	}
+
 	exportContracts, err := GenerateExportContracts(sf)
 	if err != nil {
 		return "", err
@@ -116,6 +130,7 @@ func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
 	ed.ShortKinds = make(map[string]string)
 
 	jf := j.NewFile(pkg)
+	generateEnums(jf, sf, hasNamedEnumFields(sf))
 
 	var (
 		kinds   []string
@@ -321,6 +336,350 @@ func toCamal(s string) string {
 	}
 
 	return b.String()
+}
+
+const (
+	enumLegacyRef     = "ref"
+	enumLegacyString  = "string"
+	enumLegacyKeyword = "keyword"
+)
+
+func validateEnums(sf *schemaFile) error {
+	typeNames := make(map[string]string, len(sf.Enums))
+	generatedStructs := make(map[string]string, len(sf.Components)+len(sf.Kinds))
+	for name := range sf.Components {
+		generatedStructs[toCamal(name)] = "component " + name
+	}
+	for name := range sf.Kinds {
+		generatedStructs[toCamal(name)] = "kind " + name
+	}
+
+	for name, enum := range sf.Enums {
+		if name == "" {
+			return fmt.Errorf("enum name must not be empty")
+		}
+
+		typeName := toCamal(name)
+		if previous, ok := typeNames[typeName]; ok {
+			return fmt.Errorf("enum names %q and %q both generate Go type %s", previous, name, typeName)
+		}
+		if generated, ok := generatedStructs[typeName]; ok {
+			return fmt.Errorf("enum %q and %s both generate Go type %s", name, generated, typeName)
+		}
+		typeNames[typeName] = name
+
+		if len(enum.Values) == 0 {
+			return fmt.Errorf("enum %q must declare at least one value", name)
+		}
+
+		seen := make(map[string]struct{}, len(enum.Values))
+		identifiers := make(map[string]string, len(enum.Values))
+		for _, value := range enum.Values {
+			if value == "" {
+				return fmt.Errorf("enum %q contains an empty value", name)
+			}
+			if _, ok := seen[value]; ok {
+				return fmt.Errorf("enum %q contains duplicate value %q", name, value)
+			}
+			seen[value] = struct{}{}
+
+			identifier := enumConstant(name, value)
+			if previous, ok := identifiers[identifier]; ok {
+				return fmt.Errorf("enum %q values %q and %q both generate Go identifier %s", name, previous, value, identifier)
+			}
+			identifiers[identifier] = value
+		}
+	}
+
+	memberIDs := make(map[string]string)
+	for name, enum := range sf.Enums {
+		for _, value := range enum.Values {
+			id := enumMemberID(sf, name, value)
+			if previous, ok := memberIDs[id]; ok {
+				return fmt.Errorf("enum members %s and %s both use entity ID %s", previous, name+"."+value, id)
+			}
+			memberIDs[id] = name + "." + value
+		}
+	}
+
+	var validateAttrs func(string, schemaAttrs) error
+	validateAttrs = func(path string, attrs schemaAttrs) error {
+		for name, attr := range attrs {
+			fieldPath := path + "." + name
+			if attr.Type == "enum" {
+				if attr.Many {
+					return fmt.Errorf("enum field %s does not support many", fieldPath)
+				}
+				if len(attr.Choices) > 0 && attr.Enum != "" {
+					return fmt.Errorf("enum field %s cannot use both choices and a named enum", fieldPath)
+				}
+				if len(attr.Choices) == 0 && attr.Enum == "" {
+					return fmt.Errorf("enum field %s must declare choices or reference a named enum", fieldPath)
+				}
+				if attr.Enum == "" {
+					if attr.LegacyEncoding != "" {
+						return fmt.Errorf("inline enum field %s cannot declare legacy encoding", fieldPath)
+					}
+					continue
+				}
+				if _, ok := sf.Enums[attr.Enum]; !ok {
+					return fmt.Errorf("enum field %s references unknown enum %q", fieldPath, attr.Enum)
+				}
+				switch attr.LegacyEncoding {
+				case "", enumLegacyRef, enumLegacyString:
+				case enumLegacyKeyword:
+					for _, value := range sf.Enums[attr.Enum].Values {
+						keyword := enumLegacyKeywordValue(sf, attr.Enum, value)
+						if !entity.ValidKeyword(keyword) {
+							return fmt.Errorf("enum %q value %q produces invalid keyword %q for field %s", attr.Enum, value, keyword, fieldPath)
+						}
+					}
+				default:
+					return fmt.Errorf("enum field %s has invalid legacy encoding %q", fieldPath, attr.LegacyEncoding)
+				}
+			}
+
+			if len(attr.Attrs) > 0 {
+				if err := validateAttrs(fieldPath, attr.Attrs); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for name, attrs := range sf.Components {
+		if err := validateAttrs("component."+name, attrs); err != nil {
+			return err
+		}
+	}
+	for name, attrs := range sf.Kinds {
+		if err := validateAttrs(name, attrs); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func hasNamedEnumFields(sf *schemaFile) bool {
+	var attrsHaveNamedEnum func(schemaAttrs) bool
+	attrsHaveNamedEnum = func(attrs schemaAttrs) bool {
+		for _, attr := range attrs {
+			if attr.Type == "enum" && attr.Enum != "" {
+				return true
+			}
+			if attrsHaveNamedEnum(attr.Attrs) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, attrs := range sf.Components {
+		if attrsHaveNamedEnum(attrs) {
+			return true
+		}
+	}
+	for _, attrs := range sf.Kinds {
+		if attrsHaveNamedEnum(attrs) {
+			return true
+		}
+	}
+	return false
+}
+
+func generateEnums(jf *j.File, sf *schemaFile, initializeMembers bool) {
+	for name, enum := range mapx.StableOrder(sf.Enums) {
+		typeName := toCamal(name)
+		jf.Type().Id(typeName).String()
+		jf.Const().DefsFunc(func(group *j.Group) {
+			for _, value := range enum.Values {
+				group.Id(typeName + toCamal(value)).Id(typeName).Op("=").Lit(value)
+			}
+		})
+		jf.Const().DefsFunc(func(group *j.Group) {
+			for _, value := range enum.Values {
+				group.Id(enumMemberConstant(name, value)).Op("=").Qual(top, "Id").Call(j.Lit(enumMemberID(sf, name, value)))
+			}
+		})
+		jf.Line()
+	}
+
+	if initializeMembers {
+		jf.Func().Id("initEnumMembers").Params(j.Id("sb").Op("*").Qual(sch, "SchemaBuilder")).BlockFunc(func(group *j.Group) {
+			for name, enum := range mapx.StableOrder(sf.Enums) {
+				for _, value := range enum.Values {
+					group.Id("sb").Dot("Singleton").Call(j.Lit(enumMemberID(sf, name, value)))
+				}
+			}
+		})
+		jf.Line()
+	}
+}
+
+func enumID(sf *schemaFile, name string) string {
+	return sf.Domain + "/enum." + name
+}
+
+func enumMemberID(sf *schemaFile, name, value string) string {
+	prefix := sf.Enums[name].MemberPrefix
+	if prefix == "" {
+		prefix = "enum." + name
+	}
+	return sf.Domain + "/" + prefix + "." + value
+}
+
+func enumLegacyKeywordValue(sf *schemaFile, name, value string) string {
+	return enumID(sf, name) + "." + value
+}
+
+func enumConstant(enumName, value string) string {
+	return toCamal(enumName) + toCamal(value)
+}
+
+func enumMemberConstant(enumName, value string) string {
+	return enumConstant(enumName, value) + "MemberId"
+}
+
+func enumStringMap(mapName, enumType, enumName string, values []string) j.Code {
+	return j.Var().Id(mapName + "FromString").Op("=").Map(j.String()).Id(enumType).ValuesFunc(func(group *j.Group) {
+		for _, value := range values {
+			group.Lit(value).Op(":").Id(enumConstant(enumName, value))
+		}
+	})
+}
+
+func enumKeywordMap(sf *schemaFile, mapName, enumType, enumName string, values []string) j.Code {
+	return j.Var().Id(mapName + "FromKeyword").Op("=").Map(j.Qual(topt, "Keyword")).Id(enumType).ValuesFunc(func(group *j.Group) {
+		for _, value := range values {
+			keyword := enumID(sf, enumName) + "." + value
+			group.Qual(top, "MustKeyword").Call(j.Lit(keyword)).Op(":").Id(enumConstant(enumName, value))
+		}
+	})
+}
+
+func enumDecoder(g *gen, fieldName, mapName, kindName, accessor string) j.Code {
+	return j.If(
+		j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fieldName)),
+		j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, kindName),
+	).Block(
+		j.Id("o").Dot(fieldName).Op("=").Id(mapName).Index(j.Id("a").Dot("Value").Dot(accessor).Call()),
+	)
+}
+
+// inlineEnum preserves the original field-owned enum representation used by
+// choices. Named enums are only needed when multiple fields share one identity.
+func (g *gen) inlineEnum(name, fname, eid string, attr *schemaAttr, tag map[string]string) {
+	g.decodeouter = append(g.decodeouter, j.Type().Add(g.NSd(fname)).String())
+	g.fields = append(g.fields, j.Id(fname).Add(g.NSd(fname)).Tag(tag))
+
+	values := make(map[string]entity.Id, len(attr.Choices))
+	for _, value := range attr.Choices {
+		id := name + "." + value
+		if g.isComponent {
+			id = attr.Attr + "." + value
+		}
+
+		fullID := g.sf.Domain + "/" + id
+		if _, ok := g.usedAttrs[fullID]; ok {
+			panic(fmt.Sprintf("Duplicate attribute name: %s", fullID))
+		}
+		g.usedAttrs[fullID] = struct{}{}
+
+		g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(value))).Op("=").Qual(top, "Id").Call(j.Lit(fullID)))
+		values[value] = entity.Id(fullID)
+	}
+
+	g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(group *j.Group) {
+		for _, value := range attr.Choices {
+			constant := strings.ToUpper(value)
+			enumValue := name + "." + value
+			if g.isComponent {
+				constant = g.local + constant
+				enumValue = attr.Attr + "." + value
+			}
+			group.Id(constant).Add(g.NSd(fname)).Op("=").Lit(enumValue)
+		}
+	}))
+
+	fromID := g.name + name + "FromId"
+	toID := g.name + name + "ToId"
+	g.decodeouter = append(g.decodeouter, j.Var().Id(fromID).Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).ValuesFunc(func(group *j.Group) {
+		for _, value := range attr.Choices {
+			constant := strings.ToUpper(value)
+			if g.isComponent {
+				constant = g.local + constant
+			}
+			group.Add(g.Ident(fname + toCamal(value))).Op(":").Id(constant)
+		}
+	}))
+	g.decodeouter = append(g.decodeouter, j.Var().Id(toID).Op("=").Map(g.NSd(fname)).Qual(top, "Id").ValuesFunc(func(group *j.Group) {
+		for _, value := range attr.Choices {
+			constant := strings.ToUpper(value)
+			if g.isComponent {
+				constant = g.local + constant
+			}
+			group.Id(constant).Op(":").Add(g.Ident(fname + toCamal(value)))
+		}
+	}))
+
+	g.decoders = append(g.decoders, j.If(
+		j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fname)),
+		j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindId"),
+	).Block(
+		j.Id("o").Dot(fname).Op("=").Id(fromID).Index(j.Id("a").Dot("Value").Dot("Id").Call()),
+	))
+	g.encoders = append(g.encoders, j.If(
+		j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(toID).Index(j.Id("o").Dot(fname)), j.Id("ok"),
+	).Block(
+		j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("a"))),
+	))
+	g.emptyChecks = append(g.emptyChecks, emptyCheck{
+		notEmpty: j.Id("o").Dot(fname).Op("!=").Lit(""),
+		isEmpty:  j.Id("o").Dot(fname).Op("==").Lit(""),
+	})
+
+	call := []j.Code{j.Lit(name), j.Lit(eid)}
+	if attr.Doc != "" {
+		call = append(call, j.Qual(sch, "Doc").Call(j.Lit(attr.Doc)))
+	}
+	if attr.Required {
+		call = append(call, j.Qual(sch, "Required"))
+	}
+	if attr.Indexed {
+		call = append(call, j.Qual(sch, "Indexed"))
+	}
+	if attr.Session {
+		call = append(call, j.Qual(sch, "Session"))
+	}
+	if len(attr.Tags) > 0 {
+		var tags []j.Code
+		for _, tag := range attr.Tags {
+			tags = append(tags, j.Lit(tag))
+		}
+		call = append(call, j.Qual(sch, "Tags").Call(tags...))
+	}
+
+	var choices []j.Code
+	for _, value := range attr.Choices {
+		singletonPath := name + "." + value
+		if g.isComponent {
+			singletonPath = attr.Attr + "." + value
+		}
+		g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(g.sf.Domain+"/"+singletonPath)))
+		choices = append(choices, g.Ident(fname+toCamal(value)))
+	}
+	call = append(call, j.Qual(sch, "Choices").Call(choices...))
+	g.decl = append(g.decl, j.Id("sb").Dot("Ref").Call(call...))
+
+	g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
+		Name:       name,
+		Type:       "enum",
+		Id:         entity.Id(eid),
+		EnumValues: values,
+	})
 }
 
 func (g *gen) Ident(name string) j.Code {
@@ -677,82 +1036,117 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 		simpleField("label")
 
 	case "enum":
-		g.decodeouter = append(g.decodeouter, j.Type().Add(g.NSd(fname)).String())
-
-		g.fields = append(g.fields, j.Id(fname).Add(g.NSd(fname)).Tag(tag))
-
-		fc := map[string]entity.Id{}
-
-		for _, v := range attr.Choices {
-			// Enum ID path - use full path for components, simple for kinds (backward compatibility)
-			id := name + "." + v // For kinds: simple "status.unknown"
-			if g.isComponent {
-				id = attr.Attr + "." + v // For components: full "component.port_spec.protocol.tcp"
-			}
-
-			// Use full attribute ID for duplicate checking (includes domain)
-			fullAttrId := g.sf.Domain + "/" + id
-			if _, ok := g.usedAttrs[fullAttrId]; ok {
-				panic(fmt.Sprintf("Duplicate attribute name: %s", fullAttrId))
-			}
-
-			g.usedAttrs[fullAttrId] = struct{}{}
-
-			g.idents = append(g.idents, j.Add(g.Ident(fname+toCamal(v))).Op("=").Qual(top, "Id").
-				Call(j.Lit(g.sf.Domain+"/"+id)))
-
-			fc[v] = entity.Id(g.sf.Domain + "/" + id)
+		if attr.Enum == "" {
+			g.inlineEnum(name, fname, eid, attr, tag)
+			break
 		}
 
-		g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(b *j.Group) {
-			for _, v := range attr.Choices {
-				// Only prefix enum constants for standalone components (backward compatibility for kinds)
-				constName := strings.ToUpper(v)
-				enumValue := name + "." + v // For kinds: simple "status.pending" format
-				if g.isComponent {
-					constName = g.local + constName
-					enumValue = attr.Attr + "." + v // For components: full "component.port_spec.protocol.tcp" format
+		g.hasEnums = true
+		enum := g.sf.Enums[attr.Enum]
+		enumType := toCamal(attr.Enum)
+		mapName := g.local + fname
+
+		if attr.LegacyEncoding == enumLegacyRef {
+			legacyType := g.local + fname
+			if legacyType != enumType {
+				g.decodeouter = append(g.decodeouter, j.Type().Id(legacyType).Op("=").Id(enumType))
+			}
+			g.decodeouter = append(g.decodeouter, j.Const().DefsFunc(func(group *j.Group) {
+				for _, value := range enum.Values {
+					legacyConstant := strings.ToUpper(value)
+					if g.isComponent {
+						legacyConstant = g.local + legacyConstant
+					}
+					group.Id(legacyConstant).Id(enumType).Op("=").Id(enumConstant(attr.Enum, value))
 				}
-				b.Add(j.Id(constName).Add(g.NSd(fname)).Op("=").Add(j.Lit(enumValue)))
+			}))
+		}
+
+		g.fields = append(g.fields, j.Id(fname).Id(enumType).Tag(tag))
+
+		canonicalValues := make(map[string]entity.Id, len(enum.Values))
+		legacyValues := make(map[string][]entity.Value, len(enum.Values))
+		legacyRefIDs := make(map[string]string, len(enum.Values))
+
+		for _, value := range enum.Values {
+			canonicalID := enumMemberID(g.sf, attr.Enum, value)
+			canonicalValues[value] = entity.Id(canonicalID)
+
+			switch attr.LegacyEncoding {
+			case enumLegacyRef:
+				legacyID := name + "." + value
+				if g.isComponent {
+					legacyID = attr.Attr + "." + value
+				}
+				legacyID = g.sf.Domain + "/" + legacyID
+				legacyRefIDs[value] = legacyID
+
+				if _, ok := g.usedAttrs[legacyID]; ok {
+					panic(fmt.Sprintf("Duplicate attribute name: %s", legacyID))
+				}
+				g.usedAttrs[legacyID] = struct{}{}
+
+				legacyIdent := g.local + fname + toCamal(value) + "Id"
+				canonicalIdent := enumMemberConstant(attr.Enum, value)
+				if legacyIdent == canonicalIdent && legacyID != canonicalID {
+					panic(fmt.Sprintf("legacy enum member %s and canonical member %s generate Go identifier %s", legacyID, canonicalID, legacyIdent))
+				}
+				if legacyIdent != canonicalIdent {
+					definition := j.Id(legacyIdent).Op("=")
+					if legacyID == canonicalID {
+						definition.Id(canonicalIdent)
+					} else {
+						definition.Qual(top, "Id").Call(j.Lit(legacyID))
+					}
+					g.idents = append(g.idents, definition)
+				}
+
+				if legacyID != canonicalID {
+					legacyValues[value] = append(legacyValues[value], entity.RefValue(entity.Id(legacyID)))
+				}
+			case enumLegacyString:
+				legacyValues[value] = append(legacyValues[value], entity.StringValue(value))
+			case enumLegacyKeyword:
+				keyword := enumLegacyKeywordValue(g.sf, attr.Enum, value)
+				legacyValues[value] = append(legacyValues[value], entity.KeywordValue(keyword))
+			}
+		}
+
+		g.decodeouter = append(g.decodeouter, j.Var().Id(mapName+"FromId").Op("=").Map(j.Qual(top, "Id")).Id(enumType).ValuesFunc(func(b *j.Group) {
+			for _, value := range enum.Values {
+				b.Id(enumMemberConstant(attr.Enum, value)).Op(":").Id(enumConstant(attr.Enum, value))
+				if legacyID := legacyRefIDs[value]; legacyID != "" && legacyID != enumMemberID(g.sf, attr.Enum, value) {
+					b.Id(g.local + fname + toCamal(value) + "Id").Op(":").Id(enumConstant(attr.Enum, value))
+				}
 			}
 		}))
-
-		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"FromId").Op("=").Map(j.Qual(top, "Id")).Add(g.NSd(fname)).
-			ValuesFunc(func(b *j.Group) {
-				for _, v := range attr.Choices {
-					constName := strings.ToUpper(v)
-					if g.isComponent {
-						constName = g.local + constName
-					}
-					b.Add(g.Ident(fname + toCamal(v))).Op(":").Id(constName)
-				}
-			}))
-
-		g.decodeouter = append(g.decodeouter, j.Var().Id(g.name+name+"ToId").Op("=").Map(g.NSd(fname)).Qual(top, "Id").
-			ValuesFunc(func(b *j.Group) {
-				for _, v := range attr.Choices {
-					constName := strings.ToUpper(v)
-					if g.isComponent {
-						constName = g.local + constName
-					}
-					b.Add(j.Id(constName).Op(":").Add(g.Ident(fname + toCamal(v))))
-				}
-			}))
-
-		d := j.If(
+		g.decodeouter = append(g.decodeouter, j.Var().Id(mapName+"ToId").Op("=").Map(j.Id(enumType)).Qual(top, "Id").ValuesFunc(func(b *j.Group) {
+			for _, value := range enum.Values {
+				b.Id(enumConstant(attr.Enum, value)).Op(":").Id(enumMemberConstant(attr.Enum, value))
+			}
+		}))
+		g.decoders = append(g.decoders, j.If(
 			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id("e").Dot("Get").Call(g.Ident(fname)),
 			j.Id("ok").Op("&&").Id("a").Dot("Value").Dot("Kind").Call().Op("==").Qual(top, "KindId"),
 		).Block(
-			j.Id("o").Dot(fname).Op("=").Id(g.name + name + "FromId").Index(j.Id("a").Dot("Value").Dot("Id").Call()),
-		)
-		g.decoders = append(g.decoders, d)
+			j.Id("o").Dot(fname).Op("=").Id(mapName+"FromId").Index(j.Id("a").Dot("Value").Dot("Id").Call()),
+		))
 
-		enc := j.If(
-			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(g.name+name+"ToId").Index(j.Id("o").Dot(fname)), j.Id("ok"),
+		switch attr.LegacyEncoding {
+		case enumLegacyString:
+			g.decodeouter = append(g.decodeouter, enumStringMap(mapName, enumType, attr.Enum, enum.Values))
+			g.decoders = append(g.decoders, enumDecoder(g, fname, mapName+"FromString", "KindString", "String"))
+		case enumLegacyKeyword:
+			g.decodeouter = append(g.decodeouter, enumKeywordMap(g.sf, mapName, enumType, attr.Enum, enum.Values))
+			g.decoders = append(g.decoders, enumDecoder(g, fname, mapName+"FromKeyword", "KindKeyword", "Keyword"))
+		}
+
+		g.encoders = append(g.encoders, j.If(
+			j.List(j.Id("a"), j.Id("ok")).Op(":=").Id(mapName+"ToId").Index(j.Id("o").Dot(fname)), j.Id("ok"),
 		).Block(
 			j.Id("attrs").Op("=").Append(j.Id("attrs"), j.Qual(top, "Ref").Call(g.Ident(fname), j.Id("a"))),
-		)
-		g.encoders = append(g.encoders, enc)
+		))
+
 		g.emptyChecks = append(g.emptyChecks, emptyCheck{
 			notEmpty: j.Id("o").Dot(fname).Op("!=").Lit(""),
 			isEmpty:  j.Id("o").Dot(fname).Op("==").Lit(""),
@@ -789,29 +1183,26 @@ func (g *gen) attr(name string, attr *schemaAttr) {
 			call = append(call, j.Qual(sch, "Tags").Call(tagArgs...))
 		}
 
-		var args []j.Code
-
-		for _, v := range attr.Choices {
-			// Use full attribute path for standalone components (backward compatibility for kinds)
-			singletonPath := name + "." + v
-			if g.isComponent {
-				singletonPath = attr.Attr + "." + v
-			}
-			g.decl = append(g.decl, j.Id("sb").Dot("Singleton").Call(j.Lit(g.sf.Domain+"/"+singletonPath)))
-			args = append(args, g.Ident(fname+toCamal(v)))
+		var canonicalSchemaValues []j.Code
+		for _, value := range enum.Values {
+			canonicalSchemaValues = append(canonicalSchemaValues, j.Id(enumMemberConstant(attr.Enum, value)))
 		}
-
-		call = append(call, j.Qual(sch, "Choices").Call(args...))
-
-		g.decl = append(g.decl,
-			j.Id("sb").Dot("Ref").Call(call...))
+		enumCall := []j.Code{call[0], call[1], j.Index().Any().Values(canonicalSchemaValues...)}
+		enumCall = append(enumCall, call[2:]...)
+		enumCall = append(enumCall, j.Qual(sch, "ElementType").Call(j.Qual(top, "TypeRef")))
+		g.decl = append(g.decl, j.Id("sb").Dot("Enum").Call(enumCall...))
 
 		g.ec.Fields = append(g.ec.Fields, &entity.SchemaField{
-			Name:       name,
-			Type:       "enum",
-			Id:         entity.Id(eid),
-			Many:       attr.Many,
-			EnumValues: fc,
+			Name:               name,
+			Type:               "enum",
+			Id:                 entity.Id(eid),
+			Many:               attr.Many,
+			Enum:               enumID(g.sf, attr.Enum),
+			EnumEncoding:       enumLegacyRef,
+			EnumLegacyEncoding: attr.LegacyEncoding,
+			EnumMembers:        enum.Values,
+			EnumValues:         canonicalValues,
+			EnumLegacyValues:   legacyValues,
 		})
 	case "component":
 		var sg gen
@@ -1057,6 +1448,9 @@ func (g *gen) generate() {
 		Params(j.Id("o").Op("*").Id(structName)).
 		Id("InitSchema").Params(j.Id("sb").Op("*").Qual(sch, "SchemaBuilder")).
 		BlockFunc(func(b *j.Group) {
+			if g.hasEnums {
+				b.Id("initEnumMembers").Call(j.Id("sb"))
+			}
 			for _, d := range g.decl {
 				b.Add(d)
 			}

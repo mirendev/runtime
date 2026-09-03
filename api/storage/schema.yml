@@ -1,5 +1,9 @@
 domain: dev.miren.storage
 version: v1alpha
+enums:
+  disk_filesystem:
+    member-prefix: filesystem
+    values: [ext4, xfs, btrfs]
 kinds:
   disk:
     name:
@@ -15,8 +19,9 @@ kinds:
 
     filesystem:
       type: enum
+      enum: disk_filesystem
+      legacy-encoding: ref
       doc: Filesystem type for the disk
-      choices: [ext4, xfs, btrfs]
       default: ext4
 
     status:
@@ -130,7 +135,9 @@ kinds:
       required: true
 
     filesystem:
-      type: string
+      type: enum
+      enum: disk_filesystem
+      legacy-encoding: string
       doc: Filesystem type (ext4, xfs, btrfs)
       default: ext4
 

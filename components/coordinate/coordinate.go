@@ -57,6 +57,7 @@ import (
 	sagagcctrl "miren.dev/runtime/controllers/sagagc"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
+	schemaconvergectrl "miren.dev/runtime/controllers/schemaconverge"
 	schemareindexctrl "miren.dev/runtime/controllers/schemareindex"
 	versionctrl "miren.dev/runtime/controllers/version"
 	"miren.dev/runtime/metrics"
@@ -391,21 +392,22 @@ type Coordinator struct {
 	eac   *esv1.EntityAccessClient // Entity access client for querying entities
 	store entity.Store
 
-	aa            activator.AppActivator
-	spm           *sandboxpool.Manager
-	cm            *controller.ControllerManager
-	certProvider  autotls.CertificateProvider
-	autocertReady func() // nil when DNS-01 path is used
-	artifactGC    *artifactctrl.GCController
-	runScheduler  *runctrl.Scheduler
-	runGC         *runctrl.GCController
-	ephemeralGC   *ephemeralctrl.GCController
-	versionGC     *versionctrl.GCController
-	indexGC       *indexgcctrl.GCController
-	sagaGC        *sagagcctrl.GCController
-	schemaReindex *schemareindexctrl.Controller
-	keyRotation   *keyrotationctrl.Controller
-	hs            *httpingress.Server
+	aa             activator.AppActivator
+	spm            *sandboxpool.Manager
+	cm             *controller.ControllerManager
+	certProvider   autotls.CertificateProvider
+	autocertReady  func() // nil when DNS-01 path is used
+	artifactGC     *artifactctrl.GCController
+	runScheduler   *runctrl.Scheduler
+	runGC          *runctrl.GCController
+	ephemeralGC    *ephemeralctrl.GCController
+	versionGC      *versionctrl.GCController
+	indexGC        *indexgcctrl.GCController
+	sagaGC         *sagagcctrl.GCController
+	schemaConverge *schemaconvergectrl.Controller
+	schemaReindex  *schemareindexctrl.Controller
+	keyRotation    *keyrotationctrl.Controller
+	hs             *httpingress.Server
 
 	authority *caauth.Authority
 
@@ -534,6 +536,9 @@ func (c *Coordinator) Stop() {
 	}
 	if c.schemaReindex != nil {
 		c.schemaReindex.Stop()
+	}
+	if c.schemaConverge != nil {
+		c.schemaConverge.Stop()
 	}
 	if c.debugServer != nil {
 		if err := c.debugServer.Close(); err != nil {
@@ -1571,6 +1576,17 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		Config:      schemareindexctrl.DefaultConfig(),
 	}
 	c.schemaReindex.Start(ctx)
+
+	// Canonical entity writes are immediate, while historical representations
+	// drain in small, revision-checked batches. This keeps schema truth simple
+	// without making coordinator startup pay for a full-store migration.
+	c.schemaConverge = &schemaconvergectrl.Controller{
+		Log:         c.Log.With("module", "schema-convergence"),
+		Store:       etcdStore,
+		CurrentPlan: schema.ConvergencePlan,
+		Config:      schemaconvergectrl.DefaultConfig(),
+	}
+	c.schemaConverge.Start(ctx)
 
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))

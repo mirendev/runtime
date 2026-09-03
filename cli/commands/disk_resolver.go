@@ -148,7 +148,7 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 				DiskId:       diskEntityId,
 				VolumeId:     volId,
 				SizeGb:       sizeGb,
-				Filesystem:   filesystem,
+				Filesystem:   fs,
 				VolumeMode:   detectVolumeMode(),
 				DesiredState: storage_v1alpha.DV_PRESENT,
 				ActualState:  storage_v1alpha.DV_READY,

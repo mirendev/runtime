@@ -1,5 +1,9 @@
 domain: dev.miren.compute
 version: v1alpha
+enums:
+  port_protocol:
+    member-prefix: protocol
+    values: [tcp, udp]
 
 components:
   # Immutable build-time sandbox configuration
@@ -169,8 +173,9 @@ components:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              legacy-encoding: ref
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: High-level port type (e.g., http)
@@ -386,8 +391,9 @@ kinds:
               required: true
             protocol:
               type: enum
+              enum: port_protocol
+              legacy-encoding: ref
               doc: Port protocol
-              choices: [tcp, udp]
             type:
               type: string
               doc: The highlevel type of the port

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	etypes "miren.dev/runtime/pkg/entity/types"
 )
 
 func TestValidateComponentAttribute(t *testing.T) {
@@ -390,6 +391,140 @@ func TestValidateUpdateRefChoicesExempt(t *testing.T) {
 
 	// But changing that attribute to a still-invalid value is rejected.
 	r.Error(validator.ValidateUpdate(ctx, []Attr{legacy}, nil))
+}
+
+func TestValidateUpdateEnumChoicesExempt(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/enum-status",
+		Doc, "status",
+		Cardinality, CardinalityOne,
+		Type, TypeEnum,
+		EnumValues, ArrayValue(Id("test/status.a"), Id("test/status.b")),
+	))
+	require.NoError(t, err)
+
+	validator := NewValidator(store)
+	legacy := Ref("test/enum-status", "test/status.legacy")
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{legacy}, []Attr{legacy}))
+	require.Error(t, validator.ValidateUpdate(ctx, []Attr{legacy}, nil))
+}
+
+func TestValidateUpdateKeepsNestedExemptionsInTheirComponent(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	for _, schema := range []*Entity{
+		New(
+			Ident, "test/components",
+			Cardinality, CardinalityMany,
+			Type, TypeComponent,
+		),
+		New(
+			Ident, "test/component-name",
+			Cardinality, CardinalityOne,
+			Type, TypeStr,
+		),
+		New(
+			Ident, "test/component-status",
+			Cardinality, CardinalityOne,
+			Type, TypeEnum,
+			EntityElemType, TypeRef,
+			EnumValues, ArrayValue(Id("test/status.ready"), Id("test/status.done")),
+		),
+	} {
+		_, err := store.CreateEntity(ctx, schema)
+		require.NoError(t, err)
+	}
+
+	component := func(name string, status Id) Attr {
+		return Component("test/components", []Attr{
+			String("test/component-name", name),
+			Ref("test/component-status", status),
+		})
+	}
+	original := []Attr{
+		component("one", "test/status.legacy-one"),
+		component("two", "test/status.legacy-two"),
+	}
+	validator := NewValidator(store)
+	require.NoError(t, validator.ValidateUpdate(ctx, original, original))
+
+	// legacy-two is unchanged in component two, but copying it into component
+	// one is still a new invalid value. It must not borrow component two's
+	// exemption merely because both nested attributes have the same ID.
+	changed := []Attr{
+		component("one", "test/status.legacy-two"),
+		component("two", "test/status.legacy-two"),
+	}
+	require.ErrorContains(t, validator.ValidateUpdate(ctx, changed, original), "must be one of")
+}
+
+func TestValidateEnumMemberRequiresEntity(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/enum-status",
+		Doc, "status",
+		Cardinality, CardinalityOne,
+		Type, TypeEnum,
+		EntityElemType, TypeRef,
+		EnumValues, ArrayValue(Id("test/status.ready"), "legacy"),
+	))
+	require.NoError(t, err)
+
+	validator := NewValidator(store)
+	canonical := Ref("test/enum-status", "test/status.ready")
+	require.ErrorContains(t, validator.ValidateAttribute(ctx, &canonical), "non-existent enum member")
+
+	_, err = store.CreateEntity(ctx, New(Ident, "test/status.ready"))
+	require.NoError(t, err)
+	require.NoError(t, validator.ValidateAttribute(ctx, &canonical))
+
+	legacy := String("test/enum-status", "legacy")
+	require.NoError(t, validator.ValidateAttribute(ctx, &legacy))
+}
+
+func TestValidatePhysicalEnumChoices(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/string-mode",
+		Doc, "mode",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		EnumValues, ArrayValue("auto", "fixed"),
+	))
+	require.NoError(t, err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/keyword-mode",
+		Doc, "mode",
+		Cardinality, CardinalityOne,
+		Type, TypeKeyword,
+		EnumValues, ArrayValue(etypes.Keyword("test/mode.auto"), etypes.Keyword("test/mode.fixed")),
+	))
+	require.NoError(t, err)
+
+	validator := NewValidator(store)
+	validString := String("test/string-mode", "auto")
+	invalidString := String("test/string-mode", "legacy")
+	require.NoError(t, validator.ValidateAttribute(ctx, &validString))
+	require.Error(t, validator.ValidateAttribute(ctx, &invalidString))
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{invalidString}, []Attr{invalidString}))
+
+	validKeyword := Keyword("test/keyword-mode", etypes.Keyword("test/mode.auto"))
+	invalidKeyword := Keyword("test/keyword-mode", etypes.Keyword("test/mode.legacy"))
+	require.NoError(t, validator.ValidateAttribute(ctx, &validKeyword))
+	require.Error(t, validator.ValidateAttribute(ctx, &invalidKeyword))
+	require.NoError(t, validator.ValidateUpdate(ctx, []Attr{invalidKeyword}, []Attr{invalidKeyword}))
 }
 
 func TestValidate_EntityAttrs(t *testing.T) {

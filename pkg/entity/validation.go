@@ -180,38 +180,51 @@ func (v *Validator) ValidateAttributes(ctx context.Context, attrs []Attr) error 
 // Otherwise an entity holding a now-dangling reference becomes impossible to
 // patch at all, and any controller reconciling it spins forever. See MIR-1320.
 func (v *Validator) ValidateUpdate(ctx context.Context, newAttrs, originalAttrs []Attr) error {
-	return v.validateAttributes(ctx, newAttrs, exemptUnchangedRefs(originalAttrs))
+	return v.validateAttributes(ctx, newAttrs, originalAttrs)
 }
 
-// refExemptFn reports whether the reference-existence check for a given
-// attribute should be skipped. A nil predicate checks every reference, which is
-// the correct behavior for creates.
-type refExemptFn func(attr Attr) bool
+// matchOriginalAttrs pairs unchanged attributes as a multiset within their
+// current entity or component. Changed components are then paired with a
+// remaining component at the same scope, so nested exemptions cannot leak
+// between repeated component instances.
+func matchOriginalAttrs(attrs, original []Attr) []*Attr {
+	matches := make([]*Attr, len(attrs))
+	used := make([]bool, len(original))
 
-// exemptUnchangedRefs returns a predicate that exempts reference attributes
-// appearing unchanged (same id and value) in the original attribute set.
-func exemptUnchangedRefs(original []Attr) refExemptFn {
-	byID := make(map[Id][]Attr, len(original))
-	for _, a := range original {
-		byID[a.ID] = append(byID[a.ID], a)
-	}
-	return func(attr Attr) bool {
-		for _, o := range byID[attr.ID] {
-			if o.Equal(attr) {
-				return true
+	for i := range attrs {
+		for j := range original {
+			if !used[j] && attrs[i].Equal(original[j]) {
+				matches[i] = &original[j]
+				used[j] = true
+				break
 			}
 		}
-		return false
 	}
+
+	for i := range attrs {
+		if matches[i] != nil || attrs[i].Value.Kind() != KindComponent {
+			continue
+		}
+		for j := range original {
+			if !used[j] && original[j].ID == attrs[i].ID && original[j].Value.Kind() == KindComponent {
+				matches[i] = &original[j]
+				used[j] = true
+				break
+			}
+		}
+	}
+
+	return matches
 }
 
-func (v *Validator) validateAttributes(ctx context.Context, attrs []Attr, exempt refExemptFn) error {
+func (v *Validator) validateAttributes(ctx context.Context, attrs, original []Attr) error {
 	// Check them one-off...
 
+	originalMatches := matchOriginalAttrs(attrs, original)
 	count := make(map[Id]int)
 	for i, attr := range attrs {
 		count[attr.ID]++
-		if err := v.validateAttribute(ctx, &attr, exempt); err != nil {
+		if err := v.validateAttribute(ctx, &attr, originalMatches[i]); err != nil {
 			return err
 		}
 
@@ -239,8 +252,9 @@ func (v *Validator) ValidateAttribute(ctx context.Context, attr *Attr) error {
 	return v.validateAttribute(ctx, attr, nil)
 }
 
-func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt refExemptFn) error {
+func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, original *Attr) error {
 	name := attr.ID
+	exempted := original != nil && original.Equal(*attr)
 
 	if name == DBId {
 		if attr.Value.Kind() != KindId {
@@ -273,9 +287,15 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 		default:
 			return fmt.Errorf("attribute %s must be a keyword or string, got %T", name, v)
 		}
+		if len(schema.EnumValues) > 0 && !exempted && !matchesChoice(schema.EnumValues, attr.Value) {
+			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
+		}
 	case TypeStr:
 		if _, ok := attr.Value.Any().(string); !ok {
 			return fmt.Errorf("attribute %s must be a string (is %T)", name, attr.Value.Any())
+		}
+		if len(schema.EnumValues) > 0 && !exempted && !matchesChoice(schema.EnumValues, attr.Value) {
+			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
 		}
 	case TypeBytes:
 		if _, ok := attr.Value.Any().([]byte); !ok {
@@ -310,7 +330,7 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 		if !ok {
 			return fmt.Errorf("attribute %s must be a string representing an entity ID", name)
 		}
-		if str != "" && (exempt == nil || !exempt(*attr)) {
+		if str != "" && !exempted {
 			// When the attribute declares a choice set (schema.Choices),
 			// enforce membership before the existence check: it's cheaper and
 			// gives a more precise error than "references a non-existent
@@ -341,8 +361,15 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 			return fmt.Errorf("attribute %s must be a timestamp (int64 or RFC3339 string), got %T", name, v)
 		}
 	case TypeEnum:
-		if !matchesChoice(schema.EnumValues, attr.Value) {
+		if !exempted && !matchesChoice(schema.EnumValues, attr.Value) {
 			return fmt.Errorf("attribute %s must be one of %v (was %v)", name, choiceValues(schema.EnumValues), attr.Value)
+		}
+		// Enum members are entities, so membership also carries the ordinary
+		// referential-integrity guarantee.
+		if attr.Value.Kind() == KindId && attr.Value.Id() != "" && !exempted {
+			if _, err := v.store.GetEntity(ctx, attr.Value.Id()); err != nil {
+				return fmt.Errorf("attribute %s references a non-existent enum member: %w", name, err)
+			}
 		}
 	case TypeArray:
 		tuple, ok := attr.Value.Any().([]any)
@@ -352,7 +379,7 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 
 		// If the whole array attribute is unchanged, don't re-check the
 		// existence of the references it contains (see ValidateUpdate).
-		skipRefCheck := exempt != nil && exempt(*attr)
+		skipRefCheck := exempted
 		for i, elem := range tuple {
 			if err := v.validateToType(ctx, elem, schema.ElemType, skipRefCheck); err != nil {
 				return fmt.Errorf("attribute %s[%d]: %w", name, i, err)
@@ -369,15 +396,11 @@ func (v *Validator) validateAttribute(ctx context.Context, attr *Attr, exempt re
 		}
 
 		comp := attr.Value.Component()
-		// If the whole component attribute is unchanged, don't re-check the
-		// existence of the references nested inside it. The top-level exempt
-		// predicate is keyed on top-level attributes and never matches nested
-		// ones, so mirror the TypeArray handling and exempt the whole component.
-		compExempt := exempt
-		if exempt != nil && exempt(*attr) {
-			compExempt = func(Attr) bool { return true }
+		var originalAttrs []Attr
+		if original != nil && original.Value.Kind() == KindComponent {
+			originalAttrs = original.Value.Component().attrs
 		}
-		err := v.validateAttributes(ctx, comp.attrs, compExempt)
+		err := v.validateAttributes(ctx, comp.attrs, originalAttrs)
 		if err != nil {
 			return fmt.Errorf("attribute %s must be a valid component: %w", name, err)
 		}
