@@ -109,12 +109,13 @@ boot and drops privileges; `main-wrapper.sh` maps `gateway run` to `hermes gatew
 The `args` field replaces only the image's default `CMD`, so that entrypoint stays intact
 and receives `gateway` and `run` as separate arguments.
 
-:::warning[The HTTP service must be named `web`]
-Miren's HTTP ingress routes an app's hostname to the service named `web`. Name it anything
-else and every request returns `error acquiring lease: app/hermes` (HTTP 500) even though
-the container is healthy. If you want a **portless background worker** instead (reachable
-only via a messaging platform or `miren sandbox exec`), name the service something else
-and omit `port`/`port_type` — then Miren does no HTTP ingress and no port health check.
+:::warning[Name the HTTP service `web`]
+Miren's HTTP ingress routes a hostname to the app's `web` service by default, so the
+easiest layout is to name the HTTP service `web`. Name it something else and `miren route set`
+rejects it unless you pass `--service <name>`. If you want a **portless background worker**
+instead (reachable only via a messaging platform or `miren sandbox exec`), name the service
+something else and omit `port`/`port_type` — then Miren does no HTTP ingress and no port
+health check.
 :::
 
 Two details in that config bite if you skip them. Miren health-checks and routes to the
@@ -182,9 +183,9 @@ miren route list -C hermes
 ```
 </CliCommand>
 
-`route set <host> <app>` has no port selector — it routes the host to the app's `web`
-service. `*.clusters.miren.run` DNS and TLS are managed by the cluster; give it a few
-seconds to provision.
+`route set <host> <app>` routes the host to the app's `web` service by default; pass
+`--service <name>` to target another HTTP service. `*.clusters.miren.run` DNS and TLS
+are managed by the cluster; give it a few seconds to provision.
 
 ## Verify
 
@@ -215,7 +216,7 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 ## Roadblock checklist
 
 1. Set `args = ["gateway", "run"]` so Miren preserves the image's s6 `ENTRYPOINT` and replaces only its default `CMD`.
-2. Name the HTTP service `web`, or ingress returns `error acquiring lease`.
+2. Name the HTTP service `web` (or pass `--service <name>` to `miren route set`).
 3. Bind services to `0.0.0.0`, not `127.0.0.1`.
 4. `port_timeout = "180s"` for the slow s6 first boot.
 5. A `miren` disk means `fixed` / `num_instances = 1`; expect `did not become healthy` noise on redeploy (verify state before retrying). Use `local` for snappy rollouts.
