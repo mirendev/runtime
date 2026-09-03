@@ -104,6 +104,7 @@ func (s *State) startLocalListener(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	s.localLn = li
 	os.Chmod(addr, 0777)
 
 	go func() {
@@ -151,11 +152,16 @@ func (s *State) startLocalListener(ctx context.Context, addr string) error {
 	}
 
 	subS.hs = serv
+	s.localHS = serv
+	s.localLI = ec
+	s.localPath = addr
 
 	go func() {
-		<-ctx.Done()
-		os.Remove(addr)
-		serv.Shutdown(context.Background())
+		if s.contextOwnsShutdown(ctx) {
+			_ = li.Close()
+			_ = os.Remove(addr)
+			_ = serv.Shutdown(context.Background())
+		}
 	}()
 
 	s.log.Debug("starting local listener", "addr", addr)

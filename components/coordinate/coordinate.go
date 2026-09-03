@@ -506,8 +506,10 @@ func (c *Coordinator) ExposeWorkServices() error {
 	return nil
 }
 
-// Stop stops the coordinator and all managed controllers
-func (c *Coordinator) Stop() {
+// Stop first quiesces coordinator-owned background work, then drains the RPC
+// server. The RPC lifetime is separate from the boot lifetime so graph
+// cancellation cannot cut off dependent components while they are draining.
+func (c *Coordinator) Stop(ctx context.Context) error {
 	if c.cm != nil {
 		c.cm.Stop()
 	}
@@ -540,6 +542,10 @@ func (c *Coordinator) Stop() {
 			c.Log.Error("failed to close debug server", "error", err)
 		}
 	}
+	if c.state != nil {
+		return c.state.Shutdown(ctx)
+	}
+	return nil
 }
 
 const (
@@ -908,7 +914,7 @@ func (c *Coordinator) workloadAuthenticator() rpc.Authenticator {
 	return workloadidentity.NewAuthenticator(c.WorkloadIssuer, c.Log)
 }
 
-func (c *Coordinator) Start(ctx context.Context) error {
+func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 	c.Log.Info("starting coordinator", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
 	err := c.LoadCA(ctx)
@@ -1025,12 +1031,22 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	rpcOpts = append(rpcOpts, c.runnerTelemetryOptions()...)
 
-	rs, err := rpc.NewState(ctx, rpcOpts...)
+	// The boot graph cancels ctx before it enters reverse dependency order.
+	// Keep RPC alive across that cancellation so dependents such as the OCI
+	// registry can finish their final coordinator calls before Stop drains it.
+	rs, err := rpc.NewState(context.WithoutCancel(ctx), rpcOpts...)
 	if err != nil {
 		c.Log.Error("failed to create RPC server", "error", err)
 		return err
 	}
 	c.state = rs
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		_ = c.state.Close()
+		c.state = nil
+	}()
 
 	server := rs.Server()
 

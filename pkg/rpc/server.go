@@ -1185,6 +1185,10 @@ func (s *Server) runCallStream(ctx context.Context, cs *controlStream, mm Method
 	ctx = contextWithServerLifetime(ctx, s.state.top)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	if s.state.top != nil {
+		stop := context.AfterFunc(s.state.top, cancel)
+		defer stop()
+	}
 
 	defer func() {
 		if r := recover(); r != nil {

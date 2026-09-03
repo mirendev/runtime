@@ -58,6 +58,11 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	coord := coordinate.NewCoordinator(testDeps.Log, coordCfg)
 	err := coord.Start(ctx)
 	r.NoError(err)
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		r.NoError(coord.Stop(shutdownCtx))
+	}()
 
 	rcfg, err := coord.ServiceConfig()
 	r.NoError(err)

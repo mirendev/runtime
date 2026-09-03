@@ -42,8 +42,9 @@ func (s *State) startWSListener(ctx context.Context, addr string) error {
 	s.tcpLn = tcpLn
 
 	go func() {
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		if s.contextOwnsShutdown(ctx) {
+			_ = srv.Shutdown(context.Background())
+		}
 	}()
 
 	s.log.Info("starting websocket/tcp listener", "addr", tcpLn.Addr().String())

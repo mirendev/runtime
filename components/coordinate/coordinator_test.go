@@ -1,10 +1,12 @@
 package coordinate_test
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -41,13 +43,20 @@ func TestCoordinatorParse(t *testing.T) {
 		NoAuth:        true,
 	}
 
-	// Create contexts
+	// Keep request contexts independent so cancelling the boot lifetime below
+	// models Graph.Stop without cancelling the client call too.
+	bootCtx, cancelBoot := context.WithCancel(t.Context())
 	ctx := t.Context()
 
 	// Start coordinator in background
 	coord := coordinate.NewCoordinator(log, coordCfg)
-	err := coord.Start(ctx)
+	err := coord.Start(bootCtx)
 	r.NoError(err)
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, coord.Stop(shutdownCtx))
+	})
 
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
@@ -89,6 +98,17 @@ func TestCoordinatorParse(t *testing.T) {
 	enttest.EqualAttr(t, ent, entity.Id("dev.miren.core/metadata.name"), "nginx")
 	enttest.EqualAttr(t, ent, entity.Id("entity/kind"), types.Id("dev.miren.compute/kind.sandbox"))
 	enttest.EqualAttr(t, ent, entity.Id("entity/kind"), types.Id("dev.miren.core/kind.metadata"))
+
+	// Graph.Stop cancels the boot lifetime before it starts reverse-order stop
+	// hooks. The coordinator must remain available during that gap so dependent
+	// drains can make their final RPCs over an already-warmed connection.
+	cancelBoot()
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		_, err := eac.Parse(ctx, data)
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+	}
 
 	/*
 		r.Equal(attrs[2].ID, entity.Id("dev.miren.sandbox/port"))
