@@ -312,7 +312,7 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 			continue
 		}
 		resolvedApps[deployAppName] = struct{}{}
-		activeDeployment, err := d.activeDeploymentID(ctx, deployAppName)
+		activeDeployment, err := d.servingDeploymentID(ctx, deployAppName)
 		if err != nil {
 			return err
 		}
@@ -353,7 +353,7 @@ func (d *DeploymentServer) GetDeploymentById(ctx context.Context, req *deploymen
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
-	activeDeployment, err := d.activeDeploymentID(ctx, rec.Deployment.AppName)
+	activeDeployment, err := d.servingDeploymentID(ctx, rec.Deployment.AppName)
 	if err != nil {
 		return err
 	}
@@ -1131,6 +1131,34 @@ func (d *DeploymentServer) activeDeploymentID(ctx context.Context, appName strin
 		return "", err
 	}
 	return app.ActiveDeployment, nil
+}
+
+// servingDeploymentID returns the deployment currently serving appName, the
+// same resolution GetActiveDeployment uses. The canonical app.active_deployment
+// pointer wins when the migration's apps phase has backfilled it; before that,
+// the one retained legacy "active" row is served. When the pointer is empty
+// and two legacy active rows remain it declines to pick one (returning ""), so
+// neither is mislabeled active until a deploy resolves the ambiguity — the
+// same safety choice migrateApp makes. This keeps ListDeployments and
+// GetDeploymentById consistent with GetActiveDeployment during the migration
+// window, so the served row renders "active" rather than collapsing to the
+// canonical "succeeded" in toDeploymentInfo.
+func (d *DeploymentServer) servingDeploymentID(ctx context.Context, appName string) (entity.Id, error) {
+	id, err := d.activeDeploymentID(ctx, appName)
+	if err != nil {
+		return "", err
+	}
+	if id != "" {
+		return id, nil
+	}
+	legacy, err := d.listDeploymentsInternal(ctx, appName, "active", 2)
+	if err != nil {
+		return "", err
+	}
+	if len(legacy) != 1 {
+		return "", nil
+	}
+	return legacy[0].deployment.ID, nil
 }
 
 func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment, serving bool) *deployment_v1alpha.DeploymentInfo {
