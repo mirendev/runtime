@@ -217,6 +217,31 @@ func TestDeleteAppTransitive(t *testing.T) {
 		require.False(t, entityExists(appID), "app should be deleted")
 	})
 
+	t.Run("deletes app with deployment attempt referencing app", func(t *testing.T) {
+		// Create app
+		app := &core_v1alpha.App{}
+		appID, err := client.Create(ctx, "app-with-deployment", app)
+		require.NoError(t, err)
+
+		// Canonical deployment attempt referencing the app via the `app` ref field.
+		dep := &core_v1alpha.Deployment{App: appID, Status: "active"}
+		depID, err := client.Create(ctx, "app-with-deployment-attempt", dep)
+		require.NoError(t, err)
+
+		// Verify both exist
+		require.True(t, entityExists(appID), "app should exist")
+		require.True(t, entityExists(depID), "deployment attempt should exist")
+
+		// Delete the app — the contract (delete.go:18-19) covers every entity that
+		// directly references the app, and deployment.app is a direct by-id ref.
+		err = DeleteAppTransitive(ctx, client, log, appID)
+		require.NoError(t, err)
+
+		// Verify app and deployment attempt are both deleted
+		require.False(t, entityExists(appID), "app should be deleted")
+		require.False(t, entityExists(depID), "deployment attempt should be deleted (has dev.miren.app_ref tag)")
+	})
+
 	t.Run("deletes app with multiple app_versions and their dependencies", func(t *testing.T) {
 		// Create app
 		app := &core_v1alpha.App{}
