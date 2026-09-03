@@ -274,21 +274,23 @@ func (s *Server) appSamples(
 }
 
 func sortApps(rows []*usage_v1alpha.AppUsage, ord ordering) {
-	key := ord.sort
-	desc := ord.descending()
+	var (
+		less      func(a, b *usage_v1alpha.AppUsage) bool
+		ascending bool
+	)
 
-	less := func(a, b *usage_v1alpha.AppUsage) bool {
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "memory", "mem":
-			return a.Total().MemoryBytes() < b.Total().MemoryBytes()
-		case "sandboxes":
-			return a.SandboxCount() < b.SandboxCount()
-		case "name", "app":
-			return a.App() < b.App()
-		default:
-			return a.Total().CpuCores() < b.Total().CpuCores()
-		}
+	switch strings.ToLower(strings.TrimSpace(ord.sort)) {
+	case "memory", "mem":
+		less = func(a, b *usage_v1alpha.AppUsage) bool { return a.Total().MemoryBytes() < b.Total().MemoryBytes() }
+	case "sandboxes":
+		less = func(a, b *usage_v1alpha.AppUsage) bool { return a.SandboxCount() < b.SandboxCount() }
+	case "name", "app":
+		less, ascending = func(a, b *usage_v1alpha.AppUsage) bool { return a.App() < b.App() }, true
+	default:
+		less = func(a, b *usage_v1alpha.AppUsage) bool { return a.Total().CpuCores() < b.Total().CpuCores() }
 	}
+
+	desc := ord.direction(ascending)
 
 	sort.SliceStable(rows, func(i, j int) bool {
 		if desc {

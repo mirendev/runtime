@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"miren.dev/runtime/api/usage/usage_v1alpha"
 )
 
 // The metric labels are written with dots and stored with underscores. Querying
@@ -151,22 +154,56 @@ func TestMaxUsesAShortRateWindowSteppedAcrossTheWindow(t *testing.T) {
 	r.Equal("sum by (miren_sandbox) (rate(cpu_usage_seconds_total[3600s]))", avg)
 }
 
-// The sensible default direction depends on what is being sorted: a usage
-// column wants the busiest first, a name wants A to Z. An earlier version
-// inverted the name comparator to fake that, which meant an explicit order=asc
-// produced reverse-alphabetical output.
-func TestOrderingDefaultsPerSortKey(t *testing.T) {
+// An explicit order always wins; otherwise the comparator's own default
+// applies. The direction no longer comes from guessing at the key name, because
+// a key one listing sorts by name and another does not implement would get an
+// alphabetical direction applied to a CPU comparison.
+func TestOrderingDirection(t *testing.T) {
 	r := require.New(t)
 
-	r.True(ordering{sort: "cpu"}.descending(), "busiest first when unspecified")
-	r.True(ordering{sort: ""}.descending(), "cpu is the default key, so descending")
-	r.False(ordering{sort: "name"}.descending(), "names read A to Z")
-	r.False(ordering{sort: "app"}.descending())
-	r.False(ordering{sort: "service"}.descending())
+	r.True(ordering{}.direction(false), "a usage column defaults to busiest first")
+	r.False(ordering{}.direction(true), "a name defaults to A to Z")
 
-	// An explicit direction always wins, in both directions and for both
-	// families of key.
-	r.False(ordering{sort: "cpu", order: "asc"}.descending())
-	r.True(ordering{sort: "name", order: "desc"}.descending())
-	r.False(ordering{sort: "name", order: "ASC"}.descending(), "case-insensitive")
+	r.False(ordering{order: "asc"}.direction(false))
+	r.True(ordering{order: "desc"}.direction(true))
+	r.False(ordering{order: "ASC"}.direction(false), "case-insensitive")
+	r.True(ordering{order: "nonsense"}.direction(false), "an unparseable order falls back to the default")
+}
+
+// Every sort key a listing accepts must have a comparator. A key that reaches
+// the default branch silently sorts by CPU, and if the key was name-like it
+// also inherits an ascending direction, so the caller gets ascending CPU order
+// with no indication anything was ignored.
+func TestEverySortKeyHasAComparator(t *testing.T) {
+	sandbox := func(id string, cores float64) *usage_v1alpha.SandboxUsage {
+		var ref usage_v1alpha.SandboxRef
+		ref.SetSandboxShortId(id)
+		ref.SetApp(id)
+		ref.SetService(id)
+		ref.SetNodeName(id)
+
+		var cpu usage_v1alpha.CpuUsage
+		cpu.SetCores(cores)
+
+		var row usage_v1alpha.SandboxUsage
+		row.SetRef(&ref)
+		row.SetCpu(&cpu)
+		row.SetMemory(&usage_v1alpha.MemoryUsage{})
+		return &row
+	}
+
+	// "a" is the alphabetical first but the CPU last. Any key that falls
+	// through to the CPU comparator puts "c" first instead.
+	for _, key := range []string{"name", "app", "service", "node", "runner"} {
+		rows := []*usage_v1alpha.SandboxUsage{sandbox("c", 3), sandbox("a", 1), sandbox("b", 2)}
+		sortSandboxes(rows, ordering{sort: key})
+
+		assert.Equalf(t, "a", rows[0].Ref().SandboxShortId(),
+			"sort=%s fell through to the CPU comparator", key)
+	}
+
+	// A usage key still reads busiest first.
+	rows := []*usage_v1alpha.SandboxUsage{sandbox("a", 1), sandbox("c", 3)}
+	sortSandboxes(rows, ordering{sort: "cpu"})
+	assert.Equal(t, "c", rows[0].Ref().SandboxShortId())
 }

@@ -22,13 +22,15 @@ type ordering struct {
 	limit int
 }
 
-// descending reports which direction to sort in when the caller did not say.
+// direction reports whether to sort descending.
 //
-// The sensible default depends on what is being sorted: a usage column wants
-// the busiest first, while a name wants A to Z. Making the caller pass
-// order=asc just to get an alphabetical list would be a trap, and passing
-// order=desc for a name should still reverse it.
-func (o ordering) descending() bool {
+// An explicit order always wins. Otherwise the sensible default depends on what
+// is being sorted, so each comparator states it: a usage column wants the
+// busiest first, a name wants A to Z. Asking the comparator rather than
+// guessing from the key name is what keeps the two in step -- a key one listing
+// sorts by name and another does not implement would otherwise get an
+// alphabetical direction applied to a CPU comparison.
+func (o ordering) direction(defaultAscending bool) bool {
 	switch strings.ToLower(strings.TrimSpace(o.order)) {
 	case "asc":
 		return false
@@ -36,12 +38,7 @@ func (o ordering) descending() bool {
 		return true
 	}
 
-	switch strings.ToLower(strings.TrimSpace(o.sort)) {
-	case "name", "app", "service", "node", "runner":
-		return false
-	default:
-		return true
-	}
+	return !defaultAscending
 }
 
 func (o ordering) truncate(n int) int {
