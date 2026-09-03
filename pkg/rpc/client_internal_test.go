@@ -19,9 +19,8 @@ import (
 func TestWebTransportDialHonorsContextWhenServerDoesNotAnswer(t *testing.T) {
 	r := require.New(t)
 
-	// Keep a UDP socket open without reading from it. This behaves like a
-	// coordinator whose address is routable but whose QUIC server is down: the
-	// client gets no ICMP rejection and no handshake response.
+	// A UDP socket nobody reads: like a coordinator whose address is routable
+	// but whose QUIC server is down. No rejection, no handshake response.
 	blackhole, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	r.NoError(err)
 	t.Cleanup(func() { _ = blackhole.Close() })
@@ -46,22 +45,15 @@ func TestWebTransportDialHonorsContextWhenServerDoesNotAnswer(t *testing.T) {
 	}
 }
 
-// TestWebTransportDialHonorsContextAfterHandshakeWithoutSettings is the core
-// regression for this bug. A raw QUIC listener completes the handshake and then
-// deliberately never speaks HTTP/3, so the client never receives a SETTINGS
-// frame. Before the fix, webtransport-go's settings-wait select blocks forever
-// (it reacts only to ReceivedSettings and the Dialer's own lifetime context,
-// never the caller ctx) and the watch loop wedges until the process restarts.
-// After the fix, dialWebTransport races the dial against ctx and closes a
-// per-call Dialer to unblock the settings-wait, so the dial aborts on the
-// caller's deadline.
+// The core regression: a raw QUIC listener completes the handshake and then
+// never speaks HTTP/3, so SETTINGS never arrive and webtransport-go's wait for
+// them has nothing to release it. The dial must still abort on the deadline.
 func TestWebTransportDialHonorsContextAfterHandshakeWithoutSettings(t *testing.T) {
 	r := require.New(t)
 
 	addr := quietQUICServer(t, t.Context(), func(ctx context.Context, conn *quic.Conn) {
-		// Handshake completed; never send an HTTP/3 control stream. Hold the
-		// connection open so the client really is waiting on SETTINGS rather
-		// than on QUIC connection teardown.
+		// Hold the connection open, so the client is waiting on SETTINGS
+		// rather than on the connection going away.
 		<-ctx.Done()
 		_ = conn.CloseWithError(0, "test")
 	})
@@ -77,10 +69,8 @@ func TestWebTransportDialHonorsContextAfterHandshakeWithoutSettings(t *testing.T
 		done <- err
 	}()
 
-	// Prove the QUIC handshake really completed, so this test exercises the
-	// post-handshake settings-wait rather than the pre-handshake path the
-	// blackhole tests already cover. Before the fix this is exactly the state
-	// in which the dial should hang.
+	// Prove the handshake completed, so this exercises the settings wait
+	// rather than the pre-handshake path the blackhole test covers.
 	r.Eventually(func() bool {
 		return client.reachedServer()
 	}, time.Second, 10*time.Millisecond)
@@ -94,14 +84,9 @@ func TestWebTransportDialHonorsContextAfterHandshakeWithoutSettings(t *testing.T
 	}
 }
 
-// TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath models a
-// coordinator that is killed (SIGKILL / OOM / panic) in the one-RTT window after
-// the QUIC handshake completes but before its SETTINGS packet transits. The
-// peer tears the connection down with CONNECTION_CLOSE, yet in quic-go that
-// teardown does NOT close ReceivedSettings, so webtransport-go's settings-wait
-// stays blocked until the Dialer is closed. Before the fix the dial hung
-// forever (production never calls Dialer.Close); after the fix the caller's ctx
-// releases it.
+// A coordinator killed in the one-RTT window after the handshake, before its
+// SETTINGS packet transits. The peer closes the connection, but quic-go does
+// not close ReceivedSettings on teardown, so that alone releases nothing.
 func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) {
 	r := require.New(t)
 
@@ -136,25 +121,17 @@ func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) 
 	}
 }
 
-// TestWebTransportDialHonorsContextAfterSettingsWithoutResponse covers the
-// phase behind the settings wait. Here the peer is a real WebTransport server,
-// so SETTINGS arrive and the dial gets past the wait that the two tests above
-// exercise — then the handler never answers the CONNECT, leaving the dial
-// blocked in http3.RequestStream.ReadResponse, which takes no context.
-//
-// Closing the per-call Dialer does nothing for this state, and neither does
-// waiting: DefaultQUICConfig keepalives are shorter than its idle timeout, so
-// the connection stays healthy indefinitely. Only tearing the connection down
-// releases the read. The test asserts both halves of that: the caller returns
-// on its deadline, and the connection the dial created is actually closed, which
-// is what lets the dial goroutine exit instead of being stranded for the life of
-// the process on every reconnect attempt.
+// The phase behind the settings wait: a real WebTransport server, so SETTINGS
+// arrive, but the handler never answers the CONNECT and the dial sits in
+// ReadResponse. Closing the Dialer does nothing here and keepalives keep the
+// connection healthy, so only closing the connection releases it. Asserts both
+// halves: the caller returns on its deadline, and the connection is closed,
+// which is what lets the dial goroutine exit.
 func TestWebTransportDialHonorsContextAfterSettingsWithoutResponse(t *testing.T) {
 	r := require.New(t)
 
-	// Held open for the whole test so the handler never returns a response.
-	// The timer is a backstop: nothing should reach it, but a handler blocked
-	// forever would wedge the server's own shutdown rather than fail the test.
+	// Held open so the handler never returns a response. The timer is a
+	// backstop against wedging the server's shutdown instead of failing.
 	blocked := make(chan struct{})
 	addr := webTransportServer(t, func(http.ResponseWriter, *http.Request) {
 		select {
@@ -168,8 +145,7 @@ func TestWebTransportDialHonorsContextAfterSettingsWithoutResponse(t *testing.T)
 
 	client := newTestWebTransportClient(t, addr)
 
-	// Wrap the client's DialAddr so the test can see the connection the dial
-	// creates and assert it gets torn down.
+	// Wrap DialAddr so the test can see the connection the dial creates.
 	inner := client.ws.DialAddr
 	var (
 		mu       sync.Mutex
@@ -214,11 +190,9 @@ func TestWebTransportDialHonorsContextAfterSettingsWithoutResponse(t *testing.T)
 		"the connection an abandoned dial was reading from must be torn down")
 }
 
-// webTransportServer starts a real webtransport.Server on 127.0.0.1 whose
-// HTTP/3 handler is handler, and returns the address to dial. Because it is a
-// genuine WebTransport server, a client reaches it with SETTINGS negotiated —
-// so a handler that never writes a response leaves the dial past the settings
-// wait and blocked on the CONNECT response.
+// webTransportServer starts a real webtransport.Server on 127.0.0.1 and returns
+// the address to dial. Being genuine, it negotiates SETTINGS, so a handler that
+// never writes a response leaves the dial blocked on the CONNECT instead.
 func webTransportServer(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
 	r := require.New(t)
@@ -242,11 +216,8 @@ func webTransportServer(t *testing.T, handler http.HandlerFunc) string {
 	return packetConn.LocalAddr().String()
 }
 
-// TestWebTransportDialSucceedsWhenServerAnswers guards the success path: with a
-// real WebTransport server returning HTTP/3 settings and a 2xx CONNECT, the
-// per-call Dialer introduced by the fix must still establish a usable session,
-// and closing that Dialer on return must not tear the session down (the
-// returned Session owns its own context, rooted at context.Background).
+// The success path: a per-call Dialer must still establish a usable session,
+// and closing it on return must not tear that session down.
 func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 	r := require.New(t)
 
@@ -287,12 +258,10 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 	r.Equal(http.StatusOK, hr.StatusCode)
 	defer func() { _ = sess.CloseWithError(0, "") }()
 
-	// dialWebTransport has already returned, so its per-call Dialer is already
-	// closed. The session it handed back must still be alive.
+	// The per-call Dialer is closed by now; the session must still be alive.
 	r.NoError(sess.Context().Err())
 
-	// And the wire must still work: open a stream through the closed-dialer
-	// session and round-trip a byte.
+	// And the wire still works through it.
 	str, err := sess.OpenStreamSync(ctx)
 	r.NoError(err)
 	defer func() { _ = str.Close() }()
@@ -301,8 +270,7 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 }
 
 // newTestWebTransportClient builds a NetworkClient pointed at addr over its own
-// UDP socket, wired for the QUIC/HTTP3+WebTransport path, and registers cleanup
-// for the transports it creates. Tests dial through this client.
+// UDP socket, and registers cleanup for the transports it creates.
 func newTestWebTransportClient(t *testing.T, addr string) *NetworkClient {
 	t.Helper()
 	r := require.New(t)
@@ -319,10 +287,8 @@ func newTestWebTransportClient(t *testing.T, addr string) *NetworkClient {
 	}
 	client.setupTransport()
 	t.Cleanup(func() {
-		// webtransport.Dialer.Close panics if Dial was never invoked (its initOnce
-		// never ran, so ctxCancel is nil). The shared c.ws is only a config
-		// holder for dialWebTransport's per-call dialers; guard the close so
-		// cleanup is safe whether or not a test dialed through c.ws directly.
+		// Dialer.Close panics if Dial never ran, leaving ctxCancel nil. Most
+		// tests never dial through c.ws directly, so guard the close.
 		func() {
 			defer func() { _ = recover() }()
 			_ = client.ws.Close()
@@ -346,11 +312,9 @@ func testServerTLSConfig(t *testing.T) *tls.Config {
 	}
 }
 
-// quietQUICServer starts a raw QUIC listener (full handshake) on 127.0.0.1 and
-// hands the first accepted *quic.Conn to run. It never speaks HTTP/3, so a
-// client that dials it completes the QUIC handshake but never receives a
-// SETTINGS frame — the post-handshake state this bug lives in. Returns the
-// address the client should dial.
+// quietQUICServer starts a raw QUIC listener on 127.0.0.1 and hands the first
+// accepted connection to run. It never speaks HTTP/3, so a client completes the
+// handshake and then waits on SETTINGS forever. Returns the address to dial.
 func quietQUICServer(t *testing.T, parent context.Context, run func(context.Context, *quic.Conn)) string {
 	t.Helper()
 	r := require.New(t)

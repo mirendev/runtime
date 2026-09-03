@@ -162,25 +162,9 @@ func (c *NetworkClient) setupTransport() {
 
 	c.ws.TLSClientConfig = c.tlsCfg
 	c.ws.QUICConfig = &c.qc
-	// webtransport.Dialer.Dial waits for HTTP/3 settings on a select between
-	// conn.ReceivedSettings() and the Dialer's own lifetime context, not on the
-	// caller's ctx. Two phases there can therefore outlive the caller:
-	//
-	//   1. the QUIC handshake, if DialAddr hands it a 0-RTT early connection
-	//      whose handshake later fails; and
-	//   2. the HTTP/3 SETTINGS wait, if the peer completes the handshake but
-	//      never delivers a control-stream SETTINGS frame (e.g. it dies in the
-	//      one-RTT window after the handshake); and
-	//   3. the CONNECT exchange after that wait, which reads the response off
-	//      the request stream through an API that takes no context.
-	//
-	// Completing the handshake here (phase 1) is necessary but not sufficient:
-	// it just moves the unbounded wait to the phases behind it.
-	// dialWebTransport bounds those by giving the dial its own Dialer per call
-	// and, when the caller's ctx expires, closing both that Dialer (which
-	// releases phase 2) and the connection (which releases phase 3) — so the
-	// streaming dial is abortable at every stage. Ordinary HTTP/3 RPCs keep
-	// their 0-RTT path above.
+	// The streaming dial completes the handshake rather than taking the 0-RTT
+	// path above, so a 0-RTT connection whose handshake later fails cannot
+	// strand it. dialWebTransport handles the phases behind this one.
 	c.ws.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 		return dial(ctx, addr, tlsCfg, cfg, false)
 	}
@@ -846,47 +830,27 @@ type InlineCapability struct {
 	*Interface
 }
 
-// dialWebTransport opens a WebTransport session for a streaming RPC, bounded by
-// ctx for the whole dial — including the HTTP/3 SETTINGS wait that
-// webtransport-go performs after the QUIC handshake.
+// dialWebTransport opens a WebTransport session for a streaming RPC and aborts
+// the whole dial when ctx expires.
 //
-// webtransport.Dialer.Dial selects for that wait between conn.ReceivedSettings()
-// and the Dialer's own lifetime context (rooted at context.Background, canceled
-// only by Dialer.Close), not on the caller's ctx. A peer that completes the QUIC
-// handshake but never delivers SETTINGS (a coordinator killed in the one-RTT
-// window before its SETTINGS packet transits, or a connection torn down after
-// the handshake) would therefore hang the dial until Dialer.Close, which the
-// shared c.ws never has run against it — leaving the watch loop wedged until
-// the process is restarted.
+// webtransport-go will not do that on its own. Its wait for the peer's HTTP/3
+// SETTINGS frame selects on the Dialer's own lifetime context rather than the
+// ctx passed to Dial, and only Dialer.Close cancels that, which nothing runs
+// against the shared c.ws. The phases behind the wait watch no context either:
+// http3.RequestStream.ReadResponse takes none, and DefaultQUICConfig's
+// keepalives are shorter than its idle timeout, so a peer that sends SETTINGS
+// and then never answers the CONNECT holds the dial open indefinitely.
 //
-// We make the dial abortable by the caller by giving it a fresh Dialer per call
-// and closing it (canceling its lifetime context, which unblocks the
-// settings-wait select) when the caller's ctx expires, and by racing the dial
-// against ctx. The returned *webtransport.Session owns a context rooted at
-// context.Background and is unaffected by closing this Dialer, so a per-call
-// Dialer is observationally equivalent to the shared one for a single session.
-//
-// A per-call Dialer costs no connection reuse: webtransport.Dialer does not
-// pool. Dial creates a fresh QUIC connection and a fresh http3.Transport every
-// time (webtransport-go v0.9.0 client.go), so the shared c.ws was already
-// opening one connection per streaming RPC. If a later version starts caching
-// connections on the Dialer, this needs revisiting. Unary RPCs pool through
-// c.htr, which is untouched.
-//
-// Closing the Dialer only releases the settings wait. The phases after it —
-// OpenRequestStream, SendRequestHeader, ReadResponse — talk to the HTTP/3
-// request stream directly, and http3.RequestStream.ReadResponse takes no
-// context at all, so nothing there watches the caller's ctx. Nor does the
-// connection time out underneath them: DefaultQUICConfig sets a KeepAlivePeriod
-// shorter than its MaxIdleTimeout, so a peer that answers SETTINGS and then
-// never answers the CONNECT keeps the connection alive indefinitely. We
-// therefore also close the QUIC connection this dial created, which is what
-// makes the read fail and the goroutine exit. Without it a peer in that state
-// would strand the dial goroutine and pin the connection (and its entry in
-// c.conns) for the life of the process, once per reconnect attempt.
+// The dial therefore gets its own Dialer, and ctx expiry closes both that
+// Dialer (releasing the settings wait) and the connection (releasing the phases
+// behind it). Closing the Dialer leaves an already-returned session alone,
+// since the session's context is rooted at context.Background, and costs no
+// connection reuse: webtransport.Dialer does not pool, creating a fresh QUIC
+// connection and http3.Transport per Dial (v0.9.0). Unary RPCs pool through
+// c.htr, untouched.
 func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header http.Header) (*http.Response, *webtransport.Session, error) {
-	// Records the connection the dial below creates, so the ctx.Done path can
-	// tear it down. Guarded because the dial runs on its own goroutine.
+	// Recorded so the ctx.Done path can tear it down. Guarded because the
+	// dial runs on its own goroutine.
 	var (
 		connMu   sync.Mutex
 		dialConn *quic.Conn
@@ -910,9 +874,8 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 	}
 	defer ws.Close()
 
-	// abandonDial tears down the connection an abandoned dial is sitting on.
-	// Safe to call for a dial that has not created one yet, and safe to call
-	// more than once: quic-go's CloseWithError is idempotent.
+	// abandonDial closes the connection an abandoned dial is sitting on. Safe
+	// before one exists, and safe to repeat: CloseWithError is idempotent.
 	abandonDial := func() {
 		connMu.Lock()
 		conn := dialConn
@@ -933,9 +896,8 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 		ch <- dialResult{hr, s, err}
 	}()
 
-	// Prefer a dial that already completed: if the result is ready before we
-	// observe ctx, take it, so a session delivered at the same instant the
-	// caller gave up isn't discarded.
+	// Take a result that is already ready, so a session delivered at the
+	// instant the caller gave up is not discarded.
 	select {
 	case r := <-ch:
 		return r.hr, r.s, r.err
@@ -947,18 +909,12 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 		return r.hr, r.s, r.err
 	case <-ctx.Done():
 		cause := context.Cause(ctx)
-		// The dial is still in flight, and two different things can be holding
-		// it. If it is in the settings wait, defer ws.Close() cancels this
-		// Dialer's lifetime context and releases it. If it is past that, on the
-		// request stream, only the connection going away releases it — see the
-		// function comment — so tear the connection down here. Doing both
-		// covers every phase; each is a no-op for a dial stuck in the other.
+		// defer ws.Close() releases a dial still in the settings wait; this
+		// releases one behind it. Each is a no-op for the other's phase.
 		abandonDial()
-		// The buffered channel guarantees the dial goroutine exits without
-		// blocking. If the dial finished at the same instant the caller gave
-		// up, collect and close its session now; otherwise reap the eventual
-		// result in the background so a session produced by the race is
-		// released rather than pinning a connection until its idle timeout.
+		// The buffered channel lets the dial goroutine exit without blocking.
+		// Close any session the race still produced, rather than leaving it
+		// pinned until the idle timeout.
 		select {
 		case r := <-ch:
 			if r.s != nil {
