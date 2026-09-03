@@ -340,6 +340,9 @@ func TestStoreConformance_EnsureAndReplaceKindedEntityCarriesShortID(t *testing.
 		), WithFromRevision(ent.GetRevision()))
 		require.NoError(t, err)
 		assert.Equal(t, shortID, replaced.ShortId())
+		assert.True(t, ent.GetCreatedAt().Equal(replaced.GetCreatedAt()),
+			"replacing a kinded reservation must preserve its creation time: before=%s after=%s",
+			ent.GetCreatedAt(), replaced.GetCreatedAt())
 		assert.False(t, Is(replaced, initialKind))
 		assert.True(t, Is(replaced, replacementKind))
 	})
@@ -375,6 +378,7 @@ func TestStoreConformance_ReplaceEntity(t *testing.T) {
 		))
 		require.NoError(t, err)
 		beforeRev := created.GetRevision()
+		beforeCreatedAt := created.GetCreatedAt()
 
 		replaced, err := store.ReplaceEntity(ctx, New(
 			Ref(DBId, id),
@@ -386,6 +390,9 @@ func TestStoreConformance_ReplaceEntity(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "after", doc.Value.String(), "replace must overwrite attributes")
 		assert.Greater(t, replaced.GetRevision(), beforeRev, "replace must bump revision")
+		assert.True(t, beforeCreatedAt.Equal(replaced.GetCreatedAt()),
+			"replace must preserve store-managed creation time: before=%s after=%s",
+			beforeCreatedAt, replaced.GetCreatedAt())
 
 		got, err := store.GetEntity(ctx, id)
 		require.NoError(t, err)

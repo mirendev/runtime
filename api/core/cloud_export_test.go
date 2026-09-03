@@ -40,6 +40,9 @@ func TestCloudExportFiltersDeploymentCustodyFields(t *testing.T) {
 		deployment.Encode,
 		entity.Ref(entity.DBId, deployment.ID),
 		entity.String(entity.DBShortId, "dep-1"),
+		entity.Int64(entity.Revision, 42),
+		entity.Time(entity.CreatedAt, started),
+		entity.Time(entity.UpdatedAt, started.Add(time.Minute)),
 	)
 
 	marker, ok := source.Get(core_v1alpha.CloudExportContract.MarkerID())

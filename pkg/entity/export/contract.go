@@ -202,15 +202,28 @@ func (c *Contract) Filter(source *entity.Entity) (*entity.Entity, *Policy, error
 		return nil, nil, ErrKindNotExported
 	}
 
-	mandatory := map[entity.Id]struct{}{
-		entity.DBId:      {},
-		entity.Revision:  {},
-		entity.CreatedAt: {},
-		entity.UpdatedAt: {},
+	mandatory := []struct {
+		id   entity.Id
+		kind entity.ValueKind
+	}{
+		{id: entity.DBId, kind: entity.KindId},
+		{id: entity.Revision, kind: entity.KindInt64},
+		{id: entity.CreatedAt, kind: entity.KindTime},
+		{id: entity.UpdatedAt, kind: entity.KindTime},
+	}
+	for _, required := range mandatory {
+		attr, found := source.Get(required.id)
+		if !found {
+			return nil, nil, fmt.Errorf("export entity %s is missing mandatory attribute %s", source.Id(), required.id)
+		}
+		if attr.Value.Kind() != required.kind {
+			return nil, nil, fmt.Errorf("export entity %s mandatory attribute %s has %s value, want %s",
+				source.Id(), required.id, attr.Value.Kind(), required.kind)
+		}
 	}
 	filtered := make([]entity.Attr, 0, len(source.Attrs()))
 	for _, attr := range source.Attrs() {
-		if _, ok := mandatory[attr.ID]; ok {
+		if attr.ID == entity.DBId || attr.ID == entity.Revision || attr.ID == entity.CreatedAt || attr.ID == entity.UpdatedAt {
 			filtered = append(filtered, attr.Clone())
 			continue
 		}

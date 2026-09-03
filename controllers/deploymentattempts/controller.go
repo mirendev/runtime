@@ -194,6 +194,16 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 
 	var dep core_v1alpha.Deployment
 	dep.Decode(ent)
+	preferredCreatedAt := dep.StartedAt
+	if preferredCreatedAt.IsZero() {
+		preferredCreatedAt, _ = time.Parse(time.RFC3339, dep.DeployedBy.Timestamp)
+	}
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, preferredCreatedAt)
+	if err != nil {
+		return err
+	}
+	dep.Decode(ent)
 	rec := &deploylifecycle.Record{Deployment: &dep}
 	if rec.Canonical() {
 		return nil
@@ -239,7 +249,7 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 	if started, err := time.Parse(time.RFC3339, dep.DeployedBy.Timestamp); err == nil {
 		attrs = append(attrs, entity.Time(core_v1alpha.DeploymentStartedAtId, started))
 	}
-	_, err := c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
+	_, err = c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
 	return err
 }
 
@@ -257,6 +267,11 @@ func (c *Controller) legacyAppVersion(ctx context.Context, ref string) *entity.E
 }
 
 func (c *Controller) migrateVersion(ctx context.Context, ent *entity.Entity) error {
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, time.Time{})
+	if err != nil {
+		return err
+	}
 	var version core_v1alpha.AppVersion
 	version.Decode(ent)
 	if !version.Source.Empty() {
@@ -299,6 +314,11 @@ func (c *Controller) migrateVersion(ctx context.Context, ent *entity.Entity) err
 }
 
 func (c *Controller) migrateApp(ctx context.Context, ent *entity.Entity) error {
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, time.Time{})
+	if err != nil {
+		return err
+	}
 	var app core_v1alpha.App
 	app.Decode(ent)
 	if app.ActiveVersion == "" {
@@ -340,6 +360,37 @@ func (c *Controller) migrateApp(ctx context.Context, ent *entity.Entity) error {
 		entity.Ref(core_v1alpha.AppActiveDeploymentId, candidate),
 	), entity.WithFromRevision(ent.GetRevision()))
 	return err
+}
+
+// repairExportTimestamps closes holes left by historical write paths that
+// persisted records without store-managed timestamps. The export contract does
+// not permit that. A deployment's started_at is the best surviving creation
+// boundary; otherwise the earliest timestamp we still know is its last update.
+func (c *Controller) repairExportTimestamps(ctx context.Context, ent *entity.Entity, preferredCreatedAt time.Time) (*entity.Entity, error) {
+	createdAt := ent.GetCreatedAt()
+	updatedAt := ent.GetUpdatedAt()
+	if !createdAt.IsZero() && !updatedAt.IsZero() {
+		return ent, nil
+	}
+	if createdAt.IsZero() {
+		createdAt = preferredCreatedAt
+		if createdAt.IsZero() {
+			createdAt = updatedAt
+		}
+		if createdAt.IsZero() {
+			return nil, errors.New("entity has no timestamp from which to repair db/entity.created")
+		}
+	}
+
+	patch := entity.New(entity.Ref(entity.DBId, ent.Id()))
+	if ent.GetCreatedAt().IsZero() {
+		patch.SetCreatedAt(createdAt)
+	}
+	repaired, err := c.Store.PatchEntity(ctx, patch, entity.WithFromRevision(ent.GetRevision()))
+	if err != nil {
+		return nil, fmt.Errorf("repairing export timestamps: %w", err)
+	}
+	return repaired, nil
 }
 
 func (c *Controller) reconcileDeployment(ctx context.Context, ent *entity.Entity) error {

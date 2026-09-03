@@ -188,6 +188,32 @@ func TestDeploymentMigrationRediscoversProgressAfterRestart(t *testing.T) {
 	assert.Equal(t, 2, canonical)
 }
 
+func TestDeploymentMigrationRepairsMissingCreationTime(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	started := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	dep := &core_v1alpha.Deployment{
+		ID: "deployment/missing-created-at", AppName: "web", Status: "failed",
+		Outcome: "failed", StartedAt: started,
+	}
+	raw := entity.New(entity.Ref(entity.DBId, dep.ID), dep.Encode())
+	raw.SetRevision(12)
+	raw.SetUpdatedAt(started.Add(time.Hour))
+	raw.Remove(entity.CreatedAt)
+	inmem.Store.AddEntity(dep.ID, raw)
+
+	controller := New(slog.New(slog.NewTextHandler(io.Discard, nil)), inmem.Store, inmem.EAC)
+	require.NoError(t, controller.Step(ctx))
+
+	repaired, err := inmem.Store.GetEntity(ctx, dep.ID)
+	require.NoError(t, err)
+	assert.Equal(t, started, repaired.GetCreatedAt())
+	assert.False(t, repaired.GetUpdatedAt().IsZero())
+	_, _, err = core_v1alpha.CloudExportContract.Filter(repaired)
+	require.NoError(t, err)
+}
+
 func TestVersionMigrationIgnoresDeploymentsWithoutProvenance(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
