@@ -18,6 +18,7 @@ miren debug [flags]
 
 - [`miren debug advertise`](./debug-advertise.md) — Show which addresses the server would advertise and why
 - [`miren debug bundle`](./debug-bundle.md) — Create a support bundle with system debug information
+- [`miren debug cloud-sync`](./debug-cloud-sync.md) — Show runtime entity sync diagnostics
 - [`miren debug colors`](./debug-colors.md) — Print some colors
 - [`miren debug connection`](./debug-connection.md) — Test connectivity and authentication with a server
 - [`miren debug ctr`](./debug-ctr.md) — Run ctr with miren defaults

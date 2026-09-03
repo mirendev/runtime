@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 
 	"golang.org/x/sync/errgroup"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/netresolve"
 	runnercomp "miren.dev/runtime/components/runner"
+	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/serverconfig"
 )
@@ -74,6 +76,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	// the components that share it.
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	secretRegistry := secret.NewRegistry()
+	entitySyncDiagnostics := entitysync.NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
 	address := NormalizeServerAddress(options.Log, options.Config.Server.GetAddress())
 
 	// This is where we wire up the boot graph. Each component lives in a sibling
@@ -107,7 +110,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	appData := newAppDataBoot(foundation.output)
 	secretStore := newSecretStoreBoot(foundation.output)
 	runnerEndpoints := newRunnerEndpointsBoot(foundation.output, secretStore.component)
-	deploymentAttempts := newDeploymentAttemptMigrationBoot(foundation.output, appData.component)
+	deploymentAttempts := newDeploymentAttemptMigrationBoot(foundation.output, appData.component, entitySyncDiagnostics)
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), foundation.output, observability.output)
 	appMetrics := newAppMetricsBoot(
 		appMetricsInputs(options),
@@ -135,12 +138,12 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 	)
 	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, componentStopTimeout)
-	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component)
+	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component, entitySyncDiagnostics)
 	workloadControl := newWorkloadControlBoot(foundation.output, applicationManagement.output, sandboxHost.component)
 	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, componentStopTimeout, workloadControl.component)
 	nodePresence := runnercomp.NewNodePresenceBoot(sandboxHost.output, storageAgent.Component, sandboxAgent.Component, componentStopTimeout)
 	maintenance := newEntityMaintenanceBoot(foundation.output, appData.component)
-	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component)
+	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component, entitySyncDiagnostics)
 	ingress := newIngressBoot(ingressInputs(options), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output)

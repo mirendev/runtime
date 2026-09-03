@@ -7,6 +7,7 @@ import (
 
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/entitysync"
 )
 
 type applicationManagementBootOutput struct {
@@ -14,13 +15,14 @@ type applicationManagementBootOutput struct {
 }
 
 type applicationManagementBoot struct {
-	component *boot.Component
-	value     *coordinate.ApplicationManagement
-	output    boot.Output[applicationManagementBootOutput]
+	component   *boot.Component
+	value       *coordinate.ApplicationManagement
+	output      boot.Output[applicationManagementBootOutput]
+	diagnostics *entitysync.Diagnostics
 }
 
-func newApplicationManagementBoot(foundation boot.Output[foundationBootOutput], secrets boot.Output[secretStoreBootOutput], appData *boot.Component) *applicationManagementBoot {
-	b := &applicationManagementBoot{}
+func newApplicationManagementBoot(foundation boot.Output[foundationBootOutput], secrets boot.Output[secretStoreBootOutput], appData *boot.Component, diagnostics *entitysync.Diagnostics) *applicationManagementBoot {
+	b := &applicationManagementBoot{diagnostics: diagnostics}
 	b.component, b.output = boot.Provide2(
 		"application-management", foundation, secrets, b.start,
 		boot.DependsOn(appData),
@@ -30,7 +32,7 @@ func newApplicationManagementBoot(foundation boot.Output[foundationBootOutput], 
 }
 
 func (b *applicationManagementBoot) start(ctx context.Context, foundation foundationBootOutput, secrets secretStoreBootOutput) (applicationManagementBootOutput, error) {
-	b.value = coordinate.NewApplicationManagement(foundation.foundation, secrets.secretStore)
+	b.value = coordinate.NewApplicationManagement(foundation.foundation, secrets.secretStore, b.diagnostics)
 	if err := b.value.Start(ctx); err != nil {
 		return applicationManagementBootOutput{}, err
 	}
