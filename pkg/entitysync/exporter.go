@@ -427,10 +427,20 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	if err := response.Err(); err != nil {
 		return cursor, fmt.Errorf("watch cloud export index: %w", err)
 	}
+	// The watch header is an upper-bound progress watermark, not a "last
+	// delivered" marker: on the unsynced catch-up path etcd stamps
+	// Header.Revision with the current store head, which can exceed the last
+	// event's ModRevision in the same response. Treat the last delivered
+	// event's ModRevision as authoritative when events are present (mirrors
+	// client/v3/watch.go's nextRev = Events[last].Kv.ModRevision + 1); only
+	// fall back to Header.Revision for empty progress-notify responses.
+	// syncWatchers emits a chunk's events in strictly-increasing ModRevision
+	// order, so the trailing event's revision is the chunk's maximum.
 	to := response.Header.Revision
-	for _, event := range response.Events {
-		if event.Kv != nil && event.Kv.ModRevision > to {
-			to = event.Kv.ModRevision
+	if n := len(response.Events); n > 0 {
+		last := response.Events[n-1]
+		if last.Kv != nil && last.Kv.ModRevision > 0 {
+			to = last.Kv.ModRevision
 		}
 	}
 	if to <= cursor {

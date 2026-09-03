@@ -772,3 +772,292 @@ func TestSessionSnapshotsWhenCursorIsAheadOfSource(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	require.Equal(t, []int64{11}, store.WatchFromRevsCopy(), "a regressed source snapshots instead of watching beyond its head")
 }
+
+// addMarkedDeployment is a test helper that stores a marker-tagged deployment
+// at a pinned revision so its watch event can be resolved by GetEntityAtRevision.
+func addMarkedDeployment(store *entity.MockStore, id entity.Id, rev int64) {
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	e := entity.New(
+		entity.Ref(entity.DBId, id),
+		(&core_v1alpha.Deployment{ID: id, AppName: "app"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	e.SetRevision(rev)
+	store.AddEntity(id, e)
+}
+
+func putEvent(id entity.Id, rev int64) *clientv3.Event {
+	return &clientv3.Event{
+		Type: mvccpb.PUT,
+		Kv:   &mvccpb.KeyValue{Value: []byte(id), ModRevision: rev},
+	}
+}
+
+// deleteEvent mirrors the shape etcd emits for a marker-index delete with
+// WithPrevKV: the deleted entity id is carried on PrevKv (and on Kv for the
+// marker key), and Kv.ModRevision is the deletion's revision.
+func deleteEvent(id entity.Id, rev, prevRev int64) *clientv3.Event {
+	return &clientv3.Event{
+		Type:   mvccpb.DELETE,
+		Kv:     &mvccpb.KeyValue{ModRevision: rev},
+		PrevKv: &mvccpb.KeyValue{Value: []byte(id), ModRevision: prevRev},
+	}
+}
+
+// TestSendWatchResponseUsesLastEventRevisionWhenHeaderExceedsEvents asserts the
+// fix for the catch-up data-loss bug: when etcd's catch-up path stamps
+// Header.Revision with the store head (above the last delivered event), the
+// cursor and ToRevision must track the last event's ModRevision, not the
+// inflated header.
+func TestSendWatchResponseUsesLastEventRevisionWhenHeaderExceedsEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+	addMarkedDeployment(store, "deployment/a", 5000)
+	addMarkedDeployment(store, "deployment/b", 6000)
+
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeChangeBatch {
+			return
+		}
+		batch := payload.(ChangeBatch)
+		s.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+	}
+
+	// Catch-up shape observed from a real etcd: Header.Revision is the live
+	// store head (12000), far above the last event's ModRevision (6000).
+	response := clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 12000},
+		Events: []*clientv3.Event{
+			putEvent("deployment/a", 5000),
+			putEvent("deployment/b", 6000),
+		},
+	}
+
+	cursor, err := s.sendWatchResponse(link, response, 4999)
+	require.NoError(t, err)
+	require.Equal(t, int64(6000), cursor,
+		"cursor must advance to the last delivered event, not the store head")
+
+	messages := link.sent()
+	require.Len(t, messages, 1)
+	batch := messages[0].payload.(ChangeBatch)
+	require.Equal(t, int64(5000), batch.FromRevision)
+	require.Equal(t, int64(6000), batch.ToRevision,
+		"ToRevision must be the last event's ModRevision, not Header.Revision")
+	require.Len(t, batch.Changes, 2)
+	require.Equal(t, []entity.Id{"deployment/a", "deployment/b"},
+		[]entity.Id{batch.Changes[0].EntityID, batch.Changes[1].EntityID})
+}
+
+// TestChunkedCatchUpDeliversAllChanges reproduces the multi-chunk catch-up
+// scenario end-to-end through tail: a first chunk carrying events below the
+// store head must not advance the cursor so far that the second chunk is
+// silently dropped. Both chunks (and every entity) must be delivered, and the
+// cursor must end at the last delivered event across all chunks.
+func TestChunkedCatchUpDeliversAllChanges(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+	addMarkedDeployment(store, "deployment/a", 5000)
+	addMarkedDeployment(store, "deployment/b", 6000)
+	addMarkedDeployment(store, "deployment/c", 6001)
+	addMarkedDeployment(store, "deployment/d", 7000)
+
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	var mu sync.Mutex
+	var batches []ChangeBatch
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeChangeBatch {
+			return
+		}
+		batch := payload.(ChangeBatch)
+		mu.Lock()
+		batches = append(batches, batch)
+		mu.Unlock()
+		s.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+	}
+
+	watcher := make(chan clientv3.WatchResponse, 4)
+	// Two catch-up chunks, both stamped with the same store head (12000), as
+	// observed from a real etcd on the unsynced catch-up path; each chunk's
+	// last event ModRevision (6000, 7000) is well below the header.
+	watcher <- clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 12000},
+		Events: []*clientv3.Event{putEvent("deployment/a", 5000), putEvent("deployment/b", 6000)},
+	}
+	watcher <- clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 12000},
+		Events: []*clientv3.Event{putEvent("deployment/c", 6001), putEvent("deployment/d", 7000)},
+	}
+
+	type tailResult struct {
+		cursor int64
+		err    error
+	}
+	done := make(chan tailResult, 1)
+	go func() {
+		cursor, err := s.tail(link, watcher, 4999, time.Time{})
+		done <- tailResult{cursor: cursor, err: err}
+	}()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(batches) == 2
+	}, time.Second, 5*time.Millisecond)
+	close(watcher)
+
+	var result tailResult
+	select {
+	case result = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tail did not return after watcher closed")
+	}
+	require.ErrorContains(t, result.err, "watch closed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, batches, 2, "both catch-up chunks must be delivered, not just the first")
+	require.Equal(t, int64(5000), batches[0].FromRevision)
+	require.Equal(t, int64(6000), batches[0].ToRevision,
+		"chunk 1 ToRevision must be its last event's ModRevision, not Header.Revision")
+	require.Equal(t, int64(6001), batches[1].FromRevision,
+		"chunk 2 resumes immediately after chunk 1's last delivered event")
+	require.Equal(t, int64(7000), batches[1].ToRevision,
+		"chunk 2 ToRevision must be its last event's ModRevision, not Header.Revision")
+	require.Equal(t, int64(7000), result.cursor,
+		"cursor must end at the last delivered event across all chunks")
+
+	delivered := map[entity.Id]bool{}
+	for _, batch := range batches {
+		for _, ch := range batch.Changes {
+			delivered[ch.EntityID] = true
+		}
+	}
+	require.True(t, delivered["deployment/a"])
+	require.True(t, delivered["deployment/b"])
+	require.True(t, delivered["deployment/c"], "chunk 2 event c must not be silently dropped")
+	require.True(t, delivered["deployment/d"], "chunk 2 event d must not be silently dropped")
+}
+
+// TestSendWatchResponseUsesHeaderRevisionForEmptyProgressNotify guards that
+// the fix does not regress the empty progress-notify path: a response with no
+// events must still advance the cursor to Header.Revision to keep the resume
+// watermark fresh during idle periods.
+func TestSendWatchResponseUsesHeaderRevisionForEmptyProgressNotify(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeChangeBatch {
+			return
+		}
+		batch := payload.(ChangeBatch)
+		s.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+	}
+
+	// Empty progress-notify response: cursor advances to Header.Revision to
+	// keep the resume watermark fresh during idle periods.
+	response := clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 777},
+	}
+	cursor, err := s.sendWatchResponse(link, response, 700)
+	require.NoError(t, err)
+	require.Equal(t, int64(777), cursor,
+		"empty progress-notify advances the cursor to Header.Revision")
+	require.Len(t, link.sent(), 1)
+	require.Equal(t, int64(777), link.sent()[0].payload.(ChangeBatch).ToRevision)
+}
+
+// TestSendWatchResponseSkipsResponseWithNoProgressPastCursor guards that the
+// to <= cursor guard still correctly drops a response that carries no new
+// progress (the silent-skip is correct here because there is nothing to
+// deliver), distinct from the catch-up bug where progress existed but was
+// dropped.
+func TestSendWatchResponseSkipsResponseWithNoProgressPastCursor(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	link := newFakeLink()
+
+	// An empty progress-notify at or below the cursor must not emit a batch or
+	// advance the cursor: it carries no new progress.
+	response := clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 500},
+	}
+	cursor, err := s.sendWatchResponse(link, response, 500)
+	require.NoError(t, err)
+	require.Equal(t, int64(500), cursor,
+		"a response with no progress past the cursor is a no-op")
+	require.Empty(t, link.sent(), "no change batch is sent when nothing advances")
+}
+
+// TestCatchUpChunkEndingInDeleteUsesDeleteEventRevision (§2.7) guards G9: a
+// catch-up chunk whose last event is a DELETE must set ToRevision to that
+// DELETE event's ModRevision (not Header.Revision), and the generated
+// Change{Op: ChangeDelete} must be included. The `changes` function reads
+// the deleted entity at revision-1 via GetEntityAtRevision, so the prior
+// deployment is stored at the pre-delete revision.
+func TestCatchUpChunkEndingInDeleteUsesDeleteEventRevision(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+	// deployment/a exists at 5000; the DELETE event at 5050 carries its id on
+	// PrevKv. changes() reads it at revision 5049 via GetEntityAtRevision, so
+	// keep the entity present (the mock's GetEntityAtResolution resolves it).
+	addMarkedDeployment(store, "deployment/a", 5000)
+	addMarkedDeployment(store, "deployment/b", 6000)
+
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeChangeBatch {
+			return
+		}
+		batch := payload.(ChangeBatch)
+		s.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
+	}
+
+	// Catch-up shape: Header.Revision (12000) outruns the events; the chunk's
+	// last event is a DELETE at 5050, so to must be 5050, not 12000.
+	response := clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: 12000},
+		Events: []*clientv3.Event{
+			putEvent("deployment/b", 6000),
+			deleteEvent("deployment/a", 5050, 5000),
+		},
+	}
+	cursor, err := s.sendWatchResponse(link, response, 4999)
+	require.NoError(t, err)
+	require.Equal(t, int64(5050), cursor,
+		"chunk ending in a DELETE must set the cursor to the DELETE's ModRevision, not Header.Revision")
+
+	messages := link.sent()
+	require.Len(t, messages, 1)
+	batch := messages[0].payload.(ChangeBatch)
+	require.Equal(t, int64(5050), batch.ToRevision,
+		"ToRevision must be the last (DELETE) event's ModRevision, not the store head")
+	require.Len(t, batch.Changes, 2)
+	require.Equal(t, ChangePut, batch.Changes[0].Op)
+	require.Equal(t, entity.Id("deployment/b"), batch.Changes[0].EntityID)
+	require.Equal(t, ChangeDelete, batch.Changes[1].Op)
+	require.Equal(t, entity.Id("deployment/a"), batch.Changes[1].EntityID)
+	require.Equal(t, int64(5050), batch.Changes[1].Revision)
+}
