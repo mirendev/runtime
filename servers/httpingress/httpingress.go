@@ -652,7 +652,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		target = resolved
 		*appName = target.appMetadata.Name
 
-		if privateMetricsPath(target.config, r.URL.Path) {
+		if privateMetricsPath(target.config, service, r.URL.Path) {
 			http.NotFound(w, r)
 			return false
 		}
@@ -766,14 +766,17 @@ func (h *Server) resolveVersionConfig(ctx context.Context, versionID entity.Id, 
 	return resolved, nil
 }
 
-func privateMetricsPath(config *core_v1alpha.ConfigSpec, requestPath string) bool {
+func privateMetricsPath(config *core_v1alpha.ConfigSpec, service, requestPath string) bool {
 	if config == nil {
 		return false
 	}
-	// Public HTTP ingress only routes the web service. If that ever expands to
-	// other services, their private metrics paths must be checked here too.
-	for _, service := range config.Services {
-		if service.Name == "web" && service.Metrics.Enabled && !service.Metrics.Public && service.Metrics.Path == requestPath {
+	// The public HTTP ingress proxies to the service the matched route
+	// selects (see routeService), so the guard must consider only that
+	// service's metrics block. A different service's configured path may
+	// legitimately pass through (it is served elsewhere, not on the proxied
+	// listener) and must not be reserved here.
+	for _, svc := range config.Services {
+		if svc.Name == service && svc.Metrics.Enabled && !svc.Metrics.Public && svc.Metrics.Path == requestPath {
 			return true
 		}
 	}
