@@ -310,6 +310,7 @@
     "items": [
       "command/sandbox-delete",
       "command/sandbox-exec",
+      "command/sandbox-inspect",
       "command/sandbox-list",
       "command/sandbox-stop"
     ]
@@ -373,6 +374,7 @@
       "command/server-upgrade-rollback"
     ]
   },
+  "command/top",
   "command/upgrade",
   "command/version",
   "command/whoami"
