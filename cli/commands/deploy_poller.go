@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
@@ -19,9 +18,6 @@ type cancellationPoller struct {
 	deploymentId string
 	getter       deploymentStatusGetter
 	pollInterval time.Duration
-
-	mu                  sync.Mutex
-	externallyCancelled bool
 }
 
 func newCancellationPoller(deploymentId string, getter deploymentStatusGetter, pollInterval time.Duration) *cancellationPoller {
@@ -50,21 +46,11 @@ func (p *cancellationPoller) Start(ctx context.Context, cancelFunc func()) {
 				continue
 			}
 			if status == "cancelled" {
-				p.mu.Lock()
-				p.externallyCancelled = true
-				p.mu.Unlock()
 				cancelFunc()
 				return
 			}
 		}
 	}
-}
-
-// WasExternallyCancelled returns true if cancellation was detected
-func (p *cancellationPoller) WasExternallyCancelled() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.externallyCancelled
 }
 
 // logger is an interface for logging (allows mocking in tests)
