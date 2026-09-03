@@ -135,8 +135,32 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 		ImagePath: imagePath,
 		Created:   true,
 		Cleanup: func(cctx context.Context) error {
-			_, err := r.eac.Delete(cctx, string(diskEntityId))
-			if err != nil {
+			// Rollback must run even when the operator cancelled the restore
+			// (SIGINT during Finalize). The request context is already gone
+			// by then, so the entity RPCs use a non-cancellable context.
+			rollbackCtx := context.WithoutCancel(cctx)
+
+			// Finalize runs after os.Rename commits the image to ImagePath, so
+			// the temp-file defer's os.Remove(tmpPath) is a no-op once cleanup
+			// runs. Remove the final image; best-effort — a leftover is a
+			// reclaimable disk-space leak, not a correctness hazard, and must
+			// not block the entity rollback below. Tolerate "not present":
+			// Finalize may have failed before the rename committed.
+			if rerr := os.Remove(imagePath); rerr != nil && !os.IsNotExist(rerr) {
+				_ = rerr
+			}
+
+			// Delete a disk_volume Finalize may have created before failing.
+			// eac.Delete is idempotent (the store treats a missing entity as a
+			// successful delete), so this is safe whether or not Finalize got
+			// past its Create. Best-effort: a failure here must not block the
+			// disk entity rollback, which is the authoritative step.
+			r.eac.Delete(rollbackCtx, "disk_volume/"+volId)
+
+			// The disk entity is the authoritative rollback: leaving it stuck
+			// in RESTORING blocks same-name retries, so this is the one error
+			// surfaced to the caller.
+			if _, err := r.eac.Delete(rollbackCtx, string(diskEntityId)); err != nil {
 				return fmt.Errorf("deleting disk entity during cleanup: %w", err)
 			}
 			return nil
