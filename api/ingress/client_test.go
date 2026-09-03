@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -487,6 +488,19 @@ func TestHTTPService(t *testing.T) {
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 7000, Type: "tcp"}}}}},
 		},
 		{
+			name:    "scalar web with explicit non-HTTP port_type is rejected",
+			service: "web",
+			spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+				Name: "web", Port: 8080, PortType: "tcp",
+			}}},
+			wantErr: `app service "web" has no HTTP port`,
+		},
+		{
+			name:    "scalar web with no port but non-HTTP port_type is admitted",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", PortType: "tcp"}}},
+		},
+		{
 			name:    "missing service",
 			service: "api",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}},
@@ -516,6 +530,70 @@ func TestHTTPService(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHTTPServiceRejectsScalarWebWithUnroutablePort pins the boundary the fix
+// draws, and the reason it is not simply "appspec.Build emitted an HTTP port".
+//
+// Neither of the two scalar web shapes below gets an HTTP-typed container port
+// out of appspec.Build once port_type says tcp, so that alone cannot be the
+// test: it would condemn the working case along with the broken one. What
+// separates them is whether the port the app is told to use lines up with the
+// port the activator dials when it finds no HTTP-typed port (3000, see
+// extractHTTPPort in components/activator). Declaring no port leaves both at
+// 3000 and serves; naming 8080 leaves the app on 8080 and the activator on
+// 3000, so every request fails upstream and the route should never be written.
+func TestHTTPServiceRejectsScalarWebWithUnroutablePort(t *testing.T) {
+	// httpPortCount reports how many HTTP-typed container ports appspec.Build
+	// emits for a spec's web service.
+	httpPortCount := func(t *testing.T, spec *core_v1alpha.ConfigSpec) int {
+		t.Helper()
+		sb, buildErr := appspec.Build(slog.Default(), appspec.Options{
+			AppID:   entity.Id("app/demo"),
+			AppName: "demo",
+			Version: &core_v1alpha.AppVersion{ID: entity.Id("app_version/v1")},
+			Config:  spec, Service: "web", Image: "img",
+		})
+		require.NoError(t, buildErr)
+
+		n := 0
+		for _, cp := range sb.Container[0].Port {
+			if cp.Type == "http" {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("declared non-HTTP port is rejected", func(t *testing.T) {
+		spec := &core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web", Port: 8080, PortType: "tcp",
+		}}}
+
+		err := HTTPService(spec, "web")
+		require.Error(t, err)
+		require.ErrorContains(t, err, `app service "web" has no HTTP port`)
+
+		require.Equal(t, 0, httpPortCount(t, spec),
+			"appspec.Build emits no http port, and PORT=8080 does not match the activator's 3000 fallback")
+	})
+
+	t.Run("no declared port stays admitted", func(t *testing.T) {
+		spec := &core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web", PortType: "tcp",
+		}}}
+
+		require.NoError(t, HTTPService(spec, "web"),
+			"the no-port web shape must stay admitted: it works end to end today")
+
+		// Deliberately the same count as the rejected case above. This is the
+		// assertion that keeps the test honest about what the rule really is:
+		// admission here does not come from appspec.Build emitting an HTTP
+		// port, it comes from PORT and the activator's fallback both being
+		// 3000. Narrowing HTTPService to require an HTTP-typed port would
+		// reject this working configuration.
+		require.Equal(t, 0, httpPortCount(t, spec))
+	})
 }
 
 func TestClientSetRouteStoresService(t *testing.T) {

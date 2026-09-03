@@ -252,9 +252,19 @@ func (c *Client) List(ctx context.Context) ([]*RouteWithMeta, error) {
 	return routes, nil
 }
 
-// HTTPService validates that service exists and is HTTP-capable. It matches
-// appspec.Build: omitted port types default to HTTP, and web receives an
-// implicit HTTP port when it has no HTTP port declaration.
+// HTTPService validates that service exists and is HTTP-capable, so a route is
+// only written for a service the launcher will actually serve HTTP from. An
+// omitted port type means HTTP, and web keeps an exemption for the shapes
+// appspec.Build turns into a working port-3000 listener.
+//
+// The rule is deliberately about the declaration, not about the container port
+// appspec.Build ends up emitting; the two do not correspond exactly. A web
+// service that declares no port at all is admitted even though appspec.Build
+// gives it {3000, type: tcp} when port_type says tcp, because the app is still
+// told PORT=3000 and that is the port the activator falls back to when it finds
+// no HTTP-typed port. A web service that names a port with a non-HTTP type is
+// rejected: nothing lines the app's port up with the activator's fallback, so
+// the route could not serve. See TestHTTPServiceRejectsScalarWebWithUnroutablePort.
 func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 	for _, svc := range spec.Services {
 		if svc.Name != service {
@@ -276,7 +286,11 @@ func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 		if svc.Port > 0 && (svc.PortType == "" || svc.PortType == "http") {
 			return nil
 		}
-		if service == "web" {
+		// Only the no-port-declared shape keeps the web exemption: appspec.Build
+		// bumps it to 3000 and hands the app PORT=3000, which is where the
+		// activator looks when no HTTP-typed port exists. A declared port with a
+		// non-HTTP type gets no such alignment.
+		if service == "web" && svc.Port == 0 {
 			return nil
 		}
 		return fmt.Errorf("app service %q has no HTTP port", service)
