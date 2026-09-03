@@ -866,6 +866,13 @@ type InlineCapability struct {
 // context.Background and is unaffected by closing this Dialer, so a per-call
 // Dialer is observationally equivalent to the shared one for a single session.
 //
+// A per-call Dialer costs no connection reuse: webtransport.Dialer does not
+// pool. Dial creates a fresh QUIC connection and a fresh http3.Transport every
+// time (webtransport-go v0.9.0 client.go), so the shared c.ws was already
+// opening one connection per streaming RPC. If a later version starts caching
+// connections on the Dialer, this needs revisiting. Unary RPCs pool through
+// c.htr, which is untouched.
+//
 // Closing the Dialer only releases the settings wait. The phases after it —
 // OpenRequestStream, SendRequestHeader, ReadResponse — talk to the HTTP/3
 // request stream directly, and http3.RequestStream.ReadResponse takes no
