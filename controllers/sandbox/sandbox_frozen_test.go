@@ -100,7 +100,13 @@ func TestSandboxControllerFrozen(t *testing.T) {
 		// refresh tick. No matching saga edit either: reconcileSandboxesOnBoot
 		// is only reached from Init, which both paths share, and the saga
 		// controller has no boot reconciliation of its own.
-		"sandbox.go":  "d38b8bc2e05cf5b3419d0bec46899415936f100a4e99e9e10b6b8d1b4404d7ec",
+		// WaitForPort race fix (MIR-1133): re-checks the port map under the
+		// lock before declaring a timeout, so a spurious select on the timer
+		// when the done channel closed simultaneously does not produce a false
+		// timeout. The saga path reaches WaitForPort through
+		// sandboxOps.WaitForPort → SandboxController.WaitForPort, so no
+		// separate saga edit is needed.
+		"sandbox.go":  "6eaa3dbd198c7b6686ccd0d8a78eb2914e589b6d6ad110b2306dcedcf64a7df4",
 		"volume.go":   "4105e65c8453fd7c3c7025da93aaffb0ee5c5416aa3ca1432c23fec850aedb15",
 		"firewall.go": "648cb5d91091d5eb7400152b19695a8045585feae59c5dd36c12d663a27bb91f",
 	}
