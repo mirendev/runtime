@@ -70,7 +70,9 @@ func TestBuildDefaultsMatchTheLauncher(t *testing.T) {
 
 	assert.Equal(t, entity.Id("app_version/v1"), spec.Version)
 	assert.Equal(t, "app/demo", spec.LogEntity)
-	assert.Equal(t, types.LabelSet("miren.stage", "app-run", "miren.service", "web"), spec.LogAttribute)
+	assert.Equal(t, types.LabelSet(
+		"miren.stage", "app-run", "miren.service", "web", "miren.app", "demo"),
+		spec.LogAttribute)
 	assert.Empty(t, spec.RestartPolicy, "the historical default is to allow restarts")
 
 	require.Len(t, spec.Container, 1)
@@ -463,4 +465,47 @@ func TestBuildTaskEnvCannotShadowSystemVariables(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "tok", envMap(t, spec)["ADMIN_TOKEN"])
+}
+
+// miren.app is what lets an app's usage be summed across its sandboxes, so it
+// has to survive a caller that supplies its own attributes -- a task run does
+// exactly that, and would otherwise lose the app it belongs to.
+func TestBuildAlwaysLabelsTheApp(t *testing.T) {
+	opts := baseOptions()
+	opts.LogAttrs = types.LabelSet("miren.stage", "run", "miren.task", "migrate")
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+
+	app, ok := spec.LogAttribute.Get("miren.app")
+	require.True(t, ok, "a run must still say which app it belongs to")
+	assert.Equal(t, "demo", app)
+
+	// The caller's own attributes are kept, not replaced.
+	stage, _ := spec.LogAttribute.Get("miren.stage")
+	assert.Equal(t, "run", stage)
+}
+
+// The app NAME, not its entity id: an app's dedicated addons label themselves
+// by name, and the two can only be summed together if they agree.
+func TestBuildLabelsTheAppByName(t *testing.T) {
+	spec, err := Build(nil, baseOptions())
+	require.NoError(t, err)
+
+	app, _ := spec.LogAttribute.Get("miren.app")
+	assert.Equal(t, "demo", app)
+	assert.NotEqual(t, "app/demo", app, "the entity id is what LogEntity already carries")
+}
+
+func TestBuildOmitsTheAppLabelWhenUnknown(t *testing.T) {
+	opts := baseOptions()
+	opts.AppName = ""
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+
+	// An empty label would group every unnamed sandbox under one phantom app,
+	// which is worse than having no label at all.
+	_, ok := spec.LogAttribute.Get("miren.app")
+	assert.False(t, ok)
 }
