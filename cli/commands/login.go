@@ -490,7 +490,17 @@ func pollForToken(ctx context.Context, cloudURL, deviceCode string, interval, ma
 				continue
 			}
 
-			// Server always returns 200 with status in JSON
+			// Intermediaries (CDN/WAF/reverse proxy/maintenance pages) return
+			// non-200 with non-JSON bodies during transient outages; wait out
+			// the polling window like a transport error. Bounded by timeoutCtx.
+			if resp.StatusCode != http.StatusOK {
+				progress("pending")
+				continue
+			}
+
+			// 200 + valid JSON is dispatched by the switch below. 200 + non-JSON
+			// is a genuine origin contract violation -- surface it immediately
+			// rather than silently retrying for the rest of the window.
 			var exchangeResp DeviceFlowExchangeResponse
 			if err := json.Unmarshal(body, &exchangeResp); err != nil {
 				return nil, fmt.Errorf("failed to parse response: %w", err)
