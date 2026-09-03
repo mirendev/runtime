@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 )
 
@@ -33,9 +34,9 @@ func findApp(rows []*usage_v1alpha.AppUsage, name string) *usage_v1alpha.AppUsag
 // depends on are separate sandboxes, and a caller should not have to know that.
 func TestAppRowsSumServicesAndAddons(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/web1", "shop", sandboxKindApp),
-		row("sb/web2", "shop", sandboxKindApp),
-		row("sb/pg", "shop", sandboxKindAddon),
+		row("sb/web1", "shop", string(compute.KindApp)),
+		row("sb/web2", "shop", string(compute.KindApp)),
+		row("sb/pg", "shop", string(compute.KindAddon)),
 	}}
 	cpu := map[string]float64{"sb/web1": 0.5, "sb/web2": 0.25, "sb/pg": 1.5}
 	mem := map[string]float64{"sb/web1": 100, "sb/web2": 100, "sb/pg": 800}
@@ -63,8 +64,8 @@ func TestAppRowsSumServicesAndAddons(t *testing.T) {
 // total and the split stop agreeing.
 func TestAppRowsCanExcludeAddons(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/web", "shop", sandboxKindApp),
-		row("sb/pg", "shop", sandboxKindAddon),
+		row("sb/web", "shop", string(compute.KindApp)),
+		row("sb/pg", "shop", string(compute.KindAddon)),
 	}}
 	cpu := map[string]float64{"sb/web": 0.5, "sb/pg": 1.5}
 
@@ -79,9 +80,9 @@ func TestAppRowsCanExcludeAddons(t *testing.T) {
 
 func TestAppRowsSeparateApps(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/a", "shop", sandboxKindApp),
-		row("sb/b", "blog", sandboxKindApp),
-		row("sb/c", "blog", sandboxKindAddon),
+		row("sb/a", "shop", string(compute.KindApp)),
+		row("sb/b", "blog", string(compute.KindApp)),
+		row("sb/c", "blog", string(compute.KindAddon)),
 	}}
 	cpu := map[string]float64{"sb/a": 1, "sb/b": 2, "sb/c": 3}
 
@@ -96,8 +97,8 @@ func TestAppRowsSeparateApps(t *testing.T) {
 // would make a broken telemetry pipeline look like an idle cluster.
 func TestAppRowsReportSilentAppsAsStale(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/quiet", "shop", sandboxKindApp),
-		row("sb/busy", "blog", sandboxKindApp),
+		row("sb/quiet", "shop", string(compute.KindApp)),
+		row("sb/busy", "blog", string(compute.KindApp)),
 	}}
 	cpu := map[string]float64{"sb/busy": 1}
 
@@ -112,8 +113,8 @@ func TestAppRowsReportSilentAppsAsStale(t *testing.T) {
 // up into, and must not create a row named "".
 func TestAppRowsSkipSandboxesWithNoApp(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/shared", "", sandboxKindAddon),
-		row("sb/web", "shop", sandboxKindApp),
+		row("sb/shared", "", string(compute.KindAddon)),
+		row("sb/web", "shop", string(compute.KindApp)),
 	}}
 	cpu := map[string]float64{"sb/shared": 9, "sb/web": 1}
 
@@ -127,8 +128,8 @@ func TestAppRowsSkipSandboxesWithNoApp(t *testing.T) {
 
 func TestAppRowsFilterByApp(t *testing.T) {
 	dir := &directory{sandboxes: []sandboxRow{
-		row("sb/a", "shop", sandboxKindApp),
-		row("sb/b", "blog", sandboxKindApp),
+		row("sb/a", "shop", string(compute.KindApp)),
+		row("sb/b", "blog", string(compute.KindApp)),
 	}}
 
 	rows, _ := buildAppRows(dir, map[string]float64{"sb/a": 1, "sb/b": 2}, nil, "shop", true)

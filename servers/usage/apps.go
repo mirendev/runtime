@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/api/compute"
+
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
@@ -42,7 +44,7 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 
 	out := &appListing{cluster: cluster, warnings: warnings, total: int32(len(rows))}
 
-	sortApps(rows, ord.sort, ord.order)
+	sortApps(rows, ord)
 	out.rows = rows[:ord.truncate(len(rows))]
 
 	return out, nil
@@ -164,7 +166,7 @@ func buildAppRows(
 			continue
 		}
 
-		isAddon := sb.ref.Kind() == sandboxKindAddon
+		isAddon := sb.ref.Kind() == string(compute.KindAddon)
 		if isAddon && !includeAddons {
 			continue
 		}
@@ -271,8 +273,9 @@ func (s *Server) appSamples(
 	return cpu, memory, warnings
 }
 
-func sortApps(rows []*usage_v1alpha.AppUsage, key, order string) {
-	desc := !strings.EqualFold(order, "asc")
+func sortApps(rows []*usage_v1alpha.AppUsage, ord ordering) {
+	key := ord.sort
+	desc := ord.descending()
 
 	less := func(a, b *usage_v1alpha.AppUsage) bool {
 		switch strings.ToLower(strings.TrimSpace(key)) {
@@ -281,9 +284,7 @@ func sortApps(rows []*usage_v1alpha.AppUsage, key, order string) {
 		case "sandboxes":
 			return a.SandboxCount() < b.SandboxCount()
 		case "name", "app":
-			// Names sort ascending even under the default descending order:
-			// nobody wants a reverse-alphabetical app list.
-			return a.App() > b.App()
+			return a.App() < b.App()
 		default:
 			return a.Total().CpuCores() < b.Total().CpuCores()
 		}

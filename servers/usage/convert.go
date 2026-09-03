@@ -22,6 +22,28 @@ type ordering struct {
 	limit int
 }
 
+// descending reports which direction to sort in when the caller did not say.
+//
+// The sensible default depends on what is being sorted: a usage column wants
+// the busiest first, while a name wants A to Z. Making the caller pass
+// order=asc just to get an alphabetical list would be a trap, and passing
+// order=desc for a name should still reverse it.
+func (o ordering) descending() bool {
+	switch strings.ToLower(strings.TrimSpace(o.order)) {
+	case "asc":
+		return false
+	case "desc":
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(o.sort)) {
+	case "name", "app", "service", "node", "runner":
+		return false
+	default:
+		return true
+	}
+}
+
 func (o ordering) truncate(n int) int {
 	if o.limit > 0 && o.limit < n {
 		return o.limit

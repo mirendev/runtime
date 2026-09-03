@@ -1990,29 +1990,6 @@ func TestShouldRetireInsteadOfRestart(t *testing.T) {
 	r.False(shouldRetireInsteadOfRestart(&compute.Sandbox{Status: compute.RUNNING}))
 }
 
-func TestSandboxWorkloadKind(t *testing.T) {
-	withAttrs := func(kv ...string) *compute.Sandbox {
-		sb := &compute.Sandbox{}
-		sb.Spec.LogAttribute = types.LabelSet(kv...)
-		return sb
-	}
-
-	r := require.New(t)
-
-	r.Equal("app", sandboxWorkloadKind(withAttrs("miren.stage", "app-run", "miren.service", "web")),
-		"appspec stamps app-run on every deployed service")
-	r.Equal("run", sandboxWorkloadKind(withAttrs("miren.stage", "run", "miren.task", "migrate")),
-		"the run controller stamps run on one-off tasks")
-
-	// Addon servers set no stage at all, so the addon label is the only signal
-	// that a sandbox is infrastructure rather than someone's app.
-	r.Equal("addon", sandboxWorkloadKind(withAttrs("addon", "postgresql", "app", "myapp")),
-		"an addon is infrastructure even though it carries an app label")
-
-	r.Equal("other", sandboxWorkloadKind(withAttrs()),
-		"an unclassifiable sandbox is reported as such rather than assumed to be an app")
-}
-
 func TestSandboxMetricsIdentityLabelsNode(t *testing.T) {
 	sb := &compute.Sandbox{ID: "sb_abc"}
 	sb.Spec.LogEntity = "app_xyz"
@@ -2031,4 +2008,28 @@ func TestSandboxMetricsIdentityLabelsNode(t *testing.T) {
 	// host rather than being visibly absent.
 	_, attrs = sandboxMetricsIdentity(sb, "")
 	r.NotContains(attrs, "miren.node")
+}
+
+// The identity keys are what a series is attributed by, so a sandbox spec must
+// not be able to claim them. A spec carrying miren.node would otherwise report
+// its usage against a host it never ran on.
+func TestSandboxMetricsIdentityIgnoresSpoofedIdentityAttributes(t *testing.T) {
+	sb := &compute.Sandbox{ID: "sb_real"}
+	sb.Spec.LogEntity = "app_xyz"
+	sb.Spec.Version = "app_version/real"
+	sb.Spec.LogAttribute = types.LabelSet(
+		"miren.stage", "app-run",
+		"miren.node", "node/somewhere-else",
+		"miren.sandbox", "sb_impostor",
+		"miren.version", "app_version/fake",
+		"miren.kind", "addon",
+	)
+
+	_, attrs := sandboxMetricsIdentity(sb, "node/real")
+
+	r := require.New(t)
+	r.Equal("node/real", attrs["miren.node"])
+	r.Equal("sb_real", attrs["miren.sandbox"])
+	r.Equal("app_version/real", attrs["miren.version"])
+	r.Equal("app", attrs["miren.kind"])
 }

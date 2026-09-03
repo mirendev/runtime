@@ -77,7 +77,7 @@ func (n *NodeUsage) Monitor(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := n.collect(ctx); err != nil {
-				n.Log.Error("failed to record node resource usage", "err", err)
+				n.Log.Warn("failed to record node resource usage", "err", err)
 			}
 		case <-ctx.Done():
 			return

@@ -2,6 +2,10 @@ package rpc
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,17 +40,46 @@ func restOnlyMethods() []Method {
 func TestRestOnlyMethodIsUnreachableOverRPC(t *testing.T) {
 	iface := NewInterface(restOnlyMethods(), struct{}{})
 
-	ordinary := iface.rpcMethod("listThings")
+	ordinary, found := iface.rpcMethod("listThings")
+	require.True(t, found)
 	require.NotNil(t, ordinary.Handler, "an ordinary method still dispatches")
 
-	restOnly := iface.rpcMethod("httpListThings")
-	assert.Nil(t, restOnly.Handler,
-		"a rest-only method must resolve to nothing dispatchable; every call site treats a nil Handler as unknown")
+	_, ok := iface.rpcMethod("httpListThings")
+	assert.False(t, ok, "a rest-only method must not resolve for RPC dispatch")
 
 	// The same answer a typo gets, which is the point: an RPC caller should not
 	// be able to tell a rest-only method from one that does not exist.
-	missing := iface.rpcMethod("noSuchThing")
-	assert.Equal(t, missing.Handler == nil, restOnly.Handler == nil)
+	_, missing := iface.rpcMethod("noSuchThing")
+	assert.Equal(t, missing, ok)
+}
+
+// Every path that invokes a handler by name has to consult rpcMethod. The first
+// version of this feature guarded three of them and left the inline router, the
+// actor path and the in-process test client reading the map directly, so a
+// rest-only method stayed reachable by all three. This asserts the map has no
+// other readers rather than trusting a grep done once.
+func TestEveryDispatchPathGoesThroughRpcMethod(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+
+	direct := regexp.MustCompile(`\.methods\[`)
+
+	for _, f := range files {
+		if f == "server.go" {
+			// rpcMethod itself is the one sanctioned reader.
+			continue
+		}
+
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+
+		for n, line := range strings.Split(string(src), "\n") {
+			if direct.MatchString(line) {
+				t.Errorf("%s:%d reads the method map directly; use Interface.rpcMethod so rest-only methods stay unreachable:\n\t%s",
+					f, n+1, strings.TrimSpace(line))
+			}
+		}
+	}
 }
 
 // Withdrawing it from RPC must not unmount its route. The REST gateway

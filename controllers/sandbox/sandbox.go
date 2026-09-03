@@ -44,6 +44,7 @@ import (
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 
+	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -1081,14 +1082,21 @@ func sandboxMetricsIdentity(sb *compute.Sandbox, nodeID string) (string, map[str
 		le = sb.ID.String()
 	}
 
-	attrs := map[string]string{
-		"miren.sandbox": sb.ID.String(),
+	attrs := map[string]string{}
+
+	// The sandbox's own attributes go in first so the controller-owned keys
+	// below overwrite them rather than the other way round. These identify the
+	// series; a spec that happened to carry miren.node could otherwise report a
+	// sandbox's usage against a host it never ran on.
+	for _, lbl := range sb.Spec.LogAttribute {
+		attrs[lbl.Key] = lbl.Value
 	}
 
-	// Without this, usage can be attributed to a workload but not to a host,
-	// which is what makes "which node is hot" unanswerable. It costs no extra
-	// time series: it is functionally dependent on miren.sandbox, which is
-	// already an attribute here.
+	attrs["miren.sandbox"] = sb.ID.String()
+
+	// Without the node, usage can be attributed to a workload but not to a
+	// host, which is what makes "which node is hot" unanswerable. It costs no
+	// extra time series: it is functionally dependent on miren.sandbox.
 	if nodeID != "" {
 		attrs["miren.node"] = nodeID
 	}
@@ -1097,44 +1105,9 @@ func sandboxMetricsIdentity(sb *compute.Sandbox, nodeID string) (string, map[str
 		attrs["miren.version"] = sb.Spec.Version.String()
 	}
 
-	for _, lbl := range sb.Spec.LogAttribute {
-		attrs[lbl.Key] = lbl.Value
-	}
-
-	attrs["miren.kind"] = sandboxWorkloadKind(sb)
+	attrs["miren.kind"] = string(computeapi.SandboxKind(sb))
 
 	return le, attrs
-}
-
-// sandboxWorkloadKind classifies a sandbox as an app service, an addon server,
-// or a task run, so a usage report can separate a user's web process from the
-// database sitting behind it.
-//
-// The classification is read back out of attributes the sandbox already
-// carries rather than stored on it: appspec stamps miren.stage=app-run on
-// deployed services and the run controller stamps miren.stage=run, while the
-// addon framework passes the addon's own labels through as log attributes and
-// sets no stage.
-func sandboxWorkloadKind(sb *compute.Sandbox) string {
-	var stage string
-
-	for _, lbl := range sb.Spec.LogAttribute {
-		switch lbl.Key {
-		case "addon":
-			return "addon"
-		case "miren.stage":
-			stage = lbl.Value
-		}
-	}
-
-	switch stage {
-	case "run":
-		return "run"
-	case "app-run":
-		return "app"
-	default:
-		return "other"
-	}
 }
 
 // sandboxCgroups reads the cgroup path of each of a sandbox's live containers
