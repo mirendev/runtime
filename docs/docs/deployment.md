@@ -184,7 +184,6 @@ STATUS  VERSION                              WHEN     DEPLOYED BY
 ✓       myapp-vCVkjR6u7744AsMebwMjGU         2m ago   paul@miren.dev
 ✓       myapp-vCVkjJSe4fydvxEHfhsKfA         1h ago   paul@miren.dev
 ✗       myapp-vCVmuoeQCzjoNN9hGsu14c         3h ago   paul@miren.dev
-↩       myapp-vCVkjTGJhRddyZDVq9CmnN         1d ago   paul@miren.dev
 ```
 
 Status icons:
@@ -194,7 +193,7 @@ Status icons:
 - **⟳** — in progress
 - **⊘** — cancelled
 
-You can filter by status, show full git provenance with `--detailed`, or get JSON output for scripting. See the [`miren app history` reference](/command/app-history) for all options.
+Show full git provenance with `--detailed`, or get JSON output for scripting. See the [`miren app history` reference](/command/app-history) for all options.
 
 ## Cancelling a Deployment
 
