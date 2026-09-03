@@ -135,14 +135,58 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 		ImagePath: imagePath,
 		Created:   true,
 		Cleanup: func(cctx context.Context) error {
-			_, err := r.eac.Delete(cctx, string(diskEntityId))
+			// The restore's own context is already cancelled when the
+			// operator interrupts the restore, and the rollback is exactly
+			// what has to run then. Detach so cleanup is not defeated by
+			// the failure it is cleaning up after.
+			cctx = context.WithoutCancel(cctx)
+
+			// Finalize is the last fallible step of a restore, so cleanup
+			// only ever runs when it did not complete — and its
+			// disk_volume Create is its last write. Nothing owns the image
+			// at this point, and the restore already renamed it into
+			// place, so the temp-file removal in disk_restore.go is a
+			// no-op for it. Remove it before touching the disk: a
+			// PROVISIONED disk still carrying its VolumeId can be
+			// self-healed into a disk_volume by the controller, and there
+			// is no reason to let that adopt an image on its way to being
+			// torn down. Tolerate "not present" — the rename may never
+			// have happened.
+			imageErr := os.Remove(imagePath)
+			if os.IsNotExist(imageErr) {
+				imageErr = nil
+			}
+
+			// Transition the disk to DELETING rather than deleting the
+			// entity outright. A direct Delete bypasses the disk
+			// controller's DELETING-driven handleDeletion path, which is
+			// the only writer of disk_volume.desired_state=DV_ABSENT; once
+			// the disk is gone, a disk_volume the controller self-healed
+			// from the PROVISIONED disk has no reaper and is left
+			// reconciled by the coordinator as a live mount / volume
+			// directory / phantom cloud volume. Marking the disk DELETING
+			// keeps it alive to drive that existing contract, which tears
+			// the disk_volume down via the coordinator's
+			// DiskVolumeController. Idempotent: patching an already-DELETING
+			// disk is a no-op.
+			_, err := r.eac.Patch(cctx, []entity.Attr{
+				entity.Ref(entity.DBId, diskEntityId),
+				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusDeletingId),
+			}, 0)
 			if err != nil {
-				return fmt.Errorf("deleting disk entity during cleanup: %w", err)
+				return fmt.Errorf("transitioning disk to deleting during cleanup: %w", err)
+			}
+
+			// Reported only once the authoritative step is done, so a
+			// failure to reclaim the image never costs us the disk
+			// rollback — a leftover image is disk space, a stuck
+			// RESTORING disk blocks every same-name retry.
+			if imageErr != nil {
+				return fmt.Errorf("removing restored image during cleanup: %w", imageErr)
 			}
 			return nil
 		},
 		Finalize: func(fctx context.Context) error {
-			// Create disk_volume now that the image is written.
 			vol := &storage_v1alpha.DiskVolume{
 				Name:         name,
 				DiskId:       diskEntityId,
@@ -156,22 +200,30 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 				NodeId:       nodeId,
 			}
 
-			_, err := r.eac.Create(fctx, entity.New(
-				entity.DBId, entity.Id("disk_volume/"+volId),
-				vol.Encode,
-			).Attrs())
-			if err != nil {
-				return fmt.Errorf("creating disk_volume entity: %w", err)
-			}
-
-			// Transition disk to PROVISIONED with volume ID.
-			_, err = r.eac.Patch(fctx, []entity.Attr{
+			// Transition the disk to PROVISIONED before creating the
+			// disk_volume. These are two independent, non-transactional
+			// writes, so the order matters: if the disk_volume were
+			// created first and the Patch then failed, the deferred
+			// Cleanup would orphan the committed disk_volume by deleting
+			// its parent disk out from under it. Patching first means a
+			// Create failure leaves no disk_volume behind, and a surviving
+			// PROVISIONED disk drives the existing DELETING-based cleanup
+			// and self-healing paths.
+			_, err := r.eac.Patch(fctx, []entity.Attr{
 				entity.Ref(entity.DBId, diskEntityId),
 				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisionedId),
 				entity.String(storage_v1alpha.DiskVolumeIdId, volId),
 			}, 0)
 			if err != nil {
 				return fmt.Errorf("updating disk to provisioned: %w", err)
+			}
+
+			_, err = r.eac.Create(fctx, entity.New(
+				entity.DBId, entity.Id("disk_volume/"+volId),
+				vol.Encode,
+			).Attrs())
+			if err != nil {
+				return fmt.Errorf("creating disk_volume entity: %w", err)
 			}
 
 			return nil
