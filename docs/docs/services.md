@@ -315,7 +315,7 @@ Connect to other services using their DNS name and standard port—`postgres.app
 
 ## Traffic Routing
 
-The `web` service receives external HTTP traffic through Miren's HTTP ingress. Create a route to make your app reachable:
+The `web` service is the default target for external HTTP traffic through Miren's HTTP ingress. Create a route to make your app reachable:
 
 <CliCommand context="client">
 ```miren
