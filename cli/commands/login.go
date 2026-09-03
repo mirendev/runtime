@@ -786,7 +786,7 @@ func autoConfigureCluster(ctx *Context, identityName, cloudURL string, identity 
 	// Only clusters with a reachable address can be auto-configured.
 	var validClusters []ClusterResponse
 	for _, cluster := range clusters {
-		if cluster.hasReachableAddress() {
+		if cluster.HasReachableAddress() {
 			validClusters = append(validClusters, cluster)
 		}
 	}

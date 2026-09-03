@@ -781,10 +781,37 @@ miren deploy --analyze
 			Body: "miren cluster switch production",
 		}),
 	))
+	d.Dispatch("cluster available", Infer("cluster available", "List the clusters Miren Cloud has for your account", ClusterAvailable,
+		WithExample(mflags.Example{
+			Name: "List clusters you could add",
+			Body: "miren cluster available",
+		}),
+		WithExample(mflags.Example{
+			Name: "List as JSON",
+			Body: "miren cluster available --format json",
+		}),
+		WithExample(mflags.Example{
+			Name: "Ask cloud whether it can reach the clusters with no address",
+			Body: "miren cluster available --check",
+		}),
+	))
 	d.Dispatch("cluster add", Infer("cluster add", "Add a new cluster configuration", ClusterAdd,
+		WithDescription(clusterAddJSONDoc),
 		WithExample(mflags.Example{
 			Name: "Add a cluster interactively",
 			Body: "miren cluster add",
+		}),
+		WithExample(mflags.Example{
+			Name: "Add a cluster by name, without the picker",
+			Body: "miren cluster add --cluster my-cluster",
+		}),
+		WithExample(mflags.Example{
+			Name: "Add a cluster by name under a different local name",
+			Body: "miren cluster add --cluster my-cluster --as staging",
+		}),
+		WithExample(mflags.Example{
+			Name: "Add a cluster, reporting the result (and any failure) as JSON",
+			Body: "miren cluster add --cluster my-cluster --format json",
 		}),
 		WithExample(mflags.Example{
 			Name: "Add a cluster with a specific address",

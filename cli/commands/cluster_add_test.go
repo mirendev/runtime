@@ -126,3 +126,162 @@ func TestNormalizeAddress(t *testing.T) {
 		})
 	}
 }
+
+// The cluster list an account with two organizations gets back, including the
+// name collision that makes --organization necessary.
+func namedClusters() []ClusterResponse {
+	return []ClusterResponse{
+		{Name: "prod", XID: "cluster-acme-prod", OrganizationName: "Acme", OrganizationXID: "org-acme"},
+		{Name: "prod", XID: "cluster-globex-prod", OrganizationName: "Globex", OrganizationXID: "org-globex"},
+		{Name: "staging", XID: "cluster-acme-staging", OrganizationName: "Acme", OrganizationXID: "org-acme"},
+	}
+}
+
+func TestFindClusterByName(t *testing.T) {
+	tests := []struct {
+		name         string
+		cluster      string
+		organization string
+		wantXID      string
+		wantErr      []string
+	}{
+		{
+			name:    "exact match",
+			cluster: "staging",
+			wantXID: "cluster-acme-staging",
+		},
+		{
+			// Convenience for anyone typing a name back from a listing, but
+			// only once nothing matched exactly.
+			name:    "case insensitive match",
+			cluster: "STAGING",
+			wantXID: "cluster-acme-staging",
+		},
+		{
+			name:    "no such cluster names the ones that exist",
+			cluster: "nope",
+			wantErr: []string{`no cluster named "nope"`, "prod (Acme)", "prod (Globex)", "staging (Acme)"},
+		},
+		{
+			// Guessing here would bind the wrong production cluster under the
+			// right local name.
+			name:    "ambiguous name is refused",
+			cluster: "prod",
+			wantErr: []string{`2 clusters are named "prod"`, "prod (Acme)", "prod (Globex)", "--organization"},
+		},
+		{
+			name:         "organization resolves the ambiguity",
+			cluster:      "prod",
+			organization: "Globex",
+			wantXID:      "cluster-globex-prod",
+		},
+		{
+			name:         "organization matches case insensitively",
+			cluster:      "prod",
+			organization: "acme",
+			wantXID:      "cluster-acme-prod",
+		},
+		{
+			// The XID is what a script has on hand, and it is unambiguous in a
+			// way the display name is not.
+			name:         "organization matches by xid",
+			cluster:      "prod",
+			organization: "org-globex",
+			wantXID:      "cluster-globex-prod",
+		},
+		{
+			name:         "unknown organization names the real ones",
+			cluster:      "prod",
+			organization: "Initech",
+			wantErr:      []string{`no clusters in organization "Initech"`, "Acme, Globex"},
+		},
+		{
+			name:         "organization narrows before the name is matched",
+			cluster:      "staging",
+			organization: "Globex",
+			wantErr:      []string{`no cluster named "staging"`, "prod (Globex)"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := require.New(t)
+
+			found, err := findClusterByName(namedClusters(), test.cluster, test.organization)
+
+			if len(test.wantErr) > 0 {
+				r.Error(err)
+				for _, want := range test.wantErr {
+					r.Contains(err.Error(), want)
+				}
+				r.Nil(found)
+				return
+			}
+
+			r.NoError(err)
+			r.Equal(test.wantXID, found.XID)
+		})
+	}
+}
+
+// A name that matches exactly must win over one that only matches case
+// insensitively, or two clusters differing in case would read as ambiguous.
+func TestFindClusterByNamePrefersTheExactMatch(t *testing.T) {
+	clusters := []ClusterResponse{
+		{Name: "Prod", XID: "cluster-upper", OrganizationName: "Acme"},
+		{Name: "prod", XID: "cluster-lower", OrganizationName: "Acme"},
+	}
+
+	found, err := findClusterByName(clusters, "prod", "")
+	require.NoError(t, err)
+	require.Equal(t, "cluster-lower", found.XID)
+}
+
+// The flag combinations that are refused before anything is fetched or dialed,
+// which is what makes them testable without a cloud or a cluster.
+func TestClusterAddFlagValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    addClusterOptions
+		wantErr string
+	}{
+		{
+			name:    "as without cluster",
+			opts:    addClusterOptions{localName: "local-prod"},
+			wantErr: "--as needs --cluster",
+		},
+		{
+			name:    "as with address",
+			opts:    addClusterOptions{clusterName: "prod", address: "10.0.0.1:8443", localName: "local-prod"},
+			wantErr: "--as and --address are mutually exclusive",
+		},
+		{
+			name:    "organization with address",
+			opts:    addClusterOptions{clusterName: "prod", address: "10.0.0.1:8443", organization: "Acme"},
+			wantErr: "--organization and --address are mutually exclusive",
+		},
+		{
+			name:    "organization without cluster",
+			opts:    addClusterOptions{organization: "Acme"},
+			wantErr: "--organization only narrows the lookup for --cluster",
+		},
+		{
+			name:    "via-cloud with address",
+			opts:    addClusterOptions{clusterName: "prod", address: "10.0.0.1:8443", viaCloud: true},
+			wantErr: "--via-cloud and --address are mutually exclusive",
+		},
+		{
+			name:    "address without cluster",
+			opts:    addClusterOptions{address: "10.0.0.1:8443"},
+			wantErr: "--address needs --cluster",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := addCluster(presenceContext(t), test.opts)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.wantErr)
+		})
+	}
+}

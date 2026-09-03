@@ -4,63 +4,24 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cloudapi/cloudapitest"
 )
 
-// cloudPresenceServer stands in for cloud's per-cluster presence endpoint,
-// recording which clusters were asked about.
-// The recorder is returned as a function rather than a slice pointer because
-// the presence checks now run concurrently: reads and writes both have to hold
-// the lock, and handing back a pointer makes it easy to forget.
-func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*httptest.Server, func() []string) {
+// cloudPresenceServer stands in for cloud's presence endpoint, recording which
+// clusters were asked about. A thin wrapper over the shared fake so these tests
+// keep reading as they did.
+func cloudPresenceServer(t *testing.T, online map[string]bool, status int) (*cloudapitest.Server, func() []string) {
 	t.Helper()
 
-	var (
-		mu    sync.Mutex
-		asked []string
-	)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if status != http.StatusOK {
-			w.WriteHeader(status)
-			return
-		}
-
-		// /api/v1/clusters/{xid}/online
-		xid := r.PathValue("xid")
-		if xid == "" {
-			// Fall back to parsing, since this server is not using a router.
-			parts := r.URL.Path
-			const prefix = "/api/v1/clusters/"
-			const suffix = "/online"
-			if len(parts) > len(prefix)+len(suffix) {
-				xid = parts[len(prefix) : len(parts)-len(suffix)]
-			}
-		}
-		mu.Lock()
-		asked = append(asked, xid)
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		if online[xid] {
-			_, _ = w.Write([]byte(`{"cluster_xid":"` + xid + `","online":true}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"cluster_xid":"` + xid + `","online":false}`))
-	}))
+	srv := cloudapitest.NewServer(nil, online, status)
 	t.Cleanup(srv.Close)
 
-	return srv, func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), asked...)
-	}
+	return srv, srv.Asked
 }
 
 func presenceTestConfig(t *testing.T, issuer string) (*clientconfig.Config, *clientconfig.IdentityConfig) {

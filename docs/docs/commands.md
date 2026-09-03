@@ -81,6 +81,7 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren cluster`](/command/cluster) | List configured clusters |
 | [`miren cluster add`](/command/cluster-add) | Add a new cluster configuration |
+| [`miren cluster available`](/command/cluster-available) | List the clusters Miren Cloud has for your account |
 | [`miren cluster current`](/command/cluster-current) | Show the pinned cluster for this app |
 | [`miren cluster export-address`](/command/cluster-export-address) | Export cluster address with TLS fingerprint for MIREN_CLUSTER |
 | [`miren cluster list`](/command/cluster-list) | List all configured clusters |

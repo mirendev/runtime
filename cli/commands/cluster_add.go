@@ -28,27 +28,48 @@ var skipAddresses = map[string]bool{
 	"localhost.localdomain": true,
 }
 
-func ClusterAdd(ctx *Context, opts struct {
-	Identity string `short:"i" long:"identity" description:"Name of the identity to use (optional - will use the only one if single)"`
-	Cluster  string `short:"c" long:"cluster" description:"Name of the cluster to create (optional - will list available)"`
-	Address  string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
-	Force    bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
-	ViaCloud bool   `long:"via-cloud" description:"Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to"`
-}) error {
-	return addCluster(ctx, addClusterOptions{
+type clusterAddOpts struct {
+	FormatOptions
+	Identity     string `short:"i" long:"identity" description:"Name of the identity to use (optional - will use the only one if single)"`
+	Cluster      string `short:"c" long:"cluster" description:"Name of the cluster to add, looked up in Miren Cloud unless --address is given (optional - will list available)"`
+	Address      string `short:"a" long:"address" description:"Address/hostname of the cluster (optional - will use from selected cluster)"`
+	As           string `long:"as" description:"Local name to store the cluster under, when it should differ from its name in Miren Cloud"`
+	Organization string `long:"organization" description:"Organization the named cluster belongs to, for when the same name exists in more than one"`
+	Force        bool   `short:"f" long:"force" description:"Overwrite existing cluster configuration"`
+	ViaCloud     bool   `long:"via-cloud" description:"Reach the cluster through Miren Cloud instead of dialing it, for a cluster this machine has no route to"`
+}
+
+func ClusterAdd(ctx *Context, opts clusterAddOpts) error {
+	// Adding a cluster narrates itself as it goes, and in JSON mode stdout
+	// belongs to the result document alone.
+	if opts.IsJSON() {
+		defer ctx.ProgressToStderr()()
+	}
+
+	added, err := addCluster(ctx, addClusterOptions{
 		identityName: opts.Identity,
 		clusterName:  opts.Cluster,
 		address:      opts.Address,
+		localName:    opts.As,
+		organization: opts.Organization,
 		force:        opts.Force,
 		viaCloud:     opts.ViaCloud,
+		jsonOutput:   opts.IsJSON(),
 	})
+
+	if !opts.IsJSON() {
+		return err
+	}
+
+	return reportClusterAdd(ctx, added, err)
 }
 
 // AddClusterInteractive prompts the user to select and add a cluster interactively.
 // It auto-selects the identity if only one is available.
 // Returns nil if a cluster was successfully added.
 func AddClusterInteractive(ctx *Context) error {
-	return addCluster(ctx, addClusterOptions{})
+	_, err := addCluster(ctx, addClusterOptions{})
+	return err
 }
 
 type addClusterOptions struct {
@@ -57,11 +78,26 @@ type addClusterOptions struct {
 	address      string
 	force        bool
 
+	// localName overrides the name the cluster is stored under locally. The
+	// picker asks for one; naming a cluster on the command line skips that
+	// prompt, so this is how the same choice is made without it.
+	localName string
+
+	// organization narrows the cloud lookup when clusterName exists in more
+	// than one of them.
+	organization string
+
 	// viaCloud writes an entry that reaches the cluster through Miren Cloud.
 	// It only makes sense in discovery mode: routing through cloud needs the
 	// cluster's XID, and asking cloud which clusters you have is the only way
 	// to learn it.
 	viaCloud bool
+
+	// jsonOutput means the caller wants a document, not a conversation. The
+	// steps that would put a question on the screen — the cluster picker, the
+	// overwrite prompt — become errors it can act on instead, even when there
+	// is a terminal attached and asking would have worked.
+	jsonOutput bool
 }
 
 // canFallBackToCloud reports whether a cluster that would not answer a direct
@@ -94,45 +130,169 @@ func announceClusterAdd(ctx *Context, remoteName, localName, how string) {
 	ctx.Info("Adding cluster '%s' (%s)", remoteName, how)
 }
 
-func addCluster(ctx *Context, opts addClusterOptions) error {
+// findClusterByName picks the cluster the caller named out of the list cloud
+// returned, standing in for the interactive picker when the name is already
+// known.
+//
+// Cluster names are unique within an organization but not across them, so an
+// ambiguous name is refused rather than guessed at: binding the wrong
+// production cluster to the right local name is a worse outcome than being
+// asked for --organization. Matching is exact first and case-insensitive only
+// as a fallback, so a name that is exactly right can never lose to one that
+// merely differs in case.
+func findClusterByName(clusters []ClusterResponse, name, organization string) (*ClusterResponse, error) {
+	candidates, err := clustersInOrganization(clusters, organization)
+	if err != nil {
+		return nil, err
+	}
+
+	matches := matchClusterName(candidates, func(clusterName string) bool { return clusterName == name })
+	if len(matches) == 0 {
+		matches = matchClusterName(candidates, func(clusterName string) bool { return strings.EqualFold(clusterName, name) })
+	}
+
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return nil, codedErrorf(codeClusterNotFound, "no cluster named %q. Available clusters: %s",
+			name, describeClusters(candidates))
+	default:
+		return nil, codedErrorf(codeAmbiguousCluster, "%d clusters are named %q (%s). Pick one with --organization",
+			len(matches), name, describeClusters(derefClusters(matches)))
+	}
+}
+
+// clustersInOrganization narrows a cluster list to one organization, named
+// either by its display name or by its id. An organization that matches nothing
+// is an error rather than an empty list, because the overwhelmingly likely
+// cause is a misspelled name, and an empty list reads as "you have no clusters
+// there" — a different and more alarming claim.
+//
+// Shared by the commands that take --organization so the flag means the same
+// thing whether it is narrowing a lookup or a listing.
+func clustersInOrganization(clusters []ClusterResponse, organization string) ([]ClusterResponse, error) {
+	if organization == "" {
+		return clusters, nil
+	}
+
+	var matched []ClusterResponse
+	for _, cluster := range clusters {
+		if strings.EqualFold(cluster.OrganizationName, organization) || cluster.OrganizationXID == organization {
+			matched = append(matched, cluster)
+		}
+	}
+
+	if len(matched) == 0 {
+		return nil, codedErrorf(codeUnknownOrganization, "no clusters in organization %q. Your clusters are in: %s",
+			organization, organizationNames(clusters))
+	}
+
+	return matched, nil
+}
+
+func matchClusterName(clusters []ClusterResponse, match func(name string) bool) []*ClusterResponse {
+	var matches []*ClusterResponse
+	for i := range clusters {
+		if match(clusters[i].Name) {
+			matches = append(matches, &clusters[i])
+		}
+	}
+	return matches
+}
+
+func derefClusters(clusters []*ClusterResponse) []ClusterResponse {
+	out := make([]ClusterResponse, 0, len(clusters))
+	for _, cluster := range clusters {
+		out = append(out, *cluster)
+	}
+	return out
+}
+
+// describeClusters renders clusters as "name (organization)" so an error about
+// the wrong name is actionable without running a second command.
+func describeClusters(clusters []ClusterResponse) string {
+	described := make([]string, 0, len(clusters))
+	for _, cluster := range clusters {
+		described = append(described, fmt.Sprintf("%s (%s)", cluster.Name, cluster.OrganizationName))
+	}
+	slices.Sort(described)
+	return strings.Join(described, ", ")
+}
+
+// organizationNames lists the organizations the given clusters belong to, once
+// each, for the error about an organization that matched nothing.
+func organizationNames(clusters []ClusterResponse) string {
+	var names []string
+	for _, cluster := range clusters {
+		if !slices.Contains(names, cluster.OrganizationName) {
+			names = append(names, cluster.OrganizationName)
+		}
+	}
+	slices.Sort(names)
+	return strings.Join(names, ", ")
+}
+
+func addCluster(ctx *Context, opts addClusterOptions) (*addedCluster, error) {
 	identityName, clusterName, address, force := opts.identityName, opts.clusterName, opts.address, opts.force
 
 	if opts.viaCloud && address != "" {
-		return fmt.Errorf("--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
+		return nil, codedErrorf(codeInvalidFlags, "--via-cloud and --address are mutually exclusive: routing through cloud is for a cluster you have no address for")
+	}
+	if opts.localName != "" && address != "" {
+		return nil, codedErrorf(codeInvalidFlags, "--as and --address are mutually exclusive: with --address nothing is looked up in cloud, so --cluster is already the local name")
+	}
+	if opts.organization != "" && address != "" {
+		return nil, codedErrorf(codeInvalidFlags, "--organization and --address are mutually exclusive: with --address nothing is looked up in cloud")
+	}
+	if opts.localName != "" && clusterName == "" {
+		return nil, codedErrorf(codeInvalidFlags, "--as needs --cluster to say which cluster to rename; the picker asks for a local name itself")
+	}
+	// Silently ignoring it would be worse: it reads as a filter that was
+	// applied, and the picker shows every cluster either way.
+	if opts.organization != "" && clusterName == "" {
+		return nil, codedErrorf(codeInvalidFlags, "--organization only narrows the lookup for --cluster; the picker already shows which organization each cluster is in")
+	}
+	// Checked here with the other flag combinations rather than where the
+	// address is used: an address with nothing to call it is wrong on its face,
+	// and leaving it until after identity resolution meant reporting whatever
+	// that found instead — "multiple identities available" for a command whose
+	// real problem was a missing --cluster.
+	if address != "" && clusterName == "" {
+		return nil, codedErrorf(codeInvalidFlags, "--address needs --cluster to say what to call the cluster locally; drop --address to look one up in Miren Cloud instead")
+	}
+	// The picker cannot answer to a caller that wanted a document, so say what
+	// to do instead of opening a list nobody is watching.
+	if opts.jsonOutput && clusterName == "" && address == "" {
+		return nil, codedErrorf(codeInteractiveRequired,
+			"choosing a cluster from a list needs a person; name one with --cluster (run 'miren cluster available' to see them) or give --cluster and --address")
 	}
 	// Load the main config to check if the identity exists
 	mainConfig, err := clientconfig.LoadConfig()
 	if err != nil && err != clientconfig.ErrNoConfig {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return nil, codedErrorf(codeConfigError, "failed to load configuration: %w", err)
 	}
 
-	// Detect manual mode: both --cluster and --address provided
-	manualMode := clusterName != "" && address != ""
+	// Detect manual mode: an address was given, so the cluster is dialed
+	// directly and cloud is never asked anything. Naming a cluster without an
+	// address is a cloud lookup like the picker, and needs an identity for the
+	// same reason.
+	manualMode := address != ""
 
 	// In manual mode, identity is optional (a CI runner authenticates with an
 	// OIDC token from its environment and has none configured).
 	// In discovery mode, identity is required to fetch available clusters.
 	if !manualMode {
 		// Discovery mode — identity is required
-		if mainConfig == nil || !mainConfig.HasIdentities() {
-			return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
-		}
-
-		if identityName == "" {
-			availableIdentities := mainConfig.GetIdentityNames()
-			if len(availableIdentities) == 1 {
-				identityName = availableIdentities[0]
-				ctx.Info("Using identity '%s' (only one available)", identityName)
-			} else if len(availableIdentities) > 1 {
-				return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(availableIdentities, ", "))
-			} else {
-				return fmt.Errorf("no identities configured. Please run 'miren login' first, or use --cluster and --address to add a cluster directly")
-			}
+		identityName, err = pickCloudIdentity(ctx, mainConfig, identityName,
+			", or use --cluster and --address to add a cluster directly")
+		if err != nil {
+			return nil, err
 		}
 	} else if identityName != "" {
 		// Manual mode with explicit --identity: validate it exists
 		if mainConfig == nil || !mainConfig.HasIdentities() {
-			return fmt.Errorf("identity %q not found: no identities configured", identityName)
+			return nil, codedErrorf(codeIdentityError, "identity %q not found: no identities configured", identityName)
 		}
 	} else if mainConfig != nil {
 		// Manual mode with no --identity. Optional isn't the same as unwanted:
@@ -148,63 +308,102 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			identityName = names[0]
 			ctx.Info("Using identity '%s' (only one available)", identityName)
 		default:
-			return fmt.Errorf("multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+			return nil, codedErrorf(codeIdentityError, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
 		}
 	}
 
 	// Look up identity if one was specified (skip if manual mode with no identity)
 	var identity *clientconfig.IdentityConfig
 	if identityName != "" {
-		if mainConfig == nil {
-			return fmt.Errorf("identity %q not found in configuration", identityName)
-		}
-		var err error
-		identity, err = mainConfig.GetIdentity(identityName)
+		identity, err = lookupIdentity(mainConfig, identityName)
 		if err != nil {
-			availableIdentities := mainConfig.GetIdentityNames()
-			if len(availableIdentities) > 0 {
-				return fmt.Errorf("identity %q not found. Available identities: %v", identityName, availableIdentities)
-			}
-			return fmt.Errorf("identity %q not found in configuration", identityName)
+			return nil, err
 		}
 	}
 
-	// If no cluster name or address provided, query the identity server for available clusters
+	// With no address to dial, the cluster comes from cloud — either named on
+	// the command line or chosen from the picker. Both land on the same
+	// selected cluster and then share every decision about how to reach it.
 	var clusterCert *clusterCertificate
 	var allAddresses []string
 	var clusterXID string
 
-	if clusterName == "" && address == "" {
+	// What the cluster is called in cloud, and whose it is. Empty in manual
+	// mode, where cloud is never asked and neither is knowable.
+	var cloudName, organizationName string
+
+	// Whether the caller asked for cloud routing, as opposed to the code
+	// choosing it below. Captured before opts.viaCloud can be set, because the
+	// two cases warrant different treatment: a route chosen here has already
+	// been probed, while one the caller named has not been checked at all.
+	explicitViaCloud := opts.viaCloud
+
+	if address == "" {
 		ctx.Info("Fetching available clusters from identity server...")
 
 		clusters, err := fetchAvailableClusters(ctx, mainConfig, identityName, identity)
 		if err != nil {
-			return fmt.Errorf("failed to fetch available clusters: %w", err)
+			return nil, codedErrorf(codeCloudRequestFailed, "failed to fetch available clusters: %w", err)
 		}
 
 		if len(clusters) == 0 {
-			return fmt.Errorf("no clusters available for your account")
+			return nil, codedErrorf(codeClusterNotFound, "no clusters available for your account")
 		}
 
-		// Which of the undialable clusters cloud can still reach. Asked before
-		// the picker so a cluster that works is offered as one, rather than
-		// greyed out for advertising no address it was never going to have.
-		//
-		// Skipped when the caller already said --via-cloud, since the answer
-		// would change nothing.
-		var cloudRoutable map[string]bool
-		if !opts.viaCloud {
-			cloudRoutable = cloudRoutableClusters(ctx, mainConfig, identityName, identity, clusters)
-		}
+		var (
+			selectedCluster *ClusterResponse
+			localName       string
+			// Which of the undialable clusters cloud can still reach. Skipped
+			// when the caller already said --via-cloud, since the answer would
+			// change nothing.
+			cloudRoutable map[string]bool
+		)
 
-		// Present cluster selection to user and get local name
-		selectedCluster, localName, err := selectClusterFromList(ctx, clusters, cloudRoutable)
-		if err != nil {
-			return err
+		if clusterName != "" {
+			selectedCluster, err = findClusterByName(clusters, clusterName, opts.organization)
+			if err != nil {
+				return nil, err
+			}
+
+			localName = clusterName
+			if opts.localName != "" {
+				localName = opts.localName
+			}
+
+			// Only the one cluster is asked about, since no list is being
+			// rendered and the other answers would go unused.
+			if !opts.viaCloud {
+				cloudRoutable = cloudRoutableClusters(ctx, mainConfig, identityName, identity, []ClusterResponse{*selectedCluster})
+			}
+
+			// The picker greys out a cluster with nothing to dial that cloud
+			// cannot reach either. Named, there is no row to grey out, and
+			// falling through would probe localhost as a last resort — which
+			// on a dev machine can pin whatever is listening there under a
+			// remote cluster's name.
+			if !opts.viaCloud && !selectedCluster.HasReachableAddress() && !cloudRoutable[selectedCluster.XID] {
+				return nil, codedErrorf(codeClusterUnreachable, "%s has %s, and cloud cannot reach it either; to connect: %s",
+					selectedCluster.Name, unreachableAddressNote, unreachableAddressHelp)
+			}
+		} else {
+			// Asked before the picker so a cluster that works is offered as
+			// one, rather than greyed out for advertising no address it was
+			// never going to have.
+			if !opts.viaCloud {
+				cloudRoutable = cloudRoutableClusters(ctx, mainConfig, identityName, identity, clusters)
+			}
+
+			// Present cluster selection to user and get local name
+			selectedCluster, localName, err = selectClusterFromList(ctx, clusters, cloudRoutable)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		clusterName = localName
 		clusterXID = selectedCluster.XID
+		cloudName = selectedCluster.Name
+		organizationName = selectedCluster.OrganizationName
 
 		// A cluster nothing can dial, which cloud reports it can reach. Routing
 		// through cloud is not a fallback here so much as the only way it was
@@ -213,7 +412,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		// establish that the cluster will answer over it.
 		if !opts.viaCloud && cloudRoutable[selectedCluster.XID] {
 			if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
-				return fmt.Errorf(
+				return nil, codedErrorf(codeClusterUnreachable,
 					"%s advertises no address this machine can dial, and did not answer through cloud either; "+
 						"if its runtime predates cloud-routed RPC, upgrade it or add the cluster from a network that can reach it",
 					selectedCluster.Name)
@@ -223,10 +422,22 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		}
 
 		if opts.viaCloud {
-			// No address, no probe, no certificate. Every one of those describes
-			// dialing the cluster, which is the thing this entry exists to avoid
-			// — and probing would just fail slowly before writing the entry that
-			// was going to work.
+			// No address and no certificate: both describe dialing the cluster,
+			// which is the thing this entry exists to avoid.
+			//
+			// The route itself is checked when the caller asked for it by name,
+			// rather than when it was chosen above (which already probed). The
+			// entry is written either way, because --via-cloud says how this
+			// cluster is reached and not that it answers this minute, and a
+			// cluster can reasonably be offline while somebody sets it up. But
+			// an entry that cannot work right now is worth saying out loud,
+			// since otherwise the first sign of it is an unrelated command
+			// failing later.
+			if explicitViaCloud && !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
+				ctx.Warn("%s did not answer through cloud just now, so commands to it will fail until it reconnects.", selectedCluster.Name)
+				ctx.Warn("Adding it anyway, since --via-cloud records how to reach it rather than that it is up.")
+			}
+
 			announceClusterAdd(ctx, selectedCluster.Name, localName, "routed through Miren Cloud")
 		} else {
 			// Store all available addresses
@@ -240,7 +451,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 				// machine is not on. Cloud may still hold a link to it, and if
 				// it does, the entry that works is the routed one.
 				if !canFallBackToCloud(ctx, mainConfig, identityName, identity, selectedCluster) {
-					return err
+					return nil, codedErrorf(codeClusterUnreachable, "%w", err)
 				}
 
 				ctx.Info("Could not reach %s directly, but cloud has a link to it.", selectedCluster.Name)
@@ -259,10 +470,6 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 				announceClusterAdd(ctx, selectedCluster.Name, localName, "connected to "+workingAddress)
 			}
 		}
-	} else if opts.viaCloud {
-		return fmt.Errorf("--via-cloud needs to look the cluster up in cloud, so it can't be combined with --cluster; run `miren cluster add --via-cloud` and pick from the list")
-	} else if clusterName == "" || address == "" {
-		return fmt.Errorf("both --cluster and --address must be specified, or neither (to list available clusters)")
 	} else {
 		// Manual mode - address was specified directly
 		ctx.Info("Connecting to %s to extract TLS certificate...", address)
@@ -270,7 +477,7 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		// Extract the TLS certificate from the server
 		cert, err := extractTLSCertificate(ctx, address)
 		if err != nil {
-			return fmt.Errorf("failed to extract TLS certificate: %w", err)
+			return nil, codedErrorf(codeClusterUnreachable, "failed to extract TLS certificate: %w", err)
 		}
 		clusterCert = cert
 		ctx.Completed("Successfully extracted TLS certificate (fingerprint: %s)", cert.Fingerprint)
@@ -310,13 +517,16 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		if err == clientconfig.ErrNoConfig {
 			mainConfig = clientconfig.NewConfig()
 		} else {
-			return fmt.Errorf("failed to load client config: %w", err)
+			return nil, codedErrorf(codeConfigError, "failed to load client config: %w", err)
 		}
 	}
 
 	// Check if the leaf config already exists (by trying to get the cluster)
 	if mainConfig.HasCluster(clusterName) && !force {
-		if ui.IsInteractive() {
+		// A caller wanting a document gets the decision handed back rather than
+		// a prompt, even at a terminal: overwriting somebody's cluster entry is
+		// not a call to make on their behalf because nobody was watching.
+		if ui.IsInteractive() && !opts.jsonOutput {
 			// Prompt user to choose: overwrite or cancel
 			items := []ui.PickerItem{
 				ui.SimplePickerItem{Text: "Overwrite existing configuration"},
@@ -326,14 +536,17 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 			title := fmt.Sprintf("Cluster %q already exists", clusterName)
 			selected, err := ui.RunPicker(items, ui.WithTitle(title))
 			if err != nil {
-				return fmt.Errorf("failed to run picker: %w", err)
+				return nil, codedErrorf(codeInteractiveRequired, "failed to run picker: %w", err)
 			}
 			if selected == nil || selected.ID() == "Cancel" {
-				return fmt.Errorf("cancelled")
+				// No code: this branch only runs for a person answering a
+				// prompt, and JSON mode never opens one, so a code here would
+				// be a contract entry that can never appear in a document.
+				return nil, fmt.Errorf("cancelled")
 			}
 			// User chose to overwrite, continue
 		} else {
-			return fmt.Errorf("cluster configuration %q already exists. Use --force to overwrite", clusterName)
+			return nil, codedErrorf(codeClusterExists, "cluster configuration %q already exists. Use --force to overwrite", clusterName)
 		}
 	}
 
@@ -350,14 +563,14 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 	if mainConfig.GetClusterCount() == 1 {
 		// If this is the first cluster, set it as active
 		if err := mainConfig.SetActiveCluster(clusterName); err != nil {
-			return fmt.Errorf("failed to set active cluster: %w", err)
+			return nil, codedErrorf(codeConfigError, "failed to set active cluster: %w", err)
 		}
 		ctx.Info("Setting %q as the active cluster", clusterName)
 	}
 
 	// Save the main config (which will also save the leaf config)
 	if err := mainConfig.Save(); err != nil {
-		return fmt.Errorf("failed to save cluster configuration: %w", err)
+		return nil, codedErrorf(codeConfigError, "failed to save cluster configuration: %w", err)
 	}
 
 	if opts.viaCloud {
@@ -379,7 +592,22 @@ func addCluster(ctx *Context, opts addClusterOptions) error {
 		ctx.Info("  miren cluster switch %s", clusterName)
 	}
 
-	return nil
+	added := &addedCluster{
+		Name:       clusterName,
+		XID:        clusterXID,
+		Address:    address,
+		ViaCloud:   opts.viaCloud,
+		Identity:   identityName,
+		Insecure:   clusterConfig.Insecure,
+		Active:     mainConfig.ActiveCluster() == clusterName,
+		ConfigFile: mainConfig.GetClusterSource(clusterName),
+	}
+	if cloudName != "" && cloudName != clusterName {
+		added.CloudName = cloudName
+	}
+	added.Organization = organizationName
+
+	return added, nil
 }
 
 // normalizeAddress handles robust address normalization for various formats:

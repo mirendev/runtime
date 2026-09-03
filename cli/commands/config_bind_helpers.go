@@ -2,12 +2,8 @@ package commands
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -17,32 +13,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cloudapi"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
 
-// ClusterResponse represents a cluster returned from the API
-type ClusterResponse struct {
-	XID               string         `json:"xid"`
-	Name              string         `json:"name"`
-	Description       string         `json:"description,omitempty"`
-	Tags              map[string]any `json:"tags"`
-	APIAddresses      []string       `json:"api_addresses,omitempty"`
-	CACertFingerprint string         `json:"ca_cert_fingerprint,omitempty"`
-	OrganizationXID   string         `json:"organization_xid"`
-	OrganizationName  string         `json:"organization_name"`
-}
-
-// hasReachableAddress reports whether the cloud advertised at least one API
-// address for this cluster. A cluster with none can't be dialed by any client,
-// so it would otherwise be silently hidden from `miren cluster add`. The most
-// common cause is a firewalled inbound port: miren connects over QUIC (UDP
-// 8443), and when the cloud's netcheck can't reach that port it drops the
-// discovered public IP, leaving the cluster advertising nothing. See MIR-1316.
-func (c ClusterResponse) hasReachableAddress() bool {
-	return len(c.APIAddresses) > 0
-}
+// ClusterResponse is a cluster as Miren Cloud describes it. Aliased rather
+// than redeclared so the commands keep their familiar name while the type,
+// and the API that returns it, live in one place.
+type ClusterResponse = cloudapi.Cluster
 
 const (
 	// unreachableAddressNote is the short, inline note shown in listings next to
@@ -203,62 +183,81 @@ func isPrivateAddress(host string) bool {
 	return ip.IsPrivate()
 }
 
-// fetchAvailableClusters queries the identity server for available clusters.
-// identityName may be "" for an anonymous in-memory identity (e.g. during login
-// before it has been named), in which case token refreshes are not persisted.
-func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
-	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
-		return nil, fmt.Errorf("cluster listing is only supported for keypair and token identities")
+// pickCloudIdentity chooses which configured identity to ask cloud with. A
+// lone identity is adopted, several are refused rather than guessed between,
+// and none is an error — every question for cloud is asked as somebody.
+//
+// suggestion is appended to the "no identities" error by callers that have
+// something to offer besides logging in, so each command can point at its own
+// way out while the rest of the message stays the same.
+func pickCloudIdentity(ctx *Context, config *clientconfig.Config, requested, suggestion string) (string, error) {
+	noIdentities := codedErrorf(codeNoIdentities, "no identities configured. Please run 'miren login' first%s", suggestion)
+
+	if config == nil || !config.HasIdentities() {
+		return "", noIdentities
 	}
 
-	// Get the issuer URL
-	issuerURL := identity.Issuer
-	if issuerURL == "" {
+	if requested != "" {
+		return requested, nil
+	}
+
+	switch names := config.GetIdentityNames(); len(names) {
+	case 1:
+		ctx.Info("Using identity '%s' (only one available)", names[0])
+		return names[0], nil
+	case 0:
+		return "", noIdentities
+	default:
+		return "", codedErrorf(codeIdentityError, "multiple identities available, please specify one with --identity: %s", strings.Join(names, ", "))
+	}
+}
+
+// lookupIdentity resolves a named identity, naming the ones that do exist when
+// it is not among them.
+func lookupIdentity(config *clientconfig.Config, name string) (*clientconfig.IdentityConfig, error) {
+	if config == nil {
+		return nil, codedErrorf(codeIdentityError, "identity %q not found in configuration", name)
+	}
+
+	identity, err := config.GetIdentity(name)
+	if err != nil {
+		if available := config.GetIdentityNames(); len(available) > 0 {
+			return nil, codedErrorf(codeIdentityError, "identity %q not found. Available identities: %v", name, available)
+		}
+		return nil, codedErrorf(codeIdentityError, "identity %q not found in configuration", name)
+	}
+
+	return identity, nil
+}
+
+// cloudClient builds a client for the cloud that issued this identity.
+//
+// identityName may be "" for an anonymous in-memory identity (during login,
+// before it has been named), in which case token refreshes are not persisted.
+func cloudClient(config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) (*cloudapi.Client, error) {
+	if identity == nil {
+		return nil, fmt.Errorf("no identity to authenticate with")
+	}
+	if identity.Type != clientconfig.IdentityKeypair && identity.Type != clientconfig.IdentityToken {
+		return nil, fmt.Errorf("talking to cloud is only supported for keypair and token identities")
+	}
+	if identity.Issuer == "" {
 		return nil, fmt.Errorf("identity has no issuer configured")
 	}
 
-	// Get JWT token
-	token, err := config.TokenForIdentity(ctx, identityName, identity, issuerURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to authenticate: %w", err)
-	}
+	return cloudapi.New(identity.Issuer, func(ctx context.Context) (string, error) {
+		return config.TokenForIdentity(ctx, identityName, identity, identity.Issuer)
+	})
+}
 
-	// Make request to fetch clusters
-	clustersURL, err := url.JoinPath(issuerURL, "/api/v1/users/clusters")
+// fetchAvailableClusters asks cloud which clusters this identity can see.
+func fetchAvailableClusters(ctx *Context, config *clientconfig.Config, identityName string, identity *clientconfig.IdentityConfig) ([]ClusterResponse, error) {
+	client, err := cloudClient(config, identityName, identity)
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", clustersURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch clusters: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Define response structure
-	var response struct {
-		Clusters []ClusterResponse `json:"clusters"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return response.Clusters, nil
+	return client.ListClusters(ctx)
 }
 
 // clusterOnlineInCloud asks cloud whether it currently holds a link to a
@@ -279,51 +278,12 @@ func clusterOnlineInCloud(
 		return false, nil
 	}
 
-	issuerURL := identity.Issuer
-	if issuerURL == "" {
-		return false, fmt.Errorf("identity has no issuer configured")
-	}
-
-	token, err := config.TokenForIdentity(ctx, identityName, identity, issuerURL)
-	if err != nil {
-		return false, fmt.Errorf("failed to authenticate: %w", err)
-	}
-
-	onlineURL, err := url.JoinPath(issuerURL, "/api/v1/clusters/", clusterXID, "/online")
+	client, err := cloudClient(config, identityName, identity)
 	if err != nil {
 		return false, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", onlineURL, nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	// Short, because this runs while somebody is waiting at a prompt and a slow
-	// answer is worth no more than no answer: either way we fall back to
-	// treating the cluster as unroutable.
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return false, fmt.Errorf("cloud returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var response struct {
-		Online bool `json:"online"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return false, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return response.Online, nil
+	return client.ClusterOnline(ctx, clusterXID)
 }
 
 const (
@@ -434,7 +394,7 @@ func cloudRoutableClusters(
 	)
 
 	for _, cluster := range clusters {
-		if cluster.hasReachableAddress() || cluster.XID == "" {
+		if cluster.HasReachableAddress() || cluster.XID == "" {
 			continue
 		}
 
@@ -496,7 +456,7 @@ func buildClusterPickerItems(clusters []ClusterResponse, cloudRoutable map[strin
 		itemID := fmt.Sprintf("cluster_%d", i)
 
 		var address string
-		if cluster.hasReachableAddress() {
+		if cluster.HasReachableAddress() {
 			reachableCount++
 			// Sort addresses to put localhost/0.0.0.0 last, then format the
 			// primary one with a grayed port.
@@ -547,7 +507,7 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse, cloudRoutab
 			if cluster.Description != "" {
 				ctx.Printf("   Description: %s\n", cluster.Description)
 			}
-			if cluster.hasReachableAddress() {
+			if cluster.HasReachableAddress() {
 				ctx.Printf("   API Addresses:\n")
 				for _, addr := range cluster.APIAddresses {
 					ctx.Printf("     - %s\n", addr)
@@ -562,7 +522,8 @@ func selectClusterFromList(ctx *Context, clusters []ClusterResponse, cloudRoutab
 			}
 			ctx.Printf("\n")
 		}
-		ctx.Printf("Re-run with --cluster and --address flags to select a specific cluster\n")
+		ctx.Printf("Re-run with --cluster <name> to add one of these without the picker\n")
+		ctx.Printf("(add --organization when the same name appears in more than one, or --address to dial a cluster directly)\n")
 		return nil, "", fmt.Errorf("interactive mode not available")
 	}
 
