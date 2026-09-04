@@ -1,0 +1,58 @@
+# Toolchain for compiling the lbd kernel module against a node's running kernel.
+#
+# This image deliberately does NOT contain the module source. miren embeds the
+# source and bind-mounts it at /src, so shipping a new module version means
+# shipping a new miren, not republishing this image.
+#
+# The contract with pkg/lbdmod:
+#
+#   /src              read-write   module source; object files are written here
+#   /out              read-write   where lbd.ko and lbdctl are left
+#   /lib/modules      read-only    the host's module tree, mounted at its real
+#   /usr/src          read-only    path so the kernel build tree's absolute
+#                                  symlinks still resolve
+#
+#   KERNEL_RELEASE    the kernel to build for; defaults to uname -r, which is
+#                     already the host's kernel since containers share it
+#   KERNEL_HEADERS    the build tree to compile against; probed when unset
+#   HOST_DISTRO_ID    the host's os-release ID, for error messages
+#   HOST_DISTRO_LIKE  the host's os-release ID_LIKE
+
+FROM ubuntu:24.04
+
+# bc, flex, bison, libelf-dev and libssl-dev are what the kernel build system
+# reaches for; kmod gives us modinfo to verify what we produced.
+#
+# One gcc, not several. A module's ABI contract is its vermagic and symbol
+# CRCs, both of which come from the kernel headers rather than the compiler --
+# DKMS has always built out-of-tree modules with whatever gcc the host happens
+# to have. Carrying gcc-12 and gcc-14 as well cost ~300MB to silence a warning.
+# build.sh still reports a major-version mismatch, and the Clang case, which is
+# the one that genuinely fails to load, is refused outright.
+#
+# Deliberately not build-essential: that drags in g++ and libstdc++-dev (~50MB)
+# to compile C++ we never write. libc6-dev and make are what it was wanted for.
+#
+# The dpkg excludes also apply to the kernel headers the builder installs for
+# itself on the fetch path, so they keep paying off after image build.
+RUN printf 'path-exclude=/usr/share/man/*\npath-exclude=/usr/share/doc/*\npath-exclude=/usr/share/info/*\npath-exclude=/usr/share/lintian/*\npath-exclude=/usr/share/locale/*\npath-include=/usr/share/locale/en*\n' \
+      > /etc/dpkg/dpkg.cfg.d/01-nodoc \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    bc \
+    binutils \
+    bison \
+    ca-certificates \
+    flex \
+    gcc-13 \
+    kmod \
+    libc6-dev \
+    libelf-dev \
+    libssl-dev \
+    make \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
+
+COPY docker/lbd-builder/build.sh /usr/local/bin/build-lbd
+RUN chmod +x /usr/local/bin/build-lbd
+
+ENTRYPOINT ["/usr/local/bin/build-lbd"]
