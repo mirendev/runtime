@@ -97,6 +97,16 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 						"id", co.ID, "error", err)
 				}
 
+				// Healthy containers do not mean creation finished: the saga
+				// persists each tail action separately, so a crash between
+				// actionBootCtrs and actionUpdateSvcs leaves a RUNNING sandbox
+				// with no Endpoints. Since 9bf10a18 startup Recover skips
+				// legacy (empty-scope) records, leaving a routed Execute as the
+				// only way to resume them.
+				if s.sagaResumeNeeded(ctx, co) {
+					return s.createSandboxViaSaga(ctx, co, true)
+				}
+
 				if co.Status == compute.PENDING {
 					createdAt := meta.GetCreatedAt()
 					age := time.Since(createdAt)
@@ -156,7 +166,7 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 			return s.inner.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
-		return s.createSandboxViaSaga(ctx, co)
+		return s.createSandboxViaSaga(ctx, co, false)
 	case compute.NOT_READY:
 		// Transient boot state; nothing to reconcile until it resolves.
 		fallthrough
@@ -166,18 +176,60 @@ func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox,
 	}
 }
 
+// createSandboxSagaID is the durable execution name for a sandbox's
+// create-sandbox saga. Naming it after the entity makes a re-entered reconcile
+// pass resume the same run rather than starting a second one.
+func createSandboxSagaID(co *compute.Sandbox) string {
+	return fmt.Sprintf("create-sandbox-%s", co.ID)
+}
+
+// sagaResumeNeeded reports whether a create-sandbox record is safe to resume
+// against containers that are already healthy.
+//
+// Requiring actionBootCtrs is what keeps this safe: it confines the resume to
+// the tail (add-metrics, wait-ports, set-running, update-services), all of
+// which tolerate re-execution. Resuming earlier would re-run createContainer or
+// bootContainers against a live sandbox, and since every action here has an
+// Undo, one that errored would unwind the saga, destroy the healthy containers,
+// and leave the sandbox DEAD. Undoing records are skipped for the same reason.
+func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *compute.Sandbox) bool {
+	exec, err := s.storage.Get(ctx, createSandboxSagaID(co))
+	if err != nil {
+		if !errors.Is(err, saga.ErrExecutionNotFound) {
+			s.log.Warn("checking for incomplete create-sandbox saga",
+				"id", co.ID, "error", err)
+		}
+		return false
+	}
+
+	if exec.Status != saga.StatusPending && exec.Status != saga.StatusRunning {
+		return false
+	}
+
+	if _, booted := exec.ExecutedActions[actionBootCtrs]; !booted {
+		s.log.Debug("not resuming create-sandbox saga: containers survive but the record predates boot-containers",
+			"id", co.ID, "status", exec.Status)
+		return false
+	}
+	return true
+}
+
 // createSandboxViaSaga runs sandbox creation as a saga for crash recovery.
-func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox) error {
+// resuming marks the call as adopting a record whose containers are still alive.
+func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox, resuming bool) error {
 	s.log.Info("creating sandbox via saga", "id", co.ID)
 
-	execID := fmt.Sprintf("create-sandbox-%s", co.ID)
+	execID := createSandboxSagaID(co)
 
-	// We only get here once CheckSandbox has found the containers missing, so a
-	// record of a previous successful creation describes resources that are no
-	// longer there. Left in place it would resume straight to success and the
-	// sandbox would never be rebuilt, which the old overwrite-on-start hid.
-	if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
-		return fmt.Errorf("clearing stale creation record: %w", err)
+	// With the containers missing, a completed record describes resources that
+	// are no longer there: left in place it would resume straight to success
+	// and the sandbox would never be rebuilt. When resuming, the containers are
+	// alive, and dropping the record would restart the saga from alloc-network
+	// underneath them.
+	if !resuming {
+		if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
+			return fmt.Errorf("clearing stale creation record: %w", err)
+		}
 	}
 
 	err := s.executor.Start(sagaCreateSandbox).

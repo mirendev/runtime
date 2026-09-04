@@ -174,7 +174,10 @@ func (o *sandboxOps) DiagnoseListening(id string) (routable []int, loopback []in
 // --- SandboxObservability ---
 
 func (o *sandboxOps) AddMetrics(logEntity string, cgroups map[string]string, attrs map[string]string) error {
-	return o.ctrl.Metrics.Add(logEntity, cgroups, attrs)
+	// add-metrics re-runs on a resumed saga, and Add would overwrite the
+	// Cgroups entry and reset the accumulated CPU baseline (MIR-1013).
+	_, err := o.ctrl.Metrics.AddIfAbsent(logEntity, cgroups, attrs)
+	return err
 }
 
 func (o *sandboxOps) RemoveMetrics(logEntity string) {
