@@ -55,6 +55,13 @@ type lockedBuffer struct {
 	buf bytes.Buffer
 }
 
+func stampExportMetadata(ent *entity.Entity, revision int64) *entity.Entity {
+	ent.SetRevision(revision)
+	ent.SetCreatedAt(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	ent.SetUpdatedAt(time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC))
+	return ent
+}
+
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -391,14 +398,14 @@ func TestSnapshotFiltersEntities(t *testing.T) {
 		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	app.SetRevision(4)
+	stampExportMetadata(app, 4)
 	store.AddEntity(app.Id(), app)
 	deployment := entity.New(
 		entity.Ref(entity.DBId, "deployment/d1"),
 		(&core_v1alpha.Deployment{ID: "deployment/d1", AppName: "web", ErrorMessage: "token=super-secret"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	deployment.SetRevision(7)
+	stampExportMetadata(deployment, 7)
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
@@ -451,7 +458,7 @@ func TestSnapshotReadsAndSendsOnePinnedPageAtATime(t *testing.T) {
 			(&core_v1alpha.Deployment{ID: id, AppName: "marmalade"}).Encode(),
 			entity.Bool(marker, true),
 		)
-		deployment.SetRevision(int64(i + 1))
+		stampExportMetadata(deployment, int64(i+1))
 		store.AddEntity(id, deployment)
 	}
 
@@ -521,7 +528,7 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 		(&core_v1alpha.Deployment{ID: "deployment/d1", AppName: "web", Outcome: "in_progress"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	deployment.SetRevision(7)
+	stampExportMetadata(deployment, 7)
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
@@ -572,7 +579,7 @@ func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
 		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	app.SetRevision(4)
+	stampExportMetadata(app, 4)
 	store.AddEntity(app.Id(), app)
 	s := &stream{exporter: testExporter(store), ctx: t.Context()}
 
@@ -916,11 +923,15 @@ func TestWatchBatchStopsAtLastDeliveredEvent(t *testing.T) {
 	store := entity.NewMockStore()
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
-		store.AddEntity(id, entity.New(
+		revision := int64(10)
+		if id == "deployment/b" {
+			revision = 20
+		}
+		store.AddEntity(id, stampExportMetadata(entity.New(
 			entity.Ref(entity.DBId, id),
 			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
 			entity.Bool(marker, true),
-		))
+		), revision))
 	}
 	exporter := testExporter(store)
 	stream := &stream{
@@ -953,11 +964,15 @@ func TestTailDeliversEveryCatchUpChunkBeforeStoreHead(t *testing.T) {
 	store := entity.NewMockStore()
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
-		store.AddEntity(id, entity.New(
+		revision := int64(10)
+		if id == "deployment/b" {
+			revision = 20
+		}
+		store.AddEntity(id, stampExportMetadata(entity.New(
 			entity.Ref(entity.DBId, id),
 			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
 			entity.Bool(marker, true),
-		))
+		), revision))
 	}
 	exporter := testExporter(store)
 	stream := &stream{
@@ -1004,6 +1019,17 @@ func TestSendAndWaitTimesOutWithoutAcknowledgment(t *testing.T) {
 	_, err := stream.sendAndWait(newFakeLink(), TypeChangeBatch, struct{}{}, "message-1")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorContains(t, err, "await entity.change.batch ack")
+}
+
+func TestSnapshotAcknowledgmentUsesItsLongerDeadline(t *testing.T) {
+	exporter := testExporter(entity.NewMockStore())
+	exporter.ackTimeout = time.Hour
+	exporter.snapshotAckTimeout = 10 * time.Millisecond
+	stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+
+	_, err := stream.sendAndWait(newFakeLink(), TypeSnapshotComplete, struct{}{}, "snapshot-1")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "await entity.snapshot.complete ack")
 }
 
 func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {

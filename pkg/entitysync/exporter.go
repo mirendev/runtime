@@ -26,6 +26,7 @@ const maxLiveBatchesBetweenSnapshotBatches = 8
 const sessionRetryDelay = time.Second
 const defaultMinimumResnapshotInterval = time.Hour
 const defaultAckTimeout = 30 * time.Second
+const defaultSnapshotAckTimeout = 5 * time.Minute
 const defaultPreparationLogInterval = time.Minute
 const sourceEpochTimeout = 5 * time.Second
 
@@ -46,6 +47,7 @@ type Exporter struct {
 	startGate                 <-chan struct{}
 	minimumResnapshotInterval time.Duration
 	ackTimeout                time.Duration
+	snapshotAckTimeout        time.Duration
 	preparationLogInterval    time.Duration
 
 	mu     sync.Mutex
@@ -75,6 +77,7 @@ func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Co
 		log: log, store: store, contract: contract,
 		minimumResnapshotInterval: defaultMinimumResnapshotInterval,
 		ackTimeout:                defaultAckTimeout,
+		snapshotAckTimeout:        defaultSnapshotAckTimeout,
 		preparationLogInterval:    defaultPreparationLogInterval,
 	}
 	for _, option := range options {
@@ -570,7 +573,11 @@ func (s *stream) sendAndWait(link Link, messageType string, payload any, message
 	if err := link.SendMessageBlocking(s.ctx, messageType, payload); err != nil {
 		return Ack{}, err
 	}
-	waitCtx, cancelWait := context.WithTimeout(s.ctx, s.exporter.ackTimeout)
+	timeout := s.exporter.ackTimeout
+	if messageType == TypeSnapshotComplete {
+		timeout = s.exporter.snapshotAckTimeout
+	}
+	waitCtx, cancelWait := context.WithTimeout(s.ctx, timeout)
 	defer cancelWait()
 	select {
 	case <-waitCtx.Done():

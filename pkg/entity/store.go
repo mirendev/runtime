@@ -1058,6 +1058,13 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, fmt.Errorf("db/id attribute does not match existing entity ID")
 	}
 
+	// CreatedAt is store-managed metadata and survives a full attribute
+	// replacement. This also lets callers atomically change an entity's kind,
+	// as deployment lock-owner publication does, without erasing its origin.
+	if createdAt := originalEntity.GetCreatedAt(); !createdAt.IsZero() {
+		repl.SetCreatedAt(createdAt)
+	}
+
 	if repl.GetRevision() == 0 {
 		repl.SetRevision(rev)
 	}
