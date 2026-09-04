@@ -41,7 +41,9 @@ func DebugDiskListDeleted(ctx *Context, opts struct {
 			RetentionDays int    `json:"retention_days"`
 		}
 
-		var items []deletedDiskJSON
+		// Non-nil, so an empty result marshals as [] rather than null and
+		// callers can iterate it without a special case.
+		items := make([]deletedDiskJSON, 0, len(entries))
 		for _, e := range entries {
 			meta := e.Metadata
 			expiresAt := meta.DeletedAt.Add(time.Duration(retentionDays) * 24 * time.Hour)
@@ -85,7 +87,8 @@ func DebugDiskListDeleted(ctx *Context, opts struct {
 		ctx.Info("")
 	}
 
-	ctx.Info("To restore: miren disk undelete --name <disk-name>")
+	ctx.Info("To recover: miren disk undelete --name <disk-name>")
+	ctx.Info("  or, if the server's RPC listener is down: miren debug disk undelete --name <disk-name>")
 
 	return nil
 }

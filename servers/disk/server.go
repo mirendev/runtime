@@ -59,6 +59,10 @@ type Server struct {
 	// mntOps answers "is this image currently in use". It reads kernel state
 	// directly, so it needs no handle on the runner's controllers.
 	mntOps diskio.DiskMountOps
+
+	// transfers serializes concurrent work on one transfer id, which is the
+	// only shared mutable state these handlers have.
+	transfers *transferLocks
 }
 
 // NewServer builds the disk backup service. updates may be nil, which means the
@@ -72,13 +76,14 @@ func NewServer(
 ) *Server {
 	log = log.With("module", "disk-backup")
 	return &Server{
-		log:      log,
-		disks:    diskresolve.New(eac, ec),
-		dataPath: dataPath,
-		eac:      eac,
-		ec:       ec,
-		updates:  updates,
-		mntOps:   diskio.NewRealDiskMountOps(log),
+		log:       log,
+		disks:     diskresolve.New(eac, ec),
+		dataPath:  dataPath,
+		eac:       eac,
+		ec:        ec,
+		updates:   updates,
+		mntOps:    diskio.NewRealDiskMountOps(log),
+		transfers: newTransferLocks(),
 	}
 }
 

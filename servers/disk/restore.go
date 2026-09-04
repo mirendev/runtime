@@ -30,6 +30,16 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 		return refuse("disk name is required")
 	}
 
+	// An uploaded snapshot lives in a file keyed by transfer id, and it stays
+	// there until the image is installed. Hold the id for the whole handler, so
+	// an overlapping call cannot append into the same file or pull it out from
+	// under the install. A restore point needs none of this: it comes from the
+	// cloud and touches no transfer file.
+	if id := args.TransferId(); id != "" && args.RestorePoint() == "" {
+		release := s.transfers.acquire(id)
+		defer release()
+	}
+
 	src, total, closeSrc, err := s.restoreSource(ctx, name, args, prog)
 	if err != nil {
 		return err
@@ -347,6 +357,28 @@ func (s *Server) writeImage(imagePath string, src io.Reader, compressedSize int6
 	if err := os.Rename(tmpPath, imagePath); err != nil {
 		return fmt.Errorf("moving image into place: %w", err)
 	}
+
+	// Syncing the file only promised its contents survive a power loss, not the
+	// directory entry that gives them this name. Losing the rename would leave
+	// the old image in place while the disk was already reported restored, and
+	// on a recovery path that is exactly the report you cannot have be wrong.
+	if err := syncDir(filepath.Dir(imagePath)); err != nil {
+		return err
+	}
+
 	cleanup = false
+	return nil
+}
+
+func syncDir(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("opening volume directory: %w", err)
+	}
+	defer d.Close()
+
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("flushing volume directory: %w", err)
+	}
 	return nil
 }

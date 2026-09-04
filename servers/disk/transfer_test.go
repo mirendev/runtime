@@ -171,3 +171,96 @@ func TestSweepRemovesAbandonedTransfersAndKeepsFreshOnes(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "a transfer nobody came back for should be reclaimed")
 	assert.FileExists(t, fresh, "a transfer still within its window must survive")
 }
+
+// The lock is what stops two calls carrying the same id from interleaving their
+// appends or truncating each other's staging.
+func TestTransferLockSerializesTheSameId(t *testing.T) {
+	locks := newTransferLocks()
+
+	release := locks.acquire("t1")
+
+	entered := make(chan struct{})
+	go func() {
+		r := locks.acquire("t1")
+		close(entered)
+		r()
+	}()
+
+	select {
+	case <-entered:
+		t.Fatal("a second holder of the same id must wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("releasing the id should have let the waiter through")
+	}
+}
+
+// Different transfers must not queue behind each other; two operators backing
+// up different disks are not related.
+func TestTransferLockDoesNotSerializeDifferentIds(t *testing.T) {
+	locks := newTransferLocks()
+
+	release := locks.acquire("t1")
+	defer release()
+
+	done := make(chan struct{})
+	go func() {
+		r := locks.acquire("t2")
+		r()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a different transfer id should not have blocked")
+	}
+}
+
+// Reference counting keeps the map from growing by one entry per backup, and
+// must not drop an entry another caller is still holding.
+func TestTransferLockReleasesItsBookkeeping(t *testing.T) {
+	locks := newTransferLocks()
+
+	for range 50 {
+		locks.acquire("t1")()
+	}
+
+	locks.mu.Lock()
+	n := len(locks.locks)
+	locks.mu.Unlock()
+	assert.Zero(t, n, "a fully released id should leave no entry behind")
+}
+
+// The sweep has to take both halves of a staged backup. Taking only the bytes
+// would leave the metadata behind forever, since nothing looks at a metadata
+// file whose .part is gone.
+func TestSweepRemovesStagingMetadataToo(t *testing.T) {
+	s, _, _, _ := newTestServer(t, []byte("hello"))
+
+	dir := filepath.Join(s.diskDataPath(), transfersDir)
+	require.NoError(t, os.MkdirAll(dir, 0700))
+
+	part := filepath.Join(dir, "stale.part")
+	meta := filepath.Join(dir, "stale.meta")
+	require.NoError(t, os.WriteFile(part, []byte("bytes"), 0600))
+	require.NoError(t, os.WriteFile(meta, []byte("{}"), 0600))
+
+	old := time.Now().Add(-transferTTL - time.Hour)
+	for _, p := range []string{part, meta} {
+		require.NoError(t, os.Chtimes(p, old, old))
+	}
+
+	s.sweepTransfers()
+
+	for _, p := range []string{part, meta} {
+		_, err := os.Stat(p)
+		assert.True(t, os.IsNotExist(err), "%s should have been reclaimed", p)
+	}
+}

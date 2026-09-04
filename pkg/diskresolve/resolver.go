@@ -51,7 +51,9 @@ func (r *Resolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskSta
 
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("disk %q not found", name)
+		// Typed, so callers can tell "no such disk" from "the lookup failed".
+		// PrepareRestore creates a disk on the first and must not on the second.
+		return nil, snapshot.DiskNotFoundError{Name: name}
 	case 1:
 		return &matches[0], nil
 	default:
@@ -89,7 +91,10 @@ func (r *Resolver) FindVolume(ctx context.Context, diskID string) (*snapshot.Vol
 // RestoreTarget includes a Finalize callback that creates the disk_volume
 // entity and transitions the disk to PROVISIONED.
 func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
-	sizeGb := sizeBytes / (1 << 30)
+	// Round up. Truncating would hand back a disk that claims less capacity
+	// than the image it is about to be given, so a 1.5 GiB image would land on
+	// a disk reporting 1 GiB.
+	sizeGb := (sizeBytes + (1 << 30) - 1) / (1 << 30)
 	if sizeGb == 0 {
 		sizeGb = 1
 	}

@@ -373,3 +373,35 @@ func TestCreateDiskAndVolume_CleanupRunsAfterCancellation(t *testing.T) {
 	_, statErr := os.Stat(target.ImagePath)
 	assert.True(t, os.IsNotExist(statErr), "the restored image must be removed, got %v", statErr)
 }
+
+// A disk that claims less capacity than the image it is given is wrong on its
+// face, so the size rounds up rather than truncating.
+func TestCreateDiskAndVolumeRoundsSizeUp(t *testing.T) {
+	ctx := t.Context()
+
+	cases := []struct {
+		name      string
+		sizeBytes int64
+		wantGb    int64
+	}{
+		{"exactly one GiB", 1 << 30, 1},
+		{"a byte over one GiB", (1 << 30) + 1, 2},
+		{"one and a half GiB", (1 << 30) * 3 / 2, 2},
+		{"exactly two GiB", 2 << 30, 2},
+		{"smaller than a GiB still gets one", 4096, 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			es, resolver := setupResolver(t, nil)
+
+			target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", tc.sizeBytes, "ext4", t.TempDir())
+			require.NoError(t, err)
+			require.NotNil(t, target)
+
+			disks := listTestDisks(t, ctx, es.EAC)
+			require.Len(t, disks, 1)
+			assert.Equal(t, tc.wantGb, disks[0].SizeGb)
+		})
+	}
+}

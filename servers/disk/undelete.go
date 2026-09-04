@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"miren.dev/runtime/pkg/diskresolve"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/snapshot"
 )
 
 // diskDataPath is where volume directories and the soft-delete holding area
@@ -112,8 +114,16 @@ func (s *Server) undelete(ctx context.Context, name, volumeID string) (_ *undele
 
 	// A live disk already owning this name would end up with two entities
 	// answering to it, and every lookup by name is ambiguous from then on.
-	if _, err := s.disks.FindDisk(ctx, name); err == nil {
+	//
+	// Only an actual absence clears the way. A lookup that merely failed says
+	// nothing about whether the name is taken, and treating it as free is how
+	// a moment of entity-store trouble becomes the duplicate this check exists
+	// to prevent.
+	switch _, err := s.disks.FindDisk(ctx, name); {
+	case err == nil:
 		return nil, refuse("a disk named %q already exists — rename or delete it before recovering this one", name)
+	case !errors.As(err, &snapshot.DiskNotFoundError{}):
+		return nil, fmt.Errorf("checking whether %q is already taken: %w", name, err)
 	}
 
 	filesystem := strings.TrimPrefix(strings.ToLower(meta.Filesystem), "filesystem.")
@@ -123,18 +133,23 @@ func (s *Server) undelete(ctx context.Context, name, volumeID string) (_ *undele
 		return nil, err
 	}
 
+	// From here on there are entities to unwind, and unwinding has to survive
+	// the thing that made it necessary. A client that disconnects mid-recovery
+	// cancels ctx, which is exactly when the cleanup below must still run.
+	cleanupCtx := context.WithoutCancel(ctx)
+
 	volID := meta.VolumeID
 	destPath := filepath.Join(s.diskDataPath(), "volumes", volID)
 
 	// The runner creates this on startup, but a recovery can be the first thing
 	// that happens on a rebuilt host, and rename will not create it.
 	if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
-		s.deleteEntity(ctx, string(diskEntityId), "disk")
+		s.deleteEntity(cleanupCtx, string(diskEntityId), "disk")
 		return nil, fmt.Errorf("creating volumes directory: %w", err)
 	}
 
 	if err := os.Rename(entry.Path, destPath); err != nil {
-		s.deleteEntity(ctx, string(diskEntityId), "disk")
+		s.deleteEntity(cleanupCtx, string(diskEntityId), "disk")
 		return nil, fmt.Errorf("moving volume back to %s: %w", destPath, err)
 	}
 
@@ -146,13 +161,10 @@ func (s *Server) undelete(ctx context.Context, name, volumeID string) (_ *undele
 		if committed {
 			return
 		}
-		// The request's context is already cancelled when a client disconnects
-		// mid-recovery, and rolling back is exactly what has to happen then.
-		rctx := context.WithoutCancel(ctx)
 		if rerr := os.Rename(destPath, entry.Path); rerr != nil {
 			s.log.Warn("failed to move volume back to deleted-volumes", "volume_id", volID, "error", rerr)
 		}
-		s.deleteEntity(rctx, string(diskEntityId), "disk")
+		s.deleteEntity(cleanupCtx, string(diskEntityId), "disk")
 	}()
 
 	imagePath := filepath.Join(destPath, "disk.img")
@@ -201,7 +213,7 @@ func (s *Server) undelete(ctx context.Context, name, volumeID string) (_ *undele
 		entity.String(storage_v1alpha.DiskVolumeIdId, volID),
 	}, 0)
 	if err != nil {
-		s.deleteEntity(ctx, string(volEntityId), "disk_volume")
+		s.deleteEntity(cleanupCtx, string(volEntityId), "disk_volume")
 		return nil, fmt.Errorf("updating disk to provisioning: %w", err)
 	}
 

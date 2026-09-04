@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"miren.dev/runtime/api/disk/disk_v1alpha"
@@ -24,6 +25,58 @@ const (
 	// forever.
 	transferTTL = 24 * time.Hour
 )
+
+// transferLocks serializes work on any one transfer id.
+//
+// The transfer files are shared mutable state, and nothing else guards them.
+// Two calls carrying the same id can otherwise both pass openTransfer's offset
+// check and interleave their appends, or one can truncate a staged snapshot
+// while the other is streaming it. A well-behaved client never does this, since
+// it picks a fresh id per invocation and retries in sequence, but the server
+// should not be relying on that.
+//
+// Locks are reference counted so the map does not grow by one entry per backup
+// forever. Dropping an entry while a caller still held a pointer to it would be
+// worse than the leak: the next caller would mint a second lock for the same id
+// and the two would run concurrently anyway.
+type transferLocks struct {
+	mu    sync.Mutex
+	locks map[string]*transferLock
+}
+
+type transferLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newTransferLocks() *transferLocks {
+	return &transferLocks{locks: map[string]*transferLock{}}
+}
+
+// acquire blocks until this id is free and returns the release function.
+func (t *transferLocks) acquire(id string) func() {
+	t.mu.Lock()
+	l, ok := t.locks[id]
+	if !ok {
+		l = &transferLock{}
+		t.locks[id] = l
+	}
+	l.refs++
+	t.mu.Unlock()
+
+	l.mu.Lock()
+
+	return func() {
+		l.mu.Unlock()
+
+		t.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(t.locks, id)
+		}
+		t.mu.Unlock()
+	}
+}
 
 // transferPath is where a transfer's bytes accumulate.
 //
@@ -235,7 +288,13 @@ func (s *Server) sweepTransfers() {
 
 	cutoff := time.Now().Add(-transferTTL)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".part") {
+		if e.IsDir() {
+			continue
+		}
+		// Both halves of a staged backup are swept. Taking only the .part would
+		// leave its .meta behind forever, since nothing else ever looks at a
+		// metadata file whose bytes are gone.
+		if !strings.HasSuffix(e.Name(), ".part") && !strings.HasSuffix(e.Name(), ".meta") {
 			continue
 		}
 		info, ierr := e.Info()

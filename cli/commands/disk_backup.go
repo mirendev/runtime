@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,15 +24,17 @@ func DiskBackup(ctx *Context, opts struct {
 	Cloud  bool   `long:"cloud" description:"Upload the snapshot to miren.cloud as a restore point instead of writing a local file"`
 	Pin    string `long:"pin" description:"Name the uploaded restore point, pinning it against cleanup"`
 }) (retErr error) {
+	// Checked before the client is built, so a flag mistake reports the flag
+	// rather than whatever the network had to say about reaching the cluster.
+	if opts.Pin != "" && !opts.Cloud {
+		return fmt.Errorf("--pin names a restore point in miren.cloud, so it only applies with --cloud")
+	}
+
 	client, err := ctx.RPCClient(diskBackupService)
 	if err != nil {
 		return err
 	}
 	dc := disk_v1alpha.NewDiskBackupClient(client)
-
-	if opts.Pin != "" && !opts.Cloud {
-		return fmt.Errorf("--pin names a restore point in miren.cloud, so it only applies with --cloud")
-	}
 
 	start := time.Now()
 	progress := diskProgress(ctx)
@@ -60,8 +63,15 @@ func DiskBackup(ctx *Context, opts struct {
 		outputPath = fmt.Sprintf("%s-%s.miren.zst", opts.Name, time.Now().Format("20060102-150405"))
 	}
 
-	outFile, err := os.Create(outputPath)
+	// Deliberately not os.Create. This command cleans up a snapshot that never
+	// finished, so truncating an existing file and then failing would destroy a
+	// good backup to produce nothing, which is the one outcome a backup command
+	// must not have.
+	outFile, err := os.OpenFile(outputPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s already exists — choose another --output path, or move it aside", outputPath)
+		}
 		return fmt.Errorf("creating output file: %w", err)
 	}
 

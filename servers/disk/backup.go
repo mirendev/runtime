@@ -124,6 +124,12 @@ func (s *Server) backupToClient(
 		return refuse("backup needs either --cloud or somewhere to write the snapshot")
 	}
 
+	// Held across staging and the whole stream, not just the file opens. The
+	// window that matters is the one where another call could truncate the
+	// staged snapshot while this one is reading it.
+	release := s.transfers.acquire(args.TransferId())
+	defer release()
+
 	staged, meta, err := s.stageForClient(args.TransferId(), prog, target)
 	if err != nil {
 		return err

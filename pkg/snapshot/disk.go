@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 )
@@ -11,6 +12,20 @@ const (
 
 	LeaseStatusBound = "BOUND"
 )
+
+// DiskNotFoundError reports that no disk answers to a name.
+//
+// It is a distinct type because "there is no such disk" and "I could not find
+// out" call for opposite responses. Callers act on the first by creating the
+// disk, or by reporting that there is nothing to recover. Acting on the second
+// the same way turns a moment of entity-store trouble into a duplicate disk.
+type DiskNotFoundError struct {
+	Name string
+}
+
+func (e DiskNotFoundError) Error() string {
+	return fmt.Sprintf("disk %q not found", e.Name)
+}
 
 // DiskState holds the state of a disk entity as returned by a DiskResolver.
 type DiskState struct {
@@ -113,10 +128,14 @@ func PrepareRestore(ctx context.Context, resolver DiskResolver, name string, dat
 
 	disk, err := resolver.FindDisk(ctx, name)
 	if err != nil {
-		if cfg.creator == nil {
+		var notFound DiskNotFoundError
+		if cfg.creator == nil || !errors.As(err, &notFound) {
+			// Only an actual absence means "create it". A lookup that failed
+			// says nothing about whether the disk exists, and creating one on
+			// that basis is how a brief entity-store outage turns into two
+			// disks answering to the same name.
 			return nil, err
 		}
-		// Disk not found — create it
 		return cfg.creator.CreateDiskAndVolume(ctx, name, cfg.sizeBytes, cfg.filesystem, dataPath)
 	}
 

@@ -4,6 +4,7 @@ package blackbox
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,10 +84,37 @@ func waitDiskProvisioned(t *testing.T, m *harness.Miren, name string) {
 			if !r.Success() {
 				return false, "debug disk list failed"
 			}
-			if r.OutputContains(name) && r.OutputContains("provisioned") {
+			if diskIsProvisioned(r.Stdout+r.Stderr, name) {
 				return true, ""
 			}
 			return false, "disk not yet provisioned"
 		},
 	)
+}
+
+// diskIsProvisioned reports whether the named disk's own entry says provisioned.
+//
+// Asking whether the whole listing mentions the name and mentions "provisioned"
+// is not the same question: any other provisioned disk in the cluster answers
+// the second half, so the poll would return while this disk was still coming
+// up. The name and the status sit on different lines of one entry, so the match
+// has to run over the entry rather than a line.
+func diskIsProvisioned(output, name string) bool {
+	lines := strings.Split(output, "\n")
+
+	for i, line := range lines {
+		if !strings.Contains(line, "Name:") || !strings.Contains(line, name) {
+			continue
+		}
+		// Scan this entry's fields, stopping where the next entry begins.
+		for _, field := range lines[i+1:] {
+			if strings.HasPrefix(strings.TrimSpace(field), "ID:") {
+				break
+			}
+			if strings.Contains(field, "Status:") {
+				return strings.Contains(field, "provisioned")
+			}
+		}
+	}
+	return false
 }

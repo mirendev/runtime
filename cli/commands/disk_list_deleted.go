@@ -36,7 +36,9 @@ func DiskListDeleted(ctx *Context, opts struct {
 			RetentionDays int    `json:"retention_days"`
 		}
 
-		var items []deletedDiskJSON
+		// Non-nil, so an empty result marshals as [] rather than null and
+		// callers can iterate it without a special case.
+		items := make([]deletedDiskJSON, 0, len(disks))
 		for _, d := range disks {
 			items = append(items, deletedDiskJSON{
 				DiskName:      d.DiskName(),
