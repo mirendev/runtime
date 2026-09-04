@@ -573,6 +573,13 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
+		// A decommissioned pool has no capacity to scale down. Avoid loading its
+		// baked AppVersion, which may already have been deleted while the empty
+		// pool waits for its final sandbox entities to be collected.
+		if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) == 0 {
+			continue
+		}
+
 		// Skip pools without a version (e.g. addon pools) — they don't use
 		// concurrency-based scale-down.
 		if pool.SandboxSpec.Version == "" {
