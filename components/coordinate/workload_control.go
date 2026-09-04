@@ -208,11 +208,13 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 	if err := nodeHealth.Init(ctx); err != nil {
 		return fmt.Errorf("initializing node health controller: %w", err)
 	}
-	cm.AddController(controller.NewReconcileController(
+	nodeHealthReconciler := controller.NewReconcileController(
 		"nodehealth", c.Log,
 		entity.Ref(entity.EntityKind, compute_v1alpha.KindNode), eac,
 		controller.AdaptReconcileController[compute_v1alpha.Node](nodeHealth), 30*time.Second, 1,
-	))
+	)
+	nodeHealthReconciler.SetPeriodic(time.Minute, nodeHealth.SweepOrphanedSandboxes)
+	cm.AddController(nodeHealthReconciler)
 
 	// Default routes are cluster-global derived state, not runner-local work.
 	defaultRouteApp := ingressctrl.NewDefaultRouteAppController(c.Log, eac)
