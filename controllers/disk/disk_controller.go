@@ -30,7 +30,7 @@ func detectDiskMode(configured string) storage_v1alpha.DiskMode {
 	// loaded and drivable. lbdctl on PATH is not enough -- miren installs it
 	// alongside the module, so its presence says nothing about whether the
 	// module loaded.
-	if lbdmod.Available(lbdmod.Options{}) {
+	if lbdmod.Available(lbdmod.HostOptions("")) {
 		return storage_v1alpha.ACCELERATOR
 	}
 

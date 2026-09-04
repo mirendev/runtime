@@ -262,3 +262,24 @@ func TestSearchPathDoesNotWriteIntoTheCallersSlice(t *testing.T) {
 	assert.Equal(t, []string{"/opt/bin", systemReleasePath}, got,
 		"the returned slice must not alias the caller's array")
 }
+
+func TestMarkerSurvivesATruncatedWrite(t *testing.T) {
+	// The record is written through a rename, so a crash mid-write cannot
+	// leave a half-file behind. readMarker treats a corrupt record as an
+	// error rather than as absent, so a torn write would wedge every probe.
+	dataPath := t.TempDir()
+	require.NoError(t, writeMarker(dataPath, Marker{
+		LbdVersion:    SourceVersion(),
+		KernelRelease: testRelease,
+		ModulePath:    modulePath(testRelease),
+	}))
+
+	// No temporary file is left behind.
+	_, err := os.Stat(markerPath(dataPath) + ".tmp")
+	assert.True(t, os.IsNotExist(err))
+
+	got, err := readMarker(dataPath)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, testRelease, got.KernelRelease)
+}

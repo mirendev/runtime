@@ -105,6 +105,11 @@ This only happens on hosts that installed the module in the first place. A host
 that never turned accelerator mode on never pays for an unattended compile at
 startup.
 
+The startup rebuild is capped at ten minutes. If it runs over, the server logs a
+warning, carries on booting, and the node stays on loop devices until you run
+`install` yourself. Accelerator mode is a speed-up, so a build that will not
+finish must never hold up a node coming back after a reboot.
+
 Until the module is back, disks fall back to universal mode. Nothing breaks;
 they are just slower.
 

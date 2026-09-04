@@ -199,7 +199,19 @@ func writeMarker(dataPath string, m Marker) error {
 	if err != nil {
 		return fmt.Errorf("encoding the lbd install record: %w", err)
 	}
-	return os.WriteFile(path, append(data, '\n'), 0644)
+
+	// Written through a rename so a crash mid-write cannot leave a truncated
+	// record. readMarker reports a corrupt one as an error rather than
+	// treating it as absent, which would otherwise wedge every later probe.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("installing %s: %w", path, err)
+	}
+	return nil
 }
 
 // removeMarker forgets that lbd was ever installed, so later boots stop

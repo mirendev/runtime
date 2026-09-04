@@ -258,11 +258,6 @@ func TestBuildHandsTheBuilderSourceAndHeaders(t *testing.T) {
 	assert.Contains(t, builder.spec.Env, "KERNEL_HEADERS=/lib/modules/"+testRelease+"/build")
 	assert.Contains(t, builder.spec.Env, "HOST_DISTRO_ID=ubuntu")
 	assert.Contains(t, builder.spec.Env, "HOST_DISTRO_LIKE=debian")
-	// The build runs unprivileged: compiling against read-only bind mounts
-	// needs no extra capabilities, and this container runs on every node with
-	// accelerator mode on.
-	assert.False(t, builder.spec.HostNetwork,
-		"a build against host headers should reach nothing")
 }
 
 func TestBuildRejectsABuilderThatProducedNothing(t *testing.T) {

@@ -12,23 +12,13 @@ import (
 	"miren.dev/runtime/pkg/lbdmod/ctrbuild"
 )
 
-// acceleratorOptions builds the lookup paths for lbd on this host. The release
-// directory is included because it is prepended to containerd's PATH, not
-// miren's, so a bundled lbdctl would otherwise be invisible here.
-func acceleratorOptions(dataPath string) lbdmod.Options {
-	return lbdmod.Options{
-		DataPath:   dataPath,
-		SearchPath: []string{FindReleasePath()},
-	}
-}
-
 // DiskAcceleratorStatus reports whether accelerator mode can run on this host.
 // It only reads, so it does not need root.
 func DiskAcceleratorStatus(ctx *Context, opts struct {
 	FormatOptions
 	DataPath string `long:"data-path" description:"Path to miren data" default:"/var/lib/miren"`
 }) error {
-	status, err := lbdmod.Probe(acceleratorOptions(opts.DataPath))
+	status, err := lbdmod.Probe(lbdmod.HostOptions(opts.DataPath))
 	if err != nil {
 		return err
 	}
@@ -90,7 +80,7 @@ func DiskAcceleratorInstall(ctx *Context, opts struct {
 	installer := &lbdmod.Installer{
 		Log:     ctx.Log,
 		Builder: ctrbuild.New(cc, ctx.Log),
-		Options: acceleratorOptions(opts.DataPath),
+		Options: lbdmod.HostOptions(opts.DataPath),
 		Image:   opts.Image,
 	}
 
@@ -113,7 +103,7 @@ func DiskAcceleratorUninstall(ctx *Context, opts struct {
 }) error {
 	installer := &lbdmod.Installer{
 		Log:     ctx.Log,
-		Options: acceleratorOptions(opts.DataPath),
+		Options: lbdmod.HostOptions(opts.DataPath),
 	}
 
 	ctx.Begin("Removing the lbd kernel module")
@@ -140,9 +130,13 @@ func dialContainerd(ctx context.Context, socket string) (*containerd.Client, err
 	// containerd.New does not connect, so without this a dead socket would
 	// surface much later as an opaque failure to pull the builder image.
 	serving, err := cc.IsServing(ctx)
-	if err != nil || !serving {
+	if err != nil {
 		cc.Close()
 		return nil, fmt.Errorf("containerd at %s is not responding, which the builder needs: %w", socket, err)
+	}
+	if !serving {
+		cc.Close()
+		return nil, fmt.Errorf("containerd at %s answered but is not serving, which the builder needs", socket)
 	}
 
 	return cc, nil

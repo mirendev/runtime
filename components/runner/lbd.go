@@ -38,14 +38,19 @@ const rebuildTimeout = 10 * time.Minute
 //
 // Neither failing nor timing out is fatal. Universal mode works everywhere, so
 // the worst case is slower disks, not a runner that will not start.
-func setupLbd(ctx context.Context, cc *containerd.Client, log *slog.Logger) {
-	if err := diskio.EnsureLbdDevices(log); err == nil {
+func setupLbd(ctx context.Context, cc *containerd.Client, dataPath string, log *slog.Logger) {
+	if err := diskio.EnsureLbdDevices(ctx, log); err == nil {
 		return
 	}
 
+	// dataPath has to be the runner's own, not the package default: the
+	// install record lives under it, and reading it from the wrong place
+	// would make a host that installed lbd look like one that never did, so
+	// the rebuild after a kernel upgrade would never fire.
 	installer := &lbdmod.Installer{
 		Log:     log,
 		Builder: ctrbuild.New(cc, log),
+		Options: lbdmod.HostOptions(dataPath),
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rebuildTimeout)
@@ -69,7 +74,7 @@ func setupLbd(ctx context.Context, cc *containerd.Client, log *slog.Logger) {
 		return
 	}
 
-	if err := diskio.EnsureLbdDevices(log); err != nil {
+	if err := diskio.EnsureLbdDevices(ctx, log); err != nil {
 		log.Warn("rebuilt the lbd kernel module but it is still not usable", "error", err)
 	}
 }

@@ -1,6 +1,7 @@
 package lbdmod
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -185,24 +186,28 @@ func parseOSRelease(content string) (id string, like []string) {
 // shelling out, and falls back to uname(1) only for a real host, since a
 // fixture root has no process to ask.
 func kernelRelease(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, "proc/sys/kernel/osrelease"))
-	if err == nil {
+	path := filepath.Join(root, "proc/sys/kernel/osrelease")
+	data, readErr := os.ReadFile(path)
+	if readErr == nil {
 		if release := strings.TrimSpace(string(data)); release != "" {
 			return release, nil
 		}
+		// The file is there but says nothing. Name that, so the error below
+		// never wraps a nil.
+		readErr = fmt.Errorf("%s is empty", path)
 	}
 
 	if root != "/" {
-		return "", fmt.Errorf("no kernel release under %s: %w", root, err)
+		return "", fmt.Errorf("no kernel release under %s: %w", root, readErr)
 	}
 
 	out, unameErr := exec.Command("uname", "-r").Output()
 	if unameErr != nil {
-		return "", fmt.Errorf("could not determine the kernel release: %w", err)
+		return "", fmt.Errorf("could not determine the kernel release: %w", unameErr)
 	}
 	release := strings.TrimSpace(string(out))
 	if release == "" {
-		return "", fmt.Errorf("could not determine the kernel release: uname -r said nothing")
+		return "", errors.New("could not determine the kernel release: uname -r said nothing")
 	}
 	return release, nil
 }

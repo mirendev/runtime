@@ -35,6 +35,23 @@ type Options struct {
 // have to remember to add it.
 const systemReleasePath = "/var/lib/miren/release"
 
+// HostOptions builds the options for inspecting this host. dataPath is where
+// miren keeps its data; empty means DefaultDataPath.
+//
+// Everything that decides whether a disk gets accelerator mode goes through
+// here, because they all have to reach the same answer or a node picks a mode
+// it cannot serve. They disagreed before: the CLI searched the release
+// directory it resolved through $HOME while the disk controller searched only
+// the system one, so a host with lbdctl under ~/.miren/release would have the
+// CLI choose accelerator and the controller choose universal.
+//
+// The rule is now the system release directory and PATH, for every caller.
+// Nothing resolves a per-user location, since the CLI and the server run as
+// different users and would resolve it differently.
+func HostOptions(dataPath string) Options {
+	return Options{DataPath: dataPath}
+}
+
 func (o Options) root() string {
 	if o.Root == "" {
 		return "/"
