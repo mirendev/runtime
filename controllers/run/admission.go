@@ -98,8 +98,7 @@ func (c *Controller) acquireSlot(ctx context.Context, r *run_v1alpha.Run) (bool,
 		}
 	}
 
-	// Already ours: a reconcile repeated after a dropped error, which the
-	// framework does routinely since it never requeues.
+	// Already ours: a reconcile repeated after a partial failure or later signal.
 	if existing.Run == r.ID {
 		return true, nil
 	}

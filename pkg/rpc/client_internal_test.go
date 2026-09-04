@@ -45,6 +45,74 @@ func TestWebTransportDialHonorsContextWhenServerDoesNotAnswer(t *testing.T) {
 	}
 }
 
+func TestWebTransportDialHandlesAlreadyCanceledContext(t *testing.T) {
+	client := newTestWebTransportClient(t, "127.0.0.1:1")
+
+	// An index watch can begin dialing after its controller has already started
+	// shutting down. Exercise that window repeatedly so returning on ctx.Done
+	// can never race the per-call Dialer's initialization.
+	for range 100 {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, _, err := client.dialWebTransport(ctx, "https://127.0.0.1:1/", nil)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+}
+
+func TestWebTransportDialClosesConnectionReturnedAfterCancellation(t *testing.T) {
+	addr := quietQUICServer(t, t.Context(), func(_ context.Context, conn *quic.Conn) {
+		<-conn.Context().Done()
+	})
+
+	client := newTestWebTransportClient(t, addr)
+	originalDial := client.ws.DialAddr
+	dialReturned := make(chan *quic.Conn, 1)
+	releaseDial := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseDial) }) }
+	t.Cleanup(release)
+	client.ws.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+		conn, err := originalDial(ctx, addr, tlsCfg, cfg)
+		if err != nil {
+			return nil, err
+		}
+		dialReturned <- conn
+		<-releaseDial
+		return conn, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.dialWebTransport(ctx, "https://"+addr+"/", nil)
+		done <- err
+	}()
+
+	var dialConn *quic.Conn
+	select {
+	case dialConn = <-dialReturned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("QUIC dial did not complete")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("WebTransport dial did not return after cancellation")
+	}
+
+	// The underlying callback returns after cancellation cleanup has already
+	// observed no connection. It must close rather than publish that late conn.
+	release()
+	select {
+	case <-dialConn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection returned after cancellation remained open")
+	}
+}
+
 // The core regression: a raw QUIC listener completes the handshake and then
 // never speaks HTTP/3, so SETTINGS never arrive and webtransport-go's wait for
 // them has nothing to release it. The dial must still abort on the deadline.

@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/indexwatch"
 	"miren.dev/runtime/pkg/idgen"
-	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 // EventType represents the type of event that occurred on an entity
@@ -63,18 +64,11 @@ func WorkerId(ctx context.Context) string {
 // HandlerFunc is a function that processes an entity
 type HandlerFunc func(ctx context.Context, event Event) ([]entity.Attr, error)
 
-// inFlightEntry tracks an entity being processed and queues additional events
-type inFlightEntry struct {
-	revision      int64
-	pendingEvents []Event
-}
-
 // ReconcileController implements the Controller interface
 type ReconcileController struct {
 	Log *slog.Logger
 
 	cancel func()
-	top    context.Context
 
 	esc          *entityserver_v1alpha.EntityAccessClient
 	name         string
@@ -82,13 +76,13 @@ type ReconcileController struct {
 	handler      HandlerFunc
 	resyncPeriod time.Duration
 	workers      int
-	workQueue    chan Event
+	queue        *dirtyQueue
+	watcher      *indexwatch.Watcher
 	wg           sync.WaitGroup
 
-	// In-flight tracking to prevent concurrent processing of the same entity
-	// Maps entity ID to an entry containing the revision being processed and pending events
-	inFlight   map[entity.Id]*inFlightEntry
-	inFlightMu sync.Mutex
+	metricWriter *metrics.VictoriaMetricsWriter
+	metricLabels map[string]string
+	counters     controllerCounters
 
 	// Recent writes tracking to skip self-generated watch events
 	// Controllers record revisions from their writes to reduce reconciliation noise
@@ -109,8 +103,7 @@ func NewReconcileController(name string, log *slog.Logger, index entity.Attr, es
 		handler:      handler,
 		resyncPeriod: resyncPeriod,
 		workers:      workers,
-		workQueue:    make(chan Event, 1000),
-		inFlight:     make(map[entity.Id]*inFlightEntry),
+		queue:        newDirtyQueue(),
 		recentWrites: NewRingSet(1000), // Track last 1000 revisions written by this controller
 	}
 }
@@ -125,7 +118,6 @@ func (c *ReconcileController) SetPeriodic(often time.Duration, fn func(ctx conte
 func (c *ReconcileController) Start(top context.Context) error {
 	ctx, cancel := context.WithCancel(top)
 	c.cancel = cancel
-	c.top = top
 
 	c.Log.Info("Starting controller", "name", c.name)
 
@@ -136,122 +128,22 @@ func (c *ReconcileController) Start(top context.Context) error {
 		})
 	}
 
-	// Start event processor
+	c.watcher = indexwatch.New(c.esc, c.index, indexwatch.Options{
+		Logger:       c.Log,
+		ResyncPeriod: c.resyncPeriod,
+	})
+	if err := c.watcher.Start(ctx); err != nil {
+		cancel()
+		return err
+	}
 	c.wg.Go(func() {
-		c.Log.Info("Starting index watch")
-		defer c.Log.Info("Index watch stopped")
-
-		// Retry logic with exponential backoff
-		retryDelay := time.Second
-		maxRetryDelay := time.Minute * 5
-		retryCount := 0
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			if retryCount > 0 {
-				c.Log.Info("Attempting to reconnect watch", "index", c.index.ID, "value", c.index.Value, "attempt", retryCount)
-			} else {
-				c.Log.Debug("Attempting to establish watch connection", "index", c.index.ID, "value", c.index.Value)
-			}
-
-			_, err := c.esc.WatchIndex(ctx, c.index, 0, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
-				// Log successful reconnection after retry
-				if retryCount > 0 {
-					c.Log.Info("Watch successfully reconnected", "index", c.index.ID, "value", c.index.Value, "afterAttempts", retryCount)
-					retryCount = 0
-					retryDelay = time.Second // Reset delay for future disconnects
-				}
-				var eventType EventType
-
-				switch op.OperationType() {
-				case entityserver_v1alpha.EntityOperationCreate:
-					eventType = EventAdded
-				case entityserver_v1alpha.EntityOperationUpdate:
-					eventType = EventUpdated
-				case entityserver_v1alpha.EntityOperationDelete:
-					eventType = EventDeleted
-				case entityserver_v1alpha.EntityOperationProgress, entityserver_v1alpha.EntityOperationCompacted:
-					// Not entity mutations; nothing to dispatch.
-					fallthrough
-				default:
-					return nil
-				}
-
-				ev := Event{
-					Type:    eventType,
-					Id:      entity.Id(op.EntityId()),
-					PrevRev: op.Previous(),
-				}
-
-				if op.HasEntity() {
-					aen := op.Entity()
-
-					createdAt := time.UnixMilli(aen.CreatedAt())
-					updatedAt := time.UnixMilli(aen.UpdatedAt())
-
-					ev.Entity = entity.New(aen.Attrs())
-
-					ev.Entity.SetCreatedAt(createdAt)
-					ev.Entity.SetUpdatedAt(updatedAt)
-					ev.Entity.SetRevision(aen.Revision())
-					ev.Rev = aen.Revision()
-				}
-
-				// Skip watch events for revisions we recently wrote to reduce reconciliation noise.
-				// Never skip delete events — a delete is always meaningful regardless of who caused it.
-				if ev.Type != EventDeleted && ev.Rev > 0 && c.recentWrites.Contains(ev.Rev) {
-					return nil
-				}
-
-				select {
-				case <-ctx.Done():
-					return nil
-				case c.workQueue <- ev:
-					//ok
-				default:
-					// Queue is full, log and continue
-					c.Log.Warn("Work queue full, dropping watch event", "entity", ev.Id, "eventType", ev.Type, "queueSize", len(c.workQueue))
-				}
-
-				return nil
-			}))
-
-			if err != nil {
-				// Check if context was cancelled
-				if ctx.Err() != nil {
-					c.Log.Debug("Watch context cancelled, stopping watch")
-					return
-				}
-
-				retryCount++
-				c.Log.Error("Watch disconnected, will retry", "error", err, "retryDelay", retryDelay, "attempt", retryCount)
-
-				// Wait before retrying with exponential backoff
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(retryDelay):
-					// Exponential backoff with max delay
-					retryDelay = min(retryDelay*2, maxRetryDelay)
-				}
-			} else {
-				// Watch completed normally (shouldn't happen unless context cancelled)
-				c.Log.Debug("Watch completed normally")
-				return
-			}
+		for event := range c.watcher.Updates() {
+			c.acceptWatchEvent(event)
 		}
 	})
 
-	// Start periodic resync
-	if c.resyncPeriod > 0 {
-		c.wg.Go(func() {
-			c.periodicResync(ctx)
-		})
+	if c.metricWriter != nil {
+		c.wg.Go(func() { c.reportMetrics(ctx) })
 	}
 
 	// Start periodic callback if set
@@ -270,15 +162,21 @@ func (c *ReconcileController) Stop() {
 	if c.cancel != nil {
 		c.cancel()
 	}
+	if c.watcher != nil {
+		c.watcher.Stop()
+	}
+	c.queue.Close()
 	c.wg.Wait()
-	close(c.workQueue)
 }
 
 // RecordWrite records a revision that was written by this controller.
 // Subsequent watch events for this revision will be skipped to reduce
-// unnecessary reconciliation noise from self-generated updates.
+// unnecessary reconciliation noise from self-generated updates. Calls also
+// contribute to the controller's write metric so writes performed outside the
+// framework are included in its write velocity.
 func (c *ReconcileController) RecordWrite(revision int64) {
 	if revision > 0 {
+		c.counters.writes.Add(1)
 		c.recentWrites.Add(revision)
 	}
 }
@@ -289,17 +187,61 @@ func (c *ReconcileController) WriteTracker() WriteTracker {
 	return c
 }
 
-// Enqueue adds an event to the work queue for processing
+// Enqueue marks an entity dirty. The supplied snapshot is ignored for live
+// entities; workers always re-read current state. Delete snapshots are retained
+// only as tombstones for cleanup handlers that need the removed entity.
 func (c *ReconcileController) Enqueue(event Event) {
-	select {
-	case <-c.top.Done():
-		// Controller is stopping, do not enqueue
-		return
-	case c.workQueue <- event:
-		// Successfully enqueued
-	default:
-		// Queue is full, log and drop
-		c.Log.Warn("Work queue full, dropping enqueued event", "entity", event.Id, "eventType", event.Type, "queueSize", len(c.workQueue))
+	c.enqueueSignal(workSignal{
+		id:        event.Id,
+		priority:  workUrgent,
+		present:   event.Type != EventDeleted,
+		created:   event.Type == EventAdded,
+		tombstone: event.Entity,
+	})
+}
+
+func (c *ReconcileController) acceptWatchEvent(event indexwatch.Event) {
+	switch event.Type {
+	case indexwatch.EventSync:
+		// A snapshot describes current positive state, not a deletion log. Keeping
+		// every previously seen id just to infer missed deletes would make each
+		// controller retain its index's full cardinality and still would not cover
+		// deletes missed across a process restart.
+		for _, en := range event.Entities {
+			c.enqueueSignal(workSignal{id: en.Id(), priority: workRepair, present: true})
+		}
+
+	case indexwatch.EventAdded, indexwatch.EventUpdated:
+		if event.Rev > 0 && c.recentWrites.Contains(event.Rev) {
+			return
+		}
+		c.enqueueSignal(workSignal{
+			id:       event.Id,
+			priority: workUrgent,
+			present:  true,
+			created:  event.Type == indexwatch.EventAdded,
+		})
+
+	case indexwatch.EventDeleted:
+		c.enqueueSignal(workSignal{
+			id:        event.Id,
+			priority:  workUrgent,
+			present:   false,
+			tombstone: event.Entity,
+		})
+	}
+}
+
+func (c *ReconcileController) enqueueSignal(signal workSignal) {
+	switch c.queue.Add(signal) {
+	case enqueueQueued:
+	case enqueueCoalesced:
+		c.counters.coalesced.Add(1)
+	case enqueueDropped:
+		c.counters.dropped.Add(1)
+		if signal.id != "" {
+			c.Log.Warn("dropping reconcile signal after queue closed", "entity", signal.id)
+		}
 	}
 }
 
@@ -312,76 +254,68 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 	ctx = withWorkerId(ctx, id)
 
 	for {
-		select {
-		case <-ctx.Done():
+		item, ok := c.queue.Get(ctx)
+		if !ok {
 			c.Log.Info("Stopping worker", "id", id)
 			return
-		case event, ok := <-c.workQueue:
-			if !ok {
-				c.Log.Info("Stopping worker", "id", id)
-				return
-			}
+		}
 
-			// Check if this entity is already being processed
-			c.inFlightMu.Lock()
-			if entry, inFlight := c.inFlight[event.Id]; inFlight {
-				// Entity is already in-flight, queue event to the in-flight entry
-				entry.pendingEvents = append(entry.pendingEvents, event)
-				c.Log.Debug("Entity already in-flight, queuing to pending events",
-					"entity", event.Id,
-					"worker", WorkerId(ctx),
-					"inFlightRev", entry.revision,
-					"eventRev", event.Rev,
-					"pendingCount", len(entry.pendingEvents))
-				c.inFlightMu.Unlock()
-				continue
-			}
+		c.counters.inFlight.Add(1)
+		event, loadErr := c.currentEvent(ctx, item)
+		var handlerErr, writeErr error
+		if loadErr == nil {
+			current := cloneEntity(event.Entity)
+			var updates []entity.Attr
+			updates, handlerErr = c.processItem(ctx, event)
+			writeErr = c.applyUpdates(ctx, event, current, updates)
+		}
+		c.counters.inFlight.Add(-1)
 
-			// Mark entity as in-flight with a new entry
-			c.inFlight[event.Id] = &inFlightEntry{
-				revision:      event.Rev,
-				pendingEvents: nil,
-			}
-			c.inFlightMu.Unlock()
-
-			// Process the event
-			updates, err := c.processItem(ctx, event)
-			if err != nil {
-				c.Log.Error("error processing item", "event", event, "error", err)
-				// we still try to process updates even if there is an error.
-			}
-
-			c.applyUpdates(ctx, event, updates)
-
-			// Process any pending events before removing from in-flight
-			for {
-				c.inFlightMu.Lock()
-				entry := c.inFlight[event.Id]
-				if entry == nil || len(entry.pendingEvents) == 0 {
-					// No pending events, remove from in-flight and break
-					delete(c.inFlight, event.Id)
-					c.inFlightMu.Unlock()
-					break
-				}
-
-				// Pop the first pending event
-				event = entry.pendingEvents[0]
-				entry.pendingEvents = entry.pendingEvents[1:]
-				entry.revision = event.Rev
-				c.inFlightMu.Unlock()
-
-				c.Log.Info("Processing pending event", "entity", event.Id, "worker", WorkerId(ctx), "rev", event.Rev, "remainingPending", len(entry.pendingEvents))
-
-				// Process the pending event
-				updates, err := c.processItem(ctx, event)
-				if err != nil {
-					c.Log.Error("error processing pending item", "event", event, "error", err)
-				}
-
-				c.applyUpdates(ctx, event, updates)
-			}
+		processErr := errors.Join(loadErr, handlerErr, writeErr)
+		if processErr != nil && ctx.Err() == nil {
+			c.counters.failures.Add(1)
+			c.Log.Error("reconcile failed", "entity", item.id, "error", processErr)
+		}
+		if ctx.Err() != nil {
+			processErr = nil
+		}
+		if retrying := c.queue.Done(item, processErr); retrying {
+			c.counters.retries.Add(1)
 		}
 	}
+}
+
+func (c *ReconcileController) currentEvent(ctx context.Context, item workItem) (Event, error) {
+	resp, err := c.esc.Get(ctx, item.id.String())
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return Event{Type: EventDeleted, Id: item.id, Entity: item.tombstone}, nil
+		}
+		return Event{}, fmt.Errorf("reading current entity %s: %w", item.id, err)
+	}
+
+	aen := resp.Entity()
+	en := entity.New(aen.Attrs())
+	en.SetCreatedAt(time.UnixMilli(aen.CreatedAt()))
+	en.SetUpdatedAt(time.UnixMilli(aen.UpdatedAt()))
+	en.SetRevision(aen.Revision())
+
+	if !item.present {
+		// An index-entry deletion can leave the entity itself alive, notably when
+		// a session lease expires. Preserve the index lifecycle signal in that
+		// case. A following add/update will dirty the key again with current state.
+		tombstone := item.tombstone
+		if tombstone == nil {
+			tombstone = en
+		}
+		return Event{Type: EventDeleted, Id: item.id, Entity: tombstone, Rev: aen.Revision()}, nil
+	}
+
+	typ := EventUpdated
+	if item.created {
+		typ = EventAdded
+	}
+	return Event{Type: typ, Id: item.id, Entity: en, Rev: aen.Revision()}, nil
 }
 
 // processItem processes a single item from the work queue
@@ -398,20 +332,35 @@ func (c *ReconcileController) processItem(ctx context.Context, event Event) ([]e
 // ProcessEventForTest processes a single event and applies any updates.
 // This is exposed for testing controllers without starting the full controller loop.
 func (c *ReconcileController) ProcessEventForTest(ctx context.Context, event Event) error {
-	updates, err := c.processItem(ctx, event)
-	c.applyUpdates(ctx, event, updates)
-	return err
+	current, loadErr := c.currentEvent(ctx, workItem{
+		id:        event.Id,
+		present:   event.Type != EventDeleted,
+		created:   event.Type == EventAdded,
+		tombstone: event.Entity,
+	})
+	if loadErr != nil {
+		return loadErr
+	}
+	before := cloneEntity(current.Entity)
+	updates, handlerErr := c.processItem(ctx, current)
+	return errors.Join(handlerErr, c.applyUpdates(ctx, current, before, updates))
 }
 
 // applyUpdates applies the given updates to an entity using Patch
-func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, updates []entity.Attr) {
+func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, current *entity.Entity, updates []entity.Attr) error {
 	if len(updates) == 0 {
-		return
+		return nil
 	}
 
 	if event.Id == "" {
-		c.Log.Error("entity id is empty but there are updates", "event", event)
-		return
+		return errors.New("entity id is empty but handler returned updates")
+	}
+
+	if current != nil {
+		updates = entity.Diff(entity.New(updates), current)
+		if len(updates) == 0 {
+			return nil
+		}
 	}
 
 	// Debug rather than Info: every controller write passes through here, so at
@@ -428,75 +377,25 @@ func (c *ReconcileController) applyUpdates(ctx context.Context, event Event, upd
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
 			c.Log.Warn("entity not found during update", "entity", event.Id)
-			return
+			return err
 		}
-		c.Log.Error("error updating entity", "entity", event.Id, "error", err)
-	} else {
-		c.Log.Debug("updated entity", "entity", event.Id)
-		// Record the revision we just wrote so we can skip the watch event
-		if result.HasRevision() {
-			c.RecordWrite(result.Revision())
-		}
+		return fmt.Errorf("updating entity %s: %w", event.Id, err)
 	}
+	c.Log.Debug("updated entity", "entity", event.Id)
+	// Record the revision we just wrote so we can skip the watch event
+	if result.HasRevision() {
+		c.RecordWrite(result.Revision())
+	} else {
+		c.counters.writes.Add(1)
+	}
+	return nil
 }
 
-// periodicResync periodically resyncs all entities
-func (c *ReconcileController) periodicResync(ctx context.Context) {
-	c.Log.Info("Starting resync")
-	defer c.Log.Info("Stopping resync")
-
-	ticker := time.NewTicker(c.resyncPeriod)
-	defer ticker.Stop()
-
-	for {
-		// List all entities and queue them for processing
-		resp, err := c.esc.List(ctx, c.index)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-
-			c.Log.Error("error listing entities for resync", "error", err)
-			continue
-		}
-
-		entities := resp.Values()
-
-		for _, aen := range entities {
-			createdAt := time.UnixMilli(aen.CreatedAt())
-			updatedAt := time.UnixMilli(aen.UpdatedAt())
-
-			en := entity.New(aen.Attrs())
-
-			en.SetCreatedAt(createdAt)
-			en.SetUpdatedAt(updatedAt)
-			en.SetRevision(aen.Revision())
-
-			ev := Event{
-				Type:   EventUpdated,
-				Id:     entity.Id(aen.Id()),
-				Entity: en,
-				Rev:    aen.Revision(),
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case c.workQueue <- ev:
-				// Event added to queue
-			default:
-				// Queue is full, log and skip this event
-				c.Log.Warn("Work queue full during resync, dropping event", "entity", ev.Id, "queueSize", len(c.workQueue))
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// Continue to the next tick
-		}
+func cloneEntity(en *entity.Entity) *entity.Entity {
+	if en == nil {
+		return nil
 	}
+	return en.Clone()
 }
 
 // runPeriodic runs the periodic callback every 10 minutes
@@ -683,17 +582,27 @@ func AdaptReconcileController[
 // ControllerManager manages multiple controllers
 type ControllerManager struct {
 	controllers []Controller
+	metrics     *metrics.VictoriaMetricsWriter
+	labels      map[string]string
 }
 
 // NewControllerManager creates a new controller manager
-func NewControllerManager() *ControllerManager {
-	return &ControllerManager{
+func NewControllerManager(opts ...ManagerOption) *ControllerManager {
+	m := &ControllerManager{
 		controllers: make([]Controller, 0),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // AddController adds a controller to the manager
 func (m *ControllerManager) AddController(controller Controller) {
+	if reconcile, ok := controller.(*ReconcileController); ok {
+		reconcile.metricWriter = m.metrics
+		reconcile.metricLabels = m.labels
+	}
 	m.controllers = append(m.controllers, controller)
 }
 

@@ -53,7 +53,7 @@ func TestControlPlaneParse(t *testing.T) {
 	err := coord.Start(bootCtx)
 	r.NoError(err)
 	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		require.NoError(t, coord.Stop(shutdownCtx))
 	})
@@ -61,6 +61,9 @@ func TestControlPlaneParse(t *testing.T) {
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	require.NoError(t, err)
+	// Registered after the coordinator cleanup so LIFO cleanup closes the client
+	// connection before the server is asked to drain it.
+	t.Cleanup(func() { require.NoError(t, rs.Close()) })
 
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -17,17 +16,15 @@ import (
 // mount controller finishes mounting it.
 type DiskMountWatchController struct {
 	Log    *slog.Logger
-	EAC    *entityserver_v1alpha.EntityAccessClient
 	NodeId compute.NodeId
 
 	LeaseController *controller.ReconcileController
 }
 
 // NewDiskMountWatchController creates a new disk mount watch controller.
-func NewDiskMountWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, leaseController *controller.ReconcileController, nodeId compute.NodeId) *DiskMountWatchController {
+func NewDiskMountWatchController(log *slog.Logger, leaseController *controller.ReconcileController, nodeId compute.NodeId) *DiskMountWatchController {
 	return &DiskMountWatchController{
 		Log:             log.With("module", "disk-mount-watch"),
-		EAC:             eac,
 		LeaseController: leaseController,
 		NodeId:          nodeId,
 	}
@@ -55,19 +52,9 @@ func (m *DiskMountWatchController) Update(ctx context.Context, mount *storage_v1
 		"lease", mount.DiskLeaseId,
 		"actual_state", mount.ActualState)
 
-	resp, err := m.EAC.Get(ctx, string(mount.DiskLeaseId))
-	if err != nil {
-		m.Log.Warn("failed to get parent disk lease for mount change",
-			"mount", mount.ID,
-			"lease", mount.DiskLeaseId,
-			"error", err)
-		return nil
-	}
-
 	m.LeaseController.Enqueue(controller.Event{
-		Type:   controller.EventUpdated,
-		Id:     mount.DiskLeaseId,
-		Entity: resp.Entity().Entity(),
+		Type: controller.EventUpdated,
+		Id:   mount.DiskLeaseId,
 	})
 
 	return nil

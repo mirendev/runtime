@@ -97,7 +97,9 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 	}
 	aa.SetPoolCreator(launcher)
 
-	cm := controller.NewControllerManager()
+	cm := controller.NewControllerManager(
+		controller.WithMetrics(c.MetricsWriter, map[string]string{"role": "coordinator"}),
+	)
 	// Add addon controller (reconciles addon associations for provisioning/deprovisioning)
 	addonController := addonctrl.NewController(c.Log, ec, eac, addonRegistry, addonFw.Storage)
 	if err := addonController.Init(ctx); err != nil {
@@ -164,7 +166,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 
 	// A sandbox reaching STOPPED produces no event on the run index, so without
 	// this bridge a finished run would wait for the sweep to notice it.
-	runSandboxWatch := runctrl.NewSandboxWatchController(c.Log, eac, runReconciler)
+	runSandboxWatch := runctrl.NewSandboxWatchController(runReconciler)
 	runSandboxReconciler := controller.NewReconcileController(
 		"run-sandbox-watch",
 		c.Log,

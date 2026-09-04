@@ -29,6 +29,7 @@ import (
 	"miren.dev/runtime/components/sqlitedisk"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/controller"
@@ -81,6 +82,7 @@ type RunnerDeps struct {
 	LogsMaintainer *observability.LogsMaintainer
 	LogWriter      observability.LogWriter
 	StatusMon      *observability.StatusMonitor
+	MetricsWriter  *metrics.VictoriaMetricsWriter
 
 	// Network config
 	IPv4Routable    netip.Prefix
@@ -945,7 +947,12 @@ func (r *SandboxHost) SetupControllers(
 	_ *controller.ControllerManager,
 	retErr error,
 ) {
-	cm := controller.NewControllerManager()
+	cm := controller.NewControllerManager(
+		controller.WithMetrics(r.deps.MetricsWriter, map[string]string{
+			"role": "runner",
+			"node": r.Id,
+		}),
+	)
 
 	// Initialize NetServ if not provided (distributed runner mode)
 	if r.deps.NetServ == nil {
