@@ -153,7 +153,7 @@ func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	ctx := t.Context()
 	es, resolver := setupResolver(t, nil)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 	require.NotNil(t, target)
 	assert.True(t, target.Created)
@@ -196,7 +196,7 @@ func TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan(t *testing.T) {
 	fault := newFaultRPC(nil, "create", 1, fmt.Errorf("simulated disk_volume create failure"))
 	es, resolver := setupResolver(t, fault)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 
 	disks := listTestDisks(t, ctx, es.EAC)
@@ -238,7 +238,7 @@ func TestCreateDiskAndVolume_FinalizePatchFailsLeavesNoOrphan(t *testing.T) {
 	fault := newFaultRPC(nil, "patch", 1, fmt.Errorf("simulated disk patch failure"))
 	es, resolver := setupResolver(t, fault)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 
 	disks := listTestDisks(t, ctx, es.EAC)
@@ -274,7 +274,7 @@ func TestCreateDiskAndVolume_CleanupDoesNotHardDeleteDisk(t *testing.T) {
 	ctx := t.Context()
 	es, resolver := setupResolver(t, nil)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 	disks := listTestDisks(t, ctx, es.EAC)
 	diskID := disks[0].ID
