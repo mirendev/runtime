@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"time"
@@ -9,6 +10,7 @@ import (
 	"miren.dev/runtime/api/disk/disk_v1alpha"
 	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/rpc/stream"
+	"miren.dev/runtime/pkg/snapshot"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -22,7 +24,7 @@ import (
 func DiskRestore(ctx *Context, opts struct {
 	ConfigCentric
 	Snapshot     string `short:"s" long:"snapshot" description:"Path to a snapshot file to restore from"`
-	Name         string `short:"n" long:"name" description:"Disk name to restore to" required:"true"`
+	Name         string `short:"n" long:"name" description:"Disk name to restore to (default: the name recorded in the snapshot)"`
 	FromCloud    bool   `long:"from-cloud" description:"Restore from a miren.cloud restore point"`
 	RestorePoint string `long:"restore-point" description:"Restore point to use (implies --from-cloud; default: the newest)"`
 	Force        bool   `short:"f" long:"force" description:"Overwrite an existing disk image"`
@@ -45,6 +47,10 @@ func DiskRestore(ctx *Context, opts struct {
 	progress := diskProgress(ctx)
 
 	if fromCloud {
+		if opts.Name == "" {
+			return fmt.Errorf("--name says which disk's restore points to look at, so it is required with --from-cloud")
+		}
+
 		point := opts.RestorePoint
 		if point == "" {
 			point, err = pickRestorePoint(ctx, dc, opts.Name)
@@ -69,9 +75,28 @@ func DiskRestore(ctx *Context, opts struct {
 	}
 	defer snapFile.Close()
 
-	ctx.Info("Restoring disk %q from %s", opts.Name, opts.Snapshot)
+	name := opts.Name
+	if name == "" {
+		// The snapshot records the disk it came from, so restoring one back
+		// where it belongs needs no --name. The server reads the header again
+		// for the size and filesystem; this read is only to answer "which
+		// disk", which the client has to know before it can ask.
+		meta, err := snapshot.ReadHeader(snapFile)
+		if err != nil {
+			return fmt.Errorf("reading snapshot header: %w", err)
+		}
+		name = meta.Name
+		if name == "" {
+			return fmt.Errorf("%s records no disk name, so pass --name", opts.Snapshot)
+		}
+		if _, err := snapFile.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewinding snapshot: %w", err)
+		}
+	}
 
-	res, err := dc.Restore(ctx, opts.Name, "", stream.ServeReader(ctx, snapFile, stream.WithBulkBatching()), opts.Force, progress)
+	ctx.Info("Restoring disk %q from %s", name, opts.Snapshot)
+
+	res, err := dc.Restore(ctx, name, "", stream.ServeReader(ctx, snapFile, stream.WithBulkBatching()), opts.Force, progress)
 	if err != nil {
 		return err
 	}
