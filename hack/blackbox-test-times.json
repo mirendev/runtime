@@ -1,9 +1,9 @@
 {
   "summary": {
     "standalone": {
-      "total_test_time_s": 526.23,
-      "test_count": 33,
-      "source": "CI run 29856793428 job 88723011745 (green merge of PR #946)"
+      "total_test_time_s": 1236.25,
+      "test_count": 66,
+      "source": "CI run 33878614602 (green PR #1138)"
     },
     "peers": {
       "total_test_time_s": 1028.3,
@@ -415,201 +415,399 @@
       "status": "pass"
     },
     {
-      "name": "TestAddonDeployWithVersionInAppToml",
+      "name": "TestAddonRotateValkey",
       "environment": "standalone",
-      "elapsed_s": 38.4,
-      "status": "pass"
-    },
-    {
-      "name": "TestMemcacheAddonCreateListDestroy",
-      "environment": "standalone",
-      "elapsed_s": 36.15,
-      "status": "pass"
-    },
-    {
-      "name": "TestMysqlAddonDeployWithAppToml",
-      "environment": "standalone",
-      "elapsed_s": 32.31,
-      "status": "pass"
-    },
-    {
-      "name": "TestRabbitmqAddonCreateListDestroy",
-      "environment": "standalone",
-      "elapsed_s": 30.95,
-      "status": "pass"
-    },
-    {
-      "name": "TestEnvSetGetList",
-      "environment": "standalone",
-      "elapsed_s": 29.08,
-      "status": "pass"
-    },
-    {
-      "name": "TestZeroDowntimeDeploy",
-      "environment": "standalone",
-      "elapsed_s": 22.45,
-      "status": "pass"
-    },
-    {
-      "name": "TestValkeyAddonCreateListDestroy",
-      "environment": "standalone",
-      "elapsed_s": 21.95,
-      "status": "pass"
-    },
-    {
-      "name": "TestBadCommand",
-      "environment": "standalone",
-      "elapsed_s": 20.97,
-      "status": "pass"
-    },
-    {
-      "name": "TestLocalDiskPersistence",
-      "environment": "standalone",
-      "elapsed_s": 20.55,
-      "status": "pass"
-    },
-    {
-      "name": "TestRabbitmqAddonDeployWithAppToml",
-      "environment": "standalone",
-      "elapsed_s": 19.97,
-      "status": "pass"
-    },
-    {
-      "name": "TestValkeyAddonDeployWithAppToml",
-      "environment": "standalone",
-      "elapsed_s": 19.92,
-      "status": "pass"
-    },
-    {
-      "name": "TestAddonDeployWithAppToml",
-      "environment": "standalone",
-      "elapsed_s": 19.89,
+      "elapsed_s": 72.04,
       "status": "pass"
     },
     {
       "name": "TestMysqlAddonCreateListDestroy",
       "environment": "standalone",
-      "elapsed_s": 18.82,
+      "elapsed_s": 67.09,
       "status": "pass"
     },
     {
-      "name": "TestAddonUnknownAddon",
+      "name": "TestAttachedRunWaitsForTheCommand",
       "environment": "standalone",
-      "elapsed_s": 18.66,
+      "elapsed_s": 60.01,
       "status": "pass"
     },
     {
-      "name": "TestAddonCreateListDestroy",
+      "name": "TestRunCarriesDeclaredTaskEnv",
       "environment": "standalone",
-      "elapsed_s": 18.6,
+      "elapsed_s": 60.0,
       "status": "pass"
     },
     {
-      "name": "TestCrashLoop",
+      "name": "TestAddonEnvSurvivesDeployVersion",
       "environment": "standalone",
-      "elapsed_s": 17.31,
+      "elapsed_s": 59.6,
       "status": "pass"
     },
     {
-      "name": "TestMemcacheAddonDeployWithAppToml",
+      "name": "TestRunPreservesArgumentBoundaries",
       "environment": "standalone",
-      "elapsed_s": 17.05,
+      "elapsed_s": 57.87,
       "status": "pass"
     },
     {
       "name": "TestEphemeralDeploy",
       "environment": "standalone",
-      "elapsed_s": 11.64,
+      "elapsed_s": 42.93,
       "status": "pass"
     },
     {
-      "name": "TestRouteWafEnableDisable",
+      "name": "TestMemcacheAddonCreateListDestroy",
       "environment": "standalone",
-      "elapsed_s": 11.07,
+      "elapsed_s": 40.41,
       "status": "pass"
     },
     {
-      "name": "TestSandboxExec",
+      "name": "TestRabbitmqAddonCreateListDestroy",
       "environment": "standalone",
-      "elapsed_s": 10.85,
+      "elapsed_s": 39.64,
       "status": "pass"
     },
     {
-      "name": "TestRouteWafJsonOutput",
+      "name": "TestAttachedRunPropagatesExitCode",
       "environment": "standalone",
-      "elapsed_s": 10.82,
+      "elapsed_s": 32.94,
       "status": "pass"
     },
     {
-      "name": "TestRouteWafInvalidLevel",
+      "name": "TestRabbitmqAddonDeployWithAppToml",
       "environment": "standalone",
-      "elapsed_s": 10.8,
+      "elapsed_s": 30.23,
       "status": "pass"
     },
     {
-      "name": "TestDeployGoServer",
+      "name": "TestMysqlAddonDeployWithAppToml",
       "environment": "standalone",
-      "elapsed_s": 10.74,
+      "elapsed_s": 30.21,
       "status": "pass"
     },
     {
-      "name": "TestRoutePasswordProtection",
+      "name": "TestSqliteAddonReplication",
       "environment": "standalone",
-      "elapsed_s": 9.59,
+      "elapsed_s": 29.99,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonRotateSharedPostgresSuperuser",
+      "environment": "standalone",
+      "elapsed_s": 29.46,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonRotateSharedPostgresUser",
+      "environment": "standalone",
+      "elapsed_s": 29.4,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretReferencedByApp",
+      "environment": "standalone",
+      "elapsed_s": 28.66,
+      "status": "pass"
+    },
+    {
+      "name": "TestEnvSetGetList",
+      "environment": "standalone",
+      "elapsed_s": 28.29,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonDeployWithVersionInAppToml",
+      "environment": "standalone",
+      "elapsed_s": 28.15,
+      "status": "pass"
+    },
+    {
+      "name": "TestBadCommand",
+      "environment": "standalone",
+      "elapsed_s": 26.07,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 25.34,
+      "status": "pass"
+    },
+    {
+      "name": "TestZeroDowntimeDeploy",
+      "environment": "standalone",
+      "elapsed_s": 22.7,
+      "status": "pass"
+    },
+    {
+      "name": "TestMemcacheAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 21.03,
+      "status": "pass"
+    },
+    {
+      "name": "TestValkeyAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 20.94,
+      "status": "pass"
+    },
+    {
+      "name": "TestCrashLoop",
+      "environment": "standalone",
+      "elapsed_s": 20.74,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployImageInheritsMetadata",
+      "environment": "standalone",
+      "elapsed_s": 20.61,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretRevocationFailsClosed",
+      "environment": "standalone",
+      "elapsed_s": 20.29,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonDeployWithAppToml",
+      "environment": "standalone",
+      "elapsed_s": 20.28,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteMaintenance",
+      "environment": "standalone",
+      "elapsed_s": 20.28,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonCreateListDestroy",
+      "environment": "standalone",
+      "elapsed_s": 19.89,
+      "status": "pass"
+    },
+    {
+      "name": "TestLocalDiskPersistence",
+      "environment": "standalone",
+      "elapsed_s": 17.71,
       "status": "pass"
     },
     {
       "name": "TestDeployAndRollback",
       "environment": "standalone",
-      "elapsed_s": 9.47,
+      "elapsed_s": 11.53,
+      "status": "pass"
+    },
+    {
+      "name": "TestRoutePasswordProtection",
+      "environment": "standalone",
+      "elapsed_s": 10.66,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteTimeoutSetShowClear",
+      "environment": "standalone",
+      "elapsed_s": 10.61,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteTimeoutDefaultRoute",
+      "environment": "standalone",
+      "elapsed_s": 10.38,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxExec",
+      "environment": "standalone",
+      "elapsed_s": 10.19,
       "status": "pass"
     },
     {
       "name": "TestRouteWafBlocksMaliciousRequest",
       "environment": "standalone",
-      "elapsed_s": 9.21,
+      "elapsed_s": 10.16,
       "status": "pass"
     },
     {
       "name": "TestRouteSetListRemove",
       "environment": "standalone",
-      "elapsed_s": 8.94,
+      "elapsed_s": 9.97,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployHistoryRecordsActiveVersion",
+      "environment": "standalone",
+      "elapsed_s": 9.94,
       "status": "pass"
     },
     {
       "name": "TestRouteWafDefaultRoute",
       "environment": "standalone",
-      "elapsed_s": 8.84,
+      "elapsed_s": 9.92,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployImageEntrypointWithArgs",
+      "environment": "standalone",
+      "elapsed_s": 9.88,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafJsonOutput",
+      "environment": "standalone",
+      "elapsed_s": 9.86,
       "status": "pass"
     },
     {
       "name": "TestSandboxList",
       "environment": "standalone",
-      "elapsed_s": 8.61,
+      "elapsed_s": 9.84,
+      "status": "pass"
+    },
+    {
+      "name": "TestAddonUnknownAddon",
+      "environment": "standalone",
+      "elapsed_s": 9.78,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafInvalidLevel",
+      "environment": "standalone",
+      "elapsed_s": 9.72,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployImageOnlyNoDockerfile",
+      "environment": "standalone",
+      "elapsed_s": 9.4,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteSetService",
+      "environment": "standalone",
+      "elapsed_s": 9.39,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployImageEntrypointNoCommand",
+      "environment": "standalone",
+      "elapsed_s": 8.31,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteWafEnableDisable",
+      "environment": "standalone",
+      "elapsed_s": 8.23,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployGoServer",
+      "environment": "standalone",
+      "elapsed_s": 7.72,
+      "status": "pass"
+    },
+    {
+      "name": "TestDeployTaskGatesTheDeploy",
+      "environment": "standalone",
+      "elapsed_s": 4.1,
+      "status": "pass"
+    },
+    {
+      "name": "TestDetachedRunSucceeds",
+      "environment": "standalone",
+      "elapsed_s": 3.97,
+      "status": "pass"
+    },
+    {
+      "name": "TestRunLogsAreReadableByRunID",
+      "environment": "standalone",
+      "elapsed_s": 3.79,
+      "status": "pass"
+    },
+    {
+      "name": "TestFailingRunRecordsItsExitCode",
+      "environment": "standalone",
+      "elapsed_s": 3.73,
+      "status": "pass"
+    },
+    {
+      "name": "TestTaskOnlyAppDeploys",
+      "environment": "standalone",
+      "elapsed_s": 2.05,
+      "status": "pass"
+    },
+    {
+      "name": "TestBareRunOpensAConsole",
+      "environment": "standalone",
+      "elapsed_s": 2.01,
+      "status": "pass"
+    },
+    {
+      "name": "TestRunCancellation",
+      "environment": "standalone",
+      "elapsed_s": 1.99,
+      "status": "pass"
+    },
+    {
+      "name": "TestFailedBuildLeavesFailedRecord",
+      "environment": "standalone",
+      "elapsed_s": 1.96,
       "status": "pass"
     },
     {
       "name": "TestDiskUndelete",
       "environment": "standalone",
-      "elapsed_s": 1.49,
+      "elapsed_s": 1.7,
       "status": "pass"
     },
     {
       "name": "TestRoutePasswordProviderLifecycle",
       "environment": "standalone",
-      "elapsed_s": 0.66,
+      "elapsed_s": 0.78,
+      "status": "pass"
+    },
+    {
+      "name": "TestConcurrentDeployBlockedByLock",
+      "environment": "standalone",
+      "elapsed_s": 0.68,
+      "status": "pass"
+    },
+    {
+      "name": "TestSecretStoreAndRotate",
+      "environment": "standalone",
+      "elapsed_s": 0.49,
       "status": "pass"
     },
     {
       "name": "TestAddonVariants",
       "environment": "standalone",
-      "elapsed_s": 0.38,
+      "elapsed_s": 0.44,
+      "status": "pass"
+    },
+    {
+      "name": "TestDebugSagaShowUnknownID",
+      "environment": "standalone",
+      "elapsed_s": 0.1,
       "status": "pass"
     },
     {
       "name": "TestAddonListAvailable",
       "environment": "standalone",
       "elapsed_s": 0.09,
+      "status": "pass"
+    },
+    {
+      "name": "TestRouteDownDefaultNeedsConfirmation",
+      "environment": "standalone",
+      "elapsed_s": 0.08,
+      "status": "pass"
+    },
+    {
+      "name": "TestSandboxSpecImageFromEntityDocument",
+      "environment": "standalone",
+      "elapsed_s": 0.0,
       "status": "pass"
     }
   ]

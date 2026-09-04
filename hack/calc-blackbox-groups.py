@@ -19,7 +19,7 @@ lightest shard so they always run somewhere.
 
 Usage:
   ./hack/calc-blackbox-groups.py hack/blackbox-test-times.json \
-      --env standalone -n 3 -o hack/blackbox-groups.json
+      --env standalone -n 4 -o hack/blackbox-groups.json
 """
 
 import argparse
@@ -33,7 +33,13 @@ import sys
 # `-skip` list in the Makefile and the ungrouped-test filter in
 # .github/workflows/test.yml; without it, `-list` discovery would fold them into
 # the lightest shard as untimed tests.
-ALWAYS_SKIP = {"TestPOP", "TestRPCViaCloud", "TestDeployViaCloud"}
+ALWAYS_SKIP = {
+    "TestPOP",
+    "TestRPCViaCloud",
+    "TestDeployViaCloud",
+    "TestServerEnrollWithToken",
+    "TestServerUnregister",
+}
 
 
 def load_times(path):
@@ -122,8 +128,8 @@ def main():
     parser.add_argument("input", help="blackbox-test-times.json")
     parser.add_argument("--env", default="standalone",
                         help="Environment pool to shard (default: standalone)")
-    parser.add_argument("-n", "--shards", type=int, default=3,
-                        help="Number of parallel shards (default: 3)")
+    parser.add_argument("-n", "--shards", type=int, default=4,
+                        help="Number of parallel shards (default: 4)")
     parser.add_argument("-o", "--output", help="Write groups JSON to file")
     parser.add_argument("--no-discover", action="store_true",
                         help="Skip go test -list discovery (use only timing data)")
