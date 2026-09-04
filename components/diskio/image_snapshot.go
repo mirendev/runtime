@@ -53,6 +53,14 @@ type SnapshotRequest struct {
 	Filesystem string
 	// SnapshotName optionally pins this as a named restore point.
 	SnapshotName string
+	// InUse records that the image was attached when it was read, so the
+	// snapshot is a smear across the read rather than a point-in-time copy.
+	// Worth knowing later: it is the difference between a restore point you can
+	// rely on and one you are choosing to gamble on.
+	//
+	// The caller decides, because "attached" is a question about kernel state
+	// that the snapshotter has no handle on.
+	InUse bool
 	// LeaseNonce is required when the volume has an active lease.
 	LeaseNonce string
 	// StagingDir is where the compressed snapshot is written before upload.
@@ -119,6 +127,7 @@ func (s *ImageSnapshotter) Snapshot(ctx context.Context, req SnapshotRequest) (*
 			"image_size":      info.Size(),
 			"image_sha256":    checksum,
 			"compressed_size": stagedInfo.Size(),
+			"was_attached":    req.InUse,
 		},
 		LeaseNonce: req.LeaseNonce,
 	}, staged, stagedInfo.Size())

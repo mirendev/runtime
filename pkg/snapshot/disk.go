@@ -8,7 +8,6 @@ import (
 
 const (
 	StatusDeleting = "DELETING"
-	StatusAttached = "ATTACHED"
 
 	LeaseStatusBound = "BOUND"
 )
@@ -56,7 +55,6 @@ type BackupTarget struct {
 	Name       string
 	Filesystem string
 	ImagePath  string
-	IsAttached bool
 	// VolumeID is the node-local volume identifier.
 	VolumeID string
 	// CloudVolumeID identifies the volume in miren.cloud, for backups sent
@@ -96,7 +94,6 @@ func PrepareBackup(ctx context.Context, resolver DiskResolver, name string, data
 		Name:       name,
 		Filesystem: disk.Filesystem,
 		ImagePath:  resolveImagePath(vol, dataPath),
-		IsAttached: disk.Status == StatusAttached,
 
 		VolumeID:      vol.VolumeID,
 		CloudVolumeID: vol.CloudVolumeID,

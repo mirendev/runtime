@@ -54,17 +54,6 @@ func TestPrepareBackup(t *testing.T) {
 		assert.Equal(t, "mydb", target.Name)
 		assert.Equal(t, "ext4", target.Filesystem)
 		assert.Equal(t, "/data/disk.img", target.ImagePath)
-		assert.False(t, target.IsAttached)
-	})
-
-	t.Run("attached disk sets flag", func(t *testing.T) {
-		r := &mockResolver{
-			disk:   &DiskState{ID: "d1", Name: "mydb", Status: StatusAttached, Filesystem: "ext4"},
-			volume: &VolumeState{VolumeID: "v1", ImagePath: "/data/disk.img"},
-		}
-		target, err := PrepareBackup(ctx, r, "mydb", "/var/lib/miren")
-		require.NoError(t, err)
-		assert.True(t, target.IsAttached)
 	})
 
 	t.Run("deleting disk rejected", func(t *testing.T) {

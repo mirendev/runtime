@@ -53,15 +53,25 @@ func DebugDiskBackup(ctx *Context, opts struct {
 		return fmt.Errorf("disk image not found at %s: %w", target.ImagePath, err)
 	}
 
-	if target.IsAttached {
-		// Nothing here freezes the filesystem or takes a copy-on-write clone, so
-		// this is a sequential read of a file the loop device is still writing.
-		// The head and tail of the image come from different moments, which is
-		// weaker than the power-loss state fsck and Postgres recovery are built
-		// for. Say so plainly: the operator is the one deciding this is safe.
-		ctx.Warn("Disk is attached and may be written during the backup.")
-		ctx.Warn("The image is read while in use, so it is not a point-in-time copy and may not mount cleanly.")
-		ctx.Warn("Detach the disk first for a backup you can rely on.")
+	// Nothing here freezes the filesystem or takes a copy-on-write clone, so a
+	// backup of a live disk is a sequential read of a file the loop device is
+	// still writing. The head and tail of the image come from different moments,
+	// which is weaker than the power-loss state fsck and Postgres recovery are
+	// built for. Say so plainly: the operator is the one deciding this is safe.
+	//
+	// The kernel is the only thing that actually knows, so ask it. Not knowing
+	// counts as in use, since this flag only ever warns a reader off relying on
+	// the snapshot.
+	inUse := true
+	if dev, lerr := diskio.NewRealDiskMountOps(ctx.Log).FindLoopByBacking(target.ImagePath); lerr != nil {
+		ctx.Warn("Could not tell whether the disk is in use: %v", lerr)
+	} else {
+		inUse = dev != ""
+		if inUse {
+			ctx.Warn("Disk is in use (%s) and may be written during the backup.", dev)
+			ctx.Warn("The image is read while in use, so it is not a point-in-time copy and may not mount cleanly.")
+			ctx.Warn("Detach the disk first for a backup you can rely on.")
+		}
 	}
 
 	outputPath := opts.Output
@@ -128,6 +138,7 @@ func DebugDiskBackup(ctx *Context, opts struct {
 	if opts.Cloud {
 		updateID, err := uploadSnapshotToCloud(ctx, opts.DataPath, target, outputPath, cloudSnapshotDetails{
 			Pin:            opts.Pin,
+			InUse:          inUse,
 			ImageSize:      imgInfo.Size(),
 			ImageChecksum:  checksum,
 			CompressedSize: outInfo.Size(),
@@ -152,6 +163,9 @@ type cloudSnapshotDetails struct {
 	ImageSize      int64
 	ImageChecksum  string
 	CompressedSize int64
+	// InUse records that the image was attached when it was read, so the
+	// snapshot is a smear across the read rather than a point-in-time copy.
+	InUse bool
 }
 
 // uploadSnapshotToCloud sends a finished snapshot file to miren.cloud as a
@@ -218,7 +232,7 @@ func uploadSnapshotToCloud(ctx *Context, dataPath string, target *snapshot.Backu
 			"compressed_size": details.CompressedSize,
 			// Records that this was taken from a live disk, so the image is a
 			// smear across the read rather than a point-in-time copy.
-			"was_attached": target.IsAttached,
+			"was_attached": details.InUse,
 		},
 	}, file, info.Size())
 }
