@@ -82,6 +82,9 @@ jobs:
       with:
         version: v2.12.2
 
+    - name: Check the vendored lbd source matches go.mod
+      run: ./hack/sync-lbd-src.sh --check
+
     - name: Check go.mod tidiness
       run: |
         # Run go mod tidy and check if there are any changes
