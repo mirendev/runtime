@@ -24,16 +24,20 @@ import (
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/diskresolve"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
 // diskEntities is what the handlers need from the entity store: which disk the
-// operator means, and how to conjure one that does not exist yet.
+// operator means, how to conjure one that does not exist yet, and which node
+// stateful workloads run on.
 type diskEntities interface {
 	snapshot.DiskResolver
 	snapshot.DiskCreator
+
+	FindNodeId(ctx context.Context) (entity.Id, error)
 }
 
 // Server implements disk_v1alpha.DiskBackup.
@@ -41,6 +45,12 @@ type Server struct {
 	log      *slog.Logger
 	disks    diskEntities
 	dataPath string
+
+	// Recovering a deleted disk rebuilds entities from what the holding area
+	// recorded, rather than from anything a caller supplied, so it writes to
+	// the entity store directly instead of through the resolver.
+	eac *entityserver_v1alpha.EntityAccessClient
+	ec  *entityserver.Client
 
 	// updates is nil on a cluster with no miren.cloud registration. The
 	// streaming paths still work in that case; only the cloud ones refuse.
@@ -65,6 +75,8 @@ func NewServer(
 		log:      log,
 		disks:    diskresolve.New(eac, ec),
 		dataPath: dataPath,
+		eac:      eac,
+		ec:       ec,
 		updates:  updates,
 		mntOps:   diskio.NewRealDiskMountOps(log),
 	}

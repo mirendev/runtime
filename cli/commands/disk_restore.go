@@ -113,9 +113,8 @@ func (r restorePointItem) ID() string { return r.point.Id() }
 
 func (r restorePointItem) Row() []string {
 	when := "unknown"
-	if r.point.HasCreatedAt() {
-		ts := r.point.CreatedAt()
-		when = time.Unix(ts.Seconds(), int64(ts.Nanoseconds())).Format("2006-01-02 15:04:05")
+	if t := goTime(r.point.HasCreatedAt(), r.point.CreatedAt()); !t.IsZero() {
+		when = t.Format("2006-01-02 15:04:05")
 	}
 	return []string{
 		when,

@@ -114,6 +114,52 @@ types:
         index: 3
         doc: Identifier of the uploaded restore point, empty for a local backup
 
+  - type: DeletedDisk
+    doc: >
+      A disk that was deleted but whose data is still sitting in the
+      soft-delete holding area, waiting out its retention period.
+    fields:
+      - name: disk_name
+        type: string
+        index: 0
+      - name: volume_id
+        type: string
+        index: 1
+        doc: Identifies which one to recover when several share a name
+      - name: size_gb
+        type: int64
+        index: 2
+      - name: filesystem
+        type: string
+        index: 3
+      - name: deleted_at
+        type: standard.Timestamp
+        index: 4
+      - name: expires_at
+        type: standard.Timestamp
+        index: 5
+        doc: When the retention period runs out and the data is reclaimed
+      - name: volume_mode
+        type: string
+        index: 6
+
+  - type: UndeleteResult
+    fields:
+      - name: disk
+        type: string
+        index: 0
+        doc: Name of the recovered disk
+      - name: disk_id
+        type: string
+        index: 1
+        doc: Entity id of the recreated disk
+      - name: volume_id
+        type: string
+        index: 2
+      - name: image_path
+        type: string
+        index: 3
+
   - type: RestoreResult
     fields:
       - name: disk
@@ -209,3 +255,30 @@ interfaces:
         results:
           - name: result
             type: '*RestoreResult'
+
+      - name: listDeleted
+        doc: >
+          List disks whose data is still recoverable from the soft-delete
+          holding area, newest deletion first.
+        results:
+          - name: disks
+            type: list
+            element: DeletedDisk
+          - name: retention_days
+            type: int32
+            doc: How long this server keeps deleted disk data before reclaiming it
+
+      - name: undelete
+        doc: >
+          Recover a deleted disk: move its data back out of the holding area
+          and recreate the entities that point at it.
+        parameters:
+          - name: disk
+            type: string
+            doc: Name of the deleted disk to recover
+          - name: volume_id
+            type: string
+            doc: Which volume to recover, when several deleted disks share a name
+        results:
+          - name: result
+            type: '*UndeleteResult'

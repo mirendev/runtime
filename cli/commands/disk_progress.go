@@ -8,10 +8,29 @@ import (
 	"golang.org/x/term"
 	"miren.dev/runtime/api/disk/disk_v1alpha"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 const diskBackupService = "dev.miren.runtime/disk-backup"
+
+// goTime converts a wire timestamp, treating an absent one as the zero time so
+// callers can say "unknown" rather than print 1970.
+func goTime(present bool, ts *standard.Timestamp) time.Time {
+	if !present || ts == nil {
+		return time.Time{}
+	}
+	return time.Unix(ts.Seconds(), int64(ts.Nanoseconds()))
+}
+
+// rfc3339 renders a wire timestamp for JSON output, empty when absent.
+func rfc3339(present bool, ts *standard.Timestamp) string {
+	t := goTime(present, ts)
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
 
 // diskProgress renders the server's progress events for backup and restore.
 //

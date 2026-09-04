@@ -96,18 +96,7 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 
 	// Normalize filesystem string — strip enum prefix if present
 	filesystem = strings.TrimPrefix(strings.ToLower(filesystem), "filesystem.")
-
-	var fs storage_v1alpha.DiskFilesystem
-	switch filesystem {
-	case "ext4":
-		fs = storage_v1alpha.EXT4
-	case "xfs":
-		fs = storage_v1alpha.XFS
-	case "btrfs":
-		fs = storage_v1alpha.BTRFS
-	default:
-		fs = storage_v1alpha.EXT4
-	}
+	fs := ParseFilesystem(filesystem)
 
 	diskId := idgen.GenNS("disk")
 	volId := idgen.GenNS("disk-vol")
@@ -279,6 +268,20 @@ func (r *Resolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.Le
 	}
 
 	return leases, nil
+}
+
+// ParseFilesystem maps a filesystem name onto the disk enum, tolerating the
+// "filesystem." prefix the enum renders with. Anything unrecognized becomes
+// ext4, which is the default a disk gets when it does not ask for one.
+func ParseFilesystem(fs string) storage_v1alpha.DiskFilesystem {
+	switch strings.TrimPrefix(strings.ToLower(fs), "filesystem.") {
+	case "xfs":
+		return storage_v1alpha.XFS
+	case "btrfs":
+		return storage_v1alpha.BTRFS
+	default:
+		return storage_v1alpha.EXT4
+	}
 }
 
 func DetectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {

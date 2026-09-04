@@ -420,6 +420,222 @@ func (v *BackupResult) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type deletedDiskData struct {
+	DiskName   *string             `cbor:"0,keyasint,omitempty" json:"disk_name,omitempty"`
+	VolumeId   *string             `cbor:"1,keyasint,omitempty" json:"volume_id,omitempty"`
+	SizeGb     *int64              `cbor:"2,keyasint,omitempty" json:"size_gb,omitempty"`
+	Filesystem *string             `cbor:"3,keyasint,omitempty" json:"filesystem,omitempty"`
+	DeletedAt  *standard.Timestamp `cbor:"4,keyasint,omitempty" json:"deleted_at,omitempty"`
+	ExpiresAt  *standard.Timestamp `cbor:"5,keyasint,omitempty" json:"expires_at,omitempty"`
+	VolumeMode *string             `cbor:"6,keyasint,omitempty" json:"volume_mode,omitempty"`
+}
+
+type DeletedDisk struct {
+	data deletedDiskData
+}
+
+func (v *DeletedDisk) HasDiskName() bool {
+	return v.data.DiskName != nil
+}
+
+func (v *DeletedDisk) DiskName() string {
+	if v.data.DiskName == nil {
+		return ""
+	}
+	return *v.data.DiskName
+}
+
+func (v *DeletedDisk) SetDiskName(disk_name string) {
+	v.data.DiskName = &disk_name
+}
+
+func (v *DeletedDisk) HasVolumeId() bool {
+	return v.data.VolumeId != nil
+}
+
+func (v *DeletedDisk) VolumeId() string {
+	if v.data.VolumeId == nil {
+		return ""
+	}
+	return *v.data.VolumeId
+}
+
+func (v *DeletedDisk) SetVolumeId(volume_id string) {
+	v.data.VolumeId = &volume_id
+}
+
+func (v *DeletedDisk) HasSizeGb() bool {
+	return v.data.SizeGb != nil
+}
+
+func (v *DeletedDisk) SizeGb() int64 {
+	if v.data.SizeGb == nil {
+		return 0
+	}
+	return *v.data.SizeGb
+}
+
+func (v *DeletedDisk) SetSizeGb(size_gb int64) {
+	v.data.SizeGb = &size_gb
+}
+
+func (v *DeletedDisk) HasFilesystem() bool {
+	return v.data.Filesystem != nil
+}
+
+func (v *DeletedDisk) Filesystem() string {
+	if v.data.Filesystem == nil {
+		return ""
+	}
+	return *v.data.Filesystem
+}
+
+func (v *DeletedDisk) SetFilesystem(filesystem string) {
+	v.data.Filesystem = &filesystem
+}
+
+func (v *DeletedDisk) HasDeletedAt() bool {
+	return v.data.DeletedAt != nil
+}
+
+func (v *DeletedDisk) DeletedAt() *standard.Timestamp {
+	return v.data.DeletedAt
+}
+
+func (v *DeletedDisk) SetDeletedAt(deleted_at *standard.Timestamp) {
+	v.data.DeletedAt = deleted_at
+}
+
+func (v *DeletedDisk) HasExpiresAt() bool {
+	return v.data.ExpiresAt != nil
+}
+
+func (v *DeletedDisk) ExpiresAt() *standard.Timestamp {
+	return v.data.ExpiresAt
+}
+
+func (v *DeletedDisk) SetExpiresAt(expires_at *standard.Timestamp) {
+	v.data.ExpiresAt = expires_at
+}
+
+func (v *DeletedDisk) HasVolumeMode() bool {
+	return v.data.VolumeMode != nil
+}
+
+func (v *DeletedDisk) VolumeMode() string {
+	if v.data.VolumeMode == nil {
+		return ""
+	}
+	return *v.data.VolumeMode
+}
+
+func (v *DeletedDisk) SetVolumeMode(volume_mode string) {
+	v.data.VolumeMode = &volume_mode
+}
+
+func (v *DeletedDisk) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DeletedDisk) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DeletedDisk) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DeletedDisk) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type undeleteResultData struct {
+	Disk      *string `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
+	DiskId    *string `cbor:"1,keyasint,omitempty" json:"disk_id,omitempty"`
+	VolumeId  *string `cbor:"2,keyasint,omitempty" json:"volume_id,omitempty"`
+	ImagePath *string `cbor:"3,keyasint,omitempty" json:"image_path,omitempty"`
+}
+
+type UndeleteResult struct {
+	data undeleteResultData
+}
+
+func (v *UndeleteResult) HasDisk() bool {
+	return v.data.Disk != nil
+}
+
+func (v *UndeleteResult) Disk() string {
+	if v.data.Disk == nil {
+		return ""
+	}
+	return *v.data.Disk
+}
+
+func (v *UndeleteResult) SetDisk(disk string) {
+	v.data.Disk = &disk
+}
+
+func (v *UndeleteResult) HasDiskId() bool {
+	return v.data.DiskId != nil
+}
+
+func (v *UndeleteResult) DiskId() string {
+	if v.data.DiskId == nil {
+		return ""
+	}
+	return *v.data.DiskId
+}
+
+func (v *UndeleteResult) SetDiskId(disk_id string) {
+	v.data.DiskId = &disk_id
+}
+
+func (v *UndeleteResult) HasVolumeId() bool {
+	return v.data.VolumeId != nil
+}
+
+func (v *UndeleteResult) VolumeId() string {
+	if v.data.VolumeId == nil {
+		return ""
+	}
+	return *v.data.VolumeId
+}
+
+func (v *UndeleteResult) SetVolumeId(volume_id string) {
+	v.data.VolumeId = &volume_id
+}
+
+func (v *UndeleteResult) HasImagePath() bool {
+	return v.data.ImagePath != nil
+}
+
+func (v *UndeleteResult) ImagePath() string {
+	if v.data.ImagePath == nil {
+		return ""
+	}
+	return *v.data.ImagePath
+}
+
+func (v *UndeleteResult) SetImagePath(image_path string) {
+	v.data.ImagePath = &image_path
+}
+
+func (v *UndeleteResult) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *UndeleteResult) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *UndeleteResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *UndeleteResult) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type restoreResultData struct {
 	Disk           *string `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
 	ImageSizeBytes *int64  `cbor:"1,keyasint,omitempty" json:"image_size_bytes,omitempty"`
@@ -783,6 +999,141 @@ func (v *DiskBackupRestoreResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type diskBackupListDeletedArgsData struct{}
+
+type DiskBackupListDeletedArgs struct {
+	call rpc.Call
+	data diskBackupListDeletedArgsData
+}
+
+func (v *DiskBackupListDeletedArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupListDeletedArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupListDeletedArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupListDeletedArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskBackupListDeletedResultsData struct {
+	Disks         *[]*DeletedDisk `cbor:"0,keyasint,omitempty" json:"disks,omitempty"`
+	RetentionDays *int32          `cbor:"1,keyasint,omitempty" json:"retention_days,omitempty"`
+}
+
+type DiskBackupListDeletedResults struct {
+	call rpc.Call
+	data diskBackupListDeletedResultsData
+}
+
+func (v *DiskBackupListDeletedResults) SetDisks(disks []*DeletedDisk) {
+	x := slices.Clone(disks)
+	v.data.Disks = &x
+}
+
+func (v *DiskBackupListDeletedResults) SetRetentionDays(retention_days int32) {
+	v.data.RetentionDays = &retention_days
+}
+
+func (v *DiskBackupListDeletedResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupListDeletedResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupListDeletedResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupListDeletedResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskBackupUndeleteArgsData struct {
+	Disk     *string `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
+	VolumeId *string `cbor:"1,keyasint,omitempty" json:"volume_id,omitempty"`
+}
+
+type DiskBackupUndeleteArgs struct {
+	call rpc.Call
+	data diskBackupUndeleteArgsData
+}
+
+func (v *DiskBackupUndeleteArgs) HasDisk() bool {
+	return v.data.Disk != nil
+}
+
+func (v *DiskBackupUndeleteArgs) Disk() string {
+	if v.data.Disk == nil {
+		return ""
+	}
+	return *v.data.Disk
+}
+
+func (v *DiskBackupUndeleteArgs) HasVolumeId() bool {
+	return v.data.VolumeId != nil
+}
+
+func (v *DiskBackupUndeleteArgs) VolumeId() string {
+	if v.data.VolumeId == nil {
+		return ""
+	}
+	return *v.data.VolumeId
+}
+
+func (v *DiskBackupUndeleteArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupUndeleteArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupUndeleteArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupUndeleteArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskBackupUndeleteResultsData struct {
+	Result **UndeleteResult `cbor:"0,keyasint,omitempty" json:"result,omitempty"`
+}
+
+type DiskBackupUndeleteResults struct {
+	call rpc.Call
+	data diskBackupUndeleteResultsData
+}
+
+func (v *DiskBackupUndeleteResults) SetResult(result **UndeleteResult) {
+	v.data.Result = result
+}
+
+func (v *DiskBackupUndeleteResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupUndeleteResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupUndeleteResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupUndeleteResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type DiskBackupBackup struct {
 	rpc.Call
 	args    DiskBackupBackupArgs
@@ -861,10 +1212,64 @@ func (t *DiskBackupRestore) Results() *DiskBackupRestoreResults {
 	return results
 }
 
+type DiskBackupListDeleted struct {
+	rpc.Call
+	args    DiskBackupListDeletedArgs
+	results DiskBackupListDeletedResults
+}
+
+func (t *DiskBackupListDeleted) Args() *DiskBackupListDeletedArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DiskBackupListDeleted) Results() *DiskBackupListDeletedResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DiskBackupUndelete struct {
+	rpc.Call
+	args    DiskBackupUndeleteArgs
+	results DiskBackupUndeleteResults
+}
+
+func (t *DiskBackupUndelete) Args() *DiskBackupUndeleteArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DiskBackupUndelete) Results() *DiskBackupUndeleteResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type DiskBackup interface {
 	Backup(ctx context.Context, state *DiskBackupBackup) error
 	ListBackups(ctx context.Context, state *DiskBackupListBackups) error
 	Restore(ctx context.Context, state *DiskBackupRestore) error
+	ListDeleted(ctx context.Context, state *DiskBackupListDeleted) error
+	Undelete(ctx context.Context, state *DiskBackupUndelete) error
 }
 
 type reexportDiskBackup struct {
@@ -880,6 +1285,14 @@ func (reexportDiskBackup) ListBackups(ctx context.Context, state *DiskBackupList
 }
 
 func (reexportDiskBackup) Restore(ctx context.Context, state *DiskBackupRestore) error {
+	panic("not implemented")
+}
+
+func (reexportDiskBackup) ListDeleted(ctx context.Context, state *DiskBackupListDeleted) error {
+	panic("not implemented")
+}
+
+func (reexportDiskBackup) Undelete(ctx context.Context, state *DiskBackupUndelete) error {
 	panic("not implemented")
 }
 
@@ -917,6 +1330,26 @@ func AdaptDiskBackup(t DiskBackup) *rpc.Interface {
 			Params:        []string{"disk", "restore_point", "data", "force", "progress"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Restore(ctx, &DiskBackupRestore{Call: call})
+			},
+		},
+		{
+			Name:          "listDeleted",
+			InterfaceName: "DiskBackup",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListDeleted(ctx, &DiskBackupListDeleted{Call: call})
+			},
+		},
+		{
+			Name:          "undelete",
+			InterfaceName: "DiskBackup",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"disk", "volume_id"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Undelete(ctx, &DiskBackupUndelete{Call: call})
 			},
 		},
 	}
@@ -1050,4 +1483,75 @@ func (v DiskBackupClient) Restore(ctx context.Context, disk string, restore_poin
 	}
 
 	return &DiskBackupClientRestoreResults{client: v.Client, data: ret}, nil
+}
+
+type DiskBackupClientListDeletedResults struct {
+	client rpc.Client
+	data   diskBackupListDeletedResultsData
+}
+
+func (v *DiskBackupClientListDeletedResults) HasDisks() bool {
+	return v.data.Disks != nil
+}
+
+func (v *DiskBackupClientListDeletedResults) Disks() []*DeletedDisk {
+	if v.data.Disks == nil {
+		return nil
+	}
+	return *v.data.Disks
+}
+
+func (v *DiskBackupClientListDeletedResults) HasRetentionDays() bool {
+	return v.data.RetentionDays != nil
+}
+
+func (v *DiskBackupClientListDeletedResults) RetentionDays() int32 {
+	if v.data.RetentionDays == nil {
+		return 0
+	}
+	return *v.data.RetentionDays
+}
+
+func (v DiskBackupClient) ListDeleted(ctx context.Context) (*DiskBackupClientListDeletedResults, error) {
+	args := DiskBackupListDeletedArgs{}
+
+	var ret diskBackupListDeletedResultsData
+
+	err := v.Call(ctx, "listDeleted", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DiskBackupClientListDeletedResults{client: v.Client, data: ret}, nil
+}
+
+type DiskBackupClientUndeleteResults struct {
+	client rpc.Client
+	data   diskBackupUndeleteResultsData
+}
+
+func (v *DiskBackupClientUndeleteResults) HasResult() bool {
+	return v.data.Result != nil
+}
+
+func (v *DiskBackupClientUndeleteResults) Result() *UndeleteResult {
+	if v.data.Result == nil {
+		return nil
+	}
+	return *v.data.Result
+}
+
+func (v DiskBackupClient) Undelete(ctx context.Context, disk string, volume_id string) (*DiskBackupClientUndeleteResults, error) {
+	args := DiskBackupUndeleteArgs{}
+	args.data.Disk = &disk
+	args.data.VolumeId = &volume_id
+
+	var ret diskBackupUndeleteResultsData
+
+	err := v.Call(ctx, "undelete", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DiskBackupClientUndeleteResults{client: v.Client, data: ret}, nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -23,6 +24,7 @@ type fakeDisks struct {
 	volume  *snapshot.VolumeState
 	leases  []snapshot.LeaseState
 	created *snapshot.RestoreTarget
+	nodeErr error
 }
 
 func (f *fakeDisks) FindDisk(_ context.Context, name string) (*snapshot.DiskState, error) {
@@ -41,6 +43,13 @@ func (f *fakeDisks) FindVolume(context.Context, string) (*snapshot.VolumeState, 
 
 func (f *fakeDisks) FindLeases(context.Context, string) ([]snapshot.LeaseState, error) {
 	return f.leases, nil
+}
+
+func (f *fakeDisks) FindNodeId(context.Context) (entity.Id, error) {
+	if f.nodeErr != nil {
+		return "", f.nodeErr
+	}
+	return entity.Id("node/n1"), nil
 }
 
 func (f *fakeDisks) CreateDiskAndVolume(context.Context, string, int64, string, string) (*snapshot.RestoreTarget, error) {
