@@ -1,4 +1,4 @@
-package commands
+package diskresolve
 
 import (
 	"context"
@@ -17,18 +17,18 @@ import (
 	"miren.dev/runtime/pkg/snapshot"
 )
 
-// entityDiskResolver implements snapshot.DiskResolver using the entity
+// Resolver implements snapshot.DiskResolver using the entity
 // access RPC client.
-type entityDiskResolver struct {
+type Resolver struct {
 	eac *entityserver_v1alpha.EntityAccessClient
 	ec  *entityserver.Client
 }
 
-func newEntityDiskResolver(eac *entityserver_v1alpha.EntityAccessClient, ec *entityserver.Client) *entityDiskResolver {
-	return &entityDiskResolver{eac: eac, ec: ec}
+func New(eac *entityserver_v1alpha.EntityAccessClient, ec *entityserver.Client) *Resolver {
+	return &Resolver{eac: eac, ec: ec}
 }
 
-func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskState, error) {
+func (r *Resolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskState, error) {
 	ref := entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk)
 	results, err := r.eac.List(ctx, ref)
 	if err != nil {
@@ -59,7 +59,7 @@ func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapsh
 	}
 }
 
-func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*snapshot.VolumeState, error) {
+func (r *Resolver) FindVolume(ctx context.Context, diskID string) (*snapshot.VolumeState, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(storage_v1alpha.DiskVolumeDiskIdId, entity.Id(diskID)))
 	if err != nil {
 		return nil, fmt.Errorf("listing disk volumes: %w", err)
@@ -88,7 +88,7 @@ func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*sn
 // controller ignores it while restore writes the image. The returned
 // RestoreTarget includes a Finalize callback that creates the disk_volume
 // entity and transitions the disk to PROVISIONED.
-func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
+func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
 	sizeGb := sizeBytes / (1 << 30)
 	if sizeGb == 0 {
 		sizeGb = 1
@@ -125,7 +125,7 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 		return nil, fmt.Errorf("creating disk entity: %w", err)
 	}
 
-	nodeId, err := r.findNodeId(ctx)
+	nodeId, err := r.FindNodeId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("finding node: %w", err)
 	}
@@ -193,7 +193,7 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 				VolumeId:     volId,
 				SizeGb:       sizeGb,
 				Filesystem:   filesystem,
-				VolumeMode:   detectVolumeMode(),
+				VolumeMode:   DetectVolumeMode(),
 				DesiredState: storage_v1alpha.DV_PRESENT,
 				ActualState:  storage_v1alpha.DV_READY,
 				ImagePath:    imagePath,
@@ -231,10 +231,10 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 	}, nil
 }
 
-// findNodeId finds the coordinator node. Stateful sandboxes (those with
+// FindNodeId finds the coordinator node. Stateful sandboxes (those with
 // disk volumes) run on the coordinator, so disk_volume entities must
 // reference it.
-func (r *entityDiskResolver) findNodeId(ctx context.Context) (entity.Id, error) {
+func (r *Resolver) FindNodeId(ctx context.Context) (entity.Id, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(entity.EntityKind, compute.KindNode))
 	if err != nil {
 		return "", fmt.Errorf("listing nodes: %w", err)
@@ -262,7 +262,7 @@ func (r *entityDiskResolver) findNodeId(ctx context.Context) (entity.Id, error) 
 	return "", fmt.Errorf("multiple nodes found but none has role=coordinator")
 }
 
-func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.LeaseState, error) {
+func (r *Resolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.LeaseState, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, entity.Id(diskID)))
 	if err != nil {
 		return nil, fmt.Errorf("listing disk leases: %w", err)
@@ -281,7 +281,7 @@ func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]s
 	return leases, nil
 }
 
-func detectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
+func DetectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
 	if mode := os.Getenv("MIREN_DISK_MODE"); mode == "accelerator" {
 		return storage_v1alpha.VM_ACCELERATOR
 	}

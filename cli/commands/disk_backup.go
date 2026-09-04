@@ -10,6 +10,7 @@ import (
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/diskresolve"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/snapshot"
 )
@@ -33,7 +34,7 @@ func DiskBackup(ctx *Context, opts struct {
 	}
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
-	resolver := newEntityDiskResolver(eac, nil)
+	resolver := diskresolve.New(eac, nil)
 
 	target, err := snapshot.PrepareBackup(ctx, resolver, opts.Name, opts.DataPath)
 	if err != nil {

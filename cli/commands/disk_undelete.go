@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/pkg/diskresolve"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 )
@@ -73,7 +74,7 @@ func DiskUndelete(ctx *Context, opts struct {
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(ctx.Log, eac)
-	resolver := newEntityDiskResolver(eac, ec)
+	resolver := diskresolve.New(eac, ec)
 
 	// Check if a disk with this name already exists
 	if _, err := resolver.FindDisk(context.Background(), meta.DiskName); err == nil {
@@ -140,7 +141,7 @@ func DiskUndelete(ctx *Context, opts struct {
 	}()
 
 	// Find the node ID
-	nodeId, err := resolver.findNodeId(context.Background())
+	nodeId, err := resolver.FindNodeId(context.Background())
 	if err != nil {
 		ctx.Warn("Failed to find node ID, using stored value: %v", err)
 		nodeId = meta.NodeID.Id()

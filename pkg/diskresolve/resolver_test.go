@@ -1,4 +1,4 @@
-package commands
+package diskresolve
 
 import (
 	"context"
@@ -73,17 +73,17 @@ func (c cancelAwareRPC) Call(ctx context.Context, method string, args, result an
 }
 
 // setupResolver builds an in-memory entity server, seeds a coordinator node so
-// entityDiskResolver.findNodeId succeeds, and returns a resolver wired through
+// Resolver.FindNodeId succeeds, and returns a resolver wired through
 // fault (or a plain eac when fault is nil). Reads in tests should use es.EAC,
 // which is not fault-injected.
-func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer, *entityDiskResolver) {
+func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer, *Resolver) {
 	t.Helper()
 	ctx := t.Context()
 
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 
-	// Seed a single coordinator node so entityDiskResolver.findNodeId returns one.
+	// Seed a single coordinator node so Resolver.FindNodeId returns one.
 	_, err := es.Client.Create(ctx, "coordinator", &compute.Node{ApiAddress: ":8444"})
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer,
 	}
 	eac := entityserver_v1alpha.NewEntityAccessClient(cli)
 	ec := entityserver.NewClient(testutils.TestLogger(t), eac)
-	return es, newEntityDiskResolver(eac, ec)
+	return es, New(eac, ec)
 }
 
 func listTestDisks(t *testing.T, ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) []storage_v1alpha.Disk {
@@ -355,7 +355,7 @@ func TestCreateDiskAndVolume_CleanupRunsAfterCancellation(t *testing.T) {
 	// The resolver talks through a client that honours cancellation, so a
 	// cleanup that inherited the dead context would fail its Patch.
 	eac := entityserver_v1alpha.NewEntityAccessClient(cancelAwareRPC{Client: es.EAC.Client})
-	resolver := newEntityDiskResolver(eac, entityserver.NewClient(testutils.TestLogger(t), eac))
+	resolver := New(eac, entityserver.NewClient(testutils.TestLogger(t), eac))
 
 	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)

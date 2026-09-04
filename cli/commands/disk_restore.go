@@ -8,6 +8,7 @@ import (
 
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/diskresolve"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -54,7 +55,7 @@ func DiskRestore(ctx *Context, opts struct {
 
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(ctx.Log, eac)
-	resolver := newEntityDiskResolver(eac, ec)
+	resolver := diskresolve.New(eac, ec)
 
 	target, err := snapshot.PrepareRestore(ctx, resolver, diskName, opts.DataPath,
 		snapshot.WithCreator(resolver, meta.SizeBytes, meta.Filesystem),
