@@ -60,33 +60,47 @@ type SnapshotRequest struct {
 	StagingDir string
 }
 
-// Snapshot compresses the image and uploads it, returning the cloud's update ID.
-func (s *ImageSnapshotter) Snapshot(ctx context.Context, req SnapshotRequest) (string, error) {
+// SnapshotResult describes the restore point a Snapshot produced. The sizes and
+// checksum are what a caller reports back to an operator, so they come from the
+// snapshot that was actually uploaded rather than being recomputed.
+type SnapshotResult struct {
+	// UpdateID is the cloud's identifier for the uploaded restore point.
+	UpdateID string
+	// ImageSize is the uncompressed size of the image that was read.
+	ImageSize int64
+	// CompressedSize is the size of the uploaded snapshot.
+	CompressedSize int64
+	// Checksum is the SHA-256 of the uncompressed image, hex encoded.
+	Checksum string
+}
+
+// Snapshot compresses the image and uploads it as a restore point.
+func (s *ImageSnapshotter) Snapshot(ctx context.Context, req SnapshotRequest) (*SnapshotResult, error) {
 	if s.updates == nil {
-		return "", fmt.Errorf("no cloud updates client configured")
+		return nil, fmt.Errorf("no cloud updates client configured")
 	}
 	if req.VolumeID == "" {
-		return "", fmt.Errorf("volume ID is required")
+		return nil, fmt.Errorf("volume ID is required")
 	}
 
 	info, err := os.Stat(req.ImagePath)
 	if err != nil {
-		return "", fmt.Errorf("stat image: %w", err)
+		return nil, fmt.Errorf("stat image: %w", err)
 	}
 
 	staged, checksum, err := s.stage(req, info)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer os.Remove(staged.Name())
 	defer staged.Close()
 
 	stagedInfo, err := staged.Stat()
 	if err != nil {
-		return "", fmt.Errorf("stat staged snapshot: %w", err)
+		return nil, fmt.Errorf("stat staged snapshot: %w", err)
 	}
 	if _, err := staged.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("rewind staged snapshot: %w", err)
+		return nil, fmt.Errorf("rewind staged snapshot: %w", err)
 	}
 
 	// The ordering key must sort against its siblings and match the cloud's
@@ -109,7 +123,7 @@ func (s *ImageSnapshotter) Snapshot(ctx context.Context, req SnapshotRequest) (s
 		LeaseNonce: req.LeaseNonce,
 	}, staged, stagedInfo.Size())
 	if err != nil {
-		return "", fmt.Errorf("upload image snapshot: %w", err)
+		return nil, fmt.Errorf("upload image snapshot: %w", err)
 	}
 
 	s.log.Info("uploaded volume image snapshot",
@@ -119,7 +133,12 @@ func (s *ImageSnapshotter) Snapshot(ctx context.Context, req SnapshotRequest) (s
 		"image_size", info.Size(),
 		"compressed_size", stagedInfo.Size(),
 	)
-	return updateID, nil
+	return &SnapshotResult{
+		UpdateID:       updateID,
+		ImageSize:      info.Size(),
+		CompressedSize: stagedInfo.Size(),
+		Checksum:       checksum,
+	}, nil
 }
 
 // stage writes a compressed snapshot to a temp file.

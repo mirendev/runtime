@@ -116,10 +116,10 @@ types:
 
   - type: RestoreResult
     fields:
-      - name: disk_id
+      - name: disk
         type: string
         index: 0
-        doc: Entity id of the restored disk
+        doc: Name of the restored disk
       - name: image_size_bytes
         type: int64
         index: 1

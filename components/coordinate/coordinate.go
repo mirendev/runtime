@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/api/disk/disk_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -43,6 +44,7 @@ import (
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/components/buildkit"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/components/netresolve"
 	addonctrl "miren.dev/runtime/controllers/addon"
 	artifactctrl "miren.dev/runtime/controllers/artifact"
@@ -93,6 +95,7 @@ import (
 	"miren.dev/runtime/servers/build"
 	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
+	disksrv "miren.dev/runtime/servers/disk"
 	"miren.dev/runtime/servers/entityserver"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
 	"miren.dev/runtime/servers/httpingress"
@@ -1658,6 +1661,24 @@ func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 		return err
 	}
 	server.ExposeValue(rpc.ServiceSqliteBackup, sqlitebackup_v1alpha.AdaptSqliteBackup(sqliteBackupServer))
+
+	// Disk backup and restore, driven by a client that need not be on this host
+	// (RFD-108). The image bytes and the cloud key stay here; everything else is
+	// the client's orchestration.
+	//
+	// The updates client is nil when the cluster has no cloud registration,
+	// which leaves the local-file backup path working and refuses the cloud
+	// ones with an explanation.
+	var diskUpdates diskio.CloudUpdatesClient
+	if c.authClient != nil {
+		cloudURL := c.CloudAuth.CloudURL
+		if cloudURL == "" {
+			cloudURL = DefaultCloudURL
+		}
+		diskUpdates = diskio.NewCloudUpdatesClient(c.Log, cloudURL, c.authClient)
+	}
+	diskBackupServer := disksrv.NewServer(c.Log, eac, ec, c.DataPath, diskUpdates)
+	server.ExposeValue("dev.miren.runtime/disk-backup", disk_v1alpha.AdaptDiskBackup(diskBackupServer))
 
 	// Create httpingress server for internal HTTP requests
 	ingressConfig := httpingress.IngressConfig{

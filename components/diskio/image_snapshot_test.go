@@ -29,7 +29,7 @@ func TestImageSnapshotUploadsCompressedImage(t *testing.T) {
 	content := bytes.Repeat([]byte("disk contents "), 512)
 	snapshotter, fake, imagePath := newSnapshotFixture(t, content)
 
-	updateID, err := snapshotter.Snapshot(context.Background(), SnapshotRequest{
+	res, err := snapshotter.Snapshot(context.Background(), SnapshotRequest{
 		VolumeID:     "vol-1",
 		ImagePath:    imagePath,
 		Name:         "data",
@@ -37,7 +37,10 @@ func TestImageSnapshotUploadsCompressedImage(t *testing.T) {
 		SnapshotName: "pre-migration",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "volup-fake", updateID)
+	assert.Equal(t, "volup-fake", res.UpdateID)
+	assert.Equal(t, int64(len(content)), res.ImageSize)
+	assert.NotZero(t, res.CompressedSize)
+	assert.NotEmpty(t, res.Checksum)
 
 	require.Len(t, fake.uploads, 1)
 	up := fake.uploads[0]

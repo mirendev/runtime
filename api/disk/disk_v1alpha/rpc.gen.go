@@ -421,7 +421,7 @@ func (v *BackupResult) UnmarshalJSON(data []byte) error {
 }
 
 type restoreResultData struct {
-	DiskId         *string `cbor:"0,keyasint,omitempty" json:"disk_id,omitempty"`
+	Disk           *string `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
 	ImageSizeBytes *int64  `cbor:"1,keyasint,omitempty" json:"image_size_bytes,omitempty"`
 	Created        *bool   `cbor:"2,keyasint,omitempty" json:"created,omitempty"`
 }
@@ -430,19 +430,19 @@ type RestoreResult struct {
 	data restoreResultData
 }
 
-func (v *RestoreResult) HasDiskId() bool {
-	return v.data.DiskId != nil
+func (v *RestoreResult) HasDisk() bool {
+	return v.data.Disk != nil
 }
 
-func (v *RestoreResult) DiskId() string {
-	if v.data.DiskId == nil {
+func (v *RestoreResult) Disk() string {
+	if v.data.Disk == nil {
 		return ""
 	}
-	return *v.data.DiskId
+	return *v.data.Disk
 }
 
-func (v *RestoreResult) SetDiskId(disk_id string) {
-	v.data.DiskId = &disk_id
+func (v *RestoreResult) SetDisk(disk string) {
+	v.data.Disk = &disk
 }
 
 func (v *RestoreResult) HasImageSizeBytes() bool {

@@ -155,6 +155,9 @@ func clusterAdminPerms() perms {
 			"internalhttp": set("dorequest"),
 			"disks":        set("new", "delete"),
 			"addons":       set("createinstance", "deleteinstance"),
+			// Backup and restore read and rewrite a disk's contents wholesale,
+			// so they sit with the other disk mutations rather than with reads.
+			"diskbackup": set("backup", "restore", "listbackups"),
 		},
 	)
 }
