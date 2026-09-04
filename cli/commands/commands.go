@@ -1271,6 +1271,13 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-delete", Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete))
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
+	// Break-glass: `miren disk backup`/`restore` drive the server and are the
+	// supported commands. These touch the image directly, for a host whose RPC
+	// listener is down, and so must run on the server.
+	d.Dispatch("debug disk backup", Infer("debug disk backup", "Back up a disk by reading its image directly (break-glass)", DebugDiskBackup))
+	d.Dispatch("debug disk restore", Infer("debug disk restore", "Restore a disk by writing its image directly (break-glass)", DebugDiskRestore))
+	d.Dispatch("debug disk undelete", Infer("debug disk undelete", "Recover a deleted disk by moving its data directly (break-glass)", DebugDiskUndelete))
+	d.Dispatch("debug disk list-deleted", Infer("debug disk list-deleted", "Read the soft-delete holding area directly (break-glass)", DebugDiskListDeleted))
 
 	// Debug saga commands
 	d.Dispatch("debug saga", Section("debug saga", "Saga execution debug commands", "", WithSectionDescription(sagaSectionDescription)))

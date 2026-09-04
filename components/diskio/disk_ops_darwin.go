@@ -68,7 +68,7 @@ func (s *stubDiskMountOps) FindLoopByBacking(_ string) (string, error) {
 	return "", nil
 }
 
-func (s *stubDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
+func (s *stubDiskMountOps) FindAllLoopBackings() (map[string]LoopBacking, error) {
 	return nil, nil
 }
 

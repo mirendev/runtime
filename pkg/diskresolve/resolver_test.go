@@ -1,8 +1,9 @@
-package commands
+package diskresolve
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -73,17 +74,17 @@ func (c cancelAwareRPC) Call(ctx context.Context, method string, args, result an
 }
 
 // setupResolver builds an in-memory entity server, seeds a coordinator node so
-// entityDiskResolver.findNodeId succeeds, and returns a resolver wired through
+// Resolver.FindNodeId succeeds, and returns a resolver wired through
 // fault (or a plain eac when fault is nil). Reads in tests should use es.EAC,
 // which is not fault-injected.
-func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer, *entityDiskResolver) {
+func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer, *Resolver) {
 	t.Helper()
 	ctx := t.Context()
 
 	es, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 
-	// Seed a single coordinator node so entityDiskResolver.findNodeId returns one.
+	// Seed a single coordinator node so Resolver.FindNodeId returns one.
 	_, err := es.Client.Create(ctx, "coordinator", &compute.Node{ApiAddress: ":8444"})
 	require.NoError(t, err)
 
@@ -95,7 +96,7 @@ func setupResolver(t *testing.T, fault *faultRPC) (*testutils.InMemEntityServer,
 	}
 	eac := entityserver_v1alpha.NewEntityAccessClient(cli)
 	ec := entityserver.NewClient(testutils.TestLogger(t), eac)
-	return es, newEntityDiskResolver(eac, ec)
+	return es, New(eac, ec)
 }
 
 func listTestDisks(t *testing.T, ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient) []storage_v1alpha.Disk {
@@ -153,7 +154,7 @@ func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	ctx := t.Context()
 	es, resolver := setupResolver(t, nil)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 	require.NotNil(t, target)
 	assert.True(t, target.Created)
@@ -196,7 +197,7 @@ func TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan(t *testing.T) {
 	fault := newFaultRPC(nil, "create", 1, fmt.Errorf("simulated disk_volume create failure"))
 	es, resolver := setupResolver(t, fault)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 
 	disks := listTestDisks(t, ctx, es.EAC)
@@ -238,7 +239,7 @@ func TestCreateDiskAndVolume_FinalizePatchFailsLeavesNoOrphan(t *testing.T) {
 	fault := newFaultRPC(nil, "patch", 1, fmt.Errorf("simulated disk patch failure"))
 	es, resolver := setupResolver(t, fault)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 
 	disks := listTestDisks(t, ctx, es.EAC)
@@ -274,7 +275,7 @@ func TestCreateDiskAndVolume_CleanupDoesNotHardDeleteDisk(t *testing.T) {
 	ctx := t.Context()
 	es, resolver := setupResolver(t, nil)
 
-	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", "/var/lib/miren")
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
 	disks := listTestDisks(t, ctx, es.EAC)
 	diskID := disks[0].ID
@@ -355,7 +356,7 @@ func TestCreateDiskAndVolume_CleanupRunsAfterCancellation(t *testing.T) {
 	// The resolver talks through a client that honours cancellation, so a
 	// cleanup that inherited the dead context would fail its Patch.
 	eac := entityserver_v1alpha.NewEntityAccessClient(cancelAwareRPC{Client: es.EAC.Client})
-	resolver := newEntityDiskResolver(eac, entityserver.NewClient(testutils.TestLogger(t), eac))
+	resolver := New(eac, entityserver.NewClient(testutils.TestLogger(t), eac))
 
 	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
 	require.NoError(t, err)
@@ -372,4 +373,67 @@ func TestCreateDiskAndVolume_CleanupRunsAfterCancellation(t *testing.T) {
 	assert.Equal(t, storage_v1alpha.DELETING, getTestDisk(t, ctx, es.EAC, diskID).Status)
 	_, statErr := os.Stat(target.ImagePath)
 	assert.True(t, os.IsNotExist(statErr), "the restored image must be removed, got %v", statErr)
+}
+
+// A disk that claims less capacity than the image it is given is wrong on its
+// face, so the size rounds up rather than truncating.
+func TestCreateDiskAndVolumeRoundsSizeUp(t *testing.T) {
+	ctx := t.Context()
+
+	cases := []struct {
+		name      string
+		sizeBytes int64
+		wantGb    int64
+	}{
+		{"exactly one GiB", 1 << 30, 1},
+		{"a byte over one GiB", (1 << 30) + 1, 2},
+		{"one and a half GiB", (1 << 30) * 3 / 2, 2},
+		{"exactly two GiB", 2 << 30, 2},
+		{"smaller than a GiB still gets one", 4096, 1},
+		{"zero still gets one", 0, 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			es, resolver := setupResolver(t, nil)
+
+			target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", tc.sizeBytes, "ext4", t.TempDir())
+			require.NoError(t, err)
+			require.NotNil(t, target)
+
+			disks := listTestDisks(t, ctx, es.EAC)
+			require.Len(t, disks, 1)
+			assert.Equal(t, tc.wantGb, disks[0].SizeGb)
+		})
+	}
+}
+
+// The size comes out of a snapshot header, which is a file the caller handed
+// us, so it is checked rather than trusted. Rounding by adding gib-1 would let
+// a size near the top of the range overflow into a negative capacity, which the
+// entity store would happily persist.
+func TestDiskSizeGbRejectsSizesItCannotRepresent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sizeBytes int64
+	}{
+		{"negative", -1},
+		{"very negative", math.MinInt64},
+		{"large enough to overflow the rounding", math.MaxInt64},
+		{"just past the representable ceiling", math.MaxInt64 - (1 << 30) + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := diskSizeGb(tc.sizeBytes)
+			require.Error(t, err, "size %d should have been rejected", tc.sizeBytes)
+		})
+	}
+}
+
+// And the largest size it does accept round-trips back to bytes without
+// overflowing, which is what the disk volume controller does with it.
+func TestDiskSizeGbCeilingRoundTrips(t *testing.T) {
+	sizeGb, err := diskSizeGb(math.MaxInt64 - (1 << 30))
+	require.NoError(t, err)
+	assert.Positive(t, sizeGb)
+	assert.Positive(t, sizeGb*(1<<30)/(1<<30), "the byte conversion must not overflow")
 }

@@ -1,24 +1,25 @@
 ---
-title: "miren disk backup"
-sidebar_label: "disk backup"
-description: "Backup a disk to a snapshot file"
+title: "miren debug disk backup"
+sidebar_label: "debug disk backup"
+description: "Back up a disk by reading its image directly (break-glass)"
 ---
 
-# miren disk backup
+# miren debug disk backup
 
-Backup a disk to a snapshot file
+Back up a disk by reading its image directly (break-glass)
 
 ## Usage
 
 ```bash
-miren disk backup [flags]
+miren debug disk backup [flags]
 ```
 
 ## Flags
 
-- `--cloud` — Upload the snapshot to miren.cloud as a restore point instead of writing a local file
+- `--cloud` — Also upload the snapshot to miren.cloud as a restore point
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--data-path` — Path to miren data directory (default: `/var/lib/miren`)
 - `--name, -n` — Disk name to backup
 - `--output, -o` — Output snapshot path (default: DISK-YYYYMMDD-HHMMSS.miren.zst)
 - `--pin` — Name the uploaded restore point, pinning it against cleanup
@@ -31,4 +32,4 @@ miren disk backup [flags]
 
 ## See also
 
-- [`miren disk`](/command/disk)
+- [`miren debug disk`](/command/debug-disk)

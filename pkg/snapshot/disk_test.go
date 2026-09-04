@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -54,17 +55,6 @@ func TestPrepareBackup(t *testing.T) {
 		assert.Equal(t, "mydb", target.Name)
 		assert.Equal(t, "ext4", target.Filesystem)
 		assert.Equal(t, "/data/disk.img", target.ImagePath)
-		assert.False(t, target.IsAttached)
-	})
-
-	t.Run("attached disk sets flag", func(t *testing.T) {
-		r := &mockResolver{
-			disk:   &DiskState{ID: "d1", Name: "mydb", Status: StatusAttached, Filesystem: "ext4"},
-			volume: &VolumeState{VolumeID: "v1", ImagePath: "/data/disk.img"},
-		}
-		target, err := PrepareBackup(ctx, r, "mydb", "/var/lib/miren")
-		require.NoError(t, err)
-		assert.True(t, target.IsAttached)
 	})
 
 	t.Run("deleting disk rejected", func(t *testing.T) {
@@ -227,5 +217,43 @@ func TestPrepareRestore(t *testing.T) {
 		target, err := PrepareRestore(ctx, r, "mydb", "/var/lib/miren")
 		require.NoError(t, err)
 		assert.Equal(t, "/var/lib/miren/disk-data/volumes/vol-xyz/disk.img", target.ImagePath)
+	})
+}
+
+// mockCreator records whether PrepareRestore decided to create a disk.
+type mockCreator struct {
+	called bool
+}
+
+func (m *mockCreator) CreateDiskAndVolume(_ context.Context, name string, _ int64, _ string, _ string) (*RestoreTarget, error) {
+	m.called = true
+	return &RestoreTarget{Name: name, ImagePath: "/data/new.img", Created: true}, nil
+}
+
+// "There is no such disk" and "I could not find out" call for opposite
+// responses, and only the first one means create it. Treating a failed lookup
+// as an absence is how a brief entity-store outage becomes two disks answering
+// to the same name.
+func TestPrepareRestoreOnlyCreatesOnAGenuineAbsence(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("absent disk is created", func(t *testing.T) {
+		c := &mockCreator{}
+		r := &mockResolver{diskErr: DiskNotFoundError{Name: "mydb"}}
+
+		target, err := PrepareRestore(ctx, r, "mydb", "/var/lib/miren", WithCreator(c, 1<<30, "ext4"))
+		require.NoError(t, err)
+		assert.True(t, c.called, "an absent disk should be created")
+		assert.True(t, target.Created)
+	})
+
+	t.Run("a failed lookup is reported, not papered over", func(t *testing.T) {
+		c := &mockCreator{}
+		r := &mockResolver{diskErr: errors.New("listing disks: etcd unreachable")}
+
+		_, err := PrepareRestore(ctx, r, "mydb", "/var/lib/miren", WithCreator(c, 1<<30, "ext4"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "etcd unreachable")
+		assert.False(t, c.called, "a lookup failure must not create a disk")
 	})
 }

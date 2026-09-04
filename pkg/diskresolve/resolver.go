@@ -1,8 +1,9 @@
-package commands
+package diskresolve
 
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,18 +18,18 @@ import (
 	"miren.dev/runtime/pkg/snapshot"
 )
 
-// entityDiskResolver implements snapshot.DiskResolver using the entity
+// Resolver implements snapshot.DiskResolver using the entity
 // access RPC client.
-type entityDiskResolver struct {
+type Resolver struct {
 	eac *entityserver_v1alpha.EntityAccessClient
 	ec  *entityserver.Client
 }
 
-func newEntityDiskResolver(eac *entityserver_v1alpha.EntityAccessClient, ec *entityserver.Client) *entityDiskResolver {
-	return &entityDiskResolver{eac: eac, ec: ec}
+func New(eac *entityserver_v1alpha.EntityAccessClient, ec *entityserver.Client) *Resolver {
+	return &Resolver{eac: eac, ec: ec}
 }
 
-func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskState, error) {
+func (r *Resolver) FindDisk(ctx context.Context, name string) (*snapshot.DiskState, error) {
 	ref := entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk)
 	results, err := r.eac.List(ctx, ref)
 	if err != nil {
@@ -51,7 +52,9 @@ func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapsh
 
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("disk %q not found", name)
+		// Typed, so callers can tell "no such disk" from "the lookup failed".
+		// PrepareRestore creates a disk on the first and must not on the second.
+		return nil, snapshot.DiskNotFoundError{Name: name}
 	case 1:
 		return &matches[0], nil
 	default:
@@ -59,7 +62,7 @@ func (r *entityDiskResolver) FindDisk(ctx context.Context, name string) (*snapsh
 	}
 }
 
-func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*snapshot.VolumeState, error) {
+func (r *Resolver) FindVolume(ctx context.Context, diskID string) (*snapshot.VolumeState, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(storage_v1alpha.DiskVolumeDiskIdId, entity.Id(diskID)))
 	if err != nil {
 		return nil, fmt.Errorf("listing disk volumes: %w", err)
@@ -88,26 +91,15 @@ func (r *entityDiskResolver) FindVolume(ctx context.Context, diskID string) (*sn
 // controller ignores it while restore writes the image. The returned
 // RestoreTarget includes a Finalize callback that creates the disk_volume
 // entity and transitions the disk to PROVISIONED.
-func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
-	sizeGb := sizeBytes / (1 << 30)
-	if sizeGb == 0 {
-		sizeGb = 1
+func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
+	sizeGb, err := diskSizeGb(sizeBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	// Normalize filesystem string — strip enum prefix if present
 	filesystem = strings.TrimPrefix(strings.ToLower(filesystem), "filesystem.")
-
-	var fs storage_v1alpha.DiskFilesystem
-	switch filesystem {
-	case "ext4":
-		fs = storage_v1alpha.EXT4
-	case "xfs":
-		fs = storage_v1alpha.XFS
-	case "btrfs":
-		fs = storage_v1alpha.BTRFS
-	default:
-		fs = storage_v1alpha.EXT4
-	}
+	fs := ParseFilesystem(filesystem)
 
 	diskId := idgen.GenNS("disk")
 	volId := idgen.GenNS("disk-vol")
@@ -125,7 +117,7 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 		return nil, fmt.Errorf("creating disk entity: %w", err)
 	}
 
-	nodeId, err := r.findNodeId(ctx)
+	nodeId, err := r.FindNodeId(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("finding node: %w", err)
 	}
@@ -193,7 +185,7 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 				VolumeId:     volId,
 				SizeGb:       sizeGb,
 				Filesystem:   filesystem,
-				VolumeMode:   detectVolumeMode(),
+				VolumeMode:   DetectVolumeMode(),
 				DesiredState: storage_v1alpha.DV_PRESENT,
 				ActualState:  storage_v1alpha.DV_READY,
 				ImagePath:    imagePath,
@@ -231,10 +223,10 @@ func (r *entityDiskResolver) CreateDiskAndVolume(ctx context.Context, name strin
 	}, nil
 }
 
-// findNodeId finds the coordinator node. Stateful sandboxes (those with
+// FindNodeId finds the coordinator node. Stateful sandboxes (those with
 // disk volumes) run on the coordinator, so disk_volume entities must
 // reference it.
-func (r *entityDiskResolver) findNodeId(ctx context.Context) (entity.Id, error) {
+func (r *Resolver) FindNodeId(ctx context.Context) (entity.Id, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(entity.EntityKind, compute.KindNode))
 	if err != nil {
 		return "", fmt.Errorf("listing nodes: %w", err)
@@ -262,7 +254,7 @@ func (r *entityDiskResolver) findNodeId(ctx context.Context) (entity.Id, error) 
 	return "", fmt.Errorf("multiple nodes found but none has role=coordinator")
 }
 
-func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.LeaseState, error) {
+func (r *Resolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.LeaseState, error) {
 	resp, err := r.eac.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, entity.Id(diskID)))
 	if err != nil {
 		return nil, fmt.Errorf("listing disk leases: %w", err)
@@ -281,7 +273,54 @@ func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]s
 	return leases, nil
 }
 
-func detectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
+// gib is the unit disks are sized in.
+const gib = 1 << 30
+
+// diskSizeGb converts an image size into the capacity to record on the disk.
+//
+// It rounds up, because a disk claiming less capacity than the image it is
+// about to be given is wrong on its face: a 1.5 GiB image would land on a disk
+// reporting 1 GiB.
+//
+// The size comes from a snapshot header, which is a file the caller handed us,
+// so it is checked rather than trusted. The rounding is done with a remainder
+// rather than by adding gib-1 so that a size near the top of the range cannot
+// overflow into a negative capacity, and the upper bound is where the
+// controller's own conversion back to bytes would overflow.
+func diskSizeGb(sizeBytes int64) (int64, error) {
+	switch {
+	case sizeBytes < 0:
+		return 0, fmt.Errorf("snapshot reports a negative image size (%d bytes)", sizeBytes)
+	case sizeBytes > math.MaxInt64-gib:
+		return 0, fmt.Errorf("snapshot reports an image size too large to be real (%d bytes)", sizeBytes)
+	}
+
+	sizeGb := sizeBytes / gib
+	if sizeBytes%gib != 0 {
+		sizeGb++
+	}
+	// Even an empty image gets a disk, and a disk has to be at least 1 GB.
+	if sizeGb == 0 {
+		sizeGb = 1
+	}
+	return sizeGb, nil
+}
+
+// ParseFilesystem maps a filesystem name onto the disk enum, tolerating the
+// "filesystem." prefix the enum renders with. Anything unrecognized becomes
+// ext4, which is the default a disk gets when it does not ask for one.
+func ParseFilesystem(fs string) storage_v1alpha.DiskFilesystem {
+	switch strings.TrimPrefix(strings.ToLower(fs), "filesystem.") {
+	case "xfs":
+		return storage_v1alpha.XFS
+	case "btrfs":
+		return storage_v1alpha.BTRFS
+	default:
+		return storage_v1alpha.EXT4
+	}
+}
+
+func DetectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
 	if mode := os.Getenv("MIREN_DISK_MODE"); mode == "accelerator" {
 		return storage_v1alpha.VM_ACCELERATOR
 	}

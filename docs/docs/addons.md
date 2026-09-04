@@ -371,7 +371,7 @@ Miren provisions PostgreSQL, injects `DATABASE_URL`, and starts your app once th
 :::info[Early version]
 Addon backup and restore uses the general-purpose disk backup system. We plan to add addon-aware backup commands in a future release that will simplify this workflow. For now, the steps below work reliably for PostgreSQL addon data.
 
-The `disk backup` and `disk restore` commands must be run directly on the server (via SSH or `miren ssh`), not from your local machine. Remote backup support is planned.
+The `disk backup` and `disk restore` commands run from anywhere you can reach the cluster, including your own machine. The server does the work; the snapshot is streamed to or from you.
 :::
 
 Each PostgreSQL addon stores its data on a Miren disk. You can back up and restore this disk using the `miren disk backup` and `miren disk restore` commands.
@@ -390,19 +390,23 @@ Addon disks are named with a `pg-` prefix. For dedicated (`small`) addons, the n
 
 ### Creating a Backup
 
-Back up the disk to a compressed snapshot file. This must be run on the server:
+Back up the disk to a compressed snapshot file:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n <disk-name>
 ```
 </CliCommand>
 
-This creates a timestamped `.miren.zst` file in the current directory. If the disk is currently in use, the backup will be crash-consistent (safe for PostgreSQL, which uses write-ahead logging).
+This creates a timestamped `.miren.zst` file in the current directory.
+
+:::warning[Detach the disk first]
+Nothing freezes the filesystem while the snapshot is read, so backing up a disk that is currently attached reads it as it is being written. The head and tail of the image come from different moments, which is weaker than the power-loss state PostgreSQL's write-ahead log recovery is built for. The command warns you when it detects this. Stop the services using the disk for a backup you can rely on.
+:::
 
 Example:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n pg-pg-myapp-sCZDabc123-data
 # Output: pg-pg-myapp-sCZDabc123-data-20260324-120000.miren.zst
@@ -411,7 +415,7 @@ miren disk backup -n pg-pg-myapp-sCZDabc123-data
 
 You can specify a custom output path with `-o`:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n pg-pg-myapp-sCZDabc123-data -o /backups/myapp-db.miren.zst
 ```
@@ -419,9 +423,9 @@ miren disk backup -n pg-pg-myapp-sCZDabc123-data -o /backups/myapp-db.miren.zst
 
 ### Restoring from a Backup
 
-To restore from a backup, provide the snapshot file. This must also be run on the server:
+To restore from a backup, provide the snapshot file:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk restore -s <snapshot-file>
 ```
@@ -429,7 +433,7 @@ miren disk restore -s <snapshot-file>
 
 The restore procedure recreates the disk with the original name. If the disk already exists, use `--force` to overwrite:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk restore -s myapp-db.miren.zst --force
 ```
@@ -437,11 +441,15 @@ miren disk restore -s myapp-db.miren.zst --force
 
 To restore to a different disk name:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk restore -s myapp-db.miren.zst -n new-disk-name
 ```
 </CliCommand>
+
+:::warning[Stop the app before restoring]
+Restore refuses to write over a disk that is still attached. A disk in use is held open by the kernel, so a restore into it would leave the running database on the old data while reporting success — the command stops rather than let that happen. Scale the app to zero, or restore into a new disk name and switch over.
+:::
 
 After restoring, restart your app to pick up the restored data:
 
