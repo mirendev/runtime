@@ -179,6 +179,10 @@
       "id": "command/disk"
     },
     "items": [
+      "command/disk-accelerator",
+      "command/disk-accelerator-install",
+      "command/disk-accelerator-status",
+      "command/disk-accelerator-uninstall",
       "command/disk-backup",
       "command/disk-list-deleted",
       "command/disk-restore",

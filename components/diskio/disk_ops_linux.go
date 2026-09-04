@@ -17,7 +17,12 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/lbdmod"
 )
+
+// modprobeTimeout bounds loading the module at startup. Loading an
+// already-built module is near-instant; anything approaching this is wedged.
+const modprobeTimeout = 30 * time.Second
 
 const (
 	loopCtlGetFree = 0x4C82
@@ -385,8 +390,7 @@ func lbdDeviceIndex(devicePath string) (string, error) {
 }
 
 func (r *realDiskMountOps) LbdAvailable() bool {
-	_, err := exec.LookPath("lbdctl")
-	return err == nil
+	return lbdmod.Available(lbdmod.HostOptions(""))
 }
 
 func (r *realDiskMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {
@@ -646,19 +650,31 @@ func ensureLoopDeviceNode(log *slog.Logger, index int) error {
 	return nil
 }
 
-// EnsureLbdDevices checks if the lbd kernel module and lbdctl are available.
-func EnsureLbdDevices(log *slog.Logger) error {
-	// Try modprobe lbd
-	if out, err := exec.Command("modprobe", "lbd").CombinedOutput(); err != nil {
-		log.Warn("modprobe lbd failed", "error", err, "output", string(out))
+// EnsureLbdDevices loads the lbd kernel module and proves it is usable.
+//
+// modprobe's exit code is not the test: a module can be absent, or present but
+// wedged, and lbdctl can be installed on a host whose module never loaded.
+// What settles it is the same probe accelerator mode itself relies on, so a
+// node never selects accelerator mode it cannot serve.
+func EnsureLbdDevices(ctx context.Context, log *slog.Logger) error {
+	// Bounded because this runs on the startup path, where a modprobe that
+	// never returns would hold up the whole runner.
+	ctx, cancel := context.WithTimeout(ctx, modprobeTimeout)
+	defer cancel()
+
+	if out, err := exec.CommandContext(ctx, "modprobe", lbdmod.ModuleName).CombinedOutput(); err != nil {
+		log.Debug("modprobe lbd failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 
-	// Check that lbdctl is in PATH
-	if _, err := exec.LookPath("lbdctl"); err != nil {
-		return fmt.Errorf("lbdctl not found in PATH: %w", err)
+	status, err := lbdmod.Probe(lbdmod.HostOptions(""))
+	if err != nil {
+		return err
+	}
+	if !status.Available() {
+		return errors.New(status.Explain())
 	}
 
-	log.Info("lbd devices available")
+	log.Info("lbd devices available", "kernel", status.Host.KernelRelease, "lbdctl", status.LbdctlPath)
 	return nil
 }
 

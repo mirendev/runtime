@@ -107,7 +107,11 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren disk`](/command/disk) | Disk backup and recovery |
+| [`miren disk`](/command/disk) | Disk backup, recovery, and acceleration |
+| [`miren disk accelerator`](/command/disk-accelerator) | Faster block-device disks via the lbd kernel module |
+| [`miren disk accelerator install`](/command/disk-accelerator-install) | Build and load the lbd kernel module for this kernel |
+| [`miren disk accelerator status`](/command/disk-accelerator-status) | Show whether accelerator mode can run on this host |
+| [`miren disk accelerator uninstall`](/command/disk-accelerator-uninstall) | Unload and remove the lbd kernel module |
 | [`miren disk backup`](/command/disk-backup) | Backup a disk to a snapshot file |
 | [`miren disk list-deleted`](/command/disk-list-deleted) | List deleted disks available for recovery |
 | [`miren disk restore`](/command/disk-restore) | Restore a disk from a snapshot file |

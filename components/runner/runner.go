@@ -872,10 +872,9 @@ func (r *Runner) SetupControllers(
 		log.Warn("Loop devices not available, disk mounts will fail", "error", err)
 	}
 
-	// Try to set up lbd devices for accelerator mode
-	if err := diskio.EnsureLbdDevices(log); err != nil {
-		log.Info("lbd devices not available, accelerator mode will not work", "error", err)
-	}
+	// Bring up accelerator mode, rebuilding the lbd module if a kernel
+	// upgrade left the installed one unloadable.
+	setupLbd(ctx, r.deps.CC, r.DataPath, log)
 
 	diskioState, err := diskio.LoadState(dataPath)
 	if err != nil {

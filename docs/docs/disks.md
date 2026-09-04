@@ -103,6 +103,8 @@ Miren Disks live on your server. Back up important data with `miren disk backup`
 
 Miren Disks provide managed persistent storage for your applications. Disks are provisioned with a specific size and filesystem, support exclusive leasing for data consistency, and persist across app restarts and redeployments.
 
+They work out of the box on any Linux host. For faster writes, [accelerator mode](/disk-accelerator) builds and loads a Miren kernel module tuned for this job; it is one command, and disks fall back to the default cleanly if you skip it.
+
 ### Why Use Disks?
 
 - **Managed lifecycle**: Miren handles disk creation, formatting, and attachment automatically
