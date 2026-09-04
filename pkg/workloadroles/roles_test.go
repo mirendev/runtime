@@ -149,6 +149,7 @@ func TestRoleMembershipSpotChecks(t *testing.T) {
 		{RoleAppAdmin, [2]string{"crud", "setenvvar"}, [2]string{"crud", "list"}},
 		{RoleAppAdmin, [2]string{"sandboxexec", "exec"}, [2]string{"crud", "destroy"}},
 		{RoleClusterReadonly, [2]string{"crud", "list"}, [2]string{"crud", "setenvvar"}},
+		{RoleClusterReadonly, [2]string{"sandboxes", "list"}, [2]string{"sandboxexec", "exec"}},
 		{RoleClusterReadonly, [2]string{"logs", "sandboxlogs"}, [2]string{"sandboxexec", "exec"}},
 		// cluster-deployer deploys/configures any app but does not do app
 		// lifecycle: crud.new/destroy are cluster-admin's.

@@ -45,20 +45,9 @@ func TestDeployImageOnlyNoDockerfile(t *testing.T) {
 	assert.Equal(t, "image", appStatus.Source.Kind)
 	assert.Equal(t, "docker.io/library/nginx:alpine", appStatus.Source.Value)
 
-	r := m.MustRun("sandbox", "list", "--format", "json")
-	var sandboxes []struct {
-		ID   string `json:"id"`
-		Spec struct {
-			Container []struct {
-				Image string `json:"image"`
-			} `json:"container"`
-		} `json:"spec"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(r.Stdout), &sandboxes))
-
-	for _, sb := range sandboxes {
-		if len(sb.Spec.Container) > 0 && strings.HasPrefix(sb.Spec.Container[0].Image, "docker.io/library/nginx@sha256:") {
-			assert.Contains(t, sb.ID, name)
+	for _, doc := range listDocs(t, m, "sandbox") {
+		if image := sandboxSpecImage(doc); strings.HasPrefix(image, "docker.io/library/nginx@sha256:") {
+			assert.Contains(t, doc.Id, name)
 			return
 		}
 	}
@@ -118,21 +107,66 @@ func TestDeployImageInheritsMetadata(t *testing.T) {
 
 func sandboxForImageSource(t *testing.T, m *harness.Miren, appName string) (string, string) {
 	t.Helper()
-	r := m.MustRun("sandbox", "list", "--format", "json")
-	var sandboxes []struct {
-		ID   string `json:"id"`
-		Spec struct {
-			Container []struct {
-				Image string `json:"image"`
-			} `json:"container"`
-		} `json:"spec"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(r.Stdout), &sandboxes))
-	for _, sb := range sandboxes {
-		if strings.Contains(sb.ID, appName) && len(sb.Spec.Container) > 0 {
-			return sb.ID, sb.Spec.Container[0].Image
+	for _, doc := range listDocs(t, m, "sandbox") {
+		if strings.Contains(doc.Id, appName) {
+			if image := sandboxSpecImage(doc); image != "" {
+				return doc.Id, image
+			}
 		}
 	}
 	t.Fatalf("no sandbox found for app %s", appName)
 	return "", ""
+}
+
+// sandboxSpecImage deliberately reads the raw debug-entity representation.
+// Image-source tests need execution detail; the public sandbox inventory does
+// not, and must never regain a SandboxSpec just to serve these assertions.
+func sandboxSpecImage(doc entityDoc) string {
+	for _, facet := range doc.Facets {
+		for _, field := range facet.Fields {
+			if field.Name == "spec" {
+				if image, ok := findNestedString(field.Value, "image"); ok {
+					return image
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func findNestedString(value any, name string) (string, bool) {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, nested := range value {
+			if key == name {
+				if text, ok := nested.(string); ok {
+					return text, true
+				}
+			}
+			if text, ok := findNestedString(nested, name); ok {
+				return text, true
+			}
+		}
+	case []any:
+		for _, nested := range value {
+			if text, ok := findNestedString(nested, name); ok {
+				return text, true
+			}
+		}
+	}
+	return "", false
+}
+
+func TestSandboxSpecImageFromEntityDocument(t *testing.T) {
+	var doc entityDoc
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"facets": [{
+			"fields": [{
+				"name": "spec",
+				"value": {"container": [{"name": "app", "image": "registry.test/app@sha256:abc"}]}
+			}]
+		}]
+	}`), &doc))
+
+	assert.Equal(t, "registry.test/app@sha256:abc", sandboxSpecImage(doc))
 }

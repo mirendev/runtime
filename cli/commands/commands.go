@@ -355,6 +355,7 @@ miren deploy --analyze
 	// Sandbox commands
 	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription), WithSectionGroup(GroupMonitoring)))
 	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList,
+		WithDescription(sandboxListDescription),
 		WithExample(mflags.Example{
 			Name: "List running sandboxes",
 			Body: "miren sandbox list",

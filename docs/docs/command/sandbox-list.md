@@ -8,6 +8,10 @@ description: "List sandboxes (excludes dead by default)"
 
 List sandboxes (excludes dead by default)
 
+List the sandboxes currently known to the cluster. Dead sandboxes are hidden unless you pass `--all` or ask for the `dead` status explicitly.
+
+The JSON form is a stable inventory view with the same operational fields as the table. It deliberately excludes the raw sandbox execution spec, which contains resolved environment values and may include secrets. For low-level inspection, use the explicitly privileged `miren debug entity list -k sandbox` command.
+
 ## Usage
 
 ```bash
