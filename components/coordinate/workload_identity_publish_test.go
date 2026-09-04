@@ -98,7 +98,7 @@ func TestAnchoredAtCloud(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCloudControl(new(Foundation))
+			c := NewCloudControl(new(Foundation), nil)
 			c.CloudAuth = tt.cloud
 			if !tt.noIssuer {
 				c.WorkloadIssuer = newTestIssuer(t, tt.issuerURL)
@@ -116,7 +116,7 @@ func TestAnchoredAtCloud(t *testing.T) {
 // including one with no cloud at all, where authClient is nil and touching it
 // would panic.
 func TestPublishSigningKeysIsInertWithoutCloudAnchor(t *testing.T) {
-	c := NewCloudControl(&Foundation{Log: testLogger()})
+	c := NewCloudControl(&Foundation{Log: testLogger()}, nil)
 	c.WorkloadIssuer = newTestIssuer(t, workloadidentity.LocalIssuerURL)
 
 	published, err := c.publishSigningKeys(context.Background())

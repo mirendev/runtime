@@ -140,7 +140,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, componentStopTimeout, workloadControl.component)
 	nodePresence := runnercomp.NewNodePresenceBoot(sandboxHost.output, storageAgent.Component, sandboxAgent.Component, componentStopTimeout)
 	maintenance := newEntityMaintenanceBoot(foundation.output, appData.component)
-	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.component, maintenance.component, workloadControl.component)
+	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component)
 	ingress := newIngressBoot(ingressInputs(options), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output)
