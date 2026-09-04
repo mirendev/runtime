@@ -120,7 +120,7 @@ func EnsureLoopDevices(_ *slog.Logger) error {
 	return fmt.Errorf("loop devices not supported on darwin")
 }
 
-func EnsureLbdDevices(_ *slog.Logger) error {
+func EnsureLbdDevices(_ context.Context, _ *slog.Logger) error {
 	return fmt.Errorf("lbd not supported on darwin")
 }
 

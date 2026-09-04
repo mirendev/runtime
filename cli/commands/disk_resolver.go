@@ -291,7 +291,7 @@ func detectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
 
 	// Auto-detect. This has to agree with controllers/disk's detectDiskMode,
 	// so both ask lbdmod rather than each testing for lbdctl on PATH.
-	if lbdmod.Available(lbdmod.Options{SearchPath: []string{FindReleasePath()}}) {
+	if lbdmod.Available(lbdmod.HostOptions("")) {
 		return storage_v1alpha.VM_ACCELERATOR
 	}
 	return storage_v1alpha.VM_UNIVERSAL

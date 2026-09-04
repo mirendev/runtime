@@ -20,6 +20,10 @@ import (
 	"miren.dev/runtime/pkg/lbdmod"
 )
 
+// modprobeTimeout bounds loading the module at startup. Loading an
+// already-built module is near-instant; anything approaching this is wedged.
+const modprobeTimeout = 30 * time.Second
+
 const (
 	loopCtlGetFree = 0x4C82
 	loopClrFd      = 0x4C01
@@ -386,7 +390,7 @@ func lbdDeviceIndex(devicePath string) (string, error) {
 }
 
 func (r *realDiskMountOps) LbdAvailable() bool {
-	return lbdmod.Available(lbdmod.Options{})
+	return lbdmod.Available(lbdmod.HostOptions(""))
 }
 
 func (r *realDiskMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {
@@ -652,12 +656,17 @@ func ensureLoopDeviceNode(log *slog.Logger, index int) error {
 // wedged, and lbdctl can be installed on a host whose module never loaded.
 // What settles it is the same probe accelerator mode itself relies on, so a
 // node never selects accelerator mode it cannot serve.
-func EnsureLbdDevices(log *slog.Logger) error {
-	if out, err := exec.Command("modprobe", lbdmod.ModuleName).CombinedOutput(); err != nil {
+func EnsureLbdDevices(ctx context.Context, log *slog.Logger) error {
+	// Bounded because this runs on the startup path, where a modprobe that
+	// never returns would hold up the whole runner.
+	ctx, cancel := context.WithTimeout(ctx, modprobeTimeout)
+	defer cancel()
+
+	if out, err := exec.CommandContext(ctx, "modprobe", lbdmod.ModuleName).CombinedOutput(); err != nil {
 		log.Debug("modprobe lbd failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 
-	status, err := lbdmod.Probe(lbdmod.Options{})
+	status, err := lbdmod.Probe(lbdmod.HostOptions(""))
 	if err != nil {
 		return err
 	}

@@ -874,7 +874,7 @@ func (r *Runner) SetupControllers(
 
 	// Bring up accelerator mode, rebuilding the lbd module if a kernel
 	// upgrade left the installed one unloadable.
-	setupLbd(ctx, r.deps.CC, log)
+	setupLbd(ctx, r.deps.CC, r.DataPath, log)
 
 	diskioState, err := diskio.LoadState(dataPath)
 	if err != nil {

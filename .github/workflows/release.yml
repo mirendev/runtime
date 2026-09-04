@@ -500,12 +500,20 @@ jobs:
           echo "image=$IMAGE" >> $GITHUB_OUTPUT
 
           # Republishing an existing tag would move a pinned reference under
-          # already-deployed clusters, so only a new tag is ever pushed.
-          if gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
+          # already-deployed clusters, so only a genuinely absent tag is
+          # published. An auth or transient failure must not read as absent:
+          # that is how a lookup blip turns into a moved tag, so anything
+          # other than a confirmed NOT_FOUND fails the job.
+          if lookup=$(gcloud artifacts docker images describe "$IMAGE" 2>&1); then
             echo "$IMAGE already exists; nothing to publish"
             echo "publish=false" >> $GITHUB_OUTPUT
-          else
+          elif printf '%s' "$lookup" | grep -qiE 'NOT_FOUND|was not found|does not exist'; then
+            echo "$IMAGE does not exist yet; publishing"
             echo "publish=true" >> $GITHUB_OUTPUT
+          else
+            echo "could not determine whether $IMAGE exists:" >&2
+            printf '%s\n' "$lookup" >&2
+            exit 1
           fi
 
       - name: Set up Docker Buildx

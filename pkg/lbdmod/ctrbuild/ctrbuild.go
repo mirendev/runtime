@@ -62,7 +62,7 @@ func (b *Builder) Build(ctx context.Context, spec lbdmod.BuildSpec) error {
 	// A previous run that died before its own cleanup leaves the container
 	// behind and its name taken.
 	if existing, err := b.cc.LoadContainer(ctx, spec.Name); err == nil {
-		b.log.Info("removing a container left by an earlier build", "container", spec.Name)
+		b.log.Warn("removing a container left by an earlier build", "container", spec.Name)
 		b.removeContainer(ctx, existing)
 	}
 

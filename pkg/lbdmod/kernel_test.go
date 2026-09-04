@@ -154,3 +154,24 @@ func TestHeaderPackageUnknownDistro(t *testing.T) {
 	assert.Empty(t, h.HeaderPackage())
 	assert.Equal(t, "install the kernel headers for 6.8.0-51 and try again", h.InstallHint())
 }
+
+func TestKernelReleaseErrorNamesTheRealCause(t *testing.T) {
+	// A fixture root with no procfs file at all: the error has to carry the
+	// read failure, not a nil wrapped by %w.
+	_, err := kernelRelease(t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no kernel release")
+	assert.NotContains(t, err.Error(), "%!w", "an error was wrapped that was nil")
+}
+
+func TestKernelReleaseRejectsAnEmptyOsrelease(t *testing.T) {
+	// The file exists but says nothing. Before, err was nil here and %w
+	// rendered as %!w(<nil>), telling the operator nothing.
+	root := t.TempDir()
+	writeFile(t, root, "proc/sys/kernel/osrelease", "\n")
+
+	_, err := kernelRelease(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is empty")
+	assert.NotContains(t, err.Error(), "%!w")
+}
