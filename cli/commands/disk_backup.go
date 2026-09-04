@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -35,10 +36,17 @@ func DiskBackup(ctx *Context, opts struct {
 	start := time.Now()
 	progress := diskProgress(ctx)
 
+	transferID, err := newTransferID()
+	if err != nil {
+		return err
+	}
+
 	if opts.Cloud {
 		ctx.Info("Backing up disk %q to miren.cloud", opts.Name)
 
-		res, err := dc.Backup(ctx, opts.Name, true, opts.Pin, nil, progress)
+		// No resume here: the bytes go from the server straight to the cloud,
+		// so nothing is riding on this connection but the request itself.
+		res, err := dc.Backup(ctx, opts.Name, true, opts.Pin, nil, progress, transferID, 0)
 		if err != nil {
 			return err
 		}
@@ -73,15 +81,54 @@ func DiskBackup(ctx *Context, opts struct {
 	ctx.Info("Backing up disk %q", opts.Name)
 	ctx.Info("Output: %s", outputPath)
 
-	res, err := dc.Backup(ctx, opts.Name, false, "", stream.ServeWriter(ctx, outFile), progress)
+	var result *disk_v1alpha.BackupResult
+
+	err = runTransfer(ctx, "Backup", func(try int) error {
+		// What is durably in the file is the resume point, and it is the
+		// client's to know: it is the only end that can see how much of the
+		// stream actually reached disk.
+		offset, oerr := syncedSize(outFile)
+		if oerr != nil {
+			return oerr
+		}
+
+		res, berr := dc.Backup(ctx, opts.Name, false, "", stream.ServeWriter(ctx, outFile), progress, transferID, offset)
+		if berr != nil {
+			return berr
+		}
+		result = res.Result()
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 	complete = true
 
-	reportBackup(ctx, res.Result(), time.Since(start))
+	reportBackup(ctx, result, time.Since(start))
 	ctx.Info("  Snapshot:        %s", outputPath)
 	return nil
+}
+
+// syncedSize flushes what has been written and reports how much of it is
+// durably on disk.
+//
+// This is the number the server is told to continue from, so it has to be what
+// survived rather than what was handed to the kernel: asking to resume past
+// bytes that a crash could still take back would leave a hole in the snapshot.
+func syncedSize(f *os.File) (int64, error) {
+	if err := f.Sync(); err != nil {
+		return 0, fmt.Errorf("flushing snapshot: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("stat snapshot: %w", err)
+	}
+	// Writes go on at the end, so the offset has to follow the length: a retry
+	// that left the file position short would overwrite good bytes.
+	if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
+		return 0, fmt.Errorf("seeking snapshot: %w", err)
+	}
+	return info.Size(), nil
 }
 
 func reportBackup(ctx *Context, res *disk_v1alpha.BackupResult, took time.Duration) {

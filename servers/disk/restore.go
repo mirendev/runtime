@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"miren.dev/runtime/api/disk/disk_v1alpha"
 	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/snapshot"
 )
@@ -28,7 +30,7 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 		return refuse("disk name is required")
 	}
 
-	src, compressedSize, closeSrc, err := s.restoreSource(ctx, name, args, prog)
+	src, total, closeSrc, err := s.restoreSource(ctx, name, args, prog)
 	if err != nil {
 		return err
 	}
@@ -48,11 +50,19 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 	// Roll the entities back if anything below fails, but only when this
 	// restore is what created them.
 	defer func() {
-		if retErr != nil && target.Created && target.Cleanup != nil {
+		if retErr == nil {
+			return
+		}
+		if target.Created && target.Cleanup != nil {
 			if cerr := target.Cleanup(ctx); cerr != nil {
 				s.log.Warn("failed to clean up after restore", "disk", name, "error", cerr)
 			}
 		}
+		// A refusal is the one failure the client will not come back from, so
+		// the uploaded bytes are already dead. Drop them now rather than leave
+		// a copy of the snapshot sitting there until the sweep, which a
+		// repeatedly-refused restore would do once per attempt.
+		s.discardRefusedUpload(args, retErr)
 	}()
 
 	if err := s.refuseLiveImage(target, name); err != nil {
@@ -70,7 +80,7 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 
 	prog.Message("Restoring %s (%d bytes)", name, meta.SizeBytes)
 
-	if err := s.writeImage(target.ImagePath, src, compressedSize, meta, prog); err != nil {
+	if err := s.writeImage(target.ImagePath, src, total, meta, prog); err != nil {
 		return err
 	}
 
@@ -78,6 +88,13 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 		if err := target.Finalize(ctx); err != nil {
 			return err
 		}
+	}
+
+	// Installed, so the uploaded copy has served its purpose. Only now: until
+	// the image is in place, those bytes are the only copy on this host and a
+	// retry would have to send them again.
+	if id := args.TransferId(); id != "" && args.RestorePoint() == "" {
+		s.discardTransfer(id)
 	}
 
 	s.log.Info("restored disk",
@@ -94,31 +111,129 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 	return nil
 }
 
-// restoreSource opens the snapshot to restore from, whichever end it came from.
+// discardRefusedUpload drops an uploaded snapshot the server has decided it
+// will not use.
+//
+// The distinction that matters is refusal versus interruption. An interrupted
+// upload is exactly what the transfer file is for and must survive; a refused
+// one will never be picked up, because the client does not retry a refusal.
+func (s *Server) discardRefusedUpload(args *disk_v1alpha.DiskBackupRestoreArgs, err error) {
+	if shouldDiscardUpload(args.TransferId(), args.RestorePoint(), err) {
+		s.discardTransfer(args.TransferId())
+	}
+}
+
+func shouldDiscardUpload(transferID, restorePoint string, err error) bool {
+	if transferID == "" || restorePoint != "" {
+		return false
+	}
+	var refusal cond.ErrValidationFailure
+	return errors.As(err, &refusal)
+}
+
+// restoreSource resolves the snapshot to restore from and hands back a reader
+// positioned at its start.
 //
 // The second return is the compressed size when it is known, and 0 when it is
-// not. Progress is measured in compressed bytes because that is what actually
-// moves; a client streaming a snapshot up has not told us how big it is, so
-// there is nothing honest to show a percentage against.
+// not, for progress reporting.
 func (s *Server) restoreSource(
 	ctx context.Context,
 	name string,
 	args *disk_v1alpha.DiskBackupRestoreArgs,
 	prog progressSink,
 ) (io.Reader, int64, func(), error) {
-	point := args.RestorePoint()
-	if point == "" {
-		in := args.Data()
-		if in == nil {
-			return nil, 0, nil, refuse("restore needs either a restore point or a snapshot to read")
-		}
-		prog.Message("Reading snapshot from client")
-		r := stream.ToReader(ctx, in)
-		// The stream belongs to the caller; closing our reader would tear
-		// their client down, so leave it to them.
-		return r, 0, func() {}, nil
+	if point := args.RestorePoint(); point != "" {
+		return s.downloadRestorePoint(ctx, name, point, prog)
 	}
 
+	in := args.Data()
+	if in == nil {
+		return nil, 0, nil, refuse("restore needs either a restore point or a snapshot to read")
+	}
+
+	// Land the whole snapshot on disk before touching the image. It is what
+	// makes an interrupted upload resumable, and it means a transfer that dies
+	// halfway cannot leave a half-decompressed image behind.
+	path, err := s.receiveSnapshot(ctx, args.TransferId(), args.Offset(), in, prog)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("reopening uploaded snapshot: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, nil, fmt.Errorf("stat uploaded snapshot: %w", err)
+	}
+	return f, info.Size(), func() { f.Close() }, nil
+}
+
+// receiveSnapshot appends the client's bytes to this transfer's file and
+// returns where it landed.
+//
+// The file is the checkpoint. Every byte that reaches it is a byte the client
+// never has to send again, and fsync before returning is what makes that true
+// across a server restart rather than only across a dropped connection.
+func (s *Server) receiveSnapshot(
+	ctx context.Context,
+	transferID string,
+	offset int64,
+	in *stream.RecvStreamClient[[]byte],
+	prog progressSink,
+) (string, error) {
+	if transferID == "" {
+		return "", refuse("uploading a snapshot needs a transfer id, so an interrupted upload can be resumed")
+	}
+
+	s.sweepTransfers()
+
+	f, err := s.openTransfer(transferID, offset)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if offset > 0 {
+		prog.Message("Resuming upload at %d bytes", offset)
+	} else {
+		prog.Message("Reading snapshot from client")
+	}
+
+	// The stream belongs to the caller; closing our reader would tear their
+	// client down, so leave it to them.
+	r := stream.ToReader(ctx, in)
+
+	// Total is unknown — the client has not said how big its snapshot is — so
+	// progress shows bytes moved rather than a percentage.
+	written, err := io.Copy(f, s.trackReads(r, prog, offset, 0))
+
+	// Flush whatever did arrive before reporting either way. On the failure
+	// path this is the entire point: unsynced bytes would be re-sent for no
+	// reason, and worse, a length the client trusts might not survive a crash.
+	if serr := f.Sync(); serr != nil && err == nil {
+		err = fmt.Errorf("flushing uploaded snapshot: %w", serr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("receiving snapshot after %d bytes: %w", written, err)
+	}
+
+	return f.Name(), nil
+}
+
+// downloadRestorePoint opens a restore point from miren.cloud.
+//
+// This one is not resumable here: the bytes come over the cloud's own HTTPS
+// connection rather than the client's RPC session, so an interruption is
+// between the server and the cloud, and re-fetching costs the operator nothing
+// but time.
+func (s *Server) downloadRestorePoint(
+	ctx context.Context,
+	name, point string,
+	prog progressSink,
+) (io.Reader, int64, func(), error) {
 	if s.updates == nil {
 		return nil, 0, nil, errNoCloud("restoring from a restore point")
 	}
@@ -218,7 +333,7 @@ func (s *Server) writeImage(imagePath string, src io.Reader, compressedSize int6
 		return fmt.Errorf("preallocating image: %w", err)
 	}
 
-	if err := snapshot.RestoreImage(out, s.trackReads(src, prog, compressedSize), meta); err != nil {
+	if err := snapshot.RestoreImage(out, s.trackReads(src, prog, 0, compressedSize), meta); err != nil {
 		return err
 	}
 

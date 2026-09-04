@@ -212,6 +212,18 @@ interfaces:
           - name: progress
             type: stream.SendStream[*Progress]
             doc: Stream the client receives progress events on
+          - name: transfer_id
+            type: string
+            doc: >
+              Names this transfer so a dropped connection can pick it up again.
+              The client chooses it, because a value the server handed back
+              would be lost with the call that carried it. Retrying with the
+              same id resumes; a new id starts over.
+          - name: offset
+            type: int64
+            doc: >
+              Byte of the compressed snapshot to start sending from. A resuming
+              client passes what it already has on disk.
         results:
           - name: result
             type: '*BackupResult'
@@ -252,9 +264,33 @@ interfaces:
           - name: progress
             type: stream.SendStream[*Progress]
             doc: Stream the client receives progress events on
+          - name: transfer_id
+            type: string
+            doc: >
+              Names this transfer so a dropped connection can pick it up again.
+              Required when streaming a snapshot up; ignored for a restore point,
+              which the server fetches itself.
+          - name: offset
+            type: int64
+            doc: >
+              Byte of the snapshot the client is sending from. It must match
+              what the server already holds, which transferOffset reports.
         results:
           - name: result
             type: '*RestoreResult'
+
+      - name: transferOffset
+        doc: >
+          How much of a transfer the server already holds, so a client resuming
+          an interrupted restore knows where to start sending. Unknown ids
+          report zero, which is what makes the first attempt and a retry the
+          same code path on the client.
+        parameters:
+          - name: transfer_id
+            type: string
+        results:
+          - name: received_bytes
+            type: int64
 
       - name: listDeleted
         doc: >

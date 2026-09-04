@@ -708,11 +708,13 @@ func (v *RestoreResult) UnmarshalJSON(data []byte) error {
 }
 
 type diskBackupBackupArgsData struct {
-	Disk     *string         `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
-	ToCloud  *bool           `cbor:"1,keyasint,omitempty" json:"to_cloud,omitempty"`
-	Pin      *string         `cbor:"2,keyasint,omitempty" json:"pin,omitempty"`
-	Data     *rpc.Capability `cbor:"3,keyasint,omitempty" json:"data,omitempty"`
-	Progress *rpc.Capability `cbor:"4,keyasint,omitempty" json:"progress,omitempty"`
+	Disk       *string         `cbor:"0,keyasint,omitempty" json:"disk,omitempty"`
+	ToCloud    *bool           `cbor:"1,keyasint,omitempty" json:"to_cloud,omitempty"`
+	Pin        *string         `cbor:"2,keyasint,omitempty" json:"pin,omitempty"`
+	Data       *rpc.Capability `cbor:"3,keyasint,omitempty" json:"data,omitempty"`
+	Progress   *rpc.Capability `cbor:"4,keyasint,omitempty" json:"progress,omitempty"`
+	TransferId *string         `cbor:"5,keyasint,omitempty" json:"transfer_id,omitempty"`
+	Offset     *int64          `cbor:"6,keyasint,omitempty" json:"offset,omitempty"`
 }
 
 type DiskBackupBackupArgs struct {
@@ -773,6 +775,28 @@ func (v *DiskBackupBackupArgs) Progress() *stream.SendStreamClient[*Progress] {
 		return nil
 	}
 	return &stream.SendStreamClient[*Progress]{Client: v.call.NewClient(v.data.Progress)}
+}
+
+func (v *DiskBackupBackupArgs) HasTransferId() bool {
+	return v.data.TransferId != nil
+}
+
+func (v *DiskBackupBackupArgs) TransferId() string {
+	if v.data.TransferId == nil {
+		return ""
+	}
+	return *v.data.TransferId
+}
+
+func (v *DiskBackupBackupArgs) HasOffset() bool {
+	return v.data.Offset != nil
+}
+
+func (v *DiskBackupBackupArgs) Offset() int64 {
+	if v.data.Offset == nil {
+		return 0
+	}
+	return *v.data.Offset
 }
 
 func (v *DiskBackupBackupArgs) MarshalCBOR() ([]byte, error) {
@@ -892,6 +916,8 @@ type diskBackupRestoreArgsData struct {
 	Data         *rpc.Capability `cbor:"2,keyasint,omitempty" json:"data,omitempty"`
 	Force        *bool           `cbor:"3,keyasint,omitempty" json:"force,omitempty"`
 	Progress     *rpc.Capability `cbor:"4,keyasint,omitempty" json:"progress,omitempty"`
+	TransferId   *string         `cbor:"5,keyasint,omitempty" json:"transfer_id,omitempty"`
+	Offset       *int64          `cbor:"6,keyasint,omitempty" json:"offset,omitempty"`
 }
 
 type DiskBackupRestoreArgs struct {
@@ -954,6 +980,28 @@ func (v *DiskBackupRestoreArgs) Progress() *stream.SendStreamClient[*Progress] {
 	return &stream.SendStreamClient[*Progress]{Client: v.call.NewClient(v.data.Progress)}
 }
 
+func (v *DiskBackupRestoreArgs) HasTransferId() bool {
+	return v.data.TransferId != nil
+}
+
+func (v *DiskBackupRestoreArgs) TransferId() string {
+	if v.data.TransferId == nil {
+		return ""
+	}
+	return *v.data.TransferId
+}
+
+func (v *DiskBackupRestoreArgs) HasOffset() bool {
+	return v.data.Offset != nil
+}
+
+func (v *DiskBackupRestoreArgs) Offset() int64 {
+	if v.data.Offset == nil {
+		return 0
+	}
+	return *v.data.Offset
+}
+
 func (v *DiskBackupRestoreArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -996,6 +1044,71 @@ func (v *DiskBackupRestoreResults) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DiskBackupRestoreResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskBackupTransferOffsetArgsData struct {
+	TransferId *string `cbor:"0,keyasint,omitempty" json:"transfer_id,omitempty"`
+}
+
+type DiskBackupTransferOffsetArgs struct {
+	call rpc.Call
+	data diskBackupTransferOffsetArgsData
+}
+
+func (v *DiskBackupTransferOffsetArgs) HasTransferId() bool {
+	return v.data.TransferId != nil
+}
+
+func (v *DiskBackupTransferOffsetArgs) TransferId() string {
+	if v.data.TransferId == nil {
+		return ""
+	}
+	return *v.data.TransferId
+}
+
+func (v *DiskBackupTransferOffsetArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupTransferOffsetArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupTransferOffsetArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupTransferOffsetArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskBackupTransferOffsetResultsData struct {
+	ReceivedBytes *int64 `cbor:"0,keyasint,omitempty" json:"received_bytes,omitempty"`
+}
+
+type DiskBackupTransferOffsetResults struct {
+	call rpc.Call
+	data diskBackupTransferOffsetResultsData
+}
+
+func (v *DiskBackupTransferOffsetResults) SetReceivedBytes(received_bytes int64) {
+	v.data.ReceivedBytes = &received_bytes
+}
+
+func (v *DiskBackupTransferOffsetResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskBackupTransferOffsetResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskBackupTransferOffsetResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskBackupTransferOffsetResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -1212,6 +1325,32 @@ func (t *DiskBackupRestore) Results() *DiskBackupRestoreResults {
 	return results
 }
 
+type DiskBackupTransferOffset struct {
+	rpc.Call
+	args    DiskBackupTransferOffsetArgs
+	results DiskBackupTransferOffsetResults
+}
+
+func (t *DiskBackupTransferOffset) Args() *DiskBackupTransferOffsetArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DiskBackupTransferOffset) Results() *DiskBackupTransferOffsetResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type DiskBackupListDeleted struct {
 	rpc.Call
 	args    DiskBackupListDeletedArgs
@@ -1268,6 +1407,7 @@ type DiskBackup interface {
 	Backup(ctx context.Context, state *DiskBackupBackup) error
 	ListBackups(ctx context.Context, state *DiskBackupListBackups) error
 	Restore(ctx context.Context, state *DiskBackupRestore) error
+	TransferOffset(ctx context.Context, state *DiskBackupTransferOffset) error
 	ListDeleted(ctx context.Context, state *DiskBackupListDeleted) error
 	Undelete(ctx context.Context, state *DiskBackupUndelete) error
 }
@@ -1285,6 +1425,10 @@ func (reexportDiskBackup) ListBackups(ctx context.Context, state *DiskBackupList
 }
 
 func (reexportDiskBackup) Restore(ctx context.Context, state *DiskBackupRestore) error {
+	panic("not implemented")
+}
+
+func (reexportDiskBackup) TransferOffset(ctx context.Context, state *DiskBackupTransferOffset) error {
 	panic("not implemented")
 }
 
@@ -1307,7 +1451,7 @@ func AdaptDiskBackup(t DiskBackup) *rpc.Interface {
 			InterfaceName: "DiskBackup",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"disk", "to_cloud", "pin", "data", "progress"},
+			Params:        []string{"disk", "to_cloud", "pin", "data", "progress", "transfer_id", "offset"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Backup(ctx, &DiskBackupBackup{Call: call})
 			},
@@ -1327,9 +1471,19 @@ func AdaptDiskBackup(t DiskBackup) *rpc.Interface {
 			InterfaceName: "DiskBackup",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"disk", "restore_point", "data", "force", "progress"},
+			Params:        []string{"disk", "restore_point", "data", "force", "progress", "transfer_id", "offset"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Restore(ctx, &DiskBackupRestore{Call: call})
+			},
+		},
+		{
+			Name:          "transferOffset",
+			InterfaceName: "DiskBackup",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"transfer_id"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.TransferOffset(ctx, &DiskBackupTransferOffset{Call: call})
 			},
 		},
 		{
@@ -1385,7 +1539,7 @@ func (v *DiskBackupClientBackupResults) Result() *BackupResult {
 	return *v.data.Result
 }
 
-func (v DiskBackupClient) Backup(ctx context.Context, disk string, to_cloud bool, pin string, data stream.SendStream[[]byte], progress stream.SendStream[*Progress]) (*DiskBackupClientBackupResults, error) {
+func (v DiskBackupClient) Backup(ctx context.Context, disk string, to_cloud bool, pin string, data stream.SendStream[[]byte], progress stream.SendStream[*Progress], transfer_id string, offset int64) (*DiskBackupClientBackupResults, error) {
 	args := DiskBackupBackupArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Disk = &disk
@@ -1401,6 +1555,8 @@ func (v DiskBackupClient) Backup(ctx context.Context, disk string, to_cloud bool
 		args.data.Progress = c
 		caps[oid] = ic
 	}
+	args.data.TransferId = &transfer_id
+	args.data.Offset = &offset
 
 	var ret diskBackupBackupResultsData
 
@@ -1458,7 +1614,7 @@ func (v *DiskBackupClientRestoreResults) Result() *RestoreResult {
 	return *v.data.Result
 }
 
-func (v DiskBackupClient) Restore(ctx context.Context, disk string, restore_point string, data stream.RecvStream[[]byte], force bool, progress stream.SendStream[*Progress]) (*DiskBackupClientRestoreResults, error) {
+func (v DiskBackupClient) Restore(ctx context.Context, disk string, restore_point string, data stream.RecvStream[[]byte], force bool, progress stream.SendStream[*Progress], transfer_id string, offset int64) (*DiskBackupClientRestoreResults, error) {
 	args := DiskBackupRestoreArgs{}
 	caps := map[rpc.OID]*rpc.InlineCapability{}
 	args.data.Disk = &disk
@@ -1474,6 +1630,8 @@ func (v DiskBackupClient) Restore(ctx context.Context, disk string, restore_poin
 		args.data.Progress = c
 		caps[oid] = ic
 	}
+	args.data.TransferId = &transfer_id
+	args.data.Offset = &offset
 
 	var ret diskBackupRestoreResultsData
 
@@ -1483,6 +1641,36 @@ func (v DiskBackupClient) Restore(ctx context.Context, disk string, restore_poin
 	}
 
 	return &DiskBackupClientRestoreResults{client: v.Client, data: ret}, nil
+}
+
+type DiskBackupClientTransferOffsetResults struct {
+	client rpc.Client
+	data   diskBackupTransferOffsetResultsData
+}
+
+func (v *DiskBackupClientTransferOffsetResults) HasReceivedBytes() bool {
+	return v.data.ReceivedBytes != nil
+}
+
+func (v *DiskBackupClientTransferOffsetResults) ReceivedBytes() int64 {
+	if v.data.ReceivedBytes == nil {
+		return 0
+	}
+	return *v.data.ReceivedBytes
+}
+
+func (v DiskBackupClient) TransferOffset(ctx context.Context, transfer_id string) (*DiskBackupClientTransferOffsetResults, error) {
+	args := DiskBackupTransferOffsetArgs{}
+	args.data.TransferId = &transfer_id
+
+	var ret diskBackupTransferOffsetResultsData
+
+	err := v.Call(ctx, "transferOffset", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DiskBackupClientTransferOffsetResults{client: v.Client, data: ret}, nil
 }
 
 type DiskBackupClientListDeletedResults struct {

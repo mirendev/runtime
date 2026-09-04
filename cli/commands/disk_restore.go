@@ -61,7 +61,9 @@ func DiskRestore(ctx *Context, opts struct {
 
 		ctx.Info("Restoring disk %q from restore point %s", opts.Name, point)
 
-		res, err := dc.Restore(ctx, opts.Name, point, nil, opts.Force, progress)
+		// No resume here: the server fetches from the cloud over its own
+		// connection, so nothing rides on this one but the request.
+		res, err := dc.Restore(ctx, opts.Name, point, nil, opts.Force, progress, "", 0)
 		if err != nil {
 			return err
 		}
@@ -96,11 +98,41 @@ func DiskRestore(ctx *Context, opts struct {
 
 	ctx.Info("Restoring disk %q from %s", name, opts.Snapshot)
 
-	res, err := dc.Restore(ctx, name, "", stream.ServeReader(ctx, snapFile, stream.WithBulkBatching()), opts.Force, progress)
+	transferID, err := newTransferID()
 	if err != nil {
 		return err
 	}
-	reportRestore(ctx, res.Result(), time.Since(start))
+
+	var result *disk_v1alpha.RestoreResult
+
+	err = runTransfer(ctx, "Restore", func(try int) error {
+		// The server is the only end that knows how much of the upload it
+		// durably has, so ask rather than assume. An id it has never seen
+		// reports zero, which makes the first attempt and a retry identical.
+		off, oerr := dc.TransferOffset(ctx, transferID)
+		if oerr != nil {
+			return oerr
+		}
+		offset := off.ReceivedBytes()
+
+		if _, serr := snapFile.Seek(offset, io.SeekStart); serr != nil {
+			return fmt.Errorf("seeking snapshot to %d: %w", offset, serr)
+		}
+
+		res, rerr := dc.Restore(ctx, name, "",
+			stream.ServeReader(ctx, snapFile, stream.WithBulkBatching()),
+			opts.Force, progress, transferID, offset)
+		if rerr != nil {
+			return rerr
+		}
+		result = res.Result()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	reportRestore(ctx, result, time.Since(start))
 	return nil
 }
 
