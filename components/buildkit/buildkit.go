@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	buildkitclient "github.com/moby/buildkit/client"
@@ -19,6 +20,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/pkg/imagerefs"
@@ -71,6 +73,12 @@ type Component struct {
 	hostsPath     string             // path to custom /etc/hosts file for the container
 	external      bool               // true if connecting to external daemon (no container management)
 	monitorCancel context.CancelFunc // cancels the task exit-monitor goroutine on intentional stop
+}
+
+type buildkitTask interface {
+	Wait(context.Context) (<-chan containerd.ExitStatus, error)
+	Kill(context.Context, syscall.Signal, ...containerd.KillOpts) error
+	Delete(context.Context, ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error)
 }
 
 // NewComponent creates a new BuildKit component that manages an embedded daemon.
@@ -237,7 +245,9 @@ func (c *Component) Stop(ctx context.Context) error {
 	if c.container != nil {
 		task, err := c.container.Task(ctx, nil)
 		if err == nil {
-			c.stopTask(ctx, task)
+			if err := c.stopTask(ctx, task); err != nil {
+				c.Log.Error("failed to stop buildkit task during shutdown", "error", err)
+			}
 		} else {
 			c.Log.Warn("failed to get buildkit task for shutdown", "error", err)
 		}
@@ -507,7 +517,13 @@ func (c *Component) restartExistingContainer(ctx context.Context, container cont
 	// to this process.
 	if task, err := container.Task(ctx, nil); err == nil {
 		c.Log.Info("evicting stale buildkit task before restart")
-		c.stopTask(ctx, task)
+		if err := c.stopTask(ctx, task); err != nil {
+			c.container = nil
+			return fmt.Errorf("failed to evict stale buildkit task: %w", err)
+		}
+	} else if !errdefs.IsNotFound(err) {
+		c.container = nil
+		return fmt.Errorf("failed to inspect existing buildkit task: %w", err)
 	}
 
 	c.Log.Info("creating new task for existing buildkit container")
@@ -546,7 +562,9 @@ func (c *Component) startTaskAndMonitor(ctx context.Context, task containerd.Tas
 	}
 
 	if err := c.waitForReady(ctx); err != nil {
-		c.stopTask(ctx, task)
+		if stopErr := c.stopTask(ctx, task); stopErr != nil {
+			c.Log.Error("failed to stop buildkit task after readiness check failure", "error", stopErr)
+		}
 		return err
 	}
 
@@ -629,30 +647,47 @@ func (c *Component) waitForReady(ctx context.Context) error {
 	}
 }
 
-func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
-	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+func (c *Component) stopTask(ctx context.Context, task buildkitTask) error {
+	return c.stopTaskWithGrace(ctx, task, 30*time.Second)
+}
+
+func (c *Component) stopTaskWithGrace(ctx context.Context, task buildkitTask, gracePeriod time.Duration) error {
+	shutdownBase := namespaces.WithNamespace(context.WithoutCancel(ctx), c.Namespace)
+	shutdownCtx, cancel := context.WithTimeout(shutdownBase, gracePeriod)
 	defer cancel()
+
+	// Register the wait before signalling so a fast exit cannot race past it.
+	status, waitErr := task.Wait(shutdownCtx)
+	if waitErr != nil {
+		c.Log.Warn("failed to wait for buildkit task, proceeding to delete", "error", waitErr)
+	}
 
 	// If SIGTERM can't be delivered we still fall through to Delete: a task we
 	// fail to reap here otherwise leaks and blocks the next NewTask on this
 	// container.
 	if err := task.Kill(shutdownCtx, unix.SIGTERM); err != nil {
-		c.Log.Error("failed to send SIGTERM to buildkit task", "error", err)
-	} else if status, err := task.Wait(shutdownCtx); err == nil {
+		c.Log.Warn("failed to send SIGTERM to buildkit task, proceeding to delete", "error", err)
+	} else if waitErr == nil {
 		select {
 		case es := <-status:
 			c.Log.Info("buildkit task exited", "code", es.ExitCode())
 
 		case <-shutdownCtx.Done():
 			c.Log.Warn("buildkit task did not exit gracefully, sending SIGKILL")
-			killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			killCtx, killCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), c.Namespace), 10*time.Second)
 			defer killCancel()
 
+			killStatus, killWaitErr := task.Wait(killCtx)
+			if killWaitErr != nil {
+				c.Log.Warn("failed to wait for buildkit task before SIGKILL, proceeding to delete", "error", killWaitErr)
+			}
 			if err := task.Kill(killCtx, unix.SIGKILL); err != nil {
 				c.Log.Error("failed to send SIGKILL to buildkit task", "error", err)
-			} else {
-				if _, waitErr := task.Wait(killCtx); waitErr != nil {
-					c.Log.Error("buildkit task wait after SIGKILL failed", "error", waitErr)
+			} else if killWaitErr == nil {
+				select {
+				case <-killStatus:
+				case <-killCtx.Done():
+					c.Log.Warn("buildkit task did not exit after SIGKILL within timeout")
 				}
 			}
 		}
@@ -662,16 +697,15 @@ func (c *Component) stopTask(ctx context.Context, task containerd.Task) {
 	// container is left in a state where a fresh task can be created. Detach
 	// from the parent's cancellation so a cancelled/expired ctx can't skip
 	// cleanup, but carry over the containerd namespace (Delete requires it).
-	deleteBase := context.Background()
-	if ns, ok := namespaces.Namespace(ctx); ok {
-		deleteBase = namespaces.WithNamespace(deleteBase, ns)
-	}
-	deleteCtx, deleteCancel := context.WithTimeout(deleteBase, 10*time.Second)
+	deleteCtx, deleteCancel := context.WithTimeout(namespaces.WithNamespace(context.Background(), c.Namespace), 10*time.Second)
 	defer deleteCancel()
 
-	if _, err := task.Delete(deleteCtx); err != nil {
+	if _, err := task.Delete(deleteCtx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
 		c.Log.Error("failed to delete buildkit task", "error", err)
+		return fmt.Errorf("delete buildkit task: %w", err)
 	}
+
+	return nil
 }
 
 func (c *Component) deleteContainerWithRetry(ctx context.Context) {
