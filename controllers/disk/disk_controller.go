@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"strings"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -13,6 +12,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/lbdmod"
 )
 
 // detectDiskMode determines which disk I/O mode to use.
@@ -26,8 +26,11 @@ func detectDiskMode(configured string) storage_v1alpha.DiskMode {
 		return storage_v1alpha.ACCELERATOR
 	}
 
-	// Auto-detect: use accelerator mode if lbd is available
-	if _, err := exec.LookPath("lbdctl"); err == nil {
+	// Auto-detect: use accelerator mode only if the lbd module is actually
+	// loaded and drivable. lbdctl on PATH is not enough -- miren installs it
+	// alongside the module, so its presence says nothing about whether the
+	// module loaded.
+	if lbdmod.Available(lbdmod.Options{}) {
 		return storage_v1alpha.ACCELERATOR
 	}
 
