@@ -107,7 +107,6 @@ func (s *Server) liveImageDevice(imagePath string) (string, error) {
 // can call without checking for nil or caring about send failures. A client
 // that has stopped listening should not fail an in-flight backup.
 type progressSink struct {
-	log  *slog.Logger
 	send func(*disk_v1alpha.Progress)
 }
 
@@ -117,11 +116,12 @@ func (p progressSink) Message(format string, args ...any) {
 	p.send(up)
 }
 
+// Warn sends a warning to the client. Callers log the underlying condition
+// themselves, once, rather than having this emit a server log line per line of
+// operator-facing text.
 func (p progressSink) Warn(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	p.log.Warn(msg)
 	up := new(disk_v1alpha.Progress)
-	up.Update().SetWarning(msg)
+	up.Update().SetWarning(fmt.Sprintf(format, args...))
 	p.send(up)
 }
 
@@ -141,7 +141,6 @@ func (p progressSink) Transfer(done, total, perSecond, etaSeconds int64) {
 // not supply one.
 func (s *Server) newProgress(ctx context.Context, out *stream.SendStreamClient[*disk_v1alpha.Progress]) progressSink {
 	return progressSink{
-		log: s.log,
 		send: func(up *disk_v1alpha.Progress) {
 			if out == nil {
 				return

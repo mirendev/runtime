@@ -27,11 +27,15 @@ func (s *Server) Backup(ctx context.Context, state *disk_v1alpha.DiskBackupBacku
 	// whose head and tail come from different moments — weaker than the
 	// power-loss state fsck and Postgres's WAL recovery are built for. Say so
 	// and continue: the operator is the one deciding this is safe.
-	dev, err := s.liveImageDevice(target.ImagePath)
-	if err != nil {
-		return err
-	}
-	if dev != "" {
+	//
+	// Unlike restore, this check is best effort. Backup only reads, so being
+	// unable to tell whether the disk is in use is a reason to say less, not a
+	// reason to refuse.
+	if dev, err := s.liveImageDevice(target.ImagePath); err != nil {
+		s.log.Warn("could not tell whether disk image is in use", "disk", target.Name, "error", err)
+		prog.Warn("Could not tell whether %q is in use, so this backup may not be a point-in-time copy.", target.Name)
+	} else if dev != "" {
+		s.log.Info("backing up a disk that is in use", "disk", target.Name, "device", dev)
 		prog.Warn("Disk %q is in use (%s) and may be written during the backup.", target.Name, dev)
 		prog.Warn("The image is read while in use, so it is not a point-in-time copy and may not mount cleanly.")
 		prog.Warn("Detach the disk first for a backup you can rely on.")
