@@ -103,10 +103,10 @@ func (m *mockDiskMountOps) FindLoopByBacking(imagePath string) (string, error) {
 	return "", nil
 }
 
-func (m *mockDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
-	result := make(map[string]string, len(m.loopDevices))
+func (m *mockDiskMountOps) FindAllLoopBackings() (map[string]diskio.LoopBacking, error) {
+	result := make(map[string]diskio.LoopBacking, len(m.loopDevices))
 	for img, dev := range m.loopDevices {
-		result[dev] = img
+		result[dev] = diskio.LoopBacking{Path: img}
 	}
 	return result, nil
 }

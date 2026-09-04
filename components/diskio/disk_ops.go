@@ -22,6 +22,24 @@ type ActiveMount struct {
 	MountPath string
 }
 
+// LoopBacking describes what a loop device is attached to.
+//
+// Path and Deleted are reported separately because the two questions callers
+// ask are genuinely different. "Is anything holding a file under my volumes
+// directory?" wants both, so a stale device can be reclaimed. "Is this image
+// already attached, so I should mount that device instead of attaching a second
+// one?" wants only live attachments — a loop holding an unlinked inode is not
+// this image, it is the file that used to be at this path, and mounting it
+// serves data the operator replaced.
+type LoopBacking struct {
+	// Path is the backing file as the kernel reports it.
+	Path string
+	// Deleted reports that the backing inode has been unlinked. The file lives
+	// on because the loop device holds a reference, but nothing can reach it by
+	// name any more: something renamed or removed the path out from under it.
+	Deleted bool
+}
+
 // DiskMountOps abstracts OS operations for disk mount management.
 // This interface enables testing without requiring actual loop device or mount operations.
 type DiskMountOps interface {
@@ -36,7 +54,7 @@ type DiskMountOps interface {
 	// FindAllLoopBackings returns a map of loop device path to the backing
 	// file currently attached to it, for every loop device in the kernel.
 	// Used by boot-time orphan reconciliation to find stale attachments.
-	FindAllLoopBackings() (map[string]string, error)
+	FindAllLoopBackings() (map[string]LoopBacking, error)
 	LbdAttach(ctx context.Context, imagePath, logDir string) (devicePath string, err error)
 	LbdDetach(ctx context.Context, devicePath string) error
 	LbdAvailable() bool

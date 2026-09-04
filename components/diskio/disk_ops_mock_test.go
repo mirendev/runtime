@@ -102,6 +102,11 @@ type mockDiskMountOps struct {
 	mountDevices  map[string]string // mount path → device, for FindMounts
 	formattedDevs map[string]string
 	formatCalls   []diskMockFormat
+	// deletedBacking marks image paths whose loop device holds an unlinked
+	// inode — the kernel still reports the path, but the file there now is a
+	// different file. Set it to model a ghost loop.
+	deletedBacking map[string]bool
+
 	// loopBacking maps imagePath → existing loop device, for FindLoopByBacking.
 	// Tests populate this to simulate a pre-existing attachment.
 	loopBacking map[string]string
@@ -209,19 +214,21 @@ func (m *mockDiskMountOps) FindLoopByBacking(imagePath string) (string, error) {
 	if m.loopBacking == nil {
 		return "", nil
 	}
+	// A device holding an unlinked inode is not this image, so it is not a
+	// match — the same rule the real implementation follows.
+	if m.deletedBacking[imagePath] {
+		return "", nil
+	}
 	return m.loopBacking[imagePath], nil
 }
 
-func (m *mockDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
+func (m *mockDiskMountOps) FindAllLoopBackings() (map[string]LoopBacking, error) {
 	if m.findLoopErr != nil {
 		return nil, m.findLoopErr
 	}
-	if m.loopBacking == nil {
-		return map[string]string{}, nil
-	}
-	result := make(map[string]string, len(m.loopBacking))
+	result := make(map[string]LoopBacking, len(m.loopBacking))
 	for imagePath, dev := range m.loopBacking {
-		result[dev] = imagePath
+		result[dev] = LoopBacking{Path: imagePath, Deleted: m.deletedBacking[imagePath]}
 	}
 	return result, nil
 }
