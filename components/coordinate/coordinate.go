@@ -1269,7 +1269,7 @@ func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 		eac,
 		controller.AdaptReconcileController[core_v1alpha.App](launcher),
 		time.Minute, // Resync every minute to ensure pools exist
-		1,           // Single worker to prevent race conditions
+		2,           // Parallelize apps; same-app work is serialized by the controller and launcher
 	)
 	c.cm.AddController(launcherController)
 
@@ -1281,7 +1281,7 @@ func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 		eac,
 		launcher.AddonAssociationHandler(),
 		0, // No resync — driven entirely by watch events
-		1,
+		2, // Parallelize apps; the launcher's per-app lock serializes matching associations
 	)
 	c.cm.AddController(addonLauncherController)
 
