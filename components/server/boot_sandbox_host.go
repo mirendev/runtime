@@ -17,18 +17,15 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"golang.org/x/sync/errgroup"
-	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/pkg/boot"
-	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/serverconfig"
 )
 
-type runnerBootInputs struct {
+type sandboxHostBootInputs struct {
 	config                  serverconfig.ServerConfig
 	resolver                netresolve.Resolver
-	secrets                 *secret.Registry
 	apiPort                 int
 	group                   *errgroup.Group
 	bridge                  string
@@ -37,26 +34,25 @@ type runnerBootInputs struct {
 	stopSandboxesOnShutdown bool
 }
 
-type runnerBootOutput struct {
-	runner *runner.Runner
+type sandboxHostBootOutput struct {
+	host *runner.SandboxHost
 }
 
-type runnerBoot struct {
+type sandboxHostBoot struct {
 	component     *boot.Component
-	inputs        runnerBootInputs
+	inputs        sandboxHostBootInputs
 	containerd    containerdBootOutput
 	log           *slog.Logger
-	result        runnerBootOutput
-	output        boot.Output[runnerBootOutput]
+	value         *runner.SandboxHost
+	output        boot.Output[sandboxHostBootOutput]
 	started       bool
 	cleanupOnStop bool
 }
 
-func runnerInputs(options StartOptions, resolver netresolve.Resolver, secrets *secret.Registry, apiPort int) runnerBootInputs {
-	return runnerBootInputs{
+func sandboxHostInputs(options StartOptions, resolver netresolve.Resolver, apiPort int) sandboxHostBootInputs {
+	return sandboxHostBootInputs{
 		config:                  options.Config.Server,
 		resolver:                resolver,
-		secrets:                 secrets,
 		apiPort:                 apiPort,
 		group:                   options.Group,
 		bridge:                  "rt0",
@@ -66,43 +62,24 @@ func runnerInputs(options StartOptions, resolver netresolve.Resolver, secrets *s
 	}
 }
 
-func newRunnerBoot(inputs runnerBootInputs, registration boot.Output[registrationBootOutput], identity boot.Output[workloadIdentityBootOutput], containerdOutput boot.Output[containerdBootOutput], coordinator boot.Output[coordinatorBootOutput], entityAccess boot.Output[entityAccessBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *runnerBoot {
-	b := &runnerBoot{inputs: inputs}
-	b.component, b.output = boot.Provide7("runner", registration, identity, containerdOutput, coordinator, entityAccess, network, observability, b.start,
-		boot.WithStop(b.stop, runnerComponentStopTimeout),
+func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput], storage boot.Output[nodeStorageBootOutput], containerdOutput boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *sandboxHostBoot {
+	b := &sandboxHostBoot{inputs: inputs}
+	b.component, b.output = boot.Provide5(
+		"sandbox-host", access, storage, containerdOutput, network, observability,
+		b.start, boot.WithStop(b.stop, runnerComponentStopTimeout),
 	)
 	return b
 }
 
-func (b *runnerBoot) start(ctx context.Context, registration registrationBootOutput, identity workloadIdentityBootOutput, containerdOutput containerdBootOutput, coordinatorOutput coordinatorBootOutput, entityAccess entityAccessBootOutput, network networkBootOutput, observability observabilityBootOutput) (runnerBootOutput, error) {
-	config := runner.RunnerConfig{
-		Id:            b.inputs.config.GetRunnerID(),
-		ListenAddress: b.inputs.config.GetRunnerAddress(),
-		Workers:       runner.DefaulWorkers,
-		DataPath:      b.inputs.config.GetDataPath(),
-		DiskMode:      b.inputs.config.GetDiskMode(),
-	}
-	var err error
-	coordinator := coordinatorOutput.coordinator
-	config.Config, err = coordinator.RunnerConfig(config.ListenAddress)
-	if err != nil {
-		return runnerBootOutput{}, err
-	}
-	cloudAuth := registration.cloudAuth
-	if cloudAuth.Enabled {
-		config.CloudAuth = &cloudAuth
-	} else {
-		config.CloudAuth = &coordinate.CloudAuthConfig{}
-	}
+func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOutput, storage nodeStorageBootOutput, containerdOutput containerdBootOutput, network networkBootOutput, observability observabilityBootOutput) (sandboxHostBootOutput, error) {
+	config := access.config
 
 	dependencies := runner.RunnerDeps{
-		Secrets:         b.inputs.secrets,
 		CC:              containerdOutput.client,
 		Namespace:       containerdOutput.namespace,
 		Bridge:          b.inputs.bridge,
 		Tempdir:         b.inputs.tempDir,
 		Subnet:          network.subnet,
-		NetServ:         entityAccess.netService,
 		LogsMaintainer:  observability.logsMaintainer,
 		LogWriter:       observability.logWriter,
 		StatusMon:       observability.statusMonitor,
@@ -113,44 +90,40 @@ func (b *runnerBoot) start(ctx context.Context, registration registrationBootOut
 		SandboxMetrics:  observability.sandboxMetrics,
 		IsCoordinator:   true,
 		ApiAddress:      net.JoinHostPort(network.routerAddress.String(), strconv.Itoa(b.inputs.apiPort)),
-		CACert:          coordinator.CACertificate(),
-	}
-	if issuer := identity.issuer; issuer != nil {
-		dependencies.WorkloadIssuer = issuer
+		CACert:          access.caCert,
 	}
 
-	b.result.runner, err = runner.NewRunner(observability.log, dependencies, config)
+	var err error
+	b.value, err = runner.NewSandboxHost(access.access, storage.storage, dependencies, config)
 	if err != nil {
-		return runnerBootOutput{}, err
+		return sandboxHostBootOutput{}, err
 	}
-	if err := b.result.runner.Start(ctx, b.inputs.group); err != nil {
-		return runnerBootOutput{}, err
+	if err := b.value.Start(ctx, b.inputs.group); err != nil {
+		return sandboxHostBootOutput{}, err
 	}
 	b.containerd = containerdOutput
 	b.log = observability.log
 	b.started = true
-	return b.result, nil
+	return sandboxHostBootOutput{host: b.value}, nil
 }
 
-func (b *runnerBoot) stop(ctx context.Context) error {
-	if b.result.runner == nil {
+func (b *sandboxHostBoot) stop(ctx context.Context) error {
+	if b.value == nil {
 		return nil
 	}
 	var errs []error
-	if err := b.result.runner.Close(); err != nil {
+	if err := b.value.Close(); err != nil {
 		errs = append(errs, err)
 	}
-	if b.cleanupOnStop && b.started {
-		if client := b.containerd.client; client != nil {
-			if err := stopAllSandboxContainers(ctx, b.log, client); err != nil {
-				errs = append(errs, err)
-			}
+	if b.cleanupOnStop && b.started && b.containerd.client != nil {
+		if err := stopAllSandboxContainers(ctx, b.log, b.containerd.client); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (b *runnerBoot) enableShutdownCleanup() {
+func (b *sandboxHostBoot) enableShutdownCleanup() {
 	b.cleanupOnStop = b.inputs.stopSandboxesOnShutdown
 }
 
@@ -183,8 +156,6 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *con
 		exitCh, waitErr := task.Wait(ctx)
 		if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
 			log.Debug("failed to send SIGTERM to task", "container", container.ID(), "error", err)
-		} else {
-			log.Debug("sent SIGTERM to task", "container", container.ID())
 		}
 
 		exited := false
@@ -199,7 +170,6 @@ func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *con
 				grace.Stop()
 				exited = true
 			case <-grace.C:
-				log.Debug("sandbox did not exit during grace period", "container", container.ID())
 			}
 		}
 		var deleteOpts []containerd.ProcessDeleteOpts

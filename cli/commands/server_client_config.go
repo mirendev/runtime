@@ -16,14 +16,14 @@ import (
 	"miren.dev/runtime/pkg/serverconfig"
 )
 
-func configureServerClient(ctx *Context, config *serverconfig.Config, coordinator *coordinate.Coordinator) error {
+func configureServerClient(ctx *Context, config *serverconfig.Config, foundation *coordinate.Foundation) error {
 	if config.Server.GetConfigClusterName() == "" {
 		config.Server.SetConfigClusterName("local")
 	}
 	if config.GetMode() != "standalone" || config.Server.GetSkipClientConfig() {
 		return nil
 	}
-	certificate, err := coordinator.IssueCertificate("miren-server")
+	certificate, err := foundation.IssueCertificate("miren-server")
 	if err != nil {
 		ctx.Log.Error("failed to issue server certificate", "error", err)
 		return fmt.Errorf("failed to issue server certificate: %w", err)

@@ -29,8 +29,8 @@ type Runtime struct {
 	once          sync.Once
 	observability boot.Output[observabilityBootOutput]
 
-	Coordinator *coordinate.Coordinator
-	Runner      *runner.Runner
+	ControlPlane *coordinate.ControlPlane
+	Runner       *runner.Runner
 
 	stopErr error
 }
@@ -53,9 +53,26 @@ func Start(options StartOptions) (*Runtime, error) {
 		_ = runtime.Stop(stopCtx)
 		return nil, err
 	}
-	components.runner.enableShutdownCleanup()
-	runtime.Coordinator = components.coordinator.output.Value().coordinator
-	runtime.Runner = components.runner.output.Value().runner
+	components.sandboxHost.enableShutdownCleanup()
+	runtime.ControlPlane = coordinate.NewControlPlane(
+		components.foundation.output.Value().foundation,
+		coordinate.ControlPlaneParts{
+			Secrets:         components.secretStore.output.Value().secretStore,
+			RunnerEndpoints: components.runnerEndpoints.output.Value().endpoints,
+			Workloads:       components.workloadControl.output.Value().workloadControl,
+			Applications:    components.applicationManagement.output.Value().applications,
+			Maintenance:     components.maintenance.output.Value().maintenance,
+			Cloud:           components.cloudControl.output.Value().cloud,
+		},
+	)
+	runtime.Runner = &runner.Runner{
+		Access:       components.clusterAccess.output.Value().access,
+		Storage:      components.nodeStorage.output.Value().storage,
+		Host:         components.sandboxHost.output.Value().host,
+		StorageAgent: components.storageAgent.output.Value().agent,
+		SandboxAgent: components.sandboxAgent.output.Value().agent,
+		Presence:     components.nodePresence.output.Value().presence,
+	}
 	return runtime, nil
 }
 
@@ -77,13 +94,26 @@ func (s *startup) addComponents() error {
 		s.victoriaLogs.component,
 		s.victoriaMetrics.component,
 		s.buildkit.component,
-		s.coordinator.component,
+		s.foundation.component,
+		s.appData.component,
+		s.secretStore.component,
+		s.runnerEndpoints.component,
+		s.clusterAccess.component,
+		s.nodeStorage.component,
 		s.deploymentAttempts.component,
 		s.entityAccess.component,
 		s.appMetrics.component,
 		s.network.component,
-		s.runner.component,
+		s.sandboxHost.component,
+		s.storageAgent.component,
+		s.sandboxAgent.component,
+		s.nodePresence.component,
+		s.workloadControl.component,
+		s.applicationManagement.component,
+		s.maintenance.component,
+		s.cloudControl.component,
 		s.ingress.component,
+		s.admin.component,
 		s.registryHostMapping.component,
 		s.ociRegistry.component,
 		s.workAdmission.component,

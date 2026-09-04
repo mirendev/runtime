@@ -24,16 +24,19 @@ type deploymentAttemptMigrationBootOutput struct {
 
 const markerBackfillRetryInterval = 10 * time.Second
 
-func newDeploymentAttemptMigrationBoot(coordinator boot.Output[coordinatorBootOutput]) *deploymentAttemptMigrationBoot {
+func newDeploymentAttemptMigrationBoot(foundation boot.Output[foundationBootOutput], appData *boot.Component) *deploymentAttemptMigrationBoot {
 	b := &deploymentAttemptMigrationBoot{}
-	b.component, b.output = boot.Provide1("deployment-attempt-migration", coordinator, b.start,
+	// Both startup migrations update AppVersions. The order-only edge prevents
+	// this controller's patches from racing the older whole-entity rewrite.
+	b.component, b.output = boot.Provide1("deployment-attempt-migration", foundation, b.start,
+		boot.DependsOn(appData),
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *deploymentAttemptMigrationBoot) start(ctx context.Context, coordinator coordinatorBootOutput) (deploymentAttemptMigrationBootOutput, error) {
-	controller, err := coordinator.coordinator.NewDeploymentAttemptController()
+func (b *deploymentAttemptMigrationBoot) start(ctx context.Context, foundation foundationBootOutput) (deploymentAttemptMigrationBootOutput, error) {
+	controller, err := foundation.foundation.NewDeploymentAttemptController()
 	if err != nil {
 		return deploymentAttemptMigrationBootOutput{}, err
 	}
@@ -44,11 +47,11 @@ func (b *deploymentAttemptMigrationBoot) start(ctx context.Context, coordinator 
 		close(ready)
 		return deploymentAttemptMigrationBootOutput{entitySyncReady: ready}, nil
 	}
-	go b.prepareEntitySync(ctx, coordinator, ready)
+	go b.prepareEntitySync(ctx, foundation, ready)
 	return deploymentAttemptMigrationBootOutput{entitySyncReady: ready}, nil
 }
 
-func (b *deploymentAttemptMigrationBoot) prepareEntitySync(ctx context.Context, coordinator coordinatorBootOutput, ready chan<- struct{}) {
+func (b *deploymentAttemptMigrationBoot) prepareEntitySync(ctx context.Context, foundation foundationBootOutput, ready chan<- struct{}) {
 	select {
 	case <-ctx.Done():
 		return
@@ -56,12 +59,12 @@ func (b *deploymentAttemptMigrationBoot) prepareEntitySync(ctx context.Context, 
 	}
 
 	for {
-		if err := coordinator.coordinator.BackfillCloudExportMarker(ctx); err == nil {
+		if err := foundation.foundation.BackfillCloudExportMarker(ctx); err == nil {
 			close(ready)
-			coordinator.coordinator.Log.Info("entity sync source preparation complete")
+			foundation.foundation.Log.Info("entity sync source preparation complete")
 			return
 		} else if ctx.Err() == nil {
-			coordinator.coordinator.Log.Warn("cloud export marker backfill failed; retrying", "error", err)
+			foundation.foundation.Log.Warn("cloud export marker backfill failed; retrying", "error", err)
 		}
 
 		select {

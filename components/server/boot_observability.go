@@ -49,14 +49,15 @@ func observabilityInputs(options StartOptions) observabilityBootInputs {
 	}
 }
 
-func newObservabilityBoot(inputs observabilityBootInputs, tracing boot.Output[struct{}], victoriaLogs boot.Output[victoriaLogsBootOutput], victoriaMetrics boot.Output[victoriaMetricsBootOutput]) *observabilityBoot {
+func newObservabilityBoot(inputs observabilityBootInputs, tracing *boot.Component, victoriaLogs boot.Output[victoriaLogsBootOutput], victoriaMetrics boot.Output[victoriaMetricsBootOutput]) *observabilityBoot {
 	b := &observabilityBoot{inputs: inputs}
-	b.component, b.output = boot.Provide3("observability", tracing, victoriaLogs, victoriaMetrics, b.start,
+	b.component, b.output = boot.Provide2("observability", victoriaLogs, victoriaMetrics, b.start,
+		boot.DependsOn(tracing),
 		boot.WithStop(b.stop, componentStopTimeout))
 	return b
 }
 
-func (b *observabilityBoot) start(ctx context.Context, _ struct{}, victoriaLogs victoriaLogsBootOutput, victoriaMetrics victoriaMetricsBootOutput) (observabilityBootOutput, error) {
+func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogsBootOutput, victoriaMetrics victoriaMetricsBootOutput) (observabilityBootOutput, error) {
 	writer := metrics.NewVictoriaMetricsWriter(b.inputs.log, victoriaMetrics.address, b.inputs.timeout)
 	writer.Start()
 	reader := metrics.NewVictoriaMetricsReader(b.inputs.log, victoriaMetrics.address, b.inputs.timeout)

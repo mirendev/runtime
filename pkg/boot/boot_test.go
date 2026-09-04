@@ -19,6 +19,14 @@ func TestValidateRejectsDanglingInputProducer(t *testing.T) {
 	require.ErrorContains(t, g.Validate(), `component "consumer" has undeclared input producer "producer"`)
 }
 
+func TestValidateRejectsDanglingOrderOnlyDependency(t *testing.T) {
+	g := boot.NewGraph()
+	dependency := boot.Run0("dependency", func(context.Context) error { return nil })
+	dependent := boot.Run0("dependent", func(context.Context) error { return nil }, boot.DependsOn(dependency))
+	require.NoError(t, g.Add(dependent))
+	require.ErrorContains(t, g.Validate(), `component "dependent" has undeclared input producer "dependency"`)
+}
+
 func TestOutputPublishesOnlyAfterSuccessfulStart(t *testing.T) {
 	g := boot.NewGraph()
 	producer, output := boot.Provide0("producer", func(context.Context) (int, error) { return 42, nil })
@@ -155,6 +163,69 @@ func TestStopUsesReverseDataflowOrder(t *testing.T) {
 	require.NoError(t, g.Start(t.Context()))
 	require.NoError(t, g.Stop(t.Context()))
 	require.Equal(t, []string{"leaf", "root"}, stopped)
+}
+
+func TestDependsOnOrdersComponentsWithoutPublishingAValue(t *testing.T) {
+	g := boot.NewGraph()
+	release := make(chan struct{})
+	dependencyStarted := make(chan struct{})
+	dependentStarted := make(chan struct{})
+
+	dependency := boot.Run0("dependency", func(ctx context.Context) error {
+		close(dependencyStarted)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	})
+	dependent := boot.Run0("dependent", func(context.Context) error {
+		close(dependentStarted)
+		return nil
+	}, boot.DependsOn(dependency))
+
+	require.NoError(t, g.Add(dependency))
+	require.NoError(t, g.Add(dependent))
+	done := make(chan error, 1)
+	go func() { done <- g.Start(t.Context()) }()
+
+	<-dependencyStarted
+	select {
+	case <-dependentStarted:
+		t.Fatal("dependent started before its order-only dependency completed")
+	default:
+	}
+	close(release)
+	require.NoError(t, <-done)
+	select {
+	case <-dependentStarted:
+	default:
+		t.Fatal("dependent did not start after its dependency completed")
+	}
+}
+
+func TestDependsOnControlsReverseShutdownOrder(t *testing.T) {
+	g := boot.NewGraph()
+	var stopped []string
+	dependency := boot.Run0("dependency", func(context.Context) error { return nil },
+		boot.WithStop(func(context.Context) error {
+			stopped = append(stopped, "dependency")
+			return nil
+		}, 0),
+	)
+	dependent := boot.Run0("dependent", func(context.Context) error { return nil },
+		boot.DependsOn(dependency),
+		boot.WithStop(func(context.Context) error {
+			stopped = append(stopped, "dependent")
+			return nil
+		}, 0),
+	)
+	require.NoError(t, g.Add(dependency))
+	require.NoError(t, g.Add(dependent))
+	require.NoError(t, g.Start(t.Context()))
+	require.NoError(t, g.Stop(t.Context()))
+	require.Equal(t, []string{"dependent", "dependency"}, stopped)
 }
 
 func TestStopCancelsLifetimeBeforeCallingStop(t *testing.T) {

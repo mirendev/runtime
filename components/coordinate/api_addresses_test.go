@@ -291,14 +291,14 @@ func TestApiAddresses(t *testing.T) {
 			if listen == "" {
 				listen = wildcardListen
 			}
-			c := &Coordinator{
+			c := NewCloudControl(&Foundation{
 				CoordinatorConfig: CoordinatorConfig{
 					Address: listen,
 					IPs:     tt.ips,
 				},
 				Log:            slog.Default(),
 				netcheckResult: tt.netcheckResult,
-			}
+			})
 
 			got := c.apiAddresses()
 
