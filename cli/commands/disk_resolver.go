@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/lbdmod"
 	"miren.dev/runtime/pkg/snapshot"
 )
 
@@ -282,10 +282,16 @@ func (r *entityDiskResolver) FindLeases(ctx context.Context, diskID string) ([]s
 }
 
 func detectVolumeMode() storage_v1alpha.DiskVolumeVolumeMode {
-	if mode := os.Getenv("MIREN_DISK_MODE"); mode == "accelerator" {
+	switch os.Getenv("MIREN_DISK_MODE") {
+	case "accelerator":
 		return storage_v1alpha.VM_ACCELERATOR
+	case "universal":
+		return storage_v1alpha.VM_UNIVERSAL
 	}
-	if _, err := exec.LookPath("lbdctl"); err == nil {
+
+	// Auto-detect. This has to agree with controllers/disk's detectDiskMode,
+	// so both ask lbdmod rather than each testing for lbdctl on PATH.
+	if lbdmod.Available(lbdmod.Options{SearchPath: []string{FindReleasePath()}}) {
 		return storage_v1alpha.VM_ACCELERATOR
 	}
 	return storage_v1alpha.VM_UNIVERSAL
