@@ -149,30 +149,38 @@ func (r *AppInfo) List(ctx context.Context, state *app_v1alpha.CrudList) error {
 	return nil
 }
 
-// ListApps computes the current inventory of apps: identity, active version,
-// health, instance counts, scaling mode, and routes.
+// appEntry is one app with its active version and that version's entity
+// resolved, which is what both the health classification and the fuller
+// listing are built from.
+type appEntry struct {
+	name                string
+	app                 core_v1alpha.App
+	activeVersion       *core_v1alpha.AppVersion
+	activeVersionEntity *entityserver_v1alpha.Entity
+}
+
+// appHealthSource is everything a health classification is derived from: the
+// apps, their resolved config specs, and the aggregated pool state per app.
+type appHealthSource struct {
+	apps      []appEntry
+	specs     map[string]*core_v1alpha.ConfigSpec
+	poolState map[string]*poolHealth
+}
+
+// collectAppHealth reads what health is derived from, and nothing else.
 //
-// This is deliberately shared rather than duplicated. Health is a
-// classification over sandbox pool state, not a stored field, so any second
-// implementation would drift from this one and let `miren app list` and the
-// cloud dashboard disagree about whether an app is healthy. Both read from
-// here instead.
-func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) {
+// Kept separate from route lookup so periodic health samples do not pay for
+// an HttpRoute listing they will discard.
+func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error) {
 	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return nil, err
 	}
 
-	// Collect apps and resolve their active versions
-	type appEntry struct {
-		name                string
-		app                 core_v1alpha.App
-		activeVersion       *core_v1alpha.AppVersion
-		activeVersionEntity *entityserver_v1alpha.Entity
+	src := &appHealthSource{
+		specs:     make(map[string]*core_v1alpha.ConfigSpec),
+		poolState: make(map[string]*poolHealth),
 	}
-
-	var apps []appEntry
-	specMap := make(map[string]*core_v1alpha.ConfigSpec)
 
 	for list.Next() {
 		var app core_v1alpha.App
@@ -187,16 +195,13 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 				entry.activeVersion = &appVer
 				entry.activeVersionEntity = verEnt
 				if resolvedCfg, err := coreutil.ResolveRuntimeConfig(ctx, r.EC.EAC(), &appVer); err == nil {
-					specMap[appVer.ID.String()] = resolvedCfg
+					src.specs[appVer.ID.String()] = resolvedCfg
 				}
 			}
 		}
 
-		apps = append(apps, entry)
+		src.apps = append(src.apps, entry)
 	}
-
-	// Aggregate sandbox pool state per app
-	poolStateMap := make(map[string]*poolHealth)
 
 	poolList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
@@ -209,19 +214,94 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 		poolList.Read(&pool)
 
 		appName := ui.CleanEntityID(pool.App.String())
-		if poolStateMap[appName] == nil {
-			poolStateMap[appName] = &poolHealth{isAutoscale: true}
+		if src.poolState[appName] == nil {
+			src.poolState[appName] = &poolHealth{isAutoscale: true}
 		}
-		ps := poolStateMap[appName]
+		ps := src.poolState[appName]
 		ps.accumulate(&pool, now)
 
-		if spec, ok := specMap[pool.SandboxSpec.Version.String()]; ok {
+		if spec, ok := src.specs[pool.SandboxSpec.Version.String()]; ok {
 			for _, svc := range spec.Services {
 				if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
 					ps.isAutoscale = false
 				}
 			}
 		}
+	}
+
+	return src, nil
+}
+
+// healthOf classifies one app.
+//
+// This is the single implementation. `miren app list` and the cloud health feed
+// both arrive here, so they cannot drift into disagreeing about whether an app
+// is healthy.
+func (s *appHealthSource) healthOf(entry appEntry) apphealth.State {
+	out := apphealth.State{Name: entry.name}
+
+	if ps, ok := s.poolState[entry.name]; ok {
+		out.Pooled = true
+		out.ReadyInstances = int32(ps.ready)
+		out.DesiredInstances = int32(ps.desired)
+		if ps.isAutoscale {
+			out.ScalingMode = "auto"
+		} else {
+			out.ScalingMode = "fixed"
+		}
+		out.Health = ps.classify()
+		if ps.inCooldown {
+			out.InCooldown = true
+			out.CrashCount = ps.crashCount
+			out.CooldownSeconds = int32(ps.cooldownLeft.Seconds())
+		}
+		return out
+	}
+
+	if entry.activeVersion != nil {
+		// Active version but no pools yet. Mirror AppInfo so `m app list` and
+		// app-status/deploy agree: an autoscale app reads as idle (deliberately
+		// at zero), while a fixed service reads as starting (not up yet) rather
+		// than a misleading idle. Both classifiers have to agree, or `m app
+		// list` and the deploy poller disagree about the same app.
+		ps := poolHealth{
+			isAutoscale: specAllowsScaleToZero(s.specs[entry.activeVersion.ID.String()]),
+			isTaskOnly:  specIsTaskOnly(s.specs[entry.activeVersion.ID.String()]),
+		}
+		out.Health = ps.classify()
+		return out
+	}
+
+	out.Health = apphealth.Unknown
+	return out
+}
+
+// ListAppHealth returns the health classification for every app and nothing
+// else. See collectAppHealth for why this exists alongside ListApps.
+func (r *AppInfo) ListAppHealth(ctx context.Context) ([]apphealth.State, error) {
+	src, err := r.collectAppHealth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]apphealth.State, 0, len(src.apps))
+	for _, entry := range src.apps {
+		results = append(results, src.healthOf(entry))
+	}
+	return results, nil
+}
+
+// ListApps computes the current inventory of apps: identity, active version,
+// health, instance counts, scaling mode, and routes.
+//
+// Health comes from healthOf, the same classifier the cloud health feed uses.
+// Health is a classification over sandbox pool state rather than a stored
+// field, so a second implementation would drift from this one and let `miren
+// app list` and the cloud dashboard disagree about whether an app is healthy.
+func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) {
+	src, err := r.collectAppHealth(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect routes per app
@@ -253,7 +333,7 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 	// Build response
 	var results []*app_v1alpha.AppInfo
 
-	for _, entry := range apps {
+	for _, entry := range src.apps {
 		var a app_v1alpha.AppInfo
 		a.SetName(entry.name)
 
@@ -266,39 +346,20 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 			a.SetCurrentVersion(&vi)
 		}
 
-		// Pool state → health, instances, scaling
-		if ps, ok := poolStateMap[entry.name]; ok {
-			a.SetReadyInstances(int32(ps.ready))
-			a.SetDesiredInstances(int32(ps.desired))
+		health := src.healthOf(entry)
+		a.SetHealth(health.Health)
 
-			if ps.isAutoscale {
-				a.SetScalingMode("auto")
-			} else {
-				a.SetScalingMode("fixed")
-			}
-
-			a.SetHealth(ps.classify())
-			if ps.inCooldown {
-				a.SetCrashCount(ps.crashCount)
-				a.SetCooldownSeconds(int32(ps.cooldownLeft.Seconds()))
+		if health.Pooled {
+			a.SetReadyInstances(health.ReadyInstances)
+			a.SetDesiredInstances(health.DesiredInstances)
+			a.SetScalingMode(health.ScalingMode)
+			if health.InCooldown {
+				a.SetCrashCount(health.CrashCount)
+				a.SetCooldownSeconds(health.CooldownSeconds)
 			}
 		} else if entry.activeVersion != nil {
-			// Active version but no pools yet. Mirror AppInfo so `m app list`
-			// and app-status/deploy agree: an autoscale app reads as idle
-			// (deliberately at zero), while a fixed service reads as starting
-			// (not up yet) rather than a misleading idle.
-			// Both classifiers have to agree, or `m app list` and the deploy
-			// poller disagree about the same app.
-			spec := specMap[entry.activeVersion.ID.String()]
-			ps := poolHealth{
-				isAutoscale: specAllowsScaleToZero(spec),
-				isTaskOnly:  specIsTaskOnly(spec),
-			}
 			a.SetReadyInstances(0)
 			a.SetDesiredInstances(0)
-			a.SetHealth(ps.classify())
-		} else {
-			a.SetHealth(apphealth.Unknown)
 		}
 
 		// Routes

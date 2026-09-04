@@ -19,21 +19,23 @@ type cloudControlBoot struct {
 	value     *coordinate.CloudControl
 }
 
-func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applications, maintenance, workloads *boot.Component) *cloudControlBoot {
+func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applications boot.Output[applicationManagementBootOutput], maintenance, workloads *boot.Component) *cloudControlBoot {
 	b := &cloudControlBoot{}
-	b.component, b.output = boot.Provide1(
-		"cloud-control", foundation, b.start,
+	b.component, b.output = boot.Provide2(
+		"cloud-control", foundation, applications, b.start,
 		// Cloud startup status means the management, maintenance, and workload
 		// control planes are available. It does not promise ingress or build and
 		// deployment admission, which have their own readiness boundaries.
-		boot.DependsOn(applications, maintenance, workloads),
+		// Application management is an input rather than an ordering edge because
+		// the uplink reports the health it classifies.
+		boot.DependsOn(maintenance, workloads),
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *cloudControlBoot) start(ctx context.Context, foundation foundationBootOutput) (cloudControlBootOutput, error) {
-	cloud := coordinate.NewCloudControl(foundation.foundation)
+func (b *cloudControlBoot) start(ctx context.Context, foundation foundationBootOutput, applications applicationManagementBootOutput) (cloudControlBootOutput, error) {
+	cloud := coordinate.NewCloudControl(foundation.foundation, applications.applications)
 	if err := cloud.Start(ctx); err != nil {
 		return cloudControlBootOutput{}, err
 	}

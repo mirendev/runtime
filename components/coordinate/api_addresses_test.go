@@ -298,7 +298,7 @@ func TestApiAddresses(t *testing.T) {
 				},
 				Log:            slog.Default(),
 				netcheckResult: tt.netcheckResult,
-			})
+			}, nil)
 
 			got := c.apiAddresses()
 
