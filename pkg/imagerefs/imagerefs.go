@@ -35,6 +35,12 @@ const (
 
 	// Miren runtime server
 	Miren = "oci.miren.cloud/miren:latest"
+
+	// LbdBuilder carries the toolchain that compiles the lbd kernel module
+	// against a node's running kernel (docker/Dockerfile.lbd-builder). It
+	// holds no module source -- miren embeds that and mounts it in -- so the
+	// tag only moves when the toolchain itself needs to.
+	LbdBuilder = "oci.miren.cloud/lbd-builder:v1"
 )
 
 // Base images for language stacks

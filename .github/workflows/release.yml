@@ -456,6 +456,74 @@ jobs:
           # this path makes worse.
           cache-to: ${{ needs.init.outputs.cache == 'true' && 'type=gha,mode=max' || '' }}
 
+  build-and-push-lbd-builder:
+    # The toolchain image that compiles the lbd kernel module on a node. It
+    # carries no module source, so its tag only moves when the toolchain does:
+    # this publishes the tag pkg/imagerefs pins, and does nothing if that tag
+    # already exists. Bumping imagerefs.LbdBuilder is what ships a new one.
+    needs: [init, test]
+    if: >-
+      !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: depot-ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.init.outputs.sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Decide whether the builder image needs publishing
+        id: lbd-builder
+        run: |
+          set -euo pipefail
+          # The pinned reference is the single source of truth for the tag.
+          REF=$(grep -oE 'oci\.miren\.cloud/lbd-builder:[A-Za-z0-9._-]+' pkg/imagerefs/imagerefs.go | head -1)
+          if [ -z "$REF" ]; then
+            echo "could not find the lbd-builder reference in pkg/imagerefs/imagerefs.go" >&2
+            exit 1
+          fi
+          TAG="${REF##*:}"
+          IMAGE="us-central1-docker.pkg.dev/miren-cloud/miren-oci/lbd-builder:$TAG"
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+          # Republishing an existing tag would move a pinned reference under
+          # already-deployed clusters, so only a new tag is ever pushed.
+          if gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
+            echo "$IMAGE already exists; nothing to publish"
+            echo "publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "publish=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.lbd-builder.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and push the lbd builder image
+        if: steps.lbd-builder.outputs.publish == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./docker/Dockerfile.lbd-builder
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.lbd-builder.outputs.image }}
+          cache-from: type=gha
+          cache-to: ${{ needs.init.outputs.cache == 'true' && 'type=gha,mode=max' || '' }}
+
   upload-to-miren:
     needs: [init, test, package, build-binaries]
     # Same reasoning as build-and-push-docker: tolerate `test` being skipped on

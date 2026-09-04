@@ -40,7 +40,9 @@ sudo dnf install iptables nftables
 `miren server install` and `miren runner install` verify these are present before installing, so a missing tool stops the install with instructions rather than surfacing later as a broken network.
 
 :::note[Extra tooling for optional features]
-Some features reach for more commands, installed automatically or only when you opt in. [Block-device volumes](/managing-disk-space) use disk tooling (`lbdctl`, `mkfs.*`, `blkid`) when a disk is provisioned, and on SELinux-enforcing hosts the installer uses `semanage` and `restorecon` to label the binary. Both paths degrade gracefully if the tools are absent, so you only need them if you use the corresponding feature.
+Some features reach for more commands, installed automatically or only when you opt in. Block-device volumes use disk tooling (`mkfs.*`, `blkid`) when a disk is provisioned, and on SELinux-enforcing hosts the installer uses `semanage` and `restorecon` to label the binary. Both paths degrade gracefully if the tools are absent, so you only need them if you use the corresponding feature.
+
+[Accelerator mode](/disk-accelerator) compiles a kernel module for your running kernel, so it needs that kernel's headers. On Debian and Ubuntu the builder fetches them itself; elsewhere install them first (`kernel-devel-$(uname -r)` on Fedora and RHEL). Without them, disks use loop devices instead — slower, but working.
 :::
 
 ## Why these numbers?

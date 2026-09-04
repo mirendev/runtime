@@ -1249,11 +1249,40 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug entity ensure", Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure))
 
 	// Disk commands
-	d.Dispatch("disk", Section("disk", "Disk backup and recovery", "", WithSectionGroup(GroupServer)))
+	d.Dispatch("disk", Section("disk", "Disk backup, recovery, and acceleration", "", WithSectionGroup(GroupServer)))
 	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
 	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
 	d.Dispatch("disk undelete", Infer("disk undelete", "Restore a recently deleted disk", DiskUndelete))
 	d.Dispatch("disk list-deleted", Infer("disk list-deleted", "List deleted disks available for recovery", DiskListDeleted))
+
+	// Accelerator mode. These build and load the lbd kernel module, so they
+	// only do anything on Linux; the non-Linux builds register stubs that say
+	// so rather than leaving the command missing.
+	d.Dispatch("disk accelerator", Section("disk accelerator", "Faster block-device disks via the lbd kernel module", "",
+		WithSectionGroup(GroupServer),
+		WithSectionDescription(acceleratorSectionDescription)))
+	d.Dispatch("disk accelerator status", Infer("disk accelerator status", "Show whether accelerator mode can run on this host", DiskAcceleratorStatus,
+		WithExample(mflags.Example{
+			Name: "Check accelerator mode",
+			Body: "miren disk accelerator status",
+		}),
+	))
+	d.Dispatch("disk accelerator install", Infer("disk accelerator install", "Build and load the lbd kernel module for this kernel", DiskAcceleratorInstall,
+		WithExample(mflags.Example{
+			Name: "Enable accelerator mode",
+			Body: "sudo miren disk accelerator install",
+		}),
+		WithExample(mflags.Example{
+			Name: "Rebuild after a kernel upgrade",
+			Body: "sudo miren disk accelerator install --force",
+		}),
+	))
+	d.Dispatch("disk accelerator uninstall", Infer("disk accelerator uninstall", "Unload and remove the lbd kernel module", DiskAcceleratorUninstall,
+		WithExample(mflags.Example{
+			Name: "Go back to loop devices",
+			Body: "sudo miren disk accelerator uninstall",
+		}),
+	))
 
 	// Debug disk commands
 	d.Dispatch("debug disk", Section("debug disk", "Disk entity debug commands", "", WithSectionDescription(diskSectionDescription)))
