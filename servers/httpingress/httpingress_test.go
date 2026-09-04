@@ -2,6 +2,7 @@ package httpingress
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
@@ -27,6 +29,70 @@ import (
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestHandleRequestPanic(t *testing.T) {
+	tests := []struct {
+		name       string
+		panicValue any
+		wantLog    bool
+	}{
+		{
+			name:       "abort handler sentinel",
+			panicValue: http.ErrAbortHandler,
+			wantLog:    false,
+		},
+		{
+			name:       "different error with the same message",
+			panicValue: errors.New(http.ErrAbortHandler.Error()),
+			wantLog:    true,
+		},
+		{
+			name:       "uncomparable panic value",
+			panicValue: map[string]string{"unexpected": "panic"},
+			wantLog:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := &Server{Log: slog.New(slog.NewJSONHandler(&logs, nil))}
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+
+			var recovered any
+			func() {
+				defer func() {
+					recovered = recover()
+				}()
+				h.handleRequestPanic(req, tt.panicValue)
+			}()
+
+			if !reflect.DeepEqual(recovered, tt.panicValue) {
+				t.Fatalf("recovered panic = %v, want %v", recovered, tt.panicValue)
+			}
+
+			if !tt.wantLog {
+				if logs.Len() != 0 {
+					t.Fatalf("unexpected panic log: %s", logs.String())
+				}
+				return
+			}
+
+			for _, want := range [][]byte{
+				[]byte(`"level":"ERROR"`),
+				[]byte(`"msg":"panic in request handler"`),
+				[]byte(`"stack":`),
+				[]byte(`"method":"GET"`),
+				[]byte(`"path":"/test"`),
+				[]byte(`"host":"example.com"`),
+			} {
+				if !bytes.Contains(logs.Bytes(), want) {
+					t.Errorf("panic log missing %s: %s", want, logs.String())
+				}
+			}
+		})
+	}
+}
 
 func TestIngressConfigDefault(t *testing.T) {
 	// Test that zero timeout defaults to 60s
