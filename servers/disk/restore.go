@@ -25,7 +25,7 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 
 	name := args.Disk()
 	if name == "" {
-		return fmt.Errorf("disk name is required")
+		return refuse("disk name is required")
 	}
 
 	src, compressedSize, closeSrc, err := s.restoreSource(ctx, name, args, prog)
@@ -61,7 +61,7 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 
 	if !target.Created {
 		if _, err := os.Stat(target.ImagePath); err == nil && !args.Force() {
-			return fmt.Errorf(
+			return refuse(
 				"disk %q already has an image at %s — pass --force to overwrite it",
 				name, target.ImagePath,
 			)
@@ -110,7 +110,7 @@ func (s *Server) restoreSource(
 	if point == "" {
 		in := args.Data()
 		if in == nil {
-			return nil, 0, nil, fmt.Errorf("restore needs either a restore point or a snapshot to read")
+			return nil, 0, nil, refuse("restore needs either a restore point or a snapshot to read")
 		}
 		prog.Message("Reading snapshot from client")
 		r := stream.ToReader(ctx, in)
@@ -131,7 +131,7 @@ func (s *Server) restoreSource(
 		return nil, 0, nil, err
 	}
 	if target.CloudVolumeID == "" {
-		return nil, 0, nil, fmt.Errorf("disk %q is not registered with miren.cloud, so it has no restore points", name)
+		return nil, 0, nil, refuse("disk %q is not registered with miren.cloud, so it has no restore points", name)
 	}
 
 	size := s.restorePointSize(ctx, target.CloudVolumeID, point)
@@ -180,7 +180,7 @@ func (s *Server) refuseLiveImage(target *snapshot.RestoreTarget, name string) er
 	if dev == "" {
 		return nil
 	}
-	return fmt.Errorf(
+	return refuse(
 		"disk %q is in use (%s is backing %s), and restoring it now would write an image nothing reads — "+
 			"stop everything using the disk first, or restore into a new disk instead",
 		name, dev, target.ImagePath,

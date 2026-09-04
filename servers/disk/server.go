@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/diskresolve"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -69,11 +70,22 @@ func NewServer(
 	}
 }
 
+// errCategory groups this service's errors in the RPC error envelope.
+const errCategory = "disk-backup"
+
+// refuse reports a request this server will not carry out, as opposed to one
+// that failed partway. It travels as a validation failure so the client prints
+// the message on its own rather than wrapping it in "remote error: generic
+// unknown", which buries the sentence an operator needs to read.
+func refuse(format string, args ...any) error {
+	return cond.ValidationFailure(errCategory, fmt.Sprintf(format, args...))
+}
+
 // errNoCloud is what every cloud-dependent path reports. It names the command
 // that would fix it, because "no cloud configured" on its own leaves an
 // operator guessing whether that is a bug or a setup step they skipped.
 func errNoCloud(what string) error {
-	return fmt.Errorf(
+	return refuse(
 		"%s needs a miren.cloud registration, and this cluster has none — run `miren register` first, or back up to a local file instead",
 		what,
 	)
@@ -155,7 +167,7 @@ func (s *Server) newProgress(ctx context.Context, out *stream.SendStreamClient[*
 // prepareBackup resolves a disk to an image on this host.
 func (s *Server) prepareBackup(ctx context.Context, name string) (*snapshot.BackupTarget, error) {
 	if name == "" {
-		return nil, fmt.Errorf("disk name is required")
+		return nil, refuse("disk name is required")
 	}
 	return snapshot.PrepareBackup(ctx, s.disks, name, s.dataPath)
 }

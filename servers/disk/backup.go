@@ -57,7 +57,7 @@ func (s *Server) backupToCloud(
 		return errNoCloud("backing up to miren.cloud")
 	}
 	if target.CloudVolumeID == "" {
-		return fmt.Errorf(
+		return refuse(
 			"disk %q is not registered with miren.cloud yet, so there is nowhere to upload to — it registers on its own shortly after the disk is created",
 			target.Name,
 		)
@@ -108,7 +108,7 @@ func (s *Server) backupToClient(
 ) error {
 	out := state.Args().Data()
 	if out == nil {
-		return fmt.Errorf("backup needs either --cloud or somewhere to write the snapshot")
+		return refuse("backup needs either --cloud or somewhere to write the snapshot")
 	}
 
 	img, err := os.Open(target.ImagePath)
