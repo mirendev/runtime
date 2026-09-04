@@ -352,6 +352,43 @@ miren deploy --analyze
 		}),
 	))
 
+	d.Dispatch("top", Infer("top", "Show cluster-wide resource usage", Top,
+		WithGroup(GroupMonitoring),
+		WithDescription(topDescription),
+		WithExample(mflags.Example{
+			Name: "What is using the cluster's CPU",
+			Body: "miren top",
+		}),
+		WithExample(mflags.Example{
+			Name: "Which host is hot, and whether an app is to blame",
+			Body: "miren top --nodes",
+		}),
+		WithExample(mflags.Example{
+			Name: "Per-app totals, including each app's dedicated addons",
+			Body: "miren top --apps",
+		}),
+		WithExample(mflags.Example{
+			Name: "One app's usage",
+			Body: "miren top --apps --app myapp",
+		}),
+		WithExample(mflags.Example{
+			Name: "Narrow to one runner",
+			Body: "miren top --runner miren-garden-runner-1",
+		}),
+		WithExample(mflags.Example{
+			Name: "Find a spike that has already passed",
+			Body: "miren top --since 1h --aggregate max",
+		}),
+		WithExample(mflags.Example{
+			Name: "Watch continuously",
+			Body: "miren top --watch",
+		}),
+		WithExample(mflags.Example{
+			Name: "Machine-readable output",
+			Body: "miren top --format json",
+		}),
+	))
+
 	// Sandbox commands
 	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription), WithSectionGroup(GroupMonitoring)))
 	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList,
@@ -390,6 +427,20 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Force delete without confirmation",
 			Body: "miren sandbox delete sb_abc123 --force",
+		}),
+	))
+	d.Dispatch("sandbox inspect", Infer("sandbox inspect", "Show one sandbox's resource usage and failure history", SandboxInspect,
+		WithExample(mflags.Example{
+			Name: "Inspect a sandbox",
+			Body: "miren sandbox inspect sb_abc123",
+		}),
+		WithExample(mflags.Example{
+			Name: "Inspect over the last hour",
+			Body: "miren sandbox inspect sb_abc123 --since 1h",
+		}),
+		WithExample(mflags.Example{
+			Name: "Include CPU and memory history",
+			Body: "miren sandbox inspect sb_abc123 --series",
 		}),
 	))
 	d.Dispatch("sandbox exec", Infer("sandbox exec", "Open interactive shell in an existing sandbox", SandboxExec,

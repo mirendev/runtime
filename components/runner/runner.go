@@ -36,6 +36,7 @@ import (
 	"miren.dev/runtime/controllers/ingress"
 	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/controllers/service"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -100,6 +101,12 @@ type RunnerDeps struct {
 
 	// Sandbox metrics
 	SandboxMetrics *sandbox.Metrics
+
+	// MetricsWriter is where host-level resource series are published. It is
+	// the same writer the sandbox collectors use, taken directly rather than
+	// through them because node series are labeled by node rather than by
+	// sandbox. Nil disables host metrics, as it does for sandbox metrics.
+	MetricsWriter *metrics.VictoriaMetricsWriter
 
 	// IsCoordinator indicates this runner is the coordinator node.
 	// Affects scheduling: stateful sandboxes are routed to the coordinator.
@@ -781,6 +788,15 @@ func (r *Runner) SetupControllers(
 	retErr error,
 ) {
 	cm := controller.NewControllerManager()
+
+	// Host-level metrics start here rather than alongside the other collectors
+	// in boot because this is the one place that runs for both the
+	// coordinator's embedded runner and a distributed one, and it is where the
+	// node identity these series are keyed by is known.
+	if r.deps.MetricsWriter != nil {
+		nodeUsage := metrics.NewNodeUsage(r.Log, r.deps.MetricsWriter, r.nodeId().String(), r.Id, r.DataPath)
+		go nodeUsage.Monitor(ctx)
+	}
 
 	// Initialize NetServ if not provided (distributed runner mode)
 	if r.deps.NetServ == nil {

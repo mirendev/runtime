@@ -504,7 +504,7 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	// Register the saga definition
 	log := slog.Default()
-	err := registerCreateSandboxSaga(h.registry, h.entities, h.networking, h.runtime, h.obs, log)
+	err := registerCreateSandboxSaga(h.registry, h.entities, h.networking, h.runtime, h.obs, "node/test-node", log)
 	require.NoError(t, err)
 
 	h.executor = saga.NewExecutor(h.storage,

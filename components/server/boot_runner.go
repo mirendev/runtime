@@ -111,6 +111,7 @@ func (b *runnerBoot) start(ctx context.Context, registration registrationBootOut
 		DisableLocalNet: false,
 		Resolver:        b.inputs.resolver,
 		SandboxMetrics:  observability.sandboxMetrics,
+		MetricsWriter:   observability.metricsWriter,
 		IsCoordinator:   true,
 		ApiAddress:      net.JoinHostPort(network.routerAddress.String(), strconv.Itoa(b.inputs.apiPort)),
 		CACert:          coordinator.CACertificate(),

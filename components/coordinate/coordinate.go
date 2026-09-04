@@ -39,6 +39,7 @@ import (
 	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
+	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
@@ -104,6 +105,7 @@ import (
 	secretsrv "miren.dev/runtime/servers/secret"
 	sqlitebackupsrv "miren.dev/runtime/servers/sqlitebackup"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
+	usagesrv "miren.dev/runtime/servers/usage"
 	"miren.dev/runtime/version"
 )
 
@@ -143,6 +145,11 @@ type CoordinatorConfig struct {
 	HTTP      *metrics.HTTPMetrics
 	Logs      *observability.LogReader
 	LogWriter observability.LogWriter
+
+	// MetricsReader queries the cluster's metrics directly, rather than through
+	// the app-shaped helpers on Cpu and Mem. The usage service needs arbitrary
+	// groupings -- by sandbox, by node -- that those helpers do not express.
+	MetricsReader *metrics.VictoriaMetricsReader
 
 	// Observability addresses for distributed runners
 	VictoriametricsAddress string
@@ -1591,6 +1598,13 @@ func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 	server.ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(ai))
 	server.ExposeValue("dev.miren.runtime/app-status", app_v1alpha.AdaptAppStatus(ai))
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
+
+	// Cluster-wide resource usage. This lives only on the coordinator because
+	// it is the only process holding both the entity store and a reader for
+	// every node's metrics; a runner can answer for itself but not for the
+	// cluster.
+	usageServer := usagesrv.NewServer(c.Log, ec, c.MetricsReader)
+	server.ExposeValue("dev.miren.runtime/usage", usage_v1alpha.AdaptResourceUsage(usageServer))
 
 	addonsServer := app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker())
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(addonsServer))

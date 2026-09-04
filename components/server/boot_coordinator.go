@@ -101,6 +101,7 @@ func (b *coordinatorBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBoot
 	config.Mem = observability.memory
 	config.Cpu = observability.cpu
 	config.HTTP = observability.http
+	config.MetricsReader = observability.metricsReader
 	config.Logs = observability.logs
 	config.LogWriter = observability.logWriter
 	config.VictoriametricsAddress = observability.victoriaMetricsAddress

@@ -44,6 +44,7 @@ import (
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 
+	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -1070,23 +1071,41 @@ func (c *SandboxController) pauseContainerPID(ctx context.Context, pauseID strin
 // keyed by, plus the attributes those metrics carry. Every registration site
 // shares this so the key always matches the one StopSandbox removes, and so
 // new attributes reach all of them at once.
-func sandboxMetricsIdentity(sb *compute.Sandbox) (string, map[string]string) {
+//
+// nodeID is the node this sandbox's cgroups live on. It is passed in rather
+// than read off the sandbox because the sandbox entity does not carry one --
+// the schedule that assigns it is a separate component -- and the controller
+// registering the metrics is by definition running on that node.
+func sandboxMetricsIdentity(sb *compute.Sandbox, nodeID string) (string, map[string]string) {
 	le := sb.Spec.LogEntity
 	if le == "" {
 		le = sb.ID.String()
 	}
 
-	attrs := map[string]string{
-		"miren.sandbox": sb.ID.String(),
+	attrs := map[string]string{}
+
+	// The sandbox's own attributes go in first so the controller-owned keys
+	// below overwrite them rather than the other way round. These identify the
+	// series; a spec that happened to carry miren.node could otherwise report a
+	// sandbox's usage against a host it never ran on.
+	for _, lbl := range sb.Spec.LogAttribute {
+		attrs[lbl.Key] = lbl.Value
+	}
+
+	attrs["miren.sandbox"] = sb.ID.String()
+
+	// Without the node, usage can be attributed to a workload but not to a
+	// host, which is what makes "which node is hot" unanswerable. It costs no
+	// extra time series: it is functionally dependent on miren.sandbox.
+	if nodeID != "" {
+		attrs["miren.node"] = nodeID
 	}
 
 	if sb.Spec.Version != "" {
 		attrs["miren.version"] = sb.Spec.Version.String()
 	}
 
-	for _, lbl := range sb.Spec.LogAttribute {
-		attrs[lbl.Key] = lbl.Value
-	}
+	attrs["miren.kind"] = string(computeapi.SandboxKind(sb))
 
 	return le, attrs
 }
@@ -1131,7 +1150,7 @@ func (c *SandboxController) sandboxCgroups(ctx context.Context, sb *compute.Sand
 // every reconcile for adopted sandboxes, and re-adding would reset the CPU
 // delta baseline each time (MIR-1013).
 func (c *SandboxController) ensureMetrics(ctx context.Context, sb *compute.Sandbox) error {
-	le, attrs := sandboxMetricsIdentity(sb)
+	le, attrs := sandboxMetricsIdentity(sb, c.NodeId.String())
 
 	// Cheap bail-out so the common case doesn't ask containerd for a spec per
 	// container on every reconcile. AddIfAbsent below is what actually keeps
@@ -1535,7 +1554,7 @@ func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandb
 		return err
 	}
 
-	le, attrs := sandboxMetricsIdentity(co)
+	le, attrs := sandboxMetricsIdentity(co, c.NodeId.String())
 
 	err = c.Metrics.Add(le, cgroups, attrs)
 	if err != nil {
