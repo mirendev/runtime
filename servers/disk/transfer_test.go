@@ -175,7 +175,7 @@ func TestSweepRemovesAbandonedTransfersAndKeepsFreshOnes(t *testing.T) {
 // The lock is what stops two calls carrying the same id from interleaving their
 // appends or truncating each other's staging.
 func TestTransferLockSerializesTheSameId(t *testing.T) {
-	locks := newTransferLocks()
+	locks := newKeyedLocks()
 
 	release := locks.acquire("t1")
 
@@ -204,7 +204,7 @@ func TestTransferLockSerializesTheSameId(t *testing.T) {
 // Different transfers must not queue behind each other; two operators backing
 // up different disks are not related.
 func TestTransferLockDoesNotSerializeDifferentIds(t *testing.T) {
-	locks := newTransferLocks()
+	locks := newKeyedLocks()
 
 	release := locks.acquire("t1")
 	defer release()
@@ -226,7 +226,7 @@ func TestTransferLockDoesNotSerializeDifferentIds(t *testing.T) {
 // Reference counting keeps the map from growing by one entry per backup, and
 // must not drop an entry another caller is still holding.
 func TestTransferLockReleasesItsBookkeeping(t *testing.T) {
-	locks := newTransferLocks()
+	locks := newKeyedLocks()
 
 	for range 50 {
 		locks.acquire("t1")()

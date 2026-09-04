@@ -3,6 +3,7 @@ package diskresolve
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -389,6 +390,7 @@ func TestCreateDiskAndVolumeRoundsSizeUp(t *testing.T) {
 		{"one and a half GiB", (1 << 30) * 3 / 2, 2},
 		{"exactly two GiB", 2 << 30, 2},
 		{"smaller than a GiB still gets one", 4096, 1},
+		{"zero still gets one", 0, 1},
 	}
 
 	for _, tc := range cases {
@@ -404,4 +406,34 @@ func TestCreateDiskAndVolumeRoundsSizeUp(t *testing.T) {
 			assert.Equal(t, tc.wantGb, disks[0].SizeGb)
 		})
 	}
+}
+
+// The size comes out of a snapshot header, which is a file the caller handed
+// us, so it is checked rather than trusted. Rounding by adding gib-1 would let
+// a size near the top of the range overflow into a negative capacity, which the
+// entity store would happily persist.
+func TestDiskSizeGbRejectsSizesItCannotRepresent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sizeBytes int64
+	}{
+		{"negative", -1},
+		{"very negative", math.MinInt64},
+		{"large enough to overflow the rounding", math.MaxInt64},
+		{"just past the representable ceiling", math.MaxInt64 - (1 << 30) + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := diskSizeGb(tc.sizeBytes)
+			require.Error(t, err, "size %d should have been rejected", tc.sizeBytes)
+		})
+	}
+}
+
+// And the largest size it does accept round-trips back to bytes without
+// overflowing, which is what the disk volume controller does with it.
+func TestDiskSizeGbCeilingRoundTrips(t *testing.T) {
+	sizeGb, err := diskSizeGb(math.MaxInt64 - (1 << 30))
+	require.NoError(t, err)
+	assert.Positive(t, sizeGb)
+	assert.Positive(t, sizeGb*(1<<30)/(1<<30), "the byte conversion must not overflow")
 }

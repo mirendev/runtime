@@ -106,6 +106,19 @@ func (s *Server) undelete(ctx context.Context, name, volumeID string) (_ *undele
 		return nil, refuse("disk name is required")
 	}
 
+	// The name check below and the create that follows it are two steps, so two
+	// recoveries of the same name could both find it free and both take it,
+	// leaving two disks answering to one name and every lookup by that name
+	// ambiguous from then on.
+	//
+	// Process-local is the right granularity here rather than a shortcut: disk
+	// volumes are pinned to the coordinator, so one process serves every
+	// recovery on a cluster. Making this safe across processes would mean a
+	// conditional unique-name create in the entity store, which is worth doing
+	// if disks ever schedule anywhere else.
+	releaseName := s.names.acquire(name)
+	defer releaseName()
+
 	entry, err := s.findDeleted(name, volumeID)
 	if err != nil {
 		return nil, err

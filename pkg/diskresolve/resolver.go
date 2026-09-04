@@ -3,6 +3,7 @@ package diskresolve
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,12 +92,9 @@ func (r *Resolver) FindVolume(ctx context.Context, diskID string) (*snapshot.Vol
 // RestoreTarget includes a Finalize callback that creates the disk_volume
 // entity and transitions the disk to PROVISIONED.
 func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
-	// Round up. Truncating would hand back a disk that claims less capacity
-	// than the image it is about to be given, so a 1.5 GiB image would land on
-	// a disk reporting 1 GiB.
-	sizeGb := (sizeBytes + (1 << 30) - 1) / (1 << 30)
-	if sizeGb == 0 {
-		sizeGb = 1
+	sizeGb, err := diskSizeGb(sizeBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	// Normalize filesystem string — strip enum prefix if present
@@ -273,6 +271,39 @@ func (r *Resolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.Le
 	}
 
 	return leases, nil
+}
+
+// gib is the unit disks are sized in.
+const gib = 1 << 30
+
+// diskSizeGb converts an image size into the capacity to record on the disk.
+//
+// It rounds up, because a disk claiming less capacity than the image it is
+// about to be given is wrong on its face: a 1.5 GiB image would land on a disk
+// reporting 1 GiB.
+//
+// The size comes from a snapshot header, which is a file the caller handed us,
+// so it is checked rather than trusted. The rounding is done with a remainder
+// rather than by adding gib-1 so that a size near the top of the range cannot
+// overflow into a negative capacity, and the upper bound is where the
+// controller's own conversion back to bytes would overflow.
+func diskSizeGb(sizeBytes int64) (int64, error) {
+	switch {
+	case sizeBytes < 0:
+		return 0, fmt.Errorf("snapshot reports a negative image size (%d bytes)", sizeBytes)
+	case sizeBytes > math.MaxInt64-gib:
+		return 0, fmt.Errorf("snapshot reports an image size too large to be real (%d bytes)", sizeBytes)
+	}
+
+	sizeGb := sizeBytes / gib
+	if sizeBytes%gib != 0 {
+		sizeGb++
+	}
+	// Even an empty image gets a disk, and a disk has to be at least 1 GB.
+	if sizeGb == 0 {
+		sizeGb = 1
+	}
+	return sizeGb, nil
 }
 
 // ParseFilesystem maps a filesystem name onto the disk enum, tolerating the

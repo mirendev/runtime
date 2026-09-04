@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,9 @@ func newUndeleteServer(t *testing.T) (*Server, *testutils.InMemEntityServer, str
 		eac:      es.EAC,
 		ec:       ec,
 		mntOps:   fakeMountOps{},
+
+		transfers: newKeyedLocks(),
+		names:     newKeyedLocks(),
 	}
 	return s, es, dataPath
 }
@@ -245,4 +249,36 @@ func listVolumes(t *testing.T, es *testutils.InMemEntityServer) []storage_v1alph
 		out = append(out, vol)
 	}
 	return out
+}
+
+// The name check and the create that follows it are two steps, so two
+// recoveries of the same name must not both find it free. Two disks answering
+// to one name make every lookup by that name ambiguous from then on.
+func TestUndeleteSerializesRecoveriesOfTheSameName(t *testing.T) {
+	s, es, dataPath := newUndeleteServer(t)
+	seedDeleted(t, dataPath, "mydisk", "vol-1", time.Now())
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.undelete(context.Background(), "mydisk", "")
+		}()
+	}
+	wg.Wait()
+
+	// One recovers it; the other finds nothing left in the holding area, or
+	// finds the name taken. Either way it must not create a second disk.
+	succeeded := 0
+	for _, err := range errs {
+		if err == nil {
+			succeeded++
+		}
+	}
+	assert.Equal(t, 1, succeeded, "exactly one recovery should have succeeded")
+
+	disks := listDisks(t, es)
+	assert.Len(t, disks, 1, "a name must never end up on two disks")
 }

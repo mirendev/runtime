@@ -134,6 +134,9 @@ func newTestServer(t *testing.T, content []byte) (*Server, *fakeDisks, *fakeUpda
 		dataPath: dataPath,
 		updates:  updates,
 		mntOps:   fakeMountOps{},
+
+		transfers: newKeyedLocks(),
+		names:     newKeyedLocks(),
 	}
 	return s, disks, updates, imagePath
 }

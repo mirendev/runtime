@@ -26,7 +26,7 @@ const (
 	transferTTL = 24 * time.Hour
 )
 
-// transferLocks serializes work on any one transfer id.
+// keyedLocks serializes work on any one key: a transfer id, or a disk name.
 //
 // The transfer files are shared mutable state, and nothing else guards them.
 // Two calls carrying the same id can otherwise both pass openTransfer's offset
@@ -39,26 +39,26 @@ const (
 // forever. Dropping an entry while a caller still held a pointer to it would be
 // worse than the leak: the next caller would mint a second lock for the same id
 // and the two would run concurrently anyway.
-type transferLocks struct {
+type keyedLocks struct {
 	mu    sync.Mutex
-	locks map[string]*transferLock
+	locks map[string]*keyedLock
 }
 
-type transferLock struct {
+type keyedLock struct {
 	mu   sync.Mutex
 	refs int
 }
 
-func newTransferLocks() *transferLocks {
-	return &transferLocks{locks: map[string]*transferLock{}}
+func newKeyedLocks() *keyedLocks {
+	return &keyedLocks{locks: map[string]*keyedLock{}}
 }
 
-// acquire blocks until this id is free and returns the release function.
-func (t *transferLocks) acquire(id string) func() {
+// acquire blocks until this key is free and returns the release function.
+func (t *keyedLocks) acquire(id string) func() {
 	t.mu.Lock()
 	l, ok := t.locks[id]
 	if !ok {
-		l = &transferLock{}
+		l = &keyedLock{}
 		t.locks[id] = l
 	}
 	l.refs++

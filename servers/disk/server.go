@@ -60,9 +60,11 @@ type Server struct {
 	// directly, so it needs no handle on the runner's controllers.
 	mntOps diskio.DiskMountOps
 
-	// transfers serializes concurrent work on one transfer id, which is the
-	// only shared mutable state these handlers have.
-	transfers *transferLocks
+	// transfers serializes concurrent work on one transfer id, and names does
+	// the same for one disk name, so a check followed by a create cannot be
+	// overtaken between the two steps.
+	transfers *keyedLocks
+	names     *keyedLocks
 }
 
 // NewServer builds the disk backup service. updates may be nil, which means the
@@ -83,7 +85,8 @@ func NewServer(
 		ec:        ec,
 		updates:   updates,
 		mntOps:    diskio.NewRealDiskMountOps(log),
-		transfers: newTransferLocks(),
+		transfers: newKeyedLocks(),
+		names:     newKeyedLocks(),
 	}
 }
 
