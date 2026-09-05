@@ -20,7 +20,7 @@ Ask your AI coding agent to "set up this Objective-C app on Miren" after install
 and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
@@ -64,11 +64,7 @@ int main(int argc, const char *argv[]) {
 
 SOPE's HTTP adaptor takes its listen address from the `WOPort` default, which you pass
 on the command line. Miren injects `PORT`, so start the app with
-`-WOPort 0.0.0.0:$PORT`:
-
-```procfile
-web: sh -c '. /usr/share/GNUstep/Makefiles/GNUstep.sh && exec /app/obj/app -WOPort 0.0.0.0:$PORT'
-```
+`-WOPort 0.0.0.0:$PORT`. The Dockerfile's `CMD` below supplies that command.
 
 :::warning[Give WOPort an explicit `0.0.0.0`]
 `-WOPort 8080` alone makes the adaptor bind the wildcard address (`*:8080`), which fails
@@ -93,6 +89,7 @@ WORKDIR /app
 COPY main.m GNUmakefile ./
 RUN . /usr/share/GNUstep/Makefiles/GNUstep.sh && make
 EXPOSE 8080
+CMD ["sh", "-c", ". /usr/share/GNUstep/Makefiles/GNUstep.sh && exec /app/obj/app -WOPort 0.0.0.0:$PORT"]
 ```
 
 The `GNUmakefile` builds a plain tool linked against the SOPE libraries (SOPE's own
@@ -118,6 +115,9 @@ The compiled binary lands at `obj/app`.
 
 ## Deploy
 
+Miren uses the image's `CMD` and infers the web port from `EXPOSE 8080`, so you don't
+need a `Procfile` or service command.
+
 Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
@@ -130,11 +130,6 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
-line above. Without it the deploy stops with `no services defined`.
-:::
-
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
@@ -142,7 +137,7 @@ line above. Without it the deploy stops with `no services defined`.
 - **Build:** GNUstep makefiles as a plain tool linking `-lNGObjWeb …` (install `make`); binary at `obj/app`
 - **Port:** `-WOPort 0.0.0.0:$PORT` — the explicit `0.0.0.0` avoids a wildcard bind failure
 - **Runtime:** source `GNUstep.sh` before exec so the app finds its frameworks
-- **Service is required:** the `web:` Procfile line — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 
 ## Next steps
 

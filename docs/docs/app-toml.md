@@ -205,12 +205,12 @@ args = ["postgres", "-c", "shared_buffers=256MB"]
 |-------|------|-------------|---------|
 | `command` | string | Shell command that replaces the image startup command (`/bin/sh -c`) | — |
 | `args` | string[] | Exec-form arguments that replace the image `CMD` while preserving its `ENTRYPOINT` | — |
-| `port` | int | Port the service listens on (single-port shorthand) | `3000` (web only) |
+| `port` | int | Port the service listens on (single-port shorthand) | For `web` inheriting the primary image: its single exposed TCP port, otherwise `3000` |
 | `port_name` | string | Named port identifier (single-port shorthand) | Service name |
 | `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
 | `ports` | [[port]](#ports) | Multi-port configuration array | — |
 | `port_timeout` | duration | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `"15s"` |
-| `image` | string | Container image to use. On `services.web`, this selects the app's primary image unless `[build].dockerfile` is set or `Dockerfile.miren` exists | App's built image |
+| `image` | string | Container image to use. On `services.web`, this selects the app's primary image unless `[build].dockerfile` is set or `Dockerfile.miren` exists | App version's primary image |
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `metrics` | [metrics](#service-metrics) | Prometheus-compatible metrics endpoint scraped by the runtime | Disabled |

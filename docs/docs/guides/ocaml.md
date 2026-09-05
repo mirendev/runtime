@@ -19,7 +19,7 @@ binds `0.0.0.0:$PORT`, wires up environment variables, and deploys — using thi
 its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect OCaml, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -115,16 +115,12 @@ A minimal `dune-project` and `dune`:
 _build
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /usr/local/bin/app
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "ocaml-bench"
@@ -135,12 +131,6 @@ name = "ocaml-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -171,7 +161,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** none — requires `Dockerfile.miren` (native binary)
 - **Build:** `opam install --no-depexts dream dune`, `dune build --profile release ./main.exe`
 - **System deps:** use `USER root` for `apt-get` (`sudo` fails in the build sandbox); runtime needs `libev4 libgmp10 libssl3`
-- **Service is required:** define a `Procfile` (`web: /usr/local/bin/app`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** read `Sys.getenv_opt "PORT"`; Dream needs `~interface:"0.0.0.0"`
 - **Env vars:** `miren env set -e/-s`; read with `Sys.getenv_opt`
 

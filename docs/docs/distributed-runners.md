@@ -60,7 +60,7 @@ When an app runs several instances, the scheduler spreads them across nodes rath
 
 ### Images
 
-Runners pull the images they need from the registry on the coordinator. There's no separate registry to run or configure, and no manual step to push a build out to your runners. When you deploy, the coordinator builds the image once, and each runner that needs to start a sandbox pulls it on demand.
+Runners pull the images they need from the registry on the coordinator. There's no separate registry to run or configure, and no manual step to distribute an image to your runners. When you deploy, the coordinator resolves a configured image or builds one from source, and each runner that needs to start a sandbox pulls the selected image on demand.
 
 ## Adding a runner
 

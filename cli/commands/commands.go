@@ -107,7 +107,7 @@ miren deploy --analyze
 			Body: "miren deploy -e DATABASE_URL=postgres://localhost/mydb",
 		}),
 		WithExample(mflags.Example{
-			Name: "Deploy a previously built version",
+			Name: "Deploy an existing version",
 			Body: "miren deploy --version v3",
 		}),
 	))
@@ -1306,23 +1306,23 @@ Warning: These commands are intended for advanced users and developers. They may
 // generated command docs (docs/docs/command/*.md) and clarify which operations
 // roll out automatically versus require a rebuild.
 
-const deployDescription = `Deploy uploads your source, builds a new container image on the server, and activates the resulting version — replacing the previously running one. This is the only command that rebuilds your image.
+const deployDescription = `Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by ` + "`" + `[build].dockerfile` + "`" + ` or discovered as ` + "`" + `Dockerfile.miren` + "`" + ` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. When source needs rebuilding, this is the command that does it.
 
-To activate a previously built version without rebuilding, pass ` + "`" + `--version` + "`" + `:
+To activate an existing version without selecting or building another image, pass ` + "`" + `--version` + "`" + `:
 ` + "```" + `bash
 miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
-This reuses the existing image and rolls it out immediately — useful for rolling forward to a known-good version without waiting for a build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
 
 :::note[Config changes deploy on their own]
 Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deploy` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
 :::`
 
-const rollbackDescription = `Rollback re-activates a previous version by reusing its already-built image — no rebuild happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
+const rollbackDescription = `Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
 Rollback creates a new deployment record; it does not erase history.`
 
-const appRestartDescription = `Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or rebuild your image — the app comes back on exactly the spec it was already running.
+const appRestartDescription = `Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or select or build another image. The app comes back on exactly the spec it was already running.
 
 Use restart to:
 - Clear stuck or wedged process state

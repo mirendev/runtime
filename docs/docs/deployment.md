@@ -20,14 +20,14 @@ miren deploy
 ```
 </CliCommand>
 
-That's the whole thing — Miren detects your language, builds the image on the server, and activates the new version. If the project isn't set up yet, the CLI offers to run `miren init` first; if the app doesn't exist on the server, it's created automatically on first deploy.
+That's the whole thing. Miren first honors a Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren`. Without one, it uses a configured image directly or detects your language and builds one on the server, then activates the new version. If the project isn't set up yet, the CLI offers to run `miren init` first; if the app doesn't exist on the server, it's created automatically on first deploy.
 
 ## How Deployment Works
 
 When you run `miren deploy`, Miren:
 
 1. **Uploads your files** — sends your project files and app configuration to the server (after your first deploy, only changed files are transferred)
-2. **Selects or builds an image** — uses a configured web image directly, or inspects your source to build an image from a detected [language or framework](/guides) or your Dockerfile
+2. **Selects or builds an image** — builds a configured or discovered Dockerfile first; otherwise uses a configured web image directly or inspects your source for a detected [language or framework](/guides)
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
@@ -85,7 +85,7 @@ Source: dockerfile
 Source: image ghcr.io/example/myapp:latest
 ```
 
-The same source appears in `miren app status` after deployment, so it remains visible after the build finishes.
+The same source appears in `miren app status` after deployment, so it remains visible after the deploy finishes.
 
 If a build fails, Miren displays the build errors and the deployment is marked as failed in history (visible via `miren app history`).
 
@@ -100,10 +100,9 @@ name = "myapp"
 
 [services.web]
 image = "ghcr.io/example/myapp:latest"
-port = 8080
 ```
 
-Miren normalizes the reference and launches that image directly. It does not run BuildKit, push a derived image, or create a build artifact. When `command` is unset, the container uses the image's default entrypoint and command.
+Miren normalizes the reference and launches that image directly. It does not run BuildKit, push a derived image, or create a build artifact. The container keeps the image's working directory, entrypoint, and command. If the image exposes exactly one TCP port, Miren uses it for the web service and injects the same value as `PORT`. Set `port` explicitly when the image exposes no ports or several.
 
 :::note[Image selection]
 A Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren` takes precedence over `services.web.image`. Without one, the web image takes precedence over automatic source detection, even if the project directory also contains recognizable source files. Images on other services do not suppress source detection. If detection finds no buildable source, Miren uses a lone service image as the fallback; with several service images, set `services.web.image` to choose the primary one.
@@ -131,7 +130,7 @@ miren deploy -s SECRET_KEY
 
 ## Redeploying an Existing Version
 
-Skip the build entirely and redeploy a previously built version:
+Skip image selection and building entirely by redeploying an existing version:
 
 <CliCommand context="client">
 ```miren
@@ -139,7 +138,7 @@ miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ```
 </CliCommand>
 
-Useful for rolling forward to a known-good version without waiting for a new build.
+Useful for rolling forward to a known-good version without waiting for a new image to resolve or build.
 
 Find version IDs with `miren app history` (see [Deployment History](#deployment-history) below).
 

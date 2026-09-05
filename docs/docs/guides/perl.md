@@ -19,7 +19,7 @@ Ask your AI coding agent to "set up this Perl app on Miren" after installing the
 at `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Perl, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -58,6 +58,7 @@ RUN cpanm --notest Mojolicious
 COPY . /app
 
 EXPOSE 8080
+CMD ["sh", "-c", "exec perl /app/app.pl daemon -l \"http://*:$PORT\""]
 ```
 
 For an app with a `cpanfile`, install from it instead: `RUN cpanm --notest --installdeps .`
@@ -68,17 +69,12 @@ For an app with a `cpanfile`, install from it instead: `RUN cpanm --notest --ins
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` that starts the
-Mojolicious daemon on the injected port:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: perl /app/app.pl daemon -l "http://*:$PORT"
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "perl-bench"
@@ -90,14 +86,17 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
+For a PSGI app (Dancer2, Catalyst), install Plack and Starman in the Dockerfile:
 
-For a PSGI app (Dancer2, Catalyst), run it under a Plack server instead:
-`web: plackup -s Starman --host 0.0.0.0 --port $PORT app.psgi`.
+```dockerfile
+RUN cpanm --notest Plack Starman
+```
+
+Then replace the Dockerfile's `CMD` with one that starts the PSGI app:
+
+```dockerfile
+CMD ["sh", "-c", "exec plackup -s Starman --host 0.0.0.0 --port \"$PORT\" /app/app.psgi"]
+```
 
 ## Environment variables
 
@@ -127,7 +126,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `perl:5.40`; `cpanm --notest Mojolicious` (or `--installdeps .` with a `cpanfile`)
-- **Service is required:** `Procfile` `web: perl /app/app.pl daemon -l "http://*:$PORT"` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** Mojolicious `daemon -l http://*:$PORT`; PSGI apps use `plackup --host 0.0.0.0 --port $PORT`
 - **Env vars:** `miren env set -e/-s`; read with `$ENV{KEY}`
 

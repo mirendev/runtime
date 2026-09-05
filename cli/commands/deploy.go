@@ -83,7 +83,7 @@ func reconcileDeploymentCancellation(
 func Deploy(ctx *Context, opts struct {
 	AppCentric
 
-	Version       string   `short:"V" long:"version" description:"Deploy an existing version (skip build)"`
+	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
 	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"` //nolint

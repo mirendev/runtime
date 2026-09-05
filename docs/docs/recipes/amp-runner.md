@@ -72,9 +72,10 @@ The commands below target it explicitly with `-C amp`. Omit `-C` to use your def
 
 ## The Dockerfile
 
-Amp ships as a CLI, not a container image, so build a thin image that installs it with the
-official installer (a standalone binary — no Node required). Include the tools the agent will
-reach for when it runs shell commands (`git`, `ripgrep`, `curl`):
+Keep a Dockerfile here because Amp ships as a CLI, not a container image. This is a real
+application image: it pins and installs Amp, adds the shell tools the agent needs, and copies
+the runner lifecycle script. The official installer produces a standalone binary, so Node
+isn't required.
 
 ```dockerfile
 FROM debian:bookworm-slim

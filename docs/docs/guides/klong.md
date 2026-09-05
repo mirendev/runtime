@@ -20,7 +20,7 @@ Ask your AI coding agent to "set up this Klong app on Miren" after installing th
 front-end, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
 guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
@@ -54,11 +54,8 @@ output. In file mode only your `.d` bytes are written.
 ## The socket front-end
 
 The program doesn't bind a port — `socat` does. Miren injects `PORT`, and `socat`'s
-`TCP-LISTEN` binds all interfaces; `fork` runs Klong once per connection:
-
-```procfile
-web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'
-```
+`TCP-LISTEN` binds all interfaces; `fork` runs Klong once per connection. The Dockerfile's
+`CMD` starts that socket front-end.
 
 :::note[Behind Miren's ingress]
 Miren's HTTP ingress terminates TLS and handles the public HTTP layer in front of your
@@ -80,6 +77,7 @@ RUN pip install --no-cache-dir klongpy colorama \
 WORKDIR /app
 COPY hello.kg /app/
 EXPOSE 8080
+CMD ["sh", "-c", "exec socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'"]
 ```
 
 ### .dockerignore
@@ -89,6 +87,9 @@ EXPOSE 8080
 ```
 
 ## Deploy
+
+Miren uses the image's `CMD` and infers the web port from `EXPOSE 8080`, so you don't
+need a `Procfile` or service command.
 
 Create `.miren/app.toml` naming your app and deploy from your project root:
 
@@ -102,18 +103,13 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
-line above. Without it the deploy stops with `no services defined`.
-:::
-
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Runtime:** KlongPy (`pip install klongpy colorama`) on `python:3.12-slim`
 - **Serving:** the Klong program `.d`-prints a full HTTP response; `socat` owns the socket
 - **Run from a file:** `kgpy hello.kg` (file mode) — `-e`/pipe modes echo the result too
-- **Service is required:** `Procfile` `web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:'kgpy /app/hello.kg'`
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `socat TCP-LISTEN:$PORT` binds `0.0.0.0`
 
 ## Next steps

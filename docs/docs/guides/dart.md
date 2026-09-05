@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this Dart app on Miren" after installing the
 binds `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Dart, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
@@ -83,16 +83,12 @@ snapshots run with `dartaotruntime`, not for `compile exe`.)
 .dart_tool
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /app/server
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "dart-bench"
@@ -103,12 +99,6 @@ name = "dart-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -139,7 +129,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 - **Detection:** none — requires `Dockerfile.miren` (compiled exe)
 - **Build:** `dart compile exe bin/server.dart -o /app/server` on `dart:stable`
 - **Runtime:** `debian:12-slim` (glibc) — the compiled exe won't run on `scratch`
-- **Service is required:** define a `Procfile` (`web: /app/server`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `Platform.environment['PORT']`; bind `0.0.0.0` via `shelf_io.serve`
 - **Env vars:** `miren env set -e/-s`; read with `Platform.environment`
 

@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # App Configuration
 
-Miren uses a **convention over configuration** approach. Most apps deploy with zero configuration—Miren detects your language, builds your image, and runs it with sensible defaults. When you need to customize, you add a `.miren/app.toml` file.
+Miren uses a **convention over configuration** approach. Most apps need little configuration: Miren can detect your language and build an image, or run a configured image with its own startup defaults. When you need to customize, you add a `.miren/app.toml` file.
 
 ## Minimum working example
 
@@ -21,7 +21,7 @@ name = "myapp"
 command = "npm start"
 ```
 
-Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive — environment variables, more services, scaling, disks.
+Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive: environment variables, more services, scaling, disks.
 
 :::tip[Have an agent inspect your app]
 Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
@@ -123,14 +123,13 @@ To deploy an existing image as the app, set `image` on the `web` service. Miren 
 ```toml
 [services.web]
 image = "ghcr.io/example/myapp:latest"
-args = ["serve", "--port", "8080"]
-port = 8080
 ```
 
 The optional `args` array replaces the image's `CMD` while preserving its
 `ENTRYPOINT`. Miren passes the array directly, without shell expansion. Leave both
 `args` and `command` unset to use the image's defaults unchanged; use `command` for
-the existing full `/bin/sh -c` override.
+the existing full `/bin/sh -c` override. Miren also inherits a single TCP port from
+the image's `EXPOSE` metadata. Set `port` when the image exposes no ports or several.
 
 See [Services](/services) for patterns like running databases alongside your app.
 
