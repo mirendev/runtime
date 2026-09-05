@@ -29,13 +29,21 @@ import (
 
 // NewCloudControl constructs cloud status, identity publication, and uplink
 // integration on top of cluster state.
-func NewCloudControl(foundation *Foundation) *CloudControl {
-	return &CloudControl{Foundation: foundation}
+func NewCloudControl(foundation *Foundation, diagnostics ...*entitysync.Diagnostics) *CloudControl {
+	var entitySyncDiagnostics *entitysync.Diagnostics
+	if len(diagnostics) > 0 {
+		entitySyncDiagnostics = diagnostics[0]
+	}
+	if entitySyncDiagnostics == nil {
+		entitySyncDiagnostics = entitysync.NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
+	}
+	return &CloudControl{Foundation: foundation, entitySyncDiagnostics: entitySyncDiagnostics}
 }
 
 // CloudControl owns cloud status, identity publication, and uplink integration.
 type CloudControl struct {
 	*Foundation
+	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
 	publishedKeyFingerprint string
 	cancel                  context.CancelFunc
@@ -48,6 +56,11 @@ func (c *CloudControl) Stop() {
 		c.cancel()
 	}
 	c.wg.Wait()
+}
+
+// EntitySyncDiagnostics is the runtime-local view exposed by miren debug.
+func (c *CloudControl) EntitySyncDiagnostics() *entitysync.Diagnostics {
+	return c.entitySyncDiagnostics
 }
 
 // Start begins cloud-facing reporting. The uplink itself remains a separate
@@ -71,6 +84,7 @@ func (c *CloudControl) Start(ctx context.Context) error {
 // remain independent of that background migration.
 func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.Server, entitySyncReady <-chan struct{}) error {
 	if !c.CloudAuth.Enabled || c.authClient == nil {
+		c.entitySyncDiagnostics.SetDisabled("cloud-auth-disabled")
 		return nil
 	}
 	cloudURL := c.CloudAuth.CloudURL
@@ -78,9 +92,11 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 		cloudURL = DefaultCloudURL
 	}
 
-	var uplinkOptions []uplink.ClientOption
+	uplinkOptions := []uplink.ClientOption{uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink)}
 	if labs.AppVisibility() {
 		uplinkOptions = append(uplinkOptions, uplink.WithSession(version.GetInfo().Version))
+	} else {
+		c.entitySyncDiagnostics.SetCapabilityDisabled("app-visibility-disabled")
 	}
 	link := uplink.NewClient(
 		cloudURL,
@@ -93,6 +109,7 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 		if err := entitysync.NewExporter(
 			c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
 			entitysync.WithStartGate(entitySyncReady),
+			entitysync.WithDiagnostics(c.entitySyncDiagnostics),
 		).Register(ctx, link); err != nil {
 			// Entity visibility is additive. Local source metadata should not take
 			// Anywhere or cloud RPC off the shared link when it is unavailable.

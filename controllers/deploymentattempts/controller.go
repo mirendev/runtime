@@ -35,6 +35,15 @@ type Config struct {
 	BatchSize int64
 }
 
+// Progress reports the controller's current migration scan position.
+type Progress struct {
+	Phase      string
+	Cursor     string
+	PassFailed bool
+	Ready      bool
+	LastError  string
+}
+
 func DefaultConfig() Config {
 	return Config{Interval: 10 * time.Second, BatchSize: 200}
 }
@@ -54,6 +63,7 @@ type Controller struct {
 	passFailed          bool
 	firstCleanSweepOnce sync.Once
 	ready               chan struct{}
+	reportProgress      func(Progress)
 }
 
 func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityAccessClient) *Controller {
@@ -69,6 +79,11 @@ func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityA
 // wait on it without making the controller's ongoing repair loop part of their
 // own lifecycle.
 func (c *Controller) Ready() <-chan struct{} { return c.ready }
+
+// SetProgressReporter attaches runtime diagnostics before Start is called.
+func (c *Controller) SetProgressReporter(report func(Progress)) {
+	c.reportProgress = report
+}
 
 func (c *Controller) Start(ctx context.Context) {
 	if c.Config.Interval <= 0 {
@@ -89,7 +104,9 @@ func (c *Controller) Stop() {
 
 func (c *Controller) run(ctx context.Context) {
 	for {
-		if err := c.Step(ctx); err != nil && ctx.Err() == nil {
+		err := c.Step(ctx)
+		c.publishProgress(err)
+		if err != nil && ctx.Err() == nil {
 			c.Log.Warn("deployment-attempt migration pass failed", "error", err)
 		}
 		select {
@@ -98,6 +115,22 @@ func (c *Controller) run(ctx context.Context) {
 		case <-time.After(c.Config.Interval):
 		}
 	}
+}
+
+func (c *Controller) publishProgress(err error) {
+	if c.reportProgress == nil {
+		return
+	}
+	progress := Progress{Phase: c.phase, Cursor: c.cursor, PassFailed: c.passFailed}
+	if err != nil {
+		progress.LastError = err.Error()
+	}
+	select {
+	case <-c.ready:
+		progress.Ready = true
+	default:
+	}
+	c.reportProgress(progress)
 }
 
 // Step processes one bounded page. It is public so tests and operators can

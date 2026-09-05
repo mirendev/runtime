@@ -25,6 +25,7 @@ import (
 	"miren.dev/runtime/pkg/addon/rabbitmq"
 	addonsqlite "miren.dev/runtime/pkg/addon/sqlite"
 	"miren.dev/runtime/pkg/addon/valkey"
+	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
@@ -40,22 +41,27 @@ import (
 
 // NewApplicationManagement constructs the application management plane on top
 // of cluster state and the secret store.
-func NewApplicationManagement(foundation *Foundation, secrets *SecretStore) *ApplicationManagement {
-	return &ApplicationManagement{Foundation: foundation, secrets: secrets}
+func NewApplicationManagement(foundation *Foundation, secrets *SecretStore, diagnostics ...*entitysync.Diagnostics) *ApplicationManagement {
+	var entitySyncDiagnostics *entitysync.Diagnostics
+	if len(diagnostics) > 0 {
+		entitySyncDiagnostics = diagnostics[0]
+	}
+	return &ApplicationManagement{Foundation: foundation, secrets: secrets, entitySyncDiagnostics: entitySyncDiagnostics}
 }
 
 // ApplicationManagement owns the durable app, addon, and run management surface.
 // WorkloadControl realizes that intent as running workloads.
 type ApplicationManagement struct {
 	*Foundation
-	secrets           *SecretStore
-	addonRegistry     *addon.Registry
-	addonFramework    *addon.ProviderFramework
-	appInfo           *app.AppInfo
-	debugServer       *debugsrv.Server
-	sagaBuilder       *build.SagaBuilder
-	buildHandler      *rpc.Interface
-	deploymentHandler *rpc.Interface
+	secrets               *SecretStore
+	addonRegistry         *addon.Registry
+	addonFramework        *addon.ProviderFramework
+	appInfo               *app.AppInfo
+	debugServer           *debugsrv.Server
+	entitySyncDiagnostics *entitysync.Diagnostics
+	sagaBuilder           *build.SagaBuilder
+	buildHandler          *rpc.Interface
+	deploymentHandler     *rpc.Interface
 }
 
 // Start initializes the durable application-management objects and exposes their
@@ -173,7 +179,9 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	if err != nil {
 		return err
 	}
+	c.debugServer.CloudSync = c.entitySyncDiagnostics
 	server.ExposeValue("dev.miren.runtime/debug-netdb", debug_v1alpha.AdaptNetDB(c.debugServer))
+	server.ExposeValue("dev.miren.runtime/debug-cloud-sync", debug_v1alpha.AdaptCloudSync(c.debugServer))
 	return nil
 }
 

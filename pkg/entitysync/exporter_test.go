@@ -953,7 +953,7 @@ func TestWatchBatchStopsAtLastDeliveredEvent(t *testing.T) {
 			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/a"), ModRevision: 10}},
 			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/b"), ModRevision: 20}},
 		},
-	}, 0)
+	}, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(20), cursor)
 	require.Len(t, link.sent(), 1)
@@ -1046,6 +1046,7 @@ func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
 
 	t.Run("cloud rejection", func(t *testing.T) {
 		exporter := testExporter(entity.NewMockStore())
+		exporter.diagnostics = NewDiagnostics("schema")
 		exporter.ackTimeout = time.Hour
 		stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
 		link := newFakeLink()
@@ -1055,6 +1056,8 @@ func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
 
 		_, err := stream.sendAndWait(link, TypeChangeBatch, struct{}{}, "message-1")
 		require.ErrorContains(t, err, "cloud rejected entity.change.batch: not accepted")
+		require.Nil(t, exporter.diagnostics.SnapshotStatus().LastAcknowledgment,
+			"a rejected message was not acknowledged by cloud")
 	})
 }
 
