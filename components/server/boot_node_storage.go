@@ -10,14 +10,10 @@ import (
 	"miren.dev/runtime/pkg/boot"
 )
 
-type nodeStorageBootOutput struct {
-	storage *runner.NodeStorage
-}
-
 type nodeStorageBoot struct {
 	component *boot.Component
 	value     *runner.NodeStorage
-	output    boot.Output[nodeStorageBootOutput]
+	output    boot.Output[*runner.NodeStorage]
 }
 
 func newNodeStorageBoot(access boot.Output[clusterAccessBootOutput], registration boot.Output[registrationBootOutput]) *nodeStorageBoot {
@@ -29,7 +25,7 @@ func newNodeStorageBoot(access boot.Output[clusterAccessBootOutput], registratio
 	return b
 }
 
-func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOutput, registration registrationBootOutput) (nodeStorageBootOutput, error) {
+func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOutput, registration registrationBootOutput) (*runner.NodeStorage, error) {
 	config := access.config
 	cloudAuth := registration.cloudAuth
 	if cloudAuth.Enabled {
@@ -40,12 +36,12 @@ func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOut
 	var err error
 	b.value, err = runner.NewNodeStorage(access.access, runner.RunnerDeps{IsCoordinator: true}, config)
 	if err != nil {
-		return nodeStorageBootOutput{}, err
+		return nil, err
 	}
 	if err := b.value.Start(ctx); err != nil {
-		return nodeStorageBootOutput{}, err
+		return nil, err
 	}
-	return nodeStorageBootOutput{storage: b.value}, nil
+	return b.value, nil
 }
 
 func (b *nodeStorageBoot) stop(context.Context) error {

@@ -34,17 +34,13 @@ type sandboxHostBootInputs struct {
 	stopSandboxesOnShutdown bool
 }
 
-type sandboxHostBootOutput struct {
-	host *runner.SandboxHost
-}
-
 type sandboxHostBoot struct {
 	component     *boot.Component
 	inputs        sandboxHostBootInputs
 	containerd    containerdBootOutput
 	log           *slog.Logger
 	value         *runner.SandboxHost
-	output        boot.Output[sandboxHostBootOutput]
+	output        boot.Output[*runner.SandboxHost]
 	started       bool
 	cleanupOnStop bool
 }
@@ -62,7 +58,7 @@ func sandboxHostInputs(options StartOptions, resolver netresolve.Resolver, apiPo
 	}
 }
 
-func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput], storage boot.Output[nodeStorageBootOutput], containerdOutput boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *sandboxHostBoot {
+func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput], storage boot.Output[*runner.NodeStorage], containerdOutput boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *sandboxHostBoot {
 	b := &sandboxHostBoot{inputs: inputs}
 	b.component, b.output = boot.Provide5(
 		"sandbox-host", access, storage, containerdOutput, network, observability,
@@ -71,12 +67,12 @@ func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[cluster
 	return b
 }
 
-func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOutput, storage nodeStorageBootOutput, containerdOutput containerdBootOutput, network networkBootOutput, observability observabilityBootOutput) (sandboxHostBootOutput, error) {
+func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOutput, storage *runner.NodeStorage, containerdOutput containerdBootOutput, network networkBootOutput, observability observabilityBootOutput) (*runner.SandboxHost, error) {
 	config := access.config
 
 	dependencies := runner.RunnerDeps{
-		CC:              containerdOutput.client,
-		Namespace:       containerdOutput.namespace,
+		CC:              containerdOutput.Client,
+		Namespace:       containerdOutput.Namespace,
 		Bridge:          b.inputs.bridge,
 		Tempdir:         b.inputs.tempDir,
 		Subnet:          network.subnet,
@@ -94,17 +90,17 @@ func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOut
 	}
 
 	var err error
-	b.value, err = runner.NewSandboxHost(access.access, storage.storage, dependencies, config)
+	b.value, err = runner.NewSandboxHost(access.access, storage, dependencies, config)
 	if err != nil {
-		return sandboxHostBootOutput{}, err
+		return nil, err
 	}
 	if err := b.value.Start(ctx, b.inputs.group); err != nil {
-		return sandboxHostBootOutput{}, err
+		return nil, err
 	}
 	b.containerd = containerdOutput
 	b.log = observability.log
 	b.started = true
-	return sandboxHostBootOutput{host: b.value}, nil
+	return b.value, nil
 }
 
 func (b *sandboxHostBoot) stop(ctx context.Context) error {
@@ -115,8 +111,8 @@ func (b *sandboxHostBoot) stop(ctx context.Context) error {
 	if err := b.value.Close(); err != nil {
 		errs = append(errs, err)
 	}
-	if b.cleanupOnStop && b.started && b.containerd.client != nil {
-		if err := stopAllSandboxContainers(ctx, b.log, b.containerd.client); err != nil {
+	if b.cleanupOnStop && b.started && b.containerd.Client != nil {
+		if err := stopAllSandboxContainers(ctx, b.log, b.containerd.Client, b.containerd.Namespace); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -127,11 +123,11 @@ func (b *sandboxHostBoot) enableShutdownCleanup() {
 	b.cleanupOnStop = b.inputs.stopSandboxesOnShutdown
 }
 
-func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *containerd.Client) error {
+func stopAllSandboxContainers(ctx context.Context, log *slog.Logger, client *containerd.Client, namespace string) error {
 	log.Info("stopping all sandbox containers via containerd")
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	ctx = namespaces.WithNamespace(ctx, containerdNamespace)
+	ctx = namespaces.WithNamespace(ctx, namespace)
 
 	containers, err := client.Containers(ctx)
 	if err != nil {
