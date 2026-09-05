@@ -70,8 +70,7 @@ For an app with a `cpanfile`, install from it instead: `RUN cpanm --notest --ins
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` that starts the
+Add a `Procfile` that starts the
 Mojolicious daemon on the injected port:
 
 ```procfile
@@ -89,12 +88,6 @@ name = "perl-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 For a PSGI app (Dancer2, Catalyst), run it under a Plack server instead:
 `web: plackup -s Starman --host 0.0.0.0 --port $PORT app.psgi`.

@@ -145,8 +145,7 @@ mise.toml
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` next to your
+Add a `Procfile` next to your
 `Dockerfile.miren` that starts the release (replace `my_app` with your OTP app name):
 
 ```procfile
@@ -162,13 +161,6 @@ name = "my_app"
 [addons.miren-postgresql]
 variant = "small"
 ```
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`. A `[services.web]` block with the same `command` in `app.toml` works
-too.
-:::
 
 Phoenix's generated `config/runtime.exs` already reads `PORT` (defaulting to 4000) and
 binds the endpoint to `0.0.0.0`, so it works with Miren's injected `PORT` without changes.

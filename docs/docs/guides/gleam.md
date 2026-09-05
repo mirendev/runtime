@@ -144,8 +144,7 @@ build
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` next to your
+Add a `Procfile` next to your
 `Dockerfile.miren`:
 
 ```procfile
@@ -167,13 +166,6 @@ name = "gleam-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a Procfile fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`. Defining `[services.web]` with the same `command` in `app.toml`
-works too.
-:::
 
 ## Environment variables
 
