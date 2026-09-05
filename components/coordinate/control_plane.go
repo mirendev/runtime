@@ -38,7 +38,7 @@ func NewControlPlane(foundation *Foundation, supplied ...ControlPlaneParts) *Con
 		parts.Maintenance = NewEntityMaintenance(foundation)
 	}
 	if parts.Cloud == nil {
-		parts.Cloud = NewCloudControl(foundation)
+		parts.Cloud = NewCloudControl(foundation, parts.Applications)
 	}
 	return &ControlPlane{
 		Foundation:      foundation,

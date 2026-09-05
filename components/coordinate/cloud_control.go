@@ -14,6 +14,7 @@ import (
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/anywhere"
+	"miren.dev/runtime/pkg/apphealthsync"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cloudrpc"
 	"miren.dev/runtime/pkg/containerenv"
@@ -29,13 +30,19 @@ import (
 
 // NewCloudControl constructs cloud status, identity publication, and uplink
 // integration on top of cluster state.
-func NewCloudControl(foundation *Foundation) *CloudControl {
-	return &CloudControl{Foundation: foundation}
+func NewCloudControl(foundation *Foundation, applications *ApplicationManagement) *CloudControl {
+	return &CloudControl{Foundation: foundation, applications: applications}
 }
 
 // CloudControl owns cloud status, identity publication, and uplink integration.
 type CloudControl struct {
 	*Foundation
+
+	// applications supplies the health classification the uplink reports. It is
+	// the same AppInfo backing the app RPC surface, so the console cannot
+	// disagree with `miren app list`.
+	applications *ApplicationManagement
+
 	publishedKeysMu         sync.Mutex
 	publishedKeyFingerprint string
 	cancel                  context.CancelFunc
@@ -97,6 +104,15 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			// Entity visibility is additive. Local source metadata should not take
 			// Anywhere or cloud RPC off the shared link when it is unavailable.
 			c.Log.Warn("entity sync is unavailable for this uplink session", "error", err)
+		}
+	}
+	if labs.AppVisibility() && c.applications != nil && c.applications.appInfo != nil {
+		if err := apphealthsync.NewReporter(
+			c.Log.With("component", "app-health"), c.applications.appInfo,
+		).Register(ctx, link); err != nil {
+			// Health reporting is additive, like entity sync. It must not take
+			// Anywhere or cloud RPC off the shared link when it is unavailable.
+			c.Log.Warn("app health reporting is unavailable for this uplink session", "error", err)
 		}
 	}
 	anywhereConn := anywhere.New(anywhere.Config{
