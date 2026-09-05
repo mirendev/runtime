@@ -171,7 +171,7 @@ update-test-groups: ## Measure new packages and rebuild hack/test-groups.json
 	python3 hack/calc-test-groups.py hack/test-times.json -n 4 -o hack/test-groups.json
 
 blackbox-groups: ## Rebalance hack/blackbox-groups.json from measured blackbox test times
-	python3 hack/calc-blackbox-groups.py hack/blackbox-test-times.json --env standalone -n 3 -o hack/blackbox-groups.json
+	python3 hack/calc-blackbox-groups.py hack/blackbox-test-times.json --env standalone -n 4 -o hack/blackbox-groups.json
 
 measure-blackbox-times: ## Re-measure per-test blackbox times into hack/blackbox-test-times.json (requires `make dev` running)
 	python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
@@ -183,10 +183,10 @@ measure-blackbox-times-distributed: ## Re-measure per-test blackbox times in the
 	BLACKBOX_MODE=peers python3 hack/measure-blackbox-times.py -o hack/blackbox-test-times.json
 
 test-blackbox: ## Run blackbox tests (requires `make dev` running)
-	# The cloud-backed tests are excluded: each stands up a whole cloud on fixed
+	# Cloud-backed tests are excluded: each stands up a whole cloud on fixed
 	# ports and restarts the server, which interferes with everything after it.
-	# They have their own target below, and their own CI job.
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken)$$' ./blackbox/...
+	# Run them explicitly against a cloud checkout instead.
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \
@@ -198,13 +198,13 @@ build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	echo "Done: bin/bb-cloud, bin/bb-pop"
 
 test-blackbox-pop: ## Run cloud-backed blackbox tests (requires `make dev` and cloud repo)
-	# One invocation each: both build a cloud environment on the same fixed
-	# ports, and running them in a single process leaves the second waiting on
-	# a port the first has not finished releasing.
+	# Use one invocation per test so cloud environments on fixed ports and
+	# server restarts cannot interfere with the next test.
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestPOP$$' ./blackbox/...
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestRPCViaCloud$$' ./blackbox/...
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestDeployViaCloud$$' ./blackbox/...
 	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerEnrollWithToken$$' ./blackbox/...
+	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerUnregister$$' ./blackbox/...
 
 test-blackbox-distributed: ## Run blackbox tests against distributed environment (requires hack/dev-distributed up)
 	# Runs the blackbox suite (not just the distributed-specific tests) against
@@ -217,11 +217,11 @@ test-blackbox-distributed: ## Run blackbox tests against distributed environment
 	# 'TestA|TestB'); the sharded CI matrix sets it to one shard's tests. Unset,
 	# the whole suite runs, which is what local use wants. The timeout is a
 	# generous upper bound for the whole-suite local case; a shard finishes well
-	# inside it. The cloud-backed tests are skipped (same set as test-blackbox):
+	# inside it. Cloud-backed tests are skipped (same set as test-blackbox): an
 	# unset BLACKBOX_RUN would otherwise run them here, and they need the cloud
 	# repo and restart the server.
 	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 \
-		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken)$$' ./blackbox/...
+		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 .PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times blackbox-groups-distributed measure-blackbox-times-distributed
 

@@ -9,7 +9,7 @@ with -v and parses the `--- PASS/FAIL/SKIP: TestName (N.NNs)` lines that
 (hack/calc-blackbox-groups.py) to consume.
 
 Requires a running dev environment (make dev) since the tests exercise a real
-cluster. TestPOP is always excluded (its own CI job).
+cluster. Cloud-backed tests are always excluded from the shard timing pool.
 
 Times are tagged with the environment they were measured in (`standalone` or
 `peers`), and rows for that one environment are replaced on each run while rows
@@ -38,14 +38,16 @@ import sys
 # prefixed with "job\tUNKNOWN STEP\ttimestamp ") both parse.
 RESULT_RE = re.compile(r'--- (PASS|FAIL|SKIP): (Test\w+) \(([\d.]+)s\)')
 
-# TestPOP always runs in its own CI job, so it's excluded from every
-# environment's timing set. The TestDistributed* tests self-skip outside the
-# peers topology: in standalone they're noise (a 0s skip), but in peers they're
-# real work and must be timed, so they're only excluded for standalone.
+# Cloud-backed tests need a cloud checkout, so they're excluded from every
+# shard environment's timing set. The TestDistributed* tests self-skip outside
+# the peers topology: in standalone they're noise (a 0s skip), but in peers
+# they're real work and must be timed, so they're only excluded for standalone.
 def excluded_prefixes(environment):
+    cloud = ("TestPOP", "TestRPCViaCloud", "TestDeployViaCloud",
+             "TestServerEnrollWithToken", "TestServerUnregister")
     if environment == "peers":
-        return ("TestPOP",)
-    return ("TestPOP", "TestDistributed")
+        return cloud
+    return cloud + ("TestDistributed",)
 
 
 def parse_log(lines, environment):
@@ -83,7 +85,7 @@ def run_suite(environment):
     """
     cmd = ["go", "test", "-tags", "blackbox", "-timeout", "15m", "-v",
            "-count=1", "-p", "1",
-           "-skip", "^(TestPOP|TestRPCViaCloud|TestDeployViaCloud)$",
+           "-skip", "^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$",
            "./blackbox/..."]
     env = os.environ.copy()
     if environment == "peers":

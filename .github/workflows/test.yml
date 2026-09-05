@@ -262,9 +262,9 @@ jobs:
         # Tests already assigned to a shard in the checked-in manifest.
         GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups.json | sort -u)
 
-        # The cloud-backed tests run in their own job (test-blackbox-pop):
-        # they need the cloud repo and restart the server. Never shard them.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken' || true)
+        # Cloud-backed tests need the cloud repo, while distributed tests need
+        # the peers topology. Neither belongs in the standalone shards.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister|TestDistributed.*' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
 
@@ -342,14 +342,13 @@ jobs:
 
     - name: Run blackbox tests (shard ${{ matrix.group.shard }})
       # Each shard runs only its assigned subset, built into a -run regex from
-      # the matrix. The cloud-backed tests run in their own job
-      # (test-blackbox-pop) because their server restart interferes with
-      # subsequent deploys; -skip guards against one ever slipping into a
-      # shard. Per-shard runtime is ~3 min, so 10m restores fast failure on a
-      # genuine hang.
+      # the matrix. Cloud-backed tests need a cloud checkout and their server
+      # restart interferes with subsequent deploys; -skip guards against one
+      # ever slipping into a shard. Per-shard runtime is ~5 min, so 10m
+      # restores fast failure on a genuine hang.
       run: |
         RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
-        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken)$' ./blackbox/...
+        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
@@ -457,6 +456,11 @@ jobs:
         BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
       run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerEnrollWithToken$' ./blackbox/...
 
+    - name: Run server-unregister blackbox tests
+      env:
+        BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
+      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerUnregister$' ./blackbox/...
+
     - name: Server logs on failure
       if: failure()
       run: |
@@ -517,9 +521,9 @@ jobs:
         # Tests already assigned to a shard in the checked-in manifest.
         GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups-distributed.json | sort -u)
 
-        # The cloud-backed tests run in their own job (test-blackbox-pop): they
-        # need the cloud repo and restart the server. Never shard them.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken' || true)
+        # Cloud-backed tests need the cloud repo and never belong in these
+        # peers-topology shards.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups-distributed.json)
 
