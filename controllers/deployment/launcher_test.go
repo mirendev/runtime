@@ -726,6 +726,53 @@ func TestUpdatePoolPreservesMetadata(t *testing.T) {
 	assert.Empty(t, updatedPool.ReferencedByVersions, "should clear ReferencedByVersions")
 }
 
+func TestUpdatePoolSkipsUnchangedEntity(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("version-1"),
+		},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	// Normalize the explicit zero attributes that Encode omits. The second call
+	// then represents the minutely stale-drain retry from MIR-1780.
+	created, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	require.NoError(t, launcher.updatePool(ctx, &PoolWithEntity{
+		Pool:   pool,
+		Entity: *created.Entity().Entity(),
+	}))
+
+	normalized, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	var unchanged compute_v1alpha.SandboxPool
+	unchanged.Decode(normalized.Entity().Entity())
+	revision := normalized.Entity().Revision()
+	updatedAt := normalized.Entity().Entity().GetUpdatedAt()
+
+	require.NoError(t, launcher.updatePool(ctx, &PoolWithEntity{
+		Pool:   &unchanged,
+		Entity: *normalized.Entity().Entity(),
+	}))
+
+	after, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	assert.Equal(t, revision, after.Entity().Revision(), "no-op update must not advance the revision")
+	assert.Equal(t, updatedAt, after.Entity().Entity().GetUpdatedAt(), "no-op update must not advance UpdatedAt")
+}
+
 // TestAutoModePoolReusePreservesDesiredInstances tests that when reusing a pool
 // for an auto mode service, the launcher does NOT reset desired_instances.
 // For auto mode, the activator manages desired_instances based on traffic,
@@ -3293,6 +3340,28 @@ func TestDiskPoolDrainedBeforeNewPoolCreated(t *testing.T) {
 	assert.Equal(t, "local", poolV2.SandboxSpec.Volume[0].Provider)
 }
 
+func TestStoppedDisklessSandboxDoesNotBlockDiskPoolDrain(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	poolID := entity.Id("pool/stale-diskless")
+	_, err := server.Client.Create(ctx, "stopped-diskless", &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.STOPPED,
+	}, apiserver.WithLabels(types.LabelSet(
+		"pool", poolID.String(),
+		"service", "web",
+	)))
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	active, err := launcher.hasActiveSandboxForPool(ctx, poolID, "web")
+	require.NoError(t, err)
+	assert.False(t, active, "a stopped diskless sandbox cannot conflict with a disk-backed replacement")
+}
+
 // TestDiskDrainWaitsForStoppedSandboxToDie verifies that STOPPED is only a
 // teardown request, not proof that the old process and its disk resources are
 // gone. The replacement pool must wait until the sandbox reaches DEAD.
@@ -3354,6 +3423,7 @@ func TestDiskDrainWaitsForStoppedSandboxToDie(t *testing.T) {
 	// finishes graceful shutdown and resource cleanup.
 	sb := &compute_v1alpha.Sandbox{
 		Status: compute_v1alpha.STOPPED,
+		Spec:   poolsV1[0].SandboxSpec,
 	}
 	sbID, err := server.Client.Create(ctx, "old-sandbox",
 		sb,
@@ -3416,6 +3486,22 @@ func TestDiskDrainWaitsForStoppedSandboxToDie(t *testing.T) {
 		"old pool should be scaled to 0")
 	assert.Empty(t, poolV1.ReferencedByVersions,
 		"old pool should have no version references")
+
+	// A periodic resync sees that the drain request is already persisted. It
+	// must neither rewrite the same pool nor wait for the full drain timeout.
+	firstDrainResp, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	firstDrainRevision := firstDrainResp.Entity().Revision()
+	launcher.PoolReadyTimeout = 2 * time.Second
+	started := time.Now()
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	assert.Less(t, time.Since(started), 500*time.Millisecond,
+		"an already-requested drain should not occupy the launcher until timeout")
+
+	secondDrainResp, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, firstDrainRevision, secondDrainResp.Entity().Revision(),
+		"an already-requested drain should not rewrite the pool")
 
 	// DEAD confirms shutdown and cleanup finished. The next reconcile may now
 	// create the replacement pool.
