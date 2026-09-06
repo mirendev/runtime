@@ -55,8 +55,9 @@ const (
 	EventAdded
 	// EventUpdated indicates a watched entity changed (live).
 	EventUpdated
-	// EventDeleted indicates an entity left the watched index (live). The Entity
-	// field may be nil; rely on Id.
+	// EventDeleted indicates an entity left the watched index (live). Entity is
+	// the last available value when the server can recover it; rely on Id because
+	// the value may be unavailable.
 	EventDeleted
 )
 
@@ -82,8 +83,8 @@ type Event struct {
 	Type EventType
 	// Id is the entity's id. Set for Added/Updated/Deleted; empty for EventSync.
 	Id entity.Id
-	// Entity is the full entity for Added/Updated events. It is nil for Deleted
-	// events and for EventSync.
+	// Entity is the full entity for Added/Updated events and, when available, the
+	// last value for Deleted events. It is nil for EventSync.
 	Entity *entity.Entity
 	// Entities is the complete current set for EventSync; nil for live events.
 	Entities []*entity.Entity

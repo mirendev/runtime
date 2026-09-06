@@ -69,9 +69,8 @@ func NewController(log *slog.Logger, ec *entityserver.Client, eac *entityserver_
 func (c *Controller) Init(ctx context.Context) error { return nil }
 
 // Reconcile drives a run through its lifecycle. Every step is idempotent and
-// re-entrant: the framework logs and drops handler errors without requeueing,
-// so recovery comes from the next watch event or the deadline sweep rather than
-// from retry bookkeeping here.
+// re-entrant so framework retries, later watch events, and the deadline sweep
+// can all safely resume from the current stored state.
 func (c *Controller) Reconcile(ctx context.Context, r *run_v1alpha.Run, meta *entity.Meta) error {
 	if isTerminal(r.Status) {
 		return c.ensureTornDown(ctx, r)
@@ -532,9 +531,8 @@ func (c *Controller) SweepDeadlines(ctx context.Context) error {
 			}
 
 			c.RC.Enqueue(controller.Event{
-				Type:   controller.EventUpdated,
-				Id:     entity.Id(e.Id()),
-				Entity: e.Entity(),
+				Type: controller.EventUpdated,
+				Id:   entity.Id(e.Id()),
 			})
 		}
 	}

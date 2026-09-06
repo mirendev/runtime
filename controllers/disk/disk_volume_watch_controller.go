@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -17,17 +16,15 @@ import (
 // volume controller finishes provisioning it.
 type DiskVolumeWatchController struct {
 	Log    *slog.Logger
-	EAC    *entityserver_v1alpha.EntityAccessClient
 	NodeId compute.NodeId
 
 	DiskController *controller.ReconcileController
 }
 
 // NewDiskVolumeWatchController creates a new disk volume watch controller.
-func NewDiskVolumeWatchController(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, diskController *controller.ReconcileController, nodeId compute.NodeId) *DiskVolumeWatchController {
+func NewDiskVolumeWatchController(log *slog.Logger, diskController *controller.ReconcileController, nodeId compute.NodeId) *DiskVolumeWatchController {
 	return &DiskVolumeWatchController{
 		Log:            log.With("module", "disk-volume-watch"),
-		EAC:            eac,
 		DiskController: diskController,
 		NodeId:         nodeId,
 	}
@@ -54,19 +51,9 @@ func (v *DiskVolumeWatchController) Update(ctx context.Context, vol *storage_v1a
 		"disk", vol.DiskId,
 		"actual_state", vol.ActualState)
 
-	resp, err := v.EAC.Get(ctx, string(vol.DiskId))
-	if err != nil {
-		v.Log.Warn("failed to get parent disk for volume change",
-			"volume", vol.ID,
-			"disk", vol.DiskId,
-			"error", err)
-		return nil
-	}
-
 	v.DiskController.Enqueue(controller.Event{
-		Type:   controller.EventUpdated,
-		Id:     vol.DiskId,
-		Entity: resp.Entity().Entity(),
+		Type: controller.EventUpdated,
+		Id:   vol.DiskId,
 	})
 
 	return nil

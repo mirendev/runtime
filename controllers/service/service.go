@@ -102,6 +102,18 @@ func NewServiceController(cfg ServiceControllerDeps) (*ServiceController, error)
 }
 
 func (s *ServiceController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
+	if event.Entity == nil {
+		if event.Type == controller.EventDeleted {
+			// Snapshot comparison can identify an entity that left the index
+			// without recovering its pre-delete value. Without the tombstone we
+			// cannot identify the parent Service; its periodic GC removes any
+			// stranded nftables chains.
+			s.Log.Debug("Endpoint deleted without tombstone; deferring cleanup to service GC", "endpoint", event.Id)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("endpoint %s event has no entity", event.Id)
+	}
+
 	var eps network_v1alpha.Endpoints
 	eps.Decode(event.Entity)
 

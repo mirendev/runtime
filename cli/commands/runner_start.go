@@ -309,6 +309,7 @@ func RunnerStart(ctx *Context, opts struct {
 	sbMetrics.CPUUsage = metrics.NewCPUUsage(ctx.Log, metricsWriter, nil)
 	sbMetrics.MemUsage = metrics.NewMemoryUsage(ctx.Log, metricsWriter, nil)
 	deps.SandboxMetrics = sbMetrics
+	deps.MetricsWriter = metricsWriter
 
 	if telemetryClient != nil && cfg.VictorialogsAddress != "" {
 		logsURL := runnertelemetry.LogsURL(cfg.CoordinatorAddress)

@@ -855,21 +855,32 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 	// Recorded so the ctx.Done path can tear it down. Guarded because the
 	// dial runs on its own goroutine.
 	var (
-		connMu   sync.Mutex
-		dialConn *quic.Conn
+		connMu        sync.Mutex
+		dialConn      *quic.Conn
+		dialAbandoned bool
 	)
 	dialAddr := c.ws.DialAddr
+	dialerReady := make(chan struct{})
 
 	ws := &webtransport.Dialer{
 		TLSClientConfig:         c.ws.TLSClientConfig,
 		QUICConfig:              c.ws.QUICConfig,
 		StreamReorderingTimeout: c.ws.StreamReorderingTimeout,
 		DialAddr: func(dctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			// Dial initializes the Dialer's lifetime context before invoking
+			// DialAddr. Signal that Close is now safe even if the caller's
+			// context was already canceled when this goroutine started.
+			close(dialerReady)
 			conn, err := dialAddr(dctx, addr, tlsCfg, cfg)
 			if err != nil {
 				return nil, err
 			}
 			connMu.Lock()
+			if dialAbandoned {
+				connMu.Unlock()
+				_ = conn.CloseWithError(0, "")
+				return nil, context.Cause(dctx)
+			}
 			dialConn = conn
 			connMu.Unlock()
 			return conn, nil
@@ -881,7 +892,9 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 	// before one exists, and safe to repeat: CloseWithError is idempotent.
 	abandonDial := func() {
 		connMu.Lock()
+		dialAbandoned = true
 		conn := dialConn
+		dialConn = nil
 		connMu.Unlock()
 		if conn != nil {
 			_ = conn.CloseWithError(0, "")
@@ -899,12 +912,13 @@ func (c *NetworkClient) dialWebTransport(ctx context.Context, url string, header
 		ch <- dialResult{hr, s, err}
 	}()
 
-	// Take a result that is already ready, so a session delivered at the
-	// instant the caller gave up is not discarded.
+	// Do not return (and run the deferred Close) until Dial has initialized
+	// its internal cancel function. webtransport-go v0.9.0 assumes Close only
+	// runs after Dial initialization and otherwise dereferences nil.
 	select {
 	case r := <-ch:
 		return r.hr, r.s, r.err
-	default:
+	case <-dialerReady:
 	}
 
 	select {
