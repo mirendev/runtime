@@ -306,6 +306,16 @@ func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, count
 	s.writeChainBody(tx, chain, counterName, sorted)
 }
 
+// invalidateChainCache drops every cached chain body. The cache is only an
+// optimization -- it exists to skip a flush+rebuild when nothing changed -- so
+// dropping it costs one extra rebuild and restores the invariant that a cache
+// entry means nft accepted that body.
+func (s *ServiceController) invalidateChainCache() {
+	s.mu.Lock()
+	clear(s.chainEndpoints)
+	s.mu.Unlock()
+}
+
 // writeChainBody flushes a service-IP or nodeport chain and re-emits its full
 // rule set: counter, per-prefix mark-for-masq jumps, and a numgen-random vmap
 // across endpoint chains. When endpoints is empty the chain is rebuilt with
@@ -313,6 +323,22 @@ func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, count
 // rather than DNAT'd to a stale address. Bypasses the chainEndpoints cache;
 // callers that want the cached fast path should go through setEndpoints.
 func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
+	// Declare the counter in the same transaction that references it. Init
+	// declares it too, but a chain body must not depend on that: nft answers a
+	// rule naming an absent counter with ENOENT and rolls back the whole batch,
+	// so the chain keeps whatever it already had -- in the reported case,
+	// nothing, while the verdict map went on routing to it.
+	//
+	// How the counter went missing in the field was never established, and the
+	// evidence is gone. What is known: it had existed, since Init creates the
+	// maps and the counters in one atomic batch and the maps were still
+	// present; and it went before any rule referenced it, since nft refuses to
+	// delete a referenced counter (EBUSY). No mechanism fitting that window was
+	// found. Hence declaring it here rather than guarding a specific cause --
+	// the body then depends on no prior state at all. `add` is idempotent and
+	// does not reset an existing counter's totals, so it costs nothing.
+	tx.Add(&knftables.Counter{Name: counterName})
+
 	tx.Flush(&knftables.Chain{Name: chain})
 	tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("counter name", `"`+counterName+`"`)})
 
@@ -440,6 +466,13 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		return nil
 	}
 	if err := s.nft.Run(ctx, tx); err != nil {
+		// setEndpoints records what it wrote before the batch is applied, so a
+		// failed apply leaves the cache claiming rules that nft never took.
+		// The next pass would then skip the rebuild and the chain would stay
+		// as it is -- created by the idempotent addServiceChain, but empty, so
+		// the map sends traffic into a chain that matches nothing. Drop the
+		// cache so the next pass rebuilds from scratch.
+		s.invalidateChainCache()
 		return fmt.Errorf("apply nftables changes: %w", err)
 	}
 	return nil
