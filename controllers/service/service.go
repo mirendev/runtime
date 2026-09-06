@@ -324,13 +324,19 @@ func (s *ServiceController) invalidateChainCache() {
 // callers that want the cached fast path should go through setEndpoints.
 func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
 	// Declare the counter in the same transaction that references it. Init
-	// declares it too, but a chain body can be written against kernel state
-	// where that never took effect -- Init runs once at startup, while anything
-	// that flushes the ruleset underneath us drops the counter and leaves the
-	// table to be rebuilt by these paths. nft answers a rule naming an absent
-	// counter with ENOENT and rolls back the whole batch, so the chain keeps
-	// whatever it had. `add` is idempotent and does not reset an existing
-	// counter's totals, so declaring it here is free.
+	// declares it too, but a chain body must not depend on that: nft answers a
+	// rule naming an absent counter with ENOENT and rolls back the whole batch,
+	// so the chain keeps whatever it already had -- in the reported case,
+	// nothing, while the verdict map went on routing to it.
+	//
+	// How the counter went missing in the field was never established, and the
+	// evidence is gone. What is known: it had existed, since Init creates the
+	// maps and the counters in one atomic batch and the maps were still
+	// present; and it went before any rule referenced it, since nft refuses to
+	// delete a referenced counter (EBUSY). No mechanism fitting that window was
+	// found. Hence declaring it here rather than guarding a specific cause --
+	// the body then depends on no prior state at all. `add` is idempotent and
+	// does not reset an existing counter's totals, so it costs nothing.
 	tx.Add(&knftables.Counter{Name: counterName})
 
 	tx.Flush(&knftables.Chain{Name: chain})
