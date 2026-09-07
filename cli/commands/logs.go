@@ -815,13 +815,6 @@ var hiddenAttributes = map[string]bool{
 	"source": true,
 }
 
-// formatAttributes renders attributes as an unstyled " key=val" logfmt tail,
-// skipping hidden and miren.* keys. It is the plain form used in signatures.
-func formatAttributes(m map[string]string) string {
-	plain, _ := renderAttrs(m, nil)
-	return plain
-}
-
 // renderAttrs renders attributes as a " key=val" tail in both plain and styled
 // forms. Keys are muted and values a touch brighter; app.* promoted fields take
 // the Highlight role. Hidden and miren.* keys are always skipped, plus any key in

@@ -598,39 +598,6 @@ func TestLogPrinterNonTTYNeverCoalesces(t *testing.T) {
 	}
 }
 
-func TestFormatAttributes(t *testing.T) {
-	t.Run("filters hidden attributes", func(t *testing.T) {
-		m := map[string]string{
-			"miren.container": "app",
-			"miren.sandbox":   "sandbox/test",
-			"miren.service":   "web",
-			"miren.stage":     "app-run",
-			"miren.version":   "v1",
-			"miren.short_id":  "abc",
-			"source":          "test-id",
-			"component":       "scheduler",
-		}
-		got := formatAttributes(m)
-		if !strings.Contains(got, "component=scheduler") {
-			t.Errorf("expected component=scheduler, got: %q", got)
-		}
-		if strings.Contains(got, "miren.") {
-			t.Errorf("hidden attrs should not appear, got: %q", got)
-		}
-	})
-
-	t.Run("returns empty when all attributes are hidden", func(t *testing.T) {
-		m := map[string]string{
-			"miren.container": "app",
-			"miren.sandbox":   "sandbox/test",
-		}
-		got := formatAttributes(m)
-		if got != "" {
-			t.Errorf("expected empty, got: %q", got)
-		}
-	})
-}
-
 func TestParseTimeFlag(t *testing.T) {
 	now := time.Date(2026, 6, 26, 15, 30, 0, 0, time.Local)
 
