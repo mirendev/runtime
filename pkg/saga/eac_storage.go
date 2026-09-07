@@ -72,6 +72,7 @@ func (s *EACStorage) Get(ctx context.Context, id string) (*Execution, error) {
 // ListTerminal summarizes every execution in a terminal state via EAC.
 func (s *EACStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
 	var result []TerminalExecution
+	var staleNonTerminal int
 	seen := make(map[string]struct{})
 
 	for _, status := range []entity.Id{
@@ -89,14 +90,19 @@ func (s *EACStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, err
 			}
 			seen[id] = struct{}{}
 
-			summary, ok := terminalSummary(v.Entity())
-			if !ok {
+			summary, verdict := terminalSummary(v.Entity())
+			switch verdict {
+			case summaryOK:
+				result = append(result, summary)
+			case summaryNotTerminal:
+				staleNonTerminal++
+			case summaryNoTimestamp:
 				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", id)
-				continue
 			}
-			result = append(result, summary)
 		}
 	}
+
+	logStaleTerminal(s.log, staleNonTerminal)
 
 	return result, nil
 }
@@ -148,6 +154,7 @@ func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
 	}
 
 	var executions []*Execution
+	var staleTerminal int
 	for _, eacEnt := range allEntities {
 		ent := eacEnt.Entity()
 		sagaEntity, ok := entity.As[saga_v1alpha.Saga](ent)
@@ -160,8 +167,14 @@ func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
 			s.log.Warn("failed to convert saga entity, skipping", "id", eacEnt.Id(), "error", err)
 			continue
 		}
+		if isTerminal(exec.Status) {
+			staleTerminal++
+			continue
+		}
 		executions = append(executions, exec)
 	}
+
+	logStaleIncomplete(s.log, staleTerminal)
 
 	return executions, nil
 }

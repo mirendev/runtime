@@ -33,6 +33,10 @@ type MockStore struct {
 	// WatchFromRevs records the fromRev argument of every WatchIndex call, in
 	// order, so tests can assert resume behavior.
 	WatchFromRevs []int64
+
+	// staleIndexEntries holds fault-injected index entries, keyed by attr.CAS().
+	// See AddStaleIndexEntry.
+	staleIndexEntries map[string][]Id
 }
 
 var _ Store = &MockStore{}
@@ -574,17 +578,43 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var ids []Id
+	seen := make(map[Id]bool)
 	for id, entity := range m.Entities {
 		allAttrs := enumerateAllAttrs(entity.attrs)
 		for _, a := range allAttrs {
 			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
 				ids = append(ids, id)
+				seen[id] = true
 				break
 			}
 		}
 	}
 
+	// Deduplicated because an index is a keyspace: it cannot hold the same
+	// entity twice under one value.
+	for _, id := range m.staleIndexEntries[attr.CAS()] {
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+
 	return ids, nil
+}
+
+// AddStaleIndexEntry makes ListIndex report id under attr even though the stored
+// entity does not carry that value. MockStore derives its index from live
+// attributes and so cannot drift on its own; this is how a test reaches the case
+// where EtcdStore's separate collection keyspace disagrees with the entity.
+func (m *MockStore) AddStaleIndexEntry(attr Attr, id Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.staleIndexEntries == nil {
+		m.staleIndexEntries = make(map[string][]Id)
+	}
+	key := attr.CAS()
+	m.staleIndexEntries[key] = append(m.staleIndexEntries[key], id)
 }
 
 // ListIndexRevision returns the matching ids along with a revision. The mock

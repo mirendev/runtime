@@ -402,6 +402,67 @@ func TestStoreConformance_ReplaceEntity(t *testing.T) {
 	})
 }
 
+// TestStoreConformance_ReplaceEntityMaintainsIndexEntries asserts on the index a
+// replacement moved away from: the write and the read-back can both look correct
+// while that index still answers for the entity.
+func TestStoreConformance_ReplaceEntityMaintainsIndexEntries(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		before := Id("conf-move-before/v1")
+		after := Id("conf-move-after/v1")
+		_, err := store.CreateEntity(ctx, New(Ref(DBId, before)))
+		require.NoError(t, err)
+		_, err = store.CreateEntity(ctx, New(Ref(DBId, after)))
+		require.NoError(t, err)
+
+		id := Id("conf-move-subject")
+		_, err = store.CreateEntity(ctx, New(
+			Ref(DBId, id),
+			Ref(Id("conf/ref"), before),
+		))
+		require.NoError(t, err)
+
+		indexed := func(t *testing.T, target Id) []Id {
+			t.Helper()
+			ids, err := store.ListIndex(ctx, Ref(Id("conf/ref"), target))
+			require.NoError(t, err)
+			return ids
+		}
+
+		require.Contains(t, indexed(t, before), id, "create must index the initial value")
+
+		// Changing the value moves the entry.
+		_, err = store.ReplaceEntity(ctx, New(
+			Ref(DBId, id),
+			Ref(Id("conf/ref"), after),
+		))
+		require.NoError(t, err)
+
+		assert.Contains(t, indexed(t, after), id, "replace must index the new value")
+		assert.NotContains(t, indexed(t, before), id,
+			"replace must remove the index entry for the value it replaced")
+
+		got, err := store.GetEntity(ctx, id)
+		require.NoError(t, err)
+		ref, ok := got.Get(Id("conf/ref"))
+		require.True(t, ok)
+		assert.Equal(t, after, ref.Value.Id(),
+			"the stored entity must carry only the new value")
+
+		// Dropping the attribute removes the entry outright.
+		_, err = store.ReplaceEntity(ctx, New(
+			Ref(DBId, id),
+			Any(Doc, "no longer indexed"),
+		))
+		require.NoError(t, err)
+
+		assert.NotContains(t, indexed(t, after), id,
+			"replace must remove the index entry for an attribute it dropped")
+	})
+}
+
 // TestStoreConformance_UpdateEntity pins the cardinality-aware merge: a
 // cardinality-one attribute is replaced, a cardinality-many attribute
 // accumulates. This is the behavior mock.go hand-mirrors from store.go.

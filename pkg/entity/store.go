@@ -1074,8 +1074,10 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
-	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, repl.attrs)
+	// Must come from the stored entity, not the replacement: buildCollectionOps
+	// deletes the original indexed values the replacement no longer carries, and
+	// diffing repl against itself emits no deletes at all.
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, originalEntity.attrs)
 	if err != nil {
 		return nil, err
 	}
