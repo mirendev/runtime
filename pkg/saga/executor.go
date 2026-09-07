@@ -68,15 +68,28 @@ type Storage interface {
 	// Get retrieves an execution by ID.
 	Get(ctx context.Context, id string) (*Execution, error)
 
-	// ListIncomplete returns all executions that need recovery (Pending, Running, or Undoing).
-	ListIncomplete(ctx context.Context) ([]*Execution, error)
+	// ListIncompletePage returns one bounded page of executions that need
+	// recovery (Pending, Running, or Undoing).
+	//
+	// Paged rather than whole because the whole set is not a size anyone
+	// chooses. A cluster that accumulated a six-figure backlog of incomplete
+	// executions made every restarting runner materialize all of them, with
+	// their action-output blobs, before recovery got as far as deciding which
+	// three it owned (MIR-1785).
+	//
+	// The walk covers several status indexes and is not pinned to one store
+	// revision, so an execution written mid-walk may be missed or repeated. A
+	// miss is recovered on the next pass, and a repeat is refused by the
+	// executor's own claim, which is the cheaper failure than a walk that dies
+	// with ErrCompacted partway through a large backlog.
+	ListIncompletePage(ctx context.Context, q IncompleteQuery) (*IncompletePage, error)
 
-	// ListTerminal returns a summary of every execution that has finished
-	// (Completed or Failed). It deliberately returns summaries rather than
-	// executions: retention only needs an ID and an age, and a backend holding
-	// a six-figure backlog must not have to materialize every action-output
-	// blob to answer.
-	ListTerminal(ctx context.Context) ([]TerminalExecution, error)
+	// ListTerminalPage returns one bounded page of executions that have
+	// finished (Completed or Failed). It deliberately returns summaries rather
+	// than executions: retention only needs an ID and an age, and a backend
+	// holding a six-figure backlog must not have to materialize every
+	// action-output blob to answer.
+	ListTerminalPage(ctx context.Context, q TerminalQuery) (*TerminalPage, error)
 
 	// Delete removes an execution. Deleting one that is already gone is not an
 	// error, so a retried or overlapping sweep converges instead of failing.
@@ -673,14 +686,71 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 }
 
 // Recover finds and resumes incomplete sagas after a restart.
+//
+// It walks the incomplete set a page at a time and never holds more than one
+// page, because the set is shared across every executor in the cluster and its
+// size is nobody's decision. A runner restarting into a six-figure backlog used
+// to load all of it, with every action-output blob, before getting as far as
+// deciding which handful it owned.
+//
+// Recovery is sequential on purpose. Resuming a page's worth of sagas at once
+// would trade the memory this bounds for the same amount of it plus concurrent
+// action side effects, and nothing here needs the throughput.
 func (e *Executor) Recover(ctx context.Context) error {
-	incomplete, err := e.storage.ListIncomplete(ctx)
-	if err != nil {
-		return fmt.Errorf("listing incomplete sagas: %w", err)
+	var recoverErrors []error
+
+	// Recovering one execution twice re-runs actions that already completed and
+	// collides on the entities the first pass created, so this is the one place
+	// a duplicate genuinely costs something. The walk cannot deduplicate across
+	// status indexes without holding all of them, so the set lives here instead
+	// and is bounded by what this executor actually attempted, not by the size
+	// of the backlog it walked past.
+	attempted := make(map[string]struct{})
+
+	cursor := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		page, err := e.storage.ListIncompletePage(ctx, IncompleteQuery{Cursor: cursor})
+		if err != nil {
+			return fmt.Errorf("listing incomplete sagas: %w", err)
+		}
+
+		if err := e.recoverPage(ctx, page.Executions, attempted, &recoverErrors); err != nil {
+			return err
+		}
+
+		cursor = page.Cursor
+		if cursor == "" {
+			break
+		}
 	}
 
-	var recoverErrors []error
-	for _, exec := range incomplete {
+	if len(recoverErrors) > 0 {
+		return fmt.Errorf("recovery completed with %d errors", len(recoverErrors))
+	}
+	return nil
+}
+
+// recoverPage resumes the executions in one page that belong to this executor.
+func (e *Executor) recoverPage(
+	ctx context.Context,
+	page []*Execution,
+	attempted map[string]struct{},
+	recoverErrors *[]error,
+) error {
+	for _, exec := range page {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if _, dup := attempted[exec.ID]; dup {
+			e.log.Debug("execution already attempted in this recovery pass, skipping",
+				"saga", exec.DefinitionName, "execution", exec.ID)
+			continue
+		}
 		// The shared store contains every runner's incomplete sandbox sagas.
 		// Scope is checked before even taking the local claim so this executor
 		// cannot drive another runner's record. Empty is an exact value here,
@@ -721,6 +791,9 @@ func (e *Executor) Recover(ctx context.Context) error {
 				"saga", exec.DefinitionName, "execution", exec.ID)
 			continue
 		}
+
+		attempted[exec.ID] = struct{}{}
+
 		// Released through defer so an action that panics cannot strand the
 		// claim. A stranded one is permanent: every later Execute under that
 		// name would report the work as still in flight and never run it.
@@ -730,13 +803,10 @@ func (e *Executor) Recover(ctx context.Context) error {
 		}()
 
 		if err != nil {
-			recoverErrors = append(recoverErrors, err)
+			*recoverErrors = append(*recoverErrors, err)
 		}
 	}
 
-	if len(recoverErrors) > 0 {
-		return fmt.Errorf("recovery completed with %d errors", len(recoverErrors))
-	}
 	return nil
 }
 

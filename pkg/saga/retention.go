@@ -2,42 +2,57 @@ package saga
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
 
-// liveParentsOf returns the IDs of executions still in flight, but only when
-// the terminal set actually contains a child. Most clusters run no nested
-// sagas, and paying for an extra listing every sweep to answer a question
-// nobody asked is not worth it.
+// parentLiveness answers whether a terminal execution's parent is still in
+// flight, one parent at a time and remembering what it learned.
 //
-// An in-flight parent is exactly ListIncomplete's set: the three non-terminal
-// statuses and nothing else. A parent absent from the store entirely is safe,
-// since nothing remains to re-find the child.
-func liveParentsOf(ctx context.Context, storage Storage, terminal []TerminalExecution) (map[string]struct{}, error) {
-	hasChild := false
-	for _, exec := range terminal {
-		if exec.ParentID != "" {
-			hasChild = true
-			break
-		}
-	}
-	if !hasChild {
-		return nil, nil
+// This used to be a second full listing of the incomplete set, taken whenever
+// any execution in the terminal set had a parent. That asked the store for
+// every in-flight execution in the cluster in order to answer a question about
+// at most a page's worth of parents, and on a large backlog it was the second
+// unbounded read in a sweep that already had one.
+//
+// Reading each parent directly costs a round trip per distinct parent instead.
+// Most clusters run no nested sagas at all, so most sweeps ask nothing; and
+// where they do, children of one parent share the answer.
+type parentLiveness struct {
+	storage Storage
+	live    map[string]bool
+}
+
+func newParentLiveness(storage Storage) *parentLiveness {
+	return &parentLiveness{storage: storage, live: map[string]bool{}}
+}
+
+// isLive reports whether the named parent is still in flight.
+//
+// A parent that is absent from the store is not live: nothing remains that
+// could re-find the child. A parent that cannot be read is treated as live,
+// which is the safe direction. Protecting a child that did not need it costs
+// one more sweep; deleting one that did turns a resumed saga into a duplicated
+// one.
+func (p *parentLiveness) isLive(ctx context.Context, id string, log *slog.Logger) bool {
+	if live, known := p.live[id]; known {
+		return live
 	}
 
-	incomplete, err := storage.ListIncomplete(ctx)
-	if err != nil {
-		return nil, err
+	exec, err := p.storage.Get(ctx, id)
+	switch {
+	case errors.Is(err, ErrExecutionNotFound):
+		p.live[id] = false
+	case err != nil:
+		log.Warn("could not read saga parent, keeping its children for now",
+			"parent", id, "error", err)
+		p.live[id] = true
+	default:
+		p.live[id] = !isTerminal(exec.Status)
 	}
 
-	live := make(map[string]struct{}, len(incomplete))
-	for _, exec := range incomplete {
-		if exec != nil {
-			live[exec.ID] = struct{}{}
-		}
-	}
-	return live, nil
+	return p.live[id]
 }
 
 // RetentionConfig tunes a retention sweep.
@@ -108,52 +123,104 @@ func RunRetention(ctx context.Context, storage Storage, cfg RetentionConfig, log
 		return result, nil
 	}
 
-	terminal, err := storage.ListTerminal(ctx)
-	if err != nil {
-		return result, err
-	}
-
-	liveParents, err := liveParentsOf(ctx, storage, terminal)
-	if err != nil {
-		return result, err
-	}
-
+	parents := newParentLiveness(storage)
 	cutoff := time.Now().Add(-cfg.Retention)
 
-	for i, exec := range terminal {
+	cursor := ""
+	for {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		result.Scanned++
 
-		if exec.FinishedAt.After(cutoff) {
-			continue
+		page, err := storage.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor})
+		if err != nil {
+			return result, err
 		}
 
-		// A finished child whose parent is still in flight has to stay. The
-		// parent does not re-run a nested saga on resume, it re-finds the child
-		// by deterministic ID and reuses the result, so deleting the child
-		// converts a resumed saga into a duplicated one.
-		if exec.ParentID != "" {
-			if _, live := liveParents[exec.ParentID]; live {
+		for _, exec := range page.Executions {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+			result.Scanned++
+
+			if exec.FinishedAt.After(cutoff) {
+				continue
+			}
+
+			// A finished child whose parent is still in flight has to stay. The
+			// parent does not re-run a nested saga on resume, it re-finds the
+			// child by deterministic ID and reuses the result, so deleting the
+			// child converts a resumed saga into a duplicated one.
+			if exec.ParentID != "" && parents.isLive(ctx, exec.ParentID, log) {
 				result.Skipped++
 				continue
 			}
+
+			if err := storage.Delete(ctx, exec.ID); err != nil {
+				log.Warn("failed to delete expired saga execution",
+					"id", exec.ID, "finished_at", exec.FinishedAt, "error", err)
+				result.Failed++
+				continue
+			}
+			result.Deleted++
+
+			if cfg.MaxDeletes > 0 && result.Deleted >= cfg.MaxDeletes {
+				capped, err := stoppedEarly(ctx, storage, page, exec.ID)
+				if err != nil {
+					return result, err
+				}
+				result.Capped = capped
+				return result, nil
+			}
 		}
 
-		if err := storage.Delete(ctx, exec.ID); err != nil {
-			log.Warn("failed to delete expired saga execution",
-				"id", exec.ID, "finished_at", exec.FinishedAt, "error", err)
-			result.Failed++
-			continue
-		}
-		result.Deleted++
-
-		if cfg.MaxDeletes > 0 && result.Deleted >= cfg.MaxDeletes {
-			result.Capped = i < len(terminal)-1
+		cursor = page.Cursor
+		if cursor == "" {
 			return result, nil
 		}
 	}
+}
 
-	return result, nil
+// stoppedEarly reports whether a sweep that just spent its delete budget left
+// anything uninspected.
+//
+// Spending the budget is not the same as being cut short. A sweep that deletes
+// its last permitted execution and has nothing left to look at did the whole
+// job, and reporting that as capped would have an operator chasing a backlog
+// that is not there.
+//
+// Deciding takes a look ahead, because the cursor alone cannot answer it. The
+// walk covers several status indexes in sequence, so a cursor can point at the
+// head of a next index that turns out to be empty, and a page can come back
+// empty while its cursor still has an index behind it. So the lookahead reads
+// forward until it finds something or the walk genuinely ends, rather than
+// reading one page and concluding from an empty one. It runs at all only in the
+// exact case where the budget landed on a page boundary.
+func stoppedEarly(ctx context.Context, storage Storage, page *TerminalPage, deletedID string) (bool, error) {
+	if len(page.Executions) == 0 {
+		return false, nil
+	}
+
+	// Anything after it in the page it stopped in is already unlooked-at.
+	if deletedID != page.Executions[len(page.Executions)-1].ID {
+		return true, nil
+	}
+
+	cursor := page.Cursor
+	for cursor != "" {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+
+		next, err := storage.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor, Limit: 1})
+		if err != nil {
+			return false, err
+		}
+		if len(next.Executions) > 0 {
+			return true, nil
+		}
+		cursor = next.Cursor
+	}
+
+	return false, nil
 }
