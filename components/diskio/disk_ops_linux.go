@@ -67,10 +67,6 @@ func (r *realDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	return nil
 }
 
-func (r *realDiskVolumeOps) RemoveDiskImage(path string) error {
-	return os.Remove(path)
-}
-
 // realDiskMountOps implements DiskMountOps with real loop device operations
 type realDiskMountOps struct {
 	log *slog.Logger
@@ -82,10 +78,6 @@ func NewRealDiskMountOps(log *slog.Logger) DiskMountOps {
 
 func (r *realDiskMountOps) CreateDir(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
-}
-
-func (r *realDiskMountOps) RemoveFile(path string) error {
-	return os.Remove(path)
 }
 
 func (r *realDiskMountOps) LoopAttach(imagePath string) (string, error) {
@@ -382,11 +374,6 @@ func lbdDeviceIndex(devicePath string) (string, error) {
 		return "", fmt.Errorf("lbd device path %q has a non-numeric index: %w", devicePath, err)
 	}
 	return index, nil
-}
-
-func (r *realDiskMountOps) LbdAvailable() bool {
-	_, err := exec.LookPath("lbdctl")
-	return err == nil
 }
 
 func (r *realDiskMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {
