@@ -1433,6 +1433,108 @@ func (v *EntityAccessListResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessListPageArgsData struct {
+	Index  *entity.Attr `cbor:"0,keyasint,omitempty" json:"index,omitempty"`
+	Cursor *string      `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Limit  *int64       `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+}
+
+type EntityAccessListPageArgs struct {
+	call rpc.Call
+	data entityAccessListPageArgsData
+}
+
+func (v *EntityAccessListPageArgs) HasIndex() bool {
+	return v.data.Index != nil
+}
+
+func (v *EntityAccessListPageArgs) Index() entity.Attr {
+	return *v.data.Index
+}
+
+func (v *EntityAccessListPageArgs) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *EntityAccessListPageArgs) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v *EntityAccessListPageArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *EntityAccessListPageArgs) Limit() int64 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *EntityAccessListPageArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessListPageArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessListPageArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessListPageArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessListPageResultsData struct {
+	Values   *[]*Entity `cbor:"0,keyasint,omitempty" json:"values,omitempty"`
+	Cursor   *string    `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Total    *int64     `cbor:"2,keyasint,omitempty" json:"total,omitempty"`
+	Revision *int64     `cbor:"3,keyasint,omitempty" json:"revision,omitempty"`
+}
+
+type EntityAccessListPageResults struct {
+	call rpc.Call
+	data entityAccessListPageResultsData
+}
+
+func (v *EntityAccessListPageResults) SetValues(values []*Entity) {
+	x := slices.Clone(values)
+	v.data.Values = &x
+}
+
+func (v *EntityAccessListPageResults) SetCursor(cursor string) {
+	v.data.Cursor = &cursor
+}
+
+func (v *EntityAccessListPageResults) SetTotal(total int64) {
+	v.data.Total = &total
+}
+
+func (v *EntityAccessListPageResults) SetRevision(revision int64) {
+	v.data.Revision = &revision
+}
+
+func (v *EntityAccessListPageResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessListPageResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessListPageResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessListPageResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessMakeAttrArgsData struct {
 	Id    *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
@@ -2440,6 +2542,32 @@ func (t *EntityAccessList) Results() *EntityAccessListResults {
 	return results
 }
 
+type EntityAccessListPage struct {
+	rpc.Call
+	args    EntityAccessListPageArgs
+	results EntityAccessListPageResults
+}
+
+func (t *EntityAccessListPage) Args() *EntityAccessListPageArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessListPage) Results() *EntityAccessListPageResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessMakeAttr struct {
 	rpc.Call
 	args    EntityAccessMakeAttrArgs
@@ -2712,6 +2840,7 @@ type EntityAccess interface {
 	WatchIndex(ctx context.Context, state *EntityAccessWatchIndex) error
 	WatchEntity(ctx context.Context, state *EntityAccessWatchEntity) error
 	List(ctx context.Context, state *EntityAccessList) error
+	ListPage(ctx context.Context, state *EntityAccessListPage) error
 	MakeAttr(ctx context.Context, state *EntityAccessMakeAttr) error
 	LookupKind(ctx context.Context, state *EntityAccessLookupKind) error
 	Parse(ctx context.Context, state *EntityAccessParse) error
@@ -2769,6 +2898,10 @@ func (reexportEntityAccess) WatchEntity(ctx context.Context, state *EntityAccess
 }
 
 func (reexportEntityAccess) List(ctx context.Context, state *EntityAccessList) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) ListPage(ctx context.Context, state *EntityAccessListPage) error {
 	panic("not implemented")
 }
 
@@ -2926,6 +3059,16 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Params:        []string{"index"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.List(ctx, &EntityAccessList{Call: call})
+			},
+		},
+		{
+			Name:          "list_page",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"index", "cursor", "limit"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListPage(ctx, &EntityAccessListPage{Call: call})
 			},
 		},
 		{
@@ -3456,6 +3599,71 @@ func (v EntityAccessClient) List(ctx context.Context, index entity.Attr) (*Entit
 	}
 
 	return &EntityAccessClientListResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientListPageResults struct {
+	client rpc.Client
+	data   entityAccessListPageResultsData
+}
+
+func (v *EntityAccessClientListPageResults) HasValues() bool {
+	return v.data.Values != nil
+}
+
+func (v *EntityAccessClientListPageResults) Values() []*Entity {
+	if v.data.Values == nil {
+		return nil
+	}
+	return *v.data.Values
+}
+
+func (v *EntityAccessClientListPageResults) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *EntityAccessClientListPageResults) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v *EntityAccessClientListPageResults) HasTotal() bool {
+	return v.data.Total != nil
+}
+
+func (v *EntityAccessClientListPageResults) Total() int64 {
+	if v.data.Total == nil {
+		return 0
+	}
+	return *v.data.Total
+}
+
+func (v *EntityAccessClientListPageResults) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessClientListPageResults) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v EntityAccessClient) ListPage(ctx context.Context, index entity.Attr, cursor string, limit int64) (*EntityAccessClientListPageResults, error) {
+	args := EntityAccessListPageArgs{}
+	args.data.Index = &index
+	args.data.Cursor = &cursor
+	args.data.Limit = &limit
+
+	var ret entityAccessListPageResultsData
+
+	err := v.Call(ctx, "list_page", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientListPageResults{client: v.Client, data: ret}, nil
 }
 
 type EntityAccessClientMakeAttrResults struct {

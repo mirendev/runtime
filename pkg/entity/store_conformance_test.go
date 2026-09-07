@@ -1044,6 +1044,66 @@ func TestStoreConformance_GetEntityAtRevision_Historical(t *testing.T) {
 	})
 }
 
+// TestStoreConformance_ListIndexEntitiesPage pins the parts of the paged index
+// read both backends must agree on, because callers cannot tell which one they
+// are talking to.
+//
+// Alignment is the one worth stating outright. A caller pairs entities back up
+// with the ids that named them, so a backend that dropped misses instead of
+// holding their place would shift every entity after the gap onto the wrong id,
+// and nothing about that failure looks like a bug until much later.
+func TestStoreConformance_ListIndexEntitiesPage(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+
+		attrEnt, err := store.CreateEntity(ctx, New(
+			String(Ident, "conf-page-attr"),
+			Ref(Type, TypeStr),
+			Bool(Index, true),
+		))
+		require.NoError(t, err)
+
+		index := String(attrEnt.Id(), "value")
+
+		for i := range 3 {
+			_, err := store.CreateEntity(ctx, New(
+				index,
+				String(Ident, fmt.Sprintf("conf-page-%02d", i)),
+			))
+			require.NoError(t, err)
+		}
+
+		page, err := store.ListIndexEntitiesPage(ctx, index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Entities, len(page.Ids), "entities must line up with the ids that named them")
+		require.NotNil(t, page.Undecodable, "the map must be indexable without a nil check")
+
+		seen := map[Id]bool{}
+		for i, ent := range page.Entities {
+			require.NotNil(t, ent)
+			assert.Equal(t, page.Ids[i], ent.Id())
+			seen[ent.Id()] = true
+		}
+		assert.Len(t, seen, 3)
+
+		// Walking must terminate, and must not hand back a cursor to nothing
+		// when the index ends exactly on a page boundary.
+		cursor := ""
+		total := 0
+		for range 20 {
+			p, err := store.ListIndexEntitiesPage(ctx, index, cursor, 3)
+			require.NoError(t, err)
+			total += len(p.Entities)
+			cursor = p.Cursor
+			if cursor == "" {
+				break
+			}
+		}
+		assert.Equal(t, "", cursor, "the walk must terminate")
+		assert.Equal(t, 3, total)
+	})
+}
+
 // TestStoreConformance_Sessions pins the minimal session lifecycle both
 // backends support (create yields a non-empty token; ping and revoke succeed).
 // MockStore's sessions are stubs that do not enforce scoping or expiry, so

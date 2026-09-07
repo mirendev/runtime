@@ -108,14 +108,11 @@ func (c *Controller) Step(ctx context.Context) error {
 	}
 
 	kind, migrate := c.phaseWork(c.phase)
-	page, err := c.Store.ListIndexPage(ctx, entity.Ref(entity.EntityKind, kind), c.cursor, c.Config.BatchSize)
+	page, err := c.Store.ListIndexEntitiesPage(ctx, entity.Ref(entity.EntityKind, kind), c.cursor, c.Config.BatchSize)
 	if err != nil {
 		return err
 	}
-	entities, err := c.Store.GetEntities(ctx, page.Ids)
-	if err != nil {
-		return err
-	}
+	entities := page.Entities
 	var migrateErrs []error
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, ent := range entities {

@@ -115,6 +115,40 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 	return entities, nil
 }
 
+// ListIndexEntitiesPage composes the mock's own paging and batch read.
+//
+// It reports nothing undecodable and ignores the revision when resolving
+// entities: the mock keeps one version of each entity, so there is no history
+// to read at and nothing stored that could fail to decode. It cannot prove a
+// caller pinned the right revision, which is what the EtcdStore conformance
+// case is for. What it can still check is that a caller handles nils, indexes
+// the map without a nil check, and walks the cursor to the end.
+func (m *MockStore) ListIndexEntitiesPage(
+	ctx context.Context,
+	attr Attr,
+	cursor string,
+	limit int64,
+) (*EntityPage, error) {
+	page, err := m.ListIndexPage(ctx, attr, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	entities, err := m.GetEntities(ctx, page.Ids)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityPage{
+		Ids:         page.Ids,
+		Entities:    entities,
+		Undecodable: map[Id]bool{},
+		Cursor:      page.Cursor,
+		Total:       page.Total,
+		Revision:    page.Revision,
+	}, nil
+}
+
 // validateSessionAttrs checks that if any attributes are session-scoped,
 // a session ID was provided via EntityOption. This matches EtcdStore behavior.
 func (m *MockStore) validateSessionAttrs(ctx context.Context, attrs []Attr, opts []EntityOption) error {
