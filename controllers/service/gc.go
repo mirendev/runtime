@@ -335,9 +335,9 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 	)
 
 	if err := s.nft.Run(ctx, tx); err != nil {
-		// Same reasoning as Create: the cache must not outlive a batch nft
-		// rejected, or the next pass skips the rebuild it needs.
-		s.invalidateChainCache()
+		// syncCachesAfterGC is below the error return for the same reason
+		// Create commits its cache late: a rejected batch changed nothing, so
+		// the cache has to keep describing the bodies still in the kernel.
 		return fmt.Errorf("apply GC batch: %w", err)
 	}
 
