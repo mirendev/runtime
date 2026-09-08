@@ -1,8 +1,13 @@
 # Toolchain for compiling the lbd kernel module against a node's running kernel.
 #
-# This image deliberately does NOT contain the module source. miren embeds the
-# source and bind-mounts it at /src, so shipping a new module version means
-# shipping a new miren, not republishing this image.
+# This is embedded in the miren binary and built by the cluster's own BuildKit
+# into the cluster-local registry, not published by us. That is why it is here
+# rather than under docker/: nothing outside miren ever builds it, and the tag
+# is a hash of this directory, so it is rebuilt exactly when it changes.
+#
+# It deliberately does NOT contain the module source. miren embeds the source
+# and bind-mounts it at /src, so a new module version ships as a new miren
+# without touching this image at all.
 #
 # The contract with pkg/lbdmod:
 #
@@ -52,7 +57,9 @@ RUN printf 'path-exclude=/usr/share/man/*\npath-exclude=/usr/share/doc/*\npath-e
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /usr/share/doc /usr/share/man
 
-COPY docker/lbd-builder/build.sh /usr/local/bin/build-lbd
+# The build context is this directory, materialized from the embed, so the
+# script sits next to the Dockerfile rather than under a docker/ prefix.
+COPY build.sh /usr/local/bin/build-lbd
 RUN chmod +x /usr/local/bin/build-lbd
 
 ENTRYPOINT ["/usr/local/bin/build-lbd"]
