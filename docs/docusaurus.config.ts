@@ -55,8 +55,20 @@ const configDir = typeof __dirname === 'string' ? __dirname : process.cwd();
 // hack/docs-snapshot materializes the released docs into version-latest, which
 // then serves at the site root while main serves at /next. The snapshot isn't
 // checked in, so a plain checkout has no versions at all and builds main at the
-// root: that's what local development and PR preview builds want.
-const releasedDocs = existsSync(`${configDir}/versioned_docs/version-latest`)
+// root, which is what local development wants and what PR builds get.
+const releasedDocsDir = `${configDir}/versioned_docs/version-latest`;
+const hasReleasedDocs = existsSync(releasedDocsDir);
+
+// docusaurus-plugin-llms reads the docs tree itself rather than going through
+// the docs plugin, so it has no idea versioning exists. Left alone it publishes
+// main's markdown at the released URLs: /observability.md would serve
+// unreleased docs with none of the banner the HTML page carries, and llms.txt
+// would advertise pages that 404 at the root. Point it at the same snapshot the
+// site root is built from. preserveDirectoryStructure: false already strips the
+// configured docsDir prefix, so the emitted paths stay root-relative.
+const llmsDocsDir = hasReleasedDocs ? 'versioned_docs/version-latest' : 'docs';
+
+const releasedDocs = hasReleasedDocs
   ? {
       lastVersion: 'latest',
       // The navbar dropdown already names the version on every page, and /next
@@ -136,6 +148,7 @@ const config: Config = {
         generateLLMsTxt: true,
         generateLLMsFullTxt: true,
         generateMarkdownFiles: true,
+        docsDir: llmsDocsDir,
         // Docs are served from the site root, so emit Markdown beside the
         // corresponding HTML route rather than under build/docs/.
         preserveDirectoryStructure: false,

@@ -40,7 +40,7 @@ jobs:
         with:
           persist-credentials: false
           # hack/docs-snapshot resolves the released docs from a tag or from
-          # docs-latest, and reads the version label off the tags reachable
+          # release/X.Y, and reads the version label off the tags reachable
           # from it. A shallow, tagless checkout can see none of that.
           fetch-depth: 0
 
@@ -59,9 +59,8 @@ jobs:
         working-directory: docs
 
       # Materializes the released docs so the build serves them at the site
-      # root with this branch's docs at /next. Skipped on pull requests: a
-      # preview build wants the branch's own docs at the root, where the
-      # reviewer will look for them.
+      # root with this branch's docs at /next. Skipped on pull requests, which
+      # publish nothing and only check that the docs still compile.
       - name: Snapshot released docs
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
         run: hack/docs-snapshot
