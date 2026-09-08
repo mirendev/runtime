@@ -168,6 +168,7 @@ func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 
 	// Convert to executions
 	var executions []*Execution
+	var staleTerminal int
 	for _, ent := range entities {
 		if ent == nil {
 			continue
@@ -182,8 +183,14 @@ func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 			s.log.Warn("failed to convert saga entity, skipping", "id", ent.Id(), "error", err)
 			continue
 		}
+		if isTerminal(exec.Status) {
+			staleTerminal++
+			continue
+		}
 		executions = append(executions, exec)
 	}
+
+	logStaleIncomplete(s.log, staleTerminal)
 
 	return executions, nil
 }
@@ -229,6 +236,7 @@ func (s *EntityStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, 
 	}
 
 	var result []TerminalExecution
+	var staleNonTerminal int
 	for start := 0; start < len(ids); start += terminalFetchBatch {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -245,14 +253,19 @@ func (s *EntityStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, 
 				// Deleted between the listing and the fetch. Nothing to report.
 				continue
 			}
-			summary, ok := terminalSummary(ent)
-			if !ok {
+			summary, verdict := terminalSummary(ent)
+			switch verdict {
+			case summaryOK:
+				result = append(result, summary)
+			case summaryNotTerminal:
+				staleNonTerminal++
+			case summaryNoTimestamp:
 				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", ent.Id())
-				continue
 			}
-			result = append(result, summary)
 		}
 	}
+
+	logStaleTerminal(s.log, staleNonTerminal)
 
 	return result, nil
 }
@@ -268,17 +281,37 @@ func (s *EntityStorage) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// terminalSummary reduces a saga entity to what retention needs, reporting
-// false when the entity carries no usable timestamp at all.
+// summaryVerdict says why terminalSummary rejected an entity. The two reasons
+// want different handling: stale index entries arrive in bulk, while a missing
+// timestamp is a one-off worth naming the entity for.
+type summaryVerdict int
+
+const (
+	summaryOK summaryVerdict = iota
+	// summaryNotTerminal means the decoded status is not terminal, so the index
+	// entry that produced this entity is stale.
+	summaryNotTerminal
+	// summaryNoTimestamp means the entity carries no usable finish time.
+	summaryNoTimestamp
+)
+
+// terminalSummary reduces a saga entity to what retention needs.
+//
+// The status index is a hint, not the truth: an entry can outlive the status it
+// was written for, so the decoded status decides whether this is terminal.
 //
 // The finish time prefers the saga's own updated_at but falls back to the
 // entity store's system timestamp, which is what makes retention safe across an
 // upgrade: every execution written before saga timestamps were persisted reads
 // back with a zero updated_at, and treating that as infinitely old would delete
 // a saga a runner on the old binary finished seconds ago.
-func terminalSummary(ent *entity.Entity) (TerminalExecution, bool) {
+func terminalSummary(ent *entity.Entity) (TerminalExecution, summaryVerdict) {
 	var s saga_v1alpha.Saga
 	s.Decode(ent)
+
+	if !isTerminal(statusFromEntity(s.Status)) {
+		return TerminalExecution{}, summaryNotTerminal
+	}
 
 	summary := TerminalExecution{
 		ID:       string(ent.Id()),
@@ -293,10 +326,33 @@ func terminalSummary(ent *entity.Entity) (TerminalExecution, bool) {
 	case !ent.GetCreatedAt().IsZero():
 		summary.FinishedAt = ent.GetCreatedAt()
 	default:
-		return TerminalExecution{}, false
+		return TerminalExecution{}, summaryNoTimestamp
 	}
 
-	return summary, true
+	return summary, summaryOK
+}
+
+// isTerminal reports whether a status is one of the two finished states.
+// ListIncomplete and ListTerminal both need it, in opposite directions.
+func isTerminal(s Status) bool {
+	return s == StatusCompleted || s == StatusFailed
+}
+
+// logStaleIncomplete and logStaleTerminal report index drift once per call
+// rather than once per entry: the backlog runs to tens of thousands, and a
+// per-entry line would drown the tier it logs in.
+func logStaleIncomplete(log *slog.Logger, count int) {
+	if count > 0 {
+		log.Warn("incomplete status index returned terminal executions, skipping; index needs repair",
+			"count", count)
+	}
+}
+
+func logStaleTerminal(log *slog.Logger, count int) {
+	if count > 0 {
+		log.Warn("terminal status index returned non-terminal executions, skipping; index needs repair",
+			"count", count)
+	}
 }
 
 // statusToEntity converts saga.Status to the entity enum value.

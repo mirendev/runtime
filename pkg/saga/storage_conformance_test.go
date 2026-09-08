@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
@@ -232,4 +233,109 @@ func containsExecution(execs []*Execution, id string) bool {
 		}
 	}
 	return false
+}
+
+// runIndexBackedConformance runs scenario against the storages that answer from
+// the entity index, handing over the mock store beneath so it can seed drift.
+// MemoryStorage is absent: it has no index to make stale.
+func runIndexBackedConformance(t *testing.T, scenario func(t *testing.T, storage Storage, store *entity.MockStore)) {
+	t.Helper()
+
+	backends := []struct {
+		name string
+		make func(t *testing.T, inmem *testutils.InMemEntityServer) Storage
+	}{
+		{"EntityStorage", func(t *testing.T, inmem *testutils.InMemEntityServer) Storage {
+			return NewEntityStorage(inmem.Store, testutils.TestLogger(t))
+		}},
+		{"EACStorage", func(t *testing.T, inmem *testutils.InMemEntityServer) Storage {
+			return NewEACStorage(inmem.EAC, testutils.TestLogger(t))
+		}},
+	}
+
+	for _, backend := range backends {
+		t.Run(backend.name, func(t *testing.T) {
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			scenario(t, backend.make(t, inmem), inmem.Store)
+		})
+	}
+}
+
+// seedStaleStatusIndex makes the status index report id under status while the
+// stored execution says otherwise.
+func seedStaleStatusIndex(t *testing.T, store *entity.MockStore, id string, status Status) {
+	t.Helper()
+
+	attr, ok := StatusIndexAttr(status)
+	require.True(t, ok, "status %v has no index attribute", status)
+	store.AddStaleIndexEntry(attr, entity.Id(id))
+}
+
+// TestStorageConformance_IncompleteListIgnoresStaleTerminalIndex is
+// CompletedExecutionLeavesIncompleteList again, with the index lying.
+func TestStorageConformance_IncompleteListIgnoresStaleTerminalIndex(t *testing.T) {
+	runIndexBackedConformance(t, func(t *testing.T, storage Storage, store *entity.MockStore) {
+		ctx := context.Background()
+
+		saveAged(t, storage, "teardown-postgres", StatusFailed, time.Hour)
+
+		// Every status this execution passed through on its way to failed.
+		seedStaleStatusIndex(t, store, "teardown-postgres", StatusPending)
+		seedStaleStatusIndex(t, store, "teardown-postgres", StatusRunning)
+
+		incomplete, err := storage.ListIncomplete(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, incomplete,
+			"a failed execution must not be recovered because stale pending and running index entries survived")
+
+		terminal, err := storage.ListTerminal(ctx)
+		require.NoError(t, err)
+		require.Len(t, terminal, 1, "the execution is still terminal and retention must still see it")
+		assert.Equal(t, "teardown-postgres", terminal[0].ID)
+	})
+}
+
+// TestStorageConformance_TerminalListIgnoresStaleIncompleteIndex is the
+// symmetric guard, with the sharper stake: retention deletes what ListTerminal
+// returns, so trusting a stale entry here deletes a running saga.
+func TestStorageConformance_TerminalListIgnoresStaleIncompleteIndex(t *testing.T) {
+	runIndexBackedConformance(t, func(t *testing.T, storage Storage, store *entity.MockStore) {
+		ctx := context.Background()
+
+		saveAged(t, storage, "create-sandbox", StatusRunning, 30*24*time.Hour)
+		seedStaleStatusIndex(t, store, "create-sandbox", StatusCompleted)
+
+		terminal, err := storage.ListTerminal(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, terminal,
+			"a running execution must not be offered to retention because a stale completed index entry survived")
+
+		incomplete, err := storage.ListIncomplete(ctx)
+		require.NoError(t, err)
+		require.Len(t, incomplete, 1, "the execution is still in flight and recovery must still find it")
+		assert.Equal(t, "create-sandbox", incomplete[0].ID)
+	})
+}
+
+// TestStorageConformance_RetentionCollectsChildOfStaleIncompleteParent covers
+// the stall one layer up: retention holds back children of a live parent, and
+// reads ListIncomplete to decide which parents are live.
+func TestStorageConformance_RetentionCollectsChildOfStaleIncompleteParent(t *testing.T) {
+	runIndexBackedConformance(t, func(t *testing.T, storage Storage, store *entity.MockStore) {
+		ctx := context.Background()
+
+		saveAged(t, storage, "finished-parent", StatusCompleted, 30*24*time.Hour)
+		saveChild(t, storage, "expired-child", "finished-parent", 30*24*time.Hour)
+		seedStaleStatusIndex(t, store, "finished-parent", StatusPending)
+
+		result, err := RunRetention(ctx, storage, weekRetention(), testutils.TestLogger(t))
+		require.NoError(t, err)
+
+		assert.Zero(t, result.Skipped,
+			"the parent is terminal, so its expired child is collectable no matter what the pending index claims")
+		assert.Equal(t, 2, result.Deleted)
+		assert.False(t, executionExists(t, storage, "expired-child"))
+		assert.False(t, executionExists(t, storage, "finished-parent"))
+	})
 }

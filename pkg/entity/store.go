@@ -496,12 +496,31 @@ func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (
 }
 
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
+	entities, _, err := s.getEntities(ctx, ids, true)
+	return entities, err
+}
+
+// getEntities reads entities in batches, leaving nil in the result for any id
+// that is absent. warnMissing is false for callers where a miss is expected
+// input rather than a surprise, such as the index sweep resolving ids read out
+// of the index itself.
+//
+// undecodable names the ids whose key was present but whose payload would not
+// unmarshal. Those are nil in the result too, so a caller that reads nil as
+// proof the entity is gone would be wrong about exactly the entities it can
+// say the least about.
+func (s *EtcdStore) getEntities(
+	ctx context.Context,
+	ids []Id,
+	warnMissing bool,
+) (entities []*Entity, undecodable map[Id]bool, err error) {
+	undecodable = map[Id]bool{}
 	if len(ids) == 0 {
-		return []*Entity{}, nil
+		return []*Entity{}, undecodable, nil
 	}
 
 	// Process entities in batches to avoid exceeding etcd transaction limits
-	entities := make([]*Entity, len(ids))
+	entities = make([]*Entity, len(ids))
 
 	for start := 0; start < len(ids); start += maxEntitiesPerBatch {
 		end := min(start+maxEntitiesPerBatch, len(ids))
@@ -519,11 +538,11 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 		// Execute transaction for this batch
 		tr, err := s.client.Txn(ctx).Then(ops...).Commit()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get entities from etcd: %w", err)
+			return nil, nil, fmt.Errorf("failed to get entities from etcd: %w", err)
 		}
 
 		if !tr.Succeeded {
-			return nil, fmt.Errorf("transaction failed")
+			return nil, nil, fmt.Errorf("transaction failed")
 		}
 
 		// Process results for this batch
@@ -539,13 +558,19 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 			primaryResp := tr.Responses[primaryIdx].GetResponseRange()
 			if len(primaryResp.Kvs) == 0 {
 				// Entity not found, leave nil in the result array
-				s.log.Warn("failed to get primary entity from etcd", "id", batchIds[i])
+				if warnMissing {
+					s.log.Warn("failed to get primary entity from etcd", "id", batchIds[i])
+				}
 				continue
 			}
 
 			var entity Entity
 			err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
 			if err != nil {
+				// The key is there, so this entity exists; we just cannot read
+				// it. Always worth a line, whatever warnMissing says.
+				s.log.Error("failed to decode entity from etcd", "id", batchIds[i], "error", err)
+				undecodable[batchIds[i]] = true
 				continue
 			}
 
@@ -553,11 +578,19 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 
 			// Process session attributes
 			sessionResp := tr.Responses[sessionIdx].GetResponseRange()
+			sessionUnreadable := false
 			for _, kv := range sessionResp.Kvs {
 				var attrs []Attr
 				err = decoder.Unmarshal(kv.Value, &attrs)
 				if err != nil {
-					continue
+					// Same reasoning as the primary payload. An attribute we
+					// cannot read is not an attribute the entity lacks, and
+					// handing back a partially decoded entity invites a caller
+					// to conclude the missing value was never there.
+					s.log.Error("failed to decode session attributes from etcd",
+						"id", batchIds[i], "error", err)
+					sessionUnreadable = true
+					break
 				}
 
 				sid := string(kv.Key)
@@ -571,12 +604,17 @@ func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 				entity.attrs = append(entity.attrs, attrs...)
 			}
 
+			if sessionUnreadable {
+				undecodable[batchIds[i]] = true
+				continue
+			}
+
 			entity.postUnmarshal()
 			entities[start+i] = &entity
 		}
 	}
 
-	return entities, nil
+	return entities, undecodable, nil
 }
 
 type EntityOpType int
@@ -1074,8 +1112,10 @@ func (s *EtcdStore) ReplaceEntity(
 		return nil, err
 	}
 
-	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, repl.attrs)
+	// Must come from the stored entity, not the replacement: buildCollectionOps
+	// deletes the original indexed values the replacement no longer carries, and
+	// diffing repl against itself emits no deletes at all.
+	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, originalEntity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -2054,38 +2094,6 @@ func enumerateAllAttrs(attrs []Attr) []Attr {
 		}
 	}
 	return result
-}
-
-// ListAllEntityIDs returns all entity IDs in the store
-func (s *EtcdStore) ListAllEntityIDs(ctx context.Context) ([]Id, error) {
-	prefix := fmt.Sprintf("%s/entity/", s.prefix)
-	kvs, err := s.scanPaged(ctx, prefix, withKeysOnly())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list entities: %w", err)
-	}
-
-	var ids []Id
-	for _, kv := range kvs {
-		key := string(kv.Key)
-		// Skip session keys (they have /session/ in the path)
-		if strings.Contains(key, "/session/") {
-			continue
-		}
-		// Extract entity ID from key
-		// Key format: /prefix/entity/base58(entityid)
-		key = strings.TrimPrefix(key, prefix)
-		if key == "" {
-			continue
-		}
-		decoded, err := base58.Decode(key)
-		if err != nil {
-			s.log.Warn("failed to decode entity ID", "key", key, "error", err)
-			continue
-		}
-		ids = append(ids, Id(decoded))
-	}
-
-	return ids, nil
 }
 
 // DeletePrefixCount deletes all keys with prefix and returns count
