@@ -25,15 +25,20 @@ node is running. One command does that.
 ## Minimum working example
 
 ```bash
-miren disk accelerator status          # can this host run it?
-sudo miren disk accelerator install    # build and load the module
-sudo systemctl restart miren           # pick up the new mode
+miren disk accelerator status              # can this host run it?
+miren disk accelerator install runner1     # build and load the module there
+sudo systemctl restart miren               # on that node, to pick up the mode
 ```
 
-`install` downloads a builder image, compiles the module against your kernel's
-headers inside a container, then installs and loads the result. The toolchain
-lives in the image, so on Debian and Ubuntu there is nothing to install first —
-if the host has no kernel headers, the builder fetches them for itself.
+`install` names the node to install on, because the module has to be compiled
+against the kernel that node is running. Your cluster builds the toolchain image
+itself, using the same BuildKit and registry it already uses for your apps, and
+the node pulls it from there. Nothing is downloaded from us, and there is no
+image to keep up to date.
+
+The toolchain lives in that image, so on Debian and Ubuntu there is nothing to
+install on the host first — if it has no kernel headers, the builder fetches
+them for itself.
 
 Once the server restarts, new disks use accelerator mode. Existing disks keep
 whatever mode they were created with.
@@ -98,7 +103,7 @@ the module it built, and rebuilds. You do not have to do anything, though you
 can force it by hand:
 
 ```bash
-sudo miren disk accelerator install --force
+miren disk accelerator install runner1 --force
 ```
 
 This only happens on hosts that installed the module in the first place. A host

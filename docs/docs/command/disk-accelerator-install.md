@@ -11,15 +11,18 @@ Build and load the lbd kernel module for this kernel
 ## Usage
 
 ```bash
-miren disk accelerator install [flags]
+miren disk accelerator install <node> [flags]
 ```
+
+## Arguments
+
+- `node` — Runner to install on (name, ID, or short ID)
 
 ## Flags
 
-- `--data-path` — Path to miren data (default: `/var/lib/miren`)
+- `--cluster, -C` — Cluster name
+- `--config` — Path to the config file
 - `--force, -f` — Rebuild even when the module is already current
-- `--image` — Override the builder image
-- `--socket` — Path to the containerd socket
 
 ## Global Options
 
@@ -29,16 +32,16 @@ miren disk accelerator install [flags]
 
 ## Examples
 
-**Enable accelerator mode:**
+**Enable accelerator mode on a runner:**
 
 ```bash
-sudo miren disk accelerator install
+miren disk accelerator install runner1
 ```
 
 **Rebuild after a kernel upgrade:**
 
 ```bash
-sudo miren disk accelerator install --force
+miren disk accelerator install runner1 --force
 ```
 
 ## See also

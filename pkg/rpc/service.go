@@ -13,6 +13,10 @@ type ServiceID = string
 const (
 	ServiceRunner ServiceID = "dev.miren.runtime/runner"
 
+	// ServiceNodeAdmin is served by each runner, for work the coordinator asks
+	// one specific node to do to itself.
+	ServiceNodeAdmin ServiceID = "dev.miren.runtime/nodeadmin"
+
 	// ServiceSqliteBackup stores LTX transaction files replicated from
 	// SQLite-provider disks on runners.
 	ServiceSqliteBackup ServiceID = "dev.miren.runtime/sqlite-backup"

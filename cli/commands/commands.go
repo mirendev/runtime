@@ -1269,12 +1269,12 @@ Warning: These commands are intended for advanced users and developers. They may
 	))
 	d.Dispatch("disk accelerator install", Infer("disk accelerator install", "Build and load the lbd kernel module for this kernel", DiskAcceleratorInstall,
 		WithExample(mflags.Example{
-			Name: "Enable accelerator mode",
-			Body: "sudo miren disk accelerator install",
+			Name: "Enable accelerator mode on a runner",
+			Body: "miren disk accelerator install runner1",
 		}),
 		WithExample(mflags.Example{
 			Name: "Rebuild after a kernel upgrade",
-			Body: "sudo miren disk accelerator install --force",
+			Body: "miren disk accelerator install runner1 --force",
 		}),
 	))
 	d.Dispatch("disk accelerator uninstall", Infer("disk accelerator uninstall", "Unload and remove the lbd kernel module", DiskAcceleratorUninstall,

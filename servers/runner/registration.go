@@ -51,6 +51,16 @@ type RegistrationServerConfig struct {
 	// do not hold the cluster signing key, request tokens from the coordinator
 	// through this server. May be nil when no issuer is configured.
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// LbdBuilder builds the lbd toolchain image into the cluster registry, so
+	// a node has something to pull before it compiles the kernel module. Nil
+	// on a cluster with no BuildKit, where accelerator mode is unavailable.
+	LbdBuilder LbdBuilderImageEnsurer
+
+	// RPC is how the coordinator reaches a specific runner. Installing the
+	// kernel module has to happen on the node itself, so unlike the rest of
+	// this server it is not enough to write an entity and wait.
+	RPC *rpc.State
 }
 
 type RegistrationServer struct {

@@ -1680,6 +1680,11 @@ func (c *Coordinator) Start(ctx context.Context) (retErr error) {
 		VictoriametricsAddress: c.VictoriametricsAddress,
 		VictorialogsAddress:    c.VictorialogsAddress,
 		WorkloadIssuer:         c.WorkloadIssuer,
+		// Installing the lbd kernel module needs both halves: the builder to
+		// put the toolchain image in the cluster registry, and rpc state to
+		// reach the node that has to compile against its own kernel.
+		LbdBuilder: bs,
+		RPC:        rs,
 	})
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 

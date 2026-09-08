@@ -422,3 +422,35 @@ func TestUninstallPathsWithNoMarker(t *testing.T) {
 	// No install record means miren put nothing on this host.
 	assert.Empty(t, uninstallPaths(nil))
 }
+
+func TestCheckKernelToolsFailsBeforeAnExpensiveBuild(t *testing.T) {
+	// A container can have /lib/modules mounted and still lack kmod, which is
+	// how this was found. Catching it up front matters because the build takes
+	// minutes and the failure otherwise looks like the compile went wrong.
+	t.Setenv("PATH", t.TempDir())
+
+	err := checkKernelTools()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "depmod is not installed")
+	assert.Contains(t, err.Error(), "install kmod", "the error has to say what to do about it")
+}
+
+func TestCheckKernelToolsPassesWhenBothArePresent(t *testing.T) {
+	dir := t.TempDir()
+	for _, tool := range []string{"depmod", "modprobe"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\n"), 0755))
+	}
+	t.Setenv("PATH", dir)
+
+	require.NoError(t, checkKernelTools())
+}
+
+func TestCheckKernelToolsNeedsModprobeToo(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "depmod"), []byte("#!/bin/sh\n"), 0755))
+	t.Setenv("PATH", dir)
+
+	err := checkKernelTools()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "modprobe is not installed")
+}

@@ -23,6 +23,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
@@ -417,6 +418,13 @@ func (r *Runner) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	rs.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
 
 	r.Log.Info("Registered exec server")
+
+	rs.Server().ExposeValue(rpc.ServiceNodeAdmin, nodeadmin_v1alpha.AdaptNodeAdmin(&nodeAdminServer{
+		log:  r.Log.With("module", "nodeadmin"),
+		deps: r.lbdDeps(),
+	}))
+
+	r.Log.Info("Registered node admin server")
 
 	err = cm.Start(ctx)
 	if err != nil {
@@ -874,12 +882,7 @@ func (r *Runner) SetupControllers(
 
 	// Bring up accelerator mode, rebuilding the lbd module if a kernel
 	// upgrade left the installed one unloadable.
-	setupLbd(ctx, lbdDeps{
-		CC:             r.deps.CC,
-		Resolver:       r.deps.Resolver,
-		WorkloadIssuer: r.deps.WorkloadIssuer,
-		DataPath:       r.DataPath,
-	}, log)
+	setupLbd(ctx, r.lbdDeps(), log)
 
 	diskioState, err := diskio.LoadState(dataPath)
 	if err != nil {

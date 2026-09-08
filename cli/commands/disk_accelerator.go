@@ -3,13 +3,12 @@
 package commands
 
 import (
-	"context"
 	"fmt"
 	"time"
 
-	containerd "github.com/containerd/containerd/v2/client"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/pkg/lbdmod"
-	"miren.dev/runtime/pkg/lbdmod/ctrbuild"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 // DiskAcceleratorStatus reports whether accelerator mode can run on this host.
@@ -51,47 +50,50 @@ func DiskAcceleratorStatus(ctx *Context, opts struct {
 	case status.Available() && !status.Stale():
 		return nil
 	case status.Stale():
-		ctx.Warn("The installed module no longer matches this host. Run: sudo miren disk accelerator install")
+		ctx.Warn("The installed module no longer matches this host. Run: miren disk accelerator install <node>")
 	case status.Host.HeadersDir == "" && status.Host.CanFetchHeaders():
-		ctx.Info("This host has no kernel headers; the builder will fetch them. Run: sudo miren disk accelerator install")
+		ctx.Info("This host has no kernel headers; the builder will fetch them. Run: miren disk accelerator install <node>")
 	case status.Host.HeadersDir == "":
 		ctx.Warn("This host has no kernel headers, which the build needs. %s", status.Host.InstallHint())
 	default:
-		ctx.Info("To enable accelerator mode, run: sudo miren disk accelerator install")
+		ctx.Info("To enable accelerator mode, run: miren disk accelerator install <node>")
 	}
 	return nil
 }
 
-// DiskAcceleratorInstall compiles the lbd kernel module against the running
-// kernel and loads it, so disks can use accelerator mode instead of falling
-// back to loop devices.
+// DiskAcceleratorInstall asks the cluster to build and load the lbd kernel
+// module on a node, so its disks use accelerator mode instead of loop devices.
+//
+// This runs through the server rather than locally because the toolchain image
+// lives in the cluster registry, and reaching it needs an identity the CLI does
+// not hold. The coordinator builds the image if it is missing, then hands the
+// work to the node, which is where the module has to be compiled anyway.
 func DiskAcceleratorInstall(ctx *Context, opts struct {
-	Force    bool   `short:"f" long:"force" description:"Rebuild even when the module is already current"`
-	Image    string `long:"image" description:"Override the builder image"`
-	Socket   string `long:"socket" description:"Path to the containerd socket"`
-	DataPath string `long:"data-path" description:"Path to miren data" default:"/var/lib/miren"`
+	ConfigCentric
+
+	Force bool   `short:"f" long:"force" description:"Rebuild even when the module is already current"`
+	Node  string `position:"0" usage:"Runner to install on (name, ID, or short ID)" required:"true"`
 }) error {
-	cc, err := dialContainerd(ctx, opts.Socket)
+	client, err := ctx.RPCClient(rpc.ServiceRunner)
 	if err != nil {
 		return err
 	}
-	defer cc.Close()
+	defer client.Close()
 
-	installer := &lbdmod.Installer{
-		Log:     ctx.Log,
-		Builder: ctrbuild.New(cc, ctx.Log),
-		Options: lbdmod.HostOptions(opts.DataPath),
-		Image:   opts.Image,
-	}
+	rc := runner_v1alpha.NewRunnerRegistrationClient(client)
 
-	ctx.Begin("Installing the lbd kernel module")
-	status, err := installer.Install(ctx, opts.Force)
+	ctx.Begin("Installing the lbd kernel module on %s", opts.Node)
+
+	res, err := rc.InstallDiskAccelerator(ctx, opts.Node, opts.Force)
 	if err != nil {
 		return err
 	}
+	if res.Error() != "" {
+		return fmt.Errorf("%s", res.Error())
+	}
 
-	ctx.Completed("Accelerator mode is ready on kernel %s", status.Host.KernelRelease)
-	ctx.Info("Restart the miren server to pick it up: sudo systemctl restart miren")
+	ctx.Completed("Accelerator mode is ready on %s, kernel %s", res.Name(), res.KernelRelease())
+	ctx.Info("Restart that node's miren service to pick it up")
 	return nil
 }
 
@@ -113,33 +115,6 @@ func DiskAcceleratorUninstall(ctx *Context, opts struct {
 
 	ctx.Completed("Accelerator mode removed; disks will use loop devices")
 	return nil
-}
-
-// dialContainerd connects to the containerd miren runs its own containers on,
-// preferring miren's socket over the system one.
-func dialContainerd(ctx context.Context, socket string) (*containerd.Client, error) {
-	if socket == "" {
-		socket = defaultContainerdSocket()
-	}
-
-	cc, err := containerd.New(socket)
-	if err != nil {
-		return nil, fmt.Errorf("could not reach containerd at %s, which the builder needs: %w", socket, err)
-	}
-
-	// containerd.New does not connect, so without this a dead socket would
-	// surface much later as an opaque failure to pull the builder image.
-	serving, err := cc.IsServing(ctx)
-	if err != nil {
-		cc.Close()
-		return nil, fmt.Errorf("containerd at %s is not responding, which the builder needs: %w", socket, err)
-	}
-	if !serving {
-		cc.Close()
-		return nil, fmt.Errorf("containerd at %s answered but is not serving, which the builder needs", socket)
-	}
-
-	return cc, nil
 }
 
 // acceleratorStatusJSON is the machine-readable shape of the status command.

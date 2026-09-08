@@ -99,3 +99,13 @@ func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
 		log.Warn("rebuilt the lbd kernel module but it is still not usable", "error", err)
 	}
 }
+
+// lbdDeps gathers what accelerator mode needs from the runner.
+func (r *Runner) lbdDeps() lbdDeps {
+	return lbdDeps{
+		CC:             r.deps.CC,
+		Resolver:       r.deps.Resolver,
+		WorkloadIssuer: r.deps.WorkloadIssuer,
+		DataPath:       r.DataPath,
+	}
+}
