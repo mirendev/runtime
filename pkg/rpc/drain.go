@@ -38,6 +38,26 @@ import (
 // noticeably, long enough that the poll costs nothing over a real drain.
 const drainPollInterval = 25 * time.Millisecond
 
+// WebTransport's raw HTTP/3 connections are not managed by http3.Shutdown.
+// Clients that understand /_rpc/drain retire themselves after reading their
+// responses. Older and plain HTTP/3 clients have only the deadline fallback.
+func (s *State) drainWebTransport(ctx context.Context) error {
+	_ = s.li.Close()
+	// Stabilize the census before observing zero: Accept may have returned a
+	// connection just before listener closure and not counted it yet.
+	<-s.acceptDone
+	ticker := time.NewTicker(drainPollInterval)
+	defer ticker.Stop()
+	for !s.li.idle() {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
 // countingListener wraps the QUIC listener handed to an http3.Server so we can
 // tell whether a drain still has work to do. It costs one atomic increment per
 // accepted connection, on a path that has just finished a QUIC handshake.

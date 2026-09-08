@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,9 +48,9 @@ func TestMountedHTTPHandler(t *testing.T) {
 	})
 	r.NoError(err)
 
-	var sawRequest bool
+	var sawRequest atomic.Bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		sawRequest = true
+		sawRequest.Store(true)
 		body, _ := io.ReadAll(req.Body)
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write(body)
@@ -92,7 +93,7 @@ func TestMountedHTTPHandler(t *testing.T) {
 		status, body := post(t, []tls.Certificate{pair})
 		require.Equal(t, http.StatusAccepted, status)
 		require.Equal(t, "hello", body)
-		require.True(t, sawRequest, "handler should have run")
+		require.True(t, sawRequest.Load(), "handler should have run")
 	})
 
 	t.Run("refused without a certificate", func(t *testing.T) {

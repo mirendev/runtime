@@ -25,7 +25,7 @@ func (s *shutdownBlockingStream) Emit(ctx context.Context, _ *example.EmitTempsE
 	return ctx.Err()
 }
 
-func TestStateShutdownDrainsActiveHTTP3Request(t *testing.T) {
+func TestStateShutdownAllowsLegacyHTTP3ResponseUntilDeadline(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	state, err := rpc.NewState(t.Context(),
@@ -64,7 +64,7 @@ func TestStateShutdownDrainsActiveHTTP3Request(t *testing.T) {
 		t.Fatal("request did not reach the server")
 	}
 
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancelShutdown()
 	shutdownDone := make(chan error, 1)
 	go func() { shutdownDone <- state.Shutdown(shutdownCtx) }()
@@ -79,7 +79,9 @@ func TestStateShutdownDrainsActiveHTTP3Request(t *testing.T) {
 	result := <-responseDone
 	require.NoError(t, result.err)
 	require.Equal(t, "drained", result.body)
-	require.NoError(t, <-shutdownDone)
+	// A plain HTTP/3 client cannot receive our RPC drain notification. Its
+	// response can finish, but the pooled connection stays until the deadline.
+	require.ErrorIs(t, <-shutdownDone, context.DeadlineExceeded)
 }
 
 func TestStateContextCancellationStillStopsHTTP3(t *testing.T) {
