@@ -243,15 +243,17 @@ On a frequently-deployed cluster this window can pin more image data than the di
 
 Miren records a saga execution for multi-step operations like creating a sandbox or running a build, so that a server crash mid-operation can resume or roll back cleanly instead of leaving things half-done. Each record holds the outputs of every step it ran.
 
-Once an execution finishes, that record is only useful for looking back at what happened, so Miren deletes it after `retention_period`. Successes and failures are treated the same way. Executions still in progress are never deleted regardless of age, including ones stuck retrying a rollback, since those are exactly what the server needs to recover.
+Once an execution finishes, that record is only useful for looking back at what happened, so Miren deletes it after `retention_period`. Successes and failures are treated the same way. An execution that is still in progress is never deleted at any age, including one stuck retrying a rollback, since those are exactly what the server needs to recover.
+
+That leaves one gap, which Miren closes on its own. An execution can end up with nothing driving it and no way for anything to find it again, and because it never reaches a finished state, retention never considers it either. It would sit in the store forever, and every recovery pass would pay to read it. So an execution that has gone a week without changing state is marked failed, which is both the honest description of it and what lets the ordinary rules take over: whoever owns the operation can retry it, and retention collects the record a `retention_period` later. There's no separate setting for this — a week is far longer than the gap between two steps of a saga that's actually running, and anything the server is working on, or retrying on a loop, stays well clear of it.
 
 :::warning[Indefinite retention grows without bound]
-Setting `retention_period` to `0` keeps finished executions forever. That's useful while investigating an incident, but a cluster where one app repeatedly fails to start can write thousands of executions a day, so it's worth putting back afterward.
+Setting `retention_period` to `0` freezes saga records: nothing is deleted, and nothing in progress is marked failed either. That's useful while investigating an incident, but a cluster where one app repeatedly fails to start can write thousands of executions a day, so it's worth putting back afterward.
 :::
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `retention_period` | string | `7d` | Delete finished saga executions older than this (e.g. `7d`, `24h`). `0` keeps them indefinitely | `MIREN_SAGA_RETENTION_PERIOD` | `--saga-retention-period` |
+| `retention_period` | string | `7d` | Delete finished saga executions older than this (e.g. `7d`, `24h`). `0` freezes saga records entirely | `MIREN_SAGA_RETENTION_PERIOD` | `--saga-retention-period` |
 
 ## Workload Identity Anchor {#workload-identity}
 
