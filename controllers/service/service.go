@@ -293,9 +293,9 @@ func (s *ServiceController) addServiceChain(tx *knftables.Transaction, ip netip.
 }
 
 // setEndpoints fills in the body of a service-IP or nodeport chain. Skips the
-// flush+rebuild when the endpoint set hasn't changed from the cache to avoid
-// resetting the named counter on each event-driven reconcile. For the
-// unconditional-rebuild path used by Periodic, see writeChainBody.
+// flush+rebuild when the endpoint set hasn't changed from the cache, which also
+// spares the chain's counter from being zeroed on each event-driven reconcile.
+// For the unconditional-rebuild path used by Periodic, see writeChainBody.
 //
 // Anything it writes is recorded in pending rather than in the cache. A cache
 // entry has to mean "nft accepted this body", so the caller commits pending
@@ -345,7 +345,9 @@ func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain stri
 	// cannot look one up". That rejection rolled back the whole batch, so on
 	// such a kernel no service chain body ever installed and every service IP
 	// was a black hole. A per-chain counter needs no kernel option beyond the
-	// nf_tables core and reports per service rather than one global total.
+	// nf_tables core and reports per service rather than one global total. That
+	// is a rolling window, not a running total -- Periodic rebuilds every body
+	// on its five minute tick, and an anonymous counter goes away with its rule.
 	tx.Add(&knftables.Rule{Chain: chain, Rule: "counter"})
 
 	if len(endpoints) == 0 {
