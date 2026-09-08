@@ -19,7 +19,7 @@ server binds `0.0.0.0:$PORT`, sets the runtime permissions, and deploys — usin
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren's JavaScript detection covers Node and Bun (see
 [JavaScript on Miren](/guides/javascript)); Deno needs a `Dockerfile.miren`. Miren builds
@@ -75,16 +75,12 @@ fast. Deno runs with no permissions by default, so grant exactly what your app n
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Add a `Procfile` with the full
-`deno run` command (including permissions):
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: deno run --allow-net --allow-env main.ts
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "deno-bench"
@@ -126,7 +122,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 - **Detection:** none — requires `Dockerfile.miren` (Node/Bun are detected, Deno is not)
 - **Base image:** `denoland/deno:<version>`; `deno cache main.ts` warms deps
-- **Service is required:** define a `Procfile` (`web: deno run --allow-net --allow-env main.ts`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Permissions:** grant `--allow-net` + `--allow-env` at minimum; add others as needed
 - **Port:** read `Deno.env.get("PORT")`; bind `0.0.0.0` via `Deno.serve`
 - **Env vars:** `miren env set -e/-s`, or `[[env]]` in `app.toml`; read with `Deno.env.get`

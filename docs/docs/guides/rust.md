@@ -18,7 +18,7 @@ Ask your AI coding agent to "set up this Rust app on Miren" after installing the
 reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects Rust from `Cargo.toml` and runs `cargo build --release` for you. The
 default is the **latest Rust 1.x**. Provide a `Dockerfile.miren` only for custom build

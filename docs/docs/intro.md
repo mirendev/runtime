@@ -17,7 +17,7 @@ Miren is a container platform for small teams. You install it on a Linux server,
 
 Miren has two sides. The **server** runs on your Linux machine and manages containers, networking, and storage. The **client** is the `miren` CLI on your laptop (or CI runner), which talks to the server over a secure connection.
 
-You deploy apps by running `miren deploy` from your project directory. Miren detects your language (Python, Node, Bun, Go, Ruby, Rust, or a Dockerfile), builds a container image, and runs it. Your first app gets a route automatically. Scaling is automatic by default, adjusting instance counts based on traffic.
+You deploy apps by running `miren deploy` from your project directory. Miren can run a configured container image directly, or detect your language (Python, Node, Bun, Go, Ruby, Rust, or a Dockerfile) and build one from your source. Your first app gets a route automatically. Scaling is automatic by default, adjusting instance counts based on traffic.
 
 If your server is on a home network or behind a firewall, [Miren Anywhere](/miren-cloud/miren-anywhere) still puts your apps on the internet, routing their traffic through Miren Cloud so you don't need port forwarding or a public IP of your own.
 

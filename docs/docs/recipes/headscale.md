@@ -57,7 +57,8 @@ miren whoami
 
 ## The Dockerfile
 
-You only need to add your config file and tell the image what to run:
+Keep a small Dockerfile here. This is a derived image, not a wrapper: the deployment needs
+to add `config.yaml`, and the upstream image supplies an `ENTRYPOINT` but no `CMD`.
 
 ```dockerfile
 FROM docker.io/headscale/headscale:0.29.3
@@ -68,8 +69,10 @@ COPY config.yaml /etc/headscale/config.yaml
 CMD ["serve"]
 ```
 
-That's the whole build. The upstream image already carries the CA bundle headscale needs to
-fetch the DERP map, so there's nothing to install.
+That's the whole build. Miren still inherits the upstream entrypoint and working directory;
+the Dockerfile adds the deployment artifact and completes the image's startup contract. The
+upstream image already carries the CA bundle headscale needs to fetch the DERP map, so
+there's nothing to install.
 
 :::warning[Don't set a `command` for this app]
 The headscale image ships without a shell, and a service that sets `command` needs one.

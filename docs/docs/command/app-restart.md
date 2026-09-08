@@ -8,7 +8,7 @@ description: "Restart an application"
 
 Restart an application
 
-Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or rebuild your image — the app comes back on exactly the spec it was already running.
+Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or select or build another image. The app comes back on exactly the spec it was already running.
 
 Use restart to:
 - Clear stuck or wedged process state

@@ -19,7 +19,7 @@ proposes a start command, wires up environment variables, and deploys — using 
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects Python from a `requirements.txt`, `Pipfile`, `pyproject.toml`, or
 `uv.lock` and builds the image automatically. The default Python version is **3.11**;

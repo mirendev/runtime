@@ -103,11 +103,11 @@ key = "OPENAI_API_KEY"
 sensitive = true
 ```
 
-The image's `ENTRYPOINT` is s6-overlay:
-`["/init", "/opt/hermes/docker/main-wrapper.sh"]`. `/init` seeds `/opt/data` on first
-boot and drops privileges; `main-wrapper.sh` maps `gateway run` to `hermes gateway run`.
-The `args` field replaces only the image's default `CMD`, so that entrypoint stays intact
-and receives `gateway` and `run` as separate arguments.
+The image's `ENTRYPOINT` is `/opt/hermes/docker/entrypoint-dispatch.sh`. When it runs as
+PID 1, the dispatcher starts s6-overlay and passes the arguments through to Hermes' main
+wrapper. The `args` field supplies `gateway` and `run` as separate arguments without
+replacing that startup path. The image doesn't expose a port, so the recipe declares the
+dashboard's port explicitly.
 
 :::warning[Name the HTTP service `web`]
 Miren's HTTP ingress routes a hostname to the app's `web` service by default, so the
@@ -215,7 +215,7 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 
 ## Roadblock checklist
 
-1. Set `args = ["gateway", "run"]` so Miren preserves the image's s6 `ENTRYPOINT` and replaces only its default `CMD`.
+1. Set `args = ["gateway", "run"]` so Miren preserves the image's dispatcher `ENTRYPOINT` and supplies the gateway subcommand.
 2. Name the HTTP service `web` (or pass `--service <name>` to `miren route set`).
 3. Bind services to `0.0.0.0`, not `127.0.0.1`.
 4. `port_timeout = "180s"` for the slow s6 first boot.
