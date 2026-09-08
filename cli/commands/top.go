@@ -552,6 +552,13 @@ type topModel struct {
 	body     string
 	err      error
 	quitting bool
+
+	// gen identifies the current refresh chain. Every refresh starts a new one,
+	// and messages from an older chain are dropped. Without it, pressing r
+	// while a tick is already pending leaves both running: the manual refresh
+	// schedules its own tick, the pending one fires and schedules another, and
+	// the poll rate doubles for every press.
+	gen int
 }
 
 // topResultMsg carries a completed refresh back to Update.
@@ -561,11 +568,14 @@ type topModel struct {
 // model from inside a command would race with View reading it, and Update is
 // the only place bubbletea guarantees exclusive access.
 type topResultMsg struct {
+	gen  int
 	body string
 	err  error
 }
 
-type topRefreshMsg struct{}
+type topRefreshMsg struct {
+	gen int
+}
 
 func (q topQuery) watch(ctx *Context, interval time.Duration) error {
 	m := &topModel{q: q, interval: interval, ctx: ctx}
@@ -582,13 +592,19 @@ func (m *topModel) Init() tea.Cmd {
 	return m.refresh()
 }
 
+// refresh starts a new chain and returns the command that runs it. It is only
+// ever called from Init and Update, so the write to gen is on bubbletea's own
+// goroutine; the command reads the captured copy instead of the field.
 func (m *topModel) refresh() tea.Cmd {
 	ctx := m.ctx
 	q := m.q
 
+	m.gen++
+	gen := m.gen
+
 	return func() tea.Msg {
 		body, err := q.render(ctx)
-		return topResultMsg{body: body, err: err}
+		return topResultMsg{gen: gen, body: body, err: err}
 	}
 }
 
@@ -604,9 +620,15 @@ func (m *topModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case topResultMsg:
+		// An error is worth reporting whichever chain found it, but a stale
+		// body is not worth drawing: a newer refresh is already on its way.
 		if msg.err != nil {
 			m.err = msg.err
 			return m, tea.Quit
+		}
+
+		if msg.gen != m.gen {
+			return m, nil
 		}
 
 		m.body = msg.body
@@ -615,11 +637,15 @@ func (m *topModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		gen := m.gen
 		return m, tea.Tick(m.interval, func(time.Time) tea.Msg {
-			return topRefreshMsg{}
+			return topRefreshMsg{gen: gen}
 		})
 
 	case topRefreshMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		if m.quitting {
 			return m, tea.Quit
 		}

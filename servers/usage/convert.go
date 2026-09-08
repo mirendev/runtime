@@ -95,14 +95,27 @@ func orderingFrom(o *usage_v1alpha.Ordering) ordering {
 // value is ignored rather than rejected: this is a diagnostic endpoint, and
 // answering a typo'd duration with the default beats a 400.
 func restWindow(since, until, aggregate string) window {
-	end := time.Now()
+	// Both offsets come off one captured now. Measuring since from an already
+	// shifted end would make the two cumulative, so ?since=2h&until=1h would
+	// answer with two hours starting three hours ago instead of the hour it
+	// names.
+	now := time.Now()
+
+	end := now
 	if d, ok := parseRESTDuration(until); ok {
-		end = end.Add(-d)
+		end = now.Add(-d)
 	}
 
 	start := end.Add(-defaultWindow)
 	if d, ok := parseRESTDuration(since); ok {
-		start = end.Add(-d)
+		start = now.Add(-d)
+	}
+
+	// A since inside until names no span at all. Falling back to the default
+	// length ending where until asked keeps a diagnostic endpoint answering,
+	// which is the same trade resolveWindow makes for the RPC surface.
+	if !start.Before(end) {
+		start = end.Add(-defaultWindow)
 	}
 
 	return window{start: start, end: end, aggregate: resolveAggregate(aggregate)}

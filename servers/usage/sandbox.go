@@ -85,8 +85,10 @@ func (s *Server) sandboxDetail(
 	}
 
 	// Resolve through the same directory the listing uses, so the identity
-	// shown here and the identity shown in a row cannot disagree.
-	dir, err := s.loadDirectory(ctx, filter{includeSystem: true})
+	// shown here and the identity shown in a row cannot disagree. Unlike a
+	// listing this includes the dead: an exited sandbox is the one an operator
+	// most wants to inspect, and its exit is what decorateFromEntities reports.
+	dir, err := s.loadDirectory(ctx, filter{includeSystem: true, includeDead: true})
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +103,7 @@ func (s *Server) sandboxDetail(
 	}
 
 	if found == nil {
-		return nil, fmt.Errorf("sandbox %q not found, or it is not running", query)
+		return nil, fmt.Errorf("sandbox %q not found", query)
 	}
 
 	out := &sandboxDetailResult{}

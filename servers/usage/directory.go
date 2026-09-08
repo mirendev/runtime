@@ -75,6 +75,10 @@ type filter struct {
 	// includeAddons applies to app rollups only: whether an app's dedicated
 	// addons count toward its total.
 	includeAddons bool
+
+	// includeDead admits sandboxes that have stopped or died. Only the
+	// single-sandbox detail path wants them; see the skip in loadDirectory.
+	includeDead bool
 }
 
 // matches reports whether a sandbox belongs in the listing.
@@ -164,8 +168,18 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 		sch.Decode(ent)
 
 		// A dead sandbox is not a row. Listing it would show a sandbox using no
-		// resources, which reads as idle rather than as gone.
-		if compute.SandboxDead(sb.Status) {
+		// resources, which reads as idle rather than as gone. The detail path
+		// asks for them anyway, because how a sandbox exited is most of what
+		// there is to say about one that has.
+		//
+		// The cost is that a listing is always of what is live now, even when
+		// the window is historical: a sandbox that was busy an hour ago and has
+		// since been replaced is absent from that hour's rows, though its
+		// samples are still in the metrics store. Including it would mean
+		// reconciling the window against each sandbox's death time, and dead
+		// entities are collected eventually, so the answer is to source
+		// historical rows from the series rather than from the entity store.
+		if compute.SandboxDead(sb.Status) && !f.includeDead {
 			continue
 		}
 
