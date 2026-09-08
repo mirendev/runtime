@@ -205,7 +205,7 @@ args = ["postgres", "-c", "shared_buffers=256MB"]
 |-------|------|-------------|---------|
 | `command` | string | Shell command that replaces the image startup command (`/bin/sh -c`) | — |
 | `args` | string[] | Exec-form arguments that replace the image `CMD` while preserving its `ENTRYPOINT` | — |
-| `port` | int | Port the service listens on (single-port shorthand) | `3000` (web only) |
+| `port` | int | Port the service listens on (single-port shorthand) | Built image's single TCP `EXPOSE` port, else `3000` (web only) |
 | `port_name` | string | Named port identifier (single-port shorthand) | Service name |
 | `port_type` | string | `"http"` or `"tcp"` (single-port shorthand) | `"http"` |
 | `ports` | [[port]](#ports) | Multi-port configuration array | — |

@@ -231,7 +231,7 @@ Each service can configure:
 | `command` | Shell command that replaces the image startup command (`/bin/sh -c`) | (none) |
 | `args` | Exec-form arguments that replace image `CMD` while preserving `ENTRYPOINT`; mutually exclusive with `command` | (none) |
 | `image` | Container image to use | App's built image |
-| `port` | Port the service listens on (single-port shorthand) | 3000 (web only) |
+| `port` | Port the service listens on (single-port shorthand) | Built image's single TCP `EXPOSE` port, else 3000 (web only) |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
 | `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
 | `env` | Service-specific environment variables | (none) |
@@ -323,7 +323,7 @@ miren route add myapp.example.com --app myapp
 ```
 </CliCommand>
 
-The web service defaults to port 3000. Override it if your app listens elsewhere:
+The web service defaults to the built image's single TCP `EXPOSE` port when one is set, or 3000 otherwise. Override it if your app listens elsewhere:
 
 ```toml
 [services.web]
