@@ -22,9 +22,9 @@ trigger = "deploy"
 timeout = "10m"
 ```
 
-See the [`app.toml` reference](/app-toml#tasks) for every field.
+See the [`app.toml` reference](./app-toml.md#tasks) for every field.
 
-A task always runs in your app's image and sees the same environment your services do, including credentials injected by [addons](/addons) — which is what makes the migration case work without extra configuration.
+A task always runs in your app's image and sees the same environment your services do, including credentials injected by [addons](./addons.md) — which is what makes the migration case work without extra configuration.
 
 ## Triggers
 

@@ -9,21 +9,21 @@ import CliCommand from '@site/src/components/CliCommand';
 # Klong (K) on Miren
 
 [Klong](https://t3x.org/klong/) is an open-source array language in the K/APL family.
-Array languages don't ship HTTP servers, so — as with [COBOL](/guides/cobol) and
-[Bash](/guides/bash) — this guide has the Klong program print an HTTP response and puts
+Array languages don't ship HTTP servers, so — as with [COBOL](./cobol.md) and
+[Bash](./bash.md) — this guide has the Klong program print an HTTP response and puts
 `socat` in front of it to own the socket. It uses [KlongPy](https://klongpy.org), a
 pip-installable Klong implementation.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Klong app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren` and the socket
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren` and the socket
 front-end, and deploys — using this page as its reference.
 :::
 
 ## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -114,6 +114,6 @@ miren deploy
 
 ## Next steps
 
-- [COBOL on Miren](/guides/cobol) and [Bash on Miren](/guides/bash) — the same `socat` pattern
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [COBOL on Miren](./cobol.md) and [Bash on Miren](./bash.md) — the same `socat` pattern
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -38,7 +38,7 @@ When a request arrives for a hostname with a configured route, Miren provisions 
 Hostnames without a configured route are served with a self-signed fallback certificate (browsers will show a warning).
 :::
 
-For wildcard routes (e.g., `*.myapp.example.com`), TLS certificates are provisioned for each matching subdomain as requests arrive. See [Wildcard Routes](/traffic-routing#wildcard-routes) for details.
+For wildcard routes (e.g., `*.myapp.example.com`), TLS certificates are provisioned for each matching subdomain as requests arrive. See [Wildcard Routes](./traffic-routing.md#wildcard-routes) for details.
 
 ## Challenge Types
 
@@ -143,11 +143,11 @@ Two other modes are available for deployments where Miren sits behind a TLS-term
 | `behind-proxy-http` | Plain HTTP at the configured address (default `127.0.0.1:80`); TLS lives at the proxy | n/a (proxy terminates TLS) |
 | `behind-proxy-https` | TLS terminated at the configured address (default `127.0.0.1:443`); no `:80` listener, so no HTTP-01 ACME | `[tls]` self-signed or DNS-01 ACME only |
 
-See [Server Configuration Reference → `[ingress]`](/server-config#ingress) for the full schema. The HTTP-01 ACME flow described above only applies under `tls-autoprovision`; under `behind-proxy-https`, certs must come from DNS-01 ACME or be self-signed because Miren doesn't bind `:80` in that mode (and the public DNS for the hostname points at the proxy anyway, not at Miren).
+See [Server Configuration Reference → `[ingress]`](./server-config.md#ingress) for the full schema. The HTTP-01 ACME flow described above only applies under `tls-autoprovision`; under `behind-proxy-https`, certs must come from DNS-01 ACME or be self-signed because Miren doesn't bind `:80` in that mode (and the public DNS for the hostname points at the proxy anyway, not at Miren).
 
 ## TLS Settings Reference
 
-All TLS settings live under the `[tls]` section of the server config file (typically `/etc/miren/server.toml` — see [Server Configuration](/server-config#config-file) for the search order). The three ingress-cert settings below are consulted only under TLS-terminating ingress modes:
+All TLS settings live under the `[tls]` section of the server config file (typically `/etc/miren/server.toml` — see [Server Configuration](./server-config.md#config-file) for the search order). The three ingress-cert settings below are consulted only under TLS-terminating ingress modes:
 
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|
@@ -166,7 +166,7 @@ Two additional `[tls]` settings apply to the API server and etcd certs rather th
 Addresses in `additional_ips` bypass the filtering applied to auto-discovered
 addresses and are always advertised to Miren Cloud, which makes this the lever
 for a cluster behind a static NAT or on a private network. See
-[Running Miren on a Tailnet](/tailscale).
+[Running Miren on a Tailnet](./tailscale.md).
 :::
 
 ## Troubleshooting
@@ -181,7 +181,7 @@ sudo journalctl -u miren | grep -i acme
 ```
 </CliCommand>
 
-**HTTP-01 challenges:** Ensure ports 80 and 443 are reachable from the public internet. See [Firewall Configuration](/firewall) for cloud provider-specific guidance.
+**HTTP-01 challenges:** Ensure ports 80 and 443 are reachable from the public internet. See [Firewall Configuration](./firewall.md) for cloud provider-specific guidance.
 
 **DNS-01 challenges:** Verify your DNS provider credentials are correct and the environment file is loaded:
 

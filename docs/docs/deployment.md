@@ -27,7 +27,7 @@ That's the whole thing. Miren first honors a Dockerfile selected by `[build].doc
 When you run `miren deploy`, Miren:
 
 1. **Uploads your files** — sends your project files and app configuration to the server (after your first deploy, only changed files are transferred)
-2. **Selects or builds an image** — builds a configured or discovered Dockerfile first; otherwise uses a configured web image directly or inspects your source for a detected [language or framework](/guides)
+2. **Selects or builds an image** — builds a configured or discovered Dockerfile first; otherwise uses a configured web image directly or inspects your source for a detected [language or framework](./guides/index.md)
 3. **Activates the new version** — rolls out the new version, replacing the previous one
 
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
@@ -51,7 +51,7 @@ miren deploy -d path/to/app
 ```
 </CliCommand>
 
-Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](/app-configuration#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
+Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](./app-configuration.md#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
 
 ### Confirmation Prompt
 
@@ -67,7 +67,7 @@ The prompt is also skipped automatically when only one cluster is configured or 
 
 ## Build Detection
 
-Miren automatically detects how to build your application. It inspects your project files and identifies the language, framework, package manager, and entry points. See [Language Guides](/guides) for details on supported stacks.
+Miren automatically detects how to build your application. It inspects your project files and identifies the language, framework, package manager, and entry points. See [Language Guides](./guides/index.md) for details on supported stacks.
 
 Use `--analyze` to see what Miren detects without actually building or deploying:
 
@@ -191,7 +191,7 @@ Status icons:
 - **⟳** — in progress
 - **⊘** — cancelled
 
-Show full git provenance with `--detailed`, or get JSON output for scripting. See the [`miren app history` reference](/command/app-history) for all options.
+Show full git provenance with `--detailed`, or get JSON output for scripting. See the [`miren app history` reference](./command/app-history.md) for all options.
 
 ## Cancelling a Deployment
 
@@ -215,9 +215,9 @@ Miren automatically captures git metadata (commit, branch, author, dirty state) 
 
 ## Next Steps
 
-- [Language Guides](/guides) — How Miren detects and builds different languages and frameworks
-- [App Configuration](/app-configuration) — Configure your app with `.miren/app.toml`
-- [Services](/services) — Define multiple processes in your app
-- [CI/CD Deployment](/ci-deploy) — Deploy from CI pipelines with OIDC authentication
-- [Pull Request Environments](/pr-environments) — Deploy labeled, time-boxed previews per PR
-- [app.toml Reference](/app-toml) — Complete field reference
+- [Language Guides](./guides/index.md) — How Miren detects and builds different languages and frameworks
+- [App Configuration](./app-configuration.md) — Configure your app with `.miren/app.toml`
+- [Services](./services.md) — Define multiple processes in your app
+- [CI/CD Deployment](./ci-deploy.md) — Deploy from CI pipelines with OIDC authentication
+- [Pull Request Environments](./pr-environments.md) — Deploy labeled, time-boxed previews per PR
+- [app.toml Reference](./app-toml.md) — Complete field reference

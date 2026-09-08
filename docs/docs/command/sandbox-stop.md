@@ -39,4 +39,4 @@ miren sandbox stop sb_abc123
 
 ## See also
 
-- [`miren sandbox`](/command/sandbox)
+- [`miren sandbox`](./sandbox.md)

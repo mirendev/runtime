@@ -52,4 +52,4 @@ miren logs sandbox sb_abc123 -f
 
 ## See also
 
-- [`miren logs`](/command/logs)
+- [`miren logs`](./logs.md)

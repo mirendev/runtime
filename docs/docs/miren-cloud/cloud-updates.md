@@ -10,7 +10,7 @@ What's new in Miren Cloud.
 
 ## March 2026
 
-- **App Subdomains** - Claim custom subdomains (e.g. `mycluster.run.garden`, `mycluster.miren.app`) and assign them to your clusters with automatic DNS provisioning. See [Subdomains](/miren-cloud/subdomains).
+- **App Subdomains** - Claim custom subdomains (e.g. `mycluster.run.garden`, `mycluster.miren.app`) and assign them to your clusters with automatic DNS provisioning. See [Subdomains](./subdomains.md).
 
 ## January 2026
 

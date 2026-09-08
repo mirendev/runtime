@@ -43,4 +43,4 @@ miren debug saga list [flags]
 
 ## See also
 
-- [`miren debug saga`](/command/debug-saga)
+- [`miren debug saga`](./debug-saga.md)

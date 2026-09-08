@@ -41,4 +41,4 @@ miren secret keyring
 
 ## See also
 
-- [`miren secret`](/command/secret)
+- [`miren secret`](./secret.md)

@@ -43,4 +43,4 @@ miren app list --format json
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

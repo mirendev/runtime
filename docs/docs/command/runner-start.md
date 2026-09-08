@@ -37,4 +37,4 @@ miren runner start
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

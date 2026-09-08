@@ -32,4 +32,4 @@ miren debug netdb list [flags]
 
 ## See also
 
-- [`miren debug netdb`](/command/debug-netdb)
+- [`miren debug netdb`](./debug-netdb.md)

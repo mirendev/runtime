@@ -39,4 +39,4 @@ miren runner token revoke inv_abc123
 
 ## See also
 
-- [`miren runner token`](/command/runner-token)
+- [`miren runner token`](./runner-token.md)

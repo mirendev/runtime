@@ -38,7 +38,7 @@ For setups that clearly need it, Miren turns Anywhere on for you. A containerize
 
 Other installs start with Anywhere off. That's a deliberately cautious default: a cluster that's already reachable is working fine, and Miren would rather leave it alone than reroute it through the POP by mistake. When you want Anywhere on one of these clusters, you turn it on yourself.
 
-You control this per cluster from the **Miren Anywhere** setting on the cluster's page in [Miren Cloud](/miren-cloud/overview):
+You control this per cluster from the **Miren Anywhere** setting on the cluster's page in [Miren Cloud](./overview.md):
 
 - **Default** — what a cluster starts on: Anywhere is on for containerized installs (Docker or Podman), which effectively can't accept inbound traffic, and off everywhere else.
 - **Auto** — route through the POP network whenever the cluster has no reachable public address, whether or not it's containerized. A cluster that can be reached directly keeps serving its apps itself.
@@ -65,12 +65,12 @@ The token handshake is what makes this safe behind carrier-grade NAT, where many
 
 Miren Anywhere is young, and there are edges it doesn't cover yet. Here's what to expect today.
 
-**It covers your cluster's Miren-managed hostnames.** Traffic routes through the POP network for your cluster's `cluster-xyz.miren.systems` address and any [Miren Cloud subdomains](/miren-cloud/subdomains) you've claimed. Bringing your own custom domain through Miren Anywhere isn't supported yet. For now, a custom domain needs a cluster that's directly reachable on the public internet.
+**It covers your cluster's Miren-managed hostnames.** Traffic routes through the POP network for your cluster's `cluster-xyz.miren.systems` address and any [Miren Cloud subdomains](./subdomains.md) you've claimed. Bringing your own custom domain through Miren Anywhere isn't supported yet. For now, a custom domain needs a cluster that's directly reachable on the public internet.
 
 **It carries app traffic, not deploys.** Miren Anywhere routes the HTTP and HTTPS your visitors load, on ports 80 and 443. It doesn't yet carry the control plane, so `miren deploy`, `miren logs`, and other CLI commands still need a direct network path to the cluster they're talking to. In practice that means a cluster with no public address can serve its apps to the whole internet through the POP network while you deploy to it from the same LAN. Carrying that traffic over Miren Anywhere too is on the roadmap.
 
 :::info[Reading the Connectivity panel]
-This split is why a cluster can show "Not reachable" for deploys yet still show its apps as available. See [Cluster Connectivity](/miren-cloud/connectivity) for how the deploy path and the app path are checked separately.
+This split is why a cluster can show "Not reachable" for deploys yet still show its apps as available. See [Cluster Connectivity](./connectivity.md) for how the deploy path and the app path are checked separately.
 :::
 
 ## Verify the connection
@@ -81,7 +81,7 @@ The clearest signal is in the server logs. Once the server is running, look for 
 component=anywhere ... connected to cloud
 ```
 
-From [Miren Cloud](/miren-cloud/overview), the [Connectivity](/miren-cloud/connectivity) panel on your cluster's page reflects the same thing: when the live link is up, the cluster reads **Connected**, as opposed to merely **Online** (which only means it's still checking in).
+From [Miren Cloud](./overview.md), the [Connectivity](./connectivity.md) panel on your cluster's page reflects the same thing: when the live link is up, the cluster reads **Connected**, as opposed to merely **Online** (which only means it's still checking in).
 
 ## When something's wrong
 
@@ -99,6 +99,6 @@ Miren Anywhere needs outbound connectivity from your cluster on two paths: a Web
 
 ## Next steps
 
-- [Subdomains](/miren-cloud/subdomains) — Claim a hostname that routes through Miren Anywhere
-- [Cluster Connectivity](/miren-cloud/connectivity) — Read the three connectivity checks and what each one means
-- [Miren Cloud Overview](/miren-cloud/overview) — Cluster registration and login
+- [Subdomains](./subdomains.md) — Claim a hostname that routes through Miren Anywhere
+- [Cluster Connectivity](./connectivity.md) — Read the three connectivity checks and what each one means
+- [Miren Cloud Overview](./overview.md) — Cluster registration and login

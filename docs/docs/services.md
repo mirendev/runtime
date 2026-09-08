@@ -159,7 +159,7 @@ An image on another service does not override a buildable source stack. This kee
 :::
 
 :::tip[Use addons for databases]
-If you just need a PostgreSQL database, consider using an [addon](/addons) instead of running it as a service. Addons are fully managed — Miren provisions the database, injects credentials, and handles cleanup. Use a service when you need full control over the database configuration.
+If you just need a PostgreSQL database, consider using an [addon](./addons.md) instead of running it as a service. Addons are fully managed — Miren provisions the database, injects credentials, and handles cleanup. Use a service when you need full control over the database configuration.
 :::
 
 For services that need entirely different software—like a database—specify an `image`:
@@ -235,12 +235,12 @@ Each service can configure:
 | `args` | Exec-form arguments that replace image `CMD` while preserving `ENTRYPOINT`; mutually exclusive with `command` | (none) |
 | `image` | Container image to use | App version's primary image |
 | `port` | Port the service listens on (single-port shorthand) | For `web` inheriting the primary image: its single exposed TCP port, otherwise 3000 |
-| `ports` | Port configuration array (multi-port, see [Traffic Routing](/traffic-routing)) | (none) |
+| `ports` | Port configuration array (multi-port, see [Traffic Routing](./traffic-routing.md)) | (none) |
 | `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
 | `env` | Service-specific environment variables | (none) |
-| `concurrency` | Scaling configuration | See [Scaling](/scaling) |
+| `concurrency` | Scaling configuration | See [Scaling](./scaling.md) |
 | `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |
-| `disks` | Persistent disk attachments (experimental, see [Disks](/disks)) | (none) |
+| `disks` | Persistent disk attachments (experimental, see [Disks](./disks.md)) | (none) |
 
 With neither `command` nor `args`, the image's `ENTRYPOINT` and `CMD` run
 unchanged. `args` preserves each array element exactly, without shell expansion.
@@ -335,7 +335,7 @@ command = "gunicorn app:app --bind 0.0.0.0:8000"
 port = 8000
 ```
 
-For non-HTTP services (TCP/UDP), you can expose ports directly using the `ports` array and `node_port`. See [Traffic Routing](/traffic-routing) for the full picture — HTTP ingress, L4 routing, multi-port services, and the `PORT` environment variable.
+For non-HTTP services (TCP/UDP), you can expose ports directly using the `ports` array and `node_port`. See [Traffic Routing](./traffic-routing.md) for the full picture — HTTP ingress, L4 routing, multi-port services, and the `PORT` environment variable.
 
 ## Service Scaling
 
@@ -357,11 +357,11 @@ mode = "fixed"
 num_instances = 3
 ```
 
-For detailed scaling configuration, see [Application Scaling](/scaling).
+For detailed scaling configuration, see [Application Scaling](./scaling.md).
 
 ## Persistent Storage
 
-For stateful services like databases, use [Local Storage](/disks#local-storage)—persistent storage automatically available at `/miren/data/local`. Configure your database to store data there:
+For stateful services like databases, use [Local Storage](./disks.md#local-storage)—persistent storage automatically available at `/miren/data/local`. Configure your database to store data there:
 
 ```toml
 [services.postgres]
@@ -382,7 +382,7 @@ The `PGDATA` environment variable tells PostgreSQL where to store its data.
 Using a subdirectory (`pgdata`) under `/miren/data/local` is required because PostgreSQL expects to own its data directory.
 :::
 
-For cloud-synced storage that travels with your app, see [Miren Disks](/disks#miren-disks) (experimental).
+For cloud-synced storage that travels with your app, see [Miren Disks](./disks.md#miren-disks) (experimental).
 
 ## Sandbox Pools
 
@@ -561,9 +561,9 @@ num_instances = 1
 
 ## Next Steps
 
-- [App Configuration](/app-configuration) — Overview of the configuration model
-- [app.toml Reference](/app-toml) — Complete field reference for `.miren/app.toml`
-- [Traffic Routing](/traffic-routing) — HTTP ingress, TCP/UDP routing, multi-port services
-- [Persistent Storage](/disks) — Local storage and disk options for databases
-- [Application Scaling](/scaling) — Configure how each service scales
-- [Getting Started](/getting-started) — Deploy your first app
+- [App Configuration](./app-configuration.md) — Overview of the configuration model
+- [app.toml Reference](./app-toml.md) — Complete field reference for `.miren/app.toml`
+- [Traffic Routing](./traffic-routing.md) — HTTP ingress, TCP/UDP routing, multi-port services
+- [Persistent Storage](./disks.md) — Local storage and disk options for databases
+- [Application Scaling](./scaling.md) — Configure how each service scales
+- [Getting Started](./getting-started.md) — Deploy your first app

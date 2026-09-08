@@ -51,4 +51,4 @@ miren env list --format json
 
 ## See also
 
-- [`miren env`](/command/env)
+- [`miren env`](./env.md)

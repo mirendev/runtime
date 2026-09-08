@@ -59,13 +59,13 @@ miren app --watch
 
 ## Subcommands
 
-- [`miren app attach`](/command/app-attach) — Attach to a running task
-- [`miren app delete`](/command/app-delete) — Delete an application and all its resources
-- [`miren app history`](/command/app-history) — Show deployment history for an application
-- [`miren app list`](/command/app-list) — List all applications
-- [`miren app restart`](/command/app-restart) — Restart an application
-- [`miren app run`](/command/app-run) — Open interactive shell in a new sandbox
-- [`miren app runs`](/command/app-runs) — List recent task runs
-- [`miren app set-workload-role`](/command/app-set-workload-role) — Set the API role for an app's sandbox identity tokens
-- [`miren app status`](/command/app-status) — Show current status of an application
-- [`miren app versions`](/command/app-versions) — List app versions with status
+- [`miren app attach`](./app-attach.md) — Attach to a running task
+- [`miren app delete`](./app-delete.md) — Delete an application and all its resources
+- [`miren app history`](./app-history.md) — Show deployment history for an application
+- [`miren app list`](./app-list.md) — List all applications
+- [`miren app restart`](./app-restart.md) — Restart an application
+- [`miren app run`](./app-run.md) — Open interactive shell in a new sandbox
+- [`miren app runs`](./app-runs.md) — List recent task runs
+- [`miren app set-workload-role`](./app-set-workload-role.md) — Set the API role for an app's sandbox identity tokens
+- [`miren app status`](./app-status.md) — Show current status of an application
+- [`miren app versions`](./app-versions.md) — List app versions with status

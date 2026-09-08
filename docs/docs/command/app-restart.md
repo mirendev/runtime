@@ -61,4 +61,4 @@ miren app restart -s web
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

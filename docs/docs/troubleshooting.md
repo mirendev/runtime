@@ -31,7 +31,7 @@ miren doctor auth     # Check authentication
 </CliCommand>
 
 :::tip[Get a combined diagnosis]
-Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to
 "check the health of this app" or "check the health of this cluster."
 The `app-health` and `cluster-health` skills combine status, deployment history,
 logs, and diagnostics into a prioritized report with suggested next steps.
@@ -99,7 +99,7 @@ miren logs build -a myapp VERSION
 ```
 </CliCommand>
 
-Replace `VERSION` with the version from the deployment history. This shows the build output so you can see where things went wrong. See [Logs](/logs) for more on filtering and following logs.
+Replace `VERSION` with the version from the deployment history. This shows the build output so you can see where things went wrong. See [Logs](./logs.md) for more on filtering and following logs.
 
 ## Server-level issues
 

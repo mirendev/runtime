@@ -14,7 +14,7 @@ there's no separate build step for most apps.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Deno app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, confirms your
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, confirms your
 server binds `0.0.0.0:$PORT`, sets the runtime permissions, and deploys — using this
 page as its reference.
 :::
@@ -22,9 +22,9 @@ page as its reference.
 ## Does this source build need a Dockerfile?
 
 Yes. Miren's JavaScript detection covers Node and Bun (see
-[JavaScript on Miren](/guides/javascript)); Deno needs a `Dockerfile.miren`. Miren builds
+[JavaScript on Miren](./javascript.md)); Deno needs a `Dockerfile.miren`. Miren builds
 from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -116,7 +116,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -129,7 +129,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [JavaScript on Miren](/guides/javascript) — Node and Bun (auto-detected)
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [JavaScript on Miren](./javascript.md) — Node and Bun (auto-detected)
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

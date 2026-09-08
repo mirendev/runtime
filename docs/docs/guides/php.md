@@ -15,7 +15,7 @@ for frameworks like Laravel and Symfony.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Laravel app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, points the server
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, points the server
 at `0.0.0.0:$PORT`, wires up environment variables, and deploys — using this page as its
 reference.
 :::
@@ -24,7 +24,7 @@ reference.
 
 Yes. Miren doesn't auto-detect PHP, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -122,9 +122,9 @@ key = "APP_ENV"
 value = "production"
 ```
 
-Need a managed Postgres database? Add a [`miren-postgresql` addon](/addons) and Miren
+Need a managed Postgres database? Add a [`miren-postgresql` addon](../addons.md) and Miren
 injects `DATABASE_URL` for you. See
-[App Configuration — Environment Variables](/app-configuration#environment-variables).
+[App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -138,7 +138,7 @@ injects `DATABASE_URL` for you. See
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

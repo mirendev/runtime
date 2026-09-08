@@ -14,7 +14,7 @@ your project to an Erlang shipment and runs it on the BEAM. This guide targets E
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Gleam app on Miren" after installing the
-[Miren agent skills](/agent-skills). It can add the `Dockerfile.miren`, confirm your
+[Miren agent skills](../agent-skills.md). It can add the `Dockerfile.miren`, confirm your
 server binds `0.0.0.0:$PORT`, wire up environment variables, and deploy — using this
 page as its reference.
 :::
@@ -23,7 +23,7 @@ page as its reference.
 
 Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
 project root. Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::info[Validated pattern — adapt the versions]
 The Dockerfile and app below were deployed to a live Miren cluster with Gleam 1.15 and
@@ -187,9 +187,9 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-Need a managed Postgres database? Add a [`miren-postgresql` addon](/addons) and Miren
+Need a managed Postgres database? Add a [`miren-postgresql` addon](../addons.md) and Miren
 injects `DATABASE_URL` for you. See
-[App Configuration — Environment Variables](/app-configuration#environment-variables).
+[App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -204,7 +204,7 @@ injects `DATABASE_URL` for you. See
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

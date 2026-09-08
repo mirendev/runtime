@@ -44,4 +44,4 @@ miren secret disable payments/stripe-key@x1A
 
 ## See also
 
-- [`miren secret`](/command/secret)
+- [`miren secret`](./secret.md)

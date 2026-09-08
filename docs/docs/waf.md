@@ -120,6 +120,6 @@ Request bodies up to 10 MB are inspected. Requests with bodies exceeding this li
 
 ## See Also
 
-- [CLI: `miren route waf`](/command/route-waf) — enable or disable WAF on a route
-- [Traffic Routing](/traffic-routing) — how routes work
-- [Protecting Routes](/route-protect) — OIDC authentication for routes
+- [CLI: `miren route waf`](./command/route-waf.md) — enable or disable WAF on a route
+- [Traffic Routing](./traffic-routing.md) — how routes work
+- [Protecting Routes](./route-protect.md) — OIDC authentication for routes

@@ -40,7 +40,7 @@ sudo dnf install iptables nftables
 `miren server install` and `miren runner install` verify these are present before installing, so a missing tool stops the install with instructions rather than surfacing later as a broken network.
 
 :::note[Extra tooling for optional features]
-Some features reach for more commands, installed automatically or only when you opt in. [Block-device volumes](/managing-disk-space) use disk tooling (`lbdctl`, `mkfs.*`, `blkid`) when a disk is provisioned, and on SELinux-enforcing hosts the installer uses `semanage` and `restorecon` to label the binary. Both paths degrade gracefully if the tools are absent, so you only need them if you use the corresponding feature.
+Some features reach for more commands, installed automatically or only when you opt in. [Block-device volumes](./managing-disk-space.md) use disk tooling (`lbdctl`, `mkfs.*`, `blkid`) when a disk is provisioned, and on SELinux-enforcing hosts the installer uses `semanage` and `restorecon` to label the binary. Both paths degrade gracefully if the tools are absent, so you only need them if you use the corresponding feature.
 :::
 
 ## Why these numbers?
@@ -53,13 +53,13 @@ With 8 GB, you'll have comfortable headroom for running multiple apps and handli
 
 ### Storage
 
-Container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80 MB compressed but expand on disk, and BuildKit caches intermediate build layers aggressively — keeping up to 10 GB by default. A single Rails deployment can use 15-20 GB between base images, build cache, and the container registry. With multiple apps and their version history, usage grows from there. Miren reclaims images, caches, and old versions automatically as space gets tight — see [Managing Disk Space](/managing-disk-space).
+Container images and build caches add up quickly. Base images for languages like Ruby or Python are 50-80 MB compressed but expand on disk, and BuildKit caches intermediate build layers aggressively — keeping up to 10 GB by default. A single Rails deployment can use 15-20 GB between base images, build cache, and the container registry. With multiple apps and their version history, usage grows from there. Miren reclaims images, caches, and old versions automatically as space gets tight — see [Managing Disk Space](./managing-disk-space.md).
 
 Starting with 50 GB gives you enough room to get going. With 100 GB you'll have space to grow without worrying about "no space left on device" errors during builds.
 
 ## Runner nodes
 
-The same numbers apply to every machine you add as a [distributed runner](/distributed-runners). `miren runner install` runs the same check against the same minimums.
+The same numbers apply to every machine you add as a [distributed runner](./distributed-runners.md). `miren runner install` runs the same check against the same minimums.
 
 The reasoning shifts a little, though. A runner doesn't build your apps or hold cluster state, so it never runs buildkit or etcd, and it won't see the build-time memory spikes that set the server's floor. What it does run is containerd and every sandbox the scheduler places on it, and it pulls and stores the images those sandboxes need. So on a runner, plan memory around how many sandboxes you expect to land there, and storage around the images they pull rather than the build cache.
 

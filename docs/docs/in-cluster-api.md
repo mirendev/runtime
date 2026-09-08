@@ -9,10 +9,10 @@ keywords: [in-cluster, api, workload identity, role, rbac, sandbox, service acco
 
 Code running inside a Miren sandbox can call the cluster's own API — deploy, read logs, open a shell, inspect status — authenticating as *itself*, with no API key to store or rotate. It's the Miren equivalent of a Kubernetes pod using its service-account token to reach the Kubernetes API.
 
-Every sandbox already carries a [workload identity token](/workload-identity). That page is about presenting the token *outward* (to AWS, GCP, your own APIs). This page is about pointing it *inward*: using it to talk to Miren, and choosing what a given app's workloads are allowed to do once they do.
+Every sandbox already carries a [workload identity token](./workload-identity.md). That page is about presenting the token *outward* (to AWS, GCP, your own APIs). This page is about pointing it *inward*: using it to talk to Miren, and choosing what a given app's workloads are allowed to do once they do.
 
 :::info[Two directions, one token]
-- **[Workload Identity](/workload-identity)** — present the token to *external* services to prove which workload you are.
+- **[Workload Identity](./workload-identity.md)** — present the token to *external* services to prove which workload you are.
 - **In-Cluster API Access** (this page) — present the same token to the *Miren* API, scoped by a role.
 :::
 
@@ -124,5 +124,5 @@ Deleting the line leaves the last value in place — a deploy with no `workload_
 
 ## See also
 
-- [Workload Identity](/workload-identity) — the token itself, and presenting it to external services
-- [app.toml Reference](/app-toml) — the `workload_role` field
+- [Workload Identity](./workload-identity.md) — the token itself, and presenting it to external services
+- [app.toml Reference](./app-toml.md) — the `workload_role` field

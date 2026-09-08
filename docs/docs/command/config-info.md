@@ -37,4 +37,4 @@ miren config info
 
 ## See also
 
-- [`miren config`](/command/config)
+- [`miren config`](./config.md)

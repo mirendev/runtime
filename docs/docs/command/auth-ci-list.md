@@ -32,4 +32,4 @@ miren auth ci list [flags]
 
 ## See also
 
-- [`miren auth ci`](/command/auth-ci)
+- [`miren auth ci`](./auth-ci.md)

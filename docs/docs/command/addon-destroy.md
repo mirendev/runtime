@@ -56,4 +56,4 @@ miren addon destroy miren-postgresql --force
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

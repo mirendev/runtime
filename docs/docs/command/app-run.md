@@ -106,4 +106,4 @@ miren app run --task reindex --detach
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

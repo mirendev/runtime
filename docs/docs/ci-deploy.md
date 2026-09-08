@@ -13,7 +13,7 @@ Deploy to Miren from CI/CD pipelines without storing long-lived secrets. Instead
 GitHub Actions works out of the box. Other OIDC-capable CI systems (GitLab CI, CircleCI, etc.) are supported with manual configuration.
 
 :::info[Looking for route protection?]
-This page covers OIDC for **CI/CD deployment authentication** — letting pipelines deploy without stored secrets. For putting single sign-on in front of your **application's HTTP routes**, see [Protecting Routes](/route-protect).
+This page covers OIDC for **CI/CD deployment authentication** — letting pipelines deploy without stored secrets. For putting single sign-on in front of your **application's HTTP routes**, see [Protecting Routes](./route-protect.md).
 :::
 
 ## Minimum working example
@@ -62,7 +62,7 @@ Every push to `main` now deploys, authenticated by a short-lived OIDC token — 
 No secrets are stored in your CI system. The OIDC token is issued fresh for each job and expires in minutes.
 
 :::tip[Per-PR preview deploys]
-Pairing OIDC with [Pull Request Environments](/pr-environments) lets each PR get its own short-lived preview URL — see that page for the full workflow.
+Pairing OIDC with [Pull Request Environments](./pr-environments.md) lets each PR get its own short-lived preview URL — see that page for the full workflow.
 :::
 
 ## Quick Start with GitHub Actions

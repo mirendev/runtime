@@ -203,6 +203,38 @@ for (const id of fsIds) {
   }
 }
 
+// --- Check 5: No site-absolute links between docs pages ---
+
+// A site-absolute link resolves against whatever docs version is served at the
+// site root, so from /next (main) it silently sends the reader into the
+// released docs. Relative .md links resolve within their own version.
+// Site-absolute links to static assets (/img/..., /*.json) are fine.
+// CommonMark allows an optional title after the destination, as in
+// [CLI](/commands "CLI Reference"), so the destination is not always
+// followed directly by the closing paren.
+const ABSOLUTE_LINK =
+  /\]\((\/[A-Za-z0-9][^)\s]*?)(?:#[^)\s]*)?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g;
+
+function resolvesToDoc(target: string): boolean {
+  // Docusaurus serves /secrets?view=full as the secrets page, so the query
+  // has to come off before the path can be matched against a doc id.
+  const rel = target.replace(/\?.*$/, '').replace(/^\//, '');
+  return fsIds.has(rel) || fsIds.has(`${rel}/index`);
+}
+
+for (const id of fsIds) {
+  const lines = readFileSync(join(docsDir, `${id}.md`), 'utf-8').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    for (const m of lines[i].matchAll(ABSOLUTE_LINK)) {
+      if (!resolvesToDoc(m[1])) continue;
+      fail(
+        `ERROR: docs/${id}.md:${i + 1} — site-absolute link "${m[1]}" to another docs page; ` +
+          `use a relative .md link so it resolves within its own docs version`,
+      );
+    }
+  }
+}
+
 // --- Result ---
 
 if (errors === 0) {

@@ -43,4 +43,4 @@ miren config load --input cluster-config.yaml --set-active
 
 ## See also
 
-- [`miren config`](/command/config)
+- [`miren config`](./config.md)

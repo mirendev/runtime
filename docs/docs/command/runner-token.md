@@ -16,10 +16,10 @@ miren runner token [flags]
 
 ## Subcommands
 
-- [`miren runner token create`](/command/runner-token-create) — Create a join token for a runner
-- [`miren runner token list`](/command/runner-token-list) — List all join tokens
-- [`miren runner token revoke`](/command/runner-token-revoke) — Revoke a join token
+- [`miren runner token create`](./runner-token-create.md) — Create a join token for a runner
+- [`miren runner token list`](./runner-token-list.md) — List all join tokens
+- [`miren runner token revoke`](./runner-token-revoke.md) — Revoke a join token
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

@@ -11,7 +11,7 @@ import CliCommand from '@site/src/components/CliCommand';
 Miren automatically scales your application instances based on traffic. This page explains how scaling works and how to configure it for your needs.
 
 :::info[Scaling out across machines]
-This page is about how many instances of your app run. When the machine itself runs out of room, you add more machines to the cluster instead: see [Distributed Runners](/distributed-runners).
+This page is about how many instances of your app run. When the machine itself runs out of room, you add more machines to the cluster instead: see [Distributed Runners](./distributed-runners.md).
 :::
 
 ## Minimum working example
@@ -250,7 +250,7 @@ miren sandbox list
 
 ## Next Steps
 
-- [app.toml Reference — Concurrency](/app-toml#concurrency) — Complete field reference for concurrency settings
-- [Services](/services) — Define multiple processes in your app
-- [Distributed Runners](/distributed-runners) — Add machines when one server isn't enough
-- [Getting Started](/getting-started) — Deploy your first app
+- [app.toml Reference — Concurrency](./app-toml.md#concurrency) — Complete field reference for concurrency settings
+- [Services](./services.md) — Define multiple processes in your app
+- [Distributed Runners](./distributed-runners.md) — Add machines when one server isn't enough
+- [Getting Started](./getting-started.md) — Deploy your first app

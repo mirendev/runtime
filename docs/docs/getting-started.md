@@ -35,7 +35,7 @@ miren version
 - **Memory**: 4GB minimum, 8GB recommended
 - **Storage**: 50GB minimum, 100GB recommended
 
-See [System Requirements](/system-requirements) for details on why these numbers matter.
+See [System Requirements](./system-requirements.md) for details on why these numbers matter.
 
 ## Set Up Your Server
 
@@ -49,7 +49,7 @@ sudo miren server install
 ```
 </CliCommand>
 
-This will download required components, register your cluster with [miren.cloud](/miren-cloud/overview) (follow the prompts), install and start the Miren systemd service, and configure the local CLI to talk to it.
+This will download required components, register your cluster with [miren.cloud](./miren-cloud/overview.md) (follow the prompts), install and start the Miren systemd service, and configure the local CLI to talk to it.
 
 To skip cloud registration and run standalone:
 
@@ -61,7 +61,7 @@ sudo miren server install --without-cloud
 
 ### Using Our Demo Cluster
 
-Ask for access to our demo cluster, [Miren Club](/miren-club), in #miren-club on [Discord](https://miren.dev/discord). Once you have access, log in and add the cluster:
+Ask for access to our demo cluster, [Miren Club](./miren-club.md), in #miren-club on [Discord](https://miren.dev/discord). Once you have access, log in and add the cluster:
 
 <CliCommand context="client">
 ```miren
@@ -130,10 +130,10 @@ Then open the URL in your browser to see the demo app.
 ![The demo app running in a browser](/img/demo-app-browser.png)
 
 :::note[Not publicly accessible?]
-If your server is behind a firewall or on a private network, `miren route set` still configures the route. To serve your apps to the internet without a public IP, [Miren Anywhere](/miren-cloud/miren-anywhere) routes traffic through Miren Cloud.
+If your server is behind a firewall or on a private network, `miren route set` still configures the route. To serve your apps to the internet without a public IP, [Miren Anywhere](./miren-cloud/miren-anywhere.md) routes traffic through Miren Cloud.
 :::
 
-Otherwise, verify the app is running locally with `miren app list` and `miren logs`, and see [Firewall](/firewall) for making the cluster directly reachable.
+Otherwise, verify the app is running locally with `miren app list` and `miren logs`, and see [Firewall](./firewall.md) for making the cluster directly reachable.
 
 ## See It Running
 
@@ -166,25 +166,25 @@ That's it! You have an app running on Miren.
 
 Now that you've got something deployed, here's where to go depending on what you need.
 
-**Deploy your own app.** Miren auto-detects Python, Node, Bun, Go, Ruby, and Rust projects. Run `miren init` in your project to create a [`.miren/app.toml`](/app-configuration) config, then `miren deploy`. If your app already has a runnable container image, [configure it directly](/deployment#deploying-an-existing-image). Use a `Dockerfile` when the deployment still needs to add source, packages, or build steps. For a step-by-step source-build walkthrough, see the [Language Guides](/guides).
+**Deploy your own app.** Miren auto-detects Python, Node, Bun, Go, Ruby, and Rust projects. Run `miren init` in your project to create a [`.miren/app.toml`](./app-configuration.md) config, then `miren deploy`. If your app already has a runnable container image, [configure it directly](./deployment.md#deploying-an-existing-image). Use a `Dockerfile` when the deployment still needs to add source, packages, or build steps. For a step-by-step source-build walkthrough, see the [Language Guides](./guides/index.md).
 
 :::tip[Set up your own app with an agent]
-Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to
 "set up this app on Miren." The `app-setup` skill inspects your project, works
 out its services and environment variables, creates the configuration, and
 walks through the first deploy.
 :::
 
-**Manage multiple clusters.** If you have more than one server, use [`miren cluster`](/command/cluster) to list your clusters and `miren cluster switch` to change which one you're targeting before deploying.
+**Manage multiple clusters.** If you have more than one server, use [`miren cluster`](./command/cluster.md) to list your clusters and `miren cluster switch` to change which one you're targeting before deploying.
 
-**Configure your app.** The [App Configuration](/app-configuration) guide covers `.miren/app.toml` in depth: setting commands, ports, environment variables, concurrency, and more.
+**Configure your app.** The [App Configuration](./app-configuration.md) guide covers `.miren/app.toml` in depth: setting commands, ports, environment variables, concurrency, and more.
 
-**Set up routes.** Your first app gets a default route, but additional apps need explicit routing. See [Routes](/traffic-routing) for custom domains and path-based routing.
+**Set up routes.** Your first app gets a default route, but additional apps need explicit routing. See [Routes](./traffic-routing.md) for custom domains and path-based routing.
 
-**Scale your app.** Miren autoscales by default (like Cloud Run), spinning instances up and down with traffic. If you need fixed instance counts for things like databases or workers, see [Application Scaling](/scaling).
+**Scale your app.** Miren autoscales by default (like Cloud Run), spinning instances up and down with traffic. If you need fixed instance counts for things like databases or workers, see [Application Scaling](./scaling.md).
 
-**Add persistent storage.** [Disks](/disks) let you attach storage volumes to services, with built-in backup and restore.
+**Add persistent storage.** [Disks](./disks.md) let you attach storage volumes to services, with built-in backup and restore.
 
-**Explore the CLI.** The full [CLI Reference](/commands) documents every command and flag.
+**Explore the CLI.** The full [CLI Reference](./commands.md) documents every command and flag.
 
-**Get help.** If something isn't working, check [Troubleshooting](/troubleshooting) or ask in #miren-club on [Discord](https://miren.dev/discord).
+**Get help.** If something isn't working, check [Troubleshooting](./troubleshooting.md) or ask in #miren-club on [Discord](https://miren.dev/discord).

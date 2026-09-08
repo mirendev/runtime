@@ -44,7 +44,7 @@ miren route set myapp.example.com myapp
 ```
 </CliCommand>
 
-Requests to that hostname are forwarded to your `web` app service. TLS certificates are provisioned automatically (see [TLS Certificates](/tls)).
+Requests to that hostname are forwarded to your `web` app service. TLS certificates are provisioned automatically (see [TLS Certificates](./tls.md)).
 
 ### Routing to another HTTP app service
 
@@ -74,7 +74,7 @@ If an exact route also exists for a specific subdomain, the exact route takes pr
 
 The wildcard `*` must be the first label — patterns like `foo.*.example.com` are not supported. The domain must have at least two labels after the wildcard (e.g., `*.example.com` is valid, `*.com` is not).
 
-For [Pull Request Environments](/pr-environments), you don't need a wildcard route — any subdomain of an existing route automatically resolves to its ephemeral label. You only need wildcard *DNS* pointing at your cluster.
+For [Pull Request Environments](./pr-environments.md), you don't need a wildcard route — any subdomain of an existing route automatically resolves to its ephemeral label. You only need wildcard *DNS* pointing at your cluster.
 
 ### Custom Domains
 
@@ -113,7 +113,7 @@ miren route set '*.yourdomain.com' myapp
 ```
 </CliCommand>
 
-You don't have to do anything else for HTTPS — Miren provisions Let's Encrypt certificates as requests arrive. See [TLS Certificates](/tls) for the details.
+You don't have to do anything else for HTTPS — Miren provisions Let's Encrypt certificates as requests arrive. See [TLS Certificates](./tls.md) for the details.
 
 ### Request Timeouts
 
@@ -138,7 +138,7 @@ miren route timeout longpoll.yourdomain.com --clear
 
 The value is a duration string such as `10m`, `300s`, or `2h`, and must be positive. `miren route list` shows a `TIMEOUT` column with each route's override, or `-` when it uses the default.
 
-The 60-second default itself is the `server.http_request_timeout` setting — see [Server Configuration](/server-config). A per-route value overrides it for that route only.
+The 60-second default itself is the `server.http_request_timeout` setting — see [Server Configuration](./server-config.md). A per-route value overrides it for that route only.
 
 :::note[Streaming responses are already fine]
 The timeout measures silence, not total duration. A server-sent-events stream or a WebSocket that keeps sending data will run indefinitely on the default — you only need an override when the connection genuinely goes quiet for longer than a minute.
@@ -215,7 +215,7 @@ Node port constraints:
 - Must be unique across all apps on the cluster — Miren checks for conflicts at deploy time
 - Cannot overlap with ports Miren uses (80, 443, 8443)
 
-If your cloud provider uses security groups or network ACLs, you'll need to allow traffic on your node ports (see [Firewall Configuration](/firewall)).
+If your cloud provider uses security groups or network ACLs, you'll need to allow traffic on your node ports (see [Firewall Configuration](./firewall.md)).
 
 ## Multiple Ports per Service
 
@@ -403,8 +403,8 @@ num_instances = 1
 
 ## Next Steps
 
-- [app.toml Reference](/app-toml#ports) — Complete field reference for port configuration
-- [Services](/services) — Defining services, commands, images, and scaling
-- [TLS Certificates](/tls) — How HTTPS works for HTTP services
-- [Firewall Configuration](/firewall) — Host-level firewall rules and cloud provider setup
-- [Application Scaling](/scaling) — How services scale up and down
+- [app.toml Reference](./app-toml.md#ports) — Complete field reference for port configuration
+- [Services](./services.md) — Defining services, commands, images, and scaling
+- [TLS Certificates](./tls.md) — How HTTPS works for HTTP services
+- [Firewall Configuration](./firewall.md) — Host-level firewall rules and cloud provider setup
+- [Application Scaling](./scaling.md) — How services scale up and down

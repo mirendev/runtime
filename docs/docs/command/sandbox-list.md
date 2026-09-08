@@ -69,4 +69,4 @@ miren sandbox list --format json
 
 ## See also
 
-- [`miren sandbox`](/command/sandbox)
+- [`miren sandbox`](./sandbox.md)

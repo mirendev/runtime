@@ -27,8 +27,8 @@ miren debug rbac [flags]
 
 ## Subcommands
 
-- [`miren debug rbac test`](/command/debug-rbac-test) — Test RBAC evaluation with fetched rules
+- [`miren debug rbac test`](./debug-rbac-test.md) — Test RBAC evaluation with fetched rules
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

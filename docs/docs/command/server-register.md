@@ -43,8 +43,8 @@ miren server register --name my-cluster --url https://cloud.example.com
 
 ## Subcommands
 
-- [`miren server register status`](/command/server-register-status) — Show cluster registration status
+- [`miren server register status`](./server-register-status.md) — Show cluster registration status
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

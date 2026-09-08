@@ -9,7 +9,7 @@ import CliCommand from '@site/src/components/CliCommand';
 # Protecting Routes
 
 :::tip[Looking for CI/CD OIDC?]
-If you want to **deploy from GitHub Actions or other CI systems** using OIDC tokens (no stored secrets), see [CI/CD Deployment with OIDC](/ci-deploy). This page covers a different feature: protecting your app's HTTP routes with a login.
+If you want to **deploy from GitHub Actions or other CI systems** using OIDC tokens (no stored secrets), see [CI/CD Deployment with OIDC](./ci-deploy.md). This page covers a different feature: protecting your app's HTTP routes with a login.
 :::
 
 Route protection puts a login in front of an application at the routing layer, without you writing any auth code in the app. There are two ways to do it:
@@ -311,4 +311,4 @@ miren route show myapp.example.com
 ```
 </CliCommand>
 
-See the [CLI reference](/command/route-protect) for the full list of options.
+See the [CLI reference](./command/route-protect.md) for the full list of options.

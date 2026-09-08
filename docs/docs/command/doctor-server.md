@@ -37,4 +37,4 @@ miren doctor server
 
 ## See also
 
-- [`miren doctor`](/command/doctor)
+- [`miren doctor`](./doctor.md)

@@ -56,4 +56,4 @@ miren route protect --default --provider my-google-oidc
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

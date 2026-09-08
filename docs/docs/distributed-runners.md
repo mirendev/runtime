@@ -54,7 +54,7 @@ Sandbox IPs are allocated from `10.8.0.0/16`, with each node leasing its own `/2
 The scheduler places each sandbox on a node when it starts. Two rules shape where things land:
 
 - **Stateless workloads prefer runners.** Ordinary web and worker sandboxes are spread out across your runner nodes, keeping the coordinator free for the work only it can do. If no runners are available, they fall back to the coordinator.
-- **Anything with a disk stays on the coordinator.** Disks, local storage, and host mounts are all node-local, so a sandbox that mounts one can't yet move between machines. Miren pins those sandboxes to the coordinator. See [Persistent Storage](/disks) for the details.
+- **Anything with a disk stays on the coordinator.** Disks, local storage, and host mounts are all node-local, so a sandbox that mounts one can't yet move between machines. Miren pins those sandboxes to the coordinator. See [Persistent Storage](./disks.md) for the details.
 
 When an app runs several instances, the scheduler spreads them across nodes rather than stacking them on one, so losing a single machine doesn't take out your whole service.
 
@@ -76,10 +76,10 @@ miren runner token create
 ```
 </CliCommand>
 
-This prints an `mren_...` token with the coordinator's address baked in. Tokens are one-time by default and expire after an hour. To provision several machines from the same token, pass `--reusable`, and adjust the lifetime with `--ttl`. See [`runner token create`](/command/runner-token-create) for the full set of options.
+This prints an `mren_...` token with the coordinator's address baked in. Tokens are one-time by default and expire after an hour. To provision several machines from the same token, pass `--reusable`, and adjust the lifetime with `--ttl`. See [`runner token create`](./command/runner-token-create.md) for the full set of options.
 
 :::warning[Treat join tokens like secrets]
-A join token lets any machine enroll as a runner in your cluster. Don't commit it, log it, or paste it anywhere it might be captured. Prefer one-time tokens, and revoke anything unused with [`runner token revoke`](/command/runner-token-revoke).
+A join token lets any machine enroll as a runner in your cluster. Don't commit it, log it, or paste it anywhere it might be captured. Prefer one-time tokens, and revoke anything unused with [`runner token revoke`](./command/runner-token-revoke.md).
 :::
 
 ### 2. Join the new machine
@@ -92,7 +92,7 @@ miren runner join mren_...
 ```
 </CliCommand>
 
-Joining registers the machine as a runner, exchanges the token for a client certificate, and writes a config file to `/var/lib/miren/runner/config.yaml`. Each runner gets a stable identity; if you ever need to re-add a machine, remove the old entry first (see [caveats](#things-to-know) below). Reach for [`runner join`](/command/runner-join) for flags like `--name` and `--labels`.
+Joining registers the machine as a runner, exchanges the token for a client certificate, and writes a config file to `/var/lib/miren/runner/config.yaml`. Each runner gets a stable identity; if you ever need to re-add a machine, remove the old entry first (see [caveats](#things-to-know) below). Reach for [`runner join`](./command/runner-join.md) for flags like `--name` and `--labels`.
 
 Joining is only the first connection a runner makes. Once it's running it also
 talks to the coordinator's etcd endpoint, so if there's a firewall between your
@@ -106,7 +106,7 @@ machines it needs to allow rather more than 8443. These are the defaults:
 
 The coordinator API is QUIC, so 8443 is UDP rather than TCP. Opening the TCP
 port instead is a common way to end up with a runner that can't join. The same
-ports are listed in the [firewall reference](/firewall#between-nodes-distributed-runners).
+ports are listed in the [firewall reference](./firewall.md#between-nodes-distributed-runners).
 
 Metrics and logs travel over 8443 alongside everything else a runner sends the
 coordinator. VictoriaMetrics and VictoriaLogs themselves stay bound to loopback
@@ -117,7 +117,7 @@ identity token scoped to telemetry, on top of the certificate it got at join.
 The overlay port needs to be open between runners, not just from each runner
 to the coordinator, since sandboxes on different machines send traffic to each
 other node-to-node. The coordinator's ports are configurable; see the
-[server configuration reference](/server-config).
+[server configuration reference](./server-config.md).
 
 ### 3. Start the runner
 
@@ -162,7 +162,7 @@ miren runner token create --reusable --name infra --ttl 0
 `--ttl 0` makes the token long-lived; set a real expiry like `--ttl 30d` if you'd rather rotate on a schedule. Store it wherever your infrastructure already keeps secrets.
 
 :::danger[A reusable token is a standing key to your cluster]
-Anyone holding it can enroll a runner, and it isn't consumed on use. Keep it in a secret manager, scope its TTL, and revoke it with [`runner token revoke`](/command/runner-token-revoke) the moment it's no longer needed or might have leaked.
+Anyone holding it can enroll a runner, and it isn't consumed on use. Keep it in a secret manager, scope its TTL, and revoke it with [`runner token revoke`](./command/runner-token-revoke.md) the moment it's no longer needed or might have leaked.
 :::
 
 Then, in your machine's provisioning script (cloud-init, user data, an image build step), fetch the token and hand it to `runner install`. That single command downloads the runner, enrolls it, and sets up the systemd service, so the node comes up ready to take work:
@@ -182,7 +182,7 @@ else
 fi
 ```
 
-The `systemctl cat` guard keeps this idempotent. The service file lives on the boot disk, so it survives reboots and the script does nothing on a second run, while a freshly recreated machine has no service yet and enrolls cleanly. `--skip-system-check` stops the non-interactive install from pausing on a requirements prompt, and `--force` overwrites the service file left by any half-finished earlier attempt, so a retried boot installs cleanly. Add `--name <name>` to give the runner a readable identity in [`runner list`](/command/runner-list), and `--branch <release>` to pin a specific runtime version.
+The `systemctl cat` guard keeps this idempotent. The service file lives on the boot disk, so it survives reboots and the script does nothing on a second run, while a freshly recreated machine has no service yet and enrolls cleanly. `--skip-system-check` stops the non-interactive install from pausing on a requirements prompt, and `--force` overwrites the service file left by any half-finished earlier attempt, so a retried boot installs cleanly. Add `--name <name>` to give the runner a readable identity in [`runner list`](./command/runner-list.md), and `--branch <release>` to pin a specific runtime version.
 
 This is how we run Miren's own fleet: a reusable enrollment token in a secret manager, a Terraform module that bakes the `runner install` call into each instance's startup, and scaling the fleet up or down is just changing an instance count.
 
@@ -190,12 +190,12 @@ This is how we run Miren's own fleet: a reusable enrollment token in a secret ma
 
 Day-to-day fleet management happens through the `runner` subcommands. A quick tour of the ones you'll reach for most:
 
-- **Check on the fleet.** [`runner list`](/command/runner-list) shows every registered node and its health; [`runner status`](/command/runner-status) reports a single runner's health and configuration.
-- **Take a node out of rotation.** [`runner cordon`](/command/runner-cordon) marks a runner unschedulable so no new sandboxes land on it, while leaving what's already running in place. [`runner uncordon`](/command/runner-uncordon) puts it back in rotation.
-- **Empty a node.** [`runner drain`](/command/runner-drain) cordons a runner and then evicts its sandboxes so the pool controllers rebuild that capacity elsewhere. Use it before taking a machine down for maintenance.
-- **Retire a node.** [`runner remove`](/command/runner-remove) deregisters a node and cleans up after it. Drain first, since remove refuses a node with active work unless you force it.
-- **Keep runners current.** [`runner upgrade`](/command/runner-upgrade) updates a runner's binary in place.
-- **Rotate credentials.** [`runner reissue`](/command/runner-reissue) rotates a runner's certificate without a full re-join, as long as its current certificate is still valid.
+- **Check on the fleet.** [`runner list`](./command/runner-list.md) shows every registered node and its health; [`runner status`](./command/runner-status.md) reports a single runner's health and configuration.
+- **Take a node out of rotation.** [`runner cordon`](./command/runner-cordon.md) marks a runner unschedulable so no new sandboxes land on it, while leaving what's already running in place. [`runner uncordon`](./command/runner-uncordon.md) puts it back in rotation.
+- **Empty a node.** [`runner drain`](./command/runner-drain.md) cordons a runner and then evicts its sandboxes so the pool controllers rebuild that capacity elsewhere. Use it before taking a machine down for maintenance.
+- **Retire a node.** [`runner remove`](./command/runner-remove.md) deregisters a node and cleans up after it. Drain first, since remove refuses a node with active work unless you force it.
+- **Keep runners current.** [`runner upgrade`](./command/runner-upgrade.md) updates a runner's binary in place.
+- **Rotate credentials.** [`runner reissue`](./command/runner-reissue.md) rotates a runner's certificate without a full re-join, as long as its current certificate is still valid.
 
 A typical maintenance window looks like: drain the node, do your work, then uncordon it (or remove it if it's not coming back).
 
@@ -204,13 +204,13 @@ A typical maintenance window looks like: drain the node, do your work, then unco
 A few properties of distributed clusters are worth keeping in mind as you plan:
 
 - **The coordinator is the hub.** It holds the cluster state, the image registry, and the identity signer, and every runner depends on it. Runners keep their existing sandboxes running if the coordinator briefly goes away, but scheduling, deploys, and image pulls all need it back. For now that makes the coordinator a single point of coordination, so give it your most reliable machine. It won't stay that way: the control plane is built to grow into a multi-node setup that can survive losing a coordinator, and finishing that work is on our roadmap.
-- **Stateful apps don't distribute yet.** Anything with a disk is pinned to the coordinator, so today distributed runners add capacity for stateless web and worker workloads, not for your databases. Letting stateful workloads migrate between nodes is something we're actively working toward. See [Persistent Storage](/disks).
-- **Workload identity is issued by the coordinator.** Sandboxes on runners get their identity tokens by way of the coordinator, so token issuance depends on it being reachable and on an issuer being configured. See [Workload Identity](/workload-identity).
+- **Stateful apps don't distribute yet.** Anything with a disk is pinned to the coordinator, so today distributed runners add capacity for stateless web and worker workloads, not for your databases. Letting stateful workloads migrate between nodes is something we're actively working toward. See [Persistent Storage](./disks.md).
+- **Workload identity is issued by the coordinator.** Sandboxes on runners get their identity tokens by way of the coordinator, so token issuance depends on it being reachable and on an issuer being configured. See [Workload Identity](./workload-identity.md).
 - **Metrics and logs flow to the coordinator.** Runners ship their sandboxes' metrics and logs back to the coordinator's observability stack, so everything lands in one place regardless of which node a sandbox ran on.
-- **Re-adding a machine needs a clean slate.** Runner identities are unique. If you're rebuilding a machine that was previously a runner, remove the old registration with [`runner remove`](/command/runner-remove) before you join it again.
+- **Re-adding a machine needs a clean slate.** Runner identities are unique. If you're rebuilding a machine that was previously a runner, remove the old registration with [`runner remove`](./command/runner-remove.md) before you join it again.
 
 ## Next steps
 
-- [`miren runner`](/command/runner) — the full command reference for managing runners
-- [Application Scaling](/scaling) — how Miren scales instances within your cluster
-- [Persistent Storage](/disks) — why disks pin apps to the coordinator
+- [`miren runner`](./command/runner.md) — the full command reference for managing runners
+- [Application Scaling](./scaling.md) — how Miren scales instances within your cluster
+- [Persistent Storage](./disks.md) — why disks pin apps to the coordinator

@@ -100,4 +100,4 @@ miren sandbox exec --app myapp --service worker -- ps aux
 
 ## See also
 
-- [`miren sandbox`](/command/sandbox)
+- [`miren sandbox`](./sandbox.md)

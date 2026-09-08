@@ -41,4 +41,4 @@ miren cluster export-address -C my-cluster
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

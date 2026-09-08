@@ -55,4 +55,4 @@ miren server install --enroll-token "$(cat /etc/miren/enroll-token)"
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

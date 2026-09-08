@@ -34,4 +34,4 @@ miren server upgrade rollback
 
 ## See also
 
-- [`miren server upgrade`](/command/server-upgrade)
+- [`miren server upgrade`](./server-upgrade.md)

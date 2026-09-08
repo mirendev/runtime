@@ -57,4 +57,4 @@ miren addon rotate miren-valkey --force
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

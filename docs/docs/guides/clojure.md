@@ -14,7 +14,7 @@ Clojure isn't auto-detected, so you deploy it with a `Dockerfile.miren`. This gu
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Clojure app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, binds Jetty to
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, binds Jetty to
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
@@ -22,7 +22,7 @@ Ask your AI coding agent to "set up this Clojure app on Miren" after installing 
 
 Yes. Miren doesn't auto-detect Clojure, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -123,7 +123,7 @@ required = true
 sensitive = true
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -135,7 +135,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Java on Miren](/guides/java) — the JVM sibling guide
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Java on Miren](./java.md) — the JVM sibling guide
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

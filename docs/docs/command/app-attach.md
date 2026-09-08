@@ -56,4 +56,4 @@ miren app attach run/myapp-session-4kq2np
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

@@ -9,12 +9,12 @@ import CliCommand from '@site/src/components/CliCommand';
 # F# on Miren
 
 F# isn't auto-detected, so you deploy it with a `Dockerfile.miren` — the same .NET
-toolchain as [C#](/guides/dotnet), just with F# source. This guide uses an ASP.NET Core
+toolchain as [C#](./dotnet.md), just with F# source. This guide uses an ASP.NET Core
 minimal API; the pattern also works for Giraffe and Saturn.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this F# app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, points Kestrel at
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, points Kestrel at
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
@@ -22,7 +22,7 @@ Ask your AI coding agent to "set up this F# app on Miren" after installing the
 
 Yes. Miren doesn't auto-detect .NET, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -132,11 +132,11 @@ key = "ASPNETCORE_ENVIRONMENT"
 value = "Production"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
-- **Detection:** none — requires `Dockerfile.miren` (same toolchain as [C#](/guides/dotnet))
+- **Detection:** none — requires `Dockerfile.miren` (same toolchain as [C#](./dotnet.md))
 - **Build:** `dotnet publish -c Release -o /out` on the SDK image; run on `dotnet/aspnet`
 - **fsproj:** use `Microsoft.NET.Sdk.Web`; list `<Compile Include>` files in dependency order
 - **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
@@ -145,7 +145,7 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [.NET on Miren](/guides/dotnet) — the C# sibling guide
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [.NET on Miren](./dotnet.md) — the C# sibling guide
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -16,11 +16,11 @@ miren debug netdb [flags]
 
 ## Subcommands
 
-- [`miren debug netdb gc`](/command/debug-netdb-gc) — Find and release orphaned IP leases
-- [`miren debug netdb list`](/command/debug-netdb-list) — List all IP leases from netdb
-- [`miren debug netdb release`](/command/debug-netdb-release) — Manually release IP leases
-- [`miren debug netdb status`](/command/debug-netdb-status) — Show IP allocation status by subnet
+- [`miren debug netdb gc`](./debug-netdb-gc.md) — Find and release orphaned IP leases
+- [`miren debug netdb list`](./debug-netdb-list.md) — List all IP leases from netdb
+- [`miren debug netdb release`](./debug-netdb-release.md) — Manually release IP leases
+- [`miren debug netdb status`](./debug-netdb-status.md) — Show IP allocation status by subnet
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)
