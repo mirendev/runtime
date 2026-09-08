@@ -37,4 +37,4 @@ miren runner token list
 
 ## See also
 
-- [`miren runner token`](/command/runner-token)
+- [`miren runner token`](./runner-token.md)

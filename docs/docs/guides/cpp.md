@@ -14,15 +14,15 @@ program and runs the binary. This guide uses the header-only
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this C++ app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, confirms the server
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, confirms the server
 binds `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect C++, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -85,16 +85,12 @@ with `-static-libstdc++ -static-libgcc`.
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /usr/local/bin/app
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "cpp-bench"
@@ -105,12 +101,6 @@ name = "cpp-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -124,19 +114,19 @@ miren env set -s DATABASE_URL
 ```
 </CliCommand>
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** fetch `httplib.h`; `g++ -O2 -std=c++17 -pthread -o app main.cpp` on `gcc:14`
 - **Runtime glibc/libstdc++:** use `debian:trixie-slim` (matches `gcc:14`) — older bases crash on `GLIBC_2.38`/`GLIBCXX_3.4.32`
-- **Service is required:** define a `Procfile` (`web: /usr/local/bin/app`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `std::getenv("PORT")`; `svr.listen("0.0.0.0", port)`
 - **Env vars:** `miren env set -e/-s`; read with `std::getenv`
 
 ## Next steps
 
-- [C on Miren](/guides/c) — the C sibling guide
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [C on Miren](./c.md) — the C sibling guide
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

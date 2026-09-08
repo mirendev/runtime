@@ -96,4 +96,4 @@ miren cluster add --cluster my-cluster --address 10.0.0.1:8443
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

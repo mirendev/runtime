@@ -39,4 +39,4 @@ miren auth generate
 
 ## See also
 
-- [`miren auth`](/command/auth)
+- [`miren auth`](./auth.md)

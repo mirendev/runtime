@@ -35,7 +35,7 @@ Miren creates the PostgreSQL server, injects `DATABASE_URL` (and the other `PG*`
 | **Credentials** | Automatically injected as env vars | You configure manually |
 | **Best for** | Production databases, managed infrastructure | Custom software, full control |
 
-If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions or full control over the configuration, run it as a [service](/services).
+If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions or full control over the configuration, run it as a [service](./services.md).
 
 ## Available Addons
 

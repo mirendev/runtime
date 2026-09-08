@@ -64,9 +64,9 @@ type TestDeps struct {
 	Logs                *observability.LogReader
 
 	// Coordinator and Entity Access
-	Coordinator *coordinate.Coordinator
-	EAC         *entityserver_v1alpha.EntityAccessClient
-	RPCState    *rpc.State
+	ControlPlane *coordinate.ControlPlane
+	EAC          *entityserver_v1alpha.EntityAccessClient
+	RPCState     *rpc.State
 
 	// Logger
 	Log *slog.Logger
@@ -190,7 +190,7 @@ func NewTestDeps() (*TestDeps, func()) {
 
 	// Create coordinator
 	prefix := "/" + idgen.Gen("p")
-	coord := coordinate.NewCoordinator(log, coordinate.CoordinatorConfig{
+	coord := coordinate.NewControlPlane(coordinate.NewFoundation(log, coordinate.CoordinatorConfig{
 		EtcdEndpoints: []string{"etcd:2379"},
 		Prefix:        prefix,
 		Resolver:      resolver,
@@ -199,7 +199,7 @@ func NewTestDeps() (*TestDeps, func()) {
 		Mem:           mem,
 		Cpu:           cpu,
 		NoAuth:        true, // Disable authentication for tests
-	})
+	}))
 
 	err = coord.Start(ctx)
 	if err != nil {
@@ -250,9 +250,9 @@ func NewTestDeps() (*TestDeps, func()) {
 		PersistentLogReader: persistentLogReader,
 		Logs:                logs,
 
-		Coordinator: coord,
-		EAC:         eac,
-		RPCState:    rpcState,
+		ControlPlane: coord,
+		EAC:          eac,
+		RPCState:     rpcState,
 
 		Log:    log,
 		Ctx:    ctx,

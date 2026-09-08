@@ -60,4 +60,4 @@ miren logs run run/myapp-reindex-8xh1dc -f
 
 ## See also
 
-- [`miren logs`](/command/logs)
+- [`miren logs`](./logs.md)

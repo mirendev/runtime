@@ -14,14 +14,14 @@ web server, with dependencies pulled by Quicklisp.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Common Lisp app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, binds Hunchentoot
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, binds Hunchentoot
 to `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -74,6 +74,7 @@ RUN apt-get update -y && apt-get install -y curl && rm -rf /var/lib/apt/lists/* 
 WORKDIR /app
 COPY . /app
 EXPOSE 8080
+CMD ["sbcl", "--disable-debugger", "--load", "/app/app.lisp"]
 ```
 
 ### .dockerignore
@@ -82,16 +83,12 @@ EXPOSE 8080
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run the script with SBCL:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: sbcl --disable-debugger --load /app/app.lisp
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "commonlisp-bench"
@@ -102,12 +99,6 @@ name = "commonlisp-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -131,19 +122,19 @@ required = true
 sensitive = true
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Base image:** `clfoundation/sbcl:latest`; install Quicklisp + preload Hunchentoot in the build
-- **Service is required:** `Procfile` `web: sbcl --disable-debugger --load /app/app.lisp` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Keep-alive:** end the script with `(loop (sleep 3600))` so the process stays running
 - **Port:** `(uiop:getenv "PORT")`; `easy-acceptor :address "0.0.0.0"`
 - **Env vars:** `miren env set -e/-s`; read with `(uiop:getenv "KEY")`
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

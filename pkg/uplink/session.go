@@ -21,6 +21,7 @@ const (
 	CapabilityPopConnect = "pop-connect"
 	CapabilityRPCRelay   = "rpc-relay"
 	CapabilityEntitySync = "entity-sync"
+	CapabilityAppHealth  = "app-health"
 )
 
 // CapabilityOffer describes one protocol family the runtime can speak. The

@@ -26,6 +26,7 @@ const maxLiveBatchesBetweenSnapshotBatches = 8
 const sessionRetryDelay = time.Second
 const defaultMinimumResnapshotInterval = time.Hour
 const defaultAckTimeout = 30 * time.Second
+const defaultSnapshotAckTimeout = 5 * time.Minute
 const defaultPreparationLogInterval = time.Minute
 const sourceEpochTimeout = 5 * time.Second
 
@@ -46,7 +47,9 @@ type Exporter struct {
 	startGate                 <-chan struct{}
 	minimumResnapshotInterval time.Duration
 	ackTimeout                time.Duration
+	snapshotAckTimeout        time.Duration
 	preparationLogInterval    time.Duration
+	diagnostics               *Diagnostics
 
 	mu     sync.Mutex
 	active *stream
@@ -70,11 +73,17 @@ func WithStartGate(ready <-chan struct{}) Option {
 	return func(exporter *Exporter) { exporter.startGate = ready }
 }
 
+// WithDiagnostics publishes exporter progress to the local debug interface.
+func WithDiagnostics(diagnostics *Diagnostics) Option {
+	return func(exporter *Exporter) { exporter.diagnostics = diagnostics }
+}
+
 func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Contract, options ...Option) *Exporter {
 	exporter := &Exporter{
 		log: log, store: store, contract: contract,
 		minimumResnapshotInterval: defaultMinimumResnapshotInterval,
 		ackTimeout:                defaultAckTimeout,
+		snapshotAckTimeout:        defaultSnapshotAckTimeout,
 		preparationLogInterval:    defaultPreparationLogInterval,
 	}
 	for _, option := range options {
@@ -87,8 +96,12 @@ func (t *Exporter) Register(_ context.Context, link Link) error {
 	link.OfferCapabilityFunc(uplink.CapabilityEntitySync, []uint{Version1}, func(ctx context.Context) (json.RawMessage, bool) {
 		sourceEpoch, err := t.readSourceEpoch(ctx)
 		if err != nil {
+			t.fail("read-source-epoch", err)
 			t.log.Warn("entity sync source epoch unavailable; omitting capability", "error", err)
 			return nil, false
+		}
+		if t.diagnostics != nil {
+			t.diagnostics.setSource(sourceEpoch)
 		}
 		return marshalOffer(t.contract.Digest(), sourceEpoch), true
 	})
@@ -102,35 +115,54 @@ func (t *Exporter) Register(_ context.Context, link Link) error {
 func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link Link) {
 	selection, ok := session.Capability(uplink.CapabilityEntitySync)
 	if !ok {
+		t.setMode("waiting", "capability-not-selected")
 		return
 	}
 
 	var config Config
 	if err := json.Unmarshal(selection.Config, &config); err != nil {
+		t.fail("decode-session-config", err)
+		t.setMode("waiting", "invalid-session-config")
 		t.log.Warn("invalid entity sync session config", "error", err)
 		return
 	}
 	if config.ExportSchema != t.contract.Digest() {
+		err := fmt.Errorf("cloud selected schema %s; local schema is %s", config.ExportSchema, t.contract.Digest())
+		t.fail("validate-session-config", err)
+		t.setMode("waiting", "schema-mismatch")
 		t.log.Warn("cloud selected an unexpected entity export schema",
 			"selected", config.ExportSchema, "local", t.contract.Digest())
 		return
 	}
 	resnapshotInterval, nextSnapshot := t.resnapshotSchedule(config)
+	if t.diagnostics != nil {
+		t.diagnostics.setCursor(config.Cursor)
+		t.diagnostics.setNextWatchRevision(config.Cursor + 1)
+	}
+	t.setMode("waiting", "source-preparation")
 	if !t.waitForStartGate(ctx) {
 		return
 	}
 	sourceEpoch, err := t.readSourceEpoch(ctx)
 	if err != nil {
+		t.fail("read-source-epoch", err)
+		t.setMode("waiting", "source-epoch-unavailable")
 		t.log.Warn("entity sync source epoch unavailable for selected session", "error", err)
 		return
 	}
 	if config.SourceEpoch != sourceEpoch {
+		err := fmt.Errorf("cloud selected source epoch %s; local source epoch is %s", config.SourceEpoch, sourceEpoch)
+		t.fail("validate-session-config", err)
+		t.setMode("waiting", "source-epoch-mismatch")
 		t.log.Warn("cloud selected an unexpected entity source epoch",
 			"selected", config.SourceEpoch, "local", sourceEpoch)
 		return
 	}
 
 	s := &stream{exporter: t, ctx: ctx, sourceEpoch: sourceEpoch, waiters: make(map[string]chan Ack)}
+	if t.diagnostics != nil {
+		t.diagnostics.setSource(sourceEpoch)
+	}
 	t.mu.Lock()
 	t.active = s
 	t.mu.Unlock()
@@ -152,6 +184,9 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		headPage, err := t.store.ListIndexPageAtRevision(ctx, t.marker(), "", 1, 0)
 		if err != nil {
 			cancelWatch()
+			if t.diagnostics != nil {
+				t.diagnostics.abortSnapshot()
+			}
 			if !s.retry(ctx, "read entity sync source head", err) {
 				return
 			}
@@ -162,6 +197,7 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		var watcher clientv3.WatchChan
 		didSnapshot := false
 		if snapshotRequired || cursor > currentHead {
+			t.setMode("snapshotting", "")
 			var snapshotCursor int64
 			snapshotCursor, watcher, err = s.snapshot(watchCtx, link)
 			if err == nil {
@@ -169,6 +205,10 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 				didSnapshot = true
 			}
 		} else {
+			t.setMode("watching", "")
+			if t.diagnostics != nil {
+				t.diagnostics.setNextWatchRevision(cursor + 1)
+			}
 			watcher, err = t.store.WatchIndex(watchCtx, t.marker(), cursor+1)
 			if errors.Is(err, rpctypes.ErrCompacted) {
 				err = errCompacted
@@ -176,6 +216,9 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		}
 		if err != nil {
 			cancelWatch()
+			if t.diagnostics != nil {
+				t.diagnostics.abortSnapshot()
+			}
 			if errors.Is(err, errCompacted) {
 				snapshotRequired = true
 				if !s.retry(ctx, "entity sync snapshot raced etcd compaction", err) {
@@ -193,6 +236,7 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 			nextSnapshot = time.Now().Add(resnapshotInterval)
 		}
 		snapshotRequired = false
+		t.setMode("watching", "")
 		cursor, err = s.tail(link, watcher, cursor, nextSnapshot)
 		cancelWatch()
 		if ctx.Err() != nil {
@@ -213,6 +257,18 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		if !s.retry(ctx, "entity sync stream interrupted", err) {
 			return
 		}
+	}
+}
+
+func (t *Exporter) setMode(mode, reason string) {
+	if t.diagnostics != nil {
+		t.diagnostics.setMode(mode, reason)
+	}
+}
+
+func (t *Exporter) fail(stage string, err error) {
+	if t.diagnostics != nil {
+		t.diagnostics.fail(stage, err)
 	}
 }
 
@@ -246,8 +302,10 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 		return false
 	}
 	if err != nil {
+		s.exporter.fail(message, err)
 		s.exporter.log.Warn(message, "error", err, "retry_in", sessionRetryDelay)
 	}
+	s.exporter.setMode("retrying", message)
 	timer := time.NewTimer(sessionRetryDelay)
 	defer timer.Stop()
 	select {
@@ -331,6 +389,9 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 	}
 
 	snapshotID := uuid.NewString()
+	if s.exporter.diagnostics != nil {
+		s.exporter.diagnostics.beginSnapshot(snapshotID, head, head+1)
+	}
 	if err := link.SendMessageBlocking(s.ctx, TypeSnapshotBegin, SnapshotBegin{
 		SnapshotID: snapshotID, SourceHead: head, ExportSchemaDigest: s.exporter.contract.Digest(),
 		SourceEpoch: s.sourceEpoch,
@@ -373,6 +434,9 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 				return 0, nil, err
 			}
 		}
+		if s.exporter.diagnostics != nil {
+			s.exporter.diagnostics.addSnapshotPage(len(entities), counts)
+		}
 		tailCursor, err = s.drainLiveChanges(link, watcher, tailCursor)
 		if err != nil {
 			return 0, nil, err
@@ -402,6 +466,9 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 	if ack.Cursor != tailCursor {
 		return 0, nil, fmt.Errorf("snapshot ack cursor %d does not match committed tail %d", ack.Cursor, tailCursor)
 	}
+	if s.exporter.diagnostics != nil {
+		s.exporter.diagnostics.finishSnapshot(ack.Cursor)
+	}
 	return ack.Cursor, watcher, nil
 }
 
@@ -428,7 +495,7 @@ func (s *stream) tail(link Link, watcher clientv3.WatchChan, cursor int64, nextS
 				return cursor, errors.New("entity export watch closed")
 			}
 			var err error
-			cursor, err = s.sendWatchResponse(link, response, cursor)
+			cursor, err = s.sendWatchResponse(link, response, cursor, true)
 			if err != nil {
 				return cursor, err
 			}
@@ -446,7 +513,7 @@ func (s *stream) drainLiveChanges(link Link, watcher clientv3.WatchChan, cursor 
 				return cursor, errors.New("entity export watch closed")
 			}
 			var err error
-			cursor, err = s.sendWatchResponse(link, response, cursor)
+			cursor, err = s.sendWatchResponse(link, response, cursor, false)
 			if err != nil {
 				return cursor, err
 			}
@@ -457,7 +524,7 @@ func (s *stream) drainLiveChanges(link Link, watcher clientv3.WatchChan, cursor 
 	return cursor, nil
 }
 
-func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, cursor int64) (int64, error) {
+func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, cursor int64, committed bool) (int64, error) {
 	if response.CompactRevision > 0 || errors.Is(response.Err(), rpctypes.ErrCompacted) {
 		return cursor, errCompacted
 	}
@@ -493,6 +560,12 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	}
 	if ack.Cursor != to {
 		return cursor, fmt.Errorf("change ack cursor %d does not match batch end %d", ack.Cursor, to)
+	}
+	if s.exporter.diagnostics != nil {
+		s.exporter.diagnostics.setNextWatchRevision(to + 1)
+		if committed {
+			s.exporter.diagnostics.setCursor(to)
+		}
 	}
 	return to, nil
 }
@@ -570,7 +643,11 @@ func (s *stream) sendAndWait(link Link, messageType string, payload any, message
 	if err := link.SendMessageBlocking(s.ctx, messageType, payload); err != nil {
 		return Ack{}, err
 	}
-	waitCtx, cancelWait := context.WithTimeout(s.ctx, s.exporter.ackTimeout)
+	timeout := s.exporter.ackTimeout
+	if messageType == TypeSnapshotComplete {
+		timeout = s.exporter.snapshotAckTimeout
+	}
+	waitCtx, cancelWait := context.WithTimeout(s.ctx, timeout)
 	defer cancelWait()
 	select {
 	case <-waitCtx.Done():
@@ -578,6 +655,9 @@ func (s *stream) sendAndWait(link Link, messageType string, payload any, message
 	case ack := <-waiter:
 		if ack.Error != "" {
 			return Ack{}, fmt.Errorf("cloud rejected %s: %s", messageType, ack.Error)
+		}
+		if s.exporter.diagnostics != nil {
+			s.exporter.diagnostics.acknowledge(messageType, ack)
 		}
 		return ack, nil
 	}

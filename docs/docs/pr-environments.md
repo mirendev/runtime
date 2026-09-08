@@ -40,7 +40,7 @@ Ephemeral deploys don't create deployment history records, don't take the deploy
 *.myapp.example.com.   CNAME   cluster-jwomf2l0tn8z.miren.systems.
 ```
 
-You don't need to configure a wildcard route on your server. Any existing route for `myapp.example.com` will pick up `pr-123.myapp.example.com` as an ephemeral lookup. See [Custom Domains](/traffic-routing#custom-domains) for the full DNS setup.
+You don't need to configure a wildcard route on your server. Any existing route for `myapp.example.com` will pick up `pr-123.myapp.example.com` as an ephemeral lookup. See [Custom Domains](./traffic-routing.md#custom-domains) for the full DNS setup.
 
 **Step 2: Deploy with `--ephemeral` and an optional TTL.**
 
@@ -179,7 +179,7 @@ Ephemeral deploys don't appear in `miren app history` — that command shows onl
 
 ## GitHub Actions: Per-PR Previews
 
-To deploy a preview per pull request from GitHub Actions, pair this with [CI/CD Deployment with OIDC](/ci-deploy) so no secrets land in your repo. The example below targets a staging app — see [Using a Staging App](#using-a-staging-app) for why that's the recommended setup.
+To deploy a preview per pull request from GitHub Actions, pair this with [CI/CD Deployment with OIDC](./ci-deploy.md) so no secrets land in your repo. The example below targets a staging app — see [Using a Staging App](#using-a-staging-app) for why that's the recommended setup.
 
 **Step 1: Allow `pull_request` events on the OIDC binding.**
 
@@ -248,11 +248,11 @@ The deploy action exposes the preview URL as a step output, so a follow-up step 
 
 ## Command Reference
 
-The flags introduced on this page are `--ephemeral` and `--ttl` on [`miren deploy`](/command/deploy), and `--ephemeral` on [`miren app versions`](/command/app-versions). Those reference pages have the full flag listings.
+The flags introduced on this page are `--ephemeral` and `--ttl` on [`miren deploy`](./command/deploy.md), and `--ephemeral` on [`miren app versions`](./command/app-versions.md). Those reference pages have the full flag listings.
 
 ## Next Steps
 
-- [Deployment](/deployment) — How normal deploys work
-- [Traffic Routing](/traffic-routing) — Routes, wildcard DNS, and custom domains
-- [CI/CD Deployment with OIDC](/ci-deploy) — Deploy from GitHub Actions without stored secrets
-- [TLS Certificates](/tls) — How HTTPS works for ephemeral subdomains
+- [Deployment](./deployment.md) — How normal deploys work
+- [Traffic Routing](./traffic-routing.md) — Routes, wildcard DNS, and custom domains
+- [CI/CD Deployment with OIDC](./ci-deploy.md) — Deploy from GitHub Actions without stored secrets
+- [TLS Certificates](./tls.md) — How HTTPS works for ephemeral subdomains

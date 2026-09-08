@@ -32,4 +32,4 @@ miren debug disk backup [flags]
 
 ## See also
 
-- [`miren debug disk`](/command/debug-disk)
+- [`miren debug disk`](./debug-disk.md)

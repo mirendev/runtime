@@ -39,4 +39,4 @@ miren cluster switch production
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

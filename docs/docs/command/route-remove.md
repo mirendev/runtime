@@ -39,4 +39,4 @@ miren route remove example.com
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

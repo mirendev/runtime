@@ -16,8 +16,8 @@ miren debug test [flags]
 
 ## Subcommands
 
-- [`miren debug test load`](/command/debug-test-load) — Loadtest a URL
+- [`miren debug test load`](./debug-test-load.md) — Loadtest a URL
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

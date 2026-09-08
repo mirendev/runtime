@@ -35,6 +35,15 @@ type Config struct {
 	BatchSize int64
 }
 
+// Progress reports the controller's current migration scan position.
+type Progress struct {
+	Phase      string
+	Cursor     string
+	PassFailed bool
+	Ready      bool
+	LastError  string
+}
+
 func DefaultConfig() Config {
 	return Config{Interval: 10 * time.Second, BatchSize: 200}
 }
@@ -54,6 +63,7 @@ type Controller struct {
 	passFailed          bool
 	firstCleanSweepOnce sync.Once
 	ready               chan struct{}
+	reportProgress      func(Progress)
 }
 
 func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityAccessClient) *Controller {
@@ -69,6 +79,11 @@ func New(log *slog.Logger, store entity.Store, eac *entityserver_v1alpha.EntityA
 // wait on it without making the controller's ongoing repair loop part of their
 // own lifecycle.
 func (c *Controller) Ready() <-chan struct{} { return c.ready }
+
+// SetProgressReporter attaches runtime diagnostics before Start is called.
+func (c *Controller) SetProgressReporter(report func(Progress)) {
+	c.reportProgress = report
+}
 
 func (c *Controller) Start(ctx context.Context) {
 	if c.Config.Interval <= 0 {
@@ -89,7 +104,9 @@ func (c *Controller) Stop() {
 
 func (c *Controller) run(ctx context.Context) {
 	for {
-		if err := c.Step(ctx); err != nil && ctx.Err() == nil {
+		err := c.Step(ctx)
+		c.publishProgress(err)
+		if err != nil && ctx.Err() == nil {
 			c.Log.Warn("deployment-attempt migration pass failed", "error", err)
 		}
 		select {
@@ -100,6 +117,22 @@ func (c *Controller) run(ctx context.Context) {
 	}
 }
 
+func (c *Controller) publishProgress(err error) {
+	if c.reportProgress == nil {
+		return
+	}
+	progress := Progress{Phase: c.phase, Cursor: c.cursor, PassFailed: c.passFailed}
+	if err != nil {
+		progress.LastError = err.Error()
+	}
+	select {
+	case <-c.ready:
+		progress.Ready = true
+	default:
+	}
+	c.reportProgress(progress)
+}
+
 // Step processes one bounded page. It is public so tests and operators can
 // drive convergence without waiting for the loop.
 func (c *Controller) Step(ctx context.Context) error {
@@ -108,14 +141,11 @@ func (c *Controller) Step(ctx context.Context) error {
 	}
 
 	kind, migrate := c.phaseWork(c.phase)
-	page, err := c.Store.ListIndexPage(ctx, entity.Ref(entity.EntityKind, kind), c.cursor, c.Config.BatchSize)
+	page, err := c.Store.ListIndexEntitiesPage(ctx, entity.Ref(entity.EntityKind, kind), c.cursor, c.Config.BatchSize)
 	if err != nil {
 		return err
 	}
-	entities, err := c.Store.GetEntities(ctx, page.Ids)
-	if err != nil {
-		return err
-	}
+	entities := page.Entities
 	var migrateErrs []error
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, ent := range entities {
@@ -194,6 +224,16 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 
 	var dep core_v1alpha.Deployment
 	dep.Decode(ent)
+	preferredCreatedAt := dep.StartedAt
+	if preferredCreatedAt.IsZero() {
+		preferredCreatedAt, _ = time.Parse(time.RFC3339, dep.DeployedBy.Timestamp)
+	}
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, preferredCreatedAt)
+	if err != nil {
+		return err
+	}
+	dep.Decode(ent)
 	rec := &deploylifecycle.Record{Deployment: &dep}
 	if rec.Canonical() {
 		return nil
@@ -239,7 +279,7 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 	if started, err := time.Parse(time.RFC3339, dep.DeployedBy.Timestamp); err == nil {
 		attrs = append(attrs, entity.Time(core_v1alpha.DeploymentStartedAtId, started))
 	}
-	_, err := c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
+	_, err = c.Store.PatchEntity(ctx, entity.New(attrs), entity.WithFromRevision(ent.GetRevision()))
 	return err
 }
 
@@ -257,6 +297,11 @@ func (c *Controller) legacyAppVersion(ctx context.Context, ref string) *entity.E
 }
 
 func (c *Controller) migrateVersion(ctx context.Context, ent *entity.Entity) error {
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, time.Time{})
+	if err != nil {
+		return err
+	}
 	var version core_v1alpha.AppVersion
 	version.Decode(ent)
 	if !version.Source.Empty() {
@@ -299,6 +344,11 @@ func (c *Controller) migrateVersion(ctx context.Context, ent *entity.Entity) err
 }
 
 func (c *Controller) migrateApp(ctx context.Context, ent *entity.Entity) error {
+	var err error
+	ent, err = c.repairExportTimestamps(ctx, ent, time.Time{})
+	if err != nil {
+		return err
+	}
 	var app core_v1alpha.App
 	app.Decode(ent)
 	if app.ActiveVersion == "" {
@@ -340,6 +390,37 @@ func (c *Controller) migrateApp(ctx context.Context, ent *entity.Entity) error {
 		entity.Ref(core_v1alpha.AppActiveDeploymentId, candidate),
 	), entity.WithFromRevision(ent.GetRevision()))
 	return err
+}
+
+// repairExportTimestamps closes holes left by historical write paths that
+// persisted records without store-managed timestamps. The export contract does
+// not permit that. A deployment's started_at is the best surviving creation
+// boundary; otherwise the earliest timestamp we still know is its last update.
+func (c *Controller) repairExportTimestamps(ctx context.Context, ent *entity.Entity, preferredCreatedAt time.Time) (*entity.Entity, error) {
+	createdAt := ent.GetCreatedAt()
+	updatedAt := ent.GetUpdatedAt()
+	if !createdAt.IsZero() && !updatedAt.IsZero() {
+		return ent, nil
+	}
+	if createdAt.IsZero() {
+		createdAt = preferredCreatedAt
+		if createdAt.IsZero() {
+			createdAt = updatedAt
+		}
+		if createdAt.IsZero() {
+			return nil, errors.New("entity has no timestamp from which to repair db/entity.created")
+		}
+	}
+
+	patch := entity.New(entity.Ref(entity.DBId, ent.Id()))
+	if ent.GetCreatedAt().IsZero() {
+		patch.SetCreatedAt(createdAt)
+	}
+	repaired, err := c.Store.PatchEntity(ctx, patch, entity.WithFromRevision(ent.GetRevision()))
+	if err != nil {
+		return nil, fmt.Errorf("repairing export timestamps: %w", err)
+	}
+	return repaired, nil
 }
 
 func (c *Controller) reconcileDeployment(ctx context.Context, ent *entity.Entity) error {

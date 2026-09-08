@@ -62,4 +62,4 @@ miren route timeout example.com --clear
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

@@ -340,6 +340,9 @@ func TestStoreConformance_EnsureAndReplaceKindedEntityCarriesShortID(t *testing.
 		), WithFromRevision(ent.GetRevision()))
 		require.NoError(t, err)
 		assert.Equal(t, shortID, replaced.ShortId())
+		assert.True(t, ent.GetCreatedAt().Equal(replaced.GetCreatedAt()),
+			"replacing a kinded reservation must preserve its creation time: before=%s after=%s",
+			ent.GetCreatedAt(), replaced.GetCreatedAt())
 		assert.False(t, Is(replaced, initialKind))
 		assert.True(t, Is(replaced, replacementKind))
 	})
@@ -375,6 +378,7 @@ func TestStoreConformance_ReplaceEntity(t *testing.T) {
 		))
 		require.NoError(t, err)
 		beforeRev := created.GetRevision()
+		beforeCreatedAt := created.GetCreatedAt()
 
 		replaced, err := store.ReplaceEntity(ctx, New(
 			Ref(DBId, id),
@@ -386,12 +390,76 @@ func TestStoreConformance_ReplaceEntity(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "after", doc.Value.String(), "replace must overwrite attributes")
 		assert.Greater(t, replaced.GetRevision(), beforeRev, "replace must bump revision")
+		assert.True(t, beforeCreatedAt.Equal(replaced.GetCreatedAt()),
+			"replace must preserve store-managed creation time: before=%s after=%s",
+			beforeCreatedAt, replaced.GetCreatedAt())
 
 		got, err := store.GetEntity(ctx, id)
 		require.NoError(t, err)
 		gotDoc, ok := got.Get(Doc)
 		require.True(t, ok)
 		assert.Equal(t, "after", gotDoc.Value.String())
+	})
+}
+
+// TestStoreConformance_ReplaceEntityMaintainsIndexEntries asserts on the index a
+// replacement moved away from: the write and the read-back can both look correct
+// while that index still answers for the entity.
+func TestStoreConformance_ReplaceEntityMaintainsIndexEntries(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		applyConformanceSchema(t, store)
+
+		before := Id("conf-move-before/v1")
+		after := Id("conf-move-after/v1")
+		_, err := store.CreateEntity(ctx, New(Ref(DBId, before)))
+		require.NoError(t, err)
+		_, err = store.CreateEntity(ctx, New(Ref(DBId, after)))
+		require.NoError(t, err)
+
+		id := Id("conf-move-subject")
+		_, err = store.CreateEntity(ctx, New(
+			Ref(DBId, id),
+			Ref(Id("conf/ref"), before),
+		))
+		require.NoError(t, err)
+
+		indexed := func(t *testing.T, target Id) []Id {
+			t.Helper()
+			ids, err := store.ListIndex(ctx, Ref(Id("conf/ref"), target))
+			require.NoError(t, err)
+			return ids
+		}
+
+		require.Contains(t, indexed(t, before), id, "create must index the initial value")
+
+		// Changing the value moves the entry.
+		_, err = store.ReplaceEntity(ctx, New(
+			Ref(DBId, id),
+			Ref(Id("conf/ref"), after),
+		))
+		require.NoError(t, err)
+
+		assert.Contains(t, indexed(t, after), id, "replace must index the new value")
+		assert.NotContains(t, indexed(t, before), id,
+			"replace must remove the index entry for the value it replaced")
+
+		got, err := store.GetEntity(ctx, id)
+		require.NoError(t, err)
+		ref, ok := got.Get(Id("conf/ref"))
+		require.True(t, ok)
+		assert.Equal(t, after, ref.Value.Id(),
+			"the stored entity must carry only the new value")
+
+		// Dropping the attribute removes the entry outright.
+		_, err = store.ReplaceEntity(ctx, New(
+			Ref(DBId, id),
+			Any(Doc, "no longer indexed"),
+		))
+		require.NoError(t, err)
+
+		assert.NotContains(t, indexed(t, after), id,
+			"replace must remove the index entry for an attribute it dropped")
 	})
 }
 
@@ -973,6 +1041,66 @@ func TestStoreConformance_GetEntityAtRevision_Historical(t *testing.T) {
 		doc, ok := old.Get(Doc)
 		require.True(t, ok)
 		assert.Equal(t, "v1", doc.Value.String(), "reading at an old revision must return the historical value")
+	})
+}
+
+// TestStoreConformance_ListIndexEntitiesPage pins the parts of the paged index
+// read both backends must agree on, because callers cannot tell which one they
+// are talking to.
+//
+// Alignment is the one worth stating outright. A caller pairs entities back up
+// with the ids that named them, so a backend that dropped misses instead of
+// holding their place would shift every entity after the gap onto the wrong id,
+// and nothing about that failure looks like a bug until much later.
+func TestStoreConformance_ListIndexEntitiesPage(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+
+		attrEnt, err := store.CreateEntity(ctx, New(
+			String(Ident, "conf-page-attr"),
+			Ref(Type, TypeStr),
+			Bool(Index, true),
+		))
+		require.NoError(t, err)
+
+		index := String(attrEnt.Id(), "value")
+
+		for i := range 3 {
+			_, err := store.CreateEntity(ctx, New(
+				index,
+				String(Ident, fmt.Sprintf("conf-page-%02d", i)),
+			))
+			require.NoError(t, err)
+		}
+
+		page, err := store.ListIndexEntitiesPage(ctx, index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Entities, len(page.Ids), "entities must line up with the ids that named them")
+		require.NotNil(t, page.Undecodable, "the map must be indexable without a nil check")
+
+		seen := map[Id]bool{}
+		for i, ent := range page.Entities {
+			require.NotNil(t, ent)
+			assert.Equal(t, page.Ids[i], ent.Id())
+			seen[ent.Id()] = true
+		}
+		assert.Len(t, seen, 3)
+
+		// Walking must terminate, and must not hand back a cursor to nothing
+		// when the index ends exactly on a page boundary.
+		cursor := ""
+		total := 0
+		for range 20 {
+			p, err := store.ListIndexEntitiesPage(ctx, index, cursor, 3)
+			require.NoError(t, err)
+			total += len(p.Entities)
+			cursor = p.Cursor
+			if cursor == "" {
+				break
+			}
+		}
+		assert.Equal(t, "", cursor, "the walk must terminate")
+		assert.Equal(t, 3, total)
 	})
 }
 

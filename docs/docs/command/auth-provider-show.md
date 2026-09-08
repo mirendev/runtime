@@ -33,4 +33,4 @@ miren auth provider show <name> [flags]
 
 ## See also
 
-- [`miren auth provider`](/command/auth-provider)
+- [`miren auth provider`](./auth-provider.md)

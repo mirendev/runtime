@@ -43,4 +43,4 @@ miren debug etcdctl get / --prefix --keys-only
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

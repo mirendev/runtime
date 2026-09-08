@@ -23,8 +23,8 @@ background service**, `0.0.0.0`-free networking (nothing listens), a writable ne
 and single-instance concurrency — so it doubles as a tour of running an outbound-only worker.
 
 :::info[This is an application recipe, not a language guide]
-For getting your own source code onto Miren, start with [Deployment](/deployment) and the
-[Language Guides](/guides). This page is about running a third-party agent as an
+For getting your own source code onto Miren, start with [Deployment](../deployment.md) and the
+[Language Guides](../guides/index.md). This page is about running a third-party agent as an
 outbound-only service.
 :::
 
@@ -46,7 +46,7 @@ workspace (cloned repos, build caches) stable across redeploys.
 - `miren` CLI installed and authenticated (`miren whoami`).
 - Access to the target cluster and its org.
 - An **Amp API key** from [ampcode.com/settings](https://ampcode.com/settings).
-- Outbound HTTPS from the cluster to Amp's domains (see [Firewall](/firewall) if you restrict
+- Outbound HTTPS from the cluster to Amp's domains (see [Firewall](../firewall.md) if you restrict
   egress): `ampcode.com` (service + installer), `auth.ampcode.com` (authentication),
   `production.ampworkers.com` (the runner's WebSocket connection), and `static.ampcode.com`
   (binary downloads for install and `amp update`). A narrower allowlist can let the build or
@@ -72,9 +72,10 @@ The commands below target it explicitly with `-C amp`. Omit `-C` to use your def
 
 ## The Dockerfile
 
-Amp ships as a CLI, not a container image, so build a thin image that installs it with the
-official installer (a standalone binary — no Node required). Include the tools the agent will
-reach for when it runs shell commands (`git`, `ripgrep`, `curl`):
+Keep a Dockerfile here because Amp ships as a CLI, not a container image. This is a real
+application image: it pins and installs Amp, adds the shell tools the agent needs, and copies
+the runner lifecycle script. The official installer produces a standalone binary, so Node
+isn't required.
 
 ```dockerfile
 FROM debian:bookworm-slim
@@ -303,8 +304,8 @@ miren sandbox exec <sandbox-id> -C amp -- \
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — the full `app.toml` reference in context
-- [Persistent Storage](/disks) — Miren disks vs. local disks
-- [Deployment](/deployment) — deploying your own source to Miren
-- [Firewall](/firewall) — controlling egress if you restrict outbound traffic
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — building from your own Dockerfile
+- [App Configuration](../app-configuration.md) — the full `app.toml` reference in context
+- [Persistent Storage](../disks.md) — Miren disks vs. local disks
+- [Deployment](../deployment.md) — deploying your own source to Miren
+- [Firewall](../firewall.md) — controlling egress if you restrict outbound traffic
+- [Using Dockerfile.miren](../guides/index.md#using-dockerfilemiren) — building from your own Dockerfile

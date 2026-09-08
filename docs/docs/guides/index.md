@@ -8,58 +8,58 @@ keywords: [guides, languages, python, javascript, node, bun, go, ruby, rust, eli
 
 These guides take you from a project on your laptop to a running app on Miren, one
 language at a time. Each one covers the same three things: **how to set up the app**,
-**how to set environment variables**, and **whether you need a Dockerfile**.
+**how to set environment variables**, and **whether its source build needs a Dockerfile**.
 
 :::tip[Let your agent do this]
 If you use an AI coding agent (Claude Code, Codex, Amp, and others), you don't have to
-follow these guides by hand. Install the [Miren agent skills](/agent-skills) and ask
+follow these guides by hand. Install the [Miren agent skills](../agent-skills.md) and ask
 your agent to "set up this app on Miren" — it reads your project, detects the stack,
 wires up environment variables, and deploys. These guides double as the reference your
-agent works from. See [Agent Skills](/agent-skills) for setup.
+agent works from. See [Agent Skills](../agent-skills.md) for setup.
 :::
 
 ## Pick your language
 
 | Guide | Auto-detected? | You provide |
 |-------|----------------|-------------|
-| [Python](/guides/python) | Yes | `requirements.txt` / `pyproject.toml` / `Pipfile` / `uv.lock` |
-| [JavaScript (Node & Bun)](/guides/javascript) | Yes | `package.json` + a lockfile |
-| [Go](/guides/go) | Yes | `go.mod` |
-| [Ruby](/guides/ruby) | Yes | `Gemfile` |
-| [Rust](/guides/rust) | Yes | `Cargo.toml` |
-| [Java / JVM](/guides/java) | No | `Dockerfile.miren` |
-| [PHP](/guides/php) | No | `Dockerfile.miren` |
-| [.NET / C#](/guides/dotnet) | No | `Dockerfile.miren` |
-| [C++](/guides/cpp) | No | `Dockerfile.miren` |
-| [C](/guides/c) | No | `Dockerfile.miren` |
-| [Deno](/guides/deno) | No | `Dockerfile.miren` |
-| [Elixir](/guides/elixir) | No | `Dockerfile.miren` |
-| [Kotlin](/guides/kotlin) | No | `Dockerfile.miren` |
-| [Swift](/guides/swift) | No | `Dockerfile.miren` |
-| [Dart](/guides/dart) | No | `Dockerfile.miren` |
-| [Scala](/guides/scala) | No | `Dockerfile.miren` |
-| [Clojure](/guides/clojure) | No | `Dockerfile.miren` |
-| [Erlang](/guides/erlang) | No | `Dockerfile.miren` |
-| [Haskell](/guides/haskell) | No | `Dockerfile.miren` |
-| [F#](/guides/fsharp) | No | `Dockerfile.miren` |
-| [Julia](/guides/julia) | No | `Dockerfile.miren` |
-| [R](/guides/r) | No | `Dockerfile.miren` |
-| [Lua](/guides/lua) | No | `Dockerfile.miren` |
-| [Perl](/guides/perl) | No | `Dockerfile.miren` |
-| [OCaml](/guides/ocaml) | No | `Dockerfile.miren` |
-| [Crystal](/guides/crystal) | No | `Dockerfile.miren` |
-| [Nim](/guides/nim) | No | `Dockerfile.miren` |
-| [Zig](/guides/zig) | No | `Dockerfile.miren` |
-| [Gleam](/guides/gleam) | No | `Dockerfile.miren` |
-| [Objective-C](/guides/objc) | No | `Dockerfile.miren` |
-| [Raku](/guides/raku) | No | `Dockerfile.miren` |
-| [Common Lisp](/guides/commonlisp) | No | `Dockerfile.miren` |
-| [JRuby](/guides/jruby) | No | `Dockerfile.miren` |
-| [TruffleRuby](/guides/truffleruby) | No | `Dockerfile.miren` |
-| [Klong (K)](/guides/klong) | No | `Dockerfile.miren` |
-| [COBOL](/guides/cobol) | No | `Dockerfile.miren` |
-| [Bash](/guides/bash) | No | `Dockerfile.miren` |
-| [Static sites & SPAs](/guides/static) | No | `Dockerfile.miren` |
+| [Python](./python.md) | Yes | `requirements.txt` / `pyproject.toml` / `Pipfile` / `uv.lock` |
+| [JavaScript (Node & Bun)](./javascript.md) | Yes | `package.json` + a lockfile |
+| [Go](./go.md) | Yes | `go.mod` |
+| [Ruby](./ruby.md) | Yes | `Gemfile` |
+| [Rust](./rust.md) | Yes | `Cargo.toml` |
+| [Java / JVM](./java.md) | No | `Dockerfile.miren` |
+| [PHP](./php.md) | No | `Dockerfile.miren` |
+| [.NET / C#](./dotnet.md) | No | `Dockerfile.miren` |
+| [C++](./cpp.md) | No | `Dockerfile.miren` |
+| [C](./c.md) | No | `Dockerfile.miren` |
+| [Deno](./deno.md) | No | `Dockerfile.miren` |
+| [Elixir](./elixir.md) | No | `Dockerfile.miren` |
+| [Kotlin](./kotlin.md) | No | `Dockerfile.miren` |
+| [Swift](./swift.md) | No | `Dockerfile.miren` |
+| [Dart](./dart.md) | No | `Dockerfile.miren` |
+| [Scala](./scala.md) | No | `Dockerfile.miren` |
+| [Clojure](./clojure.md) | No | `Dockerfile.miren` |
+| [Erlang](./erlang.md) | No | `Dockerfile.miren` |
+| [Haskell](./haskell.md) | No | `Dockerfile.miren` |
+| [F#](./fsharp.md) | No | `Dockerfile.miren` |
+| [Julia](./julia.md) | No | `Dockerfile.miren` |
+| [R](./r.md) | No | `Dockerfile.miren` |
+| [Lua](./lua.md) | No | `Dockerfile.miren` |
+| [Perl](./perl.md) | No | `Dockerfile.miren` |
+| [OCaml](./ocaml.md) | No | `Dockerfile.miren` |
+| [Crystal](./crystal.md) | No | `Dockerfile.miren` |
+| [Nim](./nim.md) | No | `Dockerfile.miren` |
+| [Zig](./zig.md) | No | `Dockerfile.miren` |
+| [Gleam](./gleam.md) | No | `Dockerfile.miren` |
+| [Objective-C](./objc.md) | No | `Dockerfile.miren` |
+| [Raku](./raku.md) | No | `Dockerfile.miren` |
+| [Common Lisp](./commonlisp.md) | No | `Dockerfile.miren` |
+| [JRuby](./jruby.md) | No | `Dockerfile.miren` |
+| [TruffleRuby](./truffleruby.md) | No | `Dockerfile.miren` |
+| [Klong (K)](./klong.md) | No | `Dockerfile.miren` |
+| [COBOL](./cobol.md) | No | `Dockerfile.miren` |
+| [Bash](./bash.md) | No | `Dockerfile.miren` |
+| [Static sites & SPAs](./static.md) | No | `Dockerfile.miren` |
 
 ## Auto-detected vs. Dockerfile
 
@@ -69,16 +69,16 @@ and `miren deploy`, and Miren figures out the rest.
 
 | Stack | Detected from | Default version |
 |-------|---------------|-----------------|
-| [Ruby](/guides/ruby) | `Gemfile` | 3.2 |
-| [Python](/guides/python) | `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock` | 3.11 |
-| [Node.js](/guides/javascript) | `package.json` + `package-lock.json`/`yarn.lock` | 20 |
-| [Bun](/guides/javascript) | `package.json` + `bun.lock` | 1 |
-| [Go](/guides/go) | `go.mod` | Parsed from `go.mod`, else 1.23 |
-| [Rust](/guides/rust) | `Cargo.toml` | 1.83 |
+| [Ruby](./ruby.md) | `Gemfile` | 3.2 |
+| [Python](./python.md) | `requirements.txt`, `Pipfile`, `pyproject.toml`, or `uv.lock` | 3.11 |
+| [Node.js](./javascript.md) | `package.json` + `package-lock.json`/`yarn.lock` | 20 |
+| [Bun](./javascript.md) | `package.json` + `bun.lock` | 1 |
+| [Go](./go.md) | `go.mod` | Parsed from `go.mod`, else 1.23 |
+| [Rust](./rust.md) | `Cargo.toml` | 1.83 |
 
 Each guide covers that stack's detection rules, build process, and start command in
 full. Override any default version with `[build] version` in
-[`.miren/app.toml`](/app-toml#build).
+[`.miren/app.toml`](../app-toml.md#build).
 
 Every other language here — from Elixir and Gleam to Kotlin, Swift, Julia, and even
 COBOL — isn't auto-detected, so its guide shows you a `Dockerfile.miren` you
@@ -91,6 +91,19 @@ Native builds cover the common stacks today (Python, Node, Bun, Go, Ruby, Rust).
 like Miren to detect and build another language first-class — no Dockerfile needed —
 [tell us what to build next](https://linear.miren.garden/suggest).
 :::
+
+## Already have a runnable image?
+
+These language guides assume Miren starts with your source code. If you already publish a
+runnable container image, skip both language detection and `Dockerfile.miren`: set
+`services.web.image` and Miren launches the image directly.
+
+Keep the image's defaults when they already start the right process. Add `args` when its
+`ENTRYPOINT` is right but the deployment needs different arguments. Use `command` when you
+need to replace the whole process with a shell command. Build a derived image only when the
+deployment adds files or packages, or when the upstream image's startup contract is
+incomplete. See [Deploying an existing image](../deployment.md#deploying-an-existing-image) for
+the complete example.
 
 ## Using Dockerfile.miren {#using-dockerfilemiren}
 
@@ -123,18 +136,19 @@ EXPOSE 3000
 CMD ["node", "dist/index.js"]
 ```
 
-### Build priority
+### Deployment source priority
 
 1. `build.dockerfile` setting in `app.toml` (if specified)
 2. `Dockerfile.miren` in project root
-3. Automatic language detection
+3. `services.web.image` in `app.toml`
+4. Automatic language detection
 
 ### Build arguments
 
 Miren passes the following build arguments to your `Dockerfile.miren`:
 
 - `MIREN_VERSION` — the app version this build is producing, the same identifier
-  [`miren app versions`](/command/app-versions) lists and the same value injected as the
+  [`miren app versions`](../command/app-versions.md) lists and the same value injected as the
   `MIREN_VERSION` environment variable at runtime
 
 As with any Docker build argument, declare it with `ARG` in the stage that uses it:
@@ -159,7 +173,7 @@ explicitly.
 ## What every guide assumes
 
 - You've installed Miren and can reach a cluster. If not, start with
-  [Getting Started](/getting-started).
+  [Getting Started](../getting-started.md).
 
 :::warning[Bind to the injected port]
 Your web service must bind to `0.0.0.0` on the port in the `PORT` environment variable.
@@ -169,8 +183,8 @@ Miren injects `PORT` at runtime and routes traffic to it — an app that hardcod
 
 ## Next steps
 
-- [app.toml Reference — Build](/app-toml#build) — `version`, `dockerfile`, and `onbuild` settings
-- [Deployment](/deployment) — how `miren deploy` builds and activates versions
-- [App Configuration](/app-configuration) — customize with `.miren/app.toml`
-- [Services](/services) — run workers and multiple processes
-- [Agent Skills](/agent-skills) — let your agent operate Miren for you
+- [app.toml Reference — Build](../app-toml.md#build) — `version`, `dockerfile`, and `onbuild` settings
+- [Deployment](../deployment.md) — how `miren deploy` builds and activates versions
+- [App Configuration](../app-configuration.md) — customize with `.miren/app.toml`
+- [Services](../services.md) — run workers and multiple processes
+- [Agent Skills](../agent-skills.md) — let your agent operate Miren for you

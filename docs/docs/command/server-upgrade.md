@@ -53,8 +53,8 @@ miren server upgrade --version v0.2.0
 
 ## Subcommands
 
-- [`miren server upgrade rollback`](/command/server-upgrade-rollback) — Rollback server to previous version
+- [`miren server upgrade rollback`](./server-upgrade-rollback.md) — Rollback server to previous version
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

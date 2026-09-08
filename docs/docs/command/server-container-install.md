@@ -69,4 +69,4 @@ miren server container install --runtime podman
 
 ## See also
 
-- [`miren server container`](/command/server-container)
+- [`miren server container`](./server-container.md)

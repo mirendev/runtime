@@ -46,4 +46,4 @@ miren auth provider add github my-gh \
 
 ## See also
 
-- [`miren auth provider add`](/command/auth-provider-add)
+- [`miren auth provider add`](./auth-provider-add.md)

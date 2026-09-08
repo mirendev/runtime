@@ -52,8 +52,8 @@ miren runner upgrade --version v0.2.0
 
 ## Subcommands
 
-- [`miren runner upgrade rollback`](/command/runner-upgrade-rollback) — Rollback runner to previous version
+- [`miren runner upgrade rollback`](./runner-upgrade-rollback.md) — Rollback runner to previous version
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

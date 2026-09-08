@@ -3,6 +3,7 @@ package nodehealth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -109,6 +110,69 @@ func (c *Controller) Delete(ctx context.Context, id entity.Id) error {
 	return nil
 }
 
+// SweepOrphanedSandboxes deletes terminal sandboxes whose scheduled node no
+// longer exists. No node-scoped sandbox controller can finish or collect these
+// entities, so they otherwise keep stale pools alive indefinitely. The grace
+// period protects a freshly removed node from an immediate cleanup race.
+func (c *Controller) SweepOrphanedSandboxes(ctx context.Context) error {
+	nodes, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindNode))
+	if err != nil {
+		return fmt.Errorf("listing nodes for orphaned sandbox sweep: %w", err)
+	}
+
+	knownNodes := make(map[entity.Id]bool, len(nodes.Values()))
+	for _, e := range nodes.Values() {
+		knownNodes[entity.Id(e.Id())] = true
+	}
+
+	sandboxes, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return fmt.Errorf("listing sandboxes for orphaned sandbox sweep: %w", err)
+	}
+
+	cutoff := c.now().Add(-c.gracePeriod)
+	deleted := 0
+	var deleteErr error
+	for _, e := range sandboxes.Values() {
+		var schedule compute_v1alpha.Schedule
+		if !schedule.Is(e.Entity()) {
+			continue
+		}
+		schedule.Decode(e.Entity())
+		if schedule.Key.Node == "" || knownNodes[schedule.Key.Node] {
+			continue
+		}
+
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(e.Entity())
+		if sb.Status != compute_v1alpha.STOPPED && sb.Status != compute_v1alpha.DEAD {
+			continue
+		}
+		if time.UnixMilli(e.UpdatedAt()).After(cutoff) {
+			continue
+		}
+
+		c.log.Info("deleting terminal sandbox assigned to missing node",
+			"sandbox", sb.ID,
+			"node", schedule.Key.Node,
+			"status", sb.Status)
+		if _, err := c.eac.Delete(ctx, sb.ID.String()); err != nil {
+			c.log.Error("failed to delete sandbox assigned to missing node",
+				"sandbox", sb.ID,
+				"node", schedule.Key.Node,
+				"error", err)
+			deleteErr = errors.Join(deleteErr, err)
+			continue
+		}
+		deleted++
+	}
+
+	if deleted > 0 {
+		c.log.Warn("deleted terminal sandboxes assigned to missing nodes", "count", deleted)
+	}
+	return deleteErr
+}
+
 // clearTracking removes a node from all tracking maps (it recovered,
 // was removed, or entered a managed state like DISABLED).
 func (c *Controller) clearTracking(nodeID entity.Id) {
@@ -166,7 +230,10 @@ func (c *Controller) markNodeSandboxesDead(ctx context.Context, nodeID entity.Id
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(e.Entity())
 
-		if sb.Status == compute_v1alpha.DEAD || sb.Status == compute_v1alpha.STOPPED {
+		// A STOPPED sandbox still needs its runner to release resources and mark
+		// it DEAD. Once that runner is unhealthy, nodehealth must finish the
+		// transition so a replacement can be scheduled.
+		if sb.Status == compute_v1alpha.DEAD {
 			continue
 		}
 

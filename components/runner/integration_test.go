@@ -55,7 +55,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	defer cancel()
 
 	// Start coordinator in background
-	coord := coordinate.NewCoordinator(testDeps.Log, coordCfg)
+	coord := coordinate.NewControlPlane(coordinate.NewFoundation(testDeps.Log, coordCfg))
 	err := coord.Start(ctx)
 	r.NoError(err)
 	defer func() {

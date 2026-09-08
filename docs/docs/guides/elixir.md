@@ -15,16 +15,16 @@ Miren cluster with a fresh `mix phx.new` app, Postgres addon, and migrations.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Phoenix app on Miren" after installing the
-[Miren agent skills](/agent-skills). It can generate the release
+[Miren agent skills](../agent-skills.md). It can generate the release
 (`mix phx.gen.release`), drop in the `Dockerfile.miren`, wire up the database addon and
 secrets, and deploy — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
 project root. Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -143,17 +143,12 @@ node_modules
 mise.toml
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` next to your
-`Dockerfile.miren` that starts the release (replace `my_app` with your OTP app name):
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /app/bin/my_app start
-```
-
-Then create `.miren/app.toml` naming your app and declaring the database addon
+Create `.miren/app.toml` naming your app and declaring the database addon
 (covered in the next section):
 
 ```toml
@@ -162,13 +157,6 @@ name = "my_app"
 [addons.miren-postgresql]
 variant = "small"
 ```
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`. A `[services.web]` block with the same `command` in `app.toml` works
-too.
-:::
 
 Phoenix's generated `config/runtime.exs` already reads `PORT` (defaulting to 4000) and
 binds the endpoint to `0.0.0.0`, so it works with Miren's injected `PORT` without changes.
@@ -196,10 +184,10 @@ one, and the instance crashes. Configure the addon and secrets first.
 
 ### Database via an addon
 
-The simplest way to get `DATABASE_URL` is a managed Postgres [addon](/addons) — Miren
+The simplest way to get `DATABASE_URL` is a managed Postgres [addon](../addons.md) — Miren
 provisions it and injects the connection string (plus `PG*` variables) as environment
 variables automatically. Declare it in `.miren/app.toml` (as shown in
-[Set up the app](#set-up-the-app)):
+[Deploy](#deploy)):
 
 ```toml
 [addons.miren-postgresql]
@@ -231,7 +219,7 @@ paste it at the masked prompt. You can also set these at deploy time with
 | `POOL_SIZE` | No | DB pool size, defaults to 10 |
 | `DNS_CLUSTER_QUERY` | No | Enables Erlang clustering via DNS discovery |
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Migrations
 
@@ -257,7 +245,7 @@ resolves all instance IPs, which activates the scaffolded `DNSCluster`.
 - **Release:** `mix phx.gen.release`; `mix compile` **before** `mix assets.deploy`; `COPY rel rel`
 - **Runtime image:** `debian-slim` is fine — `mix release` bundles ERTS, so the runner needs no Erlang install
 - **Runtime env:** `PHX_SERVER=true` in the Dockerfile; endpoint binds `0.0.0.0:$PORT` via `runtime.exs`
-- **Service is required:** define a `Procfile` (`web: /app/bin/<app> start`) or `[services.web]` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Secrets first:** set `SECRET_KEY_BASE` + `PHX_HOST` before the app serves traffic, or the instance crashloops
 - **Database:** `[addons.miren-postgresql]` injects `DATABASE_URL` (and `PG*`) automatically
 - **Migrations:** `miren app run -a <app> -- /app/bin/migrate`
@@ -265,7 +253,7 @@ resolves all instance IPs, which activates the scaffolded `DNSCluster`.
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -10,7 +10,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"miren.dev/runtime/pkg/cond"
 )
 
 // cleanupDeleteBatchSize is how many stale entries we delete between rate-limit
@@ -18,6 +17,12 @@ import (
 // CleanupStaleCollectionEntries); this only governs how often we sleep for
 // BatchPause, not how many keys share a transaction.
 const cleanupDeleteBatchSize = 100
+
+// cleanupResolveBatchSize is how many scanned collection entries we buffer
+// before resolving their entities in one batched read. It bounds peak memory to
+// one scan page plus one resolve batch, and stays modest because every resolved
+// entity arrives with its full payload and some kinds carry sizeable blobs.
+const cleanupResolveBatchSize = 200
 
 // CleanupOptions bounds a single stale-cleanup pass so it can run continuously
 // in the background without overwhelming the store.
@@ -41,133 +46,299 @@ type CleanupStats struct {
 	CollectionEntriesScanned int64
 	StaleEntriesFound        int64
 	StaleEntriesRemoved      int64
+	// OrphanedEntriesFound counts stale entries whose entity is gone entirely;
+	// MismatchedEntriesFound those whose entity exists but no longer carries the
+	// value the entry indexes. The two have different sources, so the split says
+	// which leak is live when one keeps re-accumulating.
+	OrphanedEntriesFound   int64
+	MismatchedEntriesFound int64
 	// CASConflicts counts entries that changed between scan and delete (the slot
 	// was legitimately recreated/re-leased), so the CAS guard skipped them.
 	CASConflicts        int64
 	RemovedByCollection map[string]int64
 }
 
-// CleanupStaleCollectionEntries scans collection (index) entries and removes those
-// whose backing entity is authoritatively absent under a linearizable read.
+// CleanupStaleCollectionEntries scans collection (index) entries and removes
+// every entry the backing entity does not justify. An entry is justified when
+// the entity still exists and still carries an indexed value hashing to the
+// entry's collection segment; anything else is drift. An orphan is the
+// degenerate case, an entity with no justified values at all.
 //
-// Safety rests on creates being atomic: CreateEntity writes the entity key and its
-// collection entries in one transaction, so a collection entry whose entity is
-// absent is genuinely orphaned, with no create-in-flight race. Each delete is still
-// CAS'd on the entry's mod-revision captured at scan time, so a slot legitimately
-// recreated between scan and delete fails the compare and is left untouched (the
-// ABA guard). The pass is idempotent and bounded, so it is safe to run repeatedly
-// as a background sweep; repetition is what makes it resumable.
+// Safety rests on three things. Creates are atomic, so an entry whose entity is
+// absent is genuinely orphaned with no create-in-flight race. Entities are
+// resolved with a batched, linearizable read taken after the entry was scanned,
+// so the verdict sees state at least as new as the entry. And each delete is
+// CAS'd on the entry's mod-revision from scan time, which is what extends the
+// ABA guard to the mismatch verdict: any writer that re-justifies an entry has
+// to rewrite the key, so the compare fails and the entry survives.
+//
+// Session-scoped entries and entities whose attributes cannot be resolved are
+// left alone.
+//
+// The pass is idempotent and bounded, so it is safe to run repeatedly as a
+// background sweep.
 func (s *EtcdStore) CleanupStaleCollectionEntries(ctx context.Context, log *slog.Logger, opts CleanupOptions) (*CleanupStats, error) {
-	stats := &CleanupStats{RemovedByCollection: map[string]int64{}}
-
-	// Build the set of live entity ids so we only pay a per-entry GetEntity for
-	// collection entries that look orphaned. After a store has drained, almost
-	// every entry is in this set and the pass does no point reads at all.
-	allEntityIDs, err := s.ListAllEntityIDs(ctx)
-	if err != nil {
-		return stats, fmt.Errorf("cleanup: failed to list entities: %w", err)
-	}
-	validEntityIDs := make(map[Id]bool, len(allEntityIDs))
-	for _, id := range allEntityIDs {
-		validEntityIDs[id] = true
+	pass := &cleanupPass{
+		store:            s,
+		log:              log,
+		opts:             opts,
+		stats:            &CleanupStats{RemovedByCollection: map[string]int64{}},
+		collectionPrefix: s.prefix + "/collections/",
 	}
 
-	collectionPrefix := s.prefix + "/collections/"
-
-	// pending buffers confirmed-stale entries until we have a batch to delete.
-	// We scan and delete incrementally rather than materializing the whole
-	// keyspace: memory stays bounded by one page + one batch, and if the pass is
-	// cut short (deadline/shutdown) everything deleted before that point sticks.
-	var pending []staleCollectionEntry
-
-	flush := func() error {
-		if len(pending) == 0 {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		s.deleteStaleBatch(ctx, log, pending, stats)
-		pending = pending[:0]
-		if opts.BatchPause > 0 {
-			select {
-			case <-time.After(opts.BatchPause):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		return nil
-	}
-
-	scanErr := scanPagedFunc(ctx, s.client, collectionPrefix, func(kv *mvccpb.KeyValue) error {
-		stats.CollectionEntriesScanned++
-
-		entityID := Id(kv.Value)
-		if validEntityIDs[entityID] {
-			return nil
-		}
-
-		// Not in the snapshot's live set; confirm authoritatively before
-		// treating it as stale. A linearizable not-found is the safe signal;
-		// any other error means we couldn't verify, so we leave it alone.
-		if _, err := s.GetEntity(ctx, entityID); err != nil {
-			if !errors.Is(err, cond.ErrNotFound{}) {
-				log.Warn("cleanup: could not verify entity existence",
-					"entity_id", entityID,
-					"key", string(kv.Key),
-					"error", err)
-				return nil
-			}
-		} else {
-			return nil
-		}
-
-		stats.StaleEntriesFound++
-		if opts.DryRun {
-			return nil
-		}
-
-		pending = append(pending, staleCollectionEntry{
-			key:        string(kv.Key),
-			modRev:     kv.ModRevision,
-			collection: collectionFromKey(string(kv.Key), collectionPrefix),
-		})
-
-		// Flush a full batch, or a short one that would otherwise carry us past
-		// MaxDeletes, so a bounded pass removes at most MaxDeletes and no more.
-		atBudget := opts.MaxDeletes > 0 && int(stats.StaleEntriesRemoved)+len(pending) >= opts.MaxDeletes
-		if len(pending) >= cleanupDeleteBatchSize || atBudget {
-			if err := flush(); err != nil {
-				return err
-			}
-		}
-		if opts.MaxDeletes > 0 && stats.StaleEntriesRemoved >= int64(opts.MaxDeletes) {
-			return errStopScan
-		}
-		return nil
+	scanErr := scanPagedFunc(ctx, s.client, pass.collectionPrefix, func(kv *mvccpb.KeyValue) error {
+		return pass.scan(ctx, kv)
 	})
 
-	if scanErr != nil && !errors.Is(scanErr, errStopScan) {
+	switch {
+	case scanErr != nil && !errors.Is(scanErr, errStopScan):
 		// Persist whatever we already confirmed before surfacing the error;
 		// partial progress is the whole point of streaming the sweep.
-		if flushErr := flush(); flushErr != nil {
+		if flushErr := pass.flush(ctx); flushErr != nil {
 			log.Warn("cleanup: failed to flush after scan error", "flush_error", flushErr)
 		}
-		return stats, fmt.Errorf("cleanup: scan failed: %w", scanErr)
+		return pass.stats, fmt.Errorf("cleanup: scan failed: %w", scanErr)
+	case scanErr == nil:
+		// Scan ended on its own, so judge the trailing partial page.
+		if err := pass.resolve(ctx); err != nil && !errors.Is(err, errStopScan) {
+			if flushErr := pass.flush(ctx); flushErr != nil {
+				log.Warn("cleanup: failed to flush after resolve error", "flush_error", flushErr)
+			}
+			return pass.stats, err
+		}
 	}
 
-	if err := flush(); err != nil {
-		return stats, err
+	if err := pass.flush(ctx); err != nil {
+		return pass.stats, err
 	}
 
-	return stats, nil
+	return pass.stats, nil
+}
+
+// cleanupPass holds the mutable state of one sweep. It exists so the scan,
+// verdict, and delete steps can be separate methods over named fields rather
+// than closures over a dozen captured variables.
+type cleanupPass struct {
+	store            *EtcdStore
+	log              *slog.Logger
+	opts             CleanupOptions
+	stats            *CleanupStats
+	collectionPrefix string
+
+	// page buffers scanned entries until there are enough to resolve in one
+	// read; pending buffers confirmed-stale entries until there are enough to
+	// delete in one batch. Both stream rather than materialize, so a pass cut
+	// short by a deadline or shutdown keeps everything it already deleted.
+	page    []collectionEntry
+	pending []staleCollectionEntry
+}
+
+// scan buffers one scanned entry, resolving the page once it fills.
+func (p *cleanupPass) scan(ctx context.Context, kv *mvccpb.KeyValue) error {
+	p.stats.CollectionEntriesScanned++
+
+	key := string(kv.Key)
+	p.page = append(p.page, collectionEntry{
+		key:           key,
+		modRev:        kv.ModRevision,
+		entityID:      Id(kv.Value),
+		sessionScoped: sessionScopedKey(key, p.collectionPrefix),
+	})
+
+	if len(p.page) >= cleanupResolveBatchSize {
+		return p.resolve(ctx)
+	}
+	return nil
+}
+
+// resolve judges the buffered page, reading the entities it refers to once.
+func (p *cleanupPass) resolve(ctx context.Context) error {
+	batch := p.page
+	p.page = nil
+	if len(batch) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	justified, unverifiable, err := p.store.resolveJustified(ctx, p.log, batch)
+	if err != nil {
+		return err
+	}
+
+	for _, e := range batch {
+		if unverifiable[e.entityID] {
+			continue
+		}
+		if err := p.judge(ctx, e, justified); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// judge classifies one entry against its entity's justified values and, when it
+// is stale, queues the delete and enforces the pass's delete budget. It returns
+// errStopScan once the budget is spent.
+func (p *cleanupPass) judge(ctx context.Context, e collectionEntry, justified map[Id]map[string]bool) error {
+	collection := collectionFromKey(e.key, p.collectionPrefix)
+	values, present := justified[e.entityID]
+
+	switch {
+	case present && values[collection]:
+		return nil
+	case present && e.sessionScoped:
+		// Leased, so etcd collects it with the session. This only covers a live
+		// entity; a session-scoped entry whose entity is gone falls to the
+		// orphan case and is deleted like any other.
+		return nil
+	case present:
+		p.stats.MismatchedEntriesFound++
+	default:
+		p.stats.OrphanedEntriesFound++
+	}
+
+	p.stats.StaleEntriesFound++
+	if p.opts.DryRun {
+		return nil
+	}
+
+	p.pending = append(p.pending, staleCollectionEntry{
+		key:        e.key,
+		modRev:     e.modRev,
+		collection: collection,
+	})
+
+	atBudget := p.opts.MaxDeletes > 0 && int(p.stats.StaleEntriesRemoved)+len(p.pending) >= p.opts.MaxDeletes
+	if len(p.pending) >= cleanupDeleteBatchSize || atBudget {
+		if err := p.flush(ctx); err != nil {
+			return err
+		}
+	}
+	if p.opts.MaxDeletes > 0 && p.stats.StaleEntriesRemoved >= int64(p.opts.MaxDeletes) {
+		return errStopScan
+	}
+	return nil
+}
+
+// flush deletes the queued entries, then paces the pass.
+func (p *cleanupPass) flush(ctx context.Context) error {
+	if len(p.pending) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	p.store.deleteStaleBatch(ctx, p.log, p.pending, p.stats)
+	p.pending = p.pending[:0]
+
+	if p.opts.BatchPause > 0 {
+		select {
+		case <-time.After(p.opts.BatchPause):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// collectionEntry carries everything the verdict needs, so judging never
+// re-parses the key.
+type collectionEntry struct {
+	key           string
+	modRev        int64
+	entityID      Id
+	sessionScoped bool
+}
+
+// distinctEntityIDs returns the entities a page refers to, once each: an entity
+// commonly owns several entries in a page, one per indexed value.
+func distinctEntityIDs(entries []collectionEntry) []Id {
+	seen := make(map[Id]bool, len(entries))
+	ids := make([]Id, 0, len(entries))
+	for _, e := range entries {
+		if !seen[e.entityID] {
+			seen[e.entityID] = true
+			ids = append(ids, e.entityID)
+		}
+	}
+	return ids
+}
+
+// resolveJustified reads the entities a page refers to and returns, per entity,
+// the collection segments its current indexed attributes justify.
+//
+// An absent entity is absent from justified, so its entries read as orphans. An
+// entity that is present but unreadable, either because its payload will not
+// decode or because its attribute schema will not resolve, lands in
+// unverifiable and is left alone entirely: it is not absent, and guessing there
+// deletes live entries.
+func (s *EtcdStore) resolveJustified(
+	ctx context.Context,
+	log *slog.Logger,
+	batch []collectionEntry,
+) (justified map[Id]map[string]bool, unverifiable map[Id]bool, err error) {
+	ids := distinctEntityIDs(batch)
+	entities, undecodable, err := s.getEntities(ctx, ids, false, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cleanup: failed to resolve entities: %w", err)
+	}
+
+	justified = make(map[Id]map[string]bool, len(ids))
+	unverifiable = undecodable
+	for i, id := range ids {
+		ent := entities[i]
+		if ent == nil {
+			continue
+		}
+		values, err := s.justifiedCollections(ctx, ent)
+		if err != nil {
+			log.Warn("cleanup: could not resolve indexed attributes, leaving entries alone",
+				"entity_id", id, "error", err)
+			unverifiable[id] = true
+			continue
+		}
+		justified[id] = values
+	}
+	return justified, unverifiable, nil
+}
+
+// justifiedCollections returns the collection segments the entity's current
+// indexed attributes entitle it to, hashed the way the write path hashes them.
+//
+// Strict on purpose: it fails if any attribute's schema cannot be read, and the
+// caller then leaves that entity's entries alone. Reindex's tolerant variant
+// would drop the unreadable attribute, which here reads as "not justified" and
+// deletes a live entry.
+func (s *EtcdStore) justifiedCollections(ctx context.Context, ent *Entity) (map[string]bool, error) {
+	indexed, err := s.collectIndexedAttributes(ctx, ent.attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	values := make(map[string]bool, len(indexed))
+	for _, attrs := range indexed {
+		for _, attr := range attrs {
+			values[tr.Replace(attr.CAS())] = true
+		}
+	}
+	return values, nil
+}
+
+// sessionScopedKey reports whether a collection entry is the session-scoped
+// variant. Plain entries are "{prefix}/collections/{colKey}/{base58 id}";
+// session entries carry a further "/{session}" segment and are leased.
+func sessionScopedKey(key, collectionPrefix string) bool {
+	return strings.Count(strings.TrimPrefix(key, collectionPrefix), "/") > 1
 }
 
 // errStopScan is a sentinel returned by the scan callback to halt scanning once
 // the per-pass delete budget is reached, without treating it as a real error.
 var errStopScan = errors.New("cleanup: delete budget reached")
 
-// staleCollectionEntry is a collection entry confirmed to point at an absent
+// staleCollectionEntry is a collection entry confirmed to be unjustified by its
 // entity, along with the mod-revision it carried at scan time (the CAS guard).
 type staleCollectionEntry struct {
 	key        string

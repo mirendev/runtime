@@ -10,7 +10,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren Club is our shared cloud cluster — a place to experiment with Miren and deploy something to the real internet without setting up a server of your own first. It's the fastest way to go from "I've heard of Miren" to "my app is live," and a great sandbox for demos, hack projects, and kicking the tires.
 
-If you'd rather run Miren on your own machine, that's the [Getting Started](/getting-started) path. Miren Club is for when you just want a cluster to already exist.
+If you'd rather run Miren on your own machine, that's the [Getting Started](./getting-started.md) path. Miren Club is for when you just want a cluster to already exist.
 
 ## Requesting Access
 
@@ -44,7 +44,7 @@ Select a cluster to bind:
 ```
 </CliCommand>
 
-Pick **club** and you're pointed at the shared cluster. Every `miren` command you run now targets Miren Club until you [switch clusters](/command/cluster).
+Pick **club** and you're pointed at the shared cluster. Every `miren` command you run now targets Miren Club until you [switch clusters](./command/cluster.md).
 
 ## Deploying and Going Live
 
@@ -64,7 +64,7 @@ miren route set whateveryoulike.miren.club myapp
 ```
 </CliCommand>
 
-That's it — `whateveryoulike.miren.club` is live on the internet, TLS and all. See [Traffic Routing](/traffic-routing) for more on routes.
+That's it — `whateveryoulike.miren.club` is live on the internet, TLS and all. See [Traffic Routing](./traffic-routing.md) for more on routes.
 
 ## Club Rules
 
@@ -72,15 +72,15 @@ Miren Club is a shared resource, so a few ground rules keep it pleasant for ever
 
 - **Don't hog the GBs or the MHz.** Other people are sharing this cluster with you. Be a considerate neighbor with memory and CPU.
 - **Watch your step.** Right now there's a single namespace and no per-app permissions, so it's possible to clobber someone else's stuff. Deploy carefully and stay in your lane.
-- **Have fun, but be responsible.** Anything that violates our [Code of Conduct](/conduct) gets removed, and you'll have to turn in your Miren Club membership card.
+- **Have fun, but be responsible.** Anything that violates our [Code of Conduct](./conduct.md) gets removed, and you'll have to turn in your Miren Club membership card.
 
 ## Need Help?
 
 - Questions about **Miren Club specifically** (access, the shared cluster, routing to `miren.club`)? Ask in **#miren-club** on [Discord](https://miren.dev/discord).
-- Questions about **using Miren generally**? Ask in **#feedback**, or check [Troubleshooting](/troubleshooting).
+- Questions about **using Miren generally**? Ask in **#feedback**, or check [Troubleshooting](./troubleshooting.md).
 
 ## Next Steps
 
-- [Getting Started](/getting-started) — The full deploy walkthrough, which works the same on Miren Club
-- [Traffic Routing](/traffic-routing) — Custom domains, wildcards, and path-based routing
-- [App Configuration](/app-configuration) — Configure your app with `.miren/app.toml`
+- [Getting Started](./getting-started.md) — The full deploy walkthrough, which works the same on Miren Club
+- [Traffic Routing](./traffic-routing.md) — Custom domains, wildcards, and path-based routing
+- [App Configuration](./app-configuration.md) — Configure your app with `.miren/app.toml`

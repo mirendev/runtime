@@ -46,11 +46,6 @@ func (m *mockDiskVolumeOps) CreateDiskImage(path string, _ int64) error {
 	return nil
 }
 
-func (m *mockDiskVolumeOps) RemoveDiskImage(path string) error {
-	delete(m.existingPaths, path)
-	return nil
-}
-
 // Verify interface compliance
 var _ diskio.DiskVolumeOps = (*mockDiskVolumeOps)(nil)
 
@@ -72,10 +67,6 @@ func newMockDiskMountOps() *mockDiskMountOps {
 }
 
 func (m *mockDiskMountOps) CreateDir(_ string, _ os.FileMode) error {
-	return nil
-}
-
-func (m *mockDiskMountOps) RemoveFile(_ string) error {
 	return nil
 }
 
@@ -126,10 +117,6 @@ func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error
 		}
 	}
 	return nil
-}
-
-func (m *mockDiskMountOps) LbdAvailable() bool {
-	return false
 }
 
 func (m *mockDiskMountOps) Mount(_, mountPath, _ string, _ bool) error {

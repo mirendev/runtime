@@ -28,4 +28,4 @@ miren debug ctr nuke [flags]
 
 ## See also
 
-- [`miren debug ctr`](/command/debug-ctr)
+- [`miren debug ctr`](./debug-ctr.md)

@@ -1,0 +1,53 @@
+//go:build linux
+
+package server
+
+import (
+	"context"
+
+	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/entitysync"
+)
+
+type cloudControlBootOutput struct {
+	cloud *coordinate.CloudControl
+}
+
+type cloudControlBoot struct {
+	component   *boot.Component
+	output      boot.Output[cloudControlBootOutput]
+	value       *coordinate.CloudControl
+	diagnostics *entitysync.Diagnostics
+}
+
+func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applications boot.Output[applicationManagementBootOutput], maintenance, workloads *boot.Component, diagnostics *entitysync.Diagnostics) *cloudControlBoot {
+	b := &cloudControlBoot{diagnostics: diagnostics}
+	b.component, b.output = boot.Provide2(
+		"cloud-control", foundation, applications, b.start,
+		// Cloud startup status means the management, maintenance, and workload
+		// control planes are available. It does not promise ingress or build and
+		// deployment admission, which have their own readiness boundaries.
+		// Application management is an input rather than an ordering edge because
+		// the uplink reports the health it classifies.
+		boot.DependsOn(maintenance, workloads),
+		boot.WithStop(b.stop, componentStopTimeout),
+	)
+	return b
+}
+
+func (b *cloudControlBoot) start(ctx context.Context, foundation foundationBootOutput, applications applicationManagementBootOutput) (cloudControlBootOutput, error) {
+	cloud := coordinate.NewCloudControl(foundation.foundation, applications.applications, b.diagnostics)
+	if err := cloud.Start(ctx); err != nil {
+		return cloudControlBootOutput{}, err
+	}
+	b.value = cloud
+	return cloudControlBootOutput{cloud: cloud}, nil
+}
+
+func (b *cloudControlBoot) stop(context.Context) error {
+	if b.value != nil {
+		b.value.Stop()
+	}
+	return nil
+}

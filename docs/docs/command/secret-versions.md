@@ -42,4 +42,4 @@ miren secret versions payments/stripe-key
 
 ## See also
 
-- [`miren secret`](/command/secret)
+- [`miren secret`](./secret.md)

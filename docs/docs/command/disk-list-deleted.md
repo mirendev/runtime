@@ -29,4 +29,4 @@ miren disk list-deleted [flags]
 
 ## See also
 
-- [`miren disk`](/command/disk)
+- [`miren disk`](./disk.md)

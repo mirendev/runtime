@@ -37,15 +37,15 @@ miren route
 
 ## Subcommands
 
-- [`miren route down`](/command/route-down) — Put an HTTP route into maintenance
-- [`miren route list`](/command/route-list) — List all HTTP routes
-- [`miren route protect`](/command/route-protect) — Protect an HTTP route with an identity provider
-- [`miren route remove`](/command/route-remove) — Remove an HTTP route
-- [`miren route set`](/command/route-set) — Create or update an HTTP route
-- [`miren route set-default`](/command/route-set-default) — Set an app as the default route
-- [`miren route show`](/command/route-show) — Show details of an HTTP route
-- [`miren route timeout`](/command/route-timeout) — Override the ingress request timeout for an HTTP route
-- [`miren route unprotect`](/command/route-unprotect) — Remove identity-provider protection from an HTTP route
-- [`miren route unset-default`](/command/route-unset-default) — Remove the default route
-- [`miren route up`](/command/route-up) — Bring an HTTP route out of maintenance
-- [`miren route waf`](/command/route-waf) — Manage WAF protection on an HTTP route
+- [`miren route down`](./route-down.md) — Put an HTTP route into maintenance
+- [`miren route list`](./route-list.md) — List all HTTP routes
+- [`miren route protect`](./route-protect.md) — Protect an HTTP route with an identity provider
+- [`miren route remove`](./route-remove.md) — Remove an HTTP route
+- [`miren route set`](./route-set.md) — Create or update an HTTP route
+- [`miren route set-default`](./route-set-default.md) — Set an app as the default route
+- [`miren route show`](./route-show.md) — Show details of an HTTP route
+- [`miren route timeout`](./route-timeout.md) — Override the ingress request timeout for an HTTP route
+- [`miren route unprotect`](./route-unprotect.md) — Remove identity-provider protection from an HTTP route
+- [`miren route unset-default`](./route-unset-default.md) — Remove the default route
+- [`miren route up`](./route-up.md) — Bring an HTTP route out of maintenance
+- [`miren route waf`](./route-waf.md) — Manage WAF protection on an HTTP route

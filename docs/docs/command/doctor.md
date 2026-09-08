@@ -37,6 +37,6 @@ miren doctor
 
 ## Subcommands
 
-- [`miren doctor auth`](/command/doctor-auth) — Check authentication and user information
-- [`miren doctor config`](/command/doctor-config) — Check configuration files
-- [`miren doctor server`](/command/doctor-server) — Check server health and connectivity
+- [`miren doctor auth`](./doctor-auth.md) — Check authentication and user information
+- [`miren doctor config`](./doctor-config.md) — Check configuration files
+- [`miren doctor server`](./doctor-server.md) — Check server health and connectivity

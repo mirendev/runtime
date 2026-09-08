@@ -150,9 +150,3 @@ func scanPagedFunc(ctx context.Context, client *clientv3.Client, prefix string, 
 
 	return nil
 }
-
-// scanPaged reads every key/value under prefix from the store's etcd client in
-// bounded pages. See the package-level scanPaged for why.
-func (s *EtcdStore) scanPaged(ctx context.Context, prefix string, opts ...scanOption) ([]*mvccpb.KeyValue, error) {
-	return scanPaged(ctx, s.client, prefix, opts...)
-}

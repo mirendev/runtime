@@ -32,4 +32,4 @@ miren disk restore [flags]
 
 ## See also
 
-- [`miren disk`](/command/disk)
+- [`miren disk`](./disk.md)

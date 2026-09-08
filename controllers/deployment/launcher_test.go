@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
@@ -21,6 +22,7 @@ import (
 	apiserver "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
@@ -724,6 +726,53 @@ func TestUpdatePoolPreservesMetadata(t *testing.T) {
 	assert.Empty(t, updatedPool.ReferencedByVersions, "should clear ReferencedByVersions")
 }
 
+func TestUpdatePoolSkipsUnchangedEntity(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service:          "web",
+		DesiredInstances: 0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version: entity.Id("version-1"),
+		},
+	}
+	poolID, err := server.Client.Create(ctx, "test-pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	// Normalize the explicit zero attributes that Encode omits. The second call
+	// then represents the minutely stale-drain retry from MIR-1780.
+	created, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	require.NoError(t, launcher.updatePool(ctx, &PoolWithEntity{
+		Pool:   pool,
+		Entity: *created.Entity().Entity(),
+	}))
+
+	normalized, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	var unchanged compute_v1alpha.SandboxPool
+	unchanged.Decode(normalized.Entity().Entity())
+	revision := normalized.Entity().Revision()
+	updatedAt := normalized.Entity().Entity().GetUpdatedAt()
+
+	require.NoError(t, launcher.updatePool(ctx, &PoolWithEntity{
+		Pool:   &unchanged,
+		Entity: *normalized.Entity().Entity(),
+	}))
+
+	after, err := server.EAC.Get(ctx, poolID.String())
+	require.NoError(t, err)
+	assert.Equal(t, revision, after.Entity().Revision(), "no-op update must not advance the revision")
+	assert.Equal(t, updatedAt, after.Entity().Entity().GetUpdatedAt(), "no-op update must not advance UpdatedAt")
+}
+
 // TestAutoModePoolReusePreservesDesiredInstances tests that when reusing a pool
 // for an auto mode service, the launcher does NOT reset desired_instances.
 // For auto mode, the activator manages desired_instances based on traffic,
@@ -805,6 +854,92 @@ func TestAutoModePoolReusePreservesDesiredInstances(t *testing.T) {
 		"auto mode pool desired_instances should be preserved (not reset to 1)")
 	assert.Contains(t, pool.ReferencedByVersions, version.ID,
 		"pool should still reference the version")
+}
+
+// TestAutoModeDrainedPoolOnlyRevivesForNewVersion guards the distinction between
+// a minutely steady-state resync and a deploy. An idle pool must remain at zero
+// while it already points at the active version, but a new version reusing that
+// pool must boot once so the deploy is verified.
+func TestAutoModeDrainedPoolOnlyRevivesForNewVersion(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	newVersion := func(name string) *core_v1alpha.AppVersion {
+		t.Helper()
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: "web:latest",
+			Config: core_v1alpha.Config{
+				Port: 8080,
+				Services: []core_v1alpha.Services{
+					{
+						Name: "web",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+							ScaleDownDelay:      "15m",
+						},
+					},
+				},
+			},
+		}
+		verID, createErr := server.Client.Create(ctx, name, ver)
+		require.NoError(t, createErr)
+		ver.ID = verID
+		return ver
+	}
+
+	v1 := newVersion("v1")
+	app.ActiveVersion = v1.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	poolID := pools[0].ID
+
+	// Simulate the autoscaler draining the current version after its idle delay.
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, 0),
+	}, 0)
+	require.NoError(t, err)
+
+	// A resync of the same active version must preserve scale-to-zero.
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, poolID, pools[0].ID)
+	assert.Equal(t, int64(0), pools[0].DesiredInstances,
+		"steady-state resync must not revive an idle pool")
+	assert.Equal(t, v1.ID, pools[0].SandboxSpec.Version)
+
+	// A real deploy with the same sandbox spec reuses the pool, but it must boot
+	// the new version once for verification.
+	v2 := newVersion("v2")
+	app.ActiveVersion = v2.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "same spec should reuse the drained pool")
+	assert.Equal(t, poolID, pools[0].ID)
+	assert.Equal(t, int64(1), pools[0].DesiredInstances,
+		"new version should revive the pool for deploy verification")
+	assert.Equal(t, v2.ID, pools[0].SandboxSpec.Version)
+	assert.Contains(t, pools[0].ReferencedByVersions, v1.ID)
+	assert.Contains(t, pools[0].ReferencedByVersions, v2.ID)
 }
 
 // Helper functions
@@ -3205,6 +3340,28 @@ func TestDiskPoolDrainedBeforeNewPoolCreated(t *testing.T) {
 	assert.Equal(t, "local", poolV2.SandboxSpec.Volume[0].Provider)
 }
 
+func TestStoppedDisklessSandboxDoesNotBlockDiskPoolDrain(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	poolID := entity.Id("pool/stale-diskless")
+	_, err := server.Client.Create(ctx, "stopped-diskless", &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.STOPPED,
+	}, apiserver.WithLabels(types.LabelSet(
+		"pool", poolID.String(),
+		"service", "web",
+	)))
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+	active, err := launcher.hasActiveSandboxForPool(ctx, poolID, "web")
+	require.NoError(t, err)
+	assert.False(t, active, "a stopped diskless sandbox cannot conflict with a disk-backed replacement")
+}
+
 // TestDiskDrainWaitsForStoppedSandboxToDie verifies that STOPPED is only a
 // teardown request, not proof that the old process and its disk resources are
 // gone. The replacement pool must wait until the sandbox reaches DEAD.
@@ -3266,6 +3423,7 @@ func TestDiskDrainWaitsForStoppedSandboxToDie(t *testing.T) {
 	// finishes graceful shutdown and resource cleanup.
 	sb := &compute_v1alpha.Sandbox{
 		Status: compute_v1alpha.STOPPED,
+		Spec:   poolsV1[0].SandboxSpec,
 	}
 	sbID, err := server.Client.Create(ctx, "old-sandbox",
 		sb,
@@ -3328,6 +3486,22 @@ func TestDiskDrainWaitsForStoppedSandboxToDie(t *testing.T) {
 		"old pool should be scaled to 0")
 	assert.Empty(t, poolV1.ReferencedByVersions,
 		"old pool should have no version references")
+
+	// A periodic resync sees that the drain request is already persisted. It
+	// must neither rewrite the same pool nor wait for the full drain timeout.
+	firstDrainResp, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	firstDrainRevision := firstDrainResp.Entity().Revision()
+	launcher.PoolReadyTimeout = 2 * time.Second
+	started := time.Now()
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	assert.Less(t, time.Since(started), 500*time.Millisecond,
+		"an already-requested drain should not occupy the launcher until timeout")
+
+	secondDrainResp, err := server.EAC.Get(ctx, poolV1ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, firstDrainRevision, secondDrainResp.Entity().Revision(),
+		"an already-requested drain should not rewrite the pool")
 
 	// DEAD confirms shutdown and cleanup finished. The next reconcile may now
 	// create the replacement pool.
@@ -4137,6 +4311,81 @@ func TestCreatePoolForVersionSerializesWithReconcile(t *testing.T) {
 	// Exactly one pool — no duplicate creation.
 	pools := listAllPools(t, ctx, server)
 	assert.Len(t, pools, 1, "should create exactly one pool")
+}
+
+// TestAddonAssociationHandlerUsesPerAppLock proves addon-driven reconciliation
+// shares the main launcher's per-app lock. It also guards that locking one app
+// does not prevent another app from reconciling on the second worker.
+func TestAddonAssociationHandlerUsesPerAppLock(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	lockedApp := &core_v1alpha.App{Project: entity.Id("project-1")}
+	lockedAppID, err := server.Client.Create(ctx, "locked-app", lockedApp)
+	require.NoError(t, err)
+	lockedApp.ID = lockedAppID
+
+	otherApp := &core_v1alpha.App{Project: entity.Id("project-1")}
+	otherAppID, err := server.Client.Create(ctx, "other-app", otherApp)
+	require.NoError(t, err)
+	otherApp.ID = otherAppID
+
+	launcher := newTestLauncher(log, server.EAC)
+	val, _ := launcher.appMu.LoadOrStore(lockedApp.ID, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+
+	assoc := &addon_v1alpha.AddonAssociation{
+		ID:     entity.Id("addon-association/test"),
+		App:    lockedApp.ID,
+		Status: "active",
+	}
+	assocEntity := entity.New(
+		entity.DBId, assoc.ID,
+		assoc.Encode,
+	)
+
+	handlerDone := make(chan error, 1)
+	go func() {
+		_, handlerErr := launcher.AddonAssociationHandler()(ctx, controller.Event{
+			Type:   controller.EventUpdated,
+			Id:     assoc.ID,
+			Entity: assocEntity,
+		})
+		handlerDone <- handlerErr
+	}()
+
+	select {
+	case handlerErr := <-handlerDone:
+		mu.Unlock()
+		require.NoError(t, handlerErr)
+		t.Fatal("addon handler bypassed the app reconciliation lock")
+	case <-time.After(100 * time.Millisecond):
+		// The addon path is blocked on lockedApp as expected.
+	}
+
+	otherDone := make(chan error, 1)
+	go func() {
+		otherDone <- launcher.Reconcile(ctx, otherApp, nil)
+	}()
+	select {
+	case otherErr := <-otherDone:
+		require.NoError(t, otherErr)
+	case <-time.After(time.Second):
+		mu.Unlock()
+		t.Fatal("one app's reconciliation lock blocked another app")
+	}
+
+	mu.Unlock()
+	select {
+	case handlerErr := <-handlerDone:
+		require.NoError(t, handlerErr)
+	case <-time.After(time.Second):
+		t.Fatal("addon handler did not resume after the app lock was released")
+	}
 }
 
 // TestReapSkipsServicesWithoutEnsuredReplacement guards the gate that keeps

@@ -2,10 +2,8 @@ package run
 
 import (
 	"context"
-	"log/slog"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 )
@@ -18,20 +16,11 @@ import (
 // sit in running until the deadline sweep happened to look at it -- turning
 // every completion into a delay of up to the sweep interval.
 type SandboxWatchController struct {
-	Log *slog.Logger
-	EAC *entityserver_v1alpha.EntityAccessClient
-
 	RunController *controller.ReconcileController
 }
 
-func NewSandboxWatchController(
-	log *slog.Logger,
-	eac *entityserver_v1alpha.EntityAccessClient,
-	runController *controller.ReconcileController,
-) *SandboxWatchController {
+func NewSandboxWatchController(runController *controller.ReconcileController) *SandboxWatchController {
 	return &SandboxWatchController{
-		Log:           log.With("module", "run-sandbox-watch"),
-		EAC:           eac,
 		RunController: runController,
 	}
 }
@@ -43,7 +32,7 @@ func (w *SandboxWatchController) Create(ctx context.Context, sb *compute.Sandbox
 }
 
 func (w *SandboxWatchController) Update(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) error {
-	return w.wake(ctx, runIDFor(sb))
+	return w.wake(runIDFor(sb))
 }
 
 // Delete matters as much as Update. A sandbox deleted out from under a running
@@ -53,25 +42,17 @@ func (w *SandboxWatchController) Delete(ctx context.Context, id entity.Id, sb *c
 	if sb == nil {
 		return nil
 	}
-	return w.wake(ctx, runIDFor(sb))
+	return w.wake(runIDFor(sb))
 }
 
-func (w *SandboxWatchController) wake(ctx context.Context, runID entity.Id) error {
+func (w *SandboxWatchController) wake(runID entity.Id) error {
 	if runID == "" || w.RunController == nil {
 		return nil
 	}
 
-	resp, err := w.EAC.Get(ctx, runID.String())
-	if err != nil {
-		// The run is gone; its sandbox is now the GC's problem, not ours.
-		w.Log.Debug("sandbox references a run that no longer exists", "run", runID, "error", err)
-		return nil
-	}
-
 	w.RunController.Enqueue(controller.Event{
-		Type:   controller.EventUpdated,
-		Id:     runID,
-		Entity: resp.Entity().Entity(),
+		Type: controller.EventUpdated,
+		Id:   runID,
 	})
 	return nil
 }

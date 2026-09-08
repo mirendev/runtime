@@ -16,16 +16,17 @@ miren debug [flags]
 
 ## Subcommands
 
-- [`miren debug advertise`](/command/debug-advertise) — Show which addresses the server would advertise and why
-- [`miren debug bundle`](/command/debug-bundle) — Create a support bundle with system debug information
-- [`miren debug colors`](/command/debug-colors) — Print some colors
-- [`miren debug connection`](/command/debug-connection) — Test connectivity and authentication with a server
-- [`miren debug ctr`](/command/debug-ctr) — Run ctr with miren defaults
-- [`miren debug disk`](/command/debug-disk) — Disk entity debug commands
-- [`miren debug entity`](/command/debug-entity) — Entity store debug commands
-- [`miren debug etcdctl`](/command/debug-etcdctl) — Run etcdctl against Miren's embedded etcd
-- [`miren debug netdb`](/command/debug-netdb) — Network database debug commands
-- [`miren debug rbac`](/command/debug-rbac) — Fetch and display RBAC rules from miren.cloud
-- [`miren debug reindex`](/command/debug-reindex) — Rebuild all entity indexes from scratch
-- [`miren debug saga`](/command/debug-saga) — Saga execution debug commands
-- [`miren debug test`](/command/debug-test) — Debug test commands
+- [`miren debug advertise`](./debug-advertise.md) — Show which addresses the server would advertise and why
+- [`miren debug bundle`](./debug-bundle.md) — Create a support bundle with system debug information
+- [`miren debug cloud-sync`](./debug-cloud-sync.md) — Show runtime entity sync diagnostics
+- [`miren debug colors`](./debug-colors.md) — Print some colors
+- [`miren debug connection`](./debug-connection.md) — Test connectivity and authentication with a server
+- [`miren debug ctr`](./debug-ctr.md) — Run ctr with miren defaults
+- [`miren debug disk`](./debug-disk.md) — Disk entity debug commands
+- [`miren debug entity`](./debug-entity.md) — Entity store debug commands
+- [`miren debug etcdctl`](./debug-etcdctl.md) — Run etcdctl against Miren's embedded etcd
+- [`miren debug netdb`](./debug-netdb.md) — Network database debug commands
+- [`miren debug rbac`](./debug-rbac.md) — Fetch and display RBAC rules from miren.cloud
+- [`miren debug reindex`](./debug-reindex.md) — Rebuild all entity indexes from scratch
+- [`miren debug saga`](./debug-saga.md) — Saga execution debug commands
+- [`miren debug test`](./debug-test.md) — Debug test commands

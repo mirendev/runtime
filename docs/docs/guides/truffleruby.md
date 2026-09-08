@@ -9,21 +9,21 @@ import CliCommand from '@site/src/components/CliCommand';
 # TruffleRuby on Miren
 
 TruffleRuby is an alternative Ruby implementation built on GraalVM. Miren auto-detects
-standard (MRI) Ruby from a `Gemfile` — see [Ruby on Miren](/guides/ruby) — but to pin a
+standard (MRI) Ruby from a `Gemfile` — see [Ruby on Miren](./ruby.md) — but to pin a
 specific runtime like TruffleRuby you use a `Dockerfile.miren`. Your Ruby code and gems
 run unchanged.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this app on TruffleRuby on Miren" after installing
-the [Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, wires up Bundler
+the [Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, wires up Bundler
 and the server, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes — to run on TruffleRuby specifically. (Miren's auto-detection would pick MRI Ruby.)
 Add a `Dockerfile.miren` built on the GraalVM TruffleRuby image. See
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -73,8 +73,8 @@ require './app'
 run App
 ```
 
-Miren injects `PORT` and routes to it; you bind it via the Puma command in the Procfile
-below (`0.0.0.0` on `$PORT`).
+Miren injects `PORT` and routes to it; the Dockerfile's Puma `CMD` below binds
+`0.0.0.0` on that port.
 
 ## The Dockerfile
 
@@ -88,6 +88,7 @@ COPY Gemfile ./
 RUN bundle install
 COPY . /app
 EXPOSE 8080
+CMD ["sh", "-c", "exec bundle exec puma -b tcp://0.0.0.0:$PORT"]
 ```
 
 ### .dockerignore
@@ -96,14 +97,10 @@ EXPOSE 8080
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run Puma bound to the injected port:
-
-```procfile
-web: bundle exec puma -b tcp://0.0.0.0:$PORT
-```
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
 TruffleRuby warms up slowly (GraalVM startup plus gem loading), so raise `port_timeout`
 past the 15-second default, and keep one instance always running instead of autoscaling
@@ -146,19 +143,19 @@ miren env set -s DATABASE_URL
 ```
 </CliCommand>
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** MRI Ruby is auto-detected from a `Gemfile`; use `Dockerfile.miren` to pin TruffleRuby
 - **Base image:** `ghcr.io/graalvm/truffleruby-community:latest`; `bundle install` at build time
-- **Service is required:** `Procfile` `web: bundle exec puma -b tcp://0.0.0.0:$PORT` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Slow boot:** raise `port_timeout` (e.g. `"120s"`) past the 15s default, and pin `num_instances = 1` to stay warm
 - **Port:** Puma `-b tcp://0.0.0.0:$PORT`
 - **Env vars:** `miren env set -e/-s`; read with `ENV['KEY']`
 
 ## Next steps
 
-- [Ruby on Miren](/guides/ruby) — auto-detected MRI Ruby
-- [JRuby on Miren](/guides/jruby) — Ruby on the JVM
-- [Application Scaling](/scaling) — fixed vs. autoscaling
+- [Ruby on Miren](./ruby.md) — auto-detected MRI Ruby
+- [JRuby on Miren](./jruby.md) — Ruby on the JVM
+- [Application Scaling](../scaling.md) — fixed vs. autoscaling

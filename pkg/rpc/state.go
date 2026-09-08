@@ -152,6 +152,14 @@ type State struct {
 	// HTTP/3 Shutdown after the ordered boot stop has already drained it.
 	explicitStop     chan struct{}
 	explicitStopOnce sync.Once
+
+	// A State is both an RPC server and the owner of clients dialed through its
+	// shared QUIC transport. Those clients can call back into the same State.
+	// Close their side of every connection before draining the server, or a
+	// half-open WebTransport upgrade can leave Shutdown waiting on its own peer.
+	outboundMu     sync.Mutex
+	outboundConns  map[*quic.Conn]struct{}
+	outboundClosed bool
 }
 
 // contactAddr returns the address embedded in capabilities this server mints,
@@ -514,6 +522,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		server:          server,
 		transport:       &quic.Transport{Conn: udpConn},
 		explicitStop:    make(chan struct{}),
+		outboundConns:   make(map[*quic.Conn]struct{}),
 	}
 
 	s.qc = DefaultQUICConfig
@@ -719,12 +728,14 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 // bounded drain window.
 func (s *State) Shutdown(ctx context.Context) error {
 	s.disableContextShutdown()
-	// Stop server-owned background work and streaming RPCs before asking the
-	// network servers to drain. Unary request contexts remain transport-owned,
-	// so in-flight calls can still finish during the graceful shutdown window.
+	// Stop server-owned background work, streaming RPCs, and outgoing calls
+	// before asking the network servers to drain. Unary request contexts from
+	// other peers remain transport-owned, so in-flight calls can still finish
+	// during the graceful shutdown window.
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.closeOutboundConnections()
 	if s.localLn != nil {
 		_ = s.localLn.Close()
 	}
@@ -734,30 +745,30 @@ func (s *State) Shutdown(ctx context.Context) error {
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 	)
-	shutdown := func(fn func(context.Context) error) {
+	shutdown := func(name string, fn func(context.Context) error) {
 		if fn == nil {
 			return
 		}
 		wg.Go(func() {
 			if err := fn(ctx); err != nil {
 				mu.Lock()
-				errs = append(errs, err)
+				errs = append(errs, fmt.Errorf("shutting down %s: %w", name, err))
 				mu.Unlock()
 			}
 		})
 	}
 
 	if s.hs != nil {
-		shutdown(s.hs.Shutdown)
+		shutdown("HTTP/3", s.hs.Shutdown)
 	}
 	if s.localHS != nil {
-		shutdown(s.localHS.Shutdown)
+		shutdown("local HTTP/3", s.localHS.Shutdown)
 	}
 	if s.httpSrv != nil {
-		shutdown(s.httpSrv.Shutdown)
+		shutdown("WebSocket", s.httpSrv.Shutdown)
 	}
 	if s.restSrv != nil {
-		shutdown(s.restSrv.Shutdown)
+		shutdown("REST", s.restSrv.Shutdown)
 	}
 	if s.msgLn != nil {
 		_ = s.msgLn.Close()
@@ -785,6 +796,7 @@ func (s *State) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.closeOutboundConnections()
 	if s.li != nil {
 		_ = s.li.Close()
 	}
@@ -826,6 +838,41 @@ func (s *State) Close() error {
 	}
 
 	return s.transport.Conn.Close()
+}
+
+func (s *State) trackOutboundConn(conn *quic.Conn) {
+	s.outboundMu.Lock()
+	if s.outboundClosed {
+		s.outboundMu.Unlock()
+		_ = conn.CloseWithError(0, "state shutting down")
+		return
+	}
+	if s.outboundConns == nil {
+		s.outboundConns = make(map[*quic.Conn]struct{})
+	}
+	s.outboundConns[conn] = struct{}{}
+	s.outboundMu.Unlock()
+
+	go func() {
+		<-conn.Context().Done()
+		s.outboundMu.Lock()
+		delete(s.outboundConns, conn)
+		s.outboundMu.Unlock()
+	}()
+}
+
+func (s *State) closeOutboundConnections() {
+	s.outboundMu.Lock()
+	s.outboundClosed = true
+	conns := make([]*quic.Conn, 0, len(s.outboundConns))
+	for conn := range s.outboundConns {
+		conns = append(conns, conn)
+	}
+	s.outboundMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.CloseWithError(0, "state shutting down")
+	}
 }
 
 func (s *State) disableContextShutdown() {

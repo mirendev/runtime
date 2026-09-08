@@ -17,3 +17,10 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Released docs, materialized from a git ref by hack/docs-snapshot. Checking
+# them in would put a second copy of every page on main.
+/versioned_docs
+/versioned_sidebars
+/versions.json
+/released-version.txt

@@ -60,4 +60,4 @@ miren logs build v3 -a myapp
 
 ## See also
 
-- [`miren logs`](/command/logs)
+- [`miren logs`](./logs.md)

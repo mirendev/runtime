@@ -61,15 +61,11 @@ func BackfillMarker(
 		}
 		cursor := ""
 		for {
-			page, err := store.ListIndexPage(ctx, entity.Ref(entity.EntityKind, kindID), cursor, pageSize)
-			if err != nil {
-				return stats, fmt.Errorf("list %s for cloud export: %w", kind.ID, err)
-			}
-			entities, err := store.GetEntities(ctx, page.Ids)
+			page, err := store.ListIndexEntitiesPage(ctx, entity.Ref(entity.EntityKind, kindID), cursor, pageSize)
 			if err != nil {
 				return stats, fmt.Errorf("read %s for cloud export: %w", kind.ID, err)
 			}
-			for _, source := range entities {
+			for _, source := range page.Entities {
 				if source == nil {
 					continue
 				}

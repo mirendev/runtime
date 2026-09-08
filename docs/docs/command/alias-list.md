@@ -27,4 +27,4 @@ miren alias list [flags]
 
 ## See also
 
-- [`miren alias`](/command/alias)
+- [`miren alias`](./alias.md)

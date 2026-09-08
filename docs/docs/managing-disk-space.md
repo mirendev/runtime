@@ -35,13 +35,13 @@ Each consumer has its own janitor running on its own schedule. Nothing here need
 
 | What accumulates | Reclaimed by | Default policy | Tune with |
 |------------------|-------------|----------------|-----------|
-| App versions | Version retention GC (hourly) | Keep the active version, the most-recent `retention_count` (10), and anything younger than `retention_period` (30d) | [`[app_version]`](/server-config#app-version) |
+| App versions | Version retention GC (hourly) | Keep the active version, the most-recent `retention_count` (10), and anything younger than `retention_period` (30d) | [`[app_version]`](./server-config.md#app-version) |
 | Images, snapshots, registry blobs | Image + blob GC (weekly, plus hourly under pressure) | Reclaim images whose version has been pruned | follows version retention |
-| Build cache | BuildKit | Cap at `gc_keep_storage` (10GB), evict entries older than `gc_keep_duration` (7d) | [`[buildkit]`](/server-config#buildkit) |
-| Logs | VictoriaLogs | Keep `retention_period` (30d) | [`[victorialogs]`](/server-config#victorialogs) |
-| Metrics | VictoriaMetrics | Keep `retention_period` (1 month) | [`[victoriametrics]`](/server-config#victoriametrics) |
+| Build cache | BuildKit | Cap at `gc_keep_storage` (10GB), evict entries older than `gc_keep_duration` (7d) | [`[buildkit]`](./server-config.md#buildkit) |
+| Logs | VictoriaLogs | Keep `retention_period` (30d) | [`[victorialogs]`](./server-config.md#victorialogs) |
+| Metrics | VictoriaMetrics | Keep `retention_period` (1 month) | [`[victoriametrics]`](./server-config.md#victoriametrics) |
 | Preview versions | Ephemeral GC (every 5 min) | Delete past their TTL (default 24h), cap 10 per app | `--ttl` at deploy |
-| Deleted persistent disks | Deleted-volume GC (hourly) | Purge 7 days after deletion | see [Persistent Storage](/disks) |
+| Deleted persistent disks | Deleted-volume GC (hourly) | Purge 7 days after deletion | see [Persistent Storage](./disks.md) |
 
 The rest of this section walks through the two that matter most on a busy cluster; the others are covered by their config reference.
 
@@ -60,7 +60,7 @@ So reclaiming an image is eventually-consistent: after a version ages out, its d
 
 ### Preview versions
 
-Preview (ephemeral) deploys are handled separately. Each gets a TTL at deploy time (default 24h, set with `--ttl`), and a sweep every five minutes deletes the ones that have expired, tearing down their sandbox pools and letting their images flow through the same cascade above. Miren also caps previews at 10 per app, retiring the oldest as new ones arrive. See [Pull Request Environments](/pr-environments) for the full preview workflow.
+Preview (ephemeral) deploys are handled separately. Each gets a TTL at deploy time (default 24h, set with `--ttl`), and a sweep every five minutes deletes the ones that have expired, tearing down their sandbox pools and letting their images flow through the same cascade above. Miren also caps previews at 10 per app, retiring the oldest as new ones arrive. See [Pull Request Environments](./pr-environments.md) for the full preview workflow.
 
 ## Under disk pressure
 
@@ -79,7 +79,7 @@ The 80% threshold is the same for both collectors, kept in sync so version pruni
 
 The automatic policy handles the steady state, but if a node is running hot, here's where to look and what to reach for:
 
-- **Images from frequent deploys** are the usual culprit. You don't have to wait for the 80% trigger — lower `retention_period` (or lean on `retention_count`) in [`[app_version]`](/server-config#app-version) to age versions out sooner, and the cascade reclaims their images on the next few sweeps.
-- **Build cache** growing past what you expect: tighten `gc_keep_storage` in [`[buildkit]`](/server-config#buildkit).
-- **Logs or metrics** eating space: shorten the `retention_period` for [`[victorialogs]`](/server-config#victorialogs) or [`[victoriametrics]`](/server-config#victoriametrics).
-- **Persistent disk data** is your application's own, and Miren won't reclaim it. If a deleted disk is still holding space, remember there's a 7-day undelete window before the deleted-volume GC purges it for good — see [Persistent Storage](/disks).
+- **Images from frequent deploys** are the usual culprit. You don't have to wait for the 80% trigger — lower `retention_period` (or lean on `retention_count`) in [`[app_version]`](./server-config.md#app-version) to age versions out sooner, and the cascade reclaims their images on the next few sweeps.
+- **Build cache** growing past what you expect: tighten `gc_keep_storage` in [`[buildkit]`](./server-config.md#buildkit).
+- **Logs or metrics** eating space: shorten the `retention_period` for [`[victorialogs]`](./server-config.md#victorialogs) or [`[victoriametrics]`](./server-config.md#victoriametrics).
+- **Persistent disk data** is your application's own, and Miren won't reclaim it. If a deleted disk is still holding space, remember there's a 7-day undelete window before the deleted-volume GC purges it for good — see [Persistent Storage](./disks.md).

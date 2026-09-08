@@ -42,4 +42,4 @@ miren deploy cancel -d dep_abc123
 
 ## See also
 
-- [`miren deploy`](/command/deploy)
+- [`miren deploy`](./deploy.md)

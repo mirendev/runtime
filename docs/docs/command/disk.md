@@ -16,7 +16,7 @@ miren disk [flags]
 
 ## Subcommands
 
-- [`miren disk backup`](/command/disk-backup) — Backup a disk to a snapshot file
-- [`miren disk list-deleted`](/command/disk-list-deleted) — List deleted disks available for recovery
-- [`miren disk restore`](/command/disk-restore) — Restore a disk from a snapshot file
-- [`miren disk undelete`](/command/disk-undelete) — Restore a recently deleted disk
+- [`miren disk backup`](./disk-backup.md) — Backup a disk to a snapshot file
+- [`miren disk list-deleted`](./disk-list-deleted.md) — List deleted disks available for recovery
+- [`miren disk restore`](./disk-restore.md) — Restore a disk from a snapshot file
+- [`miren disk undelete`](./disk-undelete.md) — Restore a recently deleted disk

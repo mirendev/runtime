@@ -3,6 +3,7 @@ package saga
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -50,43 +51,99 @@ func (m *MemoryStorage) Get(ctx context.Context, id string) (*Execution, error) 
 	return exec, nil
 }
 
-// ListIncomplete returns all executions that need recovery.
-// This includes pending (crashed before starting), running, and undoing sagas.
-func (m *MemoryStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
+// ListIncompletePage returns one bounded page of executions needing recovery:
+// pending (crashed before starting), running, and undoing.
+//
+// The map has no order of its own, so the ids are sorted to give paging a
+// stable sequence to resume in. That costs O(n) per page, which is fine for a
+// backend that holds everything in memory anyway and is the price of behaving
+// like the durable backends for the tests that exercise all three.
+func (m *MemoryStorage) ListIncompletePage(ctx context.Context, q IncompleteQuery) (*IncompletePage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var result []*Execution
-	for _, exec := range m.executions {
+	var ids []string
+	for id, exec := range m.executions {
 		switch exec.Status {
 		case StatusPending, StatusRunning, StatusUndoing:
-			result = append(result, exec)
+			ids = append(ids, id)
 		case StatusCompleted, StatusFailed:
 			// Terminal states are complete; skip them.
 		}
 	}
-	return result, nil
+
+	ids, next := pageSortedIDs(ids, q.Cursor, clampLimit(q.Limit))
+
+	executions := make([]*Execution, 0, len(ids))
+	for _, id := range ids {
+		executions = append(executions, m.executions[id])
+	}
+
+	return &IncompletePage{Executions: executions, Cursor: next}, nil
 }
 
-// ListTerminal summarizes the executions that have finished.
-func (m *MemoryStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
+// ListTerminalPage summarizes one bounded page of finished executions.
+func (m *MemoryStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (*TerminalPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var result []TerminalExecution
-	for _, exec := range m.executions {
+	var ids []string
+	for id, exec := range m.executions {
 		switch exec.Status {
 		case StatusCompleted, StatusFailed:
-			result = append(result, TerminalExecution{
-				ID:         exec.ID,
-				FinishedAt: exec.UpdatedAt,
-				ParentID:   exec.ParentExecutionID,
-			})
+			ids = append(ids, id)
 		case StatusPending, StatusRunning, StatusUndoing:
 			// Still in flight; retention does not apply.
 		}
 	}
-	return result, nil
+
+	ids, next := pageSortedIDs(ids, q.Cursor, clampLimit(q.Limit))
+
+	result := make([]TerminalExecution, 0, len(ids))
+	for _, id := range ids {
+		exec := m.executions[id]
+		result = append(result, TerminalExecution{
+			ID:         exec.ID,
+			FinishedAt: exec.UpdatedAt,
+			ParentID:   exec.ParentExecutionID,
+		})
+	}
+
+	return &TerminalPage{Executions: result, Cursor: next}, nil
+}
+
+// pageSortedIDs slices one page out of an unordered id set, returning the page
+// and the cursor that resumes after it.
+//
+// The cursor is the last id in the page, and is set only when something
+// actually follows it. Handing one back merely because the page filled would
+// give the caller a cursor to nothing every time the set ends exactly on a page
+// boundary, and the caller cannot tell that from a real continuation without
+// making the extra round trip that paging exists to avoid.
+func pageSortedIDs(ids []string, cursor string, limit int) ([]string, string) {
+	slices.Sort(ids)
+
+	if cursor != "" {
+		idx, _ := slices.BinarySearch(ids, cursor)
+		for idx < len(ids) && ids[idx] <= cursor {
+			idx++
+		}
+		ids = ids[idx:]
+	}
+
+	if len(ids) > limit {
+		return ids[:limit], ids[limit-1]
+	}
+
+	return ids, ""
 }
 
 // Delete removes an execution. Deleting a missing execution is a no-op.

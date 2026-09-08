@@ -164,7 +164,7 @@ generate_command_doc() {
     if [ -n "$required_feature" ] && ! is_default_on "$required_feature"; then
       echo ""
       echo ":::note[Labs feature]"
-      echo "This command requires the \`$required_feature\` [labs feature](/labs) to be enabled."
+      echo "This command requires the \`$required_feature\` [labs feature](../labs.md) to be enabled."
       echo ":::"
     fi
 
@@ -300,9 +300,9 @@ generate_command_doc() {
         local sub_usage
         sub_usage=$(jq -r --arg p "$sub" '.[] | select(.path == $p) | .usage' "$WORK_DIR/all_commands.json")
         if [ -n "$sub_usage" ]; then
-          echo "- [\`miren $sub\`](/command/$sub_filename) — $sub_usage"
+          echo "- [\`miren $sub\`](./$sub_filename.md) — $sub_usage"
         else
-          echo "- [\`miren $sub\`](/command/$sub_filename)"
+          echo "- [\`miren $sub\`](./$sub_filename.md)"
         fi
       done <<< "$subcmd_paths"
     fi
@@ -314,7 +314,7 @@ generate_command_doc() {
       echo ""
       echo "## See also"
       echo ""
-      echo "- [\`miren $parent_path\`](/command/$parent_filename)"
+      echo "- [\`miren $parent_path\`](./$parent_filename.md)"
     fi
 
   } > "$outfile"
@@ -343,7 +343,7 @@ generate_commands_index() {
       (.path | gsub(" "; "-")) as $filename |
       (.requiredFeature // "") as $feat |
       (if $feat != "" and ($on | index($feat)) == null then " _(`\($feat)`)_" else "" end) as $badge |
-      "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
+      "| [`miren \(.path)`](./command/\($filename).md) | \(.usage)\($badge) |"
     ] | join("\n")) +
     "\n"
   ' "$WORK_DIR/all_commands.json" > "$WORK_DIR/command_sections.md"
@@ -357,7 +357,7 @@ generate_commands_index() {
         (.path | gsub(" "; "-")) as $filename |
         (.requiredFeature // "") as $feat |
         (if $feat != "" and ($on | index($feat)) == null then " _(`\($feat)`)_" else "" end) as $badge |
-        "| [`miren \(.path)`](/command/\($filename)) | \(.usage)\($badge) |"
+        "| [`miren \(.path)`](./command/\($filename).md) | \(.usage)\($badge) |"
       ] | join("\n")) +
       "\n"
     else empty end

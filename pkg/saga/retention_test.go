@@ -277,7 +277,7 @@ func TestListTerminal_LegacyExecutionsUseStoreTimestamp(t *testing.T) {
 				ExecutionOrder:  []string{},
 			}))
 
-			terminal, err := tc.storage.ListTerminal(ctx)
+			terminal, err := collectTerminal(ctx, tc.storage)
 			require.NoError(t, err)
 
 			var found *TerminalExecution

@@ -62,4 +62,4 @@ miren route waf example.com --disable
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

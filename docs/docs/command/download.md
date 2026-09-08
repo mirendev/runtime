@@ -16,4 +16,4 @@ miren download [flags]
 
 ## Subcommands
 
-- [`miren download release`](/command/download-release) — Download and extract miren release
+- [`miren download release`](./download-release.md) — Download and extract miren release

@@ -33,6 +33,10 @@ type MockStore struct {
 	// WatchFromRevs records the fromRev argument of every WatchIndex call, in
 	// order, so tests can assert resume behavior.
 	WatchFromRevs []int64
+
+	// staleIndexEntries holds fault-injected index entries, keyed by attr.CAS().
+	// See AddStaleIndexEntry.
+	staleIndexEntries map[string][]Id
 }
 
 var _ Store = &MockStore{}
@@ -109,6 +113,40 @@ func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error
 		}
 	}
 	return entities, nil
+}
+
+// ListIndexEntitiesPage composes the mock's own paging and batch read.
+//
+// It reports nothing undecodable and ignores the revision when resolving
+// entities: the mock keeps one version of each entity, so there is no history
+// to read at and nothing stored that could fail to decode. It cannot prove a
+// caller pinned the right revision, which is what the EtcdStore conformance
+// case is for. What it can still check is that a caller handles nils, indexes
+// the map without a nil check, and walks the cursor to the end.
+func (m *MockStore) ListIndexEntitiesPage(
+	ctx context.Context,
+	attr Attr,
+	cursor string,
+	limit int64,
+) (*EntityPage, error) {
+	page, err := m.ListIndexPage(ctx, attr, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	entities, err := m.GetEntities(ctx, page.Ids)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityPage{
+		Ids:         page.Ids,
+		Entities:    entities,
+		Undecodable: map[Id]bool{},
+		Cursor:      page.Cursor,
+		Total:       page.Total,
+		Revision:    page.Revision,
+	}, nil
 }
 
 // validateSessionAttrs checks that if any attributes are session-scoped,
@@ -574,17 +612,43 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var ids []Id
+	seen := make(map[Id]bool)
 	for id, entity := range m.Entities {
 		allAttrs := enumerateAllAttrs(entity.attrs)
 		for _, a := range allAttrs {
 			if a.ID == attr.ID && a.Value.Equal(attr.Value) {
 				ids = append(ids, id)
+				seen[id] = true
 				break
 			}
 		}
 	}
 
+	// Deduplicated because an index is a keyspace: it cannot hold the same
+	// entity twice under one value.
+	for _, id := range m.staleIndexEntries[attr.CAS()] {
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+
 	return ids, nil
+}
+
+// AddStaleIndexEntry makes ListIndex report id under attr even though the stored
+// entity does not carry that value. MockStore derives its index from live
+// attributes and so cannot drift on its own; this is how a test reaches the case
+// where EtcdStore's separate collection keyspace disagrees with the entity.
+func (m *MockStore) AddStaleIndexEntry(attr Attr, id Id) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.staleIndexEntries == nil {
+		m.staleIndexEntries = make(map[string][]Id)
+	}
+	key := attr.CAS()
+	m.staleIndexEntries[key] = append(m.staleIndexEntries[key], id)
 }
 
 // ListIndexRevision returns the matching ids along with a revision. The mock

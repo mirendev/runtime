@@ -13,14 +13,22 @@ func TestSandboxList(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 
+	const envCanary = "mir1765-must-not-appear-in-sandbox-inventory"
 	name := harness.DeployApp(t, m, harness.AppOptions{
 		Testdata: "go-server",
+		Env:      []string{"MIR1765_CANARY=" + envCanary},
 	})
 
 	// List sandboxes — our app's sandbox should appear in the output.
 	// Use JSON format since the table view shows short IDs, not app names.
 	r := m.MustRun("sandbox", "list", "--format", "json")
 	r.RequireContains(t, name)
+	if strings.Contains(r.Stdout, envCanary) {
+		t.Fatalf("sandbox inventory leaked a resolved environment value:\n%s", r.Stdout)
+	}
+	if strings.Contains(r.Stdout, `"spec"`) {
+		t.Fatalf("sandbox inventory exposed the raw execution spec:\n%s", r.Stdout)
+	}
 
 	t.Run("app-filter", func(t *testing.T) {
 		r := m.MustRun("sandbox", "list", "--app", name)

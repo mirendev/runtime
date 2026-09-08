@@ -67,4 +67,4 @@ miren route down --default --reason "Cluster upgrade"
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

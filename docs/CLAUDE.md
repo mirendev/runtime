@@ -47,3 +47,51 @@ Rules:
 
 `hack/gen-command-docs` also emits admonitions; keep it consistent with the
 above. The docs lint (`bun run lint`) enforces these rules.
+
+## Versions
+
+miren.md serves the docs for the released version. The docs on `main` are
+published alongside them at `/next`, behind a banner linking back to the
+released page. Nothing versioned is checked in: `hack/docs-snapshot`
+materializes the released copy from a git ref at build time, and a plain
+checkout has no versions at all, so `bun run dev` and PR preview builds show
+this branch's docs at the root the way they always have.
+
+To see the versioned layout locally, run `hack/docs-snapshot` and then
+`bun run build`. It is safe to leave the snapshot lying around; it is
+gitignored. Delete `docs/versioned_docs` to go back to a single-version site.
+
+Write for `main`. A page describing unreleased behavior can merge as soon as
+it is right, and goes live at the root when the release ships: the release
+workflow dispatches the docs deploy once a stable tag is built, since the tag
+itself never touches `docs/` and so triggers nothing on its own.
+
+Correcting the live docs before the next release follows the hotfix flow in
+RFD-40: land the fix on `main` first, then cherry-pick it onto `release/X.Y`
+for the released minor, creating that branch off the tag if it doesn't exist.
+Pushing it republishes the site. If a code hotfix later cuts `vX.Y.1` from the same
+branch, the correction is already sitting on it.
+
+Mind the missing `v`. A `release/vX.Y.Z` branch is one version being cut from
+`main`, which is how every release has been cut so far; `release/X.Y` is a
+released minor being maintained. Only the second kind changes what miren.md
+serves, and a docs correction is likely to be the first thing that ever needs
+one.
+
+`/next` is kept out of search results with `noIndex` on the current version
+rather than a `robots.txt` rule: `Disallow` stops the crawl, so the crawler
+never reads the `noindex`, and a linked URL can still be indexed on the
+strength of the link alone. Because nothing in `robots.txt` holds Algolia back
+any more, its exclusion has to live in the crawler config.
+
+Algolia should therefore index only the released docs, which is why
+`contextualSearch` is off: with one version in the index there is nothing to
+narrow, and leaving it on would filter `/next` queries down to nothing. That
+holds only once `/next` is in the crawler's exclusions and a crawl has run;
+until then the index can still pick up or retain `/next` pages.
+
+Links between docs pages must be relative (`./secrets.md`, `../labs.md`), not
+site-absolute (`/secrets`). A site-absolute link resolves against whatever
+version is at the site root, so from `/next` it walks the reader back into the
+released docs, and the broken-link check can't see it because the page does
+exist. `bun run lint` enforces this.

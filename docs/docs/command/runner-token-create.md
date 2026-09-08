@@ -53,4 +53,4 @@ miren runner token create --addr 10.0.0.5:8443
 
 ## See also
 
-- [`miren runner token`](/command/runner-token)
+- [`miren runner token`](./runner-token.md)

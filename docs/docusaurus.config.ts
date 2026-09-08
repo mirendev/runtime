@@ -1,3 +1,4 @@
+import {existsSync, readFileSync} from 'fs';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
@@ -44,6 +45,59 @@ function filterAncestorWatchesPlugin() {
     },
   };
 }
+
+// The CLI loads this config through jiti when it runs under Node, which
+// transpiles to CJS, where the import.meta form of the site directory is a
+// syntax error. __dirname is the spelling that survives that, and cwd covers a
+// loader that provides neither: every entry point runs from the site dir.
+const configDir = typeof __dirname === 'string' ? __dirname : process.cwd();
+
+// hack/docs-snapshot materializes the released docs into version-latest, which
+// then serves at the site root while main serves at /next. The snapshot isn't
+// checked in, so a plain checkout has no versions at all and builds main at the
+// root, which is what local development wants and what PR builds get.
+const releasedDocsDir = `${configDir}/versioned_docs/version-latest`;
+const hasReleasedDocs = existsSync(releasedDocsDir);
+
+// docusaurus-plugin-llms reads the docs tree itself rather than going through
+// the docs plugin, so it has no idea versioning exists. Left alone it publishes
+// main's markdown at the released URLs: /observability.md would serve
+// unreleased docs with none of the banner the HTML page carries, and llms.txt
+// would advertise pages that 404 at the root. Point it at the same snapshot the
+// site root is built from. preserveDirectoryStructure: false already strips the
+// configured docsDir prefix, so the emitted paths stay root-relative.
+const llmsDocsDir = hasReleasedDocs ? 'versioned_docs/version-latest' : 'docs';
+
+const releasedDocs = hasReleasedDocs
+  ? {
+      lastVersion: 'latest',
+      // The navbar dropdown already names the version on every page, and /next
+      // carries the unreleased banner on top of that. The per-page badge is a
+      // third copy of the same fact sitting above the title, where the content
+      // should be.
+      versions: {
+        latest: {
+          label: readFileSync(
+            `${configDir}/released-version.txt`,
+            'utf8',
+          ).trim(),
+          path: '',
+          badge: false,
+        },
+        current: {
+          label: 'main',
+          path: 'next',
+          banner: 'unreleased' as const,
+          badge: false,
+          // Keeps /next out of search results. robots.txt can't do this job:
+          // Disallow stops the crawl, which means the crawler never reads the
+          // noindex, and a linked URL can still be indexed on the strength of
+          // the link alone.
+          noIndex: true,
+        },
+      },
+    }
+  : {};
 
 const config: Config = {
   title: 'Miren Docs',
@@ -94,6 +148,7 @@ const config: Config = {
         generateLLMsTxt: true,
         generateLLMsFullTxt: true,
         generateMarkdownFiles: true,
+        docsDir: llmsDocsDir,
         // Docs are served from the site root, so emit Markdown beside the
         // corresponding HTML route rather than under build/docs/.
         preserveDirectoryStructure: false,
@@ -130,9 +185,18 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
+          ...releasedDocs,
+          // Every page is authored on main, including the released ones: a
+          // correction is a normal docs PR, cherry-picked onto docs-latest
+          // only when it can't wait for the next release.
           editUrl: 'https://github.com/mirendev/runtime/tree/main/docs/',
         },
         blog: false,
+        // /next is the same pages mid-flight. Leaving it in the sitemap would
+        // offer search engines two of everything.
+        sitemap: {
+          ignorePatterns: ['/next/**'],
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -160,7 +224,12 @@ const config: Config = {
         srcDark: 'img/logo.svg',
       },
       items: [
-{
+        {
+          type: 'docsVersionDropdown',
+          position: 'right',
+          dropdownActiveClassDisabled: true,
+        },
+        {
           type: 'search',
           position: 'right',
         },
@@ -174,6 +243,11 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
+      // These are root-relative, so from /next they land on the released docs.
+      // That is deliberate: the footer is site chrome pointing at the canonical
+      // docs, and every /next page already carries a banner saying where the
+      // reader is. Making them version-aware means shadowing Footer/LinkItem,
+      // which is a theme component to maintain forever for three links.
       links: [
         {
           title: 'Docs',
@@ -208,7 +282,14 @@ const config: Config = {
       appId: 'UMQ0GOVXIG',
       apiKey: '9ac12cfcf7f3cdb2ccd3fe48548cc1ed',
       indexName: 'Miren Docs',
-      contextualSearch: true,
+      // The crawler only indexes the released docs at the site root, so there
+      // is exactly one version and one locale in the index and nothing for
+      // contextual filtering to narrow. Leaving it on would filter every query
+      // by the page's own docusaurus_tag, which returns nothing at all from
+      // /next and nothing from the root until the next crawl re-tags the
+      // index. Off, /next searches the released docs, which is the best answer
+      // available for pages that aren't indexed.
+      contextualSearch: false,
       searchPagePath: 'search',
       // Send click & conversion events to Algolia so we can see which search
       // results people actually open (Click Analytics in the Algolia

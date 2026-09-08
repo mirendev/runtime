@@ -50,4 +50,4 @@ miren runner install --token mren_...
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

@@ -42,4 +42,4 @@ miren server container status --follow
 
 ## See also
 
-- [`miren server container`](/command/server-container)
+- [`miren server container`](./server-container.md)

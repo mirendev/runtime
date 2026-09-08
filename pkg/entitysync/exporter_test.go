@@ -55,6 +55,13 @@ type lockedBuffer struct {
 	buf bytes.Buffer
 }
 
+func stampExportMetadata(ent *entity.Entity, revision int64) *entity.Entity {
+	ent.SetRevision(revision)
+	ent.SetCreatedAt(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	ent.SetUpdatedAt(time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC))
+	return ent
+}
+
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -391,14 +398,14 @@ func TestSnapshotFiltersEntities(t *testing.T) {
 		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	app.SetRevision(4)
+	stampExportMetadata(app, 4)
 	store.AddEntity(app.Id(), app)
 	deployment := entity.New(
 		entity.Ref(entity.DBId, "deployment/d1"),
 		(&core_v1alpha.Deployment{ID: "deployment/d1", AppName: "web", ErrorMessage: "token=super-secret"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	deployment.SetRevision(7)
+	stampExportMetadata(deployment, 7)
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
@@ -451,7 +458,7 @@ func TestSnapshotReadsAndSendsOnePinnedPageAtATime(t *testing.T) {
 			(&core_v1alpha.Deployment{ID: id, AppName: "marmalade"}).Encode(),
 			entity.Bool(marker, true),
 		)
-		deployment.SetRevision(int64(i + 1))
+		stampExportMetadata(deployment, int64(i+1))
 		store.AddEntity(id, deployment)
 	}
 
@@ -521,10 +528,11 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 		(&core_v1alpha.Deployment{ID: "deployment/d1", AppName: "web", Outcome: "in_progress"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	deployment.SetRevision(7)
+	stampExportMetadata(deployment, 7)
 	store.AddEntity(deployment.Id(), deployment)
 
 	tenant := testExporter(store)
+	tenant.diagnostics = NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
 	s := &stream{exporter: tenant, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
 	tenant.active = s
 	link := newFakeLink()
@@ -545,6 +553,8 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 			batch := payload.(ChangeBatch)
 			s.deliver(Ack{MessageID: batch.MessageID, Cursor: batch.ToRevision})
 		case TypeSnapshotComplete:
+			require.Zero(t, tenant.diagnostics.SnapshotStatus().CloudCursor,
+				"snapshot catch-up remains provisional until the snapshot commits")
 			complete := payload.(SnapshotComplete)
 			s.deliver(Ack{MessageID: complete.MessageID, Cursor: 8})
 		}
@@ -553,6 +563,7 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	cursor, _, err := s.snapshot(ctx, link)
 	require.NoError(t, err)
 	require.Equal(t, int64(8), cursor)
+	require.Equal(t, int64(8), tenant.diagnostics.SnapshotStatus().CloudCursor)
 	messages := link.sent()
 	require.Equal(t, []string{
 		TypeSnapshotBegin, TypeSnapshotBatch, TypeChangeBatch, TypeSnapshotComplete,
@@ -572,7 +583,7 @@ func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
 		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
 		entity.Bool(marker, true),
 	)
-	app.SetRevision(4)
+	stampExportMetadata(app, 4)
 	store.AddEntity(app.Id(), app)
 	s := &stream{exporter: testExporter(store), ctx: t.Context()}
 
@@ -916,11 +927,15 @@ func TestWatchBatchStopsAtLastDeliveredEvent(t *testing.T) {
 	store := entity.NewMockStore()
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
-		store.AddEntity(id, entity.New(
+		revision := int64(10)
+		if id == "deployment/b" {
+			revision = 20
+		}
+		store.AddEntity(id, stampExportMetadata(entity.New(
 			entity.Ref(entity.DBId, id),
 			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
 			entity.Bool(marker, true),
-		))
+		), revision))
 	}
 	exporter := testExporter(store)
 	stream := &stream{
@@ -942,7 +957,7 @@ func TestWatchBatchStopsAtLastDeliveredEvent(t *testing.T) {
 			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/a"), ModRevision: 10}},
 			{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte("deployment/b"), ModRevision: 20}},
 		},
-	}, 0)
+	}, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(20), cursor)
 	require.Len(t, link.sent(), 1)
@@ -953,11 +968,15 @@ func TestTailDeliversEveryCatchUpChunkBeforeStoreHead(t *testing.T) {
 	store := entity.NewMockStore()
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	for _, id := range []entity.Id{"deployment/a", "deployment/b"} {
-		store.AddEntity(id, entity.New(
+		revision := int64(10)
+		if id == "deployment/b" {
+			revision = 20
+		}
+		store.AddEntity(id, stampExportMetadata(entity.New(
 			entity.Ref(entity.DBId, id),
 			(&core_v1alpha.Deployment{ID: id, AppName: "web"}).Encode(),
 			entity.Bool(marker, true),
-		))
+		), revision))
 	}
 	exporter := testExporter(store)
 	stream := &stream{
@@ -1006,6 +1025,17 @@ func TestSendAndWaitTimesOutWithoutAcknowledgment(t *testing.T) {
 	require.ErrorContains(t, err, "await entity.change.batch ack")
 }
 
+func TestSnapshotAcknowledgmentUsesItsLongerDeadline(t *testing.T) {
+	exporter := testExporter(entity.NewMockStore())
+	exporter.ackTimeout = time.Hour
+	exporter.snapshotAckTimeout = 10 * time.Millisecond
+	stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+
+	_, err := stream.sendAndWait(newFakeLink(), TypeSnapshotComplete, struct{}{}, "snapshot-1")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "await entity.snapshot.complete ack")
+}
+
 func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
 	t.Run("session cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -1020,6 +1050,7 @@ func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
 
 	t.Run("cloud rejection", func(t *testing.T) {
 		exporter := testExporter(entity.NewMockStore())
+		exporter.diagnostics = NewDiagnostics("schema")
 		exporter.ackTimeout = time.Hour
 		stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
 		link := newFakeLink()
@@ -1029,6 +1060,8 @@ func TestSendAndWaitPreservesCancellationAndRejection(t *testing.T) {
 
 		_, err := stream.sendAndWait(link, TypeChangeBatch, struct{}{}, "message-1")
 		require.ErrorContains(t, err, "cloud rejected entity.change.batch: not accepted")
+		require.Nil(t, exporter.diagnostics.SnapshotStatus().LastAcknowledgment,
+			"a rejected message was not acknowledged by cloud")
 	})
 }
 

@@ -41,4 +41,4 @@ miren auth provider add password my-pw --password hunter2
 
 ## See also
 
-- [`miren auth provider add`](/command/auth-provider-add)
+- [`miren auth provider add`](./auth-provider-add.md)

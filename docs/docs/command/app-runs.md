@@ -53,8 +53,8 @@ miren app runs --task migrate --format json
 
 ## Subcommands
 
-- [`miren app runs cancel`](/command/app-runs-cancel) — End a run early
+- [`miren app runs cancel`](./app-runs-cancel.md) — End a run early
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

@@ -13,7 +13,6 @@ type DiskVolumeOps interface {
 	MoveVolumeDir(src, dst string) error
 	VolumePathExists(path string) bool
 	CreateDiskImage(path string, sizeBytes int64) error
-	RemoveDiskImage(path string) error
 }
 
 // ActiveMount describes a mount found on the running system.
@@ -44,7 +43,6 @@ type LoopBacking struct {
 // This interface enables testing without requiring actual loop device or mount operations.
 type DiskMountOps interface {
 	CreateDir(path string, perm os.FileMode) error
-	RemoveFile(path string) error
 	LoopAttach(imagePath string) (devicePath string, err error)
 	LoopDetach(devicePath string) error
 	// FindLoopByBacking returns the loop device path (e.g. /dev/loop3) currently
@@ -57,7 +55,6 @@ type DiskMountOps interface {
 	FindAllLoopBackings() (map[string]LoopBacking, error)
 	LbdAttach(ctx context.Context, imagePath, logDir string) (devicePath string, err error)
 	LbdDetach(ctx context.Context, devicePath string) error
-	LbdAvailable() bool
 	Mount(device, mountPath, filesystem string, readOnly bool) error
 	Unmount(path string) error
 	IsMounted(path string) bool

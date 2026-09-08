@@ -10,9 +10,8 @@
 // Use ProvideN for a component that publishes a value to downstream work. Its
 // start callback must not return until that value is ready to use; the graph can
 // order callback completion, but it cannot infer what readiness means for the
-// value. Use RunN for side-effect-only work at the edge of the graph. A RunN
-// callback may install long-lived background work and return because it
-// publishes nothing for another component to consume.
+// value. Use RunN for side-effect-only work. A dependent component can name
+// that work with DependsOn when it needs completion but no value from it.
 package boot
 
 import (
@@ -92,8 +91,26 @@ func (s *outputState[T]) publish(value T) {
 // StopFunc stops a component.
 type StopFunc func(context.Context) error
 
-// Option adds lifecycle behavior to a provided or side-effect-only component.
+// Option adds dependencies or lifecycle behavior to a component.
 type Option func(*Component)
+
+type componentDependency struct {
+	producer *Component
+}
+
+func (d componentDependency) producerComponent() *Component {
+	return d.producer
+}
+
+// DependsOn adds order-only edges to a component. Use it when startup must
+// wait for side-effect-only work that has no value to publish.
+func DependsOn(dependencies ...*Component) Option {
+	return func(component *Component) {
+		for _, dependency := range dependencies {
+			component.inputs = append(component.inputs, componentDependency{producer: dependency})
+		}
+	}
+}
 
 // WithStop adds a stop function and its component-specific timeout. A zero
 // timeout uses the Graph.Stop caller's context directly.

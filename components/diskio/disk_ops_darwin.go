@@ -38,10 +38,6 @@ func (s *stubDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	return fmt.Errorf("disk images not supported on darwin")
 }
 
-func (s *stubDiskVolumeOps) RemoveDiskImage(path string) error {
-	return os.Remove(path)
-}
-
 type stubDiskMountOps struct{}
 
 func NewRealDiskMountOps(_ *slog.Logger) DiskMountOps {
@@ -50,10 +46,6 @@ func NewRealDiskMountOps(_ *slog.Logger) DiskMountOps {
 
 func (s *stubDiskMountOps) CreateDir(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
-}
-
-func (s *stubDiskMountOps) RemoveFile(path string) error {
-	return os.Remove(path)
 }
 
 func (s *stubDiskMountOps) LoopAttach(_ string) (string, error) {
@@ -78,10 +70,6 @@ func (s *stubDiskMountOps) LbdAttach(_ context.Context, _, _ string) (string, er
 
 func (s *stubDiskMountOps) LbdDetach(_ context.Context, _ string) error {
 	return fmt.Errorf("lbd not supported on darwin")
-}
-
-func (s *stubDiskMountOps) LbdAvailable() bool {
-	return false
 }
 
 func (s *stubDiskMountOps) Mount(_, _, _ string, _ bool) error {
