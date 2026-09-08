@@ -140,17 +140,6 @@ func (c *Config) UnmarshalYAML(unmarshal func(any) error) error {
 	return nil
 }
 
-// MarshalYAML implements the yaml.Marshaler interface
-func (c *Config) MarshalYAML() (any, error) {
-	return &ConfigData{
-		Active:     c.active,
-		Theme:      c.theme,
-		Clusters:   c.clusters,
-		Identities: c.identities,
-		Keys:       c.keys,
-	}, nil
-}
-
 func NewConfig() *Config {
 	cfg := &Config{
 		clusters:           make(map[string]*ClusterConfig),
