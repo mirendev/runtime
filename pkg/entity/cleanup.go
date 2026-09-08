@@ -281,7 +281,7 @@ func (s *EtcdStore) resolveJustified(
 	batch []collectionEntry,
 ) (justified map[Id]map[string]bool, unverifiable map[Id]bool, err error) {
 	ids := distinctEntityIDs(batch)
-	entities, undecodable, err := s.getEntities(ctx, ids, false)
+	entities, undecodable, err := s.getEntities(ctx, ids, false, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cleanup: failed to resolve entities: %w", err)
 	}

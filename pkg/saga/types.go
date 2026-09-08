@@ -110,3 +110,56 @@ type TerminalExecution struct {
 	// duplicated one.
 	ParentID string
 }
+
+// IncompleteQuery selects one page of incomplete executions.
+//
+// It is a struct rather than positional arguments because what recovery needs
+// to say about a page grows: the filtering that keeps an executor from loading
+// another executor's payloads is expressed here too.
+type IncompleteQuery struct {
+	// Cursor resumes after the last execution of a previous page. Empty starts
+	// at the beginning.
+	Cursor string
+
+	// Limit caps how many executions the page materializes. Zero or less means
+	// the backend's own cap, which every backend has: a page with no ceiling is
+	// the unbounded read this whole design exists to remove.
+	Limit int
+}
+
+// IncompletePage is one bounded page of executions needing recovery.
+type IncompletePage struct {
+	// Executions are the incomplete executions in this page.
+	Executions []*Execution
+
+	// Cursor resumes the walk after this page, and is empty once there is
+	// nothing left.
+	//
+	// A short page does not mean the end. Backends that walk several status
+	// indexes finish one before starting the next, and never straddle two in
+	// one page, so a page can come back well under the limit with plenty still
+	// to come. Only an empty cursor ends the walk.
+	Cursor string
+}
+
+// TerminalQuery selects one page of terminal executions.
+type TerminalQuery struct {
+	// Cursor resumes after the last execution of a previous page. Empty starts
+	// at the beginning.
+	Cursor string
+
+	// Limit caps how many executions the page summarizes. Zero or less means
+	// the backend's own cap.
+	Limit int
+}
+
+// TerminalPage is one bounded page of finished executions.
+type TerminalPage struct {
+	// Executions summarizes the terminal executions in this page.
+	Executions []TerminalExecution
+
+	// Cursor resumes the walk after this page, empty once the walk is done.
+	// The same caveat as IncompletePage.Cursor applies: a short page is not an
+	// ending, only an empty cursor is.
+	Cursor string
+}

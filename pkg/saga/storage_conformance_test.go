@@ -2,6 +2,7 @@ package saga
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 type storageFactory struct {
 	name string
 	make func(t *testing.T) Storage
+
+	// makeIndexed is set only for the backends that find their work through a
+	// status index, and hands back the store underneath so a test can seed an
+	// index entry pointing at an execution that is not there. MemoryStorage
+	// leaves it nil: it has no index, so it has no index to corrupt.
+	makeIndexed func(t *testing.T) (Storage, *entity.MockStore)
 }
 
 // allStorageBackends returns every production Storage implementation behind a
@@ -52,6 +59,11 @@ func allStorageBackends() []storageFactory {
 				t.Cleanup(cleanup)
 				return NewEntityStorage(inmem.Store, testutils.TestLogger(t))
 			},
+			makeIndexed: func(t *testing.T) (Storage, *entity.MockStore) {
+				inmem, cleanup := testutils.NewInMemEntityServer(t)
+				t.Cleanup(cleanup)
+				return NewEntityStorage(inmem.Store, testutils.TestLogger(t)), inmem.Store
+			},
 		},
 		{
 			name: "EACStorage",
@@ -59,6 +71,11 @@ func allStorageBackends() []storageFactory {
 				inmem, cleanup := testutils.NewInMemEntityServer(t)
 				t.Cleanup(cleanup)
 				return NewEACStorage(inmem.EAC, testutils.TestLogger(t))
+			},
+			makeIndexed: func(t *testing.T) (Storage, *entity.MockStore) {
+				inmem, cleanup := testutils.NewInMemEntityServer(t)
+				t.Cleanup(cleanup)
+				return NewEACStorage(inmem.EAC, testutils.TestLogger(t)), inmem.Store
 			},
 		},
 	}
@@ -144,7 +161,7 @@ func TestStorageConformance_CompletedExecutionLeavesIncompleteList(t *testing.T)
 			}
 			require.NoError(t, storage.Save(ctx, exec))
 
-			incomplete, err := storage.ListIncomplete(ctx)
+			incomplete, err := collectIncomplete(ctx, storage)
 			require.NoError(t, err)
 			assert.True(t, containsExecution(incomplete, exec.ID),
 				"a pending saga must appear in ListIncomplete")
@@ -152,7 +169,7 @@ func TestStorageConformance_CompletedExecutionLeavesIncompleteList(t *testing.T)
 			exec.Status = StatusCompleted
 			require.NoError(t, storage.Save(ctx, exec))
 
-			incomplete, err = storage.ListIncomplete(ctx)
+			incomplete, err = collectIncomplete(ctx, storage)
 			require.NoError(t, err)
 			assert.False(t, containsExecution(incomplete, exec.ID),
 				"a completed saga must NOT appear in ListIncomplete; if it does, recovery will re-run finished work")
@@ -284,12 +301,12 @@ func TestStorageConformance_IncompleteListIgnoresStaleTerminalIndex(t *testing.T
 		seedStaleStatusIndex(t, store, "teardown-postgres", StatusPending)
 		seedStaleStatusIndex(t, store, "teardown-postgres", StatusRunning)
 
-		incomplete, err := storage.ListIncomplete(ctx)
+		incomplete, err := collectIncomplete(ctx, storage)
 		require.NoError(t, err)
 		assert.Empty(t, incomplete,
 			"a failed execution must not be recovered because stale pending and running index entries survived")
 
-		terminal, err := storage.ListTerminal(ctx)
+		terminal, err := collectTerminal(ctx, storage)
 		require.NoError(t, err)
 		require.Len(t, terminal, 1, "the execution is still terminal and retention must still see it")
 		assert.Equal(t, "teardown-postgres", terminal[0].ID)
@@ -306,12 +323,12 @@ func TestStorageConformance_TerminalListIgnoresStaleIncompleteIndex(t *testing.T
 		saveAged(t, storage, "create-sandbox", StatusRunning, 30*24*time.Hour)
 		seedStaleStatusIndex(t, store, "create-sandbox", StatusCompleted)
 
-		terminal, err := storage.ListTerminal(ctx)
+		terminal, err := collectTerminal(ctx, storage)
 		require.NoError(t, err)
 		assert.Empty(t, terminal,
 			"a running execution must not be offered to retention because a stale completed index entry survived")
 
-		incomplete, err := storage.ListIncomplete(ctx)
+		incomplete, err := collectIncomplete(ctx, storage)
 		require.NoError(t, err)
 		require.Len(t, incomplete, 1, "the execution is still in flight and recovery must still find it")
 		assert.Equal(t, "create-sandbox", incomplete[0].ID)
@@ -338,4 +355,316 @@ func TestStorageConformance_RetentionCollectsChildOfStaleIncompleteParent(t *tes
 		assert.False(t, executionExists(t, storage, "expired-child"))
 		assert.False(t, executionExists(t, storage, "finished-parent"))
 	})
+}
+
+// collectIncomplete and collectTerminal walk a storage's pages to the end and
+// return everything, for tests that are asserting on the contents of the set
+// rather than on how it is paged. Paging itself is exercised separately, by
+// TestStorageConformance_Paging.
+func collectIncomplete(ctx context.Context, s Storage) ([]*Execution, error) {
+	var all []*Execution
+	cursor := ""
+	// A bound rather than `for {}`: a backend whose cursor failed to advance
+	// would otherwise hang the suite instead of failing it, and a hung test
+	// says much less than a failed one.
+	for range 1000 {
+		page, err := s.ListIncompletePage(ctx, IncompleteQuery{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Executions...)
+		cursor = page.Cursor
+		if cursor == "" {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("incomplete walk did not terminate")
+}
+
+func collectTerminal(ctx context.Context, s Storage) ([]TerminalExecution, error) {
+	var all []TerminalExecution
+	cursor := ""
+	for range 1000 {
+		page, err := s.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Executions...)
+		cursor = page.Cursor
+		if cursor == "" {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("terminal walk did not terminate")
+}
+
+// TestStorageConformance_Paging pins the paging contract every backend has to
+// satisfy, because the callers cannot tell which one they are talking to.
+//
+// The properties that matter to a caller walking a backlog: a page never
+// exceeds the limit it asked for, the pages together cover the set exactly
+// once, the walk terminates, and a short page is not mistaken for the end. That
+// last one is the trap. The etcd-backed backends finish one status index before
+// starting the next and never straddle two, so a page can come back well under
+// the limit with plenty still to come, and a caller that stopped on a short
+// page would silently skip every running and undoing saga in the store.
+func TestStorageConformance_Paging(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			t.Run("covers the incomplete set exactly once across pages", func(t *testing.T) {
+				storage := backend.make(t)
+
+				// Spread across all three incomplete statuses so a backend that
+				// walks them in stages actually has stages to walk, and enough
+				// per status that a limit of 2 cannot clear one in a page.
+				want := map[string]bool{}
+				for i := range 5 {
+					for _, status := range []Status{StatusPending, StatusRunning, StatusUndoing} {
+						id := fmt.Sprintf("page-%s-%02d", status, i)
+						saveWithStatus(t, storage, id, status)
+						want[id] = true
+					}
+				}
+
+				seen := map[string]bool{}
+				cursor := ""
+				pages := 0
+
+				for range 100 {
+					page, err := storage.ListIncompletePage(ctx, IncompleteQuery{Cursor: cursor, Limit: 2})
+					require.NoError(t, err)
+					require.LessOrEqual(t, len(page.Executions), 2,
+						"a page must never exceed the limit it was given")
+
+					pages++
+					for _, exec := range page.Executions {
+						require.False(t, seen[exec.ID], "paging returned %s twice", exec.ID)
+						seen[exec.ID] = true
+					}
+
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+
+				assert.Equal(t, "", cursor, "the walk must terminate")
+				assert.Equal(t, want, seen, "the pages together must cover the set")
+				assert.Greater(t, pages, 1, "15 executions at 2 per page must take more than one page")
+			})
+
+			t.Run("covers the terminal set exactly once across pages", func(t *testing.T) {
+				storage := backend.make(t)
+
+				want := map[string]bool{}
+				for i := range 5 {
+					for _, status := range []Status{StatusCompleted, StatusFailed} {
+						id := fmt.Sprintf("page-%s-%02d", status, i)
+						saveWithStatus(t, storage, id, status)
+						want[id] = true
+					}
+				}
+
+				seen := map[string]bool{}
+				cursor := ""
+
+				for range 100 {
+					page, err := storage.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor, Limit: 2})
+					require.NoError(t, err)
+					require.LessOrEqual(t, len(page.Executions), 2)
+
+					for _, exec := range page.Executions {
+						require.False(t, seen[exec.ID], "paging returned %s twice", exec.ID)
+						seen[exec.ID] = true
+					}
+
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+
+				assert.Equal(t, "", cursor, "the walk must terminate")
+				assert.Equal(t, want, seen, "the pages together must cover the set")
+			})
+
+			t.Run("an empty store ends the walk", func(t *testing.T) {
+				storage := backend.make(t)
+
+				// Not "immediately": an empty page still carries the cursor to
+				// the next status index, because a backend cannot tell an
+				// exhausted index from one whose page happened to resolve to
+				// nothing without asking. That costs a walk over an empty store
+				// one round trip per status index, which is the price of not
+				// silently skipping the rest of an index that had stale entries
+				// at the front of it.
+				incomplete := 0
+				cursor := ""
+				for range 100 {
+					page, err := storage.ListIncompletePage(ctx, IncompleteQuery{Cursor: cursor})
+					require.NoError(t, err)
+					incomplete += len(page.Executions)
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+				assert.Equal(t, "", cursor, "the walk must still terminate")
+				assert.Zero(t, incomplete)
+
+				terminal := 0
+				cursor = ""
+				for range 100 {
+					page, err := storage.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor})
+					require.NoError(t, err)
+					terminal += len(page.Executions)
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+				assert.Equal(t, "", cursor, "the walk must still terminate")
+				assert.Zero(t, terminal)
+			})
+
+			t.Run("a set that ends on a page boundary ends the walk", func(t *testing.T) {
+				storage := backend.make(t)
+
+				// One status only, four of them, read two at a time: the second
+				// page fills exactly and there is nothing after it.
+				for i := range 4 {
+					saveWithStatus(t, storage, fmt.Sprintf("boundary-%02d", i), StatusCompleted)
+				}
+
+				seen := 0
+				cursor := ""
+				for range 100 {
+					page, err := storage.ListTerminalPage(ctx, TerminalQuery{Cursor: cursor, Limit: 2})
+					require.NoError(t, err)
+					seen += len(page.Executions)
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+
+				assert.Equal(t, 4, seen)
+				assert.Equal(t, "", cursor, "the walk must terminate on an exact boundary too")
+			})
+
+			t.Run("stops when the context is cancelled", func(t *testing.T) {
+				storage := backend.make(t)
+
+				for i := range 10 {
+					saveWithStatus(t, storage, fmt.Sprintf("cancel-%02d", i), StatusPending)
+				}
+
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+
+				// Not asserting on which error: what matters is that a walk
+				// under a dead context does not quietly do a store's worth of
+				// work on its way to noticing.
+				_, err := storage.ListIncompletePage(cancelled, IncompleteQuery{})
+				assert.Error(t, err)
+			})
+		})
+	}
+}
+
+// Cursor validation is deliberately not part of this suite. A cursor is opaque
+// and only ever handed back to the storage that issued it, and the backends
+// have nothing in common underneath: the etcd-backed ones prefix a status-index
+// stage and can spot a malformed cursor, while MemoryStorage's is a bare
+// execution id, where "garbage" and "an id deleted since the last page" are the
+// same string. Requiring rejection would mean giving the memory backend a
+// cursor format it has no other reason to have. The stage encoding the durable
+// backends do share is tested directly, in TestStageCursor.
+
+// saveWithStatus persists an execution in the given status, going through the
+// same two-step save the executor does so a backend's index sees the transition
+// rather than only the final value.
+func saveWithStatus(t *testing.T, storage Storage, id string, status Status) {
+	t.Helper()
+
+	now := time.Now()
+	exec := &Execution{
+		ID:              id,
+		DefinitionName:  "paging-test",
+		Status:          StatusPending,
+		InitialInputs:   map[string]any{},
+		ExecutedActions: map[string]*ActionResult{},
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	require.NoError(t, storage.Save(context.Background(), exec))
+
+	if status == StatusPending {
+		return
+	}
+
+	exec.Status = status
+	exec.UpdatedAt = now
+	require.NoError(t, storage.Save(context.Background(), exec))
+}
+
+// TestStorageConformance_PagingPastStaleEntries is the regression for a page
+// that resolves to nothing.
+//
+// A status index can name executions that are not there. That is the whole
+// premise of MIR-1735, and runners read the index across an RPC whose server
+// drops the ids it cannot resolve while keeping the cursor. So a page can come
+// back empty with an entire index still behind it, and a backend that read that
+// as "this index is exhausted" would walk off the end of it and silently leave
+// every saga after the stale run unrecovered.
+//
+// The stale entries sort ahead of the real ones on purpose: the first page has
+// to be the empty one, or the bug hides.
+func TestStorageConformance_PagingPastStaleEntries(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		if backend.makeIndexed == nil {
+			continue
+		}
+
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			storage, store := backend.makeIndexed(t)
+
+			pending, ok := StatusIndexAttr(StatusPending)
+			require.True(t, ok)
+
+			store.AddStaleIndexEntry(pending, entity.Id("aaa-stale-00"))
+			store.AddStaleIndexEntry(pending, entity.Id("aaa-stale-01"))
+
+			want := map[string]bool{}
+			for i := range 3 {
+				id := fmt.Sprintf("zzz-real-%02d", i)
+				saveWithStatus(t, storage, id, StatusPending)
+				want[id] = true
+			}
+
+			seen := map[string]bool{}
+			cursor := ""
+			for range 100 {
+				page, err := storage.ListIncompletePage(ctx, IncompleteQuery{Cursor: cursor, Limit: 2})
+				require.NoError(t, err)
+
+				for _, exec := range page.Executions {
+					seen[exec.ID] = true
+				}
+
+				cursor = page.Cursor
+				if cursor == "" {
+					break
+				}
+			}
+
+			assert.Equal(t, "", cursor, "the walk must terminate")
+			assert.Equal(t, want, seen,
+				"a page that resolved to nothing must not end the walk of its index")
+		})
+	}
 }

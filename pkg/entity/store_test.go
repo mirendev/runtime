@@ -3029,3 +3029,220 @@ func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
 	r.Empty(collectionKVsForEntity(t, client, store.Prefix(), pool.Id()),
 		"no index entry may survive a delete that raced a patch (MIR-1334)")
 }
+
+// TestEtcdStore_getEntitiesAtRevision covers the property the whole paged-read
+// design rests on: that a caller holding ids from one moment can read the
+// entities those ids name as of that same moment.
+//
+// It tests the unexported read rather than ListIndexEntitiesPage because this
+// is where the revision is applied. The operation above it is tested for what
+// it composes, not for re-proving this.
+//
+// Listing an index and fetching what it named are two reads. Without a common
+// revision, an entity written between them comes back carrying a value the
+// index has not caught up to, which is indistinguishable from the stale-index
+// bug MIR-1735 fixed and would send a caller hunting the wrong defect.
+func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
+	t.Run("reads the value the entity carried at that revision", func(t *testing.T) {
+		store, _ := setupTestEtcdStore(t)
+
+		created, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "revtest"),
+			Any(Doc, "before"),
+		))
+		require.NoError(t, err)
+
+		before := created.GetRevision()
+		require.NotZero(t, before, "a created entity must report the revision it was written at")
+
+		_, err = store.ReplaceEntity(t.Context(), New(
+			Ref(DBId, Id(created.Id())),
+			Any(Ident, "revtest"),
+			Any(Doc, "after"),
+		))
+		require.NoError(t, err)
+
+		ids := []Id{Id(created.Id())}
+
+		pinned, undecodable, err := store.getEntities(t.Context(), ids, false, before)
+		require.NoError(t, err)
+		require.Len(t, pinned, 1)
+		require.NotNil(t, pinned[0], "the entity existed at that revision")
+		assert.Empty(t, undecodable)
+		doc, ok := pinned[0].Get(Doc)
+		require.True(t, ok)
+		assert.Equal(t, "before", doc.Value.String(),
+			"a pinned read must see the entity as it was, not as it is")
+
+		current, _, err := store.getEntities(t.Context(), ids, false, 0)
+		require.NoError(t, err)
+		require.Len(t, current, 1)
+		require.NotNil(t, current[0])
+		doc, ok = current[0].Get(Doc)
+		require.True(t, ok)
+		assert.Equal(t, "after", doc.Value.String(),
+			"a zero revision means now, which is what makes this a superset of GetEntities")
+	})
+
+	t.Run("leaves nil for an id absent at that revision", func(t *testing.T) {
+		store, _ := setupTestEtcdStore(t)
+
+		created, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "present"),
+			Any(Doc, "here"),
+		))
+		require.NoError(t, err)
+
+		// Position matters: a caller pairs the result back up with the ids it
+		// asked for, so a miss has to hold its place rather than shorten the
+		// slice and silently shift every entity after it onto the wrong id.
+		ids := []Id{"missing-before", Id(created.Id()), "missing-after"}
+
+		entities, undecodable, err := store.getEntities(t.Context(), ids, false, 0)
+		require.NoError(t, err)
+		require.Len(t, entities, 3)
+		assert.Nil(t, entities[0])
+		require.NotNil(t, entities[1])
+		assert.Equal(t, created.Id(), entities[1].Id())
+		assert.Nil(t, entities[2])
+		assert.Empty(t, undecodable)
+	})
+
+	t.Run("an entity created after the revision is absent from a pinned read", func(t *testing.T) {
+		store, _ := setupTestEtcdStore(t)
+
+		first, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "first"),
+		))
+		require.NoError(t, err)
+
+		later, err := store.CreateEntity(t.Context(), New(
+			Any(Ident, "later"),
+		))
+		require.NoError(t, err)
+
+		entities, _, err := store.getEntities(t.Context(),
+			[]Id{Id(first.Id()), Id(later.Id())}, false, first.GetRevision())
+		require.NoError(t, err)
+		require.Len(t, entities, 2)
+		assert.NotNil(t, entities[0])
+		assert.Nil(t, entities[1], "it did not exist yet at the revision asked for")
+	})
+
+	t.Run("returns an indexable map for an empty request", func(t *testing.T) {
+		store, _ := setupTestEtcdStore(t)
+
+		entities, undecodable, err := store.getEntities(t.Context(), nil, false, 0)
+		require.NoError(t, err)
+		assert.Empty(t, entities)
+
+		// Non-nil on every path, including this one. A caller that indexes it
+		// to tell "gone" from "unreadable" should not need a nil check on the
+		// empty case, and the sweep in cleanup.go already assumes it.
+		require.NotNil(t, undecodable)
+		assert.False(t, undecodable["anything"])
+	})
+
+}
+
+// TestEtcdStore_ListIndexEntitiesPage covers what the operation composes: the
+// page's ids and its entities line up, the walk terminates, and an id the index
+// still names but the store has dropped holds its place as a nil rather than
+// shifting every entity after it onto the wrong id.
+func TestEtcdStore_ListIndexEntitiesPage(t *testing.T) {
+	setup := func(t *testing.T, n int) (*EtcdStore, *clientv3.Client, Attr, []Id) {
+		t.Helper()
+		store, client := setupTestEtcdStore(t)
+
+		attr, err := store.CreateEntity(t.Context(), New(
+			String(Ident, "test-entities-page"),
+			Ref(Type, TypeStr),
+			Bool(Index, true),
+		))
+		require.NoError(t, err)
+
+		index := String(attr.Id(), "value")
+
+		var ids []Id
+		for i := range n {
+			created, err := store.CreateEntity(t.Context(), New(
+				index,
+				String(Ident, fmt.Sprintf("entities-page-%d", i)),
+			))
+			require.NoError(t, err)
+			ids = append(ids, created.Id())
+		}
+
+		return store, client, index, ids
+	}
+
+	t.Run("ids and entities line up", func(t *testing.T) {
+		store, _, index, _ := setup(t, 3)
+
+		page, err := store.ListIndexEntitiesPage(t.Context(), index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Entities, len(page.Ids))
+		require.Len(t, page.Entities, 3)
+
+		for i, ent := range page.Entities {
+			require.NotNil(t, ent)
+			assert.Equal(t, page.Ids[i], ent.Id(),
+				"entity %d must be the one its id names", i)
+		}
+
+		require.NotNil(t, page.Undecodable, "must be indexable without a nil check")
+		assert.NotZero(t, page.Revision, "a page has to say what revision it read at")
+	})
+
+	t.Run("pages to the end without repeating or dropping", func(t *testing.T) {
+		store, _, index, want := setup(t, 5)
+
+		seen := map[Id]bool{}
+		cursor := ""
+		for range 20 {
+			page, err := store.ListIndexEntitiesPage(t.Context(), index, cursor, 2)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(page.Entities), 2)
+
+			for _, ent := range page.Entities {
+				require.False(t, seen[ent.Id()], "paging repeated %s", ent.Id())
+				seen[ent.Id()] = true
+			}
+
+			cursor = page.Cursor
+			if cursor == "" {
+				break
+			}
+		}
+
+		assert.Equal(t, "", cursor, "the walk must terminate")
+		assert.Len(t, seen, len(want))
+	})
+
+	t.Run("an id the store cannot answer for holds its place", func(t *testing.T) {
+		store, client, index, _ := setup(t, 2)
+
+		// An index entry pointing at an entity that is not there, which is
+		// exactly the stale-index shape this tree has had. The page has to
+		// survive it without shifting the entities that follow onto the wrong
+		// ids.
+		seedStaleEntry(t, store, client, index.CAS(), Id("fake/nonexistent"))
+
+		page, err := store.ListIndexEntitiesPage(t.Context(), index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Entities, len(page.Ids))
+		require.Len(t, page.Ids, 3)
+
+		var nils int
+		for i, ent := range page.Entities {
+			if ent == nil {
+				nils++
+				assert.Equal(t, Id("fake/nonexistent"), page.Ids[i],
+					"the nil must sit under the id that is missing")
+				continue
+			}
+			assert.Equal(t, page.Ids[i], ent.Id())
+		}
+		assert.Equal(t, 1, nils)
+	})
+}

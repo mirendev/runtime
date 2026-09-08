@@ -1140,3 +1140,106 @@ type failingGetStore struct {
 func (f *failingGetStore) GetEntity(ctx context.Context, id entity.Id) (*entity.Entity, error) {
 	return nil, f.err
 }
+
+func TestEntityServer_ListPage(t *testing.T) {
+	const testKind = "dev.miren.core/kind.project"
+
+	index := entity.Attr{ID: entity.EntityKind, Value: entity.RefValue(testKind)}
+
+	seed := func(t *testing.T, store entity.Store, count int) {
+		t.Helper()
+		for i := range count {
+			_, err := store.CreateEntity(context.TODO(), entity.New([]entity.Attr{
+				{ID: entity.Ident, Value: entity.KeywordValue(fmt.Sprintf("test/entity%02d", i))},
+				{ID: entity.EntityKind, Value: entity.RefValue(testKind)},
+			}))
+			require.NoError(t, err)
+		}
+	}
+
+	setup := func(t *testing.T, count int) v1alpha.EntityAccessClient {
+		t.Helper()
+		r := require.New(t)
+
+		store := entity.NewMockStore()
+		server, err := NewEntityServer(slog.Default(), store)
+		r.NoError(err)
+		r.NoError(schema.Apply(context.TODO(), store))
+
+		seed(t, store, count)
+
+		return v1alpha.EntityAccessClient{
+			Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+		}
+	}
+
+	t.Run("pages through the index without repeating or dropping", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 5)
+
+		seen := map[string]bool{}
+		cursor := ""
+
+		for range 10 {
+			res, err := sc.ListPage(context.TODO(), index, cursor, 2)
+			r.NoError(err)
+			r.LessOrEqual(len(res.Values()), 2, "a page must honour the limit it was given")
+
+			for _, v := range res.Values() {
+				r.False(seen[v.Id()], "paging repeated %s", v.Id())
+				seen[v.Id()] = true
+			}
+
+			cursor = res.Cursor()
+			if cursor == "" {
+				break
+			}
+		}
+
+		r.Equal("", cursor, "paging must terminate")
+		r.Len(seen, 5, "the pages together must cover the index")
+	})
+
+	t.Run("offers no cursor when the index ends on a page boundary", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 4)
+
+		res, err := sc.ListPage(context.TODO(), index, "", 2)
+		r.NoError(err)
+		r.Len(res.Values(), 2)
+
+		second, err := sc.ListPage(context.TODO(), index, res.Cursor(), 2)
+		r.NoError(err)
+		r.Len(second.Values(), 2)
+		r.Equal("", second.Cursor(),
+			"a full last page must not hand back a cursor to nothing")
+	})
+
+	t.Run("reports the total only when starting from the head", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 5)
+
+		first, err := sc.ListPage(context.TODO(), index, "", 2)
+		r.NoError(err)
+		r.Equal(int64(5), first.Total(), "the caller needs the full count to say what it is hiding")
+
+		next, err := sc.ListPage(context.TODO(), index, first.Cursor(), 2)
+		r.NoError(err)
+		r.Equal(int64(0), next.Total())
+	})
+
+	t.Run("returns entities with their attributes intact", func(t *testing.T) {
+		r := require.New(t)
+		sc := setup(t, 1)
+
+		res, err := sc.ListPage(context.TODO(), index, "", 0)
+		r.NoError(err)
+		r.Len(res.Values(), 1)
+
+		ent := res.Values()[0].Entity()
+		kind, ok := ent.Get(entity.EntityKind)
+		r.True(ok, "a listed entity must arrive carrying the attribute it was indexed on")
+		r.Equal(testKind, kind.Value.Id().String())
+	})
+
+}

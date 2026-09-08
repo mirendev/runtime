@@ -57,6 +57,17 @@ type Store interface {
 	// the first call establishes the revision reported by the returned page;
 	// passing that revision to every continuation produces one consistent scan.
 	ListIndexPageAtRevision(ctx context.Context, attr Attr, cursor string, limit, revision int64) (*IndexPage, error)
+	// ListIndexEntitiesPage reads one bounded page of an index together with the
+	// entities it names, both at a single store revision.
+	//
+	// This is the operation callers actually want, and it exists because
+	// assembling it by hand is easy to get subtly wrong. Listing an index and
+	// fetching what it named are two reads, and every caller that paired them
+	// itself paired them unpinned, so an entity written between the two came
+	// back carrying a value the index had not caught up to. That is
+	// indistinguishable from a stale index entry, which is a real defect this
+	// tree has had, so the difference is worth removing rather than documenting.
+	ListIndexEntitiesPage(ctx context.Context, attr Attr, cursor string, limit int64) (*EntityPage, error)
 	ListCollection(ctx context.Context, collection string) ([]Id, error)
 
 	CreateSession(ctx context.Context, ttl int64) ([]byte, error)
@@ -496,14 +507,57 @@ func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (
 }
 
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
-	entities, _, err := s.getEntities(ctx, ids, true)
+	entities, _, err := s.getEntities(ctx, ids, true, 0)
 	return entities, err
+}
+
+// ListIndexEntitiesPage reads one page of an index and the entities it names,
+// both as of one store revision.
+//
+// Pinning is per page and deliberately not carried across a walk. A revision
+// only stays readable inside etcd's compaction window, so a scan that held one
+// revision across many pages of a large index would eventually fail with
+// ErrCompacted rather than return a torn result, and for a caller paging a
+// six-figure backlog on a small host that is the worse of the two failures.
+// Within a page the window is milliseconds. So an entity written mid-walk may
+// still be missed or repeated between pages; a caller that cannot tolerate that
+// wants a watch, not a listing.
+//
+// Entities line up with Ids positionally, with a nil for any id the store no
+// longer holds, which for ids read out of an index is an ordinary race rather
+// than a surprise.
+func (s *EtcdStore) ListIndexEntitiesPage(
+	ctx context.Context,
+	attr Attr,
+	cursor string,
+	limit int64,
+) (*EntityPage, error) {
+	page, err := s.ListIndexPage(ctx, attr, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	entities, undecodable, err := s.getEntities(ctx, page.Ids, false, page.Revision)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityPage{
+		Ids:         page.Ids,
+		Entities:    entities,
+		Undecodable: undecodable,
+		Cursor:      page.Cursor,
+		Total:       page.Total,
+		Revision:    page.Revision,
+	}, nil
 }
 
 // getEntities reads entities in batches, leaving nil in the result for any id
 // that is absent. warnMissing is false for callers where a miss is expected
 // input rather than a surprise, such as the index sweep resolving ids read out
 // of the index itself.
+//
+// A non-zero rev reads every key as of that revision instead of the latest.
 //
 // undecodable names the ids whose key was present but whose payload would not
 // unmarshal. Those are nil in the result too, so a caller that reads nil as
@@ -513,6 +567,7 @@ func (s *EtcdStore) getEntities(
 	ctx context.Context,
 	ids []Id,
 	warnMissing bool,
+	rev int64,
 ) (entities []*Entity, undecodable map[Id]bool, err error) {
 	undecodable = map[Id]bool{}
 	if len(ids) == 0 {
@@ -527,12 +582,20 @@ func (s *EtcdStore) getEntities(
 
 		batchIds := ids[start:end]
 
-		// Build all the ops for this batch
+		// Build all the ops for this batch. A pinned read applies the revision
+		// to the session sub-read too: the two halves of an entity have to come
+		// from the same point in time or a caller can see attributes bonded by
+		// a session that did not exist yet at the revision it asked for.
+		var revOpt []clientv3.OpOption
+		if rev > 0 {
+			revOpt = []clientv3.OpOption{clientv3.WithRev(rev)}
+		}
+
 		var ops []clientv3.Op
 		for _, id := range batchIds {
 			key := s.buildKey(id)
-			ops = append(ops, clientv3.OpGet(key))
-			ops = append(ops, clientv3.OpGet(key+"/session/", clientv3.WithPrefix()))
+			ops = append(ops, clientv3.OpGet(key, revOpt...))
+			ops = append(ops, clientv3.OpGet(key+"/session/", append([]clientv3.OpOption{clientv3.WithPrefix()}, revOpt...)...))
 		}
 
 		// Execute transaction for this batch
@@ -1634,6 +1697,32 @@ type IndexPage struct {
 	Total int64
 
 	// Revision is the store revision the page was read at.
+	Revision int64
+}
+
+// EntityPage is one bounded page of an index together with the entities it
+// names, as returned by ListIndexEntitiesPage.
+type EntityPage struct {
+	// Ids are the index entries in this page.
+	Ids []Id
+
+	// Entities line up with Ids positionally. A nil means the store no longer
+	// holds that id, or holds it in a form that would not decode; Undecodable
+	// separates the two, because a caller that reads nil as proof the entity is
+	// gone would be wrong about exactly the entities it can say the least
+	// about. It is always non-nil, so it is safe to index without a nil check.
+	Entities    []*Entity
+	Undecodable map[Id]bool
+
+	// Cursor resumes the listing after this page, empty once the index is
+	// exhausted.
+	Cursor string
+
+	// Total counts the entries in the index, filled only when the caller starts
+	// from the head.
+	Total int64
+
+	// Revision is the store revision both reads were made at.
 	Revision int64
 }
 

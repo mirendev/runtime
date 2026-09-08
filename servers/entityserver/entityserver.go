@@ -692,6 +692,39 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	return nil
 }
 
+// ListPage reads a bounded page of entities from an index.
+func (e *EntityServer) ListPage(ctx context.Context, req *entityserver_v1alpha.EntityAccessListPage) error {
+	args := req.Args()
+
+	if !args.HasIndex() {
+		return fmt.Errorf("missing required field: index")
+	}
+
+	page, err := e.entityPage(ctx, args.Index(), args.Cursor(), args.Limit())
+	if err != nil {
+		return err
+	}
+
+	ret := make([]*entityserver_v1alpha.Entity, 0, len(page.entities))
+	for _, ent := range page.entities {
+		var rpcEntity entityserver_v1alpha.Entity
+		rpcEntity.SetId(ent.Id().String())
+		rpcEntity.SetCreatedAt(ent.GetCreatedAt().UnixMilli())
+		rpcEntity.SetUpdatedAt(ent.GetUpdatedAt().UnixMilli())
+		rpcEntity.SetRevision(ent.GetRevision())
+		rpcEntity.SetAttrs(ent.Attrs())
+
+		ret = append(ret, &rpcEntity)
+	}
+
+	req.Results().SetValues(ret)
+	req.Results().SetCursor(encodeCursor(page.cursor))
+	req.Results().SetTotal(page.total)
+	req.Results().SetRevision(page.revision)
+
+	return nil
+}
+
 func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.EntityAccessMakeAttr) error {
 	args := req.Args()
 
@@ -938,50 +971,17 @@ func (e *EntityServer) ListDocuments(ctx context.Context, req *entityserver_v1al
 		return fmt.Errorf("missing required field: index")
 	}
 
-	index := args.Index()
-
-	cursor, err := decodeCursor(args.Cursor())
+	page, err := e.entityPage(ctx, args.Index(), args.Cursor(), args.Limit())
 	if err != nil {
 		return err
-	}
-
-	// Zero means "everything" to the caller, which the client turns into a walk
-	// over successive pages rather than one enormous response.
-	limit := args.Limit()
-	if limit <= 0 || limit > MaxPageLimit {
-		limit = MaxPageLimit
-	}
-
-	ids, next, total, err := e.pageIds(ctx, index, cursor, limit)
-	if err != nil {
-		return err
-	}
-
-	entities, err := e.Store.GetEntities(ctx, ids)
-	if err != nil {
-		return fmt.Errorf("failed to get entities: %w", err)
 	}
 
 	opts := model.Options{MaxValueLen: int(args.MaxValueLen())}
 
 	// Non-nil so an empty page marshals as [] rather than null, which spares
 	// every JSON consumer a null check.
-	docs := make([]*model.Document, 0, len(entities))
-
-	for i, ent := range entities {
-		if ent == nil {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i],
-				"index", index)
-
-			// Keep the reported total honest about what the caller can see.
-			if total > 0 {
-				total--
-			}
-
-			continue
-		}
-
+	docs := make([]*model.Document, 0, len(page.entities))
+	for _, ent := range page.entities {
 		docs = append(docs, model.BuildDocument(ctx, e.sc, ent, opts))
 	}
 
@@ -991,10 +991,111 @@ func (e *EntityServer) ListDocuments(ctx context.Context, req *entityserver_v1al
 	}
 
 	req.Results().SetDocuments(data)
-	req.Results().SetCursor(encodeCursor(next))
-	req.Results().SetTotal(total)
+	req.Results().SetCursor(encodeCursor(page.cursor))
+	req.Results().SetTotal(page.total)
 
 	return nil
+}
+
+// resolvedPage is one page of entities that actually resolved, with the ids
+// that did not already dropped and accounted for.
+type resolvedPage struct {
+	entities []*entity.Entity
+	cursor   string
+	total    int64
+	revision int64
+}
+
+// entityPage reads one page of an index and the entities it names.
+//
+// Both listing methods reduce to this plus a transform, and keeping the read in
+// one place is what stops them drifting: they differ in what they render, not
+// in what they read or in how they account for an id the store could not
+// resolve.
+//
+// Session indexes stay here rather than moving into the store, because reaching
+// ListSessionEntities means base58-decoding a session id out of the attribute
+// value, which is a wire concern. Those listings carry no revision to pin to.
+// The index arrives already read rather than as the request, so callers have to
+// check HasIndex before they get here: Index() dereferences the optional field,
+// and Go evaluates the argument before the call, so a guard inside this
+// function would be a panic that never got the chance to fire.
+func (e *EntityServer) entityPage(
+	ctx context.Context,
+	index entity.Attr,
+	rawCursor string,
+	limit int64,
+) (*resolvedPage, error) {
+	cursor, err := decodeCursor(rawCursor)
+	if err != nil {
+		return nil, err
+	}
+
+	// Zero means "everything" to the caller, which the client turns into a walk
+	// over successive pages rather than one enormous response.
+	if limit <= 0 || limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+
+	if index.ID == entity.AttrSession {
+		ids, next, total, err := e.pageSessionIds(ctx, index, cursor, limit)
+		if err != nil {
+			return nil, err
+		}
+
+		entities, err := e.Store.GetEntities(ctx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get entities: %w", err)
+		}
+
+		return e.resolve(index, ids, entities, nil, next, total, 0), nil
+	}
+
+	page, err := e.Store.ListIndexEntitiesPage(ctx, index, cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list entities: %w", err)
+	}
+
+	return e.resolve(index, page.Ids, page.Entities, page.Undecodable, page.Cursor, page.Total, page.Revision), nil
+}
+
+// resolve drops the ids the store could not answer for and keeps the reported
+// total honest about what the caller can actually see.
+//
+// Absent and unreadable both arrive as a nil entity and deserve different
+// lines. An id the index still names but the store has dropped is stale-index
+// work; a key that will not decode is a corrupt entity nobody should assume is
+// gone.
+func (e *EntityServer) resolve(
+	index entity.Attr,
+	ids []entity.Id,
+	entities []*entity.Entity,
+	undecodable map[entity.Id]bool,
+	cursor string,
+	total, revision int64,
+) *resolvedPage {
+	resolved := make([]*entity.Entity, 0, len(entities))
+
+	for i, ent := range entities {
+		if ent != nil {
+			resolved = append(resolved, ent)
+			continue
+		}
+
+		if undecodable[ids[i]] {
+			e.Log.Error("entity in index cannot be decoded, skipping",
+				"id", ids[i], "index", index)
+		} else {
+			e.Log.Error("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
+		}
+
+		if total > 0 {
+			total--
+		}
+	}
+
+	return &resolvedPage{entities: resolved, cursor: cursor, total: total, revision: revision}
 }
 
 // encodeCursor hides the store key a cursor is made of. It is a resume point,
@@ -1020,47 +1121,47 @@ func decodeCursor(cursor string) (string, error) {
 	return string(key), nil
 }
 
-// pageIds resolves one page of an index.
+// pageSessionIds reads one page of a session's entities.
 //
-// Session membership is not an attribute index and the store cannot page it, so
-// that case lists and slices. Everything else pages in the store.
-func (e *EntityServer) pageIds(ctx context.Context, index entity.Attr, cursor string, limit int64) ([]entity.Id, string, int64, error) {
-	if index.ID == entity.AttrSession {
-		ids, _, err := e.listIds(ctx, index)
-		if err != nil {
-			return nil, "", 0, err
-		}
-
-		// The only sort on the paging path, and the only place a page costs
-		// O(all matches). Session membership has no keyspace to resume from, so
-		// the cursor has to be an entity id, which needs a total order the
-		// store does not provide. It is bounded by what one session bonded,
-		// which is small; the indexed path below pages in etcd instead.
-		slices.Sort(ids)
-
-		total := int64(len(ids))
-
-		if cursor != "" {
-			for len(ids) > 0 && string(ids[0]) <= cursor {
-				ids = ids[1:]
-			}
-		}
-
-		var next string
-		if limit > 0 && int64(len(ids)) > limit {
-			next = string(ids[limit-1])
-			ids = ids[:limit]
-		}
-
-		return ids, next, total, nil
-	}
-
-	page, err := e.Store.ListIndexPage(ctx, index, cursor, limit)
+// Session membership is not an attribute index, so the store cannot page it and
+// this lists and slices instead. It is the only sort left on the paging path
+// and the only place a page costs O(all matches), which is tolerable because a
+// page is bounded by what one session bonded. Everything else pages in the
+// store.
+//
+// Reaching the store here means base58-decoding a session id out of the
+// attribute value, which is why this stays on the server rather than moving
+// into ListIndexEntitiesPage with the rest of the paging.
+func (e *EntityServer) pageSessionIds(
+	ctx context.Context,
+	index entity.Attr,
+	cursor string,
+	limit int64,
+) (ids []entity.Id, next string, total int64, err error) {
+	ids, _, err = e.listIds(ctx, index)
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("failed to list entities: %w", err)
+		return nil, "", 0, err
 	}
 
-	return page.Ids, page.Cursor, page.Total, nil
+	// The cursor has to be an entity id, since session membership has no
+	// keyspace to resume from, and that needs a total order the store does not
+	// provide.
+	slices.Sort(ids)
+
+	total = int64(len(ids))
+
+	if cursor != "" {
+		for len(ids) > 0 && string(ids[0]) <= cursor {
+			ids = ids[1:]
+		}
+	}
+
+	if limit > 0 && int64(len(ids)) > limit {
+		next = string(ids[limit-1])
+		ids = ids[:limit]
+	}
+
+	return ids, next, total, nil
 }
 
 func (e *EntityServer) CreateSession(ctx context.Context, req *entityserver_v1alpha.EntityAccessCreateSession) error {
