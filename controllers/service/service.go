@@ -204,12 +204,6 @@ func (s *ServiceController) Init(ctx context.Context) error {
 		Type: "inet_proto . inet_service : verdict",
 	})
 
-	// Named counters that the per-service and per-nodeport chains reference
-	// for traffic visibility. Created here so chain bodies can `counter name`
-	// them without races.
-	tx.Add(&knftables.Counter{Name: "services"})
-	tx.Add(&knftables.Counter{Name: "nodeports"})
-
 	// Static chains. We Add to ensure existence and Flush to wipe stale rules
 	// from prior controller versions, then re-add the canonical rule set.
 	// The duplicate `jump services` rules the bug report flagged came from old
@@ -306,7 +300,7 @@ func (s *ServiceController) addServiceChain(tx *knftables.Transaction, ip netip.
 // Anything it writes is recorded in pending rather than in the cache. A cache
 // entry has to mean "nft accepted this body", so the caller commits pending
 // with commitChainCache once the batch applies -- see Create.
-func (s *ServiceController) setEndpoints(tx *knftables.Transaction, pending map[string][]string, chain, counterName string, endpoints []string) {
+func (s *ServiceController) setEndpoints(tx *knftables.Transaction, pending map[string][]string, chain string, endpoints []string) {
 	sorted := append([]string(nil), endpoints...)
 	slices.Sort(sorted)
 
@@ -318,7 +312,7 @@ func (s *ServiceController) setEndpoints(tx *knftables.Transaction, pending map[
 	}
 
 	pending[chain] = sorted
-	s.writeChainBody(tx, chain, counterName, sorted)
+	s.writeChainBody(tx, chain, sorted)
 }
 
 // commitChainCache records chain bodies that nft has accepted. Until this
@@ -341,18 +335,18 @@ func (s *ServiceController) commitChainCache(pending map[string][]string) {
 // just `counter + drop` so traffic to a service with no backends is dropped
 // rather than DNAT'd to a stale address. Bypasses the chainEndpoints cache;
 // callers that want the cached fast path should go through setEndpoints.
-func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
-	// Declare the counter in the same transaction that references it. Init
-	// declares it too, but nft answers a rule naming an absent counter with
-	// ENOENT and rolls the whole batch back, so a body that assumes Init got
-	// there first leaves the chain empty behind a live verdict map. How the
-	// counter went missing in the field was never established; declaring it
-	// here means the body depends on no prior state at all. `add` is idempotent
-	// and does not reset an existing counter's totals, so it costs nothing.
-	tx.Add(&knftables.Counter{Name: counterName})
-
+func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain string, endpoints []string) {
 	tx.Flush(&knftables.Chain{Name: chain})
-	tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("counter name", `"`+counterName+`"`)})
+
+	// An anonymous counter, not `counter name "services"`. Referencing a named
+	// counter is the nftables objref expression, which needs CONFIG_NFT_OBJREF;
+	// kernels built without it reject the rule with ENOENT pointing at the
+	// name, which reads as "the counter is missing" but means "this kernel
+	// cannot look one up". That rejection rolled back the whole batch, so on
+	// such a kernel no service chain body ever installed and every service IP
+	// was a black hole. A per-chain counter needs no kernel option beyond the
+	// nf_tables core and reports per service rather than one global total.
+	tx.Add(&knftables.Rule{Chain: chain, Rule: "counter"})
 
 	if len(endpoints) == 0 {
 		// `drop` rather than `reject` because the calling path includes
@@ -395,7 +389,7 @@ func (s *ServiceController) addNodePort(tx *knftables.Transaction, pending map[s
 		Key:   []string{proto, strconv.Itoa(nport)},
 		Value: []string{"goto " + chain},
 	})
-	s.setEndpoints(tx, pending, chain, "nodeports", endpoints)
+	s.setEndpoints(tx, pending, chain, endpoints)
 }
 
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
@@ -462,7 +456,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 			key := portKey{Port: tp.Port, Proto: proto}
 
 			s.addServiceChain(tx, ip, int(tp.Port), proto)
-			s.setEndpoints(tx, pending, s.serviceChain(ip, uint16(tp.Port), proto), "services", epChainsByPort[key])
+			s.setEndpoints(tx, pending, s.serviceChain(ip, uint16(tp.Port), proto), epChainsByPort[key])
 		}
 	}
 
