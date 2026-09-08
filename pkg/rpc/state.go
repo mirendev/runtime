@@ -126,9 +126,9 @@ type State struct {
 	server    *Server
 	hs        *http3.Server
 	ws        *webtransport.Server
-	li        *quic.EarlyListener
+	li        *countingListener
 	localHS   *http3.Server
-	localLI   *quic.EarlyListener
+	localLI   *countingListener
 	localLn   net.Listener
 	localPath string
 
@@ -152,6 +152,11 @@ type State struct {
 	// HTTP/3 Shutdown after the ordered boot stop has already drained it.
 	explicitStop     chan struct{}
 	explicitStopOnce sync.Once
+
+	// stalledDrainOnce keeps the four drains below, which run concurrently and
+	// share one deadline, from each dumping the same goroutines when they all
+	// time out together.
+	stalledDrainOnce sync.Once
 
 	// A State is both an RPC server and the owner of clients dialed through its
 	// shared QUIC transport. Those clients can call back into the same State.
@@ -646,7 +651,7 @@ func (s *State) setupServer(so *stateOptions) error {
 		return err
 	}
 
-	s.li = ec
+	s.li = &countingListener{EarlyListener: ec}
 	s.server.state = s
 	s.server.restEnabled = so.restBindAddr != ""
 
@@ -745,30 +750,46 @@ func (s *State) Shutdown(ctx context.Context) error {
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 	)
-	shutdown := func(name string, fn func(context.Context) error) {
+	// ln is the listener behind this surface, or nil for one that does not have
+	// a QUIC listener of its own. It has to be the surface's own listener: a
+	// stalled local drain reported against the primary listener's census would
+	// print the wrong numbers, and print them at the one moment they are the
+	// only evidence anyone has.
+	shutdown := func(name string, ln *countingListener, fn func(context.Context) error) {
 		if fn == nil {
 			return
 		}
 		wg.Go(func() {
-			if err := fn(ctx); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("shutting down %s: %w", name, err))
-				mu.Unlock()
+			err := fn(ctx)
+			if err == nil {
+				return
 			}
+			// Reaching here means the drain missed its deadline with work
+			// genuinely outstanding, so say what was still connected.
+			conns := s.reportStalledDrain(name, ln, err)
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("shutting down %s: %w (%s)", name, err, conns))
+			mu.Unlock()
 		})
 	}
 
+	// Both HTTP/3 surfaces drain against their own listener census rather than
+	// quic-go's internal count. See drainQUIC.
 	if s.hs != nil {
-		shutdown("HTTP/3", s.hs.Shutdown)
+		shutdown("HTTP/3", s.li, func(ctx context.Context) error {
+			return drainQUIC(ctx, s.hs.Shutdown, s.li)
+		})
 	}
 	if s.localHS != nil {
-		shutdown("local HTTP/3", s.localHS.Shutdown)
+		shutdown("local HTTP/3", s.localLI, func(ctx context.Context) error {
+			return drainQUIC(ctx, s.localHS.Shutdown, s.localLI)
+		})
 	}
 	if s.httpSrv != nil {
-		shutdown("WebSocket", s.httpSrv.Shutdown)
+		shutdown("WebSocket", nil, s.httpSrv.Shutdown)
 	}
 	if s.restSrv != nil {
-		shutdown("REST", s.restSrv.Shutdown)
+		shutdown("REST", nil, s.restSrv.Shutdown)
 	}
 	if s.msgLn != nil {
 		_ = s.msgLn.Close()
@@ -873,6 +894,39 @@ func (s *State) closeOutboundConnections() {
 	for _, conn := range conns {
 		_ = conn.CloseWithError(0, "state shutting down")
 	}
+}
+
+// reportStalledDrain records a graceful shutdown that missed its deadline and
+// returns the in-flight request census for the caller to fold into its error.
+//
+// A daemon that cannot drain is the system failing at something it owns, so
+// this logs at Error. It fires at most once per State, only on a drain that has
+// already failed, which is what makes carrying the goroutine dump permanently
+// affordable: the expensive part never runs on a healthy shutdown.
+func (s *State) reportStalledDrain(name string, ln *countingListener, err error) string {
+	conns := ln.describe()
+
+	// Only a drain that ran out of time is a stall. A surface that failed for
+	// its own reasons, fast, is a different event, and letting it spend the
+	// one-shot dump would leave a genuine stall later in the same shutdown with
+	// no census and no stacks: precisely the surface that needed them.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		s.log.Error("graceful shutdown failed",
+			"surface", name,
+			"error", err,
+			"connections", conns)
+		return conns
+	}
+
+	s.stalledDrainOnce.Do(func() {
+		s.log.Error("graceful shutdown did not finish before its deadline",
+			"surface", name,
+			"error", err,
+			"connections", conns,
+			"stacks", drainStacks())
+	})
+
+	return conns
 }
 
 func (s *State) disableContextShutdown() {

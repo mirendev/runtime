@@ -151,9 +151,12 @@ func (s *State) startLocalListener(ctx context.Context, addr string) error {
 		Logger:  subS.log.With("module", "http3-local"),
 	}
 
+	cl := &countingListener{EarlyListener: ec}
+
 	subS.hs = serv
+	subS.li = cl
 	s.localHS = serv
-	s.localLI = ec
+	s.localLI = cl
 	s.localPath = addr
 
 	go func() {
@@ -165,7 +168,7 @@ func (s *State) startLocalListener(ctx context.Context, addr string) error {
 	}()
 
 	s.log.Debug("starting local listener", "addr", addr)
-	go subS.hs.ServeListener(ec)
+	go subS.hs.ServeListener(cl)
 
 	return nil
 }
