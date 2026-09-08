@@ -24,7 +24,7 @@ func registeredCloudControl(t *testing.T, stored string) (*CloudControl, string)
 		PrivateKey:        "unused",
 	}))
 
-	c := NewCloudControl(&Foundation{Log: testLogger()})
+	c := NewCloudControl(&Foundation{Log: testLogger()}, nil)
 	c.DataPath = dataPath
 	c.CloudAuth = CloudAuthConfig{Enabled: true, ClusterID: "cluster-abc", IdentityIssuerURL: stored}
 	return c, dir
@@ -76,7 +76,7 @@ func TestRecordIdentityAnchorIgnoresNoOps(t *testing.T) {
 // An unregistered cluster has no file to write, and must not gain one.
 func TestRecordIdentityAnchorOnUnregisteredClusterIsInert(t *testing.T) {
 	dataPath := t.TempDir()
-	c := NewCloudControl(&Foundation{Log: testLogger()})
+	c := NewCloudControl(&Foundation{Log: testLogger()}, nil)
 	c.DataPath = dataPath
 
 	require.NotPanics(t, func() { c.recordIdentityAnchor(reportedAnchor) })
