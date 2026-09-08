@@ -118,6 +118,7 @@
     "items": [
       "command/debug-advertise",
       "command/debug-bundle",
+      "command/debug-cloud-sync",
       "command/debug-colors",
       "command/debug-connection",
       "command/debug-ctr",

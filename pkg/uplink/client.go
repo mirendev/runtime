@@ -69,6 +69,7 @@ type Client struct {
 	onSession    []func(ctx context.Context, session Session)
 	capabilities []capabilityRegistration
 	session      *sessionConfig
+	reportStatus StatusFunc
 
 	// NewClient enables this for production's pre-handshake path. Keeping it
 	// explicit lets narrow package tests construct a Client without also having
@@ -83,6 +84,17 @@ type Client struct {
 type sessionConfig struct {
 	runtimeVersion string
 }
+
+// Status describes the current state of the reconnecting uplink client.
+type Status struct {
+	State     string
+	Session   *Session
+	LastError string
+	RetryAt   time.Time
+}
+
+// StatusFunc receives uplink lifecycle changes. Callbacks must return quickly.
+type StatusFunc func(Status)
 
 // CapabilityOfferFunc builds the connection-specific payload for an offered
 // capability. Returning false omits the capability from that connection.
@@ -104,6 +116,17 @@ type ClientOption func(*Client)
 func WithSession(runtimeVersion string) ClientOption {
 	return func(c *Client) {
 		c.session = &sessionConfig{runtimeVersion: runtimeVersion}
+	}
+}
+
+// WithStatus reports connection lifecycle changes for operator diagnostics.
+func WithStatus(report StatusFunc) ClientOption {
+	return func(c *Client) { c.reportStatus = report }
+}
+
+func (c *Client) setStatus(status Status) {
+	if c.reportStatus != nil {
+		c.reportStatus(status)
 	}
 }
 
@@ -407,8 +430,10 @@ func (c *Client) SendMessageBlocking(ctx context.Context, msgType string, data a
 // until the context is cancelled.
 func (c *Client) Run(ctx context.Context) error {
 	backoff := initialBackoff
+	defer c.setStatus(Status{State: "stopped"})
 
 	for {
+		c.setStatus(Status{State: "connecting"})
 		start := time.Now()
 		err := c.runOnce(ctx)
 		if ctx.Err() != nil {
@@ -422,6 +447,9 @@ func (c *Client) Run(ctx context.Context) error {
 		}
 
 		delay := jittered(backoff)
+		c.setStatus(Status{
+			State: "retrying", LastError: fmt.Sprint(err), RetryAt: time.Now().Add(delay),
+		})
 
 		c.log.Warn("websocket disconnected, reconnecting",
 			"error", err, "backoff", delay)
@@ -484,6 +512,7 @@ func (c *Client) runOnce(ctx context.Context) error {
 	c.drainOutbox()
 
 	if c.session != nil {
+		c.setStatus(Status{State: "negotiating"})
 		session, callbacks, err := c.establishSession(ctx, conn)
 		if err != nil {
 			return fmt.Errorf("establish session: %w", err)
@@ -494,11 +523,15 @@ func (c *Client) runOnce(ctx context.Context) error {
 			"handshake_version", session.HandshakeVersion,
 			"capabilities", len(session.Capabilities),
 			"clock_offset", session.ClockOffset)
+		c.setStatus(Status{State: "connected", Session: &session})
 		for _, fn := range callbacks {
 			fn(ctx, session)
 		}
 	} else if c.legacyBootstrap {
+		c.setStatus(Status{State: "connected"})
 		c.sendLegacyInitialRequests()
+	} else {
+		c.setStatus(Status{State: "connected"})
 	}
 
 	for _, fn := range c.connectCallbacks() {

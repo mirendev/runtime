@@ -307,6 +307,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug`](./command/debug.md) | Debug and troubleshooting commands |
 | [`miren debug advertise`](./command/debug-advertise.md) | Show which addresses the server would advertise and why |
 | [`miren debug bundle`](./command/debug-bundle.md) | Create a support bundle with system debug information |
+| [`miren debug cloud-sync`](./command/debug-cloud-sync.md) | Show runtime entity sync diagnostics |
 | [`miren debug colors`](./command/debug-colors.md) | Print some colors |
 | [`miren debug connection`](./command/debug-connection.md) | Test connectivity and authentication with a server |
 | [`miren debug ctr`](./command/debug-ctr.md) | Run ctr with miren defaults |

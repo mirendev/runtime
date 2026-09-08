@@ -11,17 +11,20 @@ import (
 	"miren.dev/runtime/api/debug/debug_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 type Server struct {
-	Log   *slog.Logger
-	NetDB *netdb.NetDB
-	EAC   *entityserver_v1alpha.EntityAccessClient
+	Log       *slog.Logger
+	NetDB     *netdb.NetDB
+	EAC       *entityserver_v1alpha.EntityAccessClient
+	CloudSync *entitysync.Diagnostics
 }
 
 var _ debug_v1alpha.NetDB = &Server{}
+var _ debug_v1alpha.CloudSync = &Server{}
 
 func NewServer(log *slog.Logger, netdbPath string, eac *entityserver_v1alpha.EntityAccessClient) (*Server, error) {
 	ndb, err := netdb.New(netdbPath)
