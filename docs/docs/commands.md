@@ -229,6 +229,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren sandbox`](./command/sandbox.md) | Sandbox management commands |
 | [`miren sandbox delete`](./command/sandbox-delete.md) | Delete a dead sandbox |
 | [`miren sandbox exec`](./command/sandbox-exec.md) | Open interactive shell in an existing sandbox |
+| [`miren sandbox inspect`](./command/sandbox-inspect.md) | Show one sandbox's resource usage and failure history |
 | [`miren sandbox list`](./command/sandbox-list.md) | List sandboxes (excludes dead by default) |
 | [`miren sandbox stop`](./command/sandbox-stop.md) | Stop a sandbox |
 
@@ -275,6 +276,12 @@ Complete reference for all `miren` CLI commands.
 | [`miren server unregister`](./command/server-unregister.md) | Detach this cluster from miren.cloud |
 | [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
+
+## top
+
+| Command | Description |
+|---------|-------------|
+| [`miren top`](./command/top.md) | Show cluster-wide resource usage |
 
 ## upgrade
 

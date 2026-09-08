@@ -82,7 +82,12 @@ type RunnerDeps struct {
 	LogsMaintainer *observability.LogsMaintainer
 	LogWriter      observability.LogWriter
 	StatusMon      *observability.StatusMonitor
-	MetricsWriter  *metrics.VictoriaMetricsWriter
+
+	// MetricsWriter is also where host-level resource series are published. It
+	// is the same writer the sandbox collectors use, taken directly rather than
+	// through them because node series are labeled by node rather than by
+	// sandbox. Nil disables host metrics, as it does for sandbox metrics.
+	MetricsWriter *metrics.VictoriaMetricsWriter
 
 	// Network config
 	IPv4Routable    netip.Prefix
@@ -953,6 +958,15 @@ func (r *SandboxHost) SetupControllers(
 			"node": r.Id,
 		}),
 	)
+
+	// Host-level metrics start here rather than alongside the other collectors
+	// in boot because this is the one place that runs for both the
+	// coordinator's embedded runner and a distributed one, and it is where the
+	// node identity these series are keyed by is known.
+	if r.deps.MetricsWriter != nil {
+		nodeUsage := metrics.NewNodeUsage(r.Log, r.deps.MetricsWriter, r.nodeId().String(), r.Id, r.DataPath)
+		go nodeUsage.Monitor(ctx)
+	}
 
 	// Initialize NetServ if not provided (distributed runner mode)
 	if r.deps.NetServ == nil {

@@ -46,6 +46,7 @@ type startup struct {
 	foundation            *foundationBoot
 	appData               *appDataBoot
 	secretStore           *secretStoreBoot
+	resourceUsage         *resourceUsageBoot
 	runnerEndpoints       *runnerEndpointsBoot
 	clusterAccess         *clusterAccessBoot
 	nodeStorage           *nodeStorageBoot
@@ -109,6 +110,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	)
 	appData := newAppDataBoot(foundation.output)
 	secretStore := newSecretStoreBoot(foundation.output)
+	resourceUsage := newResourceUsageBoot(foundation.output)
 	runnerEndpoints := newRunnerEndpointsBoot(foundation.output, secretStore.component)
 	deploymentAttempts := newDeploymentAttemptMigrationBoot(foundation.output, appData.component, entitySyncDiagnostics)
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), foundation.output, observability.output)
@@ -171,6 +173,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		foundation:            foundation,
 		appData:               appData,
 		secretStore:           secretStore,
+		resourceUsage:         resourceUsage,
 		runnerEndpoints:       runnerEndpoints,
 		clusterAccess:         clusterAccess,
 		nodeStorage:           nodeStorage,

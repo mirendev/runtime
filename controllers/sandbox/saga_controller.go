@@ -61,7 +61,7 @@ func (s *SagaSandboxController) Init(ctx context.Context) error {
 		return err
 	}
 
-	if err := registerCreateSandboxSaga(s.registry, s.ops, s.ops, s.ops, s.ops, s.log); err != nil {
+	if err := registerCreateSandboxSaga(s.registry, s.ops, s.ops, s.ops, s.ops, s.inner.NodeId.String(), s.log); err != nil {
 		return fmt.Errorf("registering create-sandbox saga: %w", err)
 	}
 

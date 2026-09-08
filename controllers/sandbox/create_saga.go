@@ -36,6 +36,11 @@ type createSandboxDeps struct {
 	networking SandboxNetworking
 	runtime    SandboxContainerRuntime
 	obs        SandboxObservability
+
+	// nodeID labels the metrics this saga registers. A saga only ever runs on
+	// the node whose cgroups it is attaching to, so the value is fixed for the
+	// life of the controller rather than derived per sandbox.
+	nodeID string
 }
 
 // logSandboxEvent surfaces a startup diagnostic on the sandbox's own log stream
@@ -426,7 +431,7 @@ func addMetrics(ctx context.Context, in addMetricsIn) (addMetricsOut, error) {
 		return addMetricsOut{}, fmt.Errorf("fetching sandbox: %w", err)
 	}
 
-	le, attrs := sandboxMetricsIdentity(sb)
+	le, attrs := sandboxMetricsIdentity(sb, deps.nodeID)
 
 	if err := deps.obs.AddMetrics(le, in.AllCgroups, attrs); err != nil {
 		return addMetricsOut{}, fmt.Errorf("adding metrics: %w", err)
@@ -680,6 +685,7 @@ func registerCreateSandboxSaga(
 	networking SandboxNetworking,
 	runtime SandboxContainerRuntime,
 	obs SandboxObservability,
+	nodeID string,
 	log *slog.Logger,
 ) error {
 	deps := &createSandboxDeps{
@@ -687,6 +693,7 @@ func registerCreateSandboxSaga(
 		networking: networking,
 		runtime:    runtime,
 		obs:        obs,
+		nodeID:     nodeID,
 	}
 
 	return saga.Define(sagaCreateSandbox).

@@ -54,8 +54,14 @@ type CoordinatorConfig struct {
 	Cpu           *metrics.CPUUsage
 	HTTP          *metrics.HTTPMetrics
 	MetricsWriter *metrics.VictoriaMetricsWriter
-	Logs          *observability.LogReader
-	LogWriter     observability.LogWriter
+
+	// MetricsReader queries the cluster's metrics directly, rather than through
+	// the app-shaped helpers on Cpu and Mem. The usage service needs arbitrary
+	// groupings -- by sandbox, by node -- that those helpers do not express.
+	MetricsReader *metrics.VictoriaMetricsReader
+
+	Logs      *observability.LogReader
+	LogWriter observability.LogWriter
 
 	// Observability addresses for distributed runners
 	VictoriametricsAddress string
