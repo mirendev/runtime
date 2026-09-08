@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	saga_v1alpha "miren.dev/runtime/api/saga/saga_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -190,6 +191,62 @@ func (s *EntityStorage) decodeIncomplete(entities []*entity.Entity) ([]*Executio
 	return executions, stale
 }
 
+// ListIncompleteSummaryPage summarizes one bounded page of in-flight
+// executions.
+//
+// It walks the same three status indexes ListIncompletePage does, in the same
+// order and with the same cursor encoding, and differs only in keeping a
+// summary instead of a whole execution. The sweep that reads this is looking
+// for records nothing will ever resume, which by definition means walking every
+// in-flight execution in the cluster, and doing that with full payloads would
+// cost what recovery costs without recovering anything.
+func (s *EntityStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	attr := entity.Ref(saga_v1alpha.SagaStatusId, incompleteStatuses[stage])
+
+	page, err := s.store.ListIndexEntitiesPage(ctx, attr, inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", incompleteStatuses[stage], err)
+	}
+
+	next := nextStageCursor(stage, page.Cursor, len(incompleteStatuses))
+
+	if len(page.Entities) == 0 {
+		return &IncompleteSummaryPage{Cursor: next}, nil
+	}
+
+	var result []IncompleteSummary
+	var staleTerminal int
+
+	for _, ent := range page.Entities {
+		if ent == nil {
+			// Deleted between the listing and the fetch. Nothing to summarize.
+			continue
+		}
+		summary, verdict := incompleteSummary(ent)
+		switch verdict {
+		case summaryOK:
+			result = append(result, summary)
+		case summaryWrongStatus:
+			staleTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("in-flight saga has no usable timestamp, skipping", "id", ent.Id())
+		}
+	}
+
+	logStaleIncomplete(s.log, staleTerminal)
+
+	return &IncompleteSummaryPage{Executions: result, Cursor: next}, nil
+}
+
 // ListTerminalPage summarizes one bounded page of finished executions.
 //
 // The store's index lookups are equality-only, so there is no range query over
@@ -231,7 +288,7 @@ func (s *EntityStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (
 		switch verdict {
 		case summaryOK:
 			result = append(result, summary)
-		case summaryNotTerminal:
+		case summaryWrongStatus:
 			staleNonTerminal++
 		case summaryNoTimestamp:
 			s.log.Warn("terminal saga has no usable timestamp, skipping", "id", ent.Id())
@@ -254,55 +311,94 @@ func (s *EntityStorage) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// summaryVerdict says why terminalSummary rejected an entity. The two reasons
+// summaryVerdict says why a summary read rejected an entity. The two reasons
 // want different handling: stale index entries arrive in bulk, while a missing
 // timestamp is a one-off worth naming the entity for.
 type summaryVerdict int
 
 const (
 	summaryOK summaryVerdict = iota
-	// summaryNotTerminal means the decoded status is not terminal, so the index
-	// entry that produced this entity is stale.
-	summaryNotTerminal
-	// summaryNoTimestamp means the entity carries no usable finish time.
+	// summaryWrongStatus means the decoded status is not the kind of status the
+	// index that produced this entity is for, so that entry is stale. Both
+	// directions land here: a terminal execution under a pending index, and a
+	// running one under a completed index.
+	summaryWrongStatus
+	// summaryNoTimestamp means the entity carries no usable timestamp.
 	summaryNoTimestamp
 )
+
+// lastChanged resolves when an execution last changed state.
+//
+// It prefers the saga's own updated_at and falls back to the entity store's
+// system timestamps, which is what makes both sweeps safe across an upgrade.
+// v0.11.1's saga schema had no created_at or updated_at at all, so every
+// execution written by it reads back with a zero saga timestamp. Treating that
+// as infinitely old would let retention delete a saga a runner on the old
+// binary finished seconds ago, and would let the stalled sweep force one that
+// is actively running.
+//
+// The false return is deliberately not a "just use now": an execution we cannot
+// date is one we must not act on, and the callers skip it and say so.
+func lastChanged(ent *entity.Entity, s *saga_v1alpha.Saga) (time.Time, bool) {
+	switch {
+	case !s.UpdatedAt.IsZero():
+		return s.UpdatedAt, true
+	case !ent.GetUpdatedAt().IsZero():
+		return ent.GetUpdatedAt(), true
+	case !ent.GetCreatedAt().IsZero():
+		return ent.GetCreatedAt(), true
+	default:
+		return time.Time{}, false
+	}
+}
 
 // terminalSummary reduces a saga entity to what retention needs.
 //
 // The status index is a hint, not the truth: an entry can outlive the status it
 // was written for, so the decoded status decides whether this is terminal.
-//
-// The finish time prefers the saga's own updated_at but falls back to the
-// entity store's system timestamp, which is what makes retention safe across an
-// upgrade: every execution written before saga timestamps were persisted reads
-// back with a zero updated_at, and treating that as infinitely old would delete
-// a saga a runner on the old binary finished seconds ago.
 func terminalSummary(ent *entity.Entity) (TerminalExecution, summaryVerdict) {
 	var s saga_v1alpha.Saga
 	s.Decode(ent)
 
 	if !isTerminal(statusFromEntity(s.Status)) {
-		return TerminalExecution{}, summaryNotTerminal
+		return TerminalExecution{}, summaryWrongStatus
 	}
 
-	summary := TerminalExecution{
-		ID:       string(ent.Id()),
-		ParentID: string(s.ParentExecutionId),
-	}
-
-	switch {
-	case !s.UpdatedAt.IsZero():
-		summary.FinishedAt = s.UpdatedAt
-	case !ent.GetUpdatedAt().IsZero():
-		summary.FinishedAt = ent.GetUpdatedAt()
-	case !ent.GetCreatedAt().IsZero():
-		summary.FinishedAt = ent.GetCreatedAt()
-	default:
+	finished, ok := lastChanged(ent, &s)
+	if !ok {
 		return TerminalExecution{}, summaryNoTimestamp
 	}
 
-	return summary, summaryOK
+	return TerminalExecution{
+		ID:         string(ent.Id()),
+		ParentID:   string(s.ParentExecutionId),
+		FinishedAt: finished,
+	}, summaryOK
+}
+
+// incompleteSummary reduces a saga entity to what the stalled sweep needs, and
+// is terminalSummary's mirror image in every respect including which way it
+// distrusts the index.
+func incompleteSummary(ent *entity.Entity) (IncompleteSummary, summaryVerdict) {
+	var s saga_v1alpha.Saga
+	s.Decode(ent)
+
+	status := statusFromEntity(s.Status)
+	if isTerminal(status) {
+		return IncompleteSummary{}, summaryWrongStatus
+	}
+
+	changed, ok := lastChanged(ent, &s)
+	if !ok {
+		return IncompleteSummary{}, summaryNoTimestamp
+	}
+
+	return IncompleteSummary{
+		ID:          string(ent.Id()),
+		Status:      status,
+		ParentID:    string(s.ParentExecutionId),
+		LastChanged: changed,
+	}, summaryOK
 }
 
 // isTerminal reports whether a status is one of the two finished states.

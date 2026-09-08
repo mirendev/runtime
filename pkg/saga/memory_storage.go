@@ -25,17 +25,7 @@ func (m *MemoryStorage) Save(ctx context.Context, exec *Execution) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Deep copy to simulate real storage behavior
-	copied := *exec
-	copied.ExecutedActions = make(map[string]*ActionResult)
-	for k, v := range exec.ExecutedActions {
-		copiedResult := *v
-		copied.ExecutedActions[k] = &copiedResult
-	}
-	copied.ExecutionOrder = make([]string, len(exec.ExecutionOrder))
-	copy(copied.ExecutionOrder, exec.ExecutionOrder)
-
-	m.executions[exec.ID] = &copied
+	m.executions[exec.ID] = cloneExecution(exec)
 	return nil
 }
 
@@ -48,7 +38,34 @@ func (m *MemoryStorage) Get(ctx context.Context, id string) (*Execution, error) 
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrExecutionNotFound, id)
 	}
-	return exec, nil
+	return cloneExecution(exec), nil
+}
+
+// cloneExecution copies an execution on the way into and back out of the map.
+//
+// Both directions, because the durable backends serialize in both directions
+// and a caller cannot tell which backend it has. Handing back the stored
+// pointer let a caller change stored state by mutating a value it had only
+// read, so a write this backend rejected still took effect and a memory-backed
+// test would see a state the entity stores would never have reached.
+func cloneExecution(exec *Execution) *Execution {
+	copied := *exec
+
+	copied.ExecutedActions = make(map[string]*ActionResult, len(exec.ExecutedActions))
+	for k, v := range exec.ExecutedActions {
+		copiedResult := *v
+		copied.ExecutedActions[k] = &copiedResult
+	}
+
+	copied.ExecutionOrder = make([]string, len(exec.ExecutionOrder))
+	copy(copied.ExecutionOrder, exec.ExecutionOrder)
+
+	copied.InitialInputs = make(map[string]any, len(exec.InitialInputs))
+	for k, v := range exec.InitialInputs {
+		copied.InitialInputs[k] = v
+	}
+
+	return &copied
 }
 
 // ListIncompletePage returns one bounded page of executions needing recovery:
@@ -84,6 +101,50 @@ func (m *MemoryStorage) ListIncompletePage(ctx context.Context, q IncompleteQuer
 	}
 
 	return &IncompletePage{Executions: executions, Cursor: next}, nil
+}
+
+// ListIncompleteSummaryPage summarizes one bounded page of in-flight
+// executions.
+//
+// This backend has only the execution's own UpdatedAt to offer, with no store
+// timestamp behind it to fall back to. That is the honest answer for a map: a
+// test that saves an execution with no timestamp really has told this backend
+// nothing about when it happened, and the sweep skips what it cannot date.
+func (m *MemoryStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var ids []string
+	for id, exec := range m.executions {
+		switch exec.Status {
+		case StatusPending, StatusRunning, StatusUndoing:
+			ids = append(ids, id)
+		case StatusCompleted, StatusFailed:
+			// Terminal states are finished; the stalled sweep does not apply.
+		}
+	}
+
+	ids, next := pageSortedIDs(ids, q.Cursor, clampLimit(q.Limit))
+
+	result := make([]IncompleteSummary, 0, len(ids))
+	for _, id := range ids {
+		exec := m.executions[id]
+		if exec.UpdatedAt.IsZero() {
+			continue
+		}
+		result = append(result, IncompleteSummary{
+			ID:          exec.ID,
+			Status:      exec.Status,
+			LastChanged: exec.UpdatedAt,
+			ParentID:    exec.ParentExecutionID,
+		})
+	}
+
+	return &IncompleteSummaryPage{Executions: result, Cursor: next}, nil
 }
 
 // ListTerminalPage summarizes one bounded page of finished executions.

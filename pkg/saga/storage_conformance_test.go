@@ -381,6 +381,23 @@ func collectIncomplete(ctx context.Context, s Storage) ([]*Execution, error) {
 	return nil, fmt.Errorf("incomplete walk did not terminate")
 }
 
+func collectIncompleteSummaries(ctx context.Context, s Storage) ([]IncompleteSummary, error) {
+	var all []IncompleteSummary
+	cursor := ""
+	for range 1000 {
+		page, err := s.ListIncompleteSummaryPage(ctx, IncompleteSummaryQuery{Cursor: cursor})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Executions...)
+		cursor = page.Cursor
+		if cursor == "" {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("incomplete summary walk did not terminate")
+}
+
 func collectTerminal(ctx context.Context, s Storage) ([]TerminalExecution, error) {
 	var all []TerminalExecution
 	cursor := ""
@@ -453,6 +470,42 @@ func TestStorageConformance_Paging(t *testing.T) {
 				assert.Equal(t, "", cursor, "the walk must terminate")
 				assert.Equal(t, want, seen, "the pages together must cover the set")
 				assert.Greater(t, pages, 1, "15 executions at 2 per page must take more than one page")
+			})
+
+			t.Run("covers the incomplete summary set exactly once across pages", func(t *testing.T) {
+				storage := backend.make(t)
+
+				want := map[string]bool{}
+				for i := range 5 {
+					for _, status := range []Status{StatusPending, StatusRunning, StatusUndoing} {
+						id := fmt.Sprintf("page-%s-%02d", status, i)
+						saveWithStatus(t, storage, id, status)
+						want[id] = true
+					}
+				}
+
+				seen := map[string]bool{}
+				cursor := ""
+
+				for range 100 {
+					page, err := storage.ListIncompleteSummaryPage(ctx, IncompleteSummaryQuery{Cursor: cursor, Limit: 2})
+					require.NoError(t, err)
+					require.LessOrEqual(t, len(page.Executions), 2,
+						"a page must never exceed the limit it was given")
+
+					for _, summary := range page.Executions {
+						require.False(t, seen[summary.ID], "paging returned %s twice", summary.ID)
+						seen[summary.ID] = true
+					}
+
+					cursor = page.Cursor
+					if cursor == "" {
+						break
+					}
+				}
+
+				assert.Equal(t, "", cursor, "the walk must terminate")
+				assert.Equal(t, want, seen, "the pages together must cover the set")
 			})
 
 			t.Run("covers the terminal set exactly once across pages", func(t *testing.T) {
@@ -667,4 +720,63 @@ func TestStorageConformance_PagingPastStaleEntries(t *testing.T) {
 				"a page that resolved to nothing must not end the walk of its index")
 		})
 	}
+}
+
+// TestStorageConformance_IncompleteSummaryAgreesWithIncompleteList pins the two
+// in-flight reads to the same set.
+//
+// They exist for different callers and return different shapes, which is
+// exactly how they could drift: a status added to one list and not the other
+// would leave the stalled sweep blind to a whole class of execution while
+// recovery kept resuming it, and nothing would fail.
+func TestStorageConformance_IncompleteSummaryAgreesWithIncompleteList(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			storage := backend.make(t)
+
+			for _, status := range []Status{StatusPending, StatusRunning, StatusUndoing, StatusCompleted, StatusFailed} {
+				saveWithStatus(t, storage, "agree-"+string(status), status)
+			}
+
+			executions, err := collectIncomplete(ctx, storage)
+			require.NoError(t, err)
+			summaries, err := collectIncompleteSummaries(ctx, storage)
+			require.NoError(t, err)
+
+			fromExecutions := map[string]Status{}
+			for _, exec := range executions {
+				fromExecutions[exec.ID] = exec.Status
+			}
+			fromSummaries := map[string]Status{}
+			for _, summary := range summaries {
+				fromSummaries[summary.ID] = summary.Status
+				assert.False(t, summary.LastChanged.IsZero(),
+					"a summary the sweep will act on must carry a timestamp")
+			}
+
+			assert.Equal(t, fromExecutions, fromSummaries,
+				"both in-flight reads must see the same executions in the same states")
+			assert.Len(t, fromSummaries, 3, "the three in-flight statuses, and only those")
+		})
+	}
+}
+
+// TestStorageConformance_IncompleteSummaryIgnoresStaleIndex is the same guard
+// ListIncompletePage has, with a different consequence: the stalled sweep
+// writes to what this returns, so trusting a stale pending entry would mean
+// re-failing an execution that already finished.
+func TestStorageConformance_IncompleteSummaryIgnoresStaleIndex(t *testing.T) {
+	runIndexBackedConformance(t, func(t *testing.T, storage Storage, store *entity.MockStore) {
+		ctx := context.Background()
+
+		saveAged(t, storage, "teardown-postgres", StatusCompleted, time.Hour)
+		seedStaleStatusIndex(t, store, "teardown-postgres", StatusPending)
+		seedStaleStatusIndex(t, store, "teardown-postgres", StatusRunning)
+
+		summaries, err := collectIncompleteSummaries(ctx, storage)
+		require.NoError(t, err)
+		assert.Empty(t, summaries,
+			"a completed execution must not be offered to the stalled sweep because stale in-flight index entries survived")
+	})
 }
