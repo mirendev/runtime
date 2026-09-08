@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,6 +42,21 @@ type Controller struct {
 	initErr    error
 	certCache  map[string]*cachedCert
 	cacheMutex sync.RWMutex
+	failures   sync.Map // domain -> time.Time
+}
+
+const dnsFailureCooldown = 5 * time.Minute
+
+type acmeObtainError struct {
+	err error
+}
+
+func (e *acmeObtainError) Error() string {
+	return fmt.Sprintf("failed to obtain certificate: %v", e.err)
+}
+
+func (e *acmeObtainError) Unwrap() error {
+	return e.err
 }
 
 type cachedCert struct {
@@ -262,13 +278,50 @@ func (c *Controller) Reconcile(ctx context.Context, route *ingress_v1alpha.HttpR
 	}
 
 	// Provision or renew certificate
-	log.Info("provisioning certificate via DNS challenge")
-	if err := c.provisionCertificate(ctx, domain); err != nil {
-		return fmt.Errorf("failed to provision certificate for %s: %w", domain, err)
+	return c.provisionRouteCertificate(ctx, log, domain, c.provisionCertificate)
+}
+
+func (c *Controller) provisionRouteCertificate(
+	ctx context.Context,
+	log *slog.Logger,
+	domain string,
+	provision func(context.Context, string) error,
+) error {
+	if c.inFailureCooldown(domain) {
+		log.Debug("skipping DNS certificate provisioning during failure cooldown")
+		return nil
 	}
+
+	log.Info("provisioning certificate via DNS challenge")
+	if err := provision(ctx, domain); err != nil {
+		var obtainErr *acmeObtainError
+		if !errors.As(err, &obtainErr) {
+			return err
+		}
+		c.failures.Store(domain, time.Now())
+		// ReconcileController retries ordinary state-machine failures quickly.
+		// ACME is an external rate-limited system, so keep its pacing here and
+		// let a later route event or the hourly resync make the next attempt.
+		log.Warn("failed to provision certificate; suppressing retries during cooldown",
+			"cooldown", dnsFailureCooldown, "error", err)
+		return nil
+	}
+	c.failures.Delete(domain)
 
 	log.Info("certificate provisioned successfully")
 	return nil
+}
+
+func (c *Controller) inFailureCooldown(domain string) bool {
+	value, ok := c.failures.Load(domain)
+	if !ok {
+		return false
+	}
+	if time.Since(value.(time.Time)) < dnsFailureCooldown {
+		return true
+	}
+	c.failures.Delete(domain)
+	return false
 }
 
 // Delete handles http_route deletion - we keep the cert in cache/disk for potential reuse
@@ -306,7 +359,7 @@ func (c *Controller) provisionCertificate(ctx context.Context, domain string) er
 
 	cert, err := c.client.Certificate.Obtain(request)
 	if err != nil {
-		return fmt.Errorf("failed to obtain certificate: %w", err)
+		return &acmeObtainError{err: err}
 	}
 
 	// Save to disk

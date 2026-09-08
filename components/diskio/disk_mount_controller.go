@@ -509,7 +509,7 @@ func (c *DiskMountController) mountVolume(ctx context.Context, mount *storage_v1
 			)
 
 			if time.Now().After(formatDeadline) {
-				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device, will retry on next resync: %v", err))
+				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to format device, will retry on next reconcile: %v", err))
 				return fmt.Errorf("failed to format device after retries: %w", err)
 			}
 

@@ -57,7 +57,12 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	if workers <= 0 {
 		workers = DefaulWorkers
 	}
-	manager := controller.NewControllerManager()
+	manager := controller.NewControllerManager(
+		controller.WithMetrics(s.deps.MetricsWriter, map[string]string{
+			"role": "runner",
+			"node": s.config.Id,
+		}),
+	)
 
 	dataPath := filepath.Join(s.config.DataPath, "disk-data")
 	if err := os.MkdirAll(dataPath, 0700); err != nil {
@@ -190,12 +195,12 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 		"disk-watch", log, entity.Ref(entity.EntityKind, storage_v1alpha.KindDisk), eas,
 		controller.AdaptController(diskWatch), time.Minute, 1,
 	))
-	volumeWatch := disk.NewDiskVolumeWatchController(log, eas, diskRC, s.nodeId())
+	volumeWatch := disk.NewDiskVolumeWatchController(log, diskRC, s.nodeId())
 	manager.AddController(controller.NewReconcileController(
 		"disk-volume-watch", log, entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskVolume), eas,
 		controller.AdaptController(volumeWatch), 0, 1,
 	))
-	mountWatch := disk.NewDiskMountWatchController(log, eas, diskLeaseRC, s.nodeId())
+	mountWatch := disk.NewDiskMountWatchController(log, diskLeaseRC, s.nodeId())
 	manager.AddController(controller.NewReconcileController(
 		"disk-mount-watch", log, entity.Ref(entity.EntityKind, storage_v1alpha.KindDiskMount), eas,
 		controller.AdaptController(mountWatch), 0, 1,

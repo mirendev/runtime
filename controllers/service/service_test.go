@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/netip"
 	"testing"
 	"time"
@@ -21,6 +22,16 @@ import (
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/testutils"
 )
+
+func TestUpdateEndpointsToleratesDeleteWithoutTombstone(t *testing.T) {
+	sc := &ServiceController{Log: slog.Default()}
+	updates, err := sc.UpdateEndpoints(t.Context(), controller.Event{
+		Type: controller.EventDeleted,
+		Id:   "endpoints/gone",
+	})
+	require.NoError(t, err)
+	require.Empty(t, updates)
+}
 
 // newServiceController creates a ServiceController from TestDeps for testing.
 func newServiceController(d *testutils.TestDeps) (*ServiceController, error) {

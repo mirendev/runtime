@@ -95,8 +95,7 @@ func TestSlotWithAMissingHolderIsReclaimed(t *testing.T) {
 }
 
 // Re-running admission for the run that already holds the slot must succeed.
-// The framework drops handler errors without requeueing, so the same step runs
-// again routinely.
+// Framework retries and later signals can run the same step again.
 func TestSlotAdmissionIsIdempotentForTheHolder(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)

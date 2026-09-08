@@ -20,16 +20,16 @@ type nodeStorageBoot struct {
 	output    boot.Output[nodeStorageBootOutput]
 }
 
-func newNodeStorageBoot(access boot.Output[clusterAccessBootOutput], registration boot.Output[registrationBootOutput]) *nodeStorageBoot {
+func newNodeStorageBoot(access boot.Output[clusterAccessBootOutput], registration boot.Output[registrationBootOutput], observability boot.Output[observabilityBootOutput]) *nodeStorageBoot {
 	b := &nodeStorageBoot{}
-	b.component, b.output = boot.Provide2(
-		"node-storage", access, registration, b.start,
+	b.component, b.output = boot.Provide3(
+		"node-storage", access, registration, observability, b.start,
 		boot.WithStop(b.stop, runnerComponentStopTimeout),
 	)
 	return b
 }
 
-func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOutput, registration registrationBootOutput) (nodeStorageBootOutput, error) {
+func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOutput, registration registrationBootOutput, observability observabilityBootOutput) (nodeStorageBootOutput, error) {
 	config := access.config
 	cloudAuth := registration.cloudAuth
 	if cloudAuth.Enabled {
@@ -38,7 +38,10 @@ func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOut
 		config.CloudAuth = &coordinate.CloudAuthConfig{}
 	}
 	var err error
-	b.value, err = runner.NewNodeStorage(access.access, runner.RunnerDeps{IsCoordinator: true}, config)
+	b.value, err = runner.NewNodeStorage(access.access, runner.RunnerDeps{
+		IsCoordinator: true,
+		MetricsWriter: observability.metricsWriter,
+	}, config)
 	if err != nil {
 		return nodeStorageBootOutput{}, err
 	}

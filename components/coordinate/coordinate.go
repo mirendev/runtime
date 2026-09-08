@@ -50,11 +50,12 @@ type CoordinatorConfig struct {
 	// When set, the coordinator will use mTLS to connect to etcd.
 	EtcdTLS *EtcdTLSConfig `json:"etcd_tls" yaml:"etcd_tls"`
 
-	Mem       *metrics.MemoryUsage
-	Cpu       *metrics.CPUUsage
-	HTTP      *metrics.HTTPMetrics
-	Logs      *observability.LogReader
-	LogWriter observability.LogWriter
+	Mem           *metrics.MemoryUsage
+	Cpu           *metrics.CPUUsage
+	HTTP          *metrics.HTTPMetrics
+	MetricsWriter *metrics.VictoriaMetricsWriter
+	Logs          *observability.LogReader
+	LogWriter     observability.LogWriter
 
 	// Observability addresses for distributed runners
 	VictoriametricsAddress string

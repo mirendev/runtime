@@ -40,31 +40,44 @@ func (c *DefaultRouteAppController) Init(context.Context) error {
 // Create handles app creation events
 func (c *DefaultRouteAppController) Create(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
 	c.Log.Info("App created", "app", app.ID)
+	return c.ensureDefaultForOnlyApp(ctx, app.ID)
+}
 
-	// Check if this is the first app
+// Update re-checks the invariant as well as Create. ReconcileController emits
+// current snapshot entries as updates, so this is what repairs a missing
+// default route after restart or watch compaction.
+func (c *DefaultRouteAppController) Update(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
+	c.Log.Debug("App updated, checking default route", "app", app.ID)
+	return c.ensureDefaultForOnlyApp(ctx, app.ID)
+}
+
+func (c *DefaultRouteAppController) ensureDefaultForOnlyApp(ctx context.Context, appID entity.Id) error {
+	// Check whether this is the only app.
 	appList, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return fmt.Errorf("failed to list apps: %w", err)
 	}
 
-	// If this is the only app (count == 1), create a default route for it
+	// If this is the only app, ensure it has a default route.
 	if len(appList.Values()) == 1 {
-		c.Log.Info("First app created, creating default route", "app", app.ID)
+		current, err := c.ic.LookupDefault(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to look up default route: %w", err)
+		}
+		if current != nil && current.App == appID {
+			return nil
+		}
 
-		route, err := c.ic.SetDefault(ctx, app.ID)
+		c.Log.Info("Only app has no default route, creating one", "app", appID)
+
+		route, err := c.ic.SetDefault(ctx, appID)
 		if err != nil {
 			return fmt.Errorf("failed to create default route: %w", err)
 		}
 
-		c.Log.Info("Created default route", "route", route.ID, "app", app.ID)
+		c.Log.Info("Created default route", "route", route.ID, "app", appID)
 	}
 
-	return nil
-}
-
-// Update handles app update events - we don't need to do anything here
-func (c *DefaultRouteAppController) Update(ctx context.Context, app *core_v1alpha.App, meta *entity.Meta) error {
-	c.Log.Debug("App updated, no action needed", "app", app.ID)
 	return nil
 }
 
