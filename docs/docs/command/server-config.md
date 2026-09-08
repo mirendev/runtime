@@ -16,9 +16,9 @@ miren server config [flags]
 
 ## Subcommands
 
-- [`miren server config generate`](/command/server-config-generate) — Generate a server configuration file from current settings
-- [`miren server config validate`](/command/server-config-validate) — Validate a server configuration file
+- [`miren server config generate`](./server-config-generate.md) — Generate a server configuration file from current settings
+- [`miren server config validate`](./server-config-validate.md) — Validate a server configuration file
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

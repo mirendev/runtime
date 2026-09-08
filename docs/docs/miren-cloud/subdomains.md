@@ -6,7 +6,7 @@ keywords: [subdomains, dns, run.garden, miren.app, custom domain, wildcard]
 
 # Subdomains
 
-You've got a Miren cluster running your stuff — now give it an address people can actually visit. You can always [bring your own domain](/traffic-routing#custom-domains), but if you'd rather skip the DNS busywork, Miren Cloud lets you claim a subdomain like `mycluster.run.garden`, point it at your cluster, and you're live.
+You've got a Miren cluster running your stuff — now give it an address people can actually visit. You can always [bring your own domain](../traffic-routing.md#custom-domains), but if you'd rather skip the DNS busywork, Miren Cloud lets you claim a subdomain like `mycluster.run.garden`, point it at your cluster, and you're live.
 
 ## Available Base Domains
 
@@ -45,13 +45,13 @@ You can also route wildcard subdomains to an app — handy if you want each app 
 miren route set '*.mycluster.run.garden' myapp
 ```
 
-See [Traffic Routing](/traffic-routing) for more on how routes work.
+See [Traffic Routing](../traffic-routing.md) for more on how routes work.
 
 ## Good to Know
 
 **Wildcard DNS** — When you assign a subdomain, Miren provisions both the base name and a wildcard (`*.mycluster.run.garden`), so you can give every app its own hostname or build multi-tenant setups without touching DNS again.
 
-**TLS certificates** — Miren provisions certificates automatically for your subdomains via [Let's Encrypt](/tls). This is especially relevant for `miren.app` subdomains, since the `.app` TLD requires HTTPS in all browsers.
+**TLS certificates** — Miren provisions certificates automatically for your subdomains via [Let's Encrypt](../tls.md). This is especially relevant for `miren.app` subdomains, since the `.app` TLD requires HTTPS in all browsers.
 
 **DNS propagation** — Records are provisioned on assignment and usually resolve within a few minutes, though in rare cases it can take up to an hour.
 
@@ -59,6 +59,6 @@ See [Traffic Routing](/traffic-routing) for more on how routes work.
 
 ## Next Steps
 
-- [Traffic Routing](/traffic-routing) — Set up routes to direct traffic to your apps
-- [TLS Certificates](/tls) — How Miren handles HTTPS
-- [Miren Cloud Overview](/miren-cloud/overview) — Cluster registration, login, and team management
+- [Traffic Routing](../traffic-routing.md) — Set up routes to direct traffic to your apps
+- [TLS Certificates](../tls.md) — How Miren handles HTTPS
+- [Miren Cloud Overview](./overview.md) — Cluster registration, login, and team management

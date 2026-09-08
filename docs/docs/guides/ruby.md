@@ -14,7 +14,7 @@ all work out of the box.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Rails app on Miren" after installing the
-[Miren agent skills](/agent-skills). It detects your framework, stages secrets like
+[Miren agent skills](../agent-skills.md). It detects your framework, stages secrets like
 `SECRET_KEY_BASE` and `RAILS_MASTER_KEY`, proposes a start command, and deploys —
 using this page as its reference.
 :::
@@ -22,9 +22,9 @@ using this page as its reference.
 ## Does this source build need a Dockerfile?
 
 No. Miren detects Ruby from your `Gemfile` and builds the image automatically. The
-default Ruby version is **3.4**; override it in [`.miren/app.toml`](/app-configuration)
+default Ruby version is **3.4**; override it in [`.miren/app.toml`](../app-configuration.md)
 if you need another. Provide a `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -87,14 +87,14 @@ Use a single `web:` line. To run Puma with a config file instead of the Rails co
 web: bundle exec puma -C config/puma.rb
 ```
 
-See [Services](/services) for running Sidekiq or other workers alongside web.
+See [Services](../services.md) for running Sidekiq or other workers alongside web.
 
 ## Environment variables
 
 `miren init` stages the secrets a Rails app needs on first deploy: it **generates**
 `SECRET_KEY_BASE` and **reads** `RAILS_MASTER_KEY` from `config/master.key` (or
 `config/credentials/production.key`) if present, pre-setting both on the app. See
-[What `miren init` Does for You](/app-configuration#what-miren-init-does-for-you).
+[What `miren init` Does for You](../app-configuration.md#what-miren-init-does-for-you).
 
 Set anything else with `miren env set` — `-e` for plain values, `-s` for secrets
 (masked in output and logs):
@@ -119,7 +119,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -134,6 +134,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Services](/services) — web + Sidekiq workers
-- [Deployment](/deployment) — how deploys build and activate
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Services](../services.md) — web + Sidekiq workers
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -162,4 +162,4 @@ miren logs app --service web -f
 
 ## See also
 
-- [`miren logs`](/command/logs)
+- [`miren logs`](./logs.md)

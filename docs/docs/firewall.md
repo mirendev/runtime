@@ -29,7 +29,7 @@ Also open any `node_port` values your apps declare for TCP/UDP services, and the
 ## How Miren Configures Firewall Rules
 
 :::info[Both iptables and nftables are required]
-Miren uses `iptables` for the network bridge and per-sandbox NAT, and `nftables` (the `nft` command) for services and NodePorts. Both must be installed on the host — see [System Requirements](/system-requirements#required-host-commands).
+Miren uses `iptables` for the network bridge and per-sandbox NAT, and `nftables` (the `nft` command) for services and NodePorts. Both must be installed on the host — see [System Requirements](./system-requirements.md#required-host-commands).
 :::
 
 When Miren sets up the network bridge, it installs iptables rules in two chains:
@@ -69,7 +69,7 @@ If you're running Miren on a cloud provider, you'll need to configure security g
 | 8443 | UDP | Miren API (QUIC) - CLI and client connections | Yes |
 | 80 | TCP | HTTP traffic to your applications (redirects to HTTPS) | Yes |
 | 443 | TCP | HTTPS traffic to your applications | Yes |
-| NodePorts | TCP/UDP | Direct L4 traffic to non-HTTP services (see [Traffic Routing](/traffic-routing)) | If using TCP/UDP services |
+| NodePorts | TCP/UDP | Direct L4 traffic to non-HTTP services (see [Traffic Routing](./traffic-routing.md)) | If using TCP/UDP services |
 
 **Miren API (UDP 8443):** The Miren API uses QUIC (HTTP/3) over UDP. This is how the CLI communicates with the server and how remote clients connect to your cluster.
 
@@ -79,7 +79,7 @@ If you're running Miren on a cloud provider, you'll need to configure security g
 
 ### Between Nodes (Distributed Runners)
 
-If you've grown the cluster with [distributed runners](/distributed-runners), the nodes also talk to each other. These are separate from the inbound ports above, and they only matter when there's a firewall between your machines.
+If you've grown the cluster with [distributed runners](./distributed-runners.md), the nodes also talk to each other. These are separate from the inbound ports above, and they only matter when there's a firewall between your machines.
 
 | Port | Protocol | Direction | Purpose |
 |------|----------|-----------|---------|

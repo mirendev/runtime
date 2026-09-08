@@ -46,4 +46,4 @@ miren sandbox delete sb_abc123 --force
 
 ## See also
 
-- [`miren sandbox`](/command/sandbox)
+- [`miren sandbox`](./sandbox.md)

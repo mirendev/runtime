@@ -205,7 +205,7 @@ You can also drive the server directly with the OpenHands SDK, which sends the s
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — the full `app.toml` reference in context
-- [Persistent Storage](/disks) — local vs. Miren disks
-- [Traffic Routing](/traffic-routing) — how the `web` service and routes fit together
-- [Deploy the Amp agent runner](/recipes/amp-runner) — another headless coding-agent recipe
+- [App Configuration](../app-configuration.md) — the full `app.toml` reference in context
+- [Persistent Storage](../disks.md) — local vs. Miren disks
+- [Traffic Routing](../traffic-routing.md) — how the `web` service and routes fit together
+- [Deploy the Amp agent runner](./amp-runner.md) — another headless coding-agent recipe

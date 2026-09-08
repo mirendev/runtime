@@ -37,10 +37,10 @@ miren cluster
 
 ## Subcommands
 
-- [`miren cluster add`](/command/cluster-add) — Add a new cluster configuration
-- [`miren cluster available`](/command/cluster-available) — List the clusters Miren Cloud has for your account
-- [`miren cluster current`](/command/cluster-current) — Show the pinned cluster for this app
-- [`miren cluster export-address`](/command/cluster-export-address) — Export cluster address with TLS fingerprint for MIREN_CLUSTER
-- [`miren cluster list`](/command/cluster-list) — List all configured clusters
-- [`miren cluster remove`](/command/cluster-remove) — Remove a cluster from the configuration
-- [`miren cluster switch`](/command/cluster-switch) — Switch to a different cluster
+- [`miren cluster add`](./cluster-add.md) — Add a new cluster configuration
+- [`miren cluster available`](./cluster-available.md) — List the clusters Miren Cloud has for your account
+- [`miren cluster current`](./cluster-current.md) — Show the pinned cluster for this app
+- [`miren cluster export-address`](./cluster-export-address.md) — Export cluster address with TLS fingerprint for MIREN_CLUSTER
+- [`miren cluster list`](./cluster-list.md) — List all configured clusters
+- [`miren cluster remove`](./cluster-remove.md) — Remove a cluster from the configuration
+- [`miren cluster switch`](./cluster-switch.md) — Switch to a different cluster

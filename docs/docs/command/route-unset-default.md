@@ -35,4 +35,4 @@ miren route unset-default
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

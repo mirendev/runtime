@@ -13,7 +13,7 @@ Miren auto-detects Go apps from `go.mod`, builds them to a single binary at
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Go app on Miren" after installing the
-[Miren agent skills](/agent-skills). It finds your main package, proposes a start
+[Miren agent skills](../agent-skills.md). It finds your main package, proposes a start
 command, wires up environment variables, and deploys — using this page as its reference.
 :::
 
@@ -22,7 +22,7 @@ command, wires up environment variables, and deploys — using this page as its 
 No. Miren detects Go from `go.mod` and compiles the binary for you. The Go version
 comes from the `go` directive in your `go.mod` (falling back to 1.23). Provide a
 `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -54,7 +54,7 @@ The automatic Go build can't authenticate to a private module host. It doesn't r
 `GOPRIVATE`, a `.netrc`, or git credentials, and variables you set with `miren env set`
 are not injected into the module download step. If your project depends on private
 modules, either commit a `vendor/` directory — Miren then builds with `-mod=vendor` and
-skips the download entirely — or use a [`Dockerfile.miren`](/guides#using-dockerfilemiren)
+skips the download entirely — or use a [`Dockerfile.miren`](./index.md#using-dockerfilemiren)
 where you control how modules are fetched.
 :::
 
@@ -98,7 +98,7 @@ worker: /bin/app -mode=worker
 scheduler: /bin/app -mode=scheduler
 ```
 
-See [Services](/services) for running multiple processes.
+See [Services](../services.md) for running multiple processes.
 
 ### Runtime files
 
@@ -138,7 +138,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -153,6 +153,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Services](/services) — web + workers
-- [Deployment](/deployment) — how deploys build and activate
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Services](../services.md) — web + workers
+- [Deployment](../deployment.md) — how deploys build and activate

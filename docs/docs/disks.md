@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Persistent Storage
 
-Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`. For a SQLite database, use the [`miren-sqlite` addon](/addons#sqlite-is-different) instead: it attaches its own storage and keeps it backed up, so there is no disk to declare.
+Miren provides two options for persistent storage: **Local Storage** (simple, node-local) and **Miren Disks** (managed persistent volumes). Both are configured as disks in your `app.toml`. For a SQLite database, use the [`miren-sqlite` addon](./addons.md#sqlite-is-different) instead: it attaches its own storage and keeps it backed up, so there is no disk to declare.
 
 Your data lives on the server where your app runs. Local storage and Miren Disks are backed up on request; a SQLite disk is backed up continuously as you write to it. See each section below.
 
@@ -78,14 +78,14 @@ This is handy for sharing node-local state between an app's services, but if you
 - Session storage
 - Any data that needs to persist across restarts
 
-For a SQLite database, prefer the [`miren-sqlite` addon](/addons#sqlite-is-different): you get the same node-local directory plus continuous backup and automatic restore, without declaring a disk.
+For a SQLite database, prefer the [`miren-sqlite` addon](./addons.md#sqlite-is-different): you get the same node-local directory plus continuous backup and automatic restore, without declaring a disk.
 
 ### Limitations
 
 - **Host-local**: Data is tied to the server. If you move your app to a different server, you'll need to migrate the data manually.
 - **No managed backups**: Back up your data by copying the host directory, or use your own backup tooling.
 - **Shared access**: All containers in your app can read/write simultaneously—your application needs to handle concurrent access (SQLite handles this well when configured with `PRAGMA journal_mode=WAL`).
-- **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to [distributed runners](/distributed-runners).
+- **Node affinity**: Apps with any disk (local or miren) are pinned to the coordinator and won't be scheduled to [distributed runners](./distributed-runners.md).
 
 ### Migrating from Automatic Local Storage
 
@@ -280,7 +280,7 @@ miren debug disk lease-list
 ```
 </CliCommand>
 
-See [CLI Reference - Disk Commands](/command/debug-disk) for complete command documentation.
+See [CLI Reference - Disk Commands](./command/debug-disk.md) for complete command documentation.
 
 ### Important Considerations
 
@@ -316,8 +316,8 @@ We'll update this page and the [changelog](https://miren.md/changelog) as these 
 
 ### Next Steps
 
-- [app.toml Reference — Disks](/app-toml#disks) — Complete field reference for disk configuration (including `lease_timeout`)
-- [Services](/services) — Define services that use persistent storage
-- [Getting Started](/getting-started) — Deploy your first app
-- [CLI Reference - Disk Commands](/command/debug-disk) — Complete disk CLI reference
-- [Miren Cloud](/miren-cloud/overview) — Set up cloud features
+- [app.toml Reference — Disks](./app-toml.md#disks) — Complete field reference for disk configuration (including `lease_timeout`)
+- [Services](./services.md) — Define services that use persistent storage
+- [Getting Started](./getting-started.md) — Deploy your first app
+- [CLI Reference - Disk Commands](./command/debug-disk.md) — Complete disk CLI reference
+- [Miren Cloud](./miren-cloud/overview.md) — Set up cloud features

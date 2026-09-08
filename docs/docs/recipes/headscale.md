@@ -17,10 +17,10 @@ By the end you'll have headscale answering over HTTPS at a hostname you own, its
 and keys on a disk that survives redeploys, and a first node joined to your tailnet.
 
 :::info[This is an application recipe, not a language guide]
-For getting your own source code onto Miren, start with [Deployment](/deployment) and the
-[Language Guides](/guides). This page is about self-hosting a prebuilt third-party server.
+For getting your own source code onto Miren, start with [Deployment](../deployment.md) and the
+[Language Guides](../guides/index.md). This page is about self-hosting a prebuilt third-party server.
 For the opposite topic — running a Miren **cluster** on a tailnet — see
-[Running Miren on a Tailnet](/tailscale).
+[Running Miren on a Tailnet](../tailscale.md).
 :::
 
 ## Prerequisites
@@ -28,8 +28,8 @@ For the opposite topic — running a Miren **cluster** on a tailnet — see
 - `miren` CLI installed and authenticated (`miren whoami`).
 - Access to the target cluster and its org.
 - A hostname you control, pointed at the cluster — see
-  [Custom Domains](/traffic-routing#custom-domains) or claim one through
-  [Miren Cloud subdomains](/miren-cloud/subdomains).
+  [Custom Domains](../traffic-routing.md#custom-domains) or claim one through
+  [Miren Cloud subdomains](../miren-cloud/subdomains.md).
 - **The ability to edit the cluster's server config.** Tailscale clients hold a connection
   to the control server open far longer than the ingress allows by default, so this recipe
   needs one cluster-wide setting changed before a client will stay connected. Details in
@@ -181,7 +181,7 @@ value = "https://headscale.example.com"
 ```
 
 A control server shouldn't scale to zero or run two copies against one SQLite file, hence a
-single fixed instance. [Persistent Storage](/disks) recommends a local disk for SQLite,
+single fixed instance. [Persistent Storage](../disks.md) recommends a local disk for SQLite,
 which is what this uses; note that any disk pins the app to the coordinator node.
 
 ## Deploy
@@ -222,7 +222,7 @@ Raise the limit in the server config file (`/etc/miren/server.toml`, or
 http_request_timeout = 120
 ```
 
-The value is seconds. See [Server Configuration](/server-config#server).
+The value is seconds. See [Server Configuration](../server-config.md#server).
 
 ## Verify
 
@@ -312,7 +312,7 @@ choice and costs you nothing to operate.
 
 To relay through your own server instead, enable headscale's embedded DERP. The relay is
 served over HTTPS on your existing hostname; STUN additionally needs a UDP port open on the
-host, declared as a [node port](/traffic-routing#non-http-services-tcpudp).
+host, declared as a [node port](../traffic-routing.md#non-http-services-tcpudp).
 
 Add the STUN port alongside the HTTP one, and turn the relay on:
 
@@ -346,7 +346,7 @@ value = "/data/derp_server_private.key"
 
 On boot headscale logs `stun server started at [::]:3478` and advertises the new region.
 Open 3478/udp in any cloud firewall in front of the cluster — node ports aren't opened for
-you, and [Firewall](/firewall) covers the inbound rules.
+you, and [Firewall](../firewall.md) covers the inbound rules.
 
 :::warning[Keep the public relays as a fallback]
 Relayed traffic reaches your hostname over the same HTTPS path as everything else, so a
@@ -357,8 +357,8 @@ rather than removing them.
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — the full `app.toml` reference in context
-- [Persistent Storage](/disks) — local vs. Miren disks
-- [Traffic Routing](/traffic-routing) — routes, and TCP/UDP node ports
-- [Running Miren on a Tailnet](/tailscale) — the reverse case: a cluster that lives on an
+- [App Configuration](../app-configuration.md) — the full `app.toml` reference in context
+- [Persistent Storage](../disks.md) — local vs. Miren disks
+- [Traffic Routing](../traffic-routing.md) — routes, and TCP/UDP node ports
+- [Running Miren on a Tailnet](../tailscale.md) — the reverse case: a cluster that lives on an
   overlay network

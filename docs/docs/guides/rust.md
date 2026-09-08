@@ -13,7 +13,7 @@ single release binary at `/bin/app` on a minimal runtime image — no Dockerfile
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Rust app on Miren" after installing the
-[Miren agent skills](/agent-skills). It confirms your binary, checks the server binds
+[Miren agent skills](../agent-skills.md). It confirms your binary, checks the server binds
 `0.0.0.0:$PORT`, wires up environment variables, and deploys — using this page as its
 reference.
 :::
@@ -22,7 +22,7 @@ reference.
 
 No. Miren detects Rust from `Cargo.toml` and runs `cargo build --release` for you. The
 default is the **latest Rust 1.x**. Provide a `Dockerfile.miren` only for custom build
-steps — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+steps — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -124,7 +124,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -138,6 +138,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Services](/services) — web + workers
-- [Deployment](/deployment) — how deploys build and activate
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Services](../services.md) — web + workers
+- [Deployment](../deployment.md) — how deploys build and activate

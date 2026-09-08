@@ -37,4 +37,4 @@ miren addon list-available
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

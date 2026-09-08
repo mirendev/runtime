@@ -22,8 +22,8 @@ the `web` service convention, `0.0.0.0` binding, `port_timeout`, and network dis
 it doubles as a tour of what matters when you bring your own image.
 
 :::info[This is an application recipe, not a language guide]
-For getting your own source code onto Miren, start with [Deployment](/deployment) and the
-[Language Guides](/guides). This page is about running a prebuilt third-party image.
+For getting your own source code onto Miren, start with [Deployment](../deployment.md) and the
+[Language Guides](../guides/index.md). This page is about running a prebuilt third-party image.
 :::
 
 ## Prerequisites
@@ -225,7 +225,7 @@ Healthy signs in the logs: `s6-rc: service main-hermes successfully started`,
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — the full `app.toml` reference in context
-- [Persistent Storage](/disks) — Miren disks vs. local disks
-- [Traffic Routing](/traffic-routing) — how the `web` service and routes fit together
-- [Services](/services) — image defaults, `args`, and full command overrides
+- [App Configuration](../app-configuration.md) — the full `app.toml` reference in context
+- [Persistent Storage](../disks.md) — Miren disks vs. local disks
+- [Traffic Routing](../traffic-routing.md) — how the `web` service and routes fit together
+- [Services](../services.md) — image defaults, `args`, and full command overrides

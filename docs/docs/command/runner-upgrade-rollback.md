@@ -34,4 +34,4 @@ miren runner upgrade rollback
 
 ## See also
 
-- [`miren runner upgrade`](/command/runner-upgrade)
+- [`miren runner upgrade`](./runner-upgrade.md)

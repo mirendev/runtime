@@ -40,4 +40,4 @@ miren server status --follow
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

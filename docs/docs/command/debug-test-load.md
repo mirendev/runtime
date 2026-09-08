@@ -49,4 +49,4 @@ miren debug test load <url> [flags]
 
 ## See also
 
-- [`miren debug test`](/command/debug-test)
+- [`miren debug test`](./debug-test.md)

@@ -47,4 +47,4 @@ miren runner drain my-runner --timeout 300
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

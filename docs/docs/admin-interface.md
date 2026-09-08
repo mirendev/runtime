@@ -487,7 +487,7 @@ If your app does not implement `$methods`, the CLI silently skips validation. To
 miren admin -a myapp --no-validate debug-internal
 ```
 
-See [Admin Commands](/command/admin) for the full CLI flag reference.
+See [Admin Commands](./command/admin.md) for the full CLI flag reference.
 
 ## More Implementation Examples
 
@@ -700,6 +700,6 @@ Bun.serve({
 
 ## Next Steps
 
-- [Admin Commands](/command/admin) — CLI reference for `miren admin`
-- [Services](/services) — Configure your app's web service
-- [Getting Started](/getting-started) — Deploy your first app
+- [Admin Commands](./command/admin.md) — CLI reference for `miren admin`
+- [Services](./services.md) — Configure your app's web service
+- [Getting Started](./getting-started.md) — Deploy your first app

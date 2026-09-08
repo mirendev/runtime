@@ -46,4 +46,4 @@ miren runner remove my-runner --force
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

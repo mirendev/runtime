@@ -34,4 +34,4 @@ miren server register status
 
 ## See also
 
-- [`miren server register`](/command/server-register)
+- [`miren server register`](./server-register.md)

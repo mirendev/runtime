@@ -10,7 +10,7 @@ Common terms used in Miren.
 
 ## Addon
 
-A managed backing service that Miren provisions and operates for your app. Addons handle infrastructure setup and inject connection credentials as environment variables automatically. Available addons include PostgreSQL, MySQL, Valkey, RabbitMQ, and Memcache. See [Addons](/addons).
+A managed backing service that Miren provisions and operates for your app. Addons handle infrastructure setup and inject connection credentials as environment variables automatically. Available addons include PostgreSQL, MySQL, Valkey, RabbitMQ, and Memcache. See [Addons](./addons.md).
 
 ## App
 
@@ -18,7 +18,7 @@ An application deployed to Miren. Each app has a name, configuration, and one or
 
 ## app.toml
 
-The configuration file for a Miren application, located at `.miren/app.toml`. Defines the app's services, environment variables, build settings, scaling behavior, disks, and addons. See [app.toml Reference](/app-toml).
+The configuration file for a Miren application, located at `.miren/app.toml`. Defines the app's services, environment variables, build settings, scaling behavior, disks, and addons. See [app.toml Reference](./app-toml.md).
 
 ## Build
 
@@ -38,11 +38,11 @@ The additional latency on the first request to an app that has been [scaled to z
 
 ## Concurrency
 
-The scaling configuration for a [service](#service). Miren supports two modes: **auto** (scales instances up and down based on traffic) and **fixed** (runs a constant number of instances). Auto mode is configured with `requests_per_instance` and `scale_down_delay`; fixed mode uses `num_instances`. See [Application Scaling](/scaling).
+The scaling configuration for a [service](#service). Miren supports two modes: **auto** (scales instances up and down based on traffic) and **fixed** (runs a constant number of instances). Auto mode is configured with `requests_per_instance` and `scale_down_delay`; fixed mode uses `num_instances`. See [Application Scaling](./scaling.md).
 
 ## Coordinator
 
-The primary node in a distributed cluster — the machine running `miren server`. The coordinator holds the cluster's state (entity store and etcd), image registry, and workload-identity signing, and schedules sandboxes across the cluster. It also runs workloads itself. Every [distributed runner](#distributed-runner) depends on the coordinator being reachable. See [Distributed Runners](/distributed-runners).
+The primary node in a distributed cluster — the machine running `miren server`. The coordinator holds the cluster's state (entity store and etcd), image registry, and workload-identity signing, and schedules sandboxes across the cluster. It also runs workloads itself. Every [distributed runner](#distributed-runner) depends on the coordinator being reachable. See [Distributed Runners](./distributed-runners.md).
 
 ## Default Route
 
@@ -56,15 +56,15 @@ A deployment and the version it produces are distinct objects: the deployment is
 
 ## Disk
 
-Persistent storage attached to your application. Miren disks survive restarts and redeployments, making them suitable for databases and stateful workloads. See [Persistent Storage](/disks).
+Persistent storage attached to your application. Miren disks survive restarts and redeployments, making them suitable for databases and stateful workloads. See [Persistent Storage](./disks.md).
 
 ## Distributed Runner
 
-An additional machine that joins a cluster to host [sandboxes](#sandbox), expanding capacity beyond the [coordinator](#coordinator). A runner joins with `miren runner join`, runs stateless workloads scheduled to it, and reports health back to the coordinator, but holds no cluster state of its own. See [Distributed Runners](/distributed-runners).
+An additional machine that joins a cluster to host [sandboxes](#sandbox), expanding capacity beyond the [coordinator](#coordinator). A runner joins with `miren runner join`, runs stateless workloads scheduled to it, and reports health back to the coordinator, but holds no cluster state of its own. See [Distributed Runners](./distributed-runners.md).
 
 ## Ephemeral Version
 
-A labeled, time-boxed preview build of your app that runs alongside the active [version](#version) on its own subdomain. Ephemeral versions don't affect production traffic and are deleted automatically when their [TTL](#ttl) expires. Used for pull request previews. See [Pull Request Environments](/pr-environments).
+A labeled, time-boxed preview build of your app that runs alongside the active [version](#version) on its own subdomain. Ephemeral versions don't affect production traffic and are deleted automatically when their [TTL](#ttl) expires. Used for pull request previews. See [Pull Request Environments](./pr-environments.md).
 
 ## Identity Provider
 
@@ -80,7 +80,7 @@ A DNS-compliant name assigned to an [ephemeral version](#ephemeral-version) (e.g
 
 ## Miren Cloud
 
-A central control plane that connects and manages your Miren clusters. Provides team management, access control, and multi-environment workflows. See [Miren Cloud](/miren-cloud/overview).
+A central control plane that connects and manages your Miren clusters. Provides team management, access control, and multi-environment workflows. See [Miren Cloud](./miren-cloud/overview.md).
 
 ## Miren Runtime
 
@@ -96,11 +96,11 @@ The background service that runs on your cluster and manages applications, sandb
 
 ## Node Port
 
-A port exposed directly on the host machine for non-HTTP services like game servers, IRC, or custom TCP/UDP protocols. Unlike HTTP traffic (which is routed automatically through Miren's ingress layer), node ports give external clients a direct `host:port` to connect to. Configured with `port_type = "tcp"` in [app.toml](#apptoml). See [Traffic Routing](/traffic-routing#non-http-services-tcpudp).
+A port exposed directly on the host machine for non-HTTP services like game servers, IRC, or custom TCP/UDP protocols. Unlike HTTP traffic (which is routed automatically through Miren's ingress layer), node ports give external clients a direct `host:port` to connect to. Configured with `port_type = "tcp"` in [app.toml](#apptoml). See [Traffic Routing](./traffic-routing.md#non-http-services-tcpudp).
 
 ## OIDC Binding
 
-A configuration that links an [app](#app) to an [identity provider](#identity-provider) with a subject pattern, enabling CI/CD systems to deploy using short-lived OIDC tokens instead of stored secrets. For example, a binding can authorize GitHub Actions workflows from a specific repository to deploy a specific app. See [CI/CD Deployment](/ci-deploy).
+A configuration that links an [app](#app) to an [identity provider](#identity-provider) with a subject pattern, enabling CI/CD systems to deploy using short-lived OIDC tokens instead of stored secrets. For example, a binding can authorize GitHub Actions workflows from a specific repository to deploy a specific app. See [CI/CD Deployment](./ci-deploy.md).
 
 ## Onbuild
 
@@ -112,7 +112,7 @@ A simple file format for defining [services](#service) in your app. Each line ma
 
 ## Route
 
-Maps a hostname to an application. Routes determine how HTTP traffic reaches your apps. Your first app gets a [default route](#default-route) automatically. See [Traffic Routing](/traffic-routing).
+Maps a hostname to an application. Routes determine how HTTP traffic reaches your apps. Your first app gets a [default route](#default-route) automatically. See [Traffic Routing](./traffic-routing.md).
 
 ## Rollback
 
@@ -120,7 +120,7 @@ A type of [deployment](#deployment) that re-releases an existing [version](#vers
 
 ## Route Protection
 
-Authentication at the routing layer using an [identity provider](#identity-provider). Unauthenticated requests are redirected to an OIDC provider for login. After authentication, JWT claims are injected as HTTP headers (e.g., `X-User-Email`) before the request reaches your app — no in-app auth code required. See [Protecting Routes](/route-protect).
+Authentication at the routing layer using an [identity provider](#identity-provider). Unauthenticated requests are redirected to an OIDC provider for login. After authentication, JWT claims are injected as HTTP headers (e.g., `X-User-Email`) before the request reaches your app — no in-app auth code required. See [Protecting Routes](./route-protect.md).
 
 ## Sandbox
 
@@ -132,15 +132,15 @@ The controller that manages the set of [instances](#instance) for a [service](#s
 
 ## Scale to Zero
 
-Miren's ability to scale a service down to zero [instances](#instance) when there is no traffic. The next incoming request triggers a [cold start](#cold-start) to create a new sandbox. Enabled by default for auto-scaled services. See [Application Scaling](/scaling#scale-to-zero).
+Miren's ability to scale a service down to zero [instances](#instance) when there is no traffic. The next incoming request triggers a [cold start](#cold-start) to create a new sandbox. Enabled by default for auto-scaled services. See [Application Scaling](./scaling.md#scale-to-zero).
 
 ## Service
 
-A named process within an app. An app can have multiple services, each with its own command, image, port, and scaling configuration. Common services include `web` (HTTP server), `worker` (background jobs), and database services like `postgres`. See [Services](/services).
+A named process within an app. An app can have multiple services, each with its own command, image, port, and scaling configuration. Common services include `web` (HTTP server), `worker` (background jobs), and database services like `postgres`. See [Services](./services.md).
 
 ## TLS Certificate
 
-An SSL/TLS certificate that Miren provisions automatically from [Let's Encrypt](https://letsencrypt.org/) when you set a [route](#route). Certificates are obtained via ACME HTTP-01 or DNS-01 challenges, cached on disk, and renewed automatically. See [TLS Certificates](/tls).
+An SSL/TLS certificate that Miren provisions automatically from [Let's Encrypt](https://letsencrypt.org/) when you set a [route](#route). Certificates are obtained via ACME HTTP-01 or DNS-01 challenges, cached on disk, and renewed automatically. See [TLS Certificates](./tls.md).
 
 ## TTL
 
@@ -152,8 +152,8 @@ A unique identifier for a runnable release of your app (e.g., `myapp-vCVkjR6u774
 
 ## WAF
 
-Web Application Firewall — per-route request filtering using the [OWASP Core Rule Set](https://coreruleset.org/). Inspects incoming HTTP requests for common attacks like SQL injection, XSS, and path traversal. Configured per [route](#route) with a paranoia level (1–4) controlling strictness. See [WAF](/waf).
+Web Application Firewall — per-route request filtering using the [OWASP Core Rule Set](https://coreruleset.org/). Inspects incoming HTTP requests for common attacks like SQL injection, XSS, and path traversal. Configured per [route](#route) with a paranoia level (1–4) controlling strictness. See [WAF](./waf.md).
 
 ## Wildcard Route
 
-A [route](#route) that matches all subdomains of a domain using a `*` prefix (e.g., `*.myapp.example.com`). Useful for multi-tenant apps or custom subdomain routing. Exact routes take priority over wildcards when both match. See [Traffic Routing](/traffic-routing#wildcard-routes).
+A [route](#route) that matches all subdomains of a domain using a `*` prefix (e.g., `*.myapp.example.com`). Useful for multi-tenant apps or custom subdomain routing. Exact routes take priority over wildcards when both match. See [Traffic Routing](./traffic-routing.md#wildcard-routes).

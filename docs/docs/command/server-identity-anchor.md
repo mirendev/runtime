@@ -44,4 +44,4 @@ miren server identity-anchor cluster
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

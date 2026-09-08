@@ -28,15 +28,15 @@ miren debug entity [flags]
 
 ## Subcommands
 
-- [`miren debug entity create`](/command/debug-entity-create) — Create a new entity
-- [`miren debug entity delete`](/command/debug-entity-delete) — Delete an entity
-- [`miren debug entity ensure`](/command/debug-entity-ensure) — Ensure an entity exists
-- [`miren debug entity get`](/command/debug-entity-get) — Get an entity
-- [`miren debug entity list`](/command/debug-entity-list) — List entities
-- [`miren debug entity patch`](/command/debug-entity-patch) — Patch an existing entity
-- [`miren debug entity put`](/command/debug-entity-put) — Put an entity
-- [`miren debug entity replace`](/command/debug-entity-replace) — Replace an existing entity
+- [`miren debug entity create`](./debug-entity-create.md) — Create a new entity
+- [`miren debug entity delete`](./debug-entity-delete.md) — Delete an entity
+- [`miren debug entity ensure`](./debug-entity-ensure.md) — Ensure an entity exists
+- [`miren debug entity get`](./debug-entity-get.md) — Get an entity
+- [`miren debug entity list`](./debug-entity-list.md) — List entities
+- [`miren debug entity patch`](./debug-entity-patch.md) — Patch an existing entity
+- [`miren debug entity put`](./debug-entity-put.md) — Put an entity
+- [`miren debug entity replace`](./debug-entity-replace.md) — Replace an existing entity
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

@@ -54,4 +54,4 @@ miren route up --default
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

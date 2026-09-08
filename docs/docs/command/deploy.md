@@ -86,4 +86,4 @@ miren deploy --version v3
 
 ## Subcommands
 
-- [`miren deploy cancel`](/command/deploy-cancel) — Cancel an in-progress deployment
+- [`miren deploy cancel`](./deploy-cancel.md) — Cancel an in-progress deployment

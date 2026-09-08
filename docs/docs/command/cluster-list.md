@@ -43,4 +43,4 @@ miren cluster list --format json
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

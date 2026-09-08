@@ -56,4 +56,4 @@ miren addon create miren-postgresql:small --version 16
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

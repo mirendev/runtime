@@ -16,4 +16,4 @@ miren alias [flags]
 
 ## Subcommands
 
-- [`miren alias list`](/command/alias-list) — List configured CLI aliases
+- [`miren alias list`](./alias-list.md) — List configured CLI aliases

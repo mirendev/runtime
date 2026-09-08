@@ -9,7 +9,7 @@ keywords: [app.toml, configuration, reference, services, tasks, scheduled jobs, 
 
 Complete reference for `.miren/app.toml` — the configuration file for Miren applications.
 
-For a guide-style introduction, see [App Configuration](/app-configuration).
+For a guide-style introduction, see [App Configuration](./app-configuration.md).
 
 For editor autocomplete and automated validation, use the published
 [JSON Schema](/app-toml.schema.json). Editors that support TOML schemas can map
@@ -86,7 +86,7 @@ tail = "logs app -f"
 | `name` | string | Application name | Inferred from directory name |
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
-| `workload_role` | string | Role for this app's sandbox [in-cluster API access](/in-cluster-api). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
+| `workload_role` | string | Role for this app's sandbox [in-cluster API access](./in-cluster-api.md). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
 | `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for a task-only app with no services, where leaving it unset is an error |
 
 ### `web` and the synthesized web service {#web}
@@ -140,7 +140,7 @@ ref = "payments/stripe-key"
 |-------|------|-------------|---------|
 | `key` | string | Variable name. **Required.** | — |
 | `value` | string | Variable value | `""` |
-| `backend` | string | [Secret](/secrets) backend to source the value from | `""` |
+| `backend` | string | [Secret](./secrets.md) backend to source the value from | `""` |
 | `ref` | string | Reference to the secret within that backend | `""` |
 | `required` | bool | Fail deploy if value is empty | `false` |
 | `sensitive` | bool | Mask value in CLI output and logs | `false` |
@@ -171,7 +171,7 @@ alpine_image = "alpine:3.19"
 
 ### `[[build.secrets]]` — Build-time secrets {#build-secrets}
 
-Exposes an encrypted [secret](/secrets) to a Dockerfile build. BuildKit keeps the value out of image layers and its own logs; your `RUN` command must not print it. Each entry is mounted by its `id`, which your Dockerfile reads with `RUN --mount=type=secret,id=<id>`. Supported for Dockerfile builds only — declaring one on an auto-detected language stack is an error. See [Using a secret at build time](/secrets#using-a-secret-at-build-time) for the full contract.
+Exposes an encrypted [secret](./secrets.md) to a Dockerfile build. BuildKit keeps the value out of image layers and its own logs; your `RUN` command must not print it. Each entry is mounted by its `id`, which your Dockerfile reads with `RUN --mount=type=secret,id=<id>`. Supported for Dockerfile builds only — declaring one on an auto-detected language stack is an error. See [Using a secret at build time](./secrets.md#using-a-secret-at-build-time) for the full contract.
 
 ```toml
 [[build.secrets]]
@@ -182,12 +182,12 @@ ref = "registry/npm-token"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `id` | string | Mount identifier used in `--mount=type=secret,id=<id>`. Letters, digits, and `_.-` only; unique within the list | Required |
-| `backend` | string | [Secret](/secrets) backend to resolve against | `cluster` (built-in store) |
+| `backend` | string | [Secret](./secrets.md) backend to resolve against | `cluster` (built-in store) |
 | `ref` | string | Reference naming the secret within the backend | Required |
 
 ## `[services.<name>]` — Service Configuration {#services}
 
-Each named section under `services` defines a process in your app. See [Services](/services) for usage patterns.
+Each named section under `services` defines a process in your app. See [Services](./services.md) for usage patterns.
 
 ```toml
 [services.web]
@@ -263,7 +263,7 @@ protection.
 
 ### `[services.<name>.concurrency]` — Scaling {#concurrency}
 
-Controls how many instances of a service run. See [Application Scaling](/scaling) for tuning guidance.
+Controls how many instances of a service run. See [Application Scaling](./scaling.md) for tuning guidance.
 
 **Default for `web`:** auto mode, 10 requests per instance, 15m scale-down delay, 10s shutdown timeout.
 
@@ -301,7 +301,7 @@ shutdown_timeout = "10s"
 
 ### `[[services.<name>.ports]]` — Ports {#ports}
 
-Configures network ports for a service. Use this when a service needs multiple ports or non-HTTP protocols. See [Traffic Routing](/traffic-routing) for usage patterns and examples.
+Configures network ports for a service. Use this when a service needs multiple ports or non-HTTP protocols. See [Traffic Routing](./traffic-routing.md) for usage patterns and examples.
 
 ```toml
 [[services.app.ports]]
@@ -333,7 +333,7 @@ node_port = 7000
 
 ### `[[services.<name>.disks]]` — Persistent Disks {#disks}
 
-Attaches persistent storage to a service. See [Persistent Storage](/disks) for local storage and Miren Disks. A SQLite database is not declared here: the [`miren-sqlite` addon](/addons#sqlite-is-different) attaches its own storage.
+Attaches persistent storage to a service. See [Persistent Storage](./disks.md) for local storage and Miren Disks. A SQLite database is not declared here: the [`miren-sqlite` addon](./addons.md#sqlite-is-different) attaches its own storage.
 
 ```toml
 # Local storage (simple, node-local)
@@ -373,7 +373,7 @@ filesystem = "ext4"
 By default a writable miren disk is chowned to the user your container runs as,
 so a non-root image can write to it without a `chown` shim. Read-only mounts and
 containers that run as root are left untouched. See
-[Disks](/disks#configuring-disks) for the ownership rules and the one-time
+[Disks](./disks.md#configuring-disks) for the ownership rules and the one-time
 migration pass on large existing disks.
 
 ## `[tasks.<name>]` — Task Configuration {#tasks}
@@ -484,7 +484,7 @@ accepted; `man systemd.time` documents the full grammar.
 
 ## `[addons.<name>]` — Addons {#addons}
 
-Configures managed backing services. The `<name>` is the addon identifier (e.g. `miren-postgresql`). See [Addons](/addons) for a full guide.
+Configures managed backing services. The `<name>` is the addon identifier (e.g. `miren-postgresql`). See [Addons](./addons.md) for a full guide.
 
 When you deploy, Miren provisions declared addons and injects connection credentials as environment variables before starting your app.
 

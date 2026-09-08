@@ -16,5 +16,5 @@ miren config [flags]
 
 ## Subcommands
 
-- [`miren config info`](/command/config-info) — Show configuration file locations and format
-- [`miren config load`](/command/config-load) — Load config and merge it with your current config
+- [`miren config info`](./config-info.md) — Show configuration file locations and format
+- [`miren config load`](./config-load.md) — Load config and merge it with your current config

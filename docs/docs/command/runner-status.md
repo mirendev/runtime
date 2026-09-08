@@ -35,4 +35,4 @@ miren runner status
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

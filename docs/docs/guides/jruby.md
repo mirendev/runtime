@@ -9,12 +9,12 @@ import CliCommand from '@site/src/components/CliCommand';
 # JRuby on Miren
 
 JRuby runs Ruby on the JVM. Miren auto-detects standard (MRI) Ruby from a `Gemfile` —
-see [Ruby on Miren](/guides/ruby) — but to run on JRuby specifically you use a
+see [Ruby on Miren](./ruby.md) — but to run on JRuby specifically you use a
 `Dockerfile.miren`. Your Ruby code and gems run unchanged; they execute on the JVM.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this app on JRuby on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, wires up Bundler and
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, wires up Bundler and
 the server, and deploys — using this page as its reference.
 :::
 
@@ -22,7 +22,7 @@ the server, and deploys — using this page as its reference.
 
 Yes — to run on JRuby specifically. (Miren's auto-detection would pick MRI Ruby.) Add a
 `Dockerfile.miren` built on the `jruby` image. See
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -141,7 +141,7 @@ miren env set -s DATABASE_URL
 ```
 </CliCommand>
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -154,6 +154,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Ruby on Miren](/guides/ruby) — auto-detected MRI Ruby
-- [TruffleRuby on Miren](/guides/truffleruby) — Ruby on GraalVM
-- [Application Scaling](/scaling) — fixed vs. autoscaling
+- [Ruby on Miren](./ruby.md) — auto-detected MRI Ruby
+- [TruffleRuby on Miren](./truffleruby.md) — Ruby on GraalVM
+- [Application Scaling](../scaling.md) — fixed vs. autoscaling

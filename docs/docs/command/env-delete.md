@@ -63,4 +63,4 @@ miren env delete WORKERS --service worker
 
 ## See also
 
-- [`miren env`](/command/env)
+- [`miren env`](./env.md)

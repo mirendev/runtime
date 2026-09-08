@@ -20,9 +20,9 @@ miren debug saga [flags]
 
 ## Subcommands
 
-- [`miren debug saga list`](/command/debug-saga-list) — List saga executions
-- [`miren debug saga show`](/command/debug-saga-show) — Show a saga execution in detail
+- [`miren debug saga list`](./debug-saga-list.md) — List saga executions
+- [`miren debug saga show`](./debug-saga-show.md) — Show a saga execution in detail
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

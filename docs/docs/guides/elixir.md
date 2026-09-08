@@ -15,7 +15,7 @@ Miren cluster with a fresh `mix phx.new` app, Postgres addon, and migrations.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Phoenix app on Miren" after installing the
-[Miren agent skills](/agent-skills). It can generate the release
+[Miren agent skills](../agent-skills.md). It can generate the release
 (`mix phx.gen.release`), drop in the `Dockerfile.miren`, wire up the database addon and
 secrets, and deploy — using this page as its reference.
 :::
@@ -24,7 +24,7 @@ secrets, and deploy — using this page as its reference.
 
 Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
 project root. Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -184,7 +184,7 @@ one, and the instance crashes. Configure the addon and secrets first.
 
 ### Database via an addon
 
-The simplest way to get `DATABASE_URL` is a managed Postgres [addon](/addons) — Miren
+The simplest way to get `DATABASE_URL` is a managed Postgres [addon](../addons.md) — Miren
 provisions it and injects the connection string (plus `PG*` variables) as environment
 variables automatically. Declare it in `.miren/app.toml` (as shown in
 [Deploy](#deploy)):
@@ -219,7 +219,7 @@ paste it at the masked prompt. You can also set these at deploy time with
 | `POOL_SIZE` | No | DB pool size, defaults to 10 |
 | `DNS_CLUSTER_QUERY` | No | Enables Erlang clustering via DNS discovery |
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Migrations
 
@@ -253,7 +253,7 @@ resolves all instance IPs, which activates the scaffolded `DNSCluster`.
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

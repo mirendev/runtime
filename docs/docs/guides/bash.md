@@ -14,14 +14,14 @@ output — and that's all you need. This guide puts `socat` in front of a Bash s
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this shell script on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren` and the socket
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren` and the socket
 front-end, and deploys — using this page as its reference.
 :::
 
 ## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -46,7 +46,7 @@ The script doesn't bind a port — `socat` does. Miren injects `PORT`, and `soca
 Dockerfile's `CMD` starts that socket front-end.
 
 This same `socat` pattern serves any program that writes an HTTP response to stdout —
-see the [COBOL guide](/guides/cobol) for another example.
+see the [COBOL guide](./cobol.md) for another example.
 
 :::note[Behind Miren's ingress]
 Miren's HTTP ingress terminates TLS and handles the public HTTP layer in front of your
@@ -103,6 +103,6 @@ miren deploy
 
 ## Next steps
 
-- [COBOL on Miren](/guides/cobol) — the same `socat` pattern for a compiled program
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [COBOL on Miren](./cobol.md) — the same `socat` pattern for a compiled program
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

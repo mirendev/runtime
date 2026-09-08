@@ -42,4 +42,4 @@ miren server unregister --local-only
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

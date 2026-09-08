@@ -41,4 +41,4 @@ miren route set example.com myapp
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

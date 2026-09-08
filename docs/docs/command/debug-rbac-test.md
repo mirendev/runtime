@@ -29,4 +29,4 @@ miren debug rbac test [flags]
 
 ## See also
 
-- [`miren debug rbac`](/command/debug-rbac)
+- [`miren debug rbac`](./debug-rbac.md)

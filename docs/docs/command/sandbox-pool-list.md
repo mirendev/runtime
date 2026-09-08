@@ -37,4 +37,4 @@ miren sandbox-pool list
 
 ## See also
 
-- [`miren sandbox-pool`](/command/sandbox-pool)
+- [`miren sandbox-pool`](./sandbox-pool.md)

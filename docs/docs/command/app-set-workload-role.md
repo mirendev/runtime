@@ -46,4 +46,4 @@ miren app set-workload-role -a tooling cluster-readonly
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

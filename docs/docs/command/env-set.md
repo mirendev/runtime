@@ -74,4 +74,4 @@ miren env set -e WORKERS=4 --service worker
 
 ## See also
 
-- [`miren env`](/command/env)
+- [`miren env`](./env.md)

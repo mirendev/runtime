@@ -22,4 +22,4 @@ miren debug colors [flags]
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

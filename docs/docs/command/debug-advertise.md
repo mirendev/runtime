@@ -31,4 +31,4 @@ miren debug advertise [flags]
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

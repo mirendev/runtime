@@ -43,4 +43,4 @@ miren server container uninstall --remove-volume
 
 ## See also
 
-- [`miren server container`](/command/server-container)
+- [`miren server container`](./server-container.md)

@@ -45,4 +45,4 @@ miren debug saga show [args...] [flags]
 
 ## See also
 
-- [`miren debug saga`](/command/debug-saga)
+- [`miren debug saga`](./debug-saga.md)

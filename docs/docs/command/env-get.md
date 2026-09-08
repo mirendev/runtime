@@ -55,4 +55,4 @@ miren env get SECRET_KEY --unmask
 
 ## See also
 
-- [`miren env`](/command/env)
+- [`miren env`](./env.md)

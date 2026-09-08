@@ -15,7 +15,7 @@ the same way; either build it during the image build or run it directly with Bun
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this app on Miren" after installing the
-[Miren agent skills](/agent-skills). It detects Node vs. Bun, finds your start script,
+[Miren agent skills](../agent-skills.md). It detects Node vs. Bun, finds your start script,
 wires up environment variables, and deploys — using this page as its reference.
 :::
 
@@ -23,7 +23,7 @@ wires up environment variables, and deploys — using this page as its reference
 
 No. Miren detects your project and builds the image automatically. Provide a
 `Dockerfile.miren` only for custom build steps — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 ## Node.js
 
@@ -122,7 +122,7 @@ onbuild = ["npm run build"]
 Then point your start command at the compiled output (e.g. `web: node dist/index.js`).
 Bun apps can skip this and run `.ts` files directly.
 
-See [Services](/services) to run a worker alongside your web process.
+See [Services](../services.md) to run a worker alongside your web process.
 
 ## Environment variables
 
@@ -149,7 +149,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -163,6 +163,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Services](/services) — web + workers
-- [Deployment](/deployment) — how deploys build and activate
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Services](../services.md) — web + workers
+- [Deployment](../deployment.md) — how deploys build and activate

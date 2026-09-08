@@ -16,14 +16,14 @@ the Objective-C web framework that SOGo is built on), whose `WOApplication` and
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Objective-C app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren` and GNUstep build,
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren` and GNUstep build,
 and deploys — using this page as its reference.
 :::
 
 ## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -141,6 +141,6 @@ miren deploy
 
 ## Next steps
 
-- [C on Miren](/guides/c) — the C guide (Objective-C is a superset of C)
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [C on Miren](./c.md) — the C guide (Objective-C is a superset of C)
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

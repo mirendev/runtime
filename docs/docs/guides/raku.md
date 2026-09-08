@@ -13,7 +13,7 @@ Raku isn't auto-detected, so you deploy it with a `Dockerfile.miren`. This guide
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Raku app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, binds the server to
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, binds the server to
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
@@ -21,7 +21,7 @@ Ask your AI coding agent to "set up this Raku app on Miren" after installing the
 
 Yes. Miren doesn't auto-detect Raku, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -110,7 +110,7 @@ miren env set -s DATABASE_URL
 ```
 </CliCommand>
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -124,6 +124,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [Perl on Miren](/guides/perl) — the Perl guide
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [Perl on Miren](./perl.md) — the Perl guide
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

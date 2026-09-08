@@ -81,11 +81,11 @@ In standalone mode, embedded services start automatically unless explicitly disa
 | `release_path` | string | — | Path to release directory containing binaries | `MIREN_SERVER_RELEASE_PATH` | `--release-path` |
 | `config_cluster_name` | string | `local` | Name for this cluster in client config and as the telemetry label fallback when it is not registered with Miren Cloud | `MIREN_SERVER_CONFIG_CLUSTER_NAME` | `--config-cluster-name`, `-C` |
 | `skip_client_config` | bool | `false` | Skip writing client config to `clientconfig.d` | `MIREN_SERVER_SKIP_CLIENT_CONFIG` | `--skip-client-config` |
-| `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1). Cluster-wide default; override per route with `miren route timeout` — see [Request Timeouts](/traffic-routing#request-timeouts) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
+| `http_request_timeout` | int | `60` | HTTP request timeout in seconds (minimum: 1). Cluster-wide default; override per route with `miren route timeout` — see [Request Timeouts](./traffic-routing.md#request-timeouts) | `MIREN_SERVER_HTTP_REQUEST_TIMEOUT` | `--http-request-timeout` |
 | `stop_sandboxes_on_shutdown` | bool | `false` | Stop all sandboxes when server shuts down (useful in development) | `MIREN_SERVER_STOP_SANDBOXES_ON_SHUTDOWN` | `--stop-sandboxes-on-shutdown` |
 ## `[ingress]` — Ingress Settings {#ingress}
 
-Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines where Miren listens and whether it terminates TLS. See [TLS](/tls) for cert sourcing under each mode.
+Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines where Miren listens and whether it terminates TLS. See [TLS](./tls.md) for cert sourcing under each mode.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
@@ -108,9 +108,9 @@ The `behind-proxy-*` modes default to localhost to keep accidental misconfigurat
 
 ## `[tls]` — TLS Settings {#tls}
 
-Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. See [TLS](/tls) for setup guides.
+Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. See [TLS](./tls.md) for setup guides.
 
-`additional_ips` does more than its name suggests. Alongside adding SANs, every address listed there is passed straight through to the addresses the server advertises to Miren Cloud, skipping the filtering that discovered addresses go through. That makes it the way to pin an address discovery gets wrong — a host behind a static NAT, or one where you want a specific interface used. See [Running Miren on a Tailnet](/tailscale) for a worked example, and run `miren debug advertise` on the host to see what discovery decided and why.
+`additional_ips` does more than its name suggests. Alongside adding SANs, every address listed there is passed straight through to the addresses the server advertises to Miren Cloud, skipping the filtering that discovered addresses go through. That makes it the way to pin an address discovery gets wrong — a host behind a static NAT, or one where you want a specific interface used. See [Running Miren on a Tailnet](./tailscale.md) for a worked example, and run `miren debug advertise` on the host to see what discovery decided and why.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
@@ -232,7 +232,7 @@ Every deploy creates a new version of an app, and Miren keeps a bounded history 
 
 A version is retained if it is among the most recent `retention_count` **or** newer than `retention_period` — whichever rule keeps it. The two settings are a floor, not a budget: raising either one keeps more versions. The currently active version is always retained regardless of these limits, and ephemeral (preview) versions are managed separately by their own TTL.
 
-On a frequently-deployed cluster this window can pin more image data than the disk can hold, so Miren tightens retention automatically under pressure: once storage reaches 80%, a sweep drops the `retention_period` floor and keeps the active version plus `retention_count` (plus anything still in use). That makes `retention_count` a hard floor, always honored, while `retention_period` is best-effort and yields when the disk is tight. See [Managing Disk Space](/managing-disk-space) for how the reclaim works end to end and what to tune.
+On a frequently-deployed cluster this window can pin more image data than the disk can hold, so Miren tightens retention automatically under pressure: once storage reaches 80%, a sweep drops the `retention_period` floor and keeps the active version plus `retention_count` (plus anything still in use). That makes `retention_count` a hard floor, always honored, while `retention_period` is best-effort and yields when the disk is tight. See [Managing Disk Space](./managing-disk-space.md) for how the reclaim works end to end and what to tune.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
@@ -259,4 +259,4 @@ The anchor is the `iss` claim in the tokens this cluster mints for its apps, and
 
 There is no configuration field for it, because it is a property of the registration rather than of the server. A cluster registered with Miren Cloud is anchored there, and Miren Cloud serves its discovery; a cluster installed with `--without-cloud` anchors at its own hostname and serves its own.
 
-To change it on a registered cluster, use [`miren server identity-anchor`](/command/server-identity-anchor), which handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](/workload-identity#moving-the-anchor).
+To change it on a registered cluster, use [`miren server identity-anchor`](./command/server-identity-anchor.md), which handles the restart and the verification overlap that keeps in-flight tokens working. See [Moving the anchor](./workload-identity.md#moving-the-anchor).

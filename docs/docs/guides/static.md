@@ -15,14 +15,14 @@ reads the injected `$PORT`.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Vite app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the build step and `Dockerfile.miren`,
+[Miren agent skills](../agent-skills.md). It adds the build step and `Dockerfile.miren`,
 configures the SPA fallback, and deploys — using this page as its reference.
 :::
 
 ## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -119,7 +119,7 @@ reach the browser. Bake build-time configuration in during `npm run build` (e.g.
 `VITE_*` variables), or fetch runtime config from an API your SPA calls.
 
 If you do need a value at build time, pass it as a Docker build arg and reference it in
-your build step. See [App Configuration](/app-configuration) for how Miren handles
+your build step. See [App Configuration](../app-configuration.md) for how Miren handles
 configuration.
 
 ## Agent quick reference
@@ -133,7 +133,7 @@ configuration.
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
-- [JavaScript on Miren](/guides/javascript) — if you also run a Node/Bun backend
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate
+- [JavaScript on Miren](./javascript.md) — if you also run a Node/Bun backend
