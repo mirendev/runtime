@@ -215,7 +215,7 @@ func TestNodeRecoversWithinGracePeriod(t *testing.T) {
 		"sandbox should remain RUNNING after node recovered")
 }
 
-func TestSkipsAlreadyDeadAndStoppedSandboxes(t *testing.T) {
+func TestMarksStoppedSandboxDeadAfterGracePeriod(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
@@ -236,10 +236,64 @@ func TestSkipsAlreadyDeadAndStoppedSandboxes(t *testing.T) {
 
 	assert.Equal(t, compute_v1alpha.DEAD, getSandboxStatus(t, ctx, server, sbDead),
 		"already DEAD sandbox should stay DEAD")
-	assert.Equal(t, compute_v1alpha.STOPPED, getSandboxStatus(t, ctx, server, sbStopped),
-		"already STOPPED sandbox should stay STOPPED")
+	assert.Equal(t, compute_v1alpha.DEAD, getSandboxStatus(t, ctx, server, sbStopped),
+		"STOPPED sandbox cannot finish cleanup after its node fails")
 	assert.Equal(t, compute_v1alpha.DEAD, getSandboxStatus(t, ctx, server, sbRunning),
 		"RUNNING sandbox should be marked DEAD")
+}
+
+func TestSweepOrphanedSandboxes(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	missingNodeID := createReadyNode(t, ctx, server.Client, "missing-node", &compute_v1alpha.Node{
+		Status: compute_v1alpha.READY,
+	})
+	readyNodeID := createReadyNode(t, ctx, server.Client, "ready-node", &compute_v1alpha.Node{
+		Status: compute_v1alpha.READY,
+	})
+
+	oldTime := time.Now().Add(-10 * time.Minute)
+	server.Store.NowFunc = func() time.Time { return oldTime }
+	orphanStopped := createScheduledSandbox(t, ctx, server, "orphan-stopped", missingNodeID, compute_v1alpha.STOPPED)
+	orphanDead := createScheduledSandbox(t, ctx, server, "orphan-dead", missingNodeID, compute_v1alpha.DEAD)
+	ownedStopped := createScheduledSandbox(t, ctx, server, "owned-stopped", readyNodeID, compute_v1alpha.STOPPED)
+	server.Store.NowFunc = nil
+
+	_, err := server.EAC.Delete(ctx, missingNodeID.String())
+	require.NoError(t, err)
+
+	ctrl := NewController(testutils.TestLogger(t), server.EAC)
+	require.NoError(t, ctrl.Init(ctx))
+	require.NoError(t, ctrl.SweepOrphanedSandboxes(ctx))
+
+	_, err = server.EAC.Get(ctx, orphanStopped.String())
+	assert.Error(t, err, "old STOPPED sandbox on a missing node should be deleted")
+	_, err = server.EAC.Get(ctx, orphanDead.String())
+	assert.Error(t, err, "old DEAD sandbox on a missing node should be deleted")
+	assert.Equal(t, compute_v1alpha.STOPPED, getSandboxStatus(t, ctx, server, ownedStopped),
+		"terminal sandbox on an existing node should be left for its owner")
+}
+
+func TestSweepOrphanedSandboxesHonorsGracePeriod(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	missingNodeID := createReadyNode(t, ctx, server.Client, "missing-node", &compute_v1alpha.Node{
+		Status: compute_v1alpha.READY,
+	})
+	freshOrphan := createScheduledSandbox(t, ctx, server, "fresh-orphan", missingNodeID, compute_v1alpha.STOPPED)
+	_, err := server.EAC.Delete(ctx, missingNodeID.String())
+	require.NoError(t, err)
+
+	ctrl := NewController(testutils.TestLogger(t), server.EAC)
+	require.NoError(t, ctrl.Init(ctx))
+	require.NoError(t, ctrl.SweepOrphanedSandboxes(ctx))
+
+	assert.Equal(t, compute_v1alpha.STOPPED, getSandboxStatus(t, ctx, server, freshOrphan),
+		"a freshly orphaned sandbox should survive the node failure grace period")
 }
 
 func TestDisabledNodeSkipsGracePeriod(t *testing.T) {

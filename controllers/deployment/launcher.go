@@ -246,11 +246,18 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		// use leases), so the old sandbox must release the disk before the
 		// new one can mount it.
 		if serviceHasDisks(spec, svc.Name) {
-			if err := l.drainStaleDiskPools(ctx, app, &ver, spec, svc.Name); err != nil {
+			drained, err := l.drainStaleDiskPools(ctx, app, &ver, spec, svc.Name)
+			if err != nil {
 				l.Log.Error("failed to drain old disk pools, skipping service",
 					"app", app.ID,
 					"service", svc.Name,
 					"error", err)
+				continue
+			}
+			if !drained {
+				l.Log.Debug("stale disk pools are still draining, skipping service",
+					"app", app.ID,
+					"service", svc.Name)
 				continue
 			}
 		}
@@ -943,12 +950,6 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	pool := poolWithEntity.Pool
 	ent := poolWithEntity.Entity
 
-	l.Log.Info("updating pool",
-		"pool", pool.ID,
-		"desired_instances", pool.DesiredInstances,
-		"references", pool.ReferencedByVersions,
-		"num_refs", len(pool.ReferencedByVersions))
-
 	// Build new attributes from the pool
 	newAttrs := pool.Encode()
 
@@ -1002,6 +1003,19 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 
 	// Add all new attrs (including multi-valued ReferencedByVersions from Encode())
 	finalAttrs = append(finalAttrs, newAttrs...)
+
+	// Direct EAC writes bypass ReconcileController's empty-diff guard. Keep this
+	// helper idempotent so a caller that asks for state already in the store does
+	// not advance UpdatedAt and wake every watcher again.
+	if entity.New(finalAttrs).Compare(&ent) == 0 {
+		return nil
+	}
+
+	l.Log.Info("updating pool",
+		"pool", pool.ID,
+		"desired_instances", pool.DesiredInstances,
+		"references", pool.ReferencedByVersions,
+		"num_refs", len(pool.ReferencedByVersions))
 
 	// Use Replace with the combined attributes (preserves metadata)
 	_, err := l.EAC.Replace(ctx, finalAttrs, 0)
@@ -1422,7 +1436,7 @@ func (l *Launcher) drainStaleDiskPools(
 	ver *core_v1alpha.AppVersion,
 	cfgSpec *core_v1alpha.ConfigSpec,
 	serviceName string,
-) error {
+) (bool, error) {
 	// Determine which image to use (same logic as ensurePoolForService)
 	image := ver.ImageUrl
 	for _, svc := range cfgSpec.Services {
@@ -1434,25 +1448,32 @@ func (l *Launcher) drainStaleDiskPools(
 
 	desiredSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, serviceName, image)
 	if err != nil {
-		return fmt.Errorf("build sandbox spec: %w", err)
+		return false, fmt.Errorf("build sandbox spec: %w", err)
 	}
 
 	stalePools, err := l.findStalePoolsForService(ctx, app.ID, serviceName, desiredSpec)
 	if err != nil {
-		return fmt.Errorf("find stale pools: %w", err)
+		return false, fmt.Errorf("find stale pools: %w", err)
 	}
 
 	if len(stalePools) == 0 {
-		return nil
+		return true, nil
 	}
 
-	l.Log.Info("draining stale disk pools before creating new pool",
-		"app", app.ID,
-		"service", serviceName,
-		"stale_pools", len(stalePools))
+	newDrains := 0
 
 	for _, pwe := range stalePools {
 		pool := pwe.Pool
+		if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) == 0 {
+			continue
+		}
+
+		if newDrains == 0 {
+			l.Log.Info("draining stale disk pools before creating new pool",
+				"app", app.ID,
+				"service", serviceName,
+				"stale_pools", len(stalePools))
+		}
 
 		// Remove version references and scale to 0
 		pool.ReferencedByVersions = nil
@@ -1463,18 +1484,27 @@ func (l *Launcher) drainStaleDiskPools(
 			"service", pool.Service)
 
 		if err := l.updatePool(ctx, pwe); err != nil {
-			return fmt.Errorf("update pool %s: %w", pool.ID, err)
+			return false, fmt.Errorf("update pool %s: %w", pool.ID, err)
 		}
+		newDrains++
+	}
+
+	// The first pass waits so an ordinary disk deploy can start its replacement
+	// as soon as teardown finishes. Later resyncs observe the persisted drain
+	// request and return immediately instead of holding an app lock for a minute
+	// at a time when teardown cannot converge.
+	if newDrains == 0 {
+		return false, nil
 	}
 
 	// Wait for all stale pools to fully drain so disk leases are released.
 	for _, pwe := range stalePools {
 		if err := l.waitForPoolDrained(ctx, pwe.Pool.ID, pwe.Pool.Service, l.PoolReadyTimeout); err != nil {
-			return fmt.Errorf("waiting for pool %s to drain: %w", pwe.Pool.ID, err)
+			return false, fmt.Errorf("waiting for pool %s to drain: %w", pwe.Pool.ID, err)
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // reapStaleStatelessPools scales to 0 any pool for a stateless service whose
@@ -1643,11 +1673,11 @@ func (l *Launcher) waitForPoolDrained(ctx context.Context, poolID entity.Id, ser
 	}
 }
 
-// hasActiveSandboxForPool returns true if any sandbox for the pool has not
-// reached DEAD. STOPPED is deliberately active here: the pool manager sets it
-// before the sandbox controller finishes graceful process shutdown and resource
-// cleanup, so starting a replacement at STOPPED can overlap access to a local
-// disk with the retiring process.
+// hasActiveSandboxForPool reports whether a pool still has a sandbox that can
+// conflict with a disk-backed replacement. STOPPED remains active when the old
+// sandbox mounted a volume: the pool manager sets STOPPED before the sandbox
+// controller finishes graceful process shutdown and resource cleanup. A stopped
+// diskless sandbox has no disk resource to release and cannot create that overlap.
 func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id, service string) (bool, error) {
 	resp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
@@ -1658,8 +1688,11 @@ func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		if sb.Status == compute_v1alpha.DEAD {
+		if sb.Status == compute_v1alpha.DEAD ||
+			(sb.Status == compute_v1alpha.STOPPED && len(sb.Spec.Volume) == 0) {
 			// DEAD is set after process shutdown and resource cleanup complete.
+			// A diskless STOPPED sandbox cannot conflict with the replacement's
+			// disk, so it need not hold a disk-aware deploy behind its teardown.
 			continue
 		}
 
