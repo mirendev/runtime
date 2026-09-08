@@ -42,6 +42,16 @@ func TestDiagnosticsTracksNegotiatedSessionAndExporterProgress(t *testing.T) {
 	require.Nil(t, status.Snapshot)
 }
 
+func TestDiagnosticsFinishingQuietSnapshotAdvancesWatchRevision(t *testing.T) {
+	diagnostics := NewDiagnostics("schema")
+	diagnostics.setNextWatchRevision(1)
+	diagnostics.beginSnapshot("snapshot-1", 64, 65)
+
+	diagnostics.finishSnapshot(64)
+
+	require.Equal(t, int64(65), diagnostics.SnapshotStatus().NextWatchRevision)
+}
+
 func TestDiagnosticsSnapshotDoesNotAliasMutableState(t *testing.T) {
 	diagnostics := NewDiagnostics("schema")
 	diagnostics.beginSnapshot("snapshot-1", 10, 11)
