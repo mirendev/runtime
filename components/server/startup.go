@@ -5,12 +5,17 @@ package server
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 
 	"golang.org/x/sync/errgroup"
+	containerdcomp "miren.dev/runtime/components/containerd"
 	"miren.dev/runtime/components/netresolve"
+	runnercomp "miren.dev/runtime/components/runner"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/serverconfig"
 )
+
+type containerdBootOutput = containerdcomp.Capability
 
 // StartOptions contains the resolved inputs used to assemble one fixed server
 // boot graph.
@@ -31,7 +36,7 @@ type startup struct {
 	tracing               *tracingBoot
 	observability         *observabilityBoot
 	pprof                 *pprofBoot
-	containerd            *containerdBoot
+	containerd            *containerdcomp.Boot
 	etcd                  *etcdBoot
 	victoriaLogs          *victoriaLogsBoot
 	victoriaMetrics       *victoriaMetricsBoot
@@ -52,9 +57,9 @@ type startup struct {
 	appMetrics            *appMetricsBoot
 	network               *networkBoot
 	sandboxHost           *sandboxHostBoot
-	storageAgent          *storageAgentBoot
-	sandboxAgent          *sandboxAgentBoot
-	nodePresence          *nodePresenceBoot
+	storageAgent          *runnercomp.CapabilityBoot[*runnercomp.StorageAgent]
+	sandboxAgent          *runnercomp.CapabilityBoot[*runnercomp.SandboxAgent]
+	nodePresence          *runnercomp.CapabilityBoot[*runnercomp.NodePresence]
 	ingress               *ingressBoot
 	admin                 *adminBoot
 	registryHostMapping   *registryHostMappingBoot
@@ -81,15 +86,15 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	registration := newRegistrationBoot(registrationInputs(options))
 	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
 	tracing := newTracingBoot(tracingInputs(options), registration.output)
-	containerd := newContainerdBoot(containerdInputs(options))
-	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.output)
-	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.output)
+	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
+	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
+	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
 	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
-	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.output, observability.output)
+	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
-	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.output, registryHostMapping.output, network.output, observability.output)
+	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output)
 	foundation := newFoundationBoot(
 		foundationConfig(options, resolver, secretRegistry, address),
 		ipDiscovery.output,
@@ -106,7 +111,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	entityAccess := newEntityAccessBoot(entityAccessInputs(options), foundation.output, observability.output)
 	appMetrics := newAppMetricsBoot(
 		appMetricsInputs(options),
-		containerd.output,
+		containerd.Output,
 		registration.output,
 		workloadIdentity.output,
 		entityAccess.output,
@@ -125,22 +130,22 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		sandboxHostInputs(options, resolver, serverPort(options.Log, address)),
 		clusterAccess.output,
 		nodeStorage.output,
-		containerd.output,
+		containerd.Output,
 		network.output,
 		observability.output,
 	)
-	storageAgent := newStorageAgentBoot(nodeStorage.output, sandboxHost.component)
+	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, componentStopTimeout)
 	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component)
 	workloadControl := newWorkloadControlBoot(foundation.output, applicationManagement.output, sandboxHost.component)
-	sandboxAgent := newSandboxAgentBoot(sandboxHost.output, workloadControl.component)
-	nodePresence := newNodePresenceBoot(sandboxHost.output, storageAgent.component, sandboxAgent.component)
+	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, componentStopTimeout, workloadControl.component)
+	nodePresence := runnercomp.NewNodePresenceBoot(sandboxHost.output, storageAgent.Component, sandboxAgent.Component, componentStopTimeout)
 	maintenance := newEntityMaintenanceBoot(foundation.output, appData.component)
 	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.component, maintenance.component, workloadControl.component)
-	ingress := newIngressBoot(ingressInputs(options), workloadControl.output, nodePresence.component, workloadIdentity.output, entityAccess.output, observability.output)
+	ingress := newIngressBoot(ingressInputs(options), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output)
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
-	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.component, buildkit.component, ociRegistry.component, registryHostMapping.component)
+	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
 		buildSagaRecoveryInputs(options),
 		applicationManagement.output,
@@ -186,4 +191,23 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workAdmission:         workAdmission,
 		buildSagaRecovery:     buildSagaRecovery,
 	}
+}
+
+func containerdBootConfig(options StartOptions) containerdcomp.BootConfig {
+	config := options.Config.Containerd
+	dataPath := options.Config.Server.GetDataPath()
+	socketPath := config.GetSocketPath()
+	if socketPath == "" {
+		socketPath = filepath.Join(dataPath, "containerd", "containerd.sock")
+	}
+
+	var bootConfig containerdcomp.BootConfig
+	if config.GetStartEmbedded() {
+		bootConfig = containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
+			config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
+	} else {
+		bootConfig = containerdcomp.ExternalBootConfig(options.Log, dataPath, socketPath)
+	}
+	bootConfig.StopTimeout = componentStopTimeout
+	return bootConfig
 }

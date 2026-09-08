@@ -80,7 +80,7 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 	b.result.endpoints = append([]string(nil), b.inputs.config.Endpoints...)
 	log := observability.log
 	log.Info("starting embedded etcd server", "client-port", b.inputs.config.GetClientPort(), "peer-port", b.inputs.config.GetPeerPort())
-	b.server = etcd.NewEtcdComponent(log, containerd.client, containerd.namespace, b.inputs.dataPath)
+	b.server = etcd.NewEtcdComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	b.server.SetMetricsWriter(observability.metricsWriter)
 	config := etcd.EtcdConfig{
 		Name:              "miren-etcd",

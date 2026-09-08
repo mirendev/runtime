@@ -61,7 +61,7 @@ func (b *victoriaMetricsBoot) startEmbedded(ctx context.Context, containerd cont
 	b.log = b.inputs.log
 	log := b.log
 	log.Info("starting embedded victoriametrics server", "http-port", b.inputs.config.GetHTTPPort())
-	b.server = victoriametrics.NewVictoriaMetricsComponent(log, containerd.client, containerd.namespace, b.inputs.dataPath)
+	b.server = victoriametrics.NewVictoriaMetricsComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	if err := b.server.Start(ctx, victoriametrics.VictoriaMetricsConfig{
 		HTTPPort:        b.inputs.config.GetHTTPPort(),
 		RetentionPeriod: b.inputs.config.GetRetentionPeriod(),

@@ -67,11 +67,11 @@ func Start(options StartOptions) (*Runtime, error) {
 	)
 	runtime.Runner = &runner.Runner{
 		Access:       components.clusterAccess.output.Value().access,
-		Storage:      components.nodeStorage.output.Value().storage,
-		Host:         components.sandboxHost.output.Value().host,
-		StorageAgent: components.storageAgent.output.Value().agent,
-		SandboxAgent: components.sandboxAgent.output.Value().agent,
-		Presence:     components.nodePresence.output.Value().presence,
+		Storage:      components.nodeStorage.output.Value(),
+		Host:         components.sandboxHost.output.Value(),
+		StorageAgent: components.storageAgent.Output.Value(),
+		SandboxAgent: components.sandboxAgent.Output.Value(),
+		Presence:     components.nodePresence.Output.Value(),
 	}
 	return runtime, nil
 }
@@ -89,7 +89,7 @@ func (s *startup) addComponents() error {
 		s.tracing.component,
 		s.observability.component,
 		s.pprof.component,
-		s.containerd.component,
+		s.containerd.Component,
 		s.etcd.component,
 		s.victoriaLogs.component,
 		s.victoriaMetrics.component,
@@ -105,9 +105,9 @@ func (s *startup) addComponents() error {
 		s.appMetrics.component,
 		s.network.component,
 		s.sandboxHost.component,
-		s.storageAgent.component,
-		s.sandboxAgent.component,
-		s.nodePresence.component,
+		s.storageAgent.Component,
+		s.sandboxAgent.Component,
+		s.nodePresence.Component,
 		s.workloadControl.component,
 		s.applicationManagement.component,
 		s.maintenance.component,
