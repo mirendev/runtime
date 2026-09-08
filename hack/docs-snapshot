@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Materialize the released docs into docs/versioned_docs/version-latest so a
+# build serves them at the site root with main's docs at /next.
+#
+# The snapshot is not checked in: main holds one copy of each page, and this
+# rebuilds the released copy from a git ref at build time. Run with no
+# arguments and it picks the ref the same way the docs deploy does.
+#
+# Usage: hack/docs-snapshot [ref]
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+# Newest stable version tag. Prereleases carry a hyphen (v1.0.0-rc.1) and are
+# skipped: the docs at the site root should describe what `miren upgrade`
+# installs, which is the latest channel, which never points at a prerelease.
+latest_stable_tag() {
+  git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+    | grep -v -- '-' \
+    | head -n1
+}
+
+# The released docs come from the release branch for the current minor when one
+# exists, and from the tag itself otherwise.
+#
+# RFD-40 creates release/X.Y off a tag only when a fix has to reach users
+# before the next release, then deletes it once the patch ships. Note the
+# missing v: release/vX.Y.Z is a version being cut from main, which is how
+# every release so far has been cut, while release/X.Y is a released minor
+# being maintained. Only the latter says anything about what is deployed.
+#
+# A docs correction is that same situation with a cheaper fix, so it takes the same
+# route: land it on main, cherry-pick it onto release/X.Y, and it is published
+# on push. If a code hotfix later cuts vX.Y.1 from that branch, the correction
+# is already sitting on it and ships along with the bugfix rather than needing
+# to be remembered.
+#
+# A branch for an older minor is ignored on its own: the name is derived from
+# the newest tag, so once vX.Y+1.0 ships, release/X.Y stops being consulted.
+resolve_ref() {
+  if [ -n "${DOCS_RELEASE_REF:-}" ]; then
+    echo "$DOCS_RELEASE_REF"
+    return
+  fi
+
+  local tag branch
+  tag="$(latest_stable_tag)"
+  if [ -z "$tag" ]; then
+    return
+  fi
+
+  # v0.14.0 -> release/0.14
+  branch="release/$(echo "${tag#v}" | cut -d. -f1,2)"
+  for candidate in "$branch" "origin/$branch"; do
+    if git rev-parse --verify --quiet "$candidate^{commit}" >/dev/null; then
+      echo "$candidate"
+      return
+    fi
+  done
+
+  echo "$tag"
+}
+
+REF="${1:-$(resolve_ref)}"
+if [ -z "$REF" ]; then
+  echo "docs-snapshot: no released version to snapshot." >&2
+  echo "  No stable version tag is visible. If this is CI, the checkout" >&2
+  echo "  probably needs fetch-depth: 0 so tags come with it." >&2
+  exit 1
+fi
+
+if ! git rev-parse --verify --quiet "$REF^{commit}" >/dev/null; then
+  echo "docs-snapshot: '$REF' is not a commit in this repository." >&2
+  exit 1
+fi
+
+# The label in the version dropdown and in the "see the latest version" banner.
+# Taken from the tags reachable from the ref, so release/0.14 carrying a
+# correction on top of v0.14.0 still reads as v0.14.0, and reads v0.14.1 the
+# moment that patch is tagged.
+# --exclude keeps this off prereleases the way latest_stable_tag does; without
+# it a vX.Y.Z-rc tag reachable from the ref can win and label the site with a
+# version nobody was shipped.
+LABEL="$(git describe --tags --abbrev=0 \
+  --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' "$REF" 2>/dev/null || true)"
+LABEL="${LABEL:-$REF}"
+
+WORK="$(mktemp -d)"
+cleanup() {
+  git worktree remove --force "$WORK" >/dev/null 2>&1 || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+# `docusaurus docs:version` snapshots the docs tree next to it along with a
+# JSON dump of its sidebars, which is the part we can't reasonably produce by
+# hand: sidebars.ts is a module, and the released one has to be evaluated
+# against the released command-sidebar.json. Running it in a worktree of the
+# ref gets both from the right commit, and keeps deleted pages out of the
+# snapshot the way copying over the working tree would not.
+echo "docs-snapshot: snapshotting docs from $REF ($LABEL)"
+git worktree add --quiet --detach "$WORK" "$REF"
+
+# Reuse this checkout's install rather than resolving the released lockfile.
+# The version command copies files and serializes sidebars; it does not build.
+ln -s "$ROOT_DIR/docs/node_modules" "$WORK/docs/node_modules"
+
+(cd "$WORK/docs" && bunx docusaurus docs:version latest >/dev/null)
+
+rm -rf docs/versioned_docs docs/versioned_sidebars
+mv "$WORK/docs/versioned_docs" "$WORK/docs/versioned_sidebars" docs/
+mv "$WORK/docs/versions.json" docs/versions.json
+echo "$LABEL" > docs/released-version.txt
+
+echo "docs-snapshot: $(find docs/versioned_docs -name '*.md' | wc -l | tr -d ' ') pages at the site root, main at /next"

@@ -739,8 +739,36 @@ jobs:
 
           echo "Homebrew tap update triggered for $VERSION"
 
+  republish-docs:
+    needs: [init, upload-to-miren]
+    runs-on: ubuntu-latest
+    # A release changes which docs miren.md should serve, but the tag itself
+    # never touches docs/, so the docs workflow's own push trigger doesn't fire
+    # for it. Without this the site keeps serving the previous version until
+    # some unrelated docs change happens to land on main.
+    #
+    # Same gating as the homebrew tap: stable version tags only, since
+    # hack/docs-snapshot resolves the latest channel and that never points at a
+    # prerelease.
+    if: |
+      startsWith(needs.init.outputs.ref, 'v') && !contains(needs.init.outputs.ref, '-') &&
+      (github.event_name == 'push' || inputs.update_latest == true)
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger docs republish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Republishing docs for ${{ needs.init.outputs.ref }}..."
+          # Dispatched on main: the snapshot resolves the released docs from
+          # the tag, and main supplies /next.
+          gh workflow run docs.yml \
+            --repo "${{ github.repository }}" \
+            --ref main
+
   notify:
-    needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap]
+    needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap, republish-docs]
     if: always()
     runs-on: ubuntu-latest
     steps:
