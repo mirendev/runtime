@@ -8,9 +8,21 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"miren.dev/runtime/components/diskio"
+	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/pkg/lbdmod"
 	"miren.dev/runtime/pkg/lbdmod/ctrbuild"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
+
+// lbdDeps is what bringing accelerator mode up needs from the runner: a
+// containerd to run the build in, the cluster address mapping and identity to
+// pull the toolchain image with, and the data path holding the install record.
+type lbdDeps struct {
+	CC             *containerd.Client
+	Resolver       netresolve.Resolver
+	WorkloadIssuer workloadidentity.TokenIssuer
+	DataPath       string
+}
 
 // rebuildTimeout bounds the unattended rebuild at startup.
 //
@@ -38,9 +50,18 @@ const rebuildTimeout = 10 * time.Minute
 //
 // Neither failing nor timing out is fatal. Universal mode works everywhere, so
 // the worst case is slower disks, not a runner that will not start.
-func setupLbd(ctx context.Context, cc *containerd.Client, dataPath string, log *slog.Logger) {
+func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
 	if err := diskio.EnsureLbdDevices(ctx, log); err == nil {
 		return
+	}
+
+	// The toolchain image lives in the cluster registry and nowhere public, so
+	// the pull needs the cluster's own address mapping and a registry token.
+	// A distributed runner holds both: its issuer proxies to the coordinator,
+	// which is what mints the token on its behalf.
+	registry := &ctrbuild.ClusterRegistry{
+		Resolver: deps.Resolver,
+		Issuer:   deps.WorkloadIssuer,
 	}
 
 	// dataPath has to be the runner's own, not the package default: the
@@ -49,8 +70,8 @@ func setupLbd(ctx context.Context, cc *containerd.Client, dataPath string, log *
 	// the rebuild after a kernel upgrade would never fire.
 	installer := &lbdmod.Installer{
 		Log:     log,
-		Builder: ctrbuild.New(cc, log),
-		Options: lbdmod.HostOptions(dataPath),
+		Builder: ctrbuild.New(deps.CC, log, ctrbuild.WithClusterRegistry(registry)),
+		Options: lbdmod.HostOptions(deps.DataPath),
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rebuildTimeout)

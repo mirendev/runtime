@@ -42,11 +42,29 @@ const outputTailLines = 40
 type Builder struct {
 	cc  *containerd.Client
 	log *slog.Logger
+
+	// registry, when set, teaches the pull about the cluster-local registry.
+	// The toolchain image lives there and nowhere public, so a builder without
+	// it can only run an image already in the node's containerd.
+	registry *ClusterRegistry
 }
 
 // New returns a Builder that runs containers on cc.
-func New(cc *containerd.Client, log *slog.Logger) *Builder {
-	return &Builder{cc: cc, log: log}
+func New(cc *containerd.Client, log *slog.Logger, opts ...Option) *Builder {
+	b := &Builder{cc: cc, log: log}
+	for _, o := range opts {
+		o(b)
+	}
+	return b
+}
+
+// Option configures a Builder.
+type Option func(*Builder)
+
+// WithClusterRegistry lets the builder pull from the cluster-local registry,
+// which is where the toolchain image is published.
+func WithClusterRegistry(r *ClusterRegistry) Option {
+	return func(b *Builder) { b.registry = r }
 }
 
 // Build pulls the image, runs the container to completion, and tears
@@ -154,7 +172,13 @@ func (b *Builder) resolveImage(ctx context.Context, ref string) (containerd.Imag
 	}
 
 	b.log.Info("pulling the lbd builder image", "image", ref)
-	img, err := b.cc.Pull(ctx, ref, containerd.WithPullUnpack)
+
+	pullOpts := []containerd.RemoteOpt{containerd.WithPullUnpack}
+	if b.registry != nil {
+		pullOpts = append(pullOpts, containerd.WithResolver(b.registry.resolver()))
+	}
+
+	img, err := b.cc.Pull(ctx, ref, pullOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("pulling %s: %w", ref, err)
 	}
