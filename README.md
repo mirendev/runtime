@@ -121,9 +121,6 @@ miren sandbox list --status running
 
 # Execute command in sandbox
 miren sandbox exec <sandbox-id> -- <command>
-
-# Get sandbox metrics
-miren sandbox metrics <sandbox-id>
 ```
 
 ### Configuration Management
