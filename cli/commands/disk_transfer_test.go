@@ -3,6 +3,9 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,4 +61,68 @@ func TestTransferIDsUseOnlySafeCharacters(t *testing.T) {
 			t.Fatalf("transfer id %q contains %q, which the server rejects", id, r)
 		}
 	}
+}
+
+// closeCountingFile stands in for the snapshot file a restore uploads from,
+// recording whether anything closed it out from under us.
+type closeCountingFile struct {
+	*os.File
+	closes int
+}
+
+func (f *closeCountingFile) Close() error {
+	f.closes++
+	return f.File.Close()
+}
+
+// A retry has to be able to seek the snapshot again, and the case that catches
+// this is the one where the upload fully succeeded and the server then rejected
+// it: the stream reaches EOF, closes what it was reading from, and every later
+// attempt fails on the seek rather than on anything real.
+//
+// readerOnly is what prevents that, by handing the stream something with no
+// Close to find.
+func TestReaderOnlyHidesCloseFromTheStream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.miren.zst")
+	require.NoError(t, os.WriteFile(path, []byte("a snapshot's worth of bytes"), 0600))
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	tracked := &closeCountingFile{File: f}
+	defer tracked.File.Close()
+
+	// What the stream helper does when it reaches the end: close the reader if
+	// it can. Wrapped, there is nothing to close.
+	var wrapped io.Reader = readerOnly{tracked}
+	_, isCloser := wrapped.(io.Closer)
+	assert.False(t, isCloser, "the stream must not be able to close the caller's file")
+
+	// Read it to the end, the way a completed upload does.
+	_, err = io.ReadAll(wrapped)
+	require.NoError(t, err)
+	assert.Zero(t, tracked.closes, "reading to EOF must not have closed the file")
+
+	// And a retry can still rewind and re-send it.
+	_, err = tracked.Seek(0, io.SeekStart)
+	require.NoError(t, err, "a retry after a complete upload must still be able to seek")
+
+	again, err := io.ReadAll(readerOnly{tracked})
+	require.NoError(t, err)
+	assert.Equal(t, "a snapshot's worth of bytes", string(again))
+}
+
+// The unwrapped file is the shape that caused the bug, so pin the difference:
+// handed the file directly, the stream helper would find a Closer to call.
+func TestAnUnwrappedFileWouldBeClosedByTheStream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.miren.zst")
+	require.NoError(t, os.WriteFile(path, []byte("bytes"), 0600))
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	var plain io.Reader = f
+	_, isCloser := plain.(io.Closer)
+	assert.True(t, isCloser,
+		"an *os.File is a Closer, which is why it has to be wrapped before it is streamed")
 }

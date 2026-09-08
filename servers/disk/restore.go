@@ -30,11 +30,23 @@ func (s *Server) Restore(ctx context.Context, state *disk_v1alpha.DiskBackupRest
 		return refuse("disk name is required")
 	}
 
-	// An uploaded snapshot lives in a file keyed by transfer id, and it stays
-	// there until the image is installed. Hold the id for the whole handler, so
-	// an overlapping call cannot append into the same file or pull it out from
-	// under the install. A restore point needs none of this: it comes from the
-	// cloud and touches no transfer file.
+	// Two locks, because two different things are shared here.
+	//
+	// The disk name covers the entity work and the image path. A restore
+	// creates the disk when it does not exist, and two restores racing to the
+	// same new name both find it missing and both create one, or one catches
+	// the other's disk halfway built and fails looking for a volume that is not
+	// there yet. They also write the same <image>.restore.tmp. Held for the
+	// whole handler, since the name is not free again until the image is
+	// installed.
+	releaseName := s.names.acquire(name)
+	defer releaseName()
+
+	// The transfer id covers the uploaded snapshot, which lives in a file of
+	// its own and stays there until the image is installed. Different clients
+	// restoring to the same name bring different transfer ids, so this does not
+	// duplicate the lock above. A restore point needs none of it: it comes from
+	// the cloud and touches no transfer file.
 	if id := args.TransferId(); id != "" && args.RestorePoint() == "" {
 		release := s.transfers.acquire(id)
 		defer release()

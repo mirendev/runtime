@@ -90,7 +90,8 @@ func (r *Resolver) FindVolume(ctx context.Context, diskID string) (*snapshot.Vol
 // CreateDiskAndVolume creates a new disk entity in RESTORING state so the disk
 // controller ignores it while restore writes the image. The returned
 // RestoreTarget includes a Finalize callback that creates the disk_volume
-// entity and transitions the disk to PROVISIONED.
+// entity and hands the disk to the controller as PROVISIONING, which promotes
+// it once the volume is ready.
 func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeBytes int64, filesystem string, dataPath string) (*snapshot.RestoreTarget, error) {
 	sizeGb, err := diskSizeGb(sizeBytes)
 	if err != nil {
@@ -133,34 +134,25 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 			// the failure it is cleaning up after.
 			cctx = context.WithoutCancel(cctx)
 
-			// Finalize is the last fallible step of a restore, so cleanup
-			// only ever runs when it did not complete — and its
-			// disk_volume Create is its last write. Nothing owns the image
-			// at this point, and the restore already renamed it into
-			// place, so the temp-file removal in disk_restore.go is a
-			// no-op for it. Remove it before touching the disk: a
-			// PROVISIONED disk still carrying its VolumeId can be
-			// self-healed into a disk_volume by the controller, and there
-			// is no reason to let that adopt an image on its way to being
-			// torn down. Tolerate "not present" — the rename may never
-			// have happened.
-			imageErr := os.Remove(imagePath)
-			if os.IsNotExist(imageErr) {
-				imageErr = nil
-			}
-
 			// Transition the disk to DELETING rather than deleting the
 			// entity outright. A direct Delete bypasses the disk
 			// controller's DELETING-driven handleDeletion path, which is
-			// the only writer of disk_volume.desired_state=DV_ABSENT; once
-			// the disk is gone, a disk_volume the controller self-healed
-			// from the PROVISIONED disk has no reaper and is left
+			// the only writer of disk_volume.desired_state=DV_ABSENT; a
+			// disk_volume whose disk is gone has no reaper and is left
 			// reconciled by the coordinator as a live mount / volume
 			// directory / phantom cloud volume. Marking the disk DELETING
 			// keeps it alive to drive that existing contract, which tears
 			// the disk_volume down via the coordinator's
 			// DiskVolumeController. Idempotent: patching an already-DELETING
 			// disk is a no-op.
+			//
+			// This runs before the image is touched, because Finalize
+			// creates the disk_volume first now: cleanup after a partial
+			// Finalize can find a volume the controller is already mounting,
+			// and pulling the image out from under a loop device leaves it
+			// holding an unlinked inode rather than releasing it. Letting
+			// the teardown path unmount and detach first is the only order
+			// that ends with nothing held.
 			_, err := r.eac.Patch(cctx, []entity.Attr{
 				entity.Ref(entity.DBId, diskEntityId),
 				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusDeletingId),
@@ -169,53 +161,74 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 				return fmt.Errorf("transitioning disk to deleting during cleanup: %w", err)
 			}
 
-			// Reported only once the authoritative step is done, so a
-			// failure to reclaim the image never costs us the disk
-			// rollback — a leftover image is disk space, a stuck
-			// RESTORING disk blocks every same-name retry.
-			if imageErr != nil {
+			// Whatever the teardown did not claim. Usually this is the whole
+			// job, since most cleanups run before Finalize and so before any
+			// volume exists. Tolerate "not present": the restore may never
+			// have renamed the image into place, and a volume teardown may
+			// have moved the directory out from under it.
+			if imageErr := os.Remove(imagePath); imageErr != nil && !os.IsNotExist(imageErr) {
+				// Reported only once the authoritative step is done, so a
+				// failure to reclaim the image never costs us the disk
+				// rollback — a leftover image is disk space, a stuck
+				// RESTORING disk blocks every same-name retry.
 				return fmt.Errorf("removing restored image during cleanup: %w", imageErr)
 			}
 			return nil
 		},
 		Finalize: func(fctx context.Context) error {
 			vol := &storage_v1alpha.DiskVolume{
-				Name:         name,
-				DiskId:       diskEntityId,
-				VolumeId:     volId,
-				SizeGb:       sizeGb,
-				Filesystem:   filesystem,
-				VolumeMode:   DetectVolumeMode(),
+				Name:       name,
+				DiskId:     diskEntityId,
+				VolumeId:   volId,
+				SizeGb:     sizeGb,
+				Filesystem: filesystem,
+				VolumeMode: DetectVolumeMode(),
+
 				DesiredState: storage_v1alpha.DV_PRESENT,
-				ActualState:  storage_v1alpha.DV_READY,
-				ImagePath:    imagePath,
-				NodeId:       nodeId,
+				// Start PENDING, not READY, and let the DiskVolumeController
+				// drive it the rest of the way. The image is already written
+				// and formatted, so it mounts what was restored rather than
+				// reimaging.
+				ActualState: storage_v1alpha.DV_PENDING,
+				ImagePath:   imagePath,
+				NodeId:      nodeId,
 			}
 
-			// Transition the disk to PROVISIONED before creating the
-			// disk_volume. These are two independent, non-transactional
-			// writes, so the order matters: if the disk_volume were
-			// created first and the Patch then failed, the deferred
-			// Cleanup would orphan the committed disk_volume by deleting
-			// its parent disk out from under it. Patching first means a
-			// Create failure leaves no disk_volume behind, and a surviving
-			// PROVISIONED disk drives the existing DELETING-based cleanup
-			// and self-healing paths.
-			_, err := r.eac.Patch(fctx, []entity.Attr{
-				entity.Ref(entity.DBId, diskEntityId),
-				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisionedId),
-				entity.String(storage_v1alpha.DiskVolumeIdId, volId),
-			}, 0)
-			if err != nil {
-				return fmt.Errorf("updating disk to provisioned: %w", err)
-			}
-
-			_, err = r.eac.Create(fctx, entity.New(
+			// The volume goes in first, and the disk moves to PROVISIONING
+			// rather than PROVISIONED. Both halves of that matter, and the
+			// reason is a window rather than a preference.
+			//
+			// DiskController ignores a RESTORING disk, so nothing watches
+			// this disk until the patch below. Announcing PROVISIONED first
+			// would end that truce while there was still no disk_volume to
+			// find, and handleProvisioned answers a provisioned disk with no
+			// volume by provisioning a blank one. The restore's own volume
+			// then lands beside it: two DV_READY volumes on one disk, both
+			// mounted, and the next backup fails on the ambiguity.
+			//
+			// This way the volume is already there when the disk becomes
+			// visible, and the controller promotes it to PROVISIONED once the
+			// volume reports ready. It is the same handshake a recovered disk
+			// uses, so there is one path through this transition instead of
+			// two.
+			_, err := r.eac.Create(fctx, entity.New(
 				entity.DBId, entity.Id("disk_volume/"+volId),
 				vol.Encode,
 			).Attrs())
 			if err != nil {
 				return fmt.Errorf("creating disk_volume entity: %w", err)
+			}
+
+			// A failure here leaves a RESTORING disk with a committed volume,
+			// which Cleanup handles: it marks the disk DELETING, and the
+			// controller tears the volume down from there.
+			_, err = r.eac.Patch(fctx, []entity.Attr{
+				entity.Ref(entity.DBId, diskEntityId),
+				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusProvisioningId),
+				entity.String(storage_v1alpha.DiskVolumeIdId, volId),
+			}, 0)
+			if err != nil {
+				return fmt.Errorf("updating disk to provisioning: %w", err)
 			}
 
 			return nil
@@ -291,7 +304,10 @@ func diskSizeGb(sizeBytes int64) (int64, error) {
 	switch {
 	case sizeBytes < 0:
 		return 0, fmt.Errorf("snapshot reports a negative image size (%d bytes)", sizeBytes)
-	case sizeBytes > math.MaxInt64-gib:
+	case sizeBytes > math.MaxInt64-gib+1:
+		// The ceiling is the largest size whose rounded-up capacity still
+		// converts back to bytes without overflowing, which is the whole GiB
+		// just below the top of the range.
 		return 0, fmt.Errorf("snapshot reports an image size too large to be real (%d bytes)", sizeBytes)
 	}
 

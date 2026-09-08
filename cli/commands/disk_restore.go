@@ -119,8 +119,12 @@ func DiskRestore(ctx *Context, opts struct {
 			return fmt.Errorf("seeking snapshot to %d: %w", offset, serr)
 		}
 
+		// readerOnly, not snapFile itself: ServeReader closes what it is given
+		// once it reaches the end of the stream, and a retry after a fully
+		// delivered upload has to seek this same file again. Ownership stays
+		// with the defer above.
 		res, rerr := dc.Restore(ctx, name, "",
-			stream.ServeReader(ctx, snapFile, stream.WithBulkBatching()),
+			stream.ServeReader(ctx, readerOnly{snapFile}, stream.WithBulkBatching()),
 			opts.Force, progress, transferID, offset)
 		if rerr != nil {
 			return rerr

@@ -147,8 +147,8 @@ func getTestDisk(t *testing.T, ctx context.Context, eac *entityserver_v1alpha.En
 	return d
 }
 
-// TestCreateDiskAndVolume_FinalizeSuccess is the happy path: Finalize patches
-// the disk to PROVISIONED and then creates the disk_volume, leaving the disk
+// TestCreateDiskAndVolume_FinalizeSuccess is the happy path: Finalize creates
+// the disk_volume and then moves the disk to PROVISIONING, leaving the disk
 // carrying its VolumeId and exactly one disk_volume referencing it.
 func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	ctx := t.Context()
@@ -169,7 +169,10 @@ func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	require.NoError(t, target.Finalize(ctx))
 
 	disk := getTestDisk(t, ctx, es.EAC, diskID)
-	assert.Equal(t, storage_v1alpha.PROVISIONED, disk.Status)
+	// PROVISIONING, not PROVISIONED. DiskController promotes it once the volume
+	// reports ready, so the restore never hands over a disk whose volume the
+	// controller would go and invent for itself.
+	assert.Equal(t, storage_v1alpha.PROVISIONING, disk.Status)
 	assert.NotEmpty(t, disk.VolumeId)
 
 	vols := volumesForDisk(t, ctx, es.EAC, diskID)
@@ -178,7 +181,7 @@ func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	assert.Equal(t, diskID, vol.DiskId)
 	assert.Equal(t, disk.VolumeId, vol.VolumeId)
 	assert.Equal(t, storage_v1alpha.DV_PRESENT, vol.DesiredState)
-	assert.Equal(t, storage_v1alpha.DV_READY, vol.ActualState)
+	assert.Equal(t, storage_v1alpha.DV_PENDING, vol.ActualState)
 	assert.Equal(t, target.ImagePath, vol.ImagePath)
 
 	// disk_volume.NodeId must match the coordinator node the resolver found.
@@ -188,10 +191,10 @@ func TestCreateDiskAndVolume_FinalizeSuccess(t *testing.T) {
 	assert.Equal(t, nodes.Values()[0].Entity().Id(), vol.NodeId)
 }
 
-// TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan is the core bug
-// repro, inverted: with the reordered Finalize (Patch before Create), failing
-// the disk_volume Create leaves NO disk_volume committed. Under the old
-// Create-first order this is exactly the window that orphaned a disk_volume.
+// TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan covers the first of
+// Finalize's two writes failing. The Create is what commits a volume, so its
+// failure leaves nothing behind and the disk is still RESTORING, which the disk
+// controller ignores.
 func TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan(t *testing.T) {
 	ctx := t.Context()
 	fault := newFaultRPC(nil, "create", 1, fmt.Errorf("simulated disk_volume create failure"))
@@ -208,17 +211,15 @@ func TestCreateDiskAndVolume_FinalizeCreateFailsLeavesNoOrphan(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating disk_volume entity")
 
-	// No disk_volume entity was committed: the Create that would have committed
-	// it ran last and failed. This is the invariant the reorder restores.
+	// Nothing was committed: the Create is the first write now, so its failure
+	// leaves no volume at all.
 	assert.Empty(t, allTestDiskVolumes(t, ctx, es.EAC), "no disk_volume must be left behind")
 	assert.Empty(t, volumesForDisk(t, ctx, es.EAC, diskID))
 
-	// The disk survived and reached PROVISIONED (the Patch ran first), so it can
-	// drive self-healing / DELETING-based cleanup instead of being deleted out
-	// from under a volume the coordinator may already be reconciling.
+	// The disk is still RESTORING, which DiskController ignores, so a restore
+	// that fell over here has not handed anything half-built to the controller.
 	disk := getTestDisk(t, ctx, es.EAC, diskID)
-	assert.Equal(t, storage_v1alpha.PROVISIONED, disk.Status)
-	assert.NotEmpty(t, disk.VolumeId)
+	assert.Equal(t, storage_v1alpha.RESTORING, disk.Status)
 
 	// Cleanup keeps the disk alive by transitioning it to DELETING, not by
 	// deleting it outright; the disk controller's DELETING path then drives
@@ -248,23 +249,57 @@ func TestCreateDiskAndVolume_FinalizePatchFailsLeavesNoOrphan(t *testing.T) {
 
 	err = target.Finalize(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "updating disk to provisioned")
+	assert.Contains(t, err.Error(), "updating disk to provisioning")
 
-	// Patch is now the first write, so a Patch failure cannot have left a
-	// disk_volume behind.
-	assert.Empty(t, allTestDiskVolumes(t, ctx, es.EAC))
-	assert.Empty(t, volumesForDisk(t, ctx, es.EAC, diskID))
+	// The volume is created first now, so a Patch failure does leave one
+	// behind. That is not an orphan: an entity is only orphaned when nothing
+	// owns its teardown, and this one is still attached to a disk.
+	vols := volumesForDisk(t, ctx, es.EAC, diskID)
+	require.Len(t, vols, 1)
 
-	// Disk still exists, still RESTORING (Patch failed, Create never ran).
+	// The disk never advertised itself, so nothing else has acted on it.
 	disk := getTestDisk(t, ctx, es.EAC, diskID)
 	assert.Equal(t, storage_v1alpha.RESTORING, disk.Status)
 
 	// Cleanup's Patch is the 2nd patch call; only the 1st (Finalize's) fails,
-	// so cleanup still transitions the disk to DELETING.
+	// so cleanup still transitions the disk to DELETING. That is what hands
+	// the volume to the controller's teardown path, which is the only writer
+	// of desired_state=DV_ABSENT.
 	require.NoError(t, target.Cleanup(ctx))
 	disk = getTestDisk(t, ctx, es.EAC, diskID)
 	assert.Equal(t, storage_v1alpha.DELETING, disk.Status)
-	assert.Empty(t, allTestDiskVolumes(t, ctx, es.EAC))
+	assert.Len(t, volumesForDisk(t, ctx, es.EAC, diskID), 1,
+		"the volume stays attached to the deleting disk, which is what reaps it")
+}
+
+// The restore hands the disk over already carrying its volume, and as
+// PROVISIONING rather than PROVISIONED.
+//
+// Both halves close the same window. DiskController answers a PROVISIONED disk
+// with no disk_volume by provisioning a blank one, so announcing the disk
+// before its volume exists produces a second volume beside the restored one:
+// two ready volumes on one disk, both mounted, and every later lookup by disk
+// ambiguous.
+func TestCreateDiskAndVolume_FinalizeHandsOverAVolumeItAlreadyOwns(t *testing.T) {
+	ctx := t.Context()
+	es, resolver := setupResolver(t, nil)
+
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, target.Finalize(ctx))
+
+	disks := listTestDisks(t, ctx, es.EAC)
+	require.Len(t, disks, 1)
+
+	// PROVISIONING, not PROVISIONED: the controller promotes it once the
+	// volume reports ready, so there is one path through this transition.
+	assert.Equal(t, storage_v1alpha.PROVISIONING, disks[0].Status)
+
+	vols := volumesForDisk(t, ctx, es.EAC, disks[0].ID)
+	require.Len(t, vols, 1, "a restore must leave exactly one volume on the disk")
+	assert.Equal(t, storage_v1alpha.DV_PENDING, vols[0].ActualState)
+	assert.Equal(t, storage_v1alpha.DV_PRESENT, vols[0].DesiredState)
+	assert.Equal(t, disks[0].VolumeId, vols[0].VolumeId)
 }
 
 // TestCreateDiskAndVolume_CleanupDoesNotHardDeleteDisk pins the key behavioral
@@ -420,7 +455,7 @@ func TestDiskSizeGbRejectsSizesItCannotRepresent(t *testing.T) {
 		{"negative", -1},
 		{"very negative", math.MinInt64},
 		{"large enough to overflow the rounding", math.MaxInt64},
-		{"just past the representable ceiling", math.MaxInt64 - (1 << 30) + 1},
+		{"just past the representable ceiling", math.MaxInt64 - (1 << 30) + 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := diskSizeGb(tc.sizeBytes)
@@ -432,7 +467,9 @@ func TestDiskSizeGbRejectsSizesItCannotRepresent(t *testing.T) {
 // And the largest size it does accept round-trips back to bytes without
 // overflowing, which is what the disk volume controller does with it.
 func TestDiskSizeGbCeilingRoundTrips(t *testing.T) {
-	sizeGb, err := diskSizeGb(math.MaxInt64 - (1 << 30))
+	// The ceiling itself: exactly divisible by a GiB, so it rounds to a
+	// capacity that converts straight back to the same byte count.
+	sizeGb, err := diskSizeGb(math.MaxInt64 - (1 << 30) + 1)
 	require.NoError(t, err)
 	assert.Positive(t, sizeGb)
 	assert.Positive(t, sizeGb*(1<<30)/(1<<30), "the byte conversion must not overflow")

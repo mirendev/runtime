@@ -439,25 +439,42 @@ miren disk restore -s myapp-db.miren.zst --force
 ```
 </CliCommand>
 
-To restore to a different disk name:
+:::warning[Restore into a new disk, not over the running one]
+Restoring on top of a disk your app is using is not supported today, and the command refuses it rather than pretending. A disk in use is held open by the kernel, so writing a new image into it would leave the running database on the old data while reporting success.
 
-<CliCommand context="client">
-```miren
-miren disk restore -s myapp-db.miren.zst -n new-disk-name
-```
-</CliCommand>
+There is currently no way to release a disk while keeping the app configured for it. Disk-backed services run at fixed concurrency, `num_instances = 0` is rejected, and scaling a pool to zero by hand is reconciled straight back to one. Even in that brief window the disk stays mounted.
 
-:::warning[Stop the app before restoring]
-Restore refuses to write over a disk that is still attached. A disk in use is held open by the kernel, so a restore into it would leave the running database on the old data while reporting success — the command stops rather than let that happen. Scale the app to zero, or restore into a new disk name and switch over.
+So the working recovery is to restore into a **new** disk and move the app across.
 :::
 
-After restoring, restart your app to pick up the restored data:
+Restore into a new disk name:
 
 <CliCommand context="client">
 ```miren
-miren app restart myapp
+miren disk restore -s myapp-db.miren.zst -n myapp-db-restored
 ```
 </CliCommand>
+
+Then point the service at it in `.miren/app.toml` and deploy:
+
+```toml
+[[services.db.disks]]
+name = "myapp-db-restored"
+mount_path = "/var/lib/postgresql/data"
+size_gb = 20
+```
+
+<CliCommand context="client">
+```miren
+miren deploy
+```
+</CliCommand>
+
+The one case that does restore in place is the one where nothing is holding the disk: a rebuilt host whose disk image is gone. There the image is absent rather than mounted, so `miren disk restore` writes it and the app picks it up on the next start.
+
+:::note[`--from-cloud` restores into the disk the point came from]
+A cloud restore point is looked up through its own disk's cloud volume, so `--from-cloud` needs that disk to already exist and be registered. It cannot restore into a new disk name, which means the move-the-app-across path above needs a local snapshot file. Keep one for a disk you would want to recover onto a running cluster.
+:::
 
 ### Backup Recommendations
 

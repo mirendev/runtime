@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"miren.dev/runtime/pkg/cond"
@@ -27,6 +28,21 @@ const (
 	transferRetryDelay = 5 * time.Second
 	transferRetryMax   = 60 * time.Second
 )
+
+// readerOnly hides a reader's Close from whoever it is handed to.
+//
+// The stream helper closes what it reads from once it reaches the end, which is
+// right when it owns the reader and wrong when the caller still needs it. A
+// retry has to seek the same file again, and an upload that got all the way to
+// the end before the server rejected it is exactly when that happens: the file
+// would already be closed and every later attempt would fail on the seek rather
+// than on anything real.
+//
+// Embedding only io.Reader is what does the hiding: the wrapper has Read and
+// nothing else, so a type assertion for io.Closer finds nothing to call.
+type readerOnly struct {
+	io.Reader
+}
 
 // newTransferID names one backup or restore so an interrupted one can be
 // resumed.
