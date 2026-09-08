@@ -98,8 +98,7 @@ EXPOSE 8080
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run Puma bound to the injected port:
+Run Puma bound to the injected port:
 
 ```procfile
 web: bundle exec puma -b tcp://0.0.0.0:$PORT

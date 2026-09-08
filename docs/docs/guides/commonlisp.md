@@ -84,8 +84,7 @@ EXPOSE 8080
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run the script with SBCL:
+Run the script with SBCL:
 
 ```procfile
 web: sbcl --disable-debugger --load /app/app.lisp
@@ -102,12 +101,6 @@ name = "commonlisp-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 

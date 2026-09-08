@@ -82,8 +82,7 @@ EXPOSE 8080
 
 ## Set up the app
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` that runs the main
+Add a `Procfile` that runs the main
 namespace:
 
 ```procfile
@@ -101,12 +100,6 @@ name = "clojure-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 For faster startup you can instead build an uberjar (via `tools.build` or `depstar`) and
 run `java -jar`, but running the `clojure` CLI directly with cached deps works fine.

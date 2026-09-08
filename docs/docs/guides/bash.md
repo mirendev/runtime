@@ -92,11 +92,6 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
-line above. Without it the deploy stops with `no services defined`.
-:::
-
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
