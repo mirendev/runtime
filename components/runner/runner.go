@@ -541,6 +541,12 @@ func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
 
 	r.Log.Info("Registered exec server")
 
+	r.access.state.Server().ExposeValue(rpc.ServiceNodeAdmin, nodeadmin_v1alpha.AdaptNodeAdmin(&nodeAdminServer{
+		log:  r.Log.With("module", "nodeadmin"),
+		deps: r.lbdDeps(),
+	}))
+	r.Log.Info("Registered node admin server")
+
 	return nil
 }
 

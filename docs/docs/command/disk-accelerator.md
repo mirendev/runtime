@@ -18,16 +18,17 @@ write-ahead log in front of the disk. It is faster, and it is what continuous
 backup to Miren Cloud is built on.
 
 `lbd` is not part of the Linux kernel, so it has to be compiled for the
-exact kernel your node is running. `miren disk accelerator install` does
-that for you: it downloads a builder image, compiles the module against your
-kernel's headers inside a container, then installs and loads the result. Nothing
-but Miren has to be installed on the host beyond the kernel headers themselves.
+exact kernel each node is running. `miren disk accelerator install` does
+that: your cluster builds the toolchain image with the BuildKit and registry it
+already runs, the named node pulls it from there, and the module is compiled and
+loaded on that node. Nothing is downloaded from us, and there is no published
+image to keep up to date.
 
 ## Getting started
 
 ```bash
 miren disk accelerator status          # can this host run it?
-sudo miren disk accelerator install    # build and load the module
+miren disk accelerator install runner1  # build and load it there
 sudo systemctl restart miren           # pick up the new mode
 ```
 
@@ -46,7 +47,7 @@ sudo systemctl restart miren           # pick up the new mode
 A module only loads on the kernel it was built for. Once a host has installed the
 module, Miren notices on startup that the running kernel has changed and rebuilds
 it. You can also do it by hand with
-`sudo miren disk accelerator install --force`.
+`miren disk accelerator install <node> --force`.
 
 Until the module is back, disks fall back to universal mode. Nothing breaks; they
 are just slower.

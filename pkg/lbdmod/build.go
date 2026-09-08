@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"miren.dev/runtime/pkg/imagerefs"
+	"miren.dev/runtime/components/ocireg"
 )
 
 const (
@@ -40,7 +40,8 @@ type Installer struct {
 	// Options say where to read host state and keep the install record.
 	Options Options
 
-	// Image overrides the builder image. Empty means imagerefs.LbdBuilder.
+	// Image is the toolchain image to build in. Empty falls back to the
+	// cluster registry reference, which is where the coordinator publishes it.
 	Image string
 }
 
@@ -56,7 +57,7 @@ func (i *Installer) image() string {
 	if i.Image != "" {
 		return i.Image
 	}
-	return imagerefs.LbdBuilder
+	return BuilderImage(ocireg.Host)
 }
 
 // Install compiles the module against the running kernel and loads it. It is
@@ -184,7 +185,26 @@ func (i *Installer) checkCanBuild(status Status) error {
 		return fmt.Errorf("no container runtime to run the lbd builder in")
 	}
 
+	if err := checkKernelTools(); err != nil {
+		return err
+	}
+
 	return i.checkCompilerAndHeaders(status)
+}
+
+// checkKernelTools makes sure the commands that load a module are present.
+//
+// Checked before the build rather than after. The build takes minutes, and
+// failing at the end on a missing binary wastes all of it and reads like the
+// compile itself went wrong. Found on a container that had /lib/modules
+// mounted but no kmod installed.
+func checkKernelTools() error {
+	for _, tool := range []string{"depmod", "modprobe"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s is not installed, and loading a kernel module needs it: install kmod", tool)
+		}
+	}
+	return nil
 }
 
 // checkCompilerAndHeaders covers the host conditions that make a build

@@ -14,10 +14,10 @@ func DiskAcceleratorStatus(ctx *Context, opts struct {
 
 // DiskAcceleratorInstall is not supported on non-Linux platforms
 func DiskAcceleratorInstall(ctx *Context, opts struct {
-	Force    bool   `short:"f" long:"force" description:"Rebuild even when the module is already current"`
-	Image    string `long:"image" description:"Override the builder image"`
-	Socket   string `long:"socket" description:"Path to the containerd socket"`
-	DataPath string `long:"data-path" description:"Path to miren data" default:"/var/lib/miren"`
+	ConfigCentric
+
+	Force bool   `short:"f" long:"force" description:"Rebuild even when the module is already current"`
+	Node  string `position:"0" usage:"Runner to install on (name, ID, or short ID)" required:"true"`
 }) error {
 	return fmt.Errorf("disk accelerator install is only available on Linux")
 }

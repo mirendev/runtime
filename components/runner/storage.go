@@ -71,9 +71,7 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	if err := diskio.EnsureLoopDevices(log); err != nil {
 		log.Warn("Loop devices not available, disk mounts will fail", "error", err)
 	}
-	if err := diskio.EnsureLbdDevices(log); err != nil {
-		log.Warn("lbd devices not available, accelerator mode will not work", "error", err)
-	}
+	setupLbd(ctx, s.lbdDeps(), log)
 
 	diskioState, err := diskio.LoadState(dataPath)
 	if err != nil {
