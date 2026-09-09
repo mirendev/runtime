@@ -106,7 +106,7 @@ func (s *EACStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (*Te
 		switch verdict {
 		case summaryOK:
 			result = append(result, summary)
-		case summaryNotTerminal:
+		case summaryWrongStatus:
 			staleNonTerminal++
 		case summaryNoTimestamp:
 			s.log.Warn("terminal saga has no usable timestamp, skipping", "id", v.Id())
@@ -187,4 +187,51 @@ func (s *EACStorage) ListIncompletePage(ctx context.Context, q IncompleteQuery) 
 	logStaleIncomplete(s.log, staleTerminal)
 
 	return &IncompletePage{Executions: executions, Cursor: next}, nil
+}
+
+// ListIncompleteSummaryPage summarizes one bounded page of in-flight executions
+// via EAC.
+func (s *EACStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	status := incompleteStatuses[stage]
+
+	resp, err := s.eac.ListPage(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status), inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
+	}
+
+	next := nextStageCursor(stage, resp.Cursor(), len(incompleteStatuses))
+
+	// See ListTerminalPage: an empty page still carries a cursor, and dropping
+	// it here would skip the rest of this status index.
+	if len(resp.Values()) == 0 {
+		return &IncompleteSummaryPage{Cursor: next}, nil
+	}
+
+	var result []IncompleteSummary
+	var staleTerminal int
+
+	for _, v := range resp.Values() {
+		summary, verdict := incompleteSummary(v.Entity())
+		switch verdict {
+		case summaryOK:
+			result = append(result, summary)
+		case summaryWrongStatus:
+			staleTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("in-flight saga has no usable timestamp, skipping", "id", v.Id())
+		}
+	}
+
+	logStaleIncomplete(s.log, staleTerminal)
+
+	return &IncompleteSummaryPage{Executions: result, Cursor: next}, nil
 }
