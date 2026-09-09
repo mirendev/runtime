@@ -121,11 +121,26 @@ func (f *fakeSource) derivations() int {
 
 func (f *fakeLink) Handle(_ string, handler uplink.MessageHandler) { f.handler = handler }
 
+// testSpread pins the connect spread. The real one puts the opening sample at a
+// random point in the first minute, which makes every later assertion about
+// when a sample happened a dice roll: a draw above 59s lands that sample within
+// the reporter's own one-second floor, so a demand at t=60s is deferred rather
+// than answered. It stays non-zero because
+// TestDemandBypassesConnectSpreadAndReconnectDropsLease needs a real wait to
+// bypass, and uplink's own tests already cover the randomness.
+const testSpread = 30 * time.Second
+
+func newTestReporter(source Source) *Reporter {
+	reporter := NewReporter(slog.New(slog.DiscardHandler), source)
+	reporter.spread = func(time.Duration) time.Duration { return testSpread }
+	return reporter
+}
+
 func startSampler(t *testing.T) (*Reporter, *fakeSource, *fakeLink, context.CancelFunc) {
 	t.Helper()
 	source := &fakeSource{apps: []apphealth.State{{Name: "web", Health: apphealth.Crashed, InCooldown: true, CooldownSeconds: 0}}}
 	link := newFakeLink()
-	reporter := NewReporter(slog.New(slog.DiscardHandler), source)
+	reporter := newTestReporter(source)
 	require.NoError(t, reporter.Register(context.Background(), link))
 	ctx, cancel := context.WithCancel(context.Background())
 	link.sessions[0](ctx, uplink.Session{ID: "s1", Capabilities: []uplink.CapabilitySelection{{Name: uplink.CapabilityAppHealth, Version: Version1, Config: json.RawMessage(`{"background_seconds":300}`)}}})
@@ -209,7 +224,7 @@ func TestSamplesRecoverAfterReadAndSendFailures(t *testing.T) {
 func TestBatchesShareObservationTime(t *testing.T) {
 	source := &fakeSource{apps: make([]apphealth.State, 205)}
 	link := newFakeLink()
-	require.NoError(t, NewReporter(slog.New(slog.DiscardHandler), source).sample(context.Background(), link))
+	require.NoError(t, newTestReporter(source).sample(context.Background(), link))
 	batches := link.allBatches()
 	require.Len(t, batches, 3)
 	require.Len(t, batches[0].Apps, 100)
@@ -220,7 +235,7 @@ func TestBatchesShareObservationTime(t *testing.T) {
 func TestUnselectedCapabilityAndInvalidDemand(t *testing.T) {
 	source := &fakeSource{}
 	link := newFakeLink()
-	require.NoError(t, NewReporter(slog.New(slog.DiscardHandler), source).Register(context.Background(), link))
+	require.NoError(t, newTestReporter(source).Register(context.Background(), link))
 	require.Equal(t, uplink.CapabilityAppHealth, link.offers[0].Name)
 	link.sessions[0](context.Background(), uplink.Session{ID: "s1"})
 	require.Zero(t, source.derivations())
@@ -233,7 +248,7 @@ func TestDemandBypassesConnectSpreadAndReconnectDropsLease(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		source := &fakeSource{apps: []apphealth.State{{Name: "web", Health: apphealth.Healthy}}}
 		link := newFakeLink()
-		reporter := NewReporter(slog.New(slog.DiscardHandler), source)
+		reporter := newTestReporter(source)
 		require.NoError(t, reporter.Register(context.Background(), link))
 		ctx, cancel := context.WithCancel(context.Background())
 		session := uplink.Session{ID: "first", Capabilities: []uplink.CapabilitySelection{{Name: uplink.CapabilityAppHealth, Version: Version1}}}
@@ -257,7 +272,7 @@ func TestNegotiatedBackgroundCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		source := &fakeSource{apps: []apphealth.State{{Name: "web"}}}
 		link := newFakeLink()
-		reporter := NewReporter(slog.New(slog.DiscardHandler), source)
+		reporter := newTestReporter(source)
 		require.NoError(t, reporter.Register(context.Background(), link))
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

@@ -40,14 +40,20 @@ type samplingSession struct {
 }
 
 type Reporter struct {
-	log     *slog.Logger
-	source  Source
+	log    *slog.Logger
+	source Source
+
+	// spread defers the opening sample so a reconnecting fleet does not sample
+	// as one spike. Injectable because a randomly timed first sample makes
+	// every later assertion about sampling times a dice roll.
+	spread func(time.Duration) time.Duration
+
 	mu      sync.Mutex
 	session *samplingSession
 }
 
 func NewReporter(log *slog.Logger, source Source) *Reporter {
-	return &Reporter{log: log, source: source}
+	return &Reporter{log: log, source: source, spread: uplink.SpreadOnConnect}
 }
 
 func (r *Reporter) Register(_ context.Context, link Link) error {
@@ -106,7 +112,7 @@ func (r *Reporter) run(active *samplingSession, link Link, background time.Durat
 	ctx := active.ctx
 	r.log.Info("app health sampling started", "background_interval", background)
 	// Spread unsolicited connection samples; viewing a panel bypasses this wait.
-	next := time.Now().Add(uplink.SpreadOnConnect(time.Minute))
+	next := time.Now().Add(r.spread(time.Minute))
 	var last, until time.Time
 	derivationFailed := false
 	interval := background
