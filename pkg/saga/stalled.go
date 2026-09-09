@@ -131,8 +131,9 @@ func RunStalledSweep(ctx context.Context, storage StalledStorage, cfg StalledCon
 			// parent re-finds its children by ID rather than re-running them,
 			// so failing one under a live parent fails the parent for a reason
 			// that was never true. A stranded parent is non-terminal and so
-			// reads as live, which means a stranded tree converges one level
-			// per sweep rather than all at once.
+			// reads as live, which means a stranded tree converges at least one
+			// level per sweep. Often more: a parent forced earlier in the same
+			// walk is already terminal by the time its child is read.
 			if summary.ParentID != "" && parents.isLive(ctx, summary.ParentID, log) {
 				result.Skipped++
 				continue
@@ -151,7 +152,12 @@ func RunStalledSweep(ctx context.Context, storage StalledStorage, cfg StalledCon
 				continue
 			}
 
-			log.Info("forced stalled saga execution to failed",
+			// Debug rather than Info: draining a backlog puts a full sweep's
+			// budget of these into the tier an operator reads, every tick, for
+			// hours. Retention logs per record only when a delete fails, and
+			// the sweep's summary carries the count worth noticing. The id is
+			// one -v away.
+			log.Debug("forced stalled saga execution to failed",
 				"id", summary.ID, "status", summary.Status,
 				"last_changed", summary.LastChanged)
 			result.Forced++

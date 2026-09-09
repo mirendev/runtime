@@ -192,8 +192,13 @@ func TestRunStalledSweep_KeepsChildrenOfLiveParents(t *testing.T) {
 // TestRunStalledSweep_ConvergesOnStrandedTrees is the case a liveness check
 // alone would deadlock on. "Live" means not terminal, so a stranded parent
 // shields its own children from the sweep that is about to deal with it. The
-// property that matters is not that a tree goes in one sweep but that it goes,
-// one level at a time.
+// property that matters is not how fast a tree goes but that it goes.
+//
+// The per-sweep counts below depend on walk order: "stranded-child" sorts ahead
+// of "stranded-parent", so the child is read while its parent is still pending.
+// Reverse the names and both go in one sweep, which is a better outcome and a
+// failed assertion. If a rename breaks this, that is why, and the property to
+// keep asserting is that the tree is fully forced by the end.
 func TestRunStalledSweep_ConvergesOnStrandedTrees(t *testing.T) {
 	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
