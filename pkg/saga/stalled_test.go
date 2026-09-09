@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
@@ -16,7 +17,35 @@ func weekStalled() StalledConfig {
 	return StalledConfig{StaleAfter: 7 * 24 * time.Hour, MaxForces: 1000}
 }
 
-func statusOf(t *testing.T, storage Storage, id string) Status {
+// stalledStorage is StalledStorage plus the Save a test needs to seed with.
+type stalledStorage interface {
+	StalledStorage
+	executionSaver
+}
+
+// stalledBackends returns every storage the sweep can be handed. EACStorage is
+// absent by construction rather than omission: it cannot express a conditional
+// write, so adding it here would not compile.
+func stalledBackends() []struct {
+	name string
+	make func(t *testing.T) stalledStorage
+} {
+	return []struct {
+		name string
+		make func(t *testing.T) stalledStorage
+	}{
+		{"MemoryStorage", func(t *testing.T) stalledStorage {
+			return NewMemoryStorage()
+		}},
+		{"EntityStorage", func(t *testing.T) stalledStorage {
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			return NewEntityStorage(inmem.Store, testutils.TestLogger(t))
+		}},
+	}
+}
+
+func statusOf(t *testing.T, storage executionGetter, id string) Status {
 	t.Helper()
 
 	exec, err := storage.Get(context.Background(), id)
@@ -25,15 +54,14 @@ func statusOf(t *testing.T, storage Storage, id string) Status {
 }
 
 // TestRunStalledSweep_ForcesStrandedExecutions is the core of MIR-1788: an
-// in-flight execution that has not changed state for longer than the window is
-// the one thing neither convergence nor retention will ever deal with, so the
-// sweep transitions it into a state that has rules.
+// in-flight execution nothing has touched for longer than the window is what
+// neither convergence nor retention will ever deal with.
 //
-// All three in-flight statuses qualify. Undoing is the one worth naming: an
-// execution retrying its undos writes a timestamp on every attempt, so the only
-// undoing execution old enough to reach here is one where the retrying stopped.
+// Undoing qualifies too, which is worth naming: retrying undos writes a
+// timestamp on every attempt, so an undoing execution old enough to reach here
+// is one where the retrying stopped.
 func TestRunStalledSweep_ForcesStrandedExecutions(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -88,7 +116,7 @@ func TestRunStalledSweep_RecordsWhyItForced(t *testing.T) {
 // retention. The two sweeps must not both have an opinion about the same
 // execution: a terminal one is retention's, at any age.
 func TestRunStalledSweep_NeverTouchesTerminalExecutions(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -109,7 +137,7 @@ func TestRunStalledSweep_NeverTouchesTerminalExecutions(t *testing.T) {
 }
 
 // saveStalledChild persists an in-flight child execution belonging to parentID.
-func saveStalledChild(t *testing.T, storage Storage, id, parentID string, age time.Duration) {
+func saveStalledChild(t *testing.T, storage executionSaver, id, parentID string, age time.Duration) {
 	t.Helper()
 
 	changed := time.Now().Add(-age)
@@ -131,7 +159,7 @@ func saveStalledChild(t *testing.T, storage Storage, id, parentID string, age ti
 // re-finding its children rather than re-running them, so failing a child under
 // a live parent fails the parent for a reason that was never true.
 func TestRunStalledSweep_KeepsChildrenOfLiveParents(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -162,16 +190,12 @@ func TestRunStalledSweep_KeepsChildrenOfLiveParents(t *testing.T) {
 }
 
 // TestRunStalledSweep_ConvergesOnStrandedTrees is the case a liveness check
-// alone would deadlock on.
-//
-// "Live" means not terminal, so a stranded parent looks live to its own
-// children and shields them from the sweep that is about to deal with it. That
-// is the right answer for one pass and the wrong one forever, so the property
-// that matters is not that a tree goes in a single sweep but that it goes: the
-// parent is forced, which makes it terminal, which unshields the children on
-// the next pass. A tree converges in as many sweeps as it is deep.
+// alone would deadlock on. "Live" means not terminal, so a stranded parent
+// shields its own children from the sweep that is about to deal with it. The
+// property that matters is not that a tree goes in one sweep but that it goes,
+// one level at a time.
 func TestRunStalledSweep_ConvergesOnStrandedTrees(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -205,7 +229,7 @@ func TestRunStalledSweep_ConvergesOnStrandedTrees(t *testing.T) {
 // passes rather than one thundering herd of writes, and that hitting the cap is
 // reported rather than reading as a clean sweep.
 func TestRunStalledSweep_CapsForces(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -238,7 +262,7 @@ func TestRunStalledSweep_CapsForces(t *testing.T) {
 // same reason retention pins it: reporting a converged sweep as capped tells an
 // operator a backlog remains on a store that has none.
 func TestRunStalledSweep_ExactlyMaxForcesIsNotCapped(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -263,7 +287,7 @@ func TestRunStalledSweep_ExactlyMaxForcesIsNotCapped(t *testing.T) {
 // operator who wants in-flight sagas left exactly as they are during an
 // investigation sets the window to zero.
 func TestRunStalledSweep_ZeroStaleAfterForcesNothing(t *testing.T) {
-	for _, backend := range allStorageBackends() {
+	for _, backend := range stalledBackends() {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			storage := backend.make(t)
@@ -280,149 +304,159 @@ func TestRunStalledSweep_ZeroStaleAfterForcesNothing(t *testing.T) {
 	}
 }
 
-// resumeOnGetStorage revives an execution the moment the sweep re-reads it,
-// standing in for a runner that picked the saga back up between the page and
-// the write.
-type resumeOnGetStorage struct {
-	Storage
-	reviveID string
-	status   Status
+// changeAfterPageStorage mutates an execution the moment the sweep has a page
+// naming it, standing in for a runner that picked the saga back up between the
+// listing and the transition.
+type changeAfterPageStorage struct {
+	stalledStorage
+	targetID string
+	change   func(t *testing.T, s stalledStorage, id string)
+	t        *testing.T
 }
 
-func (r *resumeOnGetStorage) Get(ctx context.Context, id string) (*Execution, error) {
-	exec, err := r.Storage.Get(ctx, id)
-	if err != nil || id != r.reviveID {
-		return exec, err
-	}
-
-	exec.Status = r.status
-	exec.UpdatedAt = time.Now()
-	if err := r.Save(ctx, exec); err != nil {
+func (c *changeAfterPageStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	page, err := c.stalledStorage.ListIncompleteSummaryPage(ctx, q)
+	if err != nil {
 		return nil, err
 	}
-	return exec, nil
+	for _, summary := range page.Executions {
+		if summary.ID == c.targetID {
+			c.change(c.t, c.stalledStorage, c.targetID)
+		}
+	}
+	return page, nil
 }
 
-// TestRunStalledSweep_RereadsBeforeForcing is the safety property that matters
-// most, and the one a summary read makes possible to get wrong.
-//
-// A page is a snapshot of an index. Between building it and reaching a given
-// execution, a runner may have resumed that saga, or it may have finished, or
-// it may be gone. Writing failed from the summary alone would take a saga that
-// had just started running again and declare it dead, which is the one way this
-// sweep could cause the damage it exists to clean up.
-func TestRunStalledSweep_RereadsBeforeForcing(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		status Status
-	}{
-		{"resumed under us", StatusRunning},
-		{"finished under us", StatusCompleted},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			storage := &resumeOnGetStorage{
-				Storage:  NewMemoryStorage(),
-				reviveID: "revived",
-				status:   tc.status,
+func resumeExecution(status Status) func(*testing.T, stalledStorage, string) {
+	return func(t *testing.T, s stalledStorage, id string) {
+		t.Helper()
+
+		exec, err := s.Get(context.Background(), id)
+		require.NoError(t, err)
+		exec.Status = status
+		exec.UpdatedAt = time.Now()
+		require.NoError(t, s.Save(context.Background(), exec))
+	}
+}
+
+// TestRunStalledSweep_RefusesCandidatesThatMovedAfterTheirPage is the safety
+// property that matters most. A page says an execution sat untouched for a
+// month; by the time the sweep reaches it, it may have been resumed, finished
+// or deleted. Forcing on the page's word alone would declare dead a saga that
+// had just started running again.
+func TestRunStalledSweep_RefusesCandidatesThatMovedAfterTheirPage(t *testing.T) {
+	for _, backend := range stalledBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				status Status
+			}{
+				{"resumed after its page", StatusRunning},
+				{"finished after its page", StatusCompleted},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ctx := context.Background()
+					inner := backend.make(t)
+
+					saveAged(t, inner, "moved", StatusPending, 30*24*time.Hour)
+					saveAged(t, inner, "genuinely-stranded", StatusPending, 30*24*time.Hour)
+
+					storage := &changeAfterPageStorage{
+						stalledStorage: inner,
+						targetID:       "moved",
+						change:         resumeExecution(tc.status),
+						t:              t,
+					}
+
+					result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
+					require.NoError(t, err)
+
+					assert.Equal(t, 1, result.Recovered,
+						"an execution that moved after its page is counted, not forced")
+					assert.Equal(t, tc.status, statusOf(t, inner, "moved"),
+						"and its own progress is left exactly as it wrote it")
+
+					assert.Equal(t, 1, result.Forced)
+					assert.Equal(t, StatusFailed, statusOf(t, inner, "genuinely-stranded"),
+						"one candidate turning out to be alive must not spare the rest")
+				})
 			}
-
-			saveAged(t, storage, "revived", StatusPending, 30*24*time.Hour)
-			saveAged(t, storage, "genuinely-stranded", StatusPending, 30*24*time.Hour)
-
-			result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
-			require.NoError(t, err)
-
-			assert.Equal(t, 1, result.Recovered,
-				"an execution that moved on between the page and the write is counted, not forced")
-			assert.Equal(t, tc.status, statusOf(t, storage, "revived"))
-
-			assert.Equal(t, 1, result.Forced)
-			assert.Equal(t, StatusFailed, statusOf(t, storage, "genuinely-stranded"),
-				"one candidate turning out to be alive must not spare the rest")
 		})
 	}
 }
 
-// TestRunStalledSweep_DeletedUnderUsIsNotAnError keeps overlapping or retried
-// sweeps converging rather than erroring on work another pass already did.
-func TestRunStalledSweep_DeletedUnderUsIsNotAnError(t *testing.T) {
-	ctx := context.Background()
-	storage := &deleteOnGetStorage{Storage: NewMemoryStorage(), deleteID: "vanishing"}
+// TestRunStalledSweep_DeletedAfterItsPageIsNotAnError keeps overlapping or
+// retried sweeps converging rather than erroring on work another pass already
+// did.
+func TestRunStalledSweep_DeletedAfterItsPageIsNotAnError(t *testing.T) {
+	for _, backend := range stalledBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			inner := backend.make(t)
 
-	saveAged(t, storage, "vanishing", StatusPending, 30*24*time.Hour)
+			saveAged(t, inner, "vanishing", StatusPending, 30*24*time.Hour)
 
-	result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
-	require.NoError(t, err)
+			storage := &changeAfterPageStorage{
+				stalledStorage: inner,
+				targetID:       "vanishing",
+				change: func(t *testing.T, s stalledStorage, id string) {
+					t.Helper()
+					require.NoError(t, s.(Storage).Delete(context.Background(), id))
+				},
+				t: t,
+			}
 
-	assert.Zero(t, result.Failed)
-	assert.Zero(t, result.Forced)
-	assert.Equal(t, 1, result.Recovered)
-}
+			result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
+			require.NoError(t, err)
 
-// deleteOnGetStorage removes an execution just as the sweep re-reads it.
-type deleteOnGetStorage struct {
-	Storage
-	deleteID string
-}
-
-func (d *deleteOnGetStorage) Get(ctx context.Context, id string) (*Execution, error) {
-	if id == d.deleteID {
-		if err := d.Delete(ctx, id); err != nil {
-			return nil, err
-		}
+			assert.Zero(t, result.Failed)
+			assert.Zero(t, result.Forced)
+			assert.Equal(t, 1, result.Recovered)
+		})
 	}
-	return d.Storage.Get(ctx, id)
 }
 
-// saveFailingStorage fails Save for one specific execution.
-type saveFailingStorage struct {
-	Storage
+// forceFailingStorage fails the transition for one specific execution.
+type forceFailingStorage struct {
+	stalledStorage
 	failID string
 }
 
-func (s *saveFailingStorage) Save(ctx context.Context, exec *Execution) error {
-	if exec.ID == s.failID && exec.Status == StatusFailed {
-		return errors.New("simulated save failure")
+func (f *forceFailingStorage) ForceFailed(ctx context.Context, id string, cutoff time.Time, reason string) (bool, error) {
+	if id == f.failID {
+		return false, errors.New("simulated write failure")
 	}
-	return s.Storage.Save(ctx, exec)
+	return f.stalledStorage.ForceFailed(ctx, id, cutoff, reason)
 }
 
-// TestRunStalledSweep_SaveFailureDoesNotAbortSweep pins the best-effort
+// TestRunStalledSweep_WriteFailureDoesNotAbortSweep pins the best-effort
 // behavior. Without it, a single execution the store will not accept a write
 // for would wedge the sweep for the whole cluster.
-func TestRunStalledSweep_SaveFailureDoesNotAbortSweep(t *testing.T) {
+func TestRunStalledSweep_WriteFailureDoesNotAbortSweep(t *testing.T) {
 	ctx := context.Background()
-	storage := &saveFailingStorage{Storage: NewMemoryStorage(), failID: "stubborn"}
+	inner := NewMemoryStorage()
+	storage := &forceFailingStorage{stalledStorage: inner, failID: "stubborn"}
 
 	for _, id := range []string{"first", "stubborn", "last"} {
-		saveAged(t, storage, id, StatusPending, 30*24*time.Hour)
+		saveAged(t, inner, id, StatusPending, 30*24*time.Hour)
 	}
 
 	result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
-	require.NoError(t, err, "a save failure must not fail the sweep")
+	require.NoError(t, err, "a write failure must not fail the sweep")
 
 	assert.Equal(t, 1, result.Failed)
 	assert.Equal(t, 2, result.Forced, "the other stranded executions must still be forced")
-	assert.Equal(t, StatusPending, statusOf(t, storage, "stubborn"))
-	assert.Equal(t, StatusFailed, statusOf(t, storage, "first"))
-	assert.Equal(t, StatusFailed, statusOf(t, storage, "last"))
+	assert.Equal(t, StatusPending, statusOf(t, inner, "stubborn"))
+	assert.Equal(t, StatusFailed, statusOf(t, inner, "first"))
+	assert.Equal(t, StatusFailed, statusOf(t, inner, "last"))
 }
 
 // TestStalledSweep_LegacyExecutionsUseStoreTimestamp is the upgrade path, and
-// the reason the sweep reads summaries rather than executions.
-//
-// The executions this sweep exists to drain were written by v0.11.1, whose saga
-// schema had no created_at or updated_at fields at all. Every one of them reads
-// back with a zero saga timestamp, so an age taken from the execution alone
-// would call the whole population infinitely old and force it on sight,
-// including whatever a runner on the old binary started seconds before the
-// upgrade. The entity-backed stores fall back to the store's own timestamp,
-// which is a real measurement of a real record.
-//
-// Deliberately not part of the conformance suite: MemoryStorage has no second
-// timestamp to fall back to, and the whole point is that the entity backends
-// do.
+// the reason the sweep reads summaries rather than executions. v0.11.1's saga
+// schema had no timestamp fields, so its executions read back with a zero one,
+// and an age taken from the execution alone would force the whole population on
+// sight. Not in the conformance suite because MemoryStorage has no second
+// timestamp to fall back to, which is the point.
 func TestStalledSweep_LegacyExecutionsUseStoreTimestamp(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -430,10 +464,9 @@ func TestStalledSweep_LegacyExecutionsUseStoreTimestamp(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
-		storage Storage
+		storage stalledStorage
 	}{
 		{"EntityStorage", NewEntityStorage(inmem.Store, testutils.TestLogger(t))},
-		{"EACStorage", NewEACStorage(inmem.EAC, testutils.TestLogger(t))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// A saga saved with no timestamps at all, exactly as v0.11.1 wrote
@@ -469,4 +502,85 @@ func TestStalledSweep_LegacyExecutionsUseStoreTimestamp(t *testing.T) {
 			assert.Equal(t, StatusPending, statusOf(t, tc.storage, id))
 		})
 	}
+}
+
+// mutateOnGetStore writes a new revision of an entity immediately after handing
+// it to a reader, so a caller that reads then writes always finds its read
+// stale. Wrapping the store rather than the storage is the only way to reach
+// the gap inside ForceFailed, between its read and its write.
+type mutateOnGetStore struct {
+	entity.Store
+	targetID entity.Id
+	mutate   func(t *testing.T, store entity.Store, ent *entity.Entity)
+	t        *testing.T
+	fired    bool
+}
+
+func (m *mutateOnGetStore) GetEntity(ctx context.Context, id entity.Id) (*entity.Entity, error) {
+	ent, err := m.Store.GetEntity(ctx, id)
+	if err != nil || id != m.targetID || m.fired {
+		return ent, err
+	}
+
+	// Once only: the mutation is itself a read-modify-write, and re-entering
+	// here would recurse.
+	m.fired = true
+	m.mutate(m.t, m.Store, ent)
+	return ent, nil
+}
+
+// TestEntityStorageForceFailed_RefusesAStaleWrite pins the conditional write.
+//
+// A runner can resume an aged execution after ForceFailed has read it and
+// decided but before it writes. An unconditional upsert would replace that
+// runner's status and action outputs with a stale copy marked failed, and the
+// retry a recorded failure unblocks would re-run actions that already ran.
+func TestEntityStorageForceFailed_RefusesAStaleWrite(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	const id = "raced-execution"
+
+	seed := NewEntityStorage(inmem.Store, testutils.TestLogger(t))
+	saveAged(t, seed, id, StatusPending, 30*24*time.Hour)
+
+	// The runner's resume: fresh status, fresh outputs, fresh timestamp,
+	// landing between our read and our write.
+	resumed := &Execution{
+		ID:             id,
+		DefinitionName: "create-sandbox",
+		Status:         StatusRunning,
+		InitialInputs:  map[string]any{"app": "demo"},
+		ExecutedActions: map[string]*ActionResult{
+			"allocate-ip": {Output: []byte(`{"ip":"10.0.0.9"}`), ExecutedAt: time.Now()},
+		},
+		ExecutionOrder: []string{"allocate-ip"},
+		CreatedAt:      time.Now().Add(-30 * 24 * time.Hour),
+		UpdatedAt:      time.Now(),
+	}
+
+	racing := &mutateOnGetStore{
+		Store:    inmem.Store,
+		targetID: entity.Id(id),
+		t:        t,
+		mutate: func(t *testing.T, store entity.Store, _ *entity.Entity) {
+			t.Helper()
+			require.NoError(t, NewEntityStorage(store, testutils.TestLogger(t)).Save(ctx, resumed))
+		},
+	}
+
+	storage := NewEntityStorage(racing, testutils.TestLogger(t))
+
+	forced, err := storage.ForceFailed(ctx, id, time.Now().Add(-7*24*time.Hour), StalledError)
+	require.NoError(t, err, "losing the race is an ordinary outcome, not an error")
+	assert.False(t, forced, "a record that changed under us must refuse the transition")
+
+	after, err := seed.Get(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, StatusRunning, after.Status,
+		"the resuming runner's status must survive")
+	assert.Empty(t, after.Error, "and it must not be carrying our failure message")
+	assert.Contains(t, after.ExecutedActions, "allocate-ip",
+		"nor may its recorded action outputs be replaced by our stale copy")
 }

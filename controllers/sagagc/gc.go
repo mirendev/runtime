@@ -52,14 +52,8 @@ type GCConfig struct {
 
 	// StaleAfter is how long an in-flight execution may sit without changing
 	// state before it is declared stranded and forced to failed. Zero disables
-	// the stalled sweep, leaving in-flight executions untouched at any age.
-	//
-	// There is no server config field behind this. The one reason an operator
-	// pauses saga GC is to freeze the store while they investigate, and that
-	// intent is already spelled saga.retention_period = 0, which the
-	// coordinator passes through to both windows. A second knob would ask them
-	// to know what an in-flight saga is in order to answer a question they had
-	// already answered.
+	// the stalled sweep. No config field sets this directly; see
+	// EntityMaintenance for why saga.retention_period drives both windows.
 	StaleAfter time.Duration
 
 	// MaxForcesPerSweep caps stalled transitions per sweep, on the same
@@ -71,19 +65,10 @@ type GCConfig struct {
 // what RFD-35 committed to. The per-sweep cap and interval together drain about
 // 48,000 executions a day, comfortably ahead of the worst observed write rate.
 //
-// StaleAfter reuses the same seven days, which is enormously generous against
-// what it is actually measuring: an execution writes a timestamp on every
-// transition and every action completion, so the gap this has to clear is one
-// action, not one saga. A forced execution then waits out Retention before its
-// bytes go, so a stranded record takes about a fortnight to disappear entirely.
-// That is the right trade for a population that has already been sitting for
-// months: the slow path costs nothing, and it leaves a week in which an
-// operator can still see what got forced and why.
-//
-// Nothing here is tuned separately in practice. The coordinator sets both
-// windows from one config field, so these two numbers move together or not at
-// all; they are separate fields because the sweeps are separate policies, not
-// because an operator is expected to play them against each other.
+// StaleAfter reuses the same seven days, which is generous against what it
+// measures: the gap between two steps of a saga, not the life of one. A forced
+// execution then waits out Retention, so a stranded record takes about a
+// fortnight to go entirely, and an operator has a week to see what was forced.
 func DefaultGCConfig() GCConfig {
 	return GCConfig{
 		Retention:          7 * 24 * time.Hour,
@@ -95,12 +80,25 @@ func DefaultGCConfig() GCConfig {
 	}
 }
 
-// GCController periodically deletes expired saga executions. It runs on the
-// coordinator, so exactly one process is sweeping and it never contends with
-// runners writing saga state through the entity-access client.
+// Storage is what this controller needs to sweep: retention's view plus the
+// conditional transition the stalled sweep writes through.
+//
+// Only the direct entity-store backend satisfies both, which is the point. The
+// controller was always coordinator-only, stated in a comment; requiring the
+// narrower interface makes an entity-access-backed storage fail to compile here
+// rather than fail to be safe at runtime.
+type Storage interface {
+	saga.Storage
+	saga.StalledStorage
+}
+
+// GCController periodically deletes expired saga executions and forces stranded
+// ones. It runs on the coordinator, so exactly one process is sweeping and it
+// never contends with runners writing saga state through the entity-access
+// client.
 type GCController struct {
 	Log     *slog.Logger
-	Storage saga.Storage
+	Storage Storage
 	Config  GCConfig
 
 	cancel context.CancelFunc
@@ -169,10 +167,8 @@ func (c *GCController) run(ctx context.Context) {
 // foreground operation.
 //
 // The two share one deadline, so a slow retention pass can leave the stalled
-// sweep no time and it says so at Warn rather than running past the bound. That
-// is the acceptable direction: both passes are idempotent and resume from where
-// they stopped, retention is capped at MaxDeletesPerSweep so it cannot run away
-// on a backlog, and a stranded execution that waits another half hour has
+// sweep no time and it says so at Warn rather than overrunning. Both resume
+// where they stopped, and a stranded execution that waits another half hour has
 // already waited months.
 func (c *GCController) sweep(ctx context.Context) {
 	sweepCtx := ctx
@@ -212,13 +208,10 @@ func (c *GCController) sweepRetention(ctx context.Context) {
 
 // sweepStalled forces stranded in-flight executions to failed.
 //
-// A sweep that forces anything logs at Info rather than Debug, and says how
-// many. On a cluster running v0.14.0 or later the expected number is zero: the
-// generated-name addon retries that created these stopped happening when
-// convergent IDs shipped. So a line here is either the historical backlog
-// draining, which ends, or a saga getting stranded by something we have not
-// found yet, which does not. An operator cannot tell those apart without seeing
-// the count, and cannot see the count if it never gets logged.
+// It logs at Info whenever it forces anything, because on v0.14.0 and later the
+// expected count is zero: convergent IDs closed the source. A line here is
+// either the historical backlog draining, which ends, or something still
+// stranding sagas, which does not.
 func (c *GCController) sweepStalled(ctx context.Context) {
 	result, err := saga.RunStalledSweep(ctx, c.Storage, saga.StalledConfig{
 		StaleAfter: c.Config.StaleAfter,

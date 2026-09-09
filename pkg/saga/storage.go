@@ -194,12 +194,10 @@ func (s *EntityStorage) decodeIncomplete(entities []*entity.Entity) ([]*Executio
 // ListIncompleteSummaryPage summarizes one bounded page of in-flight
 // executions.
 //
-// It walks the same three status indexes ListIncompletePage does, in the same
-// order and with the same cursor encoding, and differs only in keeping a
-// summary instead of a whole execution. The sweep that reads this is looking
-// for records nothing will ever resume, which by definition means walking every
-// in-flight execution in the cluster, and doing that with full payloads would
-// cost what recovery costs without recovering anything.
+// Same indexes and cursor encoding as ListIncompletePage, keeping a summary
+// rather than a whole execution. Its caller walks every in-flight execution in
+// the cluster, and doing that with full payloads would cost what recovery costs
+// without recovering anything.
 func (s *EntityStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -300,6 +298,68 @@ func (s *EntityStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (
 	return &TerminalPage{Executions: result, Cursor: next}, nil
 }
 
+// ForceFailed transitions an in-flight execution to failed, and reports whether
+// it did.
+//
+// The decision lives here rather than in the caller because the write has to be
+// conditional on the read it was made against, and only this layer sees the
+// revision. A caller that read, decided, then asked us to save could overwrite
+// a runner that resumed the saga in the gap, replacing its status and action
+// outputs with a stale copy marked failed.
+//
+// So the transition is refused, without error, whenever the record moved: gone,
+// already terminal, touched since cutoff, or a changed revision. Each means
+// something else is dealing with it, and the next pass looks again.
+//
+// The age test goes through lastChanged rather than the execution's updated_at,
+// because a record written before v0.14.0 carries its age only on the entity.
+func (s *EntityStorage) ForceFailed(ctx context.Context, id string, cutoff time.Time, reason string) (bool, error) {
+	ent, err := s.store.GetEntity(ctx, entity.Id(id))
+	if err != nil {
+		if errors.Is(err, entity.ErrEntityNotFound) || errors.Is(err, cond.ErrNotFound{}) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting saga entity: %w", err)
+	}
+
+	sagaEntity, ok := entity.As[saga_v1alpha.Saga](ent)
+	if !ok {
+		return false, fmt.Errorf("entity %s is not a saga", id)
+	}
+
+	if isTerminal(statusFromEntity(sagaEntity.Status)) {
+		return false, nil
+	}
+
+	changed, ok := lastChanged(ent, sagaEntity)
+	if !ok || changed.After(cutoff) {
+		return false, nil
+	}
+
+	exec, err := entityToExecution(sagaEntity)
+	if err != nil {
+		return false, fmt.Errorf("decoding execution %q: %w", id, err)
+	}
+
+	exec.Status = StatusFailed
+	exec.Error = reason
+	exec.UpdatedAt = time.Now()
+
+	forced, err := executionToEntity(exec)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := s.store.ReplaceEntity(ctx, forced, entity.WithFromRevision(ent.GetRevision())); err != nil {
+		if errors.Is(err, cond.ErrConflict{}) {
+			return false, nil
+		}
+		return false, fmt.Errorf("forcing execution %q to failed: %w", id, err)
+	}
+
+	return true, nil
+}
+
 // Delete removes a saga execution entity.
 func (s *EntityStorage) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteEntity(ctx, entity.Id(id)); err != nil {
@@ -330,15 +390,13 @@ const (
 // lastChanged resolves when an execution last changed state.
 //
 // It prefers the saga's own updated_at and falls back to the entity store's
-// system timestamps, which is what makes both sweeps safe across an upgrade.
-// v0.11.1's saga schema had no created_at or updated_at at all, so every
-// execution written by it reads back with a zero saga timestamp. Treating that
-// as infinitely old would let retention delete a saga a runner on the old
-// binary finished seconds ago, and would let the stalled sweep force one that
-// is actively running.
+// system timestamps, which is what makes both sweeps safe across an upgrade:
+// v0.11.1's schema had neither field, so its executions read back with a zero
+// saga timestamp, and treating that as infinitely old would collect a saga
+// finished seconds ago or force one that is actively running.
 //
-// The false return is deliberately not a "just use now": an execution we cannot
-// date is one we must not act on, and the callers skip it and say so.
+// The false return is not a "just use now". An execution we cannot date is one
+// we must not act on, and both callers skip it and say so.
 func lastChanged(ent *entity.Entity, s *saga_v1alpha.Saga) (time.Time, bool) {
 	switch {
 	case !s.UpdatedAt.IsZero():

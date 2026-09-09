@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 )
 
 // MemoryStorage is a simple in-memory storage implementation for testing and examples.
@@ -43,11 +44,10 @@ func (m *MemoryStorage) Get(ctx context.Context, id string) (*Execution, error) 
 
 // cloneExecution copies an execution on the way into and back out of the map.
 //
-// Both directions, because the durable backends serialize in both directions
-// and a caller cannot tell which backend it has. Handing back the stored
-// pointer let a caller change stored state by mutating a value it had only
-// read, so a write this backend rejected still took effect and a memory-backed
-// test would see a state the entity stores would never have reached.
+// Both directions, because the durable backends serialize both ways and a
+// caller cannot tell which backend it has. Handing back the stored pointer let
+// a caller change stored state by mutating a value it had only read, reaching a
+// state the entity stores never could.
 func cloneExecution(exec *Execution) *Execution {
 	copied := *exec
 
@@ -106,10 +106,8 @@ func (m *MemoryStorage) ListIncompletePage(ctx context.Context, q IncompleteQuer
 // ListIncompleteSummaryPage summarizes one bounded page of in-flight
 // executions.
 //
-// This backend has only the execution's own UpdatedAt to offer, with no store
-// timestamp behind it to fall back to. That is the honest answer for a map: a
-// test that saves an execution with no timestamp really has told this backend
-// nothing about when it happened, and the sweep skips what it cannot date.
+// A map has no system timestamp to fall back on, so an execution saved without
+// one really is undatable here and gets skipped rather than guessed at.
 func (m *MemoryStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -205,6 +203,35 @@ func pageSortedIDs(ids []string, cursor string, limit int) ([]string, string) {
 	}
 
 	return ids, ""
+}
+
+// ForceFailed transitions an in-flight execution to failed, and reports whether
+// it did.
+//
+// The mutex stands in for the durable backends' revision check: held across the
+// read and the write, so no Save can land between them.
+func (m *MemoryStorage) ForceFailed(ctx context.Context, id string, cutoff time.Time, reason string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	exec, ok := m.executions[id]
+	if !ok {
+		return false, nil
+	}
+	if isTerminal(exec.Status) {
+		return false, nil
+	}
+	if exec.UpdatedAt.IsZero() || exec.UpdatedAt.After(cutoff) {
+		return false, nil
+	}
+
+	forced := cloneExecution(exec)
+	forced.Status = StatusFailed
+	forced.Error = reason
+	forced.UpdatedAt = time.Now()
+
+	m.executions[id] = forced
+	return true, nil
 }
 
 // Delete removes an execution. Deleting a missing execution is a no-op.

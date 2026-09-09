@@ -381,7 +381,13 @@ func collectIncomplete(ctx context.Context, s Storage) ([]*Execution, error) {
 	return nil, fmt.Errorf("incomplete walk did not terminate")
 }
 
-func collectIncompleteSummaries(ctx context.Context, s Storage) ([]IncompleteSummary, error) {
+// summaryLister is all the summary walk needs, so both the full Storage and the
+// narrower StalledStorage can be walked with it.
+type summaryLister interface {
+	ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error)
+}
+
+func collectIncompleteSummaries(ctx context.Context, s summaryLister) ([]IncompleteSummary, error) {
 	var all []IncompleteSummary
 	cursor := ""
 	for range 1000 {
