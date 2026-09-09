@@ -437,6 +437,13 @@ func (m *MockStore) WatchFromRevsCopy() []int64 {
 	return append([]int64(nil), m.WatchFromRevs...)
 }
 
+// WatchIndex registers a watcher and delivers changes from that moment on.
+//
+// Unlike EtcdStore, it records fromRev for assertions but does not replay from
+// it, so a write landing between a caller's List and its WatchIndex is lost
+// rather than resumed. Consumers built on indexwatch.Watcher rely on that
+// replay for gap-free delivery, so a test that writes right after starting a
+// watch must wait for the watch to register first — see WaitForIndexWatcher.
 func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error) {
 	m.indexWatchersMu.Lock()
 	m.WatchFromRevs = append(m.WatchFromRevs, fromRev)
