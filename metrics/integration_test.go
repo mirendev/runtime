@@ -238,16 +238,39 @@ func TestHTTPMetrics_Integration(t *testing.T) {
 		}
 	})
 
-	t.Run("TopPaths returns most frequent paths", func(t *testing.T) {
+	t.Run("TopPaths reports the busiest paths from local counters", func(t *testing.T) {
+		// TopPaths no longer queries VictoriaMetrics. It reads the counters this
+		// process keeps, so the cardinality cap and this view cannot disagree
+		// about which paths exist -- and a path's statuses can no longer be
+		// tracked separately from each other, which is what used to report the
+		// error rate of a path whose error counter had been evicted as zero.
+		//
+		// The "RecordRequest writes all metrics" subtest above already recorded
+		// one /api/users request, so that path ends on five.
+		for range 4 {
+			require.NoError(t, httpMetrics.RecordRequest(context.Background(), HTTPRequest{
+				Timestamp: time.Now(), App: "testapp", Method: "GET",
+				Path: "/api/users", StatusCode: 200, DurationMs: 100,
+			}))
+		}
+		for range 2 {
+			require.NoError(t, httpMetrics.RecordRequest(context.Background(), HTTPRequest{
+				Timestamp: time.Now(), App: "testapp", Method: "GET",
+				Path: "/api/posts", StatusCode: 500, DurationMs: 50,
+			}))
+		}
+
 		paths, err := httpMetrics.TopPaths("testapp", 5)
 		require.NoError(t, err)
 		require.Len(t, paths, 2)
 
 		assert.Equal(t, "/api/users", paths[0].Path)
-		assert.Equal(t, int64(150), paths[0].Count)
+		assert.Equal(t, int64(5), paths[0].Count)
+		assert.Zero(t, paths[0].ErrorRate)
 
 		assert.Equal(t, "/api/posts", paths[1].Path)
-		assert.Equal(t, int64(100), paths[1].Count)
+		assert.Equal(t, int64(2), paths[1].Count)
+		assert.InDelta(t, 1.0, paths[1].ErrorRate, 0.0001, "every /api/posts request was a 500")
 	})
 
 	t.Run("ErrorsLastHour returns error breakdown", func(t *testing.T) {
