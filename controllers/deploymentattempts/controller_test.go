@@ -133,6 +133,7 @@ func TestInitialPassMigratesCanonicalGraphAndProvenance(t *testing.T) {
 	assert.Equal(t, parentID, migratedDep.ParentDeployment)
 	assert.Empty(t, migratedDep.Operation, "migration must not invent intent")
 	assert.Equal(t, "active", migratedDep.Status, "legacy representation is retained")
+	assert.Equal(t, "https://example.com/acme/web.git", migratedDep.GitInfo.Repository)
 
 	rawVersion, err := inmem.Store.GetEntity(ctx, version.ID)
 	require.NoError(t, err)
@@ -148,6 +149,41 @@ func TestInitialPassMigratesCanonicalGraphAndProvenance(t *testing.T) {
 	migratedApp.Decode(rawApp)
 	assert.Equal(t, dep.ID, migratedApp.ActiveDeployment)
 
+}
+
+func TestDeploymentMigrationSanitizesCanonicalProvenanceBeforeExport(t *testing.T) {
+	for repository, sanitized := range map[string]string{
+		"https://user:secret@example.com/acme/web.git?token=nope#frag": "https://example.com/acme/web.git",
+		"file:///home/user/private/repo":                               "",
+	} {
+		t.Run(repository, func(t *testing.T) {
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			dep := &core_v1alpha.Deployment{
+				ID: "deployment/failed", AppName: "web", Outcome: "failed", StartedAt: time.Now().UTC(),
+				GitInfo: core_v1alpha.GitInfo{Repository: repository, Author: "Ada", Sha: "abc123"},
+			}
+			_, err := inmem.Store.CreateEntity(t.Context(), entity.New(entity.Ref(entity.DBId, dep.ID), dep.Encode()))
+			require.NoError(t, err)
+			controller := New(log, inmem.Store, inmem.EAC)
+			require.NoError(t, controller.Step(t.Context()))
+			raw, err := inmem.Store.GetEntity(t.Context(), dep.ID)
+			require.NoError(t, err)
+			filtered, _, err := core_v1alpha.CloudExportContract.Filter(raw)
+			require.NoError(t, err)
+			var exported core_v1alpha.Deployment
+			exported.Decode(filtered)
+			require.Equal(t, sanitized, exported.GitInfo.Repository)
+			require.Equal(t, "Ada", exported.GitInfo.Author)
+			require.Equal(t, "abc123", exported.GitInfo.Sha)
+			require.Empty(t, exported.Version, "failed attempts retain source without an app version")
+			require.NoError(t, controller.migrateDeployment(t.Context(), raw))
+			again, err := inmem.Store.GetEntity(t.Context(), dep.ID)
+			require.NoError(t, err)
+			require.Equal(t, raw.GetRevision(), again.GetRevision(), "sanitization is idempotent")
+		})
+	}
 }
 
 func TestDeploymentMigrationRediscoversProgressAfterRestart(t *testing.T) {

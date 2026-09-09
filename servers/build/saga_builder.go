@@ -263,6 +263,9 @@ func (s *SagaBuilder) startBuild(
 		if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
 			sb = sb.Input("deploy_subject", identity.Subject).
 				Input("deploy_auth_method", string(identity.Method))
+			if orgID, ok := identity.Metadata["organization_id"].(string); ok {
+				sb = sb.Input("deploy_organization_id", orgID)
+			}
 		}
 	}
 
