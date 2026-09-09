@@ -49,32 +49,21 @@ var (
 
 func init() {
 	DefaultQUICConfig = quic.Config{
-		InitialPacketSize:              InitialPacketSize,
-		EnableDatagrams:                true,
-		MaxIncomingStreams:             1000,
-		MaxIncomingUniStreams:          1000,
-		Allow0RTT:                      true,
-		KeepAlivePeriod:                10 * time.Second,
-		MaxIdleTimeout:                 30 * time.Second,
-		Tracer:                         qlog.DefaultConnectionTracer,
-		InitialStreamReceiveWindow:     5 * 1024 * 1024,  // 5MB per stream
-		MaxStreamReceiveWindow:         20 * 1024 * 1024, // 20MB max per stream
-		InitialConnectionReceiveWindow: 10 * 1024 * 1024, // 10MB total
-		MaxConnectionReceiveWindow:     20 * 1024 * 1024, // 20MB total max
+		InitialPacketSize:                InitialPacketSize,
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		MaxIncomingStreams:               1000,
+		MaxIncomingUniStreams:            1000,
+		Allow0RTT:                        true,
+		KeepAlivePeriod:                  10 * time.Second,
+		MaxIdleTimeout:                   30 * time.Second,
+		Tracer:                           qlog.DefaultConnectionTracer,
+		InitialStreamReceiveWindow:       5 * 1024 * 1024,  // 5MB per stream
+		MaxStreamReceiveWindow:           20 * 1024 * 1024, // 20MB max per stream
+		InitialConnectionReceiveWindow:   10 * 1024 * 1024, // 10MB total
+		MaxConnectionReceiveWindow:       20 * 1024 * 1024, // 20MB total max
 	}
 }
-
-// closedPacketConn is a stub net.PacketConn that returns net.ErrClosed on all operations.
-// Used to trigger webtransport.Server initialization without actually serving connections.
-type closedPacketConn struct{}
-
-func (closedPacketConn) ReadFrom([]byte) (int, net.Addr, error) { return 0, nil, net.ErrClosed }
-func (closedPacketConn) WriteTo([]byte, net.Addr) (int, error)  { return 0, net.ErrClosed }
-func (closedPacketConn) Close() error                           { return nil }
-func (closedPacketConn) LocalAddr() net.Addr                    { return &net.UDPAddr{} }
-func (closedPacketConn) SetDeadline(time.Time) error            { return nil }
-func (closedPacketConn) SetReadDeadline(time.Time) error        { return nil }
-func (closedPacketConn) SetWriteDeadline(time.Time) error       { return nil }
 
 type StateCommon struct {
 	top context.Context
@@ -123,14 +112,15 @@ type State struct {
 
 	defaultEndpoint string
 
-	server    *Server
-	hs        *http3.Server
-	ws        *webtransport.Server
-	li        *countingListener
-	localHS   *http3.Server
-	localLI   *countingListener
-	localLn   net.Listener
-	localPath string
+	server     *Server
+	hs         *http3.Server
+	ws         *webtransport.Server
+	acceptDone chan struct{}
+	li         *countingListener
+	localHS    *http3.Server
+	localLI    *countingListener
+	localLn    net.Listener
+	localPath  string
 
 	httpSrv *http.Server
 	tcpLn   net.Listener
@@ -692,7 +682,7 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	}
 
 	s.ws = &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			Handler:         s.server,
 			EnableDatagrams: true,
 			QUICConfig:      &s.qc,
@@ -708,23 +698,52 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		},
 	}
 
-	s.hs = &s.ws.H3
+	s.hs = s.ws.H3
 	s.server.ws = s.ws
+	s.acceptDone = make(chan struct{})
 
 	go func() {
 		if s.contextOwnsShutdown(ctx) {
-			_ = s.hs.Shutdown(context.Background())
+			drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.drainWebTransport(drainCtx)
+			_ = s.ws.Close()
 		}
 	}()
 
-	// Trigger webtransport server initialization by calling Serve with a stub PacketConn.
-	// This sets up the stream hijackers on H3 without actually serving connections.
-	// The stub returns net.ErrClosed immediately, causing Serve to return after init.
-	_ = s.ws.Serve(closedPacketConn{})
-
-	go s.hs.ServeListener(s.li)
+	go func() {
+		defer close(s.acceptDone)
+		for {
+			conn, err := s.li.Accept(context.Background())
+			if err != nil {
+				if !errors.Is(err, quic.ErrServerClosed) {
+					s.log.Warn("QUIC listener stopped accepting connections", "error", err)
+				}
+				return
+			}
+			go func() {
+				if err := s.ws.ServeQUICConn(conn); err != nil {
+					s.log.Log(context.Background(), quicConnectionErrorLevel(err), "WebTransport connection ended", "error", err, "remote", conn.RemoteAddr())
+					_ = conn.CloseWithError(0, "")
+				}
+			}()
+		}
+	}()
 
 	return nil
+}
+
+func quicConnectionErrorLevel(err error) slog.Level {
+	if errors.Is(err, context.Canceled) || errors.Is(err, http.ErrServerClosed) || errors.Is(err, quic.ErrServerClosed) {
+		return slog.LevelDebug
+	}
+	if appErr, ok := errors.AsType[*quic.ApplicationError](err); ok && (appErr.ErrorCode == 0 || appErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeNoError)) {
+		return slog.LevelDebug
+	}
+	if _, ok := errors.AsType[*quic.IdleTimeoutError](err); ok {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
 }
 
 // Shutdown gracefully stops every network server owned by this State. Unlike
@@ -773,12 +792,8 @@ func (s *State) Shutdown(ctx context.Context) error {
 		})
 	}
 
-	// Both HTTP/3 surfaces drain against their own listener census rather than
-	// quic-go's internal count. See drainQUIC.
-	if s.hs != nil {
-		shutdown("HTTP/3", s.li, func(ctx context.Context) error {
-			return drainQUIC(ctx, s.hs.Shutdown, s.li)
-		})
+	if s.ws != nil {
+		shutdown("HTTP/3", s.li, s.drainWebTransport)
 	}
 	if s.localHS != nil {
 		shutdown("local HTTP/3", s.localLI, func(ctx context.Context) error {
@@ -796,6 +811,11 @@ func (s *State) Shutdown(ctx context.Context) error {
 	}
 
 	wg.Wait()
+	// Preserve live connections for timeout diagnostics before forcing them
+	// closed, and send CONNECTION_CLOSE before tearing down the UDP socket.
+	if s.ws != nil {
+		_ = s.ws.Close()
+	}
 	if s.li != nil {
 		_ = s.li.Close()
 	}
@@ -821,8 +841,8 @@ func (s *State) Close() error {
 	if s.li != nil {
 		_ = s.li.Close()
 	}
-	if s.hs != nil {
-		_ = s.hs.Close()
+	if s.ws != nil {
+		_ = s.ws.Close()
 	}
 
 	if s.localLI != nil {

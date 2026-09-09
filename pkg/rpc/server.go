@@ -475,6 +475,7 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET "+drainPath, s.handleDrain)
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
 	// CONNECT upgrades to WebTransport over HTTP/3. TCP clients use the message
 	// transport, which multiplexes every operation over one session and never
@@ -513,6 +514,10 @@ func (s *Server) mountHTTPHandlers(mounts []httpHandlerMount) error {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.state.top.Err() != nil && r.URL.Path != drainPath {
+		http.Error(w, "server draining", http.StatusServiceUnavailable)
+		return
+	}
 
 	// If no authenticator configured, allow all requests
 	if s.state.authenticator == nil {
@@ -640,6 +645,36 @@ type DebugAuthResponse struct {
 	UserInfo      map[string]string `json:"user_info,omitempty"`
 	Message       string            `json:"message,omitempty"`
 }
+
+func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
+	// This RPC endpoint has no method-level authorization to fall through to.
+	if _, noAuth := s.state.authenticator.(*NoOpAuthenticator); !noAuth && s.state.authenticator != nil {
+		identity := IdentityFromContext(r.Context())
+		if identity == nil || identity.Method == AuthMethodAnonymous {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+	}
+	w.Header().Set(drainVersionHeader, "1")
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return
+	}
+	// Bound handler lifetime even if a peer never cancels its request. EOF
+	// retires the client's pool; its next RPC establishes a fresh watch.
+	timer := time.NewTimer(drainWatchMaxAge)
+	defer timer.Stop()
+	select {
+	case <-s.state.top.Done():
+		_, _ = io.WriteString(w, "drain\n")
+	case <-r.Context().Done():
+	case <-timer.C:
+	}
+}
+
+const drainWatchMaxAge = 30 * time.Minute
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
