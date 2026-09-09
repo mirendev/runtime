@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.15.0
+*2026-09-09*
+
 **Breaking Changes**
 - **`post_import` is no longer a valid app.toml field** - It was still parsed and validated, but nothing in the runtime read it, and the docs stopped mentioning it a while back. Because unknown keys are a parse error, an `app.toml` that still carries a `post_import` line now fails validation rather than being ignored. Delete the line; if you need work to run on deploy, use a [deploy task](./tasks.md). ([#1091](https://github.com/mirendev/runtime/pull/1091))
 - **`miren app history` drops `--status` and `--hide-failed`** - Their mixed attempt/serving semantics interacted badly with `--limit`, so the results weren't reliable. Use `--all --format json` and filter downstream; the RPC-level filter stays for compatibility. ([#1111](https://github.com/mirendev/runtime/pull/1111))
