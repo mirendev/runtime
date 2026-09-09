@@ -122,6 +122,25 @@ func TestBuildSaga_Tracked_CreatesAndActivatesDeployment(t *testing.T) {
 	assert.Nil(t, blocking, "an activated deployment must not keep the lock")
 }
 
+func TestBuildSaga_PersistsInitiatingOrganizationWithoutActionIdentity(t *testing.T) {
+	h := newDeploySagaHarness(t)
+	h.streams.Register("stream-identity", makeTar(t, dockerfileTarball(t)))
+	requestCtx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{
+		Subject: "user-42", Method: rpc.AuthMethodJWT,
+		Metadata: map[string]any{"organization_id": "org-42"},
+	})
+	sb := &SagaBuilder{executor: h.executor}
+	// Actions run without the initiating RPC identity, as they do on recovery.
+	require.NoError(t, sb.startBuild(requestCtx, t.Context(), "test-identity", "demo", "stream-identity", nil, nil, nil))
+	records, err := h.builder.deploy.Store().List(t.Context(), deploylifecycle.Query{AppName: "demo"})
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	actor := records[0].Deployment.DeployedBy
+	require.Equal(t, "user-42", actor.Subject)
+	require.Equal(t, "jwt", actor.AuthMethod)
+	require.Equal(t, "org-42", actor.OrganizationId)
+}
+
 // A direct-image deploy has no build or push phase to report, but it must still
 // carry the server-owned deployment record through activation and release its
 // lock. This also exercises the production image branch with BuildKit absent.

@@ -92,11 +92,41 @@ func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
 		Subject: "user-42", Method: rpc.AuthMethodOIDC,
+		Metadata: map[string]any{"organization_id": "org-42"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
 	assert.Equal(t, "oidc", rec.Deployment.DeployedBy.AuthMethod)
+	assert.Equal(t, "org-42", rec.Deployment.DeployedBy.OrganizationId)
+	stored, err := tr.Store().Get(ctx, rec.Deployment.ID.String())
+	require.NoError(t, err)
+	assert.Equal(t, rec.Deployment.DeployedBy, stored.Deployment.DeployedBy)
+}
+
+func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
+		Subject: "recovery-worker", Method: rpc.AuthMethodSystem,
+		Metadata: map[string]any{"organization_id": "org-worker"},
+	})
+	rec, err := tr.Begin(ctx, BeginParams{
+		AppName: "web", Subject: "original-user", AuthMethod: "jwt",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "original-user", rec.Deployment.DeployedBy.Subject)
+	assert.Empty(t, rec.Deployment.DeployedBy.OrganizationId)
+}
+
+func TestBeginDoesNotCaptureAnonymousOrganization(t *testing.T) {
+	tr, _ := newTestTracker(t)
+	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
+		Method:   rpc.AuthMethodAnonymous,
+		Metadata: map[string]any{"organization_id": "org-untrusted"},
+	})
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "web"})
+	require.NoError(t, err)
+	assert.Empty(t, rec.Deployment.DeployedBy.OrganizationId)
 }
 
 func TestBeginPreservesCallerIdentityWithoutAuthenticatedOverride(t *testing.T) {

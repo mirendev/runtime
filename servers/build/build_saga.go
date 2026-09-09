@@ -748,6 +748,7 @@ type beginDeploymentIn struct {
 	GitInfo        string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
 	Subject        string `json:"deploy_subject,omitempty" saga:"deploy_subject,optional"`
 	AuthMethod     string `json:"deploy_auth_method,omitempty" saga:"deploy_auth_method,optional"`
+	OrganizationID string `json:"deploy_organization_id,omitempty" saga:"deploy_organization_id,optional"`
 	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 }
 
@@ -771,13 +772,14 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 	}
 
 	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
-		AppName:    in.AppName,
-		AppID:      entity.Id(in.AppID),
-		ClusterID:  in.ClusterID,
-		Operation:  deploylifecycle.OperationBuild,
-		GitInfo:    gitInfo,
-		Subject:    in.Subject,
-		AuthMethod: in.AuthMethod,
+		AppName:        in.AppName,
+		AppID:          entity.Id(in.AppID),
+		ClusterID:      in.ClusterID,
+		Operation:      deploylifecycle.OperationBuild,
+		GitInfo:        gitInfo,
+		Subject:        in.Subject,
+		AuthMethod:     in.AuthMethod,
+		OrganizationID: in.OrganizationID,
 	})
 	if err != nil {
 		return beginDeploymentOut{}, fmt.Errorf("begin deployment for %s: %w", in.AppName, err)
