@@ -1,13 +1,27 @@
+# Depot runs this workflow for pull requests and the merge queue. Keep its job
+# behavior aligned with .github/workflows/test.yml, which release.yml calls for
+# main and tag builds. Standard GitHub runner labels are mapped to their Depot
+# equivalents below.
+
 name: Test
 
 on:
-  # PR and merge-queue runs live in .depot/workflows/test.yml. Keep this copy
-  # callable so release.yml can test main and tags inside GitHub Actions.
-  workflow_call:
-    # Called by release.yml for main/tag builds. No inputs: a called workflow
-    # inherits the caller's github context, so a bare checkout already lands on
-    # the commit that triggered the release, and there is no ref for a caller to
-    # aim somewhere else.
+  pull_request:
+    # Explicit list because naming `types` replaces the default set. `labeled`
+    # is what lets the ci:distributed opt-in below take effect on an open PR;
+    # the other three are the defaults we'd otherwise lose.
+    #
+    # A label change restarts the whole workflow, which looks wasteful enough
+    # to want gating the other jobs on `github.event.action != 'labeled'`.
+    # Don't. The concurrency group above cancels the run in flight, and a
+    # required status check resolves to the newest run of that name. A run
+    # that skipped lint/build/test would therefore replace real results with
+    # skipped ones, and a skipped check is generally treated as satisfying a
+    # required check. That trades one spare CI run for a PR that can merge
+    # without having been tested. Labels land on roughly 1 PR in 60 here, so
+    # the waste is theoretical and the hazard is not.
+    types: [opened, synchronize, reopened, labeled]
+  merge_group:
 
 # Cancel in-progress runs when a new run is triggered on the same branch/PR.
 concurrency:
@@ -87,7 +101,7 @@ jobs:
   # run on every PR but too important to leave to someone remembering a label.
   # Only consulted for pull_request; other events don't gate on it at all.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     outputs:
       distributed: ${{ steps.filter.outputs.distributed }}
     steps:
@@ -128,7 +142,7 @@ jobs:
         fi
 
   test-groups:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -229,7 +243,7 @@ jobs:
       run: docker save runtime-shell -o /tmp/iso-image.tar
 
   blackbox-groups:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -248,9 +262,9 @@ jobs:
         # Tests already assigned to a shard in the checked-in manifest.
         GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups.json | sort -u)
 
-        # Cloud-backed tests need the cloud repo, while distributed tests need
-        # the peers topology. Neither belongs in the standalone shards.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister|TestDistributed.*' || true)
+        # The cloud-backed tests run in their own job (test-blackbox-pop):
+        # they need the cloud repo and restart the server. Never shard them.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups.json)
 
@@ -328,13 +342,14 @@ jobs:
 
     - name: Run blackbox tests (shard ${{ matrix.group.shard }})
       # Each shard runs only its assigned subset, built into a -run regex from
-      # the matrix. Cloud-backed tests need a cloud checkout and their server
-      # restart interferes with subsequent deploys; -skip guards against one
-      # ever slipping into a shard. Per-shard runtime is ~5 min, so 10m
-      # restores fast failure on a genuine hang.
+      # the matrix. The cloud-backed tests run in their own job
+      # (test-blackbox-pop) because their server restart interferes with
+      # subsequent deploys; -skip guards against one ever slipping into a
+      # shard. Per-shard runtime is ~3 min, so 10m restores fast failure on a
+      # genuine hang.
       run: |
         RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
-        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$' ./blackbox/...
+        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken)$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
@@ -442,11 +457,6 @@ jobs:
         BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
       run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerEnrollWithToken$' ./blackbox/...
 
-    - name: Run server-unregister blackbox tests
-      env:
-        BLACKBOX_CLOUD_REPO: ${{ github.workspace }}/cloud
-      run: go test -tags blackbox -timeout 15m -v -count=1 -p 1 -run '^TestServerUnregister$' ./blackbox/...
-
     - name: Server logs on failure
       if: failure()
       run: |
@@ -469,26 +479,22 @@ jobs:
     # The distributed suite exercises the multi-node topology (a coordinator plus
     # a separate runner peer) with distributedrunners enabled. Setup is heavy
     # (iso peers, a binary build, the join dance) and it's the only place a
-    # second node exists, so a bug there is invisible until it's already on main
-    # blocking a release (exactly how MIR-1469 got in). It therefore runs on
-    # main/release builds rather than every PR push: release.yml (push to main
-    # and tags) calls this workflow via workflow_call, where github.event_name is
-    # the caller's event ('push'), so excluding 'pull_request' runs it there
-    # while skipping PRs. It would also run in a merge queue ('merge_group'). On
-    # a PR it runs when the diff touches code that can break the topology, or
-    # when someone labels the PR `ci:distributed`.
+    # second node exists, so a bug there can otherwise reach the merge queue
+    # unnoticed (exactly how MIR-1469 got in). It runs for every merge-group
+    # candidate. On a PR it runs when the diff touches code that can break the
+    # topology, or when someone labels the PR `ci:distributed`.
     #
     # `!cancelled()` rather than a plain condition keeps the non-PR clause
     # authoritative even if the `changes` job fails — a failed dependency would
-    # otherwise skip this on main and tags, quietly dropping the release coverage
-    # this whole gate exists to protect.
+    # otherwise skip this in the merge queue, quietly dropping the coverage this
+    # whole gate exists to protect.
     needs: [changes]
     if: >-
       !cancelled() && (
       github.event_name != 'pull_request' ||
       needs.changes.outputs.distributed == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -507,9 +513,9 @@ jobs:
         # Tests already assigned to a shard in the checked-in manifest.
         GROUPED=$(jq -r '.groups[].tests[]' hack/blackbox-groups-distributed.json | sort -u)
 
-        # Cloud-backed tests need the cloud repo and never belong in these
-        # peers-topology shards.
-        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister' || true)
+        # The cloud-backed tests run in their own job (test-blackbox-pop): they
+        # need the cloud repo and restart the server. Never shard them.
+        UNGROUPED=$(comm -23 <(echo "$ALL_TESTS") <(echo "$GROUPED") | grep -vxE 'TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken' || true)
 
         MATRIX=$(jq -c '.groups' hack/blackbox-groups-distributed.json)
 
@@ -621,7 +627,7 @@ jobs:
   test:
     if: always()
     needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, blackbox-groups-distributed, test-blackbox-distributed]
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-latest
     steps:
     - name: Check results
       run: |
@@ -665,15 +671,13 @@ jobs:
         if [[ "${{ needs.blackbox-groups-distributed.result }}" != "success" && "${{ needs.blackbox-groups-distributed.result }}" != "skipped" ]]; then
           exit 1
         fi
-        # Distributed suite is skipped on PRs (merge-queue / main only), so
-        # skipped is acceptable here; a real run (every shard) must pass.
+        # Distributed suite is skipped on ordinary PRs, so skipped is acceptable
+        # here; a scheduled PR or merge-queue run (every shard) must pass.
         if [[ "${{ needs.test-blackbox-distributed.result }}" != "success" && "${{ needs.test-blackbox-distributed.result }}" != "skipped" ]]; then
           exit 1
         fi
 
   build:
-    # Skip when called from release.yml - it has its own build jobs with signing
-    if: github.event_name != 'workflow_call'
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
