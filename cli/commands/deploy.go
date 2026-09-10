@@ -88,8 +88,8 @@ func Deploy(ctx *Context, opts struct {
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"` //nolint
 	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
-	Env           []string `short:"e" long:"env" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
-	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
+	Env           []string `short:"e" long:"env" split:"false" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
+	Sensitive     []string `short:"s" long:"sensitive" split:"false" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`

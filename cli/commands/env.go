@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -196,22 +197,27 @@ func parseEnvVarSpec(spec string, sensitive bool) (EnvVarSpec, error) {
 
 func EnvSet(ctx *Context, opts struct {
 	AppCentric
+	Args      []string `rest:"true" usage:"KEY=VALUE pairs to set, the same as passing each with -e"`
 	Service   string   `short:"S" long:"service" description:"Set env var for specific service only (if not specified, sets for all services)"`
-	Env       []string `short:"e" long:"env" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
-	Sensitive []string `short:"s" long:"sensitive" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
+	Env       []string `short:"e" long:"env" split:"false" description:"Set environment variables (use KEY to prompt, KEY=VALUE to set directly, KEY=@file to read from file)"`
+	Sensitive []string `short:"s" long:"sensitive" split:"false" description:"Set sensitive environment variables (use KEY to prompt with masking, KEY=VALUE to set directly, KEY=@file to read from file)"`
 	Backend   string   `short:"b" long:"backend" description:"Source the value from a secret backend instead of setting it literally (default: cluster, with --ref)"`
 	Ref       string   `long:"ref" description:"Backend-relative reference to the secret, e.g. payments/stripe-key"`
 }) error {
+	// Bare KEY=VALUE arguments count as plain -e entries.
+	env := slices.Concat(opts.Env, opts.Args)
+	sensitive := opts.Sensitive
+
 	if opts.Ref != "" || opts.Backend != "" {
-		return envSetReference(ctx, opts.App, opts.Service, opts.Env, opts.Sensitive, opts.Backend, opts.Ref)
+		return envSetReference(ctx, opts.App, opts.Service, env, sensitive, opts.Backend, opts.Ref)
 	}
 
-	if len(opts.Env) == 0 && len(opts.Sensitive) == 0 {
+	if len(env) == 0 && len(sensitive) == 0 {
 		return fmt.Errorf("no environment variables specified")
 	}
 
 	// Parse all env var specs
-	specs, err := ParseEnvVarSpecs(opts.Env, opts.Sensitive)
+	specs, err := ParseEnvVarSpecs(env, sensitive)
 	if err != nil {
 		return err
 	}
