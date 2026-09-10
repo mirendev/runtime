@@ -75,6 +75,38 @@ func TestDeployScriptableOutput(t *testing.T) {
 		}
 	})
 
+	t.Run("jsonl streams events and nothing else", func(t *testing.T) {
+		r := m.MustRun("deploy", "-a", name, "-d", containerDir, "--format", "jsonl")
+
+		if strings.TrimSpace(r.Stderr) != "" {
+			t.Errorf("jsonl mode must write nothing to stderr, got:\n%s", r.Stderr)
+		}
+
+		lines := strings.Split(strings.TrimRight(r.Stdout, "\n"), "\n")
+		seen := map[string]int{}
+		var last map[string]any
+		for i, line := range lines {
+			var ev map[string]any
+			if err := json.Unmarshal([]byte(line), &ev); err != nil {
+				t.Fatalf("stdout line %d is not JSON: %v\n%s", i+1, err, line)
+			}
+			name, _ := ev["event"].(string)
+			seen[name]++
+			last = ev
+		}
+		if first, _ := lines[0], seen["start"]; !strings.HasPrefix(first, `{"event":"start"`) {
+			t.Errorf("first line must be the start event, got %s", first)
+		}
+		for _, want := range []string{"upload_complete", "build_step", "build_complete", "deployment", "health", "result"} {
+			if seen[want] == 0 {
+				t.Errorf("no %q event in stream:\n%s", want, r.Stdout)
+			}
+		}
+		if last["event"] != "result" || last["status"] != "success" || last["app_version"] == "" {
+			t.Errorf("last line must be a successful result, got %v", last)
+		}
+	})
+
 	t.Run("quiet keeps summaries and drops progress", func(t *testing.T) {
 		r := m.MustRun("deploy", "-a", name, "-d", containerDir, "-f", "-q")
 

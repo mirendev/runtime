@@ -138,11 +138,26 @@ func decideActivation(snap healthSnapshot) activationDecision {
 // app-status is unreachable we skip the wait rather than fail the deploy: the
 // version is already recorded server-side and we simply can't confirm health.
 func awaitHealthy(ctx *Context, appName, versionID, versionDisplay string) error {
+	return awaitHealthyObserved(ctx, appName, versionID, versionDisplay, nil)
+}
+
+// healthObserver receives the health wait's findings as structured calls, for
+// callers that report in a machine-readable form instead of (or as well as)
+// the printed lines. Every method may be called from the waiting goroutine.
+type healthObserver interface {
+	healthWaiting(version string)
+	healthVerdict(version, text string, ok bool, elapsed time.Duration)
+	healthPortWarning(port int, address string)
+	healthAppLog(line string)
+}
+
+// awaitHealthyObserved is awaitHealthy with an optional observer.
+func awaitHealthyObserved(ctx *Context, appName, versionID, versionDisplay string, obs healthObserver) error {
 	getter, tailer, ok := healthClients(ctx)
 	if !ok {
 		return nil
 	}
-	return waitForActivation(ctx, getter, tailer, appName, versionID, versionDisplay)
+	return waitForActivationObserved(ctx, getter, tailer, appName, versionID, versionDisplay, obs)
 }
 
 // healthClients wires up the app-status and logs clients. ok is false when
@@ -245,11 +260,28 @@ func healthOutcomeText(versionDisplay string, outcome terminalOutcome, snap heal
 // error (or nil) the deploy should propagate. The ✓/✗ verdict line itself is
 // printed by the caller (plain path) or rendered by the TUI.
 func reportHealthResult(ctx *Context, tailer logTailer, appName string, snap healthSnapshot, versionDisplay string, ok bool) error {
+	return reportHealthResultObserved(ctx, tailer, appName, snap, versionDisplay, ok, nil)
+}
+
+func reportHealthResultObserved(ctx *Context, tailer logTailer, appName string, snap healthSnapshot, versionDisplay string, ok bool, obs healthObserver) error {
 	reportBoundPortDivergence(ctx, snap)
+	if obs != nil {
+		for _, bp := range snap.boundPorts {
+			if bp != nil && bp.Port() != 0 {
+				obs.healthPortWarning(int(bp.Port()), bp.Address())
+			}
+		}
+	}
 	if ok {
 		return nil
 	}
-	printRecentLogs(ctx, tailer, appName)
+	lines := recentAppLogs(ctx, tailer, appName)
+	printRecentLogs(ctx, lines)
+	if obs != nil {
+		for _, line := range lines {
+			obs.healthAppLog(line)
+		}
+	}
 	return fmt.Errorf("version %s did not become healthy", versionDisplay)
 }
 
@@ -260,10 +292,19 @@ func reportHealthResult(ctx *Context, tailer logTailer, appName string, snap hea
 // (rollback, env, --version, and any non-TTY deploy); the interactive build
 // deploy drives health through its TUI instead (see awaitHealthyInProgram).
 func waitForActivation(ctx *Context, getter appInfoGetter, tailer logTailer, appName, versionID, versionDisplay string) error {
+	return waitForActivationObserved(ctx, getter, tailer, appName, versionID, versionDisplay, nil)
+}
+
+// waitForActivationObserved is waitForActivation with an optional observer that
+// hears the same waiting/verdict/log facts the printed lines carry.
+func waitForActivationObserved(ctx *Context, getter appInfoGetter, tailer logTailer, appName, versionID, versionDisplay string, obs healthObserver) error {
 	if versionDisplay == "" {
 		versionDisplay = versionID
 	}
 
+	if obs != nil {
+		obs.healthWaiting(versionID)
+	}
 	start := time.Now()
 	outcome, snap := pollUntilTerminal(ctx, getter, appName, versionID, versionDisplay)
 	elapsed := time.Since(start)
@@ -274,7 +315,10 @@ func waitForActivation(ctx *Context, getter appInfoGetter, tailer logTailer, app
 
 	text, ok := healthOutcomeText(versionDisplay, outcome, snap)
 	ctx.Printf("%s\n", healthSummaryLine(ok, text, elapsed))
-	return reportHealthResult(ctx, tailer, appName, snap, versionDisplay, ok)
+	if obs != nil {
+		obs.healthVerdict(versionID, text, ok, elapsed)
+	}
+	return reportHealthResultObserved(ctx, tailer, appName, snap, versionDisplay, ok, obs)
 }
 
 // pollUntilTerminal runs the poll loop until the version reaches a terminal
@@ -567,12 +611,23 @@ func reportBoundPortDivergence(ctx *Context, snap healthSnapshot) {
 	}
 }
 
-// printRecentLogs tails recent application logs (best effort) so a failed
-// deploy shows *why* instead of a bare timeout. Any error is swallowed — we're
-// already on the failure path and logs are supplementary.
-func printRecentLogs(ctx *Context, tailer logTailer, appName string) {
-	if tailer == nil {
+// printRecentLogs shows the app's recent log lines so a failed deploy shows
+// *why* instead of a bare timeout.
+func printRecentLogs(ctx *Context, lines []string) {
+	if len(lines) == 0 {
 		return
+	}
+	ctx.Printf("\nRecent logs:\n")
+	for _, line := range lines {
+		ctx.Printf("  %s\n", line)
+	}
+}
+
+// recentAppLogs tails recent application logs (best effort). Any error yields
+// nothing — this only runs on the failure path and logs are supplementary.
+func recentAppLogs(ctx *Context, tailer logTailer, appName string) []string {
+	if tailer == nil {
+		return nil
 	}
 
 	const tailLines = 20
@@ -582,7 +637,7 @@ func printRecentLogs(ctx *Context, tailer logTailer, appName string) {
 
 	logs, err := tailer.RecentLogs(logCtx, appName)
 	if err != nil {
-		return
+		return nil
 	}
 
 	// Keep the app's own runtime output and drop build/infra chatter: a just-built
@@ -596,18 +651,10 @@ func printRecentLogs(ctx *Context, tailer logTailer, appName string) {
 		}
 		lines = append(lines, strings.TrimRight(l.Line(), "\n"))
 	}
-	if len(lines) == 0 {
-		return
-	}
-
 	if len(lines) > tailLines {
 		lines = lines[len(lines)-tailLines:]
 	}
-
-	ctx.Printf("\nRecent logs:\n")
-	for _, line := range lines {
-		ctx.Printf("  %s\n", line)
-	}
+	return lines
 }
 
 // nonAppLogSources are log sources that don't reflect the running app: build
