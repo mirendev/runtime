@@ -22,6 +22,7 @@ miren debug [flags]
 - [`miren debug colors`](./debug-colors.md) — Print some colors
 - [`miren debug connection`](./debug-connection.md) — Test connectivity and authentication with a server
 - [`miren debug ctr`](./debug-ctr.md) — Run ctr with miren defaults
+- [`miren debug deploy-events`](./debug-deploy-events.md) — Render a 'miren deploy --format jsonl' stream as readable output
 - [`miren debug disk`](./debug-disk.md) — Disk entity debug commands
 - [`miren debug entity`](./debug-entity.md) — Entity store debug commands
 - [`miren debug etcdctl`](./debug-etcdctl.md) — Run etcdctl against Miren's embedded etcd

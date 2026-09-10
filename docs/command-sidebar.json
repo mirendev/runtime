@@ -123,6 +123,7 @@
       "command/debug-connection",
       "command/debug-ctr",
       "command/debug-ctr-nuke",
+      "command/debug-deploy-events",
       "command/debug-disk",
       "command/debug-disk-create",
       "command/debug-disk-delete",

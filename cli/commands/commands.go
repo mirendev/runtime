@@ -1296,6 +1296,21 @@ Warning: These commands are intended for advanced users and developers. They may
 		}),
 	))
 	d.Dispatch("debug colors", Infer("debug colors", "Print some colors", Colors))
+	d.Dispatch("debug deploy-events", Infer("debug deploy-events", "Render a 'miren deploy --format jsonl' stream as readable output", DebugDeployEvents,
+		WithDescription(debugDeployEventsDescription),
+		WithExample(mflags.Example{
+			Name: "Read a captured deploy",
+			Body: "miren debug deploy-events deploy.jsonl",
+		}),
+		WithExample(mflags.Example{
+			Name: "With elapsed times and build output",
+			Body: "miren debug deploy-events -t --build-logs deploy.jsonl",
+		}),
+		WithExample(mflags.Example{
+			Name: "Watch a deploy live",
+			Body: "miren deploy --format jsonl | tee deploy.jsonl | miren debug deploy-events",
+		}),
+	))
 	d.Dispatch("debug bundle", Infer("debug bundle", "Create a support bundle with system debug information", DebugBundle))
 	d.Dispatch("debug cloud-sync", Infer("debug cloud-sync", "Show runtime entity sync diagnostics", DebugCloudSync))
 
@@ -1397,6 +1412,10 @@ Use ` + "`" + `--format jsonl` + "`" + ` to follow the deploy as it happens. Not
 :::note[Config changes deploy on their own]
 Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deploy` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
 :::`
+
+const debugDeployEventsDescription = `A deploy run with ` + "`" + `--format jsonl` + "`" + ` writes one JSON object per line and nothing a person would want to read. This command turns that stream back into the output the deploy would have printed: the phase summaries, build steps, health verdict, routes, and final status. Point it at a saved file, or pipe a live deploy through it.
+
+Build step log lines are hidden unless ` + "`" + `--build-logs` + "`" + ` is set; ` + "`" + `--timestamps` + "`" + ` prefixes every line with the time since the first event, which is the quickest way to see where a slow deploy spent its time. Lines that are not JSON (stderr text mixed into the same file, say) are shown as they are.`
 
 const rollbackDescription = `Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
