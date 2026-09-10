@@ -21,7 +21,7 @@ image to keep up to date.
 ` + "```" + `bash
 miren disk accelerator status          # can this host run it?
 miren disk accelerator install runner1  # build and load it there
-sudo systemctl restart miren           # pick up the new mode
+sudo systemctl restart miren           # on that node, to pick up the mode
 ` + "```" + `
 
 ## Requirements

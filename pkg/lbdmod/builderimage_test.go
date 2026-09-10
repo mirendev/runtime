@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -99,4 +100,30 @@ func TestMaterializeBuilderIsRepeatable(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, BuilderDockerfile))
 	require.NoError(t, err)
 	assert.NotEqual(t, "clobbered", string(data))
+}
+
+func TestIsBuilderImageRejectsForeignReferences(t *testing.T) {
+	// This gates what a node will pull, run, and load into its kernel, so it
+	// has to reject anything outside the cluster's own toolchain repository.
+	for _, ref := range []string{
+		"docker.io/library/ubuntu:24.04",
+		"evil.example.com/miren-system/lbd-builder:v1",
+		"cluster.local:5000/someapp:latest",
+		// A prefix match on the host alone is not enough.
+		"cluster.local:5000/miren-system/lbd-builder-evil:v1",
+		// No tag at all.
+		"cluster.local:5000/" + BuilderRepository,
+		"cluster.local:5000/" + BuilderRepository + ":",
+		"",
+	} {
+		assert.False(t, IsBuilderImage(ref), "should have rejected %q", ref)
+	}
+}
+
+func TestIsBuilderImageAcceptsOurOwn(t *testing.T) {
+	assert.True(t, IsBuilderImage(BuilderImage(ocireg.Host)))
+
+	// A coordinator on a newer miren carries a different content hash, and
+	// asking a node to build with it is legitimate.
+	assert.True(t, IsBuilderImage(ocireg.Host+"/"+BuilderRepository+":miren-system-lbd-builder-0000000000000000"))
 }
