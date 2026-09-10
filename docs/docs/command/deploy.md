@@ -16,6 +16,17 @@ miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ```
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with `miren app history`.
 
+## Scripting and CI
+
+When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:
+
+```
+✓ Deploy successful
+Version: myapp-vCVkjR6u7744AsMebwMjGU
+```
+
+Use `--format json` to get the result as a single JSON document on stdout (`status`, `app_version`, `deploy_id`, `urls`); progress text moves to stderr, no prompts are shown, and the document is still written when the deploy fails, with `status` set to `failed` and an `error` field. Add `--quiet` to drop upload and build progress and keep only the phase summaries and the result.
+
 :::note[Config changes deploy on their own]
 Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deploy` when your code or `app.toml` has changed.
 :::
@@ -32,8 +43,11 @@ miren deploy [flags]
 - `--env, -e` — Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)
 - `--ephemeral` — Deploy as ephemeral preview with this label (e.g. feat-login)
 - `--explain, -x` — Explain the build process
-- `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`)
+- `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`, `quiet`)
 - `--force, -f` — Skip confirmation prompt
+- `--format` — Output format (text, json) (default: `text`)
+- `--json` — Shorthand for --format json
+- `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
 - `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
 - `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
@@ -82,6 +96,15 @@ miren deploy -e DATABASE_URL=postgres://localhost/mydb
 
 ```bash
 miren deploy --version v3
+```
+
+**Deploy from a script or CI:**
+
+```bash
+Progress goes to stderr; stdout carries one JSON document
+with the status, version, and URLs:
+
+miren deploy --format json | jq -r .app_version
 ```
 
 ## Subcommands

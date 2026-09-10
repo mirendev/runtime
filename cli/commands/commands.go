@@ -110,6 +110,14 @@ miren deploy --analyze
 			Name: "Deploy an existing version",
 			Body: "miren deploy --version v3",
 		}),
+		WithExample(mflags.Example{
+			Name: "Deploy from a script or CI",
+			Body: `Progress goes to stderr; stdout carries one JSON document
+with the status, version, and URLs:
+
+miren deploy --format json | jq -r .app_version
+`,
+		}),
 	))
 	d.Dispatch("deploy cancel", Infer("deploy cancel", "Cancel an in-progress deployment", DeployCancel,
 		WithExample(mflags.Example{
@@ -1365,6 +1373,17 @@ To activate an existing version without selecting or building another image, pas
 miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+
+## Scripting and CI
+
+When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:
+
+` + "```" + `
+✓ Deploy successful
+Version: myapp-vCVkjR6u7744AsMebwMjGU
+` + "```" + `
+
+Use ` + "`" + `--format json` + "`" + ` to get the result as a single JSON document on stdout (` + "`" + `status` + "`" + `, ` + "`" + `app_version` + "`" + `, ` + "`" + `deploy_id` + "`" + `, ` + "`" + `urls` + "`" + `); progress text moves to stderr, no prompts are shown, and the document is still written when the deploy fails, with ` + "`" + `status` + "`" + ` set to ` + "`" + `failed` + "`" + ` and an ` + "`" + `error` + "`" + ` field. Add ` + "`" + `--quiet` + "`" + ` to drop upload and build progress and keep only the phase summaries and the result.
 
 :::note[Config changes deploy on their own]
 Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deploy` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.

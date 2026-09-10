@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/cond"
 )
 
 // fakeAccessInfo implements accessInfoLike so deployURLs can be exercised
@@ -98,7 +102,14 @@ func TestDeployURLs(t *testing.T) {
 func TestWriteDeploySummary(t *testing.T) {
 	t.Run("stable deploy writes all fields", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "summary.json")
-		writeDeploySummary(summaryTestCtx(), path, "dpl_abc", "ver_123", []string{"https://a.example.com", "https://b.example.com"})
+		writeDeploySummary(summaryTestCtx(), path, &deploySummary{
+			Status:     "success",
+			App:        "meet",
+			Cluster:    "prod",
+			DeployID:   "dpl_abc",
+			AppVersion: "ver_123",
+			URLs:       []string{"https://a.example.com", "https://b.example.com"},
+		})
 
 		var got deploySummary
 		data, err := os.ReadFile(path)
@@ -109,6 +120,9 @@ func TestWriteDeploySummary(t *testing.T) {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
 		want := deploySummary{
+			Status:     "success",
+			App:        "meet",
+			Cluster:    "prod",
 			DeployID:   "dpl_abc",
 			AppVersion: "ver_123",
 			URLs:       []string{"https://a.example.com", "https://b.example.com"},
@@ -120,7 +134,7 @@ func TestWriteDeploySummary(t *testing.T) {
 
 	t.Run("no urls still emits a stable schema", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "summary.json")
-		writeDeploySummary(summaryTestCtx(), path, "dpl_x", "ver_x", nil)
+		writeDeploySummary(summaryTestCtx(), path, &deploySummary{DeployID: "dpl_x", AppVersion: "ver_x"})
 
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -141,7 +155,7 @@ func TestWriteDeploySummary(t *testing.T) {
 
 	t.Run("ephemeral deploy leaves deploy_id empty", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "summary.json")
-		writeDeploySummary(summaryTestCtx(), path, "", "ver_eph", []string{"https://pr-1.cl.miren.systems"})
+		writeDeploySummary(summaryTestCtx(), path, &deploySummary{AppVersion: "ver_eph", URLs: []string{"https://pr-1.cl.miren.systems"}})
 
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -176,9 +190,115 @@ func TestWriteDeploySummary(t *testing.T) {
 			Context: context.Background(),
 			Log:     slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		}
-		writeDeploySummary(ctx, "", "dpl_x", "ver_x", []string{"https://x.example.com"})
+		writeDeploySummary(ctx, "", &deploySummary{DeployID: "dpl_x", AppVersion: "ver_x", URLs: []string{"https://x.example.com"}})
 		if logs.Len() != 0 {
 			t.Fatalf("expected no log output for empty path, got: %s", logs.String())
 		}
 	})
+}
+
+func TestDeploySummaryFinalize(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		s := &deploySummary{AppVersion: "v1"}
+		s.finalize(nil)
+		if s.Status != "success" || s.Error != "" || s.URLs == nil {
+			t.Fatalf("finalize(nil) = %+v", s)
+		}
+	})
+
+	t.Run("failure carries the error", func(t *testing.T) {
+		s := &deploySummary{}
+		s.finalize(errors.New("version v1 did not become healthy"))
+		if s.Status != "failed" || s.Error != "version v1 did not become healthy" {
+			t.Fatalf("finalize(err) = %+v", s)
+		}
+	})
+
+	t.Run("local cancellation is cancelled not failed", func(t *testing.T) {
+		s := &deploySummary{}
+		s.finalize(fmt.Errorf("upload: %w", context.Canceled))
+		if s.Status != "cancelled" {
+			t.Fatalf("status = %q, want cancelled", s.Status)
+		}
+	})
+
+	t.Run("remote cancellation is cancelled not failed", func(t *testing.T) {
+		s := &deploySummary{}
+		s.finalize(cond.ErrRemote{Category: "deployment", Code: "cancelled", Message: "cancelled by operator"})
+		if s.Status != "cancelled" {
+			t.Fatalf("status = %q, want cancelled", s.Status)
+		}
+	})
+}
+
+func TestDeploySummaryJSONShape(t *testing.T) {
+	// Fields that are only meaningful sometimes (ephemeral, error) must vanish
+	// from the document rather than appear as empty values, and the original
+	// --summary-json keys must keep their names.
+	s := &deploySummary{App: "meet", Cluster: "prod", DeployID: "dpl_1", AppVersion: "meet-v1"}
+	s.finalize(nil)
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"status", "app", "cluster", "deploy_id", "app_version", "urls"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("missing key %q in %s", key, data)
+		}
+	}
+	for _, key := range []string{"ephemeral", "error"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("unexpected key %q in %s", key, data)
+		}
+	}
+
+	s.setEphemeral("pr-1", "24h")
+	data, _ = json.Marshal(s)
+	if !strings.Contains(string(data), `"ephemeral":{"label":"pr-1","ttl":"24h"}`) {
+		t.Errorf("ephemeral block missing from %s", data)
+	}
+	s.setEphemeral("", "")
+	if s.Ephemeral != nil {
+		t.Error("setEphemeral with an empty label must clear the block")
+	}
+}
+
+// TestDeploy_JSONReportsFailureOnStdout drives Deploy through its earliest
+// failure (no client configuration) and checks the contract that matters to a
+// script: stdout is exactly one JSON document, even on failure, and the human
+// commentary is kept off it.
+func TestDeploy_JSONReportsFailureOnStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{FormatOptions: FormatOptions{JSON: true}}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	if err == nil {
+		t.Fatal("expected an error without client configuration")
+	}
+
+	var got deploySummary
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &got); jsonErr != nil {
+		t.Fatalf("stdout has to be the result document and nothing else: %v\n%s", jsonErr, stdout.String())
+	}
+	if got.Status != "failed" || got.App != "meet" || got.Error != err.Error() {
+		t.Fatalf("document = %+v, want failed status for app meet with error %q", got, err)
+	}
+	if got.URLs == nil {
+		t.Fatal("urls must be [] not null")
+	}
+	// Redirection must have been undone so later output goes to stdout again.
+	if ctx.Stdout != &stdout {
+		t.Fatal("ctx.Stdout was not restored after the deploy")
+	}
 }

@@ -80,20 +80,59 @@ func reconcileDeploymentCancellation(
 	}
 }
 
-func Deploy(ctx *Context, opts struct {
+type deployOpts struct {
 	AppCentric
+	FormatOptions
 
 	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
 	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
-	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" default:"auto"` //nolint
+	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" choice:"quiet" default:"auto"` //nolint
+	Quiet         bool     `short:"q" long:"quiet" description:"Suppress upload and build progress; print only phase summaries and the result"`
 	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
 	Env           []string `short:"e" long:"env" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
 	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
-}) error {
+}
+
+// Deploy runs the deploy and, when asked for JSON, reports the result as one
+// document on stdout. Everything the deploy says while running still goes to
+// stderr in that mode, so `miren deploy --format json | jq` sees only the
+// document, and it is emitted on failure too (with a non-zero exit) so a script
+// gets one shape to parse either way.
+func Deploy(ctx *Context, opts deployOpts) error {
+	if opts.IsJSON() && opts.Analyze {
+		return fmt.Errorf("--format json is not supported with --analyze")
+	}
+
+	result := &deploySummary{App: opts.App, Cluster: ctx.ClusterName}
+	stdout := ctx.Stdout
+	if opts.IsJSON() {
+		// A JSON consumer cannot answer a prompt, so behave as --force.
+		opts.Force = true
+		defer ctx.ProgressToStderr()()
+	}
+
+	err := runDeploy(ctx, opts, result)
+	result.finalize(err)
+
+	if opts.IsJSON() {
+		if jsonErr := PrintJSONTo(stdout, result); jsonErr != nil && err == nil {
+			return jsonErr
+		}
+	}
+	if err == nil {
+		writeDeploySummary(ctx, opts.SummaryJSON, result)
+	}
+	return err
+}
+
+// runDeploy is the deploy proper. It fills summary in as facts become known
+// (the version once built, the deployment ID once recorded, the URLs once the
+// app is routable) so the caller can report a partial result on failure.
+func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary) error {
 	name := opts.App
 	dir := opts.ResolvedDir()
 
@@ -116,7 +155,9 @@ func Deploy(ctx *Context, opts struct {
 		return fmt.Errorf("no client configuration available; run `miren login` to authenticate or install a server locally")
 	}
 
-	isInteractive := term.IsTerminal(int(os.Stdin.Fd()))
+	// JSON mode is by definition driven by a program, even if stdin happens to
+	// be a terminal, so never prompt there.
+	isInteractive := term.IsTerminal(int(os.Stdin.Fd())) && !opts.IsJSON()
 
 	// Check that we have at least one cluster configured
 	// Check if we have an identity - if so, offer to add a cluster
@@ -236,6 +277,14 @@ func Deploy(ctx *Context, opts struct {
 			}
 			versionDisplay := ui.DisplayShortID(dep.AppVersionShortId(), deployedVersion)
 
+			// dep.Id() is empty for ephemeral deploys (no deployment record).
+			summary.DeployID = dep.Id()
+			summary.AppVersion = deployedVersion
+			summary.setEphemeral(ephemeralLabel, ephemeralTTL)
+			if result.HasAccessInfo() && result.AccessInfo() != nil {
+				summary.URLs = deployURLs(ctx, result.AccessInfo(), ephemeralLabel)
+			}
+
 			if ephemeralLabel != "" {
 				// Ephemeral deploy via --version: show ephemeral info, skip activation wait
 				ctx.Printf("Ephemeral version %s created.\n", versionDisplay)
@@ -256,6 +305,7 @@ func Deploy(ctx *Context, opts struct {
 				ctx.Printf("Deploying version %s to %s\n", versionDisplay, ctx.ClusterName)
 
 				if err := awaitHealthy(ctx, name, deployedVersion, versionDisplay); err != nil {
+					printDeployOutcome(ctx, false, deployedVersion)
 					return err
 				}
 
@@ -263,13 +313,7 @@ func Deploy(ctx *Context, opts struct {
 					displayDeployVersionAccessInfo(ctx, name, result.AccessInfo())
 				}
 			}
-
-			// dep.Id() is empty for ephemeral deploys (no deployment record).
-			var summaryURLs []string
-			if result.HasAccessInfo() && result.AccessInfo() != nil {
-				summaryURLs = deployURLs(ctx, result.AccessInfo(), ephemeralLabel)
-			}
-			writeDeploySummary(ctx, opts.SummaryJSON, dep.Id(), deployedVersion, summaryURLs)
+			printDeployOutcome(ctx, true, deployedVersion)
 		}
 		return nil
 	}
@@ -807,9 +851,10 @@ func Deploy(ctx *Context, opts struct {
 		results buildResults
 	)
 
-	// Detect if we have a TTY - if not, force explain mode
+	// Detect if we have a TTY - if not, force explain mode. JSON mode forces it
+	// too: the build TUI renders on stdout, which the document owns.
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	useExplainMode := opts.Explain || !isTTY
+	useExplainMode := opts.Explain || !isTTY || opts.IsJSON() || opts.Quiet
 
 	// When we render the interactive build TUI, the program stays alive past the
 	// build so the activate + health steps render as part of the same process.
@@ -837,7 +882,11 @@ func Deploy(ctx *Context, opts struct {
 		}
 
 		// In explain mode, write to stderr
-		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, opts.ExplainFormat)
+		progressMode := explainProgressMode(opts.ExplainFormat, isTTY, os.LookupEnv)
+		if opts.Quiet {
+			progressMode = "quiet"
+		}
+		pw, err := progresswriter.NewPrinter(ctx, os.Stderr, progressMode)
 		if err != nil {
 			return err
 		}
@@ -848,22 +897,16 @@ func Deploy(ctx *Context, opts struct {
 		uploadStartTime := time.Now()
 		var uploadBytes int64
 		var lastPrintTime time.Time
+		uploadLine := newPlainProgress(os.Stderr)
 
 		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
 			enrichUploadProgress(&progress, &uncompressedWritten, totalUncompressed)
 			uploadBytes = progress.BytesRead
-			// Print progress every 500ms to avoid spamming
-			if progress.Fraction > 0 && time.Since(lastPrintTime) >= 500*time.Millisecond {
+			// Rate-limit reports so a terminal feels live but a log isn't flooded.
+			// Quiet mode keeps only the completion line printed when the build starts.
+			if !opts.Quiet && progress.Fraction > 0 && time.Since(lastPrintTime) >= uploadLine.interval() {
 				lastPrintTime = time.Now()
-				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear to end of line
-				line := fmt.Sprintf("Uploading artifacts: %d%% — %s at %s",
-					int(progress.Fraction*100),
-					upload.FormatBytes(progress.BytesRead),
-					upload.FormatSpeed(progress.BytesPerSecond))
-				if progress.ETA > 0 {
-					line += fmt.Sprintf(" (eta ~%s)", upload.FormatDuration(progress.ETA))
-				}
-				fmt.Fprint(os.Stderr, line)
+				uploadLine.update(uploadProgressLine(progress))
 			}
 		})
 		r = progressReader
@@ -874,7 +917,7 @@ func Deploy(ctx *Context, opts struct {
 			if uploadBytes > 0 {
 				uploadDuration := time.Since(uploadStartTime)
 				avgSpeed := float64(uploadBytes) / uploadDuration.Seconds()
-				summary := fmt.Sprintf("\rUpload complete: %s in %.1fs at %s",
+				summary := fmt.Sprintf("Upload complete: %s in %.1fs at %s",
 					upload.FormatBytes(uploadBytes),
 					uploadDuration.Seconds(),
 					upload.FormatSpeed(avgSpeed))
@@ -887,14 +930,22 @@ func Deploy(ctx *Context, opts struct {
 						summary += fmt.Sprintf(" (saved %s)", upload.FormatBytes(cachedBytes))
 					}
 				}
-				fmt.Fprintf(os.Stderr, "%s\n", summary)
+				uploadLine.finish(summary)
 				uploadBytes = 0 // Only print once
 			}
 
 			return safeStatus.Send(buildCtx, status)
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment, onImage)
+		// The plain printer already shows every step's log as it happens, so
+		// only collect logs when they were suppressed and would otherwise be
+		// lost on a failure.
+		var explainLogs *[]string
+		if opts.Quiet {
+			explainLogs = &buildLogs
+		}
+		stats := &buildStats{}
+		cb = createBuildStatusCallback(buildCtx, nil, nil, stats, &buildStateMu, &buildErrors, explainLogs, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(buildCtx, r, cb)
 		if err != nil {
@@ -912,6 +963,7 @@ func Deploy(ctx *Context, opts struct {
 					}
 					if outcome == deploymentCancellationCompleted {
 						ctx.Printf("\n\n✅ Deploy completed before cancellation.\n")
+						summary.DeployID = getDeploymentID()
 						return nil
 					}
 				}
@@ -942,8 +994,8 @@ func Deploy(ctx *Context, opts struct {
 			maybeReportBlocked(ctx, depClient, serverOwnsDeployment, getDeploymentID(), name)
 
 			ctx.Printf("\n\nBuild failed with the following errors:\n")
-			errsSnap, _, _ := snapshotBuildState()
-			printBuildErrors(ctx, errsSnap, nil)
+			errsSnap, logsSnap, _ := snapshotBuildState()
+			printBuildErrors(ctx, errsSnap, logsSnap)
 			updateDeploymentOnError(fmt.Sprintf("Build failed: %v", err))
 			return err
 		}
@@ -957,11 +1009,18 @@ func Deploy(ctx *Context, opts struct {
 			uploadSpan.End()
 			return pw.Err()
 		}
+		// Close the build phase with one summary line on stdout, matching the
+		// TUI's scrollback. A direct-image deploy emits no BuildKit status for
+		// the explain printer to render, so this is the only statement of what
+		// happened; a source build gets its steps condensed into counts, which
+		// is what a log reader wants after the step-by-step stream above. Clear
+		// any in-place upload line first so it doesn't collide.
 		if image := selectedImage(); image != "" {
-			// A direct-image deploy emits no BuildKit status for the explain
-			// printer to render. Clear any in-place upload line and state the
-			// actual operation before health waiting begins.
-			fmt.Fprintf(os.Stderr, "\r\033[K%s\n", renderPhaseSummary(buildPhaseSummary(image, 0, 0)))
+			uploadLine.clear()
+			ctx.Printf("%s\n", renderPhaseSummary(buildPhaseSummary(image, 0, 0, 0)))
+		} else if progress, elapsed := stats.snapshot(); progress.total > 0 {
+			uploadLine.clear()
+			ctx.Printf("%s\n", renderPhaseSummary(buildPhaseSummary("", progress.total, progress.cached, elapsed)))
 		}
 	} else {
 		var (
@@ -1005,7 +1064,7 @@ func Deploy(ctx *Context, opts struct {
 			return nil
 		}
 
-		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler, onDeployment, onImage)
+		cb = createBuildStatusCallback(deployCtx, updateCh, buildCh, nil, &buildStateMu, &buildErrors, &buildLogs, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(deployCtx, r, cb)
 
@@ -1028,6 +1087,7 @@ func Deploy(ctx *Context, opts struct {
 					}
 					if outcome == deploymentCancellationCompleted {
 						ctx.Printf("\n\n✅ Deploy completed before cancellation.\n")
+						summary.DeployID = getDeploymentID()
 						return nil
 					}
 				}
@@ -1101,6 +1161,16 @@ func Deploy(ctx *Context, opts struct {
 	}
 
 	ctx.Log.Debug("Build completed with version", "version", appVersionId)
+
+	// Record what we know now, before the health wait, so a failed rollout
+	// still reports which version it was. The deployment ID is empty for
+	// ephemeral deploys (no deployment record).
+	summary.AppVersion = appVersionId
+	summary.DeployID = getDeploymentID()
+	summary.setEphemeral(ephemeralLabel, ephemeralTTL)
+	if results.HasAccessInfo() && results.AccessInfo() != nil {
+		summary.URLs = deployURLs(ctx, results.AccessInfo(), ephemeralLabel)
+	}
 
 	if ephemeralLabel != "" {
 		// Ephemeral deploy: no deployment record to update, just show info.
@@ -1200,6 +1270,7 @@ func Deploy(ctx *Context, opts struct {
 		printDeployWarnings()
 
 		if healthErr != nil {
+			printDeployOutcome(ctx, false, appVersionId)
 			return healthErr
 		}
 	} else {
@@ -1209,13 +1280,7 @@ func Deploy(ctx *Context, opts struct {
 	// Show route/access information (the "what's next" guidance) last, once we
 	// know the app is actually up.
 	displayAccessInfo(ctx, name, results)
-
-	// deploymentId is empty for ephemeral deploys (no deployment record).
-	var summaryURLs []string
-	if results.HasAccessInfo() && results.AccessInfo() != nil {
-		summaryURLs = deployURLs(ctx, results.AccessInfo(), ephemeralLabel)
-	}
-	writeDeploySummary(ctx, opts.SummaryJSON, getDeploymentID(), appVersionId, summaryURLs)
+	printDeployOutcome(ctx, true, appVersionId)
 
 	return nil
 }
@@ -1399,11 +1464,14 @@ func buildGitInfoFromGit(gitInfo *git.Info) *build_v1alpha.GitInfo {
 // createBuildStatusCallback creates a callback for handling build status updates.
 // stateMu must be non-nil and guards buildErrors, buildLogs, and deployWarnings
 // — the callback runs from RPC stream-handler goroutines that race with
-// readers in Deploy.
+// readers in Deploy. stats, when non-nil, receives every BuildKit vertex update
+// so the caller can summarize the build afterwards; buildCh, when non-nil, is
+// fed the same counts live for the TUI.
 func createBuildStatusCallback(
 	ctx context.Context,
 	updateCh chan<- string,
 	buildCh chan<- buildProgress,
+	stats *buildStats,
 	stateMu *sync.Mutex,
 	buildErrors *[]string,
 	buildLogs *[]string,
@@ -1412,7 +1480,9 @@ func createBuildStatusCallback(
 	onDeployment func(deploymentID, phase string),
 	onImage func(image string),
 ) stream.SendStream[*build_v1alpha.Status] {
-	vertices := map[string]bool{} // digest → completed
+	if stats == nil {
+		stats = &buildStats{}
+	}
 	return stream.Callback(func(su *build_v1alpha.Status) error {
 		update := su.Update()
 
@@ -1448,32 +1518,11 @@ func createBuildStatusCallback(
 			}
 
 			// Track build step progress via vertices
-			if buildCh != nil {
-				var updated bool
-				for _, v := range status.Vertexes {
-					d := v.Digest.String()
-					if _, seen := vertices[d]; !seen {
-						updated = true
-					}
-					done := v.Completed != nil
-					if done != vertices[d] {
-						updated = true
-					}
-					vertices[d] = done
-				}
-
-				if updated {
-					var completed int
-					for _, done := range vertices {
-						if done {
-							completed++
-						}
-					}
-					select {
-					case <-ctx.Done():
-					case buildCh <- buildProgress{total: len(vertices), completed: completed}:
-					default:
-					}
+			if progress, updated := stats.observe(&status); updated && buildCh != nil {
+				select {
+				case <-ctx.Done():
+				case buildCh <- progress:
+				default:
 				}
 			}
 
@@ -1577,14 +1626,22 @@ func renderDeployWarning(ctx *Context, entry *build_v1alpha.LogEntry) {
 	}
 }
 
-func buildStepsSummary(count int) string {
+func buildStepsSummary(count, cached int) string {
 	if count == 0 {
 		return "cached"
 	}
+	steps := fmt.Sprintf("%d steps", count)
 	if count == 1 {
-		return "1 step completed"
+		steps = "1 step"
 	}
-	return fmt.Sprintf("%d steps completed", count)
+	switch {
+	case cached <= 0:
+		return steps + " completed"
+	case cached >= count:
+		return steps + ", all cached"
+	default:
+		return fmt.Sprintf("%s, %d cached", steps, cached)
+	}
 }
 
 // deploySummary is the machine-readable result written by --summary-json. It's
@@ -1593,9 +1650,51 @@ func buildStepsSummary(count int) string {
 // deploy without re-parsing human output. deploy_id is empty for ephemeral
 // deploys, which have no deployment record.
 type deploySummary struct {
-	DeployID   string   `json:"deploy_id"`
-	AppVersion string   `json:"app_version"`
-	URLs       []string `json:"urls"`
+	// Status is "success", "failed", or "cancelled". Error carries the failure
+	// message when Status is not "success".
+	Status     string            `json:"status,omitempty"`
+	App        string            `json:"app,omitempty"`
+	Cluster    string            `json:"cluster,omitempty"`
+	DeployID   string            `json:"deploy_id"`
+	AppVersion string            `json:"app_version"`
+	URLs       []string          `json:"urls"`
+	Ephemeral  *ephemeralSummary `json:"ephemeral,omitempty"`
+	Error      string            `json:"error,omitempty"`
+}
+
+type ephemeralSummary struct {
+	Label string `json:"label"`
+	TTL   string `json:"ttl"`
+}
+
+func (s *deploySummary) setEphemeral(label, ttl string) {
+	if label == "" {
+		s.Ephemeral = nil
+		return
+	}
+	s.Ephemeral = &ephemeralSummary{Label: label, TTL: ttl}
+}
+
+// finalize settles Status and Error from the deploy's return value. A
+// cancellation, whether from Ctrl-C locally or `miren deploy cancel` remotely,
+// is reported as "cancelled" rather than "failed" so a script can tell the two
+// apart. It also pins URLs to a stable array (never JSON null) so consumers
+// see a fixed schema.
+func (s *deploySummary) finalize(err error) {
+	if s.URLs == nil {
+		s.URLs = []string{}
+	}
+	switch {
+	case err == nil:
+		s.Status = "success"
+		s.Error = ""
+	case errors.Is(err, context.Canceled) || isDeploymentCancelled(err):
+		s.Status = "cancelled"
+		s.Error = err.Error()
+	default:
+		s.Status = "failed"
+		s.Error = err.Error()
+	}
 }
 
 // accessInfoLike is the subset of the generated AccessInfo types shared by the
@@ -1656,19 +1755,15 @@ func deployURLs(ctx *Context, accessInfo accessInfoLike, ephemeralLabel string) 
 // writeDeploySummary writes the deploy summary to path (a no-op if path is
 // empty). It runs after the deploy has already succeeded, so a failure here must
 // never fail the command: it is logged and swallowed.
-func writeDeploySummary(ctx *Context, path, deployID, appVersion string, urls []string) {
+func writeDeploySummary(ctx *Context, path string, summary *deploySummary) {
 	if path == "" {
 		return
 	}
 	// Keep urls a stable array (never JSON null) so consumers see a fixed schema.
-	if urls == nil {
-		urls = []string{}
+	if summary.URLs == nil {
+		summary.URLs = []string{}
 	}
-	summary := deploySummary{
-		DeployID:   deployID,
-		AppVersion: appVersion,
-		URLs:       urls,
-	}
+	deployID, appVersion, urls := summary.DeployID, summary.AppVersion, summary.URLs
 	data, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
 		ctx.Log.Error("Failed to marshal deploy summary", "error", err)
