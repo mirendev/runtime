@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -68,7 +69,7 @@ func newSandboxController(d *testutils.TestDeps) (*sandbox.SandboxController, er
 		Resolver:       d.Resolver,
 		Metrics:        sbMetrics,
 	}
-	return sandbox.NewSandboxController(cfg)
+	return sandbox.NewSandboxController(cfg, saga.NewMemoryStorage())
 }
 
 func TestServiceController(t *testing.T) {

@@ -41,6 +41,7 @@ import (
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/netutil"
+	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 
@@ -189,16 +190,30 @@ type SandboxController struct {
 	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil is
 	// inert, so disks still mount when backups are unavailable.
 	SqliteDisks *sqlitedisk.Manager
+
+	// Sandbox creation runs as a saga so a runner that dies mid-create resumes
+	// or unwinds on restart rather than stranding containers, addresses, and
+	// disk leases. ops adapts this controller to the domain interfaces the
+	// saga's actions are written against.
+	ops          *sandboxOps
+	executor     *saga.Executor
+	sagaRegistry *saga.Registry
+	sagaStorage  saga.Storage
 }
 
 // Hubs exposes the registry of attachable containers so the runner's exec
 // server can join a client to a running container's terminal.
 func (c *SandboxController) Hubs() *HubRegistry { return c.hubs }
 
-// NewSandboxController creates a new SandboxController with validated dependencies.
-func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error) {
+// NewSandboxController creates a new SandboxController with validated
+// dependencies. sagaStorage backs the create-sandbox saga; it is required,
+// since sandbox creation has no non-saga implementation.
+func NewSandboxController(cfg SandboxControllerDeps, sagaStorage saga.Storage) (*SandboxController, error) {
 	if cfg.Log == nil {
 		return nil, fmt.Errorf("sandbox: Log is required")
+	}
+	if sagaStorage == nil {
+		return nil, fmt.Errorf("sandbox: saga storage is required")
 	}
 	if cfg.CC == nil {
 		return nil, fmt.Errorf("sandbox: containerd client is required")
@@ -236,7 +251,8 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		hubs = NewHubRegistry()
 	}
 
-	return &SandboxController{
+	registry := saga.NewRegistry()
+	c := &SandboxController{
 		hubs:           hubs,
 		Log:            cfg.Log.With("module", "sandbox"),
 		CC:             cfg.CC,
@@ -258,7 +274,21 @@ func NewSandboxController(cfg SandboxControllerDeps) (*SandboxController, error)
 		CACert:         cfg.CACert,
 		Secrets:        cfg.Secrets,
 		SqliteDisks:    cfg.SqliteDisks,
-	}, nil
+
+		sagaStorage:  sagaStorage,
+		sagaRegistry: registry,
+		executor: saga.NewExecutor(sagaStorage,
+			saga.WithRegistry(registry),
+			saga.WithLogger(cfg.Log.With("module", "saga-sandbox")),
+			// Recovery is scoped to this node: a create-sandbox record belongs
+			// to the runner holding the containers, addresses, and disk leases
+			// it describes, and no other runner can meaningfully resume or
+			// unwind it (MIR-1657).
+			saga.WithRecoveryScope(cfg.NodeId.String()),
+		),
+	}
+	c.ops = &sandboxOps{ctrl: c}
+	return c, nil
 }
 
 // localAPIPort returns the port to open to the bridge so sandboxes can reach
@@ -394,17 +424,6 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 		c.portCond.Broadcast() // Wake up the waiting goroutine
 		return fmt.Errorf("timeout waiting for port %d to be bound after %v", port, timeout)
 	}
-}
-
-// diagnoseListening reports the ports a container is actually listening on,
-// split into routable and loopback-only sets. Returns ok=false when the port
-// monitor is unavailable or the container's pid is unknown. Shared by the
-// legacy create flow and the saga ops wrapper.
-func (c *SandboxController) diagnoseListening(id string) (routable []int, loopback []int, ok bool) {
-	if c.portMonitor == nil {
-		return nil, nil, false
-	}
-	return c.portMonitor.DiagnoseListening(id)
 }
 
 // mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
@@ -767,6 +786,17 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		go c.startTokenServer(c.topCtx)
 	}
 
+	if err := registerCreateSandboxSaga(c.sagaRegistry, c.ops, c.ops, c.ops, c.ops, c.NodeId.String(), c.Log); err != nil {
+		return fmt.Errorf("registering create-sandbox saga: %w", err)
+	}
+
+	// Resume or unwind creations this node left in flight. Recovery failures are
+	// not fatal: the reconciler still drives new work, and a record left behind
+	// is retried on the next pass.
+	if err := c.executor.Recover(ctx); err != nil {
+		c.Log.Error("saga recovery completed with errors", "error", err)
+	}
+
 	return nil
 }
 
@@ -1111,8 +1141,9 @@ func sandboxMetricsIdentity(sb *compute.Sandbox, nodeID string) (string, map[str
 }
 
 // sandboxCgroups reads the cgroup path of each of a sandbox's live containers
-// from containerd, keyed the way createSandbox keys them: "" for the pause
-// container, the container name for each subcontainer.
+// from containerd, keyed the way the create-sandbox saga's boot-containers
+// action keys them: "" for the pause container, the container name for each
+// subcontainer.
 func (c *SandboxController) sandboxCgroups(ctx context.Context, sb *compute.Sandbox) (map[string]string, error) {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
@@ -1244,6 +1275,9 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 	return nil
 }
 
+// Create handles sandbox create/update events, driving new sandboxes through
+// the create-sandbox saga so a crash mid-create resumes or unwinds rather than
+// stranding containers, addresses, and disk leases.
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	switch co.Status {
 	case compute.DEAD:
@@ -1268,6 +1302,16 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 						"id", co.ID, "error", err)
 				}
 
+				// Healthy containers do not mean creation finished: the saga
+				// persists each tail action separately, so a crash between
+				// actionBootCtrs and actionUpdateSvcs leaves a RUNNING sandbox
+				// with no Endpoints. Since 9bf10a18 startup Recover skips
+				// legacy (empty-scope) records, leaving a routed Execute as the
+				// only way to resume them.
+				if c.sagaResumeNeeded(ctx, co) {
+					return c.createSandboxViaSaga(ctx, co, true)
+				}
+
 				// If sandbox exists and is healthy but status is PENDING,
 				// update it to RUNNING. This is a fallback to recover from failed
 				// status updates (e.g. due to OCC conflicts during creation).
@@ -1280,28 +1324,20 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 
 					if age > staleThreshold {
 						c.Log.Info("sandbox exists and is healthy but status is PENDING (stale), updating to RUNNING",
-							"id", co.ID,
-							"createdAt", createdAt,
-							"age", age)
+							"id", co.ID, "createdAt", createdAt, "age", age)
 						patchAttrs := entity.New(
 							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{
-								Status: compute.RUNNING,
-							}).Encode,
+							(&compute.Sandbox{Status: compute.RUNNING}).Encode,
 						)
-						_, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), meta.Revision)
+						_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {
-							c.Log.Error("failed to update sandbox status to RUNNING", "id", co.ID, "error", err)
 							return fmt.Errorf("failed to update sandbox status to RUNNING: %w", err)
 						}
 						return nil
-					} else {
-						c.Log.Debug("sandbox is PENDING but was recently created, skipping status correction",
-							"id", co.ID,
-							"age", age,
-							"threshold", staleThreshold)
-						return nil
 					}
+					c.Log.Debug("sandbox is PENDING but recently created, skipping",
+						"id", co.ID, "age", age)
+					return nil
 				}
 				return nil
 			case unhealthy:
@@ -1310,38 +1346,25 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 				// A sandbox that must not re-run its command is finished the
 				// moment its containers stop being healthy. Fall through to the
 				// recreate path below and we would execute it a second time.
-				//
-				// Gated on RUNNING because that is what distinguishes "it ran
-				// and its containers are gone" from "it has not started yet":
-				// only the former would be a re-execution.
 				if shouldRetireInsteadOfRestart(co) {
 					return c.markDeadNoRestart(ctx, co, "unhealthy")
 				}
 
-				// Mark sandbox as DEAD first if it was RUNNING
-				// This prevents infinite recreation loops
+				// Mark sandbox as DEAD first if it was RUNNING.
+				// This prevents infinite recreation loops.
 				if co.Status == compute.RUNNING {
 					c.Log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
 					patchAttrs := entity.New(
 						entity.Ref(entity.DBId, co.ID),
-						(&compute.Sandbox{
-							Status: compute.DEAD,
-						}).Encode,
+						(&compute.Sandbox{Status: compute.DEAD}).Encode,
 					)
-					result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
+					_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 					if err != nil {
-						c.Log.Error("failed to mark sandbox as DEAD", "id", co.ID, "error", err)
 						return fmt.Errorf("failed to mark sandbox as DEAD: %w", err)
-					}
-					if c.writeTracker != nil && result.HasRevision() {
-						c.writeTracker.RecordWrite(result.Revision())
 					}
 				}
 
-				// Clean up the unhealthy sandbox
-				err := c.StopSandbox(ctx, co.ID, co)
-				if err != nil {
-					c.Log.Error("failed to cleanup unhealthy sandbox", "id", co.ID, "err", err)
+				if err := c.StopSandbox(ctx, co.ID, co); err != nil {
 					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
 				}
 				// Don't fall through - we've marked it DEAD, let the next reconciliation handle recreation
@@ -1355,15 +1378,11 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 		// once it is the end of the road: the realistic case is a runner
 		// restarting mid-run, where re-running a migration is not a recoverable
 		// mistake.
-		//
-		// Only once it has actually been RUNNING, though. A PENDING sandbox has
-		// no containers because none have been created yet, and refusing to
-		// create them would retire every no-restart sandbox before it ever ran.
 		if shouldRetireInsteadOfRestart(co) {
 			return c.markDeadNoRestart(ctx, co, "containers missing")
 		}
 
-		return c.createSandbox(ctx, co, meta, false)
+		return c.createSandboxViaSaga(ctx, co, false)
 	case compute.NOT_READY:
 		// Transient boot state; nothing to reconcile until it resolves.
 		fallthrough
@@ -1411,240 +1430,6 @@ func (c *SandboxController) markDeadNoRestart(ctx context.Context, co *compute.S
 	if err := c.StopSandbox(ctx, co.ID, co); err != nil {
 		return fmt.Errorf("failed to clean up no-restart sandbox: %w", err)
 	}
-	return nil
-}
-
-func (c *SandboxController) createSandbox(ctx context.Context, co *compute.Sandbox, meta *entity.Meta, recreate bool) (err error) {
-	c.Log.Debug("creating sandbox", "id", co.ID)
-
-	// Catch-all: any error during sandbox creation marks it DEAD so the pool
-	// controller's crash-backoff logic kicks in instead of retrying forever.
-	defer func() {
-		if err != nil {
-			c.Log.Error("sandbox boot failed, marking DEAD", "id", co.ID, "err", err)
-			co.Status = compute.DEAD
-			meta.Update(co.Encode())
-
-			// Boot can fail after we've already bound a disk lease (e.g. a
-			// later port health check fails). Unlike the graceful StopSandbox
-			// path, this defer doesn't tear the sandbox down, so release any
-			// leases here — otherwise the lease stays status.bound pointing at
-			// a dead sandbox and wedges every replacement until it times out.
-			// Use a non-cancelled context: the boot error may itself be a
-			// cancellation, and we still want the lease freed. Bound it with a
-			// timeout so a hung release can't pin the reconcile worker, matching
-			// the cleanup defer below.
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-			defer cancel()
-			if relErr := c.ReleaseDiskLeases(cleanupCtx, co.ID); relErr != nil {
-				c.Log.Error("failed to release disk leases after boot failure", "id", co.ID, "err", relErr)
-			}
-
-			// Same reason as the leases: this defer is the only cleanup a failed
-			// boot gets. A Hub is created before the task is, so a container that
-			// never started still leaves one behind, and an attaching client
-			// finds it and waits on output that can never arrive -- forever,
-			// since the client's start deadline is only consulted between
-			// attempts and it is now inside a successful attach.
-			c.hubs.RemoveAll(co.ID)
-			// ConfigureVolumes registered any sqlite disks before the failure,
-			// and this path never reaches StopSandbox, so release them here or
-			// a crash-looping app accumulates a replicator per boot attempt.
-			c.releaseSqliteDisks(cleanupCtx, co.ID)
-		}
-	}()
-
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
-
-	ep, err := c.AllocateNetwork(ctx, co)
-	if err != nil {
-		return fmt.Errorf("failed to allocate network: %w", err)
-	}
-
-	// Patch entity with network address before starting sandbox
-	networkAttrs := []any{
-		entity.Ref(entity.DBId, co.ID),
-	}
-
-	for _, v := range co.Network {
-		networkAttrs = append(networkAttrs, entity.Component(compute.SandboxNetworkId, v.Encode()))
-	}
-
-	patchAttrs := entity.New(networkAttrs...)
-
-	// Use 0 as the revision in the case that the sandbox has been updated before we got
-	// here. This update must go through.
-	res, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
-	if err != nil {
-		c.deallocateNetwork(ctx, ep)
-		return fmt.Errorf("failed to patch sandbox with network address: %w", err)
-	}
-
-	meta.Revision = res.Revision()
-	if c.writeTracker != nil && res.HasRevision() {
-		c.writeTracker.RecordWrite(res.Revision())
-	}
-
-	opts, err := c.BuildSpec(ctx, co, ep, meta)
-	if err != nil {
-		c.deallocateNetwork(ctx, ep)
-		return fmt.Errorf("failed to build container spec: %w", err)
-	}
-
-	volumeMounts, err := c.ConfigureVolumes(ctx, co, meta)
-	if err != nil {
-		c.deallocateNetwork(ctx, ep)
-		return fmt.Errorf("failed to configure volumes: %w", err)
-	}
-
-	cid := pauseContainerId(co.ID)
-
-	container, err := c.CC.NewContainer(ctx, cid, opts...)
-	if err != nil {
-		c.deallocateNetwork(ctx, ep)
-		return errors.Wrapf(err, "failed to create container %s", co.ID)
-	}
-
-	defer func() {
-		if err != nil {
-			c.Log.Error("failed to create sandbox, cleaning up container resources", "id", co.ID, "err", err)
-
-			// Be sure we have at least 60 seconds to do this action.
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-
-			// Clean up network resources if they were allocated
-			c.deallocateNetwork(ctx, ep)
-
-			// Clean up any subcontainers that might have been created
-			c.DestroySubContainers(ctx, co.ID)
-
-			// Clean up the pause container using the common cleanup function
-			c.CleanupContainer(ctx, container)
-
-			// Boot may have gotten far enough to register the sandbox for token
-			// refresh (see buildSubContainerSpec). This path marks the sandbox DEAD
-			// without going through StopSandbox, so release that state here or it
-			// lingers until the entity is swept.
-			c.ReleaseTokenState(co.ID)
-
-			// Update sandbox status to DEAD in entity store
-			co.Status = compute.DEAD
-			meta.Update(co.Encode())
-			c.Log.Info("marked sandbox as DEAD due to boot failure", "id", co.ID)
-		}
-	}()
-
-	task, err := c.BootInitialTask(ctx, co, ep, container, meta.ShortId())
-	if err != nil {
-		return err
-	}
-
-	rootSpec, err := container.Spec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get container spec: %w", err)
-	}
-
-	cgroups := map[string]string{
-		"": rootSpec.Linux.CgroupsPath,
-	}
-
-	waitPorts, err := c.BootContainers(ctx, co, ep, int(task.Pid()), cgroups, meta, volumeMounts)
-	if err != nil {
-		return err
-	}
-
-	le, attrs := sandboxMetricsIdentity(co, c.NodeId.String())
-
-	err = c.Metrics.Add(le, cgroups, attrs)
-	if err != nil {
-		return err
-	}
-
-	c.Log.Info("sandbox started", "id", co.ID, "namespace", c.Namespace)
-
-	// Wait for ports to verify network connectivity before marking RUNNING.
-	// Fail-hard: if ports never bind, fail the sandbox so pool can retry. An app
-	// that ignored $PORT and bound a different port is detected here and routed
-	// to its actual port instead of being killed.
-	// Default 15s; spec.PortWaitTimeout overrides for slow-cold-init images.
-	portTimeout := resolvePortWaitTimeout(co.Spec.PortWaitTimeout)
-	var remapped bool
-	for _, wp := range waitPorts {
-		c.Log.Info("waiting for ports to be bound", "id", cid, "port", wp.Port, "timeout", portTimeout)
-		err := c.WaitForPort(ctx, wp.ID, wp.Port, portTimeout)
-		if err == nil {
-			continue // configured port bound — the normal case
-		}
-		if ctx.Err() != nil {
-			// We're shutting down, not looking at a port mismatch — skip
-			// diagnosis so we don't emit misleading "listening elsewhere" events.
-			return err
-		}
-
-		// The configured port never bound within the timeout. See what the app
-		// actually listened on: route to it if it bound a single other port, or
-		// fail with a message that names the real port.
-		routable, loopback, ok := c.diagnoseListening(wp.ID)
-		if alt, single := singleAlternativePort(routable, wp.Port); ok && single {
-			if remapped {
-				// A second configured port diverged. Routing only follows one
-				// observed port, so don't guess — fail loudly instead.
-				msg := fmt.Sprintf("more than one configured port came up on a different port; "+
-					"can't safely auto-route (latest was :%d)", alt)
-				c.EmitSandboxEvent(co, meta.ShortId(), msg)
-				return fmt.Errorf("sandbox failed network health check: %s", msg)
-			}
-			remapped = true
-			c.Log.Warn("app bound a port other than the configured one; routing to it",
-				"id", co.ID, "configured_port", wp.Port, "observed_port", alt)
-			c.EmitSandboxEvent(co, meta.ShortId(), fmt.Sprintf(
-				"app is listening on :%d, not the configured :%d; routing to :%d. "+
-					"Set $PORT or [services.web] port to :%d to silence this.",
-				alt, wp.Port, alt, alt))
-			co.BoundPort = append(co.BoundPort, compute.BoundPort{Port: int64(alt)})
-			continue
-		}
-
-		msg := describePortFailure(wp.Port, routable, loopback)
-		c.EmitSandboxEvent(co, meta.ShortId(), msg)
-		return fmt.Errorf("sandbox failed network health check: %s", msg)
-	}
-
-	// If we're doing a recreate, then we know it's safe to set it to running.
-	if recreate {
-		co.Status = compute.RUNNING
-	} else {
-		// Only set status to RUNNING if it hasn't already been marked STOPPED or DEAD
-		// (The monitoring goroutine may have already detected a crash)
-		// Fetch current status to avoid race condition
-		resp, err := c.EAC.Get(ctx, co.ID.String())
-		if err != nil {
-			c.Log.Warn("failed to fetch current sandbox status before update", "id", co.ID, "error", err)
-			// Fallthrough to set RUNNING anyway
-			co.Status = compute.RUNNING
-		} else {
-			var currentSandbox compute.Sandbox
-			currentSandbox.Decode(resp.Entity().Entity())
-			if currentSandbox.Status == compute.DEAD || currentSandbox.Status == compute.STOPPED {
-				c.Log.Info("sandbox already in terminal state, not overwriting to RUNNING",
-					"id", co.ID, "current_status", currentSandbox.Status)
-				return nil
-			}
-			co.Status = compute.RUNNING
-		}
-	}
-
-	// The controller will detect the updates and sync them back
-	if err := meta.Update(co.Encode()); err != nil {
-		return fmt.Errorf("failed to update entity metadata: %w", err)
-	}
-
-	err = c.UpdateServices(ctx, co, meta, ep)
-	if err != nil {
-		return fmt.Errorf("failed to update services: %w", err)
-	}
-
 	return nil
 }
 
@@ -1834,21 +1619,10 @@ func (c *SandboxController) deleteEndpoints(ctx context.Context, id entity.Id, s
 	return nil
 }
 
-// deallocateNetwork releases the network resources allocated for a sandbox
-func (c *SandboxController) deallocateNetwork(ctx context.Context, ep *network.EndpointConfig) {
-	if ep == nil {
-		return
-	}
-
-	for _, addr := range ep.Addresses {
-		if err := c.Subnet.ReleaseAddr(addr.Addr()); err != nil {
-			c.Log.Error("failed to release IP address during cleanup", "addr", addr.Addr(), "err", err)
-		} else {
-			c.Log.Debug("released IP address during cleanup", "addr", addr.Addr())
-		}
-	}
-}
-
+// AllocateNetwork gives a sandbox its bridge endpoint. A sandbox that already
+// carries addresses is set up on those, so a re-run adopts what it had rather
+// than leasing a second address; one that carries none is allocated a fresh
+// address and has it recorded on the passed-in spec.
 func (c *SandboxController) AllocateNetwork(
 	ctx context.Context,
 	co *compute.Sandbox,
