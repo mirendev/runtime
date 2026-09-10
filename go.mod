@@ -107,7 +107,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog/v2 v2.130.1
 	miren.dev/lbd v0.0.0-20260224020427-8914d8db2233
-	miren.dev/mflags v0.0.0-20260910203505-bda3448ec3ee
+	miren.dev/mflags v0.0.0-20260910225849-7704913d5c9c
 	modernc.org/sqlite v1.45.0
 	sigs.k8s.io/knftables v0.0.21
 )
