@@ -474,3 +474,78 @@ func TestDiskSizeGbCeilingRoundTrips(t *testing.T) {
 	assert.Positive(t, sizeGb)
 	assert.Positive(t, sizeGb*(1<<30)/(1<<30), "the byte conversion must not overflow")
 }
+
+// Once Finalize has committed the disk_volume, the image belongs to the
+// controller's teardown, not to Cleanup.
+//
+// Marking the disk DELETING only starts that teardown; the unmount and detach
+// happen later. Removing the image here would race them, and losing the race
+// unlinks a file whose loop device is still attached, leaving the kernel
+// holding an inode nothing can reach.
+func TestCleanupLeavesTheImageToTeardownOnceAVolumeExists(t *testing.T) {
+	ctx := t.Context()
+	es, resolver := setupResolver(t, nil)
+
+	dataPath := t.TempDir()
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", dataPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(target.ImagePath), 0700))
+	require.NoError(t, os.WriteFile(target.ImagePath, []byte("restored"), 0600))
+
+	// Finalize commits the volume, so the image is now the teardown's business.
+	require.NoError(t, target.Finalize(ctx))
+	require.NoError(t, target.Cleanup(ctx))
+
+	assert.FileExists(t, target.ImagePath,
+		"cleanup must not unlink an image the controller is still tearing down")
+
+	// The disk is handed to the teardown path, which is what reclaims both.
+	disks := listTestDisks(t, ctx, es.EAC)
+	require.Len(t, disks, 1)
+	assert.Equal(t, storage_v1alpha.DELETING, disks[0].Status)
+}
+
+// The common case is the opposite one: most cleanups run before Finalize, so no
+// volume exists, nothing ever opened the image, and there is no teardown to
+// wait for. Leaving it would just waste the space.
+func TestCleanupRemovesTheImageWhenNoVolumeWasCommitted(t *testing.T) {
+	ctx := t.Context()
+	_, resolver := setupResolver(t, nil)
+
+	dataPath := t.TempDir()
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", dataPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(target.ImagePath), 0700))
+	require.NoError(t, os.WriteFile(target.ImagePath, []byte("restored"), 0600))
+
+	// No Finalize, so no volume.
+	require.NoError(t, target.Cleanup(ctx))
+
+	_, statErr := os.Stat(target.ImagePath)
+	assert.True(t, os.IsNotExist(statErr),
+		"with no volume to tear down, cleanup owns the image")
+}
+
+// A disk is committed before the node lookup, and a lookup failure returns no
+// RestoreTarget, so the caller has no Cleanup to call. Left alone the disk sits
+// in RESTORING and the next restore of the same name finds it, skips creating
+// one, and dies looking for the volume it never got.
+func TestCreateDiskAndVolumeUnwindsWhenTheNodeLookupFails(t *testing.T) {
+	ctx := t.Context()
+	// FindNodeId lists nodes, and that is the first list this path makes.
+	fault := newFaultRPC(nil, "list", 1, fmt.Errorf("simulated node lookup failure"))
+	es, resolver := setupResolver(t, fault)
+
+	target, err := resolver.CreateDiskAndVolume(ctx, "mydisk", 2<<30, "ext4", t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "finding node")
+	assert.Nil(t, target, "a failed creation must not hand back a target")
+
+	// The disk it had already committed is on its way out rather than stuck.
+	disks := listTestDisks(t, ctx, es.EAC)
+	require.Len(t, disks, 1)
+	assert.Equal(t, storage_v1alpha.DELETING, disks[0].Status,
+		"a half-created disk must not be left in restoring, which blocks every same-name retry")
+}

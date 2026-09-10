@@ -120,8 +120,23 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 
 	nodeId, err := r.FindNodeId(ctx)
 	if err != nil {
+		// The disk is already committed but the caller is about to get an
+		// error and no RestoreTarget, so it has no Cleanup to call. Unwind it
+		// here or it sits in RESTORING forever, and the next restore of the
+		// same name finds that disk, skips creating one, and fails looking for
+		// the volume it never got.
+		if uerr := r.abandonDisk(ctx, diskEntityId); uerr != nil {
+			return nil, fmt.Errorf(
+				"finding node: %w (the half-created disk could not be unwound either, so %s is stuck in restoring: %v)",
+				err, name, uerr)
+		}
 		return nil, fmt.Errorf("finding node: %w", err)
 	}
+
+	// Set once Finalize has committed the disk_volume, which is the moment the
+	// image stops being ours to delete. Finalize and Cleanup are called in turn
+	// by the restore handler on one goroutine, so a plain bool is enough.
+	var volumeCommitted bool
 
 	return &snapshot.RestoreTarget{
 		Name:      name,
@@ -146,13 +161,6 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 			// DiskVolumeController. Idempotent: patching an already-DELETING
 			// disk is a no-op.
 			//
-			// This runs before the image is touched, because Finalize
-			// creates the disk_volume first now: cleanup after a partial
-			// Finalize can find a volume the controller is already mounting,
-			// and pulling the image out from under a loop device leaves it
-			// holding an unlinked inode rather than releasing it. Letting
-			// the teardown path unmount and detach first is the only order
-			// that ends with nothing held.
 			_, err := r.eac.Patch(cctx, []entity.Attr{
 				entity.Ref(entity.DBId, diskEntityId),
 				entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusDeletingId),
@@ -161,11 +169,27 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 				return fmt.Errorf("transitioning disk to deleting during cleanup: %w", err)
 			}
 
-			// Whatever the teardown did not claim. Usually this is the whole
-			// job, since most cleanups run before Finalize and so before any
-			// volume exists. Tolerate "not present": the restore may never
-			// have renamed the image into place, and a volume teardown may
-			// have moved the directory out from under it.
+			// Once the disk_volume exists, the image belongs to the teardown
+			// above and not to us. That teardown is asynchronous: the patch
+			// only marks the disk, and the controller unmounts, detaches and
+			// soft-deletes the volume directory some time later. Removing the
+			// image here would race it, and losing that race unlinks a file
+			// whose loop device is still attached, which leaves the kernel
+			// holding an inode nobody can reach instead of releasing it.
+			//
+			// Waiting for the teardown instead would mean polling the entity
+			// store from an error path that is already handling a failure.
+			// Letting the controller finish the job it already does is both
+			// simpler and the thing that cannot race.
+			if volumeCommitted {
+				return nil
+			}
+
+			// No volume was ever created, which is the common case: most
+			// cleanups run before Finalize. Nothing has opened this image, so
+			// there is no teardown to wait for and no loop device to strand.
+			// Tolerate "not present" — the restore may never have renamed the
+			// image into place.
 			if imageErr := os.Remove(imagePath); imageErr != nil && !os.IsNotExist(imageErr) {
 				// Reported only once the authoritative step is done, so a
 				// failure to reclaim the image never costs us the disk
@@ -218,6 +242,9 @@ func (r *Resolver) CreateDiskAndVolume(ctx context.Context, name string, sizeByt
 			if err != nil {
 				return fmt.Errorf("creating disk_volume entity: %w", err)
 			}
+			// From here the volume owns the image, so Cleanup must leave it to
+			// the controller's teardown rather than unlinking it itself.
+			volumeCommitted = true
 
 			// A failure here leaves a RESTORING disk with a committed volume,
 			// which Cleanup handles: it marks the disk DELETING, and the
@@ -284,6 +311,22 @@ func (r *Resolver) FindLeases(ctx context.Context, diskID string) ([]snapshot.Le
 	}
 
 	return leases, nil
+}
+
+// abandonDisk marks a disk DELETING when creation gave up partway through.
+//
+// It is the same unwind Cleanup performs, for the window before there is a
+// RestoreTarget to hang a Cleanup on.
+func (r *Resolver) abandonDisk(ctx context.Context, diskEntityId entity.Id) error {
+	// The caller's context may already be cancelled, and unwinding is exactly
+	// what still has to happen when it is.
+	ctx = context.WithoutCancel(ctx)
+
+	_, err := r.eac.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, diskEntityId),
+		entity.Ref(storage_v1alpha.DiskStatusId, storage_v1alpha.DiskStatusDeletingId),
+	}, 0)
+	return err
 }
 
 // gib is the unit disks are sized in.

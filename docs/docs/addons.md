@@ -439,15 +439,13 @@ miren disk restore -s myapp-db.miren.zst --force
 ```
 </CliCommand>
 
-:::warning[Restore into a new disk, not over the running one]
-Restoring on top of a disk your app is using is not supported today, and the command refuses it rather than pretending. A disk in use is held open by the kernel, so writing a new image into it would leave the running database on the old data while reporting success.
-
-There is currently no way to release a disk while keeping the app configured for it. Disk-backed services run at fixed concurrency, `num_instances = 0` is rejected, and scaling a pool to zero by hand is reconciled straight back to one. Even in that brief window the disk stays mounted.
-
-So the working recovery is to restore into a **new** disk and move the app across.
+:::warning[Restoring over a disk in use is refused]
+Restoring on top of a disk your app is using is not supported today, and the command stops rather than pretending. A disk in use is held open by the kernel, so writing a new image into it would leave the running database on the old data while reporting success.
 :::
 
-Restore into a new disk name:
+There is currently no way to release a disk while keeping the app configured for it, so there is no sequence that makes an in-place restore work. Disk-backed services run at fixed concurrency, `num_instances = 0` is rejected, and scaling a pool to zero by hand is reconciled straight back to one. Even during that brief window the disk stays mounted.
+
+The working recovery is to restore into a **new** disk and move the app across. Restore into a new disk name:
 
 <CliCommand context="client">
 ```miren
