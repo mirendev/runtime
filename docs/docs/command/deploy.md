@@ -47,7 +47,7 @@ miren deploy [flags]
 - `--explain, -x` — Explain the build process
 - `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`, `quiet`)
 - `--force, -f` — Skip confirmation prompt
-- `--format` — Output format (text, json, jsonl) (default: `text`)
+- `--format` — Output format (text, json, jsonl) (default: `text`) (choices: `text`, `json`, `jsonl`)
 - `--json` — Shorthand for --format json
 - `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)

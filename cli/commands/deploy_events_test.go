@@ -141,10 +141,65 @@ func TestDeployEventStream_RemembersFirstWriteError(t *testing.T) {
 	}
 }
 
+// TestJSONLExitError covers the exit decision for every combination of deploy
+// outcome and stream health, including the one a unit test cannot reach
+// through Deploy itself: a deploy that succeeded while stdout was already gone.
+func TestJSONLExitError(t *testing.T) {
+	broken := errors.New("broken pipe")
+	cases := []struct {
+		name      string
+		deployErr error
+		streamErr error
+		wantExit  int // 0 means "returns deployErr as is"
+	}{
+		{"success with healthy stream exits 0", nil, nil, 0},
+		{"success but stream lost events exits 1", nil, broken, 1},
+		{"failure exits 1 without an Error line", errors.New("build failed"), nil, 1},
+		{"failure with broken stream still exits 1", errors.New("build failed"), broken, 1},
+		{"local cancellation keeps its exit 0", context.Canceled, nil, 0},
+		{"local cancellation with broken stream keeps its exit 0", context.Canceled, broken, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jsonlExitError(tc.deployErr, tc.streamErr)
+			var exitErr ErrExitCode
+			if tc.wantExit != 0 {
+				if !errors.As(got, &exitErr) || int(exitErr) != tc.wantExit {
+					t.Fatalf("got %v, want ErrExitCode(%d)", got, tc.wantExit)
+				}
+				return
+			}
+			if !errors.Is(got, tc.deployErr) {
+				t.Fatalf("got %v, want %v passed through", got, tc.deployErr)
+			}
+		})
+	}
+}
+
+func TestDeploy_RejectsJSONWithJSONL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{Format: "jsonl", JSON: true}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("expected a conflict error, got %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("nothing must be written before the conflict is rejected: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 // TestDeploy_JSONLBrokenStdoutIsNotSuccess: a stream that could not be
-// written must not exit 0 even if the deploy itself got as far as it did. The
-// deploy here fails early anyway, so the check is that the exit-code path
-// consults the stream and does not panic on a dead writer.
+// written must not exit 0. The deploy here fails early anyway; the check is
+// that the exit-code path consults the stream and does not panic on a dead
+// writer. The success-path decision is covered by TestJSONLExitError.
 func TestDeploy_JSONLBrokenStdoutIsNotSuccess(t *testing.T) {
 	var stderr bytes.Buffer
 	ctx := &Context{

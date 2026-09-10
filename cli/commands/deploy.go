@@ -87,7 +87,7 @@ type deployOpts struct {
 	// Deploy carries its own format flags rather than the shared FormatOptions:
 	// it is the one command that also speaks jsonl, and the shared help text
 	// must not advertise that everywhere.
-	Format string `long:"format" description:"Output format (text, json, jsonl)" default:"text"`
+	Format string `long:"format" description:"Output format (text, json, jsonl)" choice:"text" choice:"json" choice:"jsonl" default:"text"` //nolint
 	JSON   bool   `long:"json" description:"Shorthand for --format json"`
 
 	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
@@ -130,8 +130,12 @@ func (o *deployOpts) machineReadable() bool {
 // progresses, ending in a "result" line with that same document, and the
 // human text is dropped rather than moved.
 func Deploy(ctx *Context, opts deployOpts) error {
+	if opts.JSON && opts.IsJSONL() {
+		// Both would claim stdout: one document and a stream cannot share it.
+		return fmt.Errorf("--json and --format jsonl cannot be combined")
+	}
 	if opts.machineReadable() && opts.Analyze {
-		return fmt.Errorf("--format %s is not supported with --analyze", opts.Format)
+		return fmt.Errorf("machine-readable output (--json, --format json, --format jsonl) is not supported with --analyze")
 	}
 
 	result := &deploySummary{App: opts.App, Cluster: ctx.ClusterName}
@@ -168,20 +172,30 @@ func Deploy(ctx *Context, opts deployOpts) error {
 	}
 	if events != nil {
 		events.result(result)
-		// The result line already carries the error. Returning a bare exit code
-		// keeps the CLI from printing "Error: ..." on stderr, so the stream
-		// stays the only output. A local cancellation keeps its exit 0.
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return ErrExitCode(1)
-		}
-		// A stream that lost events (stdout closed early) cannot claim success:
-		// the consumer may never have seen the result line.
 		if err == nil && events.Err() != nil {
 			ctx.Log.Warn("deploy succeeded but the event stream could not be written", "error", events.Err())
-			return ErrExitCode(1)
 		}
+		return jsonlExitError(err, events.Err())
 	}
 	return err
+}
+
+// jsonlExitError decides what Deploy returns in JSONL mode once the result
+// line has been attempted. The result line already carries any deploy error,
+// so a failure becomes a bare exit code: that keeps the CLI from printing
+// "Error: ..." on stderr and the stream stays the only output. A local
+// cancellation keeps its exit 0, as everywhere else. A deploy that succeeded
+// but whose stream lost events (stdout closed early) must not exit 0 either:
+// the consumer may never have seen the result line.
+func jsonlExitError(deployErr, streamErr error) error {
+	switch {
+	case deployErr != nil && errors.Is(deployErr, context.Canceled):
+		return deployErr
+	case deployErr != nil, streamErr != nil:
+		return ErrExitCode(1)
+	default:
+		return nil
+	}
 }
 
 // runDeploy is the deploy proper. It fills summary in as facts become known
