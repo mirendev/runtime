@@ -28,8 +28,8 @@ const (
 // runDeployTasks creates a Run for every task triggered by deploy and waits for
 // all of them.
 //
-// It sits between addons being ready and ActiveVersion flipping, which is the
-// only hook point in the deploy and deliberately so. Gating here means the runs
+// It sits between addons being active (awaitAddons) and ActiveVersion
+// flipping, which is the only hook point in the deploy and deliberately so. Gating here means the runs
 // complete or fail while the previous version is still the only thing serving:
 // there is no partial rollout to unwind, no traffic to shift back, and no
 // compensation step. A failed deploy task is a failed deploy, not a

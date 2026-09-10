@@ -142,7 +142,7 @@ func deploySqliteApp(t *testing.T, m *harness.Miren, c *harness.Cluster, tc sqli
 	containerDir := m.ContainerPath(filepath.Join(c.TestdataDir, tc.testdata))
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
-	harness.WaitForAddonReady(t, m, name, tc.addon, 60*time.Second)
+	harness.WaitForAddonReady(t, m, name, tc.addon, 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "SQLITE_PATH", 2*time.Minute)
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
 

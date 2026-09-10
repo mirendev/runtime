@@ -1921,11 +1921,26 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		deploy.setPhase(ctx, deploylifecycle.PhaseActivating)
 
 		// Provision addons before activating the version so that AddonAssociation
-		// entities exist when the launcher runs. The addon controller will create
-		// a new AppVersion with addon vars once provisioning completes.
+		// entities exist when the launcher runs.
 		if ac != nil && b.addonsClient != nil {
 			if err := b.provisionAddons(ctx, name, ac); err != nil {
 				return nil, fmt.Errorf("addon provisioning failed: %w", err)
+			}
+		}
+
+		var expected []expectedAddon
+		if b.addonsClient != nil {
+			expected = expectedAddons(ac)
+		}
+
+		// Hold the deploy until every declared addon is active. Creating an
+		// association only records the request; deploy tasks and the version
+		// flip both need the backing service to actually exist. Mirrors the
+		// saga's waitAddons action.
+		if len(expected) > 0 {
+			if addonErr := b.awaitAddons(ctx, name, appRec.ID, expected, NewRPCStatusSender(status, b.Log)); addonErr != nil {
+				b.sendErrorStatus(ctx, status, "%s", addonErr)
+				return nil, addonErr
 			}
 		}
 
@@ -1933,11 +1948,6 @@ func (b *Builder) buildFromDir(ctx context.Context, name string, path string,
 		// runDeployTasks action and has to exist here too: the saga builder is
 		// behind a labs flag, so this is the path that actually runs today.
 		if len(deployTriggeredTasks(&configSpec)) > 0 {
-			appRec, appErr := b.appClient.GetByName(ctx, name)
-			if appErr != nil {
-				return nil, fmt.Errorf("reading app for deploy tasks: %w", appErr)
-			}
-
 			if taskErr := b.runDeployTasks(ctx, name, appRec.ID, id, &configSpec,
 				NewRPCStatusSender(status, b.Log)); taskErr != nil {
 				b.sendErrorStatus(ctx, status, "%s", taskErr)

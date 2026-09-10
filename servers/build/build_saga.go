@@ -38,6 +38,7 @@ const (
 	actionCreateConfigVer = "create-config-version"
 	actionCreateVersion   = "create-version"
 	actionProvisionAddons = "provision-addons"
+	actionWaitAddons      = "wait-addons"
 	actionRunDeployTasks  = "run-deploy-tasks"
 	actionSetActiveVer    = "set-active-version"
 	actionFinalize        = "finalize"
@@ -561,14 +562,70 @@ func undoProvisionAddons(_ context.Context, _ provisionAddonsIn, _ provisionAddo
 	return nil
 }
 
+// waitAddons blocks the deploy until every addon app.toml declares has an
+// active association on the app. provisionAddons only records the request;
+// this is the step that makes addons_ready mean what it says, so deploy tasks
+// and the version flip both see a database that exists.
+//
+// It is its own action rather than a tail on provisionAddons so a coordinator
+// restart mid-wait resumes only the wait: the create/remove reconciliation is
+// never re-run. It is a pure read, so re-entry is safe. It takes the expected
+// set from the same app config provisionAddons acted on, so it never depends
+// on the association records already being visible.
+
+type waitAddonsIn struct {
+	AppName        string               `json:"app_name" saga:"app_name"`
+	StreamID       string               `json:"stream_id" saga:"stream_id"`
+	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
+	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	Provisioned    saga.Edge            `saga:"addons_provisioned"`
+}
+
+type waitAddonsOut struct {
+	Done saga.Edge `saga:"addons_ready"`
+}
+
+func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
+	// An ephemeral preview shares the app's addons and is not gated on them;
+	// the launcher holds its pools back the same way it does the app's.
+	if in.EphemeralLabel != "" {
+		return waitAddonsOut{}, nil
+	}
+	expected := expectedAddons(in.AppConfig)
+	if len(expected) == 0 {
+		return waitAddonsOut{}, nil
+	}
+
+	deps := saga.Get[*buildSagaDeps](ctx)
+	b := deps.builder
+	if b.addonsClient == nil {
+		return waitAddonsOut{}, nil
+	}
+
+	appRec, err := b.appClient.GetByName(ctx, in.AppName)
+	if err != nil {
+		return waitAddonsOut{}, fmt.Errorf("reading app: %w", err)
+	}
+
+	if err := b.awaitAddons(ctx, in.AppName, appRec.ID, expected, deps.statuses.SenderFor(in.StreamID)); err != nil {
+		return waitAddonsOut{}, err
+	}
+	return waitAddonsOut{}, nil
+}
+
+func undoWaitAddons(_ context.Context, _ waitAddonsIn, _ waitAddonsOut) error {
+	return nil
+}
+
 // setActiveVersion keeps the persisted saga action name, but no longer writes
 // either app pointer. It runs the last promotion checks; activateDeployment
 // performs the paired active_version and active_deployment update later.
 
 // runDeployTasksIn gates the version flip on every deploy-triggered task.
 //
-// It consumes addons_provisioned so it runs only once the app's backing
-// services exist -- a migration needs its database -- and produces an edge
+// It consumes addons_ready so it runs only once the app's backing services
+// are active -- a migration needs its database, and its DATABASE_URL only
+// exists once the association is active -- and produces an edge
 // setActiveVersion consumes, which is what puts it strictly before any traffic
 // moves.
 type runDeployTasksIn struct {
@@ -577,7 +634,7 @@ type runDeployTasksIn struct {
 	AppVersionID   string    `json:"app_version_id" saga:"app_version_id"`
 	ConfigSpec     string    `json:"config_spec_json" saga:"config_spec_json"`
 	EphemeralLabel string    `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
-	AddonsReady    saga.Edge `saga:"addons_provisioned"`
+	AddonsReady    saga.Edge `saga:"addons_ready"`
 }
 
 type runDeployTasksOut struct {
@@ -633,7 +690,7 @@ type setActiveVersionIn struct {
 	AppVersionID   string               `json:"app_version_id" saga:"app_version_id"`
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
-	AddonsReady    saga.Edge            `saga:"addons_provisioned"`
+	AddonsReady    saga.Edge            `saga:"addons_ready"`
 	// DeployTasksRan puts the promotion gate strictly after every
 	// deploy-triggered task has succeeded, so a failed task means a failed
 	// deploy rather than a half-promoted one.
@@ -1045,6 +1102,7 @@ func registerBuildSaga(
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionWaitAddons, waitAddons).Undo(undoWaitAddons).
 		Action(actionRunDeployTasks, runDeployTasks).Undo(undoRunDeployTasks).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).

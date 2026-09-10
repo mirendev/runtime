@@ -844,6 +844,51 @@ func Deploy(ctx *Context, opts struct {
 		safeStatus := newSafeStatusCh(pw.Status())
 		defer safeStatus.Close()
 
+		// Server progress messages (addon provisioning, deploy tasks) only
+		// had the TUI to land in. Without one, print each as its own line on
+		// stderr alongside the build output, clearing any in-place upload
+		// line first. The callback's send is non-blocking, so this drains
+		// promptly and flushes what is queued when the build call returns.
+		//
+		// Not for rawjson: there stderr is a stream of JSON build events for
+		// a machine to parse, and a line of prose in it would break the
+		// consumer. A nil channel makes the callback drop messages as before.
+		var (
+			updateCh     chan string
+			stopMessages = func() {}
+		)
+		if opts.ExplainFormat != "rawjson" {
+			updateCh = make(chan string, 16)
+			msgDone := make(chan struct{})
+			var msgWG sync.WaitGroup
+			printMsg := func(msg string) { fmt.Fprintf(os.Stderr, "\r\033[K%s\n", msg) }
+			msgWG.Go(func() {
+				for {
+					select {
+					case msg := <-updateCh:
+						printMsg(msg)
+					case <-msgDone:
+						for {
+							select {
+							case msg := <-updateCh:
+								printMsg(msg)
+							default:
+								return
+							}
+						}
+					}
+				}
+			})
+			var stopMsgOnce sync.Once
+			stopMessages = func() {
+				stopMsgOnce.Do(func() {
+					close(msgDone)
+					msgWG.Wait()
+				})
+			}
+		}
+		defer stopMessages()
+
 		// Add upload progress tracking in explain mode
 		uploadStartTime := time.Now()
 		var uploadBytes int64
@@ -894,9 +939,10 @@ func Deploy(ctx *Context, opts struct {
 			return safeStatus.Send(buildCtx, status)
 		}
 
-		cb = createBuildStatusCallback(buildCtx, nil, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment, onImage)
+		cb = createBuildStatusCallback(buildCtx, updateCh, nil, &buildStateMu, &buildErrors, nil, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(buildCtx, r, cb)
+		stopMessages()
 		if err != nil {
 			uploadSpan.RecordError(err)
 			uploadSpan.SetStatus(codes.Error, err.Error())

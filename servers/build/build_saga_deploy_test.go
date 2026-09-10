@@ -68,6 +68,7 @@ func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionWaitAddons, waitAddons).Undo(undoWaitAddons).
 		Action(actionSetActiveVer, setActive).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
