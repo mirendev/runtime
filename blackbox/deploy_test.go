@@ -57,8 +57,10 @@ func TestDeployScriptableOutput(t *testing.T) {
 		if err := json.Unmarshal([]byte(r.Stdout), &doc); err != nil {
 			t.Fatalf("stdout has to be the result document and nothing else: %v\nstdout: %s", err, r.Stdout)
 		}
-		if doc.Status != "success" {
-			t.Errorf("status = %q, want success", doc.Status)
+		// The spelling is the deployment record's own, the one `app history`
+		// reports for the same deploy_id.
+		if doc.Status != "succeeded" {
+			t.Errorf("status = %q, want succeeded", doc.Status)
 		}
 		if doc.App != name {
 			t.Errorf("app = %q, want %q", doc.App, name)
@@ -102,7 +104,7 @@ func TestDeployScriptableOutput(t *testing.T) {
 				t.Errorf("no %q event in stream:\n%s", want, r.Stdout)
 			}
 		}
-		if last["event"] != "result" || last["status"] != "success" || last["app_version"] == "" {
+		if last["event"] != "result" || last["status"] != "succeeded" || last["app_version"] == "" {
 			t.Errorf("last line must be a successful result, got %v", last)
 		}
 	})

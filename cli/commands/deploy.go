@@ -30,7 +30,9 @@ import (
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deployevents"
 	"miren.dev/runtime/pkg/deploygating"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/otelproxy"
@@ -138,7 +140,7 @@ func Deploy(ctx *Context, opts deployOpts) error {
 		return fmt.Errorf("machine-readable output (--json, --format json, --format jsonl) is not supported with --analyze")
 	}
 
-	result := &deploySummary{App: opts.App, Cluster: ctx.ClusterName}
+	result := &deployevents.Result{App: opts.App, Cluster: ctx.ClusterName}
 	stdout := ctx.Stdout
 	var events *deployEventStream
 	switch {
@@ -160,7 +162,7 @@ func Deploy(ctx *Context, opts deployOpts) error {
 	}
 
 	err := runDeploy(ctx, opts, result, events)
-	result.finalize(err)
+	finalizeSummary(result, err)
 
 	if opts.IsJSON() {
 		if jsonErr := PrintJSONTo(stdout, result); jsonErr != nil && err == nil {
@@ -201,7 +203,7 @@ func jsonlExitError(deployErr, streamErr error) error {
 // runDeploy is the deploy proper. It fills summary in as facts become known
 // (the version once built, the deployment ID once recorded, the URLs once the
 // app is routable) so the caller can report a partial result on failure.
-func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary, events *deployEventStream) error {
+func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, events *deployEventStream) error {
 	name := opts.App
 	dir := opts.ResolvedDir()
 
@@ -355,13 +357,13 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary, events *de
 			// dep.Id() is empty for ephemeral deploys (no deployment record).
 			summary.DeployID = dep.Id()
 			summary.AppVersion = deployedVersion
-			summary.setEphemeral(ephemeralLabel, ephemeralTTL)
+			summary.SetEphemeral(ephemeralLabel, ephemeralTTL)
 			if result.HasAccessInfo() && result.AccessInfo() != nil {
 				summary.URLs = deployURLs(ctx, result.AccessInfo(), ephemeralLabel)
 			}
 
 			if events != nil && dep.Id() != "" {
-				events.deployment(dep.Id(), "activating")
+				events.deployment(dep.Id(), deploylifecycle.PhaseActivating)
 			}
 
 			if ephemeralLabel != "" {
@@ -644,7 +646,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary, events *de
 		}
 		ctx.Log.Info("Server-owned deployment", "deployment_id", id, "phase", phase)
 		if events != nil {
-			events.deployment(id, phase)
+			events.deployment(id, deploylifecycle.Phase(phase))
 		}
 	}
 
@@ -1276,7 +1278,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary, events *de
 	// ephemeral deploys (no deployment record).
 	summary.AppVersion = appVersionId
 	summary.DeployID = getDeploymentID()
-	summary.setEphemeral(ephemeralLabel, ephemeralTTL)
+	summary.SetEphemeral(ephemeralLabel, ephemeralTTL)
 	if results.HasAccessInfo() && results.AccessInfo() != nil {
 		summary.URLs = deployURLs(ctx, results.AccessInfo(), ephemeralLabel)
 	}
@@ -1772,50 +1774,27 @@ func buildStepsSummary(count, cached int) string {
 // giving consumers the values that are otherwise awkward to recover after a
 // deploy without re-parsing human output. deploy_id is empty for ephemeral
 // deploys, which have no deployment record.
-type deploySummary struct {
-	// Status is "success", "failed", or "cancelled". Error carries the failure
-	// message when Status is not "success".
-	Status     string            `json:"status,omitempty"`
-	App        string            `json:"app,omitempty"`
-	Cluster    string            `json:"cluster,omitempty"`
-	DeployID   string            `json:"deploy_id"`
-	AppVersion string            `json:"app_version"`
-	URLs       []string          `json:"urls"`
-	Ephemeral  *ephemeralSummary `json:"ephemeral,omitempty"`
-	Error      string            `json:"error,omitempty"`
-}
+type deploySummary = deployevents.Result
 
-type ephemeralSummary struct {
-	Label string `json:"label"`
-	TTL   string `json:"ttl"`
-}
-
-func (s *deploySummary) setEphemeral(label, ttl string) {
-	if label == "" {
-		s.Ephemeral = nil
-		return
-	}
-	s.Ephemeral = &ephemeralSummary{Label: label, TTL: ttl}
-}
-
-// finalize settles Status and Error from the deploy's return value. A
-// cancellation, whether from Ctrl-C locally or `miren deploy cancel` remotely,
-// is reported as "cancelled" rather than "failed" so a script can tell the two
-// apart. It also pins URLs to a stable array (never JSON null) so consumers
-// see a fixed schema.
-func (s *deploySummary) finalize(err error) {
+// finalizeSummary settles Status and Error from the deploy's return value,
+// using the deployment record's own vocabulary so `miren app history` and this
+// document agree on the spelling. A cancellation, whether from Ctrl-C locally
+// or `miren deploy cancel` remotely, is reported as cancelled rather than
+// failed so a script can tell the two apart. It also pins URLs to a stable
+// array (never JSON null) so consumers see a fixed schema.
+func finalizeSummary(s *deployevents.Result, err error) {
 	if s.URLs == nil {
 		s.URLs = []string{}
 	}
 	switch {
 	case err == nil:
-		s.Status = "success"
+		s.Status = deploylifecycle.StatusSucceeded
 		s.Error = ""
 	case errors.Is(err, context.Canceled) || isDeploymentCancelled(err):
-		s.Status = "cancelled"
+		s.Status = deploylifecycle.StatusCancelled
 		s.Error = err.Error()
 	default:
-		s.Status = "failed"
+		s.Status = deploylifecycle.StatusFailed
 		s.Error = err.Error()
 	}
 }

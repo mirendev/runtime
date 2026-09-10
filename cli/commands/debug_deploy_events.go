@@ -12,6 +12,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"miren.dev/runtime/pkg/deployevents"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
@@ -44,52 +46,9 @@ func DebugDeployEvents(ctx *Context, opts struct {
 	return scanner.Err()
 }
 
-// deployEventRecord is the union of every field any deploy event carries. The
-// events are flat, so one struct decodes them all; which fields are set
-// depends on Event.
-type deployEventRecord struct {
-	Event string    `json:"event"`
-	Time  time.Time `json:"time"`
-
-	App     string `json:"app"`
-	Cluster string `json:"cluster"`
-	Message string `json:"message"`
-
-	Bytes          int64   `json:"bytes"`
-	BytesPerSecond float64 `json:"bytes_per_second"`
-	Fraction       float64 `json:"fraction"`
-	ETAMs          int64   `json:"eta_ms"`
-	DurationMs     int64   `json:"duration_ms"`
-	ReusedFiles    int     `json:"reused_files"`
-	TotalFiles     int     `json:"total_files"`
-	SavedBytes     int64   `json:"saved_bytes"`
-
-	Step   string `json:"step"`
-	Digest string `json:"digest"`
-	Status string `json:"status"`
-	Error  string `json:"error"`
-	Line   string `json:"line"`
-	Image  string `json:"image"`
-	Steps  int    `json:"steps"`
-	Cached int    `json:"cached"`
-
-	DeployID string `json:"deploy_id"`
-	Phase    string `json:"phase"`
-
-	Detail string `json:"detail"`
-	Link   string `json:"link"`
-
-	Version string `json:"version"`
-	Port    int    `json:"port"`
-	Address string `json:"address"`
-
-	Level  string         `json:"level"`
-	Fields map[string]any `json:"fields"`
-
-	AppVersion string            `json:"app_version"`
-	URLs       []string          `json:"urls"`
-	Ephemeral  *ephemeralSummary `json:"ephemeral"`
-}
+// deployEventRecord decodes any line of the stream; the schema is owned by
+// pkg/deployevents so this reader and the writer cannot drift apart.
+type deployEventRecord = deployevents.Record
 
 type deployEventRenderer struct {
 	ctx        *Context
@@ -219,14 +178,10 @@ func (r *deployEventRenderer) render(ev deployEventRecord, raw string) []string 
 		return lines
 
 	case "health":
-		switch ev.Status {
-		case "waiting":
+		if ev.Outcome == deployevents.OutcomeWaiting {
 			return []string{fmt.Sprintf("  Waiting for version %s to become healthy...", ev.Version)}
-		case "healthy":
-			return []string{healthSummaryLine(true, ev.Message, time.Duration(ev.DurationMs)*time.Millisecond)}
-		default:
-			return []string{healthSummaryLine(false, ev.Message, time.Duration(ev.DurationMs)*time.Millisecond)}
 		}
+		return []string{healthSummaryLine(ev.OK, ev.Message, time.Duration(ev.DurationMs)*time.Millisecond)}
 
 	case "port_warning":
 		addr := ""
@@ -324,10 +279,14 @@ func (r *deployEventRenderer) renderResult(ev deployEventRecord) []string {
 		}
 	}
 
-	switch ev.Status {
-	case "success":
+	// A result only ever carries succeeded, failed, or cancelled; anything
+	// else (a stream from a newer CLI, say) reads as a failure rather than
+	// being mistaken for success.
+	//exhaustive:ignore the default covers every non-success, non-cancelled status
+	switch deploylifecycle.Status(ev.Status) {
+	case deploylifecycle.StatusSucceeded:
 		lines = append(lines, "", "✓ Deploy successful")
-	case "cancelled":
+	case deploylifecycle.StatusCancelled:
 		lines = append(lines, "", "❌ Deploy cancelled")
 	default:
 		lines = append(lines, "", "✗ Deploy failed")

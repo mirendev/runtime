@@ -22,10 +22,10 @@ const sampleDeployEvents = `{"event":"start","time":"2026-09-10T18:29:59.377Z","
 {"event":"build_complete","time":"2026-09-10T18:30:02.200Z","steps":2,"cached":1,"duration_ms":800}
 {"event":"deployment","time":"2026-09-10T18:30:02.300Z","deploy_id":"deployment-1","phase":"activating"}
 {"event":"log","time":"2026-09-10T18:30:02.374Z","level":"ERROR","message":"rpc.callstream: error calling inline","fields":{"error":"boom"}}
-{"event":"health","time":"2026-09-10T18:30:02.400Z","version":"hw-bun-v1","status":"waiting"}
-{"event":"health","time":"2026-09-10T18:30:06.400Z","version":"hw-bun-v1","status":"healthy","message":"Version v1 is live and serving","duration_ms":4000}
+{"event":"health","time":"2026-09-10T18:30:02.400Z","version":"hw-bun-v1","outcome":"waiting","ok":false,"ready":0,"desired":0}
+{"event":"health","time":"2026-09-10T18:30:06.400Z","version":"hw-bun-v1","outcome":"healthy","ok":true,"health":"healthy","ready":1,"desired":1,"message":"Version v1 is live and serving","duration_ms":4000}
 this line is not json
-{"event":"result","time":"2026-09-10T18:30:06.500Z","status":"success","app":"hw-bun","cluster":"disttest4","deploy_id":"deployment-1","app_version":"hw-bun-v1","urls":["https://hw-bun.example.com"]}
+{"event":"result","time":"2026-09-10T18:30:06.500Z","status":"succeeded","app":"hw-bun","cluster":"disttest4","deploy_id":"deployment-1","app_version":"hw-bun-v1","urls":["https://hw-bun.example.com"]}
 `
 
 func renderSample(t *testing.T, timestamps, buildLogs bool) string {
@@ -121,7 +121,7 @@ func TestDebugDeployEvents_VersionIsCleanedLikeLiveOutput(t *testing.T) {
 	var out bytes.Buffer
 	ctx := &Context{Context: context.Background(), Stdout: &out, Stderr: io.Discard}
 	r := newDeployEventRenderer(ctx, false, false)
-	r.renderLine([]byte(`{"event":"result","time":"2026-09-10T18:30:06.500Z","status":"success","app_version":"app_version/hw-bun-v1","urls":[]}`))
+	r.renderLine([]byte(`{"event":"result","time":"2026-09-10T18:30:06.500Z","status":"succeeded","app_version":"app_version/hw-bun-v1","urls":[]}`))
 	if !strings.Contains(out.String(), "Version: hw-bun-v1\n") {
 		t.Fatalf("entity prefix must be stripped:\n%s", out.String())
 	}

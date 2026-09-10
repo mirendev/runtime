@@ -146,7 +146,10 @@ func awaitHealthy(ctx *Context, appName, versionID, versionDisplay string) error
 // the printed lines. Every method may be called from the waiting goroutine.
 type healthObserver interface {
 	healthWaiting(version string)
-	healthVerdict(version, text string, ok bool, elapsed time.Duration)
+	// healthVerdict receives the poll's full finding: the terminal outcome, the
+	// snapshot behind it (health classification and instance counts), the
+	// printed text, and whether it counts as a successful rollout.
+	healthVerdict(version string, outcome terminalOutcome, snap healthSnapshot, text string, ok bool, elapsed time.Duration)
 	healthPortWarning(port int, address string)
 	healthAppLog(line string)
 }
@@ -316,7 +319,7 @@ func waitForActivationObserved(ctx *Context, getter appInfoGetter, tailer logTai
 	text, ok := healthOutcomeText(versionDisplay, outcome, snap)
 	ctx.Printf("%s\n", healthSummaryLine(ok, text, elapsed))
 	if obs != nil {
-		obs.healthVerdict(versionID, text, ok, elapsed)
+		obs.healthVerdict(versionID, outcome, snap, text, ok, elapsed)
 	}
 	return reportHealthResultObserved(ctx, tailer, appName, snap, versionDisplay, ok, obs)
 }

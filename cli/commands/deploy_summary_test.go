@@ -16,6 +16,7 @@ import (
 
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 )
 
 // fakeAccessInfo implements accessInfoLike so deployURLs can be exercised
@@ -103,7 +104,7 @@ func TestWriteDeploySummary(t *testing.T) {
 	t.Run("stable deploy writes all fields", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "summary.json")
 		writeDeploySummary(summaryTestCtx(), path, &deploySummary{
-			Status:     "success",
+			Status:     deploylifecycle.StatusSucceeded,
 			App:        "meet",
 			Cluster:    "prod",
 			DeployID:   "dpl_abc",
@@ -120,7 +121,7 @@ func TestWriteDeploySummary(t *testing.T) {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
 		want := deploySummary{
-			Status:     "success",
+			Status:     deploylifecycle.StatusSucceeded,
 			App:        "meet",
 			Cluster:    "prod",
 			DeployID:   "dpl_abc",
@@ -198,34 +199,34 @@ func TestWriteDeploySummary(t *testing.T) {
 }
 
 func TestDeploySummaryFinalize(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
+	t.Run("success uses the deployment record's spelling", func(t *testing.T) {
 		s := &deploySummary{AppVersion: "v1"}
-		s.finalize(nil)
-		if s.Status != "success" || s.Error != "" || s.URLs == nil {
+		finalizeSummary(s, nil)
+		if s.Status != deploylifecycle.StatusSucceeded || s.Error != "" || s.URLs == nil {
 			t.Fatalf("finalize(nil) = %+v", s)
 		}
 	})
 
 	t.Run("failure carries the error", func(t *testing.T) {
 		s := &deploySummary{}
-		s.finalize(errors.New("version v1 did not become healthy"))
-		if s.Status != "failed" || s.Error != "version v1 did not become healthy" {
+		finalizeSummary(s, errors.New("version v1 did not become healthy"))
+		if s.Status != deploylifecycle.StatusFailed || s.Error != "version v1 did not become healthy" {
 			t.Fatalf("finalize(err) = %+v", s)
 		}
 	})
 
 	t.Run("local cancellation is cancelled not failed", func(t *testing.T) {
 		s := &deploySummary{}
-		s.finalize(fmt.Errorf("upload: %w", context.Canceled))
-		if s.Status != "cancelled" {
+		finalizeSummary(s, fmt.Errorf("upload: %w", context.Canceled))
+		if s.Status != deploylifecycle.StatusCancelled {
 			t.Fatalf("status = %q, want cancelled", s.Status)
 		}
 	})
 
 	t.Run("remote cancellation is cancelled not failed", func(t *testing.T) {
 		s := &deploySummary{}
-		s.finalize(cond.ErrRemote{Category: "deployment", Code: "cancelled", Message: "cancelled by operator"})
-		if s.Status != "cancelled" {
+		finalizeSummary(s, cond.ErrRemote{Category: "deployment", Code: "cancelled", Message: "cancelled by operator"})
+		if s.Status != deploylifecycle.StatusCancelled {
 			t.Fatalf("status = %q, want cancelled", s.Status)
 		}
 	})
@@ -236,7 +237,7 @@ func TestDeploySummaryJSONShape(t *testing.T) {
 	// from the document rather than appear as empty values, and the original
 	// --summary-json keys must keep their names.
 	s := &deploySummary{App: "meet", Cluster: "prod", DeployID: "dpl_1", AppVersion: "meet-v1"}
-	s.finalize(nil)
+	finalizeSummary(s, nil)
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -256,12 +257,12 @@ func TestDeploySummaryJSONShape(t *testing.T) {
 		}
 	}
 
-	s.setEphemeral("pr-1", "24h")
+	s.SetEphemeral("pr-1", "24h")
 	data, _ = json.Marshal(s)
 	if !strings.Contains(string(data), `"ephemeral":{"label":"pr-1","ttl":"24h"}`) {
 		t.Errorf("ephemeral block missing from %s", data)
 	}
-	s.setEphemeral("", "")
+	s.SetEphemeral("", "")
 	if s.Ephemeral != nil {
 		t.Error("setEphemeral with an empty label must clear the block")
 	}

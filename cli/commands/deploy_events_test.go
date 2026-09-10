@@ -13,6 +13,8 @@ import (
 
 	"github.com/moby/buildkit/client"
 	"github.com/opencontainers/go-digest"
+
+	"miren.dev/runtime/pkg/apphealth"
 )
 
 // decodeEvents parses a JSONL buffer, failing the test on any line that is not
@@ -81,7 +83,7 @@ func TestDeployEventStream_ResultCarriesSummary(t *testing.T) {
 	s := newDeployEventStream(&buf)
 
 	sum := &deploySummary{App: "meet", Cluster: "prod", DeployID: "dpl_1", AppVersion: "meet-v1"}
-	sum.finalize(errors.New("boom"))
+	finalizeSummary(sum, errors.New("boom"))
 	s.result(sum)
 
 	events := decodeEvents(t, buf.String())
@@ -104,22 +106,40 @@ func TestDeployEventStream_HealthObserver(t *testing.T) {
 	var obs healthObserver = s
 
 	obs.healthWaiting("meet-v1")
-	obs.healthVerdict("meet-v1", "Version v1 is live and serving", true, 1500*time.Millisecond)
+	obs.healthVerdict("meet-v1", outcomeHealthy, healthSnapshot{health: apphealth.Healthy, ready: 2, desired: 2}, "Version v1 is live and serving", true, 1500*time.Millisecond)
 	obs.healthPortWarning(8080, "0.0.0.0")
 	obs.healthAppLog("panic: oh no")
+	// A scaled-to-zero app is a successful rollout with no serving instance:
+	// the outcome and the apphealth value must both say so, not just "healthy".
+	obs.healthVerdict("meet-v1", outcomeScaledToZero, healthSnapshot{health: apphealth.Idle}, "Version v1 deployed — scaled to zero", true, time.Second)
+	obs.healthVerdict("meet-v1", outcomeCrashed, healthSnapshot{health: apphealth.Crashed, crashCount: 3, cooldownSeconds: 30}, "crash-looped", false, time.Second)
 
 	events := decodeEvents(t, buf.String())
-	if len(events) != 4 {
-		t.Fatalf("expected 4 events, got %d: %s", len(events), buf.String())
+	if len(events) != 6 {
+		t.Fatalf("expected 6 events, got %d: %s", len(events), buf.String())
 	}
-	if events[0]["status"] != "waiting" || events[1]["status"] != "healthy" || events[1]["duration_ms"] != float64(1500) {
-		t.Fatalf("health events = %v %v", events[0], events[1])
+	if events[0]["outcome"] != "waiting" {
+		t.Fatalf("waiting event = %v", events[0])
+	}
+	healthy := events[1]
+	if healthy["outcome"] != "healthy" || healthy["ok"] != true || healthy["health"] != "healthy" ||
+		healthy["ready"] != float64(2) || healthy["desired"] != float64(2) || healthy["duration_ms"] != float64(1500) {
+		t.Fatalf("healthy event = %v", healthy)
 	}
 	if events[2]["event"] != "port_warning" || events[2]["port"] != float64(8080) {
 		t.Fatalf("port warning = %v", events[2])
 	}
 	if events[3]["event"] != "app_log" || events[3]["line"] != "panic: oh no" {
 		t.Fatalf("app log = %v", events[3])
+	}
+	idle := events[4]
+	if idle["outcome"] != "scaled_to_zero" || idle["ok"] != true || idle["health"] != "idle" {
+		t.Fatalf("scaled-to-zero event = %v", idle)
+	}
+	crashed := events[5]
+	if crashed["outcome"] != "crashed" || crashed["ok"] != false || crashed["health"] != "crashed" ||
+		crashed["crash_count"] != float64(3) || crashed["cooldown_seconds"] != float64(30) {
+		t.Fatalf("crashed event = %v", crashed)
 	}
 }
 
