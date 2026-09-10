@@ -11,6 +11,10 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Breaking Changes**
+- **The `sagas` escape hatch is gone** - Builds and sandbox startup have run on the saga engine by default since v0.14.0, and `--labs -sagas` existed to put a cluster back on the previous code path if that went badly. It shipped a full release without anyone needing it, so both the flag and the path it selected are now removed. `-sagas` is no longer a known feature, so a server still passing it logs `unknown labs feature flag` at boot and starts normally; drop it from your `--labs` or `MIREN_LABS` setting to quiet the warning. Nothing else changes, because the saga path is already what you have been running. ([#1191](https://github.com/mirendev/runtime/pull/1191))
+- **The `distributedrunners` escape hatch is gone** - Distributed runners have been on by default since v0.13.0, with `--labs -distributedrunners` there to hide the `miren runner` commands and skip etcd mTLS setup if the new topology caused trouble. Two releases went by without anyone reaching for it, so the flag and its gating are removed: the runner commands are now always registered, and an embedded etcd always comes up with mTLS. As with `-sagas`, a server still passing `-distributedrunners` logs `unknown labs feature flag` at boot and starts normally; drop it from your `--labs` or `MIREN_LABS` setting to quiet the warning. ([#1192](https://github.com/mirendev/runtime/pull/1192))
+
 ---
 
 ## v0.15.0

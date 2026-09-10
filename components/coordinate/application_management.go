@@ -26,7 +26,6 @@ import (
 	addonsqlite "miren.dev/runtime/pkg/addon/sqlite"
 	"miren.dev/runtime/pkg/addon/valkey"
 	"miren.dev/runtime/pkg/entitysync"
-	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/servers/app"
@@ -154,16 +153,12 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	bs.WorkloadIssuer = c.WorkloadIssuer
 	bs.Secrets = secretRegistry
 
-	var buildHandler build_v1alpha.Builder = bs
-	if labs.Sagas() {
-		sagaBuilder := build.NewSagaBuilder(bs, saga.NewEntityStorage(c.etcdStore, c.Log), c.Log)
-		if err := sagaBuilder.Init(); err != nil {
-			return err
-		}
-		c.sagaBuilder = sagaBuilder
-		buildHandler = sagaBuilder
+	sagaBuilder := build.NewSagaBuilder(bs, saga.NewEntityStorage(c.etcdStore, c.Log), c.Log)
+	if err := sagaBuilder.Init(); err != nil {
+		return err
 	}
-	c.buildHandler = build_v1alpha.AdaptBuilder(buildHandler)
+	c.sagaBuilder = sagaBuilder
+	c.buildHandler = build_v1alpha.AdaptBuilder(sagaBuilder)
 	server.ExposeValue("dev.miren.runtime/logs", app_v1alpha.AdaptLogs(logs.NewServer(c.Log, ec, c.Logs)))
 
 	deploymentServer, err := deployment.NewDeploymentServer(c.Log, eac, ec, appClient, c.CloudAuth.DNSHostname, secretRegistry)

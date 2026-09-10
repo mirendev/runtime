@@ -481,7 +481,7 @@ jobs:
     # result, so the condition lives here in one place.
     #
     # The distributed suite exercises the multi-node topology (a coordinator plus
-    # a separate runner peer) with distributedrunners enabled. Setup is heavy
+    # a separate runner peer). Setup is heavy
     # (iso peers, a binary build, the join dance) and it's the only place a
     # second node exists, so a bug there is invisible until it's already on main
     # blocking a release (exactly how MIR-1469 got in). It therefore runs on
