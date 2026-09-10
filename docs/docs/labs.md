@@ -28,34 +28,31 @@ Labs features are controlled via the `--labs` flag or `MIREN_LABS` environment v
 
 <CliCommand context="server">
 ```miren
-# Enable a single labs feature
+# Enable a labs feature
 miren server --labs appvisibility
-
-# Enable multiple features
-miren server --labs appvisibility --labs distributedrunners
 
 # Via environment variable
 MIREN_LABS=appvisibility miren server
-
-# Multiple features via environment variable (comma-separated)
-MIREN_LABS=appvisibility,distributedrunners miren server
 ```
 </CliCommand>
 
+To name more than one feature, repeat `--labs` or comma-separate the
+environment variable.
+
 ## Turning a Feature Off
 
-Prefix a feature name with `-` to disable it. This is how you back out of a feature that's on by default, and it takes the same flag and environment variable as enabling.
+Prefix a feature name with `-` to disable it, using the same flag and
+environment variable as enabling. This is mainly how you back out of a feature
+that has graduated to on by default, for the one release its flag sticks around
+as an escape hatch.
 
 <CliCommand context="server">
 ```miren
-# Turn off a feature that is on by default
-miren server --labs -distributedrunners
+# Turn a feature off
+miren server --labs -appvisibility
 
 # Via environment variable
-MIREN_LABS=-distributedrunners miren server
-
-# Mix and match: app visibility on, distributed runners off
-MIREN_LABS=appvisibility,-distributedrunners miren server
+MIREN_LABS=-appvisibility miren server
 ```
 </CliCommand>
 

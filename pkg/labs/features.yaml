@@ -3,8 +3,3 @@ features:
     predicate: AppVisibility
     description: Negotiate app visibility protocols over the cloud uplink
     default: false
-
-  - name: distributedrunners
-    predicate: DistributedRunners
-    description: Schedule jobs across multiple runner nodes
-    default: true

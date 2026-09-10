@@ -3,6 +3,7 @@ package labs
 import (
 	"bytes"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -12,43 +13,93 @@ func quiet() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-func TestDisableFeatureWithPrefix(t *testing.T) {
-	Reset()
+// withFeatures swaps in a synthetic feature registry for one test and returns
+// its names sorted.
+//
+// Everything below is about how Init parses flags, which is independent of
+// whichever features happen to be in labs this release. Naming real features
+// here meant rewriting this file every time one graduated out, and the registry
+// eventually gets too small to say anything: with a single feature left there
+// is no way to tell "the exclusion disabled the one I named" apart from "the
+// exclusion disabled everything". Synthetic names cost nothing and never churn.
+func withFeatures(t *testing.T, defaults map[string]bool) []string {
+	t.Helper()
 
-	// Enable first, then disable
-	Init(quiet(), []string{"distributedrunners", "-distributedrunners"})
+	mu.Lock()
+	savedDefaults, savedEnabled := featureDefaults, enabledFeatures
+	featureDefaults = defaults
+	enabledFeatures = make(map[string]bool)
+	mu.Unlock()
 
-	if DistributedRunners() {
-		t.Error("DistributedRunners should be disabled after '-distributedrunners'")
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		featureDefaults, enabledFeatures = savedDefaults, savedEnabled
+	})
+
+	names := make([]string, 0, len(defaults))
+	for name := range defaults {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func TestDefaultsApplyWithoutFlags(t *testing.T) {
+	withFeatures(t, map[string]bool{"alpha": true, "beta": false})
+
+	Init(quiet(), nil)
+
+	if !IsEnabled("alpha") {
+		t.Error("alpha defaults to on and should be enabled with no flags")
+	}
+	if IsEnabled("beta") {
+		t.Error("beta defaults to off and should stay disabled with no flags")
 	}
 }
 
-func TestDistributedRunnersEnabledByDefault(t *testing.T) {
-	Reset()
+func TestDisableFeatureWithPrefix(t *testing.T) {
+	withFeatures(t, map[string]bool{"alpha": false})
 
-	// GA: distributed runners are on by default with no flags set.
-	Init(quiet(), nil)
+	// Enable first, then disable
+	Init(quiet(), []string{"alpha", "-alpha"})
 
-	if !DistributedRunners() {
-		t.Error("DistributedRunners should be enabled by default")
+	if IsEnabled("alpha") {
+		t.Error("alpha should be disabled after '-alpha'")
+	}
+}
+
+// A feature that ships on by default keeps its flag for a release purely so an
+// operator can put the old behavior back. That escape hatch has to work from a
+// cold start, with nothing else named.
+func TestNegativePrefixAloneDisablesDefaultOnFeature(t *testing.T) {
+	withFeatures(t, map[string]bool{"alpha": true, "beta": true})
+
+	Init(quiet(), []string{"-alpha"})
+
+	if IsEnabled("alpha") {
+		t.Error("alpha should be disabled by '-alpha' alone")
+	}
+	if !IsEnabled("beta") {
+		t.Error("beta should stay enabled when only alpha is named")
 	}
 }
 
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
-	Reset()
+	withFeatures(t, map[string]bool{"alpha": false, "beta": false})
 
-	Init(quiet(), []string{"AppVisibility", "DISTRIBUTEDRUNNERS"})
+	Init(quiet(), []string{"Alpha", "BETA"})
 
-	if !AppVisibility() {
-		t.Error("AppVisibility should be enabled (case-insensitive)")
+	if !IsEnabled("alpha") {
+		t.Error("alpha should be enabled (case-insensitive)")
 	}
-	if !DistributedRunners() {
-		t.Error("DistributedRunners should be enabled (case-insensitive)")
+	if !IsEnabled("beta") {
+		t.Error("beta should be enabled (case-insensitive)")
 	}
 }
 
 func TestUnknownFeatureLogsWarning(t *testing.T) {
-	Reset()
+	withFeatures(t, map[string]bool{"alpha": false})
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -65,21 +116,21 @@ func TestUnknownFeatureLogsWarning(t *testing.T) {
 }
 
 func TestEmptyAndWhitespaceFlags(t *testing.T) {
-	Reset()
+	withFeatures(t, map[string]bool{"alpha": false})
 
-	Init(quiet(), []string{"", "  ", "appvisibility", "  ", ""})
+	Init(quiet(), []string{"", "  ", "alpha", "  ", ""})
 
-	if !AppVisibility() {
-		t.Error("AppVisibility should be enabled despite empty/whitespace flags")
+	if !IsEnabled("alpha") {
+		t.Error("alpha should be enabled despite empty/whitespace flags")
 	}
 }
 
 func TestAllKeywordEnablesAllFeatures(t *testing.T) {
-	Reset()
+	names := withFeatures(t, map[string]bool{"alpha": false, "beta": false})
 
 	Init(quiet(), []string{"all"})
 
-	for _, name := range AllFeatures() {
+	for _, name := range names {
 		if !IsEnabled(name) {
 			t.Errorf("Feature %q should be enabled after Init with 'all'", name)
 		}
@@ -87,31 +138,43 @@ func TestAllKeywordEnablesAllFeatures(t *testing.T) {
 }
 
 func TestAllKeywordWithExclusion(t *testing.T) {
-	Reset()
+	names := withFeatures(t, map[string]bool{"alpha": false, "beta": false})
 
-	Init(quiet(), []string{"all", "-distributedrunners"})
+	Init(quiet(), []string{"all", "-beta"})
 
-	for _, name := range AllFeatures() {
-		if name == FeatureDistributedRunners {
+	for _, name := range names {
+		if name == "beta" {
 			if IsEnabled(name) {
-				t.Error("DistributedRunners should be disabled after 'all,-distributedrunners'")
+				t.Error("beta should be disabled after 'all,-beta'")
 			}
-		} else {
-			if !IsEnabled(name) {
-				t.Errorf("Feature %q should be enabled after 'all,-distributedrunners'", name)
-			}
+		} else if !IsEnabled(name) {
+			t.Errorf("Feature %q should be enabled after 'all,-beta'", name)
 		}
 	}
 }
 
 func TestNegativeAllDisablesAll(t *testing.T) {
-	Reset()
+	names := withFeatures(t, map[string]bool{"alpha": true, "beta": true})
 
-	Init(quiet(), []string{"appvisibility", "distributedrunners", "-all"})
+	Init(quiet(), []string{"alpha", "beta", "-all"})
 
-	for _, name := range AllFeatures() {
+	for _, name := range names {
 		if IsEnabled(name) {
 			t.Errorf("Feature %q should be disabled after '-all'", name)
 		}
+	}
+}
+
+func TestResetRestoresDefaults(t *testing.T) {
+	withFeatures(t, map[string]bool{"alpha": true, "beta": false})
+
+	Init(quiet(), []string{"-alpha", "beta"})
+	Reset()
+
+	if !IsEnabled("alpha") {
+		t.Error("Reset should restore alpha to its default of on")
+	}
+	if IsEnabled("beta") {
+		t.Error("Reset should restore beta to its default of off")
 	}
 }
