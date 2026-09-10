@@ -15,7 +15,7 @@ func AuthProviderAddGitHub(ctx *Context, opts struct {
 	Name         string   `position:"0" usage:"Name for this identity provider" required:"true"`
 	ClientID     string   `long:"client-id" description:"GitHub OAuth app client ID" required:"true"`
 	ClientSecret string   `long:"client-secret" description:"GitHub OAuth app client secret" required:"true"`
-	Orgs         []string `long:"org" description:"GitHub org restriction (repeatable). Use \"name\" for any-member, or \"name:team1,team2\" to require team membership and populate X-User-Groups."`
+	Orgs         []string `long:"org" split:"false" description:"GitHub org restriction (repeatable). Use \"name\" for any-member, or \"name:team1,team2\" to require team membership and populate X-User-Groups."`
 	Update       bool     `long:"update" description:"Overwrite an existing provider with the same name (rotates client secret)"`
 	ConfigCentric
 }) error {
