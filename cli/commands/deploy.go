@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -124,9 +125,13 @@ func Deploy(ctx *Context, opts deployOpts) error {
 	case opts.IsJSONL():
 		opts.Force = true
 		events = newDeployEventStream(stdout)
-		previous := ctx.Stdout
+		previousOut, previousLog := ctx.Stdout, ctx.Log
 		ctx.Stdout = io.Discard
-		defer func() { ctx.Stdout = previous }()
+		// Anything that logs through ctx.Log from here on (the RPC layer, most
+		// importantly) becomes a "log" event instead of text on stderr. The
+		// level stays whatever -v resolved to.
+		ctx.Log = slog.New(newEventLogHandler(events, &ctx.levelVar))
+		defer func() { ctx.Stdout, ctx.Log = previousOut, previousLog }()
 		events.start(opts.App, ctx.ClusterName)
 	case opts.IsJSON():
 		// A JSON consumer cannot answer a prompt, so behave as --force.

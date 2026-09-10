@@ -1,8 +1,10 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -270,6 +272,81 @@ type appLogEvent struct {
 
 func (s *deployEventStream) healthAppLog(line string) {
 	s.emit(appLogEvent{header("app_log"), line})
+}
+
+type logEvent struct {
+	eventHeader
+	Level   string         `json:"level"`
+	Message string         `json:"message"`
+	Fields  map[string]any `json:"fields,omitempty"`
+}
+
+// eventLogHandler routes the CLI's own log records into the stream as "log"
+// events. The RPC layer and other components log through ctx.Log; without
+// this, a warning or error from them would land on stderr as text in the
+// middle of an otherwise structured run.
+type eventLogHandler struct {
+	stream *deployEventStream
+	level  slog.Leveler
+	attrs  []slog.Attr
+	groups []string
+}
+
+func newEventLogHandler(stream *deployEventStream, level slog.Leveler) *eventLogHandler {
+	return &eventLogHandler{stream: stream, level: level}
+}
+
+func (h *eventLogHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level.Level()
+}
+
+// prefix is the dotted path of the open groups, ending in "." when non-empty.
+func (h *eventLogHandler) prefix() string {
+	if len(h.groups) == 0 {
+		return ""
+	}
+	return strings.Join(h.groups, ".") + "."
+}
+
+func (h *eventLogHandler) Handle(_ context.Context, r slog.Record) error {
+	fields := map[string]any{}
+	// Attributes attached earlier already carry the prefix that was open when
+	// they were attached; only the record's own attributes take the current one.
+	for _, a := range h.attrs {
+		fields[a.Key] = a.Value.Resolve().Any()
+	}
+	prefix := h.prefix()
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key != "" {
+			fields[prefix+a.Key] = a.Value.Resolve().Any()
+		}
+		return true
+	})
+	h.stream.emit(logEvent{
+		eventHeader: eventHeader{Event: "log", Time: r.Time.UTC()},
+		Level:       r.Level.String(),
+		Message:     r.Message,
+		Fields:      fields,
+	})
+	return nil
+}
+
+func (h *eventLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := *h
+	next.attrs = append([]slog.Attr(nil), h.attrs...)
+	prefix := h.prefix()
+	for _, a := range attrs {
+		if a.Key != "" {
+			next.attrs = append(next.attrs, slog.Attr{Key: prefix + a.Key, Value: a.Value})
+		}
+	}
+	return &next
+}
+
+func (h *eventLogHandler) WithGroup(name string) slog.Handler {
+	next := *h
+	next.groups = append(append([]string(nil), h.groups...), name)
+	return &next
 }
 
 type resultEvent struct {

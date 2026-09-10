@@ -123,6 +123,30 @@ func TestDeployEventStream_HealthObserver(t *testing.T) {
 	}
 }
 
+func TestEventLogHandler(t *testing.T) {
+	var buf bytes.Buffer
+	s := newDeployEventStream(&buf)
+	var level slog.LevelVar
+	level.Set(slog.LevelWarn)
+
+	log := slog.New(newEventLogHandler(s, &level)).With("module", "rpc")
+	log.Debug("hidden below the level")
+	log.WithGroup("call").Error("rpc.callstream: error calling inline", "error", "archive/tar: write too long")
+
+	events := decodeEvents(t, buf.String())
+	if len(events) != 1 {
+		t.Fatalf("expected the error only, got %d events: %s", len(events), buf.String())
+	}
+	ev := events[0]
+	if ev["event"] != "log" || ev["level"] != "ERROR" || ev["message"] != "rpc.callstream: error calling inline" {
+		t.Fatalf("log event = %v", ev)
+	}
+	fields := ev["fields"].(map[string]any)
+	if fields["module"] != "rpc" || fields["call.error"] != "archive/tar: write too long" {
+		t.Fatalf("fields = %v", fields)
+	}
+}
+
 // TestDeploy_JSONLIsTheOnlyOutput drives Deploy through its earliest failure
 // and checks the contract: stdout is nothing but JSON lines, ending in a
 // result, stderr gets nothing at all, and the CLI is handed a bare exit code so
