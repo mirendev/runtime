@@ -69,6 +69,7 @@ func (s *RegistrationServer) InstallDiskAccelerator(ctx context.Context, req *ru
 		results.SetError(fmt.Sprintf("connecting to runner %q at %s: %v", query, node.ApiAddress, err))
 		return nil
 	}
+	defer cl.Close()
 
 	nc := &nodeadmin_v1alpha.NodeAdminClient{Client: cl}
 	res, err := nc.InstallDiskAccelerator(ctx, image, args.HasForce() && args.Force())

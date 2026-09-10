@@ -706,7 +706,7 @@ regen:
 	c.Log.Info("generating new API cert", "path", cert)
 
 	cc, err := c.authority.IssueCertificate(caauth.Options{
-		CommonName:   "miren-api",
+		CommonName:   rpc.CoordinatorCertSubject,
 		Organization: "miren",
 		ValidFor:     1 * year,
 		IPs:          ips,
