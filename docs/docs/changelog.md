@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Breaking Changes**
+- **The `sagas` escape hatch is gone** - Builds and sandbox startup have run on the saga engine by default since v0.14.0, and `--labs -sagas` existed to put a cluster back on the previous code path if that went badly. It shipped a full release without anyone needing it, so both the flag and the path it selected are now removed. `-sagas` is no longer a known feature, so a server still passing it logs `unknown labs feature flag` at boot and starts normally; drop it from your `--labs` or `MIREN_LABS` setting to quiet the warning. Nothing else changes, because the saga path is already what you have been running. ([#1191](https://github.com/mirendev/runtime/pull/1191))
+
 ---
 
 ## v0.15.0

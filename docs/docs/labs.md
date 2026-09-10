@@ -29,16 +29,16 @@ Labs features are controlled via the `--labs` flag or `MIREN_LABS` environment v
 <CliCommand context="server">
 ```miren
 # Enable a single labs feature
-miren server --labs distributedrunners
+miren server --labs appvisibility
 
 # Enable multiple features
-miren server --labs distributedrunners --labs sagas
+miren server --labs appvisibility --labs distributedrunners
 
 # Via environment variable
-MIREN_LABS=distributedrunners miren server
+MIREN_LABS=appvisibility miren server
 
 # Multiple features via environment variable (comma-separated)
-MIREN_LABS=distributedrunners,sagas miren server
+MIREN_LABS=appvisibility,distributedrunners miren server
 ```
 </CliCommand>
 
@@ -54,8 +54,8 @@ miren server --labs -distributedrunners
 # Via environment variable
 MIREN_LABS=-distributedrunners miren server
 
-# Mix and match: sagas on, distributed runners off
-MIREN_LABS=sagas,-distributedrunners miren server
+# Mix and match: app visibility on, distributed runners off
+MIREN_LABS=appvisibility,-distributedrunners miren server
 ```
 </CliCommand>
 

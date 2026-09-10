@@ -13,7 +13,6 @@ import (
 const (
 	FeatureAppVisibility      = "appvisibility"
 	FeatureDistributedRunners = "distributedrunners"
-	FeatureSagas              = "sagas"
 )
 
 // AllFeatures returns a list of all known feature names
@@ -21,7 +20,6 @@ func AllFeatures() []string {
 	return []string{
 		FeatureAppVisibility,
 		FeatureDistributedRunners,
-		FeatureSagas,
 	}
 }
 
@@ -30,7 +28,6 @@ func FeatureDescriptions() map[string]string {
 	return map[string]string{
 		FeatureAppVisibility:      "Negotiate app visibility protocols over the cloud uplink",
 		FeatureDistributedRunners: "Schedule jobs across multiple runner nodes",
-		FeatureSagas:              "Use saga-based crash-recoverable workflows",
 	}
 }
 
@@ -43,7 +40,6 @@ var (
 var featureDefaults = map[string]bool{
 	FeatureAppVisibility:      false,
 	FeatureDistributedRunners: true,
-	FeatureSagas:              true,
 }
 
 // Init initializes the labs feature flags from the provided flag strings.
@@ -149,10 +145,4 @@ func AppVisibility() bool {
 // Schedule jobs across multiple runner nodes
 func DistributedRunners() bool {
 	return IsEnabled(FeatureDistributedRunners)
-}
-
-// Sagas returns whether the sagas feature is enabled.
-// Use saga-based crash-recoverable workflows
-func Sagas() bool {
-	return IsEnabled(FeatureSagas)
 }

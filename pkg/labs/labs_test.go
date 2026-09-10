@@ -12,41 +12,14 @@ func quiet() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// Sagas graduated to on-by-default in MIR-953, keeping the flag purely as an
-// escape hatch. Both halves of that contract are pinned here: nothing has to be
-// passed to get sagas, and "-sagas" on its own is enough to get the old path
-// back. MIR-1460 deletes this test along with the flag.
-func TestSagasEnabledByDefault(t *testing.T) {
-	Reset()
-
-	if !Sagas() {
-		t.Error("Sagas should be enabled by default")
-	}
-
-	Init(quiet(), nil)
-	if !Sagas() {
-		t.Error("Sagas should be enabled after Init with no flags")
-	}
-
-	Init(quiet(), []string{"distributedrunners"})
-	if !Sagas() {
-		t.Error("Sagas should stay enabled when an unrelated feature is named")
-	}
-
-	Init(quiet(), []string{"-sagas"})
-	if Sagas() {
-		t.Error("Sagas should be disabled by '-sagas' alone")
-	}
-}
-
 func TestDisableFeatureWithPrefix(t *testing.T) {
 	Reset()
 
 	// Enable first, then disable
-	Init(quiet(), []string{"sagas", "-sagas"})
+	Init(quiet(), []string{"distributedrunners", "-distributedrunners"})
 
-	if Sagas() {
-		t.Error("Sagas should be disabled after '-sagas'")
+	if DistributedRunners() {
+		t.Error("DistributedRunners should be disabled after '-distributedrunners'")
 	}
 }
 
@@ -64,10 +37,10 @@ func TestDistributedRunnersEnabledByDefault(t *testing.T) {
 func TestCaseInsensitiveFeatureNames(t *testing.T) {
 	Reset()
 
-	Init(quiet(), []string{"Sagas", "DISTRIBUTEDRUNNERS"})
+	Init(quiet(), []string{"AppVisibility", "DISTRIBUTEDRUNNERS"})
 
-	if !Sagas() {
-		t.Error("Sagas should be enabled (case-insensitive)")
+	if !AppVisibility() {
+		t.Error("AppVisibility should be enabled (case-insensitive)")
 	}
 	if !DistributedRunners() {
 		t.Error("DistributedRunners should be enabled (case-insensitive)")
@@ -94,10 +67,10 @@ func TestUnknownFeatureLogsWarning(t *testing.T) {
 func TestEmptyAndWhitespaceFlags(t *testing.T) {
 	Reset()
 
-	Init(quiet(), []string{"", "  ", "sagas", "  ", ""})
+	Init(quiet(), []string{"", "  ", "appvisibility", "  ", ""})
 
-	if !Sagas() {
-		t.Error("Sagas should be enabled despite empty/whitespace flags")
+	if !AppVisibility() {
+		t.Error("AppVisibility should be enabled despite empty/whitespace flags")
 	}
 }
 
@@ -134,7 +107,7 @@ func TestAllKeywordWithExclusion(t *testing.T) {
 func TestNegativeAllDisablesAll(t *testing.T) {
 	Reset()
 
-	Init(quiet(), []string{"sagas", "distributedrunners", "-all"})
+	Init(quiet(), []string{"appvisibility", "distributedrunners", "-all"})
 
 	for _, name := range AllFeatures() {
 		if IsEnabled(name) {
