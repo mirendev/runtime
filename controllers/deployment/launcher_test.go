@@ -3878,6 +3878,60 @@ func TestCreatePoolForVersionEphemeral(t *testing.T) {
 	assert.Contains(t, pool.ReferencedByVersions, version.ID)
 }
 
+// TestCreatePoolForVersionDefersWhileAddonsPending guards the on-demand path
+// with the same gate Reconcile has. An ephemeral version shares the app's
+// addons and skips provisioning, so a request arriving while the addon is
+// still coming up used to build a pool whose config had no DATABASE_URL.
+func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	version := &core_v1alpha.AppVersion{
+		App:            app.ID,
+		Version:        "v1",
+		ImageUrl:       "test:latest",
+		EphemeralLabel: "feat-x",
+		EphemeralTtl:   "48h",
+		Config: core_v1alpha.Config{
+			Port:     3000,
+			Services: []core_v1alpha.Services{{Name: "web"}},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-ver", version)
+	require.NoError(t, err)
+	version.ID = verID
+
+	assocID, err := server.Client.Create(ctx, "assoc-pg", &addon_v1alpha.AddonAssociation{
+		App:    app.ID,
+		Addon:  entity.Id("addon/miren-postgresql"),
+		Status: "provisioning",
+	})
+	require.NoError(t, err)
+
+	launcher := newTestLauncher(log, server.EAC)
+
+	_, err = launcher.CreatePoolForVersion(ctx, version, "web")
+	require.Error(t, err, "a pool built now would have no addon variables")
+	assert.Contains(t, err.Error(), "still provisioning")
+	assert.Empty(t, listAllPools(t, ctx, server), "no pool may exist while the addon is provisioning")
+
+	require.NoError(t, server.Client.Patch(ctx, assocID, 0,
+		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
+
+	poolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
+	require.NoError(t, err)
+	assert.NotEmpty(t, poolID)
+	assert.Len(t, listAllPools(t, ctx, server), 1)
+}
+
 // TestNonEphemeralPoolUnaffected guards against the ephemeral changes leaking
 // into normal deploys: a non-ephemeral fixed-mode version must still get the
 // configured instance count.

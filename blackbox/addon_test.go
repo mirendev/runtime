@@ -4,6 +4,7 @@ package blackbox
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestAddonCreateListDestroy(t *testing.T) {
 	// Wait for addon to appear in the list, then for provisioning to complete.
 	// The addon shows up in "addon list" immediately (status=pending), but env
 	// vars aren't injected until the provisioning saga finishes.
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// Destroy the addon and verify full async cleanup completes.
@@ -83,25 +84,23 @@ func TestAddonDeployWithAppToml(t *testing.T) {
 		m.Run("app", "delete", name, "-f")
 	})
 
-	// Deploy without waiting for healthy — the app depends on DATABASE_URL
-	// which is only injected after addon provisioning completes. The launcher
-	// defers pool creation until addons are ready, but we don't want
-	// WaitForAppReady to fatal on transient "crashed" health during provisioning.
-	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+	// The deploy holds until the addon is active, and says so on the way. The
+	// app depends on DATABASE_URL, which only exists once the association is
+	// active, so this is what keeps the first boot from racing the database
+	// (MIR-1804).
+	r := m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+	r.RequireContains(t, "Addon miren-postgresql ready")
 
-	// Wait for addon to appear in the list, then for provisioning to complete.
-	// Env vars are the true readiness signal — they're injected only after the
-	// full provisioning saga finishes (which may include creating the shared
-	// PG server from scratch if a previous run's cleanup is still settling).
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// Now wait for the app to become healthy
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
 
-	// Verify addon is listed
-	r := m.MustRun("addon", "list", "-a", name, "--format", "json")
+	// Verify addon is listed as active
+	r = m.MustRun("addon", "list", "-a", name, "--format", "json")
 	r.RequireContains(t, "miren-postgresql")
+	r.RequireContains(t, `"status": "active"`)
 
 	// Set a route and verify the app responds with DB connectivity
 	host := name + ".test.local"
@@ -128,6 +127,87 @@ func TestAddonDeployWithAppToml(t *testing.T) {
 	}
 }
 
+// TestAddonRedeployReachesSteadyState covers both halves of MIR-1804. The first
+// deploy of an app that declares an addon has to hold until the addon is
+// active, and say so. Every deploy after that has to find the addon already
+// active: no provisioning progress, no wait, and the version comes up healthy
+// inside the deploy itself rather than needing the test to wait for it.
+func TestAddonRedeployReachesSteadyState(t *testing.T) {
+	c := harness.NewCluster(t)
+	m := harness.NewMiren(t, c)
+
+	name := harness.UniqueAppName(t, "bun-postgres")
+
+	hostDir := filepath.Join(c.TestdataDir, "bun-postgres")
+	containerDir := m.ContainerPath(hostDir)
+
+	t.Cleanup(func() {
+		t.Logf("cleaning up app %s", name)
+		m.Run("app", "delete", name, "-f")
+	})
+
+	host := name + ".test.local"
+
+	// serving asserts the app answers over its route with a working database:
+	// / reads and writes the visits table, so it fails if DATABASE_URL is
+	// missing or points at nothing.
+	serving := func(stage string) {
+		t.Helper()
+		harness.Poll(t, stage+": app responds via route", 30*time.Second, 2*time.Second, func() (bool, string) {
+			code, body, err := harness.HTTPGet(m, host, "/")
+			if err != nil {
+				return false, err.Error()
+			}
+			if code != 200 {
+				return false, "status " + body
+			}
+			return true, ""
+		})
+	}
+
+	// First deploy: the association does not exist yet, so the deploy must
+	// create it, wait for it, and only then activate. The health verdict is
+	// the point: it is printed inside the deploy's own 90 second window, which
+	// used to expire while Postgres was still coming up.
+	first := m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+	first.RequireContains(t, "Provisioning addon miren-postgresql")
+	first.RequireContains(t, "Addon miren-postgresql ready")
+	first.RequireContains(t, "is live and serving")
+
+	m.MustRun("route", "set", host, name)
+	serving("first deploy")
+
+	previous := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+
+	// Steady state. Two more deploys, because the second is the one that
+	// first sees an already-active addon and the third proves that was not a
+	// one-off.
+	for i := 2; i <= 3; i++ {
+		stage := fmt.Sprintf("deploy %d", i)
+
+		r := m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
+		if r.OutputContains("Provisioning addon") {
+			t.Fatalf("%s: addon was already active, yet the deploy waited on it:\n%s%s", stage, r.Stdout, r.Stderr)
+		}
+		r.RequireContains(t, "is live and serving")
+
+		current := extractVersion(t, m.MustRun("app", "list", "--format", "json").Stdout, name)
+		if current == previous {
+			t.Fatalf("%s: expected a new version, still on %s", stage, previous)
+		}
+		previous = current
+
+		// The binding must carry forward to the new version without the
+		// addon being re-provisioned.
+		harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 30*time.Second)
+		serving(stage)
+	}
+
+	// And the addon itself never left active.
+	list := m.MustRun("addon", "list", "-a", name, "--format", "json")
+	list.RequireContains(t, `"status": "active"`)
+}
+
 func TestMysqlAddonDeployWithAppToml(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
@@ -147,7 +227,7 @@ func TestMysqlAddonDeployWithAppToml(t *testing.T) {
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
 	// Wait for addon provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-mysql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// Now wait for the app to become healthy
@@ -194,7 +274,7 @@ func TestMysqlAddonCreateListDestroy(t *testing.T) {
 	m.MustRun("addon", "create", "miren-mysql:small", "-a", name)
 
 	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-mysql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-mysql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// Verify MySQL-specific env vars are injected
@@ -219,7 +299,7 @@ func TestValkeyAddonCreateListDestroy(t *testing.T) {
 	m.MustRun("addon", "create", "miren-valkey:small", "-a", name)
 
 	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-valkey", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-valkey", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "VALKEY_URL", 5*time.Minute)
 
 	// Verify Valkey-specific env vars are injected
@@ -251,7 +331,7 @@ func TestAddonDeployWithVersionInAppToml(t *testing.T) {
 
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	harness.WaitForAppReady(t, m, name, 3*time.Minute)
@@ -326,7 +406,7 @@ func TestAddonEnvSurvivesDeployVersion(t *testing.T) {
 	t.Logf("pre-addon version: %s", preAddonVersion)
 
 	m.MustRun("addon", "create", "miren-postgresql:small", "-a", name)
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// Captured now, asserted at the end: attaching an addon contributes a binding

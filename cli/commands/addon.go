@@ -227,26 +227,30 @@ func AddonList(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type addonInfo struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Variant string `json:"variant"`
-			Version string `json:"version,omitempty"`
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			Variant      string `json:"variant"`
+			Version      string `json:"version,omitempty"`
+			Status       string `json:"status"`
+			ErrorMessage string `json:"error_message,omitempty"`
 		}
 
 		var infos []addonInfo
 		for _, a := range addons {
 			infos = append(infos, addonInfo{
-				ID:      a.Id(),
-				Name:    a.Name(),
-				Variant: a.Variant(),
-				Version: a.Version(),
+				ID:           a.Id(),
+				Name:         a.Name(),
+				Variant:      a.Variant(),
+				Version:      a.Version(),
+				Status:       a.Status(),
+				ErrorMessage: a.ErrorMessage(),
 			})
 		}
 		return PrintJSON(infos)
 	}
 
 	var rows []ui.Row
-	headers := []string{"ADDON", "VARIANT", "VERSION"}
+	headers := []string{"ADDON", "VARIANT", "VERSION", "STATUS"}
 
 	for _, a := range addons {
 		version := a.Version()
@@ -257,6 +261,7 @@ func AddonList(ctx *Context, opts struct {
 			a.Name(),
 			a.Variant(),
 			version,
+			addonStatusCell(a.Status(), a.ErrorMessage()),
 		})
 	}
 
@@ -273,6 +278,26 @@ func AddonList(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 	return nil
+}
+
+// addonStatusCell renders an association's status for the table. An older
+// server sends no status at all; show that as unknown rather than an empty
+// cell. An error carries its reason inline, since that is the one state where
+// the user has to act.
+func addonStatusCell(status, errorMessage string) string {
+	switch status {
+	case "":
+		return "-"
+	case "active":
+		return infoGreen.Render(status)
+	case "error":
+		if errorMessage != "" {
+			return infoRed.Render(fmt.Sprintf("error: %s", errorMessage))
+		}
+		return infoRed.Render(status)
+	default:
+		return status
+	}
 }
 
 func AddonDestroy(ctx *Context, opts struct {

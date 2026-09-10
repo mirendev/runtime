@@ -94,6 +94,19 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	app.Decode(appResp.Entity().Entity())
 	app.ID = ver.App
 
+	// Same gate as Reconcile. A pool built now would resolve a config with no
+	// addon variables in it, and every instance would boot without its
+	// database. The activator treats this as a failed on-demand creation and
+	// tries again on the next request; the normal reconcile creates the pool
+	// once the association flips to active.
+	ready, err := l.addonsReady(ctx, ver.App)
+	if err != nil {
+		return "", fmt.Errorf("checking addon readiness for app %s: %w", ver.App, err)
+	}
+	if !ready {
+		return "", fmt.Errorf("addons for app %s are still provisioning", ver.App)
+	}
+
 	// Resolve config
 	spec, err := coreutil.ResolveRuntimeConfig(ctx, l.EAC, ver)
 	if err != nil {
@@ -168,6 +181,11 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 
 // addonsReady returns true if the app has no pending or provisioning addon associations.
 // Apps without any addons are always considered ready.
+//
+// An association in error does not hold the app. Error is terminal in the
+// addon controller, so blocking on it would turn every later env change or
+// rollback on that app into a silent no-op. The deploy path fails loudly on
+// error before the version is ever activated; here it is only worth a warning.
 func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, error) {
 	results, err := l.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
 	if err != nil {
@@ -178,9 +196,13 @@ func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, erro
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
 
-		if assoc.Status == "pending" || assoc.Status == "provisioning" {
+		switch assoc.Status {
+		case "pending", "provisioning":
 			l.Log.Info("addon not ready", "association", assoc.ID, "status", assoc.Status)
 			return false, nil
+		case "error":
+			l.Log.Warn("addon failed to provision; app will launch without its variables",
+				"association", assoc.ID, "app", appID, "error", assoc.ErrorMessage)
 		}
 	}
 
