@@ -29,7 +29,13 @@ func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox
 
 	_, err = c.CC.Pull(ctx, ref, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
 	if err != nil {
-		c.EmitSandboxEvent(sb, shortID, describePullFailure(ref, err))
+		// A cancelled context means we were superseded or are shutting down,
+		// not that the pull failed. Skip the event so the app's logs don't
+		// report a failure (and, via the url.Error wrapper, a network hint)
+		// for something that never went wrong. Same guard as the port wait.
+		if ctx.Err() == nil {
+			c.EmitSandboxEvent(sb, shortID, describePullFailure(ref, err))
+		}
 		return nil, fmt.Errorf("failed to pull image %s: %w", ref, err)
 	}
 
@@ -56,8 +62,8 @@ func (c *SandboxController) logImageReady(ctx context.Context, img containerd.Im
 // error names an IP and port but not what is listening there, and the
 // distributed-runner case that motivated MIR-1541 is exactly a runner that
 // cannot open port 5000 on the coordinator.
-const registryUnreachableHint = "check that this node can reach the cluster image registry (" +
-	ocireg.Host + ", served by the coordinator on port 5000)"
+const registryUnreachableHint = "check that this node can reach the cluster image registry at " +
+	ocireg.Host + " on the coordinator"
 
 // describePullFailure builds the user-facing line for a failed image pull.
 // The containerd error is kept verbatim because its tail carries the root
@@ -67,9 +73,20 @@ func describePullFailure(ref string, err error) string {
 	msg := fmt.Sprintf("failed to pull image %s: %v", ref, err)
 
 	var netErr net.Error
-	if strings.HasPrefix(ref, ocireg.Host+"/") && errors.As(err, &netErr) {
+	if isClusterRegistryRef(ref) && errors.As(err, &netErr) {
 		msg += "; " + registryUnreachableHint
 	}
 
 	return msg
+}
+
+// isClusterRegistryRef reports whether ref is served by the cluster registry.
+// It accepts the same two host spellings SandboxController.resolver routes
+// there: with the port (what the build pipeline writes) and without it.
+func isClusterRegistryRef(ref string) bool {
+	host, _, ok := strings.Cut(ref, "/")
+	if !ok {
+		return false
+	}
+	return host == ocireg.Host || host == "cluster.local"
 }

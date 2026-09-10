@@ -44,6 +44,12 @@ func TestDescribePullFailure(t *testing.T) {
 			wantHint: true,
 		},
 		{
+			name:     "bare cluster.local spelling is also the cluster registry",
+			ref:      "cluster.local/app:v1",
+			err:      dialTimeout,
+			wantHint: true,
+		},
+		{
 			name:     "missing image on the cluster registry gets no hint",
 			ref:      ocireg.Host + "/app:v1",
 			err:      fmt.Errorf("failed to resolve reference %q: %w", "x", errdefs.ErrNotFound),
@@ -106,4 +112,13 @@ func TestEnsureImageEmitsPullFailure(t *testing.T) {
 	assert.Equal(t, "abc123", got.log.Attributes["miren.short_id"])
 	// Not a cluster-registry ref, so no reachability hint.
 	assert.NotContains(t, got.log.Body, registryUnreachableHint)
+
+	// A pull interrupted by cancellation is not a failure the app's logs
+	// should report: the error still comes back, but nothing is written.
+	cancelledCtx, cancelNow := context.WithCancel(ctx)
+	cancelNow()
+	img, err = co.ensureImage(cancelledCtx, sb, "abc123", ref)
+	r.Error(err)
+	r.Nil(img)
+	assert.Len(t, lw.entries, 1, "cancelled pull must not add a log entry")
 }
