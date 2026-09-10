@@ -27,7 +27,7 @@ Version: myapp-vCVkjR6u7744AsMebwMjGU
 
 Use `--format json` to get the result as a single JSON document on stdout (`status`, `app_version`, `deploy_id`, `urls`); progress text moves to stderr, no prompts are shown, and the document is still written when the deploy fails, with `status` set to `failed` and an `error` field. Add `--quiet` to drop upload and build progress and keep only the phase summaries and the result.
 
-Use `--format jsonl` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an `event` name and a `time`, and stderr stays empty. Events are `start`, `message`, `upload`, `upload_complete`, `build_step` (with `status` started, done, cached, or error), `build_log`, `build_error`, `build_complete`, `deployment` (phase changes), `warning`, `health` (waiting, then healthy or failed), `port_warning`, `app_log` (recent crash output on a failed rollout), and finally `result`, which carries the same fields as the `--format json` document.
+Use `--format jsonl` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an `event` name and a `time`, and stderr stays empty. Events are `start`, `message`, `upload`, `upload_complete`, `build_step` (with `status` started, done, cached, or error), `build_log`, `build_error`, `build_complete`, `deployment` (phase changes), `warning`, `health` (waiting, then healthy or failed), `port_warning`, `app_log` (recent crash output on a failed rollout), `log` (the CLI's own log records, which would otherwise go to stderr), and finally `result`, which carries the same fields as the `--format json` document.
 
 :::note[Config changes deploy on their own]
 Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deploy` when your code or `app.toml` has changed.
@@ -47,7 +47,7 @@ miren deploy [flags]
 - `--explain, -x` — Explain the build process
 - `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`, `quiet`)
 - `--force, -f` — Skip confirmation prompt
-- `--format` — Output format (text, json) (default: `text`)
+- `--format` — Output format (text, json, jsonl) (default: `text`)
 - `--json` — Shorthand for --format json
 - `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)

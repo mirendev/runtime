@@ -26,10 +26,11 @@ import (
 // Methods are safe to call from the RPC callback goroutines that deliver build
 // status.
 type deployEventStream struct {
-	mu    sync.Mutex
-	enc   *json.Encoder
-	names map[string]string // vertex digest → step name
-	state map[string]string // vertex digest → last reported status
+	mu       sync.Mutex
+	enc      *json.Encoder
+	names    map[string]string // vertex digest → step name
+	state    map[string]string // vertex digest → last reported status
+	firstErr error             // first write failure, if any
 }
 
 func newDeployEventStream(w io.Writer) *deployEventStream {
@@ -56,9 +57,20 @@ func header(name string) eventHeader {
 func (s *deployEventStream) emit(v any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A write failure (closed pipe) has nowhere useful to go; the deploy itself
-	// carries on and the exit code still reports the outcome.
-	_ = s.enc.Encode(v)
+	// A write failure (closed pipe) has nowhere useful to go mid-stream, so the
+	// deploy itself carries on. The failure is remembered so the exit code can
+	// say the stream was incomplete even when the deploy succeeded: a consumer
+	// that never saw the result line must not be told all went well.
+	if err := s.enc.Encode(v); err != nil && s.firstErr == nil {
+		s.firstErr = err
+	}
+}
+
+// Err reports the first write failure, or nil if every event went out.
+func (s *deployEventStream) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstErr
 }
 
 type startEvent struct {

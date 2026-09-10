@@ -83,7 +83,12 @@ func reconcileDeploymentCancellation(
 
 type deployOpts struct {
 	AppCentric
-	FormatOptions
+
+	// Deploy carries its own format flags rather than the shared FormatOptions:
+	// it is the one command that also speaks jsonl, and the shared help text
+	// must not advertise that everywhere.
+	Format string `long:"format" description:"Output format (text, json, jsonl)" default:"text"`
+	JSON   bool   `long:"json" description:"Shorthand for --format json"`
 
 	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
 	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
@@ -96,6 +101,17 @@ type deployOpts struct {
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
+}
+
+// IsJSON reports whether one JSON document was requested (--json or
+// --format json, case-insensitive).
+func (o *deployOpts) IsJSON() bool {
+	return o.JSON || strings.EqualFold(o.Format, "json")
+}
+
+// IsJSONL reports whether the streaming JSON Lines format was requested.
+func (o *deployOpts) IsJSONL() bool {
+	return strings.EqualFold(o.Format, "jsonl")
 }
 
 // machineReadable reports whether a program, not a person, is reading the
@@ -156,6 +172,12 @@ func Deploy(ctx *Context, opts deployOpts) error {
 		// keeps the CLI from printing "Error: ..." on stderr, so the stream
 		// stays the only output. A local cancellation keeps its exit 0.
 		if err != nil && !errors.Is(err, context.Canceled) {
+			return ErrExitCode(1)
+		}
+		// A stream that lost events (stdout closed early) cannot claim success:
+		// the consumer may never have seen the result line.
+		if err == nil && events.Err() != nil {
+			ctx.Log.Warn("deploy succeeded but the event stream could not be written", "error", events.Err())
 			return ErrExitCode(1)
 		}
 	}
@@ -956,7 +978,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deploySummary, events *de
 			uploadBytes = progress.BytesRead
 			// Rate-limit reports so a terminal feels live but a log isn't flooded.
 			// Quiet mode keeps only the completion line printed when the build starts.
-			if progress.Fraction <= 0 || time.Since(lastPrintTime) < uploadLine.interval() {
+			// Time is the only gate: when the manifest could not be computed the
+			// fraction stays unknown (zero), and progress must still be reported.
+			if time.Since(lastPrintTime) < uploadLine.interval() {
 				return
 			}
 			lastPrintTime = time.Now()

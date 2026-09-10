@@ -117,6 +117,31 @@ func TestDebugDeployEvents_FailedResult(t *testing.T) {
 	}
 }
 
+func TestDebugDeployEvents_VersionIsCleanedLikeLiveOutput(t *testing.T) {
+	var out bytes.Buffer
+	ctx := &Context{Context: context.Background(), Stdout: &out, Stderr: io.Discard}
+	r := newDeployEventRenderer(ctx, false, false)
+	r.renderLine([]byte(`{"event":"result","time":"2026-09-10T18:30:06.500Z","status":"success","app_version":"app_version/hw-bun-v1","urls":[]}`))
+	if !strings.Contains(out.String(), "Version: hw-bun-v1\n") {
+		t.Fatalf("entity prefix must be stripped:\n%s", out.String())
+	}
+}
+
+func TestDebugDeployEvents_UnknownEventEchoesRawLine(t *testing.T) {
+	var out bytes.Buffer
+	ctx := &Context{Context: context.Background(), Stdout: &out, Stderr: io.Discard}
+	r := newDeployEventRenderer(ctx, false, false)
+	raw := `{"event":"future_thing","time":"2026-09-10T18:30:06.500Z","novel_field":42}`
+	r.renderLine([]byte(raw))
+	got := out.String()
+	if !strings.Contains(got, raw) {
+		t.Fatalf("unknown event must echo the original line:\n%s", got)
+	}
+	if strings.Contains(got, `"app":""`) {
+		t.Fatalf("unknown event must not print re-marshalled empty fields:\n%s", got)
+	}
+}
+
 func TestDebugDeployEvents_ReadsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deploy.jsonl")
 	if err := os.WriteFile(path, []byte(sampleDeployEvents), 0o644); err != nil {

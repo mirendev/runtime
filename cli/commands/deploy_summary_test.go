@@ -279,7 +279,7 @@ func TestDeploy_JSONReportsFailureOnStdout(t *testing.T) {
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	opts := deployOpts{FormatOptions: FormatOptions{JSON: true}}
+	opts := deployOpts{JSON: true}
 	opts.App = "meet"
 
 	err := Deploy(ctx, opts)

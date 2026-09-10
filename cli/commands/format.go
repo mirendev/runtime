@@ -18,13 +18,6 @@ func (f *FormatOptions) IsJSON() bool {
 	return f.JSON || strings.EqualFold(f.Format, "json")
 }
 
-// IsJSONL returns true if JSON Lines format is selected (case-insensitive).
-// Only commands that stream progress support it; the others treat it as an
-// unknown format.
-func (f *FormatOptions) IsJSONL() bool {
-	return strings.EqualFold(f.Format, "jsonl")
-}
-
 // PrintJSON prints data as formatted JSON to stdout
 func PrintJSON(data any) error {
 	return PrintJSONTo(os.Stdout, data)

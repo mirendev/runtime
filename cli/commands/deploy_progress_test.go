@@ -117,6 +117,12 @@ func TestUploadProgressLine(t *testing.T) {
 		t.Fatalf("line = %q", line)
 	}
 
+	// An unknown fraction (no manifest) must not be reported as 0%.
+	unknown := uploadProgressLine(upload.Progress{BytesRead: 2048, BytesPerSecond: 1024})
+	if unknown != "Uploading artifacts: 2.0 KB at 1.0 KB/s" {
+		t.Fatalf("line with unknown fraction = %q", unknown)
+	}
+
 	withETA := uploadProgressLine(upload.Progress{
 		BytesRead:      2048,
 		BytesPerSecond: 1024,

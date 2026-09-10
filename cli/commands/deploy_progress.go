@@ -126,8 +126,13 @@ func (p *plainProgress) clear() {
 
 // uploadProgressLine formats one upload progress report.
 func uploadProgressLine(progress upload.Progress) string {
-	line := fmt.Sprintf("Uploading artifacts: %d%% — %s at %s",
-		int(progress.Fraction*100),
+	// The fraction is unknown (zero) when the file manifest could not be
+	// computed; claiming "0%" then would be wrong, so only bytes and speed show.
+	line := "Uploading artifacts: "
+	if progress.Fraction > 0 {
+		line += fmt.Sprintf("%d%% — ", int(progress.Fraction*100))
+	}
+	line += fmt.Sprintf("%s at %s",
 		upload.FormatBytes(progress.BytesRead),
 		upload.FormatSpeed(progress.BytesPerSecond))
 	if progress.ETA > 0 {

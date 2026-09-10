@@ -123,6 +123,65 @@ func TestDeployEventStream_HealthObserver(t *testing.T) {
 	}
 }
 
+// failingWriter fails every write, standing in for a stdout whose reader went
+// away.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestDeployEventStream_RemembersFirstWriteError(t *testing.T) {
+	s := newDeployEventStream(failingWriter{})
+	if s.Err() != nil {
+		t.Fatal("no error before any write")
+	}
+	s.start("meet", "prod")
+	s.message("still going")
+	if s.Err() == nil || s.Err().Error() != "broken pipe" {
+		t.Fatalf("Err() = %v, want the first write failure", s.Err())
+	}
+}
+
+// TestDeploy_JSONLBrokenStdoutIsNotSuccess: a stream that could not be
+// written must not exit 0 even if the deploy itself got as far as it did. The
+// deploy here fails early anyway, so the check is that the exit-code path
+// consults the stream and does not panic on a dead writer.
+func TestDeploy_JSONLBrokenStdoutIsNotSuccess(t *testing.T) {
+	var stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  failingWriter{},
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{Format: "jsonl"}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	var exitErr ErrExitCode
+	if !errors.As(err, &exitErr) || int(exitErr) != 1 {
+		t.Fatalf("expected ErrExitCode(1), got %v", err)
+	}
+}
+
+func TestDeployOptsFormats(t *testing.T) {
+	cases := []struct {
+		opts              deployOpts
+		json, jsonl, auto bool
+	}{
+		{deployOpts{Format: "text"}, false, false, false},
+		{deployOpts{Format: "json"}, true, false, true},
+		{deployOpts{Format: "JSON"}, true, false, true},
+		{deployOpts{JSON: true}, true, false, true},
+		{deployOpts{Format: "jsonl"}, false, true, true},
+		{deployOpts{Format: "JSONL"}, false, true, true},
+	}
+	for _, tc := range cases {
+		if tc.opts.IsJSON() != tc.json || tc.opts.IsJSONL() != tc.jsonl || tc.opts.machineReadable() != tc.auto {
+			t.Errorf("%+v: IsJSON=%v IsJSONL=%v machineReadable=%v", tc.opts, tc.opts.IsJSON(), tc.opts.IsJSONL(), tc.opts.machineReadable())
+		}
+	}
+}
+
 func TestEventLogHandler(t *testing.T) {
 	var buf bytes.Buffer
 	s := newDeployEventStream(&buf)
@@ -159,7 +218,7 @@ func TestDeploy_JSONLIsTheOnlyOutput(t *testing.T) {
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	}
-	opts := deployOpts{FormatOptions: FormatOptions{Format: "jsonl"}}
+	opts := deployOpts{Format: "jsonl"}
 	opts.App = "meet"
 
 	err := Deploy(ctx, opts)

@@ -14,6 +14,7 @@ import (
 
 	"miren.dev/runtime/pkg/progress/upload"
 	"miren.dev/runtime/pkg/theme"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DebugDeployEvents renders a `miren deploy --format jsonl` stream back into
@@ -136,7 +137,7 @@ func (r *deployEventRenderer) renderLine(line []byte) {
 	if r.first.IsZero() && !ev.Time.IsZero() {
 		r.first = ev.Time
 	}
-	for _, out := range r.render(ev) {
+	for _, out := range r.render(ev, trimmed) {
 		if out == "" {
 			// Spacer lines stay blank; a stamp on nothing is just noise.
 			r.ctx.Printf("\n")
@@ -157,8 +158,9 @@ func (r *deployEventRenderer) stamp(ev deployEventRecord) string {
 }
 
 // render returns the lines for one event. It leans on the same helpers the
-// live deploy uses so the two read alike.
-func (r *deployEventRenderer) render(ev deployEventRecord) []string {
+// live deploy uses so the two read alike. raw is the original input line, kept
+// for events this renderer does not know so nothing is lost or invented.
+func (r *deployEventRenderer) render(ev deployEventRecord, raw string) []string {
 	switch ev.Event {
 	case "start":
 		return []string{fmt.Sprintf("  ✓ %s: %s %s %s", r.success.Render("Deploying"), ev.App, r.faint.Render("→"), ev.Cluster)}
@@ -251,8 +253,7 @@ func (r *deployEventRenderer) render(ev deployEventRecord) []string {
 		return r.renderResult(ev)
 
 	default:
-		data, _ := json.Marshal(ev)
-		return []string{"  " + r.faint.Render(string(data))}
+		return []string{"  " + r.faint.Render(raw)}
 	}
 }
 
@@ -332,7 +333,8 @@ func (r *deployEventRenderer) renderResult(ev deployEventRecord) []string {
 		lines = append(lines, "", "✗ Deploy failed")
 	}
 	if ev.AppVersion != "" {
-		lines = append(lines, "Version: "+ev.AppVersion)
+		// Same cleaning as the live deploy, so the replay matches it.
+		lines = append(lines, "Version: "+ui.CleanEntityID(ev.AppVersion))
 	}
 	if ev.Error != "" {
 		lines = append(lines, r.fail.Render("Error: "+ev.Error))
