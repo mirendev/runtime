@@ -65,6 +65,6 @@ type SandboxObservability interface {
 	// sandbox's normal log stream, so `miren logs sandbox <id>`
 	// surfaces it alongside container output. Intended for startup
 	// or teardown events where a container never produced logs of
-	// its own (e.g. volume mount failures).
+	// its own (e.g. volume mount failures, image pull failures).
 	LogSandboxEvent(sb *compute.Sandbox, shortID, line string)
 }

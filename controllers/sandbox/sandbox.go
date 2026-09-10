@@ -1806,27 +1806,10 @@ func (c *SandboxController) BuildSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.CC.GetImage(ctx, sandboxImage)
-	if err != nil {
-		// If the image is not found, we can try to pull it.
-		_, err = c.CC.Pull(ctx, sandboxImage, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to pull image %s: %w", sandboxImage, err)
-		}
-
-		img, err = c.CC.GetImage(ctx, sandboxImage)
-		if err != nil {
-			// If we still can't get the image, return the error.
-			return nil, fmt.Errorf("failed to get image %s: %w", sandboxImage, err)
-		}
-	}
-
-	sz, err := img.Size(ctx)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), sandboxImage)
 	if err != nil {
 		return nil, err
 	}
-
-	c.Log.Info("image ready", "ref", img.Metadata().Target.Digest, "size", sz)
 
 	var (
 		opts []containerd.NewContainerOpts
@@ -2521,27 +2504,10 @@ func (c *SandboxController) buildSubContainerSpec(
 	[]containerd.NewContainerOpts,
 	error,
 ) {
-	img, err := c.CC.GetImage(ctx, co.Image)
-	if err != nil {
-		// If the image is not found, we can try to pull it.
-		_, err = c.CC.Pull(ctx, co.Image, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
-		if err != nil {
-			return nil, fmt.Errorf("failed to pull image %s: %w", co.Image, err)
-		}
-
-		img, err = c.CC.GetImage(ctx, co.Image)
-		if err != nil {
-			// If we still can't get the image, return the error.
-			return nil, fmt.Errorf("failed to get image %s: %w", co.Image, err)
-		}
-	}
-
-	sz, err := img.Size(ctx)
+	img, err := c.ensureImage(ctx, sb, meta.ShortId(), co.Image)
 	if err != nil {
 		return nil, err
 	}
-
-	c.Log.Info("image ready", "ref", img.Metadata().Target.Digest, "size", sz)
 
 	var (
 		opts []containerd.NewContainerOpts
