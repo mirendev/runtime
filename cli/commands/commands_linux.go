@@ -7,6 +7,12 @@ import (
 func addCommands(d *mflags.Dispatcher) {
 	// Server command is now defined in commands.go (renamed from dev)
 
+	// Invoked by systemd's ExecStopPost, not by people.
+	d.Dispatch("internal record-exit", Infer("internal record-exit",
+		"Record why systemd stopped a miren unit", InternalRecordExit,
+		WithGroup(GroupHidden),
+	))
+
 	// Cloud registration commands
 	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", RegisterStandalone,
 		WithExample(mflags.Example{

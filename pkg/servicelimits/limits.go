@@ -1,0 +1,288 @@
+// Package servicelimits generates the systemd drop-in that bounds the memory a
+// miren daemon may use, so a runaway control process degrades miren instead of
+// taking the whole machine down with it.
+//
+// # What the limit covers
+//
+// The miren.service cgroup holds the coordinator process, the containerd daemon
+// it manages, and one containerd-shim per container. It does NOT hold the
+// containers themselves: sandboxes are created at /miren/sandbox-<id> and every
+// other containerd workload at /<namespace>/<id>, both absolute paths that runc
+// resolves against the cgroup root. So /miren is a top-level cgroup, a sibling
+// of system.slice, holding app payloads, addon databases, etcd, buildkit and the
+// two Victoria services.
+//
+// Capping miren.service therefore cannot kill user workloads, which is what
+// makes this safe to apply by default. It also means the cap is sized to what a
+// control plane legitimately needs rather than to the whole machine — a limit
+// near 100% of RAM would be close to useless, since memory outside the service
+// can exhaust the host before the coordinator's own cgroup reaches its limit.
+//
+// # Why a drop-in rather than the unit itself
+//
+// The base unit is written only when it is absent or --force is passed, so a
+// change to the unit template never reaches a host that already has miren
+// installed — precisely the hosts at risk. A drop-in can be rewritten
+// unconditionally on install and on upgrade, leaves operator edits to the base
+// unit alone, and keeps `systemctl edit` free as an override: that writes
+// override.conf, which sorts after the 10- prefix used here and therefore wins.
+package servicelimits
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+const (
+	mib = 1024 * 1024
+	gib = 1024 * 1024 * 1024
+
+	// memoryFraction is the share of host RAM the control plane may use. A
+	// healthy control plane idles around 600 MB plus containerd and its shims,
+	// so a quarter of the machine is generous by a wide margin while still
+	// catching a runaway an order of magnitude before it exhausts the host.
+	memoryFraction = 4
+
+	// memoryFloorBytes keeps the limit workable on a 4 GB host — the documented
+	// minimum — where a flat quarter would leave too little headroom for a
+	// build or a burst of shims.
+	memoryFloorBytes = 2 * gib
+
+	// memoryCapBytes keeps the limit meaningful on a large host, where a
+	// quarter of RAM would be a cap the coordinator could never realistically
+	// reach and so would not bound a leak in time.
+	memoryCapBytes = 16 * gib
+
+	// memoryHeadroomPercent bounds the limit against physical RAM, so a tiny
+	// machine that falls under memoryFloorBytes still leaves the rest of the
+	// system something to run in.
+	memoryHeadroomPercent = 90
+
+	// memoryHighPercent sets MemoryHigh relative to MemoryMax. Crossing
+	// MemoryHigh throttles the cgroup and forces reclaim, which gives the Go
+	// garbage collector a chance to recover before the kernel kills anything.
+	memoryHighPercent = 85
+)
+
+// DropInFileName is the drop-in this package manages. The numeric prefix orders
+// it before `systemctl edit`'s override.conf, so an operator override wins.
+const DropInFileName = "10-miren-resources.conf"
+
+// unitDir is the systemd unit directory. A variable so tests can redirect it.
+var unitDir = "/etc/systemd/system"
+
+// binPath is the installed miren binary, used for the ExecStopPost hook.
+const binPath = "/var/lib/miren/release/miren"
+
+// Limits is the set of cgroup limits computed for a host.
+type Limits struct {
+	// SystemRAMBytes is the detected host memory, or 0 when it could not be
+	// read.
+	SystemRAMBytes int64
+
+	// MemoryMaxBytes and MemoryHighBytes are 0 when host memory is unknown. In
+	// that case the memory directives are omitted rather than guessed: a limit
+	// picked blind could be far too tight and would turn a diagnostic gap into
+	// an outage.
+	MemoryMaxBytes  int64
+	MemoryHighBytes int64
+}
+
+// Known returns whether a memory limit could be computed.
+func (l Limits) Known() bool { return l.MemoryMaxBytes > 0 }
+
+// Compute derives the cgroup limits for a host with ramBytes of memory. A
+// ramBytes of 0 means the host's memory could not be determined.
+func Compute(ramBytes int64) Limits {
+	l := Limits{SystemRAMBytes: ramBytes}
+	if ramBytes <= 0 {
+		return l
+	}
+
+	limit := min(max(ramBytes/memoryFraction, memoryFloorBytes), memoryCapBytes)
+	limit = min(limit, ramBytes*memoryHeadroomPercent/100)
+
+	// Derive MemoryHigh in whole MiB so both directives render as round values
+	// an operator can read at a glance.
+	l.MemoryMaxBytes = limit
+	l.MemoryHighBytes = (limit / mib) * memoryHighPercent / 100 * mib
+	return l
+}
+
+// DetectSystemRAMBytes reads total system memory from /proc/meminfo, returning 0
+// when it cannot be determined.
+func DetectSystemRAMBytes() int64 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return 0
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return kb * 1024 // /proc/meminfo reports kB
+	}
+	return 0
+}
+
+// Render returns the drop-in body for a unit. statePath is where the
+// ExecStopPost hook writes its record; an empty statePath omits the hook.
+//
+// OOMPolicy is deliberately left at its default. OOMPolicy=kill would take the
+// containerd shims down along with the coordinator, disrupting apps that the
+// cap is specifically meant to spare.
+func Render(unit string, statePath string, l Limits) string {
+	var b strings.Builder
+
+	b.WriteString("# Managed by miren — regenerated on install and upgrade. Do not edit.\n")
+	fmt.Fprintf(&b, "# To override, run `sudo systemctl edit %s` and set your own values\n", UnitShortName(unit))
+	b.WriteString("# there; systemd applies that file after this one.\n")
+	b.WriteString("[Service]\n")
+
+	if l.Known() {
+		fmt.Fprintf(&b, "MemoryHigh=%s\n", formatBytes(l.MemoryHighBytes))
+		fmt.Fprintf(&b, "MemoryMax=%s\n", formatBytes(l.MemoryMaxBytes))
+	} else {
+		b.WriteString("# Host memory could not be determined, so no memory limit was set.\n")
+	}
+
+	// Swap thrash is what actually makes a host unresponsive. Without this the
+	// cgroup drags the machine through swap long before it reaches MemoryMax.
+	b.WriteString("MemorySwapMax=0\n")
+
+	if statePath != "" {
+		// The leading "-" makes systemd record the hook's exit status without
+		// treating a failure as a failure of the unit. Without it, any stop
+		// where the hook can't run cleanly leaves the unit in a failed state:
+		// a rollback to a build with no `internal record-exit` subcommand, a
+		// binary momentarily absent mid-upgrade, or the hook itself being
+		// killed under the memory pressure this whole file exists for. Losing
+		// one diagnostic record is always better than failing the stop.
+		fmt.Fprintf(&b, "ExecStopPost=-%s internal record-exit --unit=%s --output=%s\n",
+			binPath, unit, quoteExecArg(statePath))
+	}
+
+	return b.String()
+}
+
+// Write renders the drop-in for a unit and installs it, replacing any previous
+// version. It creates the drop-in directory if needed and writes atomically, so
+// a crash mid-write cannot leave systemd with a truncated file.
+func Write(unit string, statePath string, l Limits) error {
+	dir := DropInDir(unit)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create drop-in directory %s: %w", dir, err)
+	}
+
+	path := filepath.Join(dir, DropInFileName)
+	tmp, err := os.CreateTemp(dir, DropInFileName+".*")
+	if err != nil {
+		return fmt.Errorf("create temp drop-in in %s: %w", dir, err)
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.WriteString(Render(unit, statePath, l)); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write drop-in %s: %w", path, err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod drop-in %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close drop-in %s: %w", path, err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("install drop-in %s: %w", path, err)
+	}
+	return nil
+}
+
+// Remove deletes the managed drop-in and, if it is then empty, the drop-in
+// directory. A directory left behind by an operator override is kept.
+func Remove(unit string) error {
+	dir := DropInDir(unit)
+	if err := os.Remove(filepath.Join(dir, DropInFileName)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove drop-in in %s: %w", dir, err)
+	}
+	// Ignore the error: a non-empty directory is the expected case when an
+	// operator has their own override alongside ours.
+	os.Remove(dir)
+	return nil
+}
+
+// DropInDir returns the systemd drop-in directory for a unit.
+func DropInDir(unit string) string {
+	return filepath.Join(unitDir, unit+".d")
+}
+
+// UnitShortName is the name an operator types, e.g. "miren" for "miren.service".
+// An empty unit falls back to the server, so a record written before the unit
+// name was stored still yields a usable instruction.
+func UnitShortName(unit string) string {
+	if unit == "" {
+		return "miren"
+	}
+	return strings.TrimSuffix(unit, ".service")
+}
+
+// quoteExecArg renders a value safe to embed in a systemd Exec= line.
+//
+// The runner's state path comes from `miren runner install --data-path`, so it
+// is operator-supplied. Left raw, a path containing a space splits into extra
+// arguments and the hook silently stops recording — the failure mode being a
+// missing crash report, with nothing to point at the cause. A newline would end
+// the directive early and let the rest of the value inject arbitrary settings
+// into the drop-in.
+//
+// systemd applies shell-like unquoting to Exec arguments, so a double-quoted
+// string with backslash-escaped specials is understood the way it looks.
+func quoteExecArg(s string) string {
+	if !strings.ContainsAny(s, " \t\n\r\"'\\$;") {
+		return s
+	}
+
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\', '$':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// formatBytes renders a byte count in the largest unit that divides it exactly,
+// so limits read as "4G" rather than "4294967296".
+func formatBytes(n int64) string {
+	switch {
+	case n%gib == 0:
+		return strconv.FormatInt(n/gib, 10) + "G"
+	case n%mib == 0:
+		return strconv.FormatInt(n/mib, 10) + "M"
+	default:
+		return strconv.FormatInt(n, 10)
+	}
+}

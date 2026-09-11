@@ -144,6 +144,70 @@ miren debug connection
 
 This tests RPC and HTTP connectivity to the server and reports the server version and auth status.
 
+## The server restarted on its own
+
+On a systemd install, the Miren server runs under a memory limit. If it ever
+exceeds that limit, the kernel stops the server and systemd starts it again.
+That is deliberate: a server that grows without bound would otherwise take the
+whole machine down, and a machine you can still reach is worth more than a
+server that never restarts.
+
+Your apps keep running through this. They have their own cgroups — the kernel's
+per-workload memory accounting — outside the server's, so the limit does not
+apply to them and the restart doesn't stop them.
+
+When it happens, the server says so the next time it starts:
+
+<CliCommand context="client">
+```miren
+miren logs system
+```
+</CliCommand>
+
+Look for `previous miren server run was killed for exceeding its memory limit`.
+It carries the memory the server reached, the limit it was held to, and how many
+times systemd has restarted it.
+
+**Seeing the current limit**
+
+<CliCommand context="server">
+```bash
+systemctl show -p MemoryMax -p MemoryHigh miren
+```
+</CliCommand>
+
+Miren sets this at install time to a quarter of the machine's memory, with a
+floor of 2 GB and a ceiling of 16 GB, and refreshes it on each upgrade. The
+limit covers the server process, containerd, and the per-container shims — not
+your apps or addon databases.
+
+**Raising it**
+
+A single restart usually means a bug worth reporting. Repeated restarts on a
+busy cluster can mean the limit is genuinely too low for your workload. Raise it
+with a systemd override, which takes precedence over the value Miren manages and
+survives upgrades:
+
+<CliCommand context="server">
+```bash
+sudo systemctl edit miren
+```
+</CliCommand>
+
+Add:
+
+```ini
+[Service]
+MemoryMax=24G
+MemoryHigh=20G
+```
+
+Then `sudo systemctl daemon-reload && sudo systemctl restart miren`.
+
+Keep `MemoryHigh` below `MemoryMax`. Crossing `MemoryHigh` makes the kernel
+reclaim memory and slow the process down, which often avoids the hard stop at
+`MemoryMax` entirely.
+
 ## Gathering a debug bundle
 
 If you've worked through the steps above and need further help, collect a debug bundle to share:
