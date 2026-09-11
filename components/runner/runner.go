@@ -36,7 +36,6 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/grunge"
-	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/multierror"
 	"miren.dev/runtime/pkg/netdb"
 	"miren.dev/runtime/pkg/rpc"
@@ -264,7 +263,7 @@ type SandboxHost struct {
 
 	namespace string
 
-	sbController sandbox.SandboxLifecycle
+	sbController *sandbox.SandboxController
 
 	// hubs is the stdio fan-out for attachable containers, shared between the
 	// sandbox controller that creates them and the exec server that joins
@@ -1000,25 +999,11 @@ func (r *SandboxHost) SetupControllers(
 		SqliteDisks:    r.access.sqliteDisks,
 	}
 
-	var sbc sandbox.SandboxLifecycle
-	var sbcHandler controller.HandlerFunc
-
-	if labs.Sagas() {
-		sagaStorage := saga.NewEACStorage(eas, r.Log)
-		sagaSbc, sagaErr := sandbox.NewSagaSandboxController(sbcDeps, sagaStorage, r.Log)
-		if sagaErr != nil {
-			return nil, fmt.Errorf("failed to create saga sandbox controller: %w", sagaErr)
-		}
-		sbc = sagaSbc
-		sbcHandler = controller.AdaptController(sagaSbc)
-	} else {
-		origSbc, origErr := sandbox.NewSandboxController(sbcDeps)
-		if origErr != nil {
-			return nil, fmt.Errorf("failed to create sandbox controller: %w", origErr)
-		}
-		sbc = origSbc
-		sbcHandler = controller.AdaptController(origSbc)
+	sbc, err := sandbox.NewSandboxController(sbcDeps, saga.NewEACStorage(eas, r.Log))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sandbox controller: %w", err)
 	}
+	sbcHandler := controller.AdaptController(sbc)
 
 	r.closers = append(r.closers, sbc)
 

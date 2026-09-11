@@ -87,6 +87,7 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionWaitAddons, waitAddons).Undo(undoWaitAddons).
 		Action(actionSetActiveVer, setActiveVersion).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		Action(actionBeginDeploy, beginDeployment).Undo(undoBeginDeployment).
@@ -629,6 +630,7 @@ func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
 		Action(actionCreateVersion, createVersion).Undo(undoCreateVersion).
 		Action(actionProvisionAddons, provisionAddons).Undo(undoProvisionAddons).
+		Action(actionWaitAddons, waitAddons).Undo(undoWaitAddons).
 		Action(actionSetActiveVer, failingSetActive).Undo(undoSetActiveVersion).
 		Action(actionFinalize, finalize).Undo(undoFinalize).
 		RegisterTo(registry); err != nil {
@@ -753,11 +755,15 @@ func TestBuildSaga_DeployTasksGateSitsBetweenAddonsAndActivation(t *testing.T) {
 	}
 
 	addons := pos(actionProvisionAddons)
+	wait := pos(actionWaitAddons)
 	tasks := pos(actionRunDeployTasks)
 	activate := pos(actionSetActiveVer)
 
-	if addons >= tasks {
-		t.Errorf("deploy tasks must run after addons are provisioned (a migration needs its database); order: %v", order)
+	if addons >= wait {
+		t.Errorf("the addon wait must follow provisioning, or there is nothing to wait on; order: %v", order)
+	}
+	if wait >= tasks {
+		t.Errorf("deploy tasks must run after addons are active (a migration needs its database); order: %v", order)
 	}
 	if tasks >= activate {
 		t.Errorf("deploy tasks must gate the version flip, or a failed task leaves a half-promoted deploy; order: %v", order)

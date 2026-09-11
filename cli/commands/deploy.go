@@ -98,8 +98,8 @@ type deployOpts struct {
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" choice:"quiet" default:"auto"` //nolint
 	Quiet         bool     `short:"q" long:"quiet" description:"Suppress upload and build progress; print only phase summaries and the result"`
 	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
-	Env           []string `short:"e" long:"env" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
-	Sensitive     []string `short:"s" long:"sensitive" description:"Set sensitive environment variable (masked in output)"`
+	Env           []string `short:"e" long:"env" split:"false" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
+	Sensitive     []string `short:"s" long:"sensitive" split:"false" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
@@ -979,15 +979,66 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		safeStatus := newSafeStatusCh(pw.Status())
 		defer safeStatus.Close()
 
-		// Add upload progress tracking in explain mode
-		uploadStartTime := time.Now()
-		var uploadBytes int64
-		var lastPrintTime time.Time
+		// Server progress messages (addon provisioning, deploy tasks) only
+		// had the TUI to land in. Without one, print each as its own line on
+		// stderr alongside the build output, clearing any in-place upload
+		// line first. The callback's send is non-blocking, so this drains
+		// promptly and flushes what is queued when the build call returns.
+		//
+		// Not for rawjson: there stderr is a stream of JSON build events for
+		// a machine to parse, and a line of prose in it would break the
+		// consumer. A nil channel makes the callback drop messages as before.
+		// One writer owns the in-place upload line on stderr, so a server
+		// message can replace it cleanly and nothing writes escape codes to a
+		// log. JSONL discards it: the stream carries the same facts as events.
 		var uploadOut io.Writer = os.Stderr
 		if events != nil {
 			uploadOut = io.Discard
 		}
 		uploadLine := newPlainProgress(uploadOut)
+
+		var (
+			updateCh     chan string
+			stopMessages = func() {}
+		)
+		// Not for JSONL either: the callback already turns each message into
+		// a "message" event, and stderr must stay empty in that mode.
+		if opts.ExplainFormat != "rawjson" && events == nil {
+			updateCh = make(chan string, 16)
+			msgDone := make(chan struct{})
+			var msgWG sync.WaitGroup
+			printMsg := func(msg string) { uploadLine.finish(msg) }
+			msgWG.Go(func() {
+				for {
+					select {
+					case msg := <-updateCh:
+						printMsg(msg)
+					case <-msgDone:
+						for {
+							select {
+							case msg := <-updateCh:
+								printMsg(msg)
+							default:
+								return
+							}
+						}
+					}
+				}
+			})
+			var stopMsgOnce sync.Once
+			stopMessages = func() {
+				stopMsgOnce.Do(func() {
+					close(msgDone)
+					msgWG.Wait()
+				})
+			}
+		}
+		defer stopMessages()
+
+		// Add upload progress tracking in explain mode
+		uploadStartTime := time.Now()
+		var uploadBytes int64
+		var lastPrintTime time.Time
 
 		progressReader := upload.NewProgressReader(r, func(progress upload.Progress) {
 			enrichUploadProgress(&progress, &uncompressedWritten, totalUncompressed)
@@ -1050,9 +1101,10 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 			explainLogs = &buildLogs
 		}
 		stats := &buildStats{}
-		cb = createBuildStatusCallback(buildCtx, nil, nil, stats, events, &buildStateMu, &buildErrors, explainLogs, &deployWarnings, progressHandler, onDeployment, onImage)
+		cb = createBuildStatusCallback(buildCtx, updateCh, nil, stats, events, &buildStateMu, &buildErrors, explainLogs, &deployWarnings, progressHandler, onDeployment, onImage)
 
 		results, err = buildCall(buildCtx, r, cb)
+		stopMessages()
 		if err != nil {
 			uploadSpan.RecordError(err)
 			uploadSpan.SetStatus(codes.Error, err.Error())

@@ -161,6 +161,8 @@ func (s *AddonsServer) ListInstances(ctx context.Context, state *app_v1alpha.Add
 		instance.SetAddon(string(assoc.Addon))
 		instance.SetVariant(assoc.Variant)
 		instance.SetVersion(assoc.Version)
+		instance.SetStatus(assoc.Status)
+		instance.SetErrorMessage(assoc.ErrorMessage)
 		addons = append(addons, instance)
 	}
 

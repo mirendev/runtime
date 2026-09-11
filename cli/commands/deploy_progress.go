@@ -79,7 +79,11 @@ func (s *buildStats) progressLocked() buildProgress {
 // non-interactive writer (CI logs, a file, a pipe) every report is its own
 // newline-terminated line and no cursor-control escapes are ever written, so the
 // captured log stays readable and greppable.
+//
+// It is safe for concurrent use: the upload reader and the server-message
+// printer both write through it from their own goroutines.
 type plainProgress struct {
+	mu          sync.Mutex
 	out         io.Writer
 	interactive bool
 	live        bool // an in-place line is currently on screen
@@ -101,6 +105,8 @@ func (p *plainProgress) interval() time.Duration {
 // update shows an in-progress line. On a terminal it replaces the previous
 // one; otherwise it appends.
 func (p *plainProgress) update(line string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if !p.interactive {
 		fmt.Fprintln(p.out, line)
 		return
@@ -111,13 +117,21 @@ func (p *plainProgress) update(line string) {
 
 // finish clears any in-place line and prints a final, newline-terminated one.
 func (p *plainProgress) finish(line string) {
-	p.clear()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clearLocked()
 	fmt.Fprintln(p.out, line)
 }
 
 // clear erases the live line on a terminal. It is a no-op elsewhere, so the
 // only escape sequence this type emits never reaches a non-terminal writer.
 func (p *plainProgress) clear() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clearLocked()
+}
+
+func (p *plainProgress) clearLocked() {
 	if p.interactive && p.live {
 		fmt.Fprint(p.out, "\r\033[K")
 		p.live = false

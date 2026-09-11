@@ -107,7 +107,7 @@ func RunnerInstall(ctx *Context, opts struct {
 		execStart := strings.Join(execStartParts, " ")
 
 		// Propagate the current MIREN_LABS value so the spawned binary
-		// also has distributed runners (and any other flags) enabled.
+		// runs with the same labs features as the process installing it.
 		labsEnv := os.Getenv("MIREN_LABS")
 
 		serviceContent := fmt.Sprintf(`[Unit]

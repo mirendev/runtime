@@ -10,7 +10,7 @@ Set environment variables for an application
 
 Setting an environment variable creates a new app version and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart` afterward. The new version reuses your existing container image (no rebuild); Miren boots new sandboxes with the updated environment and drains the old ones. The command waits for the new version to become healthy before returning.
 
-Use `-e` for plain values and `-s` for sensitive values (masked in output and logs). Note that `-s` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with `miren secret set` instead. Pass `--service` to scope the change to a single service instead of all services.
+Use `-e` for plain values and `-s` for sensitive values (masked in output and logs). Bare `KEY=VALUE` arguments without a flag are treated as plain values, the same as `-e`. Values may contain commas. Note that `-s` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with `miren secret set` instead. Pass `--service` to scope the change to a single service instead of all services.
 
 :::note[No restart needed]
 Environment variable changes take effect on their own. Running `miren app restart` afterward only triggers a redundant second rollout.
@@ -19,7 +19,7 @@ Environment variable changes take effect on their own. Running `miren app restar
 ## Usage
 
 ```bash
-miren env set [flags]
+miren env set [args...] [flags]
 ```
 
 ## Flags
@@ -52,6 +52,12 @@ miren env set [flags]
 
 ```bash
 miren env set -e DATABASE_URL=postgres://localhost/mydb
+```
+
+**Set several variables without flags:**
+
+```bash
+miren env set LOG_LEVEL=debug ALLOWED_HOSTS=a.example.com,b.example.com
 ```
 
 **Set a sensitive variable (prompted with masking):**

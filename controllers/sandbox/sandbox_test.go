@@ -30,6 +30,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/testutils"
 )
 
@@ -56,7 +57,21 @@ func newSandboxController(d *testutils.TestDeps) (*SandboxController, error) {
 		Resolver:       d.Resolver,
 		Metrics:        sbMetrics,
 	}
-	return NewSandboxController(cfg)
+	return NewSandboxController(cfg, saga.NewMemoryStorage())
+}
+
+// reloadSandbox re-reads a sandbox from the entity store.
+//
+// Creation runs as a saga whose actions work from the durable entity rather
+// than the struct handed to Create, so results land in the store rather than
+// on the caller's copy. That is what the reconciler sees on its next pass, so
+// asserting against it is closer to what production actually observes.
+func reloadSandbox(r *require.Assertions, ctx context.Context, co *SandboxController, id entity.Id) *compute.Sandbox {
+	res, err := co.EAC.Get(ctx, id.String())
+	r.NoError(err)
+	var sb compute.Sandbox
+	sb.Decode(res.Entity().Entity())
+	return &sb
 }
 
 func TestSandbox(t *testing.T) {
@@ -164,9 +179,10 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		r.Len(tco.Network, 1)
+		created := reloadSandbox(r, ctx, co, id)
+		r.Len(created.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(created.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
@@ -558,9 +574,10 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		r.Len(tco.Network, 1)
+		created := reloadSandbox(r, ctx, co, id)
+		r.Len(created.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(created.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
@@ -668,9 +685,10 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		r.Len(tco.Network, 1)
+		created := reloadSandbox(r, ctx, co, id)
+		r.Len(created.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(created.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
@@ -778,9 +796,10 @@ func TestSandbox(t *testing.T) {
 		err = co.Create(ctx, &tco, meta)
 		r.NoError(err)
 
-		r.Len(tco.Network, 1)
+		created := reloadSandbox(r, ctx, co, id)
+		r.Len(created.Network, 1)
 
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		ca, err := netip.ParsePrefix(created.Network[0].Address)
 		r.NoError(err)
 
 		c, err := cc.LoadContainer(ctx, pauseContainerId(id))
@@ -1026,8 +1045,9 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 
 		// Verify network was allocated
-		r.Len(tco.Network, 1)
-		ca, err := netip.ParsePrefix(tco.Network[0].Address)
+		created := reloadSandbox(r, ctx, co, id)
+		r.Len(created.Network, 1)
+		ca, err := netip.ParsePrefix(created.Network[0].Address)
 		r.NoError(err)
 		ipAddr := ca.Addr().String()
 

@@ -22,7 +22,6 @@ type deployTracking struct {
 	tracker      *deploylifecycle.Tracker
 	eac          *entityserver_v1alpha.EntityAccessClient
 	deploymentID string
-	source       core_v1alpha.Source
 	status       StatusSender
 	log          *slog.Logger
 }
@@ -46,12 +45,6 @@ func (b *Builder) trackDeployment(deploymentID string, status StatusSender) *dep
 		deploymentID: deploymentID,
 		status:       status,
 		log:          b.Log.With("deployment_id", deploymentID),
-	}
-}
-
-func (t *deployTracking) setSource(version *core_v1alpha.AppVersion) {
-	if t != nil {
-		version.Source = t.source
 	}
 }
 
@@ -91,7 +84,6 @@ func (b *Builder) beginDeploy(
 	}
 
 	dt := b.trackDeployment(string(rec.Deployment.ID), NewRPCStatusSender(status, b.Log))
-	dt.source = deploylifecycle.SourceFromGitInfo(gitInfo)
 	if work := deploymentContextFrom(ctx); work != nil {
 		work.attach(dt)
 	}
