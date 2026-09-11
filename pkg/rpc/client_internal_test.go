@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net"
@@ -459,4 +460,87 @@ func quietQUICServer(t *testing.T, parent context.Context, run func(context.Cont
 	}()
 
 	return packetConn.LocalAddr().String()
+}
+
+// Cancelling a dial while its handshake is still in flight has to tell the
+// server. quic-go's own cancellation destroys the client side without a
+// CONNECTION_CLOSE, leaving a server that accepted the connection early to
+// discover the peer is gone only at the idle timeout, which is how a
+// coordinator's own entity watches held its drain past the deadline.
+func TestQUICDialCancelledMidHandshakeClosesServerSide(t *testing.T) {
+	r := require.New(t)
+
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	r.NoError(err)
+	t.Cleanup(func() { _ = packetConn.Close() })
+	ln, err := quic.ListenEarly(packetConn, testServerTLSConfig(t), &quic.Config{
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		// Longer than the assertion window, so the server can only let go
+		// because the client told it to.
+		HandshakeIdleTimeout: 30 * time.Second,
+		MaxIdleTimeout:       30 * time.Second,
+	})
+	r.NoError(err)
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan *quic.Conn, 1)
+	go func() {
+		conn, err := ln.Accept(t.Context())
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	// Hold the client in certificate verification. By then the server has
+	// handed the connection to Accept and is waiting on the client's Finished.
+	verifying := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseClient := func() { releaseOnce.Do(func() { close(release) }) }
+	client := newTestWebTransportClient(t, packetConn.LocalAddr().String())
+	// Registered after the client so it runs before the client's transport
+	// is closed; a failing run must not leave that close waiting on a
+	// handshake nobody will finish.
+	t.Cleanup(releaseClient)
+	client.tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
+		close(verifying)
+		<-release
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.ws.Dial(ctx, "https://"+client.remote+"/", nil)
+		done <- err
+	}()
+
+	select {
+	case <-verifying:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client never reached certificate verification")
+	}
+	var serverConn *quic.Conn
+	select {
+	case serverConn = <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not accept the connection before the handshake finished")
+	}
+
+	cancel()
+	r.NoError(serverConn.Context().Err(), "server side closed before the client could have told it anything")
+	releaseClient()
+	select {
+	case err := <-done:
+		r.ErrorIs(err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("dial did not return after cancellation")
+	}
+
+	select {
+	case <-serverConn.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server side of a cancelled dial stayed open")
+	}
 }

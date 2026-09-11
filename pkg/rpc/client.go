@@ -145,12 +145,7 @@ func (c *NetworkClient) setupTransport() {
 
 		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
-		var conn *quic.Conn
-		if early {
-			conn, err = c.transport.DialEarly(ctx, uaddr, tlsCfg, cfg)
-		} else {
-			conn, err = c.transport.Dial(ctx, uaddr, tlsCfg, cfg)
-		}
+		conn, err := dialQUIC(ctx, c.transport, uaddr, tlsCfg, cfg, early)
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +175,52 @@ func (c *NetworkClient) setupTransport() {
 		return conn, err
 	}
 	c.httpDrain = &drainingHTTP{base: &c.htr, ctx: c.State.top, prepare: c.prepareRequest}
+}
+
+// dialQUIC dials through t and closes the connection properly if ctx is
+// cancelled while the handshake is still in flight.
+//
+// quic-go's own cancellation path destroys the half-built connection without
+// sending a CONNECTION_CLOSE. The server has usually already accepted it by
+// then (an EarlyListener hands connections over before the handshake finishes)
+// and is left with a peer that has silently vanished, which it only notices at
+// the idle timeout. That is long enough to hold a graceful shutdown past its
+// deadline, and a coordinator dialing itself, as its controllers do for entity
+// watches, stalls its own drain that way when a watch is cancelled mid-dial.
+//
+// So the dial runs against a context the caller cannot cancel and only the
+// wait is abandoned on cancellation. HandshakeIdleTimeout still bounds the
+// detached dial, and whatever it produces is closed with a proper
+// CONNECTION_CLOSE so the peer can let go too. quic-go already derives the
+// connection's own context with WithoutCancel, so this changes nothing about a
+// connection that does get established.
+func dialQUIC(ctx context.Context, t *quic.Transport, addr net.Addr, tlsCfg *tls.Config, cfg *quic.Config, early bool) (*quic.Conn, error) {
+	type result struct {
+		conn *quic.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var r result
+		if early {
+			r.conn, r.err = t.DialEarly(context.WithoutCancel(ctx), addr, tlsCfg, cfg)
+		} else {
+			r.conn, r.err = t.Dial(context.WithoutCancel(ctx), addr, tlsCfg, cfg)
+		}
+		done <- r
+	}()
+
+	select {
+	case r := <-done:
+		return r.conn, r.err
+	case <-ctx.Done():
+		go func() {
+			if r := <-done; r.conn != nil {
+				_ = r.conn.CloseWithError(0, "dial cancelled")
+			}
+		}()
+		return nil, context.Cause(ctx)
+	}
 }
 
 func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
