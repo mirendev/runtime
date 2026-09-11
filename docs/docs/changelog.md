@@ -13,6 +13,14 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.15.1
+*2026-09-11*
+
+**Bug Fixes**
+- **Stop control-plane memory growth during watch resyncs** - Periodic controller watches left streaming connections alive after each resync, accumulating goroutines and memory until the host could run out. Streaming calls now close their connections when they finish, and closed connections and sessions are released from bookkeeping. This patch keeps v0.15's transport protocol and QUIC version. ([#1202](https://github.com/mirendev/runtime/pull/1202))
+
+---
+
 ## v0.15.0
 *2026-09-09*
 

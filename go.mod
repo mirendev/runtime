@@ -420,3 +420,7 @@ require (
 // v0.28.6. Drop this replace once we move to a flannel release carrying both.
 // Tracking: MIR-1274.
 replace github.com/flannel-io/flannel => github.com/mirendev/flannel v0.26.8-0.20260805213236-ce737c30f40c
+
+// MIR-1820: v0.9 session-registry cleanup for the v0.15 hotfix.
+// Keeps the released protocol and QUIC dependencies; main uses the newer transport.
+replace github.com/quic-go/webtransport-go => github.com/mirendev/webtransport-go v0.9.1-0.20260911143147-180830f79577
