@@ -103,6 +103,15 @@ type EtcdComponent struct {
 	// and its maintenance loop have already started), so access is atomic. Nil-safe.
 	writer atomic.Pointer[metricsSink]
 
+	// noSpaceRecoveries counts NOSPACE self-recovery attempts this process has
+	// made. It exists because the alarm gauge cannot show a recovery that ran on
+	// the maintenance loop's first check: by the time a shipping sink attaches
+	// the alarm is disarmed and the backend reads healthy. A counter that steps
+	// up once and stays up for the process lifetime is still there to be seen.
+	// It is not persisted; PromQL's increase() treats the reset on restart as a
+	// counter reset, which is all fleet-level counting needs.
+	noSpaceRecoveries atomic.Uint64
+
 	// metricsKick nudges the maintenance loop to run a check the moment the metrics
 	// writer is attached. The writer only exists after the embedded VictoriaMetrics
 	// address is known, which is well after the loop's immediate startup check — so

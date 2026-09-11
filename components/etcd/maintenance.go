@@ -297,7 +297,8 @@ func (e *EtcdComponent) reclaimSpace(ctx context.Context, client *clientv3.Clien
 // manual operator intervention into a self-healing event.
 func (e *EtcdComponent) recoverFromNoSpace(ctx context.Context, client *clientv3.Client, endpoint string, rev, dbSize int64, members []uint64) {
 	e.Log.Error("etcd NOSPACE alarm armed, attempting self-recovery (compact+defrag+disarm)",
-		"db_size_bytes", dbSize, "quota_bytes", e.quotaBackendBytes.Load())
+		"db_size_bytes", dbSize, "quota_bytes", e.quotaBackendBytes.Load(),
+		"nospace_recovery_total", e.noSpaceRecoveries.Add(1))
 
 	e.reclaimSpace(ctx, client, endpoint, rev, dbSize)
 
@@ -345,6 +346,9 @@ func (e *EtcdComponent) emitMetrics(ctx context.Context, dbSize, dbSizeInUse int
 		{Name: "etcd_quota_headroom_bytes", Value: float64(headroom), Timestamp: now},
 		{Name: "etcd_bloat_ratio", Value: bloatRatio, Timestamp: now},
 		{Name: "etcd_nospace_alarm", Value: alarm, Timestamp: now},
+		// A counter, unlike the gauges above, carries a recovery that finished
+		// before any sink was attached: the alarm gauge already reads 0 by then.
+		{Name: "etcd_nospace_recovery_total", Value: float64(e.noSpaceRecoveries.Load()), Timestamp: now},
 	}
 	if err := writer.WritePoints(ctx, points); err != nil {
 		e.Log.Warn("etcd maintenance: failed to write metrics", "error", err)
