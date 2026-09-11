@@ -113,12 +113,16 @@ func TestEnsureImageEmitsPullFailure(t *testing.T) {
 	// Not a cluster-registry ref, so no reachability hint.
 	assert.NotContains(t, got.log.Body, registryUnreachableHint)
 
-	// A pull interrupted by cancellation is not a failure the app's logs
-	// should report: the error still comes back, but nothing is written.
+	// A cancelled context is not a failure the app's logs should report. The
+	// lookup fails with something other than NotFound, so no pull is even
+	// attempted (the error names the lookup, not a pull) and nothing is
+	// written.
 	cancelledCtx, cancelNow := context.WithCancel(ctx)
 	cancelNow()
 	img, err = co.ensureImage(cancelledCtx, sb, "abc123", ref)
 	r.Error(err)
 	r.Nil(img)
-	assert.Len(t, lw.entries, 1, "cancelled pull must not add a log entry")
+	assert.Contains(t, err.Error(), "failed to get image "+ref)
+	assert.NotContains(t, err.Error(), "failed to pull image")
+	assert.Len(t, lw.entries, 1, "cancelled lookup must not add a log entry")
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/errdefs"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/components/ocireg"
@@ -25,6 +26,12 @@ func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox
 	img, err := c.CC.GetImage(ctx, ref)
 	if err == nil {
 		return c.logImageReady(ctx, img)
+	}
+	// Only a missing image justifies a pull. Anything else (a containerd RPC
+	// failure, a cancelled context) would just fail again and be misreported
+	// as a pull failure.
+	if !errdefs.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get image %s: %w", ref, err)
 	}
 
 	_, err = c.CC.Pull(ctx, ref, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
