@@ -135,11 +135,10 @@ Miren uses etcd as its entity store. In standalone mode, an embedded etcd server
 
 \* Defaults to `true` in standalone mode only.
 
-:::info[Embedded etcd is loopback-bound unless mTLS is on]
-`client_port` binds to all interfaces only when etcd mTLS is configured, which
-today means when distributed runners are enabled. Otherwise it binds
-`127.0.0.1`, as do `peer_port` and `http_client_port` in either case. etcd's
-JSON gateway is disabled outright; its health and metrics endpoints are
+:::info[Embedded etcd always comes up with mTLS]
+`client_port` binds to all interfaces since embedded etcd always starts with
+mTLS. `peer_port` and `http_client_port` bind to `127.0.0.1`. etcd's JSON
+gateway is disabled outright; its health and metrics endpoints are
 unaffected.
 :::
 
