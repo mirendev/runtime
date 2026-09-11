@@ -111,6 +111,13 @@ func TestUnknownFlagSuggests(t *testing.T) {
 			want:    []string{"unknown flag: -Q"},
 			notWant: []string{"Did you mean?"},
 		},
+		{
+			// No command word was typed at all, so there is nothing to call an
+			// unknown command — name the flag instead.
+			args:    []string{"--bogus"},
+			want:    []string{"unknown flag: --bogus"},
+			notWant: []string{`unknown command ""`},
+		},
 	}
 
 	for _, c := range cases {
