@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/mflags"
+	"miren.dev/runtime/appconfig"
 )
 
 func TestTokenizeCommand(t *testing.T) {
@@ -96,7 +97,7 @@ func TestExpandAlias(t *testing.T) {
 
 	t.Run("no args returns unchanged", func(t *testing.T) {
 		d := newDispatcher()
-		got, err := expandAlias(d, nil)
+		got, err := expandAlias(d, nil, nil)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -104,13 +105,51 @@ func TestExpandAlias(t *testing.T) {
 	t.Run("no config returns unchanged", func(t *testing.T) {
 		d := newDispatcher()
 		args := []string{"foo", "bar"}
-		got, err := expandAlias(d, args)
+		got, err := expandAlias(d, nil, args)
 		require.NoError(t, err)
 		assert.Equal(t, args, got)
 	})
 
-	// Note: testing actual alias expansion with config files requires
-	// integration tests since expandAlias calls LoadAppConfig which reads
-	// from the filesystem. The "no config" case above covers the early-return
-	// path. The shadow check and expansion logic are exercised in blackbox tests.
+	ac := &appconfig.AppConfig{Aliases: map[string]string{
+		"ls":      "app list",
+		"ls all":  "app list --all",
+		"console": `app exec -i "bin/rails console"`,
+		"version": "app list",
+		"bad":     `app exec "unclosed`,
+	}}
+
+	t.Run("expands and keeps trailing args", func(t *testing.T) {
+		got, err := expandAlias(newDispatcher(), ac, []string{"ls", "-f", "json"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"app", "list", "-f", "json"}, got)
+	})
+
+	t.Run("longest prefix wins", func(t *testing.T) {
+		got, err := expandAlias(newDispatcher(), ac, []string{"ls", "all"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"app", "list", "--all"}, got)
+	})
+
+	t.Run("quoted target tokens survive", func(t *testing.T) {
+		got, err := expandAlias(newDispatcher(), ac, []string{"console"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"app", "exec", "-i", "bin/rails console"}, got)
+	})
+
+	t.Run("no match returns unchanged", func(t *testing.T) {
+		args := []string{"app", "list"}
+		got, err := expandAlias(newDispatcher(), ac, args)
+		require.NoError(t, err)
+		assert.Equal(t, args, got)
+	})
+
+	t.Run("alias shadowing a built-in is an error", func(t *testing.T) {
+		_, err := expandAlias(newDispatcher(), ac, []string{"version"})
+		require.ErrorContains(t, err, "shadows built-in command")
+	})
+
+	t.Run("untokenizable target is an error", func(t *testing.T) {
+		_, err := expandAlias(newDispatcher(), ac, []string{"bad"})
+		require.ErrorContains(t, err, `invalid alias "bad"`)
+	})
 }

@@ -104,9 +104,7 @@ func (c *ConfigCentric) LoadCluster() (*clientconfig.ClusterConfig, string, erro
 	}
 
 	// Check per-app state if we're in an app directory.
-	if ac, err := appconfig.LoadAppConfig(); err != nil {
-		printConfigWarning(err)
-	} else if ac != nil && ac.Name != "" {
+	if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
 		state, err := appconfig.LoadAppState(ac.Name)
 		if err == nil && state != nil && state.Cluster != "" {
 			cc, err := cfg.GetCluster(state.Cluster)

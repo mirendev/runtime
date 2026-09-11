@@ -11,8 +11,9 @@ import (
 func AliasList(ctx *Context, opts struct {
 	FormatOptions
 }) error {
-	ac, configPath, err := appconfig.LoadAppConfigWithPath()
+	ac, configPath, err := local.load()
 	if err != nil {
+		local.fatal("")
 		return err
 	}
 

@@ -1,38 +1,23 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"miren.dev/mflags"
 	"miren.dev/runtime/appconfig"
-	"miren.dev/runtime/pkg/ui"
 )
 
-// expandAlias checks if the given args match a configured alias and expands it.
-// It tries progressively longer prefixes (longest match wins).
+// expandAlias checks if the given args match an alias configured in ac and
+// expands it. It tries progressively longer prefixes (longest match wins).
 // Returns an error if an alias name conflicts with a built-in command.
-func expandAlias(d *mflags.Dispatcher, args []string) ([]string, error) {
+//
+// ac may be nil, meaning no aliases are configured.
+func expandAlias(d *mflags.Dispatcher, ac *appconfig.AppConfig, args []string) ([]string, error) {
 	if len(args) == 0 {
 		return args, nil
 	}
 
-	ac, err := appconfig.LoadAppConfig()
-	if err != nil {
-		// errors.AsType, not a type assertion: a wrapped rich error would
-		// otherwise silently degrade to the plain path below.
-		if se, ok := errors.AsType[ui.SeverityTerminalError](err); ok {
-			se.WriteWithSeverity(os.Stderr, ui.SeverityWarning)
-		} else if te, ok := errors.AsType[ui.TerminalError](err); ok {
-			fmt.Fprint(os.Stderr, "warning: ")
-			te.WriteForTerminal(os.Stderr)
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: could not load %s: %v\n", appconfig.AppConfigPath, err)
-		}
-		return args, nil
-	}
 	if ac == nil || len(ac.Aliases) == 0 {
 		return args, nil
 	}
