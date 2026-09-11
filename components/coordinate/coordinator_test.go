@@ -67,6 +67,7 @@ func TestControlPlaneParse(t *testing.T) {
 
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
 	eac := entityserver_v1alpha.EntityAccessClient{Client: client}
 
