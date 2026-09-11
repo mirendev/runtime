@@ -2379,6 +2379,23 @@ func (c *SandboxController) monitorTaskExit(
 			// this input and nothing to contend with.
 			c.reportRunExit(ctx, sb, exitStatus.ExitCode(), exitAt)
 
+			// Release this container's stdio now that its process is gone.
+			//
+			// StopSandbox does this too, but it runs from reconciliation, and
+			// nothing schedules a reconcile at this moment -- so it lands on
+			// the controller's next resync, anywhere from zero to a full period
+			// away. An attached client blocks on the Hub closing, so waiting
+			// for that pass put a uniform 0-60s tail on every `miren app run`:
+			// the command's output arrived at once and the terminal then sat
+			// there, long after the container had exited (MIR-1769).
+			//
+			// Closing a Hub also closes the container's stdin, which is why
+			// only teardown may normally do it. It is safe here for the same
+			// reason it is safe there: the process this stdin belonged to has
+			// already exited. The Hub lingers after closing, so a client that
+			// arrives late still gets the replayed output.
+			c.hubs.Remove(sb.ID, containerName)
+
 			c.Log.Info("marked sandbox as STOPPED due to process exit, cleanup will be triggered by reconciliation", "sandbox", sb.ID)
 			return
 
