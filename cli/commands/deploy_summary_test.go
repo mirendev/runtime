@@ -223,6 +223,14 @@ func TestDeploySummaryFinalize(t *testing.T) {
 		}
 	})
 
+	t.Run("declining the confirmation is cancelled not succeeded", func(t *testing.T) {
+		s := &deploySummary{}
+		finalizeSummary(s, errDeployDeclined)
+		if s.Status != deploylifecycle.StatusCancelled {
+			t.Fatalf("status = %q, want cancelled", s.Status)
+		}
+	})
+
 	t.Run("remote cancellation is cancelled not failed", func(t *testing.T) {
 		s := &deploySummary{}
 		finalizeSummary(s, cond.ErrRemote{Category: "deployment", Code: "cancelled", Message: "cancelled by operator"})

@@ -164,6 +164,14 @@ func Deploy(ctx *Context, opts deployOpts) error {
 	err := runDeploy(ctx, opts, result, events)
 	finalizeSummary(result, err)
 
+	// Declining the confirmation prompt is a cancelled deploy, not a failed
+	// one and not a successful one: the summary says so, and the command
+	// still exits 0 as it always has.
+	declined := errors.Is(err, errDeployDeclined)
+	if declined {
+		err = nil
+	}
+
 	if opts.IsJSON() {
 		if jsonErr := PrintJSONTo(stdout, result); jsonErr != nil && err == nil {
 			return jsonErr
@@ -280,6 +288,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if ctx.ClientConfig.GetClusterCount() == 0 {
 		return fmt.Errorf("no clusters configured; run 'miren login' to authenticate and configure a cluster, or install a server locally")
 	}
+	// The interactive path above may have just chosen the cluster; the summary
+	// was created before that and must name the one actually used.
+	summary.Cluster = ctx.ClusterName
 
 	// Handle --analyze flag: analyze the app without building
 	if opts.Analyze {
@@ -449,7 +460,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		}
 		if !confirmed {
 			ctx.Printf("  deployment cancelled\n")
-			return nil
+			return errDeployDeclined
 		}
 	}
 
@@ -1402,11 +1413,11 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		}
 		warnHeaderStyle := lipgloss.NewStyle().Foreground(theme.Warning).Bold(true)
 		ctx.Printf("\n%s\n", warnHeaderStyle.Render("Warnings:"))
+		// Warning events were already emitted as each warning arrived (see
+		// createBuildStatusCallback), so a build that fails after warning
+		// still reports it; only the printed form is deferred to here.
 		for _, entry := range warns {
 			renderDeployWarning(ctx, entry)
-			if events != nil {
-				events.warning(entry)
-			}
 		}
 	}
 
@@ -1757,6 +1768,12 @@ func createBuildStatusCallback(
 						*deployWarnings = append(*deployWarnings, entry)
 						stateMu.Unlock()
 					}
+					// Emitted now rather than with the printed warnings, which
+					// only render after a successful build: a build that fails
+					// after warning would otherwise lose the warning entirely.
+					if events != nil {
+						events.warning(entry)
+					}
 				case "info":
 					if updateCh != nil {
 						select {
@@ -1828,6 +1845,11 @@ func buildStepsSummary(count, cached int) string {
 // deploys, which have no deployment record.
 type deploySummary = deployevents.Result
 
+// errDeployDeclined is returned by runDeploy when the user answers no at the
+// confirmation prompt. Deploy turns it into a cancelled result with exit 0;
+// it never reaches the caller.
+var errDeployDeclined = errors.New("deployment declined at confirmation")
+
 // finalizeSummary settles Status and Error from the deploy's return value,
 // using the deployment record's own vocabulary so `miren app history` and this
 // document agree on the spelling. A cancellation, whether from Ctrl-C locally
@@ -1842,7 +1864,7 @@ func finalizeSummary(s *deployevents.Result, err error) {
 	case err == nil:
 		s.Status = deploylifecycle.StatusSucceeded
 		s.Error = ""
-	case errors.Is(err, context.Canceled) || isDeploymentCancelled(err):
+	case errors.Is(err, context.Canceled) || errors.Is(err, errDeployDeclined) || isDeploymentCancelled(err):
 		s.Status = deploylifecycle.StatusCancelled
 		s.Error = err.Error()
 	default:

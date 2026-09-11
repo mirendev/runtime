@@ -640,6 +640,9 @@ func recentAppLogs(ctx *Context, tailer logTailer, appName string) []string {
 
 	logs, err := tailer.RecentLogs(logCtx, appName)
 	if err != nil {
+		// Say so, or an empty tail and a failed fetch look identical to the
+		// reader (and to a jsonl consumer, which sees this as a log event).
+		ctx.Log.Warn("could not retrieve recent application logs", "error", err)
 		return nil
 	}
 
