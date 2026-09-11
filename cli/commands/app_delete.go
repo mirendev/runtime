@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
-	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -15,10 +14,7 @@ func AppDelete(ctx *Context, opts struct {
 }) error {
 	appName := opts.AppName
 	if appName == "" {
-		ac, err := appconfig.LoadAppConfig()
-		if err != nil {
-			printConfigWarning(err)
-		} else if ac != nil && ac.Name != "" {
+		if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
 			appName = ac.Name
 		}
 	}
