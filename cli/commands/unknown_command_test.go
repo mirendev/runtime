@@ -86,6 +86,55 @@ func TestUnknownCommandSuggests(t *testing.T) {
 	}
 }
 
+// TestUnknownFlagSuggests covers the same treatment for a mistyped flag name.
+func TestUnknownFlagSuggests(t *testing.T) {
+	labs.EnableAll()
+
+	cases := []struct {
+		args    []string
+		want    []string
+		notWant []string
+	}{
+		{
+			args:    []string{"deploy", "--aap", "x"},
+			want:    []string{"unknown flag: --aap", "Did you mean?", "--app"},
+			notWant: []string{"error parsing flags"},
+		},
+		{
+			args:    []string{"app", "list", "--forma", "json"},
+			want:    []string{"unknown flag: --forma", "--format"},
+			notWant: []string{"error parsing flags"},
+		},
+		{
+			// A single letter is too little to guess from.
+			args:    []string{"app", "list", "-Q"},
+			want:    []string{"unknown flag: -Q"},
+			notWant: []string{"Did you mean?"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(strings.Join(c.args, "_"), func(t *testing.T) {
+			err := dispatchErr(t, c.args...)
+			if err == nil {
+				t.Fatalf("Execute(%v) returned no error", c.args)
+			}
+
+			got := err.Error()
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("expected %q in error, got:\n%s", want, got)
+				}
+			}
+			for _, notWant := range c.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("did not expect %q in error, got:\n%s", notWant, got)
+				}
+			}
+		})
+	}
+}
+
 // TestKnownCommandsAreNotMistakenForTypos pins the inputs the new check must
 // leave alone: help keywords, pass-through arguments, and global flags that
 // take a value.
