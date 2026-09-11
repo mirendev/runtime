@@ -47,7 +47,7 @@ func (b *foundationBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBootO
 	config.Mem = observability.memory
 	config.Cpu = observability.cpu
 	config.HTTP = observability.http
-	config.MetricsWriter = observability.metricsWriter
+	config.MetricsWriter = observability.operationalMetrics
 	config.MetricsReader = observability.metricsReader
 	config.Logs = observability.logs
 	config.LogWriter = observability.logWriter

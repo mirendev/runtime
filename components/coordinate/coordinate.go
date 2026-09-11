@@ -53,7 +53,7 @@ type CoordinatorConfig struct {
 	Mem           *metrics.MemoryUsage
 	Cpu           *metrics.CPUUsage
 	HTTP          *metrics.HTTPMetrics
-	MetricsWriter *metrics.VictoriaMetricsWriter
+	MetricsWriter metrics.PointWriter
 
 	// MetricsReader queries the cluster's metrics directly, rather than through
 	// the app-shaped helpers on Cpu and Mem. The usage service needs arbitrary

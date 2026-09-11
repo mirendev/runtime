@@ -86,7 +86,7 @@ type RunnerDeps struct {
 	// is the same writer the sandbox collectors use, taken directly rather than
 	// through them because node series are labeled by node rather than by
 	// sandbox. Nil disables host metrics, as it does for sandbox metrics.
-	MetricsWriter *metrics.VictoriaMetricsWriter
+	MetricsWriter metrics.PointWriter
 
 	// Network config
 	IPv4Routable    netip.Prefix
