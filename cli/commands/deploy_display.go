@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // displayLockInfo shows a deployment lock error message with structured details.
@@ -19,6 +20,22 @@ func displayLockInfo(ctx *Context, operation string, lockInfo *deployment_v1alph
 			time.Since(startedAt).Round(time.Second))
 	}
 	ctx.Printf("  • Current phase: %s\n", lockInfo.CurrentPhase())
+}
+
+// printDeployOutcome closes a deploy with an unambiguous verdict and the full
+// version ID on its own line. The phase lines above already tell the story to a
+// person watching; these two lines exist for a script or CI log reader, who
+// wants a fixed marker to test for and a `Version:` line to grep that
+// round-trips into `miren deploy --version`.
+func printDeployOutcome(ctx *Context, ok bool, version string) {
+	if ok {
+		ctx.Printf("\n%s Deploy successful\n", ui.Checkmark)
+	} else {
+		ctx.Printf("\n✗ Deploy failed\n")
+	}
+	if version != "" {
+		ctx.Printf("Version: %s\n", ui.CleanEntityID(version))
+	}
 }
 
 // displayDeployVersionAccessInfo shows route/access information from the

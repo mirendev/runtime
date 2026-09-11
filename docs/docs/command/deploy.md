@@ -16,6 +16,19 @@ miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ```
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with `miren app history`.
 
+## Scripting and CI
+
+When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:
+
+```
+✓ Deploy successful
+Version: myapp-vCVkjR6u7744AsMebwMjGU
+```
+
+Use `--format json` to get the result as a single JSON document on stdout (`status`, `app_version`, `deploy_id`, `urls`); progress text moves to stderr, no prompts are shown, and the document is still written when the deploy fails, with `status` set to `failed` and an `error` field. `status` uses the deployment record's own vocabulary (`succeeded`, `failed`, `cancelled`), the same values `miren app history --format json` reports for the same `deploy_id`. Add `--quiet` to drop upload and build progress and keep only the phase summaries and the result.
+
+Use `--format jsonl` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an `event` name and a `time`, and stderr stays empty. Events are `start`, `message`, `upload`, `upload_complete`, `build_step` (with `status` started, done, cached, or error), `build_log`, `build_error`, `build_complete`, `deployment` (phase changes, using the deployment record's phase names), `warning`, `health` (an `outcome` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an `ok` flag, and the app's health classification with its instance counts), `port_warning`, `app_log` (recent crash output on a failed rollout), `log` (the CLI's own log records, which would otherwise go to stderr), and finally `result`, which carries the same fields as the `--format json` document.
+
 :::note[Config changes deploy on their own]
 Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deploy` when your code or `app.toml` has changed.
 :::
@@ -32,8 +45,11 @@ miren deploy [flags]
 - `--env, -e` — Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)
 - `--ephemeral` — Deploy as ephemeral preview with this label (e.g. feat-login)
 - `--explain, -x` — Explain the build process
-- `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`)
+- `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`, `quiet`)
 - `--force, -f` — Skip confirmation prompt
+- `--format` — Output format (text, json, jsonl) (default: `text`) (choices: `text`, `json`, `jsonl`)
+- `--json` — Shorthand for --format json
+- `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
 - `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
 - `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
@@ -82,6 +98,23 @@ miren deploy -e DATABASE_URL=postgres://localhost/mydb
 
 ```bash
 miren deploy --version v3
+```
+
+**Deploy from a script or CI:**
+
+```bash
+Progress goes to stderr; stdout carries one JSON document
+with the status, version, and URLs:
+
+miren deploy --format json | jq -r .app_version
+```
+
+**Follow a deploy as a stream of events:**
+
+```bash
+One JSON object per line on stdout, nothing on stderr:
+
+miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 ```
 
 ## Subcommands

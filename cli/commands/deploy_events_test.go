@@ -1,0 +1,319 @@
+package commands
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/moby/buildkit/client"
+	"github.com/opencontainers/go-digest"
+
+	"miren.dev/runtime/pkg/apphealth"
+)
+
+// decodeEvents parses a JSONL buffer, failing the test on any line that is not
+// a JSON object, and returns each line as a generic map.
+func decodeEvents(t *testing.T, out string) []map[string]any {
+	t.Helper()
+	var events []map[string]any
+	for i, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line %d is not JSON: %v\n%q", i+1, err, line)
+		}
+		if _, ok := ev["event"]; !ok {
+			t.Fatalf("line %d has no event field: %s", i+1, line)
+		}
+		if _, ok := ev["time"]; !ok {
+			t.Fatalf("line %d has no time field: %s", i+1, line)
+		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+func TestDeployEventStream_BuildStepsAndLogs(t *testing.T) {
+	var buf bytes.Buffer
+	s := newDeployEventStream(&buf)
+
+	now := time.Now()
+	d := digest.FromString("step-a")
+	started := &client.Vertex{Digest: d, Name: "[phase] Compiling", Started: &now}
+	done := &client.Vertex{Digest: d, Name: "[phase] Compiling", Started: &now, Completed: &now}
+	cached := &client.Vertex{Digest: digest.FromString("step-b"), Name: "copy /app", Cached: true, Completed: &now}
+
+	s.observeSolveStatus(&client.SolveStatus{Vertexes: []*client.Vertex{started}})
+	// The same state again must not repeat the event.
+	s.observeSolveStatus(&client.SolveStatus{Vertexes: []*client.Vertex{started}})
+	s.observeSolveStatus(&client.SolveStatus{
+		Vertexes: []*client.Vertex{done, cached},
+		Logs:     []*client.VertexLog{{Vertex: d, Data: []byte("line one\nline two\n")}},
+	})
+
+	events := decodeEvents(t, buf.String())
+	var got []string
+	for _, ev := range events {
+		switch ev["event"] {
+		case "build_step":
+			got = append(got, ev["step"].(string)+"="+ev["status"].(string))
+		case "build_log":
+			got = append(got, "log:"+ev["line"].(string))
+		}
+	}
+	want := []string{
+		"[phase] Compiling=started",
+		"[phase] Compiling=done",
+		"copy /app=cached",
+		"log:line one",
+		"log:line two",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("events = %v\nwant     %v", got, want)
+	}
+}
+
+func TestDeployEventStream_ResultCarriesSummary(t *testing.T) {
+	var buf bytes.Buffer
+	s := newDeployEventStream(&buf)
+
+	sum := &deploySummary{App: "meet", Cluster: "prod", DeployID: "dpl_1", AppVersion: "meet-v1"}
+	finalizeSummary(sum, errors.New("boom"))
+	s.result(sum)
+
+	events := decodeEvents(t, buf.String())
+	if len(events) != 1 {
+		t.Fatalf("expected one line, got %d", len(events))
+	}
+	ev := events[0]
+	if ev["event"] != "result" || ev["status"] != "failed" || ev["error"] != "boom" || ev["app_version"] != "meet-v1" {
+		t.Fatalf("result event = %v", ev)
+	}
+	// The first key is "event" so the stream is skimmable by eye.
+	if !strings.HasPrefix(buf.String(), `{"event":"result"`) {
+		t.Fatalf("event must be the first key: %s", buf.String())
+	}
+}
+
+func TestDeployEventStream_HealthObserver(t *testing.T) {
+	var buf bytes.Buffer
+	s := newDeployEventStream(&buf)
+	var obs healthObserver = s
+
+	obs.healthWaiting("meet-v1")
+	obs.healthVerdict("meet-v1", outcomeHealthy, healthSnapshot{health: apphealth.Healthy, ready: 2, desired: 2}, "Version v1 is live and serving", true, 1500*time.Millisecond)
+	obs.healthPortWarning(8080, "0.0.0.0")
+	obs.healthAppLog("panic: oh no")
+	// A scaled-to-zero app is a successful rollout with no serving instance:
+	// the outcome and the apphealth value must both say so, not just "healthy".
+	obs.healthVerdict("meet-v1", outcomeScaledToZero, healthSnapshot{health: apphealth.Idle}, "Version v1 deployed — scaled to zero", true, time.Second)
+	obs.healthVerdict("meet-v1", outcomeCrashed, healthSnapshot{health: apphealth.Crashed, crashCount: 3, cooldownSeconds: 30}, "crash-looped", false, time.Second)
+
+	events := decodeEvents(t, buf.String())
+	if len(events) != 6 {
+		t.Fatalf("expected 6 events, got %d: %s", len(events), buf.String())
+	}
+	if events[0]["outcome"] != "waiting" {
+		t.Fatalf("waiting event = %v", events[0])
+	}
+	healthy := events[1]
+	if healthy["outcome"] != "healthy" || healthy["ok"] != true || healthy["health"] != "healthy" ||
+		healthy["ready"] != float64(2) || healthy["desired"] != float64(2) || healthy["duration_ms"] != float64(1500) {
+		t.Fatalf("healthy event = %v", healthy)
+	}
+	if events[2]["event"] != "port_warning" || events[2]["port"] != float64(8080) {
+		t.Fatalf("port warning = %v", events[2])
+	}
+	if events[3]["event"] != "app_log" || events[3]["line"] != "panic: oh no" {
+		t.Fatalf("app log = %v", events[3])
+	}
+	idle := events[4]
+	if idle["outcome"] != "scaled_to_zero" || idle["ok"] != true || idle["health"] != "idle" {
+		t.Fatalf("scaled-to-zero event = %v", idle)
+	}
+	crashed := events[5]
+	if crashed["outcome"] != "crashed" || crashed["ok"] != false || crashed["health"] != "crashed" ||
+		crashed["crash_count"] != float64(3) || crashed["cooldown_seconds"] != float64(30) {
+		t.Fatalf("crashed event = %v", crashed)
+	}
+}
+
+// failingWriter fails every write, standing in for a stdout whose reader went
+// away.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestDeployEventStream_RemembersFirstWriteError(t *testing.T) {
+	s := newDeployEventStream(failingWriter{})
+	if s.Err() != nil {
+		t.Fatal("no error before any write")
+	}
+	s.start("meet", "prod")
+	s.message("still going")
+	if s.Err() == nil || s.Err().Error() != "broken pipe" {
+		t.Fatalf("Err() = %v, want the first write failure", s.Err())
+	}
+}
+
+// TestJSONLExitError covers the exit decision for every combination of deploy
+// outcome and stream health, including the one a unit test cannot reach
+// through Deploy itself: a deploy that succeeded while stdout was already gone.
+func TestJSONLExitError(t *testing.T) {
+	broken := errors.New("broken pipe")
+	cases := []struct {
+		name      string
+		deployErr error
+		streamErr error
+		wantExit  int // 0 means "returns deployErr as is"
+	}{
+		{"success with healthy stream exits 0", nil, nil, 0},
+		{"success but stream lost events exits 1", nil, broken, 1},
+		{"failure exits 1 without an Error line", errors.New("build failed"), nil, 1},
+		{"failure with broken stream still exits 1", errors.New("build failed"), broken, 1},
+		{"local cancellation keeps its exit 0", context.Canceled, nil, 0},
+		{"local cancellation with broken stream keeps its exit 0", context.Canceled, broken, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := jsonlExitError(tc.deployErr, tc.streamErr)
+			var exitErr ErrExitCode
+			if tc.wantExit != 0 {
+				if !errors.As(got, &exitErr) || int(exitErr) != tc.wantExit {
+					t.Fatalf("got %v, want ErrExitCode(%d)", got, tc.wantExit)
+				}
+				return
+			}
+			if !errors.Is(got, tc.deployErr) {
+				t.Fatalf("got %v, want %v passed through", got, tc.deployErr)
+			}
+		})
+	}
+}
+
+func TestDeploy_RejectsJSONWithJSONL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{Format: "jsonl", JSON: true}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("expected a conflict error, got %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("nothing must be written before the conflict is rejected: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+// TestDeploy_JSONLBrokenStdoutIsNotSuccess: a stream that could not be
+// written must not exit 0. The deploy here fails early anyway; the check is
+// that the exit-code path consults the stream and does not panic on a dead
+// writer. The success-path decision is covered by TestJSONLExitError.
+func TestDeploy_JSONLBrokenStdoutIsNotSuccess(t *testing.T) {
+	var stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  failingWriter{},
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{Format: "jsonl"}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	var exitErr ErrExitCode
+	if !errors.As(err, &exitErr) || int(exitErr) != 1 {
+		t.Fatalf("expected ErrExitCode(1), got %v", err)
+	}
+}
+
+func TestDeployOptsFormats(t *testing.T) {
+	cases := []struct {
+		opts              deployOpts
+		json, jsonl, auto bool
+	}{
+		{deployOpts{Format: "text"}, false, false, false},
+		{deployOpts{Format: "json"}, true, false, true},
+		{deployOpts{Format: "JSON"}, true, false, true},
+		{deployOpts{JSON: true}, true, false, true},
+		{deployOpts{Format: "jsonl"}, false, true, true},
+		{deployOpts{Format: "JSONL"}, false, true, true},
+	}
+	for _, tc := range cases {
+		if tc.opts.IsJSON() != tc.json || tc.opts.IsJSONL() != tc.jsonl || tc.opts.machineReadable() != tc.auto {
+			t.Errorf("%+v: IsJSON=%v IsJSONL=%v machineReadable=%v", tc.opts, tc.opts.IsJSON(), tc.opts.IsJSONL(), tc.opts.machineReadable())
+		}
+	}
+}
+
+func TestEventLogHandler(t *testing.T) {
+	var buf bytes.Buffer
+	s := newDeployEventStream(&buf)
+	var level slog.LevelVar
+	level.Set(slog.LevelWarn)
+
+	log := slog.New(newEventLogHandler(s, &level)).With("module", "rpc")
+	log.Debug("hidden below the level")
+	log.WithGroup("call").Error("rpc.callstream: error calling inline", "error", "archive/tar: write too long")
+
+	events := decodeEvents(t, buf.String())
+	if len(events) != 1 {
+		t.Fatalf("expected the error only, got %d events: %s", len(events), buf.String())
+	}
+	ev := events[0]
+	if ev["event"] != "log" || ev["level"] != "ERROR" || ev["message"] != "rpc.callstream: error calling inline" {
+		t.Fatalf("log event = %v", ev)
+	}
+	fields := ev["fields"].(map[string]any)
+	if fields["module"] != "rpc" || fields["call.error"] != "archive/tar: write too long" {
+		t.Fatalf("fields = %v", fields)
+	}
+}
+
+// TestDeploy_JSONLIsTheOnlyOutput drives Deploy through its earliest failure
+// and checks the contract: stdout is nothing but JSON lines, ending in a
+// result, stderr gets nothing at all, and the CLI is handed a bare exit code so
+// it prints nothing either.
+func TestDeploy_JSONLIsTheOnlyOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := &Context{
+		Context: context.Background(),
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	}
+	opts := deployOpts{Format: "jsonl"}
+	opts.App = "meet"
+
+	err := Deploy(ctx, opts)
+	var exitErr ErrExitCode
+	if !errors.As(err, &exitErr) || int(exitErr) != 1 {
+		t.Fatalf("expected ErrExitCode(1) so the CLI stays silent, got %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr must be empty in jsonl mode, got %q", stderr.String())
+	}
+
+	events := decodeEvents(t, stdout.String())
+	if events[0]["event"] != "start" || events[0]["app"] != "meet" {
+		t.Fatalf("first event = %v, want start", events[0])
+	}
+	last := events[len(events)-1]
+	if last["event"] != "result" || last["status"] != "failed" || last["error"] == "" {
+		t.Fatalf("last event = %v, want failed result with error", last)
+	}
+	if ctx.Stdout != &stdout {
+		t.Fatal("ctx.Stdout was not restored after the deploy")
+	}
+}

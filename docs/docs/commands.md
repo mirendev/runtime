@@ -319,6 +319,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug connection`](./command/debug-connection.md) | Test connectivity and authentication with a server |
 | [`miren debug ctr`](./command/debug-ctr.md) | Run ctr with miren defaults |
 | [`miren debug ctr nuke`](./command/debug-ctr-nuke.md) | Nuke a containerd namespace |
+| [`miren debug deploy-events`](./command/debug-deploy-events.md) | Render a 'miren deploy --format jsonl' stream as readable output |
 | [`miren debug disk`](./command/debug-disk.md) | Disk entity debug commands |
 | [`miren debug disk create`](./command/debug-disk-create.md) | Create a disk entity for testing |
 | [`miren debug disk delete`](./command/debug-disk-delete.md) | Delete a disk entity |

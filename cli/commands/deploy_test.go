@@ -12,7 +12,7 @@ func TestBuildPhaseSummary(t *testing.T) {
 	duration := 250 * time.Millisecond
 
 	t.Run("direct image names the upstream reference", func(t *testing.T) {
-		got := buildPhaseSummary("docker.io/library/nginx:alpine", 0, duration)
+		got := buildPhaseSummary("docker.io/library/nginx:alpine", 0, 0, duration)
 		if got.name != "Use image" {
 			t.Errorf("name = %q, want %q", got.name, "Use image")
 		}
@@ -25,7 +25,7 @@ func TestBuildPhaseSummary(t *testing.T) {
 	})
 
 	t.Run("source build retains build summary", func(t *testing.T) {
-		got := buildPhaseSummary("", 3, duration)
+		got := buildPhaseSummary("", 3, 0, duration)
 		if got.name != "Build & push image" {
 			t.Errorf("name = %q, want %q", got.name, "Build & push image")
 		}
@@ -33,6 +33,25 @@ func TestBuildPhaseSummary(t *testing.T) {
 			t.Errorf("details = %q, want %q", got.details, "3 steps completed")
 		}
 	})
+}
+
+func TestBuildStepsSummary(t *testing.T) {
+	cases := []struct {
+		count, cached int
+		want          string
+	}{
+		{0, 0, "cached"},
+		{1, 0, "1 step completed"},
+		{5, 0, "5 steps completed"},
+		{5, 3, "5 steps, 3 cached"},
+		{1, 1, "1 step, all cached"},
+		{5, 5, "5 steps, all cached"},
+	}
+	for _, tc := range cases {
+		if got := buildStepsSummary(tc.count, tc.cached); got != tc.want {
+			t.Errorf("buildStepsSummary(%d, %d) = %q, want %q", tc.count, tc.cached, got, tc.want)
+		}
+	}
 }
 
 func TestEnrichUploadProgress(t *testing.T) {
