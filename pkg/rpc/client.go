@@ -104,15 +104,18 @@ type NetworkClient struct {
 
 	//cachedConn *cachedConn
 
-	// conns records every QUIC connection this client has dialed, so a failed
+	// conns records live QUIC connections this client has dialed, so a failed
 	// request can be classified by whether a handshake ever completed. That
 	// distinction is not recoverable from the error value: quic-go raises the
 	// same IdleTimeoutError ("timeout: no recent network activity") both for a
 	// connection that never got a packet back and for one that completed its
 	// handshake and later went quiet. Those are different problems with
 	// different fixes, and we own the Dial hook, so we track it ourselves.
-	connMu sync.Mutex
-	conns  []*quic.Conn
+	// Preserve the handshake result after closure without retaining the
+	// connection and its buffers for the lifetime of a controller's client.
+	connMu           sync.Mutex
+	conns            map[*quic.Conn]struct{}
+	handshakeReached bool
 
 	inlineClient *inlineClient
 	localClient  *localClient
@@ -203,11 +206,20 @@ func setTLSConfigServerName(tlsConf *tls.Config, addr net.Addr, host string) {
 
 func (c *NetworkClient) trackConn(conn *quic.Conn) {
 	c.connMu.Lock()
-	c.conns = append(c.conns, conn)
+	if c.conns == nil {
+		c.conns = make(map[*quic.Conn]struct{})
+	}
+	c.conns[conn] = struct{}{}
 	c.connMu.Unlock()
 	if c.State != nil {
 		c.State.trackOutboundConn(conn)
 	}
+	context.AfterFunc(conn.Context(), func() {
+		c.connMu.Lock()
+		defer c.connMu.Unlock()
+		c.recordHandshake(conn)
+		delete(c.conns, conn)
+	})
 }
 
 // reachedServer reports whether any connection this client dialed finished its
@@ -220,17 +232,26 @@ func (c *NetworkClient) trackConn(conn *quic.Conn) {
 // non-blocking receive is an accurate "did we ever get this far" test.
 func (c *NetworkClient) reachedServer() bool {
 	c.connMu.Lock()
-	conns := slices.Clone(c.conns)
-	c.connMu.Unlock()
+	defer c.connMu.Unlock()
 
-	for _, conn := range conns {
-		select {
-		case <-conn.HandshakeComplete():
-			return true
-		default:
+	if !c.handshakeReached {
+		for conn := range c.conns {
+			c.recordHandshake(conn)
+			if c.handshakeReached {
+				break
+			}
 		}
 	}
-	return false
+	return c.handshakeReached
+}
+
+// Caller holds connMu. DialEarly can return before the handshake succeeds.
+func (c *NetworkClient) recordHandshake(conn *quic.Conn) {
+	select {
+	case <-conn.HandshakeComplete():
+		c.handshakeReached = true
+	default:
+	}
 }
 
 // classifyTransportError turns a transport failure during capability
