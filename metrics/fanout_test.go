@@ -46,6 +46,56 @@ func TestFanoutOneFailingSinkDoesNotStarveOthers(t *testing.T) {
 	require.Len(t, healthy.batches, 1)
 }
 
+// blockingSink parks inside WritePoints until released, standing in for a
+// delivery that is mid-flight when Detach is called.
+type blockingSink struct {
+	entered chan struct{}
+	release chan struct{}
+	writes  int
+}
+
+func (s *blockingSink) WritePoints(context.Context, []MetricPoint) error {
+	s.writes++
+	close(s.entered)
+	<-s.release
+	return nil
+}
+
+func TestFanoutDetachWaitsForInFlightWrite(t *testing.T) {
+	sink := &blockingSink{entered: make(chan struct{}), release: make(chan struct{})}
+	fanout := NewFanout(sink)
+
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_ = fanout.WritePoints(context.Background(), []MetricPoint{{Name: "a", Value: 1}})
+	}()
+	<-sink.entered
+
+	detached := make(chan struct{})
+	go func() {
+		defer close(detached)
+		fanout.Detach(sink)
+	}()
+
+	select {
+	case <-detached:
+		t.Fatal("Detach returned while a write to the sink was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(sink.release)
+	<-writeDone
+	select {
+	case <-detached:
+	case <-time.After(time.Second):
+		t.Fatal("Detach did not return after the in-flight write finished")
+	}
+
+	require.NoError(t, fanout.WritePoints(context.Background(), []MetricPoint{{Name: "b", Value: 2}}))
+	assert.Equal(t, 1, sink.writes, "no batch reaches a sink after Detach returns")
+}
+
 func TestFanoutIgnoresNilSinks(t *testing.T) {
 	fanout := NewFanout(nil)
 	fanout.Attach(nil)

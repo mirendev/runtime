@@ -48,22 +48,41 @@ func (f *Fanout) Attach(sink PointWriter) {
 	f.sinks = append(f.sinks, sink)
 }
 
+// Detach removes a sink. It takes the write lock, and WritePoints holds the
+// read lock for the whole delivery, so once Detach returns no batch is still
+// being handed to the removed sink; the caller can close it without a late
+// write landing after its final flush. Detaching a sink that was never
+// attached is a no-op.
+func (f *Fanout) Detach(sink PointWriter) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	remaining := make([]PointWriter, 0, len(f.sinks))
+	for _, existing := range f.sinks {
+		if existing != sink {
+			remaining = append(remaining, existing)
+		}
+	}
+	f.sinks = remaining
+}
+
 // WritePoints hands the batch to every sink. One sink failing does not stop
 // the others from receiving the batch; all failures are returned joined.
+//
+// The read lock is held across delivery, not just while reading the sink
+// list. Sinks only buffer (the writers flush on their own goroutines), so the
+// hold is brief, and it is what gives Detach its guarantee. The corollary is
+// that a sink must not call Attach or Detach from inside its own WritePoints;
+// those are lifecycle operations for whoever owns the sink, and a sink that
+// tried to detach itself mid-delivery would be waiting on its own read lock.
 func (f *Fanout) WritePoints(ctx context.Context, points []MetricPoint) error {
 	if f == nil {
 		return nil
 	}
-	// Copy under the lock rather than sharing the backing array with a
-	// concurrent Attach, so the iteration below runs without the lock held
-	// across sink writes and without any question of aliasing.
 	f.mu.RLock()
-	sinks := make([]PointWriter, len(f.sinks))
-	copy(sinks, f.sinks)
-	f.mu.RUnlock()
+	defer f.mu.RUnlock()
 
 	var errs []error
-	for _, sink := range sinks {
+	for _, sink := range f.sinks {
 		if err := sink.WritePoints(ctx, points); err != nil {
 			errs = append(errs, err)
 		}
