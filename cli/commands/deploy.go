@@ -500,8 +500,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	var gitInfo *git.Info
 	gitInfo, gitErr := git.GetInfo(dir)
 	if gitErr != nil {
-		ctx.Log.Debug("Failed to get git info", "error", gitErr)
-		// Don't fail deployment if git info is unavailable
+		// Provenance is optional, but losing it should be visible at the moment
+		// the person can still fix it, not weeks later in deployment history.
+		ctx.Log.Warn("deploying without git provenance; the deployment will record no commit", "error", gitErr)
 	}
 
 	// Create deployment record early in the process

@@ -21,7 +21,9 @@ type Info struct {
 	RemoteURL       string
 }
 
-// GetInfo retrieves git information for the given directory
+// GetInfo retrieves version-control information for the given directory.
+// Git is consulted first; a jj workspace without a colocated .git (the shape
+// `jj workspace add` produces) is read through jj instead.
 func GetInfo(dir string) (*Info, error) {
 	// Convert to absolute path
 	absDir, err := filepath.Abs(dir)
@@ -29,11 +31,16 @@ func GetInfo(dir string) (*Info, error) {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Check if it's a git repository
-	if !isGitRepo(absDir) {
-		return nil, fmt.Errorf("not a git repository")
+	if isGitRepo(absDir) {
+		return gitInfo(absDir)
 	}
+	if isJJWorkspace(absDir) {
+		return jjInfo(absDir)
+	}
+	return nil, fmt.Errorf("not a git or jj repository")
+}
 
+func gitInfo(absDir string) (*Info, error) {
 	info := &Info{}
 
 	// Get current commit SHA
@@ -112,15 +119,90 @@ func GetInfo(dir string) (*Info, error) {
 	return info, nil
 }
 
+// jjInfo reports the same shape git would for a colocated jj repo, where jj
+// pins git HEAD to @- and the working-copy commit @ plays the role of the
+// working tree: the commit fields describe @-, and the deploy is dirty when @
+// has changes on top of it. The parent's id is stable once pushed, whereas @'s
+// id changes on every snapshot, so this keeps recorded SHAs resolvable.
+func jjInfo(absDir string) (*Info, error) {
+	// jj's template language turns \0 into a NUL byte, which no field can contain.
+	const sep = `\0`
+	parent, err := runJJCommand(absDir, "log", "-r", "@-", "-n", "1", "--no-graph", "--color=never", "-T",
+		`commit_id ++ "`+sep+`" ++ local_bookmarks.map(|b| b.name()).join(",") ++ "`+sep+`" ++ description ++ "`+sep+`" ++ author.name() ++ "`+sep+`" ++ author.email() ++ "`+sep+`" ++ committer.timestamp().format("%+") ++ "`+sep+`"`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read jj parent commit: %w", err)
+	}
+	fields := strings.Split(parent, "\x00")
+	if len(fields) < 6 {
+		return nil, fmt.Errorf("unexpected jj log output: %q", parent)
+	}
+	info := &Info{
+		SHA:             strings.TrimSpace(fields[0]),
+		Branch:          strings.TrimSpace(fields[1]),
+		CommitMessage:   strings.TrimSpace(fields[2]),
+		CommitAuthor:    strings.TrimSpace(fields[3]),
+		CommitEmail:     strings.TrimSpace(fields[4]),
+		CommitTimestamp: strings.TrimSpace(fields[5]),
+	}
+	if info.SHA == "" {
+		return nil, fmt.Errorf("jj reported no parent commit for the working copy")
+	}
+
+	// `empty` is false as soon as @ carries any change over @-, which is jj's
+	// equivalent of a dirty working tree. @'s commit id already hashes that
+	// tree, so it doubles as the working-tree fingerprint.
+	wc, err := runJJCommand(absDir, "log", "-r", "@", "--no-graph", "--color=never", "-T",
+		`empty ++ "`+sep+`" ++ commit_id ++ "`+sep+`"`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read jj working copy: %w", err)
+	}
+	wcFields := strings.Split(wc, "\x00")
+	// jj's `empty` is true when @ has no changes over @-, so "false" is dirty.
+	if len(wcFields) >= 2 && strings.TrimSpace(wcFields[0]) == "false" {
+		info.IsDirty = true
+		info.WorkingTreeHash = strings.TrimSpace(wcFields[1])
+		if len(info.WorkingTreeHash) > 8 {
+			info.WorkingTreeHash = info.WorkingTreeHash[:8]
+		}
+	}
+
+	remotes, _ := runJJCommand(absDir, "git", "remote", "list")
+	for _, line := range strings.Split(remotes, "\n") {
+		name, url, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if ok && name == "origin" {
+			info.RemoteURL = strings.TrimSpace(url)
+			break
+		}
+	}
+
+	return info, nil
+}
+
 // isGitRepo checks if the directory is inside a git repository
 func isGitRepo(dir string) bool {
 	_, err := runGitCommand(dir, "rev-parse", "--git-dir")
 	return err == nil
 }
 
+// isJJWorkspace checks if the directory is inside a jj workspace. A missing
+// jj binary simply reports false, which the caller surfaces as "no provenance".
+func isJJWorkspace(dir string) bool {
+	_, err := runJJCommand(dir, "workspace", "root")
+	return err == nil
+}
+
 // runGitCommand executes a git command in the specified directory
 func runGitCommand(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	return runCommand("git", dir, args...)
+}
+
+// runJJCommand executes a jj command in the specified directory
+func runJJCommand(dir string, args ...string) (string, error) {
+	return runCommand("jj", dir, args...)
+}
+
+func runCommand(name, dir string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 
 	var stdout, stderr bytes.Buffer
@@ -129,7 +211,7 @@ func runGitCommand(dir string, args ...string) (string, error) {
 
 	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("git command failed: %w, stderr: %s", err, stderr.String())
+		return "", fmt.Errorf("%s command failed: %w, stderr: %s", name, err, stderr.String())
 	}
 
 	return stdout.String(), nil
