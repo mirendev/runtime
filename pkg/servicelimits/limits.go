@@ -179,34 +179,47 @@ func Render(unit string, statePath string, l Limits) string {
 // Write renders the drop-in for a unit and installs it, replacing any previous
 // version. It creates the drop-in directory if needed and writes atomically, so
 // a crash mid-write cannot leave systemd with a truncated file.
-func Write(unit string, statePath string, l Limits) error {
+//
+// It reports false when it deliberately left an existing drop-in in place: with
+// unknown limits Render omits the memory directives, and overwriting a host's
+// working limit with none would silently remove the protection it already had.
+// Losing RAM detection is far more likely to be a passing oddity than a real
+// change, so the existing file wins. A host with no drop-in yet still gets one,
+// since even without a limit it carries the ExecStopPost hook.
+func Write(unit string, statePath string, l Limits) (bool, error) {
 	dir := DropInDir(unit)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create drop-in directory %s: %w", dir, err)
+		return false, fmt.Errorf("create drop-in directory %s: %w", dir, err)
 	}
 
 	path := filepath.Join(dir, DropInFileName)
+
+	if !l.Known() {
+		if _, err := os.Stat(path); err == nil {
+			return false, nil
+		}
+	}
 	tmp, err := os.CreateTemp(dir, DropInFileName+".*")
 	if err != nil {
-		return fmt.Errorf("create temp drop-in in %s: %w", dir, err)
+		return false, fmt.Errorf("create temp drop-in in %s: %w", dir, err)
 	}
 	defer os.Remove(tmp.Name())
 
 	if _, err := tmp.WriteString(Render(unit, statePath, l)); err != nil {
 		tmp.Close()
-		return fmt.Errorf("write drop-in %s: %w", path, err)
+		return false, fmt.Errorf("write drop-in %s: %w", path, err)
 	}
 	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close()
-		return fmt.Errorf("chmod drop-in %s: %w", path, err)
+		return false, fmt.Errorf("chmod drop-in %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close drop-in %s: %w", path, err)
+		return false, fmt.Errorf("close drop-in %s: %w", path, err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("install drop-in %s: %w", path, err)
+		return false, fmt.Errorf("install drop-in %s: %w", path, err)
 	}
-	return nil
+	return true, nil
 }
 
 // Remove deletes the managed drop-in and, if it is then empty, the drop-in
@@ -220,6 +233,36 @@ func Remove(unit string) error {
 	// operator has their own override alongside ours.
 	os.Remove(dir)
 	return nil
+}
+
+// ExistingStatePath returns the record directory recorded in a unit's managed
+// drop-in, if there is one.
+//
+// Install knows the effective data path (from the server's config, or the
+// runner's --data-path). Upgrade does not, and recomputing it there would
+// overwrite a correct custom path with the compiled-in default — the hook would
+// then write records somewhere the daemon never reads, and restarts would go
+// unreported with nothing to show for it. So upgrade reuses whatever install
+// worked out, which also preserves a path an operator edited by hand.
+func ExistingStatePath(unit string) (string, bool) {
+	body, err := os.ReadFile(filepath.Join(DropInDir(unit), DropInFileName))
+	if err != nil {
+		return "", false
+	}
+
+	for line := range strings.SplitSeq(string(body), "\n") {
+		if !strings.HasPrefix(line, "ExecStopPost=") {
+			continue
+		}
+		_, arg, ok := strings.Cut(line, "--output=")
+		if !ok {
+			continue
+		}
+		if path := unquoteExecArg(strings.TrimSpace(arg)); path != "" {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // DropInDir returns the systemd drop-in directory for a unit.
@@ -271,6 +314,35 @@ func quoteExecArg(s string) string {
 		}
 	}
 	b.WriteByte('"')
+	return b.String()
+}
+
+// unquoteExecArg reverses quoteExecArg, so a path this package wrote can be read
+// back out of a drop-in.
+func unquoteExecArg(s string) string {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return s
+	}
+
+	var b strings.Builder
+	body := []rune(s[1 : len(s)-1])
+	for i := 0; i < len(body); i++ {
+		if body[i] != '\\' || i+1 >= len(body) {
+			b.WriteRune(body[i])
+			continue
+		}
+		i++
+		switch body[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		default:
+			b.WriteRune(body[i])
+		}
+	}
 	return b.String()
 }
 

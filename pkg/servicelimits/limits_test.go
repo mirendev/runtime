@@ -163,7 +163,9 @@ func TestWriteAndRemove(t *testing.T) {
 
 	path := filepath.Join(dir, "miren.service.d", DropInFileName)
 
-	require.NoError(t, Write("miren.service", "/var/lib/miren/server", Compute(16*gib)))
+	wrote, err := Write("miren.service", "/var/lib/miren/server", Compute(16*gib))
+	require.NoError(t, err)
+	require.True(t, wrote)
 
 	body, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -174,7 +176,9 @@ func TestWriteAndRemove(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 
 	t.Run("rewriting replaces the previous version", func(t *testing.T) {
-		require.NoError(t, Write("miren.service", "/var/lib/miren/server", Compute(64*gib)))
+		wrote, err := Write("miren.service", "/var/lib/miren/server", Compute(64*gib))
+		require.NoError(t, err)
+		require.True(t, wrote)
 
 		body, err := os.ReadFile(path)
 		require.NoError(t, err)
@@ -203,13 +207,14 @@ func TestWriteAndRemove(t *testing.T) {
 	})
 
 	t.Run("remove keeps a directory holding an operator override", func(t *testing.T) {
-		require.NoError(t, Write("miren.service", "/var/lib/miren/server", Compute(16*gib)))
+		_, err := Write("miren.service", "/var/lib/miren/server", Compute(16*gib))
+		require.NoError(t, err)
 		override := filepath.Join(dir, "miren.service.d", "override.conf")
 		require.NoError(t, os.WriteFile(override, []byte("[Service]\nMemoryMax=32G\n"), 0o644))
 
 		require.NoError(t, Remove("miren.service"))
 
-		_, err := os.Stat(override)
+		_, err = os.Stat(override)
 		assert.NoError(t, err, "an operator's own drop-in must survive uninstall")
 	})
 }
@@ -262,4 +267,101 @@ func TestRenderEscapesTheStatePath(t *testing.T) {
 				"a state path must never introduce its own directive")
 		}
 	})
+}
+
+func TestWriteKeepsAnExistingLimitWhenRAMIsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	prev := unitDir
+	unitDir = dir
+	t.Cleanup(func() { unitDir = prev })
+
+	path := filepath.Join(dir, "miren.service.d", DropInFileName)
+
+	wrote, err := Write("miren.service", "/var/lib/miren/server", Compute(16*gib))
+	require.NoError(t, err)
+	require.True(t, wrote)
+
+	// An upgrade on a host where /proc/meminfo momentarily can't be read must
+	// not replace a working cap with a drop-in that has no memory directives.
+	// That would silently remove the protection the host already had.
+	wrote, err = Write("miren.service", "/var/lib/miren/server", Compute(0))
+	require.NoError(t, err)
+	assert.False(t, wrote, "an unknown limit must not overwrite a known one")
+
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "MemoryMax=4G\n", "the existing cap must survive")
+}
+
+func TestWriteStillInstallsWhenRAMIsUnknownAndNothingExists(t *testing.T) {
+	dir := t.TempDir()
+	prev := unitDir
+	unitDir = dir
+	t.Cleanup(func() { unitDir = prev })
+
+	// A first install with no detectable RAM still gets a drop-in, because even
+	// without a limit it carries the ExecStopPost hook.
+	wrote, err := Write("miren.service", "/var/lib/miren/server", Compute(0))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	body, err := os.ReadFile(filepath.Join(dir, "miren.service.d", DropInFileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "ExecStopPost=")
+	assert.NotContains(t, string(body), "MemoryMax=")
+}
+
+func TestExistingStatePath(t *testing.T) {
+	dir := t.TempDir()
+	prev := unitDir
+	unitDir = dir
+	t.Cleanup(func() { unitDir = prev })
+
+	t.Run("no drop-in yet", func(t *testing.T) {
+		_, ok := ExistingStatePath("miren.service")
+		assert.False(t, ok)
+	})
+
+	t.Run("reads back a plain path", func(t *testing.T) {
+		_, err := Write("miren.service", "/data/miren/server", Compute(16*gib))
+		require.NoError(t, err)
+
+		got, ok := ExistingStatePath("miren.service")
+		require.True(t, ok)
+
+		// Upgrade has no idea the operator moved data_path. Recomputing here
+		// would write records to /var/lib/miren/server while the server reads
+		// /data/miren/server, and the restart would go unreported.
+		assert.Equal(t, "/data/miren/server", got)
+	})
+
+	t.Run("reads back a quoted path", func(t *testing.T) {
+		_, err := Write("miren-runner.service", "/var/lib/my runner", Compute(16*gib))
+		require.NoError(t, err)
+
+		got, ok := ExistingStatePath("miren-runner.service")
+		require.True(t, ok)
+		assert.Equal(t, "/var/lib/my runner", got)
+	})
+
+	t.Run("ignores a drop-in with no hook", func(t *testing.T) {
+		_, err := Write("miren-nohook.service", "", Compute(16*gib))
+		require.NoError(t, err)
+
+		_, ok := ExistingStatePath("miren-nohook.service")
+		assert.False(t, ok)
+	})
+}
+
+func TestUnquoteExecArgRoundTrips(t *testing.T) {
+	for _, path := range []string{
+		"/var/lib/miren/server",
+		"/var/lib/my runner",
+		"/tmp/a\"b",
+		`/tmp/a\b`,
+		"/tmp/a$b",
+		"/tmp/x\nExecStart=/bin/false",
+	} {
+		assert.Equal(t, path, unquoteExecArg(quoteExecArg(path)), "round trip for %q", path)
+	}
 }

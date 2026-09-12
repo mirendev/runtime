@@ -331,8 +331,16 @@ func (m *Manager) ensureResourceLimits(ctx context.Context) {
 		return
 	}
 
+	// Prefer the path install already worked out. It knew the effective data
+	// path; we don't, and recomputing it here would replace a custom one with
+	// the default, leaving the hook writing records the daemon never reads.
+	statePath := m.opts.StateDir
+	if existing, ok := servicelimits.ExistingStatePath(unit); ok {
+		statePath = existing
+	}
+
 	limits := servicelimits.Compute(servicelimits.DetectSystemRAMBytes())
-	if err := servicelimits.Write(unit, m.opts.StateDir, limits); err != nil {
+	if _, err := servicelimits.Write(unit, statePath, limits); err != nil {
 		fmt.Printf("Warning: could not update resource limits for %s: %v\n", unit, err)
 		return
 	}

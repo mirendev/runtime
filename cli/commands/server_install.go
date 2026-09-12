@@ -528,7 +528,7 @@ WantedBy=multi-user.target
 	// Outside the guard above on purpose: the unit is written once and then left
 	// alone, so limits added later would never reach a host that already has
 	// miren installed unless they arrive by their own drop-in.
-	installServiceLimits(ctx, "miren.service", serverStateDir)
+	installServiceLimits(ctx, "miren.service", serverStateDir(ctx))
 
 	ctx.Info("Reloading systemd daemon...")
 	cmd := exec.Command("systemctl", "daemon-reload")
