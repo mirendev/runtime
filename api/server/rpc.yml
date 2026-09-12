@@ -1,0 +1,39 @@
+name: server
+version: v1alpha
+doc: Server self-description and lifecycle
+
+imports:
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+interfaces:
+  - name: ServerInfo
+    doc: Read-only facts about the running server process
+    methods:
+      - name: Version
+        index: 0
+        public: true  # Read-only build and instance metadata; safe to answer before authentication
+        doc: Report the build and process identity of the server answering this call
+        results:
+          - name: version
+            type: string
+            doc: Build version, e.g. v0.14.0 or main:abc1234
+          - name: commit
+            type: string
+            doc: Source commit the binary was built from
+          - name: build_date
+            type: standard.Timestamp
+            doc: When the binary was built
+          - name: runtime_instance_id
+            type: string
+            doc: Identity of this server process. Changes on every restart.
+          - name: started_at
+            type: standard.Timestamp
+            doc: When this process started
+          - name: ready
+            type: bool
+            doc: True once the boot graph has started every component
+          - name: install_kind
+            type: string
+            doc: How the process is supervised (systemd, container, unknown)

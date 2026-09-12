@@ -40,6 +40,7 @@ import (
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/oidc"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/serverinfo"
 	"miren.dev/runtime/pkg/waf"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
@@ -80,6 +81,8 @@ type IngressConfig struct {
 	RequestTimeout time.Duration
 	DataPath       string
 	WorkloadIssuer *workloadidentity.Issuer
+	// Instance, when set, adds process identity and readiness to /health.
+	Instance *serverinfo.Source
 }
 
 type Server struct {
@@ -1256,6 +1259,10 @@ func isProxyConnectionError(err error) bool {
 type HealthResponse struct {
 	Status string                 `json:"status"`
 	Checks map[string]HealthCheck `json:"checks"`
+
+	// Server.Ready is the boot-graph signal an upgrade waits for; Status stays
+	// the dependency check it always was.
+	Server *serverinfo.Info `json:"server,omitempty"`
 }
 
 // HealthCheck represents a single component health check
@@ -1272,6 +1279,10 @@ func (h *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
 	response := HealthResponse{
 		Status: "healthy",
 		Checks: make(map[string]HealthCheck),
+	}
+	if h.config.Instance != nil {
+		info := h.config.Instance.Info()
+		response.Server = &info
 	}
 
 	// Check etcd connection by listing apps (lightweight query)
@@ -1290,7 +1301,9 @@ func (h *Server) handleHealth(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Set response headers and status
+	// The status code reflects dependency health only. Boot readiness is
+	// reported in the body as server.ready, and a booting server still answers
+	// 200 here so callers watching dependencies do not confuse the two.
 	w.Header().Set("Content-Type", "application/json")
 	if response.Status == "healthy" {
 		w.WriteHeader(http.StatusOK)
