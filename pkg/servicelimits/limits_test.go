@@ -250,6 +250,7 @@ func TestQuoteExecArg(t *testing.T) {
 	// no other special character therefore stays unquoted but still doubled.
 	assert.Equal(t, "/tmp/a$$b", quoteExecArg("/tmp/a$b"))
 	assert.Equal(t, "/tmp/a%%nb", quoteExecArg("/tmp/a%nb"))
+	assert.Equal(t, "/tmp/$${HOME}/x", quoteExecArg("/tmp/${HOME}/x"))
 	assert.Equal(t, `"/tmp/a $$b %%n"`, quoteExecArg("/tmp/a $b %n"))
 }
 
@@ -368,6 +369,7 @@ func TestUnquoteExecArgRoundTrips(t *testing.T) {
 		"/tmp/a$b",
 		"/tmp/a%nb",
 		"/tmp/100%",
+		"/tmp/${HOME}/x",
 		"/tmp/a $b %n",
 		"/tmp/x\nExecStart=/bin/false",
 	} {

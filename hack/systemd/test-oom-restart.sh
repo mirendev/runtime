@@ -97,26 +97,43 @@ fi
 log "Restarting miren normally to check the exit is reported..."
 systemctl start miren.service 2>/dev/null
 
-reported=0
+start_time=$(date '+%Y-%m-%d %H:%M:%S')
+
+# The early report runs before the dependency graph starts, so it does not
+# depend on the server booting successfully. That makes it the one part of
+# reporting this script can assert on unconditionally, and a regression here is
+# a real failure rather than a quirk of running inside a container.
+warned=0
 for _ in $(seq 1 60); do
-    if [ -f "$REPORTED" ]; then
-        reported=1
+    if journalctl -u miren --no-pager --since "$start_time" 2>/dev/null \
+        | grep -qi "killed for exceeding its memory limit"; then
+        warned=1
         break
     fi
     sleep 1
 done
 
-if [ "$reported" -eq 1 ]; then
-    log "PASS: the restart was recorded and reported"
-    journalctl -u miren --no-pager -n 200 | grep -i "memory limit" || true
-    exit 0
+if [ "$warned" -ne 1 ]; then
+    log "Journal since the restart:"
+    journalctl -u miren --no-pager --since "$start_time" 2>/dev/null | tail -40 || true
+    fail "the out-of-memory restart was never reported on the next start"
 fi
 
-# The report is logged by a boot component that runs after observability comes
-# up, so a server that can't finish starting in this container won't have
-# reached it yet. The record stays put and is reported on the first healthy
-# boot, so this is a warning about the container, not a failure of the feature.
-log "WARN: exit record still unreported — did the server finish starting?"
-systemctl is-active miren.service || true
-journalctl -u miren --no-pager -n 40 || true
+log "PASS: the restart was recorded and reported"
+journalctl -u miren --no-pager --since "$start_time" | grep -i "memory limit" | head -3 || true
+
+# Retiring the record happens in a boot component that runs after observability
+# comes up, so a server that cannot finish starting in this container will not
+# have got there. The warning above already proves reporting works, so this is
+# extra signal rather than a pass condition.
+for _ in $(seq 1 60); do
+    [ -f "$REPORTED" ] && break
+    sleep 1
+done
+if [ -f "$REPORTED" ]; then
+    log "  and the record was retired, so it will not warn again"
+else
+    log "  NOTE: record not yet retired; the server may not have finished starting"
+    systemctl is-active miren.service || true
+fi
 exit 0

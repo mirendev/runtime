@@ -38,6 +38,30 @@ verify_service_setup() {
         log "  FAIL: no MemoryHigh set — the cgroup would be killed without reclaiming first"
         failed=1
     fi
+
+    # Checking only for "infinity" would accept a nonsense finite value like
+    # MemoryMax=1, which is arguably worse than no limit at all. These assert the
+    # invariants the policy has to satisfy rather than re-deriving the policy
+    # itself, since a second copy of the formula in shell is exactly the kind of
+    # drift that left this harness testing a stale unit for months.
+    local mem_total
+    mem_total=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
+    if [ -n "$mem_total" ] && [ "$mem_max" != "infinity" ] && [ -n "$mem_max" ]; then
+        if [ "$mem_max" -lt $((1024 * 1024 * 1024)) ]; then
+            log "  FAIL: MemoryMax is $mem_max, under 1 GB — the control plane cannot run in that"
+            failed=1
+        fi
+        if [ "$mem_max" -gt "$mem_total" ]; then
+            log "  FAIL: MemoryMax is $mem_max, above MemTotal $mem_total — the cap can never be reached"
+            failed=1
+        fi
+    fi
+    if [ "$mem_high" != "infinity" ] && [ -n "$mem_high" ] && [ "$mem_max" != "infinity" ] && [ -n "$mem_max" ]; then
+        if [ "$mem_high" -ge "$mem_max" ]; then
+            log "  FAIL: MemoryHigh ($mem_high) is not below MemoryMax ($mem_max) — no reclaim before the kill"
+            failed=1
+        fi
+    fi
     if [ "$swap_max" != "0" ]; then
         log "  FAIL: MemorySwapMax is '$swap_max', expected 0 — swap thrash is what kills a host"
         failed=1
