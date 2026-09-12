@@ -267,6 +267,9 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			instance.SetName(addon.NameFromRef(assoc.Addon))
 			instance.SetAddon(string(assoc.Addon))
 			instance.SetVariant(assoc.Variant)
+			instance.SetVersion(assoc.Version)
+			instance.SetStatus(assoc.Status)
+			instance.SetErrorMessage(assoc.ErrorMessage)
 			addons = append(addons, instance)
 		}
 		if len(addons) > 0 {

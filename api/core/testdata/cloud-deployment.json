@@ -1,0 +1,206 @@
+{
+  "attrs": [
+    {
+      "id": "db/entity.created",
+      "v": {
+        "k": 6,
+        "v": "2026-08-31T12:00:00Z"
+      }
+    },
+    {
+      "id": "db/entity.revision",
+      "v": {
+        "k": 4,
+        "v": 42
+      }
+    },
+    {
+      "id": "db/entity.updated",
+      "v": {
+        "k": 6,
+        "v": "2026-08-31T12:01:00Z"
+      }
+    },
+    {
+      "id": "db/id",
+      "v": {
+        "k": 8,
+        "v": "deployment/dep-1"
+      }
+    },
+    {
+      "id": "db/short-id",
+      "v": {
+        "k": 5,
+        "v": "dep-1"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.app",
+      "v": {
+        "k": 8,
+        "v": "app/web"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.app_name",
+      "v": {
+        "k": 5,
+        "v": "web"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.completed_at",
+      "v": {
+        "k": 5,
+        "v": "2026-08-31T12:01:00Z"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.deployed_by",
+      "v": {
+        "k": 11,
+        "v": {
+          "attrs": [
+            {
+              "id": "dev.miren.core/deployed_by.auth_method",
+              "v": {
+                "k": 5,
+                "v": "oidc"
+              }
+            },
+            {
+              "id": "dev.miren.core/deployed_by.organization_id",
+              "v": {
+                "k": 5,
+                "v": "org-123"
+              }
+            },
+            {
+              "id": "dev.miren.core/deployed_by.subject",
+              "v": {
+                "k": 5,
+                "v": "user-123"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.git_info",
+      "v": {
+        "k": 11,
+        "v": {
+          "attrs": [
+            {
+              "id": "dev.miren.core/git_info.author",
+              "v": {
+                "k": 5,
+                "v": "Ada"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.branch",
+              "v": {
+                "k": 5,
+                "v": "main"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.commit_author_email",
+              "v": {
+                "k": 5,
+                "v": "author@example.com"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.commit_timestamp",
+              "v": {
+                "k": 5,
+                "v": "2026-08-31T11:00:00Z"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.is_dirty",
+              "v": {
+                "k": 1,
+                "v": true
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.message",
+              "v": {
+                "k": 5,
+                "v": "Fix the startup race"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.repository",
+              "v": {
+                "k": 5,
+                "v": "https://example.com/acme/web.git"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.sha",
+              "v": {
+                "k": 5,
+                "v": "abc123"
+              }
+            },
+            {
+              "id": "dev.miren.core/git_info.working_tree_hash",
+              "v": {
+                "k": 5,
+                "v": "12345678"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.operation",
+      "v": {
+        "k": 5,
+        "v": "build"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.outcome",
+      "v": {
+        "k": 5,
+        "v": "failed"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.parent_deployment",
+      "v": {
+        "k": 8,
+        "v": "deployment/dep-0"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.phase",
+      "v": {
+        "k": 5,
+        "v": "building"
+      }
+    },
+    {
+      "id": "dev.miren.core/deployment.started_at",
+      "v": {
+        "k": 6,
+        "v": "2026-08-31T12:00:00Z"
+      }
+    },
+    {
+      "id": "entity/kind",
+      "v": {
+        "k": 8,
+        "v": "dev.miren.core/kind.deployment"
+      }
+    }
+  ]
+}

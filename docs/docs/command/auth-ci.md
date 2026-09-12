@@ -16,10 +16,10 @@ miren auth ci [flags]
 
 ## Subcommands
 
-- [`miren auth ci add`](/command/auth-ci-add) — Add a CI authentication binding to an application
-- [`miren auth ci list`](/command/auth-ci-list) — List CI authentication bindings for an application
-- [`miren auth ci remove`](/command/auth-ci-remove) — Remove a CI authentication binding
+- [`miren auth ci add`](./auth-ci-add.md) — Add a CI authentication binding to an application
+- [`miren auth ci list`](./auth-ci-list.md) — List CI authentication bindings for an application
+- [`miren auth ci remove`](./auth-ci-remove.md) — Remove a CI authentication binding
 
 ## See also
 
-- [`miren auth`](/command/auth)
+- [`miren auth`](./auth.md)

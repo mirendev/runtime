@@ -39,4 +39,4 @@ miren route set-default myapp
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

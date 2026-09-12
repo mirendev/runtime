@@ -16,11 +16,11 @@ miren secret [flags]
 
 ## Subcommands
 
-- [`miren secret destroy`](/command/secret-destroy) — Permanently delete a version's value
-- [`miren secret disable`](/command/secret-disable) — Stop a version from resolving
-- [`miren secret enable`](/command/secret-enable) — Let a disabled version resolve again
-- [`miren secret keyring`](/command/secret-keyring) — Show the cluster keyring and any rotation in flight
-- [`miren secret list`](/command/secret-list) — List stored secrets
-- [`miren secret rotate-key`](/command/secret-rotate-key) — Rotate the cluster key that encrypts stored secrets
-- [`miren secret set`](/command/secret-set) — Store a secret value
-- [`miren secret versions`](/command/secret-versions) — Show a secret's versions
+- [`miren secret destroy`](./secret-destroy.md) — Permanently delete a version's value
+- [`miren secret disable`](./secret-disable.md) — Stop a version from resolving
+- [`miren secret enable`](./secret-enable.md) — Let a disabled version resolve again
+- [`miren secret keyring`](./secret-keyring.md) — Show the cluster keyring and any rotation in flight
+- [`miren secret list`](./secret-list.md) — List stored secrets
+- [`miren secret rotate-key`](./secret-rotate-key.md) — Rotate the cluster key that encrypts stored secrets
+- [`miren secret set`](./secret-set.md) — Store a secret value
+- [`miren secret versions`](./secret-versions.md) — Show a secret's versions

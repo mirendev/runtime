@@ -16,7 +16,7 @@ miren env [flags]
 
 ## Subcommands
 
-- [`miren env delete`](/command/env-delete) — Delete environment variables
-- [`miren env get`](/command/env-get) — Get an environment variable value
-- [`miren env list`](/command/env-list) — List all environment variables
-- [`miren env set`](/command/env-set) — Set environment variables for an application
+- [`miren env delete`](./env-delete.md) — Delete environment variables
+- [`miren env get`](./env-get.md) — Get an environment variable value
+- [`miren env list`](./env-list.md) — List all environment variables
+- [`miren env set`](./env-set.md) — Set environment variables for an application

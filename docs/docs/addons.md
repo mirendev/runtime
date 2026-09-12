@@ -35,7 +35,7 @@ Miren creates the PostgreSQL server, injects `DATABASE_URL` (and the other `PG*`
 | **Credentials** | Automatically injected as env vars | You configure manually |
 | **Best for** | Production databases, managed infrastructure | Custom software, full control |
 
-If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions or full control over the configuration, run it as a [service](/services).
+If you just need a PostgreSQL database for your app, use an addon. If you need custom PostgreSQL extensions or full control over the configuration, run it as a [service](./services.md).
 
 ## Available Addons
 
@@ -289,8 +289,17 @@ When you deploy an app with addons or run `addon create`, Miren:
 
 Provisioning typically takes 1–2 minutes for a new dedicated server (longer if the PostgreSQL image needs to be pulled for the first time).
 
-:::note[Provisioning blocks startup]
-Your app won't start until addon provisioning completes — Miren holds off launching your app's processes until all addons reach active status.
+:::note[Deploys wait for addons]
+`miren deploy` does not activate a new version until every addon declared in app.toml is **active**. While it waits, the deploy output shows each addon's progress:
+
+```
+Provisioning addon miren-postgresql (small)...
+Addon miren-postgresql ready
+```
+
+Deploy-triggered tasks (such as migrations) run only after this point, so they always see the addon's connection variables. If an addon fails to provision, the deploy fails and prints the reason; fix the cause, run `miren addon destroy` for that addon, and redeploy.
+
+An addon attached with `addon create` to an app that is already running follows the same rule: Miren holds off launching the app's processes until the addon reaches active status.
 :::
 
 ### Checking Status
@@ -302,6 +311,16 @@ List addons attached to your app:
 miren addon list -a myapp
 ```
 </CliCommand>
+
+The `STATUS` column shows where each addon is in its lifecycle:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Requested, provisioning has not started |
+| `provisioning` | The backing service is being created |
+| `active` | Ready; connection variables are injected into the app |
+| `error` | Provisioning failed. The reason is shown next to the status. Destroy the addon and recreate it once the cause is fixed. |
+| `deprovisioning` | Being removed |
 
 ### Removing an Addon
 

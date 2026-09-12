@@ -39,4 +39,4 @@ miren cluster remove my-cluster
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

@@ -777,3 +777,78 @@ func TestMakeTarWithIncludePatterns(t *testing.T) {
 		require.NotContains(t, entries, notExp, "file %s should be excluded", notExp)
 	}
 }
+
+func TestWriteFileContent(t *testing.T) {
+	t.Run("exact size copies everything", func(t *testing.T) {
+		var out bytes.Buffer
+		require.NoError(t, writeFileContent(&out, bytes.NewReader([]byte("hello")), 5))
+		require.Equal(t, "hello", out.String())
+	})
+
+	t.Run("file that grew is cut at the promised size", func(t *testing.T) {
+		var out bytes.Buffer
+		require.NoError(t, writeFileContent(&out, bytes.NewReader([]byte("hello world")), 5))
+		require.Equal(t, "hello", out.String())
+	})
+
+	t.Run("file that shrank is padded with zeros", func(t *testing.T) {
+		var out bytes.Buffer
+		require.NoError(t, writeFileContent(&out, bytes.NewReader([]byte("hi")), 5))
+		require.Equal(t, "hi\x00\x00\x00", out.String())
+	})
+}
+
+// TestMakeTar_FileGrowsDuringArchive is the real-world shape: a file inside the
+// project is appended to while the archive is being written (a log, or the
+// deploy's own redirected output). The archive must still be well-formed and
+// carry the file at the size its header declared.
+func TestMakeTar_FileGrowsDuringArchive(t *testing.T) {
+	dir := t.TempDir()
+	growing := filepath.Join(dir, "out.log")
+	require.NoError(t, os.WriteFile(growing, []byte("line one\n"), 0o644))
+
+	f, err := os.OpenFile(growing, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+
+	// A reader that appends to the file every time the archive is read from,
+	// so the file is guaranteed to be larger by the time its content is copied.
+	tarReader, err := MakeTar(dir, nil, nil)
+	require.NoError(t, err)
+	defer tarReader.Close()
+
+	var buf bytes.Buffer
+	chunk := make([]byte, 1)
+	for {
+		n, rerr := tarReader.Read(chunk)
+		if n > 0 {
+			buf.Write(chunk[:n])
+			_, _ = f.WriteString("more\n")
+		}
+		if rerr == io.EOF {
+			break
+		}
+		require.NoError(t, rerr)
+	}
+
+	gz, err := gzip.NewReader(&buf)
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	found := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if hdr.Name != "out.log" {
+			continue
+		}
+		found = true
+		content, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		require.Equal(t, hdr.Size, int64(len(content)))
+		require.Equal(t, "line one\n", string(content))
+	}
+	require.True(t, found, "out.log missing from archive")
+}

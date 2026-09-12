@@ -2,15 +2,25 @@ package export
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/pkg/entity"
 )
 
+func exportSource(attrs ...entity.Attr) *entity.Entity {
+	metadata := []entity.Attr{
+		entity.Int64(entity.Revision, 42),
+		entity.Time(entity.CreatedAt, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+		entity.Time(entity.UpdatedAt, time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC)),
+	}
+	return entity.New(attrs, metadata)
+}
+
 func TestFilterDropsUnlistedAndNestedAttributes(t *testing.T) {
 	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[{"id":"test/app.name","type":"string"},{"id":"test/app.actor","type":"component"},{"id":"test/actor.subject","type":"string","parent":"test/app.actor"}]}]}`))
 
-	source := entity.New(
+	source := exportSource(
 		entity.Ref(entity.DBId, "app/web"),
 		entity.Ref(entity.EntityKind, "test/kind.app"),
 		entity.String("test/app.name", "web"),
@@ -38,7 +48,7 @@ func TestFilterDropsUnlistedAndNestedAttributes(t *testing.T) {
 
 func TestFilterEmitsOnlyTheSelectedExportedKind(t *testing.T) {
 	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[{"id":"test/app.name","type":"string"}]}]}`))
-	source := entity.New(
+	source := exportSource(
 		entity.Ref(entity.DBId, "app/web"),
 		entity.Ref(entity.EntityKind, "test/kind.app"),
 		entity.Ref(entity.EntityKind, "test/kind.metadata"),
@@ -55,7 +65,7 @@ func TestFilterEmitsOnlyTheSelectedExportedKind(t *testing.T) {
 
 func TestFilterRejectsMultipleExportedKinds(t *testing.T) {
 	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[]},{"id":"test/kind.other","lifecycle":"archive","attributes":[]}]}`))
-	source := entity.New(
+	source := exportSource(
 		entity.Ref(entity.DBId, "app/web"),
 		entity.Ref(entity.EntityKind, "test/kind.app"),
 		entity.Ref(entity.EntityKind, "test/kind.other"),
@@ -67,7 +77,7 @@ func TestFilterRejectsMultipleExportedKinds(t *testing.T) {
 
 func TestFilterRejectsWrongAllowedValueShape(t *testing.T) {
 	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[{"id":"test/app.name","type":"string"}]}]}`))
-	source := entity.New(
+	source := exportSource(
 		entity.Ref(entity.DBId, "app/web"),
 		entity.Ref(entity.EntityKind, "test/kind.app"),
 		entity.Int64("test/app.name", 42),
@@ -75,6 +85,18 @@ func TestFilterRejectsWrongAllowedValueShape(t *testing.T) {
 
 	_, _, err := contract.Filter(source)
 	require.ErrorContains(t, err, "want String")
+}
+
+func TestFilterRejectsMissingMandatoryMetadata(t *testing.T) {
+	contract := MustParse([]byte(`{"version":1,"target":"cloud","marker":"test/cloud","kinds":[{"id":"test/kind.app","lifecycle":"mirror","attributes":[]}]}`))
+	source := exportSource(
+		entity.Ref(entity.DBId, "app/web"),
+		entity.Ref(entity.EntityKind, "test/kind.app"),
+	)
+	source.Remove(entity.CreatedAt)
+
+	_, _, err := contract.Filter(source)
+	require.ErrorContains(t, err, "app/web is missing mandatory attribute db/entity.created")
 }
 
 func TestDigestUsesCanonicalOrdering(t *testing.T) {

@@ -19,21 +19,21 @@ func AuthGenerate(ctx *Context, opts struct {
 	ClusterName string `short:"C" long:"cluster-name" description:"Name of the cluster" default:"local"`
 	PublicIP    bool   `short:"p" long:"public-ip" description:"Use public IP for the target, if available"`
 }) error {
-	co := coordinate.NewCoordinator(ctx.Log, coordinate.CoordinatorConfig{
+	foundation := coordinate.NewFoundation(ctx.Log, coordinate.CoordinatorConfig{
 		DataPath: opts.DataPath,
 	})
 
-	err := co.LoadCA(ctx)
+	err := foundation.LoadCA(ctx)
 	if err != nil {
 		return err
 	}
 
-	err = co.LoadAPICert(ctx)
+	err = foundation.LoadAPICert(ctx)
 	if err != nil {
 		return err
 	}
 
-	cc, err := co.IssueCertificate(opts.Name)
+	cc, err := foundation.IssueCertificate(opts.Name)
 	if err != nil {
 		return err
 	}

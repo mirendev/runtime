@@ -40,4 +40,4 @@ miren runner service-status --follow
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

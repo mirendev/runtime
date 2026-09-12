@@ -50,4 +50,4 @@ miren runner join mren_... --coordinator 10.0.0.5:8443
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

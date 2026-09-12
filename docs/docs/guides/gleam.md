@@ -14,16 +14,16 @@ your project to an Erlang shipment and runs it on the BEAM. This guide targets E
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Gleam app on Miren" after installing the
-[Miren agent skills](/agent-skills). It can add the `Dockerfile.miren`, confirm your
+[Miren agent skills](../agent-skills.md). It can add the `Dockerfile.miren`, confirm your
 server binds `0.0.0.0:$PORT`, wire up environment variables, and deploy — using this
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
 project root. Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::info[Validated pattern — adapt the versions]
 The Dockerfile and app below were deployed to a live Miren cluster with Gleam 1.15 and
@@ -142,21 +142,16 @@ Keep build artifacts out of the image context:
 build
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` next to your
-`Dockerfile.miren`:
-
-```procfile
-web: /app/entrypoint.sh run
-```
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
 The command is the release entrypoint the shipment generated. Use the absolute path
 (`/app/entrypoint.sh`, matching the Dockerfile's `WORKDIR /app`); the script resolves
 its own release directory, so it works regardless of the working directory.
 
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "gleam-bench"
@@ -167,13 +162,6 @@ name = "gleam-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a Procfile fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`. Defining `[services.web]` with the same `command` in `app.toml`
-works too.
-:::
 
 ## Environment variables
 
@@ -199,16 +187,16 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-Need a managed Postgres database? Add a [`miren-postgresql` addon](/addons) and Miren
+Need a managed Postgres database? Add a [`miren-postgresql` addon](../addons.md) and Miren
 injects `DATABASE_URL` for you. See
-[App Configuration — Environment Variables](/app-configuration#environment-variables).
+[App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren` (Erlang shipment)
 - **Build:** `gleam export erlang-shipment` → `build/erlang-shipment/` with `entrypoint.sh`
 - **Runtime image:** Erlang major version **must match** the builder's OTP (the pinned v1.15.0 image ships OTP 28 → `erlang:28-alpine`)
-- **Service is required:** define a `Procfile` (`web: /app/entrypoint.sh run`) or `[services.web]` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** read `PORT` via `envoy.get("PORT")`; bind `mist`/`wisp` to `0.0.0.0`
 - **mist API:** v6 ends the builder with `mist.start`; older versions use `mist.start_http`
 - **Env vars:** `miren env set -e/-s`, or `[[env]]` in `app.toml`; read with `envoy.get/1`
@@ -216,7 +204,7 @@ injects `DATABASE_URL` for you. See
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

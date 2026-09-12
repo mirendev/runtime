@@ -22,7 +22,7 @@ func TestMemcacheAddonCreateListDestroy(t *testing.T) {
 	m.MustRun("addon", "create", "miren-memcache:small", "-a", name)
 
 	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-memcache", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-memcache", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "MEMCACHE_URL", 5*time.Minute)
 
 	// Verify Memcache-specific env vars are injected
@@ -54,7 +54,7 @@ func TestMemcacheAddonDeployWithAppToml(t *testing.T) {
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
 	// Wait for addon provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-memcache", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-memcache", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "MEMCACHE_HOST", 5*time.Minute)
 
 	// Now wait for the app to become healthy

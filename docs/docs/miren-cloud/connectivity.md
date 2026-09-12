@@ -15,7 +15,7 @@ The **Connectivity** panel on a cluster's page answers three separate questions.
 A cluster can be online but not deployable, or undeployable over the internet yet still serving apps through the Miren POP network. Reading the three checks separately tells you exactly which layer is having trouble.
 
 :::info[What this page covers]
-This page explains what each check means and how to fix a "not reachable" verdict. For the exact ports and provider-specific firewall setup, see [Firewall Configuration](/firewall).
+This page explains what each check means and how to fix a "not reachable" verdict. For the exact ports and provider-specific firewall setup, see [Firewall Configuration](../firewall.md).
 :::
 
 ## Is the cluster online?
@@ -46,10 +46,10 @@ To fix it, make sure inbound **UDP 8443** reaches your server end to end — thr
 sudo miren server restart
 ```
 
-If your cluster's public address isn't the one Miren discovered — for example it sits behind a load balancer or a static NAT — set the reachable address explicitly with `additional_ips` in your [server configuration](/server-config) instead of relying on discovery.
+If your cluster's public address isn't the one Miren discovered — for example it sits behind a load balancer or a static NAT — set the reachable address explicitly with `additional_ips` in your [server configuration](../server-config.md) instead of relying on discovery.
 
 :::tip[Reachable, but no public address]
-A cluster on a private network (home lab, VPC with no public IP, or a host that only answers on a tailnet) will read "Not reachable" here and that's expected — you deploy to it from the same LAN or overlay. Miren Anywhere carries app traffic, not the control plane, and so **won't** change this check. For the tailnet case end to end, see [Running Miren on a Tailnet](/tailscale).
+A cluster on a private network (home lab, VPC with no public IP, or a host that only answers on a tailnet) will read "Not reachable" here and that's expected — you deploy to it from the same LAN or overlay. Miren Anywhere carries app traffic, not the control plane, and so **won't** change this check. For the tailnet case end to end, see [Running Miren on a Tailnet](../tailscale.md).
 :::
 
 ## Can users reach your apps?
@@ -61,7 +61,7 @@ There are two ways users can reach your apps:
 - **Directly**, when the cluster has a public address. The apps are served straight from your server.
 - **Via Miren Anywhere**, when it doesn't. Miren routes app traffic through the Miren POP network, so your apps stay reachable even from behind NAT with no public address of their own.
 
-This is why a cluster can show "Not reachable" for the control plane and still show apps as available: Miren Anywhere solves the app-traffic problem without solving the deploy problem. See [Custom subdomains](/miren-cloud/subdomains) for how app hostnames are provisioned.
+This is why a cluster can show "Not reachable" for the control plane and still show apps as available: Miren Anywhere solves the app-traffic problem without solving the deploy problem. See [Custom subdomains](./subdomains.md) for how app hostnames are provisioned.
 
 ## How Miren checks reachability
 

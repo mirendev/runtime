@@ -34,4 +34,4 @@ miren server config validate --file server.toml
 
 ## See also
 
-- [`miren server config`](/command/server-config)
+- [`miren server config`](./server-config.md)

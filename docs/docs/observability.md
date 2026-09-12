@@ -13,7 +13,7 @@ with [OpenTelemetry](https://opentelemetry.io/) distributed tracing.
 ## Managed application metrics
 
 First, configure a remote-write destination for your cluster in
-[`server.toml`](/server-config#managed-app-metrics). An application then opts a
+[`server.toml`](./server-config.md#managed-app-metrics). An application then opts a
 service in through `.miren/app.toml`:
 
 ```toml
@@ -186,6 +186,6 @@ httpingress                          [15ms]
 
 ## Next Steps
 
-- [Logs](/logs) — View and filter application, build, and system logs
-- [Services](/services) — Configure your app's services
-- [Application Scaling](/scaling) — Understand cold starts and autoscaling
+- [Logs](./logs.md) — View and filter application, build, and system logs
+- [Services](./services.md) — Configure your app's services
+- [Application Scaling](./scaling.md) — Understand cold starts and autoscaling

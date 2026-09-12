@@ -60,10 +60,10 @@ miren disk accelerator [flags]
 
 ## Subcommands
 
-- [`miren disk accelerator install`](/command/disk-accelerator-install) — Build and load the lbd kernel module for this kernel
-- [`miren disk accelerator status`](/command/disk-accelerator-status) — Show whether accelerator mode can run on this host
-- [`miren disk accelerator uninstall`](/command/disk-accelerator-uninstall) — Unload and remove the lbd kernel module
+- [`miren disk accelerator install`](./disk-accelerator-install.md) — Build and load the lbd kernel module for this kernel
+- [`miren disk accelerator status`](./disk-accelerator-status.md) — Show whether accelerator mode can run on this host
+- [`miren disk accelerator uninstall`](./disk-accelerator-uninstall.md) — Unload and remove the lbd kernel module
 
 ## See also
 
-- [`miren disk`](/command/disk)
+- [`miren disk`](./disk.md)

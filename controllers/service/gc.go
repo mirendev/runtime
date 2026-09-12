@@ -335,6 +335,9 @@ func (s *ServiceController) applyGC(ctx context.Context, target *targetState, ac
 	)
 
 	if err := s.nft.Run(ctx, tx); err != nil {
+		// syncCachesAfterGC is below the error return for the same reason
+		// Create commits its cache late: a rejected batch changed nothing, so
+		// the cache has to keep describing the bodies still in the kernel.
 		return fmt.Errorf("apply GC batch: %w", err)
 	}
 
@@ -354,7 +357,7 @@ func (s *ServiceController) reconcileLiveChains(tx *knftables.Transaction, targe
 	}
 	for _, sp := range target.serviceSpecs {
 		s.addServiceChain(tx, sp.ip, int(sp.port), sp.proto)
-		s.writeChainBody(tx, s.serviceChain(sp.ip, sp.port, sp.proto), "services", sp.endpoints)
+		s.writeChainBody(tx, s.serviceChain(sp.ip, sp.port, sp.proto), sp.endpoints)
 	}
 	for _, sp := range target.nodePortSpecs {
 		chain := s.nodeportChain(sp.nport, sp.proto)
@@ -364,7 +367,7 @@ func (s *ServiceController) reconcileLiveChains(tx *knftables.Transaction, targe
 			Key:   []string{sp.proto, strconv.Itoa(sp.nport)},
 			Value: []string{"goto " + chain},
 		})
-		s.writeChainBody(tx, chain, "nodeports", sp.endpoints)
+		s.writeChainBody(tx, chain, sp.endpoints)
 	}
 }
 

@@ -45,7 +45,11 @@ func Run(args []string) int {
 		return 0
 	}
 
-	execArgs, err := expandAlias(d, args[1:])
+	// A load error is left for the command to report; `miren version` has
+	// no reason to mention app.toml at all.
+	ac, _ := commands.LoadLocalAppConfig()
+
+	execArgs, err := expandAlias(d, ac, args[1:])
 	if err != nil {
 		printError(err)
 		return 1
@@ -67,6 +71,9 @@ func Run(args []string) int {
 			return int(exitErr)
 		}
 
+		// An alias that didn't expand because app.toml wouldn't parse
+		// otherwise surfaces as a bare "unknown command".
+		commands.WarnLocalAppConfig()
 		printError(err)
 		return 1
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	saga_v1alpha "miren.dev/runtime/api/saga/saga_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -111,63 +112,61 @@ func (s *EntityStorage) Get(ctx context.Context, id string) (*Execution, error) 
 	return entityToExecution(sagaEntity)
 }
 
-// ListIncomplete returns all executions that need recovery.
-func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
-	// Query for pending sagas (crashed between initial save and status transition)
-	pendingIds, err := s.store.ListIndex(ctx, entity.Ref(
-		saga_v1alpha.SagaStatusId,
-		saga_v1alpha.SagaStatusPendingId,
-	))
+// ListIncompletePage returns one bounded page of executions needing recovery.
+//
+// The three incomplete status indexes are walked one after another rather than
+// merged, because merging would mean holding all three id sets to deduplicate
+// across them, which is the allocation this is here to avoid. A cursor names
+// which index it is in, so a page never straddles two.
+//
+// Nothing deduplicates across indexes as a result. An execution listed under
+// two statuses at once is a stale index entry, and the caller is the right
+// place to notice: recovery refuses to drive an execution twice through its
+// own claim, and retention's deletes are idempotent by contract.
+func (s *EntityStorage) ListIncompletePage(ctx context.Context, q IncompleteQuery) (*IncompletePage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
 	if err != nil {
-		return nil, fmt.Errorf("listing pending sagas: %w", err)
+		return nil, err
 	}
 
-	// Query for running sagas
-	runningIds, err := s.store.ListIndex(ctx, entity.Ref(
-		saga_v1alpha.SagaStatusId,
-		saga_v1alpha.SagaStatusRunningId,
-	))
+	attr := entity.Ref(saga_v1alpha.SagaStatusId, incompleteStatuses[stage])
+
+	page, err := s.store.ListIndexEntitiesPage(ctx, attr, inner, int64(clampLimit(q.Limit)))
 	if err != nil {
-		return nil, fmt.Errorf("listing running sagas: %w", err)
+		return nil, fmt.Errorf("listing sagas with status %s: %w", incompleteStatuses[stage], err)
 	}
 
-	// Query for undoing sagas
-	undoingIds, err := s.store.ListIndex(ctx, entity.Ref(
-		saga_v1alpha.SagaStatusId,
-		saga_v1alpha.SagaStatusUndoingId,
-	))
-	if err != nil {
-		return nil, fmt.Errorf("listing undoing sagas: %w", err)
+	next := nextStageCursor(stage, page.Cursor, len(incompleteStatuses))
+
+	// Empty is a short page, not an ending, exactly as it is for EACStorage.
+	// This backend cannot produce an empty page with a live cursor, since a
+	// dropped id holds its place as a nil and an empty id list means an empty
+	// cursor, but the two backends answer one contract and should not read
+	// differently.
+	if len(page.Entities) == 0 {
+		return &IncompletePage{Cursor: next}, nil
 	}
 
-	// Combine IDs, deduplicating by ID. A saga can transiently appear under
-	// more than one status index (e.g. a stale pending entry lingering after
-	// the transition to running). Recovering the same execution twice causes
-	// double execution: the second pass re-runs already-completed actions and
-	// collides on entities the first pass created.
-	seen := make(map[entity.Id]struct{})
-	var allIds []entity.Id
-	for _, ids := range [][]entity.Id{pendingIds, runningIds, undoingIds} {
-		for _, id := range ids {
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			allIds = append(allIds, id)
-		}
-	}
-	if len(allIds) == 0 {
-		return nil, nil
-	}
+	executions, stale := s.decodeIncomplete(page.Entities)
+	logStaleIncomplete(s.log, stale)
 
-	// Batch fetch all entities
-	entities, err := s.store.GetEntities(ctx, allIds)
-	if err != nil {
-		return nil, fmt.Errorf("fetching saga entities: %w", err)
-	}
+	return &IncompletePage{Executions: executions, Cursor: next}, nil
+}
 
-	// Convert to executions
+// decodeIncomplete converts a page of entities into executions, dropping the
+// ones whose decoded status says they are already finished and counting them.
+//
+// The index is a hint and the entity is the answer. An entry can outlive the
+// status it was written for, and a page is two reads, so the status that
+// selected an id can be out of date by the time its entity arrives.
+func (s *EntityStorage) decodeIncomplete(entities []*entity.Entity) ([]*Execution, int) {
 	var executions []*Execution
+	var stale int
+
 	for _, ent := range entities {
 		if ent == nil {
 			continue
@@ -182,79 +181,183 @@ func (s *EntityStorage) ListIncomplete(ctx context.Context) ([]*Execution, error
 			s.log.Warn("failed to convert saga entity, skipping", "id", ent.Id(), "error", err)
 			continue
 		}
+		if isTerminal(exec.Status) {
+			stale++
+			continue
+		}
 		executions = append(executions, exec)
 	}
 
-	return executions, nil
+	return executions, stale
 }
 
-// terminalFetchBatch is how many entities ListTerminal materializes at a time.
-// Every entity carries its action-output blobs, so a store holding a large
-// backlog must not be pulled into memory all at once just to read timestamps
-// off it.
+// ListIncompleteSummaryPage summarizes one bounded page of in-flight
+// executions.
 //
-// This is not redundant with the batching GetEntities already does internally.
-// That one chunks the etcd transaction ops and then still allocates and returns
-// the full slice, so it bounds request size, not memory. This outer loop is
-// what keeps peak memory flat.
-const terminalFetchBatch = 200
+// Same indexes and cursor encoding as ListIncompletePage, keeping a summary
+// rather than a whole execution. Its caller walks every in-flight execution in
+// the cluster, and doing that with full payloads would cost what recovery costs
+// without recovering anything.
+func (s *EntityStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
-// ListTerminal summarizes every execution in a terminal state.
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	attr := entity.Ref(saga_v1alpha.SagaStatusId, incompleteStatuses[stage])
+
+	page, err := s.store.ListIndexEntitiesPage(ctx, attr, inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", incompleteStatuses[stage], err)
+	}
+
+	next := nextStageCursor(stage, page.Cursor, len(incompleteStatuses))
+
+	if len(page.Entities) == 0 {
+		return &IncompleteSummaryPage{Cursor: next}, nil
+	}
+
+	var result []IncompleteSummary
+	var staleTerminal int
+
+	for _, ent := range page.Entities {
+		if ent == nil {
+			// Deleted between the listing and the fetch. Nothing to summarize.
+			continue
+		}
+		summary, verdict := incompleteSummary(ent)
+		switch verdict {
+		case summaryOK:
+			result = append(result, summary)
+		case summaryWrongStatus:
+			staleTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("in-flight saga has no usable timestamp, skipping", "id", ent.Id())
+		}
+	}
+
+	logStaleIncomplete(s.log, staleTerminal)
+
+	return &IncompleteSummaryPage{Executions: result, Cursor: next}, nil
+}
+
+// ListTerminalPage summarizes one bounded page of finished executions.
 //
 // The store's index lookups are equality-only, so there is no range query over
-// a timestamp that would let us ask for expired executions directly. We list
-// the terminal set (IDs only, which stays cheap) and read each one's finish
-// time, fetching in batches and keeping only the summary.
-func (s *EntityStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
-	var ids []entity.Id
-	seen := make(map[entity.Id]struct{})
+// a timestamp that would let us ask for expired executions directly. We walk
+// the terminal indexes and read each execution's finish time, keeping only the
+// summary.
+func (s *EntityStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (*TerminalPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
-	for _, status := range []entity.Id{
-		saga_v1alpha.SagaStatusCompletedId,
-		saga_v1alpha.SagaStatusFailedId,
-	} {
-		statusIds, err := s.store.ListIndex(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status))
-		if err != nil {
-			return nil, fmt.Errorf("listing terminal sagas: %w", err)
-		}
-		// Deduplicate for the same reason recovery does: an execution can
-		// transiently appear under more than one status index.
-		for _, id := range statusIds {
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
+	stage, inner, err := decodeStageCursor(q.Cursor, len(terminalStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	attr := entity.Ref(saga_v1alpha.SagaStatusId, terminalStatuses[stage])
+
+	page, err := s.store.ListIndexEntitiesPage(ctx, attr, inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing terminal sagas: %w", err)
+	}
+
+	next := nextStageCursor(stage, page.Cursor, len(terminalStatuses))
+
+	if len(page.Entities) == 0 {
+		return &TerminalPage{Cursor: next}, nil
 	}
 
 	var result []TerminalExecution
-	for start := 0; start < len(ids); start += terminalFetchBatch {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	var staleNonTerminal int
 
-		end := min(start+terminalFetchBatch, len(ids))
-		entities, err := s.store.GetEntities(ctx, ids[start:end])
-		if err != nil {
-			return nil, fmt.Errorf("fetching terminal sagas: %w", err)
+	for _, ent := range page.Entities {
+		if ent == nil {
+			// Deleted between the listing and the fetch. Nothing to report.
+			continue
 		}
-
-		for _, ent := range entities {
-			if ent == nil {
-				// Deleted between the listing and the fetch. Nothing to report.
-				continue
-			}
-			summary, ok := terminalSummary(ent)
-			if !ok {
-				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", ent.Id())
-				continue
-			}
+		summary, verdict := terminalSummary(ent)
+		switch verdict {
+		case summaryOK:
 			result = append(result, summary)
+		case summaryWrongStatus:
+			staleNonTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("terminal saga has no usable timestamp, skipping", "id", ent.Id())
 		}
 	}
 
-	return result, nil
+	logStaleTerminal(s.log, staleNonTerminal)
+
+	return &TerminalPage{Executions: result, Cursor: next}, nil
+}
+
+// ForceFailed transitions an in-flight execution to failed, and reports whether
+// it did.
+//
+// The decision lives here rather than in the caller because the write has to be
+// conditional on the read it was made against, and only this layer sees the
+// revision. A caller that read, decided, then asked us to save could overwrite
+// a runner that resumed the saga in the gap, replacing its status and action
+// outputs with a stale copy marked failed.
+//
+// So the transition is refused, without error, whenever the record moved: gone,
+// already terminal, touched since cutoff, or a changed revision. Each means
+// something else is dealing with it, and the next pass looks again.
+//
+// The age test goes through lastChanged rather than the execution's updated_at,
+// because a record written before v0.14.0 carries its age only on the entity.
+func (s *EntityStorage) ForceFailed(ctx context.Context, id string, cutoff time.Time, reason string) (bool, error) {
+	ent, err := s.store.GetEntity(ctx, entity.Id(id))
+	if err != nil {
+		if errors.Is(err, entity.ErrEntityNotFound) || errors.Is(err, cond.ErrNotFound{}) {
+			return false, nil
+		}
+		return false, fmt.Errorf("getting saga entity: %w", err)
+	}
+
+	sagaEntity, ok := entity.As[saga_v1alpha.Saga](ent)
+	if !ok {
+		return false, fmt.Errorf("entity %s is not a saga", id)
+	}
+
+	if isTerminal(statusFromEntity(sagaEntity.Status)) {
+		return false, nil
+	}
+
+	changed, ok := lastChanged(ent, sagaEntity)
+	if !ok || changed.After(cutoff) {
+		return false, nil
+	}
+
+	exec, err := entityToExecution(sagaEntity)
+	if err != nil {
+		return false, fmt.Errorf("decoding execution %q: %w", id, err)
+	}
+
+	exec.Status = StatusFailed
+	exec.Error = reason
+	exec.UpdatedAt = time.Now()
+
+	forced, err := executionToEntity(exec)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := s.store.ReplaceEntity(ctx, forced, entity.WithFromRevision(ent.GetRevision())); err != nil {
+		if errors.Is(err, cond.ErrConflict{}) {
+			return false, nil
+		}
+		return false, fmt.Errorf("forcing execution %q to failed: %w", id, err)
+	}
+
+	return true, nil
 }
 
 // Delete removes a saga execution entity.
@@ -268,35 +371,115 @@ func (s *EntityStorage) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// terminalSummary reduces a saga entity to what retention needs, reporting
-// false when the entity carries no usable timestamp at all.
+// summaryVerdict says why a summary read rejected an entity. The two reasons
+// want different handling: stale index entries arrive in bulk, while a missing
+// timestamp is a one-off worth naming the entity for.
+type summaryVerdict int
+
+const (
+	summaryOK summaryVerdict = iota
+	// summaryWrongStatus means the decoded status is not the kind of status the
+	// index that produced this entity is for, so that entry is stale. Both
+	// directions land here: a terminal execution under a pending index, and a
+	// running one under a completed index.
+	summaryWrongStatus
+	// summaryNoTimestamp means the entity carries no usable timestamp.
+	summaryNoTimestamp
+)
+
+// lastChanged resolves when an execution last changed state.
 //
-// The finish time prefers the saga's own updated_at but falls back to the
-// entity store's system timestamp, which is what makes retention safe across an
-// upgrade: every execution written before saga timestamps were persisted reads
-// back with a zero updated_at, and treating that as infinitely old would delete
-// a saga a runner on the old binary finished seconds ago.
-func terminalSummary(ent *entity.Entity) (TerminalExecution, bool) {
+// It prefers the saga's own updated_at and falls back to the entity store's
+// system timestamps, which is what makes both sweeps safe across an upgrade:
+// v0.11.1's schema had neither field, so its executions read back with a zero
+// saga timestamp, and treating that as infinitely old would collect a saga
+// finished seconds ago or force one that is actively running.
+//
+// The false return is not a "just use now". An execution we cannot date is one
+// we must not act on, and both callers skip it and say so.
+func lastChanged(ent *entity.Entity, s *saga_v1alpha.Saga) (time.Time, bool) {
+	switch {
+	case !s.UpdatedAt.IsZero():
+		return s.UpdatedAt, true
+	case !ent.GetUpdatedAt().IsZero():
+		return ent.GetUpdatedAt(), true
+	case !ent.GetCreatedAt().IsZero():
+		return ent.GetCreatedAt(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// terminalSummary reduces a saga entity to what retention needs.
+//
+// The status index is a hint, not the truth: an entry can outlive the status it
+// was written for, so the decoded status decides whether this is terminal.
+func terminalSummary(ent *entity.Entity) (TerminalExecution, summaryVerdict) {
 	var s saga_v1alpha.Saga
 	s.Decode(ent)
 
-	summary := TerminalExecution{
-		ID:       string(ent.Id()),
-		ParentID: string(s.ParentExecutionId),
+	if !isTerminal(statusFromEntity(s.Status)) {
+		return TerminalExecution{}, summaryWrongStatus
 	}
 
-	switch {
-	case !s.UpdatedAt.IsZero():
-		summary.FinishedAt = s.UpdatedAt
-	case !ent.GetUpdatedAt().IsZero():
-		summary.FinishedAt = ent.GetUpdatedAt()
-	case !ent.GetCreatedAt().IsZero():
-		summary.FinishedAt = ent.GetCreatedAt()
-	default:
-		return TerminalExecution{}, false
+	finished, ok := lastChanged(ent, &s)
+	if !ok {
+		return TerminalExecution{}, summaryNoTimestamp
 	}
 
-	return summary, true
+	return TerminalExecution{
+		ID:         string(ent.Id()),
+		ParentID:   string(s.ParentExecutionId),
+		FinishedAt: finished,
+	}, summaryOK
+}
+
+// incompleteSummary reduces a saga entity to what the stalled sweep needs, and
+// is terminalSummary's mirror image in every respect including which way it
+// distrusts the index.
+func incompleteSummary(ent *entity.Entity) (IncompleteSummary, summaryVerdict) {
+	var s saga_v1alpha.Saga
+	s.Decode(ent)
+
+	status := statusFromEntity(s.Status)
+	if isTerminal(status) {
+		return IncompleteSummary{}, summaryWrongStatus
+	}
+
+	changed, ok := lastChanged(ent, &s)
+	if !ok {
+		return IncompleteSummary{}, summaryNoTimestamp
+	}
+
+	return IncompleteSummary{
+		ID:          string(ent.Id()),
+		Status:      status,
+		ParentID:    string(s.ParentExecutionId),
+		LastChanged: changed,
+	}, summaryOK
+}
+
+// isTerminal reports whether a status is one of the two finished states.
+// ListIncomplete and ListTerminal both need it, in opposite directions.
+func isTerminal(s Status) bool {
+	return s == StatusCompleted || s == StatusFailed
+}
+
+// logStaleIncomplete and logStaleTerminal report index drift once per call
+// rather than once per entry: the backlog runs to tens of thousands, and a
+// per-entry line would drown the tier it logs in.
+func logStaleIncomplete(log *slog.Logger, count int) {
+	if count > 0 {
+		log.Warn("incomplete status index returned terminal executions, skipping; index needs repair",
+			"count", count)
+	}
+}
+
+func logStaleTerminal(log *slog.Logger, count int) {
+	if count > 0 {
+		log.Warn("terminal status index returned non-terminal executions, skipping; index needs repair",
+			"count", count)
+	}
 }
 
 // statusToEntity converts saga.Status to the entity enum value.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"miren.dev/runtime/api/admin/admin_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/components/coordinate"
@@ -23,6 +24,8 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/testutils"
+	"miren.dev/runtime/servers/admin"
+	"miren.dev/runtime/servers/httpingress"
 )
 
 func TestServerConfig(t *testing.T) (string, error) {
@@ -64,19 +67,18 @@ func TestServer(t *testing.T) error {
 
 	tempDir := t.TempDir()
 
-	co := coordinate.NewCoordinator(log, coordinate.CoordinatorConfig{
-		Address:            optsAddress,
-		EtcdEndpoints:      []string{"http://etcd:2379"},
-		Prefix:             "/" + testDeps.Namespace,
-		Resolver:           res,
-		TempDir:            tempDir,
-		DataPath:           filepath.Join(tempDir, "coordinator"),
-		Mem:                testDeps.Mem,
-		Cpu:                testDeps.CPU,
-		Logs:               testDeps.Logs,
-		NoAuth:             true,
-		HTTPRequestTimeout: 60 * time.Second,
-	})
+	co := coordinate.NewControlPlane(coordinate.NewFoundation(log, coordinate.CoordinatorConfig{
+		Address:       optsAddress,
+		EtcdEndpoints: []string{"http://etcd:2379"},
+		Prefix:        "/" + testDeps.Namespace,
+		Resolver:      res,
+		TempDir:       tempDir,
+		DataPath:      filepath.Join(tempDir, "coordinator"),
+		Mem:           testDeps.Mem,
+		Cpu:           testDeps.CPU,
+		Logs:          testDeps.Logs,
+		NoAuth:        true,
+	}))
 
 	t.Log("Starting coordinator")
 	err := co.Start(sub)
@@ -134,8 +136,14 @@ func TestServer(t *testing.T) error {
 		return ipa.Watch(ctx, eac)
 	})
 
-	// Get httpingress from coordinator (created there for admin server)
-	hs := co.HttpIngress()
+	// Ingress is a data-plane participant even when it shares this process with
+	// the control plane.
+	hs := httpingress.NewServer(ctx, log, httpingress.IngressConfig{
+		RequestTimeout: 60 * time.Second,
+		DataPath:       filepath.Join(tempDir, "coordinator"),
+	}, client, co.WorkloadControl().Activator(), testDeps.HTTPMetrics, testDeps.LogWriter)
+	adminServer := admin.NewServer(log, ec, hs, testDeps.LogWriter)
+	co.Server().ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
 
 	rcfg, err := co.RunnerConfig(optsRunnerAddress)
 	if err != nil {

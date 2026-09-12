@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
@@ -194,8 +195,8 @@ func TestRunReachesRunningAndCreatesASandbox(t *testing.T) {
 	assert.Equal(t, id, runIDFor(&sb))
 }
 
-// Reconciling twice must not create a second sandbox. The framework never
-// requeues on error, so a dropped error means the same step runs again.
+// Reconciling twice must not create a second sandbox. Framework retries can run
+// the same step again after a partial failure.
 func TestRunStartIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -421,6 +422,43 @@ func TestRunIDForReadsTheLogAttribute(t *testing.T) {
 
 	sb.Spec.LogAttribute = types.LabelSet("miren.stage", "run", "miren.run", "run/x")
 	assert.Equal(t, entity.Id("run/x"), runIDFor(sb))
+}
+
+func TestSandboxWatchEnqueuesRunByID(t *testing.T) {
+	h := newHarness(t)
+	runID := entity.Id("run/parent")
+	h.inm.AddEntity(entity.New(entity.Ident, runID))
+
+	events := make(chan controller.Event, 1)
+	target := controller.NewReconcileController(
+		"run-target",
+		h.ctrl.Log,
+		entity.Any(entity.Type, "test/non-matching-target"),
+		h.inm.EAC,
+		func(_ context.Context, event controller.Event) ([]entity.Attr, error) {
+			events <- event
+			return nil, nil
+		},
+		0,
+		1,
+	)
+	require.NoError(t, target.Start(t.Context()))
+	t.Cleanup(target.Stop)
+
+	watch := NewSandboxWatchController(target)
+	require.NoError(t, watch.Update(t.Context(), &compute.Sandbox{
+		Spec: compute.SandboxSpec{
+			LogAttribute: types.LabelSet("miren.run", runID.String()),
+		},
+	}, nil))
+
+	select {
+	case event := <-events:
+		assert.Equal(t, runID, event.Id)
+		assert.NotNil(t, event.Entity, "the target controller should load current run state")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for run reconciliation")
+	}
 }
 
 func TestIsTerminal(t *testing.T) {

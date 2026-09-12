@@ -43,4 +43,4 @@ miren route list --format json
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

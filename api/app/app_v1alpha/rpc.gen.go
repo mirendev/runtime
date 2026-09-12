@@ -1939,11 +1939,13 @@ func (v *DiskConfig) UnmarshalJSON(data []byte) error {
 }
 
 type addonInstanceData struct {
-	Id      *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
-	Name    *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
-	Addon   *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
-	Variant *string `cbor:"3,keyasint,omitempty" json:"variant,omitempty"`
-	Version *string `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
+	Id           *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Name         *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
+	Addon        *string `cbor:"2,keyasint,omitempty" json:"addon,omitempty"`
+	Variant      *string `cbor:"3,keyasint,omitempty" json:"variant,omitempty"`
+	Version      *string `cbor:"4,keyasint,omitempty" json:"version,omitempty"`
+	Status       *string `cbor:"5,keyasint,omitempty" json:"status,omitempty"`
+	ErrorMessage *string `cbor:"6,keyasint,omitempty" json:"error_message,omitempty"`
 }
 
 type AddonInstance struct {
@@ -2023,6 +2025,36 @@ func (v *AddonInstance) Version() string {
 
 func (v *AddonInstance) SetVersion(version string) {
 	v.data.Version = &version
+}
+
+func (v *AddonInstance) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *AddonInstance) Status() string {
+	if v.data.Status == nil {
+		return ""
+	}
+	return *v.data.Status
+}
+
+func (v *AddonInstance) SetStatus(status string) {
+	v.data.Status = &status
+}
+
+func (v *AddonInstance) HasErrorMessage() bool {
+	return v.data.ErrorMessage != nil
+}
+
+func (v *AddonInstance) ErrorMessage() string {
+	if v.data.ErrorMessage == nil {
+		return ""
+	}
+	return *v.data.ErrorMessage
+}
+
+func (v *AddonInstance) SetErrorMessage(error_message string) {
+	v.data.ErrorMessage = &error_message
 }
 
 func (v *AddonInstance) MarshalCBOR() ([]byte, error) {

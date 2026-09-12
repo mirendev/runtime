@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -57,8 +58,7 @@ func (d *DiskWatchController) reconcileDependentLeases(ctx context.Context, disk
 	// Find all leases that reference this disk using the DiskId index
 	listResp, err := d.EAC.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, diskId))
 	if err != nil {
-		d.Log.Error("failed to list disk leases for disk change", "disk", diskId, "error", err)
-		return nil // Don't fail the disk reconciliation if we can't list leases
+		return fmt.Errorf("listing disk leases for disk %s: %w", diskId, err)
 	}
 
 	// Reconcile each lease that references this disk
@@ -72,11 +72,10 @@ func (d *DiskWatchController) reconcileDependentLeases(ctx context.Context, disk
 			"lease", lease.ID,
 			"leaseStatus", lease.Status)
 
-		// Trigger reconciliation by creating an event with the full entity
+		// Enqueue the lease ID; the target controller reads its current state.
 		ev := controller.Event{
-			Type:   controller.EventUpdated,
-			Id:     lease.ID,
-			Entity: e.Entity(),
+			Type: controller.EventUpdated,
+			Id:   lease.ID,
 		}
 
 		// Add to the lease reconcile controller's work queue

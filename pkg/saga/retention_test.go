@@ -12,8 +12,15 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
+// executionSaver is all the seeding helpers need. Taking it rather than Storage
+// lets the stalled sweep's tests, whose backends are narrower by construction,
+// share them.
+type executionSaver interface {
+	Save(ctx context.Context, exec *Execution) error
+}
+
 // saveAged persists an execution whose last state change was `age` ago.
-func saveAged(t *testing.T, storage Storage, id string, status Status, age time.Duration) {
+func saveAged(t *testing.T, storage executionSaver, id string, status Status, age time.Duration) {
 	t.Helper()
 
 	finished := time.Now().Add(-age)
@@ -32,7 +39,7 @@ func saveAged(t *testing.T, storage Storage, id string, status Status, age time.
 	require.NoError(t, err)
 }
 
-func executionExists(t *testing.T, storage Storage, id string) bool {
+func executionExists(t *testing.T, storage executionGetter, id string) bool {
 	t.Helper()
 
 	_, err := storage.Get(context.Background(), id)
@@ -166,7 +173,7 @@ func TestRunRetention_ExactlyMaxDeletesIsNotCapped(t *testing.T) {
 }
 
 // saveChild persists a terminal child execution belonging to parentID.
-func saveChild(t *testing.T, storage Storage, id, parentID string, age time.Duration) {
+func saveChild(t *testing.T, storage executionSaver, id, parentID string, age time.Duration) {
 	t.Helper()
 
 	finished := time.Now().Add(-age)
@@ -277,7 +284,7 @@ func TestListTerminal_LegacyExecutionsUseStoreTimestamp(t *testing.T) {
 				ExecutionOrder:  []string{},
 			}))
 
-			terminal, err := tc.storage.ListTerminal(ctx)
+			terminal, err := collectTerminal(ctx, tc.storage)
 			require.NoError(t, err)
 
 			var found *TerminalExecution

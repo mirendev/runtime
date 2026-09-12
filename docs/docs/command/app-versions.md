@@ -53,4 +53,4 @@ miren app versions --ephemeral
 
 ## See also
 
-- [`miren app`](/command/app)
+- [`miren app`](./app.md)

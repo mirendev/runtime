@@ -14,17 +14,17 @@ there's no separate build step for most apps.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Deno app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, confirms your
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, confirms your
 server binds `0.0.0.0:$PORT`, sets the runtime permissions, and deploys — using this
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren's JavaScript detection covers Node and Bun (see
-[JavaScript on Miren](/guides/javascript)); Deno needs a `Dockerfile.miren`. Miren builds
+[JavaScript on Miren](./javascript.md)); Deno needs a `Dockerfile.miren`. Miren builds
 from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -75,17 +75,12 @@ fast. Deno runs with no permissions by default, so grant exactly what your app n
 .git
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile` with the full
-`deno run` command (including permissions):
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: deno run --allow-net --allow-env main.ts
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "deno-bench"
@@ -96,12 +91,6 @@ name = "deno-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -127,20 +116,20 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren` (Node/Bun are detected, Deno is not)
 - **Base image:** `denoland/deno:<version>`; `deno cache main.ts` warms deps
-- **Service is required:** define a `Procfile` (`web: deno run --allow-net --allow-env main.ts`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Permissions:** grant `--allow-net` + `--allow-env` at minimum; add others as needed
 - **Port:** read `Deno.env.get("PORT")`; bind `0.0.0.0` via `Deno.serve`
 - **Env vars:** `miren env set -e/-s`, or `[[env]]` in `app.toml`; read with `Deno.env.get`
 
 ## Next steps
 
-- [JavaScript on Miren](/guides/javascript) — Node and Bun (auto-detected)
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [JavaScript on Miren](./javascript.md) — Node and Bun (auto-detected)
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

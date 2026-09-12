@@ -31,4 +31,4 @@ miren auth ci remove <id> [flags]
 
 ## See also
 
-- [`miren auth ci`](/command/auth-ci)
+- [`miren auth ci`](./auth-ci.md)

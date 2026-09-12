@@ -102,6 +102,18 @@ func NewServiceController(cfg ServiceControllerDeps) (*ServiceController, error)
 }
 
 func (s *ServiceController) UpdateEndpoints(ctx context.Context, event controller.Event) ([]entity.Attr, error) {
+	if event.Entity == nil {
+		if event.Type == controller.EventDeleted {
+			// Snapshot comparison can identify an entity that left the index
+			// without recovering its pre-delete value. Without the tombstone we
+			// cannot identify the parent Service; its periodic GC removes any
+			// stranded nftables chains.
+			s.Log.Debug("Endpoint deleted without tombstone; deferring cleanup to service GC", "endpoint", event.Id)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("endpoint %s event has no entity", event.Id)
+	}
+
 	var eps network_v1alpha.Endpoints
 	eps.Decode(event.Entity)
 
@@ -192,12 +204,6 @@ func (s *ServiceController) Init(ctx context.Context) error {
 		Type: "inet_proto . inet_service : verdict",
 	})
 
-	// Named counters that the per-service and per-nodeport chains reference
-	// for traffic visibility. Created here so chain bodies can `counter name`
-	// them without races.
-	tx.Add(&knftables.Counter{Name: "services"})
-	tx.Add(&knftables.Counter{Name: "nodeports"})
-
 	// Static chains. We Add to ensure existence and Flush to wipe stale rules
 	// from prior controller versions, then re-add the canonical rule set.
 	// The duplicate `jump services` rules the bug report flagged came from old
@@ -287,23 +293,40 @@ func (s *ServiceController) addServiceChain(tx *knftables.Transaction, ip netip.
 }
 
 // setEndpoints fills in the body of a service-IP or nodeport chain. Skips the
-// flush+rebuild when the endpoint set hasn't changed from the cache to avoid
-// resetting the named counter on each event-driven reconcile. For the
-// unconditional-rebuild path used by Periodic, see writeChainBody.
-func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
+// flush+rebuild when the endpoint set hasn't changed from the cache, which also
+// spares the chain's counter from being zeroed on each event-driven reconcile.
+// For the unconditional-rebuild path used by Periodic, see writeChainBody.
+//
+// Anything it writes is recorded in pending rather than in the cache. A cache
+// entry has to mean "nft accepted this body", so the caller commits pending
+// with commitChainCache once the batch applies -- see Create.
+func (s *ServiceController) setEndpoints(tx *knftables.Transaction, pending map[string][]string, chain string, endpoints []string) {
 	sorted := append([]string(nil), endpoints...)
 	slices.Sort(sorted)
 
 	s.mu.Lock()
 	cur, ok := s.chainEndpoints[chain]
+	s.mu.Unlock()
 	if ok && slices.Equal(cur, sorted) {
-		s.mu.Unlock()
 		return
 	}
-	s.chainEndpoints[chain] = sorted
-	s.mu.Unlock()
 
-	s.writeChainBody(tx, chain, counterName, sorted)
+	pending[chain] = sorted
+	s.writeChainBody(tx, chain, sorted)
+}
+
+// commitChainCache records chain bodies that nft has accepted. Until this
+// runs, a concurrent reconcile still sees the old cache entry and rebuilds the
+// body itself, which is the safe direction to be wrong in.
+func (s *ServiceController) commitChainCache(pending map[string][]string) {
+	if len(pending) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for chain, endpoints := range pending {
+		s.chainEndpoints[chain] = endpoints
+	}
 }
 
 // writeChainBody flushes a service-IP or nodeport chain and re-emits its full
@@ -312,9 +335,20 @@ func (s *ServiceController) setEndpoints(tx *knftables.Transaction, chain, count
 // just `counter + drop` so traffic to a service with no backends is dropped
 // rather than DNAT'd to a stale address. Bypasses the chainEndpoints cache;
 // callers that want the cached fast path should go through setEndpoints.
-func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, counterName string, endpoints []string) {
+func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain string, endpoints []string) {
 	tx.Flush(&knftables.Chain{Name: chain})
-	tx.Add(&knftables.Rule{Chain: chain, Rule: knftables.Concat("counter name", `"`+counterName+`"`)})
+
+	// An anonymous counter, not `counter name "services"`. Referencing a named
+	// counter is the nftables objref expression, which needs CONFIG_NFT_OBJREF;
+	// kernels built without it reject the rule with ENOENT pointing at the
+	// name, which reads as "the counter is missing" but means "this kernel
+	// cannot look one up". That rejection rolled back the whole batch, so on
+	// such a kernel no service chain body ever installed and every service IP
+	// was a black hole. A per-chain counter needs no kernel option beyond the
+	// nf_tables core and reports per service rather than one global total. That
+	// is a rolling window, not a running total -- Periodic rebuilds every body
+	// on its five minute tick, and an anonymous counter goes away with its rule.
+	tx.Add(&knftables.Rule{Chain: chain, Rule: "counter"})
 
 	if len(endpoints) == 0 {
 		// `drop` rather than `reject` because the calling path includes
@@ -349,7 +383,7 @@ func (s *ServiceController) writeChainBody(tx *knftables.Transaction, chain, cou
 // NodePort works on every node regardless of whether the service has an
 // allocated cluster IP yet. When endpoints is empty, setEndpoints writes a
 // `drop` body so the NodePort gets the same fail-shut treatment as cluster IPs.
-func (s *ServiceController) addNodePort(tx *knftables.Transaction, nport int, proto string, endpoints []string) {
+func (s *ServiceController) addNodePort(tx *knftables.Transaction, pending map[string][]string, nport int, proto string, endpoints []string) {
 	chain := s.nodeportChain(nport, proto)
 	tx.Add(&knftables.Chain{Name: chain})
 	tx.Add(&knftables.Element{
@@ -357,7 +391,7 @@ func (s *ServiceController) addNodePort(tx *knftables.Transaction, nport int, pr
 		Key:   []string{proto, strconv.Itoa(nport)},
 		Value: []string{"goto " + chain},
 	})
-	s.setEndpoints(tx, chain, "nodeports", endpoints)
+	s.setEndpoints(tx, pending, chain, endpoints)
 }
 
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
@@ -375,6 +409,10 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 	}
 
 	tx := s.nft.NewTransaction()
+
+	// Chain bodies this batch writes, held back from the cache until nft
+	// accepts them.
+	pending := map[string][]string{}
 
 	// Build endpoint chains once, keyed by the public-facing port. Both the
 	// service-IP path and the NodePort path consume the same set so that a
@@ -420,7 +458,7 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 			key := portKey{Port: tp.Port, Proto: proto}
 
 			s.addServiceChain(tx, ip, int(tp.Port), proto)
-			s.setEndpoints(tx, s.serviceChain(ip, uint16(tp.Port), proto), "services", epChainsByPort[key])
+			s.setEndpoints(tx, pending, s.serviceChain(ip, uint16(tp.Port), proto), epChainsByPort[key])
 		}
 	}
 
@@ -433,15 +471,18 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		}
 		proto := nftProto(tp.Protocol)
 		key := portKey{Port: tp.Port, Proto: proto}
-		s.addNodePort(tx, int(tp.NodePort), proto, epChainsByPort[key])
+		s.addNodePort(tx, pending, int(tp.NodePort), proto, epChainsByPort[key])
 	}
 
 	if tx.NumOperations() == 0 {
 		return nil
 	}
 	if err := s.nft.Run(ctx, tx); err != nil {
+		// pending is dropped on the floor. Nothing reached the kernel, so the
+		// cache must go on describing the bodies that are still there.
 		return fmt.Errorf("apply nftables changes: %w", err)
 	}
+	s.commitChainCache(pending)
 	return nil
 }
 

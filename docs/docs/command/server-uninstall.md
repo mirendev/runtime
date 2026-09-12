@@ -42,4 +42,4 @@ miren server uninstall --remove-data
 
 ## See also
 
-- [`miren server`](/command/server)
+- [`miren server`](./server.md)

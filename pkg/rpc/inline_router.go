@@ -159,8 +159,8 @@ func (s *State) serveInlineCalls(ctx context.Context, dec *cbor.Decoder, enc *cb
 				continue
 			}
 
-			mm := iface.methods[rs.Method]
-			if mm.Handler == nil {
+			mm, ok := iface.rpcMethod(rs.Method)
+			if !ok || mm.Handler == nil {
 				if !discardArgs(dec) {
 					return
 				}

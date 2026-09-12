@@ -27,8 +27,8 @@ miren debug ctr [args...] [flags]
 
 ## Subcommands
 
-- [`miren debug ctr nuke`](/command/debug-ctr-nuke) — Nuke a containerd namespace
+- [`miren debug ctr nuke`](./debug-ctr-nuke.md) — Nuke a containerd namespace
 
 ## See also
 
-- [`miren debug`](/command/debug)
+- [`miren debug`](./debug.md)

@@ -27,7 +27,7 @@ func TestEnsureLbdBuilderImageSkipsAnExistingImage(t *testing.T) {
 
 	// BuildKit is deliberately nil: finding the image must short-circuit
 	// before anything tries to build, or every install would rebuild.
-	b := &Builder{Log: log, EAS: inmem.EAC, ec: entityserver.NewClient(log, inmem.EAC)}
+	b := &LbdToolchain{Log: log, EC: entityserver.NewClient(log, inmem.EAC)}
 
 	ref, err := b.EnsureLbdBuilderImage(ctx)
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestEnsureLbdBuilderImageRebuildsAnArchivedImage(t *testing.T) {
 		&core_v1alpha.Artifact{Status: core_v1alpha.ARCHIVED})
 	require.NoError(t, err)
 
-	b := &Builder{Log: log, EAS: inmem.EAC, ec: entityserver.NewClient(log, inmem.EAC)}
+	b := &LbdToolchain{Log: log, EC: entityserver.NewClient(log, inmem.EAC)}
 
 	_, err = b.EnsureLbdBuilderImage(ctx)
 	require.Error(t, err)
@@ -59,7 +59,7 @@ func TestEnsureLbdBuilderImageNeedsBuildkit(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	defer cleanup()
 
-	b := &Builder{Log: testutils.TestLogger(t), EAS: inmem.EAC, ec: entityserver.NewClient(testutils.TestLogger(t), inmem.EAC)}
+	b := &LbdToolchain{Log: testutils.TestLogger(t), EC: entityserver.NewClient(testutils.TestLogger(t), inmem.EAC)}
 
 	_, err := b.EnsureLbdBuilderImage(ctx)
 	require.Error(t, err)

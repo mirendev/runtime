@@ -94,6 +94,19 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	app.Decode(appResp.Entity().Entity())
 	app.ID = ver.App
 
+	// Same gate as Reconcile. A pool built now would resolve a config with no
+	// addon variables in it, and every instance would boot without its
+	// database. The activator treats this as a failed on-demand creation and
+	// tries again on the next request; the normal reconcile creates the pool
+	// once the association flips to active.
+	ready, err := l.addonsReady(ctx, ver.App)
+	if err != nil {
+		return "", fmt.Errorf("checking addon readiness for app %s: %w", ver.App, err)
+	}
+	if !ready {
+		return "", fmt.Errorf("addons for app %s are still provisioning", ver.App)
+	}
+
 	// Resolve config
 	spec, err := coreutil.ResolveRuntimeConfig(ctx, l.EAC, ver)
 	if err != nil {
@@ -168,6 +181,11 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 
 // addonsReady returns true if the app has no pending or provisioning addon associations.
 // Apps without any addons are always considered ready.
+//
+// An association in error does not hold the app. Error is terminal in the
+// addon controller, so blocking on it would turn every later env change or
+// rollback on that app into a silent no-op. The deploy path fails loudly on
+// error before the version is ever activated; here it is only worth a warning.
 func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, error) {
 	results, err := l.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
 	if err != nil {
@@ -178,9 +196,13 @@ func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, erro
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
 
-		if assoc.Status == "pending" || assoc.Status == "provisioning" {
+		switch assoc.Status {
+		case "pending", "provisioning":
 			l.Log.Info("addon not ready", "association", assoc.ID, "status", assoc.Status)
 			return false, nil
+		case "error":
+			l.Log.Warn("addon failed to provision; app will launch without its variables",
+				"association", assoc.ID, "app", appID, "error", assoc.ErrorMessage)
 		}
 	}
 
@@ -205,34 +227,13 @@ func (l *Launcher) AddonAssociationHandler() controller.HandlerFunc {
 		l.Log.Info("addon association changed, reconciling app",
 			"association", assoc.ID, "status", assoc.Status, "app", assoc.App)
 
-		// Fetch the app and run the same reconcile logic
-		appResp, err := l.EAC.Get(ctx, assoc.App.String())
-		if err != nil {
-			if errors.Is(err, cond.ErrNotFound{}) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("failed to get app: %w", err)
-		}
-
-		var app core_v1alpha.App
-		app.Decode(appResp.Entity().Entity())
-
-		if app.ActiveVersion == "" {
-			return nil, nil
-		}
-
-		ready, err := l.addonsReady(ctx, app.ID)
-		if err != nil {
-			l.Log.Error("failed to check addon readiness", "app", app.ID, "error", err)
-			return nil, nil
-		}
-		if !ready {
-			l.Log.Info("addons still not ready, deferring", "app", app.ID)
-			return nil, nil
-		}
-
-		l.Log.Info("addons ready, triggering app reconciliation", "app", app.ID)
-		return nil, l.reconcileAppVersion(ctx, &app)
+		// Reconcile re-reads the app and checks all addon associations under the
+		// same per-app lock used by watch events and on-demand pool creation.
+		// Controller watch callbacks only enqueue events, so this handler cannot
+		// synchronously re-enter a launcher reconcile that already holds the lock.
+		// Calling reconcileAppVersion directly here used to let an addon event race
+		// the main deployment launcher for the same app.
+		return nil, l.Reconcile(ctx, &core_v1alpha.App{ID: assoc.App}, nil)
 	}
 }
 
@@ -267,11 +268,18 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 		// use leases), so the old sandbox must release the disk before the
 		// new one can mount it.
 		if serviceHasDisks(spec, svc.Name) {
-			if err := l.drainStaleDiskPools(ctx, app, &ver, spec, svc.Name); err != nil {
+			drained, err := l.drainStaleDiskPools(ctx, app, &ver, spec, svc.Name)
+			if err != nil {
 				l.Log.Error("failed to drain old disk pools, skipping service",
 					"app", app.ID,
 					"service", svc.Name,
 					"error", err)
+				continue
+			}
+			if !drained {
+				l.Log.Debug("stale disk pools are still draining, skipping service",
+					"app", app.ID,
+					"service", svc.Name)
 				continue
 			}
 		}
@@ -455,9 +463,10 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		// Steady-state reuse is a no-op; only log (below) when reuse actually
 		// mutates the pool.
 		needsUpdate := false
+		versionChanged := poolWithEntity.Pool.SandboxSpec.Version != ver.ID
 
 		// Update the pool's sandbox spec version to track the current AppVersion
-		if poolWithEntity.Pool.SandboxSpec.Version != ver.ID {
+		if versionChanged {
 			poolWithEntity.Pool.SandboxSpec.Version = ver.ID
 			needsUpdate = true
 		}
@@ -489,13 +498,12 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		}
 
 		// A deploy should boot the new version so we can verify it, even when
-		// reusing a pool that drained to zero (an autoscale app gone idle).
-		// Floor a drained pool back to 1, the same way a fresh pool seeds; the
-		// autoscaler scales it down again afterward. Without this, a redeploy of
-		// a scaled-to-zero app would just point the pool at the new version
-		// without ever booting it, so we'd never know if it actually works.
+		// reusing a pool that drained to zero (an autoscale app gone idle). A
+		// steady-state resync of the same version must leave it drained; otherwise
+		// the minutely resync repeatedly cold-starts every idle app and blocks the
+		// launcher's worker while it waits for readiness.
 		bootForVerification := false
-		if poolWithEntity.Pool.DesiredInstances < 1 {
+		if versionChanged && poolWithEntity.Pool.DesiredInstances < 1 {
 			poolWithEntity.Pool.DesiredInstances = 1
 			l.Log.Info("flooring drained pool to one instance for deploy verification",
 				"service", serviceName,
@@ -964,12 +972,6 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	pool := poolWithEntity.Pool
 	ent := poolWithEntity.Entity
 
-	l.Log.Info("updating pool",
-		"pool", pool.ID,
-		"desired_instances", pool.DesiredInstances,
-		"references", pool.ReferencedByVersions,
-		"num_refs", len(pool.ReferencedByVersions))
-
 	// Build new attributes from the pool
 	newAttrs := pool.Encode()
 
@@ -1023,6 +1025,19 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 
 	// Add all new attrs (including multi-valued ReferencedByVersions from Encode())
 	finalAttrs = append(finalAttrs, newAttrs...)
+
+	// Direct EAC writes bypass ReconcileController's empty-diff guard. Keep this
+	// helper idempotent so a caller that asks for state already in the store does
+	// not advance UpdatedAt and wake every watcher again.
+	if entity.New(finalAttrs).Compare(&ent) == 0 {
+		return nil
+	}
+
+	l.Log.Info("updating pool",
+		"pool", pool.ID,
+		"desired_instances", pool.DesiredInstances,
+		"references", pool.ReferencedByVersions,
+		"num_refs", len(pool.ReferencedByVersions))
 
 	// Use Replace with the combined attributes (preserves metadata)
 	_, err := l.EAC.Replace(ctx, finalAttrs, 0)
@@ -1443,7 +1458,7 @@ func (l *Launcher) drainStaleDiskPools(
 	ver *core_v1alpha.AppVersion,
 	cfgSpec *core_v1alpha.ConfigSpec,
 	serviceName string,
-) error {
+) (bool, error) {
 	// Determine which image to use (same logic as ensurePoolForService)
 	image := ver.ImageUrl
 	for _, svc := range cfgSpec.Services {
@@ -1455,25 +1470,32 @@ func (l *Launcher) drainStaleDiskPools(
 
 	desiredSpec, err := l.buildSandboxSpec(ctx, app, ver, cfgSpec, serviceName, image)
 	if err != nil {
-		return fmt.Errorf("build sandbox spec: %w", err)
+		return false, fmt.Errorf("build sandbox spec: %w", err)
 	}
 
 	stalePools, err := l.findStalePoolsForService(ctx, app.ID, serviceName, desiredSpec)
 	if err != nil {
-		return fmt.Errorf("find stale pools: %w", err)
+		return false, fmt.Errorf("find stale pools: %w", err)
 	}
 
 	if len(stalePools) == 0 {
-		return nil
+		return true, nil
 	}
 
-	l.Log.Info("draining stale disk pools before creating new pool",
-		"app", app.ID,
-		"service", serviceName,
-		"stale_pools", len(stalePools))
+	newDrains := 0
 
 	for _, pwe := range stalePools {
 		pool := pwe.Pool
+		if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) == 0 {
+			continue
+		}
+
+		if newDrains == 0 {
+			l.Log.Info("draining stale disk pools before creating new pool",
+				"app", app.ID,
+				"service", serviceName,
+				"stale_pools", len(stalePools))
+		}
 
 		// Remove version references and scale to 0
 		pool.ReferencedByVersions = nil
@@ -1484,18 +1506,27 @@ func (l *Launcher) drainStaleDiskPools(
 			"service", pool.Service)
 
 		if err := l.updatePool(ctx, pwe); err != nil {
-			return fmt.Errorf("update pool %s: %w", pool.ID, err)
+			return false, fmt.Errorf("update pool %s: %w", pool.ID, err)
 		}
+		newDrains++
+	}
+
+	// The first pass waits so an ordinary disk deploy can start its replacement
+	// as soon as teardown finishes. Later resyncs observe the persisted drain
+	// request and return immediately instead of holding an app lock for a minute
+	// at a time when teardown cannot converge.
+	if newDrains == 0 {
+		return false, nil
 	}
 
 	// Wait for all stale pools to fully drain so disk leases are released.
 	for _, pwe := range stalePools {
 		if err := l.waitForPoolDrained(ctx, pwe.Pool.ID, pwe.Pool.Service, l.PoolReadyTimeout); err != nil {
-			return fmt.Errorf("waiting for pool %s to drain: %w", pwe.Pool.ID, err)
+			return false, fmt.Errorf("waiting for pool %s to drain: %w", pwe.Pool.ID, err)
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // reapStaleStatelessPools scales to 0 any pool for a stateless service whose
@@ -1664,11 +1695,11 @@ func (l *Launcher) waitForPoolDrained(ctx context.Context, poolID entity.Id, ser
 	}
 }
 
-// hasActiveSandboxForPool returns true if any sandbox for the pool has not
-// reached DEAD. STOPPED is deliberately active here: the pool manager sets it
-// before the sandbox controller finishes graceful process shutdown and resource
-// cleanup, so starting a replacement at STOPPED can overlap access to a local
-// disk with the retiring process.
+// hasActiveSandboxForPool reports whether a pool still has a sandbox that can
+// conflict with a disk-backed replacement. STOPPED remains active when the old
+// sandbox mounted a volume: the pool manager sets STOPPED before the sandbox
+// controller finishes graceful process shutdown and resource cleanup. A stopped
+// diskless sandbox has no disk resource to release and cannot create that overlap.
 func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id, service string) (bool, error) {
 	resp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
@@ -1679,8 +1710,11 @@ func (l *Launcher) hasActiveSandboxForPool(ctx context.Context, poolID entity.Id
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		if sb.Status == compute_v1alpha.DEAD {
+		if sb.Status == compute_v1alpha.DEAD ||
+			(sb.Status == compute_v1alpha.STOPPED && len(sb.Spec.Volume) == 0) {
 			// DEAD is set after process shutdown and resource cleanup complete.
+			// A diskless STOPPED sandbox cannot conflict with the replacement's
+			// disk, so it need not hold a disk-aware deploy behind its teardown.
 			continue
 		}
 

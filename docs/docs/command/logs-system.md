@@ -58,4 +58,4 @@ miren logs system -f
 
 ## See also
 
-- [`miren logs`](/command/logs)
+- [`miren logs`](./logs.md)

@@ -45,4 +45,4 @@ miren secret rotate-key
 
 ## See also
 
-- [`miren secret`](/command/secret)
+- [`miren secret`](./secret.md)

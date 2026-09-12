@@ -20,7 +20,7 @@ import (
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
-func TestCoordinatorParse(t *testing.T) {
+func TestControlPlaneParse(t *testing.T) {
 	r := require.New(t)
 
 	// Setup logging
@@ -49,11 +49,11 @@ func TestCoordinatorParse(t *testing.T) {
 	ctx := t.Context()
 
 	// Start coordinator in background
-	coord := coordinate.NewCoordinator(log, coordCfg)
+	coord := coordinate.NewControlPlane(coordinate.NewFoundation(log, coordCfg))
 	err := coord.Start(bootCtx)
 	r.NoError(err)
 	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		require.NoError(t, coord.Stop(shutdownCtx))
 	})
@@ -61,6 +61,9 @@ func TestCoordinatorParse(t *testing.T) {
 	// Create RPC client to interact with coordinator
 	rs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
 	require.NoError(t, err)
+	// Registered after the coordinator cleanup so LIFO cleanup closes the client
+	// connection before the server is asked to drain it.
+	t.Cleanup(func() { require.NoError(t, rs.Close()) })
 
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
@@ -100,7 +103,7 @@ func TestCoordinatorParse(t *testing.T) {
 	enttest.EqualAttr(t, ent, entity.Id("entity/kind"), types.Id("dev.miren.core/kind.metadata"))
 
 	// Graph.Stop cancels the boot lifetime before it starts reverse-order stop
-	// hooks. The coordinator must remain available during that gap so dependent
+	// hooks. The foundation must remain available during that gap so dependent
 	// drains can make their final RPCs over an already-warmed connection.
 	cancelBoot()
 	deadline := time.Now().Add(100 * time.Millisecond)

@@ -49,32 +49,21 @@ var (
 
 func init() {
 	DefaultQUICConfig = quic.Config{
-		InitialPacketSize:              InitialPacketSize,
-		EnableDatagrams:                true,
-		MaxIncomingStreams:             1000,
-		MaxIncomingUniStreams:          1000,
-		Allow0RTT:                      true,
-		KeepAlivePeriod:                10 * time.Second,
-		MaxIdleTimeout:                 30 * time.Second,
-		Tracer:                         qlog.DefaultConnectionTracer,
-		InitialStreamReceiveWindow:     5 * 1024 * 1024,  // 5MB per stream
-		MaxStreamReceiveWindow:         20 * 1024 * 1024, // 20MB max per stream
-		InitialConnectionReceiveWindow: 10 * 1024 * 1024, // 10MB total
-		MaxConnectionReceiveWindow:     20 * 1024 * 1024, // 20MB total max
+		InitialPacketSize:                InitialPacketSize,
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		MaxIncomingStreams:               1000,
+		MaxIncomingUniStreams:            1000,
+		Allow0RTT:                        true,
+		KeepAlivePeriod:                  10 * time.Second,
+		MaxIdleTimeout:                   30 * time.Second,
+		Tracer:                           qlog.DefaultConnectionTracer,
+		InitialStreamReceiveWindow:       5 * 1024 * 1024,  // 5MB per stream
+		MaxStreamReceiveWindow:           20 * 1024 * 1024, // 20MB max per stream
+		InitialConnectionReceiveWindow:   10 * 1024 * 1024, // 10MB total
+		MaxConnectionReceiveWindow:       20 * 1024 * 1024, // 20MB total max
 	}
 }
-
-// closedPacketConn is a stub net.PacketConn that returns net.ErrClosed on all operations.
-// Used to trigger webtransport.Server initialization without actually serving connections.
-type closedPacketConn struct{}
-
-func (closedPacketConn) ReadFrom([]byte) (int, net.Addr, error) { return 0, nil, net.ErrClosed }
-func (closedPacketConn) WriteTo([]byte, net.Addr) (int, error)  { return 0, net.ErrClosed }
-func (closedPacketConn) Close() error                           { return nil }
-func (closedPacketConn) LocalAddr() net.Addr                    { return &net.UDPAddr{} }
-func (closedPacketConn) SetDeadline(time.Time) error            { return nil }
-func (closedPacketConn) SetReadDeadline(time.Time) error        { return nil }
-func (closedPacketConn) SetWriteDeadline(time.Time) error       { return nil }
 
 type StateCommon struct {
 	top context.Context
@@ -123,14 +112,15 @@ type State struct {
 
 	defaultEndpoint string
 
-	server    *Server
-	hs        *http3.Server
-	ws        *webtransport.Server
-	li        *quic.EarlyListener
-	localHS   *http3.Server
-	localLI   *quic.EarlyListener
-	localLn   net.Listener
-	localPath string
+	server     *Server
+	hs         *http3.Server
+	ws         *webtransport.Server
+	acceptDone chan struct{}
+	li         *countingListener
+	localHS    *http3.Server
+	localLI    *countingListener
+	localLn    net.Listener
+	localPath  string
 
 	httpSrv *http.Server
 	tcpLn   net.Listener
@@ -152,6 +142,19 @@ type State struct {
 	// HTTP/3 Shutdown after the ordered boot stop has already drained it.
 	explicitStop     chan struct{}
 	explicitStopOnce sync.Once
+
+	// stalledDrainOnce keeps the four drains below, which run concurrently and
+	// share one deadline, from each dumping the same goroutines when they all
+	// time out together.
+	stalledDrainOnce sync.Once
+
+	// A State is both an RPC server and the owner of clients dialed through its
+	// shared QUIC transport. Those clients can call back into the same State.
+	// Close their side of every connection before draining the server, or a
+	// half-open WebTransport upgrade can leave Shutdown waiting on its own peer.
+	outboundMu     sync.Mutex
+	outboundConns  map[*quic.Conn]struct{}
+	outboundClosed bool
 }
 
 // contactAddr returns the address embedded in capabilities this server mints,
@@ -514,6 +517,7 @@ func NewState(ctx context.Context, opts ...StateOption) (*State, error) {
 		server:          server,
 		transport:       &quic.Transport{Conn: udpConn},
 		explicitStop:    make(chan struct{}),
+		outboundConns:   make(map[*quic.Conn]struct{}),
 	}
 
 	s.qc = DefaultQUICConfig
@@ -637,7 +641,7 @@ func (s *State) setupServer(so *stateOptions) error {
 		return err
 	}
 
-	s.li = ec
+	s.li = &countingListener{EarlyListener: ec}
 	s.server.state = s
 	s.server.restEnabled = so.restBindAddr != ""
 
@@ -678,7 +682,7 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 	}
 
 	s.ws = &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			Handler:         s.server,
 			EnableDatagrams: true,
 			QUICConfig:      &s.qc,
@@ -694,23 +698,52 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 		},
 	}
 
-	s.hs = &s.ws.H3
+	s.hs = s.ws.H3
 	s.server.ws = s.ws
+	s.acceptDone = make(chan struct{})
 
 	go func() {
 		if s.contextOwnsShutdown(ctx) {
-			_ = s.hs.Shutdown(context.Background())
+			drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.drainWebTransport(drainCtx)
+			_ = s.ws.Close()
 		}
 	}()
 
-	// Trigger webtransport server initialization by calling Serve with a stub PacketConn.
-	// This sets up the stream hijackers on H3 without actually serving connections.
-	// The stub returns net.ErrClosed immediately, causing Serve to return after init.
-	_ = s.ws.Serve(closedPacketConn{})
-
-	go s.hs.ServeListener(s.li)
+	go func() {
+		defer close(s.acceptDone)
+		for {
+			conn, err := s.li.Accept(context.Background())
+			if err != nil {
+				if !errors.Is(err, quic.ErrServerClosed) {
+					s.log.Warn("QUIC listener stopped accepting connections", "error", err)
+				}
+				return
+			}
+			go func() {
+				if err := s.ws.ServeQUICConn(conn); err != nil {
+					s.log.Log(context.Background(), quicConnectionErrorLevel(err), "WebTransport connection ended", "error", err, "remote", conn.RemoteAddr())
+					_ = conn.CloseWithError(0, "")
+				}
+			}()
+		}
+	}()
 
 	return nil
+}
+
+func quicConnectionErrorLevel(err error) slog.Level {
+	if errors.Is(err, context.Canceled) || errors.Is(err, http.ErrServerClosed) || errors.Is(err, quic.ErrServerClosed) {
+		return slog.LevelDebug
+	}
+	if appErr, ok := errors.AsType[*quic.ApplicationError](err); ok && (appErr.ErrorCode == 0 || appErr.ErrorCode == quic.ApplicationErrorCode(http3.ErrCodeNoError)) {
+		return slog.LevelDebug
+	}
+	if _, ok := errors.AsType[*quic.IdleTimeoutError](err); ok {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
 }
 
 // Shutdown gracefully stops every network server owned by this State. Unlike
@@ -719,12 +752,14 @@ func (s *State) startListener(ctx context.Context, so *stateOptions) error {
 // bounded drain window.
 func (s *State) Shutdown(ctx context.Context) error {
 	s.disableContextShutdown()
-	// Stop server-owned background work and streaming RPCs before asking the
-	// network servers to drain. Unary request contexts remain transport-owned,
-	// so in-flight calls can still finish during the graceful shutdown window.
+	// Stop server-owned background work, streaming RPCs, and outgoing calls
+	// before asking the network servers to drain. Unary request contexts from
+	// other peers remain transport-owned, so in-flight calls can still finish
+	// during the graceful shutdown window.
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.closeOutboundConnections()
 	if s.localLn != nil {
 		_ = s.localLn.Close()
 	}
@@ -734,36 +769,53 @@ func (s *State) Shutdown(ctx context.Context) error {
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 	)
-	shutdown := func(fn func(context.Context) error) {
+	// ln is the listener behind this surface, or nil for one that does not have
+	// a QUIC listener of its own. It has to be the surface's own listener: a
+	// stalled local drain reported against the primary listener's census would
+	// print the wrong numbers, and print them at the one moment they are the
+	// only evidence anyone has.
+	shutdown := func(name string, ln *countingListener, fn func(context.Context) error) {
 		if fn == nil {
 			return
 		}
 		wg.Go(func() {
-			if err := fn(ctx); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+			err := fn(ctx)
+			if err == nil {
+				return
 			}
+			// Reaching here means the drain missed its deadline with work
+			// genuinely outstanding, so say what was still connected.
+			conns := s.reportStalledDrain(name, ln, err)
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("shutting down %s: %w (%s)", name, err, conns))
+			mu.Unlock()
 		})
 	}
 
-	if s.hs != nil {
-		shutdown(s.hs.Shutdown)
+	if s.ws != nil {
+		shutdown("HTTP/3", s.li, s.drainWebTransport)
 	}
 	if s.localHS != nil {
-		shutdown(s.localHS.Shutdown)
+		shutdown("local HTTP/3", s.localLI, func(ctx context.Context) error {
+			return drainQUIC(ctx, s.localHS.Shutdown, s.localLI)
+		})
 	}
 	if s.httpSrv != nil {
-		shutdown(s.httpSrv.Shutdown)
+		shutdown("WebSocket", nil, s.httpSrv.Shutdown)
 	}
 	if s.restSrv != nil {
-		shutdown(s.restSrv.Shutdown)
+		shutdown("REST", nil, s.restSrv.Shutdown)
 	}
 	if s.msgLn != nil {
 		_ = s.msgLn.Close()
 	}
 
 	wg.Wait()
+	// Preserve live connections for timeout diagnostics before forcing them
+	// closed, and send CONNECTION_CLOSE before tearing down the UDP socket.
+	if s.ws != nil {
+		_ = s.ws.Close()
+	}
 	if s.li != nil {
 		_ = s.li.Close()
 	}
@@ -785,11 +837,12 @@ func (s *State) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.closeOutboundConnections()
 	if s.li != nil {
 		_ = s.li.Close()
 	}
-	if s.hs != nil {
-		_ = s.hs.Close()
+	if s.ws != nil {
+		_ = s.ws.Close()
 	}
 
 	if s.localLI != nil {
@@ -826,6 +879,74 @@ func (s *State) Close() error {
 	}
 
 	return s.transport.Conn.Close()
+}
+
+func (s *State) trackOutboundConn(conn *quic.Conn) {
+	s.outboundMu.Lock()
+	if s.outboundClosed {
+		s.outboundMu.Unlock()
+		_ = conn.CloseWithError(0, "state shutting down")
+		return
+	}
+	if s.outboundConns == nil {
+		s.outboundConns = make(map[*quic.Conn]struct{})
+	}
+	s.outboundConns[conn] = struct{}{}
+	s.outboundMu.Unlock()
+
+	go func() {
+		<-conn.Context().Done()
+		s.outboundMu.Lock()
+		delete(s.outboundConns, conn)
+		s.outboundMu.Unlock()
+	}()
+}
+
+func (s *State) closeOutboundConnections() {
+	s.outboundMu.Lock()
+	s.outboundClosed = true
+	conns := make([]*quic.Conn, 0, len(s.outboundConns))
+	for conn := range s.outboundConns {
+		conns = append(conns, conn)
+	}
+	s.outboundMu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.CloseWithError(0, "state shutting down")
+	}
+}
+
+// reportStalledDrain records a graceful shutdown that missed its deadline and
+// returns the in-flight request census for the caller to fold into its error.
+//
+// A daemon that cannot drain is the system failing at something it owns, so
+// this logs at Error. It fires at most once per State, only on a drain that has
+// already failed, which is what makes carrying the goroutine dump permanently
+// affordable: the expensive part never runs on a healthy shutdown.
+func (s *State) reportStalledDrain(name string, ln *countingListener, err error) string {
+	conns := ln.describe()
+
+	// Only a drain that ran out of time is a stall. A surface that failed for
+	// its own reasons, fast, is a different event, and letting it spend the
+	// one-shot dump would leave a genuine stall later in the same shutdown with
+	// no census and no stacks: precisely the surface that needed them.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		s.log.Error("graceful shutdown failed",
+			"surface", name,
+			"error", err,
+			"connections", conns)
+		return conns
+	}
+
+	s.stalledDrainOnce.Do(func() {
+		s.log.Error("graceful shutdown did not finish before its deadline",
+			"surface", name,
+			"error", err,
+			"connections", conns,
+			"stacks", drainStacks())
+	})
+
+	return conns
 }
 
 func (s *State) disableContextShutdown() {

@@ -14,14 +14,14 @@ output — and that's all you need. This guide puts `socat` in front of a Bash s
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this shell script on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren` and the socket
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren` and the socket
 front-end, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -42,14 +42,11 @@ printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n
 ## The socket front-end
 
 The script doesn't bind a port — `socat` does. Miren injects `PORT`, and `socat`'s
-`TCP-LISTEN` binds all interfaces; `fork` runs the script once per connection:
-
-```procfile
-web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello.sh
-```
+`TCP-LISTEN` binds all interfaces; `fork` runs the script once per connection. The
+Dockerfile's `CMD` starts that socket front-end.
 
 This same `socat` pattern serves any program that writes an HTTP response to stdout —
-see the [COBOL guide](/guides/cobol) for another example.
+see the [COBOL guide](./cobol.md) for another example.
 
 :::note[Behind Miren's ingress]
 Miren's HTTP ingress terminates TLS and handles the public HTTP layer in front of your
@@ -70,6 +67,7 @@ WORKDIR /app
 COPY hello.sh .
 RUN chmod +x hello.sh
 EXPOSE 8080
+CMD ["sh", "-c", "exec socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello.sh"]
 ```
 
 ### .dockerignore
@@ -79,6 +77,9 @@ EXPOSE 8080
 ```
 
 ## Deploy
+
+Miren uses the image's `CMD` and infers the web port from `EXPOSE 8080`, so you don't
+need a `Procfile` or service command.
 
 Create `.miren/app.toml` naming your app and deploy from your project root:
 
@@ -92,21 +93,16 @@ miren deploy
 ```
 </CliCommand>
 
-:::note[The Procfile is required]
-Even with a `Dockerfile.miren`, Miren needs at least one service defined — the `web:`
-line above. Without it the deploy stops with `no services defined`.
-:::
-
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Serving:** the script prints a full HTTP response; `socat` owns the socket
-- **Service is required:** `Procfile` `web: socat TCP-LISTEN:$PORT,reuseaddr,fork EXEC:/app/hello.sh`
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `socat TCP-LISTEN:$PORT` binds `0.0.0.0`
 - **Pattern:** works for any executable that writes an HTTP response to stdout
 
 ## Next steps
 
-- [COBOL on Miren](/guides/cobol) — the same `socat` pattern for a compiled program
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Deployment](/deployment) — how deploys build and activate
+- [COBOL on Miren](./cobol.md) — the same `socat` pattern for a compiled program
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Deployment](../deployment.md) — how deploys build and activate

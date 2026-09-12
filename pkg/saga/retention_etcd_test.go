@@ -45,7 +45,7 @@ func TestRetention_AgainstRealEtcd(t *testing.T) {
 	saveAged(t, storage, "etcd-fresh", StatusCompleted, 1*time.Hour)
 	saveAged(t, storage, "etcd-running", StatusRunning, 90*24*time.Hour)
 
-	terminal, err := storage.ListTerminal(ctx)
+	terminal, err := collectTerminal(ctx, storage)
 	require.NoError(t, err)
 	require.Len(t, terminal, 3, "the three terminal executions must be discoverable through the real status index")
 
@@ -100,7 +100,7 @@ func TestRetention_LegacyExecutionAgainstRealEtcd(t *testing.T) {
 		ExecutionOrder:  []string{},
 	}))
 
-	terminal, err := storage.ListTerminal(ctx)
+	terminal, err := collectTerminal(ctx, storage)
 	require.NoError(t, err)
 	require.Len(t, terminal, 1)
 	assert.False(t, terminal[0].FinishedAt.IsZero(),

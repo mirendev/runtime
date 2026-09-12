@@ -2,7 +2,6 @@ package commands
 
 import (
 	"miren.dev/mflags"
-	"miren.dev/runtime/pkg/labs"
 )
 
 func RegisterAll(d *mflags.Dispatcher) {
@@ -107,8 +106,23 @@ miren deploy --analyze
 			Body: "miren deploy -e DATABASE_URL=postgres://localhost/mydb",
 		}),
 		WithExample(mflags.Example{
-			Name: "Deploy a previously built version",
+			Name: "Deploy an existing version",
 			Body: "miren deploy --version v3",
+		}),
+		WithExample(mflags.Example{
+			Name: "Deploy from a script or CI",
+			Body: `Progress goes to stderr; stdout carries one JSON document
+with the status, version, and URLs:
+
+miren deploy --format json | jq -r .app_version
+`,
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow a deploy as a stream of events",
+			Body: `One JSON object per line on stdout, nothing on stderr:
+
+miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
+`,
 		}),
 	))
 	d.Dispatch("deploy cancel", Infer("deploy cancel", "Cancel an in-progress deployment", DeployCancel,
@@ -352,9 +366,47 @@ miren deploy --analyze
 		}),
 	))
 
+	d.Dispatch("top", Infer("top", "Show cluster-wide resource usage", Top,
+		WithGroup(GroupMonitoring),
+		WithDescription(topDescription),
+		WithExample(mflags.Example{
+			Name: "What is using the cluster's CPU",
+			Body: "miren top",
+		}),
+		WithExample(mflags.Example{
+			Name: "Which host is hot, and whether an app is to blame",
+			Body: "miren top --nodes",
+		}),
+		WithExample(mflags.Example{
+			Name: "Per-app totals, including each app's dedicated addons",
+			Body: "miren top --apps",
+		}),
+		WithExample(mflags.Example{
+			Name: "One app's usage",
+			Body: "miren top --apps --app myapp",
+		}),
+		WithExample(mflags.Example{
+			Name: "Narrow to one runner",
+			Body: "miren top --runner miren-garden-runner-1",
+		}),
+		WithExample(mflags.Example{
+			Name: "Find a spike that has already passed",
+			Body: "miren top --since 1h --aggregate max",
+		}),
+		WithExample(mflags.Example{
+			Name: "Watch continuously",
+			Body: "miren top --watch",
+		}),
+		WithExample(mflags.Example{
+			Name: "Machine-readable output",
+			Body: "miren top --format json",
+		}),
+	))
+
 	// Sandbox commands
 	d.Dispatch("sandbox", Section("sandbox", "Sandbox management commands", "", WithSectionDescription(sandboxSectionDescription), WithSectionGroup(GroupMonitoring)))
 	d.Dispatch("sandbox list", Infer("sandbox list", "List sandboxes (excludes dead by default)", SandboxList,
+		WithDescription(sandboxListDescription),
 		WithExample(mflags.Example{
 			Name: "List running sandboxes",
 			Body: "miren sandbox list",
@@ -390,6 +442,20 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Force delete without confirmation",
 			Body: "miren sandbox delete sb_abc123 --force",
+		}),
+	))
+	d.Dispatch("sandbox inspect", Infer("sandbox inspect", "Show one sandbox's resource usage and failure history", SandboxInspect,
+		WithExample(mflags.Example{
+			Name: "Inspect a sandbox",
+			Body: "miren sandbox inspect sb_abc123",
+		}),
+		WithExample(mflags.Example{
+			Name: "Inspect over the last hour",
+			Body: "miren sandbox inspect sb_abc123 --since 1h",
+		}),
+		WithExample(mflags.Example{
+			Name: "Include CPU and memory history",
+			Body: "miren sandbox inspect sb_abc123 --series",
 		}),
 	))
 	d.Dispatch("sandbox exec", Infer("sandbox exec", "Open interactive shell in an existing sandbox", SandboxExec,
@@ -434,6 +500,10 @@ miren deploy --analyze
 		WithExample(mflags.Example{
 			Name: "Set an environment variable",
 			Body: "miren env set -e DATABASE_URL=postgres://localhost/mydb",
+		}),
+		WithExample(mflags.Example{
+			Name: "Set several variables without flags",
+			Body: "miren env set LOG_LEVEL=debug ALLOWED_HOSTS=a.example.com,b.example.com",
 		}),
 		WithExample(mflags.Example{
 			Name: "Set a sensitive variable (prompted with masking)",
@@ -843,175 +913,156 @@ miren deploy --analyze
 		}),
 	))
 
-	// Runner commands (distributed runners) - behind feature flag
-	if labs.DistributedRunners() {
-		d.Dispatch("runner", Section("runner", "Runner management commands", "", WithSectionGroup(GroupServer)))
-		d.Dispatch("runner token", Section("runner token", "Manage join tokens", ""))
-		d.Dispatch("runner token create", Infer("runner token create", "Create a join token for a runner", RunnerTokenCreate,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Create a one-time join token",
-				Body: "miren runner token create",
-			}),
-			WithExample(mflags.Example{
-				Name: "Create a reusable token for automation",
-				Body: "miren runner token create --reusable --name infra-terraform --ttl 0",
-			}),
-			WithExample(mflags.Example{
-				Name: "Create a token with a specific coordinator address",
-				Body: "miren runner token create --addr 10.0.0.5:8443",
-			}),
-		))
-		d.Dispatch("runner join", Infer("runner join", "Join this machine to a coordinator as a runner", RunnerJoin,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Join using a token",
-				Body: "miren runner join mren_...",
-			}),
-			WithExample(mflags.Example{
-				Name: "Join with coordinator address override",
-				Body: "miren runner join mren_... --coordinator 10.0.0.5:8443",
-			}),
-		))
-		d.Dispatch("runner reissue", Infer("runner reissue", "Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity", RunnerReissue,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Rotate this runner's certificate",
-				Body: "miren runner reissue",
-			}),
-		))
-		d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithDaemon(),
-			WithExample(mflags.Example{
-				Name: "Start the runner",
-				Body: "miren runner start",
-			}),
-		))
-		d.Dispatch("runner list", Infer("runner list", "List all registered runners", RunnerList,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "List runners",
-				Body: "miren runner list",
-			}),
-		))
-		d.Dispatch("runner status", Infer("runner status", "Show runner health and configuration", RunnerStatus,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Check runner status",
-				Body: "miren runner status",
-			}),
-		))
-		d.Dispatch("runner token revoke", Infer("runner token revoke", "Revoke a join token", RunnerTokenRevoke,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Revoke a token",
-				Body: "miren runner token revoke inv_abc123",
-			}),
-		))
-		d.Dispatch("runner token list", Infer("runner token list", "List all join tokens", RunnerTokenList,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "List tokens",
-				Body: "miren runner token list",
-			}),
-		))
-		d.Dispatch("runner remove", Infer("runner remove", "Remove a registered runner and clean up resources", RunnerRemove,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Remove a runner by name",
-				Body: "miren runner remove my-runner",
-			}),
-			WithExample(mflags.Example{
-				Name: "Force remove a runner with active sandboxes",
-				Body: "miren runner remove my-runner --force",
-			}),
-		))
-		d.Dispatch("runner cordon", Infer("runner cordon", "Mark a runner unschedulable without stopping its sandboxes", RunnerCordon,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Cordon a runner",
-				Body: "miren runner cordon my-runner",
-			}),
-			WithExample(mflags.Example{
-				Name: "Cordon with a reason",
-				Body: "miren runner cordon my-runner --reason \"cert rotation\"",
-			}),
-		))
-		d.Dispatch("runner uncordon", Infer("runner uncordon", "Make a cordoned runner eligible for scheduling again", RunnerUncordon,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Uncordon a runner",
-				Body: "miren runner uncordon my-runner",
-			}),
-		))
-		d.Dispatch("runner drain", Infer("runner drain", "Cordon a runner and evict its sandboxes onto other nodes", RunnerDrain,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Drain a runner before maintenance",
-				Body: "miren runner drain my-runner",
-			}),
-			WithExample(mflags.Example{
-				Name: "Drain with a timeout",
-				Body: "miren runner drain my-runner --timeout 300",
-			}),
-		))
-		d.Dispatch("runner install", Infer("runner install", "Install systemd service for miren runner", RunnerInstall,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Install interactively",
-				Body: "miren runner install",
-			}),
-			WithExample(mflags.Example{
-				Name: "Install with token (for automation)",
-				Body: "miren runner install --token mren_...",
-			}),
-		))
-		d.Dispatch("runner uninstall", Infer("runner uninstall", "Remove systemd service for miren runner", RunnerUninstall,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Uninstall the runner service",
-				Body: "miren runner uninstall",
-			}),
-			WithExample(mflags.Example{
-				Name: "Uninstall and remove all runner data",
-				Body: "miren runner uninstall --remove-data",
-			}),
-		))
-		d.Dispatch("runner service-status", Infer("runner service-status", "Show miren-runner systemd service status", RunnerServiceStatus,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Show service status",
-				Body: "miren runner service-status",
-			}),
-			WithExample(mflags.Example{
-				Name: "Follow service logs",
-				Body: "miren runner service-status --follow",
-			}),
-		))
-		d.Dispatch("runner upgrade", Infer("runner upgrade", "Upgrade miren runner to the latest or specified version", RunnerUpgrade,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Upgrade to the latest version",
-				Body: "miren runner upgrade",
-			}),
-			WithExample(mflags.Example{
-				Name: "Check for available updates",
-				Body: "miren runner upgrade --check",
-			}),
-			WithExample(mflags.Example{
-				Name: "Upgrade to a specific version",
-				Body: "miren runner upgrade --version v0.2.0",
-			}),
-		))
-		d.Dispatch("runner upgrade rollback", Infer("runner upgrade rollback", "Rollback runner to previous version", RunnerUpgradeRollback,
-			WithLabsFeature(labs.FeatureDistributedRunners),
-			WithExample(mflags.Example{
-				Name: "Rollback to the previous version",
-				Body: "miren runner upgrade rollback",
-			}),
-		))
-	}
+	// Runner commands
+	d.Dispatch("runner", Section("runner", "Runner management commands", "", WithSectionGroup(GroupServer)))
+	d.Dispatch("runner token", Section("runner token", "Manage join tokens", ""))
+	d.Dispatch("runner token create", Infer("runner token create", "Create a join token for a runner", RunnerTokenCreate,
+		WithExample(mflags.Example{
+			Name: "Create a one-time join token",
+			Body: "miren runner token create",
+		}),
+		WithExample(mflags.Example{
+			Name: "Create a reusable token for automation",
+			Body: "miren runner token create --reusable --name infra-terraform --ttl 0",
+		}),
+		WithExample(mflags.Example{
+			Name: "Create a token with a specific coordinator address",
+			Body: "miren runner token create --addr 10.0.0.5:8443",
+		}),
+	))
+	d.Dispatch("runner join", Infer("runner join", "Join this machine to a coordinator as a runner", RunnerJoin,
+		WithExample(mflags.Example{
+			Name: "Join using a token",
+			Body: "miren runner join mren_...",
+		}),
+		WithExample(mflags.Example{
+			Name: "Join with coordinator address override",
+			Body: "miren runner join mren_... --coordinator 10.0.0.5:8443",
+		}),
+	))
+	d.Dispatch("runner reissue", Infer("runner reissue", "Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity", RunnerReissue,
+		WithExample(mflags.Example{
+			Name: "Rotate this runner's certificate",
+			Body: "miren runner reissue",
+		}),
+	))
+	d.Dispatch("runner start", Infer("runner start", "Start this machine as a distributed runner", RunnerStart,
+		WithDaemon(),
+		WithExample(mflags.Example{
+			Name: "Start the runner",
+			Body: "miren runner start",
+		}),
+	))
+	d.Dispatch("runner list", Infer("runner list", "List all registered runners", RunnerList,
+		WithExample(mflags.Example{
+			Name: "List runners",
+			Body: "miren runner list",
+		}),
+	))
+	d.Dispatch("runner status", Infer("runner status", "Show runner health and configuration", RunnerStatus,
+		WithExample(mflags.Example{
+			Name: "Check runner status",
+			Body: "miren runner status",
+		}),
+	))
+	d.Dispatch("runner token revoke", Infer("runner token revoke", "Revoke a join token", RunnerTokenRevoke,
+		WithExample(mflags.Example{
+			Name: "Revoke a token",
+			Body: "miren runner token revoke inv_abc123",
+		}),
+	))
+	d.Dispatch("runner token list", Infer("runner token list", "List all join tokens", RunnerTokenList,
+		WithExample(mflags.Example{
+			Name: "List tokens",
+			Body: "miren runner token list",
+		}),
+	))
+	d.Dispatch("runner remove", Infer("runner remove", "Remove a registered runner and clean up resources", RunnerRemove,
+		WithExample(mflags.Example{
+			Name: "Remove a runner by name",
+			Body: "miren runner remove my-runner",
+		}),
+		WithExample(mflags.Example{
+			Name: "Force remove a runner with active sandboxes",
+			Body: "miren runner remove my-runner --force",
+		}),
+	))
+	d.Dispatch("runner cordon", Infer("runner cordon", "Mark a runner unschedulable without stopping its sandboxes", RunnerCordon,
+		WithExample(mflags.Example{
+			Name: "Cordon a runner",
+			Body: "miren runner cordon my-runner",
+		}),
+		WithExample(mflags.Example{
+			Name: "Cordon with a reason",
+			Body: "miren runner cordon my-runner --reason \"cert rotation\"",
+		}),
+	))
+	d.Dispatch("runner uncordon", Infer("runner uncordon", "Make a cordoned runner eligible for scheduling again", RunnerUncordon,
+		WithExample(mflags.Example{
+			Name: "Uncordon a runner",
+			Body: "miren runner uncordon my-runner",
+		}),
+	))
+	d.Dispatch("runner drain", Infer("runner drain", "Cordon a runner and evict its sandboxes onto other nodes", RunnerDrain,
+		WithExample(mflags.Example{
+			Name: "Drain a runner before maintenance",
+			Body: "miren runner drain my-runner",
+		}),
+		WithExample(mflags.Example{
+			Name: "Drain with a timeout",
+			Body: "miren runner drain my-runner --timeout 300",
+		}),
+	))
+	d.Dispatch("runner install", Infer("runner install", "Install systemd service for miren runner", RunnerInstall,
+		WithExample(mflags.Example{
+			Name: "Install interactively",
+			Body: "miren runner install",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install with token (for automation)",
+			Body: "miren runner install --token mren_...",
+		}),
+	))
+	d.Dispatch("runner uninstall", Infer("runner uninstall", "Remove systemd service for miren runner", RunnerUninstall,
+		WithExample(mflags.Example{
+			Name: "Uninstall the runner service",
+			Body: "miren runner uninstall",
+		}),
+		WithExample(mflags.Example{
+			Name: "Uninstall and remove all runner data",
+			Body: "miren runner uninstall --remove-data",
+		}),
+	))
+	d.Dispatch("runner service-status", Infer("runner service-status", "Show miren-runner systemd service status", RunnerServiceStatus,
+		WithExample(mflags.Example{
+			Name: "Show service status",
+			Body: "miren runner service-status",
+		}),
+		WithExample(mflags.Example{
+			Name: "Follow service logs",
+			Body: "miren runner service-status --follow",
+		}),
+	))
+	d.Dispatch("runner upgrade", Infer("runner upgrade", "Upgrade miren runner to the latest or specified version", RunnerUpgrade,
+		WithExample(mflags.Example{
+			Name: "Upgrade to the latest version",
+			Body: "miren runner upgrade",
+		}),
+		WithExample(mflags.Example{
+			Name: "Check for available updates",
+			Body: "miren runner upgrade --check",
+		}),
+		WithExample(mflags.Example{
+			Name: "Upgrade to a specific version",
+			Body: "miren runner upgrade --version v0.2.0",
+		}),
+	))
+	d.Dispatch("runner upgrade rollback", Infer("runner upgrade rollback", "Rollback runner to previous version", RunnerUpgradeRollback,
+		WithExample(mflags.Example{
+			Name: "Rollback to the previous version",
+			Body: "miren runner upgrade rollback",
+		}),
+	))
 
 	// Server commands
 	d.Dispatch("server", Infer("server", "Start the miren server", Server,
@@ -1229,7 +1280,23 @@ Warning: These commands are intended for advanced users and developers. They may
 		}),
 	))
 	d.Dispatch("debug colors", Infer("debug colors", "Print some colors", Colors))
+	d.Dispatch("debug deploy-events", Infer("debug deploy-events", "Render a 'miren deploy --format jsonl' stream as readable output", DebugDeployEvents,
+		WithDescription(debugDeployEventsDescription),
+		WithExample(mflags.Example{
+			Name: "Read a captured deploy",
+			Body: "miren debug deploy-events deploy.jsonl",
+		}),
+		WithExample(mflags.Example{
+			Name: "With elapsed times and build output",
+			Body: "miren debug deploy-events -t --build-logs deploy.jsonl",
+		}),
+		WithExample(mflags.Example{
+			Name: "Watch a deploy live",
+			Body: "miren deploy --format jsonl | tee deploy.jsonl | miren debug deploy-events",
+		}),
+	))
 	d.Dispatch("debug bundle", Infer("debug bundle", "Create a support bundle with system debug information", DebugBundle))
+	d.Dispatch("debug cloud-sync", Infer("debug cloud-sync", "Show runtime entity sync diagnostics", DebugCloudSync))
 
 	// Debug RBAC commands
 	d.Dispatch("debug rbac", Infer("debug rbac", "Fetch and display RBAC rules from miren.cloud", DebugRBAC))
@@ -1334,23 +1401,40 @@ Warning: These commands are intended for advanced users and developers. They may
 // generated command docs (docs/docs/command/*.md) and clarify which operations
 // roll out automatically versus require a rebuild.
 
-const deployDescription = `Deploy uploads your source, builds a new container image on the server, and activates the resulting version — replacing the previously running one. This is the only command that rebuilds your image.
+const deployDescription = `Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by ` + "`" + `[build].dockerfile` + "`" + ` or discovered as ` + "`" + `Dockerfile.miren` + "`" + ` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. When source needs rebuilding, this is the command that does it.
 
-To activate a previously built version without rebuilding, pass ` + "`" + `--version` + "`" + `:
+To activate an existing version without selecting or building another image, pass ` + "`" + `--version` + "`" + `:
 ` + "```" + `bash
 miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
-This reuses the existing image and rolls it out immediately — useful for rolling forward to a known-good version without waiting for a build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+
+## Scripting and CI
+
+When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:
+
+` + "```" + `
+✓ Deploy successful
+Version: myapp-vCVkjR6u7744AsMebwMjGU
+` + "```" + `
+
+Use ` + "`" + `--format json` + "`" + ` to get the result as a single JSON document on stdout (` + "`" + `status` + "`" + `, ` + "`" + `app_version` + "`" + `, ` + "`" + `deploy_id` + "`" + `, ` + "`" + `urls` + "`" + `); progress text moves to stderr, no prompts are shown, and the document is still written when the deploy fails, with ` + "`" + `status` + "`" + ` set to ` + "`" + `failed` + "`" + ` and an ` + "`" + `error` + "`" + ` field. ` + "`" + `status` + "`" + ` uses the deployment record's own vocabulary (` + "`" + `succeeded` + "`" + `, ` + "`" + `failed` + "`" + `, ` + "`" + `cancelled` + "`" + `), the same values ` + "`" + `miren app history --format json` + "`" + ` reports for the same ` + "`" + `deploy_id` + "`" + `. Add ` + "`" + `--quiet` + "`" + ` to drop upload and build progress and keep only the phase summaries and the result.
+
+Use ` + "`" + `--format jsonl` + "`" + ` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an ` + "`" + `event` + "`" + ` name and a ` + "`" + `time` + "`" + `, and stderr stays empty. Events are ` + "`" + `start` + "`" + `, ` + "`" + `message` + "`" + `, ` + "`" + `upload` + "`" + `, ` + "`" + `upload_complete` + "`" + `, ` + "`" + `build_step` + "`" + ` (with ` + "`" + `status` + "`" + ` started, done, cached, or error), ` + "`" + `build_log` + "`" + `, ` + "`" + `build_error` + "`" + `, ` + "`" + `build_complete` + "`" + `, ` + "`" + `deployment` + "`" + ` (phase changes, using the deployment record's phase names), ` + "`" + `warning` + "`" + `, ` + "`" + `health` + "`" + ` (an ` + "`" + `outcome` + "`" + ` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an ` + "`" + `ok` + "`" + ` flag, and the app's health classification with its instance counts), ` + "`" + `port_warning` + "`" + `, ` + "`" + `app_log` + "`" + ` (recent crash output on a failed rollout), ` + "`" + `log` + "`" + ` (the CLI's own log records, which would otherwise go to stderr), and finally ` + "`" + `result` + "`" + `, which carries the same fields as the ` + "`" + `--format json` + "`" + ` document.
 
 :::note[Config changes deploy on their own]
 Changing environment variables (` + "`" + `miren env set` + "`" + ` / ` + "`" + `miren env delete` + "`" + `) or addons (` + "`" + `miren addon create` + "`" + ` / ` + "`" + `miren addon destroy` + "`" + `) already creates and rolls out a new version. You only need ` + "`" + `miren deploy` + "`" + ` when your code or ` + "`" + `app.toml` + "`" + ` has changed.
 :::`
 
-const rollbackDescription = `Rollback re-activates a previous version by reusing its already-built image — no rebuild happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
+const debugDeployEventsDescription = `A deploy run with ` + "`" + `--format jsonl` + "`" + ` writes one JSON object per line and nothing a person would want to read. This command turns that stream back into the output the deploy would have printed: the phase summaries, build steps, health verdict, routes, and final status. Point it at a saved file, or pipe a live deploy through it.
+
+Build step log lines are hidden unless ` + "`" + `--build-logs` + "`" + ` is set; ` + "`" + `--timestamps` + "`" + ` prefixes every line with the time since the first event, which is the quickest way to see where a slow deploy spent its time. Lines that are not JSON (stderr text mixed into the same file, say) are shown as they are.`
+
+const rollbackDescription = `Rollback re-activates a previous version by reusing its already-resolved image. No image selection or build happens. It presents a picker of recent successful deployments and rolls out the one you choose immediately. The currently active version is excluded since rolling back to it would be a no-op.
 
 Rollback creates a new deployment record; it does not erase history.`
 
-const appRestartDescription = `Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or rebuild your image — the app comes back on exactly the spec it was already running.
+const appRestartDescription = `Restart stops your app's running sandboxes and lets the pool manager re-create them from the *current* active version. It does not create a new version, change any configuration, or select or build another image. The app comes back on exactly the spec it was already running.
 
 Use restart to:
 - Clear stuck or wedged process state
@@ -1393,7 +1477,7 @@ Prefer ` + "`" + `miren secret disable` + "`" + ` when revoking a leaked credent
 
 const envSetDescription = `Setting an environment variable creates a new app version and rolls it out automatically — you do not need to run ` + "`" + `miren deploy` + "`" + ` or ` + "`" + `miren app restart` + "`" + ` afterward. The new version reuses your existing container image (no rebuild); Miren boots new sandboxes with the updated environment and drains the old ones. The command waits for the new version to become healthy before returning.
 
-Use ` + "`" + `-e` + "`" + ` for plain values and ` + "`" + `-s` + "`" + ` for sensitive values (masked in output and logs). Note that ` + "`" + `-s` + "`" + ` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with ` + "`" + `miren secret set` + "`" + ` instead. Pass ` + "`" + `--service` + "`" + ` to scope the change to a single service instead of all services.
+Use ` + "`" + `-e` + "`" + ` for plain values and ` + "`" + `-s` + "`" + ` for sensitive values (masked in output and logs). Bare ` + "`" + `KEY=VALUE` + "`" + ` arguments without a flag are treated as plain values, the same as ` + "`" + `-e` + "`" + `. Values may contain commas. Note that ` + "`" + `-s` + "`" + ` affects display only — the value itself is stored in the clear. For a credential that should be encrypted at rest, store it with ` + "`" + `miren secret set` + "`" + ` instead. Pass ` + "`" + `--service` + "`" + ` to scope the change to a single service instead of all services.
 
 :::note[No restart needed]
 Environment variable changes take effect on their own. Running ` + "`" + `miren app restart` + "`" + ` afterward only triggers a redundant second rollout.

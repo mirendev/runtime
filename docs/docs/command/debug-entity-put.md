@@ -36,4 +36,4 @@ miren debug entity put [flags]
 
 ## See also
 
-- [`miren debug entity`](/command/debug-entity)
+- [`miren debug entity`](./debug-entity.md)

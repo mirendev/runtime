@@ -50,4 +50,4 @@ miren cluster available --check
 
 ## See also
 
-- [`miren cluster`](/command/cluster)
+- [`miren cluster`](./cluster.md)

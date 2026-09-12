@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -344,8 +345,8 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 					return fErr
 				}
 				defer f.Close()
-				if _, err := io.Copy(tw, &countingReader{r: f, counter: uncompressedBytes}); err != nil {
-					return err
+				if err := writeFileContent(tw, &countingReader{r: f, counter: uncompressedBytes}, hdr.Size); err != nil {
+					return fmt.Errorf("%s: %w", rp, err)
 				}
 			}
 
@@ -373,6 +374,35 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 }
 
 // countingReader wraps an io.Reader and atomically adds bytes read to a counter.
+// writeFileContent copies exactly size bytes of r into the archive entry whose
+// header promised that size. A file can change between the stat that sized the
+// header and the read that fills it: a log or output file that another process
+// (or this very command, with stdout redirected into the project) is still
+// appending to. The tar writer rejects extra bytes with "write too long", which
+// used to fail the whole upload. Instead the entry is cut at the promised size
+// and, if the file shrank, padded with zeros, so the archive stays well-formed
+// and the deploy carries on. The next deploy picks up the file's new content.
+func writeFileContent(w io.Writer, r io.Reader, size int64) error {
+	n, err := io.CopyN(w, r, size)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if n < size {
+		if _, err := io.CopyN(w, zeroReader{}, size-n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// zeroReader yields an endless run of zero bytes.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
 type countingReader struct {
 	r       io.Reader
 	counter *atomic.Int64

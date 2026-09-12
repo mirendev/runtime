@@ -39,4 +39,4 @@ miren runner uncordon my-runner
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

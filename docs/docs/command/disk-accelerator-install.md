@@ -46,4 +46,4 @@ miren disk accelerator install runner1 --force
 
 ## See also
 
-- [`miren disk accelerator`](/command/disk-accelerator)
+- [`miren disk accelerator`](./disk-accelerator.md)

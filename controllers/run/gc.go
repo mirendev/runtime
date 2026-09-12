@@ -280,9 +280,8 @@ func (c *GCController) deleteRun(ctx context.Context, id entity.Id, result *GCRe
 
 // stopFinishedSandbox tears down a sandbox left running by a finished run.
 //
-// The run controller does this on the transition; this is the backstop for when
-// that write was lost, which the framework makes possible by dropping handler
-// errors without requeueing.
+// The run controller does this on the transition; this is the backstop for a
+// lost write or an interrupted reconcile that never reached the retry path.
 func (c *GCController) stopFinishedSandbox(ctx context.Context, r *run_v1alpha.Run, now time.Time, result *GCResult) error {
 	if r.Sandbox == "" {
 		return nil

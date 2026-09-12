@@ -16,11 +16,11 @@ import (
 
 // newSagaControllerForResume wires up only what sagaResumeNeeded reads
 // (storage + log), so no live containerd client is needed.
-func newSagaControllerForResume(t *testing.T) *SagaSandboxController {
+func newSagaControllerForResume(t *testing.T) *SandboxController {
 	t.Helper()
-	return &SagaSandboxController{
-		storage: saga.NewMemoryStorage(),
-		log:     slog.Default().With("module", "test"),
+	return &SandboxController{
+		sagaStorage: saga.NewMemoryStorage(),
+		Log:         slog.Default().With("module", "test"),
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSagaResumeNeeded_DecidesOnForwardIncomplete(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSagaControllerForResume(t)
-			require.NoError(t, s.storage.Save(ctx, &saga.Execution{
+			require.NoError(t, s.sagaStorage.Save(ctx, &saga.Execution{
 				ID:                createSandboxSagaID(co),
 				DefinitionName:    sagaCreateSandbox,
 				DefinitionVersion: 1,

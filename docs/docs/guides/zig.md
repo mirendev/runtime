@@ -13,15 +13,15 @@ app to a single static binary and runs it on a minimal image.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Zig app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, confirms your
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, confirms your
 server binds `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Zig, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::info[Zig's standard library moves fast]
 The example below is validated against **Zig 0.14**. The `std.net` and `std.http` APIs
@@ -124,16 +124,12 @@ zig-out
 .zig-cache
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /usr/local/bin/app
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "zig-bench"
@@ -144,12 +140,6 @@ name = "zig-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -173,19 +163,19 @@ required = true
 sensitive = true
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren` (static binary)
 - **Build:** download Zig tarball, `zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl`
 - **Runtime:** copy `zig-out/bin/<name>` to a minimal Alpine image
-- **Service is required:** define a `Procfile` (`web: /usr/local/bin/app`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** read `std.posix.getenv("PORT")`; bind `0.0.0.0`
 - **Std API churn:** pin a Zig version; `std.net`/`std.http` change between releases
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

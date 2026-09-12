@@ -41,4 +41,4 @@ miren addon variants miren-postgresql
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

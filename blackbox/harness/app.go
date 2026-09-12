@@ -96,18 +96,15 @@ func GetSandboxID(t *testing.T, m *Miren, appName string) string {
 	r := m.MustRun("sandbox", "list", "--format", "json")
 
 	var sandboxes []struct {
-		ID   string `json:"id"`
-		Spec struct {
-			Version string `json:"version"`
-		} `json:"spec"`
+		ID  string `json:"id"`
+		App string `json:"app"`
 	}
 	if err := json.Unmarshal([]byte(r.Stdout), &sandboxes); err != nil {
 		t.Fatalf("failed to parse sandbox list JSON: %v", err)
 	}
 
 	for _, sb := range sandboxes {
-		// Sandbox IDs and versions contain the app name
-		if strings.Contains(sb.ID, appName) || strings.Contains(sb.Spec.Version, appName) {
+		if sb.App == appName || strings.Contains(sb.ID, appName) {
 			return sb.ID
 		}
 	}

@@ -11,19 +11,19 @@ import CliCommand from '@site/src/components/CliCommand';
 Erlang isn't auto-detected, so you deploy it with a `Dockerfile.miren` that builds a
 rebar3 release and runs it on the BEAM. This guide uses [Cowboy](https://github.com/ninenines/cowboy)
 as the HTTP server. (For Elixir and Gleam, which also run on the BEAM, see their own
-guides: [Elixir](/guides/elixir), [Gleam](/guides/gleam).)
+guides: [Elixir](./elixir.md), [Gleam](./gleam.md).)
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Erlang app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, binds Cowboy to
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, binds Cowboy to
 `0.0.0.0:$PORT`, and deploys — using this page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect Erlang, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -106,16 +106,12 @@ CMD ["/app/bin/erlang_bench", "foreground"]
 _build
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Run the release in the foreground:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: /app/bin/erlang_bench foreground
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "erlang-bench"
@@ -126,12 +122,6 @@ name = "erlang-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -155,20 +145,20 @@ required = true
 sensitive = true
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren` (rebar3 release)
 - **Build:** `rebar3 release` on `erlang:27`; `include_erts, true` makes it self-contained
 - **Runtime libs:** `libncurses6 libssl3` on `debian-slim`
-- **Service is required:** `Procfile` `web: /app/bin/<release> foreground` — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** `os:getenv("PORT", "8080")`; `cowboy:start_clear(_, [{port, Port}], _)`
 - **Env vars:** `miren env set -e/-s`; read with `os:getenv`
 
 ## Next steps
 
-- [Elixir on Miren](/guides/elixir) and [Gleam on Miren](/guides/gleam) — other BEAM guides
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Elixir on Miren](./elixir.md) and [Gleam on Miren](./gleam.md) — other BEAM guides
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -18,7 +18,7 @@ This page covers both, plus what to expect from the dashboard.
 Tailscale is the common case, but nothing here is specific to it. Headscale,
 Nebula, ZeroTier, and plain WireGuard all behave the same way. Looking for the
 reverse — hosting headscale itself as an app on Miren? See
-[Run a headscale control server](/recipes/headscale).
+[Run a headscale control server](./recipes/headscale.md).
 :::
 
 ## Minimum working example
@@ -35,7 +35,7 @@ acme_dns_provider = 'dnsimple'
 
 Put your DNS provider's API credentials in `/var/lib/miren/server/env` and
 restart the server. Point your domain's DNS at the tailnet address (or use
-[Miren Anywhere](/miren-cloud/miren-anywhere) for public traffic), and deploys
+[Miren Anywhere](./miren-cloud/miren-anywhere.md) for public traffic), and deploys
 work unchanged.
 
 ## Setting up
@@ -72,7 +72,7 @@ acme_dns_provider = 'dnsimple'
 ```
 
 Put your provider's API credentials in the server environment file at
-`/var/lib/miren/server/env`, then restart. [TLS](/tls) has the full list of
+`/var/lib/miren/server/env`, then restart. [TLS](./tls.md) has the full list of
 supported providers and the variables each one expects.
 
 :::warning[HTTP-01 can't work here]
@@ -91,7 +91,7 @@ only routes for people on your tailnet. Tailscale's
 [MagicDNS](https://tailscale.com/kb/1081/magicdns/) works too if you'd rather
 not publish anything at all.
 
-**The whole internet?** Use [Miren Anywhere](/miren-cloud/miren-anywhere). It
+**The whole internet?** Use [Miren Anywhere](./miren-cloud/miren-anywhere.md). It
 carries app traffic through the Miren POP network and reaches your cluster over
 the connection your cluster already makes outbound, so you don't need a public
 address or any open ports. On a cluster with no public address, it turns on by
@@ -109,7 +109,7 @@ A tailnet-only cluster reads **Online**, with the control plane **not
 reachable** and apps reachable through Miren Anywhere. Only the middle one looks
 alarming, and it isn't: it means Miren Cloud can't open a connection from the
 public internet, which is exactly what you set up. See
-[Cluster Connectivity](/miren-cloud/connectivity) for what each of the three
+[Cluster Connectivity](./miren-cloud/connectivity.md) for what each of the three
 checks actually measures.
 
 ## Troubleshooting

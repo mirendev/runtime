@@ -16,10 +16,10 @@ miren auth provider add [flags]
 
 ## Subcommands
 
-- [`miren auth provider add github`](/command/auth-provider-add-github) — Add a GitHub identity provider
-- [`miren auth provider add oidc`](/command/auth-provider-add-oidc) — Add an OIDC identity provider
-- [`miren auth provider add password`](/command/auth-provider-add-password) — Add a shared-password identity provider
+- [`miren auth provider add github`](./auth-provider-add-github.md) — Add a GitHub identity provider
+- [`miren auth provider add oidc`](./auth-provider-add-oidc.md) — Add an OIDC identity provider
+- [`miren auth provider add password`](./auth-provider-add-password.md) — Add a shared-password identity provider
 
 ## See also
 
-- [`miren auth provider`](/command/auth-provider)
+- [`miren auth provider`](./auth-provider.md)

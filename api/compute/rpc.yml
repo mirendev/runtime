@@ -1,0 +1,59 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+types:
+  # SandboxInfo is the operator-facing inventory record. It deliberately does
+  # not contain a Sandbox or SandboxSpec: those carry resolved container
+  # environment values and belong on the internal entity plane.
+  - type: SandboxInfo
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: short_id
+        type: string
+        index: 1
+      - name: app
+        type: string
+        index: 2
+      - name: version
+        type: string
+        index: 3
+      - name: version_short_id
+        type: string
+        index: 4
+      - name: service
+        type: string
+        index: 5
+      - name: pool
+        type: string
+        index: 6
+      - name: pool_short_id
+        type: string
+        index: 7
+      - name: address
+        type: string
+        index: 8
+      - name: runner
+        type: string
+        index: 9
+      - name: status
+        type: string
+        index: 10
+      - name: created_at
+        type: int64
+        index: 11
+        doc: Unix milliseconds
+      - name: updated_at
+        type: int64
+        index: 12
+        doc: Unix milliseconds
+
+interfaces:
+  - name: Sandboxes
+    methods:
+      - name: list
+        results:
+          - name: sandboxes
+            type: list
+            element: SandboxInfo

@@ -181,6 +181,30 @@ func TestGeneratorHTTPValidation(t *testing.T) {
 		}))
 	})
 
+	t.Run("accepts rest_only alongside an http binding", func(t *testing.T) {
+		r := require.New(t)
+
+		r.NoError(validate(t, &DescMethods{
+			Name:       "httpGet",
+			RestOnly:   true,
+			HTTP:       &DescHTTPMethod{Get: "/widgets/{id}"},
+			Parameters: []*DescParamater{{Name: "id", Type: "string"}},
+		}))
+	})
+
+	t.Run("rejects rest_only without an http binding", func(t *testing.T) {
+		r := require.New(t)
+
+		// rest_only withdraws the method from the RPC transport, so with no
+		// route left there is no way to reach it at all. Failing here beats
+		// generating a method no caller can invoke.
+		err := validate(t, &DescMethods{
+			Name:     "orphan",
+			RestOnly: true,
+		})
+		r.ErrorContains(err, "rest_only requires an http: binding")
+	})
+
 	t.Run("rejects more than one verb", func(t *testing.T) {
 		r := require.New(t)
 

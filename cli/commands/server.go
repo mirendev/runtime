@@ -68,7 +68,7 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 		}
 	}()
 
-	if err := configureServerClient(ctx, cfg, runtime.Coordinator); err != nil {
+	if err := configureServerClient(ctx, cfg, runtime.ControlPlane.Foundation); err != nil {
 		return err
 	}
 

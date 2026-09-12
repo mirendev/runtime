@@ -3,19 +3,36 @@ package build
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/lbdmod"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 // lbdBuilderLock serializes the toolchain build within one coordinator. Two
 // concurrent builds would both succeed -- the registry dedupes by manifest
 // digest -- but they would each spend a full image build to get there.
 var lbdBuilderLock sync.Mutex
+
+// LbdToolchain builds the lbd toolchain image into the cluster registry.
+//
+// It takes only what that needs rather than hanging off the app Builder: the
+// coordinator exposes the runner endpoints well before workload control boots,
+// and that is where the install RPC lives, so depending on the app builder
+// would order this after the thing that uses it.
+type LbdToolchain struct {
+	Log      *slog.Logger
+	BuildKit BuildKitProvider
+	Issuer   *workloadidentity.Issuer
+	EC       *entityserver.Client
+	TempDir  string
+}
 
 // EnsureLbdBuilderImage makes sure the lbd toolchain image is in the cluster
 // registry and returns the reference nodes should pull.
@@ -27,7 +44,7 @@ var lbdBuilderLock sync.Mutex
 //
 // It is keyed by a content hash of the embedded Dockerfile and build script, so
 // this is a no-op on every call after the first until that content changes.
-func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
+func (b *LbdToolchain) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 	ref := lbdmod.BuilderImage(ocireg.Host)
 
 	if b.present(ctx) {
@@ -72,7 +89,7 @@ func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 
 	b.Log.Info("building the lbd toolchain image", "image", ref)
 
-	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.WorkloadIssuer}
+	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.Issuer}
 	res, err := bk.BuildImage(ctx, dfs, BuildStack{
 		Stack: "dockerfile",
 		Input: lbdmod.BuilderDockerfile,
@@ -88,13 +105,13 @@ func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 // present reports whether the toolchain image for this content hash is already
 // in the registry. An artifact's entity name is the tag it was pushed under,
 // so the tag is the lookup key.
-func (b *Builder) present(ctx context.Context) bool {
-	if b.ec == nil {
+func (b *LbdToolchain) present(ctx context.Context) bool {
+	if b.EC == nil {
 		return false
 	}
 
 	var artifact core_v1alpha.Artifact
-	if err := b.ec.Get(ctx, lbdmod.BuilderTag(), &artifact); err != nil {
+	if err := b.EC.Get(ctx, lbdmod.BuilderTag(), &artifact); err != nil {
 		return false
 	}
 	// An archived artifact has had, or is about to have, its blobs collected,

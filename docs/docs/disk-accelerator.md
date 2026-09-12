@@ -6,7 +6,7 @@ keywords: [accelerator, lbd, kernel module, disk performance, disk mode, loop de
 
 # Disk Accelerator
 
-Miren serves [Miren Disks](/disks#miren-disks) in one of two modes, and picks
+Miren serves [Miren Disks](./disks.md#miren-disks) in one of two modes, and picks
 between them on its own.
 
 **Universal mode** is the default and works everywhere. It backs each disk with a
@@ -129,7 +129,7 @@ disk_mode = "universal"    # or "accelerator", or "auto" (the default)
 `universal` forces loop devices even where the module is loaded. `accelerator`
 insists on `lbd`, and disks will fail to attach if it is not there — useful when
 you would rather find out loudly than quietly run slower. See
-[Server Configuration](/server-config).
+[Server Configuration](./server-config.md).
 
 ## Turning it off
 

@@ -42,4 +42,4 @@ miren route show example.com
 
 ## See also
 
-- [`miren route`](/command/route)
+- [`miren route`](./route.md)

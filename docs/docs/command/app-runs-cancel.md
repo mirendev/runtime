@@ -44,4 +44,4 @@ miren app runs cancel run/myapp-reindex-4kq2np
 
 ## See also
 
-- [`miren app runs`](/command/app-runs)
+- [`miren app runs`](./app-runs.md)

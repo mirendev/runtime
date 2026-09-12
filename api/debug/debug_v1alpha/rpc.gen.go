@@ -213,6 +213,367 @@ func (v *SubnetStatus) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type cloudSyncEventData struct {
+	Kind    *string             `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
+	At      *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"at,omitempty"`
+	Summary *string             `cbor:"2,keyasint,omitempty" json:"summary,omitempty"`
+}
+
+type CloudSyncEvent struct {
+	data cloudSyncEventData
+}
+
+func (v *CloudSyncEvent) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *CloudSyncEvent) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *CloudSyncEvent) SetKind(kind string) {
+	v.data.Kind = &kind
+}
+
+func (v *CloudSyncEvent) HasAt() bool {
+	return v.data.At != nil
+}
+
+func (v *CloudSyncEvent) At() *standard.Timestamp {
+	return v.data.At
+}
+
+func (v *CloudSyncEvent) SetAt(at *standard.Timestamp) {
+	v.data.At = at
+}
+
+func (v *CloudSyncEvent) HasSummary() bool {
+	return v.data.Summary != nil
+}
+
+func (v *CloudSyncEvent) Summary() string {
+	if v.data.Summary == nil {
+		return ""
+	}
+	return *v.data.Summary
+}
+
+func (v *CloudSyncEvent) SetSummary(summary string) {
+	v.data.Summary = &summary
+}
+
+func (v *CloudSyncEvent) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CloudSyncEvent) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CloudSyncEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CloudSyncEvent) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type cloudSyncFactData struct {
+	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type CloudSyncFact struct {
+	data cloudSyncFactData
+}
+
+func (v *CloudSyncFact) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *CloudSyncFact) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *CloudSyncFact) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *CloudSyncFact) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *CloudSyncFact) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *CloudSyncFact) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *CloudSyncFact) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CloudSyncFact) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CloudSyncFact) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CloudSyncFact) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type cloudSyncReportData struct {
+	State   *string            `cbor:"0,keyasint,omitempty" json:"state,omitempty"`
+	Summary *string            `cbor:"1,keyasint,omitempty" json:"summary,omitempty"`
+	Facts   *[]*CloudSyncFact  `cbor:"2,keyasint,omitempty" json:"facts,omitempty"`
+	Events  *[]*CloudSyncEvent `cbor:"3,keyasint,omitempty" json:"events,omitempty"`
+}
+
+type CloudSyncReport struct {
+	data cloudSyncReportData
+}
+
+func (v *CloudSyncReport) HasState() bool {
+	return v.data.State != nil
+}
+
+func (v *CloudSyncReport) State() string {
+	if v.data.State == nil {
+		return ""
+	}
+	return *v.data.State
+}
+
+func (v *CloudSyncReport) SetState(state string) {
+	v.data.State = &state
+}
+
+func (v *CloudSyncReport) HasSummary() bool {
+	return v.data.Summary != nil
+}
+
+func (v *CloudSyncReport) Summary() string {
+	if v.data.Summary == nil {
+		return ""
+	}
+	return *v.data.Summary
+}
+
+func (v *CloudSyncReport) SetSummary(summary string) {
+	v.data.Summary = &summary
+}
+
+func (v *CloudSyncReport) HasFacts() bool {
+	return v.data.Facts != nil
+}
+
+func (v *CloudSyncReport) Facts() []*CloudSyncFact {
+	if v.data.Facts == nil {
+		return nil
+	}
+	return *v.data.Facts
+}
+
+func (v *CloudSyncReport) SetFacts(facts []*CloudSyncFact) {
+	x := slices.Clone(facts)
+	v.data.Facts = &x
+}
+
+func (v *CloudSyncReport) HasEvents() bool {
+	return v.data.Events != nil
+}
+
+func (v *CloudSyncReport) Events() []*CloudSyncEvent {
+	if v.data.Events == nil {
+		return nil
+	}
+	return *v.data.Events
+}
+
+func (v *CloudSyncReport) SetEvents(events []*CloudSyncEvent) {
+	x := slices.Clone(events)
+	v.data.Events = &x
+}
+
+func (v *CloudSyncReport) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CloudSyncReport) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CloudSyncReport) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CloudSyncReport) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type cloudSyncGetStatusArgsData struct{}
+
+type CloudSyncGetStatusArgs struct {
+	call rpc.Call
+	data cloudSyncGetStatusArgsData
+}
+
+func (v *CloudSyncGetStatusArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CloudSyncGetStatusArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CloudSyncGetStatusArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CloudSyncGetStatusArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type cloudSyncGetStatusResultsData struct {
+	Report *CloudSyncReport `cbor:"0,keyasint,omitempty" json:"report,omitempty"`
+}
+
+type CloudSyncGetStatusResults struct {
+	call rpc.Call
+	data cloudSyncGetStatusResultsData
+}
+
+func (v *CloudSyncGetStatusResults) SetReport(report *CloudSyncReport) {
+	v.data.Report = report
+}
+
+func (v *CloudSyncGetStatusResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CloudSyncGetStatusResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CloudSyncGetStatusResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CloudSyncGetStatusResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type CloudSyncGetStatus struct {
+	rpc.Call
+	args    CloudSyncGetStatusArgs
+	results CloudSyncGetStatusResults
+}
+
+func (t *CloudSyncGetStatus) Args() *CloudSyncGetStatusArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CloudSyncGetStatus) Results() *CloudSyncGetStatusResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type CloudSync interface {
+	GetStatus(ctx context.Context, state *CloudSyncGetStatus) error
+}
+
+type reexportCloudSync struct {
+	client rpc.Client
+}
+
+func (reexportCloudSync) GetStatus(ctx context.Context, state *CloudSyncGetStatus) error {
+	panic("not implemented")
+}
+
+func (t reexportCloudSync) CapabilityClient() rpc.Client {
+	return t.client
+}
+
+func AdaptCloudSync(t CloudSync) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "getStatus",
+			InterfaceName: "CloudSync",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetStatus(ctx, &CloudSyncGetStatus{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type CloudSyncClient struct {
+	rpc.Client
+}
+
+func NewCloudSyncClient(client rpc.Client) *CloudSyncClient {
+	return &CloudSyncClient{Client: client}
+}
+
+func (c CloudSyncClient) Export() CloudSync {
+	return reexportCloudSync{client: c.Client}
+}
+
+type CloudSyncClientGetStatusResults struct {
+	client rpc.Client
+	data   cloudSyncGetStatusResultsData
+}
+
+func (v *CloudSyncClientGetStatusResults) HasReport() bool {
+	return v.data.Report != nil
+}
+
+func (v *CloudSyncClientGetStatusResults) Report() *CloudSyncReport {
+	return v.data.Report
+}
+
+func (v CloudSyncClient) GetStatus(ctx context.Context) (*CloudSyncClientGetStatusResults, error) {
+	args := CloudSyncGetStatusArgs{}
+
+	var ret cloudSyncGetStatusResultsData
+
+	err := v.Call(ctx, "getStatus", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CloudSyncClientGetStatusResults{client: v.Client, data: ret}, nil
+}
+
 type netDBListLeasesArgsData struct {
 	Subnet       *string `cbor:"0,keyasint,omitempty" json:"subnet,omitempty"`
 	ReservedOnly *bool   `cbor:"1,keyasint,omitempty" json:"reserved_only,omitempty"`

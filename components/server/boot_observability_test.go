@@ -15,7 +15,7 @@ import (
 
 func TestObservabilityWaitsForVictoriaEndpoints(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	tracingComponent, tracingOutput := boot.Provide0("tracing", func(context.Context) (struct{}, error) {
+	tracingComponent, _ := boot.Provide0("tracing", func(context.Context) (struct{}, error) {
 		return struct{}{}, nil
 	})
 
@@ -37,7 +37,7 @@ func TestObservabilityWaitsForVictoriaEndpoints(t *testing.T) {
 
 	observability := newObservabilityBoot(
 		observabilityBootInputs{log: log, timeout: time.Second},
-		tracingOutput,
+		tracingComponent,
 		logsOutput,
 		metricsOutput,
 	)

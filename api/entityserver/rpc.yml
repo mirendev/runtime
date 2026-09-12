@@ -222,6 +222,56 @@ interfaces:
           - name: revision
             type: int64
 
+      - name: list_page
+        doc: |
+          List one bounded page of entities from an index.
+
+          `list` reads the whole index and then fetches every entity it named,
+          server-side, before it answers. That costs the coordinator the entire
+          collection in memory no matter what the caller intended to do with it,
+          which is how a runner recovering sagas against a six-figure backlog
+          took the coordinator down with it. This reads only the page.
+
+          Ids and entities are fetched at one store revision, so a page is
+          internally consistent: an entity written between the two reads cannot
+          appear under a value the index has not caught up to, nor vanish from
+          under an id the index just handed out. That pinning is per page and
+          deliberately not carried across pages. A revision only stays readable
+          inside etcd's compaction window, and a long walk over a large index
+          would eventually fail outright rather than return a torn result. So an
+          entity written mid-walk may be missed or repeated, exactly as it may
+          be for `list_documents`, and a caller that cannot tolerate that wants
+          a watch rather than a listing.
+
+          This sits beside `list` rather than replacing it because `list` has
+          well over a hundred call sites, almost all of them CLI commands.
+          Migrating them is MIR-1302's scope and wants a client-side page walk
+          first, so that each command does not hand-roll its own loop. The
+          direction of travel is toward this method: do not add another caller
+          of `list`.
+        parameters:
+          - name: index
+            type: entity.Attr
+          - name: cursor
+            type: string
+            doc: Opaque resume point from a previous page. Empty starts at the head.
+          - name: limit
+            type: int64
+            doc: Maximum entities to fetch. Zero or less means the server's own page cap.
+        results:
+          - name: values
+            type: list
+            element: Entity
+          - name: cursor
+            type: string
+            doc: Resume point for the next page, empty when the index is exhausted.
+          - name: total
+            type: int64
+            doc: Entries in the index, reported only when starting from the head.
+          - name: revision
+            type: int64
+            doc: The store revision this page was read at.
+
       - name: makeAttr
         parameters:
           - name: id

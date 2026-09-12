@@ -74,10 +74,11 @@ type BeginParams struct {
 	// until the build produces one. Rollback knows it up front.
 	AppVersion string
 
-	GitInfo    core_v1alpha.GitInfo
-	DeployedBy core_v1alpha.DeployedBy
-	Subject    string
-	AuthMethod string
+	GitInfo        core_v1alpha.GitInfo
+	DeployedBy     core_v1alpha.DeployedBy
+	Subject        string
+	AuthMethod     string
+	OrganizationID string
 
 	// ParentDeploymentID records the deployment this attempt was based on.
 	ParentDeploymentID string
@@ -133,13 +134,16 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	}
 
 	deployedBy := params.DeployedBy
-	if params.Subject == "" || params.AuthMethod == "" {
+	if params.Subject == "" || params.AuthMethod == "" || params.OrganizationID == "" {
 		if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
 			if params.Subject == "" {
 				params.Subject = identity.Subject
 			}
 			if params.AuthMethod == "" {
 				params.AuthMethod = string(identity.Method)
+			}
+			if params.OrganizationID == "" && params.Subject == identity.Subject && params.AuthMethod == string(identity.Method) {
+				params.OrganizationID, _ = identity.Metadata["organization_id"].(string)
 			}
 		}
 	}
@@ -148,6 +152,9 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	}
 	if params.AuthMethod != "" {
 		deployedBy.AuthMethod = params.AuthMethod
+	}
+	if params.OrganizationID != "" {
+		deployedBy.OrganizationId = params.OrganizationID
 	}
 	if deployedBy.Timestamp == "" {
 		deployedBy.Timestamp = t.now.Now().Format(time.RFC3339)

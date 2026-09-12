@@ -203,13 +203,26 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        # Same as the package job: `make bin/miren` runs the tag's Makefile, so
-        # a dispatched rebuild starts from a cold module cache.
+        # Same as the package job: the build below runs the tag's own build
+        # script, so a dispatched rebuild starts from a cold module cache.
         cache: ${{ needs.init.outputs.cache }}
 
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
+      # build-ci.sh rather than `make bin/miren`, and the same two variables the
+      # package job passes. hack/build.sh, which is what make runs, derives the
+      # version from the checkout: `git describe --exact-match --tags`, then the
+      # current branch name. Neither survives `ref: <sha>` above — a commit
+      # checkout is detached and fetches no tags, so describe finds nothing and
+      # the branch name is the literal string "HEAD". Every binary this job
+      # produced from v0.14.0 through v0.15.1 was stamped "HEAD:<short sha>"
+      # instead of its version. build-ci.sh takes the ref from the environment
+      # and recognizes a version tag, which is why the bundle the package job
+      # builds was stamped correctly across the same releases.
+      env:
+        GIT_BRANCH: ${{ needs.init.outputs.ref }}
+        GIT_COMMIT: ${{ needs.init.outputs.sha }}
       run: |
-        GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} make bin/miren
+        GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} bash hack/build-ci.sh
 
     - name: Import certificate and sign macOS binary
       if: matrix.os == 'darwin'
@@ -739,8 +752,36 @@ jobs:
 
           echo "Homebrew tap update triggered for $VERSION"
 
+  republish-docs:
+    needs: [init, upload-to-miren]
+    runs-on: ubuntu-latest
+    # A release changes which docs miren.md should serve, but the tag itself
+    # never touches docs/, so the docs workflow's own push trigger doesn't fire
+    # for it. Without this the site keeps serving the previous version until
+    # some unrelated docs change happens to land on main.
+    #
+    # Same gating as the homebrew tap: stable version tags only, since
+    # hack/docs-snapshot resolves the latest channel and that never points at a
+    # prerelease.
+    if: |
+      startsWith(needs.init.outputs.ref, 'v') && !contains(needs.init.outputs.ref, '-') &&
+      (github.event_name == 'push' || inputs.update_latest == true)
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger docs republish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Republishing docs for ${{ needs.init.outputs.ref }}..."
+          # Dispatched on main: the snapshot resolves the released docs from
+          # the tag, and main supplies /next.
+          gh workflow run docs.yml \
+            --repo "${{ github.repository }}" \
+            --ref main
+
   notify:
-    needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap]
+    needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap, republish-docs]
     if: always()
     runs-on: ubuntu-latest
     steps:

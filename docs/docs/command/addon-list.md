@@ -45,4 +45,4 @@ miren addon list
 
 ## See also
 
-- [`miren addon`](/command/addon)
+- [`miren addon`](./addon.md)

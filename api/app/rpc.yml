@@ -421,6 +421,14 @@ types:
       - name: version
         type: string
         index: 4
+      - name: status
+        doc: Association lifecycle state (pending, provisioning, active, error, deprovisioning)
+        type: string
+        index: 5
+      - name: error_message
+        doc: Why provisioning failed; set only when status is error
+        type: string
+        index: 6
 
   - type: RunInfo
     doc: One execution of an app task

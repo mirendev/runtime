@@ -12,7 +12,7 @@ Miren Cloud is the connective tissue you can opt into. It doesn't take over your
 
 ## What you get by connecting
 
-**A public front door for your apps.** Claim a [subdomain](/miren-cloud/subdomains) like `mycluster.run.garden` and your apps get a real address. With [Miren Anywhere](/miren-cloud/miren-anywhere), they stay reachable from the internet even when your cluster has no public IP, so a home lab or a box behind NAT can serve real traffic.
+**A public front door for your apps.** Claim a [subdomain](./subdomains.md) like `mycluster.run.garden` and your apps get a real address. With [Miren Anywhere](./miren-anywhere.md), they stay reachable from the internet even when your cluster has no public IP, so a home lab or a box behind NAT can serve real traffic.
 
 **Your team.** Bring other people in and control who can do what with role-based access, instead of sharing one set of credentials.
 
@@ -42,11 +42,11 @@ Then log in from whatever machine you work on:
 miren login
 ```
 
-The [Getting Started](/getting-started) guide covers the full install-and-first-deploy flow. For everything the CLI can do with clusters, see the [`miren cluster`](/command/cluster) reference.
+The [Getting Started](../getting-started.md) guide covers the full install-and-first-deploy flow. For everything the CLI can do with clusters, see the [`miren cluster`](../command/cluster.md) reference.
 
 ## Disconnecting
 
-Connecting is reversible. [`miren server unregister`](/command/server-unregister) is the inverse of registering: it removes the cluster from your organization in Miren Cloud, revokes the credentials it was using, and clears its registration locally.
+Connecting is reversible. [`miren server unregister`](../command/server-unregister.md) is the inverse of registering: it removes the cluster from your organization in Miren Cloud, revokes the credentials it was using, and clears its registration locally.
 
 ```bash
 sudo miren server unregister
@@ -57,14 +57,14 @@ Your apps and sandboxes keep running throughout. What goes away is everything th
 This is also how you move a cluster between organizations. Unregister it, `miren login` against the organization you want, then register again. The cluster comes back as a new entry with a fresh identity rather than carrying its old one across, since a cluster record belongs to the organization it was created in.
 
 :::warning[Apps served through Miren Cloud lose their address]
-If your apps are reachable at a [subdomain](/miren-cloud/subdomains) or through [Miren Anywhere](/miren-cloud/miren-anywhere), that traffic stops once the cluster is unregistered. The apps are still running, but nothing routes to them until you give the cluster an address of its own.
+If your apps are reachable at a [subdomain](./subdomains.md) or through [Miren Anywhere](./miren-anywhere.md), that traffic stops once the cluster is unregistered. The apps are still running, but nothing routes to them until you give the cluster an address of its own.
 :::
 
 If the cluster entry in Miren Cloud is already gone, or the cluster can't reach the internet to say goodbye, `sudo miren server unregister --local-only` clears the local registration without contacting the cloud.
 
 ## Explore
 
-- [Subdomains](/miren-cloud/subdomains) — Claim a hostname like `mycluster.run.garden` for your apps
-- [Miren Anywhere](/miren-cloud/miren-anywhere) — Serve public apps from a cluster with no public IP
-- [Cluster Connectivity](/miren-cloud/connectivity) — Tell whether your cluster is online, deployable, and serving apps
-- [Cloud Updates](/miren-cloud/cloud-updates) — What's new in Miren Cloud
+- [Subdomains](./subdomains.md) — Claim a hostname like `mycluster.run.garden` for your apps
+- [Miren Anywhere](./miren-anywhere.md) — Serve public apps from a cluster with no public IP
+- [Cluster Connectivity](./connectivity.md) — Tell whether your cluster is online, deployable, and serving apps
+- [Cloud Updates](./cloud-updates.md) — What's new in Miren Cloud

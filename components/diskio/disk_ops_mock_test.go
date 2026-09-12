@@ -18,13 +18,11 @@ type mockDiskVolumeOps struct {
 	movedDirs     []mockDirMove
 	existingPaths map[string]bool
 	createdImages []mockDiskImage
-	removedImages []string
 
 	createDirErr   error
 	removeDirErr   error
 	moveDirErr     error
 	createImageErr error
-	removeImageErr error
 }
 
 type mockDiskImage struct {
@@ -79,19 +77,9 @@ func (m *mockDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	return nil
 }
 
-func (m *mockDiskVolumeOps) RemoveDiskImage(path string) error {
-	if m.removeImageErr != nil {
-		return m.removeImageErr
-	}
-	m.removedImages = append(m.removedImages, path)
-	delete(m.existingPaths, path)
-	return nil
-}
-
 // mockDiskMountOps implements DiskMountOps for testing
 type mockDiskMountOps struct {
 	createdDirs   []string
-	removedFiles  []string
 	attachedLoops []string
 	detachedLoops []string
 	attachedLbds  []mockLbdAttach
@@ -118,7 +106,6 @@ type mockDiskMountOps struct {
 	isDeviceMountedErr error
 	lbdAttachErr       error
 	lbdDetachErr       error
-	lbdAvailable       bool
 	mountErr           error
 	unmountErr         error
 	isFormattedFn      func(device, filesystem string) (bool, error)
@@ -168,11 +155,6 @@ func (m *mockDiskMountOps) CreateDir(path string, _ os.FileMode) error {
 		return m.createDirErr
 	}
 	m.createdDirs = append(m.createdDirs, path)
-	return nil
-}
-
-func (m *mockDiskMountOps) RemoveFile(path string) error {
-	m.removedFiles = append(m.removedFiles, path)
 	return nil
 }
 
@@ -240,10 +222,6 @@ func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error
 	}
 	m.detachedLbds = append(m.detachedLbds, devicePath)
 	return nil
-}
-
-func (m *mockDiskMountOps) LbdAvailable() bool {
-	return m.lbdAvailable
 }
 
 func (m *mockDiskMountOps) Mount(device, mountPath, filesystem string, readOnly bool) error {

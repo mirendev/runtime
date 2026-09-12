@@ -46,4 +46,4 @@ miren runner cordon my-runner --reason "cert rotation"
 
 ## See also
 
-- [`miren runner`](/command/runner)
+- [`miren runner`](./runner.md)

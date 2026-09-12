@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -45,6 +47,73 @@ func TestWebTransportDialHonorsContextWhenServerDoesNotAnswer(t *testing.T) {
 	}
 }
 
+func TestWebTransportDialHandlesAlreadyCanceledContext(t *testing.T) {
+	client := newTestWebTransportClient(t, "127.0.0.1:1")
+
+	// An index watch can begin dialing after its controller has already started
+	// shutting down. Exercise cancellation before the shared transport initializes.
+	for range 100 {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, _, err := client.dialWebTransport(ctx, "https://127.0.0.1:1/", nil)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+}
+
+func TestWebTransportDialClosesConnectionReturnedAfterCancellation(t *testing.T) {
+	addr := quietQUICServer(t, t.Context(), func(_ context.Context, conn *quic.Conn) {
+		<-conn.Context().Done()
+	})
+
+	client := newTestWebTransportClient(t, addr)
+	originalDial := client.ws.DialAddr
+	dialReturned := make(chan *quic.Conn, 1)
+	releaseDial := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseDial) }) }
+	t.Cleanup(release)
+	client.ws.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+		conn, err := originalDial(ctx, addr, tlsCfg, cfg)
+		if err != nil {
+			return nil, err
+		}
+		dialReturned <- conn
+		<-releaseDial
+		return conn, nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.dialWebTransport(ctx, "https://"+addr+"/", nil)
+		done <- err
+	}()
+
+	var dialConn *quic.Conn
+	select {
+	case dialConn = <-dialReturned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("QUIC dial did not complete")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("WebTransport dial did not return after cancellation")
+	}
+
+	// The underlying callback returns after cancellation cleanup has already
+	// observed no connection. It must close rather than publish that late conn.
+	release()
+	select {
+	case <-dialConn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection returned after cancellation remained open")
+	}
+}
+
 // The core regression: a raw QUIC listener completes the handshake and then
 // never speaks HTTP/3, so SETTINGS never arrive and webtransport-go's wait for
 // them has nothing to release it. The dial must still abort on the deadline.
@@ -84,9 +153,8 @@ func TestWebTransportDialHonorsContextAfterHandshakeWithoutSettings(t *testing.T
 	}
 }
 
-// A coordinator killed in the one-RTT window after the handshake, before its
-// SETTINGS packet transits. The peer closes the connection, but quic-go does
-// not close ReceivedSettings on teardown, so that alone releases nothing.
+// Peer death before SETTINGS must surface the peer error immediately, rather
+// than waiting for the caller's deadline.
 func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) {
 	r := require.New(t)
 
@@ -113,9 +181,10 @@ func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) 
 	select {
 	case err := <-done:
 		r.Error(err)
-		// Conn teardown alone does not unblock the settings-wait; the dial is
-		// released by the caller's deadline, exactly as in the no-settings case.
-		r.ErrorIs(err, context.DeadlineExceeded)
+		var peerError *quic.ApplicationError
+		r.ErrorAs(err, &peerError)
+		r.Equal(quic.ApplicationErrorCode(1), peerError.ErrorCode)
+		r.True(peerError.Remote)
 	case <-time.After(3 * time.Second):
 		t.Fatal("WebTransport dial hung after the peer died post-handshake and the caller context expired")
 	}
@@ -123,7 +192,7 @@ func TestWebTransportDialHonorsContextAfterHandshakeThenConnDeath(t *testing.T) 
 
 // The phase behind the settings wait: a real WebTransport server, so SETTINGS
 // arrive, but the handler never answers the CONNECT and the dial sits in
-// ReadResponse. Closing the Dialer does nothing here and keepalives keep the
+// ReadResponse. Caller cancellation alone does nothing here and keepalives keep the
 // connection healthy, so only closing the connection releases it. Asserts both
 // halves: the caller returns on its deadline, and the connection is closed,
 // which is what lets the dial goroutine exit.
@@ -202,10 +271,10 @@ func webTransportServer(t *testing.T, handler http.HandlerFunc) string {
 	t.Cleanup(func() { _ = packetConn.Close() })
 
 	srv := &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			Handler:    handler,
 			TLSConfig:  testServerTLSConfig(t),
-			QUICConfig: &quic.Config{EnableDatagrams: true},
+			QUICConfig: &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 		},
 		// The test client dials a bare IP:port; accept it.
 		CheckOrigin: func(*http.Request) bool { return true },
@@ -216,8 +285,7 @@ func webTransportServer(t *testing.T, handler http.HandlerFunc) string {
 	return packetConn.LocalAddr().String()
 }
 
-// The success path: a per-call Dialer must still establish a usable session,
-// and closing it on return must not tear that session down.
+// A completed dial leaves its session usable through the shared transport.
 func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 	r := require.New(t)
 
@@ -228,7 +296,7 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 
 	var wtSrv *webtransport.Server
 	wtSrv = &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				sess, err := wtSrv.Upgrade(w, req)
 				if err != nil {
@@ -239,7 +307,7 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 				<-sess.Context().Done()
 			}),
 			TLSConfig:  testServerTLSConfig(t),
-			QUICConfig: &quic.Config{EnableDatagrams: true},
+			QUICConfig: &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true},
 		},
 		// The test client dials a bare IP:port; accept it.
 		CheckOrigin: func(*http.Request) bool { return true },
@@ -258,7 +326,7 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 	r.Equal(http.StatusOK, hr.StatusCode)
 	defer func() { _ = sess.CloseWithError(0, "") }()
 
-	// The per-call Dialer is closed by now; the session must still be alive.
+	// Returning from the dial must leave the session alive.
 	r.NoError(sess.Context().Err())
 
 	// And the wire still works through it.
@@ -267,6 +335,66 @@ func TestWebTransportDialSucceedsWhenServerAnswers(t *testing.T) {
 	defer func() { _ = str.Close() }()
 	_, err = str.Write([]byte("hi"))
 	r.NoError(err)
+}
+
+func TestWebTransportDialCancellationLeavesOtherSessionAlive(t *testing.T) {
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = packetConn.Close() })
+	blocked := make(chan struct{})
+	var server *webtransport.Server
+	server = &webtransport.Server{
+		H3: &http3.Server{
+			TLSConfig: testServerTLSConfig(t),
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/blocked" {
+					close(blocked)
+					<-r.Context().Done()
+					return
+				}
+				session, err := server.Upgrade(w, r)
+				if err != nil {
+					return
+				}
+				str, err := session.AcceptStream(r.Context())
+				if err != nil {
+					return
+				}
+				_, _ = io.Copy(str, str)
+				_ = str.Close()
+			}),
+		},
+	}
+	go func() { _ = server.Serve(packetConn) }()
+	t.Cleanup(func() { _ = server.Close() })
+	client := newTestWebTransportClient(t, packetConn.LocalAddr().String())
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	blockedCtx, cancelBlocked := context.WithCancel(ctx)
+	defer cancelBlocked()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.dialWebTransport(blockedCtx, "https://"+client.remote+"/blocked", nil)
+		done <- err
+	}()
+	select {
+	case <-blocked:
+	case <-ctx.Done():
+		t.Fatal("CONNECT did not reach the server")
+	}
+	_, session, err := client.dialWebTransport(ctx, "https://"+client.remote+"/echo", nil)
+	require.NoError(t, err)
+	defer func() { _ = session.CloseWithError(0, "") }()
+	cancelBlocked()
+	require.ErrorIs(t, <-done, context.Canceled)
+	str, err := session.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	_, err = io.WriteString(str, "still alive")
+	require.NoError(t, err)
+	require.NoError(t, str.Close())
+	body, err := io.ReadAll(str)
+	require.NoError(t, err)
+	require.Equal(t, "still alive", string(body))
 }
 
 // newTestWebTransportClient builds a NetworkClient pointed at addr over its own
@@ -287,12 +415,8 @@ func newTestWebTransportClient(t *testing.T, addr string) *NetworkClient {
 	}
 	client.setupTransport()
 	t.Cleanup(func() {
-		// Dialer.Close panics if Dial never ran, leaving ctxCancel nil. Most
-		// tests never dial through c.ws directly, so guard the close.
-		func() {
-			defer func() { _ = recover() }()
-			_ = client.ws.Close()
-		}()
+		// Caller cancellation releases SETTINGS waits; closing the QUIC
+		// transport releases any CONNECT reads still finishing in background.
 		_ = client.htr.Close()
 		_ = client.transport.Close()
 	})
@@ -323,7 +447,7 @@ func quietQUICServer(t *testing.T, parent context.Context, run func(context.Cont
 	r.NoError(err)
 	t.Cleanup(func() { _ = packetConn.Close() })
 
-	ln, err := quic.Listen(packetConn, testServerTLSConfig(t), &quic.Config{EnableDatagrams: true})
+	ln, err := quic.Listen(packetConn, testServerTLSConfig(t), &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
 	r.NoError(err)
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -336,4 +460,87 @@ func quietQUICServer(t *testing.T, parent context.Context, run func(context.Cont
 	}()
 
 	return packetConn.LocalAddr().String()
+}
+
+// Cancelling a dial while its handshake is still in flight has to tell the
+// server. quic-go's own cancellation destroys the client side without a
+// CONNECTION_CLOSE, leaving a server that accepted the connection early to
+// discover the peer is gone only at the idle timeout, which is how a
+// coordinator's own entity watches held its drain past the deadline.
+func TestQUICDialCancelledMidHandshakeClosesServerSide(t *testing.T) {
+	r := require.New(t)
+
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	r.NoError(err)
+	t.Cleanup(func() { _ = packetConn.Close() })
+	ln, err := quic.ListenEarly(packetConn, testServerTLSConfig(t), &quic.Config{
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		// Longer than the assertion window, so the server can only let go
+		// because the client told it to.
+		HandshakeIdleTimeout: 30 * time.Second,
+		MaxIdleTimeout:       30 * time.Second,
+	})
+	r.NoError(err)
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan *quic.Conn, 1)
+	go func() {
+		conn, err := ln.Accept(t.Context())
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	// Hold the client in certificate verification. By then the server has
+	// handed the connection to Accept and is waiting on the client's Finished.
+	verifying := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseClient := func() { releaseOnce.Do(func() { close(release) }) }
+	client := newTestWebTransportClient(t, packetConn.LocalAddr().String())
+	// Registered after the client so it runs before the client's transport
+	// is closed; a failing run must not leave that close waiting on a
+	// handshake nobody will finish.
+	t.Cleanup(releaseClient)
+	client.tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
+		close(verifying)
+		<-release
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := client.ws.Dial(ctx, "https://"+client.remote+"/", nil)
+		done <- err
+	}()
+
+	select {
+	case <-verifying:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client never reached certificate verification")
+	}
+	var serverConn *quic.Conn
+	select {
+	case serverConn = <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not accept the connection before the handshake finished")
+	}
+
+	cancel()
+	r.NoError(serverConn.Context().Err(), "server side closed before the client could have told it anything")
+	releaseClient()
+	select {
+	case err := <-done:
+		r.ErrorIs(err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("dial did not return after cancellation")
+	}
+
+	select {
+	case <-serverConn.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server side of a cancelled dial stayed open")
+	}
 }

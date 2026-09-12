@@ -15,16 +15,16 @@ build a jar, then `java -jar` it.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Spring Boot app on Miren" after installing the
-[Miren agent skills](/agent-skills). It adds the `Dockerfile.miren`, binds the server to
+[Miren agent skills](../agent-skills.md). It adds the `Dockerfile.miren`, binds the server to
 `0.0.0.0:$PORT`, wires up environment variables, and deploys — using this page as its
 reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 Yes. Miren doesn't auto-detect the JVM, so add a `Dockerfile.miren` to your project root.
 Miren builds from it instead of guessing the stack — see
-[Using Dockerfile.miren](/guides#using-dockerfilemiren).
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -78,16 +78,12 @@ name, or adjust the `COPY` to match your artifact.
 target
 ```
 
-## Set up the app
+## Deploy
 
-Even with a `Dockerfile.miren`, Miren needs at least one **service** defined — it
-doesn't use the image's `CMD` as the start command. Add a `Procfile`:
+The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
+so you don't need a `Procfile` or service command.
 
-```procfile
-web: java -jar /app/app.jar
-```
-
-Then create `.miren/app.toml` naming your app and deploy from your project root:
+Create `.miren/app.toml` naming your app and deploy from your project root:
 
 ```toml
 name = "java-bench"
@@ -98,12 +94,6 @@ name = "java-bench"
 miren deploy
 ```
 </CliCommand>
-
-:::note[Deploying without a service fails]
-If no service is defined, the build succeeds but the deploy stops with
-`no services defined: please define at least one service in a Procfile or
-.miren/app.toml`.
-:::
 
 ## Environment variables
 
@@ -126,20 +116,20 @@ key = "SPRING_PROFILES_ACTIVE"
 value = "prod"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
 - **Detection:** none — requires `Dockerfile.miren`
 - **Build:** `mvn -DskipTests package` (or Gradle); run the jar on a JRE image
-- **Service is required:** define a `Procfile` (`web: java -jar /app/app.jar`) — the image `CMD` is not used
+- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
 - **Port:** Spring `server.port=${PORT:8080}` + `server.address=0.0.0.0`; other frameworks read `PORT` and bind `0.0.0.0`
 - **Env vars:** `miren env set -e/-s`; Spring maps `SPRING_*` env vars to properties
 - **Database:** optional `[addons.miren-postgresql]` injects `DATABASE_URL`
 
 ## Next steps
 
-- [Using Dockerfile.miren](/guides#using-dockerfilemiren) — how custom builds work
-- [Addons](/addons) — managed Postgres and other backing services
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Deployment](/deployment) — how deploys build and activate
+- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
+- [Addons](../addons.md) — managed Postgres and other backing services
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -11,15 +11,13 @@ import (
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/boot"
-	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/serverconfig"
 )
 
 type etcdBootInputs struct {
-	config      serverconfig.EtcdConfig
-	tls         serverconfig.TLSConfig
-	dataPath    string
-	distributed bool
+	config   serverconfig.EtcdConfig
+	tls      serverconfig.TLSConfig
+	dataPath string
 }
 
 type etcdBootOutput struct {
@@ -38,10 +36,9 @@ type etcdBoot struct {
 
 func etcdInputs(options StartOptions) etcdBootInputs {
 	return etcdBootInputs{
-		config:      options.Config.Etcd,
-		tls:         options.Config.TLS,
-		dataPath:    options.Config.Server.GetDataPath(),
-		distributed: labs.DistributedRunners(),
+		config:   options.Config.Etcd,
+		tls:      options.Config.TLS,
+		dataPath: options.Config.Server.GetDataPath(),
 	}
 }
 
@@ -80,7 +77,7 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 	b.result.endpoints = append([]string(nil), b.inputs.config.Endpoints...)
 	log := observability.log
 	log.Info("starting embedded etcd server", "client-port", b.inputs.config.GetClientPort(), "peer-port", b.inputs.config.GetPeerPort())
-	b.server = etcd.NewEtcdComponent(log, containerd.client, containerd.namespace, b.inputs.dataPath)
+	b.server = etcd.NewEtcdComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	b.server.SetMetricsWriter(observability.metricsWriter)
 	config := etcd.EtcdConfig{
 		Name:              "miren-etcd",
@@ -91,18 +88,16 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 		QuotaBackendBytes: int64(b.inputs.config.GetQuotaBackendBytes()),
 	}
 
-	if b.inputs.distributed {
-		log.Info("setting up etcd mTLS for distributed runners")
-		if _, err := coordinate.EnsureCA(log, b.inputs.dataPath); err != nil {
-			return etcdBootOutput{}, fmt.Errorf("ensuring CA for etcd TLS: %w", err)
-		}
-		var err error
-		b.result.tls, err = coordinate.SetupEtcdTLS(log, b.inputs.dataPath, b.inputs.tls.AdditionalNames, ipDiscovery.ipSet.RawIPs())
-		if err != nil {
-			return etcdBootOutput{}, fmt.Errorf("setting up etcd TLS: %w", err)
-		}
-		config.TLS = &etcd.TLSConfig{CertsDir: b.result.tls.CertsDir}
+	log.Info("setting up etcd mTLS")
+	if _, err := coordinate.EnsureCA(log, b.inputs.dataPath); err != nil {
+		return etcdBootOutput{}, fmt.Errorf("ensuring CA for etcd TLS: %w", err)
 	}
+	tls, err := coordinate.SetupEtcdTLS(log, b.inputs.dataPath, b.inputs.tls.AdditionalNames, ipDiscovery.ipSet.RawIPs())
+	if err != nil {
+		return etcdBootOutput{}, fmt.Errorf("setting up etcd TLS: %w", err)
+	}
+	b.result.tls = tls
+	config.TLS = &etcd.TLSConfig{CertsDir: tls.CertsDir}
 
 	if err := b.server.Start(ctx, config); err != nil {
 		return etcdBootOutput{}, err

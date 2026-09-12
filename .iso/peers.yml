@@ -12,7 +12,6 @@ peers:
     hostname: coordinator
     environment:
       ROLE: coordinator
-      MIREN_LABS: distributedrunners
     ports:
       - "8443:8443"
 
@@ -20,4 +19,3 @@ peers:
     hostname: runner1
     environment:
       ROLE: runner
-      MIREN_LABS: distributedrunners

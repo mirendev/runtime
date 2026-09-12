@@ -83,7 +83,7 @@ func (b *appMetricsBoot) start(
 		registration.cloudAuth.ClusterID,
 		b.inputs.configuredClusterName,
 	)
-	managed := appmetrics.New(log, containerd.client, containerd.namespace, b.inputs.dataPath, eac, identity.issuer)
+	managed := appmetrics.New(log, containerd.Client, containerd.Namespace, b.inputs.dataPath, eac, identity.issuer)
 	if err := managed.Start(ctx, config); err != nil {
 		// Metrics are optional application telemetry. A broken destination or
 		// scraper must be visible, but must not take the application control

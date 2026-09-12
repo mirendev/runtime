@@ -14,13 +14,13 @@ It works the same way GitHub Actions' OIDC tokens do: the platform (here, your M
 These are two sides of the same OIDC machinery, pointed in opposite directions:
 
 - **Workload Identity** (this page) — your cluster issues tokens **for** the sandboxes running on it, so your *running app* can call out to AWS, GCP, etc.
-- **[CI/CD Deployment](/ci-deploy)** — your cluster *verifies* tokens issued **by** GitHub/GitLab, so a *pipeline* can deploy to Miren without stored secrets.
+- **[CI/CD Deployment](./ci-deploy.md)** — your cluster *verifies* tokens issued **by** GitHub/GitLab, so a *pipeline* can deploy to Miren without stored secrets.
 
 Both rely on the cluster's OIDC infrastructure, but the token flows in different directions.
 :::
 
 :::tip[Calling the Miren API from a sandbox]
-The same token can authenticate to your cluster's own API — deploy, read logs, open a shell — scoped by a role you choose per app. See [In-Cluster API Access](/in-cluster-api).
+The same token can authenticate to your cluster's own API — deploy, read logs, open a shell — scoped by a role you choose per app. See [In-Cluster API Access](./in-cluster-api.md).
 :::
 
 ## Minimum working example
@@ -241,7 +241,7 @@ Two things have to be true for federation to work: something has to *sign* the t
 
 **The signing key never leaves your cluster.** It's generated on the cluster, written to `<data_path>/server/workload-identity.key`, and is not uploaded anywhere — not to Miren Cloud, not to us. That's the property that matters: a compromise of Miren Cloud yields public keys and no ability to mint an identity for your workloads.
 
-Who serves the keys follows from registration (see [server config](/server-config#workload-identity)):
+Who serves the keys follows from registration (see [server config](./server-config.md#workload-identity)):
 
 | Anchor | `iss` claim | Discovery served by |
 | --- | --- | --- |
@@ -310,7 +310,7 @@ The token file is refreshed roughly every 45 minutes, in place. This interval is
 
 ### Distributed runners issue tokens via the coordinator
 
-In a cluster with [distributed runners](/distributed-runners), only the coordinator holds the signing key. On a distributed runner, token issuance is proxied back to the coordinator over RPC. Two consequences worth knowing:
+In a cluster with [distributed runners](./distributed-runners.md), only the coordinator holds the signing key. On a distributed runner, token issuance is proxied back to the coordinator over RPC. Two consequences worth knowing:
 
 - There's a small amount of extra latency, and issuance depends on the coordinator being reachable.
 - A runner that can't reach the coordinator's issuer at startup disables token issuance for its sandboxes, so they won't get the `MIREN_IDENTITY_*` variables. The coordinator always has an issuer, so in practice this means a connectivity problem rather than a configuration one.

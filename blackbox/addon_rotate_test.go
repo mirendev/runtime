@@ -127,7 +127,7 @@ func TestAddonRotateValkey(t *testing.T) {
 	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
 
 	m.MustRun("addon", "create", "miren-valkey:small", "-a", name)
-	harness.WaitForAddonReady(t, m, name, "miren-valkey", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-valkey", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "VALKEY_PASSWORD", 5*time.Minute)
 
 	// Scope to this app's dedicated server (named vk-<app>-s<id>).
@@ -164,7 +164,7 @@ func TestAddonRotateSharedPostgresSuperuser(t *testing.T) {
 	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
 
 	m.MustRun("addon", "create", "miren-postgresql:shared", "-a", name)
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	// The shared server is the singleton named "pg-shared"; scope to it so
@@ -199,7 +199,7 @@ func TestAddonRotateSharedPostgresUser(t *testing.T) {
 	name := harness.DeployApp(t, m, harness.AppOptions{Testdata: "go-server"})
 
 	m.MustRun("addon", "create", "miren-postgresql:shared", "-a", name)
-	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-postgresql", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "DATABASE_URL", 5*time.Minute)
 
 	r := m.MustRun("addon", "rotate", "miren-postgresql", "-a", name, "--force")

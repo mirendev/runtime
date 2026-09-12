@@ -83,12 +83,12 @@ miren server --mode standalone
 
 ## Subcommands
 
-- [`miren server config`](/command/server-config) — Server configuration management commands
-- [`miren server container`](/command/server-container) — Run the miren server in a container (Docker or Podman)
-- [`miren server identity-anchor`](/command/server-identity-anchor) — Move where this cluster's workload identity is anchored
-- [`miren server install`](/command/server-install) — Install systemd service for miren server
-- [`miren server register`](/command/server-register) — Register this cluster with miren.cloud
-- [`miren server status`](/command/server-status) — Show miren service status
-- [`miren server uninstall`](/command/server-uninstall) — Remove systemd service for miren server
-- [`miren server unregister`](/command/server-unregister) — Detach this cluster from miren.cloud
-- [`miren server upgrade`](/command/server-upgrade) — Upgrade miren server
+- [`miren server config`](./server-config.md) — Server configuration management commands
+- [`miren server container`](./server-container.md) — Run the miren server in a container (Docker or Podman)
+- [`miren server identity-anchor`](./server-identity-anchor.md) — Move where this cluster's workload identity is anchored
+- [`miren server install`](./server-install.md) — Install systemd service for miren server
+- [`miren server register`](./server-register.md) — Register this cluster with miren.cloud
+- [`miren server status`](./server-status.md) — Show miren service status
+- [`miren server uninstall`](./server-uninstall.md) — Remove systemd service for miren server
+- [`miren server unregister`](./server-unregister.md) — Detach this cluster from miren.cloud
+- [`miren server upgrade`](./server-upgrade.md) — Upgrade miren server

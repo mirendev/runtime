@@ -37,4 +37,4 @@ miren download release
 
 ## See also
 
-- [`miren download`](/command/download)
+- [`miren download`](./download.md)

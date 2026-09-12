@@ -69,36 +69,53 @@ func (s *EACStorage) Get(ctx context.Context, id string) (*Execution, error) {
 	return entityToExecution(sagaEntity)
 }
 
-// ListTerminal summarizes every execution in a terminal state via EAC.
-func (s *EACStorage) ListTerminal(ctx context.Context) ([]TerminalExecution, error) {
+// ListTerminalPage summarizes one bounded page of finished executions via EAC.
+func (s *EACStorage) ListTerminalPage(ctx context.Context, q TerminalQuery) (*TerminalPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stage, inner, err := decodeStageCursor(q.Cursor, len(terminalStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	status := terminalStatuses[stage]
+
+	resp, err := s.eac.ListPage(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status), inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
+	}
+
+	next := nextStageCursor(stage, resp.Cursor(), len(terminalStatuses))
+
+	// An empty page is the shortest possible short page, not the end of the
+	// walk. The server drops ids it could not resolve into entities, so a page
+	// of nothing but stale index entries comes back with no values and a live
+	// cursor into the rest of this index. Treating that as an exhausted index
+	// would skip everything after it.
+	if len(resp.Values()) == 0 {
+		return &TerminalPage{Cursor: next}, nil
+	}
+
 	var result []TerminalExecution
-	seen := make(map[string]struct{})
+	var staleNonTerminal int
 
-	for _, status := range []entity.Id{
-		saga_v1alpha.SagaStatusCompletedId,
-		saga_v1alpha.SagaStatusFailedId,
-	} {
-		resp, err := s.eac.List(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status))
-		if err != nil {
-			return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
-		}
-		for _, v := range resp.Values() {
-			id := v.Id()
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-
-			summary, ok := terminalSummary(v.Entity())
-			if !ok {
-				s.log.Warn("terminal saga has no usable timestamp, skipping", "id", id)
-				continue
-			}
+	for _, v := range resp.Values() {
+		summary, verdict := terminalSummary(v.Entity())
+		switch verdict {
+		case summaryOK:
 			result = append(result, summary)
+		case summaryWrongStatus:
+			staleNonTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("terminal saga has no usable timestamp, skipping", "id", v.Id())
 		}
 	}
 
-	return result, nil
+	logStaleTerminal(s.log, staleNonTerminal)
+
+	return &TerminalPage{Executions: result, Cursor: next}, nil
 }
 
 // Delete removes a saga execution entity via EAC.
@@ -112,45 +129,43 @@ func (s *EACStorage) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// ListIncomplete returns all executions that need recovery via EAC.
-func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
-	// Query for each incomplete status
-	var allEntities []*es.Entity
-	seen := make(map[string]struct{})
-
-	for _, statusRef := range []entity.Id{
-		saga_v1alpha.SagaStatusPendingId,
-		saga_v1alpha.SagaStatusRunningId,
-		saga_v1alpha.SagaStatusUndoingId,
-	} {
-		resp, err := s.eac.List(ctx, entity.Ref(
-			saga_v1alpha.SagaStatusId,
-			statusRef,
-		))
-		if err != nil {
-			return nil, fmt.Errorf("listing sagas with status %s: %w", statusRef, err)
-		}
-		// Deduplicate by ID: a saga can appear under more than one status
-		// index (e.g. a stale pending entry after transitioning to running),
-		// and recovering the same execution twice causes double execution.
-		for _, v := range resp.Values() {
-			id := v.Id()
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			allEntities = append(allEntities, v)
-		}
+// ListIncompletePage returns one bounded page of executions needing recovery
+// via EAC.
+//
+// The RPC pins the ids and the entities of a page to one store revision, so the
+// tear between listing an index and fetching what it named is closed on the
+// server rather than guessed at here.
+func (s *EACStorage) ListIncompletePage(ctx context.Context, q IncompleteQuery) (*IncompletePage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	if len(allEntities) == 0 {
-		return nil, nil
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	status := incompleteStatuses[stage]
+
+	resp, err := s.eac.ListPage(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status), inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
+	}
+
+	next := nextStageCursor(stage, resp.Cursor(), len(incompleteStatuses))
+
+	// See ListTerminalPage: an empty page still carries a cursor, and dropping
+	// it here would skip the rest of this status index and every saga in it
+	// that still needs recovering.
+	if len(resp.Values()) == 0 {
+		return &IncompletePage{Cursor: next}, nil
 	}
 
 	var executions []*Execution
-	for _, eacEnt := range allEntities {
-		ent := eacEnt.Entity()
-		sagaEntity, ok := entity.As[saga_v1alpha.Saga](ent)
+	var staleTerminal int
+
+	for _, eacEnt := range resp.Values() {
+		sagaEntity, ok := entity.As[saga_v1alpha.Saga](eacEnt.Entity())
 		if !ok {
 			s.log.Warn("entity is not a saga, skipping", "id", eacEnt.Id())
 			continue
@@ -160,8 +175,63 @@ func (s *EACStorage) ListIncomplete(ctx context.Context) ([]*Execution, error) {
 			s.log.Warn("failed to convert saga entity, skipping", "id", eacEnt.Id(), "error", err)
 			continue
 		}
+		// The index selected this id, the entity says what it actually is, and
+		// the entity wins.
+		if isTerminal(exec.Status) {
+			staleTerminal++
+			continue
+		}
 		executions = append(executions, exec)
 	}
 
-	return executions, nil
+	logStaleIncomplete(s.log, staleTerminal)
+
+	return &IncompletePage{Executions: executions, Cursor: next}, nil
+}
+
+// ListIncompleteSummaryPage summarizes one bounded page of in-flight executions
+// via EAC.
+func (s *EACStorage) ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	stage, inner, err := decodeStageCursor(q.Cursor, len(incompleteStatuses))
+	if err != nil {
+		return nil, err
+	}
+
+	status := incompleteStatuses[stage]
+
+	resp, err := s.eac.ListPage(ctx, entity.Ref(saga_v1alpha.SagaStatusId, status), inner, int64(clampLimit(q.Limit)))
+	if err != nil {
+		return nil, fmt.Errorf("listing sagas with status %s: %w", status, err)
+	}
+
+	next := nextStageCursor(stage, resp.Cursor(), len(incompleteStatuses))
+
+	// See ListTerminalPage: an empty page still carries a cursor, and dropping
+	// it here would skip the rest of this status index.
+	if len(resp.Values()) == 0 {
+		return &IncompleteSummaryPage{Cursor: next}, nil
+	}
+
+	var result []IncompleteSummary
+	var staleTerminal int
+
+	for _, v := range resp.Values() {
+		summary, verdict := incompleteSummary(v.Entity())
+		switch verdict {
+		case summaryOK:
+			result = append(result, summary)
+		case summaryWrongStatus:
+			staleTerminal++
+		case summaryNoTimestamp:
+			s.log.Warn("in-flight saga has no usable timestamp, skipping", "id", v.Id())
+		}
+	}
+
+	logStaleIncomplete(s.log, staleTerminal)
+
+	return &IncompleteSummaryPage{Executions: result, Cursor: next}, nil
 }

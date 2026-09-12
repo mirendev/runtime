@@ -48,4 +48,4 @@ miren auth provider add oidc my-google \
 
 ## See also
 
-- [`miren auth provider add`](/command/auth-provider-add)
+- [`miren auth provider add`](./auth-provider-add.md)

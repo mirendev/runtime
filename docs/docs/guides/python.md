@@ -14,19 +14,19 @@ for common web frameworks.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Python app on Miren" after installing the
-[Miren agent skills](/agent-skills). It detects your framework and package manager,
+[Miren agent skills](../agent-skills.md). It detects your framework and package manager,
 proposes a start command, wires up environment variables, and deploys — using this
 page as its reference.
 :::
 
-## Do you need a Dockerfile?
+## Does this source build need a Dockerfile?
 
 No. Miren detects Python from a `requirements.txt`, `Pipfile`, `pyproject.toml`, or
 `uv.lock` and builds the image automatically. The default Python version is **3.11**;
-override it in [`.miren/app.toml`](/app-configuration) if you need another.
+override it in [`.miren/app.toml`](../app-configuration.md) if you need another.
 
 Provide a `Dockerfile.miren` only if your build needs custom system packages or steps
-that don't fit detection — see [Using Dockerfile.miren](/guides#using-dockerfilemiren).
+that don't fit detection — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 ## Set up the app
 
@@ -134,7 +134,7 @@ FastAPI is auto-detected, so a `Procfile` is optional — but you can be explici
 web: fastapi run
 ```
 
-See [Services](/services) for running a worker alongside your web process.
+See [Services](../services.md) for running a worker alongside your web process.
 
 ## Environment variables
 
@@ -161,7 +161,7 @@ sensitive = true
 description = "Postgres connection string"
 ```
 
-See [App Configuration — Environment Variables](/app-configuration#environment-variables).
+See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
 
 ## Agent quick reference
 
@@ -175,6 +175,6 @@ See [App Configuration — Environment Variables](/app-configuration#environment
 
 ## Next steps
 
-- [App Configuration](/app-configuration) — customize `.miren/app.toml`
-- [Services](/services) — web + workers
-- [Deployment](/deployment) — how deploys build and activate
+- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
+- [Services](../services.md) — web + workers
+- [Deployment](../deployment.md) — how deploys build and activate

@@ -29,4 +29,4 @@ miren debug entity delete [flags]
 
 ## See also
 
-- [`miren debug entity`](/command/debug-entity)
+- [`miren debug entity`](./debug-entity.md)

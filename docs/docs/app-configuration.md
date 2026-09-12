@@ -8,7 +8,7 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # App Configuration
 
-Miren uses a **convention over configuration** approach. Most apps deploy with zero configuration—Miren detects your language, builds your image, and runs it with sensible defaults. When you need to customize, you add a `.miren/app.toml` file.
+Miren uses a **convention over configuration** approach. Most apps need little configuration: Miren can detect your language and build an image, or run a configured image with its own startup defaults. When you need to customize, you add a `.miren/app.toml` file.
 
 ## Minimum working example
 
@@ -21,10 +21,10 @@ name = "myapp"
 command = "npm start"
 ```
 
-Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive — environment variables, more services, scaling, disks.
+Deploy with `miren deploy` and Miren builds the image and runs `web` with that command. Everything else on this page is additive: environment variables, more services, scaling, disks.
 
 :::tip[Have an agent inspect your app]
-Install the [Miren agent skills](/agent-skills) and ask your AI coding agent to
+Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to
 "set up this app on Miren." The `app-setup` skill can inspect the repository,
 identify the services and environment variables it needs, and prepare a working
 `.miren/app.toml`. Use the rest of this page when you want to review or customize
@@ -35,7 +35,7 @@ the result.
 
 If your app is a single web service with a standard language stack, Miren handles everything:
 
-- **Language and build**: Detected from your project files (`package.json`, `go.mod`, `Gemfile`, etc.) — see [Language Guides](/guides)
+- **Language and build**: Detected from your project files (`package.json`, `go.mod`, `Gemfile`, etc.) — see [Language Guides](./guides/index.md)
 - **Start command**: Detected from your framework or `Procfile`
 - **Scaling**: Web services autoscale based on traffic by default
 
@@ -88,7 +88,7 @@ Create `.miren/app.toml` when you need to:
 - **Attach persistent disks** — for databases or file storage
 - **Run an existing image** — deploy a prebuilt container without a Dockerfile or source build
 - **Customize builds** — specify a Dockerfile, language version, or extra build steps
-- **Configure addons** — managed databases and other backing services (see [Addons](/addons))
+- **Configure addons** — managed databases and other backing services (see [Addons](./addons.md))
 
 ## Configuration Sections
 
@@ -104,7 +104,7 @@ version = "3.12"
 onbuild = ["npm run build"]
 ```
 
-See [Language Guides](/guides) for build details per language.
+See [Language Guides](./guides/index.md) for build details per language.
 
 ### Services
 
@@ -123,16 +123,15 @@ To deploy an existing image as the app, set `image` on the `web` service. Miren 
 ```toml
 [services.web]
 image = "ghcr.io/example/myapp:latest"
-args = ["serve", "--port", "8080"]
-port = 8080
 ```
 
 The optional `args` array replaces the image's `CMD` while preserving its
 `ENTRYPOINT`. Miren passes the array directly, without shell expansion. Leave both
 `args` and `command` unset to use the image's defaults unchanged; use `command` for
-the existing full `/bin/sh -c` override.
+the existing full `/bin/sh -c` override. Miren also inherits a single TCP port from
+the image's `EXPOSE` metadata. Set `port` when the image exposes no ports or several.
 
-See [Services](/services) for patterns like running databases alongside your app.
+See [Services](./services.md) for patterns like running databases alongside your app.
 
 ### Scaling
 
@@ -148,7 +147,7 @@ mode = "fixed"
 num_instances = 3
 ```
 
-See [Application Scaling](/scaling) for tuning guidance.
+See [Application Scaling](./scaling.md) for tuning guidance.
 
 ### Persistent Storage
 
@@ -165,7 +164,7 @@ mount_path = "/var/lib/postgresql/data"
 size_gb = 20
 ```
 
-See [Persistent Storage](/disks) for local shared storage and Miren Disks.
+See [Persistent Storage](./disks.md) for local shared storage and Miren Disks.
 
 ### Environment Variables
 
@@ -200,7 +199,7 @@ description = "Third-party API key for payment processing"
 |-------|------|-------------|
 | `key` | string | Variable name (required) |
 | `value` | string | Variable value |
-| `backend` | string | Secret backend to source the value from, instead of `value` — see [Secrets](/secrets) |
+| `backend` | string | Secret backend to source the value from, instead of `value` — see [Secrets](./secrets.md) |
 | `ref` | string | Reference to the secret within that backend |
 | `required` | bool | If `true`, deploy will fail when this variable has no value |
 | `sensitive` | bool | If `true`, the value is masked in CLI output and logs |
@@ -210,7 +209,7 @@ The `required` flag is useful for variables whose values differ per environment�
 
 #### Referencing a Secret
 
-For a real credential, `sensitive` is not enough: it masks display but the value still sits in your config. Use `backend` and `ref` to point at a [secret](/secrets) instead, so `app.toml` holds only a pointer and stays safe to commit:
+For a real credential, `sensitive` is not enough: it masks display but the value still sits in your config. Use `backend` and `ref` to point at a [secret](./secrets.md) instead, so `app.toml` holds only a pointer and stays safe to commit:
 
 ```toml
 [[env]]
@@ -229,12 +228,12 @@ Miren injects these automatically. You don't declare them, and your app can read
 |----------|-------|----------|
 | `MIREN_RUNTIME_APP` | The app name | Every sandbox |
 | `MIREN_RUNTIME_VERSION` | The deployed version, e.g. `v1` | Every sandbox |
-| `MIREN_RUNTIME_INSTANCE_NUM` | This instance's number, starting at `0`. See [Scaling](/scaling). | Instance-backed sandboxes only |
+| `MIREN_RUNTIME_INSTANCE_NUM` | This instance's number, starting at `0`. See [Scaling](./scaling.md). | Instance-backed sandboxes only |
 
-Sandboxes also get `PORT` (the port your web service should listen on) and the [workload identity](/workload-identity) variables.
+Sandboxes also get `PORT` (the port your web service should listen on) and the [workload identity](./workload-identity.md) variables.
 
 :::info[Injected vs. CLI variables]
-`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](/workload-identity) variables are injected too. Most other `MIREN_*` variables — such as `MIREN_CLUSTER` and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](/ci-deploy)).
+`MIREN_RUNTIME_*` is the namespace Miren injects **into** your app; the `MIREN_IDENTITY_*` [workload identity](./workload-identity.md) variables are injected too. Most other `MIREN_*` variables — such as `MIREN_CLUSTER` and `MIREN_CONFIG` — are input **to** the `miren` CLI, used to pick what a command acts on (see [CI/CD Deployment](./ci-deploy.md)).
 
 `MIREN_APP` is both: an input to the CLI, and — for a transition window — a **deprecated injected alias** of `MIREN_RUNTIME_APP` (along with `MIREN_VERSION` and `MIREN_INSTANCE_NUM`), so apps still reading the old names keep working. The two roles no longer collide: when the CLI runs inside a sandbox and the injected `MIREN_APP` matches the sandbox's own app, it ignores that value and resolves from your `.miren/app.toml`. Read the `MIREN_RUNTIME_*` names for injected runtime values; the aliases will be removed in a future release.
 :::
@@ -258,7 +257,7 @@ type = "tcp"
 node_port = 6667
 ```
 
-See [Traffic Routing](/traffic-routing) for the full picture — HTTP ingress, TCP/UDP routing, multi-port services, and the `PORT` environment variable.
+See [Traffic Routing](./traffic-routing.md) for the full picture — HTTP ingress, TCP/UDP routing, multi-port services, and the `PORT` environment variable.
 
 ## Complete Example
 
@@ -312,4 +311,4 @@ size_gb = 20
 
 ## Reference
 
-For a complete field-by-field listing of every `app.toml` option, see the [app.toml Reference](/app-toml).
+For a complete field-by-field listing of every `app.toml` option, see the [app.toml Reference](./app-toml.md).

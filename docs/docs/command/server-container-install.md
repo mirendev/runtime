@@ -23,7 +23,7 @@ miren server container install [flags]
 - `--http-port` — HTTP port mapping (default: `80`)
 - `--image, -i` — Container image to use (default: `oci.miren.cloud/miren:latest`)
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)
-- `--labs, -l` — Miren Labs features to enable (e.g. sagas). Prefix with - to disable.
+- `--labs, -l` — Miren Labs features to enable (e.g. appvisibility). Prefix with - to disable.
 - `--name, -n` — Container name
 - `--runtime` — Container runtime to use: docker or podman (auto-detected by default, preferring docker)
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
@@ -69,4 +69,4 @@ miren server container install --runtime podman
 
 ## See also
 
-- [`miren server container`](/command/server-container)
+- [`miren server container`](./server-container.md)

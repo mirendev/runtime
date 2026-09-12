@@ -16,9 +16,9 @@ miren addon [flags]
 
 ## Subcommands
 
-- [`miren addon create`](/command/addon-create) — Attach an addon to an application
-- [`miren addon destroy`](/command/addon-destroy) — Remove an addon from an application
-- [`miren addon list`](/command/addon-list) — List addons attached to an application
-- [`miren addon list-available`](/command/addon-list-available) — List available addons
-- [`miren addon rotate`](/command/addon-rotate) — Rotate an addon's backing credential
-- [`miren addon variants`](/command/addon-variants) — Show variants for an addon
+- [`miren addon create`](./addon-create.md) — Attach an addon to an application
+- [`miren addon destroy`](./addon-destroy.md) — Remove an addon from an application
+- [`miren addon list`](./addon-list.md) — List addons attached to an application
+- [`miren addon list-available`](./addon-list-available.md) — List available addons
+- [`miren addon rotate`](./addon-rotate.md) — Rotate an addon's backing credential
+- [`miren addon variants`](./addon-variants.md) — Show variants for an addon
