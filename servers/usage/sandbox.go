@@ -3,7 +3,6 @@ package usage
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	computev1 "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -36,6 +35,12 @@ type sandboxDetailResult struct {
 	image         string
 	restartPolicy string
 	warnings      []string
+
+	// step is the resolution the series were rendered at, zero when none were
+	// asked for. It reaches the response through the window, so a charting
+	// client can learn what it was given rather than inferring it from the
+	// gaps between points.
+	step time.Duration
 }
 
 // apply writes the result into an RPC results type. Both surfaces have the same
@@ -52,6 +57,11 @@ func (d *sandboxDetailResult) apply(set sandboxDetailSetter, w window) {
 	}
 	set.SetImage(d.image)
 	set.SetRestartPolicy(d.restartPolicy)
+
+	// The window is stamped with the step the series actually used, not the
+	// one the caller asked for: an unset or too-fine request is resolved
+	// server-side, and reporting the request would misdescribe the answer.
+	w.step = d.step
 	set.SetWindow(w.encode())
 	set.SetWarnings(d.warnings)
 }
@@ -135,7 +145,8 @@ func (s *Server) sandboxDetail(
 	row.SetStale(cores == 0 && bytes == 0)
 
 	if opts.series {
-		series, seriesWarnings := s.sandboxSeries(ctx, sel, w, opts.step)
+		out.step = resolveStep(w, opts.step)
+		series, seriesWarnings := s.sandboxSeries(ctx, sel, w, out.step)
 		out.warnings = append(out.warnings, seriesWarnings...)
 		out.series = series
 	}
@@ -229,20 +240,11 @@ func (s *Server) singleSandboxSamples(ctx context.Context, selector string, w wi
 	return cores, bytes, warnings
 }
 
-// sandboxSeries fetches CPU and memory over time for charting.
+// sandboxSeries fetches CPU and memory over time for charting. step is already
+// resolved by the caller, which is also what reports it on the window.
 func (s *Server) sandboxSeries(ctx context.Context, selector string, w window, step time.Duration) ([]*usage_v1alpha.UsageSeries, []string) {
 	if s.Reader == nil {
 		return nil, nil
-	}
-
-	if step <= 0 {
-		// Derive a step that yields roughly defaultSeriesPoints points, so the
-		// resolution matches the window instead of returning either three
-		// points for an hour or thousands for a day.
-		step = w.duration() / defaultSeriesPoints
-	}
-	if step < time.Second {
-		step = time.Second
 	}
 
 	var out []*usage_v1alpha.UsageSeries
@@ -266,30 +268,21 @@ func (s *Server) sandboxSeries(ctx context.Context, selector string, w window, s
 		var series usage_v1alpha.UsageSeries
 		series.SetMetric(q.metric)
 
-		var points []*usage_v1alpha.UsagePoint
+		// The selector pins one sandbox, so every returned series describes the
+		// same subject and collapsing them into one line is safe. An app cannot
+		// do this -- see appSeries.
+		byTime := map[int64]float64{}
 		for _, r := range result.Data.Result {
 			for _, v := range r.Values {
-				if len(v) < 2 {
-					continue
-				}
-				ts, _ := v[0].(float64)
-				raw, ok := v[1].(string)
+				at, val, ok := parseSample(v)
 				if !ok {
 					continue
 				}
-				val, err := strconv.ParseFloat(raw, 64)
-				if err != nil {
-					continue
-				}
-
-				var p usage_v1alpha.UsagePoint
-				p.SetAt(standard.ToTimestamp(time.Unix(int64(ts), 0)))
-				p.SetValue(val)
-				points = append(points, &p)
+				byTime[at] = val
 			}
 		}
 
-		series.SetPoints(points)
+		series.SetPoints(pointsInOrder(byTime))
 		out = append(out, &series)
 	}
 

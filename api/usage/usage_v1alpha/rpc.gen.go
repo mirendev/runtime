@@ -1000,6 +1000,7 @@ type appUsageData struct {
 	ServiceCount *int64          `cbor:"6,keyasint,omitempty" json:"service_count,omitempty"`
 	AddonCount   *int64          `cbor:"7,keyasint,omitempty" json:"addon_count,omitempty"`
 	Stale        *bool           `cbor:"8,keyasint,omitempty" json:"stale,omitempty"`
+	Historical   *bool           `cbor:"9,keyasint,omitempty" json:"historical,omitempty"`
 }
 
 type AppUsage struct {
@@ -1130,6 +1131,21 @@ func (v *AppUsage) Stale() bool {
 
 func (v *AppUsage) SetStale(stale bool) {
 	v.data.Stale = &stale
+}
+
+func (v *AppUsage) HasHistorical() bool {
+	return v.data.Historical != nil
+}
+
+func (v *AppUsage) Historical() bool {
+	if v.data.Historical == nil {
+		return false
+	}
+	return *v.data.Historical
+}
+
+func (v *AppUsage) SetHistorical(historical bool) {
+	v.data.Historical = &historical
 }
 
 func (v *AppUsage) MarshalCBOR() ([]byte, error) {
@@ -1487,6 +1503,77 @@ func (v *DetailOptions) MarshalJSON() ([]byte, error) {
 }
 
 func (v *DetailOptions) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type appDetailOptionsData struct {
+	IncludeSeries *bool  `cbor:"0,keyasint,omitempty" json:"include_series,omitempty"`
+	IncludeAddons *bool  `cbor:"1,keyasint,omitempty" json:"include_addons,omitempty"`
+	StepSeconds   *int64 `cbor:"2,keyasint,omitempty" json:"step_seconds,omitempty"`
+}
+
+type AppDetailOptions struct {
+	data appDetailOptionsData
+}
+
+func (v *AppDetailOptions) HasIncludeSeries() bool {
+	return v.data.IncludeSeries != nil
+}
+
+func (v *AppDetailOptions) IncludeSeries() bool {
+	if v.data.IncludeSeries == nil {
+		return false
+	}
+	return *v.data.IncludeSeries
+}
+
+func (v *AppDetailOptions) SetIncludeSeries(include_series bool) {
+	v.data.IncludeSeries = &include_series
+}
+
+func (v *AppDetailOptions) HasIncludeAddons() bool {
+	return v.data.IncludeAddons != nil
+}
+
+func (v *AppDetailOptions) IncludeAddons() bool {
+	if v.data.IncludeAddons == nil {
+		return false
+	}
+	return *v.data.IncludeAddons
+}
+
+func (v *AppDetailOptions) SetIncludeAddons(include_addons bool) {
+	v.data.IncludeAddons = &include_addons
+}
+
+func (v *AppDetailOptions) HasStepSeconds() bool {
+	return v.data.StepSeconds != nil
+}
+
+func (v *AppDetailOptions) StepSeconds() int64 {
+	if v.data.StepSeconds == nil {
+		return 0
+	}
+	return *v.data.StepSeconds
+}
+
+func (v *AppDetailOptions) SetStepSeconds(step_seconds int64) {
+	v.data.StepSeconds = &step_seconds
+}
+
+func (v *AppDetailOptions) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AppDetailOptions) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AppDetailOptions) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AppDetailOptions) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -2240,6 +2327,106 @@ func (v *ResourceUsageListAppsResults) MarshalJSON() ([]byte, error) {
 }
 
 func (v *ResourceUsageListAppsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type resourceUsageGetAppArgsData struct {
+	App     *string           `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Window  *Window           `cbor:"1,keyasint,omitempty" json:"window,omitempty"`
+	Options *AppDetailOptions `cbor:"2,keyasint,omitempty" json:"options,omitempty"`
+}
+
+type ResourceUsageGetAppArgs struct {
+	call rpc.Call
+	data resourceUsageGetAppArgsData
+}
+
+func (v *ResourceUsageGetAppArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *ResourceUsageGetAppArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *ResourceUsageGetAppArgs) HasWindow() bool {
+	return v.data.Window != nil
+}
+
+func (v *ResourceUsageGetAppArgs) Window() *Window {
+	return v.data.Window
+}
+
+func (v *ResourceUsageGetAppArgs) HasOptions() bool {
+	return v.data.Options != nil
+}
+
+func (v *ResourceUsageGetAppArgs) Options() *AppDetailOptions {
+	return v.data.Options
+}
+
+func (v *ResourceUsageGetAppArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ResourceUsageGetAppArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ResourceUsageGetAppArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ResourceUsageGetAppArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type resourceUsageGetAppResultsData struct {
+	Usage    *AppUsage       `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
+	Series   *[]*UsageSeries `cbor:"1,keyasint,omitempty" json:"series,omitempty"`
+	Window   *UsageWindow    `cbor:"2,keyasint,omitempty" json:"window,omitempty"`
+	Warnings *[]string       `cbor:"3,keyasint,omitempty" json:"warnings,omitempty"`
+}
+
+type ResourceUsageGetAppResults struct {
+	call rpc.Call
+	data resourceUsageGetAppResultsData
+}
+
+func (v *ResourceUsageGetAppResults) SetUsage(usage *AppUsage) {
+	v.data.Usage = usage
+}
+
+func (v *ResourceUsageGetAppResults) SetSeries(series []*UsageSeries) {
+	x := slices.Clone(series)
+	v.data.Series = &x
+}
+
+func (v *ResourceUsageGetAppResults) SetWindow(window *UsageWindow) {
+	v.data.Window = window
+}
+
+func (v *ResourceUsageGetAppResults) SetWarnings(warnings []string) {
+	x := slices.Clone(warnings)
+	v.data.Warnings = &x
+}
+
+func (v *ResourceUsageGetAppResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ResourceUsageGetAppResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ResourceUsageGetAppResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ResourceUsageGetAppResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -3093,6 +3280,8 @@ type resourceUsageHttpGetAppArgsData struct {
 	Until     *string `cbor:"2,keyasint,omitempty" json:"until,omitempty"`
 	Aggregate *string `cbor:"3,keyasint,omitempty" json:"aggregate,omitempty"`
 	Addons    *bool   `cbor:"4,keyasint,omitempty" json:"addons,omitempty"`
+	Series    *bool   `cbor:"5,keyasint,omitempty" json:"series,omitempty"`
+	Step      *string `cbor:"6,keyasint,omitempty" json:"step,omitempty"`
 }
 
 type ResourceUsageHttpGetAppArgs struct {
@@ -3155,6 +3344,28 @@ func (v *ResourceUsageHttpGetAppArgs) Addons() bool {
 	return *v.data.Addons
 }
 
+func (v *ResourceUsageHttpGetAppArgs) HasSeries() bool {
+	return v.data.Series != nil
+}
+
+func (v *ResourceUsageHttpGetAppArgs) Series() bool {
+	if v.data.Series == nil {
+		return false
+	}
+	return *v.data.Series
+}
+
+func (v *ResourceUsageHttpGetAppArgs) HasStep() bool {
+	return v.data.Step != nil
+}
+
+func (v *ResourceUsageHttpGetAppArgs) Step() string {
+	if v.data.Step == nil {
+		return ""
+	}
+	return *v.data.Step
+}
+
 func (v *ResourceUsageHttpGetAppArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -3172,9 +3383,10 @@ func (v *ResourceUsageHttpGetAppArgs) UnmarshalJSON(data []byte) error {
 }
 
 type resourceUsageHttpGetAppResultsData struct {
-	Usage    *AppUsage    `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
-	Window   *UsageWindow `cbor:"1,keyasint,omitempty" json:"window,omitempty"`
-	Warnings *[]string    `cbor:"2,keyasint,omitempty" json:"warnings,omitempty"`
+	Usage    *AppUsage       `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
+	Window   *UsageWindow    `cbor:"1,keyasint,omitempty" json:"window,omitempty"`
+	Warnings *[]string       `cbor:"2,keyasint,omitempty" json:"warnings,omitempty"`
+	Series   *[]*UsageSeries `cbor:"3,keyasint,omitempty" json:"series,omitempty"`
 }
 
 type ResourceUsageHttpGetAppResults struct {
@@ -3193,6 +3405,11 @@ func (v *ResourceUsageHttpGetAppResults) SetWindow(window *UsageWindow) {
 func (v *ResourceUsageHttpGetAppResults) SetWarnings(warnings []string) {
 	x := slices.Clone(warnings)
 	v.data.Warnings = &x
+}
+
+func (v *ResourceUsageHttpGetAppResults) SetSeries(series []*UsageSeries) {
+	x := slices.Clone(series)
+	v.data.Series = &x
 }
 
 func (v *ResourceUsageHttpGetAppResults) MarshalCBOR() ([]byte, error) {
@@ -3306,6 +3523,32 @@ func (t *ResourceUsageListApps) Args() *ResourceUsageListAppsArgs {
 }
 
 func (t *ResourceUsageListApps) Results() *ResourceUsageListAppsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type ResourceUsageGetApp struct {
+	rpc.Call
+	args    ResourceUsageGetAppArgs
+	results ResourceUsageGetAppResults
+}
+
+func (t *ResourceUsageGetApp) Args() *ResourceUsageGetAppArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *ResourceUsageGetApp) Results() *ResourceUsageGetAppResults {
 	results := &t.results
 	if results.call != nil {
 		return results
@@ -3476,6 +3719,7 @@ type ResourceUsage interface {
 	GetSandbox(ctx context.Context, state *ResourceUsageGetSandbox) error
 	ListNodes(ctx context.Context, state *ResourceUsageListNodes) error
 	ListApps(ctx context.Context, state *ResourceUsageListApps) error
+	GetApp(ctx context.Context, state *ResourceUsageGetApp) error
 	HttpListSandboxes(ctx context.Context, state *ResourceUsageHttpListSandboxes) error
 	HttpGetSandbox(ctx context.Context, state *ResourceUsageHttpGetSandbox) error
 	HttpListNodes(ctx context.Context, state *ResourceUsageHttpListNodes) error
@@ -3501,6 +3745,10 @@ func (reexportResourceUsage) ListNodes(ctx context.Context, state *ResourceUsage
 }
 
 func (reexportResourceUsage) ListApps(ctx context.Context, state *ResourceUsageListApps) error {
+	panic("not implemented")
+}
+
+func (reexportResourceUsage) GetApp(ctx context.Context, state *ResourceUsageGetApp) error {
 	panic("not implemented")
 }
 
@@ -3572,6 +3820,16 @@ func AdaptResourceUsage(t ResourceUsage) *rpc.Interface {
 			Params:        []string{"selector", "window", "ordering"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListApps(ctx, &ResourceUsageListApps{Call: call})
+			},
+		},
+		{
+			Name:          "getApp",
+			InterfaceName: "ResourceUsage",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "window", "options"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetApp(ctx, &ResourceUsageGetApp{Call: call})
 			},
 		},
 		{
@@ -3710,7 +3968,7 @@ func AdaptResourceUsage(t ResourceUsage) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			RestOnly:      true,
-			Params:        []string{"app", "since", "until", "aggregate", "addons"},
+			Params:        []string{"app", "since", "until", "aggregate", "addons", "series", "step"},
 			HTTP: &rpc.HTTPBinding{
 				Verb:       "GET",
 				Path:       "/api/v1/usage/apps/{app}",
@@ -3721,6 +3979,8 @@ func AdaptResourceUsage(t ResourceUsage) *rpc.Interface {
 					{Name: "until", Kind: "string"},
 					{Name: "aggregate", Kind: "string"},
 					{Name: "addons", Kind: "bool"},
+					{Name: "series", Kind: "bool"},
+					{Name: "step", Kind: "string"},
 				},
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
@@ -4081,4 +4341,63 @@ func (v ResourceUsageClient) ListApps(ctx context.Context, selector *Selector, w
 	}
 
 	return &ResourceUsageClientListAppsResults{client: v.Client, data: ret}, nil
+}
+
+type ResourceUsageClientGetAppResults struct {
+	client rpc.Client
+	data   resourceUsageGetAppResultsData
+}
+
+func (v *ResourceUsageClientGetAppResults) HasUsage() bool {
+	return v.data.Usage != nil
+}
+
+func (v *ResourceUsageClientGetAppResults) Usage() *AppUsage {
+	return v.data.Usage
+}
+
+func (v *ResourceUsageClientGetAppResults) HasSeries() bool {
+	return v.data.Series != nil
+}
+
+func (v *ResourceUsageClientGetAppResults) Series() []*UsageSeries {
+	if v.data.Series == nil {
+		return nil
+	}
+	return *v.data.Series
+}
+
+func (v *ResourceUsageClientGetAppResults) HasWindow() bool {
+	return v.data.Window != nil
+}
+
+func (v *ResourceUsageClientGetAppResults) Window() *UsageWindow {
+	return v.data.Window
+}
+
+func (v *ResourceUsageClientGetAppResults) HasWarnings() bool {
+	return v.data.Warnings != nil
+}
+
+func (v *ResourceUsageClientGetAppResults) Warnings() []string {
+	if v.data.Warnings == nil {
+		return nil
+	}
+	return *v.data.Warnings
+}
+
+func (v ResourceUsageClient) GetApp(ctx context.Context, app string, window *Window, options *AppDetailOptions) (*ResourceUsageClientGetAppResults, error) {
+	args := ResourceUsageGetAppArgs{}
+	args.data.App = &app
+	args.data.Window = window
+	args.data.Options = options
+
+	var ret resourceUsageGetAppResultsData
+
+	err := v.Call(ctx, "getApp", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ResourceUsageClientGetAppResults{client: v.Client, data: ret}, nil
 }

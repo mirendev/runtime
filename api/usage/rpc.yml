@@ -319,6 +319,17 @@ types:
           app still gets a row: an app that has stopped reporting is a finding,
           and dropping it would make a broken telemetry pipeline look like an
           idle cluster.
+      - name: historical
+        type: bool
+        index: 9
+        doc: |
+          True when this app has no live sandboxes and the row exists only
+          because the window contains its samples. Rows are sourced from the
+          metrics store, which keeps samples far longer than the entity store
+          keeps a dead sandbox, so a window reaching into the past can name an
+          app that has since been deleted. That is the right answer to a
+          historical question and the wrong one to "what is running", and this
+          is what tells the two apart.
 
   - type: Selector
     doc: |
@@ -422,6 +433,30 @@ types:
           Per-container breakdown. The stored series sum a sandbox's containers
           before they are written, so this needs the live per-node probe and is
           not yet served from the metrics store.
+      - name: step_seconds
+        type: int64
+        index: 2
+        doc: Resolution of any returned series; 0 derives one from the window
+
+  - type: AppDetailOptions
+    doc: |
+      What to include alongside one app's usage.
+
+      Separate from DetailOptions rather than shared with it: a sandbox can be
+      asked for a per-container split and an app cannot, and an app can be asked
+      to leave out its addons and a sandbox cannot. One type would carry a field
+      that is meaningless on whichever surface it reached.
+    fields:
+      - name: include_series
+        type: bool
+        index: 0
+        doc: Include CPU and memory over time, summed across the app's sandboxes
+      - name: include_addons
+        type: bool
+        index: 1
+        doc: |
+          Count the app's dedicated addons toward its figures. Absent means yes;
+          set it false for the app's own code alone.
       - name: step_seconds
         type: int64
         index: 2
@@ -651,6 +686,39 @@ interfaces:
             type: list
             element: string
 
+      - name: getApp
+        doc: |
+          One app in detail, optionally with its recent history.
+
+          The series is what listApps cannot give: a row collapses the window to
+          one number, and "what has this app been doing" needs the shape of it.
+          Both the row and the series are read from the metrics store rather
+          than assembled from the sandboxes that happen to be alive, so a window
+          longer than the current deployment answers for the whole of it.
+
+          One app at a time, deliberately. A range query grouped across every
+          app in a cluster over a long window is a cardinality question nobody
+          has measured yet.
+        parameters:
+          - name: app
+            type: string
+            doc: App name, as the metrics label it
+          - name: window
+            type: Window
+          - name: options
+            type: AppDetailOptions
+        results:
+          - name: usage
+            type: AppUsage
+          - name: series
+            type: list
+            element: UsageSeries
+          - name: window
+            type: UsageWindow
+          - name: warnings
+            type: list
+            element: string
+
       # --- REST surface: flat scalars, GET bindings ---
       #
       # since and until are duration strings here ("30s", "5m", "1h") rather
@@ -874,6 +942,12 @@ interfaces:
             type: string
           - name: addons
             type: bool
+          - name: series
+            type: bool
+            doc: Include CPU and memory history
+          - name: step
+            type: string
+            doc: Series resolution as a duration ("30s"); derived from the window when empty
         results:
           - name: usage
             type: AppUsage
@@ -882,3 +956,6 @@ interfaces:
           - name: warnings
             type: list
             element: string
+          - name: series
+            type: list
+            element: UsageSeries

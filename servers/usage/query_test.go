@@ -17,11 +17,16 @@ import (
 func TestQueriesUseStoredLabelSpelling(t *testing.T) {
 	r := require.New(t)
 
+	appKind := groupKey(labelApp, labelKind)
+
 	queries := []string{
 		cpuCoresQuery(labelSandbox, "", time.Minute, aggregateAvg),
 		cpuCoresQuery(labelNode, "", time.Hour, aggregateMax),
+		cpuCoresQuery(appKind, "", time.Hour, aggregateAvg),
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateAvg),
+		memoryBytesQuery(appKind, "", time.Hour, aggregateLast),
 		nodeGaugeQuery(metricNodeCPUCoresTotal, "", time.Minute, aggregateLast),
+		sandboxCountQuery("", time.Hour),
 	}
 
 	for _, q := range queries {
@@ -79,6 +84,32 @@ func TestMemoryQueryCollapsesGauge(t *testing.T) {
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateMax))
 	r.Equal("sum by (miren_sandbox) (memory_usage_bytes)",
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateLast))
+}
+
+// An app rollup groups by two labels at once, which is the only reason the
+// grouping is built rather than named directly.
+func TestGroupKeyJoinsLabels(t *testing.T) {
+	r := require.New(t)
+
+	r.Equal("miren_app", groupKey(labelApp))
+	r.Equal("miren_app, miren_kind", groupKey(labelApp, labelKind))
+
+	q := cpuCoresQuery(groupKey(labelApp, labelKind), "", time.Hour, aggregateAvg)
+	r.Contains(q, "sum by (miren_app, miren_kind)")
+}
+
+// A sandbox writes one memory series per container, so counting series would
+// report a sandbox with a sidecar as two. The nesting is what makes this a
+// count of sandboxes.
+func TestSandboxCountQueryCountsSandboxesNotSeries(t *testing.T) {
+	r := require.New(t)
+
+	q := sandboxCountQuery(labelSelector(map[string]string{labelApp: "shop"}), time.Hour)
+
+	r.Equal(
+		`count by (miren_app, miren_kind) (count by (miren_app, miren_kind, miren_sandbox) `+
+			`(last_over_time(memory_usage_bytes{miren_app="shop"}[3600s])))`,
+		q)
 }
 
 func TestLabelSelector(t *testing.T) {

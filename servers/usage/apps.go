@@ -1,8 +1,10 @@
 package usage
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,18 +31,20 @@ type appListing struct {
 // different kind. Doing it here means "what is app X using" has one answer that
 // does not depend on the caller reconstructing Miren's model.
 func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering) (*appListing, error) {
-	// Every kind is loaded regardless of the addon setting: addons are needed
-	// either to be counted or to be reported as the zero they were excluded at.
-	// The app filter is applied per row rather than in the directory, since an
-	// addon's app comes from a different label than a service's.
+	// The directory is still loaded, but for a narrower job than it used to do.
+	// It no longer supplies the figures -- those come from the store, grouped
+	// by app -- only each app's entity id, and a row for an app that exists but
+	// has gone quiet. Every kind is loaded regardless of the addon setting:
+	// addons are needed either to be counted or to be reported as the zero they
+	// were excluded at.
 	dir, err := s.loadDirectory(ctx, filter{node: f.node, includeSystem: true})
 	if err != nil {
 		return nil, err
 	}
 
-	cpu, memory, warnings := s.appSamples(ctx, f.node, w, dir)
+	m, warnings := s.appSamples(ctx, f.node, w, dir)
 
-	rows, cluster := buildAppRows(dir, cpu, memory, f.app, f.includeAddons)
+	rows, cluster := buildAppRows(dir, m, f.app, f.includeAddons)
 
 	out := &appListing{cluster: cluster, warnings: warnings, total: int32(len(rows))}
 
@@ -95,37 +99,213 @@ func (s *Server) HttpListApps(ctx context.Context, state *usage_v1alpha.Resource
 	return nil
 }
 
-// HttpGetApp serves GET /api/v1/usage/apps/{app}, addressing one app.
-func (s *Server) HttpGetApp(ctx context.Context, state *usage_v1alpha.ResourceUsageHttpGetApp) error {
-	args := state.Args()
+// appDetailOptions is what a caller wants alongside one app's usage.
+type appDetailOptions struct {
+	series        bool
+	includeAddons bool
+	step          time.Duration
+}
 
-	name := args.App()
+// appDetailResult is what the core produces, before either surface shapes it
+// into its own generated result type. Those types are write-only, so the core
+// cannot hand one to the other -- it returns plain values instead.
+type appDetailResult struct {
+	usage    *usage_v1alpha.AppUsage
+	series   []*usage_v1alpha.UsageSeries
+	warnings []string
+
+	// step is the resolution the series were rendered at, zero when none were
+	// asked for.
+	step time.Duration
+}
+
+// appDetailSetter is the shape both surfaces' result types share.
+type appDetailSetter interface {
+	SetUsage(*usage_v1alpha.AppUsage)
+	SetSeries([]*usage_v1alpha.UsageSeries)
+	SetWindow(*usage_v1alpha.UsageWindow)
+	SetWarnings([]string)
+}
+
+func (d *appDetailResult) apply(set appDetailSetter, w window) {
+	set.SetUsage(d.usage)
+	set.SetSeries(d.series)
+
+	// The window reports the step the series actually used, not the one asked
+	// for: an unset or too-fine request is resolved server-side.
+	w.step = d.step
+	set.SetWindow(w.encode())
+	set.SetWarnings(d.warnings)
+}
+
+// appDetail is the one implementation behind GetApp (RPC) and HttpGetApp
+// (REST).
+//
+// The row is what listApps would have produced for this one app; the series is
+// what a row cannot say. A row collapses the window to one number, and "what
+// has this app been doing" needs the shape of it.
+func (s *Server) appDetail(
+	ctx context.Context,
+	name string,
+	w window,
+	opts appDetailOptions,
+) (*appDetailResult, error) {
 	if name == "" {
-		return fmt.Errorf("an app name is required")
+		return nil, fmt.Errorf("an app name is required")
 	}
 
-	w := restWindow(args.Since(), args.Until(), args.Aggregate())
-	f := filter{app: name, includeAddons: !args.HasAddons() || args.Addons()}
+	listing, err := s.listApps(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{})
+	if err != nil {
+		return nil, err
+	}
 
-	listing, err := s.listApps(ctx, f, w, ordering{})
+	if len(listing.rows) == 0 {
+		// Not "has no running sandboxes" any more. Rows are sourced from the
+		// metrics store, so an app deleted this morning still answers for a
+		// window that contains it; an empty result means the window genuinely
+		// holds nothing.
+		return nil, fmt.Errorf("app %q has no usage in this window", name)
+	}
+
+	out := &appDetailResult{usage: listing.rows[0], warnings: listing.warnings}
+
+	if opts.series {
+		out.step = resolveStep(w, opts.step)
+
+		sel := labelSelector(map[string]string{labelApp: name})
+		series, warnings := s.appSeries(ctx, sel, w, out.step, opts.includeAddons)
+		out.series = series
+		out.warnings = append(out.warnings, warnings...)
+	}
+
+	return out, nil
+}
+
+// GetApp is the RPC surface.
+func (s *Server) GetApp(ctx context.Context, state *usage_v1alpha.ResourceUsageGetApp) error {
+	args := state.Args()
+
+	// Addons count toward an app's figures unless the caller says otherwise, so
+	// the absent case has to be told apart from an explicit false. The
+	// generated getter cannot do that on its own.
+	opts := appDetailOptions{includeAddons: true}
+	if o := args.Options(); o != nil {
+		opts.series = o.IncludeSeries()
+		opts.includeAddons = !o.HasIncludeAddons() || o.IncludeAddons()
+		opts.step = time.Duration(o.StepSeconds()) * time.Second
+	}
+
+	w := windowFrom(args.Window())
+
+	detail, err := s.appDetail(ctx, args.App(), w, opts)
 	if err != nil {
 		return err
 	}
 
-	res := state.Results()
-	res.SetWindow(w.encode())
-	res.SetWarnings(listing.warnings)
-
-	if len(listing.rows) == 0 {
-		return fmt.Errorf("app %q has no running sandboxes", name)
-	}
-
-	res.SetUsage(listing.rows[0])
+	detail.apply(state.Results(), w)
 
 	return nil
 }
 
-// appTally accumulates one app's sandboxes before they become a row.
+// HttpGetApp serves GET /api/v1/usage/apps/{app}, addressing one app.
+func (s *Server) HttpGetApp(ctx context.Context, state *usage_v1alpha.ResourceUsageHttpGetApp) error {
+	args := state.Args()
+
+	opts := appDetailOptions{
+		series:        args.Series(),
+		includeAddons: !args.HasAddons() || args.Addons(),
+	}
+	if d, ok := parseRESTDuration(args.Step()); ok {
+		opts.step = d
+	}
+
+	w := restWindow(args.Since(), args.Until(), args.Aggregate())
+
+	detail, err := s.appDetail(ctx, args.App(), w, opts)
+	if err != nil {
+		return err
+	}
+
+	detail.apply(state.Results(), w)
+
+	return nil
+}
+
+// appKey identifies one slice of an app's usage as the metrics store holds it:
+// the app, and whether the sandboxes behind it are the app's own services or
+// the addons it owns.
+type appKey struct {
+	app  string
+	kind string
+}
+
+// appMetrics is what the store says about every app in the window.
+type appMetrics struct {
+	cpu    map[appKey]float64
+	memory map[appKey]float64
+
+	// counts is how many sandboxes reported, which is not the same as how many
+	// were scheduled. A sandbox that never started never reports and so is
+	// never counted.
+	counts map[appKey]int64
+}
+
+func newAppMetrics() appMetrics {
+	return appMetrics{
+		cpu:    map[appKey]float64{},
+		memory: map[appKey]float64{},
+		counts: map[appKey]int64{},
+	}
+}
+
+// keys returns every group the store returned, in a fixed order.
+//
+// The order matters because it decides where an app the entity store has
+// already forgotten lands in the listing, and a row that moved between two
+// identical calls would read as a change in the cluster.
+func (m appMetrics) keys() []appKey {
+	seen := map[appKey]bool{}
+	var keys []appKey
+
+	add := func(k appKey) {
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+
+	for k := range m.cpu {
+		add(k)
+	}
+	for k := range m.memory {
+		add(k)
+	}
+	for k := range m.counts {
+		add(k)
+	}
+
+	slices.SortFunc(keys, func(a, b appKey) int {
+		if c := cmp.Compare(a.app, b.app); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.kind, b.kind)
+	})
+
+	return keys
+}
+
+// appKeyOf reads a group out of a query result's labels. A row with no app
+// label belongs to no app -- a shared addon server, or an unclassifiable
+// sandbox -- and has nothing to roll up into.
+func appKeyOf(labels map[string]string) (appKey, bool) {
+	app := labels[labelApp]
+	if app == "" {
+		return appKey{}, false
+	}
+	return appKey{app: app, kind: labels[labelKind]}, true
+}
+
+// appTally accumulates one app's groups before they become a row.
 type appTally struct {
 	app      string
 	appID    string
@@ -135,26 +315,51 @@ type appTally struct {
 	serviceCount int64
 	addonCount   int64
 
-	// sampled records whether any sandbox of this app reported anything. An app
-	// whose every sandbox is silent is reported as stale rather than as idle.
+	// sampled records whether this app reported anything. An app that is
+	// entirely silent is reported as stale rather than as idle.
 	sampled bool
+
+	// live records whether the app still has sandboxes in the entity store. An
+	// app that does not is reported as historical: it is in the listing only
+	// because the window reaches back far enough to contain its samples.
+	live bool
 }
 
-// buildAppRows groups the directory's sandboxes by app and attaches their
-// samples.
+// buildAppRows unions what the metrics store measured with what the entity
+// store still knows about.
 //
-// The entity pass drives the row set here exactly as it does for sandboxes: an
-// app is a row because it has sandboxes, not because it has metrics. An app
-// whose sandboxes have all stopped reporting still appears, marked stale.
+// Neither source alone is the row set. The store holds the numbers, and holds
+// them for a month, so it is the only source that can answer a window longer
+// than the current deployment -- an app redeployed on Tuesday has no live
+// sandbox that can account for Monday. But an app whose sandboxes have all
+// stopped reporting has no samples at all, and dropping it would make a broken
+// telemetry pipeline look like an idle cluster.
+//
+// So: the entity pass contributes the apps that exist and their entity ids, the
+// metric pass contributes the figures and any app the entity store has already
+// swept, and a row says which of the two it came from through stale and
+// historical.
 func buildAppRows(
 	dir *directory,
-	cpu, memory map[string]float64,
+	m appMetrics,
 	appFilter string,
 	includeAddons bool,
 ) ([]*usage_v1alpha.AppUsage, totals) {
 	tallies := map[string]*appTally{}
 	order := []string{}
 
+	tally := func(app string) *appTally {
+		t, ok := tallies[app]
+		if !ok {
+			t = &appTally{app: app}
+			tallies[app] = t
+			order = append(order, app)
+		}
+		return t
+	}
+
+	// Entities first, so a live app keeps the position it has always had and
+	// only the historical ones are appended after.
 	for _, sb := range dir.sandboxes {
 		app := sb.ref.App()
 		if app == "" {
@@ -165,25 +370,31 @@ func buildAppRows(
 		if appFilter != "" && app != appFilter {
 			continue
 		}
+		if sb.ref.Kind() == string(compute.KindAddon) && !includeAddons {
+			continue
+		}
 
-		isAddon := sb.ref.Kind() == string(compute.KindAddon)
+		t := tally(app)
+		t.live = true
+		if t.appID == "" {
+			t.appID = sb.ref.AppId()
+		}
+	}
+
+	for _, k := range m.keys() {
+		if appFilter != "" && k.app != appFilter {
+			continue
+		}
+
+		isAddon := k.kind == string(compute.KindAddon)
 		if isAddon && !includeAddons {
 			continue
 		}
 
-		t, ok := tallies[app]
-		if !ok {
-			t = &appTally{app: app, appID: sb.ref.AppId()}
-			tallies[app] = t
-			order = append(order, app)
-		}
-		if t.appID == "" {
-			t.appID = sb.ref.AppId()
-		}
+		t := tally(k.app)
 
-		id := sb.ref.Sandbox()
-		cores, haveCPU := cpu[id]
-		bytes, haveMem := memory[id]
+		cores, haveCPU := m.cpu[k]
+		bytes, haveMem := m.memory[k]
 		if haveCPU || haveMem {
 			t.sampled = true
 		}
@@ -191,11 +402,11 @@ func buildAppRows(
 		if isAddon {
 			t.addons.cpuCores += cores
 			t.addons.memoryBytes += int64(bytes)
-			t.addonCount++
+			t.addonCount += m.counts[k]
 		} else {
 			t.services.cpuCores += cores
 			t.services.memoryBytes += int64(bytes)
-			t.serviceCount++
+			t.serviceCount += m.counts[k]
 		}
 	}
 
@@ -220,6 +431,7 @@ func buildAppRows(
 		row.SetServiceCount(t.serviceCount)
 		row.SetAddonCount(t.addonCount)
 		row.SetStale(!t.sampled)
+		row.SetHistorical(!t.live)
 
 		cluster.cpuCores += total.cpuCores
 		cluster.memoryBytes += total.memoryBytes
@@ -230,23 +442,32 @@ func buildAppRows(
 	return rows, cluster
 }
 
-// appSamples fetches per-sandbox usage for the app rollup.
+// appSamples reads one row per app and kind straight from the store.
 //
-// It groups by sandbox rather than by app, even though the answer is per-app,
-// because the services-versus-addons split has to be made per sandbox and the
-// metric labels do not carry that distinction -- the entity model does. Summing
-// in the query would produce a total that could not be broken apart again.
+// Grouping by app in the query, rather than by sandbox with the rollup done
+// afterwards, is what lets a historical window answer at all: a sandbox that
+// died an hour ago is gone from the entity store within the hour, but its
+// samples are kept for a month, and only a query that never mentions a sandbox
+// id can reach them.
+//
+// The kind rides along in the grouping so the services-versus-addons split
+// survives it. That split used to be made per sandbox because the metric labels
+// were thought not to carry it; miren.kind is now stamped onto every series
+// from the same compute.SandboxKind the entity path uses, so the store can make
+// the same distinction the entity model does.
+//
+// Three queries answer the whole cluster, and none of them grows with the
+// number of sandboxes.
 func (s *Server) appSamples(
 	ctx context.Context,
 	node string,
 	w window,
 	dir *directory,
-) (cpu, memory map[string]float64, warnings []string) {
-	cpu = map[string]float64{}
-	memory = map[string]float64{}
+) (appMetrics, []string) {
+	m := newAppMetrics()
 
 	if s.Reader == nil {
-		return cpu, memory, []string{"no metrics backend configured; usage figures are unavailable"}
+		return m, []string{"no metrics backend configured; usage figures are unavailable"}
 	}
 
 	selector := ""
@@ -257,20 +478,104 @@ func (s *Server) appSamples(
 	}
 
 	dur := w.duration()
+	group := groupKey(labelApp, labelKind)
 
-	if vals, err := s.instantByLabel(ctx, cpuCoresQuery(labelSandbox, selector, dur, w.aggregate), labelSandbox, w.end); err != nil {
-		warnings = append(warnings, "cpu usage unavailable: "+err.Error())
-	} else {
-		cpu = vals
+	var warnings []string
+
+	collect := func(what, query string, store func(appKey, float64)) {
+		rows, err := s.instantRows(ctx, query, w.end)
+		if err != nil {
+			warnings = append(warnings, what+" unavailable: "+err.Error())
+			return
+		}
+		for _, r := range rows {
+			if k, ok := appKeyOf(r.labels); ok {
+				store(k, r.value)
+			}
+		}
 	}
 
-	if vals, err := s.instantByLabel(ctx, memoryBytesQuery(labelSandbox, selector, dur, w.aggregate), labelSandbox, w.end); err != nil {
-		warnings = append(warnings, "memory usage unavailable: "+err.Error())
-	} else {
-		memory = vals
+	collect("cpu usage", cpuCoresQuery(group, selector, dur, w.aggregate),
+		func(k appKey, v float64) { m.cpu[k] = v })
+
+	collect("memory usage", memoryBytesQuery(group, selector, dur, w.aggregate),
+		func(k appKey, v float64) { m.memory[k] = v })
+
+	// The counts say what a row is made of, so "1.5 cores of addon" can be
+	// attributed to something. Their absence degrades a column rather than the
+	// answer, which is why this is a warning and not a failure.
+	collect("sandbox counts", sandboxCountQuery(selector, dur),
+		func(k appKey, v float64) { m.counts[k] = int64(v) })
+
+	return m, warnings
+}
+
+// appSeries fetches an app's CPU and memory over time, summed across every
+// sandbox that belongs to it.
+//
+// It groups by kind as well as by app and sums here rather than in the query,
+// because a caller may have excluded addons and a query that had already added
+// them in could not be taken apart again. The selector pins one app, so at most
+// two series come back per metric.
+//
+// That summing is what sandboxSeries does not do: it flattens every returned
+// series into one list of points, which is only safe because its selector pins
+// a single sandbox. Flattening here would concatenate an app's services and the
+// database behind it into one undifferentiated run.
+func (s *Server) appSeries(
+	ctx context.Context,
+	selector string,
+	w window,
+	step time.Duration,
+	includeAddons bool,
+) ([]*usage_v1alpha.UsageSeries, []string) {
+	if s.Reader == nil {
+		return nil, nil
 	}
 
-	return cpu, memory, warnings
+	group := groupKey(labelApp, labelKind)
+
+	queries := []struct {
+		metric string
+		query  string
+	}{
+		{"cpu_cores", cpuCoresQuery(group, selector, step, aggregateAvg)},
+		{"memory_bytes", memoryBytesQuery(group, selector, step, aggregateLast)},
+	}
+
+	var out []*usage_v1alpha.UsageSeries
+	var warnings []string
+
+	for _, q := range queries {
+		result, err := s.Reader.RangeQuery(ctx, q.query, w.start, w.end, promDuration(step))
+		if err != nil {
+			warnings = append(warnings, q.metric+" history unavailable: "+err.Error())
+			continue
+		}
+
+		// Every returned series is evaluated at the same step, so adding by
+		// timestamp lines the kinds up without any interpolation.
+		byTime := map[int64]float64{}
+		for _, r := range result.Data.Result {
+			if !includeAddons && r.Metric[labelKind] == string(compute.KindAddon) {
+				continue
+			}
+			for _, v := range r.Values {
+				at, val, ok := parseSample(v)
+				if !ok {
+					continue
+				}
+				byTime[at] += val
+			}
+		}
+
+		var series usage_v1alpha.UsageSeries
+		series.SetMetric(q.metric)
+		series.SetPoints(pointsInOrder(byTime))
+		out = append(out, &series)
+	}
+
+	return out, warnings
 }
 
 func sortApps(rows []*usage_v1alpha.AppUsage, ord ordering) {

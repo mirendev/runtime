@@ -35,6 +35,22 @@ asked for it -- and the SERVICES and ADDONS columns show how the total divides,
 so "2.1 cores, 1.6 of it Postgres" is one line rather than an investigation.
 Pass --no-addons to count only the app's own code.
 
+App rows are read from the metrics store rather than from the sandboxes that
+happen to be alive, so --since covers the whole window it names -- including the
+deployment before the current one. An app with nothing left running is marked
+"(gone)": it is in the listing only because the window reaches back far enough
+to contain its samples. Samples are kept for a month, so a long enough --since
+will name apps that have since been deleted.
+
+--series adds that app's CPU and memory over time, which a row cannot show: a
+row collapses the window to one number. It needs --apps and --app, because a
+history is one app's:
+
+  miren top --apps --app shop --since 24h --series
+
+Use --format json to get the points themselves, and --step to choose their
+resolution.
+
 There is no restart column. Miren replaces a failed sandbox rather than
 restarting it, so no single sandbox accumulates a restart count; repeated
 failure shows up as a crash loop on the pool, which "miren sandbox inspect"
@@ -67,10 +83,12 @@ miren top [flags]
 - `--order` — Sort direction: desc or asc (default: desc for usage, asc for names)
 - `--runner` — Only show sandboxes on this runner (name, ID, or short ID)
 - `--samples` — Stop after this many refreshes (0 for unlimited) (default: `0`)
+- `--series` — With --apps --app, show one app's CPU and memory over time
 - `--service` — Only show sandboxes of this service (e.g. web, worker)
 - `--since` — Measure over this window, e.g. 30s, 5m, 1h (default 1m)
 - `--sort` — Sort by: cpu, memory, name, app, service, node (default: `cpu`)
 - `--status` — Only show sandboxes in this status
+- `--step` — Resolution of --series, e.g. 30s, 5m (default: derived from --since)
 - `--system` — Include addon and platform sandboxes
 - `--watch, -w` — Refresh continuously until interrupted
 

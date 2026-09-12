@@ -30,7 +30,19 @@ const (
 	labelSandbox = "miren_sandbox"
 	labelNode    = "miren_node"
 	labelRunner  = "miren_runner"
+	labelApp     = "miren_app"
+	labelKind    = "miren_kind"
 )
+
+// groupKey renders several labels as one grouping clause.
+//
+// The query builders take the grouping as a single string because most callers
+// group by one label. An app rollup needs two -- the app and the kind, so an
+// app's own services stay separable from the addons it owns -- and this is what
+// keeps the joining spelled in one place rather than at each call site.
+func groupKey(labels ...string) string {
+	return strings.Join(labels, ", ")
+}
 
 // Aggregates a caller may ask for.
 const (
@@ -128,6 +140,25 @@ func memoryBytesQuery(groupBy string, selector string, window time.Duration, agg
 	}
 
 	return overTime(aggregate, inner, window)
+}
+
+// sandboxCountQuery counts the sandboxes that reported, per group.
+//
+// This is how many sandboxes a row is made of, sourced from the store rather
+// than from the entity pass so that a historical window can still say. It
+// counts *reporting* sandboxes, which is not the same as scheduled ones: a
+// sandbox that was never able to start never reports and so is never counted.
+//
+// The nesting is what makes it a sandbox count rather than a series count. A
+// sandbox writes one memory series per container, so the inner count collapses
+// each sandbox to one before the outer one counts them. Memory is the metric to
+// count on because it is a gauge -- every live sandbox has a current value,
+// where a CPU counter that has not advanced in the window yields no rate.
+func sandboxCountQuery(selector string, window time.Duration) string {
+	perSandbox := fmt.Sprintf("count by (%s) (last_over_time(%s%s[%s]))",
+		groupKey(labelApp, labelKind, labelSandbox), metricMemoryUsed, selector, promDuration(window))
+
+	return fmt.Sprintf("count by (%s) (%s)", groupKey(labelApp, labelKind), perSandbox)
 }
 
 // nodeGaugeQuery reads one node-level gauge, collapsed over the window.

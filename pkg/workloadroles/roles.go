@@ -111,8 +111,8 @@ var (
 		// app the way rpc.AllowApp confines the blocks above.
 		"resourceusage": set(
 			// RPC surface.
-			"listsandboxes", "getsandbox", "listnodes", "listapps",
-			// The same six questions over plain HTTP GET.
+			"listsandboxes", "getsandbox", "listnodes", "listapps", "getapp",
+			// The same questions over plain HTTP GET.
 			"httplistsandboxes", "httpgetsandbox",
 			"httplistnodes", "httpgetnode",
 			"httplistapps", "httpgetapp",
