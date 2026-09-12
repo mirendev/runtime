@@ -330,6 +330,36 @@ interfaces:
             type: string
             doc: Error message if issuance failed
 
+      - name: InstallDiskAccelerator
+        index: 13
+        doc: |
+          Build and load the lbd kernel module on a runner, so its disks can
+          use accelerator mode instead of loop devices.
+
+          The coordinator makes sure the toolchain image is in the cluster
+          registry, then asks the node to do the install. It runs on the node
+          because the module is compiled against the kernel running there.
+        parameters:
+          - name: query
+            type: string
+            doc: Runner to install on (name, ID, or short ID)
+          - name: force
+            type: bool
+            doc: Rebuild even when the installed module is already current
+        results:
+          - name: name
+            type: string
+            doc: Name of the runner installed on
+          - name: kernel_release
+            type: string
+            doc: Kernel the module was built for
+          - name: lbd_version
+            type: string
+            doc: lbd version that was installed
+          - name: error
+            type: string
+            doc: Error message if the install failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

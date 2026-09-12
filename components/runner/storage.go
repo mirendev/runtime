@@ -71,9 +71,10 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 	if err := diskio.EnsureLoopDevices(log); err != nil {
 		log.Warn("Loop devices not available, disk mounts will fail", "error", err)
 	}
-	if err := diskio.EnsureLbdDevices(log); err != nil {
-		log.Warn("lbd devices not available, accelerator mode will not work", "error", err)
-	}
+
+	// Bring up accelerator mode, rebuilding the lbd module if a kernel
+	// upgrade left the installed one unloadable.
+	setupLbd(ctx, s.lbdDeps(), log)
 
 	diskioState, err := diskio.LoadState(dataPath)
 	if err != nil {
@@ -247,4 +248,16 @@ func (a *StorageAgent) Close() error {
 		a.storage.manager.Stop()
 	}
 	return nil
+}
+
+// lbdDeps gathers what accelerator mode needs: a containerd to run the build
+// in, the cluster address mapping and identity to pull the toolchain image
+// with, and the data path holding the install record.
+func (s *NodeStorage) lbdDeps() lbdDeps {
+	return lbdDeps{
+		CC:             s.deps.CC,
+		Resolver:       s.deps.Resolver,
+		WorkloadIssuer: s.access.WorkloadIssuer(),
+		DataPath:       s.config.DataPath,
+	}
 }
