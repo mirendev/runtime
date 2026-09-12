@@ -269,12 +269,17 @@ Complete reference for all `miren` CLI commands.
 | [`miren server container uninstall`](./command/server-container-uninstall.md) | Uninstall miren server container |
 | [`miren server identity-anchor`](./command/server-identity-anchor.md) | Move where this cluster's workload identity is anchored |
 | [`miren server install`](./command/server-install.md) | Install systemd service for miren server |
+| [`miren server lifecycle`](./command/server-lifecycle.md) | Durable server restart and upgrade operations |
+| [`miren server lifecycle list`](./command/server-lifecycle-list.md) | List recorded restart and upgrade operations |
+| [`miren server lifecycle run`](./command/server-lifecycle-run.md) | Execute or resume an operation in the foreground (normally launched by miren upgrade) |
+| [`miren server lifecycle show`](./command/server-lifecycle-show.md) | Show one restart or upgrade operation |
 | [`miren server register`](./command/server-register.md) | Register this cluster with miren.cloud |
 | [`miren server register status`](./command/server-register-status.md) | Show cluster registration status |
+| [`miren server restart`](./command/server-restart.md) | Restart the systemd-managed miren server and wait for it to report ready |
 | [`miren server status`](./command/server-status.md) | Show miren service status |
 | [`miren server uninstall`](./command/server-uninstall.md) | Remove systemd service for miren server |
 | [`miren server unregister`](./command/server-unregister.md) | Detach this cluster from miren.cloud |
-| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server |
+| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'sudo miren upgrade') |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
 ## top
@@ -287,7 +292,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren upgrade`](./command/upgrade.md) | Upgrade miren CLI to latest version |
+| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (server and CLI on a systemd server host, otherwise the CLI) |
 
 ## version
 

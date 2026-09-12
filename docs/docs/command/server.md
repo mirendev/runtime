@@ -87,8 +87,10 @@ miren server --mode standalone
 - [`miren server container`](./server-container.md) — Run the miren server in a container (Docker or Podman)
 - [`miren server identity-anchor`](./server-identity-anchor.md) — Move where this cluster's workload identity is anchored
 - [`miren server install`](./server-install.md) — Install systemd service for miren server
+- [`miren server lifecycle`](./server-lifecycle.md) — Durable server restart and upgrade operations
 - [`miren server register`](./server-register.md) — Register this cluster with miren.cloud
+- [`miren server restart`](./server-restart.md) — Restart the systemd-managed miren server and wait for it to report ready
 - [`miren server status`](./server-status.md) — Show miren service status
 - [`miren server uninstall`](./server-uninstall.md) — Remove systemd service for miren server
 - [`miren server unregister`](./server-unregister.md) — Detach this cluster from miren.cloud
-- [`miren server upgrade`](./server-upgrade.md) — Upgrade miren server
+- [`miren server upgrade`](./server-upgrade.md) — Upgrade miren server (deprecated: use 'sudo miren upgrade')

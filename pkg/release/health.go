@@ -179,11 +179,9 @@ func IsRunnerRunning() bool {
 	return isSystemdServiceActive("miren-runner")
 }
 
+// No root gate: `systemctl is-active` needs no privileges, and `miren
+// upgrade` wants the answer before it asks for sudo.
 func isSystemdServiceActive(unit string) bool {
-	if os.Geteuid() != 0 {
-		return false
-	}
-
 	cmd := exec.Command("systemctl", "is-active", unit)
 	output, err := cmd.Output()
 	if err != nil {

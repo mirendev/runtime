@@ -1094,18 +1094,38 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren server config validate --file server.toml",
 		}),
 	))
-	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server", ServerUpgrade,
+	d.Dispatch("server restart", Infer("server restart", "Restart the systemd-managed miren server and wait for it to report ready", ServerRestart,
+		WithExample(mflags.Example{
+			Name: "Restart the server",
+			Body: "sudo miren server restart",
+		}),
+	))
+	d.Dispatch("server lifecycle", Section("server lifecycle", "Durable server restart and upgrade operations", ""))
+	d.Dispatch("server lifecycle list", Infer("server lifecycle list", "List recorded restart and upgrade operations", ServerLifecycleList,
+		WithExample(mflags.Example{
+			Name: "List operations",
+			Body: "miren server lifecycle list",
+		}),
+	))
+	d.Dispatch("server lifecycle show", Infer("server lifecycle show", "Show one restart or upgrade operation", ServerLifecycleShow,
+		WithExample(mflags.Example{
+			Name: "Show an operation",
+			Body: "miren server lifecycle show 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
+	d.Dispatch("server lifecycle run", Infer("server lifecycle run", "Execute or resume an operation in the foreground (normally launched by miren upgrade)", ServerLifecycleRun))
+	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'sudo miren upgrade')", ServerUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade to the latest version",
-			Body: "miren server upgrade",
+			Body: "sudo miren server upgrade",
 		}),
 		WithExample(mflags.Example{
 			Name: "Check for available updates",
-			Body: "miren server upgrade --check",
+			Body: "sudo miren server upgrade --check",
 		}),
 		WithExample(mflags.Example{
 			Name: "Upgrade to a specific version",
-			Body: "miren server upgrade --version v0.2.0",
+			Body: "sudo miren server upgrade --version v0.2.0",
 		}),
 	))
 	d.Dispatch("server upgrade rollback", Infer("server upgrade rollback", "Rollback server to previous version", ServerUpgradeRollback,
@@ -1180,11 +1200,15 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren download release",
 		}),
 	))
-	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren CLI to latest version", Upgrade,
+	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)", Upgrade,
 		WithGroup(GroupClient),
 		WithExample(mflags.Example{
-			Name: "Upgrade to latest",
+			Name: "Upgrade the CLI on a client machine",
 			Body: "miren upgrade",
+		}),
+		WithExample(mflags.Example{
+			Name: "Upgrade the server and CLI on a server host",
+			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{
 			Name: "Check for updates without installing",
