@@ -19,10 +19,13 @@ image to keep up to date.
 ## Getting started
 
 ` + "```" + `bash
-miren disk accelerator status          # can this host run it?
-miren disk accelerator install runner1  # build and load it there
-sudo systemctl restart miren           # on that node, to pick up the mode
+miren disk accelerator install runner1  # build and load it on runner1
+sudo systemctl restart miren            # on runner1, to pick up the mode
 ` + "```" + `
+
+` + "`install`" + ` names the node to install on, but ` + "`status`" + ` and
+` + "`uninstall`" + ` read and change the host you run them on. To check a node
+before or after installing, run ` + "`status`" + ` on that node.
 
 ## Requirements
 

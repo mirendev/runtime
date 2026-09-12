@@ -25,7 +25,6 @@ node is running. One command does that.
 ## Minimum working example
 
 ```bash
-miren disk accelerator status              # can this host run it?
 miren disk accelerator install runner1     # build and load the module there
 sudo systemctl restart miren               # on that node, to pick up the mode
 ```
@@ -69,6 +68,9 @@ builder then borrows them read-only instead of downloading them, and needs no
 network at all.
 
 ## Checking what is going on
+
+`status` reads the host you run it on, not the node you last installed to. To
+see how a runner is doing, run it on that runner.
 
 ```bash
 miren disk accelerator status

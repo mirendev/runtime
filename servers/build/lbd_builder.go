@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sync"
 
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -15,7 +14,11 @@ import (
 // lbdBuilderLock serializes the toolchain build within one coordinator. Two
 // concurrent builds would both succeed -- the registry dedupes by manifest
 // digest -- but they would each spend a full image build to get there.
-var lbdBuilderLock sync.Mutex
+//
+// It is a channel rather than a sync.Mutex so a caller can give up: an image
+// build takes minutes, and the RPC handler waiting behind one has to stay
+// cancellable.
+var lbdBuilderLock = make(chan struct{}, 1)
 
 // EnsureLbdBuilderImage makes sure the lbd toolchain image is in the cluster
 // registry and returns the reference nodes should pull.
@@ -34,8 +37,12 @@ func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 		return ref, nil
 	}
 
-	lbdBuilderLock.Lock()
-	defer lbdBuilderLock.Unlock()
+	select {
+	case lbdBuilderLock <- struct{}{}:
+	case <-ctx.Done():
+		return "", fmt.Errorf("waiting for another lbd toolchain build to finish: %w", ctx.Err())
+	}
+	defer func() { <-lbdBuilderLock }()
 
 	// Another call may have finished the build while this one waited.
 	if b.present(ctx) {
