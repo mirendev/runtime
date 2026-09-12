@@ -59,6 +59,12 @@ systemctl stop miren.service 2>/dev/null
 # Deliberately NOT `systemctl revert`: that removes every drop-in for the unit,
 # including the managed /etc/systemd/system/miren.service.d/10-miren-resources.conf
 # this script exists to verify. Remove only what set-property --runtime created.
+#
+# That lands in system.control, not system. Getting it wrong leaves the 32 MB
+# squeeze in force, and since /run outranks /etc the service would restart still
+# squeezed. Both are cleared so a systemd that chooses differently still ends up
+# clean, and the restored-limit check below is what actually proves it did.
+rm -rf /run/systemd/system.control/miren.service.d
 rm -rf /run/systemd/system/miren.service.d
 systemctl daemon-reload
 

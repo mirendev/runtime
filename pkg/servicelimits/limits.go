@@ -292,7 +292,15 @@ func UnitShortName(unit string) string {
 // systemd applies shell-like unquoting to Exec arguments, so a double-quoted
 // string with backslash-escaped specials is understood the way it looks.
 func quoteExecArg(s string) string {
-	if !strings.ContainsAny(s, " \t\n\r\"'\\$;") {
+	// "%" introduces a unit-file specifier (%n is the unit name, %t the runtime
+	// directory) and "$" a variable reference. Both are interpreted whether or
+	// not the value is quoted, and each has its own documented escape — "%%"
+	// and "$$" — so they are doubled before any quoting decision. Backslash
+	// does not escape either of them.
+	s = strings.ReplaceAll(s, "%", "%%")
+	s = strings.ReplaceAll(s, "$", "$$")
+
+	if !strings.ContainsAny(s, " \t\n\r\"'\\;") {
 		return s
 	}
 
@@ -300,7 +308,7 @@ func quoteExecArg(s string) string {
 	b.WriteByte('"')
 	for _, r := range s {
 		switch r {
-		case '"', '\\', '$':
+		case '"', '\\':
 			b.WriteByte('\\')
 			b.WriteRune(r)
 		case '\n':
@@ -320,30 +328,34 @@ func quoteExecArg(s string) string {
 // unquoteExecArg reverses quoteExecArg, so a path this package wrote can be read
 // back out of a drop-in.
 func unquoteExecArg(s string) string {
-	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
-		return s
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var b strings.Builder
+		body := []rune(s[1 : len(s)-1])
+		for i := 0; i < len(body); i++ {
+			if body[i] != '\\' || i+1 >= len(body) {
+				b.WriteRune(body[i])
+				continue
+			}
+			i++
+			switch body[i] {
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 't':
+				b.WriteByte('\t')
+			default:
+				b.WriteRune(body[i])
+			}
+		}
+		s = b.String()
 	}
 
-	var b strings.Builder
-	body := []rune(s[1 : len(s)-1])
-	for i := 0; i < len(body); i++ {
-		if body[i] != '\\' || i+1 >= len(body) {
-			b.WriteRune(body[i])
-			continue
-		}
-		i++
-		switch body[i] {
-		case 'n':
-			b.WriteByte('\n')
-		case 'r':
-			b.WriteByte('\r')
-		case 't':
-			b.WriteByte('\t')
-		default:
-			b.WriteRune(body[i])
-		}
-	}
-	return b.String()
+	// Undo the specifier and variable doubling, which quoteExecArg applies
+	// outside the quoting decision.
+	s = strings.ReplaceAll(s, "$$", "$")
+	s = strings.ReplaceAll(s, "%%", "%")
+	return s
 }
 
 // formatBytes renders a byte count in the largest unit that divides it exactly,

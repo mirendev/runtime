@@ -244,7 +244,13 @@ func TestQuoteExecArg(t *testing.T) {
 
 	assert.Equal(t, `"/tmp/a\"b"`, quoteExecArg(`/tmp/a"b`))
 	assert.Equal(t, `"/tmp/a\\b"`, quoteExecArg(`/tmp/a\b`))
-	assert.Equal(t, `"/tmp/a\$b"`, quoteExecArg("/tmp/a$b"))
+
+	// "$" and "%" are interpreted by systemd whether or not the value is
+	// quoted, and each has its own escape rather than a backslash. A path with
+	// no other special character therefore stays unquoted but still doubled.
+	assert.Equal(t, "/tmp/a$$b", quoteExecArg("/tmp/a$b"))
+	assert.Equal(t, "/tmp/a%%nb", quoteExecArg("/tmp/a%nb"))
+	assert.Equal(t, `"/tmp/a $$b %%n"`, quoteExecArg("/tmp/a $b %n"))
 }
 
 func TestRenderEscapesTheStatePath(t *testing.T) {
@@ -360,6 +366,9 @@ func TestUnquoteExecArgRoundTrips(t *testing.T) {
 		"/tmp/a\"b",
 		`/tmp/a\b`,
 		"/tmp/a$b",
+		"/tmp/a%nb",
+		"/tmp/100%",
+		"/tmp/a $b %n",
 		"/tmp/x\nExecStart=/bin/false",
 	} {
 		assert.Equal(t, path, unquoteExecArg(quoteExecArg(path)), "round trip for %q", path)
