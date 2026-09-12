@@ -49,7 +49,7 @@ func NewDownloader() Downloader {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Minute, // Allow long downloads for large artifacts
 		},
-		baseURL: "https://api.miren.cloud/assets/release/miren",
+		baseURL: AssetBaseURL(),
 	}
 }
 
@@ -233,10 +233,11 @@ func (d *assetDownloader) downloadFile(ctx context.Context, url, path string, pr
 	// Set up progress tracking if a progress writer is provided
 	var reader io.Reader = resp.Body
 	if progressWriter != nil {
-		// If it's our ProgressWriter type, set the total
-		if pw, ok := progressWriter.(*ProgressWriter); ok {
+		if pw, ok := progressWriter.(interface{ SetTotal(int64) }); ok {
 			pw.SetTotal(resp.ContentLength)
-			defer pw.Close()
+		}
+		if pc, ok := progressWriter.(io.Closer); ok {
+			defer pc.Close()
 		}
 		reader = io.TeeReader(resp.Body, progressWriter)
 	}

@@ -314,7 +314,14 @@ func (m *Manager) restartService(ctx context.Context) error {
 // Best-effort. An upgrade that can't refresh the limits should still restart the
 // service the user asked it to restart.
 func (m *Manager) ensureResourceLimits(ctx context.Context) {
-	if m.opts.ServiceName == "" || m.opts.StateDir == "" {
+	RefreshResourceLimits(ctx, m.opts.ServiceName, m.opts.StateDir)
+}
+
+// RefreshResourceLimits rewrites the managed resource-limit drop-in for
+// serviceName and reloads systemd. Shared by every path that restarts the
+// service for an upgrade so the hook does not depend on which one ran.
+func RefreshResourceLimits(ctx context.Context, serviceName, stateDir string) {
+	if serviceName == "" || stateDir == "" {
 		return
 	}
 	// Writing under /etc/systemd/system needs root. A user-scoped upgrade has no
@@ -323,7 +330,7 @@ func (m *Manager) ensureResourceLimits(ctx context.Context) {
 		return
 	}
 
-	unit := m.opts.ServiceName + ".service"
+	unit := serviceName + ".service"
 
 	// Don't leave drop-in config behind for a unit that was never installed —
 	// a container install has no systemd unit to adjust.
@@ -334,7 +341,7 @@ func (m *Manager) ensureResourceLimits(ctx context.Context) {
 	// Prefer the path install already worked out. It knew the effective data
 	// path; we don't, and recomputing it here would replace a custom one with
 	// the default, leaving the hook writing records the daemon never reads.
-	statePath := m.opts.StateDir
+	statePath := stateDir
 	if existing, ok := servicelimits.ExistingStatePath(unit); ok {
 		statePath = existing
 	}
