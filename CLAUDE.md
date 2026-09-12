@@ -240,7 +240,7 @@ make test-blackbox-distributed
 make dev-distributed-down
 ```
 
-The distributed environment uses `.iso/peers.yml` to define two peers (coordinator and runner1) and connects them to the existing services (etcd, VictoriaMetrics, VictoriaLogs). The `MIREN_LABS=distributedrunners` feature flag is set on both peers.
+The distributed environment uses `.iso/peers.yml` to define two peers (coordinator and runner1) and connects them to the existing services (etcd, VictoriaMetrics, VictoriaLogs).
 
 Blackbox tests that are specific to distributed topologies (runner list, metrics pipeline, log pipeline) live in `blackbox/distributed_runner_test.go` and self-skip when not running in peers mode.
 

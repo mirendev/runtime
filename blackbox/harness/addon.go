@@ -9,12 +9,16 @@ import (
 
 // addonListEntry matches the JSON output of `miren addon list -a <app> --format json`.
 type addonListEntry struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Variant string `json:"variant"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Variant      string `json:"variant"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"error_message"`
 }
 
-// WaitForAddonReady polls `addon list` until the named addon appears for the app.
+// WaitForAddonReady polls `addon list` until the named addon is active on the
+// app. An addon in error will never become active, so that fails the test at
+// once with the controller's reason instead of running out the timeout.
 func WaitForAddonReady(t *testing.T, m *Miren, appName, addonName string, timeout time.Duration) {
 	t.Helper()
 
@@ -30,9 +34,16 @@ func WaitForAddonReady(t *testing.T, m *Miren, appName, addonName string, timeou
 		}
 
 		for _, a := range addons {
-			if a.Name == addonName {
-				return true, ""
+			if a.Name != addonName {
+				continue
 			}
+			switch a.Status {
+			case "active":
+				return true, ""
+			case "error":
+				t.Fatalf("addon %s on %s failed to provision: %s", addonName, appName, a.ErrorMessage)
+			}
+			return false, fmt.Sprintf("addon %s is %s", addonName, a.Status)
 		}
 
 		return false, fmt.Sprintf("addon %s not found in list (%d addons)", addonName, len(addons))

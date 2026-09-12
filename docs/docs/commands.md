@@ -229,6 +229,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren sandbox`](./command/sandbox.md) | Sandbox management commands |
 | [`miren sandbox delete`](./command/sandbox-delete.md) | Delete a dead sandbox |
 | [`miren sandbox exec`](./command/sandbox-exec.md) | Open interactive shell in an existing sandbox |
+| [`miren sandbox inspect`](./command/sandbox-inspect.md) | Show one sandbox's resource usage and failure history |
 | [`miren sandbox list`](./command/sandbox-list.md) | List sandboxes (excludes dead by default) |
 | [`miren sandbox stop`](./command/sandbox-stop.md) | Stop a sandbox |
 
@@ -276,6 +277,12 @@ Complete reference for all `miren` CLI commands.
 | [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
+## top
+
+| Command | Description |
+|---------|-------------|
+| [`miren top`](./command/top.md) | Show cluster-wide resource usage |
+
 ## upgrade
 
 | Command | Description |
@@ -312,6 +319,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug connection`](./command/debug-connection.md) | Test connectivity and authentication with a server |
 | [`miren debug ctr`](./command/debug-ctr.md) | Run ctr with miren defaults |
 | [`miren debug ctr nuke`](./command/debug-ctr-nuke.md) | Nuke a containerd namespace |
+| [`miren debug deploy-events`](./command/debug-deploy-events.md) | Render a 'miren deploy --format jsonl' stream as readable output |
 | [`miren debug disk`](./command/debug-disk.md) | Disk entity debug commands |
 | [`miren debug disk backup`](./command/debug-disk-backup.md) | Back up a disk by reading its image directly (break-glass) |
 | [`miren debug disk create`](./command/debug-disk-create.md) | Create a disk entity for testing |

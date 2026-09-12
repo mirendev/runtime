@@ -65,6 +65,7 @@ var Meter = spinner.Spinner{
 type buildProgress struct {
 	total     int
 	completed int
+	cached    int // completed steps that were served from cache
 }
 
 type phaseSummary struct {
@@ -104,10 +105,11 @@ type deployInfo struct {
 	message string
 	update  chan string
 
-	buildCh    chan buildProgress
-	prog       progress.Model
-	buildSteps int
-	buildPct   float64
+	buildCh     chan buildProgress
+	prog        progress.Model
+	buildSteps  int
+	buildCached int
+	buildPct    float64
 
 	uploadProgress chan upload.Progress
 	uploadSpin     spinner.Model
@@ -342,6 +344,7 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentPhase = "buildkit"
 		}
 		m.buildSteps = msg.total
+		m.buildCached = msg.cached
 
 		if msg.total > 0 {
 			m.buildPct = float64(msg.completed) / float64(msg.total)
@@ -375,12 +378,14 @@ func (m *deployInfo) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		phasePrints = append(phasePrints, m.completePhase(buildPhaseSummary(
 			msg.image,
 			m.buildSteps,
+			m.buildCached,
 			time.Since(m.phaseStart),
 		)))
 		cmds = append(cmds, tea.Sequence(phasePrints...))
 
 		m.isUploading = false
 		m.buildSteps = 0
+		m.buildCached = 0
 		m.currentPhase = "activating"
 		m.message = "Activating version"
 		m.phaseStart = time.Now()
@@ -491,7 +496,7 @@ func renderPhaseSummary(phase phaseSummary) string {
 	return fmt.Sprintf("%s %s", phaseStr, timeStr)
 }
 
-func buildPhaseSummary(image string, steps int, duration time.Duration) phaseSummary {
+func buildPhaseSummary(image string, steps, cached int, duration time.Duration) phaseSummary {
 	if image != "" {
 		return phaseSummary{
 			name:     "Use image",
@@ -502,6 +507,6 @@ func buildPhaseSummary(image string, steps int, duration time.Duration) phaseSum
 	return phaseSummary{
 		name:     "Build & push image",
 		duration: duration,
-		details:  buildStepsSummary(steps),
+		details:  buildStepsSummary(steps, cached),
 	}
 }

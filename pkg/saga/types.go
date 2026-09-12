@@ -163,3 +163,51 @@ type TerminalPage struct {
 	// ending, only an empty cursor is.
 	Cursor string
 }
+
+// IncompleteSummary summarizes an execution that is still in flight: which one,
+// what it is doing, when it last changed, and whose child it is.
+//
+// Separate from Execution because the stalled sweep walks the whole in-flight
+// set to ask one question about each. Materializing every action-output blob in
+// a six-figure backlog to read a timestamp is the unbounded read MIR-1785
+// removed, reintroduced for a worse reason.
+type IncompleteSummary struct {
+	// ID identifies the execution.
+	ID string
+
+	// Status is the decoded status, not the index the entry came from.
+	Status Status
+
+	// LastChanged is when the execution last changed state, resolved by
+	// lastChanged. The fallback matters more here than it does for retention:
+	// v0.11.1's saga schema had no updated_at at all, so the records this sweep
+	// exists to drain would otherwise all read as infinitely old.
+	LastChanged time.Time
+
+	// ParentID is set when this execution ran as a nested child, and matters
+	// for the same reason it does to retention: a live parent re-finds its
+	// child rather than re-running it.
+	ParentID string
+}
+
+// IncompleteSummaryQuery selects one page of in-flight execution summaries.
+type IncompleteSummaryQuery struct {
+	// Cursor resumes after the last execution of a previous page. Empty starts
+	// at the beginning.
+	Cursor string
+
+	// Limit caps how many executions the page summarizes. Zero or less means
+	// the backend's own cap.
+	Limit int
+}
+
+// IncompleteSummaryPage is one bounded page of in-flight execution summaries.
+type IncompleteSummaryPage struct {
+	// Executions summarizes the in-flight executions in this page.
+	Executions []IncompleteSummary
+
+	// Cursor resumes the walk after this page, empty once the walk is done.
+	// The same caveat as IncompletePage.Cursor applies: a short page is not an
+	// ending, only an empty cursor is.
+	Cursor string
+}

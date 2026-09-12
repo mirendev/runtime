@@ -54,7 +54,7 @@ miren.md serves the docs for the released version. The docs on `main` are
 published alongside them at `/next`, behind a banner linking back to the
 released page. Nothing versioned is checked in: `hack/docs-snapshot`
 materializes the released copy from a git ref at build time, and a plain
-checkout has no versions at all, so `bun run dev` and PR preview builds show
+checkout has no versions at all, so `bun run dev` and PR builds show
 this branch's docs at the root the way they always have.
 
 To see the versioned layout locally, run `hack/docs-snapshot` and then

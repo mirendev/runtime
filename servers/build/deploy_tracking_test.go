@@ -306,16 +306,31 @@ func TestGitInfoFromRequest(t *testing.T) {
 	})
 }
 
-func TestEphemeralOptsFromArgs(t *testing.T) {
-	assert.Nil(t, ephemeralOptsFromArgs(false, "", false, ""))
-	assert.Nil(t, ephemeralOptsFromArgs(true, "", false, ""), "an empty label is not ephemeral")
+// fakeBuildArgs stands in for the generated BuildFromTar/BuildFromPrepared
+// args, which share no interface of their own.
+type fakeBuildArgs struct {
+	hasLabel bool
+	label    string
+	hasTTL   bool
+	ttl      string
+}
 
-	got := ephemeralOptsFromArgs(true, "pr-1", false, "")
+func (f fakeBuildArgs) EnvVars() []*build_v1alpha.EnvironmentVariable { return nil }
+func (f fakeBuildArgs) HasEphemeralLabel() bool                       { return f.hasLabel }
+func (f fakeBuildArgs) EphemeralLabel() string                        { return f.label }
+func (f fakeBuildArgs) HasEphemeralTtl() bool                         { return f.hasTTL }
+func (f fakeBuildArgs) EphemeralTtl() string                          { return f.ttl }
+
+func TestEphemeralFromArgs(t *testing.T) {
+	assert.Nil(t, ephemeralFromArgs(fakeBuildArgs{}))
+	assert.Nil(t, ephemeralFromArgs(fakeBuildArgs{hasLabel: true}), "an empty label is not ephemeral")
+
+	got := ephemeralFromArgs(fakeBuildArgs{hasLabel: true, label: "pr-1"})
 	require.NotNil(t, got)
 	assert.Equal(t, "pr-1", got.label)
 	assert.Equal(t, "24h", got.ttl, "ttl defaults when unset")
 
-	got = ephemeralOptsFromArgs(true, "pr-1", true, "48h")
+	got = ephemeralFromArgs(fakeBuildArgs{hasLabel: true, label: "pr-1", hasTTL: true, ttl: "48h"})
 	require.NotNil(t, got)
 	assert.Equal(t, "48h", got.ttl)
 }

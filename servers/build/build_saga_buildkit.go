@@ -148,9 +148,9 @@ type runBuildkitBuildInputs struct {
 // and the registry image URL adjusted to match the artifact (which
 // may have been reused via content-digest deduplication).
 //
-// Extracted here so both the pre-saga buildFromDir path and the
-// buildImage saga action share a single implementation. status may be
-// noop and buildLog may have a noop writer.
+// status is noop on a recovered build, where SenderFor finds no stream
+// registered because the client that started it is long gone, and
+// buildLog is noop wherever no log writer is configured.
 func (b *Builder) runBuildkitBuild(
 	ctx context.Context,
 	in runBuildkitBuildInputs,

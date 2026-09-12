@@ -16,21 +16,22 @@ import (
 	"miren.dev/runtime/pkg/testutils"
 )
 
-// TestChainBodyLandsWhenCounterUndeclared is the production failure against real
-// nftables. A chain body names a counter; nft answers ENOENT if that counter
-// does not exist and rolls the whole batch back, leaving the chain empty while
-// the verdict map still routes to it -- a service IP that is a black hole.
+// TestChainBodyDependsOnNoNamedObjects applies a chain body against real
+// nftables in a table where no named counter exists at all.
 //
-// Init declares the counters once at startup, so a body written against kernel
-// state where that never took effect hits exactly this. The body must therefore
-// carry its own declaration.
+// This is the production failure. The body used to open with
+// `counter name "services"`, the nftables objref expression, which needs
+// CONFIG_NFT_OBJREF. On a kernel built without it nft rejects that rule with
+// ENOENT pointing at the name -- indistinguishable from "the counter is
+// missing" -- and rolls back the whole batch, so the chain stayed empty while
+// the verdict map went on routing to it. Every service IP on such a host was a
+// black hole, permanently, because every reconcile failed identically.
 //
-// Uses a counter name that has never been declared rather than deleting the
-// real ones: the table is shared by every test in this package's iso
-// environment, and nft refuses to delete a named counter while any rule still
-// references it (EBUSY), so removing them is both hostile to neighbouring tests
-// and not reliably possible.
-func TestChainBodyLandsWhenCounterUndeclared(t *testing.T) {
+// This test cannot reproduce the missing kernel option, since the kernel under
+// iso has it. What it does pin is the property that makes the option
+// irrelevant: the body references no named object, so there is nothing for a
+// kernel to fail to look up.
+func TestChainBodyDependsOnNoNamedObjects(t *testing.T) {
 	r := require.New(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -42,33 +43,27 @@ func TestChainBodyLandsWhenCounterUndeclared(t *testing.T) {
 	r.NoError(err)
 	r.NoError(sc.Init(ctx))
 
-	chain := "service_probe_" + idgen.GenNS("c")
-	counter := "probe_" + idgen.GenNS("k")
-
 	counters, err := sc.nft.ListCounters(ctx)
 	r.NoError(err)
-	for _, c := range counters {
-		r.NotEqual(counter, c.Name, "the probe counter must not already exist")
-	}
+	r.Empty(counters, "Init must not create named counters; nothing may depend on objref")
 
+	chain := "service_probe_" + idgen.GenNS("c")
 	t.Cleanup(func() {
-		// Chain first: nft refuses to delete a counter a rule still
-		// references. Both leak into the package's shared table otherwise.
 		tx := sc.nft.NewTransaction()
 		tx.Add(&knftables.Table{})
 		tx.Delete(&knftables.Chain{Name: chain})
-		tx.Delete(&knftables.Counter{Name: counter})
 		_ = sc.nft.Run(context.Background(), tx)
 	})
 
 	tx := sc.nft.NewTransaction()
 	tx.Add(&knftables.Table{})
 	tx.Add(&knftables.Chain{Name: chain})
-	sc.writeChainBody(tx, chain, counter, nil)
+	sc.writeChainBody(tx, chain, nil)
 
-	r.NoError(sc.nft.Run(ctx, tx),
-		"a chain body naming an undeclared counter must still apply; nft rejects the whole batch otherwise")
+	r.NotContains(tx.String(), "counter name",
+		"a named-counter reference needs CONFIG_NFT_OBJREF, which some kernels lack")
 
+	r.NoError(sc.nft.Run(ctx, tx))
 	r.NotZero(nftRuleCount(t, ctx, sc, chain),
 		"the chain must have rules: an empty one is a black hole, since the verdict map routes to it regardless")
 }

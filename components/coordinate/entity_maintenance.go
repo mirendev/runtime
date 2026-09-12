@@ -70,6 +70,14 @@ func (c *EntityMaintenance) Start(ctx context.Context) error {
 	sagaConfig := sagagcctrl.DefaultGCConfig()
 	if c.SagaRetentionPeriod >= 0 {
 		sagaConfig.Retention = c.SagaRetentionPeriod
+		// The stalled sweep has no knob of its own on purpose. The one reason
+		// an operator turns saga GC off is to freeze the store while they
+		// investigate, and a sweep that rewrites in-flight records is not
+		// frozen. So retention zero means all of saga GC is paused, not just
+		// the half that deletes.
+		if c.SagaRetentionPeriod == 0 {
+			sagaConfig.StaleAfter = 0
+		}
 	}
 	c.sagaGC = &sagagcctrl.GCController{
 		Log:     c.Log.With("module", "saga-gc"),

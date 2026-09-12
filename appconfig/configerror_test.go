@@ -98,6 +98,28 @@ comand = "server"
 	assert.Greater(t, ce.Diagnostics[0].Line, 0)
 }
 
+func TestEnrichDecodeError_ContextAgreesWithMessage(t *testing.T) {
+	_, err := Parse([]byte("name = \"test-app\"\ncomand = \"x\"\n"))
+	require.Error(t, err)
+
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
+	require.Len(t, ce.Diagnostics, 1)
+	assert.Contains(t, ce.Diagnostics[0].Context, "unknown field")
+	assert.NotContains(t, ce.Diagnostics[0].Context, "missing field")
+}
+
+func TestEnrichDecodeError_RemovedField(t *testing.T) {
+	_, err := Parse([]byte("name = \"test-app\"\npost_import = \"\"\n"))
+	require.Error(t, err)
+
+	ce, ok := errors.AsType[*ConfigError](err)
+	require.True(t, ok, "expected *ConfigError, got %T", err)
+	require.Len(t, ce.Diagnostics, 1)
+	assert.Equal(t, `unknown field "post_import"`, ce.Diagnostics[0].Message)
+	assert.Contains(t, ce.Diagnostics[0].Hint, "deploy task")
+}
+
 func TestEnrichDecodeError_SyntaxError(t *testing.T) {
 	config := `name = "unterminated`
 	_, err := Parse([]byte(config))

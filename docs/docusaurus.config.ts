@@ -187,7 +187,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           ...releasedDocs,
           // Every page is authored on main, including the released ones: a
-          // correction is a normal docs PR, cherry-picked onto docs-latest
+          // correction is a normal docs PR, cherry-picked onto release/X.Y
           // only when it can't wait for the next release.
           editUrl: 'https://github.com/mirendev/runtime/tree/main/docs/',
         },

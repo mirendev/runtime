@@ -55,9 +55,15 @@ func (a *AppCentric) Validate(glbl *GlobalFlags) error {
 
 	if a.Dir != "." {
 		ac, err = appconfig.LoadAppConfigUnder(a.Dir)
+		if err != nil {
+			local.fatal(filepath.Join(a.Dir, appconfig.AppConfigPath))
+		}
 	} else {
 		var configPath string
-		ac, configPath, err = appconfig.LoadAppConfigWithPath()
+		ac, configPath, err = local.load()
+		if err != nil {
+			local.fatal("")
+		}
 		if err == nil && ac != nil && configPath != "" {
 			// Config was found — always record the resolved directory.
 			configDir := filepath.Dir(filepath.Dir(configPath)) // strip .miren/app.toml

@@ -22,7 +22,7 @@ func TestRabbitmqAddonCreateListDestroy(t *testing.T) {
 	m.MustRun("addon", "create", "miren-rabbitmq:small", "-a", name)
 
 	// Wait for addon to appear and provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "RABBITMQ_URL", 5*time.Minute)
 
 	// Verify RabbitMQ-specific env vars are injected
@@ -57,7 +57,7 @@ func TestRabbitmqAddonDeployWithAppToml(t *testing.T) {
 	m.MustRun("deploy", "-a", name, "-d", containerDir, "-f")
 
 	// Wait for addon provisioning to complete.
-	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 30*time.Second)
+	harness.WaitForAddonReady(t, m, name, "miren-rabbitmq", 5*time.Minute)
 	harness.WaitForEnvVar(t, m, name, "RABBITMQ_HOST", 5*time.Minute)
 
 	// Now wait for the app to become healthy

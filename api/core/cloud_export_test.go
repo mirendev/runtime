@@ -2,6 +2,7 @@ package compute
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -16,7 +17,6 @@ func TestCloudExportFiltersDeploymentCustodyFields(t *testing.T) {
 		ID:               "deployment/dep-1",
 		App:              "app/web",
 		AppName:          "web",
-		Version:          "app_version/ver-1",
 		ParentDeployment: "deployment/dep-0",
 		Operation:        "build",
 		Outcome:          "failed",
@@ -26,14 +26,22 @@ func TestCloudExportFiltersDeploymentCustodyFields(t *testing.T) {
 		ClusterId:        "payload-cluster-must-not-win",
 		ErrorMessage:     "token=super-secret",
 		DeployedBy: core_v1alpha.DeployedBy{
-			Subject:    "user-123",
-			AuthMethod: "oidc",
-			UserEmail:  "private@example.com",
-			UserName:   "Private Person",
+			Subject:        "user-123",
+			AuthMethod:     "oidc",
+			OrganizationId: "org-123",
+			UserEmail:      "private@example.com",
+			UserName:       "Private Person",
 		},
 		GitInfo: core_v1alpha.GitInfo{
-			Repository:        "https://user:password@example.com/private.git?token=secret",
+			Sha:               "abc123",
+			Branch:            "main",
+			Repository:        "https://example.com/acme/web.git",
+			Author:            "Ada",
 			CommitAuthorEmail: "author@example.com",
+			Message:           "Fix the startup race",
+			CommitTimestamp:   started.Add(-time.Hour).Format(time.RFC3339),
+			IsDirty:           true,
+			WorkingTreeHash:   "12345678",
 		},
 	}
 	source := entity.New(
@@ -55,15 +63,22 @@ func TestCloudExportFiltersDeploymentCustodyFields(t *testing.T) {
 	require.Equal(t, "dep-1", entity.MustGet(filtered, entity.DBShortId).Value.String())
 	actor := entity.MustGet(filtered, core_v1alpha.DeploymentDeployedById).Value.Component()
 	require.Equal(t, "user-123", entity.MustGet(actor, core_v1alpha.DeployedBySubjectId).Value.String())
+	require.Equal(t, "org-123", entity.MustGet(actor, core_v1alpha.DeployedByOrganizationIdId).Value.String())
+	var retained core_v1alpha.Deployment
+	retained.Decode(filtered)
+	require.Equal(t, deployment.GitInfo, retained.GitInfo, "source details survive without an app version")
+	require.Empty(t, retained.Version)
 	_, ok = actor.Get(core_v1alpha.DeployedByUserEmailId)
 	require.False(t, ok)
 
 	encoded, err := json.Marshal(filtered)
 	require.NoError(t, err)
+	fixture, err := os.ReadFile("testdata/cloud-deployment.json")
+	require.NoError(t, err)
+	require.JSONEq(t, string(fixture), string(encoded), "fixture is shared with cloud's ingestion tests")
 	for _, excluded := range []string{
 		string(core_v1alpha.DeploymentClusterIdId),
 		string(core_v1alpha.DeploymentErrorMessageId),
-		string(core_v1alpha.DeploymentGitInfoId),
 		string(core_v1alpha.DeployedByUserEmailId),
 		string(core_v1alpha.DeployedByUserNameId),
 		"super-secret",
@@ -72,4 +87,27 @@ func TestCloudExportFiltersDeploymentCustodyFields(t *testing.T) {
 	} {
 		require.NotContains(t, string(encoded), excluded)
 	}
+}
+
+func TestCloudExportPreservesResolvedImageDigest(t *testing.T) {
+	version := &core_v1alpha.AppVersion{
+		ID: "app_version/ver-1", App: "app/web", Version: "v1",
+		ManifestDigest: "sha256:0123456789abcdef",
+		AdminToken:     "private-admin-token",
+		Manifest:       "private-manifest",
+		Source:         core_v1alpha.Source{Kind: "image", Value: "example.com/acme/web:latest"},
+	}
+	filtered, _, err := core_v1alpha.CloudExportContract.Filter(entity.New(
+		entity.Ref(entity.DBId, version.ID), version.Encode(),
+		entity.Int64(entity.Revision, 42),
+		entity.Time(entity.CreatedAt, time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)),
+		entity.Time(entity.UpdatedAt, time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)),
+	))
+	require.NoError(t, err)
+	var retained core_v1alpha.AppVersion
+	retained.Decode(filtered)
+	require.Equal(t, version.ManifestDigest, retained.ManifestDigest)
+	require.Equal(t, version.Source, retained.Source)
+	require.Empty(t, retained.AdminToken)
+	require.Empty(t, retained.Manifest)
 }

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Run inside iso, with both runtime revisions available in the container.
+# Example: hack/test-rpc-compat /src/tmp/runtime-old
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+old_runtime=${1:?usage: hack/test-rpc-compat OLD_RUNTIME_DIRECTORY}
+old_runtime=$(cd "$old_runtime" && pwd)
+probe_dir=$(mktemp -d)
+trap 'rm -rf "$probe_dir"' EXIT
+sources=("$root"/pkg/rpc/testdata/compat/*.go)
+(cd "$old_runtime" && GOWORK=off go build -p 1 -race -o "$probe_dir/old" "${sources[@]}")
+go build -C "$root" -p 1 -race -o "$probe_dir/new" "${sources[@]}"
+"$probe_dir/new" matrix "$probe_dir/old" "$probe_dir/new"

@@ -20,11 +20,18 @@ import (
 // Most clusters run no nested sagas at all, so most sweeps ask nothing; and
 // where they do, children of one parent share the answer.
 type parentLiveness struct {
-	storage Storage
+	storage executionGetter
 	live    map[string]bool
 }
 
-func newParentLiveness(storage Storage) *parentLiveness {
+// executionGetter is all this needs of a storage, and taking the smaller
+// interface is what lets both sweeps share it: retention holds a full Storage,
+// the stalled sweep holds one narrowed to what it is allowed to write through.
+type executionGetter interface {
+	Get(ctx context.Context, id string) (*Execution, error)
+}
+
+func newParentLiveness(storage executionGetter) *parentLiveness {
 	return &parentLiveness{storage: storage, live: map[string]bool{}}
 }
 

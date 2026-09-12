@@ -84,6 +84,22 @@ type Storage interface {
 	// with ErrCompacted partway through a large backlog.
 	ListIncompletePage(ctx context.Context, q IncompleteQuery) (*IncompletePage, error)
 
+	// ListIncompleteSummaryPage returns one bounded page of summaries of the
+	// same set ListIncompletePage covers.
+	//
+	// Separate from ListIncompletePage because the two callers want different
+	// things from the same walk. Recovery resumes what it reads and needs whole
+	// executions; the stalled sweep only asks how long each has sat untouched,
+	// and it asks about the entire in-flight set rather than the handful it
+	// owns. Answering that with full payloads would pay recovery's cost without
+	// recovering anything.
+	//
+	// A summary also carries a timestamp the execution alone cannot supply.
+	// Sagas written before v0.14.0 have no updated_at field at all, so their
+	// age has to come from the entity store's own metadata, which decoding to
+	// an Execution discards.
+	ListIncompleteSummaryPage(ctx context.Context, q IncompleteSummaryQuery) (*IncompleteSummaryPage, error)
+
 	// ListTerminalPage returns one bounded page of executions that have
 	// finished (Completed or Failed). It deliberately returns summaries rather
 	// than executions: retention only needs an ID and an age, and a backend

@@ -16,6 +16,7 @@ exports:
           - db/short-id
           - dev.miren.core/app_version.app
           - dev.miren.core/app_version.version
+          - dev.miren.core/app_version.manifest_digest
           - dev.miren.core/source.kind
           - dev.miren.core/source.value
           - dev.miren.core/source.git_sha
@@ -36,6 +37,16 @@ exports:
           - dev.miren.core/deployment.completed_at
           - dev.miren.core/deployed_by.subject
           - dev.miren.core/deployed_by.auth_method
+          - dev.miren.core/deployed_by.organization_id
+          - dev.miren.core/git_info.sha
+          - dev.miren.core/git_info.branch
+          - dev.miren.core/git_info.repository
+          - dev.miren.core/git_info.message
+          - dev.miren.core/git_info.author
+          - dev.miren.core/git_info.commit_author_email
+          - dev.miren.core/git_info.commit_timestamp
+          - dev.miren.core/git_info.is_dirty
+          - dev.miren.core/git_info.working_tree_hash
 kinds:
   metadata:
     name:
@@ -441,6 +452,9 @@ kinds:
         auth_method:
           type: string
           doc: Authentication method used by the initiating subject
+        organization_id:
+          type: string
+          doc: Organization from the initiating authenticated identity; not the cluster's ownership
 
     error_message:
       type: string
@@ -452,7 +466,7 @@ kinds:
 
     git_info:
       type: component
-      doc: "[DEPRECATED] Build provenance retained for compatibility; stable source identity lives on AppVersion.source"
+      doc: Source metadata submitted with this attempt, including builds that never produce an AppVersion
       attrs:
         sha:
           type: string
@@ -480,7 +494,7 @@ kinds:
           doc: Git commit timestamp in RFC3339 format
         repository:
           type: string
-          doc: Git repository remote URL
+          doc: Repository URL without credentials, query parameters, or fragments
 
   config_version:
     app:

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"miren.dev/jsonrpc3/go/jsonrpc3"
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -27,6 +26,21 @@ type jsonrpc2Request struct {
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 	ID      int    `json:"id"`
+}
+
+// Admin endpoints speak JSON over HTTP. Keeping the response envelope here
+// avoids coupling those fields to a library's unrelated QUIC transports.
+type jsonrpc2Response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *jsonrpc2Error  `json:"error,omitempty"`
+	ID      any             `json:"id"`
+}
+
+type jsonrpc2Error struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
 // InternalHTTPRequester is an interface for making internal HTTP requests to app sandboxes.
@@ -172,7 +186,7 @@ func (s *Server) Invoke(ctx context.Context, state *admin_v1alpha.AdminInvoke) e
 	}
 
 	// Parse JSON-RPC response
-	var rpcResp jsonrpc3.Response
+	var rpcResp jsonrpc2Response
 	respBody := httpResp.Body()
 	if respBody == nil {
 		result := &admin_v1alpha.AdminCallResult{}
@@ -362,7 +376,7 @@ func (s *Server) fetchMethods(ctx context.Context, appName string) ([]*admin_v1a
 		return nil, "", fmt.Errorf("admin endpoint returned status %d", httpResp.StatusCode())
 	}
 
-	var rpcResp jsonrpc3.Response
+	var rpcResp jsonrpc2Response
 	respBody := httpResp.Body()
 	if respBody == nil {
 		return nil, "", fmt.Errorf("empty response from admin endpoint")

@@ -123,11 +123,7 @@ func setupAppDir(t *testing.T, appName string) string {
 	// Set HOME so app state goes to our temp dir
 	t.Setenv("HOME", dir)
 
-	// Change into the app directory
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { os.Chdir(origDir) })
+	chdir(t, dir)
 
 	return dir
 }
@@ -157,11 +153,7 @@ func TestConfigCentricPerAppState(t *testing.T) {
 		r := require.New(t)
 
 		// Use a temp dir without .miren/app.toml
-		dir := t.TempDir()
-		origDir, err := os.Getwd()
-		r.NoError(err)
-		r.NoError(os.Chdir(dir))
-		t.Cleanup(func() { os.Chdir(origDir) })
+		chdir(t, t.TempDir())
 
 		cfg := clientconfig.NewConfig()
 		cfg.SetCluster("global-cluster", &clientconfig.ClusterConfig{Hostname: "10.0.0.2:8443"})

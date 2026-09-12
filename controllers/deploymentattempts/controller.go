@@ -224,6 +224,18 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 
 	var dep core_v1alpha.Deployment
 	dep.Decode(ent)
+	// Old clients stored their raw remote URL. Clean it before these attempts
+	// become visible to the cloud exporter, including already-canonical rows.
+	if repository := deploylifecycle.SourceFromGitInfo(dep.GitInfo).Repository; repository != dep.GitInfo.Repository {
+		dep.GitInfo.Repository = repository
+		clean := ent.Clone()
+		clean.Set(entity.Component(core_v1alpha.DeploymentGitInfoId, dep.GitInfo.Encode()))
+		var err error
+		ent, err = c.Store.ReplaceEntity(ctx, clean, entity.WithFromRevision(ent.GetRevision()))
+		if err != nil {
+			return fmt.Errorf("sanitizing deployment repository: %w", err)
+		}
+	}
 	preferredCreatedAt := dep.StartedAt
 	if preferredCreatedAt.IsZero() {
 		preferredCreatedAt, _ = time.Parse(time.RFC3339, dep.DeployedBy.Timestamp)

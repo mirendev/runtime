@@ -214,6 +214,7 @@ func (d *Diagnostics) finishSnapshot(cursor int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.status.CloudCursor = cursor
+	d.status.NextWatchRevision = cursor + 1
 	d.status.Snapshot = nil
 }
 

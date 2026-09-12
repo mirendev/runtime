@@ -394,7 +394,7 @@ func TestServicePeriodic(t *testing.T) {
 		// Inject the kind of stacked-duplicate state that the pre-#795
 		// append-without-flush code would leave behind across redeploys.
 		injectTx := sc.nft.NewTransaction()
-		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: `counter name "services"`})
+		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: "counter"})
 		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: "ip saddr 10.123.0.0/16 jump mark-for-masq"})
 		injectTx.Add(&knftables.Rule{Chain: parentChain, Rule: "ip saddr 10.124.0.0/16 jump mark-for-masq"})
 		r.NoError(sc.nft.Run(ctx, injectTx))

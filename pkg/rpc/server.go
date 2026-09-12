@@ -135,6 +135,16 @@ type Method struct {
 	// Public marks this method as accessible without TLS client certificate authentication.
 	// The RPC layer will reject unauthenticated calls to non-public methods automatically.
 	Public bool
+	// RestOnly marks this method as reachable through its HTTP binding and
+	// nowhere else. The RPC transport reports it as unknown and it is left out
+	// of the advertised method list, so it is invisible to an RPC caller.
+	//
+	// It exists for methods that are shaped for a URL rather than for a
+	// program: flat scalars a query string can carry, where the RPC surface
+	// offers the same answer through grouped arguments a caller cannot
+	// transpose. Marking the URL form rest-only stops it from becoming a second
+	// way to call the same thing badly.
+	RestOnly bool
 	// Params lists the method's parameter names in schema order. It powers
 	// parameter-level capability detection: a client can ask whether a server
 	// understands a specific parameter (e.g. one added after the method first
@@ -210,6 +220,20 @@ func (i *Interface) Methods() []Method {
 		methods = append(methods, m)
 	}
 	return methods
+}
+
+// rpcMethod resolves a method for dispatch over the RPC transport.
+//
+// A rest-only method is reported as absent, so the caller sees the same
+// "unknown method" a typo would produce. Every path that invokes a handler by
+// name must go through here rather than reading i.methods directly, or the
+// method stays reachable by whichever route was missed.
+func (i *Interface) rpcMethod(name string) (Method, bool) {
+	m, ok := i.methods[name]
+	if !ok || m.RestOnly {
+		return Method{}, false
+	}
+	return m, true
 }
 
 func (i *Interface) SetAroundContext(fn func(ctx context.Context, call Call) (context.Context, func())) {
@@ -451,6 +475,7 @@ func (s *Server) reexportCapability(target OID, cur *heldCapability, pub ed25519
 func (s *Server) setupMux() {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET "+drainPath, s.handleDrain)
 	mux.HandleFunc("POST /_rpc/call/{oid}/{method}", s.handleCalls)
 	// CONNECT upgrades to WebTransport over HTTP/3. TCP clients use the message
 	// transport, which multiplexes every operation over one session and never
@@ -489,6 +514,10 @@ func (s *Server) mountHTTPHandlers(mounts []httpHandlerMount) error {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if s.state.top.Err() != nil && r.URL.Path != drainPath {
+		http.Error(w, "server draining", http.StatusServiceUnavailable)
+		return
+	}
 
 	// If no authenticator configured, allow all requests
 	if s.state.authenticator == nil {
@@ -617,6 +646,36 @@ type DebugAuthResponse struct {
 	Message       string            `json:"message,omitempty"`
 }
 
+func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
+	// This RPC endpoint has no method-level authorization to fall through to.
+	if _, noAuth := s.state.authenticator.(*NoOpAuthenticator); !noAuth && s.state.authenticator != nil {
+		identity := IdentityFromContext(r.Context())
+		if identity == nil || identity.Method == AuthMethodAnonymous {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+	}
+	w.Header().Set(drainVersionHeader, "1")
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return
+	}
+	// Bound handler lifetime even if a peer never cancels its request. EOF
+	// retires the client's pool; its next RPC establishes a fresh watch.
+	timer := time.NewTimer(drainWatchMaxAge)
+	defer timer.Stop()
+	select {
+	case <-s.state.top.Done():
+		_, _ = io.WriteString(w, "drain\n")
+	case <-r.Context().Done():
+	case <-timer.C:
+	}
+}
+
+const drainWatchMaxAge = 30 * time.Minute
+
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -736,6 +795,11 @@ func newMethodsResponse(m map[string]Method) methodsResponse {
 	methods := make([]string, 0, len(m))
 	params := make(map[string][]string, len(m))
 	for name, mm := range m {
+		// A rest-only method is not part of the RPC surface, so advertising it
+		// would invite a client to call something that will answer "unknown".
+		if mm.RestOnly {
+			continue
+		}
 		methods = append(methods, name)
 		if len(mm.Params) > 0 {
 			params[name] = mm.Params
@@ -1089,8 +1153,8 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 
 	iface.touch()
 
-	mm := iface.methods[method]
-	if mm.Handler == nil {
+	mm, ok := iface.rpcMethod(method)
+	if !ok || mm.Handler == nil {
 		w.Header().Add("rpc-status", "unknown")
 		w.Header().Add("rpc-error", "unknown method: "+method)
 		w.WriteHeader(http.StatusNotFound)
@@ -1254,8 +1318,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		iface.touch()
 
-		mm := iface.methods[method]
-		if mm.Handler == nil {
+		mm, ok := iface.rpcMethod(method)
+		if !ok || mm.Handler == nil {
 			w.Header().Add("rpc-status", "unknown")
 			w.Header().Add("rpc-error", "unknown method: "+method)
 			w.WriteHeader(http.StatusNotFound)

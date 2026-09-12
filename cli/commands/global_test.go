@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"miren.dev/mflags"
-	"miren.dev/runtime/pkg/labs"
 )
 
 // TestVerbosityLadder pins the level each -v count resolves to for both kinds of
@@ -69,11 +68,6 @@ func TestWithDaemonMarksCommand(t *testing.T) {
 // is silent — the process just goes quiet — and the last time a runner ran
 // quieter than intended it took a fleet-wide systemd override to notice.
 func TestDaemonCommandsAreRegisteredAsDaemons(t *testing.T) {
-	// `runner start` only registers with distributed runners enabled, and labs
-	// state is process-wide, so put it back when we're done.
-	labs.Init(slog.New(slog.DiscardHandler), []string{labs.FeatureDistributedRunners})
-	t.Cleanup(func() { labs.Init(slog.New(slog.DiscardHandler), nil) })
-
 	d := mflags.NewDispatcher("miren")
 	RegisterAll(d)
 

@@ -4,177 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
-	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
-
-// SagaSandboxController implements SandboxLifecycle using the saga pattern
-// for crash-recoverable sandbox creation. It wraps an inner SandboxController
-// and delegates most operations to it, replacing only createSandbox with a
-// saga-based implementation.
-type SagaSandboxController struct {
-	inner    *SandboxController
-	ops      *sandboxOps
-	executor *saga.Executor
-	storage  saga.Storage
-	registry *saga.Registry
-	log      *slog.Logger
-}
-
-// NewSagaSandboxController creates a saga-based sandbox controller.
-func NewSagaSandboxController(
-	cfg SandboxControllerDeps,
-	storage saga.Storage,
-	log *slog.Logger,
-) (*SagaSandboxController, error) {
-	inner, err := NewSandboxController(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("creating inner controller: %w", err)
-	}
-
-	registry := saga.NewRegistry()
-	executor := saga.NewExecutor(storage,
-		saga.WithRegistry(registry),
-		saga.WithLogger(log.With("module", "saga-sandbox")),
-		saga.WithRecoveryScope(cfg.NodeId.String()),
-	)
-
-	return &SagaSandboxController{
-		inner:    inner,
-		ops:      &sandboxOps{ctrl: inner},
-		executor: executor,
-		storage:  storage,
-		registry: registry,
-		log:      log.With("module", "saga-sandbox-controller"),
-	}, nil
-}
-
-// Init initializes the sandbox controller and registers saga definitions.
-func (s *SagaSandboxController) Init(ctx context.Context) error {
-	if err := s.inner.Init(ctx); err != nil {
-		return err
-	}
-
-	if err := registerCreateSandboxSaga(s.registry, s.ops, s.ops, s.ops, s.ops, s.log); err != nil {
-		return fmt.Errorf("registering create-sandbox saga: %w", err)
-	}
-
-	// Recover any incomplete sagas from a previous crash
-	if err := s.executor.Recover(ctx); err != nil {
-		s.log.Error("saga recovery completed with errors", "error", err)
-	}
-
-	return nil
-}
-
-// Create handles sandbox create/update events. For new sandboxes, it uses
-// the saga-based creation flow.
-func (s *SagaSandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
-	switch co.Status {
-	case compute.DEAD:
-		return nil
-	case compute.STOPPED:
-		s.log.Debug("sandbox is stopped, verifying it is no longer running")
-		return s.inner.StopSandbox(ctx, co.ID, co)
-	case "", compute.PENDING, compute.RUNNING:
-		searchRes, err := s.inner.CheckSandbox(ctx, co, meta)
-		if err != nil {
-			s.log.Error("error checking sandbox, proceeding with create", "err", err)
-		} else {
-			switch searchRes {
-			case same:
-				// Same adoption gap as the non-saga controller: healthy
-				// containers this process didn't boot need their metrics
-				// re-registered here (MIR-1013).
-				if err := s.inner.ensureMetrics(ctx, co); err != nil {
-					s.log.Warn("failed to ensure metrics for existing sandbox",
-						"id", co.ID, "error", err)
-				}
-
-				// Healthy containers do not mean creation finished: the saga
-				// persists each tail action separately, so a crash between
-				// actionBootCtrs and actionUpdateSvcs leaves a RUNNING sandbox
-				// with no Endpoints. Since 9bf10a18 startup Recover skips
-				// legacy (empty-scope) records, leaving a routed Execute as the
-				// only way to resume them.
-				if s.sagaResumeNeeded(ctx, co) {
-					return s.createSandboxViaSaga(ctx, co, true)
-				}
-
-				if co.Status == compute.PENDING {
-					createdAt := meta.GetCreatedAt()
-					age := time.Since(createdAt)
-					const staleThreshold = 2 * time.Minute
-
-					if age > staleThreshold {
-						s.log.Info("sandbox exists and is healthy but status is PENDING (stale), updating to RUNNING",
-							"id", co.ID, "createdAt", createdAt, "age", age)
-						patchAttrs := entity.New(
-							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{Status: compute.RUNNING}).Encode,
-						)
-						_, err := s.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
-						if err != nil {
-							return fmt.Errorf("failed to update sandbox status to RUNNING: %w", err)
-						}
-						return nil
-					}
-					s.log.Debug("sandbox is PENDING but recently created, skipping",
-						"id", co.ID, "age", age)
-					return nil
-				}
-				return nil
-			case unhealthy:
-				s.log.Info("sandbox container exists but is unhealthy", "id", co.ID)
-
-				// Mirrors SandboxController.Create: a sandbox whose command
-				// must execute at most once is finished the moment its
-				// containers stop being healthy.
-				if shouldRetireInsteadOfRestart(co) {
-					return s.inner.markDeadNoRestart(ctx, co, "unhealthy")
-				}
-
-				if co.Status == compute.RUNNING {
-					s.log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
-					patchAttrs := entity.New(
-						entity.Ref(entity.DBId, co.ID),
-						(&compute.Sandbox{Status: compute.DEAD}).Encode,
-					)
-					_, err := s.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
-					if err != nil {
-						return fmt.Errorf("failed to mark sandbox as DEAD: %w", err)
-					}
-				}
-
-				if err := s.inner.StopSandbox(ctx, co.ID, co); err != nil {
-					return fmt.Errorf("failed to cleanup unhealthy sandbox: %w", err)
-				}
-				return nil
-			}
-		}
-
-		// Mirrors SandboxController.Create: the containers are gone, and for a
-		// sandbox that must not re-run its command that is the end of the road
-		// rather than a reboot.
-		if shouldRetireInsteadOfRestart(co) {
-			return s.inner.markDeadNoRestart(ctx, co, "containers missing")
-		}
-
-		return s.createSandboxViaSaga(ctx, co, false)
-	case compute.NOT_READY:
-		// Transient boot state; nothing to reconcile until it resolves.
-		fallthrough
-	default:
-		s.log.Warn("ignoring sandbox status", "status", co.Status)
-		return nil
-	}
-}
 
 // createSandboxSagaID is the durable execution name for a sandbox's
 // create-sandbox saga. Naming it after the entity makes a re-entered reconcile
@@ -192,11 +26,11 @@ func createSandboxSagaID(co *compute.Sandbox) string {
 // bootContainers against a live sandbox, and since every action here has an
 // Undo, one that errored would unwind the saga, destroy the healthy containers,
 // and leave the sandbox DEAD. Undoing records are skipped for the same reason.
-func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *compute.Sandbox) bool {
-	exec, err := s.storage.Get(ctx, createSandboxSagaID(co))
+func (c *SandboxController) sagaResumeNeeded(ctx context.Context, co *compute.Sandbox) bool {
+	exec, err := c.sagaStorage.Get(ctx, createSandboxSagaID(co))
 	if err != nil {
 		if !errors.Is(err, saga.ErrExecutionNotFound) {
-			s.log.Warn("checking for incomplete create-sandbox saga",
+			c.Log.Warn("checking for incomplete create-sandbox saga",
 				"id", co.ID, "error", err)
 		}
 		return false
@@ -207,7 +41,7 @@ func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *comput
 	}
 
 	if _, booted := exec.ExecutedActions[actionBootCtrs]; !booted {
-		s.log.Debug("not resuming create-sandbox saga: containers survive but the record predates boot-containers",
+		c.Log.Debug("not resuming create-sandbox saga: containers survive but the record predates boot-containers",
 			"id", co.ID, "status", exec.Status)
 		return false
 	}
@@ -216,8 +50,8 @@ func (s *SagaSandboxController) sagaResumeNeeded(ctx context.Context, co *comput
 
 // createSandboxViaSaga runs sandbox creation as a saga for crash recovery.
 // resuming marks the call as adopting a record whose containers are still alive.
-func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox, resuming bool) error {
-	s.log.Info("creating sandbox via saga", "id", co.ID)
+func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *compute.Sandbox, resuming bool) error {
+	c.Log.Info("creating sandbox via saga", "id", co.ID)
 
 	execID := createSandboxSagaID(co)
 
@@ -227,12 +61,12 @@ func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *co
 	// alive, and dropping the record would restart the saga from alloc-network
 	// underneath them.
 	if !resuming {
-		if err := saga.DropIfCompleted(ctx, s.storage, execID); err != nil {
+		if err := saga.DropIfCompleted(ctx, c.sagaStorage, execID); err != nil {
 			return fmt.Errorf("clearing stale creation record: %w", err)
 		}
 	}
 
-	err := s.executor.Start(sagaCreateSandbox).
+	err := c.executor.Start(sagaCreateSandbox).
 		Input("sandbox_id", co.ID.String()).
 		WithID(execID).
 		Execute(ctx)
@@ -242,12 +76,12 @@ func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *co
 		// real here: an earlier pass is still driving this creation. Nothing
 		// has failed, so leave the sandbox PENDING for the reconciler rather
 		// than killing it over work that is still going.
-		s.log.Debug("sandbox creation already in flight", "id", co.ID)
+		c.Log.Debug("sandbox creation already in flight", "id", co.ID)
 		return nil
 	}
 
 	if err != nil {
-		s.log.Error("saga sandbox creation failed, marking DEAD", "id", co.ID, "error", err)
+		c.Log.Error("saga sandbox creation failed, marking DEAD", "id", co.ID, "error", err)
 
 		// Saga compensating actions handle resource cleanup. The controller
 		// owns the domain-level outcome: mark the sandbox DEAD so the pool
@@ -259,37 +93,12 @@ func (s *SagaSandboxController) createSandboxViaSaga(ctx context.Context, co *co
 			entity.Ref(entity.DBId, co.ID),
 			(&compute.Sandbox{Status: compute.DEAD}).Encode,
 		)
-		if _, patchErr := s.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0); patchErr != nil {
-			s.log.Error("failed to mark sandbox DEAD after saga failure", "id", co.ID, "error", patchErr)
+		if _, patchErr := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0); patchErr != nil {
+			c.Log.Error("failed to mark sandbox DEAD after saga failure", "id", co.ID, "error", patchErr)
 		}
 
 		return fmt.Errorf("saga sandbox creation failed: %w", err)
 	}
 
 	return nil
-}
-
-// Delete delegates to the inner controller.
-func (s *SagaSandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
-	return s.inner.Delete(ctx, id, sb)
-}
-
-// Close shuts down the inner controller.
-func (s *SagaSandboxController) Close() error {
-	return s.inner.Close()
-}
-
-// Periodic delegates to the inner controller.
-func (s *SagaSandboxController) Periodic(ctx context.Context, timeHorizon time.Duration) error {
-	return s.inner.Periodic(ctx, timeHorizon)
-}
-
-// SetWriteTracker sets the write tracker on both the saga controller and inner controller.
-func (s *SagaSandboxController) SetWriteTracker(wt controller.WriteTracker) {
-	s.inner.SetWriteTracker(wt)
-}
-
-// SetPortStatus delegates to the inner controller.
-func (s *SagaSandboxController) SetPortStatus(id string, port observability.BoundPort, status observability.PortStatus) {
-	s.inner.SetPortStatus(id, port, status)
 }

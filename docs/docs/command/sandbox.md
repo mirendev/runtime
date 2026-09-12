@@ -20,5 +20,6 @@ miren sandbox [flags]
 
 - [`miren sandbox delete`](./sandbox-delete.md) — Delete a dead sandbox
 - [`miren sandbox exec`](./sandbox-exec.md) — Open interactive shell in an existing sandbox
+- [`miren sandbox inspect`](./sandbox-inspect.md) — Show one sandbox's resource usage and failure history
 - [`miren sandbox list`](./sandbox-list.md) — List sandboxes (excludes dead by default)
 - [`miren sandbox stop`](./sandbox-stop.md) — Stop a sandbox

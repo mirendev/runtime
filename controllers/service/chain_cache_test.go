@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -38,23 +37,26 @@ func (r *rejectingNFT) Run(ctx context.Context, tx *knftables.Transaction) error
 	return r.Interface.Run(ctx, tx)
 }
 
-// TestChainBodyDeclaresItsCounter: nft rejects a rule naming a counter that does
-// not exist, and rolls the whole batch back. The chain body must therefore
-// declare the counter it references rather than assuming Init got there first.
-func TestChainBodyDeclaresItsCounter(t *testing.T) {
+// TestChainBodyUsesAnonymousCounter guards the fix for the production outage:
+// the body must count with a plain `counter`, never `counter name`. The latter
+// is the nftables objref expression and needs CONFIG_NFT_OBJREF, which the
+// affected host's kernel was built without -- so every batch containing it was
+// rejected and no service chain body ever installed.
+func TestChainBodyUsesAnonymousCounter(t *testing.T) {
 	s := newTestController(knftables.NewFake(knftables.InetFamily, tableName))
 	tx := s.nft.NewTransaction()
 	tx.Add(&knftables.Table{})
 
-	s.writeChainBody(tx, "service_test", "services", []string{"endpoint_a"})
+	s.writeChainBody(tx, "service_test", []string{"endpoint_a"})
 
 	body := tx.String()
 
-	declare := strings.Index(body, `add counter inet `+tableName+` services`)
-	reference := strings.Index(body, `counter name "services"`)
-
-	require.NotEqual(t, -1, declare, "the batch must declare the counter it names:\n%s", body)
-	require.Less(t, declare, reference, "the counter must be declared before it is referenced:\n%s", body)
+	require.NotContains(t, body, "counter name",
+		"referencing a named counter needs CONFIG_NFT_OBJREF:\n%s", body)
+	require.NotContains(t, body, "add counter",
+		"the body must not depend on a named object existing:\n%s", body)
+	require.Contains(t, body, "add rule inet "+tableName+" service_test counter\n",
+		"the body still has to count traffic, anonymously:\n%s", body)
 }
 
 // TestRejectedGCBatchLeavesCacheAlone is the reason an empty service chain used
@@ -125,12 +127,12 @@ func TestUnchangedEndpointsStillSkipRebuild(t *testing.T) {
 
 	pending := map[string][]string{}
 	tx1 := s.nft.NewTransaction()
-	s.setEndpoints(tx1, pending, chain, "services", []string{"endpoint_a"})
+	s.setEndpoints(tx1, pending, chain, []string{"endpoint_a"})
 	require.NotEmpty(t, tx1.String())
 	s.commitChainCache(pending)
 
 	tx2 := s.nft.NewTransaction()
-	s.setEndpoints(tx2, map[string][]string{}, chain, "services", []string{"endpoint_a"})
+	s.setEndpoints(tx2, map[string][]string{}, chain, []string{"endpoint_a"})
 	require.Equal(t, 0, tx2.NumOperations(), "an unchanged endpoint set must skip the rebuild")
 }
 

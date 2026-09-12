@@ -43,17 +43,13 @@ func TestInferAppName(t *testing.T) {
 	}
 }
 
-// chdir changes the working directory for the duration of the test and restores it on cleanup.
+// chdir changes the working directory for the duration of the test and
+// forgets any app config memoized from the previous one.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get working directory: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("failed to chdir to %s: %v", dir, err)
-	}
-	t.Cleanup(func() { os.Chdir(orig) })
+	t.Chdir(dir)
+	resetLocalAppConfig()
+	t.Cleanup(resetLocalAppConfig)
 }
 
 func TestAppCentricValidate(t *testing.T) {
