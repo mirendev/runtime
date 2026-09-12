@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,6 +53,35 @@ func TestEnsureLbdBuilderImageRebuildsAnArchivedImage(t *testing.T) {
 	_, err = b.EnsureLbdBuilderImage(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no buildkit", "it should have tried to rebuild")
+}
+
+func TestEnsureLbdBuilderImageGivesUpWhenTheCallerDoes(t *testing.T) {
+	// A toolchain build takes minutes, so a second caller has to be able to
+	// walk away rather than pinning an RPC handler until the first one lands.
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	lbdBuilderLock <- struct{}{}
+	defer func() { <-lbdBuilderLock }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	log := testutils.TestLogger(t)
+	b := &LbdToolchain{Log: log, EC: entityserver.NewClient(log, inmem.EAC)}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.EnsureLbdBuilderImage(ctx)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("it blocked on the build lock instead of honouring the cancelled context")
+	}
 }
 
 func TestEnsureLbdBuilderImageNeedsBuildkit(t *testing.T) {
