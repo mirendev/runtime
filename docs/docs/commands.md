@@ -321,6 +321,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug ctr nuke`](./command/debug-ctr-nuke.md) | Nuke a containerd namespace |
 | [`miren debug deploy-events`](./command/debug-deploy-events.md) | Render a 'miren deploy --format jsonl' stream as readable output |
 | [`miren debug disk`](./command/debug-disk.md) | Disk entity debug commands |
+| [`miren debug disk backup`](./command/debug-disk-backup.md) | Back up a disk by reading its image directly (break-glass) |
 | [`miren debug disk create`](./command/debug-disk-create.md) | Create a disk entity for testing |
 | [`miren debug disk delete`](./command/debug-disk-delete.md) | Delete a disk entity |
 | [`miren debug disk lease`](./command/debug-disk-lease.md) | Create a disk lease for testing |
@@ -329,8 +330,11 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug disk lease-release`](./command/debug-disk-lease-release.md) | Release a disk lease |
 | [`miren debug disk lease-status`](./command/debug-disk-lease-status.md) | Show detailed status of a disk lease |
 | [`miren debug disk list`](./command/debug-disk-list.md) | List all disk entities |
+| [`miren debug disk list-deleted`](./command/debug-disk-list-deleted.md) | Read the soft-delete holding area directly (break-glass) |
 | [`miren debug disk mounts`](./command/debug-disk-mounts.md) | List all mounted disks from /proc/mounts |
+| [`miren debug disk restore`](./command/debug-disk-restore.md) | Restore a disk by writing its image directly (break-glass) |
 | [`miren debug disk status`](./command/debug-disk-status.md) | Show status of a disk entity |
+| [`miren debug disk undelete`](./command/debug-disk-undelete.md) | Recover a deleted disk by moving its data directly (break-glass) |
 | [`miren debug entity`](./command/debug-entity.md) | Entity store debug commands |
 | [`miren debug entity create`](./command/debug-entity-create.md) | Create a new entity |
 | [`miren debug entity delete`](./command/debug-entity-delete.md) | Delete an entity |

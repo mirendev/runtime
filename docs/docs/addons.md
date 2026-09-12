@@ -390,7 +390,7 @@ Miren provisions PostgreSQL, injects `DATABASE_URL`, and starts your app once th
 :::info[Early version]
 Addon backup and restore uses the general-purpose disk backup system. We plan to add addon-aware backup commands in a future release that will simplify this workflow. For now, the steps below work reliably for PostgreSQL addon data.
 
-The `disk backup` and `disk restore` commands must be run directly on the server (via SSH or `miren ssh`), not from your local machine. Remote backup support is planned.
+The `disk backup` and `disk restore` commands run from anywhere you can reach the cluster, including your own machine. The server does the work; the snapshot is streamed to or from you.
 :::
 
 Each PostgreSQL addon stores its data on a Miren disk. You can back up and restore this disk using the `miren disk backup` and `miren disk restore` commands.
@@ -409,19 +409,23 @@ Addon disks are named with a `pg-` prefix. For dedicated (`small`) addons, the n
 
 ### Creating a Backup
 
-Back up the disk to a compressed snapshot file. This must be run on the server:
+Back up the disk to a compressed snapshot file:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n <disk-name>
 ```
 </CliCommand>
 
-This creates a timestamped `.miren.zst` file in the current directory. If the disk is currently in use, the backup will be crash-consistent (safe for PostgreSQL, which uses write-ahead logging).
+This creates a timestamped `.miren.zst` file in the current directory.
+
+:::warning[Detach the disk first]
+Nothing freezes the filesystem while the snapshot is read, so backing up a disk that is currently attached reads it as it is being written. The head and tail of the image come from different moments, which is weaker than the power-loss state PostgreSQL's write-ahead log recovery is built for. The command warns you when it detects this. Stop the services using the disk for a backup you can rely on.
+:::
 
 Example:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n pg-pg-myapp-sCZDabc123-data
 # Output: pg-pg-myapp-sCZDabc123-data-20260324-120000.miren.zst
@@ -430,7 +434,7 @@ miren disk backup -n pg-pg-myapp-sCZDabc123-data
 
 You can specify a custom output path with `-o`:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk backup -n pg-pg-myapp-sCZDabc123-data -o /backups/myapp-db.miren.zst
 ```
@@ -438,9 +442,9 @@ miren disk backup -n pg-pg-myapp-sCZDabc123-data -o /backups/myapp-db.miren.zst
 
 ### Restoring from a Backup
 
-To restore from a backup, provide the snapshot file. This must also be run on the server:
+To restore from a backup, provide the snapshot file:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk restore -s <snapshot-file>
 ```
@@ -448,27 +452,46 @@ miren disk restore -s <snapshot-file>
 
 The restore procedure recreates the disk with the original name. If the disk already exists, use `--force` to overwrite:
 
-<CliCommand context="server">
+<CliCommand context="client">
 ```miren
 miren disk restore -s myapp-db.miren.zst --force
 ```
 </CliCommand>
 
-To restore to a different disk name:
+:::warning[Restoring over a disk in use is refused]
+Restoring on top of a disk your app is using is not supported today, and the command stops rather than pretending. A disk in use is held open by the kernel, so writing a new image into it would leave the running database on the old data while reporting success.
+:::
 
-<CliCommand context="server">
-```miren
-miren disk restore -s myapp-db.miren.zst -n new-disk-name
-```
-</CliCommand>
+There is currently no way to release a disk while keeping the app configured for it, so there is no sequence that makes an in-place restore work. Disk-backed services run at fixed concurrency, `num_instances = 0` is rejected, and scaling a pool to zero by hand is reconciled straight back to one. Even during that brief window the disk stays mounted.
 
-After restoring, restart your app to pick up the restored data:
+The working recovery is to restore into a **new** disk and move the app across. Restore into a new disk name:
 
 <CliCommand context="client">
 ```miren
-miren app restart myapp
+miren disk restore -s myapp-db.miren.zst -n myapp-db-restored
 ```
 </CliCommand>
+
+Then point the service at it in `.miren/app.toml` and deploy:
+
+```toml
+[[services.db.disks]]
+name = "myapp-db-restored"
+mount_path = "/var/lib/postgresql/data"
+size_gb = 20
+```
+
+<CliCommand context="client">
+```miren
+miren deploy
+```
+</CliCommand>
+
+The one case that does restore in place is the one where nothing is holding the disk: a rebuilt host whose disk image is gone. There the image is absent rather than mounted, so `miren disk restore` writes it and the app picks it up on the next start.
+
+:::note[`--from-cloud` restores into the disk the point came from]
+A cloud restore point is looked up through its own disk's cloud volume, so `--from-cloud` needs that disk to already exist and be registered. It cannot restore into a new disk name, which means the move-the-app-across path above needs a local snapshot file. Keep one for a disk you would want to recover onto a running cluster.
+:::
 
 ### Backup Recommendations
 

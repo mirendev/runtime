@@ -18,10 +18,11 @@ miren disk restore [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--data-path` — Path to miren data directory (default: `/var/lib/miren`)
-- `--force, -f` — Overwrite existing disk image without confirmation
-- `--name, -n` — Disk name to restore to (default: original name from snapshot)
-- `--snapshot, -s` — Path to snapshot file
+- `--force, -f` — Overwrite an existing disk image
+- `--from-cloud` — Restore from a miren.cloud restore point
+- `--name, -n` — Disk name to restore to (default: the name recorded in the snapshot)
+- `--restore-point` — Restore point to use (implies --from-cloud; default: the newest)
+- `--snapshot, -s` — Path to a snapshot file to restore from
 
 ## Global Options
 

@@ -1,0 +1,320 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+imports:
+  stream:
+    path: ../../pkg/rpc/stream/stream.yml
+    import: miren.dev/runtime/pkg/rpc/stream
+  standard:
+    path: ../../pkg/rpc/standard/standard.yml
+    import: miren.dev/runtime/pkg/rpc/standard
+
+types:
+  - type: Transfer
+    doc: >
+      How far a byte transfer has got. Backup and restore move whole disk
+      images, so a client that showed nothing until completion would look
+      indistinguishable from a hang.
+    fields:
+      - name: done
+        type: int64
+        index: 0
+        doc: Bytes moved so far
+      - name: total
+        type: int64
+        index: 1
+        doc: Bytes expected in total, or 0 when the server cannot know yet
+      - name: bytes_per_second
+        type: int64
+        index: 2
+        doc: Recent throughput
+      - name: eta_seconds
+        type: int64
+        index: 3
+        doc: Estimated seconds remaining, or 0 when total is unknown
+
+  - type: Progress
+    doc: >
+      One event in the progress stream a client passes to backup or restore.
+      Modelled on build's Status: a discriminated union, so new event kinds do
+      not break existing clients.
+    fields:
+      - name: update
+        type: union
+        union:
+          - name: message
+            type: string
+            index: 1
+            doc: A step the server has started, for display
+          - name: transfer
+            type: Transfer
+            index: 2
+            doc: Byte-movement progress
+          - name: warning
+            type: string
+            index: 3
+            doc: >
+              Something the operator should know but which does not stop the
+              operation, such as backing up a disk that is currently mounted.
+          - name: error
+            type: string
+            index: 4
+            doc: >
+              A failure being reported before the call returns. The call's own
+              error is still authoritative.
+
+  - type: RestorePoint
+    doc: >
+      A moment in time a disk can be restored to. Universal-mode volumes reach
+      one by fetching a full image and accelerator-mode volumes by replaying log
+      segments (RFD-64), but that split is the server's business — a caller
+      picks a point, not a backup type.
+    fields:
+      - name: id
+        type: string
+        index: 0
+        doc: Opaque identifier to pass back to restore
+      - name: created_at
+        type: standard.Timestamp
+        index: 1
+        doc: When the restore point was taken
+      - name: size_bytes
+        type: int64
+        index: 2
+        doc: Compressed size held in the cloud
+      - name: image_size_bytes
+        type: int64
+        index: 3
+        doc: Size of the disk image the point restores to, 0 when not recorded
+      - name: name
+        type: string
+        index: 4
+        doc: Operator-supplied name, set when the point was pinned against cleanup
+      - name: mode
+        type: string
+        index: 5
+        doc: Volume mode the point was taken from (universal or accelerator)
+
+  - type: BackupResult
+    fields:
+      - name: image_size_bytes
+        type: int64
+        index: 0
+        doc: Size of the image that was read
+      - name: compressed_size_bytes
+        type: int64
+        index: 1
+        doc: Size of the resulting snapshot
+      - name: checksum
+        type: string
+        index: 2
+        doc: SHA-256 of the uncompressed image, hex encoded
+      - name: restore_point_id
+        type: string
+        index: 3
+        doc: Identifier of the uploaded restore point, empty for a local backup
+
+  - type: DeletedDisk
+    doc: >
+      A disk that was deleted but whose data is still sitting in the
+      soft-delete holding area, waiting out its retention period.
+    fields:
+      - name: disk_name
+        type: string
+        index: 0
+      - name: volume_id
+        type: string
+        index: 1
+        doc: Identifies which one to recover when several share a name
+      - name: size_gb
+        type: int64
+        index: 2
+      - name: filesystem
+        type: string
+        index: 3
+      - name: deleted_at
+        type: standard.Timestamp
+        index: 4
+      - name: expires_at
+        type: standard.Timestamp
+        index: 5
+        doc: When the retention period runs out and the data is reclaimed
+      - name: volume_mode
+        type: string
+        index: 6
+
+  - type: UndeleteResult
+    fields:
+      - name: disk
+        type: string
+        index: 0
+        doc: Name of the recovered disk
+      - name: disk_id
+        type: string
+        index: 1
+        doc: Entity id of the recreated disk
+      - name: volume_id
+        type: string
+        index: 2
+      - name: image_path
+        type: string
+        index: 3
+
+  - type: RestoreResult
+    fields:
+      - name: disk
+        type: string
+        index: 0
+        doc: Name of the restored disk
+      - name: image_size_bytes
+        type: int64
+        index: 1
+        doc: Size of the image that was written
+      - name: created
+        type: bool
+        index: 2
+        doc: True when the disk did not exist and was created by this restore
+
+interfaces:
+  - name: DiskBackup
+    doc: >
+      Backup and restore of disk images, driven by a remote client (RFD-108).
+
+      Two steps genuinely have to happen on the server: moving the image bytes,
+      and talking to miren.cloud with the cluster's key. Both stay here. The
+      client orchestrates over this interface whether it runs on the server host
+      or on a laptop, so there is no local-versus-remote mode to detect and no
+      chance of mistaking "the data directory happens to exist here" for "this
+      client is colocated with the cluster it targets".
+
+      Every method is admin-level, matching the other disk mutations.
+    methods:
+      - name: backup
+        doc: >
+          Snapshot a disk. With to_cloud set, the server compresses the image
+          and uploads it to miren.cloud as a restore point using the cluster's
+          own key, and no image bytes reach the client. Otherwise the compressed
+          snapshot is streamed down data, which is how a cluster with no cloud
+          still backs up to a file on the client.
+        parameters:
+          - name: disk
+            type: string
+            doc: Disk name to back up
+          - name: to_cloud
+            type: bool
+            doc: Upload to miren.cloud instead of streaming to the client
+          - name: pin
+            type: string
+            doc: Name the uploaded restore point, pinning it against cleanup
+          - name: data
+            type: stream.SendStream[[]byte]
+            doc: Stream the client receives the compressed snapshot on
+          - name: progress
+            type: stream.SendStream[*Progress]
+            doc: Stream the client receives progress events on
+          - name: transfer_id
+            type: string
+            doc: >
+              Names this transfer so a dropped connection can pick it up again.
+              The client chooses it, because a value the server handed back
+              would be lost with the call that carried it. Retrying with the
+              same id resumes; a new id starts over.
+          - name: offset
+            type: int64
+            doc: >
+              Byte of the compressed snapshot to start sending from. A resuming
+              client passes what it already has on disk.
+        results:
+          - name: result
+            type: '*BackupResult'
+
+      - name: listBackups
+        doc: >
+          List the restore points available for a disk, newest first, so a
+          client can show them and let the operator pick one.
+        parameters:
+          - name: disk
+            type: string
+            doc: Disk name to list restore points for
+        results:
+          - name: points
+            type: list
+            element: RestorePoint
+
+      - name: restore
+        doc: >
+          Rebuild a disk's image. With restore_point set, the server downloads
+          that point from miren.cloud. Otherwise it reads a snapshot the client
+          streams up data. Restoring a disk the cluster has never seen creates
+          it, which is what makes this usable for disaster recovery onto a fresh
+          host.
+        parameters:
+          - name: disk
+            type: string
+            doc: Disk name to restore to
+          - name: restore_point
+            type: string
+            doc: Restore point to fetch from miren.cloud, empty to read from data
+          - name: data
+            type: stream.RecvStream[[]byte]
+            doc: Stream the server reads a client-supplied snapshot from
+          - name: force
+            type: bool
+            doc: Overwrite an existing disk image
+          - name: progress
+            type: stream.SendStream[*Progress]
+            doc: Stream the client receives progress events on
+          - name: transfer_id
+            type: string
+            doc: >
+              Names this transfer so a dropped connection can pick it up again.
+              Required when streaming a snapshot up; ignored for a restore point,
+              which the server fetches itself.
+          - name: offset
+            type: int64
+            doc: >
+              Byte of the snapshot the client is sending from. It must match
+              what the server already holds, which transferOffset reports.
+        results:
+          - name: result
+            type: '*RestoreResult'
+
+      - name: transferOffset
+        doc: >
+          How much of a transfer the server already holds, so a client resuming
+          an interrupted restore knows where to start sending. Unknown ids
+          report zero, which is what makes the first attempt and a retry the
+          same code path on the client.
+        parameters:
+          - name: transfer_id
+            type: string
+        results:
+          - name: received_bytes
+            type: int64
+
+      - name: listDeleted
+        doc: >
+          List disks whose data is still recoverable from the soft-delete
+          holding area, newest deletion first.
+        results:
+          - name: disks
+            type: list
+            element: DeletedDisk
+          - name: retention_days
+            type: int32
+            doc: How long this server keeps deleted disk data before reclaiming it
+
+      - name: undelete
+        doc: >
+          Recover a deleted disk: move its data back out of the holding area
+          and recreate the entities that point at it.
+        parameters:
+          - name: disk
+            type: string
+            doc: Name of the deleted disk to recover
+          - name: volume_id
+            type: string
+            doc: Which volume to recover, when several deleted disks share a name
+        results:
+          - name: result
+            type: '*UndeleteResult'

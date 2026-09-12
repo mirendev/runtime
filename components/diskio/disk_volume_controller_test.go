@@ -1080,3 +1080,115 @@ func TestDiskVolumeControllerAcceleratorNoMountAtCreation(t *testing.T) {
 	require.NotNil(t, volState)
 	assert.False(t, volState.Mounted)
 }
+
+// TestDiskVolumeControllerDoesNotAdoptADeletedBacking is the counterpart to the
+// adoption test above, for the case where the loop device is holding a file
+// that is no longer at that path.
+//
+// The kernel reports such a device's backing_file as the original path with
+// " (deleted)" appended. Matching on the path alone makes it look like the
+// image is already attached, so the controller adopts it, finds the old
+// filesystem, decides no formatting is needed, and mounts the contents that
+// were replaced — after a restore wrote a new image and renamed it into place,
+// exactly the data the operator had just discarded.
+//
+// The live image must get its own loop device instead.
+func TestDiskVolumeControllerDoesNotAdoptADeletedBacking(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+
+	volPath := filepath.Join(dataPath, "volumes", "vol-ghost")
+	mountPath := filepath.Join(dataPath, "vol-ghost")
+	imagePath := filepath.Join(volPath, "disk.img")
+
+	state.SetVolume("disk_volume/vol-ghost", &VolumeState{
+		EntityId:   "disk_volume/vol-ghost",
+		VolumeId:   "vol-ghost",
+		DiskPath:   volPath,
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+		Mode:       storage_v1alpha.VM_UNIVERSAL,
+		Mounted:    false,
+		MountPath:  mountPath,
+	})
+	volOps.existingPaths[volPath] = true
+
+	// A loop device still pinning the image that used to be at this path.
+	const ghostLoopDev = "/dev/loop9"
+	mntOps.loopBacking = map[string]string{imagePath: ghostLoopDev}
+	mntOps.deletedBacking = map[string]bool{imagePath: true}
+	mntOps.formattedDevs[ghostLoopDev] = "ext4"
+
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
+	vc.SetEAC(es.EAC)
+
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-ghost",
+		NodeId:       compute.NewNodeId(nodeId).Id(),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_READY,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+
+	// The live image gets a loop of its own rather than the ghost.
+	require.Len(t, mntOps.attachedLoops, 1,
+		"the live image must be attached rather than the device holding the deleted one")
+
+	require.Len(t, mntOps.mounts, 1)
+	assert.NotEqual(t, ghostLoopDev, mntOps.mounts[0].device,
+		"mounting the device that holds the deleted inode serves the data the operator replaced")
+
+	volState := state.GetVolume("disk_volume/vol-ghost")
+	require.NotNil(t, volState)
+	assert.True(t, volState.Mounted)
+	assert.NotEqual(t, ghostLoopDev, volState.DevicePath)
+}
+
+// TestDiskVolumeControllerOrphanSweepReclaimsDeletedBackings is the other half
+// of the deleted-backing distinction.
+//
+// Adoption must ignore a loop holding an unlinked inode, but the sweep must
+// still reclaim it: a device pinning a file that no longer has a name is
+// precisely the leftover this sweep exists for, and it is what keeps the
+// non-adoption above from leaking a device forever.
+func TestDiskVolumeControllerOrphanSweepReclaimsDeletedBackings(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+
+	ghostImage := filepath.Join(dataPath, "volumes", "vol-ghost", "disk.img")
+	const ghostLoopDev = "/dev/loop11"
+
+	mntOps.loopBacking = map[string]string{ghostImage: ghostLoopDev}
+	mntOps.deletedBacking = map[string]bool{ghostImage: true}
+
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
+	vc.SetEAC(es.EAC)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+
+	assert.Contains(t, mntOps.detachedLoops, ghostLoopDev,
+		"a loop holding an unlinked image under the volumes dir must still be reclaimed")
+}

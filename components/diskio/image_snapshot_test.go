@@ -29,7 +29,7 @@ func TestImageSnapshotUploadsCompressedImage(t *testing.T) {
 	content := bytes.Repeat([]byte("disk contents "), 512)
 	snapshotter, fake, imagePath := newSnapshotFixture(t, content)
 
-	updateID, err := snapshotter.Snapshot(context.Background(), SnapshotRequest{
+	res, err := snapshotter.Snapshot(context.Background(), SnapshotRequest{
 		VolumeID:     "vol-1",
 		ImagePath:    imagePath,
 		Name:         "data",
@@ -37,7 +37,10 @@ func TestImageSnapshotUploadsCompressedImage(t *testing.T) {
 		SnapshotName: "pre-migration",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "volup-fake", updateID)
+	assert.Equal(t, "volup-fake", res.UpdateID)
+	assert.Equal(t, int64(len(content)), res.ImageSize)
+	assert.NotZero(t, res.CompressedSize)
+	assert.NotEmpty(t, res.Checksum)
 
 	require.Len(t, fake.uploads, 1)
 	up := fake.uploads[0]
@@ -59,6 +62,29 @@ func TestImageSnapshotUploadsCompressedImage(t *testing.T) {
 	assert.Equal(t, "data", meta.Name)
 	assert.Equal(t, int64(len(content)), meta.SizeBytes)
 	assert.Equal(t, meta.Checksum, up.Request.Metadata["image_sha256"])
+
+	// The fixture did not say the image was in use, so the restore point does
+	// not claim it was.
+	assert.Equal(t, false, up.Request.Metadata["was_attached"])
+}
+
+// A snapshot taken from a live image is a smear across the read rather than a
+// point-in-time copy, and the restore point has to say so — it is the
+// difference between one you can rely on and one you are gambling on.
+func TestImageSnapshotRecordsThatTheImageWasInUse(t *testing.T) {
+	snapshotter, fake, imagePath := newSnapshotFixture(t, []byte("written while we read"))
+
+	_, err := snapshotter.Snapshot(context.Background(), SnapshotRequest{
+		VolumeID:   "vol-1",
+		ImagePath:  imagePath,
+		Name:       "data",
+		Filesystem: "ext4",
+		InUse:      true,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, fake.uploads, 1)
+	assert.Equal(t, true, fake.uploads[0].Request.Metadata["was_attached"])
 }
 
 // Every snapshot is a deliberate act, so two in a row both upload. There is no

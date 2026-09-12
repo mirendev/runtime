@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"miren.dev/runtime/api/disk/disk_v1alpha"
+	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
+	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/rpc"
+	disksrv "miren.dev/runtime/servers/disk"
 	runnerserver "miren.dev/runtime/servers/runner"
 	sqlitebackupsrv "miren.dev/runtime/servers/sqlitebackup"
 	telemetrysrv "miren.dev/runtime/servers/telemetry"
@@ -46,6 +50,28 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 		return fmt.Errorf("creating sqlite backup server: %w", err)
 	}
 	server.ExposeValue(rpc.ServiceSqliteBackup, sqlitebackup_v1alpha.AdaptSqliteBackup(backup))
+
+	// Disk backup and restore, driven by a client that need not be on this host
+	// (RFD-108). The image bytes and the cloud key stay here; everything else is
+	// the client's orchestration.
+	//
+	// It belongs with the other endpoints a host needs before workload control
+	// starts, for the same reason they do: recovering a disk is something you
+	// do to a cluster that is not yet running anything.
+	//
+	// The updates client is nil when the cluster has no cloud registration,
+	// which leaves the local-file backup path working and refuses the cloud
+	// ones with an explanation.
+	var diskUpdates diskio.CloudUpdatesClient
+	if c.authClient != nil {
+		cloudURL := c.CloudAuth.CloudURL
+		if cloudURL == "" {
+			cloudURL = DefaultCloudURL
+		}
+		diskUpdates = diskio.NewCloudUpdatesClient(c.Log, cloudURL, c.authClient)
+	}
+	diskBackup := disksrv.NewServer(c.Log, c.eac, aes.NewClient(c.Log, c.eac), c.DataPath, diskUpdates)
+	server.ExposeValue("dev.miren.runtime/disk-backup", disk_v1alpha.AdaptDiskBackup(diskBackup))
 
 	runnerReg := runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
 		Log:                    c.Log,

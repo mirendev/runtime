@@ -67,13 +67,14 @@ func main() {
 	check(os.WriteFile(filepath.Join(diskPath, "disk.img"), imageData, 0644), "write image")
 
 	snapshotter := diskio.NewImageSnapshotter(log, updates)
-	imageUpdateID, err := snapshotter.Snapshot(ctx, diskio.SnapshotRequest{
+	imageSnap, err := snapshotter.Snapshot(ctx, diskio.SnapshotRequest{
 		VolumeID:   volumeID,
 		ImagePath:  filepath.Join(diskPath, "disk.img"),
 		Name:       "e2e-disk",
 		Filesystem: "ext4",
 	})
 	check(err, "snapshot image")
+	imageUpdateID := imageSnap.UpdateID
 	fmt.Printf("✓ uploaded loop_image snapshot %s\n", imageUpdateID)
 
 	// --- list both kinds back ---

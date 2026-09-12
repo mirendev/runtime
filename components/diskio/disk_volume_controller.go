@@ -648,6 +648,12 @@ func (c *DiskVolumeController) ensureVolumeMount(ctx context.Context, entityId s
 		)
 		devicePath = existing
 	} else {
+		// A loop device may still be holding the file that used to be at this
+		// path — after a restore replaced the image, say. It is not adopted,
+		// because it would serve the old contents, but it does leak a device
+		// until the orphan sweep reclaims it, so say so.
+		c.warnAboutStaleLoop(entityId, imagePath)
+
 		// No existing loop. Any stale volState.DevicePath is meaningless
 		// (the kernel has no loop backing this image), so we don't touch
 		// it — the loop index it names may have been reallocated to some
@@ -810,6 +816,32 @@ func (c *DiskVolumeController) Shutdown() {
 	}
 }
 
+// warnAboutStaleLoop reports a loop device still holding a file that used to be
+// at imagePath.
+//
+// Best effort, and never fatal: this is only here to make a leaked device
+// visible. The mount that follows attaches the live image on its own device and
+// is correct either way, and the orphan sweep reclaims the leftover.
+func (c *DiskVolumeController) warnAboutStaleLoop(entityId, imagePath string) {
+	abs, err := filepath.Abs(imagePath)
+	if err != nil {
+		return
+	}
+	backings, err := c.mntOps.FindAllLoopBackings()
+	if err != nil {
+		return
+	}
+	for dev, backing := range backings {
+		if backing.Deleted && backing.Path == abs {
+			c.log.Warn("a loop device still holds the file that used to be at this path",
+				"entity_id", entityId,
+				"image_path", imagePath,
+				"device", dev,
+			)
+		}
+	}
+}
+
 // reconcileOrphanKernelState runs once at boot and tears down any kernel
 // loop devices or mounts that are rooted in miren's volumes directory but
 // that no longer correspond to a known volume in local state.
@@ -874,14 +906,20 @@ func (c *DiskVolumeController) reconcileOrphanKernelState() {
 		}
 		// Only touch loops backing files inside miren's volumes dir.
 		// Anything else is not ours to manage.
-		if !strings.HasPrefix(backing, volumesDir+string(filepath.Separator)) &&
-			!strings.HasPrefix(backing, volumesDir+"/") {
+		//
+		// A deleted backing counts: the path it reports is where the file used
+		// to be, which is still enough to say the device is ours, and a device
+		// holding an unlinked image is exactly the kind of leftover this sweep
+		// exists to reclaim.
+		if !strings.HasPrefix(backing.Path, volumesDir+string(filepath.Separator)) &&
+			!strings.HasPrefix(backing.Path, volumesDir+"/") {
 			continue
 		}
 
 		c.log.Warn("orphan sweep: detaching stale loop device",
 			"device", dev,
-			"backing_file", backing,
+			"backing_file", backing.Path,
+			"backing_deleted", backing.Deleted,
 		)
 		if err := c.mntOps.LoopDetach(dev); err != nil {
 			c.log.Warn("orphan sweep: LoopDetach failed",

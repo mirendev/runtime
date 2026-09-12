@@ -55,6 +55,7 @@ miren debug disk [flags]
 
 ## Subcommands
 
+- [`miren debug disk backup`](./debug-disk-backup.md) — Back up a disk by reading its image directly (break-glass)
 - [`miren debug disk create`](./debug-disk-create.md) — Create a disk entity for testing
 - [`miren debug disk delete`](./debug-disk-delete.md) — Delete a disk entity
 - [`miren debug disk lease`](./debug-disk-lease.md) — Create a disk lease for testing
@@ -63,8 +64,11 @@ miren debug disk [flags]
 - [`miren debug disk lease-release`](./debug-disk-lease-release.md) — Release a disk lease
 - [`miren debug disk lease-status`](./debug-disk-lease-status.md) — Show detailed status of a disk lease
 - [`miren debug disk list`](./debug-disk-list.md) — List all disk entities
+- [`miren debug disk list-deleted`](./debug-disk-list-deleted.md) — Read the soft-delete holding area directly (break-glass)
 - [`miren debug disk mounts`](./debug-disk-mounts.md) — List all mounted disks from /proc/mounts
+- [`miren debug disk restore`](./debug-disk-restore.md) — Restore a disk by writing its image directly (break-glass)
 - [`miren debug disk status`](./debug-disk-status.md) — Show status of a disk entity
+- [`miren debug disk undelete`](./debug-disk-undelete.md) — Recover a deleted disk by moving its data directly (break-glass)
 
 ## See also
 
