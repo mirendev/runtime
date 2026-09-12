@@ -148,7 +148,7 @@ func (s *RustStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
-		llb.ExcludePatterns([]string{".git", "target"}),
+		llb.ExcludePatterns(contextExcludes("target")),
 		llb.FollowPaths([]string{"."}),
 		llb.WithCustomName("application code"),
 	)

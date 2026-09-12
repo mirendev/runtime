@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/moby/buildkit/client/llb"
@@ -246,7 +247,7 @@ func (s *RubyStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
-		llb.ExcludePatterns([]string{".git"}),
+		llb.ExcludePatterns(contextExcludes()),
 		llb.FollowPaths([]string{"."}),
 		llb.WithCustomName("application code"),
 	)
@@ -493,7 +494,7 @@ func (s *RubyStack) scanRubySourceForEnvVars() []detectedEnvVar {
 		// Skip common non-source directories
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == "vendor" || base == "node_modules" || base == ".git" || base == "tmp" || base == "log" {
+			if base == "vendor" || base == "node_modules" || base == "tmp" || base == "log" || slices.Contains(vcsDirs, base) {
 				return filepath.SkipDir
 			}
 			return nil

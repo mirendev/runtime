@@ -194,7 +194,7 @@ func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions
 	// Set up local context with the directory
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
-		llb.ExcludePatterns([]string{".git"}),
+		llb.ExcludePatterns(contextExcludes()),
 		llb.FollowPaths([]string{"."}),
 		llb.WithCustomName("application code"),
 	)
