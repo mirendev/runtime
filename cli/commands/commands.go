@@ -16,6 +16,10 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Name: "JSON output",
 			Body: "miren version --format json",
 		}),
+		WithExample(mflags.Example{
+			Name: "Compare with the cluster's server",
+			Body: "miren version --server",
+		}),
 	))
 	d.Dispatch("login", Infer("login", "Authenticate with miren.cloud", Login,
 		WithGroup(GroupClient),
