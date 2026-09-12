@@ -32,6 +32,8 @@ const (
 	labelRunner  = "miren_runner"
 	labelApp     = "miren_app"
 	labelKind    = "miren_kind"
+	labelService = "miren_service"
+	labelVersion = "miren_version"
 )
 
 // groupKey renders several labels as one grouping clause.
@@ -159,6 +161,64 @@ func sandboxCountQuery(selector string, window time.Duration) string {
 		groupKey(labelApp, labelKind, labelSandbox), metricMemoryUsed, selector, promDuration(window))
 
 	return fmt.Sprintf("count by (%s) (%s)", groupKey(labelApp, labelKind), perSandbox)
+}
+
+// contributorMemoryQuery and contributorCPUSecondsQuery read what one sandbox
+// used while it was running.
+//
+// Neither uses a subquery, and that is the whole point. Every other collapse
+// here evaluates a fixed number of points across the window (see overTime), so
+// the resolution degrades as the window grows: at a week the step is over eight
+// hours, and a sandbox that lived ten minutes falls between two evaluation
+// points and reports nothing at all. It still appears in the breakdown, with
+// zeroes beside it, which reads as "used nothing" rather than "not measured".
+//
+// Applied straight to a raw metric these functions scan the samples themselves,
+// so they are exact at any window length and describe the sandbox's own
+// lifetime rather than the window's. A ten-minute sandbox reports the memory it
+// actually held for those ten minutes.
+//
+// The sum is what collapses a sandbox's several containers into one figure.
+func contributorMemoryQuery(groupBy, selector string, window time.Duration, aggregate string) string {
+	return fmt.Sprintf("sum by (%s) (%s_over_time(%s%s[%s]))",
+		groupBy, aggregate, metricMemoryUsed, selector, promDuration(window))
+}
+
+// contributorCPUSecondsQuery reads how much CPU time each sandbox consumed.
+//
+// Seconds rather than cores because seconds are what add up. Cores is a rate,
+// and two sandboxes that ran for different lengths of time cannot be compared
+// by it; the caller divides by the sandbox's own active span to recover a rate
+// that means something.
+func contributorCPUSecondsQuery(groupBy, selector string, window time.Duration) string {
+	return fmt.Sprintf("sum by (%s) (increase(%s%s[%s]))",
+		groupBy, metricCPUSeconds, selector, promDuration(window))
+}
+
+// firstSeenQuery and lastSeenQuery report when a sandbox's samples start and
+// stop inside the window.
+//
+// Together they are the span a sandbox accounted for, which is what turns a
+// week's worth of contributors from an undated pile into a sequence of
+// deployments. Nothing else can supply it: the sandbox entity that knew its own
+// start and exit times is swept about an hour after it dies.
+//
+// tfirst_over_time and tlast_over_time are the right functions and tmin/tmax
+// are not, though the names suggest otherwise. tmin_over_time returns the
+// timestamp of the smallest *value*, not the earliest sample, so a sandbox
+// whose memory dipped at the end would report having started then.
+//
+// Memory is what they ask about because it is a gauge: every live sandbox has a
+// current value, where a CPU counter that has not advanced yields no rate and
+// would read as a sandbox that was never there.
+func firstSeenQuery(selector string, window time.Duration) string {
+	return fmt.Sprintf("min by (%s) (tfirst_over_time(%s%s[%s]))",
+		labelSandbox, metricMemoryUsed, selector, promDuration(window))
+}
+
+func lastSeenQuery(selector string, window time.Duration) string {
+	return fmt.Sprintf("max by (%s) (tlast_over_time(%s%s[%s]))",
+		labelSandbox, metricMemoryUsed, selector, promDuration(window))
 }
 
 // nodeGaugeQuery reads one node-level gauge, collapsed over the window.

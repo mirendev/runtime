@@ -43,13 +43,14 @@ to contain its samples. Samples are kept for a month, so a long enough --since
 will name apps that have since been deleted.
 
 --series adds that app's CPU and memory over time, which a row cannot show: a
-row collapses the window to one number. It needs --apps and --app, because a
-history is one app's:
+row collapses the window to one number. --contributors breaks the figures down
+by the sandboxes that produced them, including the ones already replaced. Both
+need --apps and --app, because they answer for one app:
 
-  miren top --apps --app shop --since 24h --series
+  miren top --apps --app shop --since 168h --series --contributors
 
-Use --format json to get the points themselves, and --step to choose their
-resolution.
+Use --format json to get the points and the breakdown as data, and --step to
+choose the resolution of the history.
 
 There is no restart column. Miren replaces a failed sandbox rather than
 restarting it, so no single sandbox accumulates a restart count; repeated
@@ -73,6 +74,7 @@ miren top [flags]
 - `--apps` — Show per-app totals instead of per-sandbox
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--contributors` — With --apps --app, list the sandboxes that made up the figures
 - `--format` — Output format (text, json) (default: `text`)
 - `--interval` — Refresh interval when watching (default: `5s`)
 - `--json` — Shorthand for --format json

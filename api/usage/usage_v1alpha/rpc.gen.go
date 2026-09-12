@@ -1507,9 +1507,11 @@ func (v *DetailOptions) UnmarshalJSON(data []byte) error {
 }
 
 type appDetailOptionsData struct {
-	IncludeSeries *bool  `cbor:"0,keyasint,omitempty" json:"include_series,omitempty"`
-	IncludeAddons *bool  `cbor:"1,keyasint,omitempty" json:"include_addons,omitempty"`
-	StepSeconds   *int64 `cbor:"2,keyasint,omitempty" json:"step_seconds,omitempty"`
+	IncludeSeries       *bool  `cbor:"0,keyasint,omitempty" json:"include_series,omitempty"`
+	IncludeAddons       *bool  `cbor:"1,keyasint,omitempty" json:"include_addons,omitempty"`
+	StepSeconds         *int64 `cbor:"2,keyasint,omitempty" json:"step_seconds,omitempty"`
+	IncludeContributors *bool  `cbor:"3,keyasint,omitempty" json:"include_contributors,omitempty"`
+	ContributorSeries   *bool  `cbor:"4,keyasint,omitempty" json:"contributor_series,omitempty"`
 }
 
 type AppDetailOptions struct {
@@ -1561,6 +1563,36 @@ func (v *AppDetailOptions) SetStepSeconds(step_seconds int64) {
 	v.data.StepSeconds = &step_seconds
 }
 
+func (v *AppDetailOptions) HasIncludeContributors() bool {
+	return v.data.IncludeContributors != nil
+}
+
+func (v *AppDetailOptions) IncludeContributors() bool {
+	if v.data.IncludeContributors == nil {
+		return false
+	}
+	return *v.data.IncludeContributors
+}
+
+func (v *AppDetailOptions) SetIncludeContributors(include_contributors bool) {
+	v.data.IncludeContributors = &include_contributors
+}
+
+func (v *AppDetailOptions) HasContributorSeries() bool {
+	return v.data.ContributorSeries != nil
+}
+
+func (v *AppDetailOptions) ContributorSeries() bool {
+	if v.data.ContributorSeries == nil {
+		return false
+	}
+	return *v.data.ContributorSeries
+}
+
+func (v *AppDetailOptions) SetContributorSeries(contributor_series bool) {
+	v.data.ContributorSeries = &contributor_series
+}
+
 func (v *AppDetailOptions) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -1574,6 +1606,242 @@ func (v *AppDetailOptions) MarshalJSON() ([]byte, error) {
 }
 
 func (v *AppDetailOptions) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type appContributorData struct {
+	Sandbox        *string             `cbor:"0,keyasint,omitempty" json:"sandbox,omitempty"`
+	SandboxShortId *string             `cbor:"1,keyasint,omitempty" json:"sandbox_short_id,omitempty"`
+	Service        *string             `cbor:"2,keyasint,omitempty" json:"service,omitempty"`
+	Version        *string             `cbor:"3,keyasint,omitempty" json:"version,omitempty"`
+	VersionShortId *string             `cbor:"4,keyasint,omitempty" json:"version_short_id,omitempty"`
+	Node           *string             `cbor:"5,keyasint,omitempty" json:"node,omitempty"`
+	Kind           *string             `cbor:"6,keyasint,omitempty" json:"kind,omitempty"`
+	Cpu            *CpuUsage           `cbor:"7,keyasint,omitempty" json:"cpu,omitempty"`
+	Memory         *MemoryUsage        `cbor:"8,keyasint,omitempty" json:"memory,omitempty"`
+	FirstSeen      *standard.Timestamp `cbor:"9,keyasint,omitempty" json:"first_seen,omitempty"`
+	LastSeen       *standard.Timestamp `cbor:"10,keyasint,omitempty" json:"last_seen,omitempty"`
+	Alive          *bool               `cbor:"11,keyasint,omitempty" json:"alive,omitempty"`
+	Series         *[]*UsageSeries     `cbor:"12,keyasint,omitempty" json:"series,omitempty"`
+	CpuSeconds     *float64            `cbor:"13,keyasint,omitempty" json:"cpu_seconds,omitempty"`
+}
+
+type AppContributor struct {
+	data appContributorData
+}
+
+func (v *AppContributor) HasSandbox() bool {
+	return v.data.Sandbox != nil
+}
+
+func (v *AppContributor) Sandbox() string {
+	if v.data.Sandbox == nil {
+		return ""
+	}
+	return *v.data.Sandbox
+}
+
+func (v *AppContributor) SetSandbox(sandbox string) {
+	v.data.Sandbox = &sandbox
+}
+
+func (v *AppContributor) HasSandboxShortId() bool {
+	return v.data.SandboxShortId != nil
+}
+
+func (v *AppContributor) SandboxShortId() string {
+	if v.data.SandboxShortId == nil {
+		return ""
+	}
+	return *v.data.SandboxShortId
+}
+
+func (v *AppContributor) SetSandboxShortId(sandbox_short_id string) {
+	v.data.SandboxShortId = &sandbox_short_id
+}
+
+func (v *AppContributor) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *AppContributor) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *AppContributor) SetService(service string) {
+	v.data.Service = &service
+}
+
+func (v *AppContributor) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *AppContributor) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *AppContributor) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *AppContributor) HasVersionShortId() bool {
+	return v.data.VersionShortId != nil
+}
+
+func (v *AppContributor) VersionShortId() string {
+	if v.data.VersionShortId == nil {
+		return ""
+	}
+	return *v.data.VersionShortId
+}
+
+func (v *AppContributor) SetVersionShortId(version_short_id string) {
+	v.data.VersionShortId = &version_short_id
+}
+
+func (v *AppContributor) HasNode() bool {
+	return v.data.Node != nil
+}
+
+func (v *AppContributor) Node() string {
+	if v.data.Node == nil {
+		return ""
+	}
+	return *v.data.Node
+}
+
+func (v *AppContributor) SetNode(node string) {
+	v.data.Node = &node
+}
+
+func (v *AppContributor) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *AppContributor) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *AppContributor) SetKind(kind string) {
+	v.data.Kind = &kind
+}
+
+func (v *AppContributor) HasCpu() bool {
+	return v.data.Cpu != nil
+}
+
+func (v *AppContributor) Cpu() *CpuUsage {
+	return v.data.Cpu
+}
+
+func (v *AppContributor) SetCpu(cpu *CpuUsage) {
+	v.data.Cpu = cpu
+}
+
+func (v *AppContributor) HasMemory() bool {
+	return v.data.Memory != nil
+}
+
+func (v *AppContributor) Memory() *MemoryUsage {
+	return v.data.Memory
+}
+
+func (v *AppContributor) SetMemory(memory *MemoryUsage) {
+	v.data.Memory = memory
+}
+
+func (v *AppContributor) HasFirstSeen() bool {
+	return v.data.FirstSeen != nil
+}
+
+func (v *AppContributor) FirstSeen() *standard.Timestamp {
+	return v.data.FirstSeen
+}
+
+func (v *AppContributor) SetFirstSeen(first_seen *standard.Timestamp) {
+	v.data.FirstSeen = first_seen
+}
+
+func (v *AppContributor) HasLastSeen() bool {
+	return v.data.LastSeen != nil
+}
+
+func (v *AppContributor) LastSeen() *standard.Timestamp {
+	return v.data.LastSeen
+}
+
+func (v *AppContributor) SetLastSeen(last_seen *standard.Timestamp) {
+	v.data.LastSeen = last_seen
+}
+
+func (v *AppContributor) HasAlive() bool {
+	return v.data.Alive != nil
+}
+
+func (v *AppContributor) Alive() bool {
+	if v.data.Alive == nil {
+		return false
+	}
+	return *v.data.Alive
+}
+
+func (v *AppContributor) SetAlive(alive bool) {
+	v.data.Alive = &alive
+}
+
+func (v *AppContributor) HasSeries() bool {
+	return v.data.Series != nil
+}
+
+func (v *AppContributor) Series() []*UsageSeries {
+	if v.data.Series == nil {
+		return nil
+	}
+	return *v.data.Series
+}
+
+func (v *AppContributor) SetSeries(series []*UsageSeries) {
+	x := slices.Clone(series)
+	v.data.Series = &x
+}
+
+func (v *AppContributor) HasCpuSeconds() bool {
+	return v.data.CpuSeconds != nil
+}
+
+func (v *AppContributor) CpuSeconds() float64 {
+	if v.data.CpuSeconds == nil {
+		return 0
+	}
+	return *v.data.CpuSeconds
+}
+
+func (v *AppContributor) SetCpuSeconds(cpu_seconds float64) {
+	v.data.CpuSeconds = &cpu_seconds
+}
+
+func (v *AppContributor) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AppContributor) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AppContributor) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AppContributor) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
@@ -2385,10 +2653,11 @@ func (v *ResourceUsageGetAppArgs) UnmarshalJSON(data []byte) error {
 }
 
 type resourceUsageGetAppResultsData struct {
-	Usage    *AppUsage       `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
-	Series   *[]*UsageSeries `cbor:"1,keyasint,omitempty" json:"series,omitempty"`
-	Window   *UsageWindow    `cbor:"2,keyasint,omitempty" json:"window,omitempty"`
-	Warnings *[]string       `cbor:"3,keyasint,omitempty" json:"warnings,omitempty"`
+	Usage        *AppUsage          `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
+	Series       *[]*UsageSeries    `cbor:"1,keyasint,omitempty" json:"series,omitempty"`
+	Window       *UsageWindow       `cbor:"2,keyasint,omitempty" json:"window,omitempty"`
+	Warnings     *[]string          `cbor:"3,keyasint,omitempty" json:"warnings,omitempty"`
+	Contributors *[]*AppContributor `cbor:"4,keyasint,omitempty" json:"contributors,omitempty"`
 }
 
 type ResourceUsageGetAppResults struct {
@@ -2412,6 +2681,11 @@ func (v *ResourceUsageGetAppResults) SetWindow(window *UsageWindow) {
 func (v *ResourceUsageGetAppResults) SetWarnings(warnings []string) {
 	x := slices.Clone(warnings)
 	v.data.Warnings = &x
+}
+
+func (v *ResourceUsageGetAppResults) SetContributors(contributors []*AppContributor) {
+	x := slices.Clone(contributors)
+	v.data.Contributors = &x
 }
 
 func (v *ResourceUsageGetAppResults) MarshalCBOR() ([]byte, error) {
@@ -3275,13 +3549,15 @@ func (v *ResourceUsageHttpListAppsResults) UnmarshalJSON(data []byte) error {
 }
 
 type resourceUsageHttpGetAppArgsData struct {
-	App       *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
-	Since     *string `cbor:"1,keyasint,omitempty" json:"since,omitempty"`
-	Until     *string `cbor:"2,keyasint,omitempty" json:"until,omitempty"`
-	Aggregate *string `cbor:"3,keyasint,omitempty" json:"aggregate,omitempty"`
-	Addons    *bool   `cbor:"4,keyasint,omitempty" json:"addons,omitempty"`
-	Series    *bool   `cbor:"5,keyasint,omitempty" json:"series,omitempty"`
-	Step      *string `cbor:"6,keyasint,omitempty" json:"step,omitempty"`
+	App               *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Since             *string `cbor:"1,keyasint,omitempty" json:"since,omitempty"`
+	Until             *string `cbor:"2,keyasint,omitempty" json:"until,omitempty"`
+	Aggregate         *string `cbor:"3,keyasint,omitempty" json:"aggregate,omitempty"`
+	Addons            *bool   `cbor:"4,keyasint,omitempty" json:"addons,omitempty"`
+	Series            *bool   `cbor:"5,keyasint,omitempty" json:"series,omitempty"`
+	Step              *string `cbor:"6,keyasint,omitempty" json:"step,omitempty"`
+	Contributors      *bool   `cbor:"7,keyasint,omitempty" json:"contributors,omitempty"`
+	ContributorSeries *bool   `cbor:"8,keyasint,omitempty" json:"contributor_series,omitempty"`
 }
 
 type ResourceUsageHttpGetAppArgs struct {
@@ -3366,6 +3642,28 @@ func (v *ResourceUsageHttpGetAppArgs) Step() string {
 	return *v.data.Step
 }
 
+func (v *ResourceUsageHttpGetAppArgs) HasContributors() bool {
+	return v.data.Contributors != nil
+}
+
+func (v *ResourceUsageHttpGetAppArgs) Contributors() bool {
+	if v.data.Contributors == nil {
+		return false
+	}
+	return *v.data.Contributors
+}
+
+func (v *ResourceUsageHttpGetAppArgs) HasContributorSeries() bool {
+	return v.data.ContributorSeries != nil
+}
+
+func (v *ResourceUsageHttpGetAppArgs) ContributorSeries() bool {
+	if v.data.ContributorSeries == nil {
+		return false
+	}
+	return *v.data.ContributorSeries
+}
+
 func (v *ResourceUsageHttpGetAppArgs) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -3383,10 +3681,11 @@ func (v *ResourceUsageHttpGetAppArgs) UnmarshalJSON(data []byte) error {
 }
 
 type resourceUsageHttpGetAppResultsData struct {
-	Usage    *AppUsage       `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
-	Window   *UsageWindow    `cbor:"1,keyasint,omitempty" json:"window,omitempty"`
-	Warnings *[]string       `cbor:"2,keyasint,omitempty" json:"warnings,omitempty"`
-	Series   *[]*UsageSeries `cbor:"3,keyasint,omitempty" json:"series,omitempty"`
+	Usage        *AppUsage          `cbor:"0,keyasint,omitempty" json:"usage,omitempty"`
+	Window       *UsageWindow       `cbor:"1,keyasint,omitempty" json:"window,omitempty"`
+	Warnings     *[]string          `cbor:"2,keyasint,omitempty" json:"warnings,omitempty"`
+	Series       *[]*UsageSeries    `cbor:"3,keyasint,omitempty" json:"series,omitempty"`
+	Contributors *[]*AppContributor `cbor:"4,keyasint,omitempty" json:"contributors,omitempty"`
 }
 
 type ResourceUsageHttpGetAppResults struct {
@@ -3410,6 +3709,11 @@ func (v *ResourceUsageHttpGetAppResults) SetWarnings(warnings []string) {
 func (v *ResourceUsageHttpGetAppResults) SetSeries(series []*UsageSeries) {
 	x := slices.Clone(series)
 	v.data.Series = &x
+}
+
+func (v *ResourceUsageHttpGetAppResults) SetContributors(contributors []*AppContributor) {
+	x := slices.Clone(contributors)
+	v.data.Contributors = &x
 }
 
 func (v *ResourceUsageHttpGetAppResults) MarshalCBOR() ([]byte, error) {
@@ -3968,7 +4272,7 @@ func AdaptResourceUsage(t ResourceUsage) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			RestOnly:      true,
-			Params:        []string{"app", "since", "until", "aggregate", "addons", "series", "step"},
+			Params:        []string{"app", "since", "until", "aggregate", "addons", "series", "step", "contributors", "contributor_series"},
 			HTTP: &rpc.HTTPBinding{
 				Verb:       "GET",
 				Path:       "/api/v1/usage/apps/{app}",
@@ -3981,6 +4285,8 @@ func AdaptResourceUsage(t ResourceUsage) *rpc.Interface {
 					{Name: "addons", Kind: "bool"},
 					{Name: "series", Kind: "bool"},
 					{Name: "step", Kind: "string"},
+					{Name: "contributors", Kind: "bool"},
+					{Name: "contributor_series", Kind: "bool"},
 				},
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
@@ -4384,6 +4690,17 @@ func (v *ResourceUsageClientGetAppResults) Warnings() []string {
 		return nil
 	}
 	return *v.data.Warnings
+}
+
+func (v *ResourceUsageClientGetAppResults) HasContributors() bool {
+	return v.data.Contributors != nil
+}
+
+func (v *ResourceUsageClientGetAppResults) Contributors() []*AppContributor {
+	if v.data.Contributors == nil {
+		return nil
+	}
+	return *v.data.Contributors
 }
 
 func (v ResourceUsageClient) GetApp(ctx context.Context, app string, window *Window, options *AppDetailOptions) (*ResourceUsageClientGetAppResults, error) {

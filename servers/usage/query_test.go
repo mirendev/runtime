@@ -25,8 +25,11 @@ func TestQueriesUseStoredLabelSpelling(t *testing.T) {
 		cpuCoresQuery(appKind, "", time.Hour, aggregateAvg),
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateAvg),
 		memoryBytesQuery(appKind, "", time.Hour, aggregateLast),
+		cpuCoresQuery(groupKey(labelSandbox, labelService, labelVersion, labelNode, labelKind), "", time.Hour, aggregateAvg),
 		nodeGaugeQuery(metricNodeCPUCoresTotal, "", time.Minute, aggregateLast),
 		sandboxCountQuery("", time.Hour),
+		firstSeenQuery("", time.Hour),
+		lastSeenQuery("", time.Hour),
 	}
 
 	for _, q := range queries {
@@ -110,6 +113,29 @@ func TestSandboxCountQueryCountsSandboxesNotSeries(t *testing.T) {
 		`count by (miren_app, miren_kind) (count by (miren_app, miren_kind, miren_sandbox) `+
 			`(last_over_time(memory_usage_bytes{miren_app="shop"}[3600s])))`,
 		q)
+}
+
+// tmin_over_time and tmax_over_time name the timestamp of the smallest and
+// largest value, not the first and last sample. Using them here would report a
+// sandbox as having started whenever its memory happened to dip, so the
+// distinction is worth pinning down.
+func TestSeenQueriesAskForSampleTimesNotValueExtremes(t *testing.T) {
+	r := require.New(t)
+
+	sel := labelSelector(map[string]string{labelApp: "shop"})
+
+	r.Equal(
+		`min by (miren_sandbox) (tfirst_over_time(memory_usage_bytes{miren_app="shop"}[3600s]))`,
+		firstSeenQuery(sel, time.Hour))
+
+	r.Equal(
+		`max by (miren_sandbox) (tlast_over_time(memory_usage_bytes{miren_app="shop"}[3600s]))`,
+		lastSeenQuery(sel, time.Hour))
+
+	for _, q := range []string{firstSeenQuery(sel, time.Hour), lastSeenQuery(sel, time.Hour)} {
+		r.NotContains(q, "tmin_over_time")
+		r.NotContains(q, "tmax_over_time")
+	}
 }
 
 func TestLabelSelector(t *testing.T) {

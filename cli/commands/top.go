@@ -59,8 +59,9 @@ type topOptions struct {
 	Since     string `long:"since" description:"Measure over this window, e.g. 30s, 5m, 1h (default 1m)"`
 	Aggregate string `long:"aggregate" description:"How to collapse the window: avg, max, min, last" default:"avg"`
 
-	Series bool   `long:"series" description:"With --apps --app, show one app's CPU and memory over time"`
-	Step   string `long:"step" description:"Resolution of --series, e.g. 30s, 5m (default: derived from --since)"`
+	Series       bool   `long:"series" description:"With --apps --app, show one app's CPU and memory over time"`
+	Step         string `long:"step" description:"Resolution of --series, e.g. 30s, 5m (default: derived from --since)"`
+	Contributors bool   `long:"contributors" description:"With --apps --app, list the sandboxes that made up the figures"`
 
 	Sort  string `long:"sort" description:"Sort by: cpu, memory, name, app, service, node" default:"cpu"`
 	Order string `long:"order" description:"Sort direction: desc or asc (default: desc for usage, asc for names)"`
@@ -77,21 +78,26 @@ type topOptions struct {
 // over a long window is a cost nobody has measured, so the server offers the
 // series per app and the flag has to name one.
 func checkSeriesFlags(opts topOptions) error {
-	if !opts.Series {
+	if !opts.Series && !opts.Contributors {
 		if opts.Step != "" {
 			return fmt.Errorf("--step only means something with --series")
 		}
 		return nil
 	}
 
+	flag := "--series"
+	if !opts.Series {
+		flag = "--contributors"
+	}
+
 	if !opts.Apps || strings.TrimSpace(opts.App) == "" {
-		return fmt.Errorf("--series needs --apps and --app <name>")
+		return fmt.Errorf("%s needs --apps and --app <name>", flag)
 	}
 
 	// A history already covers the window. Redrawing one every few seconds
 	// would re-run the same range query to show the same chart.
 	if opts.Watch || opts.Samples > 1 {
-		return fmt.Errorf("--series and --watch ask for opposite things: a history already spans the window")
+		return fmt.Errorf("%s and --watch ask for opposite things: the answer already spans the window", flag)
 	}
 
 	return nil
@@ -252,15 +258,16 @@ func (q topQuery) fetchApps(ctx context.Context) (*usage_v1alpha.ResourceUsageCl
 
 func (q topQuery) fetchApp(ctx context.Context) (*usage_v1alpha.ResourceUsageClientGetAppResults, error) {
 	var o usage_v1alpha.AppDetailOptions
-	o.SetIncludeSeries(true)
+	o.SetIncludeSeries(q.opts.Series)
 	o.SetIncludeAddons(!q.opts.NoAddons)
 	o.SetStepSeconds(int64(q.step.Seconds()))
+	o.SetIncludeContributors(q.opts.Contributors)
 
 	return q.client.GetApp(ctx, q.opts.App, q.window(), &o)
 }
 
 func (q topQuery) renderJSON(ctx *Context) error {
-	if q.opts.Series {
+	if q.opts.Series || q.opts.Contributors {
 		res, err := q.fetchApp(ctx)
 		if err != nil {
 			return err
@@ -292,7 +299,7 @@ func (q topQuery) renderJSON(ctx *Context) error {
 }
 
 func (q topQuery) render(ctx context.Context) (string, error) {
-	if q.opts.Series {
+	if q.opts.Series || q.opts.Contributors {
 		res, err := q.fetchApp(ctx)
 		if err != nil {
 			return "", err
@@ -446,7 +453,7 @@ func renderFooter(cluster *usage_v1alpha.ResourceTotals, w *usage_v1alpha.UsageW
 
 	if w != nil && w.HasStart() && w.HasEnd() {
 		span := standard.FromTimestamp(w.End()).Sub(standard.FromTimestamp(w.Start()))
-		fmt.Fprintf(&b, " over %s (%s)", formatDuration(span), w.Aggregate())
+		fmt.Fprintf(&b, " over %s (%s)", formatSpan(span), w.Aggregate())
 	}
 
 	if total > shown {
@@ -808,13 +815,14 @@ to contain its samples. Samples are kept for a month, so a long enough --since
 will name apps that have since been deleted.
 
 --series adds that app's CPU and memory over time, which a row cannot show: a
-row collapses the window to one number. It needs --apps and --app, because a
-history is one app's:
+row collapses the window to one number. --contributors breaks the figures down
+by the sandboxes that produced them, including the ones already replaced. Both
+need --apps and --app, because they answer for one app:
 
-  miren top --apps --app shop --since 24h --series
+  miren top --apps --app shop --since 168h --series --contributors
 
-Use --format json to get the points themselves, and --step to choose their
-resolution.
+Use --format json to get the points and the breakdown as data, and --step to
+choose the resolution of the history.
 
 There is no restart column. Miren replaces a failed sandbox rather than
 restarting it, so no single sandbox accumulates a restart count; repeated
@@ -901,11 +909,15 @@ func renderAppDetail(res *usage_v1alpha.ResourceUsageClientGetAppResults) string
 		}
 	}
 
+	if c := res.Contributors(); len(c) > 0 {
+		out += "\n" + renderContributors(c)
+	}
+
 	if w := res.Window(); w != nil && w.HasStart() && w.HasEnd() {
 		span := standard.FromTimestamp(w.End()).Sub(standard.FromTimestamp(w.Start()))
-		note := fmt.Sprintf("measured over %s (%s)", formatDuration(span), w.Aggregate())
+		note := fmt.Sprintf("measured over %s (%s)", formatSpan(span), w.Aggregate())
 		if step := w.StepSeconds(); step > 0 {
-			note += fmt.Sprintf(", one point every %s", formatDuration(time.Duration(step)*time.Second))
+			note += fmt.Sprintf(", one point every %s", formatSpan(time.Duration(step)*time.Second))
 		}
 		out += "\n" + mutedStyle.Render(note) + "\n"
 	}
@@ -913,6 +925,113 @@ func renderAppDetail(res *usage_v1alpha.ResourceUsageClientGetAppResults) string
 	out += renderWarnings(res.Warnings())
 
 	return out
+}
+
+// renderContributors lists the sandboxes behind an app's figures.
+//
+// Over any window longer than one deployment most of these no longer exist, so
+// the ACTIVE column -- when each was reporting -- is what makes the list read
+// as a sequence of deployments rather than a pile of ids.
+func renderContributors(contributors []*usage_v1alpha.AppContributor) string {
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(theme.Muted)
+
+	// CPU TIME is the column that compares: cores is a rate, and these
+	// sandboxes ran for wildly different lengths of time. CPU is what each was
+	// doing while it ran.
+	headers := []string{"SANDBOX", "SERVICE", "VERSION", "CPU", "CPU TIME", "MEM", "ACTIVE"}
+	rows := make([]ui.Row, 0, len(contributors))
+
+	for _, c := range contributors {
+		rows = append(rows, ui.Row{
+			contributorName(c),
+			orDash(c.Service()),
+			orDash(shortOrClean(c.VersionShortId(), c.Version())),
+			formatCores(c.Cpu().Cores()),
+			formatCPUSeconds(c.CpuSeconds()),
+			units.Bytes(c.Memory().Bytes()).Short(),
+			activeSpan(c),
+		})
+	}
+
+	return fmt.Sprintf("%s\n%s", labelStyle.Render("Contributing sandboxes:"), renderUsageTable(headers, rows))
+}
+
+// formatSpan renders a length of time at the scale it happens to be.
+//
+// formatDuration, which the download views use, stops rolling up at minutes --
+// fine for an ETA, unreadable for a week, which it renders as "10080m0s". These
+// views span seconds to weeks, so the unit has to follow the number.
+func formatSpan(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		if m := int(d.Minutes()) % 60; m > 0 {
+			return fmt.Sprintf("%dh%dm", int(d.Hours()), m)
+		}
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		days := int(d.Hours()) / 24
+		if h := int(d.Hours()) % 24; h > 0 {
+			return fmt.Sprintf("%dd%dh", days, h)
+		}
+		return fmt.Sprintf("%dd", days)
+	}
+}
+
+// formatCPUSeconds renders consumed CPU time. Sub-second values keep their
+// precision rather than rounding to "0s", which would hide the difference
+// between an idle sandbox and one that never ran.
+func formatCPUSeconds(seconds float64) string {
+	switch {
+	case seconds <= 0:
+		return "-"
+	case seconds < 1:
+		return fmt.Sprintf("%.3fs", seconds)
+	case seconds < 60:
+		return fmt.Sprintf("%.1fs", seconds)
+	default:
+		return formatSpan(time.Duration(seconds) * time.Second)
+	}
+}
+
+// contributorName marks a sandbox that can no longer be inspected, because the
+// first thing someone does with one of these ids is try to look it up.
+func contributorName(c *usage_v1alpha.AppContributor) string {
+	name := shortOrClean(c.SandboxShortId(), c.Sandbox())
+	if !c.Alive() {
+		name += " (gone)"
+	}
+	return name
+}
+
+// shortOrClean prefers the short id someone can type. A swept entity has none
+// -- it is allocated and stored rather than derived -- so the full id with its
+// prefix trimmed is the best that can be offered.
+func shortOrClean(short, full string) string {
+	if short != "" {
+		return short
+	}
+	return ui.CleanEntityID(full)
+}
+
+// activeSpan says when a sandbox was reporting, relative to now, so a week's
+// rows read as "3d ago for 6h" rather than as two timestamps to subtract.
+func activeSpan(c *usage_v1alpha.AppContributor) string {
+	if !c.HasFirstSeen() || !c.HasLastSeen() {
+		return "-"
+	}
+
+	first := standard.FromTimestamp(c.FirstSeen())
+	last := standard.FromTimestamp(c.LastSeen())
+
+	return fmt.Sprintf("%s ago for %s", formatSpan(time.Since(first)), formatSpan(last.Sub(first)))
 }
 
 type appUsageJSON struct {
@@ -980,19 +1099,66 @@ func appJSON(a *usage_v1alpha.AppUsage) appUsageJSON {
 // so a chart can label its axis without inferring the resolution from the gaps
 // between points.
 type appDetailResultJSON struct {
-	App         appUsageJSON      `json:"app"`
-	Series      []usageSeriesJSON `json:"series,omitempty"`
-	WindowStart string            `json:"window_start,omitempty"`
-	WindowEnd   string            `json:"window_end,omitempty"`
-	Aggregate   string            `json:"aggregate,omitempty"`
-	StepSeconds int64             `json:"step_seconds,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
+	App          appUsageJSON      `json:"app"`
+	Series       []usageSeriesJSON `json:"series,omitempty"`
+	Contributors []contributorJSON `json:"contributors,omitempty"`
+	WindowStart  string            `json:"window_start,omitempty"`
+	WindowEnd    string            `json:"window_end,omitempty"`
+	Aggregate    string            `json:"aggregate,omitempty"`
+	StepSeconds  int64             `json:"step_seconds,omitempty"`
+	Warnings     []string          `json:"warnings,omitempty"`
+}
+
+// contributorJSON is one sandbox's share of an app's usage. Ids are the full
+// entity ids rather than the display forms, because a machine reader joins on
+// them; short ids are absent for a sandbox the entity store has swept.
+type contributorJSON struct {
+	Sandbox        string            `json:"sandbox"`
+	SandboxShortID string            `json:"sandbox_short_id,omitempty"`
+	Service        string            `json:"service,omitempty"`
+	Version        string            `json:"version,omitempty"`
+	VersionShortID string            `json:"version_short_id,omitempty"`
+	Node           string            `json:"node,omitempty"`
+	Kind           string            `json:"kind,omitempty"`
+	CPUCores       float64           `json:"cpu_cores"`
+	CPUSeconds     float64           `json:"cpu_seconds"`
+	MemoryBytes    int64             `json:"memory_bytes"`
+	FirstSeen      string            `json:"first_seen,omitempty"`
+	LastSeen       string            `json:"last_seen,omitempty"`
+	Alive          bool              `json:"alive"`
+	Series         []usageSeriesJSON `json:"series,omitempty"`
+}
+
+func contributorsJSON(contributors []*usage_v1alpha.AppContributor) []contributorJSON {
+	out := make([]contributorJSON, 0, len(contributors))
+
+	for _, c := range contributors {
+		out = append(out, contributorJSON{
+			Sandbox:        c.Sandbox(),
+			SandboxShortID: c.SandboxShortId(),
+			Service:        c.Service(),
+			Version:        c.Version(),
+			VersionShortID: c.VersionShortId(),
+			Node:           c.Node(),
+			Kind:           c.Kind(),
+			CPUCores:       c.Cpu().Cores(),
+			CPUSeconds:     c.CpuSeconds(),
+			MemoryBytes:    c.Memory().Bytes(),
+			FirstSeen:      timestampRFC3339(c.FirstSeen()),
+			LastSeen:       timestampRFC3339(c.LastSeen()),
+			Alive:          c.Alive(),
+			Series:         seriesJSON(c.Series()),
+		})
+	}
+
+	return out
 }
 
 func appDetailJSON(res *usage_v1alpha.ResourceUsageClientGetAppResults) appDetailResultJSON {
 	out := appDetailResultJSON{
-		Series:   seriesJSON(res.Series()),
-		Warnings: res.Warnings(),
+		Series:       seriesJSON(res.Series()),
+		Contributors: contributorsJSON(res.Contributors()),
+		Warnings:     res.Warnings(),
 	}
 
 	if a := res.Usage(); a != nil {

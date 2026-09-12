@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,4 +80,25 @@ func TestTopWatchReportsAnErrorFromAnySuperseededChain(t *testing.T) {
 
 	r.Equal(boom, m.err)
 	r.NotNil(cmd, "an error quits rather than waiting for the current chain")
+}
+
+// formatDuration stops rolling up at minutes, which renders a week as
+// "10080m0s". These views span seconds to weeks, so the unit has to follow.
+func TestFormatSpanFollowsTheScale(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{45 * time.Second, "45s"},
+		{90 * time.Second, "1m"},
+		{2 * time.Hour, "2h"},
+		{2*time.Hour + 30*time.Minute, "2h30m"},
+		{7 * 24 * time.Hour, "7d"},
+		{50 * time.Hour, "2d2h"},
+		{-time.Second, "0s"},
+	}
+
+	for _, c := range cases {
+		assert.Equal(t, c.want, formatSpan(c.in), "formatSpan(%s)", c.in)
+	}
 }

@@ -461,6 +461,109 @@ types:
         type: int64
         index: 2
         doc: Resolution of any returned series; 0 derives one from the window
+      - name: include_contributors
+        type: bool
+        index: 3
+        doc: |
+          Break the figures down by the sandboxes that produced them, including
+          the ones that have since been replaced.
+      - name: contributor_series
+        type: bool
+        index: 4
+        doc: |
+          Give each contributor its own history as well. Costs two more range
+          queries in total, not two per sandbox.
+
+  - type: AppContributor
+    doc: |
+      One sandbox's share of an app's usage over the window.
+
+      This is what an app-level figure cannot say on its own: an app that used
+      two cores last Tuesday used them somewhere, and over a window longer than
+      a deployment the somewhere is usually a sandbox that no longer exists.
+
+      Every field here except the short ids and alive is read from the metric
+      labels, which is what lets a swept sandbox still account for itself.
+    fields:
+      - name: sandbox
+        type: string
+        index: 0
+        doc: Sandbox entity id, as the metrics label it
+      - name: sandbox_short_id
+        type: string
+        index: 1
+        doc: |
+          Empty for a sandbox the entity store has already swept. A short id is
+          allocated and stored on the entity rather than derived from its id, so
+          there is nothing left to recover it from once the entity is gone.
+      - name: service
+        type: string
+        index: 2
+        doc: Service name within the app, such as web or worker
+      - name: version
+        type: string
+        index: 3
+        doc: App version entity id this sandbox was running
+      - name: version_short_id
+        type: string
+        index: 4
+        doc: Empty for a swept version, for the same reason as sandbox_short_id
+      - name: node
+        type: string
+        index: 5
+        doc: Node entity id the sandbox ran on
+      - name: kind
+        type: string
+        index: 6
+        doc: app for one of the app's own services, addon for infrastructure it owns
+      - name: cpu
+        type: CpuUsage
+        index: 7
+        doc: |
+          Average cores used *while this sandbox was running*, not averaged
+          across the whole window. The distinction matters as soon as the window
+          is longer than a deployment: a sandbox that ran hot for ten minutes of
+          a week averages to almost nothing across the week, which answers a
+          question nobody asked. percent_of_node is not set here.
+      - name: memory
+        type: MemoryUsage
+        index: 8
+        doc: Memory while this sandbox was running, collapsed by the window's aggregate
+      - name: cpu_seconds
+        type: float64
+        index: 13
+        doc: |
+          Total CPU time this sandbox consumed inside the window.
+
+          This is the figure that actually adds up. Cores and bytes describe a
+          rate and a level, so they cannot be compared between sandboxes that
+          ran for different lengths of time; seconds can, and they sum to the
+          app's consumption for the window. "400 of the app's 1200 CPU-seconds"
+          is what "contributed" means.
+      - name: first_seen
+        type: standard.Timestamp
+        index: 9
+        doc: |
+          When this sandbox's first sample inside the window was written. Taken
+          together with last_seen this is the span it accounted for, which is
+          what makes a list of a week's sandboxes readable as a sequence of
+          deployments rather than an undated pile.
+      - name: last_seen
+        type: standard.Timestamp
+        index: 10
+      - name: alive
+        type: bool
+        index: 11
+        doc: |
+          Whether the sandbox is still in the entity store. False means it can
+          no longer be inspected, only accounted for.
+      - name: series
+        type: list
+        element: UsageSeries
+        index: 12
+        doc: |
+          This sandbox's own history, when contributor_series was asked for.
+          Enough to stack the contributors and see the app series come back.
 
   - type: ContainerUsage
     doc: |
@@ -718,6 +821,14 @@ interfaces:
           - name: warnings
             type: list
             element: string
+          - name: contributors
+            type: list
+            element: AppContributor
+            doc: |
+              Which sandboxes made up the figures, busiest first. Sourced from
+              the metric labels, so it reaches the sandboxes the entity store
+              has already forgotten -- which over any window longer than a
+              deployment is most of them.
 
       # --- REST surface: flat scalars, GET bindings ---
       #
@@ -948,6 +1059,12 @@ interfaces:
           - name: step
             type: string
             doc: Series resolution as a duration ("30s"); derived from the window when empty
+          - name: contributors
+            type: bool
+            doc: Break the figures down by the sandboxes that produced them
+          - name: contributor_series
+            type: bool
+            doc: Give each contributor its own history as well
         results:
           - name: usage
             type: AppUsage
@@ -959,3 +1076,6 @@ interfaces:
           - name: series
             type: list
             element: UsageSeries
+          - name: contributors
+            type: list
+            element: AppContributor

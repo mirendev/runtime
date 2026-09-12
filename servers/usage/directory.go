@@ -32,6 +32,13 @@ type sandboxRow struct {
 type directory struct {
 	sandboxes []sandboxRow
 	nodes     map[entity.Id]*nodeInfo
+
+	// versions is every app version in the store, keyed by version id. Unlike
+	// sandboxes these are not swept when they stop running, so this is the one
+	// entity view that still describes a replaced deployment -- which is what
+	// lets a contributor that no longer exists still name a version someone can
+	// type.
+	versions map[string]*appInfo
 }
 
 type nodeInfo struct {
@@ -151,7 +158,7 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 		return nil, err
 	}
 
-	dir := &directory{nodes: nodes}
+	dir := &directory{nodes: nodes, versions: apps}
 
 	for sandboxes.Next() {
 		var sb computev1.Sandbox

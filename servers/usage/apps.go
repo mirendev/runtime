@@ -30,7 +30,10 @@ type appListing struct {
 // app's database is a separate sandbox with a different label spelling and a
 // different kind. Doing it here means "what is app X using" has one answer that
 // does not depend on the caller reconstructing Miren's model.
-func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering) (*appListing, error) {
+// The directory is returned alongside the listing because the app detail path
+// needs the same entity view -- to say which contributing sandboxes still exist
+// -- and loading it twice would mean two passes over the entity store per call.
+func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering) (*appListing, *directory, error) {
 	// The directory is still loaded, but for a narrower job than it used to do.
 	// It no longer supplies the figures -- those come from the store, grouped
 	// by app -- only each app's entity id, and a row for an app that exists but
@@ -39,7 +42,7 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 	// were excluded at.
 	dir, err := s.loadDirectory(ctx, filter{node: f.node, includeSystem: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	m, warnings := s.appSamples(ctx, f.node, w, dir)
@@ -51,7 +54,7 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 	sortApps(rows, ord)
 	out.rows = rows[:ord.truncate(len(rows))]
 
-	return out, nil
+	return out, dir, nil
 }
 
 // ListApps is the RPC surface.
@@ -59,7 +62,7 @@ func (s *Server) ListApps(ctx context.Context, state *usage_v1alpha.ResourceUsag
 	args := state.Args()
 	w := windowFrom(args.Window())
 
-	listing, err := s.listApps(ctx, selectorToFilter(args.Selector()), w, orderingFrom(args.Ordering()))
+	listing, _, err := s.listApps(ctx, selectorToFilter(args.Selector()), w, orderingFrom(args.Ordering()))
 	if err != nil {
 		return err
 	}
@@ -83,7 +86,7 @@ func (s *Server) HttpListApps(ctx context.Context, state *usage_v1alpha.Resource
 	f := filter{node: args.Node(), includeAddons: !args.HasAddons() || args.Addons()}
 	ord := ordering{sort: args.Sort(), order: args.Order(), limit: int(args.Limit())}
 
-	listing, err := s.listApps(ctx, f, w, ord)
+	listing, _, err := s.listApps(ctx, f, w, ord)
 	if err != nil {
 		return err
 	}
@@ -101,18 +104,21 @@ func (s *Server) HttpListApps(ctx context.Context, state *usage_v1alpha.Resource
 
 // appDetailOptions is what a caller wants alongside one app's usage.
 type appDetailOptions struct {
-	series        bool
-	includeAddons bool
-	step          time.Duration
+	series            bool
+	includeAddons     bool
+	step              time.Duration
+	contributors      bool
+	contributorSeries bool
 }
 
 // appDetailResult is what the core produces, before either surface shapes it
 // into its own generated result type. Those types are write-only, so the core
 // cannot hand one to the other -- it returns plain values instead.
 type appDetailResult struct {
-	usage    *usage_v1alpha.AppUsage
-	series   []*usage_v1alpha.UsageSeries
-	warnings []string
+	usage        *usage_v1alpha.AppUsage
+	series       []*usage_v1alpha.UsageSeries
+	contributors []*usage_v1alpha.AppContributor
+	warnings     []string
 
 	// step is the resolution the series were rendered at, zero when none were
 	// asked for.
@@ -123,6 +129,7 @@ type appDetailResult struct {
 type appDetailSetter interface {
 	SetUsage(*usage_v1alpha.AppUsage)
 	SetSeries([]*usage_v1alpha.UsageSeries)
+	SetContributors([]*usage_v1alpha.AppContributor)
 	SetWindow(*usage_v1alpha.UsageWindow)
 	SetWarnings([]string)
 }
@@ -130,6 +137,7 @@ type appDetailSetter interface {
 func (d *appDetailResult) apply(set appDetailSetter, w window) {
 	set.SetUsage(d.usage)
 	set.SetSeries(d.series)
+	set.SetContributors(d.contributors)
 
 	// The window reports the step the series actually used, not the one asked
 	// for: an unset or too-fine request is resolved server-side.
@@ -154,7 +162,14 @@ func (s *Server) appDetail(
 		return nil, fmt.Errorf("an app name is required")
 	}
 
-	listing, err := s.listApps(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{})
+	// Asking for contributor histories is asking for contributors. Requiring
+	// both flags would only be a way to get the combination wrong and receive
+	// an empty list.
+	if opts.contributorSeries {
+		opts.contributors = true
+	}
+
+	listing, dir, err := s.listApps(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{})
 	if err != nil {
 		return nil, err
 	}
@@ -169,12 +184,27 @@ func (s *Server) appDetail(
 
 	out := &appDetailResult{usage: listing.rows[0], warnings: listing.warnings}
 
-	if opts.series {
-		out.step = resolveStep(w, opts.step)
+	sel := labelSelector(map[string]string{labelApp: name})
 
-		sel := labelSelector(map[string]string{labelApp: name})
+	if opts.series || opts.contributorSeries {
+		out.step = resolveStep(w, opts.step)
+	}
+
+	if opts.series {
 		series, warnings := s.appSeries(ctx, sel, w, out.step, opts.includeAddons)
 		out.series = series
+		out.warnings = append(out.warnings, warnings...)
+	}
+
+	if opts.contributors {
+		// The step the contributor histories use is the one already resolved
+		// above, so a stacked chart lines up with the app series rather than
+		// being sampled at its own resolution.
+		withStep := opts
+		withStep.step = out.step
+
+		contributors, warnings := s.appContributors(ctx, sel, w, withStep, dir)
+		out.contributors = contributors
 		out.warnings = append(out.warnings, warnings...)
 	}
 
@@ -193,6 +223,8 @@ func (s *Server) GetApp(ctx context.Context, state *usage_v1alpha.ResourceUsageG
 		opts.series = o.IncludeSeries()
 		opts.includeAddons = !o.HasIncludeAddons() || o.IncludeAddons()
 		opts.step = time.Duration(o.StepSeconds()) * time.Second
+		opts.contributors = o.IncludeContributors()
+		opts.contributorSeries = o.ContributorSeries()
 	}
 
 	w := windowFrom(args.Window())
@@ -212,8 +244,10 @@ func (s *Server) HttpGetApp(ctx context.Context, state *usage_v1alpha.ResourceUs
 	args := state.Args()
 
 	opts := appDetailOptions{
-		series:        args.Series(),
-		includeAddons: !args.HasAddons() || args.Addons(),
+		series:            args.Series(),
+		includeAddons:     !args.HasAddons() || args.Addons(),
+		contributors:      args.Contributors(),
+		contributorSeries: args.ContributorSeries(),
 	}
 	if d, ok := parseRESTDuration(args.Step()); ok {
 		opts.step = d

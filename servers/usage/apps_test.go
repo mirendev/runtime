@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,4 +405,41 @@ func TestWindowReportsTheStepItsSeriesUsed(t *testing.T) {
 	// No collector here samples faster than once a second.
 	w.step = resolveStep(w, time.Millisecond)
 	assert.Equal(t, int64(1), w.encode().StepSeconds())
+}
+
+// instantStub answers instant queries, failing the ones whose text matches any
+// of fail. It exists to exercise the paths where one query answers and another
+// does not, which is where two query sets can disagree about what exists.
+type instantStub struct {
+	fail   []string
+	series []metrics.Result
+}
+
+func (s *instantStub) reader(t *testing.T) *metrics.VictoriaMetricsReader {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		require.NoError(t, err)
+
+		query := q.Get("query")
+		for _, bad := range s.fail {
+			if strings.Contains(query, bad) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+		}
+
+		body, err := json.Marshal(metrics.QueryResult{
+			Status: "success",
+			Data:   metrics.Data{ResultType: "vector", Result: s.series},
+		})
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	return metrics.NewVictoriaMetricsReader(slog.New(slog.DiscardHandler), srv.URL, 5*time.Second)
 }
