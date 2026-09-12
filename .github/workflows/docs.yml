@@ -58,6 +58,19 @@ jobs:
         run: bun install --frozen-lockfile
         working-directory: docs
 
+      # docs/plugins/og-images keeps every rendered social card here, keyed by
+      # its inputs, so a run only renders the pages whose title or description
+      # changed. The key never matches exactly (run_id), which makes every run
+      # save its additions; restore-keys picks up the newest one, and a change
+      # to the plugin itself starts a fresh line rather than growing the old.
+      - name: Restore social card cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: docs/node_modules/.cache/og-images
+          key: og-images-${{ hashFiles('docs/plugins/og-images/**') }}-${{ github.run_id }}
+          restore-keys: |
+            og-images-${{ hashFiles('docs/plugins/og-images/**') }}-
+
       # Materializes the released docs so the build serves them at the site
       # root with this branch's docs at /next. Skipped on pull requests, which
       # publish nothing and only check that the docs still compile.
