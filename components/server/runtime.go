@@ -126,6 +126,7 @@ func (s *startup) addComponents() error {
 		s.ingress.component,
 		s.admin.component,
 		s.serverInfo.component,
+		s.serverLifecycle.component,
 		s.registryHostMapping.component,
 		s.ociRegistry.component,
 		s.workAdmission.component,

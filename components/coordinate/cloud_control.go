@@ -54,6 +54,9 @@ type CloudControl struct {
 
 	// Instance is optional; when nil reports omit the instance id.
 	Instance *serverinfo.Source
+	// Lifecycle, when set, lets cloud restart and upgrade this server over the
+	// uplink.
+	Lifecycle *ServerLifecycle
 
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
@@ -134,6 +137,16 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			// Health reporting is additive, like entity sync. It must not take
 			// Anywhere or cloud RPC off the shared link when it is unavailable.
 			c.Log.Warn("app health reporting is unavailable for this uplink session", "error", err)
+		}
+	}
+	// Offered on every negotiated session, like the RPC relay: whether cloud
+	// may drive the server is cloud's decision at negotiation, not a switch on
+	// this side.
+	if c.Lifecycle != nil {
+		if err := c.Lifecycle.Register(ctx, link); err != nil {
+			// Additive, like the tenants above: the ledger stays readable over
+			// RPC and cloud simply cannot drive it this session.
+			c.Log.Warn("server lifecycle is unavailable for this uplink session", "error", err)
 		}
 	}
 	anywhereConn := anywhere.New(anywhere.Config{
