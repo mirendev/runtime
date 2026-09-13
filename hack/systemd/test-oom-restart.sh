@@ -105,8 +105,15 @@ start_time=$(date '+%Y-%m-%d %H:%M:%S')
 # a real failure rather than a quirk of running inside a container.
 warned=0
 for _ in $(seq 1 60); do
-    if journalctl -u miren --no-pager --since "$start_time" 2>/dev/null \
-        | grep -qi "killed for exceeding its memory limit"; then
+    # Read the journal into a variable and match in the shell rather than
+    # piping into grep. `grep -q` exits on the first match, and if journalctl is
+    # still writing it takes SIGPIPE; under `pipefail` the pipeline then reports
+    # failure even though the line was found, so a working feature reads as
+    # broken. Redirecting grep to /dev/null does not help, because GNU grep
+    # applies the same early-exit optimisation when its output is /dev/null.
+    # With no pipe there is nothing to signal.
+    journal=$(journalctl -u miren --no-pager --since "$start_time" 2>/dev/null || true)
+    if [[ "$journal" == *"killed for exceeding its memory limit"* ]]; then
         warned=1
         break
     fi
