@@ -139,12 +139,22 @@ WantedBy=multi-user.target
 		}
 
 		ctx.Completed("Service file created at %s", runnerServicePath)
+	}
 
-		ctx.Info("Reloading systemd daemon...")
-		cmd := exec.Command("systemctl", "daemon-reload")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
-		}
+	// Outside the guard above on purpose — see installServiceLimits.
+	//
+	// The runner gets the cap and the ExecStopPost hook, so an abnormal exit
+	// does write <data-path>/last-exit.json. Nothing reads it yet: the only
+	// exitrecord.Read callers are on the server side, and Record.LogTo still
+	// says "previous miren server run". So the runner is protected but its
+	// restarts are not reported — half the feature, deliberately, rather than
+	// something already finished.
+	installServiceLimits(ctx, runnerServiceName, opts.DataPath)
+
+	ctx.Info("Reloading systemd daemon...")
+	cmd := exec.Command("systemctl", "daemon-reload")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
 	}
 
 	// Enable and optionally start
@@ -338,6 +348,8 @@ func RunnerUninstall(ctx *Context, opts struct {
 		return fmt.Errorf("failed to remove service file: %w", err)
 	}
 	ctx.Completed("Service file removed from %s", runnerServicePath)
+
+	removeServiceLimits(ctx, runnerServiceName)
 
 	// Reload systemd
 	cmd = exec.Command("systemctl", "daemon-reload")

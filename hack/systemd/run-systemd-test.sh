@@ -12,6 +12,18 @@ NC='\033[0m' # No Color
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# A locally built binary takes precedence over the published release, so a change
+# that hasn't been pushed anywhere can still be tested end to end.
+LOCAL_MOUNT=()
+if [ -x "$REPO_ROOT/bin/miren" ]; then
+    echo "Using locally built binary: $REPO_ROOT/bin/miren"
+    LOCAL_MOUNT=(-v "$REPO_ROOT/bin:/miren-local:ro")
+else
+    echo "No bin/miren found; will install RELEASE=${RELEASE:-main} from api.miren.cloud."
+    echo "Build one first with 'make bin/miren' to test local changes."
+fi
 
 # Check Docker version and cgroup setup
 echo "Checking Docker environment..."
@@ -54,6 +66,8 @@ docker run -d \
     --tmpfs /run/lock \
     --stop-signal SIGRTMIN+3 \
     -e RELEASE="${RELEASE:-main}" \
+    "${LOCAL_MOUNT[@]}" \
+    -v "$SCRIPT_DIR:/hack:ro" \
     miren-systemd-test
 
 # Wait for container to be ready (entrypoint installs miren)
@@ -61,14 +75,36 @@ echo
 echo "Waiting for container setup (installing miren, configuring systemd)..."
 echo "You can watch the progress with: docker logs -f miren-systemd-test"
 echo
-for i in {1..60}; do
-    if docker exec miren-systemd-test systemctl list-unit-files miren.service 2>/dev/null | grep -q miren.service; then
-        echo -e "${GREEN}✓ Miren service is installed${NC}"
+# Wait on the marker the entrypoint writes, not on the unit file. The unit exists
+# well before anything has checked it, so polling for it reports success even
+# when every verification failed.
+setup_status=""
+for i in {1..90}; do
+    setup_status=$(docker exec miren-systemd-test cat /run/miren-setup-status 2>/dev/null || true)
+    if [ -n "$setup_status" ]; then
         break
     fi
     echo -n "."
     sleep 2
 done
+echo
+
+if [ "$setup_status" != "ok" ]; then
+    if [ -z "$setup_status" ]; then
+        echo -e "${RED}Container setup did not finish within the timeout${NC}"
+    else
+        echo -e "${RED}Container setup failed verification${NC}"
+    fi
+    echo
+    echo "Setup log:"
+    docker logs miren-systemd-test 2>&1 | tail -40
+    echo
+    echo "The container is still running for inspection:"
+    echo "  docker exec -it miren-systemd-test bash"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Miren service is installed and verified${NC}"
 
 # Check final status
 echo
@@ -87,6 +123,12 @@ if docker exec miren-systemd-test systemctl status --no-pager 2>/dev/null | head
     echo "  systemctl start miren                     # Start the server"
     echo "  systemctl status miren                    # Check service status"
     echo "  journalctl -u miren -f                    # View logs"
+    echo
+    echo "Test the memory limit end to end:"
+    echo "  docker exec -it miren-systemd-test /hack/test-oom-restart.sh"
+    echo
+    echo "Inspect the resource limits systemd resolved:"
+    echo "  docker exec miren-systemd-test systemctl show -p MemoryMax -p MemoryHigh -p MemorySwapMax miren"
     echo
     echo "Test upgrade commands:"
     echo "  miren upgrade --check                     # Check for updates"

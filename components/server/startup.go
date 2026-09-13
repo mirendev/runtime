@@ -38,6 +38,7 @@ type startup struct {
 	tracing               *tracingBoot
 	observability         *observabilityBoot
 	pprof                 *pprofBoot
+	exitReport            *exitReportBoot
 	containerd            *containerdcomp.Boot
 	etcd                  *etcdBoot
 	victoriaLogs          *victoriaLogsBoot
@@ -97,6 +98,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
 	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
+	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
@@ -168,6 +170,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		tracing:               tracing,
 		observability:         observability,
 		pprof:                 pprof,
+		exitReport:            exitReport,
 		containerd:            containerd,
 		etcd:                  etcd,
 		victoriaLogs:          victoriaLogs,

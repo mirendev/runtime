@@ -144,6 +144,91 @@ miren debug connection
 
 This tests RPC and HTTP connectivity to the server and reports the server version and auth status.
 
+## The server restarted on its own
+
+On a systemd install, the Miren server runs under a memory limit. If it ever
+exceeds that limit, the kernel stops the server and systemd starts it again.
+That is deliberate: a server that grows without bound would otherwise take the
+whole machine down, and a machine you can still reach is worth more than a
+server that never restarts.
+
+Your apps keep running through this. They have their own cgroups — the kernel's
+per-workload memory accounting — outside the server's, so the limit does not
+apply to them and the restart doesn't stop them.
+
+When it happens, the server says so the next time it starts:
+
+<CliCommand context="client">
+```miren
+miren logs system
+```
+</CliCommand>
+
+Look for `previous miren server run was killed for exceeding its memory limit`.
+It carries the memory the server reached, the limit it was held to, and how many
+times systemd has restarted it.
+
+**Seeing the current limit**
+
+<CliCommand context="server">
+```bash
+systemctl show -p MemoryMax -p MemoryHigh miren
+```
+</CliCommand>
+
+Miren sets this at install time to a quarter of the machine's memory, with a
+floor of 2 GB, and refreshes it on each upgrade. The limit covers the server
+process, containerd, and the per-container shims — not your apps or addon
+databases.
+
+Most of what it covers is cached file data, not the server itself. containerd
+charges every image layer it reads to this group, so a busy machine can show
+tens of gigabytes here while the server's own memory is a few hundred megabytes.
+Cached data is given back automatically when the limit is approached, which is
+why the limit is a share of the machine rather than a fixed size: it has to
+leave room for that cache on a large host while still catching a runaway on a
+small one.
+
+**Raising it**
+
+A single restart usually means a bug worth reporting. Repeated restarts on a
+busy cluster can mean the limit is genuinely too low for your workload. Raise it
+with a systemd override, which takes precedence over the value Miren manages and
+survives upgrades:
+
+<CliCommand context="server">
+```bash
+sudo systemctl edit miren
+```
+</CliCommand>
+
+Add:
+
+```ini
+[Service]
+MemoryMax=24G
+MemoryHigh=20G
+```
+
+Then `sudo systemctl daemon-reload && sudo systemctl restart miren`.
+
+:::warning[Edit the override, not the unit file]
+`systemctl edit` is the only place an override survives. A limit written
+directly into `/etc/systemd/system/miren.service` is ignored in favour of the
+one Miren manages, because systemd applies drop-in files after the unit file —
+so a hand-written limit can be silently replaced by a lower one on the next
+upgrade. If you set a limit before upgrading to this version, move it.
+:::
+
+:::warning[Keep MemoryHigh below MemoryMax]
+Crossing `MemoryHigh` puts the server under reclaim pressure and slows it down
+instead of stopping it. That buys time to notice and act, but it isn't a
+recovery: the kernel can reclaim cached file data, not the server's live memory,
+so a genuine leak still reaches `MemoryMax` and is stopped. Setting the two
+equal, or leaving `MemoryHigh` unset, removes even the warning band and the
+server goes straight from healthy to stopped.
+:::
+
 ## Gathering a debug bundle
 
 If you've worked through the steps above and need further help, collect a debug bundle to share:

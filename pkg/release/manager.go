@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
+
+	"miren.dev/runtime/pkg/servicelimits"
 )
 
 // Manager orchestrates the upgrade process
@@ -36,6 +39,9 @@ type ManagerOptions struct {
 	// documented CLI stays in sync with the managed binary. Empty disables it
 	// (e.g. for user/CLI-only upgrades).
 	PathSymlink string
+	// StateDir is the daemon's own state directory, where the ExecStopPost hook
+	// in the managed resource-limit drop-in records why the unit stopped.
+	StateDir string
 }
 
 // DefaultManagerOptions returns default manager options
@@ -49,6 +55,7 @@ func DefaultManagerOptions() ManagerOptions {
 		SkipHealthCheck: false,
 		AutoRollback:    true,
 		PathSymlink:     SystemCLIPath,
+		StateDir:        "/var/lib/miren/server",
 	}
 }
 
@@ -58,6 +65,7 @@ func DefaultManagerOptions() ManagerOptions {
 func RunnerManagerOptions() ManagerOptions {
 	opts := DefaultManagerOptions()
 	opts.ServiceName = "miren-runner"
+	opts.StateDir = "/var/lib/miren/runner"
 	return opts
 }
 
@@ -286,9 +294,59 @@ func (m *Manager) CheckForUpdate(ctx context.Context, artifactType ArtifactType)
 
 // restartService restarts the systemd service
 func (m *Manager) restartService(ctx context.Context) error {
+	m.ensureResourceLimits(ctx)
+
 	cmd := exec.CommandContext(ctx, "systemctl", "restart", m.opts.ServiceName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl restart failed: %w\nOutput: %s", err, output)
 	}
 	return nil
+}
+
+// ensureResourceLimits refreshes the managed resource-limit drop-in before the
+// service is restarted.
+//
+// Upgrade is the only moment a host that already has miren installed will pick
+// up a change here: the base unit is written once at install time and then left
+// alone. Rewriting on every upgrade also means a resized machine gets a limit
+// matched to its new size.
+//
+// Best-effort. An upgrade that can't refresh the limits should still restart the
+// service the user asked it to restart.
+func (m *Manager) ensureResourceLimits(ctx context.Context) {
+	if m.opts.ServiceName == "" || m.opts.StateDir == "" {
+		return
+	}
+	// Writing under /etc/systemd/system needs root. A user-scoped upgrade has no
+	// systemd unit to adjust in the first place.
+	if os.Geteuid() != 0 {
+		return
+	}
+
+	unit := m.opts.ServiceName + ".service"
+
+	// Don't leave drop-in config behind for a unit that was never installed —
+	// a container install has no systemd unit to adjust.
+	if _, err := os.Stat(filepath.Join("/etc/systemd/system", unit)); err != nil {
+		return
+	}
+
+	// Prefer the path install already worked out. It knew the effective data
+	// path; we don't, and recomputing it here would replace a custom one with
+	// the default, leaving the hook writing records the daemon never reads.
+	statePath := m.opts.StateDir
+	if existing, ok := servicelimits.ExistingStatePath(unit); ok {
+		statePath = existing
+	}
+
+	limits := servicelimits.Compute(servicelimits.DetectSystemRAMBytes())
+	if _, err := servicelimits.Write(unit, statePath, limits); err != nil {
+		fmt.Printf("Warning: could not update resource limits for %s: %v\n", unit, err)
+		return
+	}
+
+	cmd := exec.CommandContext(ctx, "systemctl", "daemon-reload")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		fmt.Printf("Warning: systemctl daemon-reload failed: %v\nOutput: %s\n", err, output)
+	}
 }

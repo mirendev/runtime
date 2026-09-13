@@ -16,22 +16,59 @@ This will:
 1. Build an Ubuntu 24.04 container with systemd
 2. Start the container and automatically:
    - Install Miren to `/var/lib/miren/release/` (like production)
-   - Create systemd service at `/etc/systemd/system/miren.service`
+   - Run `miren server install` to create the unit and its resource-limit drop-in
    - Create symlink at `/usr/local/bin/miren`
+   - Verify the loaded unit carries the directives it should
 3. Provide a fully configured environment matching production
+
+## Testing local changes
+
+If `bin/miren` exists in the repository, the container runs that binary instead
+of a published build, so a change that hasn't been pushed anywhere can still be
+tested end to end:
+
+```bash
+make bin/miren
+./hack/systemd/run-systemd-test.sh
+```
+
+The release bundle for `$RELEASE` is still downloaded, because the container
+needs containerd, runc and the shims from it. Only `miren` itself comes from
+your build. The entrypoint copies it in twice on purpose: once before
+`server install`, and again afterwards, because `server install` downloads the
+bundle and promotes the whole directory into place, which replaces the first
+copy. Without the second copy the harness would install with your binary and
+then test the downloaded one.
 
 ## Files
 
 - `Dockerfile.systemd` - Ubuntu 24.04 with systemd and necessary tools
 - `entrypoint.sh` - Script that mirrors production installation process
 - `run-systemd-test.sh` - Script to build and run the test container
+- `test-oom-restart.sh` - End-to-end check of the memory limit and its reporting
 
 ## Production Mirroring
 
 The container setup mirrors the production installation exactly:
 - Same directory structure (`/var/lib/miren/release/`)
-- Same systemd service configuration with `KillMode=process`
+- The unit comes from `miren server install`, not from a copy in this directory.
+  It used to be a heredoc here, which quietly went stale — the harness spent
+  months testing a unit that was missing `ExecReload`.
 - Miren brings its own containerd (no Docker needed)
+
+## Testing resource limits
+
+The container runs `--privileged --cgroupns=host` with `/sys/fs/cgroup` mounted
+read-write, so cgroup v2 limits genuinely apply inside it.
+
+```bash
+# What systemd resolved from the unit plus its drop-in
+docker exec miren-systemd-test systemctl show -p MemoryMax -p MemoryHigh -p MemorySwapMax miren
+
+# Squeeze the service until the kernel kills it, then check the kill was
+# recorded and reported on the next start
+docker exec -it miren-systemd-test /hack/test-oom-restart.sh
+```
 
 ## Testing Upgrades
 

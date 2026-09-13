@@ -523,13 +523,17 @@ WantedBy=multi-user.target
 		}
 
 		ctx.Completed("Service file created at %s", servicePath)
+	}
 
-		// Reload systemd
-		ctx.Info("Reloading systemd daemon...")
-		cmd := exec.Command("systemctl", "daemon-reload")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
-		}
+	// Outside the guard above on purpose: the unit is written once and then left
+	// alone, so limits added later would never reach a host that already has
+	// miren installed unless they arrive by their own drop-in.
+	installServiceLimits(ctx, "miren.service", serverStateDir(ctx))
+
+	ctx.Info("Reloading systemd daemon...")
+	cmd := exec.Command("systemctl", "daemon-reload")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %w\nOutput: %s", err, output)
 	}
 
 	// Enable the service (and optionally start it)
@@ -663,6 +667,8 @@ func ServerUninstall(ctx *Context, opts struct {
 	}
 
 	ctx.Completed("Service file removed from %s", servicePath)
+
+	removeServiceLimits(ctx, "miren.service")
 
 	// Reload systemd
 	ctx.Info("Reloading systemd daemon...")

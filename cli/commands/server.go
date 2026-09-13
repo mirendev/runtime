@@ -42,6 +42,11 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	versionInfo := version.GetInfo()
 	ctx.UILog.Info("starting miren server", "version", versionInfo.Version, "commit", versionInfo.Commit)
 
+	// Before anything can fail: if the last run was killed, say so now. The
+	// durable report happens later, once observability is up — but a server
+	// stuck in a memory crashloop never reaches that point.
+	reportPreviousExitEarly(cfg.Server.GetDataPath(), ctx.UILog)
+
 	if err := prepareServerConfig(ctx, cfg); err != nil {
 		return err
 	}

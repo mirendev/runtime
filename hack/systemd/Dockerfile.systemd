@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     iproute2 \
     net-tools \
     iptables \
+    nftables \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
