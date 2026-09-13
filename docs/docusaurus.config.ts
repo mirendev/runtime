@@ -1,4 +1,5 @@
 import {existsSync, readFileSync} from 'fs';
+import ogImagesPlugin from './plugins/og-images';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
@@ -132,6 +133,9 @@ const config: Config = {
 
   plugins: [
     filterAncestorWatchesPlugin,
+    // Per-page social cards; the swizzled DocItem/Metadata component wires
+    // each doc's og:image to the card this renders for it.
+    ogImagesPlugin,
     [
       '@docusaurus/plugin-client-redirects',
       {
