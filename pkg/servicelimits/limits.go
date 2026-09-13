@@ -61,9 +61,18 @@ const (
 	// system something to run in.
 	memoryHeadroomPercent = 90
 
-	// memoryHighPercent sets MemoryHigh relative to MemoryMax. Crossing
-	// MemoryHigh throttles the cgroup and forces reclaim, which gives the Go
-	// garbage collector a chance to recover before the kernel kills anything.
+	// memoryHighPercent sets MemoryHigh relative to MemoryMax. Crossing it puts
+	// the cgroup under reclaim pressure and throttles it rather than killing it
+	// outright.
+	//
+	// Be clear about what that does and doesn't buy. The kernel can reclaim page
+	// cache — containerd's image pulls, mmap'd files — but it cannot shrink a Go
+	// heap, and nothing sets GOMEMLIMIT in the coordinator today. So a runaway in
+	// Go memory is slowed between MemoryHigh and MemoryMax, not healed: it still
+	// converges on the kill. The value of the band is the slowdown and the
+	// signal, not a recovery. Making the grace period real means having the
+	// server read its own cgroup's memory.high at boot and calling
+	// debug.SetMemoryLimit, which is follow-up work.
 	memoryHighPercent = 85
 )
 

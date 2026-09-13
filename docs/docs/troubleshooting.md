@@ -205,10 +205,12 @@ MemoryHigh=20G
 Then `sudo systemctl daemon-reload && sudo systemctl restart miren`.
 
 :::warning[Keep MemoryHigh below MemoryMax]
-Crossing `MemoryHigh` makes the kernel reclaim memory and slow the process down,
-which often avoids the hard stop at `MemoryMax` entirely. Setting them equal, or
-leaving `MemoryHigh` unset, gives up that grace period and the server goes
-straight from healthy to stopped.
+Crossing `MemoryHigh` puts the server under reclaim pressure and slows it down
+instead of stopping it. That buys time to notice and act, but it isn't a
+recovery: the kernel can reclaim cached file data, not the server's live memory,
+so a genuine leak still reaches `MemoryMax` and is stopped. Setting the two
+equal, or leaving `MemoryHigh` unset, removes even the warning band and the
+server goes straight from healthy to stopped.
 :::
 
 ## Gathering a debug bundle

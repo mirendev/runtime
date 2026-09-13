@@ -23,14 +23,22 @@ This will:
 
 ## Testing local changes
 
-If `bin/miren` exists in the repository, the container installs that binary
-instead of downloading a published release, so a change that hasn't been pushed
-anywhere can still be tested:
+If `bin/miren` exists in the repository, the container runs that binary instead
+of a published build, so a change that hasn't been pushed anywhere can still be
+tested end to end:
 
 ```bash
 make bin/miren
 ./hack/systemd/run-systemd-test.sh
 ```
+
+The release bundle for `$RELEASE` is still downloaded, because the container
+needs containerd, runc and the shims from it. Only `miren` itself comes from
+your build. The entrypoint copies it in twice on purpose: once before
+`server install`, and again afterwards, because `server install` downloads the
+bundle and promotes the whole directory into place, which replaces the first
+copy. Without the second copy the harness would install with your binary and
+then test the downloaded one.
 
 ## Files
 

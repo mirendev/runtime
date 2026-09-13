@@ -142,6 +142,13 @@ WantedBy=multi-user.target
 	}
 
 	// Outside the guard above on purpose — see installServiceLimits.
+	//
+	// The runner gets the cap and the ExecStopPost hook, so an abnormal exit
+	// does write <data-path>/last-exit.json. Nothing reads it yet: the only
+	// exitrecord.Read callers are on the server side, and Record.LogTo still
+	// says "previous miren server run". So the runner is protected but its
+	// restarts are not reported — half the feature, deliberately, rather than
+	// something already finished.
 	installServiceLimits(ctx, runnerServiceName, opts.DataPath)
 
 	ctx.Info("Reloading systemd daemon...")

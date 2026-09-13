@@ -171,6 +171,23 @@ setup_miren() {
         finish "fail" "ERROR: 'miren server install' failed"
     fi
 
+    # `server install` calls ensureReleaseBundlePresent, which on a fresh
+    # container finds no release/containerd and downloads the $RELEASE bundle.
+    # promoteReleaseDir then renames the whole staging directory into place, and
+    # that bundle carries its own miren binary — so the copy made above is gone
+    # by now and the unit would run the downloaded build.
+    #
+    # Put the local binary back, so the bundle supplies containerd, runc and the
+    # shims while the local build supplies miren. Without this the harness runs
+    # the install with the local binary and then tests the downloaded one, which
+    # is the opposite of what it claims to do.
+    if [ -x /miren-local/miren ]; then
+        log "Restoring locally built Miren over the downloaded bundle..."
+        cp /miren-local/miren "$MIREN_RELEASE_DIR/miren"
+        chmod +x "$MIREN_RELEASE_DIR/miren"
+        log "Miren version under test: $(miren version 2>/dev/null || echo 'unknown')"
+    fi
+
     if ! verify_service_setup; then
         finish "fail" "ERROR: unit verification failed"
     fi
