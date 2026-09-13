@@ -212,6 +212,14 @@ MemoryHigh=20G
 
 Then `sudo systemctl daemon-reload && sudo systemctl restart miren`.
 
+:::warning[Edit the override, not the unit file]
+`systemctl edit` is the only place an override survives. A limit written
+directly into `/etc/systemd/system/miren.service` is ignored in favour of the
+one Miren manages, because systemd applies drop-in files after the unit file —
+so a hand-written limit can be silently replaced by a lower one on the next
+upgrade. If you set a limit before upgrading to this version, move it.
+:::
+
 :::warning[Keep MemoryHigh below MemoryMax]
 Crossing `MemoryHigh` puts the server under reclaim pressure and slows it down
 instead of stopping it. That buys time to notice and act, but it isn't a
