@@ -270,6 +270,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server identity-anchor`](./command/server-identity-anchor.md) | Move where this cluster's workload identity is anchored |
 | [`miren server install`](./command/server-install.md) | Install systemd service for miren server |
 | [`miren server operations`](./command/server-operations.md) | Durable server restart and upgrade operations |
+| [`miren server operations abandon`](./command/server-operations-abandon.md) | Give up on an unfinished operation, including a data restore that keeps the server from starting |
 | [`miren server operations list`](./command/server-operations-list.md) | List recorded restart and upgrade operations |
 | [`miren server operations run`](./command/server-operations-run.md) | Execute or resume an operation in the foreground (normally launched by miren upgrade) |
 | [`miren server operations show`](./command/server-operations-show.md) | Show one restart or upgrade operation |

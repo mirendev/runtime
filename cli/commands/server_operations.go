@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/components/coordinate"
+	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/serverlifecycle"
 )
@@ -24,11 +27,32 @@ func ServerOperationsRun(ctx *Context, opts struct {
 		return err
 	}
 	ex := serverlifecycle.NewExecutor(store, serverlifecycle.DefaultOptions(), ctx.Log)
+	cfg, cfgErr := serverconfig.Load("", nil, ctx.Log)
+	if cfgErr != nil {
+		// Restarts can still probe the default URL. Upgrades cannot guess
+		// whether there is an etcd to snapshot, so they fail at backing_up
+		// with this error rather than proceed without one.
+		ctx.Log.Warn("could not load server config", "error", cfgErr)
+		cfg = serverconfig.DefaultConfig()
+	}
 	healthURL := opts.HealthURL
 	if healthURL == "" {
-		healthURL = serverHealthURL(ctx)
+		healthURL = serverlifecycle.HealthURL(cfg.Ingress.GetMode(), cfg.Ingress.GetAddress())
 	}
 	ex.WithProber(serverlifecycle.NewHealthProber(healthURL, ""))
+	switch {
+	case cfgErr != nil:
+		ex.WithDataBackup(unavailableBackup{fmt.Errorf("load server config: %w", cfgErr)})
+	case cfg.Etcd.GetStartEmbedded():
+		ex.WithDataBackup(etcd.Backup{
+			Dir:      filepath.Join(store.Dir(), "backups"),
+			Endpoint: fmt.Sprintf("https://localhost:%d", cfg.Etcd.GetClientPort()),
+			TLS:      &etcd.TLSConfig{CertsDir: coordinate.EtcdCertsDir(cfg.Server.GetDataPath())},
+			Log:      ctx.Log,
+		})
+	default:
+		ctx.Log.Info("etcd is not embedded; upgrades will not snapshot it and rollback restores only the binary")
+	}
 
 	op, err := ex.Run(ctx, opts.Operation)
 	if err != nil {
@@ -40,39 +64,47 @@ func ServerOperationsRun(ctx *Context, opts struct {
 	return nil
 }
 
-// serverHealthURL derives the probe URL from the server config so behind-proxy
-// ingress modes probe the right port.
-func serverHealthURL(ctx *Context) string {
-	cfg, err := serverconfig.Load("", nil, ctx.Log)
-	if err != nil {
-		ctx.Log.Warn("could not load server config for health probe, using default", "error", err)
-		return serverlifecycle.DefaultHealthURL
-	}
-	return serverlifecycle.HealthURL(cfg.Ingress.GetMode(), cfg.Ingress.GetAddress())
-}
+// unavailableBackup fails the backing_up phase with the reason no backup
+// could be arranged, so an upgrade never proceeds on a guess.
+type unavailableBackup struct{ err error }
+
+func (u unavailableBackup) Backup(context.Context, string) (string, error) { return "", u.err }
 
 type operationJSON struct {
-	ID              string     `json:"id"`
-	Action          string     `json:"action"`
-	Phase           string     `json:"phase"`
-	RequestedBy     string     `json:"requested_by,omitempty"`
-	TargetVersion   string     `json:"target_version,omitempty"`
-	ResolvedVersion string     `json:"resolved_version,omitempty"`
-	PreviousVersion string     `json:"previous_version,omitempty"`
-	NewVersion      string     `json:"new_version,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	Progress        string     `json:"progress,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	ID              string           `json:"id"`
+	Action          string           `json:"action"`
+	Phase           string           `json:"phase"`
+	RequestedBy     string           `json:"requested_by,omitempty"`
+	TargetVersion   string           `json:"target_version,omitempty"`
+	ResolvedVersion string           `json:"resolved_version,omitempty"`
+	PreviousVersion string           `json:"previous_version,omitempty"`
+	NewVersion      string           `json:"new_version,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	Progress        string           `json:"progress,omitempty"`
+	BackupRef       string           `json:"backup_ref,omitempty"`
+	DataRestore     *dataRestoreJSON `json:"data_restore,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	FinishedAt      *time.Time       `json:"finished_at,omitempty"`
+}
+
+type dataRestoreJSON struct {
+	BackupRef  string     `json:"backup_ref"`
+	RestoredAt *time.Time `json:"restored_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 func toOperationJSON(op *serverlifecycle.Operation) operationJSON {
-	return operationJSON{
+	out := operationJSON{
 		ID: op.ID, Action: string(op.Action), Phase: string(op.Phase), RequestedBy: op.RequestedBy,
 		TargetVersion: op.TargetVersion, ResolvedVersion: op.ResolvedVersion,
 		PreviousVersion: op.PreviousVersion, NewVersion: op.NewVersion,
-		Error: op.Error, Progress: op.Progress, CreatedAt: op.CreatedAt, FinishedAt: op.FinishedAt,
+		Error: op.Error, Progress: op.Progress, BackupRef: op.BackupRef,
+		CreatedAt: op.CreatedAt, FinishedAt: op.FinishedAt,
 	}
+	if op.DataRestore != nil {
+		out.DataRestore = &dataRestoreJSON{BackupRef: op.DataRestore.BackupRef, RestoredAt: op.DataRestore.RestoredAt, Error: op.DataRestore.Error}
+	}
+	return out
 }
 
 func ServerOperationsList(ctx *Context, opts struct {
@@ -144,6 +176,12 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	if op.PreviousInstanceID != "" || op.NewInstanceID != "" {
 		ctx.Printf("Instances: %s -> %s\n", op.PreviousInstanceID, op.NewInstanceID)
 	}
+	if op.BackupRef != "" {
+		ctx.Printf("Backup:    %s\n", op.BackupRef)
+	}
+	if op.DataRestore != nil {
+		ctx.Printf("Restore:   %s\n", describeDataRestore(op.DataRestore))
+	}
 	if op.Progress != "" {
 		ctx.Printf("Progress:  %s\n", op.Progress)
 	}
@@ -155,6 +193,43 @@ func ServerOperationsShow(ctx *Context, opts struct {
 		ctx.Printf("Finished:  %s\n", op.FinishedAt.Local().Format(time.RFC3339))
 	}
 	return nil
+}
+
+// ServerOperationsAbandon ends an operation nobody will finish: an executor
+// that died mid-operation, or a rollback whose data restore keeps the
+// server from booting.
+func ServerOperationsAbandon(ctx *Context, opts struct {
+	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/server/lifecycle"`
+	ID  string `position:"0" usage:"Operation id"`
+}) error {
+	store, err := serverlifecycle.NewStore(opts.Dir)
+	if err != nil {
+		return err
+	}
+	op, err := serverlifecycle.Abandon(store, opts.ID)
+	if err != nil {
+		if errors.Is(err, serverlifecycle.ErrLocked) {
+			return fmt.Errorf("%w; wait for it to finish or stop unit %s first", err, serverlifecycle.UnitName(opts.ID))
+		}
+		return err
+	}
+	ctx.Info("Abandoned %s operation %s (%s)", op.Action, op.ID, op.Phase)
+	if op.DataRestore != nil {
+		ctx.Info("The server will start on its data as it is, without restoring %s.", op.DataRestore.BackupRef)
+		ctx.Info("If the service is down, 'systemctl restart miren' brings it back.")
+	}
+	return nil
+}
+
+func describeDataRestore(r *serverlifecycle.DataRestore) string {
+	switch {
+	case r.Error != "":
+		return "failed: " + r.Error
+	case r.RestoredAt != nil:
+		return "restored " + r.RestoredAt.Local().Format(time.RFC3339)
+	default:
+		return "requested"
+	}
 }
 
 func operationVersions(op *serverlifecycle.Operation) string {
@@ -273,6 +348,8 @@ func describePhase(op *serverlifecycle.Operation) string {
 			return "downloading " + op.ResolvedVersion
 		}
 		return "resolving " + op.TargetVersion
+	case serverlifecycle.PhaseBackingUp:
+		return "backing up data"
 	case serverlifecycle.PhaseInstalling:
 		return "installing " + op.ResolvedVersion
 	case serverlifecycle.PhaseRestarting:
