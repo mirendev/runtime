@@ -11,14 +11,15 @@ export DO_NOT_TRACK=1
 ISO_SESSION ?= dev-$(shell basename "$$(pwd)")
 export ISO_SESSION
 
-# Extract git info on the host for passing to container builds
-# These handle both regular repos and worktrees
+# Extract VCS info on the host for passing to container builds. hack/vcs-info.sh
+# handles git repos, worktrees, and jj workspaces without a .git directory.
 # Use ?= so CI can override via env vars (e.g., for detached HEAD tag checkouts)
-GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "dev")
-GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "")
+GIT_BRANCH ?= $(shell bash hack/vcs-info.sh branch)
+GIT_COMMIT ?= $(shell bash hack/vcs-info.sh commit)
+GIT_TAG ?= $(shell bash hack/vcs-info.sh tag)
 GIT_VERSION := $(shell \
-  if git describe --exact-match --tags HEAD >/dev/null 2>&1; then \
-    git describe --exact-match --tags HEAD; \
+  if [ -n "$(GIT_TAG)" ]; then \
+    echo "$(GIT_TAG)"; \
   elif echo "$(GIT_BRANCH)" | grep -q '^release/'; then \
     echo "$(GIT_BRANCH)" | sed 's|^release/||'; \
   elif [ -n "$(GIT_COMMIT)" ]; then \

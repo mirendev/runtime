@@ -121,11 +121,23 @@ type detectedEnvVar struct {
 	optional bool
 }
 
+// vcsDirs are version-control metadata directories excluded from every
+// build context and source scan. The client-side upload already drops them
+// (see pkg/tarx), but contexts can also arrive by other routes.
+var vcsDirs = []string{".git", ".jj"}
+
+// contextExcludes returns vcsDirs plus any stack-specific patterns, for
+// llb.ExcludePatterns on the local build context.
+func contextExcludes(extra ...string) []string {
+	return append(append([]string{}, vcsDirs...), extra...)
+}
+
 // skipDirs is the set of directory names to skip when scanning source files
 var skipDirs = map[string]bool{
 	"vendor":       true,
 	"node_modules": true,
 	".git":         true,
+	".jj":          true,
 	"tmp":          true,
 	"log":          true,
 	"logs":         true,
