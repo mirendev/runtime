@@ -96,7 +96,13 @@ func TestTelemetryConfiguredAndMissing(t *testing.T) {
 			require.Equal(t, tt.wantClient, telemetry.tokenSource != nil)
 			require.NotNil(t, telemetry.output.Value().sandboxMetrics)
 			require.NotNil(t, telemetry.output.Value().logWriter)
-			require.Equal(t, telemetry.metrics, telemetry.output.Value().metricsWriter)
+			if tt.wantMetrics {
+				require.Equal(t, telemetry.metrics, telemetry.output.Value().metricsWriter)
+			} else {
+				// A missing writer must be a true nil in the interface, not a
+				// typed nil pointer that consumers would mistake for a writer.
+				require.Nil(t, telemetry.output.Value().metricsWriter)
+			}
 			if tt.wantClient {
 				token, tokenErr := telemetry.tokenSource.Token()
 				require.NoError(t, tokenErr)

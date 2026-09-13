@@ -160,7 +160,7 @@ This presents a picker showing your recent successful deployments:
 | STATUS | Deployment status (active, succeeded) |
 | WHEN | Relative timestamp |
 | GIT SHA | Short commit hash |
-| BRANCH | Git branch at the time of deploy |
+| BRANCH | Git branch (or jj bookmark) at the time of deploy |
 
 Select a version and Miren redeploys it immediately. The currently active version is excluded from the list since rolling back to the current version would be a no-op.
 
@@ -212,6 +212,10 @@ Only one deployment can run per app at a time. If you attempt to deploy while an
 ## Git Provenance
 
 Miren automatically captures git metadata (commit, branch, author, dirty state) from your working directory at deploy time. This information appears in `miren app history --detailed` and in the `miren rollback` picker. No configuration is needed — if you deploy from a git repo, provenance is captured automatically.
+
+[Jujutsu](https://jj-vcs.github.io/jj/) workspaces are supported too, including non-colocated ones with no `.git` directory. The recorded commit is the parent of the working copy (`@-`), the branch is whichever local bookmark points at it, and the deploy counts as dirty when the working-copy commit (`@`) has changes on top of that parent. This matches what git reports in a colocated jj repo, so provenance looks the same either way.
+
+If neither git nor jj can be found for the directory, the deploy still runs but warns that no provenance will be recorded, and the commit column in history shows a dash.
 
 ## Next Steps
 

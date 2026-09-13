@@ -21,6 +21,7 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/components/appmetrics"
 	"miren.dev/runtime/internal/remotewrite"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
 	entitytest "miren.dev/runtime/pkg/entity/testutils"
@@ -68,7 +69,7 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 
 	var (
 		receivedMu sync.Mutex
-		received   []map[string]string
+		received   []remotewrite.Sample
 		authed     bool
 	)
 	remoteWrite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,9 +96,7 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 		}
 		receivedMu.Lock()
 		authed = true
-		for _, sample := range samples {
-			received = append(received, sample.Labels)
-		}
+		received = append(received, samples...)
 		receivedMu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -127,7 +126,8 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 			return false
 		}
 		sandboxes := make(map[string]bool)
-		for _, labels := range received {
+		for _, sample := range received {
+			labels := sample.Labels
 			if labels["__name__"] != "demo_requests_total" ||
 				labels["miren_app"] != "shop" ||
 				labels["miren_app_version"] != "v7" ||
@@ -140,6 +140,40 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 		}
 		return sandboxes[firstSandbox.String()] && sandboxes[secondSandbox.String()]
 	}, 90*time.Second, 500*time.Millisecond, "authenticated remote write should receive distinctly labeled samples from both replicas")
+
+	// The runtime's own operational gauges take the push path: the control
+	// process writes them to vmagent's import endpoint, stamped with the same
+	// identity labels the scrape path derives from targets.json, and they must
+	// come out of the same authenticated remote write.
+	pushed := metrics.NewVictoriaMetricsWriter(entitytest.TestLogger(t), component.ImportURL(), 10*time.Second)
+	shipping := &metrics.Labeled{
+		Sink:   pushed,
+		Labels: map[string]string{"miren_cluster": "cluster-123", "miren_runner": "coordinator"},
+	}
+	pushedAt := time.Now()
+	require.NoError(t, shipping.WritePoints(ctx, []metrics.MetricPoint{{
+		Name:      "go_goroutines",
+		Labels:    map[string]string{"entity": "miren/control"},
+		Value:     4242,
+		Timestamp: pushedAt,
+	}}))
+	pushed.Flush()
+
+	require.Eventually(t, func() bool {
+		receivedMu.Lock()
+		defer receivedMu.Unlock()
+		for _, sample := range received {
+			if sample.Labels["__name__"] != "go_goroutines" {
+				continue
+			}
+			return sample.Value == 4242 &&
+				sample.TimestampMS == pushedAt.UnixMilli() &&
+				sample.Labels["entity"] == "miren/control" &&
+				sample.Labels["miren_cluster"] == "cluster-123" &&
+				sample.Labels["miren_runner"] == "coordinator"
+		}
+		return false
+	}, 60*time.Second, 500*time.Millisecond, "a gauge pushed to vmagent's import endpoint should arrive labeled through the same remote write")
 }
 
 func seedMetricsReplicas(t *testing.T, ctx context.Context, server *entitytest.InMemEntityServer, port int) (entity.Id, entity.Id) {

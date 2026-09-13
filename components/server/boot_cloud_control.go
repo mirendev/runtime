@@ -8,6 +8,7 @@ import (
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/entitysync"
+	"miren.dev/runtime/pkg/serverinfo"
 )
 
 type cloudControlBootOutput struct {
@@ -19,10 +20,11 @@ type cloudControlBoot struct {
 	output      boot.Output[cloudControlBootOutput]
 	value       *coordinate.CloudControl
 	diagnostics *entitysync.Diagnostics
+	instance    *serverinfo.Source
 }
 
-func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applications boot.Output[applicationManagementBootOutput], maintenance, workloads *boot.Component, diagnostics *entitysync.Diagnostics) *cloudControlBoot {
-	b := &cloudControlBoot{diagnostics: diagnostics}
+func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applications boot.Output[applicationManagementBootOutput], maintenance, workloads *boot.Component, diagnostics *entitysync.Diagnostics, instance *serverinfo.Source) *cloudControlBoot {
+	b := &cloudControlBoot{diagnostics: diagnostics, instance: instance}
 	b.component, b.output = boot.Provide2(
 		"cloud-control", foundation, applications, b.start,
 		// Cloud startup status means the management, maintenance, and workload
@@ -38,6 +40,7 @@ func newCloudControlBoot(foundation boot.Output[foundationBootOutput], applicati
 
 func (b *cloudControlBoot) start(ctx context.Context, foundation foundationBootOutput, applications applicationManagementBootOutput) (cloudControlBootOutput, error) {
 	cloud := coordinate.NewCloudControl(foundation.foundation, applications.applications, b.diagnostics)
+	cloud.Instance = b.instance
 	if err := cloud.Start(ctx); err != nil {
 		return cloudControlBootOutput{}, err
 	}

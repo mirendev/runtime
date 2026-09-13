@@ -11,14 +11,12 @@
 
 set -euo pipefail
 
-# Use env vars if set (for CI), otherwise extract from git (for local dev)
-# Check if current commit has a tag first
-if [ -z "${GIT_BRANCH:-}" ] && git describe --exact-match --tags HEAD 2>/dev/null; then
-  GIT_BRANCH=$(git describe --exact-match --tags HEAD)
-else
-  GIT_BRANCH=${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}
+# Use env vars if set (for CI), otherwise ask the VCS (for local dev).
+# A tag on the current commit takes the branch's place in the version.
+source "$(dirname "$0")/vcs-info.sh"
+if [ -n "$GIT_TAG" ]; then
+  GIT_BRANCH="$GIT_TAG"
 fi
-GIT_COMMIT=${GIT_COMMIT:-$(git rev-parse HEAD)}
 BUILD_DATE=${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
 
 echo "Creating release package..."

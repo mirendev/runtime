@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/registration"
+	"miren.dev/runtime/pkg/serverinfo"
 	"miren.dev/runtime/pkg/sysstats"
 	"miren.dev/runtime/pkg/uplink"
 	"miren.dev/runtime/servers/httpingress"
@@ -51,6 +52,9 @@ type CloudControl struct {
 	// the same AppInfo backing the app RPC surface, so the console cannot
 	// disagree with `miren app list`.
 	applications *ApplicationManagement
+
+	// Instance is optional; when nil reports omit the instance id.
+	Instance *serverinfo.Source
 
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
@@ -103,7 +107,10 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 
 	uplinkOptions := []uplink.ClientOption{uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink)}
 	if labs.AppVisibility() {
-		uplinkOptions = append(uplinkOptions, uplink.WithSession(version.GetInfo().Version))
+		uplinkOptions = append(uplinkOptions, uplink.WithSession(uplink.SessionIdentity{
+			RuntimeVersion:    version.GetInfo().Version,
+			RuntimeInstanceID: c.instanceID(),
+		}))
 	} else {
 		c.entitySyncDiagnostics.SetCapabilityDisabled("app-visibility-disabled")
 	}
@@ -362,6 +369,7 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		ClusterID:     c.CloudAuth.ClusterID,
 		State:         "active",
 		Version:       versionInfo.Version,
+		InstanceID:    c.instanceID(),
 		NodeCount:     1, // Static value for now
 		WorkloadCount: workloadCount,
 		ResourceUsage: resourceUsage,
@@ -377,6 +385,13 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 
 	c.recordIdentityAnchor(result.IdentityIssuerURL)
 	return nil
+}
+
+func (c *CloudControl) instanceID() string {
+	if c.Instance == nil {
+		return ""
+	}
+	return c.Instance.InstanceID()
 }
 
 // collectResourceUsage gathers basic host system resource usage metrics

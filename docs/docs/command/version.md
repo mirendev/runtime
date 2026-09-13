@@ -16,8 +16,11 @@ miren version [flags]
 
 ## Flags
 
+- `--cluster, -C` — Cluster name
+- `--config` — Path to the config file
 - `--deps` — Show dependencies
 - `--format` — Output format (text, json) (default: `text`)
+- `--server, -s` — Also report the version of the active cluster's server
 
 ## Global Options
 
@@ -37,4 +40,10 @@ miren version
 
 ```bash
 miren version --format json
+```
+
+**Compare with the cluster's server:**
+
+```bash
+miren version --server
 ```

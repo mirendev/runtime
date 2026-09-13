@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/admin/admin_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/server/server_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/ipalloc"
 	"miren.dev/runtime/components/netresolve"
@@ -22,10 +23,12 @@ import (
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/serverinfo"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/servers/admin"
 	"miren.dev/runtime/servers/httpingress"
+	serverinfosrv "miren.dev/runtime/servers/serverinfo"
 )
 
 func TestServerConfig(t *testing.T) (string, error) {
@@ -138,12 +141,16 @@ func TestServer(t *testing.T) error {
 
 	// Ingress is a data-plane participant even when it shares this process with
 	// the control plane.
+	instance := serverinfo.New()
+	instance.MarkReady()
 	hs := httpingress.NewServer(ctx, log, httpingress.IngressConfig{
 		RequestTimeout: 60 * time.Second,
 		DataPath:       filepath.Join(tempDir, "coordinator"),
+		Instance:       instance,
 	}, client, co.WorkloadControl().Activator(), testDeps.HTTPMetrics, testDeps.LogWriter)
 	adminServer := admin.NewServer(log, ec, hs, testDeps.LogWriter)
 	co.Server().ExposeValue("dev.miren.runtime/admin", admin_v1alpha.AdaptAdmin(adminServer))
+	co.Server().ExposeValue("dev.miren.runtime/server-info", server_v1alpha.AdaptServerInfo(serverinfosrv.NewServer(instance)))
 
 	rcfg, err := co.RunnerConfig(optsRunnerAddress)
 	if err != nil {

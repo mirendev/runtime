@@ -36,7 +36,7 @@ func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOut
 	var err error
 	b.value, err = runner.NewNodeStorage(access.access, runner.RunnerDeps{
 		IsCoordinator: true,
-		MetricsWriter: observability.metricsWriter,
+		MetricsWriter: observability.operationalMetrics,
 	}, config)
 	if err != nil {
 		return nil, err

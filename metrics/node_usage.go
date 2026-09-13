@@ -24,7 +24,7 @@ import (
 // sandbox collectors now attach.
 type NodeUsage struct {
 	Log    *slog.Logger
-	Writer *VictoriaMetricsWriter
+	Writer PointWriter
 
 	// NodeID is the node entity ID these series describe, and RunnerID is the
 	// runner identifier for the same host. Both are emitted: the entity ID is
@@ -49,7 +49,7 @@ const defaultNodeUsageInterval = 10 * time.Second
 
 // NewNodeUsage creates a NodeUsage collector. Writer may be nil for
 // environments without metrics collection, in which case Monitor is a no-op.
-func NewNodeUsage(log *slog.Logger, writer *VictoriaMetricsWriter, nodeID, runnerID, dataPath string) *NodeUsage {
+func NewNodeUsage(log *slog.Logger, writer PointWriter, nodeID, runnerID, dataPath string) *NodeUsage {
 	return &NodeUsage{
 		Log:      log,
 		Writer:   writer,

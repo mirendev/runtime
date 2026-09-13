@@ -128,11 +128,15 @@ func enrichStrictMissingError(filePath string, sme *toml.StrictMissingError) *Co
 			Line:    row,
 			Column:  col,
 			Message: fmt.Sprintf("unknown field %q", unknown),
-			Context: indentContext(de.String()),
+			// go-toml labels the key "missing field" from the struct's point of
+			// view; keep the annotation consistent with the message above it.
+			Context: indentContext(strings.Replace(de.String(), "missing field", "unknown field", 1)),
 		}
 
 		if unknown != "" {
-			if candidates, ok := validFieldsForPath(parentPath); ok {
+			if hint, ok := removedFields[fieldPath(parentPath, unknown)]; ok {
+				d.Hint = hint
+			} else if candidates, ok := validFieldsForPath(parentPath); ok {
 				if suggestion := suggestField(unknown, candidates); suggestion != "" {
 					d.Hint = fmt.Sprintf("did you mean %q?", suggestion)
 				}
@@ -337,6 +341,23 @@ func isMapSection(path []string) bool {
 	}
 	last := path[len(path)-1]
 	return last == "services" || last == "addons" || last == "tasks"
+}
+
+// fieldPath joins a section path and a field name the way validFields and
+// removedFields key them: "services.*" + "comand" → "services.*.comand", and
+// "" + "name" → "name".
+func fieldPath(parentPath, field string) string {
+	if parentPath == "" {
+		return field
+	}
+	return parentPath + "." + field
+}
+
+// removedFields maps fields that app.toml once accepted to the hint shown
+// when one turns up, so the advice is "here's what replaced it" rather than a
+// fuzzy match against something unrelated.
+var removedFields = map[string]string{
+	"post_import": "post_import was removed and never ran; use a deploy task instead (see https://miren.md/tasks)",
 }
 
 // validFieldsForPath returns the valid field names for a given section path.

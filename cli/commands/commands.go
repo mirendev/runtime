@@ -16,6 +16,10 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Name: "JSON output",
 			Body: "miren version --format json",
 		}),
+		WithExample(mflags.Example{
+			Name: "Compare with the cluster's server",
+			Body: "miren version --server",
+		}),
 	))
 	d.Dispatch("login", Infer("login", "Authenticate with miren.cloud", Login,
 		WithGroup(GroupClient),
@@ -1131,6 +1135,10 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		WithExample(mflags.Example{
 			Name: "Force a specific runtime",
 			Body: "miren server container install --runtime podman",
+		}),
+		WithExample(mflags.Example{
+			Name: "Install a specific release",
+			Body: "miren server container install --version v0.15.0",
 		}),
 	))
 	d.Dispatch("server container uninstall", Infer("server container uninstall", "Uninstall miren server container", ServerUninstallContainer,

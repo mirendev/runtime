@@ -82,7 +82,12 @@ type Client struct {
 }
 
 type sessionConfig struct {
-	runtimeVersion string
+	identity SessionIdentity
+}
+
+type SessionIdentity struct {
+	RuntimeVersion    string
+	RuntimeInstanceID string
 }
 
 // Status describes the current state of the reconnecting uplink client.
@@ -113,9 +118,9 @@ type ClientOption func(*Client)
 // WithSession enables the negotiated session handshake. Callers should gate
 // this while the protocol is experimental; cloud must support the handshake
 // before a runtime starts requiring a welcome.
-func WithSession(runtimeVersion string) ClientOption {
+func WithSession(identity SessionIdentity) ClientOption {
 	return func(c *Client) {
-		c.session = &sessionConfig{runtimeVersion: runtimeVersion}
+		c.session = &sessionConfig{identity: identity}
 	}
 }
 
@@ -553,7 +558,8 @@ func (c *Client) establishSession(ctx context.Context, conn *websocket.Conn) (Se
 	offers, callbacks := c.sessionSnapshot(ctx)
 	hello := SessionHello{
 		HandshakeVersions: []uint{HandshakeVersion1},
-		RuntimeVersion:    c.session.runtimeVersion,
+		RuntimeVersion:    c.session.identity.RuntimeVersion,
+		RuntimeInstanceID: c.session.identity.RuntimeInstanceID,
 		ClientTime:        time.Now().UTC(),
 		Capabilities:      offers,
 	}

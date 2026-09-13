@@ -227,3 +227,50 @@ func TestEnginePortConflictError(t *testing.T) {
 		r.Empty(msg)
 	})
 }
+
+func TestResolveContainerImage(t *testing.T) {
+	cases := []struct {
+		name    string
+		image   string
+		version string
+		build   string
+		want    string
+		wantErr string
+	}{
+		{name: "image and version conflict", image: "x/y:z", version: "v1.0.0", build: "v0.15.0", wantErr: "mutually exclusive"},
+		{name: "image passes through", image: "registry.example/miren:custom", build: "feature:abc1234", want: "registry.example/miren:custom"},
+		{name: "image without a tag is not touched", image: "registry.example/miren", build: "v0.15.0", want: "registry.example/miren"},
+		{name: "version picks a tag in the default repo", version: "v0.14.0", build: "v0.15.0", want: "oci.miren.cloud/miren:v0.14.0"},
+		{name: "version latest is allowed when explicit", version: "latest", build: "dev", want: "oci.miren.cloud/miren:latest"},
+		{name: "release build pins its own tag", build: "v0.15.0", want: "oci.miren.cloud/miren:v0.15.0"},
+		{name: "prerelease build pins its own tag", build: "v0.16.0-rc.1", want: "oci.miren.cloud/miren:v0.16.0-rc.1"},
+		{name: "main build uses main", build: "main:abc1234", want: "oci.miren.cloud/miren:main"},
+		{name: "detached HEAD build uses main", build: "HEAD:abc1234", want: "oci.miren.cloud/miren:main"},
+		{name: "feature branch build must choose", build: "feature:abc1234", wantErr: "--version"},
+		{name: "dev build must choose", build: "dev", wantErr: "--version"},
+		// A branch whose name merely starts with "v" is not a release. The
+		// channel has its commit suffix stripped before the check, so these
+		// only fail the grammar, not the "contains a colon" shape.
+		{name: "branch named v1 is not a release", build: "v1:abc1234", wantErr: "--version"},
+		{name: "branch named vnext is not a release", build: "vnext:abc1234", wantErr: "--version"},
+		{name: "branch named v2-rewrite is not a release", build: "v2-rewrite:abc1234", wantErr: "--version"},
+		{name: "branch named v-feature is not a release", build: "v-feature:abc1234", wantErr: "--version"},
+		{name: "version without a v prefix is not a release", build: "0.15.0", wantErr: "--version"},
+		{name: "unknown build must choose", build: "unknown", wantErr: "--version"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := require.New(t)
+
+			got, err := resolveContainerImage(tc.image, tc.version, tc.build)
+			if tc.wantErr != "" {
+				r.Error(err)
+				r.Contains(err.Error(), tc.wantErr)
+				return
+			}
+			r.NoError(err)
+			r.Equal(tc.want, got)
+		})
+	}
+}

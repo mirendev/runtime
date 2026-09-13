@@ -335,8 +335,10 @@ func LoadAppConfig() (*AppConfig, error) {
 	return ac, err
 }
 
-// LoadAppConfigWithPath loads the app config and returns the file path it was loaded from.
-// Returns (nil, "", nil) if no config file is found.
+// LoadAppConfigWithPath loads the app config and returns the file path it was
+// loaded from. The path is also returned alongside a parse error, so a caller
+// can tell which file was at fault. Returns (nil, "", nil) if no config file
+// is found.
 func LoadAppConfigWithPath() (*AppConfig, string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -355,7 +357,7 @@ func LoadAppConfigWithPath() (*AppConfig, string, error) {
 		}
 		ac, parseErr := decodeAndValidate(data, path)
 		if parseErr != nil {
-			return nil, "", parseErr
+			return nil, path, parseErr
 		}
 		return ac, path, nil
 	}

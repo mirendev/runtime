@@ -19,8 +19,14 @@ type observabilityBootInputs struct {
 }
 
 type observabilityBootOutput struct {
-	log                    *slog.Logger
-	metricsWriter          *metrics.VictoriaMetricsWriter
+	log           *slog.Logger
+	metricsWriter *metrics.VictoriaMetricsWriter
+	// operationalMetrics is where the runtime's own health series go: the
+	// control process's memory, etcd backend health, host usage, controller
+	// queues. It always reaches the embedded VictoriaMetrics; the app-metrics
+	// boot attaches the sink that ships the same series off the cluster once
+	// its vmagent is up.
+	operationalMetrics     *metrics.Fanout
 	metricsReader          *metrics.VictoriaMetricsReader
 	cpu                    *metrics.CPUUsage
 	memory                 *metrics.MemoryUsage
@@ -60,6 +66,7 @@ func newObservabilityBoot(inputs observabilityBootInputs, tracing *boot.Componen
 func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogsBootOutput, victoriaMetrics victoriaMetricsBootOutput) (observabilityBootOutput, error) {
 	writer := metrics.NewVictoriaMetricsWriter(b.inputs.log, victoriaMetrics.address, b.inputs.timeout)
 	writer.Start()
+	operational := metrics.NewFanout(writer)
 	reader := metrics.NewVictoriaMetricsReader(b.inputs.log, victoriaMetrics.address, b.inputs.timeout)
 	cpu := metrics.NewCPUUsage(b.inputs.log, writer, reader)
 	memory := metrics.NewMemoryUsage(b.inputs.log, writer, reader)
@@ -69,7 +76,7 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 	b.batchWriter = observability.NewBatchLogWriter(logWriter)
 	log := slog.New(observability.NewSystemLogHandler(b.inputs.log.Handler(), b.batchWriter))
 
-	runtimeMemory := metrics.NewRuntimeMemory(log, writer)
+	runtimeMemory := metrics.NewRuntimeMemory(log, operational)
 	go runtimeMemory.Monitor(ctx)
 
 	sandboxMetrics := sandbox.NewMetrics()
@@ -80,6 +87,7 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 	b.result = observabilityBootOutput{
 		log:                    log,
 		metricsWriter:          writer,
+		operationalMetrics:     operational,
 		metricsReader:          reader,
 		cpu:                    cpu,
 		memory:                 memory,

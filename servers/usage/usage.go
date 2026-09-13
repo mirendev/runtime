@@ -12,6 +12,7 @@ package usage
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,6 +50,11 @@ type window struct {
 	start     time.Time
 	end       time.Time
 	aggregate string
+
+	// step is the resolution any returned series was rendered at. Zero until a
+	// caller asks for a series, because a response that reported a step without
+	// having drawn one would tell a chart it had points it never received.
+	step time.Duration
 }
 
 func (w window) duration() time.Duration {
@@ -64,7 +70,28 @@ func (w window) encode() *usage_v1alpha.UsageWindow {
 	uw.SetStart(standard.ToTimestamp(w.start))
 	uw.SetEnd(standard.ToTimestamp(w.end))
 	uw.SetAggregate(w.aggregate)
+	if w.step > 0 {
+		uw.SetStepSeconds(int64(w.step.Seconds()))
+	}
 	return &uw
+}
+
+// resolveStep settles the resolution a series is rendered at.
+//
+// A caller that names one gets it. Otherwise the step is derived from the
+// window so that a one-minute span and a day-long one both come back at a
+// resolution a chart can draw, rather than three points for an hour or
+// thousands for a day. The floor is one second because no collector here
+// samples faster than that.
+func resolveStep(w window, requested time.Duration) time.Duration {
+	step := requested
+	if step <= 0 {
+		step = w.duration() / defaultSeriesPoints
+	}
+	if step < time.Second {
+		step = time.Second
+	}
+	return step
 }
 
 // resolveWindow turns a caller's bounds into a measured span.
@@ -273,17 +300,29 @@ func (s *Server) sandboxSamples(
 	return cpu, memory, nodeCores, warnings
 }
 
-// instantByLabel runs one instant query and indexes the result by a label.
-func (s *Server) instantByLabel(ctx context.Context, query, label string, at time.Time) (map[string]float64, error) {
+// labeledValue is one row of an instant query: the labels that identify it and
+// the number it carries.
+type labeledValue struct {
+	labels map[string]string
+	value  float64
+}
+
+// instantRows runs one instant query and returns its rows with their labels
+// intact.
+//
+// Most callers group by a single label and want a map, which instantByLabel
+// gives them. An app rollup groups by two at once and cannot, so the decoding
+// -- which silently drops a row whose value is missing or unparseable rather
+// than failing a diagnostic call -- lives here and is shared.
+func (s *Server) instantRows(ctx context.Context, query string, at time.Time) ([]labeledValue, error) {
 	result, err := s.Reader.InstantQuery(ctx, query, at)
 	if err != nil {
 		return nil, err
 	}
 
-	out := make(map[string]float64, len(result.Data.Result))
+	out := make([]labeledValue, 0, len(result.Data.Result))
 	for _, r := range result.Data.Result {
-		key := r.Metric[label]
-		if key == "" || len(r.Value) < 2 {
+		if len(r.Value) < 2 {
 			continue
 		}
 		raw, ok := r.Value[1].(string)
@@ -294,10 +333,75 @@ func (s *Server) instantByLabel(ctx context.Context, query, label string, at tim
 		if err != nil {
 			continue
 		}
-		out[key] = v
+		out = append(out, labeledValue{labels: r.Metric, value: v})
 	}
 
 	return out, nil
+}
+
+// instantByLabel runs one instant query and indexes the result by a label.
+func (s *Server) instantByLabel(ctx context.Context, query, label string, at time.Time) (map[string]float64, error) {
+	rows, err := s.instantRows(ctx, query, at)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]float64, len(rows))
+	for _, r := range rows {
+		key := r.labels[label]
+		if key == "" {
+			continue
+		}
+		out[key] = r.value
+	}
+
+	return out, nil
+}
+
+// parseSample decodes one [timestamp, "value"] pair as a range query returns
+// them. A malformed pair is dropped rather than failing the call: one bad point
+// should not cost a caller the rest of the history.
+func parseSample(v []any) (at int64, value float64, ok bool) {
+	if len(v) < 2 {
+		return 0, 0, false
+	}
+
+	ts, ok := v[0].(float64)
+	if !ok {
+		return 0, 0, false
+	}
+
+	raw, ok := v[1].(string)
+	if !ok {
+		return 0, 0, false
+	}
+
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return int64(ts), parsed, true
+}
+
+// pointsInOrder turns samples collected by timestamp into points, oldest first.
+// A map has no order, and a chart handed points out of order draws a scribble.
+func pointsInOrder(byTime map[int64]float64) []*usage_v1alpha.UsagePoint {
+	times := make([]int64, 0, len(byTime))
+	for at := range byTime {
+		times = append(times, at)
+	}
+	slices.Sort(times)
+
+	points := make([]*usage_v1alpha.UsagePoint, 0, len(times))
+	for _, at := range times {
+		var p usage_v1alpha.UsagePoint
+		p.SetAt(standard.ToTimestamp(time.Unix(at, 0)))
+		p.SetValue(byTime[at])
+		points = append(points, &p)
+	}
+
+	return points
 }
 
 // totals accumulates a rolled-up slice of usage.

@@ -1,32 +1,21 @@
 #!/bin/bash
 
-# Use env vars if set (for CI/container builds), otherwise extract from git
-# This handles cases where git isn't available (e.g., inside iso container)
+# Use env vars if set (for CI/container builds), otherwise ask the VCS.
+# vcs-info.sh degrades gracefully when neither git nor jj can see a repo,
+# which is the case inside the iso container.
 build_date=${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
 
-# Try to get git info, but don't fail if git isn't available
-if [ -n "${GIT_BRANCH:-}" ]; then
-  current_branch="$GIT_BRANCH"
-elif current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null); then
-  : # got it from git
-else
-  current_branch="dev"
-fi
-
-if [ -n "${GIT_COMMIT:-}" ]; then
-  commit="$GIT_COMMIT"
-elif commit=$(git rev-parse HEAD 2>/dev/null); then
-  : # got it from git
-else
-  commit=""
-fi
+source "$(dirname "$0")/vcs-info.sh"
+current_branch="$GIT_BRANCH"
+commit="$GIT_COMMIT"
 
 # Determine version string
 if [ -n "${GIT_VERSION:-}" ]; then
   # Explicit version override
   version="$GIT_VERSION"
-elif version=$(git describe --exact-match --tags HEAD 2>/dev/null); then
-  : # Current commit has a tag
+elif [ -n "$GIT_TAG" ]; then
+  # Current commit has a tag
+  version="$GIT_TAG"
 elif [[ $current_branch =~ ^release/(.*) ]]; then
   # On release branch
   version="${BASH_REMATCH[1]}"

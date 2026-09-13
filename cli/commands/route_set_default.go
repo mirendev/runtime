@@ -5,7 +5,6 @@ import (
 
 	apppkg "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/ingress"
-	"miren.dev/runtime/appconfig"
 )
 
 func RouteSetDefault(ctx *Context, opts struct {
@@ -14,10 +13,7 @@ func RouteSetDefault(ctx *Context, opts struct {
 }) error {
 	appName := opts.AppName
 	if appName == "" {
-		ac, err := appconfig.LoadAppConfig()
-		if err != nil {
-			printConfigWarning(err)
-		} else if ac != nil && ac.Name != "" {
+		if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
 			appName = ac.Name
 		}
 	}

@@ -80,7 +80,7 @@ type ReconcileController struct {
 	watcher      *indexwatch.Watcher
 	wg           sync.WaitGroup
 
-	metricWriter *metrics.VictoriaMetricsWriter
+	metricWriter metrics.PointWriter
 	metricLabels map[string]string
 	counters     controllerCounters
 
@@ -582,7 +582,7 @@ func AdaptReconcileController[
 // ControllerManager manages multiple controllers
 type ControllerManager struct {
 	controllers []Controller
-	metrics     *metrics.VictoriaMetricsWriter
+	metrics     metrics.PointWriter
 	labels      map[string]string
 }
 

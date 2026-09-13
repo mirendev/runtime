@@ -17,14 +17,61 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"gopkg.in/yaml.v3"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/ui"
+	"miren.dev/runtime/version"
 )
+
+// defaultContainerImageRepo is where the release workflow publishes the server
+// image, tagged with the release version (v0.15.0) or "main".
+const defaultContainerImageRepo = "oci.miren.cloud/miren"
+
+// resolveContainerImage picks the image reference to install. An explicit
+// --image wins outright; --version selects a tag in the default repository;
+// otherwise the tag follows the CLI's own build so a release installs itself
+// rather than whatever :latest points at today. Only tags the release
+// workflow actually publishes (release tags and main) are inferred; any other
+// dev build has to say what it wants.
+func resolveContainerImage(imageFlag, versionFlag, buildVersion string) (string, error) {
+	switch {
+	case imageFlag != "" && versionFlag != "":
+		return "", fmt.Errorf("--image and --version are mutually exclusive")
+	case imageFlag != "":
+		return imageFlag, nil
+	case versionFlag != "":
+		return defaultContainerImageRepo + ":" + versionFlag, nil
+	}
+
+	// The channel, not the raw version: a branch build is "main:abc123" but
+	// publishes under "main". Match the release grammar rather than just a
+	// leading "v", so a branch named v2 or vnext falls through to the error
+	// below instead of resolving to an image tag that was never pushed.
+	if tag := version.BranchOf(buildVersion); tag == "main" || isPublishedReleaseTag(tag) {
+		return defaultContainerImageRepo + ":" + tag, nil
+	}
+
+	return "", fmt.Errorf("this is a development build (%s) with no published container image; "+
+		"pass --version vX.Y.Z (or --version main) to choose what to install, or --image for a custom image",
+		buildVersion)
+}
+
+// isPublishedReleaseTag reports whether tag is a release tag the release
+// workflow publishes an image for. That workflow triggers on "v*" tags, so the
+// leading v is required on top of the semver grammar pkg/release already owns.
+func isPublishedReleaseTag(tag string) bool {
+	if !strings.HasPrefix(tag, "v") {
+		return false
+	}
+	_, err := release.ParseSemVer(tag)
+	return err == nil
+}
 
 // ServerInstallContainer sets up a container (via Docker or Podman) to run the
 // miren server.
 func ServerInstallContainer(ctx *Context, opts struct {
-	Image         string            `short:"i" long:"image" description:"Container image to use" default:"oci.miren.cloud/miren:latest"`
+	Image         string            `short:"i" long:"image" description:"Container image to use (full reference; mutually exclusive with --version)"`
+	Version       string            `short:"V" long:"version" description:"Image tag to install (e.g. v0.15.0 or main). Defaults to this CLI's release version, or main for main/HEAD builds; required for other dev builds"`
 	Name          string            `short:"n" long:"name" description:"Container name"`
 	Runtime       string            `long:"runtime" description:"Container runtime to use: docker or podman (auto-detected by default, preferring docker)"`
 	Force         bool              `short:"f" long:"force" description:"Remove existing container if present"`
@@ -51,6 +98,14 @@ func ServerInstallContainer(ctx *Context, opts struct {
 	if err := validateIngressMode(opts.IngressMode); err != nil {
 		return err
 	}
+
+	// Resolve the image before touching the runtime so a dev build with no
+	// published image stops here with the fix, not after volume setup.
+	image, err := resolveContainerImage(opts.Image, opts.Version, version.Version)
+	if err != nil {
+		return err
+	}
+	ctx.Completed("Using image %s", image)
 
 	// Pick the container runtime (docker or podman) before any work so we fail
 	// fast with clear guidance when neither is installed.
@@ -123,7 +178,7 @@ func ServerInstallContainer(ctx *Context, opts struct {
 
 	// Register with cloud unless --without-cloud is specified
 	if !opts.WithoutCloud {
-		if err := performRegistrationPreStart(ctx, rt, opts.Image, volumeName, containerRegistrationOptions{
+		if err := performRegistrationPreStart(ctx, rt, image, volumeName, containerRegistrationOptions{
 			ClusterName: opts.ClusterName,
 			CloudURL:    opts.CloudURL,
 			Tags:        opts.Tags,
@@ -140,7 +195,7 @@ func ServerInstallContainer(ctx *Context, opts struct {
 
 	// Create and optionally start the container
 	ctx.Info("Creating miren server container...")
-	containerID, err := rt.createContainer(opts.Name, opts.Image, config)
+	containerID, err := rt.createContainer(opts.Name, image, config)
 	if err != nil {
 		// The pre-flight check above catches the common case, but a port can
 		// still be grabbed in the race between check and create, or be

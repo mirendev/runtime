@@ -66,6 +66,7 @@ type startup struct {
 	nodePresence          *runnercomp.CapabilityBoot[*runnercomp.NodePresence]
 	ingress               *ingressBoot
 	admin                 *adminBoot
+	serverInfo            *serverInfoBoot
 	registryHostMapping   *registryHostMappingBoot
 	ociRegistry           *ociRegistryBoot
 	workAdmission         *workAdmissionBoot
@@ -78,6 +79,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	// the components that share it.
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	secretRegistry := secret.NewRegistry()
+	instance := runtime.instance
 	entitySyncDiagnostics := entitysync.NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
 	address := NormalizeServerAddress(options.Log, options.Config.Server.GetAddress())
 
@@ -147,9 +149,10 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, componentStopTimeout, workloadControl.component)
 	nodePresence := runnercomp.NewNodePresenceBoot(sandboxHost.output, storageAgent.Component, sandboxAgent.Component, componentStopTimeout)
 	maintenance := newEntityMaintenanceBoot(foundation.output, appData.component)
-	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component, entitySyncDiagnostics)
-	ingress := newIngressBoot(ingressInputs(options), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
+	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component, entitySyncDiagnostics, instance)
+	ingress := newIngressBoot(ingressInputs(options, instance), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
+	serverInfo := newServerInfoBoot(instance, foundation.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output)
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
@@ -195,6 +198,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		nodePresence:          nodePresence,
 		ingress:               ingress,
 		admin:                 adminAPI,
+		serverInfo:            serverInfo,
 		registryHostMapping:   registryHostMapping,
 		ociRegistry:           ociRegistry,
 		workAdmission:         workAdmission,

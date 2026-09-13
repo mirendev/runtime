@@ -47,6 +47,13 @@ RUN if [ "$(uname -m)" = "aarch64" ]; then \
     rm /tmp/*_url && \
     rm -rf /upstream
 
+# jj is a test dependency: pkg/git reads deploy provenance from jj workspaces
+# and its tests build one, skipping when the binary is absent.
+RUN if [ "$(uname -m)" = "aarch64" ]; then jj_arch=aarch64; else jj_arch=x86_64; fi && \
+    curl -fL "https://github.com/jj-vcs/jj/releases/download/v0.45.1/jj-v0.45.1-${jj_arch}-unknown-linux-musl.tar.gz" \
+      | tar -C /usr/local/bin -xz ./jj && \
+    jj --version
+
 # Create containerd config directory
 RUN mkdir -p /etc/containerd
 COPY ./hack/containerd-config.toml /etc/containerd/config.toml

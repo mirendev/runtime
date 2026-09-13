@@ -200,6 +200,15 @@ func (c *Component) Stop(ctx context.Context) error {
 	return err
 }
 
+// ImportURL is the loopback base URL at which vmagent accepts pushed samples
+// (its /api/v1/import/prometheus and related handlers). Samples pushed here
+// ride the same remote-write destination, identity token, on-disk queue and
+// retry as the scraped application metrics. Unlike the scrape path, nothing
+// relabels a pushed sample, so the pusher owns its own cluster identity labels.
+func (c *Component) ImportURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d", c.httpPort)
+}
+
 func (c *Component) stopBackground() {
 	if c.cancel != nil {
 		c.cancel()

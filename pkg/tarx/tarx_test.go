@@ -218,6 +218,33 @@ func TestMakeTarWithoutGitignore(t *testing.T) {
 	require.ElementsMatch(t, expected, entries)
 }
 
+// A secondary jj workspace carries .jj/ with no .gitignore of its own, so the
+// exclusion has to come from tarx rather than from jj's ignore file.
+func TestMakeTarExcludesVCSDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := map[string]string{
+		"main.go":                     "package main",
+		".git/HEAD":                   "ref: refs/heads/main",
+		".jj/repo":                    "../../main/.jj/repo",
+		".jj/working_copy/tree_state": "state",
+	}
+	for filename, content := range files {
+		fullPath := filepath.Join(tmpDir, filename)
+		require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(content), 0644))
+	}
+
+	reader, err := MakeTar(tmpDir, nil, nil)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"main.go"}, extractTarEntries(t, reader))
+
+	manifest, err := ComputeManifest(tmpDir, nil)
+	require.NoError(t, err)
+	require.Len(t, manifest, 1)
+	require.Equal(t, "main.go", manifest[0].Path)
+}
+
 func TestMakeTarEmptyDirectory(t *testing.T) {
 	// Create temporary directory
 	tmpDir, err := os.MkdirTemp("", "tarx-test-empty-")

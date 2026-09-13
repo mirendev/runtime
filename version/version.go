@@ -38,16 +38,30 @@ func GetInfo() Info {
 	return info
 }
 
-// Branch returns the branch name if the binary was built from a branch (e.g. "main:abc123").
-// Returns the tag name for tagged releases (e.g. "v0.2.0"), and empty for unknown versions.
+// Branch returns the release channel this binary was built from: the tag name
+// for tagged releases (e.g. "v0.2.0"), the branch name for branch builds
+// (e.g. "main" for "main:abc123"), and empty for unknown versions. See BranchOf.
 func Branch() string {
-	if branch, _, ok := strings.Cut(Version, ":"); ok {
-		return branch
+	return BranchOf(Version)
+}
+
+// BranchOf derives the release channel from a version string as produced by
+// hack/build.sh. A detached checkout reports its branch as "HEAD", which is not
+// a channel anything publishes under; it is treated as "main" so installers
+// pick the main image and release bundle rather than failing on a channel
+// named HEAD.
+func BranchOf(v string) string {
+	branch, _, ok := strings.Cut(v, ":")
+	if !ok {
+		if v == "unknown" {
+			return ""
+		}
+		branch = v
 	}
-	if Version != "unknown" {
-		return Version
+	if branch == "HEAD" {
+		return "main"
 	}
-	return ""
+	return branch
 }
 
 // String returns the version info as a formatted string

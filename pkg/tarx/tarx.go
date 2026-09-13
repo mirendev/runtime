@@ -26,6 +26,21 @@ type FileManifest struct {
 	Mode int32
 }
 
+// vcsDirs are version-control metadata directories that never belong in a
+// build context. jj writes .jj/.gitignore in a main repo but not in a
+// secondary workspace, so relying on gitignore alone would ship jj's
+// working-copy state (which changes on every snapshot) with each deploy.
+var vcsDirs = []string{".git", ".jj"}
+
+// vcsIgnorePatterns returns gitignore patterns excluding every vcsDirs entry.
+func vcsIgnorePatterns() []gitignore.Pattern {
+	patterns := make([]gitignore.Pattern, 0, len(vcsDirs))
+	for _, d := range vcsDirs {
+		patterns = append(patterns, gitignore.ParsePattern(d, nil))
+	}
+	return patterns
+}
+
 // parseGitignoreFile reads a .gitignore file and returns its parsed patterns
 // scoped to the given domain (path components from the walk root). A missing
 // file is not an error and returns (nil, nil); other read failures (e.g.
@@ -129,7 +144,7 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 	if err != nil {
 		return nil, err
 	}
-	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
+	ignorePatterns = append(ignorePatterns, vcsIgnorePatterns()...)
 	includes := parseStringPatterns(includePatterns)
 
 	includesMatcher := gitignore.NewMatcher(includes)
@@ -243,7 +258,7 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 	if err != nil {
 		return nil, err
 	}
-	ignorePatterns = append(ignorePatterns, gitignore.ParsePattern(".git", nil))
+	ignorePatterns = append(ignorePatterns, vcsIgnorePatterns()...)
 	includes := parseStringPatterns(includePatterns)
 
 	includesMatcher := gitignore.NewMatcher(includes)

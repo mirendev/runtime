@@ -22,7 +22,7 @@ import (
 //   - RSS balloons, heap flat -> off-heap; pprof can't see it, look at bbolt/buildkit.
 type RuntimeMemory struct {
 	Log    *slog.Logger
-	Writer *VictoriaMetricsWriter
+	Writer PointWriter
 
 	// Entity is the value of the "entity" label on every emitted series.
 	Entity string
@@ -51,7 +51,7 @@ const (
 
 // NewRuntimeMemory creates a RuntimeMemory collector. Writer may be nil for
 // environments without metrics collection, in which case Monitor is a no-op.
-func NewRuntimeMemory(log *slog.Logger, writer *VictoriaMetricsWriter) *RuntimeMemory {
+func NewRuntimeMemory(log *slog.Logger, writer PointWriter) *RuntimeMemory {
 	return &RuntimeMemory{
 		Log:    log,
 		Writer: writer,

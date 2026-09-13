@@ -50,6 +50,22 @@ This includes endpoint errors, invalid or oversized responses, authentication
 failures, and delivery retries. `miren logs app` includes only output written by
 the application itself.
 
+### Runtime operational metrics
+
+When a remote-write destination is configured, the coordinator also ships its
+own operational series through the same pipeline: the control process's Go
+heap, goroutine count and resident memory (`go_*`, `process_resident_memory_bytes`),
+embedded etcd backend health (`etcd_db_size_bytes`, `etcd_nospace_alarm`,
+`etcd_nospace_recovery_total`, and friends), host usage (`node_*`), and reconcile
+controller queue depths (`reconcile_controller_*`). Shipped copies carry
+`miren_cluster` and `miren_runner` so series pooled from many clusters stay
+distinct. These series also remain in the cluster's embedded VictoriaMetrics,
+unlabeled, where the node is implicit.
+
+There is no separate switch. Configuring the destination turns on application
+metrics and runtime metrics together, and delivery failures for both appear in
+the same `miren logs system vmagent` output.
+
 ## Distributed tracing
 
 ### Minimum working example
