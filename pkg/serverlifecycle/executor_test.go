@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,9 +31,34 @@ type fakeHost struct {
 	installs  int
 	rollbacks int
 	downloads int
+	backups   int
 	metadata  map[string]*release.Metadata
 	instances int
+
+	// The data side: the store lets Restart play the booting server, which
+	// answers a pending restore request according to restoreBehavior.
+	store           *Store
+	restoreBehavior restoreBehavior
+	restoresSeen    []string
+	// restoreRefusing is the server refusing to boot because its restore
+	// failed, which it keeps doing until the request is settled.
+	restoreRefusing bool
+	backupErr       error
+	// installsAtBackup and backupsAtInstall pin the order of the two phases.
+	installsAtBackup int
+	backupsAtInstall int
+	// requestAtRollback is the restore request on disk when the binary was
+	// rolled back: the request has to be durable before the old binary is.
+	requestAtRollback *DataRestore
 }
+
+type restoreBehavior int
+
+const (
+	restoreBehaviorRestore restoreBehavior = iota
+	restoreBehaviorIgnore                  // an older build that predates data restore
+	restoreBehaviorFail
+)
 
 func newFakeHost(version string) *fakeHost {
 	return &fakeHost{
@@ -56,12 +83,36 @@ func (h *fakeHost) Probe(context.Context) (Snapshot, error) {
 	if h.failBoot && h.running.InstanceID != "inst-1" {
 		return Snapshot{}, errors.New("connection refused")
 	}
+	if h.restoreRefusing {
+		return Snapshot{}, errors.New("connection refused")
+	}
 	return h.running, nil
 }
 
 func (h *fakeHost) Restart(context.Context) error {
 	h.restarts++
 	h.instances++
+	if h.store != nil {
+		if op, err := h.store.PendingRestore(); err != nil {
+			return err
+		} else if op != nil {
+			h.restoresSeen = append(h.restoresSeen, op.DataRestore.BackupRef)
+			result := &RestoreResult{OperationID: op.ID, BackupRef: op.DataRestore.BackupRef, RestoredAt: time.Now().UTC()}
+			switch h.restoreBehavior {
+			case restoreBehaviorIgnore:
+				result = nil
+			case restoreBehaviorFail:
+				result.Error = "etcdutl exited 1"
+				h.restoreRefusing = true
+			case restoreBehaviorRestore:
+			}
+			if result != nil {
+				if err := h.store.WriteRestoreResult(result); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	h.running = Snapshot{
 		InstanceID:  fmt.Sprintf("inst-%d", h.instances),
 		Version:     h.onDisk.Version,
@@ -75,16 +126,43 @@ func (h *fakeHost) Restart(context.Context) error {
 
 func (h *fakeHost) Install(_ context.Context, d *release.DownloadedArtifact) error {
 	h.installs++
+	h.backupsAtInstall = h.backups
 	prev := h.onDisk
 	h.backup = &prev
 	h.onDisk = release.VersionInfo{Version: d.Artifact.Version, Commit: "c-" + d.Artifact.Version}
 	return nil
 }
 func (h *fakeHost) Backup(context.Context) error { return nil }
+
+func (h *fakeHost) BackupData(_ context.Context, opID string) (string, error) {
+	h.backups++
+	h.installsAtBackup = h.installs
+	if h.backupErr != nil {
+		return "", h.backupErr
+	}
+	return "etcd:" + opID, nil
+}
+
+// dataBackup adapts the host to the DataBackup seam, whose method name
+// collides with the installer's Backup.
+type dataBackup struct{ *fakeHost }
+
+func (d dataBackup) Backup(ctx context.Context, opID string) (string, error) {
+	return d.BackupData(ctx, opID)
+}
 func (h *fakeHost) Rollback(context.Context) error {
 	h.rollbacks++
 	if h.backup == nil {
 		return errors.New("no backup")
+	}
+	if h.store != nil {
+		if ops, err := h.store.List(); err == nil {
+			for _, op := range ops {
+				if op.DataRestore != nil {
+					h.requestAtRollback = op.DataRestore
+				}
+			}
+		}
 	}
 	h.onDisk = *h.backup
 	h.backup = nil
@@ -127,7 +205,9 @@ func newTestExecutor(t *testing.T, host *fakeHost) (*Executor, *Store) {
 	opts.ProbeInterval = 5 * time.Millisecond
 	opts.PathSymlink = ""
 	ex := NewExecutor(store, opts, slog.Default()).
-		WithDownloader(host).WithInstaller(host).WithRestarter(host).WithProber(host)
+		WithDownloader(host).WithInstaller(host).WithRestarter(host).WithProber(host).
+		WithDataBackup(dataBackup{host})
+	host.store = store
 	return ex, store
 }
 
@@ -186,6 +266,296 @@ func TestUpgradeRollsBackWhenNewBinaryNeverReady(t *testing.T) {
 	require.Equal(t, "v1.0.0", host.onDisk.Version)
 	require.Equal(t, "v1.0.0", got.NewVersion)
 	require.NotEqual(t, got.PreviousInstanceID, got.NewInstanceID)
+
+	// The data came back with the binary: the booting server saw the request
+	// and its answer is on the record.
+	require.Equal(t, []string{"etcd:" + op.ID}, host.restoresSeen)
+	// The request was on disk before the old binary was, and it names the
+	// build it is for, so a systemd restart in that window cannot start the
+	// old build on migrated data or let the new one restore for it.
+	require.NotNil(t, host.requestAtRollback)
+	require.Equal(t, "v1.0.0", host.requestAtRollback.ForVersion)
+	require.Equal(t, "c-v1.0.0", host.requestAtRollback.ForCommit)
+	require.True(t, got.DataRestore.MeantFor("v1.0.0", "c-v1.0.0"))
+	require.False(t, got.DataRestore.MeantFor("v2.0.0", "c-v2.0.0"))
+	require.NotNil(t, got.DataRestore)
+	require.Equal(t, got.BackupRef, got.DataRestore.BackupRef)
+	require.NotNil(t, got.DataRestore.RestoredAt)
+	require.Empty(t, got.DataRestore.Error)
+}
+
+func TestUpgradeBacksUpAfterDownloadBeforeInstall(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, "etcd:"+op.ID, got.BackupRef)
+	require.Equal(t, 1, host.backups)
+	require.Equal(t, 0, host.installsAtBackup)
+	require.Equal(t, 1, host.backupsAtInstall)
+	require.Nil(t, got.DataRestore)
+}
+
+func TestUpgradeFailsWhenBackupFails(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.backupErr = errors.New("etcd unreachable")
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "etcd unreachable")
+	require.Equal(t, 0, host.installs)
+	require.Equal(t, 0, host.restarts)
+	require.Equal(t, "v1.0.0", host.onDisk.Version)
+}
+
+func TestNoRollbackSkipsBackup(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.backupErr = errors.New("would fail if asked")
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.NoRollback = true
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, 0, host.backups)
+	require.Empty(t, got.BackupRef)
+}
+
+func TestUpgradeWithoutDataBackupRollsBackBinaryOnly(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.failBoot = true
+	ex, store := newTestExecutor(t, host)
+	ex.WithDataBackup(nil)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseRolledBack, got.Phase, got.Error)
+	require.Empty(t, got.BackupRef)
+	require.Nil(t, got.DataRestore)
+	require.Empty(t, host.restoresSeen)
+}
+
+func TestRollbackFailsWhenServerDoesNotRestoreData(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.failBoot = true
+	host.restoreBehavior = restoreBehaviorIgnore
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	// The old binary is back and serving, but on the new build's data: not
+	// a rollback, and the record must say so.
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "did not restore etcd:"+op.ID)
+	require.Equal(t, "v1.0.0", got.NewVersion)
+	require.NotNil(t, got.DataRestore)
+	require.Nil(t, got.DataRestore.RestoredAt)
+}
+
+// A server whose restore fails refuses to boot rather than serve the data
+// the rollback was meant to replace. The executor times out on it, but the
+// record carries the restore error and the way out, and the request stays
+// pending so the server keeps refusing until an operator abandons it.
+func TestRollbackFailsWhenDataRestoreFails(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.failBoot = true
+	host.restoreBehavior = restoreBehaviorFail
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "server not ready after rollback")
+	require.Contains(t, got.Error, "data restore failed: etcdutl exited 1")
+	require.Contains(t, got.Error, "operations abandon "+op.ID)
+	require.Equal(t, "etcdutl exited 1", got.DataRestore.Error)
+
+	pending, err := store.PendingRestore()
+	require.NoError(t, err)
+	require.NotNil(t, pending, "a failed restore is still pending, even on a finished operation")
+
+	abandoned, err := Abandon(store, op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, abandoned.Phase)
+	require.Equal(t, "etcdutl exited 1; abandoned by operator", abandoned.DataRestore.Error)
+	pending, err = store.PendingRestore()
+	require.NoError(t, err)
+	require.Nil(t, pending)
+	result, err := store.ReadRestoreResult(op.ID)
+	require.NoError(t, err)
+	require.True(t, result.Abandoned)
+}
+
+func TestAbandonFinishesADeadExecutorsOperation(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.Phase = PhaseRollingBack
+	op.Error = "server not ready within 200ms"
+	op.BackupRef = "etcd:" + op.ID
+	op.DataRestore = &DataRestore{BackupRef: op.BackupRef}
+	require.NoError(t, store.Create(op))
+
+	// Held by a live executor: refused.
+	unlock, err := store.LockOperation(op.ID)
+	require.NoError(t, err)
+	_, err = Abandon(store, op.ID)
+	require.ErrorIs(t, err, ErrLocked)
+	unlock()
+
+	got, err := Abandon(store, op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Equal(t, "server not ready within 200ms; abandoned by operator", got.Error)
+	require.Equal(t, "abandoned by operator", got.DataRestore.Error)
+	pending, err := store.PendingRestore()
+	require.NoError(t, err)
+	require.Nil(t, pending)
+
+	// Nothing left to abandon.
+	_, err = Abandon(store, op.ID)
+	require.ErrorIs(t, err, ErrNothingToAbandon)
+	require.Equal(t, 1, len(mustList(t, store)))
+}
+
+func mustList(t *testing.T, store *Store) []*Operation {
+	t.Helper()
+	ops, err := store.List()
+	require.NoError(t, err)
+	return ops
+}
+
+func TestResumeRollbackAfterRestoreDoesNotRestoreAgain(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	ex, store := newTestExecutor(t, host)
+
+	// The server restored the data and came up as v1 again, then the
+	// executor died before reading the result.
+	host.onDisk = release.VersionInfo{Version: "v1.0.0", Commit: "c-v1.0.0"}
+	host.backup = nil
+	host.running = Snapshot{InstanceID: "inst-2", Version: "v1.0.0", Commit: "c-v1.0.0", Ready: true, InstallKind: "systemd"}
+	host.instances = 2
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.ResolvedVersion = "v2.0.0"
+	op.Phase = PhaseRollingBack
+	op.Error = "server not ready within 200ms"
+	op.PreviousInstanceID = "inst-1"
+	op.PreviousVersion = "v1.0.0"
+	op.PreviousCommit = "c-v1.0.0"
+	op.BackupRef = "etcd:" + op.ID
+	op.DataRestore = &DataRestore{BackupRef: op.BackupRef}
+	require.NoError(t, store.Create(op))
+	restoredAt := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, store.WriteRestoreResult(&RestoreResult{OperationID: op.ID, BackupRef: op.BackupRef, RestoredAt: restoredAt}))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseRolledBack, got.Phase, got.Error)
+	require.Empty(t, host.restoresSeen)
+	require.Equal(t, 1, host.restarts)
+	require.True(t, restoredAt.Equal(*got.DataRestore.RestoredAt))
+}
+
+func TestDataRestoreMeantForUnknownBuildIsForAnyone(t *testing.T) {
+	r := &DataRestore{BackupRef: "etcd:x"}
+	require.True(t, r.MeantFor("v9.9.9", "whatever"))
+	r.ForVersion = "v1.0.0"
+	require.True(t, r.MeantFor("v1.0.0", "unknown"), "version decides when a commit is unknown")
+	require.False(t, r.MeantFor("v1.0.1", "unknown"))
+}
+
+// A record that cannot be decoded might be the one carrying the request, so
+// PendingRestore reports the error rather than answering "nothing pending".
+// List stays lenient for the operator listing.
+func TestStorePendingRestoreReadsStrictly(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	op := NewOperation(ActionRestart, "test")
+	require.NoError(t, store.Create(op))
+	require.NoError(t, os.WriteFile(filepath.Join(store.Dir(), "01BROKEN.json"), []byte("{not json"), 0o644))
+
+	ops, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+
+	_, err = store.PendingRestore()
+	require.ErrorContains(t, err, "decode operation 01BROKEN")
+}
+
+func TestStorePendingRestore(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.BackupRef = "etcd:" + op.ID
+	require.NoError(t, store.Create(op))
+
+	pending, err := store.PendingRestore()
+	require.NoError(t, err)
+	require.Nil(t, pending, "nothing to restore until a rollback asks")
+
+	op.Phase = PhaseRollingBack
+	op.DataRestore = &DataRestore{BackupRef: op.BackupRef}
+	require.NoError(t, store.Update(op))
+	pending, err = store.PendingRestore()
+	require.NoError(t, err)
+	require.NotNil(t, pending)
+	require.Equal(t, op.ID, pending.ID)
+
+	_, err = store.ReadRestoreResult(op.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+	require.NoError(t, store.WriteRestoreResult(&RestoreResult{OperationID: op.ID, BackupRef: op.BackupRef, Error: "disk full"}))
+	pending, err = store.PendingRestore()
+	require.NoError(t, err)
+	require.NotNil(t, pending, "a failed restore is retried on the next boot")
+
+	op.Phase = PhaseFailed
+	require.NoError(t, store.Update(op))
+	pending, err = store.PendingRestore()
+	require.NoError(t, err)
+	require.NotNil(t, pending, "the request outlives the operation")
+
+	require.NoError(t, store.WriteRestoreResult(&RestoreResult{OperationID: op.ID, BackupRef: op.BackupRef, RestoredAt: time.Now()}))
+	pending, err = store.PendingRestore()
+	require.NoError(t, err)
+	require.Nil(t, pending, "a successful restore settles the request")
+
+	// Results are not operations.
+	ops, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
 }
 
 func TestUpgradeFailsWithoutRollbackWhenDisabled(t *testing.T) {
@@ -463,4 +833,32 @@ func TestRunRefusesOperationHeldByAnotherExecutor(t *testing.T) {
 	got, err := ex.Run(context.Background(), op.ID)
 	require.NoError(t, err)
 	require.Equal(t, PhaseSucceeded, got.Phase)
+}
+
+// An operator who abandons a restore while the server is mid-attempt (and
+// then restarts the service, which fails that attempt) must not have the
+// failed attempt reopen the request behind them.
+func TestRecordRestoreAttemptKeepsAbandonment(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	const id = "01ABANDONED"
+
+	failed := &RestoreResult{OperationID: id, BackupRef: "etcd:" + id, Error: "context canceled"}
+	got, err := store.RecordRestoreAttempt(failed)
+	require.NoError(t, err)
+	require.False(t, got.Settled(), "a failed attempt with no abandonment is recorded and stays pending")
+
+	require.NoError(t, store.WriteRestoreResult(&RestoreResult{OperationID: id, BackupRef: "etcd:" + id, Error: "abandoned by operator", Abandoned: true}))
+	got, err = store.RecordRestoreAttempt(failed)
+	require.NoError(t, err)
+	require.True(t, got.Abandoned, "a failed attempt does not overwrite an abandonment")
+	onDisk, err := store.ReadRestoreResult(id)
+	require.NoError(t, err)
+	require.True(t, onDisk.Abandoned)
+
+	restored := &RestoreResult{OperationID: id, BackupRef: "etcd:" + id, RestoredAt: time.Now()}
+	got, err = store.RecordRestoreAttempt(restored)
+	require.NoError(t, err)
+	require.False(t, got.Abandoned, "a restore that did complete is recorded as such")
+	require.True(t, got.Settled())
 }

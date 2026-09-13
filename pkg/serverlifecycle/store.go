@@ -90,8 +90,20 @@ func (s *Store) Update(op *Operation) error {
 	return s.write(op)
 }
 
-// List returns every operation, oldest first.
+// List returns every operation, oldest first. A record that cannot be read
+// is left out rather than hiding the rest; callers that must not miss one
+// use listStrict.
 func (s *Store) List() ([]*Operation, error) {
+	return s.list(false)
+}
+
+// listStrict is List for a caller whose answer changes if a single record
+// is unreadable: it reports the first read or decode error instead.
+func (s *Store) listStrict() ([]*Operation, error) {
+	return s.list(true)
+}
+
+func (s *Store) list(strict bool) ([]*Operation, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
@@ -104,7 +116,9 @@ func (s *Store) List() ([]*Operation, error) {
 		}
 		op, err := s.Get(strings.TrimSuffix(name, ".json"))
 		if err != nil {
-			// A half-written or foreign file should not hide the rest.
+			if strict {
+				return nil, err
+			}
 			continue
 		}
 		ops = append(ops, op)
@@ -126,12 +140,106 @@ func (s *Store) Active() (*Operation, error) {
 	return nil, nil
 }
 
+// PendingRestore returns the operation whose rollback asked the server to
+// restore data and has not been answered, or nil. The server calls this
+// early in boot, before the data it would restore is in use.
+//
+// The request outlives its operation on purpose. An executor that waited on
+// a server refusing to boot marks the operation failed and exits, and if
+// that ended the request the very next boot would start on the data the
+// rollback was meant to replace. Only a restore or Abandon settles it.
+//
+// Records are read strictly: a request in a record that cannot be decoded
+// is still a request, and the caller fails closed on the error.
+func (s *Store) PendingRestore() (*Operation, error) {
+	ops, err := s.listStrict()
+	if err != nil {
+		return nil, err
+	}
+	var pending *Operation
+	for _, op := range ops {
+		if op.DataRestore == nil {
+			continue
+		}
+		result, err := s.ReadRestoreResult(op.ID)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			pending = op
+		case err != nil:
+			return nil, err
+		case !result.Settled():
+			pending = op
+		}
+	}
+	return pending, nil
+}
+
+func (s *Store) restoreResultPath(id string) string {
+	return filepath.Join(s.dir, "restores", id+".json")
+}
+
+// WriteRestoreResult records the server's answer to a DataRestore request.
+func (s *Store) WriteRestoreResult(result *RestoreResult) error {
+	if result.OperationID == "" {
+		return fmt.Errorf("restore result has no operation id")
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(s.restoreResultPath(result.OperationID))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomic(dir, s.restoreResultPath(result.OperationID), result.OperationID, data)
+}
+
+// RecordRestoreAttempt writes the outcome of a restore attempt, unless an
+// operator abandoned the request while the attempt ran: a failed attempt
+// must not reopen a request that was just settled, or the server would go
+// back to refusing to boot right after being told not to. A successful
+// attempt is always recorded. It returns the result now on disk.
+func (s *Store) RecordRestoreAttempt(result *RestoreResult) (*RestoreResult, error) {
+	if result.Error != "" {
+		existing, err := s.ReadRestoreResult(result.OperationID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		if existing != nil && existing.Abandoned {
+			return existing, nil
+		}
+	}
+	if err := s.WriteRestoreResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *Store) ReadRestoreResult(id string) (*RestoreResult, error) {
+	data, err := os.ReadFile(s.restoreResultPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: restore result for %s", ErrNotFound, id)
+		}
+		return nil, err
+	}
+	var result RestoreResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode restore result %s: %w", id, err)
+	}
+	return &result, nil
+}
+
 func (s *Store) write(op *Operation) error {
 	data, err := json.MarshalIndent(op, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.dir, "."+op.ID+".*.tmp")
+	return writeFileAtomic(s.dir, s.path(op.ID), op.ID, data)
+}
+
+func writeFileAtomic(dir, path, id string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, "."+id+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -154,11 +262,23 @@ func (s *Store) write(op *Operation) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, s.path(op.ID)); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return err
 	}
-	return nil
+	// The rename is durable only once the directory entry is: a restore
+	// request that vanished with a power cut would leave the next boot on
+	// the wrong data.
+	return syncDir(dir)
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // lock takes an exclusive flock on the store directory's lock file.
