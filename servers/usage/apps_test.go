@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/entity"
 )
 
 // row builds one directory entry. The ref is what the entity pass would have
@@ -442,4 +443,32 @@ func (s *instantStub) reader(t *testing.T) *metrics.VictoriaMetricsReader {
 	t.Cleanup(srv.Close)
 
 	return metrics.NewVictoriaMetricsReader(slog.New(slog.DiscardHandler), srv.URL, 5*time.Second)
+}
+
+// An unknown node is an empty listing, not the whole cluster.
+//
+// While the rows came from the entity pass this held for free: loadDirectory
+// returns an empty directory for a node it cannot match, and an empty directory
+// meant no rows. Sourcing the figures from the store added a second resolution
+// that decided the selector, and an unmatched node there left it unconstrained,
+// so a mistyped --runner would query the whole cluster and report every app on
+// it as historical.
+func TestUnknownNodeSelectsNothingRatherThanEverything(t *testing.T) {
+	dir := &directory{nodes: map[entity.Id]*nodeInfo{
+		"node/real": {id: "node/real", name: "real"},
+	}}
+
+	sel, ok := nodeSelector(dir, "real")
+	require.True(t, ok)
+	assert.Equal(t, `{miren_node="node/real"}`, sel)
+
+	// The empty selector and "not found" have to be tellable apart, because
+	// they mean opposite things: everything, and nothing.
+	sel, ok = nodeSelector(dir, "typo")
+	assert.False(t, ok, "an unmatched node must not read as unconstrained")
+	assert.Equal(t, "", sel)
+
+	sel, ok = nodeSelector(dir, "")
+	assert.True(t, ok, "naming no node is unconstrained, which is not the same thing")
+	assert.Equal(t, "", sel)
 }

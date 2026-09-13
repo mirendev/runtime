@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
@@ -134,9 +135,20 @@ func (s *Server) appContributors(
 			return
 		}
 		for _, r := range rows {
-			if id, ok := identityOf(r.labels); ok {
-				store(tally(id), r.value)
+			id, ok := identityOf(r.labels)
+			if !ok {
+				continue
 			}
+
+			// A caller that excluded addons from the row excluded them from
+			// the breakdown too. Leaving them in would list sandboxes the row
+			// above does not count, and their cpu_seconds would no longer sum
+			// to it -- which is the one property that field promises.
+			if !opts.includeAddons && id.kind == string(compute.KindAddon) {
+				continue
+			}
+
+			store(tally(id), r.value)
 		}
 	}
 

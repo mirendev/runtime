@@ -81,15 +81,38 @@ func resolveAggregate(s string) string {
 	}
 }
 
-// promDuration renders a duration the way MetricsQL wants it. Sub-second
-// precision is dropped because no collector here samples that fast, and a "0s"
-// range would match nothing.
-func promDuration(d time.Duration) string {
+// promSeconds renders a duration the way MetricsQL wants it and reports the
+// number of seconds it actually wrote. A caller dividing by the range has to
+// divide by what went into the query rather than by what it asked for, or a
+// floored sub-second range would scale the answer.
+//
+// Sub-second precision is dropped because no collector here samples that fast,
+// and a "0s" range would match nothing.
+func promSeconds(d time.Duration) (string, int64) {
 	if d < time.Second {
 		d = time.Second
 	}
-	return fmt.Sprintf("%ds", int64(d.Seconds()))
+	secs := int64(d.Seconds())
+	return fmt.Sprintf("%ds", secs), secs
 }
+
+func promDuration(d time.Duration) string {
+	rendered, _ := promSeconds(d)
+	return rendered
+}
+
+// sampleStaleness bounds how long one sandbox's last sample stays current.
+//
+// It exists because a bare selector inside a subquery inherits the subquery's
+// step as its lookbehind, and that step grows with the window: at a day it is
+// over an hour, at a week over eight. A sandbox that died keeps being counted
+// for that long, so across a redeploy two generations are summed and an app
+// reads as twice its size. Pinning the lookbehind bounds the overlap to about
+// one scrape at any window length.
+//
+// Twelve times the writer's five-second flush period, so a runner that batches
+// slowly still reports rather than leaving a hole in the series.
+const sampleStaleness = time.Minute
 
 // cpuCoresQuery builds the CPU query for one grouping label.
 //
@@ -116,16 +139,36 @@ func cpuCoresQuery(groupBy string, selector string, window time.Duration, aggreg
 		rateWindow = minRateWindow
 	}
 
-	inner := fmt.Sprintf("sum by (%s) (rate(%s%s[%s]))",
-		groupBy, metricCPUSeconds, selector, promDuration(rateWindow))
+	rangeStr, rangeSecs := promSeconds(rateWindow)
+
+	// Consumption divided by the range, rather than rate(), because the two
+	// disagree the moment more than one series is summed.
+	//
+	// rate(m[d]) is measured over the samples the series itself has, not over
+	// d. One sandbox cannot double itself, so per sandbox the distinction never
+	// showed. Summed across sandboxes it does: a sandbox that died inside the
+	// window keeps contributing the rate it ran at while alive, for as long as
+	// the window still holds its samples, so an app that redeployed reads as
+	// two apps. Measured against a steady one-core app half an hour after a
+	// redeploy, sum(rate()) answered 2.0 cores.
+	//
+	// increase() over the range, divided by the range, is time-weighted instead
+	// -- what each sandbox actually consumed, spread across the window it was
+	// asked about. VictoriaMetrics rewrites sum(rate()) into exactly this at
+	// ranges of three hours or more, which is why long windows looked right and
+	// short ones did not, and why a range query never looked right at all. It
+	// is spelled out here so the answer does not depend on that rewrite.
+	inner := fmt.Sprintf("(sum by (%s) (increase(%s%s[%s])) / %d)",
+		groupBy, metricCPUSeconds, selector, rangeStr, rangeSecs)
 
 	switch aggregate {
 	case aggregateMax, aggregateMin:
 		return fmt.Sprintf("%s_over_time(%s[%s:%s])",
-			aggregate, inner, promDuration(window), promDuration(rateWindow))
+			aggregate, inner, promDuration(window), rangeStr)
 	default:
-		// avg and last both collapse to the plain rate: a rate over the whole
-		// window IS its average, and there is no cheaper "last" for a counter.
+		// avg and last both collapse to the plain figure: consumption across
+		// the whole window already is that window's average, and there is no
+		// cheaper "last" for a counter.
 		return inner
 	}
 }
@@ -135,7 +178,11 @@ func cpuCoresQuery(groupBy string, selector string, window time.Duration, aggreg
 // Memory is a gauge, so unlike CPU it needs an explicit over_time collapse for
 // every aggregate except last.
 func memoryBytesQuery(groupBy string, selector string, window time.Duration, aggregate string) string {
-	inner := fmt.Sprintf("sum by (%s) (%s%s)", groupBy, metricMemoryUsed, selector)
+	// last_over_time rather than the bare selector: see sampleStaleness. Without
+	// it the lookbehind follows the subquery step, and a dead sandbox is summed
+	// alongside the one that replaced it for hours.
+	inner := fmt.Sprintf("sum by (%s) (last_over_time(%s%s[%s]))",
+		groupBy, metricMemoryUsed, selector, promDuration(sampleStaleness))
 
 	if aggregate == aggregateLast {
 		return inner

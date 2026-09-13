@@ -56,10 +56,10 @@ func TestQueriesNeverGroupByEntity(t *testing.T) {
 func TestCPUCoresQueryAggregates(t *testing.T) {
 	r := require.New(t)
 
-	// A rate over the whole window already is the window's average, so avg
-	// needs no subquery wrapper.
+	// Consumption across the whole window already is the window's average, so
+	// avg needs no subquery wrapper.
 	avg := cpuCoresQuery(labelSandbox, "", 5*time.Minute, aggregateAvg)
-	r.Equal("sum by (miren_sandbox) (rate(cpu_usage_seconds_total[300s]))", avg)
+	r.Equal("(sum by (miren_sandbox) (increase(cpu_usage_seconds_total[300s])) / 300)", avg)
 
 	// max does need one, or a spike that has already passed averages away into
 	// nothing -- which is the entire reason to ask for max.
@@ -70,10 +70,29 @@ func TestCPUCoresQueryAggregates(t *testing.T) {
 
 func TestCPUCoresQueryFloorsTheRateWindow(t *testing.T) {
 	// A one-second range holds at most one sample of a one-second counter, and
-	// a rate needs two. Asking for it returns nothing rather than erroring, so
-	// the floor is what keeps a short window from reading as an idle cluster.
+	// an increase needs two. Asking for it returns nothing rather than
+	// erroring, so the floor is what keeps a short window from reading as an
+	// idle cluster.
 	q := cpuCoresQuery(labelSandbox, "", time.Second, aggregateAvg)
 	require.Contains(t, q, "[15s]")
+
+	// The divisor has to be the range that was actually written, not the one
+	// that was asked for, or the floor would scale the answer by fifteen.
+	require.Contains(t, q, "/ 15")
+}
+
+// rate(m[d]) measures a series over its own samples rather than over d, so
+// summing two sandboxes double-counts one that died inside the window: an app
+// that redeployed reads as two apps. Measured against a steady one-core app,
+// sum(rate()) answered 2.0 cores half an hour after a redeploy.
+func TestCPUCoresQueryIsTimeWeightedAcrossSandboxes(t *testing.T) {
+	r := require.New(t)
+
+	for _, agg := range []string{aggregateAvg, aggregateMax, aggregateMin, aggregateLast} {
+		q := cpuCoresQuery(groupKey(labelApp, labelKind), "", time.Hour, agg)
+		r.NotContains(q, "rate(", "rate() is not time-weighted once summed: %s", q)
+		r.Contains(q, "increase(", "%s", q)
+	}
 }
 
 func TestMemoryQueryCollapsesGauge(t *testing.T) {
@@ -81,12 +100,26 @@ func TestMemoryQueryCollapsesGauge(t *testing.T) {
 
 	// Memory is a gauge, so unlike CPU every aggregate needs an explicit
 	// over_time; the bare selector would return one point, not a window.
-	r.Equal("avg_over_time(sum by (miren_sandbox) (memory_usage_bytes)[60s:3s])",
+	r.Equal("avg_over_time(sum by (miren_sandbox) (last_over_time(memory_usage_bytes[60s]))[60s:3s])",
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateAvg))
-	r.Equal("max_over_time(sum by (miren_sandbox) (memory_usage_bytes)[60s:3s])",
+	r.Equal("max_over_time(sum by (miren_sandbox) (last_over_time(memory_usage_bytes[60s]))[60s:3s])",
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateMax))
-	r.Equal("sum by (miren_sandbox) (memory_usage_bytes)",
+	r.Equal("sum by (miren_sandbox) (last_over_time(memory_usage_bytes[60s]))",
 		memoryBytesQuery(labelSandbox, "", time.Minute, aggregateLast))
+}
+
+// A bare selector inside a subquery inherits the subquery's step as its
+// lookbehind, and that step grows with the window: over an hour at a day, over
+// eight at a week. A sandbox that died keeps being summed alongside the one
+// that replaced it for that long, so a steady 100 MiB app read as 200 MiB.
+func TestMemoryQueryPinsItsLookbehind(t *testing.T) {
+	r := require.New(t)
+
+	for _, w := range []time.Duration{time.Minute, 24 * time.Hour, 168 * time.Hour} {
+		q := memoryBytesQuery(groupKey(labelApp, labelKind), "", w, aggregateMax)
+		r.Contains(q, "last_over_time(memory_usage_bytes[60s])",
+			"the lookbehind must not follow the window: %s", q)
+	}
 }
 
 // An app rollup groups by two labels at once, which is the only reason the
@@ -193,22 +226,22 @@ func TestCollapsedQueriesAlwaysCarryASubqueryStep(t *testing.T) {
 	}
 }
 
-// A max is asked for precisely to find a burst an average would hide. Taking
-// the rate over the whole window would flatten that burst into the window's
-// mean, making max and avg identical and the flag useless.
+// A max is asked for precisely to find a burst an average would hide. Measuring
+// consumption across the whole window would flatten that burst into the
+// window's mean, making max and avg identical and the flag useless.
 func TestMaxUsesAShortRateWindowSteppedAcrossTheWindow(t *testing.T) {
 	r := require.New(t)
 
 	q := cpuCoresQuery(labelSandbox, "", time.Hour, aggregateMax)
 
-	r.Contains(q, "rate(cpu_usage_seconds_total[180s])",
-		"the rate must cover a slice of the window, not all of it: %s", q)
+	r.Contains(q, "increase(cpu_usage_seconds_total[180s])",
+		"the range must cover a slice of the window, not all of it: %s", q)
 	r.Contains(q, "[3600s:180s]", "the subquery must step across the window: %s", q)
 
-	// The average is the one case where a full-window rate is right, and it
-	// needs no subquery at all.
+	// The average is the one case where measuring across the whole window is
+	// right, and it needs no subquery at all.
 	avg := cpuCoresQuery(labelSandbox, "", time.Hour, aggregateAvg)
-	r.Equal("sum by (miren_sandbox) (rate(cpu_usage_seconds_total[3600s]))", avg)
+	r.Equal("(sum by (miren_sandbox) (increase(cpu_usage_seconds_total[3600s])) / 3600)", avg)
 }
 
 // An explicit order always wins; otherwise the comparator's own default

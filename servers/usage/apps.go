@@ -45,7 +45,14 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 		return nil, nil, err
 	}
 
-	m, warnings := s.appSamples(ctx, f.node, w, dir)
+	// An unknown node is an empty listing, not the whole cluster. See
+	// nodeSelector.
+	selector, ok := nodeSelector(dir, f.node)
+	if !ok {
+		return &appListing{}, dir, nil
+	}
+
+	m, warnings := s.appSamples(ctx, selector, w)
 
 	rows, cluster := buildAppRows(dir, m, f.app, f.includeAddons)
 
@@ -494,21 +501,13 @@ func buildAppRows(
 // number of sandboxes.
 func (s *Server) appSamples(
 	ctx context.Context,
-	node string,
+	selector string,
 	w window,
-	dir *directory,
 ) (appMetrics, []string) {
 	m := newAppMetrics()
 
 	if s.Reader == nil {
 		return m, []string{"no metrics backend configured; usage figures are unavailable"}
-	}
-
-	selector := ""
-	if node != "" {
-		if n := matchNode(dir.nodes, node); n != nil {
-			selector = labelSelector(map[string]string{labelNode: string(n.id)})
-		}
 	}
 
 	dur := w.duration()

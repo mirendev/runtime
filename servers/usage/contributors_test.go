@@ -326,3 +326,41 @@ func TestSeenTimesNeverInventAContributor(t *testing.T) {
 	assert.Empty(t, rows, "a sample time with no usage is an id, not a contributor")
 	assert.NotEmpty(t, warnings, "the failed usage queries are still reported")
 }
+
+// A caller that excluded addons from the row excluded them from the breakdown
+// too. Listing them here would name sandboxes the row does not count, and their
+// cpu_seconds would stop summing to it, which is the property that field
+// promises.
+func TestContributorsHonourExcludedAddons(t *testing.T) {
+	series := []metrics.Result{
+		{
+			Metric: map[string]string{
+				labelSandbox: "sandbox/web", labelService: "web",
+				labelKind: string(compute.KindApp),
+			},
+			Value: at(1_700_000_000, "1"),
+		},
+		{
+			Metric: map[string]string{
+				labelSandbox: "sandbox/pg", labelService: "pg",
+				labelKind: string(compute.KindAddon),
+			},
+			Value: at(1_700_000_000, "9"),
+		},
+	}
+
+	w := window{start: time.Unix(0, 0), end: time.Unix(3600, 0), aggregate: aggregateAvg}
+
+	withAddons := &Server{Reader: (&instantStub{series: series}).reader(t)}
+	rows, _ := withAddons.appContributors(context.Background(), "", w,
+		appDetailOptions{includeAddons: true}, nil)
+	assert.Len(t, rows, 2)
+
+	withoutAddons := &Server{Reader: (&instantStub{series: series}).reader(t)}
+	rows, _ = withoutAddons.appContributors(context.Background(), "", w,
+		appDetailOptions{includeAddons: false}, nil)
+
+	require.Len(t, rows, 1)
+	assert.Equal(t, "sandbox/web", rows[0].Sandbox(),
+		"the database is not part of a services-only answer")
+}
