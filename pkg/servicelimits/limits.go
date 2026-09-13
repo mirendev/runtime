@@ -114,8 +114,12 @@ func Compute(ramBytes int64) Limits {
 	limit := min(max(ramBytes/memoryFraction, memoryFloorBytes), memoryCapBytes)
 	limit = min(limit, ramBytes*memoryHeadroomPercent/100)
 
-	// Derive MemoryHigh in whole MiB so both directives render as round values
-	// an operator can read at a glance.
+	// Round both down to whole MiB so they render as "11262M" rather than
+	// "11809554432". A quarter of an arbitrary MemTotal rarely lands on a MiB
+	// boundary — a real 44 GB host produced 11809554432 — and an operator
+	// reading the drop-in should not have to divide to see what the cap is.
+	limit = (limit / mib) * mib
+
 	l.MemoryMaxBytes = limit
 	l.MemoryHighBytes = (limit / mib) * memoryHighPercent / 100 * mib
 	return l

@@ -70,10 +70,11 @@ func TestCompute(t *testing.T) {
 		},
 		{
 			// Below the floor the headroom clamp takes over, so the limit
-			// always leaves the rest of the system somewhere to run.
+			// always leaves the rest of the system somewhere to run. 90% of a
+			// GiB is 966367641, which rounds down to 921 MiB.
 			name:     "tiny host is clamped to leave headroom",
 			ram:      1 * gib,
-			wantMax:  1 * gib * 90 / 100,
+			wantMax:  921 * mib,
 			wantHigh: 782 * mib,
 		},
 	}
@@ -375,4 +376,19 @@ func TestUnquoteExecArgRoundTrips(t *testing.T) {
 	} {
 		assert.Equal(t, path, unquoteExecArg(quoteExecArg(path)), "round trip for %q", path)
 	}
+}
+
+func TestComputeRoundsToWholeMiB(t *testing.T) {
+	// A real 44 GB host. A quarter of its MemTotal is 11809554432, which is not
+	// a whole number of MiB, so an unrounded limit rendered as raw bytes in the
+	// drop-in while MemoryHigh beside it rendered as "9572M".
+	got := Compute(47238217728)
+
+	assert.Equal(t, "11262M", formatBytes(got.MemoryMaxBytes))
+	assert.Equal(t, "9572M", formatBytes(got.MemoryHighBytes))
+
+	assert.Zero(t, got.MemoryMaxBytes%mib, "MemoryMax must land on a MiB boundary")
+	assert.Zero(t, got.MemoryHighBytes%mib, "MemoryHigh must land on a MiB boundary")
+	assert.LessOrEqual(t, got.MemoryMaxBytes, int64(47238217728)/memoryFraction,
+		"rounding must go down, never up past the computed share")
 }

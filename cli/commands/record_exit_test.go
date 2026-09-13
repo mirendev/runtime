@@ -40,7 +40,10 @@ func TestExitRecordFromEnv(t *testing.T) {
 			env: map[string]string{
 				"SERVICE_RESULT": "oom-kill",
 				"EXIT_CODE":      "killed",
-				"EXIT_STATUS":    "9",
+				// systemd reports the signal name here, not the number, when
+				// EXIT_CODE is "killed". Confirmed against a real out-of-memory
+				// kill in the systemd test container.
+				"EXIT_STATUS": "KILL",
 			},
 			wantAbnormal: true,
 			want: exitrecord.Record{
@@ -48,7 +51,7 @@ func TestExitRecordFromEnv(t *testing.T) {
 				Unit:       "miren.service",
 				Result:     "oom-kill",
 				ExitCode:   "killed",
-				ExitStatus: "9",
+				ExitStatus: "KILL",
 			},
 		},
 		{
@@ -84,7 +87,7 @@ func TestExitRecordFromEnv(t *testing.T) {
 			env: map[string]string{
 				"SERVICE_RESULT": " oom-kill\n",
 				"EXIT_CODE":      " killed ",
-				"EXIT_STATUS":    " 9 ",
+				"EXIT_STATUS":    " KILL ",
 			},
 			wantAbnormal: true,
 			want: exitrecord.Record{
@@ -92,7 +95,7 @@ func TestExitRecordFromEnv(t *testing.T) {
 				Unit:       "miren.service",
 				Result:     "oom-kill",
 				ExitCode:   "killed",
-				ExitStatus: "9",
+				ExitStatus: "KILL",
 			},
 		},
 	}
