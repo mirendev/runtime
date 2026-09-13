@@ -659,3 +659,110 @@ func cleanupContainer(t *testing.T, cc *containerd.Client, namespace string) {
 		}
 	}
 }
+
+// TestEtcdSnapshotRestoreIntegration walks the rollback data path: snapshot a
+// running etcd, change its data, lose the process that started it (the
+// container survives, as it does across a miren.service restart), restore
+// the snapshot, and have a fresh component pick the container up serving the
+// pre-snapshot data.
+func TestEtcdSnapshotRestoreIntegration(t *testing.T) {
+	testDeps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+	cc := testDeps.CC
+
+	tmpDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	testNamespace := fmt.Sprintf("miren-etcd-restore-test-%d", time.Now().UnixNano())
+	defer cleanupContainer(t, cc, testNamespace)
+
+	config := etcd.EtcdConfig{
+		Name:           "miren-etcd",
+		ClientPort:     testutils.GetFreePort(t),
+		HTTPClientPort: testutils.GetFreePort(t),
+		PeerPort:       testutils.GetFreePort(t),
+		ClusterState:   "new",
+	}
+
+	// The first server process. Its context is cancelled later to stand in
+	// for the process going away while its etcd container keeps running.
+	firstCtx, endFirst := context.WithCancel(context.Background())
+	defer endFirst()
+	first := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+	if err := first.Start(firstCtx, config); err != nil {
+		if strings.Contains(err.Error(), "permission denied") {
+			t.Skip("permission denied error, skipping test")
+		}
+		require.NoError(t, err, "failed to start etcd component")
+	}
+	endpoint := first.ClientEndpoint()
+
+	put := func(key, value string) {
+		client, err := clientv3.New(clientv3.Config{Endpoints: []string{endpoint}, DialTimeout: 5 * time.Second})
+		require.NoError(t, err)
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err = client.Put(ctx, key, value)
+		require.NoError(t, err)
+	}
+	get := func(key string) (string, bool) {
+		client, err := clientv3.New(clientv3.Config{Endpoints: []string{endpoint}, DialTimeout: 5 * time.Second})
+		require.NoError(t, err)
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		resp, err := client.Get(ctx, key)
+		require.NoError(t, err)
+		if len(resp.Kvs) == 0 {
+			return "", false
+		}
+		return string(resp.Kvs[0].Value), true
+	}
+
+	put("before", "kept")
+	snapshotPath := filepath.Join(tmpDir, "backups", "op1.etcd.db")
+	require.NoError(t, etcd.Snapshot(context.Background(), log, endpoint, nil, snapshotPath))
+	require.NoError(t, etcd.VerifySnapshot(snapshotPath))
+	put("after", "migrated")
+
+	t.Log("Simulating the server process going away with etcd still up...")
+	endFirst()
+	_, running := get("before")
+	require.True(t, running, "etcd container should outlive the component's context")
+
+	t.Log("Restoring the snapshot...")
+	restorer := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+	require.NoError(t, restorer.Restore(context.Background(), etcd.RestoreOptions{
+		Snapshot: snapshotPath, Config: config, Label: "op1",
+	}))
+	replaced, err := os.Stat(filepath.Join(tmpDir, "etcd.replaced-op1", "member"))
+	require.NoError(t, err, "previous data directory should be kept aside")
+	require.True(t, replaced.IsDir())
+	_, err = os.Stat(filepath.Join(tmpDir, "etcd-restore"))
+	require.ErrorIs(t, err, os.ErrNotExist, "staging directory should be gone")
+
+	t.Log("Starting a new component on the restored data...")
+	second := etcd.NewEtcdComponent(log, cc, testNamespace, tmpDir)
+	require.NoError(t, second.Start(context.Background(), config))
+	defer func() { require.NoError(t, second.Stop(context.Background())) }()
+
+	value, ok := get("before")
+	require.True(t, ok, "pre-snapshot key should be back")
+	require.Equal(t, "kept", value)
+	_, ok = get("after")
+	require.False(t, ok, "post-snapshot write should be gone")
+
+	// A second restore replaces the kept directory rather than piling up.
+	put("again", "x")
+	require.NoError(t, second.Stop(context.Background()))
+	require.NoError(t, restorer.Restore(context.Background(), etcd.RestoreOptions{
+		Snapshot: snapshotPath, Config: config, Label: "op2",
+	}))
+	_, err = os.Stat(filepath.Join(tmpDir, "etcd.replaced-op1"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(tmpDir, "etcd.replaced-op2"))
+	require.NoError(t, err)
+	require.NoError(t, second.Start(context.Background(), config))
+	_, ok = get("again")
+	require.False(t, ok)
+}
