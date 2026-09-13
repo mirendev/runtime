@@ -3,6 +3,7 @@ package release
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"runtime"
 )
 
@@ -36,9 +37,22 @@ func NewArtifact(artifactType ArtifactType, version string) Artifact {
 	}
 }
 
+const DefaultAssetBaseURL = "https://api.miren.cloud/assets/release/miren"
+
+// AssetBaseURLEnv overrides the asset service so an upgrade can be tested
+// against locally built artifacts (see hack/systemd).
+const AssetBaseURLEnv = "MIREN_ASSET_BASE_URL"
+
+func AssetBaseURL() string {
+	if v := os.Getenv(AssetBaseURLEnv); v != "" {
+		return v
+	}
+	return DefaultAssetBaseURL
+}
+
 // GetDownloadURL returns the asset service URL for this artifact
 func (a Artifact) GetDownloadURL() string {
-	baseURL := "https://api.miren.cloud/assets/release/miren"
+	baseURL := AssetBaseURL()
 
 	// Binary artifacts (just the miren binary) - available for all platforms as .tar.gz
 	if a.Type == ArtifactTypeBinary {

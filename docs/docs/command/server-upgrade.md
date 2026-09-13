@@ -1,12 +1,12 @@
 ---
 title: "miren server upgrade"
 sidebar_label: "server upgrade"
-description: "Upgrade miren server"
+description: "Upgrade miren server (deprecated: use 'sudo miren upgrade')"
 ---
 
 # miren server upgrade
 
-Upgrade miren server
+Upgrade miren server (deprecated: use 'sudo miren upgrade')
 
 ## Usage
 
@@ -19,10 +19,10 @@ miren server upgrade [flags]
 - `--channel` — Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)
 - `--check, -c` — Check for available updates only
 - `--force, -f` — Force upgrade even if already up to date
-- `--health-timeout` — Health check timeout in seconds (default: `60`)
+- `--health-timeout` — Seconds to wait for the restarted server to report ready (default: `0`)
 - `--no-auto-rollback` — Disable automatic rollback on failure
 - `--release, -r` — Upgrade full release package (not just base)
-- `--skip-health` — Skip health check after upgrade
+- `--skip-health` — Deprecated: readiness is always verified
 - `--version, -V` — Specific version to upgrade to (e.g., v0.2.0)
 
 ## Global Options
@@ -36,19 +36,19 @@ miren server upgrade [flags]
 **Upgrade to the latest version:**
 
 ```bash
-miren server upgrade
+sudo miren server upgrade
 ```
 
 **Check for available updates:**
 
 ```bash
-miren server upgrade --check
+sudo miren server upgrade --check
 ```
 
 **Upgrade to a specific version:**
 
 ```bash
-miren server upgrade --version v0.2.0
+sudo miren server upgrade --version v0.2.0
 ```
 
 ## Subcommands

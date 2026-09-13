@@ -70,6 +70,14 @@ docker exec miren-systemd-test systemctl show -p MemoryMax -p MemoryHigh -p Memo
 docker exec -it miren-systemd-test /hack/test-oom-restart.sh
 ```
 
+## Upgrade End-to-End Test
+
+`./hack/systemd/upgrade-e2e.sh` runs the whole restart/upgrade/rollback path
+against this container using builds of the current checkout and a local asset
+server, so nothing has to be published first. It takes several minutes and
+needs the iso dev environment for the builds. Set `WORK=/some/dir` to keep the
+fixtures between runs.
+
 ## Testing Upgrades
 
 The container starts with miren pre-installed:

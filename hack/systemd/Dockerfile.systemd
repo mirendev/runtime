@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     systemd \
     systemd-sysv \
     curl \
+    unzip \
     wget \
     sudo \
     vim \

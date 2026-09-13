@@ -78,6 +78,9 @@ func checkVersion(env *doctorEnv) checkResult {
 	return checkResult{Status: checkOK, Summary: summary}
 }
 
+// The advice runs on the server host with the *old* binary on its PATH, whose
+// `miren upgrade` is CLI-only; `server upgrade` is the form every version
+// understands.
 func serverUpgradeActions(env *doctorEnv) []ui.Action {
 	if env.local() {
 		return []ui.Action{
