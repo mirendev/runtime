@@ -32,6 +32,13 @@ type sandboxRow struct {
 type directory struct {
 	sandboxes []sandboxRow
 	nodes     map[entity.Id]*nodeInfo
+
+	// versions is every app version in the store, keyed by version id. Unlike
+	// sandboxes these are not swept when they stop running, so this is the one
+	// entity view that still describes a replaced deployment -- which is what
+	// lets a contributor that no longer exists still name a version someone can
+	// type.
+	versions map[string]*appInfo
 }
 
 type nodeInfo struct {
@@ -151,7 +158,7 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 		return nil, err
 	}
 
-	dir := &directory{nodes: nodes}
+	dir := &directory{nodes: nodes, versions: apps}
 
 	for sandboxes.Next() {
 		var sb computev1.Sandbox
@@ -192,6 +199,32 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 	}
 
 	return dir, nil
+}
+
+// nodeSelector resolves a caller's node name into a metric selector.
+//
+// ok reports whether a node that was named was actually found. A caller that
+// named one and got false has to answer with an empty listing rather than
+// querying cluster-wide.
+//
+// That distinction used to take care of itself. loadDirectory returns an empty
+// directory for a node it cannot match, and while the rows were built from that
+// directory an empty one meant no rows. Once the figures came from the metrics
+// store instead, a second resolution decided the selector, and an unmatched
+// node there simply left it unconstrained: a mistyped --runner would query the
+// whole cluster and report every app on it as historical. One resolution, whose
+// failure the caller has to handle, is what keeps the two from disagreeing.
+func nodeSelector(dir *directory, node string) (selector string, ok bool) {
+	if node == "" {
+		return "", true
+	}
+
+	n := matchNode(dir.nodes, node)
+	if n == nil {
+		return "", false
+	}
+
+	return labelSelector(map[string]string{labelNode: string(n.id)}), true
 }
 
 // buildRef assembles one sandbox's identity from the several entities that

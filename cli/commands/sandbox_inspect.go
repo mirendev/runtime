@@ -270,7 +270,17 @@ func inspectJSON(res *usage_v1alpha.ResourceUsageClientGetSandboxResults) inspec
 		})
 	}
 
-	for _, s := range res.Series() {
+	out.Series = seriesJSON(res.Series())
+
+	return out
+}
+
+// seriesJSON renders a history for a machine reader. Shared by the sandbox and
+// app detail views, which return the same series type.
+func seriesJSON(series []*usage_v1alpha.UsageSeries) []usageSeriesJSON {
+	out := make([]usageSeriesJSON, 0, len(series))
+
+	for _, s := range series {
 		sj := usageSeriesJSON{Metric: s.Metric()}
 		for _, p := range s.Points() {
 			sj.Points = append(sj.Points, usagePointJSON{
@@ -278,7 +288,7 @@ func inspectJSON(res *usage_v1alpha.ResourceUsageClientGetSandboxResults) inspec
 				Value: p.Value(),
 			})
 		}
-		out.Series = append(out.Series, sj)
+		out = append(out, sj)
 	}
 
 	return out
