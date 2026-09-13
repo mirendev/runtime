@@ -61,6 +61,12 @@ func UnitName(opID string) string {
 	return "miren-operation-" + strings.ToLower(opID)
 }
 
+// Launched reports whether the operation's unit is running, for a Launch
+// that errored after the unit may have been submitted.
+func (l SystemdLauncher) Launched(ctx context.Context, opID string) bool {
+	return UnitActive(ctx, UnitName(opID))
+}
+
 func (l SystemdLauncher) Launch(ctx context.Context, opID string) error {
 	args := []string{
 		"--unit=" + UnitName(opID),

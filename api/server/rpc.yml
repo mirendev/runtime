@@ -7,6 +7,86 @@ imports:
     path: ../../pkg/rpc/standard/standard.yml
     import: miren.dev/runtime/pkg/rpc/standard
 
+types:
+  - type: Operation
+    doc: The durable record of one restart or upgrade, as stored on disk
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: action
+        type: string
+        index: 1
+        doc: restart or upgrade
+      - name: phase
+        type: string
+        index: 2
+        doc: Current checkpoint; succeeded, failed, and rolled_back are terminal
+      - name: requested_by
+        type: string
+        index: 3
+      - name: target_version
+        type: string
+        index: 4
+        doc: As requested (latest, main, a tag)
+      - name: resolved_version
+        type: string
+        index: 5
+        doc: What target_version became once looked up
+      - name: resolved_commit
+        type: string
+        index: 6
+      - name: artifact_type
+        type: string
+        index: 7
+      - name: no_rollback
+        type: bool
+        index: 8
+      - name: ready_timeout_seconds
+        type: int32
+        index: 9
+      - name: error
+        type: string
+        index: 10
+      - name: progress
+        type: string
+        index: 11
+        doc: Short note for the current phase, such as a download percentage
+      - name: previous_instance_id
+        type: string
+        index: 12
+        doc: Process identity before the restart
+      - name: previous_version
+        type: string
+        index: 13
+      - name: previous_commit
+        type: string
+        index: 14
+      - name: new_instance_id
+        type: string
+        index: 15
+        doc: Process identity after the restart; differs from previous_instance_id on success
+      - name: new_version
+        type: string
+        index: 16
+      - name: created_at
+        type: standard.Timestamp
+        index: 17
+      - name: updated_at
+        type: standard.Timestamp
+        index: 18
+      - name: finished_at
+        type: standard.Timestamp
+        index: 19
+        doc: Set once the operation reaches a terminal phase
+      - name: record
+        type: string
+        index: 20
+        doc: |
+          The stored record as JSON, verbatim. The record grows as the
+          executor learns new phases; a client that decodes this sees fields
+          the typed ones above have not caught up with.
+
 interfaces:
   - name: ServerInfo
     doc: Read-only facts about the running server process
@@ -37,3 +117,60 @@ interfaces:
           - name: install_kind
             type: string
             doc: How the process is supervised (systemd, container, unknown)
+
+  - name: ServerLifecycle
+    doc: |
+      Restart and upgrade the server as durable operations. An operation is a
+      record that outlives the server process it acts on: the executor runs as
+      its own systemd unit and writes the record to disk at every phase, so
+      the server that answers Get after a restart is not the one that started
+      the operation. Everything here reads and writes that ledger.
+    methods:
+      # Parameter and result lists are positionally encoded, so they are
+      # append-only: a new field goes on the end.
+      - name: List
+        index: 0
+        doc: Every recorded operation, oldest first
+        results:
+          - name: operations
+            type: list
+            element: Operation
+      - name: Get
+        index: 1
+        doc: One operation by id
+        parameters:
+          - name: id
+            type: string
+        results:
+          - name: operation
+            type: Operation
+      - name: Start
+        index: 2
+        doc: |
+          Record an operation and launch its executor. The id is the caller's
+          to choose: a request that repeats an id returns the operation already
+          recorded under it instead of starting another, so a caller that lost
+          the first reply can retry safely. Refused while another operation is
+          still running.
+        parameters:
+          - name: id
+            type: string
+            doc: Operation id as a ULID; minted by the server when empty
+          - name: action
+            type: string
+            doc: restart or upgrade
+          - name: target_version
+            type: string
+            doc: For upgrade, the version to install (latest, main, or a tag)
+          - name: artifact_type
+            type: string
+            doc: For upgrade, base (default) or release
+          - name: no_rollback
+            type: bool
+            doc: For upgrade, keep the new build even if it never reports ready
+          - name: ready_timeout_seconds
+            type: int32
+            doc: How long the restarted server gets to report ready; 0 for the default
+        results:
+          - name: operation
+            type: Operation
