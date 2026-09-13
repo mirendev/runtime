@@ -11,7 +11,7 @@ import (
 
 type ManagerOption func(*ControllerManager)
 
-func WithMetrics(writer *metrics.VictoriaMetricsWriter, labels map[string]string) ManagerOption {
+func WithMetrics(writer metrics.PointWriter, labels map[string]string) ManagerOption {
 	return func(manager *ControllerManager) {
 		manager.metrics = writer
 		manager.labels = maps.Clone(labels)

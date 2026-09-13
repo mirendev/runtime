@@ -79,7 +79,7 @@ func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOut
 		LogsMaintainer:  observability.logsMaintainer,
 		LogWriter:       observability.logWriter,
 		StatusMon:       observability.statusMonitor,
-		MetricsWriter:   observability.metricsWriter,
+		MetricsWriter:   observability.operationalMetrics,
 		IPv4Routable:    network.ipv4Routable,
 		ServicePrefixes: b.inputs.servicePrefixes,
 		DisableLocalNet: false,

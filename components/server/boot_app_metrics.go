@@ -6,12 +6,14 @@ import (
 	"context"
 
 	"miren.dev/runtime/components/appmetrics"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/boot"
 )
 
 type appMetricsBootInputs struct {
 	config                appmetrics.Config
 	configuredClusterName string
+	runnerID              string
 	dataPath              string
 }
 
@@ -20,6 +22,12 @@ type appMetricsBoot struct {
 	inputs           appMetricsBootInputs
 	managed          *appmetrics.Component
 	disabledReporter *appmetrics.DisabledReporter
+
+	// shipping pushes the runtime's operational series into vmagent. It is
+	// attached to the observability fanout for as long as vmagent runs.
+	shipping    *metrics.Labeled
+	shipWriter  *metrics.VictoriaMetricsWriter
+	operational *metrics.Fanout
 }
 
 func appMetricsInputs(options StartOptions) appMetricsBootInputs {
@@ -29,6 +37,7 @@ func appMetricsInputs(options StartOptions) appMetricsBootInputs {
 			Audience:       options.Config.Metrics.RemoteWrite.GetWorkloadIdentityAudience(),
 		},
 		configuredClusterName: options.Config.Server.GetConfigClusterName(),
+		runnerID:              options.Config.Server.GetRunnerID(),
 		dataPath:              options.Config.Server.GetDataPath(),
 	}
 }
@@ -92,6 +101,25 @@ func (b *appMetricsBoot) start(
 		return nil
 	}
 	b.managed = managed
+
+	// The runtime's own operational series ride the same vmagent. Pushed
+	// samples skip fileSD relabeling, so the cluster identity the scrape path
+	// gets from targets.json is stamped here from the same clusterID. The
+	// embedded VictoriaMetrics keeps receiving the unlabeled series it always
+	// has; only the shipped copy carries the identity, since only at a shared
+	// destination do series from different clusters need telling apart.
+	identityLabels := map[string]string{"miren_cluster": config.ClusterID}
+	if b.inputs.runnerID != "" {
+		identityLabels["miren_runner"] = b.inputs.runnerID
+	}
+	// A zero timeout takes the writer's 30s default; vmagent is on loopback.
+	b.shipWriter = metrics.NewVictoriaMetricsWriter(log, managed.ImportURL(), 0)
+	b.shipWriter.Start()
+	b.shipping = &metrics.Labeled{Sink: b.shipWriter, Labels: identityLabels}
+	b.operational = observability.operationalMetrics
+	b.operational.Attach(b.shipping)
+	log.Info("runtime operational metrics shipping through managed metrics",
+		"cluster", config.ClusterID, "runner", b.inputs.runnerID)
 	return nil
 }
 
@@ -99,6 +127,18 @@ func (b *appMetricsBoot) stop(ctx context.Context) error {
 	if b.disabledReporter != nil {
 		b.disabledReporter.Stop()
 		b.disabledReporter = nil
+	}
+	if b.shipping != nil {
+		b.operational.Detach(b.shipping)
+		b.shipping = nil
+		b.operational = nil
+	}
+	if b.shipWriter != nil {
+		// Close flushes what it can into vmagent, whose own queue outlives this
+		// process; a final send that fails because vmagent is already stopping
+		// is reported by the writer and is not a shutdown error.
+		_ = b.shipWriter.Close()
+		b.shipWriter = nil
 	}
 	if b.managed == nil {
 		return nil

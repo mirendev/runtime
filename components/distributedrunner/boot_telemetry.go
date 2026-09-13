@@ -30,7 +30,9 @@ type telemetryBootInputs struct {
 type telemetryBootOutput struct {
 	sandboxMetrics *sandbox.Metrics
 	logWriter      observability.LogWriter
-	metricsWriter  *metrics.VictoriaMetricsWriter
+	// metricsWriter is nil, not a typed nil pointer, when metrics are not
+	// recorded, so consumers holding it as an interface can test it directly.
+	metricsWriter metrics.PointWriter
 }
 
 type telemetryBoot struct {
@@ -94,10 +96,10 @@ func (b *telemetryBoot) start(_ context.Context, access clusterAccessBootOutput)
 			metrics.WithHTTPClient(b.client.HTTP))
 		b.metrics.Start()
 		b.inputs.log.Info("metrics writer started", "endpoint", endpoint)
+		result.metricsWriter = b.metrics
 	} else {
 		b.inputs.log.Warn("no VictoriaMetrics address configured, sandbox metrics will not be recorded")
 	}
-	result.metricsWriter = b.metrics
 	result.sandboxMetrics = sandbox.NewMetrics()
 	result.sandboxMetrics.Log = b.inputs.log
 	result.sandboxMetrics.CPUUsage = metrics.NewCPUUsage(b.inputs.log, b.metrics, nil)
