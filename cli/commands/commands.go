@@ -1136,6 +1136,10 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Name: "Force a specific runtime",
 			Body: "miren server container install --runtime podman",
 		}),
+		WithExample(mflags.Example{
+			Name: "Install a specific release",
+			Body: "miren server container install --version v0.15.0",
+		}),
 	))
 	d.Dispatch("server container uninstall", Infer("server container uninstall", "Uninstall miren server container", ServerUninstallContainer,
 		WithExample(mflags.Example{

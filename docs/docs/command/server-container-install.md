@@ -21,12 +21,13 @@ miren server container install [flags]
 - `--force, -f` — Remove existing container if present
 - `--host-network` — Use host networking (ignores port mappings)
 - `--http-port` — HTTP port mapping (default: `80`)
-- `--image, -i` — Container image to use (default: `oci.miren.cloud/miren:latest`)
+- `--image, -i` — Container image to use (full reference; mutually exclusive with --version)
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default), behind-proxy-http (Miren serves plain HTTP behind a TLS-terminating proxy like tailscale serve / nginx), or behind-proxy-https (Miren terminates TLS on :443 behind a TCP-passthrough proxy)
 - `--labs, -l` — Miren Labs features to enable (e.g. appvisibility). Prefix with - to disable.
 - `--name, -n` — Container name
 - `--runtime` — Container runtime to use: docker or podman (auto-detected by default, preferring docker)
 - `--url, -u` — Cloud URL for registration (default: `https://miren.cloud`)
+- `--version, -V` — Image tag to install (e.g. v0.15.0 or main). Defaults to this CLI's release version, or main for main/HEAD builds; required for other dev builds
 - `--without-cloud` — Skip cloud registration setup
 
 ## Global Options
@@ -65,6 +66,12 @@ miren server container install --ingress-mode behind-proxy-http
 
 ```bash
 miren server container install --runtime podman
+```
+
+**Install a specific release:**
+
+```bash
+miren server container install --version v0.15.0
 ```
 
 ## See also
