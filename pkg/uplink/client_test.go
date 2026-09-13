@@ -477,7 +477,7 @@ func TestNegotiatedSessionStartsCallbacksAfterWelcome(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(srv.URL, "test-token", NewMessageRouter())
-	WithSession("v1.2.3")(client)
+	WithSession(SessionIdentity{RuntimeVersion: "v1.2.3", RuntimeInstanceID: "01TESTINSTANCE"})(client)
 	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{1}})
 	client.OnSession(func(_ context.Context, session Session) { sessionStarted <- session })
 	client.OnConnect(func(context.Context) { connectStarted <- struct{}{} })
@@ -494,6 +494,9 @@ func TestNegotiatedSessionStartsCallbacksAfterWelcome(t *testing.T) {
 	}
 	if hello.RuntimeVersion != "v1.2.3" {
 		t.Fatalf("runtime version = %q, want v1.2.3", hello.RuntimeVersion)
+	}
+	if hello.RuntimeInstanceID != "01TESTINSTANCE" {
+		t.Fatalf("runtime instance id = %q, want 01TESTINSTANCE", hello.RuntimeInstanceID)
 	}
 	if len(hello.Capabilities) != 1 || hello.Capabilities[0].Name != CapabilityPopConnect {
 		t.Fatalf("capability offers = %+v", hello.Capabilities)
@@ -543,7 +546,7 @@ func TestNegotiatedSessionRejectDoesNotStartTenants(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(srv.URL, "test-token", NewMessageRouter())
-	WithSession("test")(client)
+	WithSession(SessionIdentity{RuntimeVersion: "test"})(client)
 	started := false
 	client.OnSession(func(context.Context, Session) { started = true })
 	client.OnConnect(func(context.Context) { started = true })

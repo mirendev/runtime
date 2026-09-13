@@ -46,8 +46,11 @@ type CapabilitySelection struct {
 // The bootstrap shape is deliberately small: future protocol families evolve
 // behind capabilities rather than adding their state directly here.
 type SessionHello struct {
-	HandshakeVersions []uint            `json:"handshake_versions"`
-	RuntimeVersion    string            `json:"runtime_version"`
+	HandshakeVersions []uint `json:"handshake_versions"`
+	RuntimeVersion    string `json:"runtime_version"`
+	// RuntimeInstanceID lets cloud tell a reconnect from a restart. Optional
+	// so older runtimes stay decodable.
+	RuntimeInstanceID string            `json:"runtime_instance_id,omitempty"`
 	ClientTime        time.Time         `json:"client_time"`
 	Capabilities      []CapabilityOffer `json:"capabilities"`
 }

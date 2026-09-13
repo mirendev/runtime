@@ -94,6 +94,11 @@ type doctorEnv struct {
 	// blocked API port, whereas TCP refusing means nothing is running at all.
 	tcp probe
 	udp probe
+
+	// serverVersionErr distinguishes "could not ask" from "asked, and the
+	// server is too old to answer".
+	serverVersion    *serverVersion
+	serverVersionErr error
 }
 
 // local reports whether the active cluster runs on this machine, which decides
@@ -135,7 +140,7 @@ func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 
 	go func() {
 		defer wg.Done()
@@ -144,6 +149,11 @@ func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 			defer client.Close()
 		}
 		env.connErr = err
+	}()
+
+	go func() {
+		defer wg.Done()
+		env.serverVersion, env.serverVersionErr = fetchServerVersion(ctx)
 	}()
 
 	go func() {
@@ -167,6 +177,7 @@ func doctorChecks() []check {
 	return []check{
 		{Name: "Configuration", Group: groupConfig, Run: checkConfiguration},
 		{Name: "Server", Group: groupServer, Run: checkServer},
+		{Name: "Version", Group: groupServer, Run: checkVersion},
 		{Name: "Authentication", Group: groupAuth, Run: checkAuthentication},
 	}
 }

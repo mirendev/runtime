@@ -21,8 +21,10 @@ type ResourceUsage struct {
 
 // StatusReport represents the cluster status to report
 type StatusReport struct {
-	ClusterID         string            `json:"cluster_id"`
-	Version           string            `json:"version,omitempty"`
+	ClusterID string `json:"cluster_id"`
+	Version   string `json:"version,omitempty"`
+	// InstanceID changes on every restart while Version may not.
+	InstanceID        string            `json:"runtime_instance_id,omitempty"`
 	State             string            `json:"state"` // required: active, degraded, inactive, unknown
 	NodeCount         int               `json:"node_count,omitempty"`
 	WorkloadCount     int               `json:"workload_count,omitempty"`

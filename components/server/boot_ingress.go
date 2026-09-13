@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/components/autotls"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/serverconfig"
+	"miren.dev/runtime/pkg/serverinfo"
 	"miren.dev/runtime/servers/httpingress"
 )
 
@@ -23,6 +24,7 @@ type ingressBootInputs struct {
 	group          *errgroup.Group
 	dataPath       string
 	requestTimeout time.Duration
+	instance       *serverinfo.Source
 }
 
 type ingressBoot struct {
@@ -36,8 +38,9 @@ type ingressBootOutput struct {
 	server *httpingress.Server
 }
 
-func ingressInputs(options StartOptions) ingressBootInputs {
+func ingressInputs(options StartOptions, instance *serverinfo.Source) ingressBootInputs {
 	return ingressBootInputs{
+		instance:       instance,
 		ingress:        options.Config.Ingress,
 		tls:            options.Config.TLS,
 		group:          options.Group,
@@ -62,6 +65,7 @@ func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadC
 		RequestTimeout: b.inputs.requestTimeout,
 		DataPath:       b.inputs.dataPath,
 		WorkloadIssuer: identity.issuer,
+		Instance:       b.inputs.instance,
 	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
 	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
 		return ingressBootOutput{}, err

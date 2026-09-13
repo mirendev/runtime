@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/serverinfo"
 )
 
 const (
@@ -28,6 +29,9 @@ type Runtime struct {
 	graph         *boot.Graph
 	once          sync.Once
 	observability boot.Output[observabilityBootOutput]
+	// instance is created before the graph so every component reports the
+	// same id, and marked ready only after the whole graph has started.
+	instance *serverinfo.Source
 
 	ControlPlane *coordinate.ControlPlane
 	Runner       *runner.Runner
@@ -37,7 +41,7 @@ type Runtime struct {
 
 // Start assembles, validates, and starts the server dependency graph.
 func Start(options StartOptions) (*Runtime, error) {
-	runtime := &Runtime{graph: boot.NewGraph()}
+	runtime := &Runtime{graph: boot.NewGraph(), instance: serverinfo.New()}
 	components := newStartup(runtime, options)
 	runtime.observability = components.observability.output
 
@@ -53,6 +57,7 @@ func Start(options StartOptions) (*Runtime, error) {
 		_ = runtime.Stop(stopCtx)
 		return nil, err
 	}
+	runtime.instance.MarkReady()
 	components.sandboxHost.enableShutdownCleanup()
 	runtime.ControlPlane = coordinate.NewControlPlane(
 		components.foundation.output.Value().foundation,
@@ -74,6 +79,10 @@ func Start(options StartOptions) (*Runtime, error) {
 		Presence:     components.nodePresence.Output.Value(),
 	}
 	return runtime, nil
+}
+
+func (r *Runtime) Instance() *serverinfo.Source {
+	return r.instance
 }
 
 // Log returns the system-log-enabled logger produced during server boot.
@@ -115,6 +124,7 @@ func (s *startup) addComponents() error {
 		s.cloudControl.component,
 		s.ingress.component,
 		s.admin.component,
+		s.serverInfo.component,
 		s.registryHostMapping.component,
 		s.ociRegistry.component,
 		s.workAdmission.component,
