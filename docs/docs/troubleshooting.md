@@ -177,9 +177,17 @@ systemctl show -p MemoryMax -p MemoryHigh miren
 </CliCommand>
 
 Miren sets this at install time to a quarter of the machine's memory, with a
-floor of 2 GB and a ceiling of 16 GB, and refreshes it on each upgrade. The
-limit covers the server process, containerd, and the per-container shims — not
-your apps or addon databases.
+floor of 2 GB, and refreshes it on each upgrade. The limit covers the server
+process, containerd, and the per-container shims — not your apps or addon
+databases.
+
+Most of what it covers is cached file data, not the server itself. containerd
+charges every image layer it reads to this group, so a busy machine can show
+tens of gigabytes here while the server's own memory is a few hundred megabytes.
+Cached data is given back automatically when the limit is approached, which is
+why the limit is a share of the machine rather than a fixed size: it has to
+leave room for that cache on a large host while still catching a runaway on a
+small one.
 
 **Raising it**
 

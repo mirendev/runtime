@@ -55,18 +55,19 @@ func TestCompute(t *testing.T) {
 			wantHigh: 6963 * mib,
 		},
 		{
-			name:     "cap is reached at 64 GB",
+			name:     "large host keeps scaling",
 			ram:      64 * gib,
 			wantMax:  16 * gib,
 			wantHigh: 13926 * mib,
 		},
 		{
-			// The cap, not a quarter of RAM, so a leak is still bounded well
-			// short of the host's memory.
-			name:     "very large host stays at the cap",
+			// No ceiling. A fixed cap here would trim page cache on a machine
+			// with memory to spare, which is a pure loss: a real 629 GB host
+			// holds 39 GB of containerd cache against 489 MB of anon.
+			name:     "very large host keeps scaling",
 			ram:      256 * gib,
-			wantMax:  16 * gib,
-			wantHigh: 13926 * mib,
+			wantMax:  64 * gib,
+			wantHigh: 55705 * mib,
 		},
 		{
 			// Below the floor the headroom clamp takes over, so the limit
@@ -376,6 +377,34 @@ func TestUnquoteExecArgRoundTrips(t *testing.T) {
 	} {
 		assert.Equal(t, path, unquoteExecArg(quoteExecArg(path)), "round trip for %q", path)
 	}
+}
+
+func TestComputeLeavesRoomForPageCache(t *testing.T) {
+	// Measured on a production coordinator: 629 GB of RAM, and a miren.service
+	// cgroup holding 489 MB of anon against 39 GB of containerd page cache.
+	//
+	// memory.max governs the total, not just the anon part, so the limit has to
+	// clear the cache comfortably. An earlier version capped at 16 GiB and would
+	// have trimmed that 39 GB to 15 GB on a machine with memory to spare.
+	const (
+		prodRAM       = 629 * gib
+		prodPageCache = 39 * gib
+		prodAnon      = 489 * mib
+	)
+
+	got := Compute(prodRAM)
+
+	assert.Greater(t, got.MemoryHighBytes, int64(prodPageCache),
+		"MemoryHigh must sit above normal page cache, or the cgroup throttles forever")
+	assert.Greater(t, got.MemoryMaxBytes, int64(prodPageCache),
+		"MemoryMax must not trim page cache on a host with memory to spare")
+
+	// Still a real backstop: the leak that prompted this reached tens of GB, and
+	// the cap has to stop a runaway well short of exhausting the machine.
+	assert.Less(t, got.MemoryMaxBytes, int64(prodRAM)/2,
+		"the cap must still leave most of the host to everything else")
+	assert.Greater(t, got.MemoryMaxBytes, int64(prodAnon)*100,
+		"and sit far above the real resident footprint")
 }
 
 func TestComputeRoundsToWholeMiB(t *testing.T) {

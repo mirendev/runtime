@@ -13,10 +13,19 @@
 // two Victoria services.
 //
 // Capping miren.service therefore cannot kill user workloads, which is what
-// makes this safe to apply by default. It also means the cap is sized to what a
-// control plane legitimately needs rather than to the whole machine — a limit
-// near 100% of RAM would be close to useless, since memory outside the service
-// can exhaust the host before the coordinator's own cgroup reaches its limit.
+// makes this safe to apply by default.
+//
+// # What the limit is sized against
+//
+// Not the coordinator. A production coordinator holds 489 MB of anonymous
+// memory against 39 GB of page cache, because memory.max applies to
+// memory.current and containerd charges every image layer it touches to this
+// cgroup. Cache is reclaimable and anon is not, so the part a leak grows is the
+// small one — but the limit governs the total.
+//
+// That cuts both ways. The limit has to sit far enough above normal cache to
+// avoid trimming it for no reason, and far enough below the host to stop a
+// runaway before the machine dies. See memoryFraction.
 //
 // # Why a drop-in rather than the unit itself
 //
@@ -40,21 +49,32 @@ const (
 	mib = 1024 * 1024
 	gib = 1024 * 1024 * 1024
 
-	// memoryFraction is the share of host RAM the control plane may use. A
-	// healthy control plane idles around 600 MB plus containerd and its shims,
-	// so a quarter of the machine is generous by a wide margin while still
-	// catching a runaway an order of magnitude before it exhausts the host.
+	// memoryFraction is the share of host RAM the cgroup may use.
+	//
+	// The limit has to cover far more than the coordinator. memory.max applies
+	// to memory.current, which includes page cache, and containerd charges every
+	// image layer it reads or writes to this cgroup. On a production coordinator
+	// the split is stark: 489 MB anon against 39 GB of file cache. The
+	// non-reclaimable part — the part a leak grows and the part that actually
+	// kills a host — is the small one.
+	//
+	// So the fraction is not sized to what a control plane needs. It is sized to
+	// leave page cache room to do its job while still bounding a runaway well
+	// short of the machine. A quarter does both: it is many times the real
+	// resident footprint, and it leaves three quarters of the host for
+	// everything else.
+	//
+	// Deliberately no ceiling. An earlier version capped at 16 GiB, reasoning
+	// about what a coordinator needs. On a 629 GB host that would have trimmed
+	// containerd's cache from 39 GB to 15 GB — a pure loss, since the memory was
+	// abundant and the cache is free. Page cache scales with the host and the
+	// workload, so the limit has to as well.
 	memoryFraction = 4
 
 	// memoryFloorBytes keeps the limit workable on a 4 GB host — the documented
 	// minimum — where a flat quarter would leave too little headroom for a
 	// build or a burst of shims.
 	memoryFloorBytes = 2 * gib
-
-	// memoryCapBytes keeps the limit meaningful on a large host, where a
-	// quarter of RAM would be a cap the coordinator could never realistically
-	// reach and so would not bound a leak in time.
-	memoryCapBytes = 16 * gib
 
 	// memoryHeadroomPercent bounds the limit against physical RAM, so a tiny
 	// machine that falls under memoryFloorBytes still leaves the rest of the
@@ -111,7 +131,7 @@ func Compute(ramBytes int64) Limits {
 		return l
 	}
 
-	limit := min(max(ramBytes/memoryFraction, memoryFloorBytes), memoryCapBytes)
+	limit := max(ramBytes/memoryFraction, memoryFloorBytes)
 	limit = min(limit, ramBytes*memoryHeadroomPercent/100)
 
 	// Round both down to whole MiB so they render as "11262M" rather than
