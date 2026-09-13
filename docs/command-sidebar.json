@@ -91,7 +91,9 @@
       "command/cluster-export-address",
       "command/cluster-list",
       "command/cluster-remove",
-      "command/cluster-switch"
+      "command/cluster-restart",
+      "command/cluster-switch",
+      "command/cluster-upgrade"
     ]
   },
   {

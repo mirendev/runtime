@@ -16,7 +16,9 @@ miren server operations list [flags]
 
 ## Flags
 
-- `--dir` — Operation directory (default: `/var/lib/miren/server/lifecycle`)
+- `--cluster, -C` — Cluster name
+- `--config` — Path to the config file
+- `--dir` — Read operation records from this directory instead of asking the server (default: `/var/lib/miren/server/lifecycle`)
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
 

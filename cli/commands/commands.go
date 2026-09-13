@@ -855,6 +855,22 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren cluster switch production",
 		}),
 	))
+	d.Dispatch("cluster restart", Infer("cluster restart", "Restart the active cluster's server and wait for it to report ready", ClusterRestart,
+		WithExample(mflags.Example{
+			Name: "Restart a named cluster",
+			Body: "miren cluster restart -C production",
+		}),
+	))
+	d.Dispatch("cluster upgrade", Infer("cluster upgrade", "Upgrade the active cluster's server and wait for it to report ready", ClusterUpgrade,
+		WithExample(mflags.Example{
+			Name: "Upgrade a named cluster to the latest release",
+			Body: "miren cluster upgrade -C production",
+		}),
+		WithExample(mflags.Example{
+			Name: "Upgrade to a specific version without prompting",
+			Body: "miren cluster upgrade --version v0.16.0 --yes",
+		}),
+	))
 	d.Dispatch("cluster available", Infer("cluster available", "List the clusters Miren Cloud has for your account", ClusterAvailable,
 		WithExample(mflags.Example{
 			Name: "List clusters you could add",

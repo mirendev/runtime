@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -75,15 +74,84 @@ func toOperationJSON(op *serverlifecycle.Operation) operationJSON {
 	}
 }
 
+// operationSource reads the ledger from wherever it can be reached: the
+// server's RPC first, since that works from anywhere, and the files on this
+// host when the server cannot answer, which is exactly the situation while
+// an operation restarts it. An explicit --dir reads files only.
+type operationSource struct {
+	ctx *Context
+	dir string
+}
+
+// openStore opens an existing ledger directory for reading. NewStore would
+// create it, and a read must not turn a misspelled --dir into an empty
+// directory that quietly answers "no operations".
+func openStore(dir string) (*serverlifecycle.Store, error) {
+	if info, err := os.Stat(dir); err != nil {
+		return nil, err
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+	return serverlifecycle.NewStore(dir)
+}
+
+// local opens this host's ledger as a fallback, but only when the server the
+// CLI just failed to reach is this host. With -C naming a remote cluster, the
+// files here belong to some other server and must not stand in for it.
+func (s operationSource) local() (*serverlifecycle.Store, bool) {
+	if !s.ctx.targetsLocalServer() {
+		return nil, false
+	}
+	store, err := openStore(s.dir)
+	return store, err == nil
+}
+
+func (s operationSource) list() ([]*serverlifecycle.Operation, error) {
+	if s.dir != serverlifecycle.DefaultDir {
+		store, err := openStore(s.dir)
+		if err != nil {
+			return nil, err
+		}
+		return store.List()
+	}
+	ops, err := listRemoteOperations(s.ctx)
+	if err == nil {
+		return ops, nil
+	}
+	store, ok := s.local()
+	if !ok {
+		return nil, err
+	}
+	s.ctx.Log.Debug("reading lifecycle operations from disk; server did not answer", "error", err)
+	return store.List()
+}
+
+func (s operationSource) get(id string) (*serverlifecycle.Operation, error) {
+	if s.dir != serverlifecycle.DefaultDir {
+		store, err := openStore(s.dir)
+		if err != nil {
+			return nil, err
+		}
+		return store.Get(id)
+	}
+	op, err := getRemoteOperation(s.ctx, id)
+	if err == nil {
+		return op, nil
+	}
+	store, ok := s.local()
+	if !ok {
+		return nil, err
+	}
+	s.ctx.Log.Debug("reading lifecycle operation from disk; server did not answer", "error", err)
+	return store.Get(id)
+}
+
 func ServerOperationsList(ctx *Context, opts struct {
 	FormatOptions
-	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/server/lifecycle"`
+	ConfigCentric
+	Dir string `long:"dir" description:"Read operation records from this directory instead of asking the server" default:"/var/lib/miren/server/lifecycle"`
 }) error {
-	store, err := serverlifecycle.NewStore(opts.Dir)
-	if err != nil {
-		return err
-	}
-	ops, err := store.List()
+	ops, err := operationSource{ctx: ctx, dir: opts.Dir}.list()
 	if err != nil {
 		return err
 	}
@@ -111,14 +179,11 @@ func ServerOperationsList(ctx *Context, opts struct {
 
 func ServerOperationsShow(ctx *Context, opts struct {
 	FormatOptions
-	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/server/lifecycle"`
+	ConfigCentric
+	Dir string `long:"dir" description:"Read operation records from this directory instead of asking the server" default:"/var/lib/miren/server/lifecycle"`
 	ID  string `position:"0" usage:"Operation id"`
 }) error {
-	store, err := serverlifecycle.NewStore(opts.Dir)
-	if err != nil {
-		return err
-	}
-	op, err := store.Get(opts.ID)
+	op, err := operationSource{ctx: ctx, dir: opts.Dir}.get(opts.ID)
 	if err != nil {
 		return err
 	}
@@ -177,33 +242,21 @@ func runOperation(ctx *Context, op *serverlifecycle.Operation) (*serverlifecycle
 	if os.Geteuid() != 0 {
 		return nil, fmt.Errorf("%s requires root privileges (use sudo)", op.Action)
 	}
-	// Run the executor from this binary, not the installed server binary: an
-	// older server may predate `server operations run` entirely. Resolved
-	// before the record exists so a lookup failure cannot strand a pending op.
-	exe, err := os.Executable()
+	// Resolved before the record exists so a lookup failure cannot strand a
+	// pending op.
+	exe, err := serverlifecycle.ExecutorBinary()
 	if err != nil {
 		return nil, err
 	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return nil, err
-	}
-
 	store, err := serverlifecycle.NewStore(serverlifecycle.DefaultDir)
 	if err != nil {
 		return nil, err
 	}
-	if err := store.Create(op); err != nil {
+	op, _, err = serverlifecycle.Start(ctx, store, serverlifecycle.SystemdLauncher{Binary: exe}, op)
+	if err != nil {
 		if errors.Is(err, serverlifecycle.ErrBusy) {
 			return nil, fmt.Errorf("%w; see 'miren server operations list'", err)
 		}
-		return nil, err
-	}
-
-	launcher := serverlifecycle.SystemdLauncher{Binary: exe}
-	if err := launcher.Launch(ctx, op.ID); err != nil {
-		op.Phase = serverlifecycle.PhaseFailed
-		op.Error = "could not start executor: " + err.Error()
-		_ = store.Update(op)
 		return nil, err
 	}
 	ctx.Info("Started %s operation %s (unit %s)", op.Action, op.ID, serverlifecycle.UnitName(op.ID))
