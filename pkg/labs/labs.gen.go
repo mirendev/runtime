@@ -10,22 +10,16 @@ import (
 )
 
 // Feature name constants
-const (
-	FeatureAppVisibility = "appvisibility"
-)
+const ()
 
 // AllFeatures returns a list of all known feature names
 func AllFeatures() []string {
-	return []string{
-		FeatureAppVisibility,
-	}
+	return []string{}
 }
 
 // FeatureDescriptions returns a map of feature names to their descriptions
 func FeatureDescriptions() map[string]string {
-	return map[string]string{
-		FeatureAppVisibility: "Negotiate app visibility protocols over the cloud uplink",
-	}
+	return map[string]string{}
 }
 
 var (
@@ -34,9 +28,7 @@ var (
 )
 
 // featureDefaults holds the default state for each feature
-var featureDefaults = map[string]bool{
-	FeatureAppVisibility: false,
-}
+var featureDefaults = map[string]bool{}
 
 // Init initializes the labs feature flags from the provided flag strings.
 // Each flag can be a feature name to enable it, or prefixed with "-" to disable it.
@@ -130,9 +122,3 @@ func IsEnabled(name string) bool {
 }
 
 // Feature predicate functions
-
-// AppVisibility returns whether the appvisibility feature is enabled.
-// Negotiate app visibility protocols over the cloud uplink
-func AppVisibility() bool {
-	return IsEnabled(FeatureAppVisibility)
-}

@@ -20,7 +20,6 @@ import (
 	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entitysync"
-	"miren.dev/runtime/pkg/labs"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/serverinfo"
 	"miren.dev/runtime/pkg/sysstats"
@@ -105,34 +104,30 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 		cloudURL = DefaultCloudURL
 	}
 
-	uplinkOptions := []uplink.ClientOption{uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink)}
-	if labs.AppVisibility() {
-		uplinkOptions = append(uplinkOptions, uplink.WithSession(uplink.SessionIdentity{
-			RuntimeVersion:    version.GetInfo().Version,
-			RuntimeInstanceID: c.instanceID(),
-		}))
-	} else {
-		c.entitySyncDiagnostics.SetCapabilityDisabled("app-visibility-disabled")
-	}
+	// The negotiated session is the baseline: every capability rides it, and
+	// cloud selects the ones it wants per cluster. Which capabilities cloud
+	// puts to use is decided there, behind its own per-organization flags.
 	link := uplink.NewClient(
 		cloudURL,
 		c.authClient,
 		uplink.NewMessageRouter(),
 		c.Log.With("component", "uplink"),
-		uplinkOptions...,
+		uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink),
+		uplink.WithSession(uplink.SessionIdentity{
+			RuntimeVersion:    version.GetInfo().Version,
+			RuntimeInstanceID: c.instanceID(),
+		}),
 	)
-	if labs.AppVisibility() {
-		if err := entitysync.NewExporter(
-			c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
-			entitysync.WithStartGate(entitySyncReady),
-			entitysync.WithDiagnostics(c.entitySyncDiagnostics),
-		).Register(ctx, link); err != nil {
-			// Entity visibility is additive. Local source metadata should not take
-			// Anywhere or cloud RPC off the shared link when it is unavailable.
-			c.Log.Warn("entity sync is unavailable for this uplink session", "error", err)
-		}
+	if err := entitysync.NewExporter(
+		c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
+		entitysync.WithStartGate(entitySyncReady),
+		entitysync.WithDiagnostics(c.entitySyncDiagnostics),
+	).Register(ctx, link); err != nil {
+		// Entity visibility is additive. Local source metadata should not take
+		// Anywhere or cloud RPC off the shared link when it is unavailable.
+		c.Log.Warn("entity sync is unavailable for this uplink session", "error", err)
 	}
-	if labs.AppVisibility() && c.applications != nil && c.applications.appInfo != nil {
+	if c.applications != nil && c.applications.appInfo != nil {
 		if err := apphealthsync.NewReporter(
 			c.Log.With("component", "app-health"), c.applications.appInfo,
 		).Register(ctx, link); err != nil {

@@ -115,9 +115,8 @@ type capabilityRegistration struct {
 // ClientOption changes how a Client establishes its connections.
 type ClientOption func(*Client)
 
-// WithSession enables the negotiated session handshake. Callers should gate
-// this while the protocol is experimental; cloud must support the handshake
-// before a runtime starts requiring a welcome.
+// WithSession enables the negotiated session handshake. Without it the client
+// speaks the legacy bootstrap, which cloud still accepts from older runtimes.
 func WithSession(identity SessionIdentity) ClientOption {
 	return func(c *Client) {
 		c.session = &sessionConfig{identity: identity}
