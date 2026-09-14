@@ -18,6 +18,13 @@ const AppRefTag = "dev.miren.app_ref"
 // DeleteAppTransitive deletes an app and all entities that directly reference it.
 // This includes app_versions and sandbox_pools (both tagged with dev.miren.app_ref).
 // Other transitive resources (sandboxes referencing app_versions) are cleaned up by their controllers.
+//
+// Artifacts are the exception among app_ref entities: they are left alone.
+// Artifacts are deduplicated by manifest digest, so one tagged with this app
+// may still back another app's version, and the registry resolves manifests
+// through the artifact entity. The artifact GC archives whatever is left
+// unreferenced once the versions are gone, and archiving is what lets the
+// image and blob GCs reclaim the storage.
 func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *slog.Logger, appId entity.Id) error {
 	log.Info("starting app deletion", "appId", appId)
 
@@ -75,6 +82,9 @@ func DeleteAppTransitive(ctx context.Context, client *entityserver.Client, log *
 		}
 
 		attrId := entity.Id(schema.Id())
+		if attrId == core_v1alpha.ArtifactAppId {
+			continue
+		}
 
 		list, err := client.List(ctx, entity.Ref(attrId, appId))
 		if err != nil {
