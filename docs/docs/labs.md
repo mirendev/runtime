@@ -29,10 +29,10 @@ Labs features are controlled via the `--labs` flag or `MIREN_LABS` environment v
 <CliCommand context="server">
 ```miren
 # Enable a labs feature
-miren server --labs appvisibility
+miren server --labs <feature>
 
 # Via environment variable
-MIREN_LABS=appvisibility miren server
+MIREN_LABS=<feature> miren server
 ```
 </CliCommand>
 
@@ -49,10 +49,10 @@ as an escape hatch.
 <CliCommand context="server">
 ```miren
 # Turn a feature off
-miren server --labs -appvisibility
+miren server --labs -<feature>
 
 # Via environment variable
-MIREN_LABS=-appvisibility miren server
+MIREN_LABS=-<feature> miren server
 ```
 </CliCommand>
 

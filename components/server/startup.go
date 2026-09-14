@@ -68,6 +68,7 @@ type startup struct {
 	ingress               *ingressBoot
 	admin                 *adminBoot
 	serverInfo            *serverInfoBoot
+	serverLifecycle       *serverLifecycleBoot
 	registryHostMapping   *registryHostMappingBoot
 	ociRegistry           *ociRegistryBoot
 	workAdmission         *workAdmissionBoot
@@ -155,7 +156,8 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	ingress := newIngressBoot(ingressInputs(options, instance), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	serverInfo := newServerInfoBoot(instance, foundation.output)
-	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output)
+	serverLifecycle := newServerLifecycleBoot(instance, foundation.output)
+	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output, serverLifecycle.output)
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
@@ -202,6 +204,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		ingress:               ingress,
 		admin:                 adminAPI,
 		serverInfo:            serverInfo,
+		serverLifecycle:       serverLifecycle,
 		registryHostMapping:   registryHostMapping,
 		ociRegistry:           ociRegistry,
 		workAdmission:         workAdmission,

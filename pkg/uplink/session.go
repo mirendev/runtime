@@ -22,6 +22,9 @@ const (
 	CapabilityRPCRelay   = "rpc-relay"
 	CapabilityEntitySync = "entity-sync"
 	CapabilityAppHealth  = "app-health"
+	// CapabilityServerLifecycle lets cloud restart and upgrade the server and
+	// follow the operations it started.
+	CapabilityServerLifecycle = "server-lifecycle"
 )
 
 // CapabilityOffer describes one protocol family the runtime can speak. The

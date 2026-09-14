@@ -10,7 +10,6 @@ import (
 	deploymentattemptsctrl "miren.dev/runtime/controllers/deploymentattempts"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/entitysync"
-	"miren.dev/runtime/pkg/labs"
 )
 
 // deploymentAttemptMigrationBoot owns the controller's background lifecycle.
@@ -45,36 +44,29 @@ func (b *deploymentAttemptMigrationBoot) start(ctx context.Context, foundation f
 	}
 	b.controller = controller
 	diagnostics := b.diagnostics
-	if labs.AppVisibility() {
-		diagnostics.SetPreparation("deployment-migration", "waiting for the first clean migration and reconciliation sweep")
-		b.controller.SetProgressReporter(func(progress deploymentattemptsctrl.Progress) {
-			if progress.Ready {
-				return
-			}
-			state := "deployment-migration"
-			detail := fmt.Sprintf("phase %s", progress.Phase)
-			if progress.Cursor != "" {
-				detail += ", cursor " + progress.Cursor
-			}
-			if progress.PassFailed {
-				detail += ", current sweep has failures"
-			}
-			if progress.LastError != "" {
-				state = "deployment-migration-retrying"
-				detail += ": " + progress.LastError
-				diagnostics.SetPreparationFailure(state, detail)
-				return
-			}
-			diagnostics.SetPreparation(state, detail)
-		})
-	}
+	diagnostics.SetPreparation("deployment-migration", "waiting for the first clean migration and reconciliation sweep")
+	b.controller.SetProgressReporter(func(progress deploymentattemptsctrl.Progress) {
+		if progress.Ready {
+			return
+		}
+		state := "deployment-migration"
+		detail := fmt.Sprintf("phase %s", progress.Phase)
+		if progress.Cursor != "" {
+			detail += ", cursor " + progress.Cursor
+		}
+		if progress.PassFailed {
+			detail += ", current sweep has failures"
+		}
+		if progress.LastError != "" {
+			state = "deployment-migration-retrying"
+			detail += ": " + progress.LastError
+			diagnostics.SetPreparationFailure(state, detail)
+			return
+		}
+		diagnostics.SetPreparation(state, detail)
+	})
 	b.controller.Start(ctx)
 	ready := make(chan struct{})
-	if !labs.AppVisibility() {
-		diagnostics.SetPreparation("disabled", "app visibility is disabled")
-		close(ready)
-		return deploymentAttemptMigrationBootOutput{entitySyncReady: ready}, nil
-	}
 	go b.prepareEntitySync(ctx, foundation, ready)
 	return deploymentAttemptMigrationBootOutput{entitySyncReady: ready}, nil
 }

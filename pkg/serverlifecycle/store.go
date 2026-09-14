@@ -66,6 +66,53 @@ func (s *Store) Create(op *Operation) error {
 	return s.write(op)
 }
 
+// CreateOrGet records op unless a record with its id already exists, in
+// which case that record is returned instead and created is false. The
+// lookup and the write share the directory lock, so two callers carrying one
+// id cannot both miss and cannot both create; exactly one of them creates.
+// Like Create, it refuses to create while another operation is running.
+func (s *Store) CreateOrGet(op *Operation) (existing *Operation, created bool, err error) {
+	if err := op.validate(); err != nil {
+		return nil, false, err
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
+	existing, err = s.Get(op.ID)
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, false, err
+	}
+	if active, err := s.Active(); err != nil {
+		return nil, false, err
+	} else if active != nil {
+		return nil, false, fmt.Errorf("%w: %s (%s, %s)", ErrBusy, active.ID, active.Action, active.Phase)
+	}
+	if err := s.write(op); err != nil {
+		return nil, false, err
+	}
+	return op, true, nil
+}
+
+// Remove deletes a record. It exists for one case: a record that was
+// created but whose executor never started and whose failure could not be
+// written, which would otherwise hold the busy slot forever.
+func (s *Store) Remove(id string) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func (s *Store) Get(id string) (*Operation, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {

@@ -50,9 +50,8 @@ type Status struct {
 
 // Diagnostics collects transient state for the local debug interface.
 type Diagnostics struct {
-	mu                 sync.RWMutex
-	status             Status
-	capabilityDisabled string
+	mu     sync.RWMutex
+	status Status
 }
 
 func NewDiagnostics(schemaDigest string) *Diagnostics {
@@ -97,11 +96,7 @@ func (d *Diagnostics) ObserveUplink(status uplink.Status) {
 	if status.Session == nil {
 		d.status.SessionID = ""
 		d.status.HandshakeVersion = 0
-		if d.capabilityDisabled != "" {
-			d.status.CapabilityState = "disabled"
-			d.status.Mode = "waiting"
-			d.status.WaitReason = d.capabilityDisabled
-		} else if status.State != "connected" {
+		if status.State != "connected" {
 			d.status.CapabilityState = "not-negotiated"
 			d.status.CapabilityVersion = 0
 			d.status.Mode = "waiting"
@@ -111,13 +106,6 @@ func (d *Diagnostics) ObserveUplink(status uplink.Status) {
 	}
 	d.status.SessionID = status.Session.ID
 	d.status.HandshakeVersion = status.Session.HandshakeVersion
-	if d.capabilityDisabled != "" {
-		d.status.CapabilityState = "disabled"
-		d.status.CapabilityVersion = 0
-		d.status.Mode = "waiting"
-		d.status.WaitReason = d.capabilityDisabled
-		return
-	}
 	selection, selected := status.Session.Capability(uplink.CapabilityEntitySync)
 	if selected {
 		d.status.CapabilityState = "selected"
@@ -134,15 +122,6 @@ func (d *Diagnostics) SetDisabled(reason string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.status.UplinkState = "disabled"
-	d.status.CapabilityState = "disabled"
-	d.status.Mode = "waiting"
-	d.status.WaitReason = reason
-}
-
-func (d *Diagnostics) SetCapabilityDisabled(reason string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.capabilityDisabled = reason
 	d.status.CapabilityState = "disabled"
 	d.status.Mode = "waiting"
 	d.status.WaitReason = reason

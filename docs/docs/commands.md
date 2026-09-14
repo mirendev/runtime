@@ -86,7 +86,9 @@ Complete reference for all `miren` CLI commands.
 | [`miren cluster export-address`](./command/cluster-export-address.md) | Export cluster address with TLS fingerprint for MIREN_CLUSTER |
 | [`miren cluster list`](./command/cluster-list.md) | List all configured clusters |
 | [`miren cluster remove`](./command/cluster-remove.md) | Remove a cluster from the configuration |
+| [`miren cluster restart`](./command/cluster-restart.md) | Restart the active cluster's server and wait for it to report ready |
 | [`miren cluster switch`](./command/cluster-switch.md) | Switch to a different cluster |
+| [`miren cluster upgrade`](./command/cluster-upgrade.md) | Upgrade the active cluster's server and wait for it to report ready |
 
 ## config
 
