@@ -836,7 +836,7 @@ func (s *State) Shutdown(ctx context.Context) error {
 	if s.localPath != "" {
 		_ = os.Remove(s.localPath)
 	}
-	_ = s.closeTransport()
+	_ = s.closeTransport(ctx)
 
 	return errors.Join(errs...)
 }
@@ -887,7 +887,7 @@ func (s *State) Close() error {
 		_ = s.restLn.Close()
 	}
 
-	return s.closeTransport()
+	return s.closeTransport(context.Background())
 }
 
 func (s *State) trackOutboundConn(conn *quic.Conn) {
@@ -985,8 +985,10 @@ func (s *State) outboundDialsIdleLocked() chan struct{} {
 // listeners share, once no dial is still in flight. Any dial that completes
 // after closeOutboundConnections is closed on the spot by trackOutboundConn,
 // so the wait is bounded by the handshake timeout and is normally nothing:
-// the socket only ever stays open for a dial that was already under way.
-func (s *State) closeTransport() error {
+// the socket only ever stays open for a dial that was already under way. A
+// caller with a shutdown deadline of its own passes it as ctx, so the wait
+// never outlives the drain it belongs to.
+func (s *State) closeTransport(ctx context.Context) error {
 	if s.transport == nil || s.transport.Conn == nil {
 		return nil
 	}
@@ -995,8 +997,10 @@ func (s *State) closeTransport() error {
 	s.outboundMu.Unlock()
 	select {
 	case <-idle:
+	case <-ctx.Done():
+		s.log.Warn("closing transport with a dial still in flight", "reason", context.Cause(ctx))
 	case <-time.After(remoteHandshakeTimeout + time.Second):
-		s.log.Warn("closing transport with a dial still in flight")
+		s.log.Warn("closing transport with a dial still in flight", "reason", "handshake timeout elapsed")
 	}
 	return s.transport.Conn.Close()
 }
