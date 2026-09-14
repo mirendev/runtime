@@ -17,7 +17,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 	Force          bool   `short:"f" long:"force" description:"Force upgrade even if already up to date"`
 	Release        bool   `short:"r" long:"release" description:"Upgrade full release package (not just base)"`
 	SkipHealth     bool   `long:"skip-health" description:"Deprecated: readiness is always verified"`
-	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
+	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure (also skips the pre-upgrade etcd snapshot)"`
 	HealthTimeout  int    `long:"health-timeout" default:"0" description:"Seconds to wait for the restarted server to report ready"`
 }) error {
 	ctx.Warn("'miren server upgrade' is deprecated; 'sudo miren upgrade' now upgrades the server and the CLI together.")

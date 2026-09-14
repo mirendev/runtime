@@ -100,6 +100,7 @@ func (s *startup) addComponents() error {
 		s.pprof.component,
 		s.exitReport.component,
 		s.containerd.Component,
+		s.dataRestore.component,
 		s.etcd.component,
 		s.victoriaLogs.component,
 		s.victoriaMetrics.component,

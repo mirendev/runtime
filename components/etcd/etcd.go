@@ -85,6 +85,34 @@ type EtcdConfig struct {
 	QuotaBackendBytes int64
 }
 
+func (c *EtcdConfig) applyDefaults() {
+	if c.Name == "" {
+		c.Name = "etcd1"
+	}
+	if c.DataDir == "" {
+		c.DataDir = etcdDataDir
+	}
+	if c.ClientPort == 0 {
+		c.ClientPort = defaultEtcdPort
+	}
+	if c.HTTPClientPort == 0 {
+		c.HTTPClientPort = defaultEtcdHTTPPort
+	}
+	if c.PeerPort == 0 {
+		c.PeerPort = defaultPeerPort
+	}
+	if c.ClusterState == "" {
+		c.ClusterState = "new"
+	}
+}
+
+// advertisePeerURL is how the single member names itself. A restored data
+// directory must be built with the same value or etcd refuses to start on it,
+// so it is shared between etcdArgs and restoreArgs.
+func (c EtcdConfig) advertisePeerURL() string {
+	return etcdURL("http", "localhost", c.PeerPort)
+}
+
 type EtcdComponent struct {
 	*base.BaseComponent
 
@@ -212,24 +240,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 
 	// Resolve defaults before inspecting an existing container. The restart path
 	// uses these ports for its readiness check just like the create path does.
-	if config.Name == "" {
-		config.Name = "etcd1"
-	}
-	if config.DataDir == "" {
-		config.DataDir = etcdDataDir
-	}
-	if config.ClientPort == 0 {
-		config.ClientPort = defaultEtcdPort
-	}
-	if config.HTTPClientPort == 0 {
-		config.HTTPClientPort = defaultEtcdHTTPPort
-	}
-	if config.PeerPort == 0 {
-		config.PeerPort = defaultPeerPort
-	}
-	if config.ClusterState == "" {
-		config.ClusterState = "new"
-	}
+	config.applyDefaults()
 
 	ctx = namespaces.WithNamespace(ctx, e.Namespace)
 
@@ -509,7 +520,7 @@ func etcdArgs(config EtcdConfig, tuning etcdTuning) []string {
 	// Advertised URLs name how to reach this member rather than what to bind,
 	// so they use localhost regardless of the bind address above.
 	advertiseClientURL := etcdURL(clientScheme, "localhost", config.ClientPort)
-	advertisePeerURL := etcdURL("http", "localhost", config.PeerPort)
+	advertisePeerURL := config.advertisePeerURL()
 
 	args := []string{
 		"/usr/local/bin/etcd",

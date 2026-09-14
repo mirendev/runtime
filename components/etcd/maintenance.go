@@ -134,20 +134,28 @@ func (e *EtcdComponent) connectMaintenanceClient(ctx context.Context) (*clientv3
 }
 
 func (e *EtcdComponent) newMaintenanceClient(endpoint string) (*clientv3.Client, error) {
+	cfg, err := clientConfig(endpoint, e.config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	return clientv3.New(cfg)
+}
+
+// clientConfig dials one endpoint with the server's own certificate as the
+// client identity, which the CA trusts like any other client cert.
+func clientConfig(endpoint string, tls *TLSConfig) (clientv3.Config, error) {
 	cfg := clientv3.Config{
 		Endpoints:   []string{endpoint},
 		DialTimeout: 5 * time.Second,
 	}
-
-	if e.config.TLS != nil {
-		tlsCfg, err := buildMaintenanceTLSConfig(e.config.TLS.CertsDir)
+	if tls != nil {
+		tlsCfg, err := buildMaintenanceTLSConfig(tls.CertsDir)
 		if err != nil {
-			return nil, fmt.Errorf("building TLS config: %w", err)
+			return cfg, fmt.Errorf("building TLS config: %w", err)
 		}
 		cfg.TLS = tlsCfg
 	}
-
-	return clientv3.New(cfg)
+	return cfg, nil
 }
 
 // waitForHealthy proves that etcd can answer its API, not just that its TCP

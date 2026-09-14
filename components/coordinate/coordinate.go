@@ -140,6 +140,12 @@ type EtcdTLSSetupResult struct {
 // The CA must already exist (created by the coordinator's LoadCA).
 // Additional DNS names and IPs are included in the server certificate SANs
 // so that distributed runners can connect to etcd over the network.
+// EtcdCertsDir is where SetupEtcdTLS keeps the etcd CA and server cert, for
+// callers outside the server process that need to dial etcd.
+func EtcdCertsDir(dataPath string) string {
+	return filepath.Join(dataPath, "etcd-certs")
+}
+
 func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, extraIPs []net.IP) (*EtcdTLSSetupResult, error) {
 	certPath := filepath.Join(dataPath, "server", "ca.crt")
 	keyPath := filepath.Join(dataPath, "server", "ca.key")
@@ -162,7 +168,7 @@ func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, ext
 	}
 
 	// Create etcd certs directory
-	certsDir := filepath.Join(dataPath, "etcd-certs")
+	certsDir := EtcdCertsDir(dataPath)
 	if err := os.MkdirAll(certsDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create etcd certs directory: %w", err)
 	}

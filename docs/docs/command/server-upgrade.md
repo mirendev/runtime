@@ -20,7 +20,7 @@ miren server upgrade [flags]
 - `--check, -c` — Check for available updates only
 - `--force, -f` — Force upgrade even if already up to date
 - `--health-timeout` — Seconds to wait for the restarted server to report ready (default: `0`)
-- `--no-auto-rollback` — Disable automatic rollback on failure
+- `--no-auto-rollback` — Disable automatic rollback on failure (also skips the pre-upgrade etcd snapshot)
 - `--release, -r` — Upgrade full release package (not just base)
 - `--skip-health` — Deprecated: readiness is always verified
 - `--version, -V` — Specific version to upgrade to (e.g., v0.2.0)

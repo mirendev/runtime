@@ -42,11 +42,26 @@ func etcdInputs(options StartOptions) etcdBootInputs {
 	}
 }
 
-func newEtcdBoot(inputs etcdBootInputs, ipDiscovery boot.Output[ipDiscoveryBootOutput], containerd boot.Output[containerdBootOutput], observability boot.Output[observabilityBootOutput]) *etcdBoot {
+// embeddedEtcdConfig is the member identity and ports the embedded server
+// runs with. A restore builds its data directory for the same identity.
+func embeddedEtcdConfig(config serverconfig.EtcdConfig) etcd.EtcdConfig {
+	return etcd.EtcdConfig{
+		Name:              "miren-etcd",
+		ClientPort:        config.GetClientPort(),
+		HTTPClientPort:    config.GetHTTPClientPort(),
+		PeerPort:          config.GetPeerPort(),
+		ClusterState:      "new",
+		QuotaBackendBytes: int64(config.GetQuotaBackendBytes()),
+	}
+}
+
+func newEtcdBoot(inputs etcdBootInputs, ipDiscovery boot.Output[ipDiscoveryBootOutput], containerd boot.Output[containerdBootOutput], observability boot.Output[observabilityBootOutput], dataRestore *boot.Component) *etcdBoot {
 	b := &etcdBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
 	if inputs.config.GetStartEmbedded() {
-		b.component, b.output = boot.Provide3("etcd", ipDiscovery, containerd, observability, b.startEmbedded, stop)
+		// The order-only edge on dataRestore is what makes a rollback's
+		// data restore land before etcd opens the data directory.
+		b.component, b.output = boot.Provide3("etcd", ipDiscovery, containerd, observability, b.startEmbedded, stop, boot.DependsOn(dataRestore))
 	} else {
 		b.component, b.output = boot.Provide0("etcd", b.startExternal, stop)
 	}
@@ -79,14 +94,7 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 	log.Info("starting embedded etcd server", "client-port", b.inputs.config.GetClientPort(), "peer-port", b.inputs.config.GetPeerPort())
 	b.server = etcd.NewEtcdComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	b.server.SetMetricsWriter(observability.operationalMetrics)
-	config := etcd.EtcdConfig{
-		Name:              "miren-etcd",
-		ClientPort:        b.inputs.config.GetClientPort(),
-		HTTPClientPort:    b.inputs.config.GetHTTPClientPort(),
-		PeerPort:          b.inputs.config.GetPeerPort(),
-		ClusterState:      "new",
-		QuotaBackendBytes: int64(b.inputs.config.GetQuotaBackendBytes()),
-	}
+	config := embeddedEtcdConfig(b.inputs.config)
 
 	log.Info("setting up etcd mTLS")
 	if _, err := coordinate.EnsureCA(log, b.inputs.dataPath); err != nil {

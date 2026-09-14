@@ -1114,6 +1114,12 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 	d.Dispatch("server operations run", Infer("server operations run", "Execute or resume an operation in the foreground (normally launched by miren upgrade)", ServerOperationsRun))
+	d.Dispatch("server operations abandon", Infer("server operations abandon", "Give up on an unfinished operation, including a data restore that keeps the server from starting", ServerOperationsAbandon,
+		WithExample(mflags.Example{
+			Name: "Abandon an operation whose executor died",
+			Body: "sudo miren server operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
 	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'sudo miren upgrade')", ServerUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade to the latest version",

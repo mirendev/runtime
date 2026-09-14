@@ -74,9 +74,11 @@ docker exec -it miren-systemd-test /hack/test-oom-restart.sh
 
 `./hack/systemd/upgrade-e2e.sh` runs the whole restart/upgrade/rollback path
 against this container using builds of the current checkout and a local asset
-server, so nothing has to be published first. It takes several minutes and
-needs the iso dev environment for the builds. Set `WORK=/some/dir` to keep the
-fixtures between runs.
+server, so nothing has to be published first. The rollback case upgrades to a
+build that writes to etcd and then fails readiness, and checks that the
+rollback brings back the pre-upgrade etcd data along with the binary. It
+takes several minutes and needs the iso dev environment for the builds. Set
+`WORK=/some/dir` to keep the fixtures between runs.
 
 ## Testing Upgrades
 
