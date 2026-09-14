@@ -926,16 +926,30 @@ func (s *State) closeOutboundConnections() {
 	}
 }
 
+// errStateClosed is what a dial gets once the State has begun closing its
+// transport. It shares a message with the peer-facing close reason so the two
+// ends of the same shutdown read the same way.
+var errStateClosed = errors.New("rpc: state shutting down")
+
 // beginOutboundDial registers a dial through the shared transport and returns
 // the function that settles it. A dial is settled once its connection has been
 // handed to trackOutboundConn or closed, or the dial has failed; until then
 // closeTransport waits for it. A nil State (a client with no transport of its
 // own) has nothing to wait for.
-func (s *State) beginOutboundDial() (settle func()) {
+//
+// A dial that starts after closeOutboundConnections is refused with
+// errStateClosed. Its connection would be closed the instant it was tracked
+// anyway, and the socket may already be gone by then, in which case the dial
+// could only leave the same silent half-open peer this wait exists to stop.
+func (s *State) beginOutboundDial() (settle func(), err error) {
 	if s == nil {
-		return func() {}
+		return func() {}, nil
 	}
 	s.outboundMu.Lock()
+	if s.outboundClosed {
+		s.outboundMu.Unlock()
+		return nil, errStateClosed
+	}
 	s.outboundDialing++
 	s.outboundMu.Unlock()
 
@@ -947,12 +961,10 @@ func (s *State) beginOutboundDial() (settle func()) {
 			s.outboundDialing--
 			s.signalOutboundDialsIdleLocked()
 		})
-	}
+	}, nil
 }
 
-// Caller holds outboundMu. A dial that starts after the socket has already
-// closed settles against an idle channel that is closed for good, which is
-// what the flag guards.
+// Caller holds outboundMu.
 func (s *State) signalOutboundDialsIdleLocked() {
 	if s.outboundClosed && s.outboundDialing == 0 && !s.outboundDialsIdleClosed {
 		s.outboundDialsIdleClosed = true

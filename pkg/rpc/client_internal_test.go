@@ -643,3 +643,23 @@ func TestStateCloseWaitsForDialInFlight(t *testing.T) {
 		t.Fatal("server side of a dial that raced Close stayed open")
 	}
 }
+
+// A dial that starts after the State has begun closing is refused rather than
+// counted: its connection would be closed the moment it was tracked, and the
+// socket may already be gone by then.
+func TestStateRefusesDialsAfterClose(t *testing.T) {
+	r := require.New(t)
+	state, err := NewState(t.Context(), WithSkipVerify)
+	r.NoError(err)
+	r.NoError(state.Close())
+
+	client := &NetworkClient{
+		State:     state,
+		transport: state.transport,
+		tlsCfg:    state.clientTlsCfg.Clone(),
+		remote:    "127.0.0.1:1",
+	}
+	client.setupTransport()
+	_, _, err = client.ws.Dial(t.Context(), "https://"+client.remote+"/", nil)
+	r.ErrorIs(err, errStateClosed)
+}

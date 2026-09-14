@@ -148,7 +148,10 @@ func (c *NetworkClient) setupTransport() {
 
 		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
-		settle := c.State.beginOutboundDial()
+		settle, err := c.State.beginOutboundDial()
+		if err != nil {
+			return nil, err
+		}
 		conn, err := dialQUIC(ctx, c.transport, uaddr, tlsCfg, cfg, early, settle)
 		if err != nil {
 			return nil, err
