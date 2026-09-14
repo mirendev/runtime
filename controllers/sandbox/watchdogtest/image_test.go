@@ -321,6 +321,71 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err, "in-use image should still exist after GC")
 	})
 
+	t.Run("deletes orphaned images once past the grace period", func(t *testing.T) {
+		r := require.New(t)
+
+		// A miren-managed image whose artifact entity no longer exists, as
+		// left behind when an app is deleted.
+		orphanImage := "cluster.local:5000/test-app-deleted:" + idgen.GenNS("a")
+		img, err := cc.GetImage(ctx, imagerefs.AlpineDefault)
+		r.NoError(err)
+		_, err = cc.ImageService().Create(ctx, images.Image{
+			Name:   orphanImage,
+			Target: img.Target(),
+		})
+		r.NoError(err)
+
+		// containerd stamps CreatedAt itself, so age the image past a short
+		// grace period rather than trying to back-date it.
+		cfg := sandbox.DefaultImageGCConfig()
+		cfg.OrphanGracePeriod = 100 * time.Millisecond
+		time.Sleep(2 * cfg.OrphanGracePeriod)
+		watchdog := &sandbox.ImageWatchdog{
+			Log:       slog.Default(),
+			CC:        cc,
+			EAC:       eac,
+			Namespace: ii.Namespace,
+			DataPath:  "/tmp",
+			Config:    cfg,
+		}
+
+		result, err := watchdog.RunGC(ctx)
+		r.NoError(err)
+
+		r.Contains(result.DeletedImages, orphanImage, "orphaned image should be deleted")
+		_, err = cc.GetImage(ctx, orphanImage)
+		r.Error(err, "orphaned image should not exist after GC")
+	})
+
+	t.Run("keeps orphaned images inside the grace period", func(t *testing.T) {
+		r := require.New(t)
+
+		orphanImage := "cluster.local:5000/test-app-fresh:" + idgen.GenNS("a")
+		img, err := cc.GetImage(ctx, imagerefs.AlpineDefault)
+		r.NoError(err)
+		_, err = cc.ImageService().Create(ctx, images.Image{
+			Name:   orphanImage,
+			Target: img.Target(),
+		})
+		r.NoError(err)
+
+		watchdog := &sandbox.ImageWatchdog{
+			Log:       slog.Default(),
+			CC:        cc,
+			EAC:       eac,
+			Namespace: ii.Namespace,
+			DataPath:  "/tmp",
+			Config:    sandbox.DefaultImageGCConfig(),
+		}
+
+		result, err := watchdog.RunGC(ctx)
+		r.NoError(err)
+
+		r.NotContains(result.DeletedImages, orphanImage, "fresh orphaned image should not be deleted")
+		_, err = cc.GetImage(ctx, orphanImage)
+		r.NoError(err, "fresh orphaned image should still exist after GC")
+	})
+
 	t.Run("ParseArtifactID extracts artifact ID correctly", func(t *testing.T) {
 		r := require.New(t)
 

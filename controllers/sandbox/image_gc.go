@@ -25,6 +25,9 @@ type ImageGCConfig struct {
 	PressureCheckInterval time.Duration
 	// DiskPressureThreshold is the disk usage percentage that triggers immediate GC (default: 80%)
 	DiskPressureThreshold float64
+	// OrphanGracePeriod is how old a miren-managed image must be before it is
+	// reclaimed when no Artifact entity exists for it (default: 24h)
+	OrphanGracePeriod time.Duration
 }
 
 // DefaultImageGCConfig returns the default configuration for image GC.
@@ -33,6 +36,7 @@ func DefaultImageGCConfig() ImageGCConfig {
 		ScheduledGCInterval:   168 * time.Hour, // Weekly
 		PressureCheckInterval: 1 * time.Hour,
 		DiskPressureThreshold: 80.0,
+		OrphanGracePeriod:     24 * time.Hour,
 	}
 }
 
@@ -50,9 +54,13 @@ type ImageGCResult struct {
 
 // ImageWatchdog periodically garbage collects container images from containerd.
 // It uses Artifact entity status to determine which images to remove:
-// - Images with no corresponding Artifact are kept (infrastructure images, etc.)
-// - Images with Artifact status "active" or empty are kept
-// - Images with Artifact status "archived" are deleted
+//   - Images that are not miren-managed (infrastructure images, etc.) are kept
+//   - Images with Artifact status "active" or empty are kept
+//   - Images with Artifact status "archived" are deleted
+//   - Miren-managed images with no Artifact entity are deleted once they are
+//     older than OrphanGracePeriod. The Artifact is created when the manifest
+//     is pushed, before containerd ever pulls the image, so a missing Artifact
+//     means the app was deleted out from under it.
 type ImageWatchdog struct {
 	Log *slog.Logger
 	CC  *containerd.Client
@@ -212,6 +220,8 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		return result, fmt.Errorf("failed to collect artifact statuses: %w", err)
 	}
 
+	now := time.Now()
+
 	// Process each image
 	for _, img := range images {
 		imgName := img.Name()
@@ -230,22 +240,24 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 			continue
 		}
 
-		// Look up artifact status
 		status, found := artifactStatuses[artifactID]
-		if !found {
-			// No artifact entity found - keep the image (safe default)
+		switch {
+		case !found:
+			// The artifact is gone (app deleted or renamed). Give a fresh image
+			// a grace period before reclaiming it so one bad entity read can't
+			// take down a deploy that is still in flight.
+			if now.Sub(img.Metadata().CreatedAt) < w.Config.OrphanGracePeriod {
+				result.RetainedImages++
+				continue
+			}
+			w.Log.Debug("deleting orphaned image", "image", imgName, "artifact", artifactID)
+		case status == core_v1alpha.ARCHIVED:
+			w.Log.Debug("deleting archived image", "image", imgName, "artifact", artifactID)
+		default:
 			result.RetainedImages++
 			continue
 		}
 
-		// Only delete if artifact is explicitly archived
-		if status != core_v1alpha.ARCHIVED {
-			result.RetainedImages++
-			continue
-		}
-
-		// Artifact is archived - delete the image
-		w.Log.Debug("deleting archived image", "image", imgName, "artifact", artifactID)
 		err := w.CC.ImageService().Delete(gcCtx, imgName)
 		if err != nil {
 			result.FailedImages[imgName] = err
