@@ -1,12 +1,12 @@
 ---
 title: "miren upgrade"
 sidebar_label: "upgrade"
-description: "Upgrade miren CLI to latest version"
+description: "Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)"
 ---
 
 # miren upgrade
 
-Upgrade miren CLI to latest version
+Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)
 
 ## Usage
 
@@ -18,8 +18,8 @@ miren upgrade [flags]
 
 - `--channel` — Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)
 - `--check, -c` — Check for available updates only
-- `--force, -f` — Force upgrade even if already up to date or server running
-- `--user, -u` — Install to user directory (~/.miren/release/miren) instead of system location
+- `--force, -f` — Upgrade even if already up to date; without root, upgrade only the CLI even though a server is running
+- `--user, -u` — Install the CLI to ~/.miren/release/miren instead of the system location
 - `--version, -V` — Specific version to upgrade to (e.g., v0.2.0)
 
 ## Global Options
@@ -30,10 +30,16 @@ miren upgrade [flags]
 
 ## Examples
 
-**Upgrade to latest:**
+**Upgrade the CLI on a client machine:**
 
 ```bash
 miren upgrade
+```
+
+**Upgrade the server and CLI on a server host:**
+
+```bash
+sudo miren upgrade
 ```
 
 **Check for updates without installing:**
