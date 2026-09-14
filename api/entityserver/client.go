@@ -584,10 +584,17 @@ func (l *Session) Close() error {
 	return nil
 }
 
-// Revoke revokes the lease
+// Revoke revokes the lease. A session that has already been revoked, by Close
+// or by the keepalive loop's own exit, has nothing left to revoke: the two
+// race during a shutdown, and the loser must not spend an RPC on an empty id
+// while the transport underneath it is being closed.
 func (l *Session) Revoke(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	if l.id == "" {
+		return nil
+	}
 
 	_, err := l.c.eac.RevokeSession(ctx, l.id)
 	if err != nil {

@@ -155,6 +155,17 @@ type State struct {
 	outboundMu     sync.Mutex
 	outboundConns  map[*quic.Conn]struct{}
 	outboundClosed bool
+
+	// outboundDialing counts dials through the shared transport that have not
+	// yet reached trackOutboundConn. Closing the UDP socket while one is in
+	// flight destroys its connection without a CONNECTION_CLOSE, and if the
+	// server had already finished the handshake it is left holding a dead
+	// peer until its idle timeout, which is longer than any drain budget. So
+	// the socket waits for outboundDialsIdle, which closes once every dial in
+	// flight at close time has been tracked (and so closed) or failed.
+	outboundDialing         int
+	outboundDialsIdle       chan struct{}
+	outboundDialsIdleClosed bool
 }
 
 // contactAddr returns the address embedded in capabilities this server mints,
@@ -825,9 +836,7 @@ func (s *State) Shutdown(ctx context.Context) error {
 	if s.localPath != "" {
 		_ = os.Remove(s.localPath)
 	}
-	if s.transport != nil && s.transport.Conn != nil {
-		_ = s.transport.Conn.Close()
-	}
+	_ = s.closeTransport()
 
 	return errors.Join(errs...)
 }
@@ -878,7 +887,7 @@ func (s *State) Close() error {
 		_ = s.restLn.Close()
 	}
 
-	return s.transport.Conn.Close()
+	return s.closeTransport()
 }
 
 func (s *State) trackOutboundConn(conn *quic.Conn) {
@@ -905,6 +914,7 @@ func (s *State) trackOutboundConn(conn *quic.Conn) {
 func (s *State) closeOutboundConnections() {
 	s.outboundMu.Lock()
 	s.outboundClosed = true
+	s.signalOutboundDialsIdleLocked()
 	conns := make([]*quic.Conn, 0, len(s.outboundConns))
 	for conn := range s.outboundConns {
 		conns = append(conns, conn)
@@ -914,6 +924,69 @@ func (s *State) closeOutboundConnections() {
 	for _, conn := range conns {
 		_ = conn.CloseWithError(0, "state shutting down")
 	}
+}
+
+// beginOutboundDial registers a dial through the shared transport and returns
+// the function that settles it. A dial is settled once its connection has been
+// handed to trackOutboundConn or closed, or the dial has failed; until then
+// closeTransport waits for it. A nil State (a client with no transport of its
+// own) has nothing to wait for.
+func (s *State) beginOutboundDial() (settle func()) {
+	if s == nil {
+		return func() {}
+	}
+	s.outboundMu.Lock()
+	s.outboundDialing++
+	s.outboundMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.outboundMu.Lock()
+			defer s.outboundMu.Unlock()
+			s.outboundDialing--
+			s.signalOutboundDialsIdleLocked()
+		})
+	}
+}
+
+// Caller holds outboundMu. A dial that starts after the socket has already
+// closed settles against an idle channel that is closed for good, which is
+// what the flag guards.
+func (s *State) signalOutboundDialsIdleLocked() {
+	if s.outboundClosed && s.outboundDialing == 0 && !s.outboundDialsIdleClosed {
+		s.outboundDialsIdleClosed = true
+		close(s.outboundDialsIdleLocked())
+	}
+}
+
+// Caller holds outboundMu. Lazily made so a State assembled by hand in a test
+// waits the same way one built by NewState does.
+func (s *State) outboundDialsIdleLocked() chan struct{} {
+	if s.outboundDialsIdle == nil {
+		s.outboundDialsIdle = make(chan struct{})
+	}
+	return s.outboundDialsIdle
+}
+
+// closeTransport closes the UDP socket every outbound connection and the QUIC
+// listeners share, once no dial is still in flight. Any dial that completes
+// after closeOutboundConnections is closed on the spot by trackOutboundConn,
+// so the wait is bounded by the handshake timeout and is normally nothing:
+// the socket only ever stays open for a dial that was already under way.
+func (s *State) closeTransport() error {
+	if s.transport == nil || s.transport.Conn == nil {
+		return nil
+	}
+	s.outboundMu.Lock()
+	idle := s.outboundDialsIdleLocked()
+	s.outboundMu.Unlock()
+	select {
+	case <-idle:
+	case <-time.After(remoteHandshakeTimeout + time.Second):
+		s.log.Warn("closing transport with a dial still in flight")
+	}
+	return s.transport.Conn.Close()
 }
 
 // reportStalledDrain records a graceful shutdown that missed its deadline and

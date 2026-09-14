@@ -544,3 +544,102 @@ func TestQUICDialCancelledMidHandshakeClosesServerSide(t *testing.T) {
 		t.Fatal("server side of a cancelled dial stayed open")
 	}
 }
+
+// A State that closes its UDP socket while one of its dials is mid-handshake
+// destroys that connection without a CONNECTION_CLOSE, and a server that had
+// already finished the handshake holds the dead peer until its idle timeout.
+// Close has to wait for the dial to settle instead, so the connection is
+// tracked and closed properly. This is the runner-side half of a coordinator
+// drain that stalled on "1 still open" with no client in sight (MIR-1834).
+func TestStateCloseWaitsForDialInFlight(t *testing.T) {
+	r := require.New(t)
+
+	packetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	r.NoError(err)
+	t.Cleanup(func() { _ = packetConn.Close() })
+	ln, err := quic.ListenEarly(packetConn, testServerTLSConfig(t), &quic.Config{
+		EnableDatagrams:                  true,
+		EnableStreamResetPartialDelivery: true,
+		// Longer than the assertion window, so the server can only let go
+		// because the client told it to.
+		HandshakeIdleTimeout: 30 * time.Second,
+		MaxIdleTimeout:       30 * time.Second,
+	})
+	r.NoError(err)
+	t.Cleanup(func() { _ = ln.Close() })
+	accepted := make(chan *quic.Conn, 1)
+	go func() {
+		conn, err := ln.Accept(t.Context())
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	state, err := NewState(t.Context(), WithSkipVerify)
+	r.NoError(err)
+	// The client is assembled the way State.Connect does it, minus the
+	// capability lookup the quiet server would never answer.
+	client := &NetworkClient{
+		State:     state,
+		transport: state.transport,
+		tlsCfg:    state.clientTlsCfg.Clone(),
+		remote:    packetConn.LocalAddr().String(),
+	}
+	client.setupTransport()
+
+	verifying := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseClient := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseClient)
+	client.tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
+		close(verifying)
+		<-release
+		return nil
+	}
+
+	dialed := make(chan error, 1)
+	go func() {
+		_, _, err := client.ws.Dial(t.Context(), "https://"+client.remote+"/", nil)
+		dialed <- err
+	}()
+
+	select {
+	case <-verifying:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client never reached certificate verification")
+	}
+	var serverConn *quic.Conn
+	select {
+	case serverConn = <-accepted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not accept the connection before the handshake finished")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- state.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close returned with a dial still in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+	r.NoError(serverConn.Context().Err(), "server side closed before the client could have told it anything")
+
+	releaseClient()
+	select {
+	case err := <-closed:
+		r.NoError(err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return once the dial settled")
+	}
+	select {
+	case <-dialed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("dial did not return")
+	}
+	select {
+	case <-serverConn.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("server side of a dial that raced Close stayed open")
+	}
+}

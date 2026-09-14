@@ -112,9 +112,11 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	cfg, err := coord.LocalConfig()
 	r.NoError(err)
 
-	// Create RPC client to interact with coordinator
+	// Create RPC client to interact with coordinator. It is closed before the
+	// coordinator drains so its connections are not what the drain waits on.
 	rs, err := cfg.State(ctx)
 	require.NoError(t, err)
+	defer func() { _ = rs.Close() }()
 
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
