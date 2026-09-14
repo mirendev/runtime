@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"go4.org/netipx"
+	_ "modernc.org/sqlite"
 )
 
 type NetDB struct {
@@ -53,7 +55,17 @@ type Subnet struct {
 }
 
 func New(path string) (*NetDB, error) {
-	db, err := sql.Open("sqlite3", path)
+	// Subnet and NetDB methods lock independently, so two connections can
+	// contend for the write lock. The busy timeout mirrors the 5s default
+	// mattn/go-sqlite3 applied before this moved to the pure-Go driver. It
+	// goes in the DSN so every pooled connection gets it, and the DSN is a
+	// file: URI so a "?" in the path is not mistaken for the query.
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving netdb path: %w", err)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: abs, RawQuery: "_pragma=busy_timeout(5000)"}).String()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open netdb database: %w", err)
 	}
