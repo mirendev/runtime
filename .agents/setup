@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+	printf '\n==> %s\n' "$1"
+}
+
+GO_VERSION="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+ISO_VERSION="v0.0.0-20260903233145-c01782a6b7e3"
+GOIMPORTS_VERSION="v0.50.0"
+MOCKGEN_VERSION="v0.6.0"
+GOLANGCI_LINT_VERSION="2.12.2"
+
+step "Installing system dependencies"
+missing_packages=()
+for package in clang llvm; do
+	if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed'; then
+		missing_packages+=("$package")
+	fi
+done
+if [[ ! -x /usr/bin/dockerd && ! -x /usr/sbin/dockerd ]]; then
+	missing_packages+=(docker.io)
+fi
+if ((${#missing_packages[@]})); then
+	sudo apt-get update
+	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
+fi
+
+step "Installing Go ${GO_VERSION}"
+if [[ "$(/usr/local/go/bin/go version 2>/dev/null || true)" != "go version go${GO_VERSION} "* ]]; then
+	case "$(uname -m)" in
+		x86_64) go_arch=amd64 ;;
+		aarch64) go_arch=arm64 ;;
+		*) printf 'Unsupported architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+	esac
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	curl --fail --location --retry 3 \
+		"https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" \
+		--output "$tmp_dir/go.tar.gz"
+	sudo rm -rf /usr/local/go
+	sudo tar -C /usr/local -xzf "$tmp_dir/go.tar.gz"
+	rm -rf "$tmp_dir"
+	trap - EXIT
+fi
+export PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
+sudo ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+sudo ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
+install_go_tool() {
+	local binary=$1 module=$2 package=$3 version=$4
+	if ! go version -m "/usr/local/bin/$binary" 2>/dev/null |
+		grep -Fq $'\tmod\t'"$module"$'\t'"$version"; then
+		sudo env GOBIN=/usr/local/bin PATH="$PATH" go install "$package@$version"
+	fi
+}
+
+step "Installing Go development tools"
+install_go_tool iso miren.dev/iso miren.dev/iso/cmd/iso "$ISO_VERSION"
+install_go_tool goimports golang.org/x/tools golang.org/x/tools/cmd/goimports "$GOIMPORTS_VERSION"
+install_go_tool mockgen go.uber.org/mock go.uber.org/mock/mockgen "$MOCKGEN_VERSION"
+
+if ! golangci-lint version 2>/dev/null | grep -Fq "$GOLANGCI_LINT_VERSION"; then
+	case "$(uname -m)" in
+		x86_64) lint_arch=amd64 ;;
+		aarch64) lint_arch=arm64 ;;
+	esac
+	tmp_dir="$(mktemp -d)"
+	trap 'rm -rf "$tmp_dir"' EXIT
+	curl --fail --location --retry 3 \
+		"https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${lint_arch}.tar.gz" \
+		--output "$tmp_dir/golangci-lint.tar.gz"
+	tar -C "$tmp_dir" -xzf "$tmp_dir/golangci-lint.tar.gz"
+	sudo install -m 0755 \
+		"$tmp_dir/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-${lint_arch}/golangci-lint" \
+		/usr/local/bin/golangci-lint
+	rm -rf "$tmp_dir"
+	trap - EXIT
+fi
+
+step "Downloading Go module dependencies"
+go mod download
+
+step "Installing documentation dependencies"
+bun install --cwd docs --frozen-lockfile
+
+step "Orb setup complete"
+go version
+iso version
+golangci-lint version

@@ -14,3 +14,6 @@ coverage.html
 
 # ISO extracted binaries
 .iso/iso-linux-*
+
+# Amp-generated portal state
+.amp/portals/
