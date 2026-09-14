@@ -98,7 +98,7 @@ If any of your environment variables reference `/miren/data/local`, Miren will a
 ## Miren Disks
 
 :::note[Backups]
-Miren Disks live on your server. Back up important data with `miren disk backup` and restore it with `miren disk restore`. Cloud backup is on the [roadmap](#roadmap-cloud-backup--sync).
+Miren Disks live on your server. Back up important data with `miren disk backup` and restore it with `miren disk restore`, from your own machine or from the server. Add `--cloud` to store the backup in Miren Cloud instead of a local file.
 :::
 
 Miren Disks provide managed persistent storage for your applications. Disks are provisioned with a specific size and filesystem, support exclusive leasing for data consistency, and persist across app restarts and redeployments.
@@ -309,7 +309,7 @@ Your server must have the mkfs tools to format the disk types.
 
 We're building toward cloud-connected storage for Miren Disks. Here's what's planned:
 
-- **Remote backup & restore** (next up): Trigger backups of your disks to Miren Cloud and restore them on any cluster. This extends the existing local backup/restore functionality to work remotely.
+- **Remote backup & restore** (shipped): `miren disk backup` and `miren disk restore` run from any machine that can reach the cluster. Add `--cloud` to store a backup in Miren Cloud as a restore point, and `--from-cloud` to restore from one.
 - **Automatic cloud sync**: Background replication of disk data to Miren Cloud, enabling seamless portability across clusters.
 
 We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
