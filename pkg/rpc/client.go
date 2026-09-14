@@ -148,11 +148,16 @@ func (c *NetworkClient) setupTransport() {
 
 		setTLSConfigServerName(tlsCfg, uaddr, addr)
 
-		conn, err := dialQUIC(ctx, c.transport, uaddr, tlsCfg, cfg, early)
+		settle, err := c.State.beginOutboundDial()
+		if err != nil {
+			return nil, err
+		}
+		conn, err := dialQUIC(ctx, c.transport, uaddr, tlsCfg, cfg, early, settle)
 		if err != nil {
 			return nil, err
 		}
 		c.trackConn(conn)
+		settle()
 		return conn, nil
 	}
 	c.htr.Dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
@@ -197,7 +202,12 @@ func (c *NetworkClient) setupTransport() {
 // CONNECTION_CLOSE so the peer can let go too. quic-go already derives the
 // connection's own context with WithoutCancel, so this changes nothing about a
 // connection that does get established.
-func dialQUIC(ctx context.Context, t *quic.Transport, addr net.Addr, tlsCfg *tls.Config, cfg *quic.Config, early bool) (*quic.Conn, error) {
+//
+// settle is called once the dial no longer needs the transport's socket: on
+// failure, or once an abandoned dial's connection has been closed. A dial that
+// succeeds is settled by the caller after it has tracked the connection, since
+// that is the moment the State can close it on the caller's behalf.
+func dialQUIC(ctx context.Context, t *quic.Transport, addr net.Addr, tlsCfg *tls.Config, cfg *quic.Config, early bool, settle func()) (*quic.Conn, error) {
 	type result struct {
 		conn *quic.Conn
 		err  error
@@ -215,9 +225,13 @@ func dialQUIC(ctx context.Context, t *quic.Transport, addr net.Addr, tlsCfg *tls
 
 	select {
 	case r := <-done:
+		if r.err != nil {
+			settle()
+		}
 		return r.conn, r.err
 	case <-ctx.Done():
 		go func() {
+			defer settle()
 			if r := <-done; r.conn != nil {
 				_ = r.conn.CloseWithError(0, "dial cancelled")
 			}

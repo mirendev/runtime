@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +68,13 @@ type countingListener struct {
 
 	accepted atomic.Int64
 	open     atomic.Int64
+
+	// peers is every accepted connection that has not closed yet, kept so a
+	// stalled drain can name who it is waiting on. The census counters above
+	// stay atomics because idle() polls them; this map is only read when the
+	// drain has already failed.
+	peersMu sync.Mutex
+	peers   map[*quic.Conn]time.Time
 }
 
 func (l *countingListener) Accept(ctx context.Context) (*quic.Conn, error) {
@@ -76,8 +85,17 @@ func (l *countingListener) Accept(ctx context.Context) (*quic.Conn, error) {
 
 	l.accepted.Add(1)
 	l.open.Add(1)
+	l.peersMu.Lock()
+	if l.peers == nil {
+		l.peers = make(map[*quic.Conn]time.Time)
+	}
+	l.peers[conn] = time.Now()
+	l.peersMu.Unlock()
 	go func() {
 		<-conn.Context().Done()
+		l.peersMu.Lock()
+		delete(l.peers, conn)
+		l.peersMu.Unlock()
 		l.open.Add(-1)
 	}()
 
@@ -90,11 +108,37 @@ func (l *countingListener) idle() bool {
 	return l.open.Load() <= 0
 }
 
+// describe renders the census, naming each connection still open by its peer
+// address, handshake state, and age. The peer address is what lets a stalled
+// drain be attributed: every client State binds its own UDP port, so the port
+// says which process, or which State within one, never let go.
 func (l *countingListener) describe() string {
 	if l == nil {
 		return "no listener"
 	}
-	return fmt.Sprintf("%d accepted, %d still open", l.accepted.Load(), l.open.Load())
+	census := fmt.Sprintf("%d accepted, %d still open", l.accepted.Load(), l.open.Load())
+
+	l.peersMu.Lock()
+	peers := make([]string, 0, len(l.peers))
+	for conn, since := range l.peers {
+		peers = append(peers, describePeer(conn, since))
+	}
+	l.peersMu.Unlock()
+	if len(peers) == 0 {
+		return census
+	}
+	sort.Strings(peers)
+	return census + ": " + strings.Join(peers, ", ")
+}
+
+func describePeer(conn *quic.Conn, since time.Time) string {
+	handshake := "handshaking"
+	select {
+	case <-conn.HandshakeComplete():
+		handshake = "established"
+	default:
+	}
+	return fmt.Sprintf("%s (%s, open %s)", conn.RemoteAddr(), handshake, time.Since(since).Round(time.Millisecond))
 }
 
 // drainQUIC gracefully shuts down an HTTP/3 server, stopping the wait as soon
