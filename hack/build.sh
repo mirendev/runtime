@@ -31,6 +31,14 @@ echo "Building version $version"
 echo "  Commit: ${commit:0:7}"
 echo "  Date:   $build_date"
 
+# Static build. Nothing in the binary needs cgo, and a dynamically linked
+# glibc binary cannot run on NixOS, Alpine, or any other host whose ELF
+# interpreter is not at /lib64. With cgo off, net uses the pure-Go resolver
+# (resolv.conf, hosts, nsswitch.conf; no NSS plugins) and os/user reads
+# /etc/passwd directly. Darwin is unaffected either way: both packages use
+# libSystem syscalls there regardless of cgo.
+export CGO_ENABLED=0
+
 go build -ldflags "\
   -X miren.dev/runtime/version.Version=$version \
   -X miren.dev/runtime/version.Commit=$commit \
