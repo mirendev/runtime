@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestColumnBuilder(t *testing.T) {
@@ -139,6 +141,79 @@ func TestAutoSizeColumns(t *testing.T) {
 		// "another-app" is the widest value in column 1 (11 chars)
 		if cols[1].Width < 11 {
 			t.Errorf("expected column 1 width >= 11 (for 'another-app'), got %d", cols[1].Width)
+		}
+	})
+}
+
+// totalWidth is what a row of these columns occupies, spacers included.
+func totalWidth(cols []Column) int {
+	total := 0
+	for _, c := range cols {
+		total += c.Width
+	}
+	return total + (len(cols)-1)*2
+}
+
+func TestSizeColumnsNarrowTerminal(t *testing.T) {
+	// The shape of 'server operations list': a fixed-width id, a few short
+	// columns, a timestamp, and an error that can be arbitrarily long.
+	headers := []string{"ID", "ACTION", "PHASE", "VERSIONS", "STARTED", "ERROR"}
+	rows := []Row{{
+		"01M2GHF1ETZ70A27AW1BP5PNBY", "upgrade", "rolled_back", "main:4be30ed -> main:ce76f6f",
+		"2026-09-14 13:04:28", strings.Repeat("server did not report ready ", 8),
+	}}
+	protect := Columns().NoTruncate(0, 2, 4)
+
+	t.Run("table fits and the error column absorbs the squeeze", func(t *testing.T) {
+		cols := sizeColumns(headers, rows, protect, 120)
+		if got := totalWidth(cols); got != 120 {
+			t.Errorf("expected total width 120, got %d", got)
+		}
+		for _, i := range []int{0, 2, 4} {
+			if cols[i].Width != lipgloss.Width(rows[0][i]) {
+				t.Errorf("expected protected column %d at natural width, got %d", i, cols[i].Width)
+			}
+		}
+		if cols[1].Width != 7 {
+			t.Errorf("expected ACTION to keep its natural 7, got %d", cols[1].Width)
+		}
+		if cols[3].Width < 10 {
+			t.Errorf("expected VERSIONS at or above the floor, got %d", cols[3].Width)
+		}
+		if natural := lipgloss.Width(rows[0][5]); cols[5].Width >= natural {
+			t.Errorf("expected error column truncated below %d, got %d", natural, cols[5].Width)
+		}
+	})
+
+	t.Run("protected columns alone fill the terminal", func(t *testing.T) {
+		// 26 + 11 + 19 protected plus 5 spacers already exceed 40 columns,
+		// so there is nothing to share out. The rest must still sit on
+		// their floors rather than stay at natural width.
+		cols := sizeColumns(headers, rows, protect, 40)
+		want := []int{26, 7, 11, 10, 19, 10}
+		for i, w := range want {
+			if cols[i].Width != w {
+				t.Errorf("column %d: expected width %d, got %d", i, w, cols[i].Width)
+			}
+		}
+		if got := totalWidth(cols); got != 93 {
+			t.Errorf("expected total width 93, got %d", got)
+		}
+	})
+
+	t.Run("floors do not push the total past the terminal", func(t *testing.T) {
+		// A single pass would give the long column its proportional share
+		// and then bump the short ones up to the floor, overflowing.
+		cols := sizeColumns(headers, rows, nil, 100)
+		if got := totalWidth(cols); got != 100 {
+			t.Errorf("expected total width 100, got %d", got)
+		}
+	})
+
+	t.Run("no terminal width leaves columns at natural size", func(t *testing.T) {
+		cols := sizeColumns(headers, rows, nil, 0)
+		if cols[5].Width != lipgloss.Width(rows[0][5]) {
+			t.Errorf("expected error column at natural width %d, got %d", lipgloss.Width(rows[0][5]), cols[5].Width)
 		}
 	})
 }

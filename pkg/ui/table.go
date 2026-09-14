@@ -167,23 +167,25 @@ func NewTable(opts ...TableOption) *Table {
 // respecting terminal width and column configuration hints.
 // Pass nil for builder to use default behavior.
 func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Column {
-	if len(headers) == 0 {
-		return nil
-	}
-
-	// Check if stdout is a terminal
-	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-
-	// Get terminal width only if stdout is a TTY
+	// Only a terminal constrains width; piped or redirected output gets
+	// every column at its natural size.
 	var termWidth int
-	if isTTY {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
 		if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
 			termWidth = width
 		} else {
 			termWidth = 80 // fallback for TTY
 		}
 	}
-	// If not a TTY (piped/redirected), don't constrain width
+	return sizeColumns(headers, rows, builder, termWidth)
+}
+
+// sizeColumns is AutoSizeColumns with the terminal width passed in, so the
+// squeeze can be tested without a TTY. termWidth <= 0 means unconstrained.
+func sizeColumns(headers []string, rows []Row, builder *ColumnBuilder, termWidth int) []Column {
+	if len(headers) == 0 {
+		return nil
+	}
 
 	// Initialize widths with header lengths
 	widths := make([]int, len(headers))
@@ -220,8 +222,7 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 		}
 	}
 
-	// Only apply terminal width constraints if stdout is a TTY
-	if isTTY && termWidth > 0 {
+	if termWidth > 0 {
 		// Calculate total width needed (including spaces between columns)
 		totalWidth := 0
 		for _, w := range widths {
@@ -230,41 +231,8 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 		spacing := (len(headers) - 1) * 2 // 2 spaces between each column
 		totalWidth += spacing
 
-		// If total width exceeds terminal width, scale down non-protected columns
 		if totalWidth > termWidth {
-			// Calculate protected width (columns that can't be truncated)
-			protectedWidth := 0
-			scalableWidth := 0
-			for i, w := range widths {
-				if noTruncate[i] {
-					protectedWidth += w
-				} else {
-					scalableWidth += w
-				}
-			}
-
-			// Available width for scalable columns
-			availableForScalable := termWidth - spacing - protectedWidth
-
-			// Only scale if there's something to scale and room to do it
-			if scalableWidth > 0 && availableForScalable > 0 {
-				scaleFactor := float64(availableForScalable) / float64(scalableWidth)
-
-				for i := range widths {
-					if noTruncate[i] {
-						continue // Don't scale protected columns
-					}
-
-					hint := builder.getHint(i)
-					minWidth := hint.MinWidth
-					if minWidth <= 0 {
-						minWidth = 10 // Default minimum
-					}
-
-					newWidth := max(int(float64(widths[i])*scaleFactor), minWidth)
-					widths[i] = newWidth
-				}
-			}
+			squeeze(widths, noTruncate, builder, termWidth-spacing)
 		}
 	}
 
@@ -280,6 +248,70 @@ func AutoSizeColumns(headers []string, rows []Row, builder *ColumnBuilder) []Col
 	}
 
 	return columns
+}
+
+// squeeze shrinks the columns that allow truncation until the widths sum
+// to budget. Each shrinkable column gets a share of the budget in
+// proportion to its natural width, except that no column goes below its
+// floor: the hint's MinWidth, 10 by default, or its natural width when
+// that is narrower still. A column that lands on its floor is pinned there
+// and the remaining budget is shared out again among the others, so the
+// floors do not push the total past the budget the way a single pass
+// would. When the pinned columns alone exceed the budget everything else
+// sits on its floor, and the overflow is bounded by what the caller chose
+// to protect rather than by the longest value in the table.
+func squeeze(widths []int, noTruncate []bool, builder *ColumnBuilder, budget int) {
+	floors := make([]int, len(widths))
+	pinned := make([]bool, len(widths))
+	for i, w := range widths {
+		floor := builder.getHint(i).MinWidth
+		if floor <= 0 {
+			floor = 10
+		}
+		floors[i] = min(floor, w)
+		pinned[i] = noTruncate[i]
+	}
+
+	for {
+		remaining := budget
+		scalable := 0
+		for i, w := range widths {
+			if pinned[i] {
+				remaining -= w
+			} else {
+				scalable += w
+			}
+		}
+		if scalable == 0 {
+			return
+		}
+
+		factor := 0.0
+		if remaining > 0 {
+			factor = float64(remaining) / float64(scalable)
+		}
+
+		hitFloor := false
+		for i, w := range widths {
+			if pinned[i] {
+				continue
+			}
+			if int(float64(w)*factor) < floors[i] {
+				widths[i] = floors[i]
+				pinned[i] = true
+				hitFloor = true
+			}
+		}
+		if hitFloor {
+			continue
+		}
+		for i, w := range widths {
+			if !pinned[i] {
+				widths[i] = int(float64(w) * factor)
+			}
+		}
+		return
+	}
 }
 
 // measureDisplayWidth measures the display width of a string,
