@@ -116,7 +116,7 @@ func TestRunnerCoordinatorIntegration(t *testing.T) {
 	// coordinator drains so its connections are not what the drain waits on.
 	rs, err := cfg.State(ctx)
 	require.NoError(t, err)
-	defer func() { _ = rs.Close() }()
+	defer func() { r.NoError(rs.Close()) }()
 
 	client, err := rs.Connect(coordCfg.Address, "entities")
 	require.NoError(t, err)
