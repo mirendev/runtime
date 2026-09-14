@@ -26,6 +26,10 @@ type NamedValue struct {
 	Label     string
 	Value     string
 	ValueType ValueType
+	// Style, when set, renders the value instead of the style its ValueType
+	// would pick. It is how a caller says one value means something (a
+	// failed phase, an error) without restyling the whole list.
+	Style *lipgloss.Style
 }
 
 // NewNamedValue creates a NamedValue with automatic type detection
@@ -71,6 +75,11 @@ func NewNamedValue(label string, value any) NamedValue {
 	return nv
 }
 
+// NewStyledValue creates a NamedValue whose value renders in the given style.
+func NewStyledValue(label, value string, style lipgloss.Style) NamedValue {
+	return NamedValue{Label: label, Value: value, ValueType: ValueTypeString, Style: &style}
+}
+
 // NamedValueList renders a list of named values with right-aligned labels
 type NamedValueList struct {
 	items  []NamedValue
@@ -88,12 +97,15 @@ type NamedValueStyles struct {
 	OtherValue  lipgloss.Style
 }
 
-// DefaultNamedValueStyles returns the default styling for named values
+// DefaultNamedValueStyles returns the default styling for named values. The
+// label is the scaffolding and the value is the data, so the label carries
+// the emphasis and a plain string stays plain; only typed values (numbers,
+// booleans, nulls) and values given an explicit Style pick up color.
 func DefaultNamedValueStyles() NamedValueStyles {
 	return NamedValueStyles{
-		Label:       lipgloss.NewStyle(),
+		Label:       lipgloss.NewStyle().Bold(true),
 		Separator:   ": ",
-		StringValue: lipgloss.NewStyle().Foreground(theme.Success), // Green
+		StringValue: lipgloss.NewStyle(),
 		NumberValue: lipgloss.NewStyle().Foreground(theme.Info),    // Blue
 		BoolValue:   lipgloss.NewStyle().Foreground(theme.Warning), // Yellow
 		NullValue:   lipgloss.NewStyle().Foreground(theme.Muted),   // De-emphasized
@@ -153,6 +165,9 @@ func (n *NamedValueList) Render() string {
 
 // styleValue applies the appropriate style based on value type
 func (n *NamedValueList) styleValue(item NamedValue) string {
+	if item.Style != nil {
+		return item.Style.Render(item.Value)
+	}
 	switch item.ValueType {
 	case ValueTypeString:
 		return n.styles.StringValue.Render(item.Value)
