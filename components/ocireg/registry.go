@@ -17,6 +17,7 @@ import (
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/workloadidentity"
@@ -394,6 +395,42 @@ func (h *RegistryHandler) getArtifactForManifest(ctx context.Context, reference 
 	return artifact, err
 }
 
+// reactivateArtifact flips an archived artifact back to active so a new
+// version can safely reuse it. The patch is revision-checked so it cannot
+// clobber a concurrent write, and it re-reads on conflict because the usual
+// competitor is the artifact GC archiving the same artifact; whichever of the
+// two lands last has to see the other's write.
+func (h *RegistryHandler) reactivateArtifact(ctx context.Context, id entity.Id) error {
+	const attempts = 3
+	for i := range attempts {
+		res, err := h.ec.EAC().Get(ctx, id.String())
+		if err != nil {
+			return fmt.Errorf("reading artifact: %w", err)
+		}
+
+		var art core_v1alpha.Artifact
+		art.Decode(res.Entity().Entity())
+		if art.Status != core_v1alpha.ARCHIVED {
+			return nil
+		}
+
+		attrs := entity.New(
+			entity.Ref(entity.DBId, id),
+			(&core_v1alpha.Artifact{Status: core_v1alpha.ACTIVE}).Encode,
+		).Attrs()
+		if _, err := h.ec.EAC().Patch(ctx, attrs, res.Entity().Revision()); err != nil {
+			if i < attempts-1 && errors.Is(err, cond.ErrConflict{}) {
+				continue
+			}
+			return fmt.Errorf("patching artifact status: %w", err)
+		}
+
+		h.log.Info("Reactivated archived artifact for reuse", "id", id)
+		return nil
+	}
+	return fmt.Errorf("artifact %s kept changing under reactivation", id)
+}
+
 // putManifest handles PUT requests for manifests
 func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
 	// Read the manifest data
@@ -411,7 +448,15 @@ func (h *RegistryHandler) putManifest(w http.ResponseWriter, r *http.Request, na
 	var existingArtifact core_v1alpha.Artifact
 	err = h.ec.OneAtIndex(r.Context(), entity.String(core_v1alpha.ArtifactManifestDigestId, digest), &existingArtifact)
 	if err == nil {
-		// Artifact already exists, return success without creating a duplicate
+		// Artifact already exists, return success without creating a duplicate.
+		// The push is about to mint a version that points at it, so an archived
+		// artifact has to come back to life first or the GCs will reclaim the
+		// image and blobs out from under that version.
+		if err := h.reactivateArtifact(r.Context(), existingArtifact.ID); err != nil {
+			h.log.Error("Error reactivating archived artifact", "id", existingArtifact.ID, "digest", digest, "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		h.log.Info("Found existing artifact with same digest", "digest", digest, "existing_id", existingArtifact.ID, "reference", reference)
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.WriteHeader(http.StatusCreated)
