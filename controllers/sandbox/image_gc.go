@@ -26,7 +26,8 @@ type ImageGCConfig struct {
 	// DiskPressureThreshold is the disk usage percentage that triggers immediate GC (default: 80%)
 	DiskPressureThreshold float64
 	// OrphanGracePeriod is how old a miren-managed image must be before it is
-	// reclaimed when no Artifact entity exists for it (default: 24h)
+	// reclaimed when no Artifact entity exists for it (default: 24h). Zero or
+	// negative means the default.
 	OrphanGracePeriod time.Duration
 }
 
@@ -227,6 +228,13 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		return result, fmt.Errorf("failed to collect app version references: %w", err)
 	}
 
+	// A zero grace period is an omitted one, not a request to reclaim
+	// immediately; the grace is what stops a torn read from taking a fresh
+	// image, so never let it silently switch off.
+	grace := w.Config.OrphanGracePeriod
+	if grace <= 0 {
+		grace = DefaultImageGCConfig().OrphanGracePeriod
+	}
 	now := time.Now()
 
 	// Process each image
@@ -264,7 +272,7 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 			// The artifact is gone (app deleted or renamed). Give a fresh image
 			// a grace period before reclaiming it so one bad entity read can't
 			// take down a deploy that is still in flight.
-			if now.Sub(img.Metadata().CreatedAt) < w.Config.OrphanGracePeriod {
+			if now.Sub(img.Metadata().CreatedAt) < grace {
 				result.RetainedImages++
 				continue
 			}
