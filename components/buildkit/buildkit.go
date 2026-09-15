@@ -23,6 +23,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/components/base"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -515,19 +516,13 @@ func (c *Component) restartExistingContainer(ctx context.Context, container cont
 	// the task silently expunges all jobs ("NotFound: no such job") and every
 	// build fails. Always evict any existing task and start a fresh one bound
 	// to this process.
-	if task, err := container.Task(ctx, nil); err == nil {
-		c.Log.Info("evicting stale buildkit task before restart")
-		if err := c.stopTask(ctx, task); err != nil {
-			c.container = nil
-			return fmt.Errorf("failed to evict stale buildkit task: %w", err)
-		}
-	} else if !errdefs.IsNotFound(err) {
-		c.container = nil
-		return fmt.Errorf("failed to inspect existing buildkit task: %w", err)
-	}
-
 	c.Log.Info("creating new task for existing buildkit container")
-	task, err := container.NewTask(ctx, slogout.WithLogger(c.Log, "buildkit"))
+	task, err := base.ReplaceTask(ctx, c.Log, "buildkit", container,
+		func(ctx context.Context, task containerd.Task) error { return c.stopTask(ctx, task) },
+		func(ctx context.Context, id string) error { return base.ReapLeakedTask(ctx, c.CC, id) },
+		func(ctx context.Context) (containerd.Task, error) {
+			return container.NewTask(ctx, slogout.WithLogger(c.Log, "buildkit"))
+		})
 	if err != nil {
 		c.container = nil
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
