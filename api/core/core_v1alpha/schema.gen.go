@@ -9,6 +9,38 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type DiskProvider string
+
+const (
+	DiskProviderMiren  DiskProvider = "miren"
+	DiskProviderLocal  DiskProvider = "local"
+	DiskProviderSqlite DiskProvider = "sqlite"
+)
+const (
+	DiskProviderMirenMemberId  = entity.Id("dev.miren.core/provider.miren")
+	DiskProviderLocalMemberId  = entity.Id("dev.miren.core/provider.local")
+	DiskProviderSqliteMemberId = entity.Id("dev.miren.core/provider.sqlite")
+)
+
+type PortProtocol string
+
+const (
+	PortProtocolTcp PortProtocol = "tcp"
+	PortProtocolUdp PortProtocol = "udp"
+)
+const (
+	PortProtocolTcpMemberId = entity.Id("dev.miren.core/protocol.tcp")
+	PortProtocolUdpMemberId = entity.Id("dev.miren.core/protocol.udp")
+)
+
+func initEnumMembers(sb *schema.SchemaBuilder) {
+	sb.Singleton("dev.miren.core/provider.miren")
+	sb.Singleton("dev.miren.core/provider.local")
+	sb.Singleton("dev.miren.core/provider.sqlite")
+	sb.Singleton("dev.miren.core/protocol.tcp")
+	sb.Singleton("dev.miren.core/protocol.udp")
+}
+
 const (
 	ConfigSpecEntrypointId     = entity.Id("dev.miren.core/component.config_spec.entrypoint")
 	ConfigSpecServicesId       = entity.Id("dev.miren.core/component.config_spec.services")
@@ -397,29 +429,29 @@ const (
 )
 
 type ConfigSpecServicesDisks struct {
-	DbFile       string                          `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string                          `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string                          `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string                          `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string                          `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string                          `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     ConfigSpecServicesDisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool                            `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64                           `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string                          `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string                          `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type ConfigSpecServicesDisksProvider string
+type ConfigSpecServicesDisksProvider = DiskProvider
 
 const (
-	ConfigSpecServicesDisksMIREN  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.miren"
-	ConfigSpecServicesDisksLOCAL  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.local"
-	ConfigSpecServicesDisksSQLITE ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.sqlite"
+	ConfigSpecServicesDisksMIREN  DiskProvider = DiskProviderMiren
+	ConfigSpecServicesDisksLOCAL  DiskProvider = DiskProviderLocal
+	ConfigSpecServicesDisksSQLITE DiskProvider = DiskProviderSqlite
 )
 
-var ConfigSpecServicesDisksproviderFromId = map[entity.Id]ConfigSpecServicesDisksProvider{ConfigSpecServicesDisksProviderMirenId: ConfigSpecServicesDisksMIREN, ConfigSpecServicesDisksProviderLocalId: ConfigSpecServicesDisksLOCAL, ConfigSpecServicesDisksProviderSqliteId: ConfigSpecServicesDisksSQLITE}
-var ConfigSpecServicesDisksproviderToId = map[ConfigSpecServicesDisksProvider]entity.Id{ConfigSpecServicesDisksMIREN: ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksLOCAL: ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksSQLITE: ConfigSpecServicesDisksProviderSqliteId}
+var ConfigSpecServicesDisksProviderFromId = map[entity.Id]DiskProvider{DiskProviderMirenMemberId: DiskProviderMiren, ConfigSpecServicesDisksProviderMirenId: DiskProviderMiren, DiskProviderLocalMemberId: DiskProviderLocal, ConfigSpecServicesDisksProviderLocalId: DiskProviderLocal, DiskProviderSqliteMemberId: DiskProviderSqlite, ConfigSpecServicesDisksProviderSqliteId: DiskProviderSqlite}
+var ConfigSpecServicesDisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: DiskProviderMirenMemberId, DiskProvider("component.config_spec.services.disks.provider.miren"): DiskProviderMirenMemberId, DiskProviderLocal: DiskProviderLocalMemberId, DiskProvider("component.config_spec.services.disks.provider.local"): DiskProviderLocalMemberId, DiskProviderSqlite: DiskProviderSqliteMemberId, DiskProvider("component.config_spec.services.disks.provider.sqlite"): DiskProviderSqliteMemberId}
 
 func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesDisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -441,7 +473,7 @@ func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = ConfigSpecServicesDisksproviderFromId[a.Value.Id()]
+		o.Provider = ConfigSpecServicesDisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -476,7 +508,7 @@ func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesDisksOwnerId, o.Owner))
 	}
-	if a, ok := ConfigSpecServicesDisksproviderToId[o.Provider]; ok {
+	if a, ok := ConfigSpecServicesDisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesDisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesDisksReadOnlyId, o.ReadOnly))
@@ -530,16 +562,14 @@ func (o *ConfigSpecServicesDisks) Empty() bool {
 }
 
 func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("db_file", "dev.miren.core/component.config_spec.services.disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/component.config_spec.services.disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/component.config_spec.services.disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease"))
 	sb.String("mount_path", "dev.miren.core/component.config_spec.services.disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
 	sb.String("name", "dev.miren.core/component.config_spec.services.disks.name", schema.Doc("The name of the disk"))
 	sb.String("owner", "dev.miren.core/component.config_spec.services.disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.miren")
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.local")
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.sqlite")
-	sb.Ref("provider", "dev.miren.core/component.config_spec.services.disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksProviderSqliteId))
+	sb.Enum("provider", "dev.miren.core/component.config_spec.services.disks.provider", []entity.Id{DiskProviderMirenMemberId, DiskProviderLocalMemberId, DiskProviderSqliteMemberId}, schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"))
 	sb.Bool("read_only", "dev.miren.core/component.config_spec.services.disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/component.config_spec.services.disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
 	sb.String("source", "dev.miren.core/component.config_spec.services.disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
@@ -733,22 +763,22 @@ const (
 )
 
 type ConfigSpecServicesPorts struct {
-	Name     string                          `cbor:"name" json:"name"`
-	NodePort int64                           `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64                           `cbor:"port" json:"port"`
-	Protocol ConfigSpecServicesPortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string                          `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type ConfigSpecServicesPortsProtocol string
+type ConfigSpecServicesPortsProtocol = PortProtocol
 
 const (
-	ConfigSpecServicesPortsTCP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.tcp"
-	ConfigSpecServicesPortsUDP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.udp"
+	ConfigSpecServicesPortsTCP PortProtocol = PortProtocolTcp
+	ConfigSpecServicesPortsUDP PortProtocol = PortProtocolUdp
 )
 
-var ConfigSpecServicesPortsprotocolFromId = map[entity.Id]ConfigSpecServicesPortsProtocol{ConfigSpecServicesPortsProtocolTcpId: ConfigSpecServicesPortsTCP, ConfigSpecServicesPortsProtocolUdpId: ConfigSpecServicesPortsUDP}
-var ConfigSpecServicesPortsprotocolToId = map[ConfigSpecServicesPortsProtocol]entity.Id{ConfigSpecServicesPortsTCP: ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsUDP: ConfigSpecServicesPortsProtocolUdpId}
+var ConfigSpecServicesPortsProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, ConfigSpecServicesPortsProtocolTcpId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp, ConfigSpecServicesPortsProtocolUdpId: PortProtocolUdp}
+var ConfigSpecServicesPortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("component.config_spec.services.ports.protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("component.config_spec.services.ports.protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesPortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -761,7 +791,7 @@ func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = ConfigSpecServicesPortsprotocolFromId[a.Value.Id()]
+		o.Protocol = ConfigSpecServicesPortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -776,7 +806,7 @@ func (o *ConfigSpecServicesPorts) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsPortId, o.Port))
-	if a, ok := ConfigSpecServicesPortsprotocolToId[o.Protocol]; ok {
+	if a, ok := ConfigSpecServicesPortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesPortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -805,12 +835,11 @@ func (o *ConfigSpecServicesPorts) Empty() bool {
 }
 
 func (o *ConfigSpecServicesPorts) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.core/component.config_spec.services.ports.name", schema.Required)
 	sb.Int64("node_port", "dev.miren.core/component.config_spec.services.ports.node_port")
 	sb.Int64("port", "dev.miren.core/component.config_spec.services.ports.port", schema.Required)
-	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.tcp")
-	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.udp")
-	sb.Ref("protocol", "dev.miren.core/component.config_spec.services.ports.protocol", schema.Choices(ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.core/component.config_spec.services.ports.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId})
 	sb.String("type", "dev.miren.core/component.config_spec.services.ports.type")
 }
 
@@ -1805,9 +1834,9 @@ const (
 	DisksNameId           = entity.Id("dev.miren.core/disks.name")
 	DisksOwnerId          = entity.Id("dev.miren.core/disks.owner")
 	DisksProviderId       = entity.Id("dev.miren.core/disks.provider")
-	DisksProviderMirenId  = entity.Id("dev.miren.core/provider.miren")
-	DisksProviderLocalId  = entity.Id("dev.miren.core/provider.local")
-	DisksProviderSqliteId = entity.Id("dev.miren.core/provider.sqlite")
+	DisksProviderMirenId  = DiskProviderMirenMemberId
+	DisksProviderLocalId  = DiskProviderLocalMemberId
+	DisksProviderSqliteId = DiskProviderSqliteMemberId
 	DisksReadOnlyId       = entity.Id("dev.miren.core/disks.read_only")
 	DisksSizeGbId         = entity.Id("dev.miren.core/disks.size_gb")
 	DisksSourceId         = entity.Id("dev.miren.core/disks.source")
@@ -1815,29 +1844,29 @@ const (
 )
 
 type Disks struct {
-	DbFile       string        `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string        `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string        `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string        `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string        `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string        `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     DisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool          `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64         `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string        `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string        `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type DisksProvider string
+type DisksProvider = DiskProvider
 
 const (
-	MIREN  DisksProvider = "provider.miren"
-	LOCAL  DisksProvider = "provider.local"
-	SQLITE DisksProvider = "provider.sqlite"
+	MIREN  DiskProvider = DiskProviderMiren
+	LOCAL  DiskProvider = DiskProviderLocal
+	SQLITE DiskProvider = DiskProviderSqlite
 )
 
-var DisksproviderFromId = map[entity.Id]DisksProvider{DisksProviderMirenId: MIREN, DisksProviderLocalId: LOCAL, DisksProviderSqliteId: SQLITE}
-var DisksproviderToId = map[DisksProvider]entity.Id{MIREN: DisksProviderMirenId, LOCAL: DisksProviderLocalId, SQLITE: DisksProviderSqliteId}
+var DisksProviderFromId = map[entity.Id]DiskProvider{DiskProviderMirenMemberId: DiskProviderMiren, DiskProviderLocalMemberId: DiskProviderLocal, DiskProviderSqliteMemberId: DiskProviderSqlite}
+var DisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: DiskProviderMirenMemberId, DiskProvider("provider.miren"): DiskProviderMirenMemberId, DiskProviderLocal: DiskProviderLocalMemberId, DiskProvider("provider.local"): DiskProviderLocalMemberId, DiskProviderSqlite: DiskProviderSqliteMemberId, DiskProvider("provider.sqlite"): DiskProviderSqliteMemberId}
 
 func (o *Disks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -1859,7 +1888,7 @@ func (o *Disks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(DisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = DisksproviderFromId[a.Value.Id()]
+		o.Provider = DisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -1894,7 +1923,7 @@ func (o *Disks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(DisksOwnerId, o.Owner))
 	}
-	if a, ok := DisksproviderToId[o.Provider]; ok {
+	if a, ok := DisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(DisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(DisksReadOnlyId, o.ReadOnly))
@@ -1948,16 +1977,14 @@ func (o *Disks) Empty() bool {
 }
 
 func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("db_file", "dev.miren.core/disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease (e.g. 5m, 10m)"))
 	sb.String("mount_path", "dev.miren.core/disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
 	sb.String("name", "dev.miren.core/disks.name", schema.Doc("The name of the disk"))
 	sb.String("owner", "dev.miren.core/disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
-	sb.Singleton("dev.miren.core/provider.miren")
-	sb.Singleton("dev.miren.core/provider.local")
-	sb.Singleton("dev.miren.core/provider.sqlite")
-	sb.Ref("provider", "dev.miren.core/disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(DisksProviderMirenId, DisksProviderLocalId, DisksProviderSqliteId))
+	sb.Enum("provider", "dev.miren.core/disks.provider", []entity.Id{DiskProviderMirenMemberId, DiskProviderLocalMemberId, DiskProviderSqliteMemberId}, schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"))
 	sb.Bool("read_only", "dev.miren.core/disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
 	sb.String("source", "dev.miren.core/disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
@@ -2069,28 +2096,28 @@ const (
 	PortsNodePortId    = entity.Id("dev.miren.core/ports.node_port")
 	PortsPortId        = entity.Id("dev.miren.core/ports.port")
 	PortsProtocolId    = entity.Id("dev.miren.core/ports.protocol")
-	PortsProtocolTcpId = entity.Id("dev.miren.core/protocol.tcp")
-	PortsProtocolUdpId = entity.Id("dev.miren.core/protocol.udp")
+	PortsProtocolTcpId = PortProtocolTcpMemberId
+	PortsProtocolUdpId = PortProtocolUdpMemberId
 	PortsTypeId        = entity.Id("dev.miren.core/ports.type")
 )
 
 type Ports struct {
-	Name     string        `cbor:"name" json:"name"`
-	NodePort int64         `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64         `cbor:"port" json:"port"`
-	Protocol PortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string        `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type PortsProtocol string
+type PortsProtocol = PortProtocol
 
 const (
-	TCP PortsProtocol = "protocol.tcp"
-	UDP PortsProtocol = "protocol.udp"
+	TCP PortProtocol = PortProtocolTcp
+	UDP PortProtocol = PortProtocolUdp
 )
 
-var PortsprotocolFromId = map[entity.Id]PortsProtocol{PortsProtocolTcpId: TCP, PortsProtocolUdpId: UDP}
-var PortsprotocolToId = map[PortsProtocol]entity.Id{TCP: PortsProtocolTcpId, UDP: PortsProtocolUdpId}
+var PortsProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp}
+var PortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *Ports) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(PortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -2103,7 +2130,7 @@ func (o *Ports) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(PortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = PortsprotocolFromId[a.Value.Id()]
+		o.Protocol = PortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(PortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -2118,7 +2145,7 @@ func (o *Ports) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(PortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(PortsPortId, o.Port))
-	if a, ok := PortsprotocolToId[o.Protocol]; ok {
+	if a, ok := PortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -2147,12 +2174,11 @@ func (o *Ports) Empty() bool {
 }
 
 func (o *Ports) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.core/ports.name", schema.Required)
 	sb.Int64("node_port", "dev.miren.core/ports.node_port")
 	sb.Int64("port", "dev.miren.core/ports.port", schema.Required)
-	sb.Singleton("dev.miren.core/protocol.tcp")
-	sb.Singleton("dev.miren.core/protocol.udp")
-	sb.Ref("protocol", "dev.miren.core/ports.protocol", schema.Choices(PortsProtocolTcpId, PortsProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.core/ports.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId})
 	sb.String("type", "dev.miren.core/ports.type")
 }
 
@@ -3670,5 +3696,5 @@ func init() {
 		(&Secret{}).InitSchema(sb)
 		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\K\xb3\xec6\x11\xfe\x1b\x04\b\x10\xde\x04pr\t\x01\xc2#\xc5cA\x15\x1b~\x82Kc˶\xceؖ\xaf\xa4\x99{&;\xdeP\x14U\xfc\x06\xee\xb9l\xf2\xfb`MY/Kmْ<\x87\xcd)\xb5\xe4\xfe\xf4\xean\xb5Z}\xe6\xa9\x1eр\xc7\x1a_\x8b\x810<\x16\x15e\x18\x9f\xc9X\xf3O_\xf9\xb5\xef͵\x05\x9a\xa6\x7fK\x1e\x06Z\xd14)\xbe\xff65\x1d\x10\x19\x01h\xd3\x10\xdc\xd7\xfcϯO\xa4~\xfcꚹ@\x95 W\\\xd6x\xea\xe9m\xc0\xa3\x90ݼ\\W\x8bۄO\xa4\x96@\xefl\x03]1ㄎj\x82\xa0NC<\xcd\x10_\x0e@,\xbd\x95=\xad\xce\x12\x83\xc2\xca\x19\x84Tt\x98\xe8\x88G\xb1\x94\xd4\xfa@\xdc\"\x80\x9b\xb2`\x7f\x90\xf3|\x17\f\x12\x00\x15\xa8zy!\f\xd7%R\xcbvv+\xe6\x81ւ\fXB}'\x02\xe5Ф\x96`\x83_5\xc35\\02\xb6\x12\xf0[\x11@\xfc8\x11\x86\xb9\x19ڃCۑ\xb5zg\xda\xeb\v\xd4O\x1d\xea'F\x06\xc4n\xe5\xbcB\xe3\x828\x03nn<\x19\x89 \xa8/+:6\xa4U\x1b\x0f\xea\\\xd9\xf9l\x00bb\xf4\x01Wj\xa0\xad!\\\xa6/\x05\x98^Qv\xee)\xaaKF{\xacV̯rVlw\xa2\x15\x9a\xa6հ\xa4\xdaq\\1\xac%\xeb\x02>Pm)\xb2\xf4{9\x85\xaf\x05\xf9\x8b\xea\xc2ؼg\xae\xdePX\xb9\xb7~\x1agB\xa2\x93̵,\xa5νQ쏟\vM_\uf11a\xff\x15|\xa1\x1bS\x16\xe0wr\xe0\x9f\x0f\x03\x14\xf4Ո\x99\xec\x02\xabb\xea؍\xa4\xac\x90\x95\xc9d\x824Ȍ\x1eZUӚ2\xfc?\xca\xe1\xc3\x152\b\xb3\x85\x91]\xccb\xb4/\xb4\x86c@#i0W\xf2\xdeY\nj\xf87b\xfceMZ\x03Ca\xa5\x83&\r\xee\x17\xb6и@\xe2\xc2%H\xa3\xcb\xd2@\xe0\xf12\x9c\xe7?\xe5\x15\xf5\x17\xcc\xff\xd5(s\xbeZnŤ\x0f\x80\x0e\xb1\xaa#W\xbc\xee\xd0|\xa6\xdbw\xb7\xb63\xa3\v\xef\xed\x80\x05\xaa\x91@\xe1\xbd5\xadIv>\xb86\x06\xa1\xe8\xd1\t\xf7\xbc\x1e\xd0x\xfb\x8fZ!]3\xaf\x10\x96\xe5\xa0l[\x00\xa9\x91\xcb\x1f\xb8\xc5_\xdc\xe2۳\x88\xfb+g V\x93\x92+\xb7\xd8t}^\xbe\xb5y\x8c\xa4,\xdf?\xe5,\xde\xde\xc4\xd8V\x0ex\xfe\xfb<\xa5]\xb2\xceRp\xed\xa0A\x05\b\xaeA=\xbb\x15\x10\azE\x0eN\xd5_\xb8\xc0̜\xc8\x0f\x0e\rQ\xbe\xbe\x83B\x87\xa9\xc7bq\x13z\xaf\x06*\xeaμT\x11\xd7\xe5\xe9\xa6\xe6\xe5VD\x1c#\x00[\x84aS6\xfd/;\x13\x96 \x05\xba\x88\xae\x1c\xb0\xe8h\xad\xd7ߩ\x80+\x17v\xb2\x14\x10e-\x1a\xc9'H\x10:\x9a]\xa0\xb0\x12\x02\x86EK\x01\xf2\xcbi\xd1+C\xa4I\x84\x02\x98\xdd&.РĚ,d\x9ax*\x90\vǬ\xc4\x03\"\xbd\x92+\x87Ι\x8cdӫ\xd2\x1a\"g2\x92Ǫ\x1aY\xc8\xd4#\xf8\xc1\xa0\x9dn\xc1#\xcb\x112\xcc\x18e\xe5\x809G\xadv\xd7\xfc*\xa8\a;\x16\xa2%\xa2$cC\x95\x85\xb0T\xe6\xd5 \x00\x98\"\xfe\x7f{\x1d:2\f\x82\x94}\xaa\xfc\x99F\x97\xe1\x96l\xf2\x9e\x18\x1a+\xe5\xc65\xba\fy\xbf\xbd\xc5[\xd1a \xa2T]:\xc2\xc5C\r\x10\xf5\x9b\x11T_\xea\xa7U-ă\xae\x8f\xc5#\xbc\xac\t\x13\xca|u\x96\x92\x0eǉ\xd2>x*ZnWzڀ\xdc\x045\xc6r3<QN\x04e\xaa\xf7\a\x87\x86\x18\xd0ٳ\x18\xbcC\xea<\x9b\v\xb1+\x99\xe5\x9a\xef%dlK\xc10.;\xc4\xd5\x16\xbf\\W'\xbb\xbe-\x113\xb2\xec\xf6+ۊB'̤\x9dT\n\xbe\x90p\xe8\xf0b\xe7b\\DE\xb5\x89h\r\x11\x13K\x87\x7fB\xf2.\x03#\f\xebj\xd7=\x80\"\xe0\xe2u\x88\xab\xd1`U\x84c)\xb6y9\xbd\xb0\xca\rk\x18\xf3)\x82-\x19\xae\x02\x17\x889G\xfc\x83C\xfb\x81\x00\xa8\x1a>F\xc8\x13O\xdc'\xd7\xe1i\xc1\xcd1ň\xcf \xabu7\xd1'\xe3=iS\x1a\xb8ě/RL\xe8?\x82\x1e\x84\x03R\xa0z c)\xe8\x19\x1b\x0fΩ\x88\xd9S\x0fh\xcb\x01\x85Z\xe31\xe9ۇ\xf6@\r\xe5Ư\x02\x91\x10\xcb\xeeDB\x1a'\x02\xb2s4\xbd\xb3\x8eZ\x01\xb4\xa4(ߛ\xd0j(~i\xc9\xd1X\xbb\x97\x99\xce\xd6E\x86\xf7ntx\x16>= \x02E\xcd \x18(%Ȇ\x88ݜ,7\xc7\xecJ*m\xae\f\x91jW\xed\x8a\x04UUO\x15\x8f\x82\xdd&JF\x13Y[h8J\xa8'\x1aa\xa2L\xe8`\xcd\\\x9a\xb9*2\x8a\xbd\xed\xd33\xf1\xb6\xcf\xd6ݿ}\x06*\xc9\x01z\x13\xba\xf4\x19\x84\xa2&\xfc\xec\x0e\x13\xab\x8a\xc8\x18\xdfO\x1f\xa3\xea!e\xa4\x7f\x0f^\xce%{Q\x9fʆ\xe8\xc0ak\x88\x98\x94)\xd6\xf9S~\xe3\x02\x0fJ\x00\x1c:\xea\xbeK\x80\x1e#\x8e\xa5\xfbD/J\x10\x06\xbf*m\x1c\x03\xbd\x8c\xa2\xb4\x91\xbf\a\x87\x86\x00\xabk\xbe\x04\x88D'\xa0\xf4*\xa6\xbdx\xddS0\x1c \xd9&F\xaf\xa4֜\x9d\xa5\x82\xa1\xa6\u05f8\xa7\x15\xeaWH\x86\xab\x90\xcdX\xb6l\x7f$\xeb\x1a\xfe\xb2'\x02\xaf\xd4\xca~\xa5ڃ\xe7\x88\x1a8è.\xe9\xd8+\xaf\x91,\xa4ﴆ\xa5\x8c\x93Opٞ\xb45҄\xd1\xf7\xa0\xab\xa9\xf9\xa4;\xa2]\x01U\x8e\x9dz\x9aQNǸ5d!SM\xa0R\xd77\xa1\xa1Y\x05\xc4\xe3\xd5Q\xf0j&#\xea]d\xa87\x1e\xaf\xe9a\b(\xa3x\xbc\x16'T\xcdn\x82ZtCĖof\xac1\xaf\x18\x99\xac\xc3|v+\x00\x00\x8c\x87\xcf\xfcg\xac\x84\xa4\x9a\v\xb1;\xc5\xcc\xc0\xb0z/RJa\xa9}ɚ\x199\x1e9\x11\xe4\xaao\xee\v\xe9\xb3B\xb5\x97\xacq\xd1\xfaL\x80Mj\xa6R{UL~^\xc1\xe35\x18&\xb4\x1bN\x06s\xa9ê\bǳ\x8a8\x1bΈ\x01\xdb\xe4\xdb8\x80\x83.\xb6\xc7\xe4DK\x162\xe6\xa4\xfb\br\x87\x16\x04u;X\x10\xf6\x0fי\xc5;\\U\xc53\x1e\xae\x120E\xff\xfe\x14\x940\xc9\x1eۗ\x951VL\xb4ƥ\xdd\x19\xb2\x90\xde\xf6\x84;\xdc\xd8\xd0\xe0y\xa49\x18\x15\xb4\xa2\xbd=\x8f\x14\x15~\xfa\xa8D5\xad\x14\xd8\xf0\x14\xa2\x9a\xaaK\xbd\xf3\xc1\xa5\x9ev\xc6n\x05\xa2\x86\xb2\xb0o\xa8%\xf7S\xe8\xf6m7S\x17ʊ\x8e\xeaM\xb1R\x06\x8a\x87\x1a\"B\xf4q\x86\x10\x05\xe0\xd3E\n\x06\x11\x03`\xc5@k\xbdf\xb2\x04\x05\xec\xfd\x04\x88y{\xc9\xc8\x05\x1ag\x17Z:a~\x95'v?J@\x9c\xed7悗\x13f\x16G=\x1e\x87\x9b\xbc\x1e>H\xe8\x81\xcfnOY\xd3WcY\xe3\x1e\xa9͜V\xb5p9\x92\xa0\xbb\x8b\x90\x10\xae[:\xadjS\xa5\x93\xe9>\x9c.\xf6o^Fv\x82\xc1s#_\x021Qք\xe1ʆ\xf1(\xac\x84\xb6t\xe3BuE\x8c\xa0S\x8f\xdd\v\x95\xad\xbb\xffBe\xa0\xd2=\x19\xe8\xe3\x1b\x844w\x06\x863,w\x8eO\xb3\xb2`\x16e׳\x81\xf7d˕\xe4\xde\xc0\xd3\xd2r'\xfa8p\x7f\x17\xfe\xb8\xa3\x03\x8f\x06\xcb{\xd8۱2\xb4\x9fv\xa1\xa4$\x185^\v\x93\x9fT\x05\xeaܘ\xd6{;Px\xea\xf0\x80\x19\xeaK\x90\x19$\x82-~\xd0\x12\xbeх\x81\xe5{\xb8RJX\x19{p\b\x03\n\xd1\xeb\x97\"\xaf*\x16\x96u\xc1\xa4CY^\x98\x02\"\v\x19S \x17$1aco\x95\x0e\xe5l\xec\x05\x197\xa4\xfb`\x90Q!\xa4\x9f\xd1P\xe5\x15\xbf|Gs\x1e\xb1\x1e\x1c:\xa6z\x0e\x82ydi\r\x11\vLh\xdey\xf4\xca)\x90\xa5\x98\x99\xd2\\w<\vi\x84\xc3\xc6Bo\\0R\xe4\xee\xcefh?\xa5\x137\xf9a\xb5\x062\xbe\x7fƷ\x92Q!_\x86\xb4\xac\xac\xf2\xc1\x9cOҥ\x04\x9a6\x17%\xebA8\xa8\xe6\x1eZ\xc3\xe8P\x9aS\xaa\xb3T\xecU\xde\xc3`\xf8\x15CӤ\xcf+\xb2\x90\xdeu\x02n\x94\a\x91\x9aL\xf5T\xd7t\\\xbf\xa3\xe8\x1c\xa9\xb9\xadi\x10\xe9q\xe0\x0e\xab>Q\xad\x1dÂ̓\xdbʶ2\xed\x0fz2\xf3\xa7+=0\x9f\x9a/\x82\xf2\xe8MSP\xbb֍.\xa7\x8ac\xef\x02\x85呒\xba*Od\xac\xc9\xd8nȣ\xfbIz\x024t\xb1\\\x94\xe0KћP\xea\xae\xc7U\xf5\x88\f\xb3#]\x93yB\xee\xdd|Z\xb5E\f4\xe8\xa8\xd8\xed(\xfd\xa1\x05\x9el\x10i߹\x83\xb7\xb1\x15\xf7\x84\x84\xc0L\x1b'C\xa4J\x03\x95p\vZ\xb0Ko\x1d\xb2\xfcY(\xc4\x1e\x12\xe1\xfc\xa2\xe3э.\xc7L\x8eǿ\x13\xd1\xde{\x1a\xf70t\nR\xe9.\"\x85\x95ɪ\xe5B\xaf\x15xV-\xdfy\xd4r\a\x8fb\xff\xa3tA\x83\ue28f\x13T\xb0\xa0E\x05||\u0095:\xd6e)\xa2Dp\xcbl\xbb\x99\xfb\f\x92~\x84A\x97:\b\x97\xf8$(\xad\xc9w\x93\x00\xefy\xee\x03=\x14\xfb=$\xbd\xd7\xcbm\xfa^\xd6\xc8\v\xc4Zw\xf8\xb5\xa4\xa1r|\x98\x87\x19{\x1a\x96\xe3\xfc(\x17ӏ\x8d\x9d3bb\x1fe-uq(\x1c\xf6\xf1\xe1\xe9Ģd\xbf>\x8e\x9c\x17<\xfb\xed\xf1\x8e\ue2e9\xfd\xe6x\xc7\aCm\xf7\xf4\xf8\xbc\x11\xb8ǷU\x8fs\x87\xa6?\xa7\xbb7\xa1\xc0`d\xb4Ǟ\xf6?\xc8S\x92\xcc\xd7\xfd\x9f\x1c\x98B\xda\xe3\x7f\xa6\xe2e\xe7\x06\xfc\xe2\b~v\xea\xc0\xa1Ydd\x16\xc0\xc0x\x12~\xe4}(ӂ'\xe6%\xfc\xf4\bꑴ\x85_\xdeӑ\x97\xdbp\x1f\x92\x97\x00\U0006bee0\x9c,\x89\x9f\x1d\x01JL\xa28\xa4\xcc\xf1\x1c\x8b\x1f\x1f\x82\x8d\x87\x8f\x0f-\xc5\xdd\x19\x1a\xaf\xd6v}\xc9\xd9x\x917\xa4\xfcL\x8e\x17y\xd6<+\x99#S\xef\x93s=2\xf7)7\x15$\u05cb\x8d\xa6\x8ad\xcakr&I\xa6ze$\x9ad\x9e\x02\x89y(?\xccG=\x1c\x8b\xbd\xac\xb5\xca$\xaedzI{\xe9,O\a\xc4e\xc0\x82\x91Jy٭!\"Z\xfaa\x9e\x96j\xd4\xf4KI\xa6Fi\xfc\x02\x8f\xf2yUM\xc5\x10\xbe$e\xfa+\x06\x99\x8c\x02\xb3+\xd2\xe9\x1c\x96\xbaS\xb3\f\xfa\xf6\x7fW߅\xba\x93\x85\x94\xe9\xacX\xc8˩'*Z\xd2\xe8\xb2]\xde\xfd\xdb\xc2[k\xf9נ\xaf\x0f\\\xfe#\x0e^&\xda\xdeBeڈ\xe4$\xae\xcc=U\xb9\\\x8e[\xde{5wZ\xb6\xe4ıLSu,\x9d,\xf3B\x97\x99Q\x96y\x94$%\x9ce\x9a\xab\x9c|\xb4C\xc3\xddKW\xcb\xd4\xfc\xa3\xd9l?\xbf\xa7\x1b\x9b\xf2v\x1f\x8aɋ;\xb4\x86\a\xd3\xe6\x02\u07b3\xc4\xdb\xcffZ3Ɂ\x7f?m\xe0GҖ`2A\x18Z \x10\x91Q\x15\x99\xf9K;\xd8)z\xfb\xd7\f\x9b.A\xa3q\\\xb9\x02\xf0\xff\xf8\xf6\x00\xef\xcfH\x8f\xa0\xa7_b\xd2\x0e\x0e\v\x9cw\xd3\xc8Y\xe4\xe85#\xcd\x0f]\xc0(#-Q\x83lt\xf9ع\xb6@&][\xd2\xcc\xc3\x02\x9axgɝ~\u0085%\xcd\x1e,\x90\x87o+\x8eARj\xaa\xaf*i7h5\x80\x01=.\x19\xa0\xea8\x1aA\x9dwҥ=\x85)\xecg\xf1\xff\x14\x14\x9b\xbdP\xfd\xc8\xd0\x1ab7sv\x0f\x8dW\x1d\xae/:\xf4\xdbY\xea\x9e\x01\xba^_\xbb\xe5\xf0e\x012Ҷ:\xe4\xd8\x1a\"\xfdEݗ\x8c\fSjR\x17\xdd\x03\x85,\x95\xcfbP-\\\xbaA\xfdA\xde\xe0\xd3BBiVz\x01\xfd?X\xe9\x05|\xd7J\xa7\x99\xd4\x05\xec\x19M\xea\x02\xfa\xac&Ձ}.\x93\xba@\x1e6\xa9|Q\x1c\x8b\xb6\x9fX\xe7\f`\xff\x97\xf4\xfc\x84\x86pf\x86\xfa!\xb6Hf\x86\xffQz\xe2\x13L\xb7\xf5q\x8a\x8aL\x1df\x02?\xea\xf4\x05\x87\x9eW\x0f\x9fnB;\xbc0\xbb\x02\x00\x9d\xf1\xd9\x04\xb6\x1b]\x8e\xa5\xd4\x00\x04Ej\x89Pe7U\x04\xe62An\x81\x84\xde|U\f\xbfӘ\xd0S0\xb9\x0e\x9b(UW\x13\xae>[m\x83\xfc\xcc4\x93\x1as\xc1\xe8m\xe37\xcfd\n\xbej\xdf\xf8\xf7\x16o\nr\x88\xe5\x80*c~\r\t\x17\x12&W\x02\x1c\x9d\xbbX\xd6X\xfd\x90\xe6٭Xvu_p}L\xf8\xed\x99w\x94\t\xa5<\x9fVh\x9a\xb6~\xbb\xd4\xfc\xca\xe0Ώ,\xda\x1f\xf3\xdb\xfb%\xc2\xc8\xcf\u0099\xd6\xe57\xd0v\x7f=\xce\xfd\u074bȏ\xa5y9\xb4\xb1\xdf\xc8H\xc8pt\xbf\U00033da2\t\x91I\xc6\xc4\xff\x06lc\x8a\xfd\xf9\x1f\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\x18қȢV\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xdc\\[\xaf\xe48\xf1\xff\x1a\xff\xfd\xc3\x02˝\x05\xb2;,\v,\x97\x15\x97\a$^\xf8\b\x91;q\x12\x9fN\xe2\x8c\xed\xee9\xbdo\xc3\x1d!$>\x033\xb3/|>xF\xf1-vŉ\xed\xf4AB\xbc\x1c\xb9\x1c\xd7Ϸ\xaar\xb9\\\xa7_\xd7#\x1a\xf0X\xe3k1\x10\x86Ǣ\xa2\f\xe33\x19k\xfe\x8f\x17~\xed{sm\x81\xa6\xe9S\xc9\xc3\xc0W4M\x8a\xef_MM\aDF\x00\xda4\x04\xf75\xffë\x13\xa9\x1f\xbf\xbcf.P%\xc8\x15\x975\x9ezz\x1b\xf0(d7\xcf\xd7\xd5\xe26\xe1\x13\xa9%\xd0;\xdb@W\xcc8\xa1\xa3\x9a \xa8\xd3\x10\xafg\x88/\x06 \x96\xdeʞVg\x89Aa\xe5\fB*:LtģXJj} n\x11\xc0MY\xb0\xdf\xcay\xbe\v\x06\t\x80\nT=\xbf\x10\x86\xeb\x12\xa9e;\xbb\x15\xf3@kA\x06,\xa1\xbe\x15\x81rhRK\xb0\xc1\xaf\x9a\xe1\x1a.\x18\x19[\t\xf8\x8d\b ~\x9c\b\xc3\xdc\f\xed\xc1\xa1\xed\xc8Z\xbd3\xed\xf5\x19\xea\xa7\x0e\xf5\x13#\x03b\xb7r^\xa1qA\x9c\x0177\x9e\x8cD\x10ԗ\x15\x1d\x1bҪ\x8d\au\xae\xec\xfc\x7f\x00bb\xf4\x01Wj\xa0\xad!\\\xa6/\x04\x98^Pv\xee)\xaaKF{\xacV̯rVlw\xa2\x15\x9a\xa6հ\xa4\xdaq\\1\xac%\xeb\x02\x1a\xa8o)\xb2\xf4\x1b9\x85\xaf\x04\xf9\x8b\xea\xc2ؼg\xae\xdePX\xb9\xb7~\x1agB\xa2\x93̵,\xa5νQ쏟\tM_\uf11a\xff\x15\xb4\xd0\x1fS\x16\xe0\xa5\x1c\xf8g\xc3\x00\x05}1b&\xbb\xc0\xaa\x98:v#)+de2\x99 \r2\xa3\x87V\xd5|M\x19\xfe\xef\xe4\xf0\xe1\n\x19\x84\xd9\xc2\xc8.f1\xda\x17Z\xc31\xa0\x914\x98+y\xef,\x055\xfck1\xfe\xb2&\xad\x81\xa1\xb0\xd2A\x93\x06\xf7s[h\\ q\xe1\x12\xa4\xd1ei \xf0x\x19\xce\xf3\x9f\xf2\x8a\xfa\v\xe6\x7fo\x949_-\xb7b\xd2\a@\x87XՑ+^wh\x9a\xe9\xef\xbb[ۙх\xf7v\xc0\x02\xd5H\xa0\xf0ޚ\xafIv>\xb86\x06\xa1\xe8\xd1\t\xf7\xbc\x1e\xd0x\xfb\xa7Z!]3\xaf\x10\x96\xe5\xa0l[\x00\xa9\x91\xcb\x1f\xb8ş\xdf\xe2۳\x88\xfb+g V\x93\x92+\xb7\xd8t}^\xbe\xb5y\x8c\xa4,\xdf\xdf\xe4,\xde\xde\xc4\xd8V\x0ex\xfe\xfb<\xa5]\xb2\xceRp\xed\xa0A\x05\b\xaeA=\xbb\x15\x10\azE\x0eN\xd5_\xb8\xc0̜\xc8\x0f\x0e\rQ\xbe\xba\x83B\x87\xa9\xc7bq\x13z\xaf\x06*\xeaμT\x11\xd7\xe5\xe9\xa6\xe6\xe5VD\x1c#\x00[\x84aS6\xfd\x8f;\x13\x96 \x05\xba\x88\xae\x1c\xb0\xe8h\xad\xd7ߩ\x80+\x17v\xb2\x14\x10e-\x1a\xc9'H\x10:\x9a]\xa0\xb0\x12\x02\x86EK\x01\xf2\xcbi\xd1+C\xa4I\x84\x02\x98\xdd&.РĚ,d\x9ax*\x90\vǬ\xc4\x03\"\xbd\x92+\x87Ι\x8cdӫ\xd2\x1a\"g2\x92Ǫ\x1aY\xc8\xd4#\xf8\xc1\xa0\x9dn\xc1#\xcb\x112\xcc\x18e\xe5\x809G\xadv\xd7\xfc*\xa8\a;\x16\xa2%\xa2$cC\x95\x85\xb0T\xe6\xd5 \x00\x98\"\xfe\x7f~\x15:2\f\x82\x94}\xaa\xfc\x99F\x97\xe1\x96l\xf2\x9e\x18\x1a+\xe5\xc65\xba\fy\xbf\xb9\xc5[\xd1a \xa2T]:\xc2\xc5C\x1f \xea\xd7#\xa8\xbe\xd4O\xabZ\x88\a]\x1f\x8bGxY\x13&\x94\xf9\xea,%\x1d\x8e\x13\xa5}\xf0T\xb4ܮ\xf4\xb4\x01\xb9\tj\x8c\xe5fx\xa2\x9c\b\xcaT\xef\x0f\x0e\r1\xa0\xb3g1x\x87\xd4y6\x17bW2\xcb5\xdfK\xc8ؖ\x82a\\v\x88\xab-~\xbe\xaeNv}[\"fd\xd9헶\x15\x85N\x98I;\xa9\x14|!\xe1\xd0\xe1\xc5\xceŸ\x88\x8aj\x13\xd1\x1a\"&\x96\x0e\xff\x84\xe4]\x06F\x18\xd6ծ{\x00E\xc0\xc5\xeb\x10W\xa3\xc1\xaa\b\xc7Rl\xf3rza\x95\x1b\xd60\xe6S\x04\xbfd\xb8\n\\ \xe6\x1c\xf1\x0f\x0e\xed\a\x02\xa0j\xf8\x18!O<q\x9f\\\x87\xa7\x057\xc7\x14#>\x83\xac\xd6\xddD\x9f\x8c\xf7\xa4Mi\xe0\x12oZ\xa4\x98п\x06=\b\a\xa4@\xf5@\xc6R\xd036\x1e\x9cS\x11\xb3\xa7\x1eЖ\x03\n\xb5\xc6cҷ\x0f\xed\x81\x1aʍ_\x05\"!\x96݉\x844N\x04d\xe7hzg\x1d\xb5\x02hIQ\xbe7\xa1\xd5P\xfcҒ\xa3\xb1v/3\x9d\xad\x8b\f\xef\xdd\xe8\xf0,|z@\x04\x8a\x9aA0PJ\x90\r\x11\xbb9Yn\x8eٕT\xda\\\x19\"ծ\xda\x15\t\xaa\xaa\x9e*\x1e\x05\xbbM\x94\x8c&\xb2\xb6\xd0p\x94PO4\xc2D\x99\xd0\xc1\x9a\xb94sUd\x14{ۧg\xe2m\x9f\xad\xbb\x7f\xfb\fT\x92\x03\xf4&t\xe93\bEM\xf8\xd9\x1d&V\x15\x911\xbe\x9f>F\xd5C\xcaH\xff\x12\xbc\x9cK\xf6\xa2>\x95\rс\xc3\xd6\x101)S\xacsS~\xe3\x02\x0fJ\x00\x1c:\xea\xbeK\x80\x1e#\x8e\xa5\xfbD/J\x10\x06\xbf*m\x1c\x03\xbd\x8c\xa2\xb4\x91\xbf\a\x87\x86\x00\xabk\xbe\x04\x88D'\xa0\xf4*\xa6\xbdx]P2\x14\xdb\xc4\xe8\x95Ԙɸ\xd2\xca|Εr_K\xdbN\x8a\xb8\xa5\x82!\xa9W\xb8\xa7\x15\xeaW=\x1a\xaeB~\xc6\xf2\xcbv#Y\xd7\xf0\xe7=\x11x\xa5~\xb6\x95\xfa\x1e<o\xd4\x04\x19FuI\xc7^y\x97d!}\xe76,\x8d\x9c|\x82\xcb\xf6\xa4\xad\x96&\x8c]\b\xba\xa4\x9aO\xba-\xdaeP\xe5\xd8\xe9\xa8\x19\xe5t\x8c\xfbC\x162\xd5T*\xb5~\x13\x1a\x9aUT<^\x1dCP\xcdd\xc4\f\x14\x19f\x00\x8f\xd7\xf4p\x05\x94e<^\x8b\x13\xaafwB-\xba!b\xcb73֘W\x8cLֱ>\xbb\x15\x00\x00\xc6\xcdg\xfe3VBRͅ\xd8\xddcf`X\xbd+)\xa5\xb0Ծd͌\x1c\x8f\x9c\br\xd57\xfc\x85\xf4Y\xa1y\x90\xacq\xd1\xfa\xbf\x00\x9b\xd4Le\x1eT1\xf9\x19\x06\x8f\xd7`8\xd1n8\x19\xcc\xe5\x0f\xab\"\x1c\xcf*2m8#\x86n\x93o\xe3\xa0\x0e\xba\xe2\x1e\x93\x13UYȘ3\xef#\xc8\x1dZ\x10\xd4-\"bj=\x04\xef\x10V\x15Ox\bK\xc0\x14\xfd\xfb}P\xc2${l_V\xc6X1\xd1\x1a\x97vg\xc8Bz\xdb\x13\xeep\xcf\xf3Z\x1d\x10\x8a\x83QA+\xda\xef\x9c[r\x7fl;sn)*\xfc\x94R\x89jZ)\xba\xe1)D5U\x97z\xa7\xc1\xa5\x9ev\xe6h\x05\xa7\x862\xb3o\xd0%\xf7\xeb\xd0m\xden\xba.\x94\x15\x1d\xd5\x1be\xa5\f\x19\x0f}\x88\b\xdb\xc7\x19\xc2\x16\x80O\x17=\x18\x94\f\x80\x15\x03\xad\xf5\x9a\xc9\x12\x14\xc4\xf7\x13 \xe6\xed%#\x17h\x9c]r\xe9\xd4\xf9U\x9ex\xfe \x01q\xb6\xf3\x98\v^N\x98Y\x1c\xf5\x18\x1d\xfe\xe4\xf5\xf0AB\x0f|v\x8fʚ\xbe\x18\xcb\x1a\xf7Hm洪\x85ˑ\x04\xdd]\x84\x84p\xdd\xdciU\x9b*\x9dL\xf7\xe1t\xb1\x7f\x933\xb2\x13\f\xc6\x1b\xf9\x12\x88\x89\xb2&\fW6,Ha%\xb4\xb9\x1b\x17\xb4+b\x04\x9dz\xec^\xd0l\xdd\xfd\x174\x03\x95\xee\xf1\xc0;\x83AHs{`x\xc4r\xe7\xf8>+\vfQv= x\xef\xb6\\In\x104і;\xd1\x17\x82\xfb\xbb\xf0\xc7\x1d\"x\x84X\xde\xc3^\x91\x95\xa1\xfd4\x0e%%\xc1(\xf4Z\x98\xfc$-P\xe7\xc6\xc8\xdeہ\xc2S\x87\a\xccP_\x82L#\x11\xfc\xe2\aA\xe1\x9b_\x18X\xbe\xaf+\xa5\x84\x95\xb1\a\x8c0\xa0\x10\xbd~y\xf2\xaaba^\x17L:\x9e\xe5\x85) \xb2\x901\x05rA\x12\x13@\xf6V\xe9P\x0e\xc8^\xd0rC\xba\x0f\x06-\x15B\xfa\x19\rU^\xf1\xcbw9\xe7Q\xec\xc1\xa1c\xaa\xe7 \x98G\x9b\xd6\x10\xb1@\x87\xe6\x9dG\xaf\x9c\x02Y\x8a\x99)\xcdu\xc73\x93F8l,\xf4\xc6\x05#O\xee\xeel>\x15\xa4t\xe2&S\xac\xd6@\xbe\x17\x9c\xf1\xaddTȗ&-+\xab\xfc2\xa7I\xba\x94@\xd3\xe6\xa2d=0\a\xd5\xdcCk\x18\x1dJsJu\x96\x8a\xbd\xf2{\x18\f\xbf`h\x9a\xf4yE\x16\xd2\xf8i\xc1wn\x0f\"59\xebu]\xd3q\xfd.\xa3s\xae\xe6oM\x83H\x8f\x03w]\xd5D}\xed\x18\x16d\x9e\xdcV\xf6\x96\xf9\xfe\xa0'37]\xe9\x81ijZ\x04\xe5ћ\xa6\xa0v\xad\x1b]N\x15\xc7\xde\x05\n\xcb#%uU\x9e\xc8X\x93\xb1ݐG\xb7IzB5t\xb1\\\x94\xe0\xcbӛP*\xb0\xc7U\xf5\x88\f\xb3#]\x93yB\xee\x1d~Z}\x8b\x18h\xd0Q\xb1\xdbQ\xfa\xc3\r<\xd9 Ҿs\aoc+\xee\t\t\x81\x996N\x86H\x95\x06*\xe1\x16\xb4`\x97\xde:d\xf9\xb3P\x88=$\xc2\xf9Eǭ\x1b]\x8e\x99\x1c\x8f\x7f'\xf2\xbd\xf7\xd4\xeea蔦\xd2]D\n+\x93U˅^+\xf0\xacZ\xbe\xf3\xa8\xe5\x0e\x1e\xc5~\xa3tA\x83\ue28f\x13T\xb0\xa0E\x05||\u0095:\xd6e)\xa2Dp\xcb\xecw3\xf7\x19$\xfd\b\x83.u\x10.\xf1\x89QZ\x93o'\x01\xde\xf3|\bz(\xf6{Hz\xff\x97\xdb\xf4\x9d\xac\x91\x17\x88\xb5\xee\xf0kIC\xe5\xf80\x0f3\xf6\xd4,\xc7\xf9Q.\xa6\x1f\x1b;g\xc4\xc4>\xcaZ\xea\xe2P8\xec\xe3\xc3ӉE\xc9~y\x1c9/x\xf6\xeb\xe3\x1d\xdd\x17S\xfb\xd5\xf1\x8e\x0f\x86\xda\xee\xe9\xf1i#p\x8fo\xab\x1e\xe7\x0eM\x7fNwoB\x81\xc1\xc8h\x8f\xa5\n|\x90\xa7$\x99\xd9\x02?:0\x85\xb4d\x82L\xc5\xcb\xce5\xf8\xd9\x11\xfc\xecT\x84C\xb3\xc8\xc8T\x80\x81\xf1$\xfc\xc8;R\xa6\x05\x8f\xe79|:\xa3\xfe\xf8\b\xea\xffF\x1a\x04\x93\xbd\xf7\xb8E\xd5\xcd\x1f\xc4\xcbǟ߳,\xeeP\xef\x85r'\xf4\xf2\xf1\x17wa9\xd9\x1f?9\x02\x94\x98\x1cr\xc8\xf8\xc4sG~x\b6\x1e\xee>\xb4\x14wg\x9e\xbcX\x9fCK.ʳ\xbc!\xe5g\xa8<\xcb;}\xb2\x92T2\xedTr\x0eK\xe6>妸\xe4z\xdd\xd1\x14\x98LyMΐ\xc9T\xaf\x8c\x04\x9a\xccS+1\xbf\xe6\xfb\xf9\xa8\x87cǗ\xb5V\x99\x84\x9cL\xafn/M\xe7\xf5\x01q\x19\xb0`\xa4R\xb7\x82\xd6\x10\x11-\xfd0OK5j\xfa%*S\xa34~\x81G\xf9\x1c\xac\xa6b\b_\x922\xfd+\x83LF\x81\xd9\x15\xe9\xf4\x13KݩY\x06}\xfb\xbf\xcb\xefB\xddɮ\xcat\xae,\xe4\xe5\xd4\x13\x15\xddit\xd9.\xef\xfe\xed歵\xfck\xd0W\a\x82\x15\x11\x874\x13mo\xa12mDrrZ枪\x1c5\xe7\x1a\xd1{5wZ\xb6䄸LSu,M.\xf3\x02\x9a\x99)\x97y\x94$%\xd2e\x9a\xab\x9c<\xbbC\xc3\xdd\x10\xe8#ת\xff\xea,\xbd\xc0=I\xa2\xbe|\xfc\xe9=\xb34}\xdf\vc\xf2\b\x0f\xed\xe1\xc14À\xf7.\xf1\xf6\xb3\xbf\xd6Lr\xe0\xdfM\x1b\xf8\x914/\x98|\x11\x86\x16\bD\xb0TEf\xbe\xd7\x0ev\x8a\xdd\xf8Sƙ\"A\xa3qo\xb9\x02\xf0\xff(\xf7\x00\xef\xcf\U0010f827_\xa2\xd2\x0e.\v\x9cw\xd3\xc9Y\xe4\xe85'\xcd\x0f^\xc0(#-Q\x83lt\xf9ع\xba@&]\x9b\xd2\xcc\xc3\x02\x9axgʝ~\u0085)\xcd\x1e,\x90\x87oK\x8eARj\xaa\xafJi7x5\x80\x01=.\x19\xb3\xea8\x1cA\x9dwҦ=\x1d*\xec'\xf1?\x15\x14\x9b\xbd`\xfd(\xd3\x1ab7\xd3x\x0f\x8dW\x1d\xae/:T\xdeY\xea\x9e\x01\xba^g\xbb\xe5pf\x012Ҷ:\xf4\xda\x1a\"=\x03\xc1\x97\x8c\fSjR=\xdd\x03\x85,\x95ObP-\\\xbaA\xfd^\xde\xe0\xd3BRiVz\x01\xfd\x0fX\xe9\x05|\xd7J\xa7\x99\xd4\x05\xec\tM\xea\x02\xfa\xa4&Ձ}*\x93\xba@\x1e6\xa9|Q\x1c\x8b\xb6\x9f\x88\xe8\f`\xff\x97\f\xfd\x04\x90p&\x8b\xfa!\xbcH&\x8b\xdf(=Q\f\xa6'\xfb8EE\xa6\x0e3\x81\x1fu\xba\x87Cϫ\x87O7\xa1\x1d^\x98\x8d\x02\x80\xce\xf8l\x02\xeb\x8d.\xc7R\x90\x00\x82\"\xb5D\xa8\xb2\x9bZ\x03s\xbf \xb7@Bo\xbe*\x86߫L\xe8+\x98\x8c\x88M\x94\xac\xab\tW\xcdV\xdb \x9b\x99Ϥ\xc6\\0z\xdb\xf8\xcd9\xf9/\v\xea\xfbƿ\x03yS\x90C,\aT\x19\xf3kH\xb8\x900\x19\x15\xe0\xe8\\ϲ\xc6\xea\x87L\xcfnŲ\xab\xfb\x82\xebc¶g\xde\xcdwZ\xf5\xbb\xb1\x15\x9a\xa6\xadߎ5\xbf\xf2\xb8\xf3#\x97\xf6\xc7\x14\xf7~\t2\xf2\xb3|\xe6\xeb\xf2\x1bt\xbb\xbf\xde\xe7\xfe\xeeH\xe4\xc7꼜\xe3\xd8o\x94$d\x84\xba-\xfc,\xb7h\x02i\x921\xf1ۀmL\xb1?\xff\x06\x00\x00\xff\xff\x01\x00\x00\xff\xff\xf6G\x11\xf3\"X\x00\x00"))
 }

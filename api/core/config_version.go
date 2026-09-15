@@ -48,19 +48,7 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 
 		// Convert ports array
 		for _, p := range svc.Ports {
-			sp := core_v1alpha.ConfigSpecServicesPorts{
-				Port:     p.Port,
-				Name:     p.Name,
-				Type:     p.Type,
-				NodePort: p.NodePort,
-			}
-			switch p.Protocol {
-			case core_v1alpha.TCP:
-				sp.Protocol = core_v1alpha.ConfigSpecServicesPortsTCP
-			case core_v1alpha.UDP:
-				sp.Protocol = core_v1alpha.ConfigSpecServicesPortsUDP
-			}
-			s.Ports = append(s.Ports, sp)
+			s.Ports = append(s.Ports, core_v1alpha.ConfigSpecServicesPorts(p))
 		}
 
 		// Convert service-level env vars
@@ -68,20 +56,11 @@ func ConfigSpecFromConfig(cfg *core_v1alpha.Config) core_v1alpha.ConfigSpec {
 			s.Env = append(s.Env, core_v1alpha.ConfigSpecServicesEnv(e))
 		}
 
-		// Convert disks (field-by-field since Provider enum types differ)
+		// Convert disks.
 		for _, d := range svc.Disks {
-			provider := core_v1alpha.ConfigSpecServicesDisksMIREN
-			switch d.Provider {
-			case core_v1alpha.LOCAL:
-				provider = core_v1alpha.ConfigSpecServicesDisksLOCAL
-			case core_v1alpha.SQLITE:
-				provider = core_v1alpha.ConfigSpecServicesDisksSQLITE
-			case core_v1alpha.MIREN:
-				provider = core_v1alpha.ConfigSpecServicesDisksMIREN
-			}
 			s.Disks = append(s.Disks, core_v1alpha.ConfigSpecServicesDisks{
 				Name:         d.Name,
-				Provider:     provider,
+				Provider:     d.Provider,
 				MountPath:    d.MountPath,
 				ReadOnly:     d.ReadOnly,
 				SizeGb:       d.SizeGb,
