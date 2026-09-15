@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 // launchTimeout bounds the systemd-run round trip on its own, since the
@@ -29,7 +29,7 @@ var ErrInvalidID = errors.New("lifecycle operation id must be a ULID")
 
 // ValidateID checks that id is a ULID as NewID would mint one.
 func ValidateID(id string) error {
-	if _, err := ulid.ParseStrict(id); err != nil {
+	if !idgen.IsULID(id) {
 		return fmt.Errorf("%w: %q", ErrInvalidID, id)
 	}
 	return nil

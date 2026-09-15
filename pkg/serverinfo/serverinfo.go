@@ -4,13 +4,12 @@
 package serverinfo
 
 import (
-	"crypto/rand"
 	"os"
 	"sync/atomic"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"miren.dev/runtime/pkg/containerenv"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/version"
 )
 
@@ -51,7 +50,7 @@ type Source struct {
 
 func New() *Source {
 	return &Source{
-		instanceID:  ulid.MustNew(ulid.Now(), rand.Reader).String(),
+		instanceID:  idgen.ULID(),
 		startedAt:   time.Now().UTC(),
 		installKind: detectInstallKind(),
 	}

@@ -2,6 +2,7 @@ version: "2"
 
 linters:
   enable:
+    - depguard
     - exhaustive
 
   disable:
@@ -9,6 +10,14 @@ linters:
 
   default: standard
   settings:
+    depguard:
+      rules:
+        ulid:
+          files:
+            - "!**/pkg/idgen/**"
+          deny:
+            - pkg: github.com/oklog/ulid
+              desc: go through idgen.ULID and idgen.IsULID so the ordering guarantee holds everywhere
     exhaustive:
       # A bare `default:` does not by itself make a switch exhaustive; every
       # enum member must be listed (use a `//exhaustive:ignore` directive to

@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -11,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -39,7 +38,7 @@ func (m *CPUUsage) Setup() error {
 	m.cpuSeconds = make(map[string]float64)
 
 	// Generate unique instance ID using ULID
-	m.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
+	m.instance = idgen.ULID()
 
 	m.Log.Info("CPU usage metrics initialized with VictoriaMetrics backend", "instance", m.instance)
 	return nil
