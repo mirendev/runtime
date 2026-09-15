@@ -3,7 +3,6 @@ package metrics
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -11,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 // Cardinality bounds for the counter map. Both path and method come from the
@@ -193,7 +192,7 @@ func (h *HTTPMetrics) Setup() error {
 	h.candidates = make(map[string]uint64, maxCandidates)
 
 	// Generate unique instance ID using ULID
-	h.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
+	h.instance = idgen.ULID()
 
 	h.Log.Info("HTTP metrics initialized with VictoriaMetrics backend", "instance", h.instance)
 	return nil

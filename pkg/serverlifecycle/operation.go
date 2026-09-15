@@ -4,11 +4,10 @@
 package serverlifecycle
 
 import (
-	"crypto/rand"
 	"fmt"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"miren.dev/runtime/pkg/idgen"
 )
 
 type Action string
@@ -157,7 +156,7 @@ func NewOperation(action Action, requestedBy string) *Operation {
 
 // NewID mints a ULID so a directory listing sorts by creation time.
 func NewID() string {
-	return ulid.MustNew(ulid.Now(), rand.Reader).String()
+	return idgen.ULID()
 }
 
 func (o *Operation) Done() bool {

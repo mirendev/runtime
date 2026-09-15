@@ -2,14 +2,13 @@ package metrics
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"maps"
 	"strconv"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/units"
 )
 
@@ -33,7 +32,7 @@ func NewMemoryUsage(log *slog.Logger, writer *VictoriaMetricsWriter, reader *Vic
 
 func (m *MemoryUsage) Setup() error {
 	// Generate unique instance ID using ULID
-	m.instance = ulid.MustNew(ulid.Now(), rand.Reader).String()
+	m.instance = idgen.ULID()
 
 	m.Log.Info("memory usage metrics initialized with VictoriaMetrics backend", "instance", m.instance)
 	return nil
