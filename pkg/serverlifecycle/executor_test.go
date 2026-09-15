@@ -655,7 +655,9 @@ func TestResumeInInstallingSkipsWhenBinaryAlreadyInstalled(t *testing.T) {
 	require.Equal(t, 1, host.restarts)
 }
 
-func TestContainerInstallIsRefused(t *testing.T) {
+// The executor does not care how the server is supervised; the Restarter
+// and Launcher it is given carry that.
+func TestContainerInstallRestartsLikeAnyOther(t *testing.T) {
 	host := newFakeHost("v1.0.0")
 	host.running.InstallKind = "container"
 	ex, store := newTestExecutor(t, host)
@@ -665,9 +667,8 @@ func TestContainerInstallIsRefused(t *testing.T) {
 
 	got, err := ex.Run(context.Background(), op.ID)
 	require.NoError(t, err)
-	require.Equal(t, PhaseFailed, got.Phase)
-	require.Contains(t, got.Error, "container")
-	require.Equal(t, 0, host.restarts)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, 1, host.restarts)
 }
 
 func TestRunOnFinishedOperationIsANoop(t *testing.T) {

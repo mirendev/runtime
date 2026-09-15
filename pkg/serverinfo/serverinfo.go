@@ -15,8 +15,9 @@ import (
 	"miren.dev/runtime/version"
 )
 
-// InstallKind is how the process is supervised, which decides whether an
-// upgrade can restart it. Container installs are not upgradable yet (MIR-882).
+// InstallKind is how the process is supervised, which decides how an
+// upgrade restarts it: through systemd, or by exiting and letting the
+// container runtime's restart policy bring a new container up.
 type InstallKind string
 
 const (

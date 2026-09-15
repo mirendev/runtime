@@ -157,9 +157,6 @@ func (e *Executor) begin(ctx context.Context, op *Operation) error {
 		op.PreviousInstanceID = snap.InstanceID
 		op.PreviousVersion = snap.Version
 		op.PreviousCommit = snap.Commit
-		if snap.InstallKind == "container" {
-			return e.fail(ctx, op, errors.New("server runs in a container; container installs cannot be upgraded or restarted this way yet (see MIR-882)"))
-		}
 	}
 	switch op.Action {
 	case ActionRestart:

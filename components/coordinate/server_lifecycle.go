@@ -16,10 +16,17 @@ import (
 const ServerLifecycleService = "dev.miren.runtime/server-lifecycle"
 
 // NewServerLifecycle serves the restart and upgrade ledger over RPC and to
-// cloud. dir is the ledger directory; the executor that
-// writes it runs outside this process.
-func NewServerLifecycle(foundation *Foundation, instance *serverinfo.Source, dir string) *ServerLifecycle {
-	return &ServerLifecycle{Foundation: foundation, instance: instance, dir: dir}
+// cloud. dir is the ledger directory. launcher is where the executor that
+// writes it runs: outside this process under systemd, inside it in a
+// container.
+func NewServerLifecycle(foundation *Foundation, instance *serverinfo.Source, dir string, launcher serverlifecycle.Launcher) *ServerLifecycle {
+	return &ServerLifecycle{Foundation: foundation, instance: instance, dir: dir, launcher: launcher}
+}
+
+// Resumer is a Launcher whose executors do not outlive the server, so an
+// operation the previous instance left unfinished has to be picked up here.
+type Resumer interface {
+	Resume(ctx context.Context, store *serverlifecycle.Store) error
 }
 
 // ServerLifecycle owns the read side of pkg/serverlifecycle within the server.
@@ -28,6 +35,7 @@ type ServerLifecycle struct {
 	*Foundation
 	instance *serverinfo.Source
 	dir      string
+	launcher serverlifecycle.Launcher
 
 	store    *serverlifecycle.Store
 	watcher  *lifecyclesync.Watcher
@@ -43,11 +51,7 @@ func (c *ServerLifecycle) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	exe, err := serverlifecycle.ExecutorBinary()
-	if err != nil {
-		return err
-	}
-	launcher := serverlifecycle.SystemdLauncher{Binary: exe}
+	launcher := c.launcher
 
 	c.store = store
 	c.watcher = lifecyclesync.NewWatcher(log, store)
@@ -63,7 +67,17 @@ func (c *ServerLifecycle) Start(ctx context.Context) error {
 
 	c.Server().ExposeValue(ServerLifecycleService, server_v1alpha.AdaptServerLifecycle(
 		lifecyclesrv.NewServer(store, kickingLauncher{launcher, c.watcher}, log)))
-	log.Info("server lifecycle ready", "dir", c.dir, "executor", exe)
+	log.Info("server lifecycle ready", "dir", c.dir, "install_kind", c.instance.Info().InstallKind)
+
+	// An operation mid-flight across the restart it asked for: the record
+	// says where it was, and this instance is the one it is waiting to see.
+	if resumer, ok := launcher.(Resumer); ok {
+		if err := resumer.Resume(runCtx, store); err != nil {
+			// Not fatal: the server is up either way, and the operation is
+			// visible in the ledger for an operator to abandon.
+			log.Error("could not resume the previous instance's lifecycle operation", "error", err)
+		}
+	}
 	return nil
 }
 
