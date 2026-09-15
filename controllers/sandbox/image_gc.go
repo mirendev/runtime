@@ -61,6 +61,8 @@ type ImageGCResult struct {
 //     older than OrphanGracePeriod. The Artifact is created when the manifest
 //     is pushed, before containerd ever pulls the image, so a missing Artifact
 //     means the app was deleted out from under it.
+//   - Images an AppVersion still references are kept regardless of what the
+//     Artifact says, since the version is what a deploy or rollback needs.
 type ImageWatchdog struct {
 	Log *slog.Logger
 	CC  *containerd.Client
@@ -220,6 +222,11 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		return result, fmt.Errorf("failed to collect artifact statuses: %w", err)
 	}
 
+	versionRefs, err := w.collectVersionReferences(gcCtx)
+	if err != nil {
+		return result, fmt.Errorf("failed to collect app version references: %w", err)
+	}
+
 	now := time.Now()
 
 	// Process each image
@@ -236,6 +243,17 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		artifactID := w.ParseArtifactID(imgName)
 		if artifactID == "" {
 			// Not a miren-managed image (infrastructure, etc.) - keep it
+			result.RetainedImages++
+			continue
+		}
+
+		// A version that still points at this image outranks the artifact's
+		// status. Installs upgraded from before app delete spared artifacts can
+		// hold a version whose shared artifact is already gone, and a build
+		// can reuse an artifact the artifact GC is archiving at the same
+		// moment. Neither is a reason to pull the image out from under a
+		// deploy or rollback.
+		if versionRefs.images[imgName] || versionRefs.artifacts[artifactID] {
 			result.RetainedImages++
 			continue
 		}
@@ -325,6 +343,43 @@ func (w *ImageWatchdog) collectInUseImages(ctx context.Context) (map[string]bool
 
 	w.Log.Debug("collected in-use images", "count", len(images))
 	return images, nil
+}
+
+// versionReferences is the set of images and artifacts that AppVersions still
+// point at, keyed the two ways an image can be matched to a version.
+type versionReferences struct {
+	images    map[string]bool
+	artifacts map[string]bool
+}
+
+// collectVersionReferences returns the images and artifacts referenced by any
+// AppVersion, ephemeral ones included.
+func (w *ImageWatchdog) collectVersionReferences(ctx context.Context) (versionReferences, error) {
+	refs := versionReferences{
+		images:    make(map[string]bool),
+		artifacts: make(map[string]bool),
+	}
+
+	resp, err := w.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
+	if err != nil {
+		return refs, fmt.Errorf("failed to list app versions: %w", err)
+	}
+
+	for _, e := range resp.Values() {
+		var av core_v1alpha.AppVersion
+		av.Decode(e.Entity())
+
+		if av.ImageUrl != "" {
+			refs.images[av.ImageUrl] = true
+		}
+		if av.Artifact != "" {
+			refs.artifacts[string(av.Artifact)] = true
+		}
+	}
+
+	w.Log.Debug("collected app version references",
+		"images", len(refs.images), "artifacts", len(refs.artifacts))
+	return refs, nil
 }
 
 // collectArtifactStatuses returns a map of artifact ID (string) to status.

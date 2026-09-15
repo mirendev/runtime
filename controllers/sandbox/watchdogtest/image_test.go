@@ -386,6 +386,88 @@ func TestImageWatchdog(t *testing.T) {
 		r.NoError(err, "fresh orphaned image should still exist after GC")
 	})
 
+	t.Run("keeps images a surviving app version still references", func(t *testing.T) {
+		r := require.New(t)
+
+		appID := entity.Id("app/" + idgen.GenNS("app"))
+		app := &core_v1alpha.App{ID: appID}
+		var appRpcE entityserver_v1alpha.Entity
+		appRpcE.SetId(appID.String())
+		appRpcE.SetAttrs(entity.New(entity.DBId, appID, app.Encode).Attrs())
+		_, err := eac.Put(ctx, &appRpcE)
+		r.NoError(err)
+
+		img, err := cc.GetImage(ctx, imagerefs.AlpineDefault)
+		r.NoError(err)
+
+		// An image whose artifact is gone, as an install upgraded from before
+		// app delete spared artifacts can have. The version points at it by
+		// artifact ID, so the artifact has to exist when the version is
+		// created and be deleted out from under it afterwards.
+		orphanArtifactName := idgen.GenNS("a")
+		orphanImage := "cluster.local:5000/test-app-shared:" + orphanArtifactName
+		_, err = cc.ImageService().Create(ctx, images.Image{Name: orphanImage, Target: img.Target()})
+		r.NoError(err)
+		orphanArtifactID := entity.Id("artifact/" + orphanArtifactName)
+		orphanArtifact := &core_v1alpha.Artifact{ID: orphanArtifactID, App: appID, Status: core_v1alpha.ACTIVE}
+		var orphanArtRpcE entityserver_v1alpha.Entity
+		orphanArtRpcE.SetId(orphanArtifactID.String())
+		orphanArtRpcE.SetAttrs(entity.New(entity.DBId, orphanArtifactID, orphanArtifact.Encode).Attrs())
+		_, err = eac.Put(ctx, &orphanArtRpcE)
+		r.NoError(err)
+
+		// An image whose artifact was archived under a live version, as a
+		// build reusing a digest can race the artifact GC into. The version
+		// points at it by image URL only.
+		archivedArtifactName := idgen.GenNS("a")
+		archivedImage := "cluster.local:5000/test-app-raced:" + archivedArtifactName
+		_, err = cc.ImageService().Create(ctx, images.Image{Name: archivedImage, Target: img.Target()})
+		r.NoError(err)
+		archivedArtifactID := entity.Id("artifact/" + archivedArtifactName)
+		archivedArtifact := &core_v1alpha.Artifact{ID: archivedArtifactID, App: appID, Status: core_v1alpha.ARCHIVED}
+		var artRpcE entityserver_v1alpha.Entity
+		artRpcE.SetId(archivedArtifactID.String())
+		artRpcE.SetAttrs(entity.New(entity.DBId, archivedArtifactID, archivedArtifact.Encode).Attrs())
+		_, err = eac.Put(ctx, &artRpcE)
+		r.NoError(err)
+
+		for _, av := range []*core_v1alpha.AppVersion{
+			{ID: entity.Id("app_version/" + idgen.GenNS("v")), App: appID, Artifact: orphanArtifactID},
+			{ID: entity.Id("app_version/" + idgen.GenNS("v")), App: appID, ImageUrl: archivedImage},
+		} {
+			var avRpcE entityserver_v1alpha.Entity
+			avRpcE.SetId(av.ID.String())
+			avRpcE.SetAttrs(entity.New(entity.DBId, av.ID, av.Encode).Attrs())
+			_, err = eac.Put(ctx, &avRpcE)
+			r.NoError(err)
+		}
+
+		_, err = eac.Delete(ctx, orphanArtifactID.String())
+		r.NoError(err)
+
+		cfg := sandbox.DefaultImageGCConfig()
+		cfg.OrphanGracePeriod = 100 * time.Millisecond
+		time.Sleep(2 * cfg.OrphanGracePeriod)
+		watchdog := &sandbox.ImageWatchdog{
+			Log:       slog.Default(),
+			CC:        cc,
+			EAC:       eac,
+			Namespace: ii.Namespace,
+			DataPath:  "/tmp",
+			Config:    cfg,
+		}
+
+		result, err := watchdog.RunGC(ctx)
+		r.NoError(err)
+
+		r.NotContains(result.DeletedImages, orphanImage, "image referenced by a version's artifact should not be deleted")
+		r.NotContains(result.DeletedImages, archivedImage, "image referenced by a version's image URL should not be deleted")
+		_, err = cc.GetImage(ctx, orphanImage)
+		r.NoError(err)
+		_, err = cc.GetImage(ctx, archivedImage)
+		r.NoError(err)
+	})
+
 	t.Run("ParseArtifactID extracts artifact ID correctly", func(t *testing.T) {
 		r := require.New(t)
 
