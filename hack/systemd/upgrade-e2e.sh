@@ -6,12 +6,20 @@
 # fixture releases from a local asset server, and drives:
 #
 #   1. sudo miren server restart            (new instance, same version)
-#   2. sudo miren upgrade --version v9.0.1  (real upgrade, new binary)
+#   2. sudo miren upgrade --version v9.0.1  (real upgrade: new binary and a
+#      full base bundle whose runc is wrapped to report a version of its own,
+#      so the health endpoint proves the server came up on the new bundle)
 #   3. sudo miren server upgrade --version v9.0.2 --health-timeout 45
 #      where v9.0.2 is a script that reports a version, writes to etcd the
 #      way a build migrating state on boot would, and then cannot start, so
-#      the executor must roll back to v9.0.1 and the pre-upgrade etcd data
+#      the executor must roll back to v9.0.1 and the pre-upgrade etcd data,
+#      and to v9.0.1's bundle: v9.0.2 carries one too, with a runc that
+#      reports yet another version
 #   4. a restart whose CLI is killed mid-flight, which must still finish
+#
+# A container started through ctr before any of this has to be running, on
+# the same pid, after all of it: containerd is bounced by every restart and
+# re-adopts the shims it left behind.
 #
 # Requires docker on a Linux host and the iso dev environment (binaries are
 # built with hack/dev-exec so no host Go toolchain is needed; the build is
@@ -45,9 +53,33 @@ for v in v9.0.0 v9.0.1; do
   cp "$ROOT_DIR/bin/miren" "$WORK/bin/miren-$v"
 done
 
+# The base bundle main ships: containerd, runc and the shim the container
+# needs beside miren, and the same files the v9.0.1 fixture carries so the
+# upgrade has a bundle to install.
+BASE_URL="${BASE_URL:-https://api.miren.cloud/assets/release/miren/main/miren-base-linux-amd64.tar.gz}"
+log "fetching the base bundle from $BASE_URL"
+mkdir -p "$WORK/bundle"
+curl -fsSL -o "$WORK/base.tgz" "$BASE_URL"
+tar -xzf "$WORK/base.tgz" --exclude=./miren -C "$WORK/bundle"
+
 log "packaging fixture releases"
-T=$(mktemp -d); cp "$WORK/bin/miren-v9.0.1" "$T/miren"
-tar -C "$T" -czf "$WORK/assets/v9.0.1/miren-base-linux-amd64.tar.gz" miren; rm -rf "$T"
+# v9.0.1 is a whole base package. Its runc is the real one behind a wrapper
+# that answers --version with a string nothing else would report, so the
+# server's component report after the upgrade can only be satisfied by the
+# runc this bundle carried.
+# bundle_with_runc <dir> <version>: the base bundle into dir, its runc wrapped.
+bundle_with_runc() {
+  cp "$WORK/bundle/"* "$1/"
+  mv "$1/runc" "$1/runc.real"
+  cat >"$1/runc" <<WRAPPED
+#!/bin/sh
+if [ "\$1" = "--version" ]; then echo "runc version $2"; exit 0; fi
+exec "\$(dirname "\$0")/runc.real" "\$@"
+WRAPPED
+  chmod +x "$1/runc"
+}
+T=$(mktemp -d); cp "$WORK/bin/miren-v9.0.1" "$T/miren"; bundle_with_runc "$T" e2e-wrapped
+tar -C "$T" -czf "$WORK/assets/v9.0.1/miren-base-linux-amd64.tar.gz" .; rm -rf "$T"
 # The broken build stands in for a new version that migrates etcd state on
 # boot and then fails readiness. A graceful service stop takes embedded etcd
 # down with the server, so like a real build it brings etcd up on the
@@ -78,7 +110,9 @@ case "$1" in
 esac
 BROKEN
 chmod +x "$T/miren"
-tar -C "$T" -czf "$WORK/assets/v9.0.2/miren-base-linux-amd64.tar.gz" miren; rm -rf "$T"
+# v9.0.2 carries a bundle as well, so the rollback has one to put back.
+bundle_with_runc "$T" e2e-broken
+tar -C "$T" -czf "$WORK/assets/v9.0.2/miren-base-linux-amd64.tar.gz" .; rm -rf "$T"
 for v in v9.0.1 v9.0.2; do
   n=${v##*.}
   (cd "$WORK/assets/$v" && sha256sum miren-base-linux-amd64.tar.gz >miren-base-linux-amd64.tar.gz.sha256)
@@ -100,6 +134,9 @@ GATEWAY=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gatew
 ASSET_URL="http://$GATEWAY:$ASSET_PORT"
 
 log "starting systemd container (installs main from the asset service)"
+# The volume cannot go while a previous run's container still holds it, and
+# a run on last time's data would find its containers already there.
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 docker volume rm miren-data >/dev/null 2>&1 || true
 "$SCRIPT_DIR/run-systemd-test.sh" >"$WORK/container.log" 2>&1
 for _ in $(seq 1 100); do
@@ -124,8 +161,7 @@ etcdctl_in() { in_container "$ETCDCTL $*"; }
 # The install script only places the miren binary; a server also needs the
 # containerd/runc bundle from the base package next to it.
 log "installing the base package dependencies"
-in_container 'cd /tmp && curl -fsSL -o base.tgz https://api.miren.cloud/assets/release/miren/main/miren-base-linux-amd64.tar.gz \
-  && tar -xzf base.tgz --exclude=./miren -C /var/lib/miren/release && rm base.tgz'
+docker cp "$WORK/bundle/." "$CONTAINER:/var/lib/miren/release/"
 
 log "installing v9.0.0 over the network install"
 docker cp "$WORK/bin/miren-v9.0.0" "$CONTAINER:/var/lib/miren/release/miren.new"
@@ -133,17 +169,47 @@ in_container 'mv /var/lib/miren/release/miren.new /var/lib/miren/release/miren &
 wait_ready
 [ "$(health .server.version)" = "v9.0.0" ]
 [ "$(health .server.install_kind)" = "systemd" ]
+[ "$(health .server.components.containerd)" != null ]
+[ "$(health .server.components.runc)" != null ]
+[ "$(health .server.components.runc)" != e2e-wrapped ]
 BEFORE=$(health .server.runtime_instance_id)
+
+# A container in a namespace of its own, so nothing miren reconciles will
+# touch it. Its pid is what every restart below must leave alone.
+CTR='/var/lib/miren/release/ctr --address /var/lib/miren/containerd/containerd.sock -n e2e'
+BUSYBOX=$(sed -n 's/.*BusyboxDefault = "\(.*\)"/\1/p' "$ROOT_DIR/pkg/imagerefs/imagerefs.go")
+log "starting a container to carry across every restart"
+in_container "$CTR image pull $BUSYBOX >/dev/null && $CTR run -d $BUSYBOX survivor sleep 86400"
+task_pid() { in_container "$CTR task ls" | awk -v t="$1" '$1 == t && $3 == "RUNNING" {print $2}'; }
+SURVIVOR_PID=$(task_pid survivor)
+[ -n "$SURVIVOR_PID" ]
+# procps is not in the image; /proc is enough to find the one daemon.
+containerd_pid() { in_container 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = containerd ] && basename $p; done; true'; }
+CONTAINERD_BEFORE=$(containerd_pid)
 
 log "1. miren server restart"
 in_container 'miren server restart'
 [ "$(health .server.runtime_instance_id)" != "$BEFORE" ]
 [ "$(health .server.version)" = "v9.0.0" ]
+# A graceful restart takes containerd down with the server; the container
+# outlives both through its shim, which the new containerd re-adopts.
+[ "$(containerd_pid)" != "$CONTAINERD_BEFORE" ]
+[ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
 
 log "2. miren upgrade --version v9.0.1"
 in_container "MIREN_ASSET_BASE_URL=$ASSET_URL miren upgrade --version v9.0.1"
 [ "$(health .server.version)" = "v9.0.1" ]
 in_container 'test -f /var/lib/miren/release/miren.old'
+# The whole bundle was installed, each file with its backup, and the server
+# came up on it: only the fixture's runc answers with the wrapped version.
+in_container 'test -f /var/lib/miren/release/.previous/containerd && test -f /var/lib/miren/release/.previous/runc'
+[ "$(health .server.components.runc)" = e2e-wrapped ]
+[ "$(health .server.components.containerd)" != null ]
+in_container 'miren server operations list --format json' | jq -e '.[-1].components.runc == "e2e-wrapped"' >/dev/null
+[ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
+# New containers run through the new shim and the wrapped runc.
+in_container "$CTR run -d $BUSYBOX newcomer sleep 86400"
+[ -n "$(task_pid newcomer)" ]
 # Every upgrade snapshots etcd first, whether or not it ends up needing it.
 BACKUP=$(in_container 'miren server operations list --format json' | jq -re '.[-1].backup_ref')
 in_container "test -s '$BACKUP'"
@@ -155,6 +221,13 @@ if in_container "MIREN_ASSET_BASE_URL=$ASSET_URL miren server upgrade --version 
 fi
 [ "$(health .server.version)" = "v9.0.1" ]
 [ "$(health .server.ready)" = "true" ]
+# The rollback put v9.0.1's bundle back along with its binary: the server
+# is on the wrapped runc again, not the broken build's, and the backups are
+# consumed. The container is still there.
+[ "$(health .server.components.runc)" = e2e-wrapped ]
+[ "$(in_container '/var/lib/miren/release/runc --version')" = "runc version e2e-wrapped" ]
+in_container 'test ! -e /var/lib/miren/release/.previous'
+[ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
 OP=$(in_container 'miren server operations list --format json' | jq -c '.[-1]')
 echo "$OP" | jq -e '.phase == "rolled_back"' >/dev/null
 echo "$OP" | jq -e '.data_restore.restored_at != null and .data_restore.backup_ref == .backup_ref' >/dev/null
@@ -165,7 +238,7 @@ in_container "test -s '$(echo "$OP" | jq -r .backup_ref)'"
 [ "$(etcdctl_in get /e2e/before --print-value-only)" = "kept" ]
 [ -z "$(etcdctl_in get /e2e/migrated --print-value-only)" ]
 in_container "test -d /var/lib/miren/etcd.replaced-$(echo "$OP" | jq -r .id)"
-in_container "miren server operations show $(echo "$OP" | jq -r .id)" | grep -q '^Restore:   restored'
+in_container "miren server operations show $(echo "$OP" | jq -r .id)" | grep -Eq '^ *Restore: +restored'
 
 log "4. restart with the CLI killed mid-operation"
 BEFORE=$(health .server.runtime_instance_id)
@@ -177,6 +250,7 @@ for _ in $(seq 1 40); do
 done
 in_container 'miren server operations list --format json' | jq -e '.[-1].phase == "succeeded"' >/dev/null
 [ "$(health .server.runtime_instance_id)" != "$BEFORE" ]
+[ "$(task_pid survivor)" = "$SURVIVOR_PID" ]
 
 log "all upgrade scenarios passed"
 in_container 'miren server operations list'

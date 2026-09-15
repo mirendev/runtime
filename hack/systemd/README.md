@@ -76,9 +76,12 @@ docker exec -it miren-systemd-test /hack/test-oom-restart.sh
 against this container using builds of the current checkout and a local asset
 server, so nothing has to be published first. The rollback case upgrades to a
 build that writes to etcd and then fails readiness, and checks that the
-rollback brings back the pre-upgrade etcd data along with the binary. It
-takes several minutes and needs the iso dev environment for the builds. Set
-`WORK=/some/dir` to keep the fixtures between runs.
+rollback brings back the pre-upgrade etcd data along with the binary and
+the previous bundle. Both fixtures are full base bundles, each with a runc
+wrapped to report a version of its own, so the health endpoint shows which
+bundle the running server is on. A container started before any of it is
+still running on the same pid at the end. It takes several minutes and needs the iso dev environment for
+the builds. Set `WORK=/some/dir` to keep the fixtures between runs.
 
 ## Testing Upgrades
 

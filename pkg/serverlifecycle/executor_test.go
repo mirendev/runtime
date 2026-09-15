@@ -119,6 +119,7 @@ func (h *fakeHost) Restart(context.Context) error {
 		Commit:      h.onDisk.Commit,
 		Ready:       true,
 		InstallKind: "systemd",
+		Components:  map[string]string{"containerd": "v2.0.4", "runc": "1.2.2"},
 	}
 	h.pending = h.bootProbes
 	return nil
@@ -246,6 +247,9 @@ func TestUpgradeDownloadsInstallsRestartsVerifies(t *testing.T) {
 	require.Equal(t, 1, host.installs)
 	require.Equal(t, 1, host.restarts)
 	require.Equal(t, 0, host.rollbacks)
+	// The restarted server's runtime versions are the record that the bundle
+	// swap took, not just the miren binary.
+	require.Equal(t, map[string]string{"containerd": "v2.0.4", "runc": "1.2.2"}, got.Components)
 }
 
 func TestUpgradeRollsBackWhenNewBinaryNeverReady(t *testing.T) {

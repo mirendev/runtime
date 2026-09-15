@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -74,20 +76,21 @@ type unavailableBackup struct{ err error }
 func (u unavailableBackup) Backup(context.Context, string) (string, error) { return "", u.err }
 
 type operationJSON struct {
-	ID              string           `json:"id"`
-	Action          string           `json:"action"`
-	Phase           string           `json:"phase"`
-	RequestedBy     string           `json:"requested_by,omitempty"`
-	TargetVersion   string           `json:"target_version,omitempty"`
-	ResolvedVersion string           `json:"resolved_version,omitempty"`
-	PreviousVersion string           `json:"previous_version,omitempty"`
-	NewVersion      string           `json:"new_version,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	Progress        string           `json:"progress,omitempty"`
-	BackupRef       string           `json:"backup_ref,omitempty"`
-	DataRestore     *dataRestoreJSON `json:"data_restore,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	FinishedAt      *time.Time       `json:"finished_at,omitempty"`
+	ID              string            `json:"id"`
+	Action          string            `json:"action"`
+	Phase           string            `json:"phase"`
+	RequestedBy     string            `json:"requested_by,omitempty"`
+	TargetVersion   string            `json:"target_version,omitempty"`
+	ResolvedVersion string            `json:"resolved_version,omitempty"`
+	PreviousVersion string            `json:"previous_version,omitempty"`
+	NewVersion      string            `json:"new_version,omitempty"`
+	Components      map[string]string `json:"components,omitempty"`
+	Error           string            `json:"error,omitempty"`
+	Progress        string            `json:"progress,omitempty"`
+	BackupRef       string            `json:"backup_ref,omitempty"`
+	DataRestore     *dataRestoreJSON  `json:"data_restore,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	FinishedAt      *time.Time        `json:"finished_at,omitempty"`
 }
 
 type dataRestoreJSON struct {
@@ -100,7 +103,7 @@ func toOperationJSON(op *serverlifecycle.Operation) operationJSON {
 	out := operationJSON{
 		ID: op.ID, Action: string(op.Action), Phase: string(op.Phase), RequestedBy: op.RequestedBy,
 		TargetVersion: op.TargetVersion, ResolvedVersion: op.ResolvedVersion,
-		PreviousVersion: op.PreviousVersion, NewVersion: op.NewVersion,
+		PreviousVersion: op.PreviousVersion, NewVersion: op.NewVersion, Components: op.Components,
 		Error: op.Error, Progress: op.Progress, BackupRef: op.BackupRef,
 		CreatedAt: op.CreatedAt, FinishedAt: op.FinishedAt,
 	}
@@ -258,6 +261,9 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	if op.PreviousInstanceID != "" || op.NewInstanceID != "" {
 		items = append(items, ui.NewNamedValue("Instances", op.PreviousInstanceID+" -> "+op.NewInstanceID))
 	}
+	if len(op.Components) > 0 {
+		items = append(items, ui.NewNamedValue("Components", describeComponents(op.Components)))
+	}
 	if op.BackupRef != "" {
 		items = append(items, ui.NewNamedValue("Backup", op.BackupRef))
 	}
@@ -276,6 +282,16 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	}
 	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
 	return nil
+}
+
+// describeComponents renders "containerd v2.0.4, runc 1.2.2", sorted so the
+// line is stable across runs.
+func describeComponents(components map[string]string) string {
+	parts := make([]string, 0, len(components))
+	for _, name := range slices.Sorted(maps.Keys(components)) {
+		parts = append(parts, name+" "+components[name])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // phaseStyle colors a phase by what it means for the operator: green is done
