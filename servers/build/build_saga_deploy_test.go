@@ -16,7 +16,6 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/saga"
@@ -392,15 +391,9 @@ func TestBuildSaga_Tracked_RecordCancellationCompensates(t *testing.T) {
 
 	deploymentID := string(records[0].Deployment.ID)
 
-	// The cancellation watch is established asynchronously, and MockStore's
-	// WatchIndex ignores the resume revision that makes indexwatch gap-free
-	// against etcd. Cancelling before the watch registers means the update is
-	// never delivered and the build hangs, so wait for the watcher first.
-	watchCtx, cancelWatchWait := context.WithTimeout(ctx, 5*time.Second)
-	defer cancelWatchWait()
-	require.NoError(t, h.inmem.Store.WaitForIndexWatcher(
-		watchCtx, entity.Ref(entity.DBId, entity.Id(deploymentID))))
-
+	// The cancellation watch is established asynchronously. It resumes from
+	// the revision of its initial snapshot, so a cancel that lands before the
+	// watch registers is replayed rather than lost, on MockStore as on etcd.
 	require.NoError(t, h.builder.deploy.Cancel(ctx, deploymentID, "operator cancelled"))
 
 	select {

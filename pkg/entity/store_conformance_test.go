@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"miren.dev/runtime/pkg/cond"
 )
@@ -214,12 +215,11 @@ func TestStoreConformance_CreateEntity(t *testing.T) {
 		))
 		require.NoError(t, err)
 		assert.NotEmpty(t, created.Id(), "create must assign an id")
-		// Revision schemes differ between backends: MockStore numbers each
-		// entity from 1, while EtcdStore stamps the global etcd revision (so a
-		// fresh entity can be at revision 290). The shared contract callers can
-		// rely on is "positive, and strictly increasing per entity across
-		// writes" (the latter is pinned by Replace/Patch/Update below), not an
-		// absolute starting value.
+		// Both backends stamp a store-wide revision, so a fresh entity can be
+		// at revision 290 (etcd) or 12 (mock, after system entities). The
+		// shared contract callers can rely on is "positive, and strictly
+		// increasing per entity across writes" (the latter is pinned by
+		// Replace/Patch/Update below), not an absolute starting value.
 		assert.Positive(t, created.GetRevision(), "create must assign a positive revision")
 	})
 }
@@ -1011,6 +1011,123 @@ func TestStoreConformance_WatchIndex(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for a WatchIndex event")
 		}
+	})
+}
+
+// collectWatchIds drains WatchIndex responses until every id in want has been
+// seen, returning the ids observed in order. It fails the test on a timeout.
+func collectWatchIds(t *testing.T, ch clientv3.WatchChan, want map[Id]bool) []Id {
+	t.Helper()
+	pending := make(map[Id]bool, len(want))
+	for id := range want {
+		pending[id] = true
+	}
+	var got []Id
+	deadline := time.After(5 * time.Second)
+	for len(pending) > 0 {
+		select {
+		case resp := <-ch:
+			for _, ev := range resp.Events {
+				id := Id(ev.Kv.Value)
+				got = append(got, id)
+				delete(pending, id)
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for WatchIndex events; still pending %v, saw %v", pending, got)
+		}
+	}
+	return got
+}
+
+// TestStoreConformance_WatchIndexResumesFromRevision pins the contract that
+// indexwatch.Watcher is built on: a watch opened from a revision replays every
+// index event at or after it before going live. A consumer lists at revision
+// R, then watches from R+1, and any write that landed in between must arrive
+// rather than vanish. MIR-1863 hit exactly that gap: MockStore used to record
+// fromRev without honouring it, so a test whose write beat the watch
+// registration lost the event forever and read as a timing flake.
+func TestStoreConformance_WatchIndexResumesFromRevision(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		applyConformanceSchema(t, store)
+
+		target := Id("conf-resume-target/v1")
+		index := Ref(Id("conf/ref"), target)
+		_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+		require.NoError(t, err)
+
+		before, err := store.CreateEntity(ctx, New(Any(Ident, "conf-resume-before"), index))
+		require.NoError(t, err)
+
+		_, rev, err := store.ListIndexRevision(ctx, index)
+		require.NoError(t, err)
+
+		// This write lands after the snapshot but before the watch exists.
+		gap, err := store.CreateEntity(ctx, New(Any(Ident, "conf-resume-gap"), index))
+		require.NoError(t, err)
+
+		ch, err := store.WatchIndex(ctx, index, rev+1)
+		require.NoError(t, err)
+
+		live, err := store.CreateEntity(ctx, New(Any(Ident, "conf-resume-live"), index))
+		require.NoError(t, err)
+
+		got := collectWatchIds(t, ch, map[Id]bool{gap.Id(): true, live.Id(): true})
+		assert.Equal(t, []Id{gap.Id(), live.Id()}, got,
+			"the write that landed before the watch opened must be replayed first, then live events follow")
+		assert.NotContains(t, got, before.Id(),
+			"a write already covered by the snapshot must not be replayed")
+	})
+}
+
+// TestStoreConformance_WatchIndexReportsCreateAndModify pins how a watch tells
+// a new index entry from a rewritten one, which the entity server turns into
+// create versus update operations and the controller framework into Create
+// versus Update calls. etcd sets CreateRevision == ModRevision on a key's first
+// put, and a later put on the same key reads as a modify.
+func TestStoreConformance_WatchIndexReportsCreateAndModify(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		applyConformanceSchema(t, store)
+
+		target := Id("conf-modify-target/v1")
+		index := Ref(Id("conf/ref"), target)
+		_, err := store.CreateEntity(ctx, New(Ref(DBId, target)))
+		require.NoError(t, err)
+
+		_, rev, err := store.ListIndexRevision(ctx, index)
+		require.NoError(t, err)
+		ch, err := store.WatchIndex(ctx, index, rev+1)
+		require.NoError(t, err)
+
+		created, err := store.CreateEntity(ctx, New(Any(Ident, "conf-modify-a"), index))
+		require.NoError(t, err)
+		_, err = store.UpdateEntity(ctx, created.Id(), New(String(Id("conf/note"), "touched")))
+		require.NoError(t, err)
+
+		var events []*clientv3.Event
+		deadline := time.After(5 * time.Second)
+		for len(events) < 2 {
+			select {
+			case resp := <-ch:
+				for _, ev := range resp.Events {
+					if Id(ev.Kv.Value) == created.Id() {
+						events = append(events, ev)
+					}
+				}
+			case <-deadline:
+				t.Fatalf("timed out waiting for two WatchIndex events, saw %d", len(events))
+			}
+		}
+
+		assert.True(t, events[0].IsCreate(), "the first put on an index entry must read as a create")
+		assert.True(t, events[1].IsModify(), "a later put on the same index entry must read as a modify")
+		assert.Greater(t, events[1].Kv.ModRevision, events[0].Kv.ModRevision,
+			"each put must carry a later revision than the one before it")
+		assert.Equal(t, events[0].Kv.ModRevision, events[1].Kv.CreateRevision,
+			"a modify must still remember the revision the entry was created at")
 	})
 }
 
