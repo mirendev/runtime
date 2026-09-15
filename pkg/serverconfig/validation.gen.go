@@ -23,6 +23,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("containerd: %w", err)
 	}
 
+	if err := c.Deployment.Validate(); err != nil {
+		return fmt.Errorf("deployment: %w", err)
+	}
+
 	if err := c.Etcd.Validate(); err != nil {
 		return fmt.Errorf("etcd: %w", err)
 	}
@@ -91,6 +95,14 @@ func (c *BuildkitConfig) Validate() error {
 func (c *ContainerdConfig) Validate() error {
 
 	// Check for port conflicts in ContainerdConfig
+
+	return nil
+}
+
+// Validate validates DeploymentConfig
+func (c *DeploymentConfig) Validate() error {
+
+	// Check for port conflicts in DeploymentConfig
 
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 
 	aes "miren.dev/runtime/api/entityserver"
 	artifactctrl "miren.dev/runtime/controllers/artifact"
+	deploymentgcctrl "miren.dev/runtime/controllers/deploymentgc"
 	ephemeralctrl "miren.dev/runtime/controllers/ephemeral"
 	indexgcctrl "miren.dev/runtime/controllers/indexgc"
 	runctrl "miren.dev/runtime/controllers/run"
@@ -26,7 +27,18 @@ func NewEntityMaintenance(foundation *Foundation) *EntityMaintenance {
 // cluster state. It does not reconcile live workloads.
 type EntityMaintenance struct {
 	*Foundation
+
+	// DeploymentHistoryReady gates the deployment GC's first sweep on the
+	// deployment-attempt migration, which must finish before any record is
+	// pruned. Nil starts the sweep immediately.
+	DeploymentHistoryReady <-chan struct{}
+
+	// DeploymentExports lets the deployment GC hold a record until cloud has
+	// landed it. Nil prunes on retention alone.
+	DeploymentExports deploymentgcctrl.ExportProgress
+
 	artifactGC    *artifactctrl.GCController
+	deploymentGC  *deploymentgcctrl.GCController
 	runGC         *runctrl.GCController
 	ephemeralGC   *ephemeralctrl.GCController
 	versionGC     *versionctrl.GCController
@@ -61,6 +73,23 @@ func (c *EntityMaintenance) Start(ctx context.Context) error {
 		Config: versionConfig, DataPath: c.DataPath,
 	}
 	c.versionGC.Start(ctx)
+
+	deploymentConfig := deploymentgcctrl.DefaultGCConfig()
+	if c.DeploymentRetentionCount > 0 {
+		deploymentConfig.RetentionCount = c.DeploymentRetentionCount
+	}
+	// Unlike the version GC's > 0 above, zero is a real setting here: it
+	// keeps deployment records indefinitely, the same escape hatch saga
+	// retention offers. Only a negative value means "use the default".
+	if c.DeploymentRetentionPeriod >= 0 {
+		deploymentConfig.RetentionPeriod = c.DeploymentRetentionPeriod
+	}
+	c.deploymentGC = &deploymentgcctrl.GCController{
+		Log: c.Log.With("module", "deployment-gc"), EAC: eac,
+		Config: deploymentConfig, StartGate: c.DeploymentHistoryReady,
+		Exports: c.DeploymentExports,
+	}
+	c.deploymentGC.Start(ctx)
 	c.indexGC = &indexgcctrl.GCController{
 		Log: c.Log.With("module", "index-gc"), Store: c.etcdStore,
 		Config: indexgcctrl.DefaultGCConfig(),
@@ -104,6 +133,9 @@ func (c *EntityMaintenance) Stop() {
 	}
 	if c.versionGC != nil {
 		c.versionGC.Stop()
+	}
+	if c.deploymentGC != nil {
+		c.deploymentGC.Stop()
 	}
 	if c.indexGC != nil {
 		c.indexGC.Stop()

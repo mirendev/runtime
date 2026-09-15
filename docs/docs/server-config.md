@@ -238,6 +238,19 @@ On a frequently-deployed cluster this window can pin more image data than the di
 | `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |
 | `retention_period` | string | `30d` | Keep versions newer than this, regardless of count (e.g. `30d`, `2w`) | `MIREN_APP_VERSION_RETENTION_PERIOD` | `--app-version-retention-period` |
 
+## `[deployment]` — Deployment History Retention {#deployment}
+
+Every deploy, rollback, and config change writes a deployment record, and `miren app history` reads them back. Miren keeps a bounded window of these per app rather than every record forever. The records are small, but a cluster that runs for years accumulates thousands, and every history lookup and reconciliation pass pays to scan them.
+
+A record is retained if it is among the most recent `retention_count` for its app **or** newer than `retention_period` — whichever rule keeps it. A few records are always kept regardless of these limits: the deployment that made the app's current version active, any deployment still in progress or holding the app's deploy lock, and any older record whose status still reads `active`. Pruning a record does not touch the app version it produced; versions have their own [retention](#app-version).
+
+Clusters registered with Miren Cloud keep their full history there. Cloud stores deployments as an archive, so a record pruned here stays visible in cloud, and the runtime only prunes a record once cloud has confirmed it holds it. If the cluster cannot reach cloud, eligible records simply wait; nothing is lost while the link is down. On a cluster that runs without cloud, this window *is* the history, so size it to how far back you want `miren app history` to reach.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `retention_count` | int | `25` | Most-recent deployment records to keep per app, regardless of age | `MIREN_DEPLOYMENT_RETENTION_COUNT` | `--deployment-retention-count` |
+| `retention_period` | string | `30d` | Keep records newer than this, regardless of count (e.g. `30d`, `2w`). `0` keeps every record indefinitely | `MIREN_DEPLOYMENT_RETENTION_PERIOD` | `--deployment-retention-period` |
+
 ## `[saga]` — Saga Execution Retention {#saga}
 
 Miren records a saga execution for multi-step operations like creating a sandbox or running a build, so that a server crash mid-operation can resume or roll back cleanly instead of leaving things half-done. Each record holds the outputs of every step it ran.

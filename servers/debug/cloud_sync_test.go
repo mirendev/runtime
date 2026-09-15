@@ -32,6 +32,7 @@ func TestCloudSyncReportKeepsProtocolDetailsInExtensibleFacts(t *testing.T) {
 		SchemaDigest:      "sha256:test",
 		Mode:              "snapshotting",
 		CloudCursor:       40,
+		LandedRevision:    32,
 		Snapshot: &entitysync.SnapshotProgress{
 			ID: "snapshot-1", HeadRevision: 60, NextRevision: 61,
 			PagesSent: 2, EntitiesSent: 3, CountsByKind: map[string]int64{"app": 3},
@@ -49,6 +50,7 @@ func TestCloudSyncReportKeepsProtocolDetailsInExtensibleFacts(t *testing.T) {
 	}
 	require.Equal(t, "session-1", facts["session_id"])
 	require.Equal(t, "40", facts["cloud_committed_cursor"])
+	require.Equal(t, "32", facts["cloud_landed_revision"])
 	require.Equal(t, "3", facts["snapshot_count.app"])
 	require.Len(t, report.Events(), 1)
 	require.Equal(t, "acknowledgment", report.Events()[0].Kind())

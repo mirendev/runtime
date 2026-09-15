@@ -18,6 +18,8 @@ type CLIFlags struct {
 	ContainerdConfigBinaryPath                *string  `long:"containerd-binary" description:"Path to containerd binary" env:"MIREN_CONTAINERD_BINARY_PATH"`
 	ContainerdConfigSocketPath                *string  `long:"containerd-socket" description:"Path to containerd socket" env:"MIREN_CONTAINERD_SOCKET_PATH"`
 	ContainerdConfigStartEmbedded             *bool    `long:"start-containerd" description:"Start embedded containerd daemon" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+	DeploymentConfigRetentionCount            *int     `long:"deployment-retention-count" description:"Number of most-recent deployment records to retain per app regardless of age" env:"MIREN_DEPLOYMENT_RETENTION_COUNT"`
+	DeploymentConfigRetentionPeriod           *string  `long:"deployment-retention-period" description:"Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely." env:"MIREN_DEPLOYMENT_RETENTION_PERIOD"`
 	EtcdConfigClientPort                      *int     `long:"etcd-client-port" description:"Etcd client port" env:"MIREN_ETCD_CLIENT_PORT"`
 	EtcdConfigEndpoints                       []string `long:"etcd" short:"e" description:"Etcd endpoints" env:"MIREN_ETCD_ENDPOINTS"`
 	EtcdConfigHTTPClientPort                  *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`

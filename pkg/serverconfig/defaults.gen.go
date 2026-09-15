@@ -8,6 +8,7 @@ func DefaultConfig() *Config {
 		AppVersion:      DefaultAppVersionConfig(),
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
+		Deployment:      DefaultDeploymentConfig(),
 		Etcd:            DefaultEtcdConfig(),
 		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
@@ -47,6 +48,14 @@ func DefaultContainerdConfig() ContainerdConfig {
 		BinaryPath:    new("containerd"),
 		SocketPath:    new(""),
 		StartEmbedded: nil,
+	}
+}
+
+// DefaultDeploymentConfig returns default DeploymentConfig
+func DefaultDeploymentConfig() DeploymentConfig {
+	return DeploymentConfig{
+		RetentionCount:  new(25),
+		RetentionPeriod: new("30d"),
 	}
 }
 
