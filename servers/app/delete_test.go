@@ -79,10 +79,10 @@ func TestDeleteAppTransitive(t *testing.T) {
 		err = DeleteAppTransitive(ctx, client, log, appID)
 		require.NoError(t, err)
 
-		// Verify app, app_version, and artifact are deleted
+		// Verify app and app_version are deleted; the artifact is left for the artifact GC
 		require.False(t, entityExists(appID), "app should be deleted")
 		require.False(t, entityExists(versionID), "app_version should be deleted")
-		require.False(t, entityExists(artifactID), "artifact should be deleted (has dev.miren.app_ref tag)")
+		require.True(t, entityExists(artifactID), "artifact should still exist (archived by artifact GC)")
 	})
 
 	t.Run("deletes app with http_route", func(t *testing.T) {
@@ -310,7 +310,7 @@ func TestDeleteAppTransitive(t *testing.T) {
 		// Verify app, app_versions, and entities with dev.miren.app_ref are deleted
 		require.False(t, entityExists(version1ID), "app_version v1 should be deleted")
 		require.False(t, entityExists(version2ID), "app_version v2 should be deleted")
-		require.False(t, entityExists(artifactID), "artifact should be deleted (has dev.miren.app_ref tag)")
+		require.True(t, entityExists(artifactID), "artifact should still exist (archived by artifact GC)")
 		require.False(t, entityExists(routeID), "route should be deleted (has dev.miren.app_ref tag)")
 		require.False(t, entityExists(appID), "app should be deleted")
 		// Sandboxes are NOT deleted - they reference app_versions, not apps directly

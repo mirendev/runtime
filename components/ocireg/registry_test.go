@@ -88,6 +88,53 @@ func TestPutManifest_PreventsDuplicateArtifacts(t *testing.T) {
 	assert.Equal(t, artifact1.ID, foundArtifact.ID, "Should be the first artifact created")
 }
 
+func TestPutManifest_ReactivatesArchivedArtifact(t *testing.T) {
+	entServer, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	log := testutils.TestLogger(t)
+	ctx := context.Background()
+
+	var app core_v1alpha.App
+	_, err := entServer.Client.Create(ctx, "test-app", &app)
+	require.NoError(t, err)
+
+	handler := NewRegistryHandler(t.TempDir(), log, entServer.Client)
+
+	manifestData, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"config":        map[string]any{"digest": "sha256:reuse1234", "size": 1024},
+	})
+	require.NoError(t, err)
+	sum := sha256.Sum256(manifestData)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+
+	rec1 := httptest.NewRecorder()
+	handler.putManifest(rec1, httptest.NewRequest(http.MethodPut, "/v2/test-app/manifests/artifact-1", bytes.NewReader(manifestData)), "test-app", "artifact-1")
+	require.Equal(t, http.StatusCreated, rec1.Code)
+
+	// The artifact GC archives it once nothing references it.
+	var artifact core_v1alpha.Artifact
+	require.NoError(t, entServer.Client.Get(ctx, "artifact-1", &artifact))
+	require.NoError(t, entServer.Client.Patch(ctx, artifact.ID, 0,
+		entity.Ref(core_v1alpha.ArtifactStatusId, core_v1alpha.ArtifactStatusArchivedId)))
+	require.NoError(t, entServer.Client.Get(ctx, "artifact-1", &artifact))
+	require.Equal(t, core_v1alpha.ARCHIVED, artifact.Status, "precondition: artifact is archived")
+
+	// A later push of the same content dedups against it and must bring it
+	// back, or the GCs will reclaim the image under the new version.
+	rec2 := httptest.NewRecorder()
+	handler.putManifest(rec2, httptest.NewRequest(http.MethodPut, "/v2/test-app/manifests/artifact-2", bytes.NewReader(manifestData)), "test-app", "artifact-2")
+	assert.Equal(t, http.StatusCreated, rec2.Code)
+	assert.Equal(t, digest, rec2.Header().Get("Docker-Content-Digest"))
+
+	require.NoError(t, entServer.Client.Get(ctx, "artifact-1", &artifact))
+	assert.Equal(t, core_v1alpha.ACTIVE, artifact.Status, "reused artifact should be active again")
+
+	var artifact2 core_v1alpha.Artifact
+	assert.Error(t, entServer.Client.Get(ctx, "artifact-2", &artifact2), "reuse should not create a second artifact")
+}
+
 func TestPutManifest_DifferentManifestsCreateSeparateArtifacts(t *testing.T) {
 	// Setup in-memory entity server
 	entServer, cleanup := testutils.NewInMemEntityServer(t)

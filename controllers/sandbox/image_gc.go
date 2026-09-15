@@ -25,6 +25,10 @@ type ImageGCConfig struct {
 	PressureCheckInterval time.Duration
 	// DiskPressureThreshold is the disk usage percentage that triggers immediate GC (default: 80%)
 	DiskPressureThreshold float64
+	// OrphanGracePeriod is how old a miren-managed image must be before it is
+	// reclaimed when no Artifact entity exists for it (default: 24h). Zero or
+	// negative means the default.
+	OrphanGracePeriod time.Duration
 }
 
 // DefaultImageGCConfig returns the default configuration for image GC.
@@ -33,6 +37,7 @@ func DefaultImageGCConfig() ImageGCConfig {
 		ScheduledGCInterval:   168 * time.Hour, // Weekly
 		PressureCheckInterval: 1 * time.Hour,
 		DiskPressureThreshold: 80.0,
+		OrphanGracePeriod:     24 * time.Hour,
 	}
 }
 
@@ -50,9 +55,15 @@ type ImageGCResult struct {
 
 // ImageWatchdog periodically garbage collects container images from containerd.
 // It uses Artifact entity status to determine which images to remove:
-// - Images with no corresponding Artifact are kept (infrastructure images, etc.)
-// - Images with Artifact status "active" or empty are kept
-// - Images with Artifact status "archived" are deleted
+//   - Images that are not miren-managed (infrastructure images, etc.) are kept
+//   - Images with Artifact status "active" or empty are kept
+//   - Images with Artifact status "archived" are deleted
+//   - Miren-managed images with no Artifact entity are deleted once they are
+//     older than OrphanGracePeriod. The Artifact is created when the manifest
+//     is pushed, before containerd ever pulls the image, so a missing Artifact
+//     means the app was deleted out from under it.
+//   - Images an AppVersion still references are kept regardless of what the
+//     Artifact says, since the version is what a deploy or rollback needs.
 type ImageWatchdog struct {
 	Log *slog.Logger
 	CC  *containerd.Client
@@ -212,6 +223,20 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 		return result, fmt.Errorf("failed to collect artifact statuses: %w", err)
 	}
 
+	versionRefs, err := w.collectVersionReferences(gcCtx)
+	if err != nil {
+		return result, fmt.Errorf("failed to collect app version references: %w", err)
+	}
+
+	// A zero grace period is an omitted one, not a request to reclaim
+	// immediately; the grace is what stops a torn read from taking a fresh
+	// image, so never let it silently switch off.
+	grace := w.Config.OrphanGracePeriod
+	if grace <= 0 {
+		grace = DefaultImageGCConfig().OrphanGracePeriod
+	}
+	now := time.Now()
+
 	// Process each image
 	for _, img := range images {
 		imgName := img.Name()
@@ -230,22 +255,35 @@ func (w *ImageWatchdog) RunGC(ctx context.Context) (*ImageGCResult, error) {
 			continue
 		}
 
-		// Look up artifact status
+		// A version that still points at this image outranks the artifact's
+		// status. Installs upgraded from before app delete spared artifacts can
+		// hold a version whose shared artifact is already gone, and a build
+		// can reuse an artifact the artifact GC is archiving at the same
+		// moment. Neither is a reason to pull the image out from under a
+		// deploy or rollback.
+		if versionRefs.images[imgName] || versionRefs.artifacts[artifactID] {
+			result.RetainedImages++
+			continue
+		}
+
 		status, found := artifactStatuses[artifactID]
-		if !found {
-			// No artifact entity found - keep the image (safe default)
+		switch {
+		case !found:
+			// The artifact is gone (app deleted or renamed). Give a fresh image
+			// a grace period before reclaiming it so one bad entity read can't
+			// take down a deploy that is still in flight.
+			if now.Sub(img.Metadata().CreatedAt) < grace {
+				result.RetainedImages++
+				continue
+			}
+			w.Log.Debug("deleting orphaned image", "image", imgName, "artifact", artifactID)
+		case status == core_v1alpha.ARCHIVED:
+			w.Log.Debug("deleting archived image", "image", imgName, "artifact", artifactID)
+		default:
 			result.RetainedImages++
 			continue
 		}
 
-		// Only delete if artifact is explicitly archived
-		if status != core_v1alpha.ARCHIVED {
-			result.RetainedImages++
-			continue
-		}
-
-		// Artifact is archived - delete the image
-		w.Log.Debug("deleting archived image", "image", imgName, "artifact", artifactID)
 		err := w.CC.ImageService().Delete(gcCtx, imgName)
 		if err != nil {
 			result.FailedImages[imgName] = err
@@ -313,6 +351,43 @@ func (w *ImageWatchdog) collectInUseImages(ctx context.Context) (map[string]bool
 
 	w.Log.Debug("collected in-use images", "count", len(images))
 	return images, nil
+}
+
+// versionReferences is the set of images and artifacts that AppVersions still
+// point at, keyed the two ways an image can be matched to a version.
+type versionReferences struct {
+	images    map[string]bool
+	artifacts map[string]bool
+}
+
+// collectVersionReferences returns the images and artifacts referenced by any
+// AppVersion, ephemeral ones included.
+func (w *ImageWatchdog) collectVersionReferences(ctx context.Context) (versionReferences, error) {
+	refs := versionReferences{
+		images:    make(map[string]bool),
+		artifacts: make(map[string]bool),
+	}
+
+	resp, err := w.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
+	if err != nil {
+		return refs, fmt.Errorf("failed to list app versions: %w", err)
+	}
+
+	for _, e := range resp.Values() {
+		var av core_v1alpha.AppVersion
+		av.Decode(e.Entity())
+
+		if av.ImageUrl != "" {
+			refs.images[av.ImageUrl] = true
+		}
+		if av.Artifact != "" {
+			refs.artifacts[string(av.Artifact)] = true
+		}
+	}
+
+	w.Log.Debug("collected app version references",
+		"images", len(refs.images), "artifacts", len(refs.artifacts))
+	return refs, nil
 }
 
 // collectArtifactStatuses returns a map of artifact ID (string) to status.
