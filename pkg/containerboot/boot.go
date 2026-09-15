@@ -16,11 +16,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"miren.dev/runtime/pkg/release"
+	"miren.dev/runtime/pkg/serverlifecycle"
 )
 
 // DefaultReleaseDir is where the image bakes the release bundle and where
 // the data volume, mounted over it, keeps it from then on.
 const DefaultReleaseDir = "/var/lib/miren/release"
+
+// DefaultMaxBootAttempts is how many boots an upgraded build gets before
+// container-boot decides it is crash looping and rolls back.
+const DefaultMaxBootAttempts = 3
+
+// RollbackFrom is what container-boot writes as the operation's
+// RollbackFrom: it is not an instance, and no instance will ever match it,
+// which is the point. The executor in the rolled-back build sees a name that
+// is not its own and knows the restart already happened.
+const RollbackFrom = "container-boot"
 
 // imageMarker records the digest of the image binary that last seeded the
 // release directory. It is how a boot tells "the volume was upgraded in
@@ -34,7 +47,12 @@ type Boot struct {
 	// ImageBinary is the miren shipped in the image, normally the one
 	// running this code.
 	ImageBinary string
-	Log         *slog.Logger
+	// LifecycleDir is the operation ledger; empty skips the upgrade guard.
+	LifecycleDir string
+	// MaxBootAttempts is how many boots an upgraded build gets; 0 means
+	// DefaultMaxBootAttempts.
+	MaxBootAttempts int
+	Log             *slog.Logger
 }
 
 // Prepare makes the release directory ready to boot from and returns the
@@ -74,6 +92,100 @@ func (b Boot) Prepare(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return releaseBin, nil
+}
+
+// GuardUpgrade is the part of rollback only container-boot can do. The
+// executor inside an upgraded build rolls it back when it fails to get
+// ready, but a build that crashes before the executor runs never gets that
+// far; from the outside it is a container restarting over and over. Each
+// boot of the new build is counted on the operation, and once it has had
+// its chances the previous binary goes back and the operation is handed to
+// the executor in that build as a rollback whose restart already happened.
+//
+// A ledger that cannot be read is logged and the boot goes on: the server's
+// own data-restore step fails closed on the same ledger, so nothing is lost
+// by not deciding here.
+func (b Boot) GuardUpgrade(ctx context.Context) {
+	if b.LifecycleDir == "" {
+		return
+	}
+	if _, err := os.Stat(b.LifecycleDir); errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err := b.guardUpgrade(ctx); err != nil {
+		b.Log.Error("could not check the lifecycle ledger for a stuck upgrade", "dir", b.LifecycleDir, "error", err)
+	}
+}
+
+func (b Boot) guardUpgrade(ctx context.Context) error {
+	store, err := serverlifecycle.NewStore(b.LifecycleDir)
+	if err != nil {
+		return err
+	}
+	op, err := store.Active()
+	if err != nil {
+		return err
+	}
+	if op == nil || op.Action != serverlifecycle.ActionUpgrade {
+		return nil
+	}
+	// Only boots of the new build count: from the restart phase on, the
+	// upgraded binary is what the volume holds. Earlier phases boot the
+	// previous build and a rollback boots it again; those are the
+	// executor's to finish.
+	if op.Phase != serverlifecycle.PhaseRestarting && op.Phase != serverlifecycle.PhaseVerifying {
+		return nil
+	}
+	// Nothing else runs before the exec, so the lock is a formality; but an
+	// executor that does hold it owns the record, and this must not write
+	// underneath it.
+	unlock, err := store.LockOperation(op.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	op.BootAttempts++
+	limit := b.MaxBootAttempts
+	if limit <= 0 {
+		limit = DefaultMaxBootAttempts
+	}
+	if op.BootAttempts <= limit {
+		b.Log.Info("booting the upgraded build", "operation", op.ID, "version", op.ResolvedVersion, "attempt", op.BootAttempts, "of", limit)
+		return store.Update(op)
+	}
+
+	op.Error = fmt.Sprintf("upgraded build %s did not come up in %d boots", op.ResolvedVersion, limit)
+	installer := release.NewInstaller(release.InstallOptions{InstallPath: filepath.Join(b.ReleaseDir, "miren"), BackupSuffix: ".old"})
+	if op.NoRollback || !installer.HasBackup() {
+		reason := "rollback was turned off for this operation"
+		if !op.NoRollback {
+			reason = "no previous binary to roll back to"
+		}
+		b.Log.Error("upgraded build is not coming up and cannot be rolled back", "operation", op.ID, "version", op.ResolvedVersion, "reason", reason)
+		op.Error += "; " + reason
+		op.Phase = serverlifecycle.PhaseFailed
+		return store.Update(op)
+	}
+
+	b.Log.Warn("upgraded build is not coming up; rolling back", "operation", op.ID, "version", op.ResolvedVersion, "previous", op.PreviousVersion, "attempts", limit)
+	// Same order as the executor's rollback: the restore request is durable
+	// before the previous binary is, and the record says the restart is
+	// behind us before that binary boots and resumes it.
+	if op.BackupRef != "" && op.DataRestore == nil {
+		op.DataRestore = &serverlifecycle.DataRestore{BackupRef: op.BackupRef, ForVersion: op.PreviousVersion, ForCommit: op.PreviousCommit}
+	}
+	op.RollbackFrom = RollbackFrom
+	op.Phase = serverlifecycle.PhaseRollingBack
+	if err := store.Update(op); err != nil {
+		return err
+	}
+	if err := installer.Rollback(ctx); err != nil {
+		op.Error += "; rollback failed: " + err.Error()
+		op.Phase = serverlifecycle.PhaseFailed
+		return errors.Join(err, store.Update(op))
+	}
+	return nil
 }
 
 // seed copies the image binary over the release one. A first boot on a fresh

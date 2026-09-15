@@ -92,26 +92,8 @@ func (h *fakeHost) Probe(context.Context) (Snapshot, error) {
 func (h *fakeHost) Restart(context.Context) error {
 	h.restarts++
 	h.instances++
-	if h.store != nil {
-		if op, err := h.store.PendingRestore(); err != nil {
-			return err
-		} else if op != nil {
-			h.restoresSeen = append(h.restoresSeen, op.DataRestore.BackupRef)
-			result := &RestoreResult{OperationID: op.ID, BackupRef: op.DataRestore.BackupRef, RestoredAt: time.Now().UTC()}
-			switch h.restoreBehavior {
-			case restoreBehaviorIgnore:
-				result = nil
-			case restoreBehaviorFail:
-				result.Error = "etcdutl exited 1"
-				h.restoreRefusing = true
-			case restoreBehaviorRestore:
-			}
-			if result != nil {
-				if err := h.store.WriteRestoreResult(result); err != nil {
-					return err
-				}
-			}
-		}
+	if err := h.restoreOnBoot(); err != nil {
+		return err
 	}
 	h.running = Snapshot{
 		InstanceID:  fmt.Sprintf("inst-%d", h.instances),
@@ -123,6 +105,29 @@ func (h *fakeHost) Restart(context.Context) error {
 	}
 	h.pending = h.bootProbes
 	return nil
+}
+
+// restoreOnBoot is the booting server answering a pending restore request,
+// the way the data-restore boot component does.
+func (h *fakeHost) restoreOnBoot() error {
+	if h.store == nil {
+		return nil
+	}
+	op, err := h.store.PendingRestore()
+	if err != nil || op == nil {
+		return err
+	}
+	h.restoresSeen = append(h.restoresSeen, op.DataRestore.BackupRef)
+	result := &RestoreResult{OperationID: op.ID, BackupRef: op.DataRestore.BackupRef, RestoredAt: time.Now().UTC()}
+	switch h.restoreBehavior {
+	case restoreBehaviorIgnore:
+		return nil
+	case restoreBehaviorFail:
+		result.Error = "etcdutl exited 1"
+		h.restoreRefusing = true
+	case restoreBehaviorRestore:
+	}
+	return h.store.WriteRestoreResult(result)
 }
 
 func (h *fakeHost) Install(_ context.Context, d *release.DownloadedArtifact) error {

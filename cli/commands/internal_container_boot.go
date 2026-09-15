@@ -17,8 +17,9 @@ import (
 // server must stay tini's direct child so signals and exit codes reach it
 // the way they do today.
 func InternalContainerBoot(ctx *Context, opts struct {
-	ReleaseDir string   `long:"release-dir" description:"Release directory in the data volume" default:"/var/lib/miren/release"`
-	Args       []string `rest:"true"`
+	ReleaseDir   string   `long:"release-dir" description:"Release directory in the data volume" default:"/var/lib/miren/release"`
+	LifecycleDir string   `long:"lifecycle-dir" description:"Operation ledger to check for a crash-looping upgrade" default:"/var/lib/miren/server/lifecycle"`
+	Args         []string `rest:"true"`
 }) error {
 	if len(opts.Args) == 0 {
 		return fmt.Errorf("container-boot needs the miren arguments to exec, e.g. `-- server`")
@@ -31,13 +32,15 @@ func InternalContainerBoot(ctx *Context, opts struct {
 		return fmt.Errorf("locate image binary: %w", err)
 	}
 
-	boot := containerboot.Boot{ReleaseDir: opts.ReleaseDir, ImageBinary: image, Log: ctx.Log}
+	boot := containerboot.Boot{ReleaseDir: opts.ReleaseDir, ImageBinary: image, LifecycleDir: opts.LifecycleDir, Log: ctx.Log}
 	bin, err := boot.Prepare(ctx)
 	if err != nil {
 		// The image binary is the one thing known to work, so a boot that
 		// cannot sort out the volume runs it rather than nothing.
 		ctx.Log.Error("could not prepare the release directory; booting the image's own binary", "error", err)
 		bin = image
+	} else {
+		boot.GuardUpgrade(ctx)
 	}
 
 	if err := syscall.Exec(bin, append([]string{bin}, opts.Args...), os.Environ()); err != nil {
