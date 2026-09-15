@@ -50,7 +50,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
 	github.com/mattn/go-runewidth v0.0.19
-	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/miekg/dns v1.1.68
 	github.com/mitchellh/go-testing-interface v1.14.1
 	github.com/mitchellh/mapstructure v1.5.0

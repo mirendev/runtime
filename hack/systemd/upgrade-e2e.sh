@@ -14,7 +14,8 @@
 #   4. a restart whose CLI is killed mid-flight, which must still finish
 #
 # Requires docker on a Linux host and the iso dev environment (binaries are
-# built with hack/dev-exec so they link against a glibc the container has).
+# built with hack/dev-exec so no host Go toolchain is needed; the build is
+# static, so the container's glibc does not matter).
 # Takes several minutes; not wired into per-PR CI on purpose.
 set -euo pipefail
 

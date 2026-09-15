@@ -16,6 +16,9 @@ fi
 
 echo "Building version $version"
 
+# Static builds, matching hack/build.sh and hack/build-ci.sh.
+export CGO_ENABLED=0
+
 dir="tmp/release/$version"
 
 mkdir -p $dir
