@@ -8,7 +8,6 @@ require (
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
-	github.com/cilium/ebpf v0.16.0
 	github.com/coder/websocket v1.8.14
 	github.com/containerd/cgroups/v3 v3.0.5
 	github.com/containerd/console v1.0.4
@@ -30,7 +29,6 @@ require (
 	github.com/docker/cli v27.5.0+incompatible
 	github.com/docker/docker v27.5.1+incompatible
 	github.com/docker/go-connections v0.5.0
-	github.com/elastic/go-perf v0.0.0-20241029065020-30bec95324b8
 	github.com/flannel-io/flannel v0.26.7
 	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/go-acme/lego/v4 v4.28.1
@@ -41,10 +39,8 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/cel-go v0.28.1
 	github.com/google/gofuzz v1.2.0
-	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/ironpark/skiplist v0.0.0-20230103051251-d63941a7d606
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.14
@@ -121,6 +117,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.5 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/cilium/ebpf v0.16.0 // indirect
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect

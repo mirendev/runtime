@@ -356,12 +356,6 @@
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/perf",
-      "elapsed_s": 3.66,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
       "package": "miren.dev/runtime/pkg/stackbuild",
       "elapsed_s": 3.66,
       "status": "pass",
@@ -538,12 +532,6 @@
     {
       "package": "miren.dev/runtime/pkg/tarx",
       "elapsed_s": 3.28,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/observability/profile",
-      "elapsed_s": 3.27,
       "status": "pass",
       "returncode": 0
     },
