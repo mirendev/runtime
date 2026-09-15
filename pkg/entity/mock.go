@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
@@ -26,9 +27,24 @@ type MockStore struct {
 	watchersMu sync.RWMutex
 	watchers   map[Id][]chan EntityOp
 
+	// rev is the store-wide revision, advanced by every write and stamped onto
+	// the written entity the way etcd stamps ModRevision. It is the axis that
+	// ListIndexRevision reports and WatchIndex resumes along, so a cursor taken
+	// from a list is directly comparable to the revision of a later event.
+	// Guarded by mu.
+	rev int64
+
 	// Index watchers - maps index key (attr.CAS()) to list of channels to notify
 	indexWatchersMu sync.RWMutex
 	indexWatchers   map[string][]chan clientv3.WatchResponse
+
+	// indexLog records every index event in commit order so WatchIndex can
+	// replay from a revision. The mock never compacts it. Guarded by
+	// indexWatchersMu, as is indexEntryCreated, which remembers the revision
+	// each (index, entity) entry first appeared at so a put can be reported as
+	// a create or a modify the way etcd's CreateRevision does.
+	indexLog          []indexLogEntry
+	indexEntryCreated map[string]int64
 
 	// WatchFromRevs records the fromRev argument of every WatchIndex call, in
 	// order, so tests can assert resume behavior.
@@ -41,12 +57,26 @@ type MockStore struct {
 
 var _ Store = &MockStore{}
 
+// indexLogEntry is one index event as WatchIndex delivers it, tagged with the
+// revision it was committed at and the index it belongs to.
+type indexLogEntry struct {
+	rev      int64
+	indexKey string
+	resp     clientv3.WatchResponse
+}
+
+// indexWatchBuffer is the slack a WatchIndex channel has for live events beyond
+// its replayed backlog. Delivery is non-blocking, so a consumer that falls
+// this far behind loses events, the same as before replay existed.
+const indexWatchBuffer = 10
+
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Entities:        make(map[Id]*Entity),
-		deletedEntities: make(map[Id]*Entity),
-		watchers:        make(map[Id][]chan EntityOp),
-		indexWatchers:   make(map[string][]chan clientv3.WatchResponse),
+		Entities:          make(map[Id]*Entity),
+		deletedEntities:   make(map[Id]*Entity),
+		watchers:          make(map[Id][]chan EntityOp),
+		indexWatchers:     make(map[string][]chan clientv3.WatchResponse),
+		indexEntryCreated: make(map[string]int64),
 	}
 }
 
@@ -82,12 +112,18 @@ func (m *MockStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (
 	return nil, cond.NotFound("entity", id)
 }
 
-// AddEntity is a thread-safe helper to directly add an entity to the mock store
+// AddEntity is a thread-safe helper to directly add an entity to the mock store.
+// It is fixture setup rather than a write: no revision is assigned and no watch
+// event is produced. A fixture that carries its own revision moves the store
+// head up to it so a watch resumed from that head starts past the fixture.
 func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entity.Fixup()
 	m.Entities[id] = entity
+	if rev := entity.GetRevision(); rev > m.rev {
+		m.rev = rev
+	}
 }
 
 // RemoveEntity is a thread-safe helper to directly remove an entity from the mock store
@@ -222,9 +258,9 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 		entity.SetCreatedAt(m.Now())
 	}
 	entity.SetUpdatedAt(m.Now())
-	entity.SetRevision(1)
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	// Mirror EtcdStore.CreateEntity (store.go:281-326): create is put-if-absent.
 	// A create against an already-existing id is a conflict, not a silent
 	// overwrite, unless WithOverwrite was passed. An idempotent re-create with
@@ -232,23 +268,21 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 	// tests would diverge from production, which enforces uniqueness via an etcd
 	// CreateRevision==0 transaction, masking bugs (e.g. duplicate runner_id
 	// joins) that production actually rejects.
-	if existing, ok := m.Entities[entity.Id()]; ok && !o.overwrite {
+	existing := m.Entities[entity.Id()]
+	if existing != nil && !o.overwrite {
+		// The revision is the store's to assign, so it is not part of what
+		// makes a re-create identical.
+		entity.SetRevision(existing.GetRevision())
 		if slices.EqualFunc(existing.attrs, entity.attrs, func(a, b Attr) bool { return a.Equal(b) }) {
-			m.mu.Unlock()
 			return existing, nil
 		}
-		m.mu.Unlock()
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 	if err := m.ensureShortIdLocked(entity); err != nil {
-		m.mu.Unlock()
 		return nil, err
 	}
 	m.Entities[entity.Id()] = entity
-	m.mu.Unlock()
-
-	// Notify index watchers of the new entity
-	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, nil)
+	m.commitLocked(entity, clientv3.EventTypePut, existing)
 
 	return entity, nil
 }
@@ -311,7 +345,6 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	// Create a copy to avoid modifying the original
 	updated := New(combinedAttrs)
 
-	updated.SetRevision(e.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
 	// Preserve CreatedAt from existing entity
 	if !e.GetCreatedAt().IsZero() {
@@ -319,13 +352,11 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	}
 
 	// Update the entity in the store
-	prevEntity := e
 	m.Entities[id] = updated
+	m.commitLocked(updated, clientv3.EventTypePut, e)
 	m.mu.Unlock()
 
-	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: updated})
-	go m.notifyIndexWatchers(updated, clientv3.EventTypePut, prevEntity)
 
 	return updated, nil
 }
@@ -358,21 +389,17 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 		return nil, cond.Conflict("entity", id)
 	}
 
-	// Update revision and timestamp
-	entity.SetRevision(existing.GetRevision() + 1)
 	entity.SetUpdatedAt(m.Now())
 	// Preserve CreatedAt from existing entity
 	if !existing.GetCreatedAt().IsZero() {
 		entity.SetCreatedAt(existing.GetCreatedAt())
 	}
 
-	prevEntity := existing
 	m.Entities[id] = entity
+	m.commitLocked(entity, clientv3.EventTypePut, existing)
 	m.mu.Unlock()
 
-	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: entity})
-	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, prevEntity)
 
 	return entity, nil
 }
@@ -405,10 +432,10 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 	if err := m.ensureShortIdLocked(entity); err != nil {
 		return nil, false, err
 	}
-	entity.SetRevision(1)
 	entity.SetCreatedAt(m.Now())
 	entity.SetUpdatedAt(m.Now())
 	m.Entities[id] = entity
+	m.commitLocked(entity, clientv3.EventTypePut, nil)
 	return entity, true, nil
 }
 
@@ -418,12 +445,12 @@ func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	delete(m.Entities, id)
 	if existed {
 		m.deletedEntities[id] = entity
+		m.commitLocked(entity, clientv3.EventTypeDelete, entity)
 	}
 	m.mu.Unlock()
 
 	if existed {
 		go m.notifyWatchers(id, EntityOp{Type: EntityOpDelete, Entity: entity})
-		go m.notifyIndexWatchers(entity, clientv3.EventTypeDelete, entity)
 	}
 
 	return nil
@@ -437,13 +464,15 @@ func (m *MockStore) WatchFromRevsCopy() []int64 {
 	return append([]int64(nil), m.WatchFromRevs...)
 }
 
-// WatchIndex registers a watcher and delivers changes from that moment on.
+// WatchIndex registers a watcher for the index. With fromRev > 0 it first
+// replays every event committed at or after that revision, the way etcd's
+// WithRev does, so a write landing between a caller's List and its WatchIndex
+// is resumed rather than lost. Consumers built on indexwatch.Watcher depend on
+// that for gap-free delivery. With fromRev == 0 it delivers changes from this
+// moment on only.
 //
-// Unlike EtcdStore, it records fromRev for assertions but does not replay from
-// it, so a write landing between a caller's List and its WatchIndex is lost
-// rather than resumed. Consumers built on indexwatch.Watcher rely on that
-// replay for gap-free delivery, so a test that writes right after starting a
-// watch must wait for the watch to register first — see WaitForIndexWatcher.
+// Replay and registration happen under one lock, so a write can never fall
+// between them. The mock never compacts, so any fromRev is resumable.
 func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error) {
 	m.indexWatchersMu.Lock()
 	m.WatchFromRevs = append(m.WatchFromRevs, fromRev)
@@ -453,10 +482,21 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (c
 		return m.OnWatchIndex(ctx, attr)
 	}
 
-	ch := make(chan clientv3.WatchResponse, 10)
 	indexKey := attr.CAS()
 
 	m.indexWatchersMu.Lock()
+	var backlog []clientv3.WatchResponse
+	if fromRev > 0 {
+		for _, entry := range m.indexLog {
+			if entry.rev >= fromRev && entry.indexKey == indexKey {
+				backlog = append(backlog, entry.resp)
+			}
+		}
+	}
+	ch := make(chan clientv3.WatchResponse, len(backlog)+indexWatchBuffer)
+	for _, resp := range backlog {
+		ch <- resp
+	}
 	m.indexWatchers[indexKey] = append(m.indexWatchers[indexKey], ch)
 	m.indexWatchersMu.Unlock()
 
@@ -561,48 +601,81 @@ func (m *MockStore) notifyWatchers(id Id, op EntityOp) {
 	}
 }
 
-// notifyIndexWatchers sends a watch response to all index watchers that match the entity's attributes.
-// eventType should be clientv3.EventTypePut for create/update or clientv3.EventTypeDelete for delete.
-// For delete events, prevEntity should be the entity before deletion (to get its ID).
-func (m *MockStore) notifyIndexWatchers(entity *Entity, eventType mvccpb.Event_EventType, prevEntity *Entity) {
-	m.indexWatchersMu.RLock()
-	defer m.indexWatchersMu.RUnlock()
+// commitLocked assigns the next store revision to a write, stamps it onto the
+// entity for a put, and records and delivers the index events the write
+// produces. The caller holds m.mu, which is what makes revision order and
+// event order the same thing: no other write can commit in between.
+//
+// eventType is clientv3.EventTypePut for create/update or
+// clientv3.EventTypeDelete for delete. prevEntity is the entity's prior value
+// when it had one (for a delete, the entity being deleted), so events can
+// carry PrevKv the way etcd's WithPrevKV does.
+func (m *MockStore) commitLocked(entity *Entity, eventType mvccpb.Event_EventType, prevEntity *Entity) {
+	m.rev++
+	rev := m.rev
+	if eventType == clientv3.EventTypePut {
+		entity.SetRevision(rev)
+	}
 
-	// Check each registered index watcher to see if this entity matches
-	allAttrs := enumerateAllAttrs(entity.attrs)
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
 
-	for indexKey, watchers := range m.indexWatchers {
-		// Check if any of the entity's attributes produce this index key
-		for _, attr := range allAttrs {
-			if attr.CAS() == indexKey {
-				// Entity matches this index - notify all watchers
-				event := &clientv3.Event{
-					Type: eventType,
-					Kv: &mvccpb.KeyValue{
-						Key:   []byte(indexKey),
-						Value: []byte(entity.Id()),
-					},
-				}
-				if prevEntity != nil {
-					event.PrevKv = &mvccpb.KeyValue{
-						Key:         []byte(indexKey),
-						Value:       []byte(prevEntity.Id()),
-						ModRevision: prevEntity.GetRevision(),
-					}
-				}
+	// An index is a keyspace, so a write touches each index key at most once no
+	// matter how many of the entity's attributes map to it.
+	seen := make(map[string]bool)
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		indexKey := attr.CAS()
+		if seen[indexKey] {
+			continue
+		}
+		seen[indexKey] = true
 
-				resp := clientv3.WatchResponse{
-					Events: []*clientv3.Event{event},
-				}
+		// etcd reports a put as a create when the key's CreateRevision equals
+		// its ModRevision, and as a modify otherwise. Track when each index
+		// entry first appeared so the mock can say the same.
+		entryKey := indexKey + "\x00" + string(entity.Id())
+		createRev := rev
+		switch eventType {
+		case clientv3.EventTypePut:
+			if first, ok := m.indexEntryCreated[entryKey]; ok {
+				createRev = first
+			} else {
+				m.indexEntryCreated[entryKey] = rev
+			}
+		case clientv3.EventTypeDelete:
+			// A deleted key has no CreateRevision, only the revision it left at.
+			createRev = 0
+			delete(m.indexEntryCreated, entryKey)
+		}
 
-				for _, ch := range watchers {
-					select {
-					case ch <- resp:
-					default:
-						// Channel full, skip
-					}
-				}
-				break // Only notify once per index key
+		event := &clientv3.Event{
+			Type: eventType,
+			Kv: &mvccpb.KeyValue{
+				Key:            []byte(indexKey),
+				Value:          []byte(entity.Id()),
+				CreateRevision: createRev,
+				ModRevision:    rev,
+			},
+		}
+		if prevEntity != nil {
+			event.PrevKv = &mvccpb.KeyValue{
+				Key:         []byte(indexKey),
+				Value:       []byte(prevEntity.Id()),
+				ModRevision: prevEntity.GetRevision(),
+			}
+		}
+
+		resp := clientv3.WatchResponse{
+			Header: etcdserverpb.ResponseHeader{Revision: rev},
+			Events: []*clientv3.Event{event},
+		}
+		m.indexLog = append(m.indexLog, indexLogEntry{rev: rev, indexKey: indexKey, resp: resp})
+
+		for _, ch := range m.indexWatchers[indexKey] {
+			select {
+			case ch <- resp:
+			default:
+				// Channel full, skip
 			}
 		}
 	}
@@ -614,10 +687,15 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 		return m.OnListIndex(ctx, attr)
 	}
 
-	// Default implementation: Filter entities by the given attribute
-	// Recursively enumerate attributes including nested ones in components
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listIndexLocked(attr), nil
+}
+
+// listIndexLocked filters entities by the given attribute, recursively
+// enumerating attributes including nested ones in components. The caller
+// holds m.mu.
+func (m *MockStore) listIndexLocked(attr Attr) []Id {
 	var ids []Id
 	seen := make(map[Id]bool)
 	for id, entity := range m.Entities {
@@ -640,7 +718,7 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 		}
 	}
 
-	return ids, nil
+	return ids
 }
 
 // AddStaleIndexEntry makes ListIndex report id under attr even though the stored
@@ -658,25 +736,25 @@ func (m *MockStore) AddStaleIndexEntry(attr Attr, id Id) {
 	m.staleIndexEntries[key] = append(m.staleIndexEntries[key], id)
 }
 
-// ListIndexRevision returns the matching ids along with a revision. The mock
-// uses the highest entity revision currently in the store as a monotonic proxy
-// for the cluster revision, which is sufficient for resume-cursor tests.
+// ListIndexRevision returns the matching ids along with the store revision
+// they were read at. A WatchIndex resumed from one past that revision sees
+// exactly the writes that landed after this list, the way etcd's header
+// revision pairs with WithRev. The ids and the revision are read under one
+// lock so no write can land between them.
 func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error) {
-	ids, err := m.ListIndex(ctx, attr)
-	if err != nil {
-		return nil, 0, err
+	if m.OnListIndex != nil {
+		ids, err := m.OnListIndex(ctx, attr)
+		if err != nil {
+			return nil, 0, err
+		}
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+		return ids, m.rev, nil
 	}
 
 	m.mu.RLock()
-	var rev int64
-	for _, e := range m.Entities {
-		if r := e.GetRevision(); r > rev {
-			rev = r
-		}
-	}
-	m.mu.RUnlock()
-
-	return ids, rev, nil
+	defer m.mu.RUnlock()
+	return m.listIndexLocked(attr), m.rev, nil
 }
 
 // ListIndexPage pages the mock's index by sorting the ids and slicing. The real
