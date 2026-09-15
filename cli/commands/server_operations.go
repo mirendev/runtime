@@ -9,10 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/serverlifecycle"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // ServerOperationsRun is the executor entry point the transient systemd unit
@@ -199,14 +202,25 @@ func ServerOperationsList(ctx *Context, opts struct {
 		ctx.Info("No operations recorded.")
 		return nil
 	}
-	rows := make([][]string, 0, len(ops))
+	headers := []string{"ID", "ACTION", "PHASE", "VERSIONS", "STARTED", "ERROR"}
+	rows := make([]ui.Row, 0, len(ops))
 	for _, op := range ops {
-		rows = append(rows, []string{
-			op.ID, string(op.Action), string(op.Phase), operationVersions(op),
+		rows = append(rows, ui.Row{
+			op.ID, string(op.Action), phaseStyle(op.Phase).Render(string(op.Phase)), operationVersions(op),
 			op.CreatedAt.Local().Format("2006-01-02 15:04:05"), op.Error,
 		})
 	}
-	ctx.DisplayTable([]string{"ID", "ACTION", "PHASE", "VERSIONS", "STARTED", "ERROR"}, rows)
+	// ID is what gets pasted into 'show' and STARTED is a fixed-width
+	// timestamp, so neither is worth anything truncated. PHASE is styled,
+	// and a styled cell renders whole, so honoring its width is what keeps
+	// the row aligned. VERSIONS and ERROR can lose their tails on a narrow
+	// terminal; 'show' has the full text.
+	columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0, 2, 4))
+	table := ui.NewTable(
+		ui.WithColumns(columns),
+		ui.WithRows(rows),
+	)
+	ctx.Printf("%s\n", table.Render())
 	return nil
 }
 
@@ -223,42 +237,65 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	if opts.IsJSON() {
 		return PrintJSON(toOperationJSON(op))
 	}
-	ctx.Printf("Operation: %s\n", op.ID)
-	ctx.Printf("Action:    %s\n", op.Action)
-	ctx.Printf("Phase:     %s\n", op.Phase)
+	items := []ui.NamedValue{
+		ui.NewNamedValue("Operation", op.ID),
+		ui.NewNamedValue("Action", string(op.Action)),
+		ui.NewStyledValue("Phase", string(op.Phase), phaseStyle(op.Phase)),
+	}
 	if op.RequestedBy != "" {
-		ctx.Printf("Requested: %s\n", op.RequestedBy)
+		items = append(items, ui.NewNamedValue("Requested", op.RequestedBy))
 	}
 	if op.TargetVersion != "" {
-		ctx.Printf("Target:    %s", op.TargetVersion)
+		target := op.TargetVersion
 		if op.ResolvedVersion != "" && op.ResolvedVersion != op.TargetVersion {
-			ctx.Printf(" (%s)", op.ResolvedVersion)
+			target += " (" + op.ResolvedVersion + ")"
 		}
-		ctx.Printf("\n")
+		items = append(items, ui.NewNamedValue("Target", target))
 	}
 	if v := operationVersions(op); v != "" {
-		ctx.Printf("Versions:  %s\n", v)
+		items = append(items, ui.NewNamedValue("Versions", v))
 	}
 	if op.PreviousInstanceID != "" || op.NewInstanceID != "" {
-		ctx.Printf("Instances: %s -> %s\n", op.PreviousInstanceID, op.NewInstanceID)
+		items = append(items, ui.NewNamedValue("Instances", op.PreviousInstanceID+" -> "+op.NewInstanceID))
 	}
 	if op.BackupRef != "" {
-		ctx.Printf("Backup:    %s\n", op.BackupRef)
+		items = append(items, ui.NewNamedValue("Backup", op.BackupRef))
 	}
 	if op.DataRestore != nil {
-		ctx.Printf("Restore:   %s\n", describeDataRestore(op.DataRestore))
+		items = append(items, ui.NewNamedValue("Restore", describeDataRestore(op.DataRestore)))
 	}
 	if op.Progress != "" {
-		ctx.Printf("Progress:  %s\n", op.Progress)
+		items = append(items, ui.NewNamedValue("Progress", op.Progress))
 	}
 	if op.Error != "" {
-		ctx.Printf("Error:     %s\n", op.Error)
+		items = append(items, ui.NewStyledValue("Error", op.Error, infoRed))
 	}
-	ctx.Printf("Started:   %s\n", op.CreatedAt.Local().Format(time.RFC3339))
+	items = append(items, ui.NewNamedValue("Started", op.CreatedAt.Local().Format(time.RFC3339)))
 	if op.FinishedAt != nil {
-		ctx.Printf("Finished:  %s\n", op.FinishedAt.Local().Format(time.RFC3339))
+		items = append(items, ui.NewNamedValue("Finished", op.FinishedAt.Local().Format(time.RFC3339)))
 	}
+	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
 	return nil
+}
+
+// phaseStyle colors a phase by what it means for the operator: green is done
+// and good, red is done and bad, yellow is a rollback in either state, and
+// blue is still moving.
+func phaseStyle(phase serverlifecycle.Phase) lipgloss.Style {
+	switch phase {
+	case serverlifecycle.PhaseSucceeded:
+		return infoGreen
+	case serverlifecycle.PhaseFailed:
+		return infoRed
+	case serverlifecycle.PhaseRollingBack, serverlifecycle.PhaseRolledBack:
+		return infoYellow
+	case serverlifecycle.PhasePending:
+		return infoGray
+	case serverlifecycle.PhaseDownloading, serverlifecycle.PhaseBackingUp, serverlifecycle.PhaseInstalling,
+		serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying:
+		return infoLabel
+	}
+	return lipgloss.NewStyle()
 }
 
 // ServerOperationsAbandon ends an operation nobody will finish: an executor
