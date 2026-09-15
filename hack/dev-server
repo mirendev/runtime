@@ -18,6 +18,43 @@ EXTRA_FLAGS="${DEV_SERVER_FLAGS:-}"
 #     The name only has to be stable; nothing resolves it.
 DEFAULT_FLAGS="--self-signed-tls --dns-names dev.miren.local"
 
+# How long stop/restart wait for the server to exit on its own before SIGKILL.
+# A forced kill skips the server's teardown of the containerd tasks it owns
+# (buildkit, etcd, ...), which the next start then has to recover from, so it
+# has to be a genuine last resort: the server's own component stops allow up
+# to 30s each before escalating, and the old 5s here was tripping well before
+# a healthy shutdown had finished (MIR-1856).
+STOP_TIMEOUT="${DEV_SERVER_STOP_TIMEOUT:-60}"
+
+# Keep the previous server's log next to the current one. `start` rotates the
+# live log aside so `wait-ready` can't match a stale "started" line, and so the
+# shutdown that preceded a bad start is still there to read.
+PREVLOGFILE="${LOGFILE}.prev"
+
+# wait_for_exit PID SECONDS: poll until PID is gone or SECONDS elapse.
+# Returns 0 if the process exited, 1 if it is still running.
+wait_for_exit() {
+  local pid=$1 seconds=$2 i
+  for ((i = 0; i < seconds * 2; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  ! kill -0 "$pid" 2>/dev/null
+}
+
+# force_kill PID: SIGKILL a server that ignored its shutdown window, and show
+# what it was doing so the escalation leaves evidence behind.
+force_kill() {
+  local pid=$1
+  echo "Warning: server did not exit within ${STOP_TIMEOUT}s, forcing termination (containerd tasks may be orphaned)"
+  echo "Last log lines before forced kill:"
+  tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/  | /'
+  kill -9 "$pid" 2>/dev/null || true
+  sleep 0.5
+}
+
 case "${1:-}" in
   start)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
@@ -36,6 +73,10 @@ case "${1:-}" in
         echo "Warning: ENV_FILE set to '$ENV_FILE' but file not found"
         exit 1
       fi
+    fi
+
+    if [ -f "$LOGFILE" ]; then
+      mv -f "$LOGFILE" "$PREVLOGFILE"
     fi
 
     echo "Starting miren server in standalone mode..."
@@ -98,18 +139,8 @@ case "${1:-}" in
     if kill -0 "$PID" 2>/dev/null; then
       echo "Stopping server (PID $PID)..."
       kill "$PID"
-      # Wait for graceful shutdown
-      for i in {1..10}; do
-        if ! kill -0 "$PID" 2>/dev/null; then
-          break
-        fi
-        sleep 0.5
-      done
-      # Force kill if still running
-      if kill -0 "$PID" 2>/dev/null; then
-        echo "Warning: Graceful shutdown timed out, forcing termination..."
-        kill -9 "$PID" 2>/dev/null || true
-        sleep 0.5
+      if ! wait_for_exit "$PID" "$STOP_TIMEOUT"; then
+        force_kill "$PID"
       fi
       echo "Server stopped"
     else
@@ -124,20 +155,11 @@ case "${1:-}" in
       PID=$(cat "$PIDFILE")
       echo "Sending SIGUSR1 to server (PID $PID) for graceful restart..."
       kill -USR1 "$PID"
-      # Wait for graceful shutdown
-      for i in {1..30}; do
-        if ! kill -0 "$PID" 2>/dev/null; then
-          break
-        fi
-        sleep 0.5
-      done
-      # Check if it's still running
-      if kill -0 "$PID" 2>/dev/null; then
-        echo "Warning: Server did not exit after SIGUSR1, forcing stop..."
+      if ! wait_for_exit "$PID" 15; then
+        echo "Warning: Server did not exit after SIGUSR1, sending SIGTERM..."
         kill "$PID"
-        sleep 1
-        if kill -0 "$PID" 2>/dev/null; then
-          kill -9 "$PID" 2>/dev/null || true
+        if ! wait_for_exit "$PID" "$STOP_TIMEOUT"; then
+          force_kill "$PID"
         fi
       fi
       rm -f "$PIDFILE"
@@ -162,11 +184,18 @@ case "${1:-}" in
     ;;
 
   logs)
-    tail -f "$LOGFILE"
+    # -F follows the name, not the inode, so a viewer left open across a
+    # restart picks up the new server's log instead of the rotated .prev
+    tail -F "$LOGFILE"
+    ;;
+
+  prev-logs)
+    # The previous server's log, kept by `start` (see PREVLOGFILE)
+    cat "$PREVLOGFILE"
     ;;
 
   *)
-    echo "Usage: $0 {start|stop|restart|status|logs|wait-ready [timeout]}"
+    echo "Usage: $0 {start|stop|restart|status|logs|prev-logs|wait-ready [timeout]}"
     exit 1
     ;;
 esac
