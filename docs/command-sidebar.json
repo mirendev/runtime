@@ -171,7 +171,12 @@
       "id": "command/deploy"
     },
     "items": [
-      "command/deploy-cancel"
+      "command/deploy-cancel",
+      "command/deploy-target",
+      "command/deploy-target-add",
+      "command/deploy-target-list",
+      "command/deploy-target-remove",
+      "command/deploy-target-set-default"
     ]
   },
   {

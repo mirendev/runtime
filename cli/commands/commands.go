@@ -139,6 +139,21 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren deploy cancel -d dep_abc123",
 		}),
 	))
+	d.Dispatch("deploy target", Infer("deploy target", "List deployment targets", DeployTargetList,
+		WithExample(mflags.Example{Name: "List deployment targets", Body: "miren deploy target"}),
+	))
+	d.Dispatch("deploy target list", Infer("deploy target list", "List deployment targets", DeployTargetList))
+	d.Dispatch("deploy target add", Infer("deploy target add", "Add a deployment target", DeployTargetAdd,
+		WithExample(mflags.Example{Name: "Select a configured cluster interactively", Body: "miren deploy target add staging"}),
+		WithExample(mflags.Example{Name: "Add a target non-interactively", Body: "miren deploy target add prod my-prod-cluster"}),
+		WithExample(mflags.Example{Name: "Add the default target", Body: "miren deploy target add staging my-staging-cluster --default"}),
+	))
+	d.Dispatch("deploy target remove", Infer("deploy target remove", "Remove a deployment target", DeployTargetRemove,
+		WithExample(mflags.Example{Name: "Remove a target", Body: "miren deploy target remove staging"}),
+	))
+	d.Dispatch("deploy target set-default", Infer("deploy target set-default", "Set the default deployment target", DeployTargetSetDefault,
+		WithExample(mflags.Example{Name: "Make production the default", Body: "miren deploy target set-default prod"}),
+	))
 	d.Dispatch("rollback", Infer("rollback", "Roll back to a previous version", Rollback,
 		WithGroup(GroupGettingStarted),
 		WithDescription(rollbackDescription),
