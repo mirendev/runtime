@@ -25,6 +25,12 @@ const (
 	// CapabilityServerLifecycle lets cloud restart and upgrade the server and
 	// follow the operations it started.
 	CapabilityServerLifecycle = "server-lifecycle"
+	// CapabilityClusterNetwork carries how the cluster can be reached: the
+	// network half of the legacy status report.
+	CapabilityClusterNetwork = "cluster-network"
+	// CapabilityClusterResources carries whole-host CPU, memory, and storage
+	// utilization: the resource half of the legacy status report.
+	CapabilityClusterResources = "cluster-resources"
 )
 
 // CapabilityOffer describes one protocol family the runtime can speak. The

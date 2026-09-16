@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/pkg/apphealthsync"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cloudrpc"
+	"miren.dev/runtime/pkg/clusternetwork"
 	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entitysync"
@@ -150,6 +151,12 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			c.Log.Warn("app health reporting is unavailable for this uplink session", "error", err)
 		}
 	}
+	// The network half of the status poll, over the session. Like the feeds
+	// above it is additive; when cloud selects it the poll has nothing left
+	// to say about the network.
+	if err := clusternetwork.NewReporter(c.Log.With("component", "cluster-network"), c).Register(ctx, link); err != nil {
+		c.Log.Warn("cluster network reporting is unavailable for this uplink session", "error", err)
+	}
 	// Offered on every negotiated session, like the RPC relay: whether cloud
 	// may drive the server is cloud's decision at negotiation, not a switch on
 	// this side.
@@ -194,6 +201,15 @@ func (c *CloudControl) runNetcheck(ctx context.Context) {
 
 	result, err := cloudauth.NetcheckDualStack(ctx, cloudURL, ports)
 	if err != nil {
+		// A check cut short by the caller going away (a session dropping
+		// mid-check, now that the network reporter runs it) says nothing about
+		// reachability. Leave the cache and its age alone so the next caller
+		// re-runs it rather than reporting for an hour as if the check found
+		// nothing.
+		if ctx.Err() != nil {
+			c.Log.Debug("netcheck: cancelled before completion; keeping the previous result")
+			return
+		}
 		if errors.Is(err, cloudauth.ErrPrivateAddress) {
 			c.Log.Info("netcheck: cluster is not publicly reachable (private IP)")
 		} else {
@@ -314,31 +330,14 @@ func (c *CloudControl) ReportStartupStatus(ctx context.Context) error {
 		return fmt.Errorf("cluster ID not configured")
 	}
 
-	// Get CA certificate fingerprint
-	var caFingerprint string
-	if c.authority != nil {
-		caCertPEM := c.authority.GetCACertificate()
-		if caCertPEM != nil {
-			// Parse the PEM to get the certificate
-			block, _ := pem.Decode(caCertPEM)
-			if block != nil && block.Type == "CERTIFICATE" {
-				// Calculate SHA1 fingerprint of the raw DER bytes
-				sum := sha1.Sum(block.Bytes)
-				caFingerprint = hex.EncodeToString(sum[:])
-			}
-		}
-	}
-
-	// Run netcheck to determine public reachability
-	c.runNetcheck(ctx)
-
 	// Build status report
+	facts := c.NetworkFacts(ctx)
 	status := &cloudauth.StatusReport{
 		ClusterID:         c.CloudAuth.ClusterID,
-		APIAddresses:      c.apiAddresses(),
-		CACertFingerprint: caFingerprint,
-		Reachability:      c.reachabilityVerdict(),
-		Containerized:     containerenv.InContainer(),
+		APIAddresses:      facts.APIAddresses,
+		CACertFingerprint: facts.CACertFingerprint,
+		Reachability:      facts.Reachability,
+		Containerized:     facts.Containerized,
 	}
 
 	result, err := c.authClient.ReportClusterStatus(ctx, status)
@@ -372,18 +371,11 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		workloadCount = len(appList.Values())
 	}
 
-	// Re-run netcheck if the cached result is older than 60 minutes
-	c.netcheckMu.RLock()
-	netcheckAge := time.Since(c.netcheckCheckedAt)
-	c.netcheckMu.RUnlock()
-	if netcheckAge > 60*time.Minute {
-		c.runNetcheck(ctx)
-	}
-
 	// Collect resource usage metrics
 	resourceUsage := c.collectResourceUsage()
 
 	// Build status report
+	facts := c.NetworkFacts(ctx)
 	status := &cloudauth.StatusReport{
 		ClusterID:     c.CloudAuth.ClusterID,
 		State:         "active",
@@ -392,9 +384,9 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		NodeCount:     1, // Static value for now
 		WorkloadCount: workloadCount,
 		ResourceUsage: resourceUsage,
-		APIAddresses:  c.apiAddresses(),
-		Reachability:  c.reachabilityVerdict(),
-		Containerized: containerenv.InContainer(),
+		APIAddresses:  facts.APIAddresses,
+		Reachability:  facts.Reachability,
+		Containerized: facts.Containerized,
 	}
 
 	result, err := c.authClient.ReportClusterStatus(ctx, status)
@@ -404,6 +396,45 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 
 	c.recordIdentityAnchor(result.IdentityIssuerURL)
 	return nil
+}
+
+// netcheckMaxAge is how old a cached netcheck result may be before the next
+// report re-runs it. Reachability changes rarely and the check costs a round
+// trip to cloud on both address families, so an hour is the balance.
+const netcheckMaxAge = 60 * time.Minute
+
+// NetworkFacts is what this cluster says about how it can be reached, in the
+// shape both the status poll and the cluster-network capability send. It
+// refreshes netcheck when the cached verdict is older than netcheckMaxAge
+// (or was never taken), so whichever path asks first pays for the check and
+// the other reads the cache.
+func (c *CloudControl) NetworkFacts(ctx context.Context) clusternetwork.Report {
+	c.netcheckMu.RLock()
+	stale := c.netcheckCheckedAt.IsZero() || time.Since(c.netcheckCheckedAt) > netcheckMaxAge
+	c.netcheckMu.RUnlock()
+	if stale {
+		c.runNetcheck(ctx)
+	}
+	return clusternetwork.Report{
+		APIAddresses:      c.apiAddresses(),
+		CACertFingerprint: c.caCertFingerprint(),
+		Reachability:      c.reachabilityVerdict(),
+		Containerized:     containerenv.InContainer(),
+	}
+}
+
+// caCertFingerprint is the hex SHA-1 of the cluster CA's DER bytes, which the
+// CLI pins when it connects directly. Empty when there is no authority yet.
+func (c *CloudControl) caCertFingerprint() string {
+	if c.authority == nil {
+		return ""
+	}
+	block, _ := pem.Decode(c.authority.GetCACertificate())
+	if block == nil || block.Type != "CERTIFICATE" {
+		return ""
+	}
+	sum := sha1.Sum(block.Bytes)
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *CloudControl) instanceID() string {
