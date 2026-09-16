@@ -22,15 +22,15 @@ type ResourceUsage struct {
 //
 // Everything it carries has a home on the negotiated uplink session now:
 // liveness and version come from the session itself, the network fields ride
-// the cluster-network capability, and resource usage rides cluster-resources.
-// A runtime keeps sending this only to a cloud that did not select those
-// capabilities. Fields cloud never read (instance id, workload count, health
-// checks, RBAC sync) are gone.
+// the cluster-network capability, resource usage rides cluster-resources, and
+// nodes are exported as entities. A runtime keeps sending this only to a cloud
+// that did not select those capabilities. Fields cloud never read (instance
+// id, workload count, health checks, RBAC sync) and the node count this
+// runtime only ever hardcoded to 1 are gone.
 type StatusReport struct {
 	ClusterID         string        `json:"cluster_id"`
 	Version           string        `json:"version,omitempty"`
 	State             string        `json:"state"` // required: active, degraded, inactive, unknown
-	NodeCount         int           `json:"node_count,omitempty"`
 	ResourceUsage     ResourceUsage `json:"resource_usage"`
 	APIAddresses      []string      `json:"api_addresses,omitempty"`
 	CACertFingerprint string        `json:"ca_cert_fingerprint,omitempty"`
