@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,26 +66,17 @@ func TestReportClusterStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create status report
-	now := time.Now()
 	status := &StatusReport{
-		ClusterID:     "test-cluster-123",
-		Version:       "1.0.0",
-		State:         "active",
-		NodeCount:     3,
-		WorkloadCount: 10,
+		ClusterID: "test-cluster-123",
+		Version:   "1.0.0",
+		State:     "active",
+		NodeCount: 3,
 		ResourceUsage: ResourceUsage{
 			CPUCores:      4.5,
 			CPUPercent:    56.25,
 			MemoryBytes:   8589934592, // 8 GB
 			MemoryPercent: 75.0,
 		},
-		HealthChecks: map[string]string{
-			"etcd":       "healthy",
-			"containerd": "healthy",
-			"buildkit":   "healthy",
-		},
-		RBACRulesVersion:  "v1.2.3",
-		LastRBACSync:      &now,
 		APIAddresses:      []string{"cluster.example.com:8443", "10.0.0.1:8443"},
 		CACertFingerprint: "1234567890abcdef1234567890abcdef12345678",
 	}
@@ -108,9 +98,7 @@ func TestReportClusterStatus(t *testing.T) {
 	assert.Equal(t, "1.0.0", receivedStatus.Version)
 	assert.Equal(t, "active", receivedStatus.State)
 	assert.Equal(t, 3, receivedStatus.NodeCount)
-	assert.Equal(t, 10, receivedStatus.WorkloadCount)
 	assert.Equal(t, 4.5, receivedStatus.ResourceUsage.CPUCores)
-	assert.Equal(t, "healthy", receivedStatus.HealthChecks["etcd"])
 	assert.Equal(t, "Bearer test-jwt-token", authToken)
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -20,7 +21,6 @@ import (
 	"miren.dev/runtime/pkg/clusternetwork"
 	"miren.dev/runtime/pkg/clusterresources"
 	"miren.dev/runtime/pkg/containerenv"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/serverinfo"
@@ -64,6 +64,11 @@ type CloudControl struct {
 	// writes (recordIdentityAnchor) and the periodic loop reads
 	// (anchoredAtCloud) on different goroutines.
 	anchorMu sync.Mutex
+
+	// pollSuppressed is set while a negotiated session carries both the
+	// cluster-network and cluster-resources capabilities, which is when the
+	// status poll has nothing left to say. See reportStatusPeriodically.
+	pollSuppressed atomic.Bool
 
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
@@ -134,6 +139,12 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 	link.OnSession(func(_ context.Context, session uplink.Session) {
 		c.recordIdentityAnchor(session.IdentityIssuerURL)
 	})
+	// With both halves of the status report negotiated onto the session, the
+	// poll would only repeat what the session already said. Suppress it for
+	// as long as such a session holds; a cloud that declines either
+	// capability gets the poll as before, which is the compatibility switch
+	// in this direction.
+	link.OnSession(c.suppressPollWhile)
 	if err := entitysync.NewExporter(
 		c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
 		entitysync.WithStartGate(entitySyncReady),
@@ -354,7 +365,27 @@ func (c *CloudControl) ReportStartupStatus(ctx context.Context) error {
 	return nil
 }
 
-// ReportStatus reports the current cluster status to miren.cloud
+// suppressPollWhile turns the status poll off for the life of a session that
+// carries both of its replacements, and back on when that session ends. See
+// the OnSession registration in RunCloudUplink.
+func (c *CloudControl) suppressPollWhile(ctx context.Context, session uplink.Session) {
+	_, network := session.Capability(uplink.CapabilityClusterNetwork)
+	_, resources := session.Capability(uplink.CapabilityClusterResources)
+	if !network || !resources {
+		return
+	}
+	c.pollSuppressed.Store(true)
+	c.Log.Info("cluster status poll suppressed; the uplink session carries its replacements")
+	go func() {
+		<-ctx.Done()
+		c.pollSuppressed.Store(false)
+	}()
+}
+
+// ReportStatus sends the legacy status poll to miren.cloud. It is what a
+// cloud that did not negotiate the cluster-network and cluster-resources
+// capabilities still relies on; against one that did, the periodic loop
+// skips it (see pollSuppressed).
 func (c *CloudControl) ReportStatus(ctx context.Context) error {
 	if c.authClient == nil {
 		return fmt.Errorf("auth client not configured")
@@ -364,34 +395,18 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		return fmt.Errorf("cluster ID not configured")
 	}
 
-	// Get version information
-	versionInfo := version.GetInfo()
-
-	// Count apps (workloads) from entity store
-	var workloadCount int
-	appList, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
-	if err != nil {
-		c.Log.Warn("failed to count apps for status report", "error", err)
-	} else {
-		workloadCount = len(appList.Values())
-	}
-
-	// Collect resource usage metrics
-	resourceUsage := c.collectResourceUsage()
-
 	// Build status report
 	facts := c.NetworkFacts(ctx)
 	status := &cloudauth.StatusReport{
-		ClusterID:     c.CloudAuth.ClusterID,
-		State:         "active",
-		Version:       versionInfo.Version,
-		InstanceID:    c.instanceID(),
-		NodeCount:     1, // Static value for now
-		WorkloadCount: workloadCount,
-		ResourceUsage: resourceUsage,
-		APIAddresses:  facts.APIAddresses,
-		Reachability:  facts.Reachability,
-		Containerized: facts.Containerized,
+		ClusterID:         c.CloudAuth.ClusterID,
+		State:             "active",
+		Version:           version.GetInfo().Version,
+		NodeCount:         1, // Static value for now
+		ResourceUsage:     c.collectResourceUsage(),
+		APIAddresses:      facts.APIAddresses,
+		CACertFingerprint: facts.CACertFingerprint,
+		Reachability:      facts.Reachability,
+		Containerized:     facts.Containerized,
 	}
 
 	result, err := c.authClient.ReportClusterStatus(ctx, status)
@@ -495,13 +510,16 @@ func (c *CloudControl) reportStatusPeriodically(ctx context.Context) {
 	case <-timer.C:
 	}
 
-	if err := c.ReportStatus(ctx); err != nil {
+	if c.pollSuppressed.Load() {
+		c.Log.Debug("skipping cluster status poll; the uplink session carries its replacements")
+	} else if err := c.ReportStatus(ctx); err != nil {
 		c.Log.Error("failed to report initial cluster status", "error", err)
 	} else {
 		c.Log.Info("reported cluster status to cloud")
 	}
 
-	// Report status every 5 minutes
+	// Report status every 5 minutes. The ticker keeps running while the poll
+	// is suppressed because it also drives the signing-key republish below.
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -510,7 +528,9 @@ func (c *CloudControl) reportStatusPeriodically(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.ReportStatus(ctx); err != nil {
+			if c.pollSuppressed.Load() {
+				c.Log.Debug("skipping cluster status poll; the uplink session carries its replacements")
+			} else if err := c.ReportStatus(ctx); err != nil {
 				c.Log.Error("failed to report cluster status", "error", err)
 			} else {
 				c.Log.Debug("reported cluster status to cloud")
