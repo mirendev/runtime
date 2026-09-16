@@ -173,6 +173,22 @@ func TestContainerUpgradeRollsBackWhenTheNewBuildNeverGetsReady(t *testing.T) {
 	require.NotNil(t, got.DataRestore.RestoredAt)
 }
 
+// The RPC that starts operations outlives the launcher's component on the
+// way down; a launch that arrives after Wait is refused, not started.
+func TestContainerLauncherRefusesLaunchesOnceStopping(t *testing.T) {
+	host := newContainerHost(t, "v1.0.0")
+	launcher := host.launcher(t)
+	launcher.Wait()
+
+	op := NewOperation(ActionRestart, "test")
+	require.NoError(t, host.store.Create(op))
+	require.ErrorIs(t, launcher.Launch(context.Background(), op.ID), ErrLauncherStopping)
+	require.Equal(t, 0, host.shutdowns)
+	got, err := host.store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhasePending, got.Phase, "the record is the caller's to settle")
+}
+
 func TestContainerResumeWithNothingPendingIsANoop(t *testing.T) {
 	host := newContainerHost(t, "v1.0.0")
 	done := NewOperation(ActionRestart, "test")

@@ -2,6 +2,7 @@ package serverlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -71,7 +72,16 @@ type ContainerLauncher struct {
 	// the server it is inside goes down.
 	ctx context.Context
 	wg  sync.WaitGroup
+	// mu orders launches against Wait: the RPC that starts operations
+	// outlives this launcher's component on the way down, so a launch can
+	// arrive after Wait, and it must be refused rather than started into a
+	// group nobody waits on.
+	mu       sync.Mutex
+	stopping bool
 }
+
+// ErrLauncherStopping is returned by Launch once the server is going down.
+var ErrLauncherStopping = errors.New("server is shutting down; try again once it is back")
 
 // NewContainerLauncher binds runs to ctx. Wait returns once every run
 // launched under it has returned.
@@ -80,6 +90,11 @@ func NewContainerLauncher(ctx context.Context, log *slog.Logger, newExecutor fun
 }
 
 func (l *ContainerLauncher) Launch(_ context.Context, opID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stopping {
+		return ErrLauncherStopping
+	}
 	ex, err := l.NewExecutor()
 	if err != nil {
 		return fmt.Errorf("build executor: %w", err)
@@ -116,9 +131,12 @@ func (l *ContainerLauncher) Resume(ctx context.Context, store *Store) error {
 	return l.Launch(ctx, op.ID)
 }
 
-// Wait blocks until every launched run has returned. Runs return promptly
-// once the launcher's context is cancelled.
+// Wait refuses further launches and blocks until every launched run has
+// returned. Runs return promptly once the launcher's context is cancelled.
 func (l *ContainerLauncher) Wait() {
+	l.mu.Lock()
+	l.stopping = true
+	l.mu.Unlock()
 	l.wg.Wait()
 }
 
