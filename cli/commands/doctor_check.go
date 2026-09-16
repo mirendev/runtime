@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"sync"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/version"
 )
@@ -71,9 +73,16 @@ type check struct {
 type doctorEnv struct {
 	ctx *Context
 
-	// CLI scope: this binary.
+	// CLI scope: this binary, and the newest release it could become.
 
 	cliVersion version.Info
+
+	// latest is the metadata of the "latest" channel, the target `miren
+	// upgrade` installs by default. latestErr means the asset service could
+	// not be asked, which is a fact about the network rather than about the
+	// install.
+	latest    *release.Metadata
+	latestErr error
 
 	// Cluster scope: the selected cluster.
 
@@ -128,15 +137,22 @@ func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 	env := &doctorEnv{ctx: ctx}
 
 	var wg sync.WaitGroup
-	wg.Go(func() { gatherCLI(env) })
+	wg.Go(func() { gatherCLI(ctx, env) })
 	wg.Go(func() { gatherCluster(ctx, opts, env) })
 	wg.Wait()
 
 	return env
 }
 
-func gatherCLI(env *doctorEnv) {
+func gatherCLI(ctx context.Context, env *doctorEnv) {
 	env.cliVersion = version.GetInfo()
+
+	// The downloader's own timeout is sized for pulling a release, not for a
+	// health sweep. The probe timeout keeps an unreachable asset service from
+	// holding up every other row.
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	env.latest, env.latestErr = release.NewDownloader().GetVersionMetadata(ctx, "latest")
 }
 
 func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
