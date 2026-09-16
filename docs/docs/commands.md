@@ -120,9 +120,6 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren doctor`](./command/doctor.md) | Diagnose miren environment and connectivity |
-| [`miren doctor auth`](./command/doctor-auth.md) | Check authentication and user information |
-| [`miren doctor config`](./command/doctor-config.md) | Check configuration files |
-| [`miren doctor server`](./command/doctor-server.md) | Check server health and connectivity |
 
 ## download
 

@@ -189,20 +189,7 @@
       "command/disk-undelete"
     ]
   },
-  {
-    "type": "category",
-    "label": "doctor",
-    "collapsed": true,
-    "link": {
-      "type": "doc",
-      "id": "command/doctor"
-    },
-    "items": [
-      "command/doctor-auth",
-      "command/doctor-config",
-      "command/doctor-server"
-    ]
-  },
+  "command/doctor",
   {
     "type": "category",
     "label": "download",

@@ -34,15 +34,9 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-func withCLIVersion(t *testing.T, v string) {
-	t.Helper()
-	prev := version.Version
-	version.Version = v
-	t.Cleanup(func() { version.Version = prev })
-}
-
 func versionEnv(server *serverVersion, err error) *doctorEnv {
 	return &doctorEnv{
+		cliVersion:       version.Info{Version: "v0.14.0"},
 		cfg:              &clientconfig.Config{},
 		cluster:          &clientconfig.ClusterConfig{Hostname: remoteHost},
 		clusterName:      "prod",
@@ -53,8 +47,6 @@ func versionEnv(server *serverVersion, err error) *doctorEnv {
 }
 
 func TestVersionCheckTable(t *testing.T) {
-	withCLIVersion(t, "v0.14.0")
-
 	lookupErr := fmt.Errorf("%w: %w", errServerVersionUnsupported,
 		rpc.NewResolveLookupError(serverInfoService, remoteHost, "unknown service"))
 

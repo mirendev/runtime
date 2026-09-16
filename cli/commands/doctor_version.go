@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/pkg/ui"
-	"miren.dev/runtime/version"
 )
 
 // checkVersion compares the CLI build with the server build.
@@ -17,7 +16,7 @@ func checkVersion(env *doctorEnv) checkResult {
 		return checkResult{Status: checkSkip, Summary: "server not reachable"}
 	}
 
-	cli := version.GetInfo()
+	cli := env.cliVersion
 
 	if env.serverVersionErr != nil {
 		if errors.Is(env.serverVersionErr, errServerVersionUnsupported) {
