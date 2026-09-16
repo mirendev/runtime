@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,6 +189,35 @@ func TestWithLoggerCreator(t *testing.T) {
 	// We can't easily test the actual container creation without containerd,
 	// but we can verify the creator is not nil
 	assert.NotNil(t, creator)
+}
+
+func TestAttachLoggerDrainsExistingFIFOs(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	fifos, err := cio.NewFIFOSetInDir(t.TempDir(), "attach-test", false)
+	require.NoError(t, err)
+	defer fifos.Close()
+
+	attached, err := AttachLogger(logger, "attach-test")(fifos)
+	require.NoError(t, err)
+	defer attached.Close()
+
+	stdout, err := os.OpenFile(attached.Config().Stdout, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	stderr, err := os.OpenFile(attached.Config().Stderr, os.O_WRONLY, 0)
+	require.NoError(t, err)
+
+	payload := strings.Repeat("x", 128*1024)
+	_, err = stdout.WriteString(payload + " stdout after restart\n")
+	require.NoError(t, err)
+	_, err = stderr.WriteString(payload + " stderr after restart\n")
+	require.NoError(t, err)
+	require.NoError(t, stdout.Close())
+	require.NoError(t, stderr.Close())
+	attached.Wait()
+
+	assert.Contains(t, buf.String(), "stdout after restart")
+	assert.Contains(t, buf.String(), "stderr after restart")
 }
 
 func TestLogWriterWithIgnorePattern(t *testing.T) {
