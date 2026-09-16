@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *release/0.15*
 
+---
+
+## v0.15.2
+*2026-09-16*
+
 **Bug Fixes**
 - **Bundled services keep logging after a server restart** - When Miren adopted an existing etcd, VictoriaMetrics, or VictoriaLogs process after an unclean exit, it did not reattach readers to the process's stdout and stderr pipes. Enough output could fill a pipe and block the service indefinitely. Adoption now resumes draining both streams, and the etcd maintenance loop bounds its health check so a wedged etcd shows up as a warning in the logs instead of the loop going silent. ([#1232](https://github.com/mirendev/runtime/pull/1232))
 - **Streaming RPC callbacks no longer panic when their stream tears** - A streaming call that ended between a frame's header and its payload handed the receiving callback a nil value, which crashed the server from inside the entity index watcher. Streaming callbacks now treat a frame with no value as the stream closing and reconnect through their normal path. ([#1233](https://github.com/mirendev/runtime/pull/1233))
