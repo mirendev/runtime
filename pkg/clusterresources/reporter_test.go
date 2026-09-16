@@ -57,8 +57,10 @@ func (f *fakeLink) first() Sample {
 
 type fakeSource struct{}
 
+// ResourceSample stamps the reading like the real source does; the reporter
+// sends it as given.
 func (fakeSource) ResourceSample() Sample {
-	return Sample{CPUCores: 8, CPUPercent: 12.5, MemoryBytes: 16 << 30, MemoryPercent: 40, StorageBytes: 512 << 30, StoragePercent: 61}
+	return Sample{ObservedAt: time.Now().UTC(), CPUCores: 8, CPUPercent: 12.5, MemoryBytes: 16 << 30, MemoryPercent: 40, StorageBytes: 512 << 30, StoragePercent: 61}
 }
 
 func start(t *testing.T, config json.RawMessage, selected bool) (*fakeLink, context.CancelFunc) {
@@ -130,14 +132,27 @@ func TestSilentWhenNotSelectedAndStopsWithSession(t *testing.T) {
 	})
 }
 
-// A malformed config declines the capability for this session rather than
-// guessing a cadence.
-func TestMalformedConfigIsSilent(t *testing.T) {
+// A malformed config falls back to the default cadence rather than going
+// silent: selecting the capability is what turns the status poll off, so a
+// selected session has to report on it.
+func TestMalformedConfigFallsBackToDefault(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		link, cancel := start(t, json.RawMessage(`{"interval_seconds":`), true)
 		defer cancel()
-		time.Sleep(time.Hour)
+		time.Sleep(10 * time.Minute)
 		synctest.Wait()
-		require.Equal(t, 0, link.count())
+		require.Equal(t, 3, link.count())
+	})
+}
+
+// An absurdly large interval is clamped to the ceiling instead of
+// overflowing into something negative.
+func TestHugeIntervalIsClamped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		link, cancel := start(t, json.RawMessage(`{"interval_seconds":9223372036854775807}`), true)
+		defer cancel()
+		time.Sleep(maxInterval)
+		synctest.Wait()
+		require.Equal(t, 2, link.count())
 	})
 }

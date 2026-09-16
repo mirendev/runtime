@@ -24,7 +24,8 @@ const (
 	maxInterval     = time.Hour
 )
 
-// Source takes one reading. CloudControl implements it over sysstats.
+// Source takes one reading, stamped with when it was taken. CloudControl
+// implements it over sysstats.
 type Source interface {
 	ResourceSample() Sample
 }
@@ -54,15 +55,21 @@ func (r *Reporter) Register(_ context.Context, link Link) error {
 		if !ok {
 			return
 		}
+		// Selection is what suppresses the status poll, so a session that
+		// selected this capability must report on it even when the cadence
+		// cloud sent cannot be read: the default stands in, with a warning,
+		// rather than leaving cloud with neither source.
 		interval := defaultInterval
 		if len(selection.Config) > 0 {
 			var config Config
 			if err := json.Unmarshal(selection.Config, &config); err != nil {
-				r.log.Warn("invalid cluster resources configuration", "error", err)
-				return
-			}
-			if config.IntervalSeconds > 0 {
-				interval = min(maxInterval, max(minInterval, time.Duration(config.IntervalSeconds)*time.Second))
+				r.log.Warn("invalid cluster resources configuration; sampling at the default interval",
+					"error", err, "interval", interval)
+			} else if config.IntervalSeconds > 0 {
+				// Clamp in seconds before converting, so a huge value cannot
+				// overflow the multiplication into a negative duration.
+				seconds := min(config.IntervalSeconds, int(maxInterval/time.Second))
+				interval = max(minInterval, time.Duration(seconds)*time.Second)
 			}
 		}
 		go r.run(ctx, link, interval)
@@ -74,9 +81,6 @@ func (r *Reporter) run(ctx context.Context, link Link, interval time.Duration) {
 	r.log.Info("cluster resource sampling started", "interval", interval)
 	sample := func() {
 		reading := r.source.ResourceSample()
-		if reading.ObservedAt.IsZero() {
-			reading.ObservedAt = time.Now().UTC()
-		}
 		if err := link.SendMessageBlocking(ctx, TypeSample, reading); err != nil {
 			// Transport failures are expected on disconnect.
 			r.log.Debug("failed to queue cluster resource sample", "error", err)

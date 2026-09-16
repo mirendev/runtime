@@ -69,6 +69,10 @@ type CloudControl struct {
 	// cluster-network and cluster-resources capabilities, which is when the
 	// status poll has nothing left to say. See reportStatusPeriodically.
 	pollSuppressed atomic.Bool
+	// pollSuppressedBy names the session that set pollSuppressed, so the
+	// teardown of an older session cannot clear what a newer one set.
+	pollSuppressedMu sync.Mutex
+	pollSuppressedBy string
 
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
@@ -374,11 +378,23 @@ func (c *CloudControl) suppressPollWhile(ctx context.Context, session uplink.Ses
 	if !network || !resources {
 		return
 	}
+	// Suppression belongs to the session that set it. On a fast reconnect
+	// the new session's callback can run before the old session's teardown
+	// goroutine wakes, and that teardown must not undo the new session's
+	// claim; only the session that currently owns the flag may clear it.
+	c.pollSuppressedMu.Lock()
+	c.pollSuppressedBy = session.ID
 	c.pollSuppressed.Store(true)
+	c.pollSuppressedMu.Unlock()
 	c.Log.Info("cluster status poll suppressed; the uplink session carries its replacements")
 	go func() {
 		<-ctx.Done()
-		c.pollSuppressed.Store(false)
+		c.pollSuppressedMu.Lock()
+		defer c.pollSuppressedMu.Unlock()
+		if c.pollSuppressedBy == session.ID {
+			c.pollSuppressedBy = ""
+			c.pollSuppressed.Store(false)
+		}
 	}()
 }
 
