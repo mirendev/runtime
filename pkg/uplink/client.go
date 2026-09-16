@@ -88,6 +88,9 @@ type sessionConfig struct {
 type SessionIdentity struct {
 	RuntimeVersion    string
 	RuntimeInstanceID string
+	// RuntimeCommit and RuntimeBuildDate are optional; see SessionHello.
+	RuntimeCommit    string
+	RuntimeBuildDate time.Time
 }
 
 // Status describes the current state of the reconnecting uplink client.
@@ -559,6 +562,8 @@ func (c *Client) establishSession(ctx context.Context, conn *websocket.Conn) (Se
 		HandshakeVersions: []uint{HandshakeVersion1},
 		RuntimeVersion:    c.session.identity.RuntimeVersion,
 		RuntimeInstanceID: c.session.identity.RuntimeInstanceID,
+		RuntimeCommit:     c.session.identity.RuntimeCommit,
+		RuntimeBuildDate:  c.session.identity.RuntimeBuildDate,
 		ClientTime:        time.Now().UTC(),
 		Capabilities:      offers,
 	}
