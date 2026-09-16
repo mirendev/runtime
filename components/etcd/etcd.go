@@ -455,7 +455,7 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 	// Create and start new task with structured logging for JSON output
 	e.Log.Info("creating new task for existing container")
-	task, err = e.createTask(ctx, container)
+	task, err = e.ReplaceTask(ctx, container, e.createTask)
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}

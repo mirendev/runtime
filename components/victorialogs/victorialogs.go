@@ -213,7 +213,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 	}
 
 	c.Log.Info("creating new task for existing container")
-	task, err = c.createTask(ctx, container)
+	task, err = c.ReplaceTask(ctx, container, c.createTask)
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}
