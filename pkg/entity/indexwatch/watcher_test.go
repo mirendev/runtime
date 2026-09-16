@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -248,6 +249,61 @@ func TestWatcher_ResumeFromCursorNoResnapshot(t *testing.T) {
 	r.Equal(int64(7), ev.Rev)
 
 	r.Equal([]int64{1, 6}, store.WatchFromRevsCopy(), "second watch should resume from cursor+1")
+}
+
+// tornFrameServer wraps the real entity server and, on the first WatchIndex,
+// delivers the callback a send frame with no value before handing the stream
+// back. That is what the watcher saw in production (MIR-1869): a call stream
+// that ends between the call header and its args decodes as a zero value, not
+// an error, and the callback dereferenced it.
+type tornFrameServer struct {
+	*entityserver.EntityServer
+	watches atomic.Int32
+}
+
+func (s *tornFrameServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha.EntityAccessWatchIndex) error {
+	if s.watches.Add(1) > 1 {
+		return s.EntityServer.WatchIndex(ctx, req)
+	}
+	var ret struct{}
+	// The stream adapter reports the torn frame as a closed stream, which the
+	// real server would only ever see as a failed send.
+	_ = req.Args().Values().Call(ctx, "send", struct{}{}, &ret)
+	return nil
+}
+
+// TestWatcher_TornFrameDoesNotPanic pins the MIR-1869 crash: a WatchIndex
+// callback invoked with a nil EntityOp must end the watch cleanly and let the
+// watcher resume, not take the process down.
+func TestWatcher_TornFrameDoesNotPanic(t *testing.T) {
+	r := require.New(t)
+
+	store := entity.NewMockStore()
+	chans := gatedWatch(store)
+	server := &tornFrameServer{EntityServer: &entityserver.EntityServer{Log: slog.Default(), Store: store}}
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	ctx := t.Context()
+
+	w := indexwatch.New(sc, testIndex(), fastOpts())
+	r.NoError(w.Start(ctx))
+	defer w.Stop()
+
+	r.Equal(indexwatch.EventSync, recv(t, w.Updates(), 5*time.Second).Type)
+
+	// The first watch tears; the second reaches the real server and resumes
+	// from the cursor, so a live event still arrives.
+	_, err := store.CreateEntity(ctx, makeEntity("X"))
+	r.NoError(err)
+
+	ch := nextChan(t, chans, 5*time.Second)
+	ch <- putEvent("X", 5, true)
+	ev := recv(t, w.Updates(), 5*time.Second)
+	r.Equal(indexwatch.EventAdded, ev.Type)
+	r.Equal(entity.Id("X"), ev.Id)
+	r.Equal(int32(2), server.watches.Load())
 }
 
 // TestWatcher_CompactionResnapshot verifies a compaction signal triggers a fresh
