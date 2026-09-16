@@ -86,6 +86,8 @@ func reconcileDeploymentCancellation(
 type deployOpts struct {
 	AppCentric
 
+	Target string `long:"target" description:"Deployment target from .miren/deploy.toml"`
+
 	// Deploy carries its own format flags rather than the shared FormatOptions:
 	// it is the one command that also speaks jsonl, and the shared help text
 	// must not advertise that everywhere.
@@ -103,6 +105,69 @@ type deployOpts struct {
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
+}
+
+func (o *deployOpts) Validate(glbl *GlobalFlags) error {
+	if err := o.AppCentric.Validate(glbl); err != nil {
+		return err
+	}
+
+	dc, err := appconfig.LoadDeployConfigUnder(o.ResolvedDir())
+	if err != nil {
+		return fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
+	}
+	if dc == nil {
+		if o.Target != "" {
+			return fmt.Errorf("--target requires %s", appconfig.DeployConfigPath)
+		}
+		return nil
+	}
+
+	if o.Target != "" && o.Cluster != "" {
+		return fmt.Errorf("--target and --cluster cannot be combined")
+	}
+	if o.Cluster != "" {
+		return nil
+	}
+
+	target, err := dc.Target(o.Target)
+	if err != nil {
+		return err
+	}
+	o.Cluster, err = o.clusterNameForTarget(target)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
+	if target.ClusterID == "" {
+		return target.Cluster, nil
+	}
+
+	cfg, err := o.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+
+	var match string
+	err = cfg.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
+		if cluster.XID != target.ClusterID {
+			return nil
+		}
+		if name == target.Cluster || match == "" {
+			match = name
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if match == "" {
+		return "", fmt.Errorf("cluster id %q for deploy target %q is not configured; run 'miren cluster add'", target.ClusterID, target.Name)
+	}
+	return match, nil
 }
 
 // IsJSON reports whether one JSON document was requested (--json or
