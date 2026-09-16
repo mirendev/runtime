@@ -124,13 +124,41 @@ func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	if rev := entity.GetRevision(); rev > m.rev {
 		m.rev = rev
 	}
+
+	// The fixture's index entries exist from here on, so a later write to the
+	// entity must read as a modify of them rather than a create. Record them
+	// at the fixture's own revision, which is below any revision a write can
+	// be stamped with.
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		key := indexEntryKey(attr.CAS(), entity.Id())
+		if _, ok := m.indexEntryCreated[key]; !ok {
+			m.indexEntryCreated[key] = entity.GetRevision()
+		}
+	}
 }
 
 // RemoveEntity is a thread-safe helper to directly remove an entity from the mock store
 func (m *MockStore) RemoveEntity(id Id) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entity, ok := m.Entities[id]
 	delete(m.Entities, id)
+	if !ok {
+		return
+	}
+
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		delete(m.indexEntryCreated, indexEntryKey(attr.CAS(), entity.Id()))
+	}
+}
+
+// indexEntryKey names one (index, entity) entry in indexEntryCreated.
+func indexEntryKey(indexKey string, id Id) string {
+	return indexKey + "\x00" + string(id)
 }
 
 func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
@@ -633,7 +661,7 @@ func (m *MockStore) commitLocked(entity *Entity, eventType mvccpb.Event_EventTyp
 		// etcd reports a put as a create when the key's CreateRevision equals
 		// its ModRevision, and as a modify otherwise. Track when each index
 		// entry first appeared so the mock can say the same.
-		entryKey := indexKey + "\x00" + string(entity.Id())
+		entryKey := indexEntryKey(indexKey, entity.Id())
 		createRev := rev
 		switch eventType {
 		case clientv3.EventTypePut:
