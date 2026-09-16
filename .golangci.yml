@@ -40,12 +40,6 @@ linters:
           - unused
         text: "func noTest.*is unused"
 
-      # Ignore unreachable code in specific packages
-      - path: pkg/perf
-        linters:
-          - govet
-        text: "unreachable code"
-
       # Ignore error handling issues in pkg/model (complex error handling that needs refactoring)
       - path: "pkg/model/"
         linters:
