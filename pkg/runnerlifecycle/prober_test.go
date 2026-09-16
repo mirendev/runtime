@@ -109,3 +109,19 @@ func TestLocalAddress(t *testing.T) {
 		require.Equal(t, want, LocalAddress(listen), listen)
 	}
 }
+
+func TestCoordinatorVersion(t *testing.T) {
+	// The test runner serves ServerInfo the way a coordinator does; point
+	// the config's coordinator address at it.
+	configPath, instance := startRunner(t, true)
+	cfg, err := runnerconfig.Load(configPath)
+	require.NoError(t, err)
+	cfg.CoordinatorAddress = cfg.ListenAddress
+	got, err := CoordinatorVersion(t.Context(), cfg, nil)
+	require.NoError(t, err)
+	require.Equal(t, instance.Info().Version, got)
+
+	cfg.CoordinatorAddress = "127.0.0.1:1"
+	_, err = CoordinatorVersion(t.Context(), cfg, nil)
+	require.Error(t, err)
+}

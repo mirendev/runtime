@@ -126,3 +126,28 @@ func ClientState(ctx context.Context, cfg *runnerconfig.Config, address string, 
 	}
 	return clientCfg.State(ctx, opts...)
 }
+
+// CoordinatorVersion asks the runner's coordinator which build it runs, so a
+// runner upgraded from its own host lands on the same one.
+func CoordinatorVersion(ctx context.Context, cfg *runnerconfig.Config, log *slog.Logger) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	state, err := ClientState(ctx, cfg, cfg.CoordinatorAddress, log)
+	if err != nil {
+		return "", err
+	}
+	defer state.Close()
+	client, err := state.Client(ServerInfoService)
+	if err != nil {
+		if re, ok := errors.AsType[*rpc.ResolveError](err); ok && re.Kind == rpc.ResolveLookupError {
+			return "", fmt.Errorf("coordinator does not report its version; it predates managed upgrades: %w", err)
+		}
+		return "", err
+	}
+	defer client.Close()
+	results, err := server_v1alpha.NewServerInfoClient(client).Version(ctx)
+	if err != nil {
+		return "", fmt.Errorf("query coordinator version: %w", err)
+	}
+	return results.Version(), nil
+}

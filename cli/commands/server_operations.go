@@ -15,19 +15,27 @@ import (
 
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/serverconfig"
 	"miren.dev/runtime/pkg/serverlifecycle"
 	"miren.dev/runtime/pkg/ui"
 )
 
-// lifecycleDaemon is what the operations commands need to know about the
-// daemon whose ledger they act on: the server or the runner.
+// lifecycleDaemon is what the operations and upgrade commands need to know
+// about the daemon they act on: the server or the runner.
 type lifecycleDaemon struct {
 	// name is the subcommand group and the word in messages: "server", "runner".
 	name    string
 	dir     string
 	unit    string
 	command []string
+	// manager describes the install the daemon runs from, for version checks.
+	manager func() release.ManagerOptions
+}
+
+// title is name capitalized, for the start of a sentence.
+func (d lifecycleDaemon) title() string {
+	return strings.ToUpper(d.name[:1]) + d.name[1:]
 }
 
 var (
@@ -36,12 +44,14 @@ var (
 		dir:     serverlifecycle.DefaultDir,
 		unit:    serverlifecycle.DefaultOptions().ServiceName,
 		command: serverlifecycle.ServerExecutorCommand,
+		manager: release.DefaultManagerOptions,
 	}
 	runnerDaemon = lifecycleDaemon{
 		name:    "runner",
 		dir:     serverlifecycle.RunnerDir,
 		unit:    serverlifecycle.RunnerOptions().ServiceName,
 		command: serverlifecycle.RunnerExecutorCommand,
+		manager: release.RunnerManagerOptions,
 	}
 )
 

@@ -1242,14 +1242,14 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren download release",
 		}),
 	))
-	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)", Upgrade,
+	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)", Upgrade,
 		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Upgrade the CLI on a client machine",
 			Body: "miren upgrade",
 		}),
 		WithExample(mflags.Example{
-			Name: "Upgrade the server and CLI on a server host",
+			Name: "Upgrade the server or runner and the CLI on the host that runs it",
 			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{

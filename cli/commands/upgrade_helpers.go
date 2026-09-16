@@ -5,11 +5,77 @@ import (
 	"fmt"
 
 	"miren.dev/runtime/pkg/release"
+	"miren.dev/runtime/pkg/runnerconfig"
+	"miren.dev/runtime/pkg/runnerlifecycle"
+	"miren.dev/runtime/version"
 )
 
 // resolveVersionChannel collapses the --version and --channel flags into a
 // single target version string. The two flags are mutually exclusive; when
 // neither is set the target defaults to the "latest" channel.
+// daemonTarget is the version a daemon on this host is upgraded to. With
+// neither flag, a server follows the latest release, and a runner follows its
+// coordinator: the fleet converges on the coordinator's build, and a runner
+// upgraded from its own host (the one-time step that brings a runner onto
+// managed upgrades, or an operator fixing one by hand) must not get ahead of
+// it. The flags are the explicit way to say otherwise.
+//
+// The bool reports an exact match: the coordinator runs a tagged release and
+// the target is that tag. An exact match is a two-way street, since a runner
+// that got ahead of its coordinator is just as much out of step as one
+// behind it; the walk from the coordinator treats it the same way.
+func daemonTarget(ctx *Context, daemon lifecycleDaemon, versionFlag, channelFlag string) (target string, exact bool, err error) {
+	if versionFlag != "" || channelFlag != "" || daemon.name != "runner" {
+		target, err = resolveVersionChannel(versionFlag, channelFlag)
+		return target, false, err
+	}
+	cfg, err := runnerconfig.Load("")
+	if err != nil {
+		return "", false, fmt.Errorf("read runner config to find the coordinator: %w (pass --version or --channel to choose a target directly)", err)
+	}
+	coordinator, err := runnerlifecycle.CoordinatorVersion(ctx, cfg, ctx.Log)
+	if err != nil {
+		return "", false, fmt.Errorf("could not ask the coordinator at %s which build to match: %w (pass --version or --channel to choose a target directly)", cfg.CoordinatorAddress, err)
+	}
+	target = version.BranchOf(coordinator)
+	if target == "" {
+		return "", false, fmt.Errorf("coordinator at %s reports version %q, which names no build to match (pass --version or --channel)", cfg.CoordinatorAddress, coordinator)
+	}
+	if target == coordinator {
+		ctx.Info("Matching the coordinator: %s", coordinator)
+		return target, true, nil
+	}
+	// A branch build resolves to its channel, so "latest of main" is the
+	// closest the runner can get; the walk from the coordinator checks the
+	// result against its own build.
+	ctx.Info("Matching the coordinator (%s) from the %s channel", coordinator, target)
+	return target, false, nil
+}
+
+// upgradeNeededFor is CheckIfUpgradeNeeded with the exact-match rule: a
+// target that must be matched is needed whenever the installed build is a
+// different one, newer included.
+func upgradeNeededFor(ctx context.Context, target string, exact, force bool, mgrOpts *release.ManagerOptions) (bool, error) {
+	if !exact {
+		return CheckIfUpgradeNeeded(ctx, target, force, mgrOpts)
+	}
+	if force {
+		return true, nil
+	}
+	current, wanted, err := CheckVersionStatus(ctx, target, mgrOpts)
+	if err != nil {
+		return true, nil
+	}
+	if current.Equivalent(wanted) {
+		fmt.Printf("Already at version %s\n", target)
+		return false, nil
+	}
+	if current.IsNewer(wanted) {
+		fmt.Printf("Installed %s is ahead of the coordinator's %s; matching the coordinator\n", current.Version, wanted.Version)
+	}
+	return true, nil
+}
+
 func resolveVersionChannel(version, channel string) (string, error) {
 	if version != "" && channel != "" {
 		return "", fmt.Errorf("--version and --channel are mutually exclusive")
