@@ -83,7 +83,7 @@ func upgradeServerAndCLI(ctx *Context, version, exe string, force bool, serverOp
 			customize(op)
 		}
 		ctx.Info("Upgrading server...")
-		result, err := runOperation(ctx, op)
+		result, err := runOperation(ctx, serverDaemon, op)
 		if err != nil {
 			return err
 		}

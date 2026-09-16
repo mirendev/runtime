@@ -20,6 +20,31 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
+// lifecycleDaemon is what the operations commands need to know about the
+// daemon whose ledger they act on: the server or the runner.
+type lifecycleDaemon struct {
+	// name is the subcommand group and the word in messages: "server", "runner".
+	name    string
+	dir     string
+	unit    string
+	command []string
+}
+
+var (
+	serverDaemon = lifecycleDaemon{
+		name:    "server",
+		dir:     serverlifecycle.DefaultDir,
+		unit:    serverlifecycle.DefaultOptions().ServiceName,
+		command: serverlifecycle.ServerExecutorCommand,
+	}
+	runnerDaemon = lifecycleDaemon{
+		name:    "runner",
+		dir:     serverlifecycle.RunnerDir,
+		unit:    serverlifecycle.RunnerOptions().ServiceName,
+		command: serverlifecycle.RunnerExecutorCommand,
+	}
+)
+
 // ServerOperationsRun is the executor entry point the transient systemd unit
 // invokes.
 func ServerOperationsRun(ctx *Context, opts struct {
@@ -194,6 +219,10 @@ func ServerOperationsList(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
+	return printOperationList(ctx, opts.FormatOptions, ops)
+}
+
+func printOperationList(ctx *Context, opts FormatOptions, ops []*serverlifecycle.Operation) error {
 	if opts.IsJSON() {
 		items := make([]operationJSON, 0, len(ops))
 		for _, op := range ops {
@@ -237,6 +266,10 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
+	return printOperation(ctx, opts.FormatOptions, op)
+}
+
+func printOperation(ctx *Context, opts FormatOptions, op *serverlifecycle.Operation) error {
 	if opts.IsJSON() {
 		return PrintJSON(toOperationJSON(op))
 	}
@@ -367,7 +400,7 @@ func operationVersions(op *serverlifecycle.Operation) string {
 
 // runOperation records op, launches it under systemd-run, and follows
 // it to a terminal phase.
-func runOperation(ctx *Context, op *serverlifecycle.Operation) (*serverlifecycle.Operation, error) {
+func runOperation(ctx *Context, daemon lifecycleDaemon, op *serverlifecycle.Operation) (*serverlifecycle.Operation, error) {
 	if os.Geteuid() != 0 {
 		return nil, fmt.Errorf("%s requires root privileges (use sudo)", op.Action)
 	}
@@ -377,24 +410,25 @@ func runOperation(ctx *Context, op *serverlifecycle.Operation) (*serverlifecycle
 	if err != nil {
 		return nil, err
 	}
-	store, err := serverlifecycle.NewStore(serverlifecycle.DefaultDir)
+	store, err := serverlifecycle.NewStore(daemon.dir)
 	if err != nil {
 		return nil, err
 	}
-	op, _, err = serverlifecycle.Start(ctx, store, serverlifecycle.SystemdLauncher{Binary: exe}, op)
+	launcher := serverlifecycle.SystemdLauncher{Binary: exe, Command: daemon.command}
+	op, _, err = serverlifecycle.Start(ctx, store, launcher, op)
 	if err != nil {
 		if errors.Is(err, serverlifecycle.ErrBusy) {
-			return nil, fmt.Errorf("%w; see 'miren server operations list'", err)
+			return nil, fmt.Errorf("%w; see 'miren %s operations list'", err, daemon.name)
 		}
 		return nil, err
 	}
 	ctx.Info("Started %s operation %s (unit %s)", op.Action, op.ID, serverlifecycle.UnitName(op.ID))
 
-	return followOperation(ctx, store, op.ID, serverlifecycle.UnitName(op.ID))
+	return followOperation(ctx, daemon, store, op.ID, serverlifecycle.UnitName(op.ID))
 }
 
 // Interrupting the follow does not stop the operation; it is its own process.
-func followOperation(ctx *Context, store *serverlifecycle.Store, id, unit string) (*serverlifecycle.Operation, error) {
+func followOperation(ctx *Context, daemon lifecycleDaemon, store *serverlifecycle.Store, id, unit string) (*serverlifecycle.Operation, error) {
 	var lastPhase serverlifecycle.Phase
 	var lastProgress string
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -417,7 +451,7 @@ func followOperation(ctx *Context, store *serverlifecycle.Store, id, unit string
 		}
 		readErrors = 0
 		if op.Phase != lastPhase {
-			ctx.Info("  %s", describePhase(op))
+			ctx.Info("  %s", describePhase(daemon, op))
 			lastPhase = op.Phase
 			lastProgress = ""
 		}
@@ -440,13 +474,13 @@ func followOperation(ctx *Context, store *serverlifecycle.Store, id, unit string
 		}
 		select {
 		case <-ctx.Done():
-			return op, fmt.Errorf("stopped following operation %s; it continues in the background (miren server operations show %s)", id, id)
+			return op, fmt.Errorf("stopped following operation %s; it continues in the background (miren %s operations show %s)", id, daemon.name, id)
 		case <-ticker.C:
 		}
 	}
 }
 
-func describePhase(op *serverlifecycle.Operation) string {
+func describePhase(daemon lifecycleDaemon, op *serverlifecycle.Operation) string {
 	switch op.Phase {
 	case serverlifecycle.PhasePending:
 		return "pending"
@@ -460,9 +494,9 @@ func describePhase(op *serverlifecycle.Operation) string {
 	case serverlifecycle.PhaseInstalling:
 		return "installing " + op.ResolvedVersion
 	case serverlifecycle.PhaseRestarting:
-		return "restarting miren service"
+		return "restarting " + daemon.unit + " service"
 	case serverlifecycle.PhaseVerifying:
-		return "waiting for the server to report ready"
+		return "waiting for the " + daemon.name + " to report ready"
 	case serverlifecycle.PhaseRollingBack:
 		return "rolling back: " + op.Error
 	case serverlifecycle.PhaseSucceeded:

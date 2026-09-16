@@ -154,7 +154,7 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 	var lastProgress string
 	report := func(op *serverlifecycle.Operation) {
 		if op.Phase != lastPhase {
-			ctx.Info("  %s", describePhase(op))
+			ctx.Info("  %s", describePhase(serverDaemon, op))
 			lastPhase = op.Phase
 			lastProgress = ""
 		}
