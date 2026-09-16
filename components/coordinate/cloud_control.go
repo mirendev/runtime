@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cloudrpc"
 	"miren.dev/runtime/pkg/clusternetwork"
+	"miren.dev/runtime/pkg/clusterresources"
 	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entitysync"
@@ -156,6 +157,10 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 	// to say about the network.
 	if err := clusternetwork.NewReporter(c.Log.With("component", "cluster-network"), c).Register(ctx, link); err != nil {
 		c.Log.Warn("cluster network reporting is unavailable for this uplink session", "error", err)
+	}
+	// And the resource half, at the cadence cloud asks for.
+	if err := clusterresources.NewReporter(c.Log.With("component", "cluster-resources"), c).Register(ctx, link); err != nil {
+		c.Log.Warn("cluster resource reporting is unavailable for this uplink session", "error", err)
 	}
 	// Offered on every negotiated session, like the RPC relay: whether cloud
 	// may drive the server is cloud's decision at negotiation, not a switch on
@@ -454,6 +459,27 @@ func (c *CloudControl) collectResourceUsage() cloudauth.ResourceUsage {
 		MemoryBytes:    stats.MemoryBytes,
 		MemoryPercent:  stats.MemoryPercent,
 		StorageBytes:   stats.StorageBytes,
+		StoragePercent: stats.StoragePercent,
+	}
+}
+
+// ResourceSample is one host reading in the cluster-resources wire shape,
+// stamped with when it was taken.
+//
+// The percentages are the ones the status poll carries. The totals are not:
+// the poll's cpu_cores is a load average despite its name and its byte
+// figures are used bytes, which cloud never read. The wire calls these
+// capacities, so they come from the host's core count and total memory and
+// storage.
+func (c *CloudControl) ResourceSample() clusterresources.Sample {
+	stats := sysstats.CollectSystemStats(c.DataPath)
+	return clusterresources.Sample{
+		ObservedAt:     time.Now().UTC(),
+		CPUCores:       float64(stats.CPUCoreCount),
+		CPUPercent:     stats.CPUPercent,
+		MemoryBytes:    stats.MemoryTotalBytes,
+		MemoryPercent:  stats.MemoryPercent,
+		StorageBytes:   stats.StorageTotalBytes,
 		StoragePercent: stats.StoragePercent,
 	}
 }
