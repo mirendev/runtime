@@ -16,6 +16,7 @@ type startup struct {
 	runtime       *Runtime
 	containerd    *containerdcomp.Boot
 	clusterAccess *clusterAccessBoot
+	lifecycle     *lifecycleBoot
 	nodeStorage   *nodeStorageBoot
 	telemetry     *telemetryBoot
 	sandboxHost   *sandboxHostBoot
@@ -27,6 +28,7 @@ type startup struct {
 func newStartup(runtime *Runtime, options StartOptions) *startup {
 	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
 	clusterAccess := newClusterAccessBoot(clusterAccessInputs(options))
+	lifecycle := newLifecycleBoot(options.Log, runtime.instance, clusterAccess.output)
 	telemetry := newTelemetryBoot(telemetryInputs(options), clusterAccess.output)
 	nodeStorage := newNodeStorageBoot(clusterAccess.output, telemetry.output)
 	sandboxHost := newSandboxHostBoot(
@@ -44,6 +46,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		runtime:       runtime,
 		containerd:    containerd,
 		clusterAccess: clusterAccess,
+		lifecycle:     lifecycle,
 		nodeStorage:   nodeStorage,
 		telemetry:     telemetry,
 		sandboxHost:   sandboxHost,
@@ -57,6 +60,7 @@ func (s *startup) addComponents() error {
 	components := []*boot.Component{
 		s.containerd.Component,
 		s.clusterAccess.component,
+		s.lifecycle.component,
 		s.nodeStorage.component,
 		s.telemetry.component,
 		s.sandboxHost.component,
