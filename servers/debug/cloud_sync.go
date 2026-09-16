@@ -54,6 +54,7 @@ func cloudSyncReport(status entitysync.Status) *debug_v1alpha.CloudSyncReport {
 	addFact("schema_digest", status.SchemaDigest)
 	addFact("wait_reason", status.WaitReason)
 	addFact("cloud_committed_cursor", strconv.FormatInt(status.CloudCursor, 10))
+	addFact("cloud_landed_revision", strconv.FormatInt(status.LandedRevision, 10))
 	if status.NextWatchRevision != 0 {
 		addFact("next_watched_revision", strconv.FormatInt(status.NextWatchRevision, 10))
 	}

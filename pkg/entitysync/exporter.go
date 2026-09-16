@@ -150,6 +150,15 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		t.log.Warn("entity sync source epoch unavailable for selected session", "error", err)
 		return
 	}
+	// Record the epoch before validating it. If the store was restored under
+	// this process and cloud still selects the old epoch, every session ends
+	// here, and the landed watermark from the old store must not outlive it:
+	// a consumer gating deletion on that watermark would otherwise compare
+	// the restored store's revisions against a number that means nothing to
+	// them.
+	if t.diagnostics != nil {
+		t.diagnostics.setSource(sourceEpoch)
+	}
 	if config.SourceEpoch != sourceEpoch {
 		err := fmt.Errorf("cloud selected source epoch %s; local source epoch is %s", config.SourceEpoch, sourceEpoch)
 		t.fail("validate-session-config", err)
@@ -160,9 +169,6 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 	}
 
 	s := &stream{exporter: t, ctx: ctx, sourceEpoch: sourceEpoch, waiters: make(map[string]chan Ack)}
-	if t.diagnostics != nil {
-		t.diagnostics.setSource(sourceEpoch)
-	}
 	t.mu.Lock()
 	t.active = s
 	t.mu.Unlock()
@@ -207,6 +213,10 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		} else {
 			t.setMode("watching", "")
 			if t.diagnostics != nil {
+				// Resuming here means cloud reported this cursor for a source
+				// epoch that matched and a head it does not exceed, so
+				// everything at or below it is already in cloud's custody.
+				t.diagnostics.setLanded(cursor)
 				t.diagnostics.setNextWatchRevision(cursor + 1)
 			}
 			watcher, err = t.store.WatchIndex(watchCtx, t.marker(), cursor+1)
@@ -565,6 +575,7 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 		s.exporter.diagnostics.setNextWatchRevision(to + 1)
 		if committed {
 			s.exporter.diagnostics.setCursor(to)
+			s.exporter.diagnostics.setLanded(to)
 		}
 	}
 	return to, nil

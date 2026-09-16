@@ -88,6 +88,14 @@ type CoordinatorConfig struct {
 	// falls back to the controller default.
 	SagaRetentionPeriod time.Duration
 
+	// DeploymentRetentionCount and DeploymentRetentionPeriod tune the
+	// deployment record retention GC. The count follows the app-version
+	// convention (<= 0 means the controller default); the period follows the
+	// saga one, where zero keeps records indefinitely and a negative value
+	// falls back to the default.
+	DeploymentRetentionCount  int
+	DeploymentRetentionPeriod time.Duration
+
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer
 

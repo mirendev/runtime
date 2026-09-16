@@ -386,6 +386,43 @@ func TestSessionValidatesEpochAfterSourcePreparation(t *testing.T) {
 	require.Empty(t, link.sent(), "the restored source must not be sent under the negotiated old epoch")
 }
 
+func TestSessionEpochMismatchResetsLandedRevision(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs lockedBuffer
+	store := &mutableEpochStore{MockStore: entity.NewMockStore(), epoch: "epoch-before-restore"}
+	diagnostics := NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		store,
+		core_v1alpha.CloudExportContract,
+		WithDiagnostics(diagnostics),
+	)
+	// Cloud landed the old store up to revision 64 while it was current.
+	diagnostics.setSource("epoch-before-restore")
+	diagnostics.setLanded(64)
+
+	// The store is restored under the running process; cloud still selects
+	// the epoch it negotiated before.
+	store.setEpoch("epoch-after-restore", nil)
+	config, err := json.Marshal(Config{
+		ExportSchema: core_v1alpha.CloudExportContract.Digest(),
+		SourceEpoch:  "epoch-before-restore",
+	})
+	require.NoError(t, err)
+
+	go exporter.runSession(ctx, uplink.Session{Capabilities: []uplink.CapabilitySelection{{
+		Name: uplink.CapabilityEntitySync, Version: Version1, Config: config,
+	}}}, newFakeLink())
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "cloud selected an unexpected entity source epoch")
+	}, time.Second, time.Millisecond)
+
+	landed, exporting := diagnostics.LandedRevision()
+	require.Zero(t, landed, "the old store's watermark must not vouch for the restored store")
+	require.True(t, exporting, "export still applies; nothing is landed yet")
+}
+
 func TestSnapshotFiltersEntities(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -564,6 +601,8 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(8), cursor)
 	require.Equal(t, int64(8), tenant.diagnostics.SnapshotStatus().CloudCursor)
+	landed, _ := tenant.diagnostics.LandedRevision()
+	require.Equal(t, int64(8), landed)
 	messages := link.sent()
 	require.Equal(t, []string{
 		TypeSnapshotBegin, TypeSnapshotBatch, TypeChangeBatch, TypeSnapshotComplete,

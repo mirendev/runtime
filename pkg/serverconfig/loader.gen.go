@@ -202,6 +202,14 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Containerd.StartEmbedded = flags.ContainerdConfigStartEmbedded
 	}
 
+	if flags.DeploymentConfigRetentionCount != nil {
+		cfg.Deployment.RetentionCount = flags.DeploymentConfigRetentionCount
+	}
+
+	if flags.DeploymentConfigRetentionPeriod != nil && *flags.DeploymentConfigRetentionPeriod != "" {
+		cfg.Deployment.RetentionPeriod = flags.DeploymentConfigRetentionPeriod
+	}
+
 	if flags.EtcdConfigClientPort != nil {
 		cfg.Etcd.ClientPort = flags.EtcdConfigClientPort
 	}

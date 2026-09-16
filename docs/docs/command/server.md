@@ -30,6 +30,8 @@ miren server [flags]
 - `--containerd-binary` — Path to containerd binary
 - `--containerd-socket` — Path to containerd socket
 - `--data-path, -d` — Data path
+- `--deployment-retention-count` — Number of most-recent deployment records to retain per app regardless of age
+- `--deployment-retention-period` — Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely.
 - `--disk-mode` — Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)
 - `--dns-names` — Additional DNS names assigned to the server cert
 - `--etcd, -e` — Etcd endpoints

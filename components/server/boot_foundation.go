@@ -100,6 +100,23 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 			"error", reason)
 	}
 
+	deploymentRetentionPeriod, err := units.ParseDuration(config.Deployment.GetRetentionPeriod())
+	if err != nil || deploymentRetentionPeriod < 0 {
+		defaultDeployment := serverconfig.DefaultDeploymentConfig()
+		invalid := deploymentRetentionPeriod
+		deploymentRetentionPeriod, _ = units.ParseDuration(defaultDeployment.GetRetentionPeriod())
+
+		reason := "negative duration"
+		if err != nil {
+			reason = err.Error()
+		}
+		options.Log.Warn("invalid deployment.retention_period, falling back to default",
+			"value", config.Deployment.GetRetentionPeriod(),
+			"parsed", invalid,
+			"default", deploymentRetentionPeriod,
+			"error", reason)
+	}
+
 	return coordinate.CoordinatorConfig{
 		Address:                   address,
 		EtcdEndpoints:             append([]string(nil), config.Etcd.Endpoints...),
@@ -114,6 +131,8 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 		AppVersionRetentionCount:  config.AppVersion.GetRetentionCount(),
 		AppVersionRetentionPeriod: appVersionRetentionPeriod,
 		SagaRetentionPeriod:       sagaRetentionPeriod,
+		DeploymentRetentionCount:  config.Deployment.GetRetentionCount(),
+		DeploymentRetentionPeriod: deploymentRetentionPeriod,
 		SecretKeyRotationPeriod:   secretKeyRotationPeriod,
 	}
 }

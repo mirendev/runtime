@@ -117,6 +117,7 @@ type Config struct {
 	AppVersion      AppVersionConfig      `toml:"app_version"`
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
+	Deployment      DeploymentConfig      `toml:"deployment"`
 	Etcd            EtcdConfig            `toml:"etcd"`
 	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
@@ -187,6 +188,38 @@ func (c *ContainerdConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *ContainerdConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
+}
+
+// DeploymentConfig Deployment record retention garbage collection
+type DeploymentConfig struct {
+	RetentionCount  *int    `toml:"retention_count" env:"MIREN_DEPLOYMENT_RETENTION_COUNT"`
+	RetentionPeriod *string `toml:"retention_period" env:"MIREN_DEPLOYMENT_RETENTION_PERIOD"`
+}
+
+// GetRetentionCount returns the value of RetentionCount or its zero value if nil
+func (c *DeploymentConfig) GetRetentionCount() int {
+	if c.RetentionCount != nil {
+		return *c.RetentionCount
+	}
+	return 0
+}
+
+// SetRetentionCount sets the value of RetentionCount
+func (c *DeploymentConfig) SetRetentionCount(v int) {
+	c.RetentionCount = &v
+}
+
+// GetRetentionPeriod returns the value of RetentionPeriod or its zero value if nil
+func (c *DeploymentConfig) GetRetentionPeriod() string {
+	if c.RetentionPeriod != nil {
+		return *c.RetentionPeriod
+	}
+	return ""
+}
+
+// SetRetentionPeriod sets the value of RetentionPeriod
+func (c *DeploymentConfig) SetRetentionPeriod(v string) {
+	c.RetentionPeriod = &v
 }
 
 // EtcdConfig Etcd configuration
