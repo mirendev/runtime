@@ -77,16 +77,17 @@ func checkVersion(env *doctorEnv) checkResult {
 	return checkResult{Status: checkOK, Summary: summary}
 }
 
-// The advice runs on the server host with the *old* binary on its PATH, whose
-// `miren upgrade` is CLI-only; `server upgrade` is the form every version
-// understands.
+// serverUpgradeActions names the one upgrade command. On a server host it
+// upgrades the server and the CLI together, and an older binary'"'"'s CLI-only
+// `miren upgrade` refuses when it finds a server running, so the same advice
+// is right whichever version is on the host'"'"'s PATH.
 func serverUpgradeActions(env *doctorEnv) []ui.Action {
 	if env.local() {
 		return []ui.Action{
-			{Command: "sudo miren server upgrade", Note: "upgrade the server on this machine"},
+			{Command: "sudo miren upgrade", Note: "upgrade the server on this machine"},
 		}
 	}
 	return []ui.Action{
-		{Command: "sudo miren server upgrade", Note: "run on the server host to upgrade it"},
+		{Command: "sudo miren upgrade", Note: "run on the server host to upgrade it"},
 	}
 }

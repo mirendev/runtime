@@ -68,14 +68,14 @@ func TestVersionCheckTable(t *testing.T) {
 			env:         versionEnv(nil, lookupErr),
 			wantStatus:  checkWarn,
 			wantSummary: "server does not report its version",
-			wantAction:  "sudo miren server upgrade",
+			wantAction:  "sudo miren upgrade",
 		},
 		{
 			name:        "server behind",
 			env:         versionEnv(&serverVersion{Version: "v0.9.0", Ready: true}, nil),
 			wantStatus:  checkWarn,
 			wantSummary: "CLI v0.14.0, server v0.9.0",
-			wantAction:  "sudo miren server upgrade",
+			wantAction:  "sudo miren upgrade",
 		},
 		{
 			name:        "cli behind",
