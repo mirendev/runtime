@@ -418,7 +418,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	e.tlsEnabled = config.TLS != nil
 
 	// Check if there's already a running task
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, slogout.AttachLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err == nil {
 		// Task exists, check its status
 		status, err := task.Status(ctx)
