@@ -5,7 +5,9 @@ package commands
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"miren.dev/runtime/pkg/containerboot"
@@ -39,8 +41,19 @@ func InternalContainerBoot(ctx *Context, opts struct {
 		// cannot sort out the volume runs it rather than nothing.
 		ctx.Log.Error("could not prepare the release directory; booting the image's own binary", "error", err)
 		bin = image
-	} else {
-		boot.GuardUpgrade(ctx)
+	} else if op := boot.GuardUpgrade(ctx); op != nil {
+		// The watchdog is the only thing that will notice this build
+		// hanging; if it cannot start, the boot still goes ahead and the
+		// executor's own deadline or the next boot's attempt count is
+		// what is left.
+		cmd := exec.Command(image, "internal", "container-watchdog",
+			"--operation", op.ID, "--server-pid", strconv.Itoa(os.Getpid()),
+			"--release-dir", opts.ReleaseDir, "--lifecycle-dir", opts.LifecycleDir)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			ctx.Log.Error("could not start the upgrade watchdog", "operation", op.ID, "error", err)
+		}
 	}
 
 	if err := syscall.Exec(bin, append([]string{bin}, opts.Args...), os.Environ()); err != nil {

@@ -105,62 +105,55 @@ func (b Boot) Prepare(ctx context.Context) (string, error) {
 // A ledger that cannot be read is logged and the boot goes on: the server's
 // own data-restore step fails closed on the same ledger, so nothing is lost
 // by not deciding here.
-func (b Boot) GuardUpgrade(ctx context.Context) {
+//
+// The returned operation, when not nil, is the upgrade this boot is the
+// new build's attempt at, for a Watchdog to keep an eye on.
+func (b Boot) GuardUpgrade(ctx context.Context) *serverlifecycle.Operation {
 	if b.LifecycleDir == "" {
-		return
+		return nil
 	}
 	if _, err := os.Stat(b.LifecycleDir); errors.Is(err, os.ErrNotExist) {
-		return
+		return nil
 	}
-	if err := b.guardUpgrade(ctx); err != nil {
+	op, err := b.guardUpgrade(ctx)
+	if err != nil {
 		b.Log.Error("could not check the lifecycle ledger for a stuck upgrade", "dir", b.LifecycleDir, "error", err)
+		return nil
 	}
+	return op
 }
 
-func (b Boot) guardUpgrade(ctx context.Context) error {
+func (b Boot) guardUpgrade(ctx context.Context) (*serverlifecycle.Operation, error) {
 	store, err := serverlifecycle.NewStore(b.LifecycleDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	op, err := store.Active()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if op == nil || op.Action != serverlifecycle.ActionUpgrade {
-		return nil
+		return nil, nil
 	}
 	// Nothing else runs before the exec, so the lock is a formality; but an
 	// executor that does hold it owns the record, and this must not write
 	// underneath it.
 	unlock, err := store.LockOperation(op.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer unlock()
 
-	installer := release.NewInstaller(release.InstallOptions{InstallPath: filepath.Join(b.ReleaseDir, "miren"), BackupSuffix: ".old"})
+	installer := b.installer()
 	if op.Phase == serverlifecycle.PhaseRollingBack && op.RollbackFrom == RollbackFrom && installer.HasBackup() {
 		// This guard's own rollback, interrupted between recording it and
 		// restoring the binary. The backup is still there, so nothing has
 		// been restored yet; finish the job.
 		b.Log.Warn("finishing an interrupted rollback", "operation", op.ID, "previous", op.PreviousVersion)
-		return b.restoreBinary(ctx, store, op, installer)
+		return nil, b.restoreBinary(ctx, store, op, installer)
 	}
-	// Only boots of the new build count. From the restart phase on, the
-	// upgraded binary is what the volume holds; so is an install that got
-	// the binary swapped but died before recording it, which the executor
-	// too recognises by what is on disk. Earlier phases boot the previous
-	// build and a rollback boots it again; those are the executor's to
-	// finish.
-	switch op.Phase { //nolint:exhaustive // every other phase boots the previous build
-	case serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying:
-	case serverlifecycle.PhaseInstalling:
-		onDisk, err := installer.GetCurrentVersion(ctx)
-		if err != nil || !serverlifecycle.SameBuild(onDisk.Version, onDisk.Commit, op.ResolvedVersion, op.ResolvedCommit) {
-			return nil
-		}
-	default:
-		return nil
+	if !b.bootsNewBuild(ctx, op, installer) {
+		return nil, nil
 	}
 
 	op.BootAttempts++
@@ -170,22 +163,50 @@ func (b Boot) guardUpgrade(ctx context.Context) error {
 	}
 	if op.BootAttempts <= limit {
 		b.Log.Info("booting the upgraded build", "operation", op.ID, "version", op.ResolvedVersion, "attempt", op.BootAttempts, "of", limit)
-		return store.Update(op)
+		return op, store.Update(op)
 	}
+	return nil, b.rollBack(ctx, store, op, installer, fmt.Sprintf("upgraded build %s did not come up in %d boots", op.ResolvedVersion, limit))
+}
 
-	op.Error = fmt.Sprintf("upgraded build %s did not come up in %d boots", op.ResolvedVersion, limit)
+func (b Boot) installer() release.Installer {
+	return release.NewInstaller(release.InstallOptions{InstallPath: filepath.Join(b.ReleaseDir, "miren"), BackupSuffix: ".old"})
+}
+
+// bootsNewBuild reports whether the binary this boot runs is op's upgraded
+// build. From the restart phase on it is what the volume holds; so is an
+// install that got the binary swapped but died before recording it, which
+// the executor too recognises by what is on disk. Earlier phases boot the
+// previous build and a rollback boots it again; those are the executor's
+// to finish.
+func (b Boot) bootsNewBuild(ctx context.Context, op *serverlifecycle.Operation, installer release.Installer) bool {
+	switch op.Phase { //nolint:exhaustive // every other phase boots the previous build
+	case serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying:
+		return true
+	case serverlifecycle.PhaseInstalling:
+		onDisk, err := installer.GetCurrentVersion(ctx)
+		return err == nil && serverlifecycle.SameBuild(onDisk.Version, onDisk.Commit, op.ResolvedVersion, op.ResolvedCommit)
+	default:
+		return false
+	}
+}
+
+// rollBack gives up on the upgraded build: it puts the previous binary back
+// and hands the operation to the executor in that build as a rollback whose
+// restart already happened. The caller holds the operation's lock.
+func (b Boot) rollBack(ctx context.Context, store *serverlifecycle.Store, op *serverlifecycle.Operation, installer release.Installer, reason string) error {
+	op.Error = reason
 	if op.NoRollback || !installer.HasBackup() {
-		reason := "rollback was turned off for this operation"
+		why := "rollback was turned off for this operation"
 		if !op.NoRollback {
-			reason = "no previous binary to roll back to"
+			why = "no previous binary to roll back to"
 		}
-		b.Log.Error("upgraded build is not coming up and cannot be rolled back", "operation", op.ID, "version", op.ResolvedVersion, "reason", reason)
-		op.Error += "; " + reason
+		b.Log.Error("upgraded build is not coming up and cannot be rolled back", "operation", op.ID, "version", op.ResolvedVersion, "reason", why)
+		op.Error += "; " + why
 		op.Phase = serverlifecycle.PhaseFailed
 		return store.Update(op)
 	}
 
-	b.Log.Warn("upgraded build is not coming up; rolling back", "operation", op.ID, "version", op.ResolvedVersion, "previous", op.PreviousVersion, "attempts", limit)
+	b.Log.Warn("upgraded build is not coming up; rolling back", "operation", op.ID, "version", op.ResolvedVersion, "previous", op.PreviousVersion, "reason", reason)
 	// Same order as the executor's rollback: the restore request is durable
 	// before the previous binary is, and the record says the restart is
 	// behind us before that binary boots and resumes it.

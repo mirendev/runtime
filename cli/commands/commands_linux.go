@@ -19,6 +19,12 @@ func addCommands(d *mflags.Dispatcher) {
 		WithGroup(GroupHidden),
 	))
 
+	// Started by container-boot beside each boot of an upgraded build.
+	d.Dispatch("internal container-watchdog", Infer("internal container-watchdog",
+		"Roll back an upgraded build that hangs before its executor can run", InternalContainerWatchdog,
+		WithGroup(GroupHidden),
+	))
+
 	// Cloud registration commands
 	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", RegisterStandalone,
 		WithExample(mflags.Example{

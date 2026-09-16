@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	"miren.dev/runtime/pkg/serverinfo"
 )
@@ -21,13 +22,37 @@ type ContainerRestarter struct {
 	// itself, which the server handles the same way as one from outside: the
 	// boot graph's stop path takes the nested stack down cleanly.
 	Shutdown func() error
+	// ExitAfter bounds the graceful stop: a restart that never finishes
+	// stopping would leave the container running the build it was meant to
+	// replace, with no supervisor to notice. 0 means DefaultExitAfter.
+	ExitAfter time.Duration
 }
 
+// DefaultExitAfter is past the server's own shutdown timeout, so it only
+// ever fires on a stop that is stuck rather than slow.
+const DefaultExitAfter = 8 * time.Minute
+
 func (r ContainerRestarter) Restart(context.Context) error {
-	if r.Shutdown != nil {
-		return r.Shutdown()
+	exitAfter := r.ExitAfter
+	if exitAfter <= 0 {
+		exitAfter = DefaultExitAfter
 	}
-	return syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	timer := time.AfterFunc(exitAfter, func() {
+		fmt.Fprintf(os.Stderr, "server still running %s after a restart was requested; exiting so the container restarts\n", exitAfter)
+		os.Exit(1)
+	})
+	var err error
+	if r.Shutdown != nil {
+		err = r.Shutdown()
+	} else {
+		err = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}
+	if err != nil {
+		// No restart is underway, and the executor records the failure; a
+		// forced exit on top would be a restart nobody asked for.
+		timer.Stop()
+	}
+	return err
 }
 
 // ContainerLauncher runs the executor inside the server process. Nothing

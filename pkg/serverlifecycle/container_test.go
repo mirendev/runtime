@@ -2,6 +2,7 @@ package serverlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -182,6 +183,18 @@ func TestContainerResumeWithNothingPendingIsANoop(t *testing.T) {
 	require.NoError(t, launcher.Resume(context.Background(), host.store))
 	launcher.Wait()
 	require.Equal(t, 0, host.shutdowns)
+}
+
+// A shutdown request that fails leaves the server running on purpose; the
+// forced exit armed for a stuck stop must not fire on top of that.
+func TestContainerRestarterDisarmsTheForcedExitWhenShutdownFails(t *testing.T) {
+	r := ContainerRestarter{
+		Shutdown:  func() error { return errors.New("no permission to signal") },
+		ExitAfter: 20 * time.Millisecond,
+	}
+	require.Error(t, r.Restart(context.Background()))
+	// If the timer were still armed this process would exit here.
+	time.Sleep(60 * time.Millisecond)
 }
 
 func TestContainerRestarterUsesTheShutdownHook(t *testing.T) {

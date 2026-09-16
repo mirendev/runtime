@@ -16,7 +16,11 @@
 #      where v9.0.2 is a script that reports a version and exits, so the
 #      new build crash loops before any executor can run in it and
 #      container-boot has to roll back the binary and the etcd snapshot
-#   4. a restart whose CLI is killed mid-flight, which must still finish
+#   4. miren cluster upgrade -V v9.0.3
+#      where v9.0.3 reports a version and then hangs, so nothing inside the
+#      server ever runs and the watchdog container-boot started beside it
+#      has to roll back on the ready deadline
+#   5. a restart whose CLI is killed mid-flight, which must still finish
 #
 # The CLI runs on the host through the cluster commands, as it does for real
 # container installs: a `docker exec` session dies with the container at the
@@ -72,7 +76,7 @@ wait_terminal() {
 last_op_id() { m server operations list --format json | jq -r '.[-1].id'; }
 
 log "building fixture binaries in $WORK"
-mkdir -p "$WORK/bin" "$WORK/assets/v9.0.1" "$WORK/assets/v9.0.2"
+mkdir -p "$WORK/bin" "$WORK/assets/v9.0.1" "$WORK/assets/v9.0.2" "$WORK/assets/v9.0.3"
 for v in v9.0.0 v9.0.1; do
   n=${v##*.}
   (cd "$ROOT_DIR" && ./hack/dev-exec env GIT_VERSION=$v GIT_COMMIT=$(printf '%040d' $n) \
@@ -96,7 +100,18 @@ esac
 BROKEN
 chmod +x "$T/miren"
 tar -C "$T" -czf "$WORK/assets/v9.0.2/miren-base-linux-amd64.tar.gz" miren; rm -rf "$T"
-for v in v9.0.1 v9.0.2; do
+# The hung build is the shape neither the crash count nor the executor can
+# see: it stays up and never gets anywhere.
+T=$(mktemp -d); cat >"$T/miren" <<'HUNG'
+#!/bin/sh
+case "$1" in
+  version) echo '{"version":"v9.0.3","commit":"0000000000000000000000000000000000000003","build_date":"2026-01-01T03:00:00Z"}';;
+  *) echo "v9.0.3 hangs on purpose" >&2; exec sleep infinity;;
+esac
+HUNG
+chmod +x "$T/miren"
+tar -C "$T" -czf "$WORK/assets/v9.0.3/miren-base-linux-amd64.tar.gz" miren; rm -rf "$T"
+for v in v9.0.1 v9.0.2 v9.0.3; do
   n=${v##*.}
   (cd "$WORK/assets/$v" && sha256sum miren-base-linux-amd64.tar.gz >miren-base-linux-amd64.tar.gz.sha256)
   echo "{\"version\":\"$v\",\"commit\":\"$(printf '%040d' $n)\",\"branch\":\"$v\",\"build_date\":\"2026-01-01T0$n:00:00Z\",\"artifacts\":[]}" \
@@ -190,7 +205,26 @@ in_container test ! -e /var/lib/miren/release/miren.old
 [ "$(restart_count)" -ge $((RESTARTS + 4)) ]
 m server operations show "$OP_ID" | grep -Eq '^ *Restore: +restored'
 
-log "4. restart with the CLI killed mid-operation"
+log "4. miren cluster upgrade --version v9.0.3 (hangs; the watchdog must roll back)"
+RESTARTS=$(restart_count)
+if m cluster upgrade --yes --version v9.0.3 --health-timeout 45; then
+  echo "upgrade to a hung build reported success" >&2; exit 1
+fi
+OP_ID=$(last_op_id)
+[ "$(wait_terminal "$OP_ID")" = "rolled_back" ]
+wait_ready
+[ "$(health .server.version)" = "v9.0.1" ]
+OP=$(ledger "$OP_ID")
+echo "$OP" | jq -e '.rollback_from == "container-boot"' >/dev/null
+echo "$OP" | jq -e '.boot_attempts == 1' >/dev/null
+echo "$OP" | jq -e '.error | test("did not report ready within")' >/dev/null
+echo "$OP" | jq -e '.data_restore.restored_at != null' >/dev/null
+in_container test -d "/var/lib/miren/etcd.replaced-$OP_ID"
+# One restart onto the hung build, one more when the watchdog ended it.
+[ "$(restart_count)" -ge $((RESTARTS + 2)) ]
+[ "$(docker logs "$CONTAINER" 2>&1 | grep -c 'ending the hung server')" -gt 0 ]
+
+log "5. restart with the CLI killed mid-operation"
 BEFORE=$(health .server.runtime_instance_id)
 rc=0; timeout 2 env MIREN_CONFIG="$WORK/clientconfig.yaml" MIREN_CLUSTER=local "$WORK/bin/miren-v9.0.0" cluster restart --yes || rc=$?
 [ "$rc" = 124 ] || { echo "expected timeout to kill the CLI (exit 124), got $rc" >&2; exit 1; }
