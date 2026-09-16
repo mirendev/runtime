@@ -200,6 +200,42 @@ func TestEntityServer_Delete(t *testing.T) {
 	}
 }
 
+func TestEntityServer_MakeAttrNamedEnum(t *testing.T) {
+	store := entity.NewMockStore()
+	sb := schema.Builder("make_attr_enum_test", "v1")
+	sb.Singleton("make_attr_enum_test/canonical.ready")
+	sb.Enum("Status", "make_attr_enum_test/status", []entity.Id{"make_attr_enum_test/canonical.ready"})
+	require.NoError(t, sb.Apply(t.Context(), store))
+
+	client := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(&EntityServer{
+			Log:   slog.Default(),
+			Store: store,
+		})),
+	}
+
+	result, err := client.MakeAttr(t.Context(), "make_attr_enum_test/status", "ready")
+	require.NoError(t, err)
+	assert.True(t, entity.RefValue("make_attr_enum_test/canonical.ready").Equal(result.Attr().Value))
+
+	_, err = client.MakeAttr(t.Context(), "make_attr_enum_test/status", "nope")
+	require.ErrorContains(t, err, "invalid enum value: nope")
+}
+
+func TestEnumValueFromStringRejectsAmbiguousShortRef(t *testing.T) {
+	values := []entity.Value{
+		entity.RefValue("test/first.ready"),
+		entity.RefValue("test/second.ready"),
+	}
+
+	exact, ok := enumRefFromString(values, "test/second.ready")
+	require.True(t, ok)
+	assert.True(t, exact.Equal(entity.RefValue("test/second.ready")))
+
+	_, ok = enumRefFromString(values, "ready")
+	assert.False(t, ok)
+}
+
 func TestEntityServer_WatchIndex(t *testing.T) {
 	r := require.New(t)
 
