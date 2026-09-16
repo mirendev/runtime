@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,6 +78,9 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 	controller.Stop()
 }
 
+// TestReconcileController_Resync verifies that periodic reconciliation
+// re-enqueues every entity on each tick without restarting the watch, and that
+// the watch keeps delivering live adds and deletes across those ticks.
 func TestReconcileController_Resync(t *testing.T) {
 	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -92,20 +96,29 @@ func TestReconcileController_Resync(t *testing.T) {
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
-	// Setup test entities
 	store.AddEntity(entity.Id("test/entity1"), entity.New(
 		entity.Ident, "test/entity1",
 		entity.Type, "test/type",
 	))
 
-	resyncCalls := 0
-	eventsChan := make(chan Event, 10)
+	var mu sync.Mutex
+	var seen []Event
 	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
-		if event.Type == EventUpdated {
-			resyncCalls++
-		}
-		eventsChan <- event
+		mu.Lock()
+		seen = append(seen, event)
+		mu.Unlock()
 		return nil, nil
+	}
+	count := func(typ EventType, id entity.Id) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, ev := range seen {
+			if ev.Type == typ && ev.Id == id {
+				n++
+			}
+		}
+		return n
 	}
 
 	controller := NewReconcileController(
@@ -114,23 +127,40 @@ func TestReconcileController_Resync(t *testing.T) {
 		testIndex,
 		sc,
 		handler,
-		100*time.Millisecond, // short resync period for testing
-		1,                    // single worker
+		50*time.Millisecond, // short resync period for testing
+		1,                   // single worker
 	)
 
-	// Start controller
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
+	ctx := t.Context()
+	require.NoError(t, controller.Start(ctx))
+	defer controller.Stop()
 
-	err := controller.Start(ctx)
+	require.NoError(t, store.WaitForIndexWatcher(ctx, testIndex))
+
+	// The initial snapshot plus at least two resync ticks each reconcile entity1.
+	require.Eventually(t, func() bool {
+		return count(EventUpdated, "test/entity1") >= 3
+	}, 5*time.Second, 10*time.Millisecond, "entity1 should be reconciled on each resync tick")
+
+	// Resync ticks must not have torn down and re-established the watch.
+	assert.Len(t, store.WatchFromRevsCopy(), 1, "resync should reuse the healthy watch")
+
+	// The watch is still live: a create and a delete both arrive as events.
+	_, err := store.CreateEntity(ctx, entity.New(
+		entity.Ref(entity.DBId, "test/entity2"),
+		entity.String(entity.Type, "test/type"),
+	))
 	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return count(EventAdded, "test/entity2") >= 1
+	}, 5*time.Second, 10*time.Millisecond, "live add should arrive through the open watch")
 
-	// Wait for at least 2 resyncs
-	<-ctx.Done()
-	controller.Stop()
+	require.NoError(t, store.DeleteEntity(ctx, "test/entity1"))
+	require.Eventually(t, func() bool {
+		return count(EventDeleted, "test/entity1") >= 1
+	}, 5*time.Second, 10*time.Millisecond, "live delete should arrive through the open watch")
 
-	// Should have at least 2 resync calls
-	assert.GreaterOrEqual(t, resyncCalls, 2)
+	assert.Len(t, store.WatchFromRevsCopy(), 1, "watch should still be the original one")
 }
 
 // Test entity for AdaptController tests

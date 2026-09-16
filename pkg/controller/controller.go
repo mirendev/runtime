@@ -93,7 +93,9 @@ type ReconcileController struct {
 	periodicTime time.Duration
 }
 
-// NewReconcileController creates a new controller
+// NewReconcileController creates a new controller. A resyncPeriod > 0 lists
+// the whole index on every tick and reconciles each entity again, so pick it
+// with the index's size in mind; it is anti-entropy, not an event source.
 func NewReconcileController(name string, log *slog.Logger, index entity.Attr, esc *entityserver_v1alpha.EntityAccessClient, handler HandlerFunc, resyncPeriod time.Duration, workers int) *ReconcileController {
 	return &ReconcileController{
 		Log:          log.With("module", fmt.Sprintf("reconcile.%s", name)),
@@ -128,10 +130,7 @@ func (c *ReconcileController) Start(top context.Context) error {
 		})
 	}
 
-	c.watcher = indexwatch.New(c.esc, c.index, indexwatch.Options{
-		Logger:       c.Log,
-		ResyncPeriod: c.resyncPeriod,
-	})
+	c.watcher = indexwatch.New(c.esc, c.index, indexwatch.Options{Logger: c.Log})
 	if err := c.watcher.Start(ctx); err != nil {
 		cancel()
 		return err
@@ -141,6 +140,12 @@ func (c *ReconcileController) Start(top context.Context) error {
 			c.acceptWatchEvent(event)
 		}
 	})
+
+	if c.resyncPeriod > 0 {
+		c.wg.Go(func() {
+			c.runResync(ctx)
+		})
+	}
 
 	if c.metricWriter != nil {
 		c.wg.Go(func() { c.reportMetrics(ctx) })
@@ -197,18 +202,15 @@ func (c *ReconcileController) Enqueue(event Event) {
 		present:   event.Type != EventDeleted,
 		created:   event.Type == EventAdded,
 		tombstone: event.Entity,
+		rev:       event.Rev,
 	})
 }
 
 func (c *ReconcileController) acceptWatchEvent(event indexwatch.Event) {
 	switch event.Type {
 	case indexwatch.EventSync:
-		// A snapshot describes current positive state, not a deletion log. Keeping
-		// every previously seen id just to infer missed deletes would make each
-		// controller retain its index's full cardinality and still would not cover
-		// deletes missed across a process restart.
 		for _, en := range event.Entities {
-			c.enqueueSignal(workSignal{id: en.Id(), priority: workRepair, present: true})
+			c.enqueueRepair(en.Id(), event.Rev)
 		}
 
 	case indexwatch.EventAdded, indexwatch.EventUpdated:
@@ -220,6 +222,7 @@ func (c *ReconcileController) acceptWatchEvent(event indexwatch.Event) {
 			priority: workUrgent,
 			present:  true,
 			created:  event.Type == indexwatch.EventAdded,
+			rev:      event.Rev,
 		})
 
 	case indexwatch.EventDeleted:
@@ -228,8 +231,19 @@ func (c *ReconcileController) acceptWatchEvent(event indexwatch.Event) {
 			priority:  workUrgent,
 			present:   false,
 			tombstone: event.Entity,
+			rev:       event.Rev,
 		})
 	}
+}
+
+// enqueueRepair marks an entity dirty at repair priority as of the revision
+// the index was read at. Both a watch snapshot and a periodic resync feed this
+// path: each describes current positive state, not a deletion log. Keeping
+// every previously seen id just to infer missed deletes would make each
+// controller retain its index's full cardinality and still would not cover
+// deletes missed across a process restart.
+func (c *ReconcileController) enqueueRepair(id entity.Id, rev int64) {
+	c.enqueueSignal(workSignal{id: id, priority: workRepair, present: true, rev: rev})
 }
 
 func (c *ReconcileController) enqueueSignal(signal workSignal) {
@@ -396,6 +410,36 @@ func cloneEntity(en *entity.Entity) *entity.Entity {
 		return nil
 	}
 	return en.Clone()
+}
+
+// runResync re-enqueues every entity in the index at repair priority once per
+// resyncPeriod. It lists the index rather than restarting the watch: the
+// watcher resumes from its revision cursor and re-snapshots after compaction on
+// its own, so the watch stays open and a tick costs one List instead of a
+// stream teardown. The first pass is left to the watcher's initial snapshot.
+func (c *ReconcileController) runResync(ctx context.Context) {
+	ticker := time.NewTicker(c.resyncPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		resp, err := c.esc.List(ctx, c.index)
+		if err != nil {
+			if ctx.Err() == nil {
+				c.Log.Warn("resync list failed, will retry next tick", "error", err)
+			}
+			continue
+		}
+		c.counters.resyncs.Add(1)
+		for _, aen := range resp.Values() {
+			c.enqueueRepair(entity.Id(aen.Id()), resp.Revision())
+		}
+	}
 }
 
 // runPeriodic runs the periodic callback every 10 minutes
