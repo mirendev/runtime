@@ -44,15 +44,29 @@ wait_for_exit() {
   ! kill -0 "$pid" 2>/dev/null
 }
 
-# force_kill PID: SIGKILL a server that ignored its shutdown window, and show
-# what it was doing so the escalation leaves evidence behind.
+# is_miren_server PID: true if PID is a miren server process. Guards the signals
+# below against a stale PID file whose number has been reused by something else.
+is_miren_server() {
+  tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q 'bin/miren server'
+}
+
+# force_kill PID: SIGKILL a server that ignored its shutdown window, show what
+# it was doing so the escalation leaves evidence behind, and confirm it is gone.
+# Returns 1 if the process is still present afterwards.
 force_kill() {
   local pid=$1
   echo "Warning: server did not exit within ${STOP_TIMEOUT}s, forcing termination (containerd tasks may be orphaned)"
   echo "Last log lines before forced kill:"
   tail -n 20 "$LOGFILE" 2>/dev/null | sed 's/^/  | /'
+  if ! is_miren_server "$pid"; then
+    echo "Error: PID $pid is no longer a miren server process; refusing to SIGKILL it"
+    return 1
+  fi
   kill -9 "$pid" 2>/dev/null || true
-  sleep 0.5
+  if ! wait_for_exit "$pid" 10; then
+    echo "Error: PID $pid still present 10s after SIGKILL"
+    return 1
+  fi
 }
 
 case "${1:-}" in
@@ -136,15 +150,19 @@ case "${1:-}" in
     fi
 
     PID=$(cat "$PIDFILE")
-    if kill -0 "$PID" 2>/dev/null; then
+    if ! kill -0 "$PID" 2>/dev/null; then
+      echo "Server not running (stale PID file)"
+    elif ! is_miren_server "$PID"; then
+      echo "Error: PID $PID from $PIDFILE is not a miren server; leaving it alone"
+      exit 1
+    else
       echo "Stopping server (PID $PID)..."
       kill "$PID"
-      if ! wait_for_exit "$PID" "$STOP_TIMEOUT"; then
-        force_kill "$PID"
+      if ! wait_for_exit "$PID" "$STOP_TIMEOUT" && ! force_kill "$PID"; then
+        echo "Error: server did not stop; keeping $PIDFILE"
+        exit 1
       fi
       echo "Server stopped"
-    else
-      echo "Server not running (stale PID file)"
     fi
     rm -f "$PIDFILE"
     ;;
@@ -153,13 +171,18 @@ case "${1:-}" in
     # Use SIGUSR1 for restart to preserve outboard processes
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
       PID=$(cat "$PIDFILE")
+      if ! is_miren_server "$PID"; then
+        echo "Error: PID $PID from $PIDFILE is not a miren server; leaving it alone"
+        exit 1
+      fi
       echo "Sending SIGUSR1 to server (PID $PID) for graceful restart..."
       kill -USR1 "$PID"
       if ! wait_for_exit "$PID" 15; then
         echo "Warning: Server did not exit after SIGUSR1, sending SIGTERM..."
         kill "$PID"
-        if ! wait_for_exit "$PID" "$STOP_TIMEOUT"; then
-          force_kill "$PID"
+        if ! wait_for_exit "$PID" "$STOP_TIMEOUT" && ! force_kill "$PID"; then
+          echo "Error: server did not stop; keeping $PIDFILE"
+          exit 1
         fi
       fi
       rm -f "$PIDFILE"

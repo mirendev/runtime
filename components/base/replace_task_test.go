@@ -115,12 +115,13 @@ func TestReplaceTaskReapsLeakedRecord(t *testing.T) {
 	require.Same(t, created, task)
 	require.Equal(t, []string{"test-container"}, reaped)
 	require.Equal(t, 2, attempts)
-	require.Equal(t, 2, host.calls, "the retry should look the task up again after reaping")
+	require.Equal(t, 3, host.calls, "expected a lookup before each create plus the recheck before reaping")
 }
 
-// If the task turns up on a retry lookup it gets evicted like any other stale
-// task rather than being left to block the create.
-func TestReplaceTaskEvictsTaskThatAppearsOnRetry(t *testing.T) {
+// A task that appears between the lookup and the create is a real task, not a
+// leaked record: it gets the graceful eviction path and the raw reap is never
+// issued against it.
+func TestReplaceTaskEvictsTaskThatAppearsBeforeCreate(t *testing.T) {
 	host := &scriptedHost{lookups: []func() (containerd.Task, error){notFound, found("late")}}
 	var evicted []string
 	created := &fakeTask{id: "new"}
@@ -131,7 +132,7 @@ func TestReplaceTaskEvictsTaskThatAppearsOnRetry(t *testing.T) {
 			evicted = append(evicted, task.(*fakeTask).id)
 			return nil
 		},
-		func(context.Context, string) error { return nil },
+		noReap(t),
 		func(context.Context) (containerd.Task, error) {
 			attempts++
 			if attempts == 1 {

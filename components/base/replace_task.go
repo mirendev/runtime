@@ -48,14 +48,25 @@ const replaceTaskMaxAttempts = 3
 // running, so ReplaceTask treats the combination as a leaked record, reaps it,
 // and creates again.
 func ReplaceTask(ctx context.Context, log *slog.Logger, componentName string, container taskHost, evict TaskEvictor, reap TaskReaper, create TaskFactory) (containerd.Task, error) {
+	// evictIfPresent reports whether a loadable task was found (and evicted).
+	evictIfPresent := func() (bool, error) {
+		task, err := container.Task(ctx, nil)
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("inspect existing %s task: %w", componentName, err)
+		}
+		log.Info("evicting stale " + componentName + " task before creating a new one")
+		if err := evict(ctx, task); err != nil {
+			return true, fmt.Errorf("evict stale %s task: %w", componentName, err)
+		}
+		return true, nil
+	}
+
 	for attempt := 1; ; attempt++ {
-		if task, err := container.Task(ctx, nil); err == nil {
-			log.Info("evicting stale " + componentName + " task before creating a new one")
-			if err := evict(ctx, task); err != nil {
-				return nil, fmt.Errorf("evict stale %s task: %w", componentName, err)
-			}
-		} else if !errdefs.IsNotFound(err) {
-			return nil, fmt.Errorf("inspect existing %s task: %w", componentName, err)
+		if _, err := evictIfPresent(); err != nil {
+			return nil, err
 		}
 
 		task, err := create(ctx)
@@ -66,7 +77,16 @@ func ReplaceTask(ctx context.Context, log *slog.Logger, componentName string, co
 			return nil, err
 		}
 		if attempt >= replaceTaskMaxAttempts {
-			return nil, fmt.Errorf("%s task record still registered after %d reap attempts: %w", componentName, attempt-1, err)
+			return nil, fmt.Errorf("%s task record still registered after %d attempts: %w", componentName, attempt, err)
+		}
+
+		// Look again before reaching for the raw delete. A task that turned up
+		// since the lookup above is a real one somebody just created, not a
+		// leaked record, and it deserves the graceful eviction path.
+		if found, err := evictIfPresent(); err != nil {
+			return nil, err
+		} else if found {
+			continue
 		}
 
 		log.Warn("containerd holds a leaked "+componentName+" task record (lookup says not found, create says already exists); reaping it", "attempt", attempt, "error", err)
