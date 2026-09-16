@@ -237,9 +237,13 @@ func (e *Executor) install(ctx context.Context, op *Operation) error {
 }
 
 func (e *Executor) restart(ctx context.Context, op *Operation) error {
-	// Resuming after a restart that took: do not bounce the server again.
+	// Resuming after a restart that took: do not bounce the server again. A
+	// new instance alone is not proof for an upgrade: the server may have
+	// been restarted for some other reason (a host reboot mid-download, say)
+	// and be the previous build again, which still needs the restart.
 	if op.PreviousInstanceID != "" {
-		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID {
+		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID &&
+			(op.Action != ActionUpgrade || sameBuild(snap.Version, snap.Commit, op.ResolvedVersion, op.ResolvedCommit)) {
 			return e.transition(op, PhaseVerifying)
 		}
 	}
@@ -537,6 +541,12 @@ func appendReason(existing, reason string) string {
 		return reason
 	}
 	return existing + "; " + reason
+}
+
+// SameBuild reports whether two builds are the same: commits decide when
+// both are known, otherwise version strings.
+func SameBuild(versionA, commitA, versionB, commitB string) bool {
+	return sameBuild(versionA, commitA, versionB, commitB)
 }
 
 // sameBuild: commits decide when both are known, otherwise version strings.

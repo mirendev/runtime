@@ -253,3 +253,61 @@ func (p staticProber) Probe(context.Context) (serverlifecycle.Snapshot, error) {
 type restarterFunc func(context.Context) error
 
 func (f restarterFunc) Restart(ctx context.Context) error { return f(ctx) }
+
+// versionScript stands in for a binary that can at least say what it is.
+func versionScript(version, commit string) string {
+	return "#!/bin/sh\ncase \"$1\" in version) echo '{\"version\":\"" + version + "\",\"commit\":\"" + commit + "\"}';; *) exit 1;; esac\n"
+}
+
+// The executor swaps the binary before it records restarting. A crash in
+// that window leaves the new build on disk under an installing phase, and
+// its boots have to count like any other.
+func TestGuardUpgradeCountsAnInstallThatDiedBeforeItsCheckpoint(t *testing.T) {
+	b, store, op := newUpgradeBoot(t)
+	op.Phase = serverlifecycle.PhaseInstalling
+	require.NoError(t, store.Update(op))
+	require.NoError(t, os.WriteFile(filepath.Join(b.ReleaseDir, "miren"), []byte(versionScript("v2.0.0", "c-v2")), 0755))
+
+	b.GuardUpgrade(context.Background())
+	got, err := store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.BootAttempts)
+
+	// The previous build still on disk under installing is the executor's
+	// resume, not a boot of the new build.
+	require.NoError(t, os.WriteFile(filepath.Join(b.ReleaseDir, "miren"), []byte(versionScript("v1.0.0", "c-v1")), 0755))
+	b.GuardUpgrade(context.Background())
+	got, err = store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.BootAttempts)
+}
+
+// The guard records its rollback before restoring the binary; a crash in
+// between must not leave the broken build installed under a phase the
+// guard ignores.
+func TestGuardUpgradeFinishesItsOwnInterruptedRollback(t *testing.T) {
+	b, store, op := newUpgradeBoot(t)
+	op.Phase = serverlifecycle.PhaseRollingBack
+	op.RollbackFrom = RollbackFrom
+	require.NoError(t, store.Update(op))
+
+	b.GuardUpgrade(context.Background())
+	require.Equal(t, "v1", releaseContents(t, b))
+	require.NoFileExists(t, filepath.Join(b.ReleaseDir, "miren.old"))
+	got, err := store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, serverlifecycle.PhaseRollingBack, got.Phase)
+
+	// Once restored, later boots leave it to the executor.
+	b.GuardUpgrade(context.Background())
+	require.Equal(t, "v1", releaseContents(t, b))
+
+	// A rollback the executor started is not this guard's to touch: it
+	// restores the binary before it records who asked for the restart.
+	op.RollbackFrom = "inst-2"
+	require.NoError(t, store.Update(op))
+	require.NoError(t, os.WriteFile(filepath.Join(b.ReleaseDir, "miren.old"), []byte("stale"), 0755))
+	b.GuardUpgrade(context.Background())
+	require.Equal(t, "v1", releaseContents(t, b))
+	require.FileExists(t, filepath.Join(b.ReleaseDir, "miren.old"))
+}

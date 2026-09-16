@@ -129,13 +129,6 @@ func (b Boot) guardUpgrade(ctx context.Context) error {
 	if op == nil || op.Action != serverlifecycle.ActionUpgrade {
 		return nil
 	}
-	// Only boots of the new build count: from the restart phase on, the
-	// upgraded binary is what the volume holds. Earlier phases boot the
-	// previous build and a rollback boots it again; those are the
-	// executor's to finish.
-	if op.Phase != serverlifecycle.PhaseRestarting && op.Phase != serverlifecycle.PhaseVerifying {
-		return nil
-	}
 	// Nothing else runs before the exec, so the lock is a formality; but an
 	// executor that does hold it owns the record, and this must not write
 	// underneath it.
@@ -144,6 +137,31 @@ func (b Boot) guardUpgrade(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+
+	installer := release.NewInstaller(release.InstallOptions{InstallPath: filepath.Join(b.ReleaseDir, "miren"), BackupSuffix: ".old"})
+	if op.Phase == serverlifecycle.PhaseRollingBack && op.RollbackFrom == RollbackFrom && installer.HasBackup() {
+		// This guard's own rollback, interrupted between recording it and
+		// restoring the binary. The backup is still there, so nothing has
+		// been restored yet; finish the job.
+		b.Log.Warn("finishing an interrupted rollback", "operation", op.ID, "previous", op.PreviousVersion)
+		return b.restoreBinary(ctx, store, op, installer)
+	}
+	// Only boots of the new build count. From the restart phase on, the
+	// upgraded binary is what the volume holds; so is an install that got
+	// the binary swapped but died before recording it, which the executor
+	// too recognises by what is on disk. Earlier phases boot the previous
+	// build and a rollback boots it again; those are the executor's to
+	// finish.
+	switch op.Phase { //nolint:exhaustive // every other phase boots the previous build
+	case serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying:
+	case serverlifecycle.PhaseInstalling:
+		onDisk, err := installer.GetCurrentVersion(ctx)
+		if err != nil || !serverlifecycle.SameBuild(onDisk.Version, onDisk.Commit, op.ResolvedVersion, op.ResolvedCommit) {
+			return nil
+		}
+	default:
+		return nil
+	}
 
 	op.BootAttempts++
 	limit := b.MaxBootAttempts
@@ -156,7 +174,6 @@ func (b Boot) guardUpgrade(ctx context.Context) error {
 	}
 
 	op.Error = fmt.Sprintf("upgraded build %s did not come up in %d boots", op.ResolvedVersion, limit)
-	installer := release.NewInstaller(release.InstallOptions{InstallPath: filepath.Join(b.ReleaseDir, "miren"), BackupSuffix: ".old"})
 	if op.NoRollback || !installer.HasBackup() {
 		reason := "rollback was turned off for this operation"
 		if !op.NoRollback {
@@ -180,6 +197,10 @@ func (b Boot) guardUpgrade(ctx context.Context) error {
 	if err := store.Update(op); err != nil {
 		return err
 	}
+	return b.restoreBinary(ctx, store, op, installer)
+}
+
+func (b Boot) restoreBinary(ctx context.Context, store *serverlifecycle.Store, op *serverlifecycle.Operation, installer release.Installer) error {
 	if err := installer.Rollback(ctx); err != nil {
 		op.Error += "; rollback failed: " + err.Error()
 		op.Phase = serverlifecycle.PhaseFailed

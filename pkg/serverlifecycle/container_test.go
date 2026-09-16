@@ -192,3 +192,37 @@ func TestContainerRestarterUsesTheShutdownHook(t *testing.T) {
 	require.NoError(t, r.Restart(context.Background()))
 	require.True(t, called)
 }
+
+// A container restarted for some other reason while the upgrade was still
+// downloading resumes in a new instance of the previous build. That new
+// instance is not the restart the upgrade needs; skipping it would verify
+// the old build against the new version and roll back a good upgrade.
+func TestContainerUpgradeResumedBeforeInstallStillRestarts(t *testing.T) {
+	host := newContainerHost(t, "v1.0.0")
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.PreviousInstanceID = "inst-1"
+	op.PreviousVersion = "v1.0.0"
+	op.PreviousCommit = "c-v1.0.0"
+	op.Phase = PhaseDownloading
+	require.NoError(t, host.store.Create(op))
+
+	// The host rebooted: same binary, new instance.
+	host.reboot(t)
+	require.Equal(t, "inst-2", host.running.InstanceID)
+	first := host.launcher(t)
+	require.NoError(t, first.Resume(context.Background(), host.store))
+	first.Wait()
+	require.Equal(t, 1, host.installs)
+	require.Equal(t, 1, host.shutdowns, "the upgrade still has to restart onto the new binary")
+
+	host.reboot(t)
+	next := host.launcher(t)
+	require.NoError(t, next.Resume(context.Background(), host.store))
+	next.Wait()
+	got, err := host.store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, "v2.0.0", got.NewVersion)
+	require.Equal(t, "inst-3", got.NewInstanceID)
+}
