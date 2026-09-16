@@ -28,6 +28,7 @@ func TestValidateWelcomeBuildsNegotiatedSession(t *testing.T) {
 			Version: 1,
 			Config:  json.RawMessage(`{"max_connections":8}`),
 		}},
+		IdentityIssuerURL: "https://id.example.test/cluster-1",
 	}
 
 	session, err := validateWelcome(hello, welcome, t1.Add(22*time.Millisecond))
@@ -43,6 +44,27 @@ func TestValidateWelcomeBuildsNegotiatedSession(t *testing.T) {
 	capability, ok := session.Capability(CapabilityPopConnect)
 	if !ok || capability.Version != 1 {
 		t.Fatalf("pop-connect selection = %+v, %v", capability, ok)
+	}
+	if session.IdentityIssuerURL != "https://id.example.test/cluster-1" {
+		t.Fatalf("identity anchor = %q, want the welcome's", session.IdentityIssuerURL)
+	}
+}
+
+// A cloud that predates the anchor, or is not serving discovery, sends none;
+// the session simply carries an empty one rather than failing.
+func TestValidateWelcomeWithoutIdentityAnchor(t *testing.T) {
+	t1 := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	hello := SessionHello{HandshakeVersions: []uint{HandshakeVersion1}, RuntimeVersion: "v1", ClientTime: t1}
+	welcome := SessionWelcome{
+		HandshakeVersion: HandshakeVersion1, SessionID: "session-1", OrganizationID: "org-1",
+		ServerReceiveTime: t1, ServerTransmitTime: t1,
+	}
+	session, err := validateWelcome(hello, welcome, t1)
+	if err != nil {
+		t.Fatalf("validate welcome: %v", err)
+	}
+	if session.IdentityIssuerURL != "" {
+		t.Fatalf("identity anchor = %q, want empty", session.IdentityIssuerURL)
 	}
 }
 

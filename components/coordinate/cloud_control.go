@@ -58,6 +58,11 @@ type CloudControl struct {
 	// uplink.
 	Lifecycle *ServerLifecycle
 
+	// anchorMu guards CloudAuth.IdentityIssuerURL, which the session callback
+	// writes (recordIdentityAnchor) and the periodic loop reads
+	// (anchoredAtCloud) on different goroutines.
+	anchorMu sync.Mutex
+
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
 	publishedKeyFingerprint string
@@ -121,6 +126,12 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			RuntimeInstanceID: c.instanceID(),
 		}),
 	)
+	// The welcome repeats the workload identity anchor the status poll's
+	// response used to, so a cluster that no longer polls still learns where
+	// cloud anchors it. Recording is not adopting; see recordIdentityAnchor.
+	link.OnSession(func(_ context.Context, session uplink.Session) {
+		c.recordIdentityAnchor(session.IdentityIssuerURL)
+	})
 	if err := entitysync.NewExporter(
 		c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
 		entitysync.WithStartGate(entitySyncReady),
@@ -587,10 +598,13 @@ func (c *CloudControl) anchoredAtCloud() bool {
 	if c.WorkloadIssuer == nil || c.authClient == nil || !c.CloudAuth.Enabled {
 		return false
 	}
-	if c.CloudAuth.IdentityIssuerURL == "" {
+	c.anchorMu.Lock()
+	anchor := c.CloudAuth.IdentityIssuerURL
+	c.anchorMu.Unlock()
+	if anchor == "" {
 		return false
 	}
-	return c.WorkloadIssuer.IssuerURL() == c.CloudAuth.IdentityIssuerURL
+	return c.WorkloadIssuer.IssuerURL() == anchor
 }
 
 // recordIdentityAnchor persists the anchor cloud reports, so a cluster that
@@ -605,6 +619,10 @@ func (c *CloudControl) anchoredAtCloud() bool {
 // startup from its configured setting, so writing this only makes the move
 // available; `miren server identity-anchor` still has to ask for it.
 func (c *CloudControl) recordIdentityAnchor(issuerURL string) {
+	// Held for the whole read-compare-save so the session callback and the
+	// poll cannot interleave two registration writes.
+	c.anchorMu.Lock()
+	defer c.anchorMu.Unlock()
 	if issuerURL == "" || issuerURL == c.CloudAuth.IdentityIssuerURL {
 		return
 	}
