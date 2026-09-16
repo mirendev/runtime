@@ -36,13 +36,25 @@ type Launcher interface {
 	Launch(ctx context.Context, opID string) error
 }
 
-// SystemdLauncher runs the executor as a transient unit, independent of
-// miren.service, so restarting the server does not take it down and journald
-// keeps its output. The binary is captured by inode at exec, so the executor
-// keeps running the build it started with after replacing the file on disk.
+// SystemdLauncher runs the executor as a transient unit, independent of the
+// daemon's own unit, so restarting the daemon does not take it down and
+// journald keeps its output. The binary is captured by inode at exec, so the
+// executor keeps running the build it started with after replacing the file
+// on disk.
 type SystemdLauncher struct {
 	Binary string
+	// Command is the subcommand that runs the executor, without the binary
+	// and without the operation flag. Nil means ServerExecutorCommand.
+	Command []string
 }
+
+// The executor entrypoints, one per ledger. Each opens its own daemon's
+// ledger and probes its own daemon, so an operation id alone does not say
+// which one it belongs to; the launcher has to.
+var (
+	ServerExecutorCommand = []string{"server", "operations", "run"}
+	RunnerExecutorCommand = []string{"runner", "operations", "run"}
+)
 
 // UnitActive reports whether a unit is running or starting.
 func UnitActive(ctx context.Context, unit string) bool {
@@ -68,9 +80,13 @@ func (l SystemdLauncher) Launched(ctx context.Context, opID string) bool {
 }
 
 func (l SystemdLauncher) Launch(ctx context.Context, opID string) error {
+	command := l.Command
+	if command == nil {
+		command = ServerExecutorCommand
+	}
 	args := []string{
 		"--unit=" + UnitName(opID),
-		"--description=miren server operation " + opID,
+		"--description=miren " + command[0] + " operation " + opID,
 		"--collect",
 		"--quiet",
 	}
@@ -79,7 +95,9 @@ func (l SystemdLauncher) Launch(ctx context.Context, opID string) error {
 	if v := os.Getenv(release.AssetBaseURLEnv); v != "" {
 		args = append(args, "--setenv="+release.AssetBaseURLEnv+"="+v)
 	}
-	args = append(args, l.Binary, "server", "operations", "run", "--operation", opID)
+	args = append(args, l.Binary)
+	args = append(args, command...)
+	args = append(args, "--operation", opID)
 	out, err := exec.CommandContext(ctx, "systemd-run", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))

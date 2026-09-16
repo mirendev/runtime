@@ -16,6 +16,9 @@ import (
 // a working configuration.
 type Options struct {
 	ServiceName string
+	// Daemon names what is being restarted in progress notes and errors:
+	// "server" or "runner".
+	Daemon string
 	// StateDir is the daemon's state directory, passed through to the
 	// resource-limit refresh that precedes a restart.
 	StateDir     string
@@ -35,6 +38,7 @@ type Options struct {
 func DefaultOptions() Options {
 	return Options{
 		ServiceName:   "miren",
+		Daemon:        "server",
 		StateDir:      release.DefaultManagerOptions().StateDir,
 		InstallPath:   release.DefaultManagerOptions().InstallPath,
 		TempDir:       os.TempDir(),
@@ -44,6 +48,19 @@ func DefaultOptions() Options {
 		AutoRollback:  true,
 		PathSymlink:   release.SystemCLIPath,
 	}
+}
+
+// RunnerOptions is DefaultOptions for the runner daemon: its unit, its state
+// directory, and no data backup, since a runner keeps no data of its own
+// that a rollback would need to put back. The prober is the caller's to set;
+// a runner has no health URL.
+func RunnerOptions() Options {
+	opts := DefaultOptions()
+	runner := release.RunnerManagerOptions()
+	opts.ServiceName = runner.ServiceName
+	opts.StateDir = runner.StateDir
+	opts.Daemon = "runner"
+	return opts
 }
 
 // DataBackup snapshots the server's data before an upgrade. The executor
@@ -152,7 +169,7 @@ func (e *Executor) begin(ctx context.Context, op *Operation) error {
 	snap, err := e.prober.Probe(ctx)
 	if err != nil {
 		// Still worth restarting; we just lose the "is this a new process" check.
-		e.log.Warn("could not identify running server before operation", "operation", op.ID, "error", err)
+		e.log.Warn("could not identify running "+e.opts.Daemon+" before operation", "operation", op.ID, "error", err)
 	} else {
 		op.PreviousInstanceID = snap.InstanceID
 		op.PreviousVersion = snap.Version
@@ -464,14 +481,14 @@ func (e *Executor) awaitReady(ctx context.Context, op *Operation, accept func(Sn
 		snap, err := e.prober.Probe(ctx)
 		switch {
 		case err != nil:
-			last = "waiting for the server to answer"
+			last = "waiting for the " + e.opts.Daemon + " to answer"
 			detail = err.Error()
 		case op.PreviousInstanceID != "" && snap.InstanceID == op.PreviousInstanceID:
-			last = "still the previous server instance " + snap.InstanceID
+			last = "still the previous " + e.opts.Daemon + " instance " + snap.InstanceID
 		case !snap.Ready:
-			last = "server " + snap.InstanceID + " is starting"
+			last = e.opts.Daemon + " " + snap.InstanceID + " is starting"
 		case !accept(snap):
-			last = fmt.Sprintf("server %s is ready but reports version %s", snap.InstanceID, snap.Version)
+			last = fmt.Sprintf("%s %s is ready but reports version %s", e.opts.Daemon, snap.InstanceID, snap.Version)
 		default:
 			return snap, nil
 		}
@@ -489,9 +506,9 @@ func (e *Executor) awaitReady(ctx context.Context, op *Operation, accept func(Sn
 		}
 	}
 	if detail != "" {
-		return Snapshot{}, fmt.Errorf("server not ready within %s: %s (%s)", timeout, last, detail)
+		return Snapshot{}, fmt.Errorf("%s not ready within %s: %s (%s)", e.opts.Daemon, timeout, last, detail)
 	}
-	return Snapshot{}, fmt.Errorf("server not ready within %s: %s", timeout, last)
+	return Snapshot{}, fmt.Errorf("%s not ready within %s: %s", e.opts.Daemon, timeout, last)
 }
 
 // failOrRollback and fail record an outcome, unless the run was cancelled: a
