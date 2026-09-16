@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 
+	"miren.dev/runtime/pkg/cond"
 	rpc "miren.dev/runtime/pkg/rpc"
 )
 
@@ -34,7 +35,29 @@ type Receiver[T any] struct {
 }
 
 func (r *Receiver[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
-	return r.fn(state.Args().Value())
+	v, err := frameValue(state)
+	if err != nil {
+		return err
+	}
+	return r.fn(v)
+}
+
+// frameValue extracts the value a send frame carries. A frame with no value
+// never comes from a sender (SendStreamClient.Send always populates it, and
+// wscWriter only sends non-empty chunks); it means the call stream ended
+// between the call header and its args, which rpc.Call.Args reports as a zero
+// value rather than an error. Every callback in the tree dereferences a
+// pointer value on its first line, so surfacing the truncation as a closed
+// stream here keeps a torn frame from panicking the process (MIR-1869), keeps
+// a writer from recording it as a successful empty write, and ends the stream
+// the way the router already expects.
+func frameValue[T any](state *SendStreamSend[T]) (T, error) {
+	args := state.Args()
+	if !args.HasValue() {
+		var zero T
+		return zero, cond.Closed("stream ended before delivering a value")
+	}
+	return args.Value(), nil
 }
 
 func ReadStream[T any](fn func(T) error) *rpc.Interface {
@@ -184,9 +207,12 @@ type serveWriter struct {
 }
 
 func (s *serveWriter) Send(ctx context.Context, state *SendStreamSend[[]byte]) error {
-	args := state.Args()
+	chunk, err := frameValue(state)
+	if err != nil {
+		return err
+	}
 
-	n, err := s.w.Write(args.Value())
+	n, err := s.w.Write(chunk)
 	if err != nil {
 		return err
 	}
@@ -289,7 +315,11 @@ type callbackSender[T any] struct {
 }
 
 func (c *callbackSender[T]) Send(ctx context.Context, state *SendStreamSend[T]) error {
-	return c.fn(state.Args().Value())
+	v, err := frameValue(state)
+	if err != nil {
+		return err
+	}
+	return c.fn(v)
 }
 
 func Callback[T any](f func(T) error) SendStream[T] {

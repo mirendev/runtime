@@ -290,20 +290,30 @@ func parseLogLevel(levelStr string) slog.Level {
 	}
 }
 
-// WithLogger creates a cio.Creator that routes container output through slog.Logger
-// instead of the default stdio. The module parameter is used to tag log entries
-// with the source module (e.g., "etcd").
-func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Creator {
+func loggerStreams(logger *slog.Logger, module string, options ...LoggerOption) cio.Opt {
 	opts := LoggerOpts{}
 	for _, option := range options {
 		option(&opts)
 	}
 
-	return cio.NewCreator(cio.WithStreams(
+	return cio.WithStreams(
 		nil, // stdin - not used
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
-	))
+	)
+}
+
+// WithLogger creates a cio.Creator that routes container output through slog.Logger
+// instead of the default stdio. The module parameter is used to tag log entries
+// with the source module (e.g., "etcd").
+func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Creator {
+	return cio.NewCreator(loggerStreams(logger, module, options...))
+}
+
+// AttachLogger creates a cio.Attach that reconnects an existing task's output
+// FIFOs to slog.Logger.
+func AttachLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Attach {
+	return cio.NewAttach(loggerStreams(logger, module, options...))
 }
 
 // NewWriter creates an io.WriteCloser that can be used as cmd.Stdout/cmd.Stderr

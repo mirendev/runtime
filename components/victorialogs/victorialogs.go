@@ -181,7 +181,7 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 	c.httpPort = config.HTTPPort
 	c.config = config
 
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, slogout.AttachLogger(c.Log, "victorialogs"))
 	if err == nil {
 		status, err := task.Status(ctx)
 		if err != nil {
