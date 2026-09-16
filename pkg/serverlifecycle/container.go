@@ -127,6 +127,11 @@ func (l *ContainerLauncher) Resume(ctx context.Context, store *Store) error {
 	if op == nil {
 		return nil
 	}
+	if op.HandedOff() {
+		// The executor's part is over; the runner upgrader in this instance
+		// adopts the walk from the ledger on its own.
+		return nil
+	}
 	l.Log.Info("resuming lifecycle operation from the previous instance", "operation", op.ID, "action", op.Action, "phase", op.Phase)
 	return l.Launch(ctx, op.ID)
 }

@@ -16,9 +16,9 @@ import (
 const ServerLifecycleService = "dev.miren.runtime/server-lifecycle"
 
 // NewServerLifecycle serves the restart and upgrade ledger over RPC and to
-// cloud. dir is the ledger directory. launcher is where the executor that
-// writes it runs: outside this process under systemd, inside it in a
-// container.
+// cloud, and finishes upgrades across the runners. dir is the ledger
+// directory. launcher is where the executor that writes the server's own
+// phases runs: outside this process under systemd, inside it in a container.
 func NewServerLifecycle(foundation *Foundation, instance *serverinfo.Source, dir string, launcher serverlifecycle.Launcher) *ServerLifecycle {
 	return &ServerLifecycle{Foundation: foundation, instance: instance, dir: dir, launcher: launcher}
 }
@@ -40,6 +40,7 @@ type ServerLifecycle struct {
 	store    *serverlifecycle.Store
 	watcher  *lifecyclesync.Watcher
 	reporter *lifecyclesync.Reporter
+	upgrader *RunnerUpgrader
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -56,12 +57,19 @@ func (c *ServerLifecycle) Start(ctx context.Context) error {
 	c.store = store
 	c.watcher = lifecyclesync.NewWatcher(log, store)
 	c.reporter = lifecyclesync.NewReporter(log, store, launcher, c.watcher, instanceIdentity{c.instance})
+	c.upgrader = NewRunnerUpgrader(log, store, c.watcher, instanceIdentity{c.instance}.InstanceID(),
+		entityNodes{c.eac}, rpcRunnerDialer(c.state), DefaultRunnerUpgradeOptions())
 
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.wg.Go(func() {
 		if err := c.watcher.Run(runCtx); err != nil && runCtx.Err() == nil {
 			log.Error("lifecycle watcher stopped", "error", err)
+		}
+	})
+	c.wg.Go(func() {
+		if err := c.upgrader.Run(runCtx); err != nil && runCtx.Err() == nil {
+			log.Error("runner upgrader stopped", "error", err)
 		}
 	})
 

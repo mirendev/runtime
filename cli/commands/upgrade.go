@@ -110,6 +110,7 @@ func upgradeDaemonAndCLI(ctx *Context, daemon lifecycleDaemon, version string, e
 		if !result.Succeeded() {
 			return fmt.Errorf("%s upgrade %s: %s", daemon.name, result.Phase, result.Error)
 		}
+		op = result
 	} else {
 		ctx.Info("%s is already up to date.", daemon.title())
 	}
@@ -122,6 +123,11 @@ func upgradeDaemonAndCLI(ctx *Context, daemon lifecycleDaemon, version string, e
 	ctx.Printf("\nUpgrade successful:\n")
 	ctx.Printf("  %-7s %s -> %s (%s)\n", daemon.title()+":", current.Display(), newVersion.Display(), mgrOpts.InstallPath)
 	ctx.Printf("  %-7s %s (%s)\n", "CLI:", newVersion.Display(), exe)
+	if op != nil {
+		for _, step := range op.Nodes {
+			ctx.Printf("  Runner  %s: %s\n", step.Name, describeStep(step))
+		}
+	}
 	return nil
 }
 

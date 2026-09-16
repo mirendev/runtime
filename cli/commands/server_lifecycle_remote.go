@@ -150,20 +150,8 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 	}
 	patience := readyTimeout + 5*time.Minute
 
-	var lastPhase serverlifecycle.Phase
-	var lastProgress string
-	report := func(op *serverlifecycle.Operation) {
-		if op.Phase != lastPhase {
-			ctx.Info("  %s", describePhase(serverDaemon, op))
-			lastPhase = op.Phase
-			lastProgress = ""
-		}
-		if op.Progress != "" && op.Progress != lastProgress && !op.Done() {
-			ctx.Info("    %s", op.Progress)
-			lastProgress = op.Progress
-		}
-	}
-	report(op)
+	reporter := &operationReporter{ctx: ctx, daemon: serverDaemon}
+	reporter.report(op)
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -197,7 +185,7 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 			unreachableSince = time.Time{}
 		}
 		op = latest
-		report(op)
+		reporter.report(op)
 	}
 	return op, nil
 }

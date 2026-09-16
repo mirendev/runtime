@@ -33,20 +33,25 @@ type Options struct {
 	// PathSymlink, when set, is kept pointing at InstallPath after a
 	// successful upgrade so the CLI on $PATH tracks the server.
 	PathSymlink string
+	// UpgradeRunners hands a verified upgrade to the daemon for the
+	// upgrading_runners phase instead of finishing it. On for the server,
+	// which has runners; off for a runner, which is one.
+	UpgradeRunners bool
 }
 
 func DefaultOptions() Options {
 	return Options{
-		ServiceName:   "miren",
-		Daemon:        "server",
-		StateDir:      release.DefaultManagerOptions().StateDir,
-		InstallPath:   release.DefaultManagerOptions().InstallPath,
-		TempDir:       os.TempDir(),
-		ArtifactType:  release.ArtifactTypeBase,
-		ReadyTimeout:  3 * time.Minute,
-		ProbeInterval: 2 * time.Second,
-		AutoRollback:  true,
-		PathSymlink:   release.SystemCLIPath,
+		ServiceName:    "miren",
+		Daemon:         "server",
+		StateDir:       release.DefaultManagerOptions().StateDir,
+		InstallPath:    release.DefaultManagerOptions().InstallPath,
+		TempDir:        os.TempDir(),
+		ArtifactType:   release.ArtifactTypeBase,
+		ReadyTimeout:   3 * time.Minute,
+		ProbeInterval:  2 * time.Second,
+		AutoRollback:   true,
+		PathSymlink:    release.SystemCLIPath,
+		UpgradeRunners: true,
 	}
 }
 
@@ -60,6 +65,7 @@ func RunnerOptions() Options {
 	opts.ServiceName = runner.ServiceName
 	opts.StateDir = runner.StateDir
 	opts.Daemon = "runner"
+	opts.UpgradeRunners = false
 	return opts
 }
 
@@ -109,8 +115,9 @@ func (e *Executor) WithRestarter(r Restarter) *Executor           { e.restarter 
 func (e *Executor) WithProber(p Prober) *Executor                 { e.prober = p; return e }
 func (e *Executor) WithDataBackup(b DataBackup) *Executor         { e.backup = b; return e }
 
-// Run drives the operation to a terminal phase or until ctx ends. A finished
-// operation is returned unchanged; an interrupted one resumes where it was.
+// Run drives the operation to a terminal phase, to the hand-off to the
+// server, or until ctx ends. A finished operation is returned unchanged; an
+// interrupted one resumes where it was.
 func (e *Executor) Run(ctx context.Context, id string) (*Operation, error) {
 	unlock, err := e.store.LockOperation(id)
 	if err != nil {
@@ -124,7 +131,7 @@ func (e *Executor) Run(ctx context.Context, id string) (*Operation, error) {
 	if err := op.validate(); err != nil {
 		return op, err
 	}
-	for !op.Done() {
+	for !op.Done() && !op.HandedOff() {
 		if err := ctx.Err(); err != nil {
 			return op, err
 		}
@@ -157,7 +164,7 @@ func (e *Executor) step(ctx context.Context, op *Operation) error {
 		return e.verify(ctx, op)
 	case PhaseRollingBack:
 		return e.rollback(ctx, op)
-	case PhaseSucceeded, PhaseFailed, PhaseRolledBack:
+	case PhaseUpgradingRunners, PhaseSucceeded, PhaseFailed, PhaseRolledBack, StepSkipped:
 		return nil
 	}
 	return e.fail(ctx, op, fmt.Errorf("unknown phase %q", op.Phase))
@@ -193,11 +200,12 @@ func (e *Executor) download(ctx context.Context, op *Operation) error {
 	op.ResolvedCommit = metadata.Commit
 
 	if op.PreviousVersion != "" && sameBuild(op.PreviousVersion, op.PreviousCommit, metadata.Version, metadata.Commit) {
-		// Already running the target; succeed without restarting for show.
+		// Already running the target; no restart for show. The runners may
+		// still be behind, so the hand-off happens all the same.
 		op.NewInstanceID = op.PreviousInstanceID
 		op.NewVersion = op.PreviousVersion
 		op.Progress = "already running " + op.ResolvedVersion
-		return e.transition(op, PhaseSucceeded)
+		return e.transition(op, e.upgraded())
 	}
 
 	artifactType := e.opts.ArtifactType
@@ -286,8 +294,53 @@ func (e *Executor) verify(ctx context.Context, op *Operation) error {
 	op.Progress = ""
 	if op.Action == ActionUpgrade {
 		e.ensurePathSymlink(op)
+		return e.transition(op, e.upgraded())
 	}
 	return e.transition(op, PhaseSucceeded)
+}
+
+// upgraded is where a verified upgrade goes next.
+func (e *Executor) upgraded() Phase {
+	if e.opts.UpgradeRunners {
+		return PhaseUpgradingRunners
+	}
+	return PhaseSucceeded
+}
+
+// AdoptionTimeout is how long a handed-off operation may wait for a server
+// to take it over before the hand-off is treated as failed.
+const AdoptionTimeout = 2 * time.Minute
+
+// AwaitAdoption waits for the server to take over a handed-off operation.
+// The executor cannot know whether the build it just verified drives runner
+// upgrades: a target older than that support would leave the record in
+// upgrading_runners with nobody to finish it. If nothing has claimed it by
+// the deadline, the operation is failed with that diagnosis. The wait polls
+// rather than holds the operation lock, since the server needs the lock to
+// adopt it.
+func AwaitAdoption(ctx context.Context, store *Store, id string, timeout, interval time.Duration) (*Operation, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		op, err := store.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		if !op.HandedOff() || op.Adopted() {
+			return op, nil
+		}
+		if time.Now().After(deadline) {
+			if failed, err := failUnadopted(store, op, timeout); err != nil || failed != nil {
+				return failed, err
+			}
+			// Locked: the server holds it and is about to write its claim.
+			// Keep polling; the next read sees it.
+		}
+		select {
+		case <-ctx.Done():
+			return op, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }
 
 // rollback restores the binary, then asks the server to restore the data on
@@ -413,6 +466,31 @@ func (e *Executor) readRestoreResult(op *Operation) (*RestoreResult, error) {
 		return nil, nil
 	}
 	return result, err
+}
+
+// failUnadopted marks a handed-off operation nobody claimed as failed, under
+// the operation lock so it cannot race the claim. It returns nil, nil when
+// the lock is held: the server is mid-claim, and its write has not landed
+// yet, so a read now would still show the record unclaimed.
+func failUnadopted(store *Store, op *Operation, timeout time.Duration) (*Operation, error) {
+	unlock, err := store.LockOperation(op.ID)
+	if err != nil {
+		if errors.Is(err, ErrLocked) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer unlock()
+	op, err = store.Get(op.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !op.HandedOff() || op.Adopted() {
+		return op, nil
+	}
+	op.Phase = PhaseFailed
+	op.Error = fmt.Sprintf("server %s came up but did not take over the runner upgrades within %s (does that build predate them?); runners were not upgraded", op.NewVersion, timeout)
+	return op, store.Update(op)
 }
 
 // ErrNothingToAbandon is returned by Abandon for an operation that is

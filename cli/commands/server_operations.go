@@ -98,6 +98,19 @@ func ServerOperationsRun(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
+	if op.HandedOff() {
+		// The server takes it from here; this process only has to be sure
+		// it did. Runner steps then show up on the record, which the CLI
+		// that started the operation is still following.
+		op, err = serverlifecycle.AwaitAdoption(ctx, store, op.ID, serverlifecycle.AdoptionTimeout, 2*time.Second)
+		if err != nil {
+			return err
+		}
+		if op.Adopted() {
+			ctx.Log.Info("server took over the operation to upgrade the runners", "operation", op.ID, "server_instance", op.DrivenBy)
+			return nil
+		}
+	}
 	if !op.Succeeded() {
 		return fmt.Errorf("operation %s %s: %s", op.ID, op.Phase, op.Error)
 	}
@@ -124,8 +137,23 @@ type operationJSON struct {
 	Progress        string            `json:"progress,omitempty"`
 	BackupRef       string            `json:"backup_ref,omitempty"`
 	DataRestore     *dataRestoreJSON  `json:"data_restore,omitempty"`
+	DrivenBy        string            `json:"driven_by,omitempty"`
+	Nodes           []nodeStepJSON    `json:"nodes,omitempty"`
 	CreatedAt       time.Time         `json:"created_at"`
 	FinishedAt      *time.Time        `json:"finished_at,omitempty"`
+}
+
+type nodeStepJSON struct {
+	Name            string     `json:"name"`
+	RunnerID        string     `json:"runner_id"`
+	OperationID     string     `json:"operation_id,omitempty"`
+	Phase           string     `json:"phase"`
+	Error           string     `json:"error,omitempty"`
+	Progress        string     `json:"progress,omitempty"`
+	PreviousVersion string     `json:"previous_version,omitempty"`
+	NewVersion      string     `json:"new_version,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
 type dataRestoreJSON struct {
@@ -139,11 +167,18 @@ func toOperationJSON(op *serverlifecycle.Operation) operationJSON {
 		ID: op.ID, Action: string(op.Action), Phase: string(op.Phase), RequestedBy: op.RequestedBy,
 		TargetVersion: op.TargetVersion, ResolvedVersion: op.ResolvedVersion,
 		PreviousVersion: op.PreviousVersion, NewVersion: op.NewVersion, Components: op.Components,
-		Error: op.Error, Progress: op.Progress, BackupRef: op.BackupRef,
+		Error: op.Error, Progress: op.Progress, BackupRef: op.BackupRef, DrivenBy: op.DrivenBy,
 		CreatedAt: op.CreatedAt, FinishedAt: op.FinishedAt,
 	}
 	if op.DataRestore != nil {
 		out.DataRestore = &dataRestoreJSON{BackupRef: op.DataRestore.BackupRef, RestoredAt: op.DataRestore.RestoredAt, Error: op.DataRestore.Error}
+	}
+	for _, step := range op.Nodes {
+		out.Nodes = append(out.Nodes, nodeStepJSON{
+			Name: step.Name, RunnerID: step.RunnerID, OperationID: step.OperationID, Phase: string(step.Phase),
+			Error: step.Error, Progress: step.Progress, PreviousVersion: step.PreviousVersion, NewVersion: step.NewVersion,
+			StartedAt: step.StartedAt, FinishedAt: step.FinishedAt,
+		})
 	}
 	return out
 }
@@ -324,6 +359,15 @@ func printOperation(ctx *Context, opts FormatOptions, op *serverlifecycle.Operat
 		items = append(items, ui.NewNamedValue("Finished", op.FinishedAt.Local().Format(time.RFC3339)))
 	}
 	ctx.Printf("%s\n", ui.NewNamedValueList(items).Render())
+	if len(op.Nodes) > 0 {
+		headers := []string{"RUNNER", "PHASE", "VERSIONS", "DETAIL"}
+		rows := make([]ui.Row, 0, len(op.Nodes))
+		for _, step := range op.Nodes {
+			rows = append(rows, ui.Row{step.Name, phaseStyle(step.Phase).Render(string(step.Phase)), stepVersions(step), stepDetail(step)})
+		}
+		columns := ui.AutoSizeColumns(headers, rows, ui.Columns().NoTruncate(0, 1))
+		ctx.Printf("\nRunners:\n%s\n", ui.NewTable(ui.WithColumns(columns), ui.WithRows(rows)).Render())
+	}
 	return nil
 }
 
@@ -337,6 +381,77 @@ func describeComponents(components map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
+func stepVersions(step *serverlifecycle.NodeStep) string {
+	switch {
+	case step.PreviousVersion != "" && step.NewVersion != "" && step.PreviousVersion != step.NewVersion:
+		return step.PreviousVersion + " -> " + step.NewVersion
+	case step.NewVersion != "":
+		return step.NewVersion
+	default:
+		return step.PreviousVersion
+	}
+}
+
+func stepDetail(step *serverlifecycle.NodeStep) string {
+	if step.Error != "" {
+		return step.Error
+	}
+	return step.Progress
+}
+
+// describeStep is one line for a runner's step as the follow prints it.
+func describeStep(step *serverlifecycle.NodeStep) string {
+	switch {
+	case step.Phase == serverlifecycle.StepSkipped:
+		return "skipped: " + step.Error
+	case step.Done() && !step.Succeeded():
+		return string(step.Phase) + ": " + step.Error
+	case step.Succeeded():
+		if step.Progress != "" {
+			return "done: " + step.Progress
+		}
+		return "done: " + stepVersions(step)
+	case step.Progress != "":
+		return string(step.Phase) + ": " + step.Progress
+	default:
+		return string(step.Phase)
+	}
+}
+
+// operationReporter prints an operation as it changes: each phase, the
+// progress note within it, and each runner's step once the walk begins.
+type operationReporter struct {
+	ctx    *Context
+	daemon lifecycleDaemon
+
+	lastPhase    serverlifecycle.Phase
+	lastProgress string
+	steps        map[string]string
+}
+
+func (r *operationReporter) report(op *serverlifecycle.Operation) {
+	if op.Phase != r.lastPhase {
+		r.ctx.Info("  %s", describePhase(r.daemon, op))
+		r.lastPhase = op.Phase
+		r.lastProgress = ""
+	}
+	if op.Progress != "" && op.Progress != r.lastProgress && !op.Done() {
+		r.ctx.Info("    %s", op.Progress)
+		r.lastProgress = op.Progress
+	}
+	if r.steps == nil {
+		r.steps = map[string]string{}
+	}
+	for _, step := range op.Nodes {
+		line := describeStep(step)
+		if line == r.steps[step.Name] {
+			continue
+		}
+		r.steps[step.Name] = line
+		r.ctx.Info("      %s: %s", step.Name, line)
+	}
+}
+
 // phaseStyle colors a phase by what it means for the operator: green is done
 // and good, red is done and bad, yellow is a rollback in either state, and
 // blue is still moving.
@@ -348,10 +463,10 @@ func phaseStyle(phase serverlifecycle.Phase) lipgloss.Style {
 		return infoRed
 	case serverlifecycle.PhaseRollingBack, serverlifecycle.PhaseRolledBack:
 		return infoYellow
-	case serverlifecycle.PhasePending:
+	case serverlifecycle.PhasePending, serverlifecycle.StepSkipped:
 		return infoGray
 	case serverlifecycle.PhaseDownloading, serverlifecycle.PhaseBackingUp, serverlifecycle.PhaseInstalling,
-		serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying:
+		serverlifecycle.PhaseRestarting, serverlifecycle.PhaseVerifying, serverlifecycle.PhaseUpgradingRunners:
 		return infoLabel
 	}
 	return lipgloss.NewStyle()
@@ -439,8 +554,7 @@ func runOperation(ctx *Context, daemon lifecycleDaemon, op *serverlifecycle.Oper
 
 // Interrupting the follow does not stop the operation; it is its own process.
 func followOperation(ctx *Context, daemon lifecycleDaemon, store *serverlifecycle.Store, id, unit string) (*serverlifecycle.Operation, error) {
-	var lastPhase serverlifecycle.Phase
-	var lastProgress string
+	reporter := &operationReporter{ctx: ctx, daemon: daemon}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	readErrors := 0
@@ -460,21 +574,15 @@ func followOperation(ctx *Context, daemon lifecycleDaemon, store *serverlifecycl
 			continue
 		}
 		readErrors = 0
-		if op.Phase != lastPhase {
-			ctx.Info("  %s", describePhase(daemon, op))
-			lastPhase = op.Phase
-			lastProgress = ""
-		}
-		if op.Progress != "" && op.Progress != lastProgress && !op.Done() {
-			ctx.Info("    %s", op.Progress)
-			lastProgress = op.Progress
-		}
+		reporter.report(op)
 		if op.Done() {
 			return op, nil
 		}
 		// An executor that exits without reaching a terminal phase would
-		// otherwise leave us polling a record nobody will update again.
-		if unit != "" && !serverlifecycle.UnitActive(ctx, unit) {
+		// otherwise leave us polling a record nobody will update again. Once
+		// it has handed off, the server writes the record and the unit is
+		// expected to be gone.
+		if unit != "" && !op.HandedOff() && !serverlifecycle.UnitActive(ctx, unit) {
 			// The executor writes its terminal record before exiting, so
 			// re-read once: the unit may have finished between the two checks.
 			if latest, err := store.Get(id); err == nil && latest.Done() {
@@ -507,6 +615,11 @@ func describePhase(daemon lifecycleDaemon, op *serverlifecycle.Operation) string
 		return "restarting " + daemon.unit + " service"
 	case serverlifecycle.PhaseVerifying:
 		return "waiting for the " + daemon.name + " to report ready"
+	case serverlifecycle.PhaseUpgradingRunners:
+		if !op.Adopted() {
+			return "server is up on " + op.NewVersion + "; handing the runners to it"
+		}
+		return "upgrading runners"
 	case serverlifecycle.PhaseRollingBack:
 		return "rolling back: " + op.Error
 	case serverlifecycle.PhaseSucceeded:
@@ -516,6 +629,8 @@ func describePhase(daemon lifecycleDaemon, op *serverlifecycle.Operation) string
 		return "done: " + operationVersions(op)
 	case serverlifecycle.PhaseRolledBack:
 		return "rolled back to " + op.NewVersion + ": " + op.Error
+	case serverlifecycle.StepSkipped:
+		return "skipped: " + op.Error
 	case serverlifecycle.PhaseFailed:
 		return "failed: " + op.Error
 	}
