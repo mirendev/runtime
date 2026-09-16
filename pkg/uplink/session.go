@@ -25,6 +25,12 @@ const (
 	// CapabilityServerLifecycle lets cloud restart and upgrade the server and
 	// follow the operations it started.
 	CapabilityServerLifecycle = "server-lifecycle"
+	// CapabilityClusterNetwork carries how the cluster can be reached: the
+	// network half of the legacy status report.
+	CapabilityClusterNetwork = "cluster-network"
+	// CapabilityClusterResources carries whole-host CPU, memory, and storage
+	// utilization: the resource half of the legacy status report.
+	CapabilityClusterResources = "cluster-resources"
 )
 
 // CapabilityOffer describes one protocol family the runtime can speak. The
@@ -67,6 +73,12 @@ type SessionWelcome struct {
 	ServerReceiveTime  time.Time             `json:"server_receive_time"`
 	ServerTransmitTime time.Time             `json:"server_transmit_time"`
 	Capabilities       []CapabilitySelection `json:"capabilities"`
+	// IdentityIssuerURL is where cloud anchors this cluster's workload
+	// identity. The status poll's response carried it on every report so a
+	// cluster registered before anchors existed could learn its own; the
+	// welcome carries it on every session for the same reason. Empty when
+	// cloud is not serving discovery, or from a cloud that predates it.
+	IdentityIssuerURL string `json:"identity_issuer_url,omitempty"`
 }
 
 // SessionReject explains why cloud could not establish a negotiated session.
@@ -85,6 +97,9 @@ type Session struct {
 	OrganizationID   string
 	ClockOffset      time.Duration
 	Capabilities     []CapabilitySelection
+	// IdentityIssuerURL is the workload identity anchor cloud named in the
+	// welcome, or empty. See SessionWelcome.
+	IdentityIssuerURL string
 }
 
 // Capability returns the selected capability with the given name.
@@ -139,11 +154,12 @@ func validateWelcome(hello SessionHello, welcome SessionWelcome, receivedAt time
 
 	offset := (welcome.ServerReceiveTime.Sub(hello.ClientTime) + welcome.ServerTransmitTime.Sub(receivedAt)) / 2
 	return Session{
-		ID:               welcome.SessionID,
-		HandshakeVersion: welcome.HandshakeVersion,
-		RuntimeVersion:   hello.RuntimeVersion,
-		OrganizationID:   welcome.OrganizationID,
-		ClockOffset:      offset,
-		Capabilities:     slices.Clone(welcome.Capabilities),
+		ID:                welcome.SessionID,
+		HandshakeVersion:  welcome.HandshakeVersion,
+		RuntimeVersion:    hello.RuntimeVersion,
+		OrganizationID:    welcome.OrganizationID,
+		ClockOffset:       offset,
+		Capabilities:      slices.Clone(welcome.Capabilities),
+		IdentityIssuerURL: welcome.IdentityIssuerURL,
 	}, nil
 }
