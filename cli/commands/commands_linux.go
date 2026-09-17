@@ -13,6 +13,18 @@ func addCommands(d *mflags.Dispatcher) {
 		WithGroup(GroupHidden),
 	))
 
+	// The container image's entrypoint for `server`; see docker/entrypoint.sh.
+	d.Dispatch("internal container-boot", Infer("internal container-boot",
+		"Boot the data volume's release binary from inside the container image", InternalContainerBoot,
+		WithGroup(GroupHidden),
+	))
+
+	// Started by container-boot beside each boot of an upgraded build.
+	d.Dispatch("internal container-watchdog", Infer("internal container-watchdog",
+		"Roll back an upgraded build that hangs before its executor can run", InternalContainerWatchdog,
+		WithGroup(GroupHidden),
+	))
+
 	// Cloud registration commands
 	d.Dispatch("server register", Infer("server register", "Register this cluster with miren.cloud", RegisterStandalone,
 		WithExample(mflags.Example{

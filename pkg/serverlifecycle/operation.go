@@ -90,6 +90,19 @@ type Operation struct {
 	// miren, and this is the record that the restarted server is on them.
 	Components map[string]string `json:"components,omitempty"`
 
+	// RollbackFrom names the instance that asked for the rollback's restart,
+	// so a resumed rollback can tell a restart that already took (the
+	// instance answering now is a different one) from one still to do. The
+	// systemd executor outlives the restart and never resumes; the container
+	// executor is that instance and dies at the restart it asks for.
+	// container-boot, rolling back a build that never answered, writes its
+	// own name.
+	RollbackFrom string `json:"rollback_from,omitempty"`
+	// BootAttempts counts container boots of the new build since the restart
+	// phase, kept by container-boot; it is what catches a build that crashes
+	// before the executor inside it can run.
+	BootAttempts int `json:"boot_attempts,omitempty"`
+
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`

@@ -92,26 +92,8 @@ func (h *fakeHost) Probe(context.Context) (Snapshot, error) {
 func (h *fakeHost) Restart(context.Context) error {
 	h.restarts++
 	h.instances++
-	if h.store != nil {
-		if op, err := h.store.PendingRestore(); err != nil {
-			return err
-		} else if op != nil {
-			h.restoresSeen = append(h.restoresSeen, op.DataRestore.BackupRef)
-			result := &RestoreResult{OperationID: op.ID, BackupRef: op.DataRestore.BackupRef, RestoredAt: time.Now().UTC()}
-			switch h.restoreBehavior {
-			case restoreBehaviorIgnore:
-				result = nil
-			case restoreBehaviorFail:
-				result.Error = "etcdutl exited 1"
-				h.restoreRefusing = true
-			case restoreBehaviorRestore:
-			}
-			if result != nil {
-				if err := h.store.WriteRestoreResult(result); err != nil {
-					return err
-				}
-			}
-		}
+	if err := h.restoreOnBoot(); err != nil {
+		return err
 	}
 	h.running = Snapshot{
 		InstanceID:  fmt.Sprintf("inst-%d", h.instances),
@@ -123,6 +105,29 @@ func (h *fakeHost) Restart(context.Context) error {
 	}
 	h.pending = h.bootProbes
 	return nil
+}
+
+// restoreOnBoot is the booting server answering a pending restore request,
+// the way the data-restore boot component does.
+func (h *fakeHost) restoreOnBoot() error {
+	if h.store == nil {
+		return nil
+	}
+	op, err := h.store.PendingRestore()
+	if err != nil || op == nil {
+		return err
+	}
+	h.restoresSeen = append(h.restoresSeen, op.DataRestore.BackupRef)
+	result := &RestoreResult{OperationID: op.ID, BackupRef: op.DataRestore.BackupRef, RestoredAt: time.Now().UTC()}
+	switch h.restoreBehavior {
+	case restoreBehaviorIgnore:
+		return nil
+	case restoreBehaviorFail:
+		result.Error = "etcdutl exited 1"
+		h.restoreRefusing = true
+	case restoreBehaviorRestore:
+	}
+	return h.store.WriteRestoreResult(result)
 }
 
 func (h *fakeHost) Install(_ context.Context, d *release.DownloadedArtifact) error {
@@ -655,7 +660,9 @@ func TestResumeInInstallingSkipsWhenBinaryAlreadyInstalled(t *testing.T) {
 	require.Equal(t, 1, host.restarts)
 }
 
-func TestContainerInstallIsRefused(t *testing.T) {
+// The executor does not care how the server is supervised; the Restarter
+// and Launcher it is given carry that.
+func TestContainerInstallRestartsLikeAnyOther(t *testing.T) {
 	host := newFakeHost("v1.0.0")
 	host.running.InstallKind = "container"
 	ex, store := newTestExecutor(t, host)
@@ -665,9 +672,8 @@ func TestContainerInstallIsRefused(t *testing.T) {
 
 	got, err := ex.Run(context.Background(), op.ID)
 	require.NoError(t, err)
-	require.Equal(t, PhaseFailed, got.Phase)
-	require.Contains(t, got.Error, "container")
-	require.Equal(t, 0, host.restarts)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, 1, host.restarts)
 }
 
 func TestRunOnFinishedOperationIsANoop(t *testing.T) {

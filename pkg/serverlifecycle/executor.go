@@ -157,9 +157,6 @@ func (e *Executor) begin(ctx context.Context, op *Operation) error {
 		op.PreviousInstanceID = snap.InstanceID
 		op.PreviousVersion = snap.Version
 		op.PreviousCommit = snap.Commit
-		if snap.InstallKind == "container" {
-			return e.fail(ctx, op, errors.New("server runs in a container; container installs cannot be upgraded or restarted this way yet (see MIR-882)"))
-		}
 	}
 	switch op.Action {
 	case ActionRestart:
@@ -240,9 +237,13 @@ func (e *Executor) install(ctx context.Context, op *Operation) error {
 }
 
 func (e *Executor) restart(ctx context.Context, op *Operation) error {
-	// Resuming after a restart that took: do not bounce the server again.
+	// Resuming after a restart that took: do not bounce the server again. A
+	// new instance alone is not proof for an upgrade: the server may have
+	// been restarted for some other reason (a host reboot mid-download, say)
+	// and be the previous build again, which still needs the restart.
 	if op.PreviousInstanceID != "" {
-		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID {
+		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID &&
+			(op.Action != ActionUpgrade || sameBuild(snap.Version, snap.Commit, op.ResolvedVersion, op.ResolvedCommit)) {
 			return e.transition(op, PhaseVerifying)
 		}
 	}
@@ -280,35 +281,13 @@ func (e *Executor) verify(ctx context.Context, op *Operation) error {
 // The request is recorded on the operation before the restart, and the
 // server's answer is read back after it.
 func (e *Executor) rollback(ctx context.Context, op *Operation) error {
-	// The restore request goes down before the binary does. The moment the
-	// previous binary is back on disk, systemd's Restart=always can launch
-	// it without waiting for us, and a launch that finds no request boots on
-	// the data the rollback was meant to replace. The request names the
-	// build it is for so that the build being rolled back from, which may
-	// still be crash looping in the same window, leaves it alone.
-	if op.BackupRef != "" && op.DataRestore == nil {
-		op.DataRestore = &DataRestore{BackupRef: op.BackupRef, ForVersion: op.PreviousVersion, ForCommit: op.PreviousCommit}
-		if err := e.store.Update(op); err != nil {
+	if !e.rollbackRestartTook(ctx, op) {
+		if err := e.restoreAndRestart(ctx, op); err != nil {
 			return err
 		}
-	}
-	// Rollback consumes the .old backup. A resumed run that died between the
-	// restore and the restart finds no backup but the previous build already
-	// on disk; that is a restore that took, not a missing one.
-	restored := false
-	if !e.installer.HasBackup() {
-		if onDisk, err := e.installer.GetCurrentVersion(ctx); err == nil &&
-			op.PreviousVersion != "" && sameBuild(onDisk.Version, onDisk.Commit, op.PreviousVersion, op.PreviousCommit) {
-			restored = true
+		if op.Done() {
+			return nil
 		}
-	}
-	if !restored {
-		if err := e.installer.Rollback(ctx); err != nil {
-			return e.fail(ctx, op, fmt.Errorf("%s; rollback failed: %w", op.Error, err))
-		}
-	}
-	if err := e.restarter.Restart(ctx); err != nil {
-		return e.fail(ctx, op, fmt.Errorf("%s; restart after rollback failed: %w", op.Error, err))
 	}
 	snap, err := e.awaitReady(ctx, op, func(Snapshot) bool { return true })
 	if err != nil {
@@ -349,6 +328,62 @@ func (e *Executor) rollback(ctx context.Context, op *Operation) error {
 	}
 	op.Progress = "rolled back to " + snap.Version
 	return e.transition(op, PhaseRolledBack)
+}
+
+// rollbackRestartTook reports whether a resumed rollback finds the restart
+// it asked for already done: the record names the instance that asked, and
+// a different one is answering now.
+func (e *Executor) rollbackRestartTook(ctx context.Context, op *Operation) bool {
+	if op.RollbackFrom == "" {
+		return false
+	}
+	snap, err := e.prober.Probe(ctx)
+	return err == nil && snap.InstanceID != op.RollbackFrom
+}
+
+// restoreAndRestart puts the previous binary back and restarts onto it,
+// recording each step so a rollback interrupted by its own restart can
+// resume. An outcome that ends the operation is recorded on op.
+func (e *Executor) restoreAndRestart(ctx context.Context, op *Operation) error {
+	// The restore request goes down before the binary does. The moment the
+	// previous binary is back on disk, systemd's Restart=always can launch
+	// it without waiting for us, and a launch that finds no request boots on
+	// the data the rollback was meant to replace. The request names the
+	// build it is for so that the build being rolled back from, which may
+	// still be crash looping in the same window, leaves it alone.
+	if op.BackupRef != "" && op.DataRestore == nil {
+		op.DataRestore = &DataRestore{BackupRef: op.BackupRef, ForVersion: op.PreviousVersion, ForCommit: op.PreviousCommit}
+		if err := e.store.Update(op); err != nil {
+			return err
+		}
+	}
+	// Rollback consumes the .old backup. A resumed run that died between the
+	// restore and the restart finds no backup but the previous build already
+	// on disk; that is a restore that took, not a missing one.
+	restored := false
+	if !e.installer.HasBackup() {
+		if onDisk, err := e.installer.GetCurrentVersion(ctx); err == nil &&
+			op.PreviousVersion != "" && sameBuild(onDisk.Version, onDisk.Commit, op.PreviousVersion, op.PreviousCommit) {
+			restored = true
+		}
+	}
+	if !restored {
+		if err := e.installer.Rollback(ctx); err != nil {
+			return e.fail(ctx, op, fmt.Errorf("%s; rollback failed: %w", op.Error, err))
+		}
+	}
+	// Recorded before the restart, since in a container the restart ends
+	// this process and the next one has to know it happened.
+	if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != "" {
+		op.RollbackFrom = snap.InstanceID
+		if err := e.store.Update(op); err != nil {
+			return err
+		}
+	}
+	if err := e.restarter.Restart(ctx); err != nil {
+		return e.fail(ctx, op, fmt.Errorf("%s; restart after rollback failed: %w", op.Error, err))
+	}
+	return nil
 }
 
 // readRestoreResult returns nil, nil when the server has not answered.
@@ -506,6 +541,12 @@ func appendReason(existing, reason string) string {
 		return reason
 	}
 	return existing + "; " + reason
+}
+
+// SameBuild reports whether two builds are the same: commits decide when
+// both are known, otherwise version strings.
+func SameBuild(versionA, commitA, versionB, commitB string) bool {
+	return sameBuild(versionA, commitA, versionB, commitB)
 }
 
 // sameBuild: commits decide when both are known, otherwise version strings.

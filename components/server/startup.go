@@ -158,7 +158,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	ingress := newIngressBoot(ingressInputs(options, instance), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	serverInfo := newServerInfoBoot(instance, foundation.output)
-	serverLifecycle := newServerLifecycleBoot(instance, foundation.output)
+	serverLifecycle := newServerLifecycleBoot(serverLifecycleInputsFrom(options), instance, foundation.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output, serverLifecycle.output)
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)

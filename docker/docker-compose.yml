@@ -5,6 +5,10 @@ services:
     image: oci.miren.cloud/miren:latest
     container_name: miren
     privileged: true
+    init: true
+    # Restart and upgrade work by the server exiting and the runtime
+    # bringing it back, so the policy is load-bearing.
+    restart: always
     ports:
       - "8080:8080"
       - "8443:8443/udp"
