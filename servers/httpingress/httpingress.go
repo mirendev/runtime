@@ -116,9 +116,12 @@ type Server struct {
 	mu   sync.Mutex
 	apps map[string]*appUsage
 
-	oidcSessionManager *oidc.SessionManager
-	oidcMu             sync.RWMutex
-	oidcHandlers       map[string]*oidcHandler
+	// sessionManager holds the cookie encryption key shared by every
+	// cookie-based auth backend (OIDC, connector, password). Handlers get a
+	// per-scheme copy via sessionManagerFor rather than this instance.
+	sessionManager *oidc.SessionManager
+	oidcMu         sync.RWMutex
+	oidcHandlers   map[string]*oidcHandler
 
 	wafEngine       *waf.Engine
 	wafProfileMu    sync.RWMutex
@@ -165,25 +168,25 @@ func NewServer(
 	}
 
 	serv := &Server{
-		Log:                log.With("module", "httpingress"),
-		config:             config,
-		rpcClient:          rpcClient,
-		eac:                eac,
-		ingressClient:      ingress.NewClient(log, rpcClient),
-		appClient:          app.NewClient(log, rpcClient),
-		aa:                 aa,
-		transport:          newProxyTransport(config.RequestTimeout),
-		transports:         make(map[time.Duration]http.RoundTripper),
-		httpMetrics:        httpMetrics,
-		logWriter:          logWriter,
-		apps:               make(map[string]*appUsage),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
-		wafEngine:          waf.NewEngine(log.With("component", "waf")),
-		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
-		passwordHandlers:   make(map[string]*passwordHandler),
-		connectorHandlers:  make(map[string]*connectorHandler),
-		workloadIssuer:     config.WorkloadIssuer,
+		Log:               log.With("module", "httpingress"),
+		config:            config,
+		rpcClient:         rpcClient,
+		eac:               eac,
+		ingressClient:     ingress.NewClient(log, rpcClient),
+		appClient:         app.NewClient(log, rpcClient),
+		aa:                aa,
+		transport:         newProxyTransport(config.RequestTimeout),
+		transports:        make(map[time.Duration]http.RoundTripper),
+		httpMetrics:       httpMetrics,
+		logWriter:         logWriter,
+		apps:              make(map[string]*appUsage),
+		sessionManager:    oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:      make(map[string]*oidcHandler),
+		wafEngine:         waf.NewEngine(log.With("component", "waf")),
+		wafProfileCache:   make(map[entity.Id]*wafProfileEntry),
+		passwordHandlers:  make(map[string]*passwordHandler),
+		connectorHandlers: make(map[string]*connectorHandler),
+		workloadIssuer:    config.WorkloadIssuer,
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
 

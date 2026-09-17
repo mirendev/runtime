@@ -201,7 +201,7 @@ func (s *Server) getOrCreatePasswordHandler(route *ingress_v1alpha.HttpRoute, ba
 	handler := &passwordHandler{
 		route:    route,
 		provider: &provider,
-		sm:       s.oidcSessionManager,
+		sm:       s.sessionManagerFor(baseURL),
 		logger:   s.Log.With("module", "password-auth", "host", route.Host, "provider", provider.Name),
 	}
 
@@ -213,8 +213,6 @@ func (s *Server) passwordMiddleware(route *ingress_v1alpha.HttpRoute, providerEn
 	return func(w http.ResponseWriter, r *http.Request) {
 		scheme := requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-		s.oidcSessionManager.SetSecure(scheme == "https")
 
 		handler, err := s.getOrCreatePasswordHandler(route, baseURL, providerEntity)
 		if err != nil {

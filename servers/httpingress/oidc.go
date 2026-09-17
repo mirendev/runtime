@@ -302,6 +302,16 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
+// sessionManagerFor returns the session manager an auth handler for baseURL
+// should use. Handlers are cached per (host, scheme) via baseURL, so the
+// Secure flag is fixed for the life of the handler: an https handler always
+// emits Secure cookies and an http handler never does. Deriving it here,
+// rather than toggling the shared manager per request, keeps one request's
+// scheme from leaking into cookies emitted by a concurrent request.
+func (s *Server) sessionManagerFor(baseURL string) *oidc.SessionManager {
+	return s.sessionManager.WithSecure(strings.HasPrefix(baseURL, "https://"))
+}
+
 // oidcProviderMatches returns true if the cached handler's provider config
 // matches the current provider entity from the store.
 func oidcProviderMatches(cached *oidcHandler, current *ingress_v1alpha.OidcProvider) bool {
@@ -350,7 +360,7 @@ func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseUR
 		resource = route.Host
 	}
 
-	handler, err := newOIDCHandler(route, &provider, s.oidcSessionManager, baseURL, resource, s.Log)
+	handler, err := newOIDCHandler(route, &provider, s.sessionManagerFor(baseURL), baseURL, resource, s.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -363,8 +373,6 @@ func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity
 	return func(w http.ResponseWriter, r *http.Request) {
 		scheme := requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-		s.oidcSessionManager.SetSecure(scheme == "https")
 
 		handler, err := s.getOrCreateOIDCHandler(route, baseURL, providerEntity)
 		if err != nil {

@@ -207,3 +207,74 @@ func TestSessionManager_GetSession_ExpiredSession(t *testing.T) {
 		t.Error("expected nil for expired session")
 	}
 }
+
+func TestSessionManager_WithSecure(t *testing.T) {
+	insecure := NewSessionManager(false, "", nil)
+	secure := insecure.WithSecure(true)
+
+	if secure == insecure {
+		t.Fatal("WithSecure must return a distinct instance")
+	}
+	if insecure.cookieSecure {
+		t.Error("WithSecure mutated the original manager")
+	}
+
+	// Every cookie-emitting method must honor the derived flag, including the
+	// clears: a browser only deletes a cookie when the clear's attributes
+	// match the original.
+	emit := func(sm *SessionManager, w *httptest.ResponseRecorder) {
+		if err := sm.SetSession(w, &SessionData{IDToken: "t", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatalf("SetSession: %v", err)
+		}
+		if err := sm.SetState(w, &StateData{State: "s", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			t.Fatalf("SetState: %v", err)
+		}
+		if err := sm.SetNamedCookie(w, "named", []byte("x"), time.Now().Add(time.Hour)); err != nil {
+			t.Fatalf("SetNamedCookie: %v", err)
+		}
+		sm.ClearSession(w)
+		sm.ClearState(w)
+		sm.ClearNamedCookie(w, "named")
+	}
+
+	for _, tc := range []struct {
+		name string
+		sm   *SessionManager
+		want bool
+	}{
+		{"original stays insecure", insecure, false},
+		{"derived is secure", secure, true},
+		{"derived back to insecure", secure.WithSecure(false), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			emit(tc.sm, w)
+			cookies := w.Result().Cookies()
+			if len(cookies) != 6 {
+				t.Fatalf("expected 6 cookies, got %d", len(cookies))
+			}
+			for _, c := range cookies {
+				if c.Secure != tc.want {
+					t.Errorf("cookie %s: Secure=%v, want %v", c.Name, c.Secure, tc.want)
+				}
+			}
+		})
+	}
+
+	// The copy shares the key, so a session sealed by one opens with the other.
+	w := httptest.NewRecorder()
+	if err := secure.SetSession(w, &SessionData{IDToken: "shared", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("SetSession: %v", err)
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	for _, c := range w.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	got, err := insecure.GetSession(req)
+	if err != nil {
+		t.Fatalf("GetSession via original: %v", err)
+	}
+	if got == nil || got.IDToken != "shared" {
+		t.Fatalf("expected session sealed by derived manager to open with original, got %+v", got)
+	}
+}

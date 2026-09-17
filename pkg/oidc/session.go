@@ -24,6 +24,7 @@ const (
 
 // SessionManager handles OIDC session lifecycle using encrypted cookies.
 // Cookie values are encrypted and authenticated with XChaCha20-Poly1305.
+// Fields are fixed at construction; use WithSecure to derive a variant.
 type SessionManager struct {
 	cookieSecure    bool
 	cookieDomain    string
@@ -64,9 +65,17 @@ type StateData struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// SetSecure updates whether cookies should be marked Secure.
-func (sm *SessionManager) SetSecure(secure bool) {
-	sm.cookieSecure = secure
+// WithSecure returns a copy of the session manager that marks cookies
+// Secure (or not) as given. The copy shares the encryption key, so cookies
+// sealed by one are readable by the other. A SessionManager is otherwise
+// immutable after construction: callers that serve both HTTP and HTTPS
+// must hold one copy per scheme rather than toggling a shared instance,
+// which would let one request's scheme decide another request's cookie
+// attributes.
+func (sm *SessionManager) WithSecure(secure bool) *SessionManager {
+	dup := *sm
+	dup.cookieSecure = secure
+	return &dup
 }
 
 // NewSessionManager creates a new session manager.
