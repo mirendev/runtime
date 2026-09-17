@@ -113,10 +113,8 @@ type doctorEnv struct {
 	serverVersion    *serverVersion
 	serverVersionErr error
 
-	// auth is only attempted when the cluster names an identity; authTried
-	// says whether it was.
-	auth      authResult
-	authTried bool
+	// auth is only attempted when the cluster names an identity.
+	auth authResult
 }
 
 // local reports whether the active cluster runs on this machine, which decides
@@ -203,7 +201,6 @@ func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 	if env.cluster.Identity != "" {
 		wg.Go(func() {
 			env.auth = tryAuthenticate(ctx, env.cfg, env.cluster)
-			env.authTried = true
 		})
 	}
 

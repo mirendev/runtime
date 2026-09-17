@@ -141,8 +141,11 @@ func checkAuthentication(env *doctorEnv) checkResult {
 		return checkResult{Status: checkSkip, Summary: "(server unreachable)"}
 	}
 
+	// Method stays "none" when no credential could be established. Claims
+	// alone can't be the test: a certificate identity has no bearer token, so
+	// it never carries claims, and it is signed in all the same.
 	res := env.auth
-	if res.Claims == nil && res.UserInfo == nil {
+	if res.Method == "none" {
 		return checkResult{
 			Status:  checkWarn,
 			Summary: fmt.Sprintf("identity %q isn't usable", env.cluster.Identity),
