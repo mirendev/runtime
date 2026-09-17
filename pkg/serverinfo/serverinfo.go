@@ -4,7 +4,9 @@
 package serverinfo
 
 import (
+	"maps"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +39,11 @@ type Info struct {
 	Ready bool `json:"ready"`
 
 	InstallKind InstallKind `json:"install_kind"`
+
+	// Components are the versions of the runtime pieces this process drives
+	// (containerd, runc, ...), as observed at boot. An upgrade that swaps
+	// them on disk is only known to have taken when this says so.
+	Components map[string]string `json:"components,omitempty"`
 }
 
 // Source is created once per process at boot and marked ready when the boot
@@ -46,6 +53,9 @@ type Source struct {
 	startedAt   time.Time
 	installKind InstallKind
 	ready       atomic.Bool
+
+	mu         sync.Mutex
+	components map[string]string
 }
 
 func New() *Source {
@@ -64,6 +74,20 @@ func (s *Source) InstanceID() string {
 	return s.instanceID
 }
 
+// SetComponent records the version of a runtime component once the boot
+// graph has it running. An empty version is not worth recording.
+func (s *Source) SetComponent(name, version string) {
+	if name == "" || version == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.components == nil {
+		s.components = make(map[string]string)
+	}
+	s.components[name] = version
+}
+
 func (s *Source) Info() Info {
 	build := version.GetInfo()
 	return Info{
@@ -74,7 +98,17 @@ func (s *Source) Info() Info {
 		StartedAt:   s.startedAt,
 		Ready:       s.ready.Load(),
 		InstallKind: s.installKind,
+		Components:  s.componentsCopy(),
 	}
+}
+
+func (s *Source) componentsCopy() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.components) == 0 {
+		return nil
+	}
+	return maps.Clone(s.components)
 }
 
 // systemd wins over the container check: if systemd started this process,

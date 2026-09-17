@@ -264,6 +264,7 @@ func (e *Executor) verify(ctx context.Context, op *Operation) error {
 	}
 	op.NewInstanceID = snap.InstanceID
 	op.NewVersion = snap.Version
+	op.Components = snap.Components
 	op.Progress = ""
 	if op.Action == ActionUpgrade {
 		e.ensurePathSymlink(op)
@@ -324,6 +325,7 @@ func (e *Executor) rollback(ctx context.Context, op *Operation) error {
 	}
 	op.NewInstanceID = snap.InstanceID
 	op.NewVersion = snap.Version
+	op.Components = snap.Components
 	if op.DataRestore != nil {
 		// The server is up, so either it restored the data or it never saw
 		// the request (a build that predates data restore, say). The old

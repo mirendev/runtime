@@ -95,7 +95,9 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	registration := newRegistrationBoot(registrationInputs(options))
 	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
 	tracing := newTracingBoot(tracingInputs(options), registration.output)
-	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
+	containerdConfig := containerdBootConfig(options)
+	containerdConfig.ReportVersion = instance.SetComponent
+	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
 	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)

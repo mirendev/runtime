@@ -85,6 +85,10 @@ type Operation struct {
 	PreviousCommit     string `json:"previous_commit,omitempty"`
 	NewInstanceID      string `json:"new_instance_id,omitempty"`
 	NewVersion         string `json:"new_version,omitempty"`
+	// Components are the runtime versions (containerd, runc, ...) the server
+	// reported once it was up. A base upgrade replaces those binaries next to
+	// miren, and this is the record that the restarted server is on them.
+	Components map[string]string `json:"components,omitempty"`
 
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`

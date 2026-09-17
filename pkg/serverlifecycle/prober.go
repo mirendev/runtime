@@ -15,6 +15,9 @@ type Snapshot struct {
 	Commit      string
 	Ready       bool
 	InstallKind string
+	// Components are the runtime versions the server reports driving
+	// (containerd, runc, ...); nil from a server that predates the report.
+	Components map[string]string
 }
 
 // Prober observes the running server: which process is there before acting,
@@ -72,11 +75,12 @@ func (p *HealthProber) Probe(ctx context.Context) (Snapshot, error) {
 	}
 	var body struct {
 		Server *struct {
-			Version     string `json:"version"`
-			Commit      string `json:"commit"`
-			InstanceID  string `json:"runtime_instance_id"`
-			Ready       bool   `json:"ready"`
-			InstallKind string `json:"install_kind"`
+			Version     string            `json:"version"`
+			Commit      string            `json:"commit"`
+			InstanceID  string            `json:"runtime_instance_id"`
+			Ready       bool              `json:"ready"`
+			InstallKind string            `json:"install_kind"`
+			Components  map[string]string `json:"components"`
 		} `json:"server"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -91,5 +95,6 @@ func (p *HealthProber) Probe(ctx context.Context) (Snapshot, error) {
 		Commit:      body.Server.Commit,
 		Ready:       body.Server.Ready,
 		InstallKind: body.Server.InstallKind,
+		Components:  body.Server.Components,
 	}, nil
 }
