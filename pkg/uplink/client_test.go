@@ -477,7 +477,13 @@ func TestNegotiatedSessionStartsCallbacksAfterWelcome(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClient(srv.URL, "test-token", NewMessageRouter())
-	WithSession(SessionIdentity{RuntimeVersion: "v1.2.3", RuntimeInstanceID: "01TESTINSTANCE"})(client)
+	built := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	WithSession(SessionIdentity{
+		RuntimeVersion:    "v1.2.3",
+		RuntimeInstanceID: "01TESTINSTANCE",
+		RuntimeCommit:     "0123456789abcdef0123456789abcdef01234567",
+		RuntimeBuildDate:  built,
+	})(client)
 	client.OfferCapability(CapabilityOffer{Name: CapabilityPopConnect, Versions: []uint{1}})
 	client.OnSession(func(_ context.Context, session Session) { sessionStarted <- session })
 	client.OnConnect(func(context.Context) { connectStarted <- struct{}{} })
@@ -497,6 +503,12 @@ func TestNegotiatedSessionStartsCallbacksAfterWelcome(t *testing.T) {
 	}
 	if hello.RuntimeInstanceID != "01TESTINSTANCE" {
 		t.Fatalf("runtime instance id = %q, want 01TESTINSTANCE", hello.RuntimeInstanceID)
+	}
+	if hello.RuntimeCommit != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("runtime commit = %q", hello.RuntimeCommit)
+	}
+	if !hello.RuntimeBuildDate.Equal(built) {
+		t.Fatalf("runtime build date = %s, want %s", hello.RuntimeBuildDate, built)
 	}
 	if len(hello.Capabilities) != 1 || hello.Capabilities[0].Name != CapabilityPopConnect {
 		t.Fatalf("capability offers = %+v", hello.Capabilities)

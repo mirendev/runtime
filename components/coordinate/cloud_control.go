@@ -126,6 +126,7 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 	// The negotiated session is the baseline: every capability rides it, and
 	// cloud selects the ones it wants per cluster. Which capabilities cloud
 	// puts to use is decided there, behind its own per-organization flags.
+	build := version.GetInfo()
 	link := uplink.NewClient(
 		cloudURL,
 		c.authClient,
@@ -133,8 +134,10 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 		c.Log.With("component", "uplink"),
 		uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink),
 		uplink.WithSession(uplink.SessionIdentity{
-			RuntimeVersion:    version.GetInfo().Version,
+			RuntimeVersion:    build.Version,
 			RuntimeInstanceID: c.instanceID(),
+			RuntimeCommit:     build.KnownCommit(),
+			RuntimeBuildDate:  build.BuildDate,
 		}),
 	)
 	// The welcome repeats the workload identity anchor the status poll's

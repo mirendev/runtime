@@ -59,9 +59,17 @@ type SessionHello struct {
 	RuntimeVersion    string `json:"runtime_version"`
 	// RuntimeInstanceID lets cloud tell a reconnect from a restart. Optional
 	// so older runtimes stay decodable.
-	RuntimeInstanceID string            `json:"runtime_instance_id,omitempty"`
-	ClientTime        time.Time         `json:"client_time"`
-	Capabilities      []CapabilityOffer `json:"capabilities"`
+	RuntimeInstanceID string `json:"runtime_instance_id,omitempty"`
+	// RuntimeCommit and RuntimeBuildDate identify the build exactly.
+	// RuntimeVersion carries only a short sha, which is ambiguous once git
+	// lengthens abbreviations under a collision and carries no order, so
+	// cloud needs the full commit to match a build against its channel and
+	// the build date to say which of two main builds is newer. Both are
+	// absent from a binary built without hack/build.sh's ldflags.
+	RuntimeCommit    string            `json:"runtime_commit,omitempty"`
+	RuntimeBuildDate time.Time         `json:"runtime_build_date,omitzero"`
+	ClientTime       time.Time         `json:"client_time"`
+	Capabilities     []CapabilityOffer `json:"capabilities"`
 }
 
 // SessionWelcome establishes the session and selects the protocol families
