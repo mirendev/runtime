@@ -136,16 +136,8 @@ func (c *ReconcileController) Start(top context.Context) error {
 		return err
 	}
 	c.wg.Go(func() {
-		for event := range c.watcher.Updates() {
-			c.acceptWatchEvent(event)
-		}
+		c.consumeWatch(ctx)
 	})
-
-	if c.resyncPeriod > 0 {
-		c.wg.Go(func() {
-			c.runResync(ctx)
-		})
-	}
 
 	if c.metricWriter != nil {
 		c.wg.Go(func() { c.reportMetrics(ctx) })
@@ -412,33 +404,60 @@ func cloneEntity(en *entity.Entity) *entity.Entity {
 	return en.Clone()
 }
 
-// runResync re-enqueues every entity in the index at repair priority once per
-// resyncPeriod. It lists the index rather than restarting the watch: the
-// watcher resumes from its revision cursor and re-snapshots after compaction on
-// its own, so the watch stays open and a tick costs one List instead of a
-// stream teardown. The first pass is left to the watcher's initial snapshot.
-func (c *ReconcileController) runResync(ctx context.Context) {
-	ticker := time.NewTicker(c.resyncPeriod)
-	defer ticker.Stop()
+// consumeWatch forwards watch events into the queue and, when a resyncPeriod
+// is set, runs the periodic resync from this same goroutine. It returns once
+// the watcher closes its Updates channel on Stop.
+//
+// Running the resync here rather than on its own goroutine is what keeps it
+// ordered with the watch. A List read at revision R takes time to return, and
+// on a separate goroutine its results could be enqueued after the watch had
+// already delivered and the worker had already processed a delete at R+1 for
+// the same id, re-creating a fresh positive entry for an entity that is gone
+// (or, for an index-only removal, still exists and would be reconciled back
+// to life). Here the List blocks watch delivery instead: events that arrive
+// while it is in flight buffer in the Updates channel, and once the snapshot
+// is enqueued every buffered event is either at or below R, and so already
+// reflected in what the List returned, or above R and enqueued after it. That
+// is the same ordering the watcher's own initial and post-compaction
+// snapshots rely on. The queue's revision guard remains as a second line.
+func (c *ReconcileController) consumeWatch(ctx context.Context) {
+	var tick <-chan time.Time
+	if c.resyncPeriod > 0 {
+		ticker := time.NewTicker(c.resyncPeriod)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
 
+	updates := c.watcher.Updates()
 	for {
 		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
-		resp, err := c.esc.List(ctx, c.index)
-		if err != nil {
-			if ctx.Err() == nil {
-				c.Log.Warn("resync list failed, will retry next tick", "error", err)
+		case event, ok := <-updates:
+			if !ok {
+				return
 			}
-			continue
+			c.acceptWatchEvent(event)
+		case <-tick:
+			c.resync(ctx)
 		}
-		c.counters.resyncs.Add(1)
-		for _, aen := range resp.Values() {
-			c.enqueueRepair(entity.Id(aen.Id()), resp.Revision())
+	}
+}
+
+// resync re-enqueues every entity in the index at repair priority. It lists
+// the index rather than restarting the watch: the watcher resumes from its
+// revision cursor and re-snapshots after compaction on its own, so the watch
+// stays open and a tick costs one List instead of a stream teardown. The
+// first pass is left to the watcher's initial snapshot.
+func (c *ReconcileController) resync(ctx context.Context) {
+	resp, err := c.esc.List(ctx, c.index)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.Log.Warn("resync list failed, will retry next tick", "error", err)
 		}
+		return
+	}
+	c.counters.resyncs.Add(1)
+	for _, aen := range resp.Values() {
+		c.enqueueRepair(entity.Id(aen.Id()), resp.Revision())
 	}
 }
 

@@ -769,15 +769,20 @@ func (m *MockStore) AddStaleIndexEntry(attr Attr, id Id) {
 // exactly the writes that landed after this list, the way etcd's header
 // revision pairs with WithRev. The ids and the revision are read under one
 // lock so no write can land between them.
+//
+// With OnListIndex installed, the revision is read before the hook runs, so a
+// hook that blocks to model a slow List reports the revision the List started
+// at rather than one that includes writes landing while it was held open.
 func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error) {
 	if m.OnListIndex != nil {
+		m.mu.RLock()
+		rev := m.rev
+		m.mu.RUnlock()
 		ids, err := m.OnListIndex(ctx, attr)
 		if err != nil {
 			return nil, 0, err
 		}
-		m.mu.RLock()
-		defer m.mu.RUnlock()
-		return ids, m.rev, nil
+		return ids, rev, nil
 	}
 
 	m.mu.RLock()
