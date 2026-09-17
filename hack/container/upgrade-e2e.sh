@@ -26,11 +26,13 @@
 # container installs: a `docker exec` session dies with the container at the
 # restart it asked for, and the server commands are for a systemd host.
 #
-# Requires docker on a Linux host and the iso dev environment (binaries are
-# built with hack/dev-exec so no host Go toolchain is needed; the build is
-# static, so the same binary serves as the host CLI). The image build
-# downloads the main release bundle from the asset service. Takes several
-# minutes; not wired into per-PR CI on purpose.
+# Requires docker or rootful podman on a Linux host and the iso dev
+# environment (binaries are built with hack/dev-exec so no host Go toolchain
+# is needed; the build is static, so the same binary serves as the host CLI).
+# RUNTIME picks the runtime command, e.g. RUNTIME="sudo podman"; podman
+# without a system policy.json also needs POLICY=/path/to/policy.json for
+# the image pulls. The image build downloads the main release bundle from the
+# asset service. Takes several minutes; not wired into per-PR CI on purpose.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,21 +47,26 @@ HEALTH_PORT="${HEALTH_PORT:-18443}"
 CONTAINER=miren-container-e2e
 VOLUME=miren-container-e2e-data
 IMAGE=miren-container-e2e:v9.0.0
+RUNTIME="${RUNTIME:-docker}"
+POLICY="${POLICY:-}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
-in_container() { docker exec "$CONTAINER" "$@"; }
+# RUNTIME is a command line, split on purpose.
+# shellcheck disable=SC2086
+rt() { $RUNTIME "$@"; }
+in_container() { rt exec "$CONTAINER" "$@"; }
 # The host CLI: the v9.0.0 build with a client config pointing at the
 # container's published API port.
 m() { MIREN_CONFIG="$WORK/clientconfig.yaml" MIREN_CLUSTER=local "$WORK/bin/miren-v9.0.0" "$@"; }
 health() { curl -sk "https://127.0.0.1:$HEALTH_PORT/.well-known/miren/health" 2>/dev/null | jq -r "$1"; }
-restart_count() { docker inspect --format '{{.RestartCount}}' "$CONTAINER"; }
+restart_count() { rt inspect --format '{{.RestartCount}}' "$CONTAINER"; }
 ledger() { in_container cat "/var/lib/miren/server/lifecycle/$1.json"; }
 wait_ready() {
   for _ in $(seq 1 100); do
     [ "$(health .server.ready 2>/dev/null)" = "true" ] && return 0
     sleep 3
   done
-  echo "server never became ready" >&2; docker logs --tail 30 "$CONTAINER" >&2; return 1
+  echo "server never became ready" >&2; rt logs --tail 30 "$CONTAINER" >&2; return 1
 }
 # Reads the ledger file rather than the RPC so it works while the server is
 # down or crash looping; docker exec fails during the restart itself, and
@@ -124,7 +131,7 @@ log "building the container image with v9.0.0 as the image binary"
 mkdir -p "$WORK/builder/build/bin" "$WORK/ctx/docker"
 cp "$WORK/bin/miren-v9.0.0" "$WORK/builder/build/bin/miren"
 cp "$ROOT_DIR/docker/entrypoint.sh" "$WORK/ctx/docker/entrypoint.sh"
-docker build --build-context "builder=$WORK/builder" -f "$ROOT_DIR/docker/Dockerfile" -t "$IMAGE" "$WORK/ctx" >"$WORK/image.log" 2>&1
+rt build ${POLICY:+--signature-policy "$POLICY"} --build-context "builder=$WORK/builder" -f "$ROOT_DIR/docker/Dockerfile" -t "$IMAGE" "$WORK/ctx" >"$WORK/image.log" 2>&1
 
 log "serving fixtures on :$ASSET_PORT"
 if ss -ltn | grep -q ":$ASSET_PORT "; then
@@ -138,20 +145,21 @@ HTTP_PID=$!
 cleanup() {
   kill $HTTP_PID 2>/dev/null || true
   if [ -z "${KEEP:-}" ]; then
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    docker volume rm "$VOLUME" >/dev/null 2>&1 || true
+    rt rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    rt volume rm "$VOLUME" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
-GATEWAY=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
-ASSET_URL="http://$GATEWAY:$ASSET_PORT"
+# host-gateway resolves to the host on both docker and podman.
+ASSET_URL="http://miren.host:$ASSET_PORT"
 
 log "starting the container the way container install does"
-docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-docker volume rm "$VOLUME" >/dev/null 2>&1 || true
+rt rm -f "$CONTAINER" >/dev/null 2>&1 || true
+rt volume rm "$VOLUME" >/dev/null 2>&1 || true
 # The executor runs inside the server here, so the asset override has to be
 # in the container's environment, not the CLI's.
-docker run -d --name "$CONTAINER" --init --privileged --restart always \
+rt run -d --name "$CONTAINER" --init --privileged --restart always \
+  --add-host=miren.host:host-gateway \
   -p "127.0.0.1:$HEALTH_PORT:443/tcp" -p "127.0.0.1:$API_PORT:8443/udp" -e "MIREN_ASSET_BASE_URL=$ASSET_URL" \
   -v "$VOLUME:/var/lib/miren" "$IMAGE" server -v >/dev/null
 wait_ready
@@ -222,7 +230,7 @@ echo "$OP" | jq -e '.data_restore.restored_at != null' >/dev/null
 in_container test -d "/var/lib/miren/etcd.replaced-$OP_ID"
 # One restart onto the hung build, one more when the watchdog ended it.
 [ "$(restart_count)" -ge $((RESTARTS + 2)) ]
-[ "$(docker logs "$CONTAINER" 2>&1 | grep -c 'ending the hung server')" -gt 0 ]
+[ "$(rt logs "$CONTAINER" 2>&1 | grep -c 'ending the hung server')" -gt 0 ]
 
 log "5. restart with the CLI killed mid-operation"
 BEFORE=$(health .server.runtime_instance_id)
