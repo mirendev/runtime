@@ -134,6 +134,14 @@ plus `loginctl enable-linger` for a rootless install), or generate a dedicated
 unit with `podman generate systemd` / a Quadlet.
 :::
 
+The restart policy is also what `miren cluster restart` and `miren cluster
+upgrade` rely on for a container install: the server exits and the runtime
+brings a new container up on the same data volume. `miren server container
+install` sets `--restart always`; a container started some other way without
+it will stay down after a restart, and a server that wasn't started through
+the image's entrypoint reports `install_kind: unknown` and refuses restart and
+upgrade rather than trying.
+
 **2. Test connectivity**
 
 <CliCommand context="client">

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"miren.dev/runtime/pkg/containerboot"
+	"miren.dev/runtime/pkg/serverinfo"
 )
 
 // InternalContainerBoot is the container image's entrypoint for `server`. It
@@ -56,6 +57,9 @@ func InternalContainerBoot(ctx *Context, opts struct {
 		}
 	}
 
+	// The server reports itself as a container install on this alone; see
+	// serverinfo.ContainerBootEnv.
+	os.Setenv(serverinfo.ContainerBootEnv, "1")
 	if err := syscall.Exec(bin, append([]string{bin}, opts.Args...), os.Environ()); err != nil {
 		if bin == image {
 			return fmt.Errorf("exec %s: %w", bin, err)

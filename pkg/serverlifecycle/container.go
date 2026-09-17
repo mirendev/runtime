@@ -158,3 +158,15 @@ func (p InstanceProber) Probe(context.Context) (Snapshot, error) {
 		InstallKind: string(info.InstallKind),
 	}, nil
 }
+
+// ErrUnsupervised is what a restart or upgrade gets on a server nothing
+// can bring back: not a systemd unit, and not a container that booted
+// through the image's entrypoint.
+var ErrUnsupervised = errors.New("this server is not supervised in a way that can restart it: install it as a systemd service, or run the container image through `miren server container install` so its restart policy brings it back")
+
+// UnsupervisedLauncher refuses every launch with ErrUnsupervised. It stands
+// in where neither systemd nor container-boot is present, so the refusal
+// says why instead of a failed systemd-run.
+type UnsupervisedLauncher struct{}
+
+func (UnsupervisedLauncher) Launch(context.Context, string) error { return ErrUnsupervised }

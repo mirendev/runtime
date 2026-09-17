@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"miren.dev/runtime/pkg/containerenv"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/version"
 )
@@ -25,6 +24,16 @@ const (
 	InstallKindContainer InstallKind = "container"
 	InstallKindUnknown   InstallKind = "unknown"
 )
+
+// ContainerBootEnv is set by `miren internal container-boot` before it
+// execs the server. It is the one positive sign that a container install
+// is the shape restart and upgrade rely on: the image's entrypoint chose
+// the binary from the release directory, so an upgrade written there is
+// what the next boot runs. Looking like a container (a /.dockerenv, cgroup
+// names) proves none of that: it is also true of a plain `docker run` of
+// the image, an older image whose entrypoint runs its own binary, and the
+// dev environment.
+const ContainerBootEnv = "MIREN_CONTAINER_BOOT"
 
 // Info is a snapshot of the server process.
 type Info struct {
@@ -114,13 +123,14 @@ func (s *Source) componentsCopy() map[string]string {
 
 // systemd wins over the container check: if systemd started this process,
 // `systemctl restart` works wherever that systemd lives (including a
-// systemd-in-docker test host). A real container install runs miren as the
-// container's own PID 1, with no INVOCATION_ID.
+// systemd-in-docker test host). A container install is only one that came
+// through container-boot; anything else in a container is unknown, and
+// unknown gets a clear refusal rather than a restart nothing brings back.
 func detectInstallKind() InstallKind {
 	if os.Getenv("INVOCATION_ID") != "" {
 		return InstallKindSystemd
 	}
-	if containerenv.InContainer() {
+	if os.Getenv(ContainerBootEnv) != "" {
 		return InstallKindContainer
 	}
 	return InstallKindUnknown

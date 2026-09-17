@@ -79,14 +79,21 @@ func (b *serverLifecycleBoot) start(ctx context.Context, foundation foundationBo
 // launcher picks where the executor runs from how this process is
 // supervised. Under systemd it is a transient unit that outlives the
 // restart. In a container nothing does, so it runs in-process and the next
-// instance resumes it.
+// instance resumes it. Anything else has no way back from a restart and is
+// refused up front.
 func (b *serverLifecycleBoot) launcher(log *slog.Logger) (serverlifecycle.Launcher, error) {
-	if b.instance.Info().InstallKind != serverinfo.InstallKindContainer {
+	switch b.instance.Info().InstallKind {
+	case serverinfo.InstallKindSystemd:
 		exe, err := serverlifecycle.ExecutorBinary()
 		if err != nil {
 			return nil, err
 		}
 		return serverlifecycle.SystemdLauncher{Binary: exe}, nil
+	case serverinfo.InstallKindContainer:
+	case serverinfo.InstallKindUnknown:
+		return serverlifecycle.UnsupervisedLauncher{}, nil
+	default:
+		return serverlifecycle.UnsupervisedLauncher{}, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancelContainer = cancel
