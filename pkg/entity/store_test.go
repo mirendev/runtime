@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/etcdtest"
 )
 
@@ -3042,6 +3043,66 @@ func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
 // revision, an entity written between them comes back carrying a value the
 // index has not caught up to, which is indistinguishable from the stale-index
 // bug MIR-1735 fixed and would send a caller hunting the wrong defect.
+// A pinned single read has to carry the entity's session attributes too, and
+// pinned at the same revision. The entity sync exporter reads every exported
+// entity this way, so a primary-key-only read would export a node without its
+// status for as long as the runner held its session.
+func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
+	store, _ := setupTestEtcdStore(t)
+	ctx := t.Context()
+
+	_, err := store.CreateEntity(ctx, New(
+		Ref(DBId, "test/session-status"),
+		String(Ident, "test/session-status"),
+		Ref(Type, TypeStr),
+		Bool(Session, true),
+	))
+	require.NoError(t, err)
+
+	session, err := store.CreateSession(ctx, 60)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), session) })
+
+	created, err := store.CreateEntity(ctx, New(
+		Ref(DBId, "node/pinned"),
+		String(Ident, "node/pinned"),
+		String("test/session-status", "ready"),
+	), WithSession(session))
+	require.NoError(t, err)
+	withStatus := created.GetRevision()
+
+	pinned, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), withStatus)
+	require.NoError(t, err)
+	status, ok := pinned.Get("test/session-status")
+	require.True(t, ok, "the session attribute is part of the entity at that revision")
+	assert.Equal(t, "ready", status.Value.String())
+
+	// Once the session is gone the attribute is gone with it, and a read at
+	// that later revision says so, while the earlier revision still has it.
+	require.NoError(t, store.RevokeSession(ctx, session))
+	require.Eventually(t, func() bool {
+		current, err := store.GetEntity(ctx, Id("node/pinned"))
+		if err != nil {
+			return false
+		}
+		_, still := current.Get("test/session-status")
+		return !still
+	}, 5*time.Second, 50*time.Millisecond)
+	current, err := store.GetEntity(ctx, Id("node/pinned"))
+	require.NoError(t, err)
+	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.GetRevision()+1)
+	require.NoError(t, err)
+	_, still := later.Get("test/session-status")
+	require.False(t, still)
+	pinned, err = store.GetEntityAtRevision(ctx, Id("node/pinned"), withStatus)
+	require.NoError(t, err)
+	_, ok = pinned.Get("test/session-status")
+	require.True(t, ok)
+
+	_, err = store.GetEntityAtRevision(ctx, Id("node/missing"), withStatus)
+	require.ErrorIs(t, err, cond.ErrNotFound{})
+}
+
 func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 	t.Run("reads the value the entity carried at that revision", func(t *testing.T) {
 		store, _ := setupTestEtcdStore(t)

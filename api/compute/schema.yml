@@ -1,6 +1,28 @@
 domain: dev.miren.compute
 version: v1alpha
 
+# Nodes are the cluster's runner inventory. Cloud mirrors them so the console
+# can count them, list them, and watch versions and health converge during an
+# upgrade. The contract itself is owned by dev.miren.core, which folds this
+# block in with -export-merge; only the owner emits a digest.
+exports:
+  cloud:
+    owner: dev.miren.core
+    marker: dev.miren.meta/cloud.export
+    kinds:
+      node:
+        lifecycle: mirror
+        include:
+          - db/short-id
+          - dev.miren.compute/node.name
+          - dev.miren.compute/node.runner_id
+          - dev.miren.compute/node.version
+          - dev.miren.compute/node.status
+          - dev.miren.compute/node.scheduling
+          - dev.miren.compute/node.api_address
+          - dev.miren.compute/node.registered_at
+          - dev.miren.compute/node.constraints
+
 components:
   # Immutable build-time sandbox configuration
   # Shared between Sandbox (as spec field) and SandboxPool (as template)

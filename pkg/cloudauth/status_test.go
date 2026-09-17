@@ -70,7 +70,6 @@ func TestReportClusterStatus(t *testing.T) {
 		ClusterID: "test-cluster-123",
 		Version:   "1.0.0",
 		State:     "active",
-		NodeCount: 3,
 		ResourceUsage: ResourceUsage{
 			CPUCores:      4.5,
 			CPUPercent:    56.25,
@@ -97,7 +96,6 @@ func TestReportClusterStatus(t *testing.T) {
 	assert.Equal(t, "test-cluster-123", receivedStatus.ClusterID)
 	assert.Equal(t, "1.0.0", receivedStatus.Version)
 	assert.Equal(t, "active", receivedStatus.State)
-	assert.Equal(t, 3, receivedStatus.NodeCount)
 	assert.Equal(t, 4.5, receivedStatus.ResourceUsage.CPUCores)
 	assert.Equal(t, "Bearer test-jwt-token", authToken)
 }

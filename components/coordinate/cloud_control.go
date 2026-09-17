@@ -417,7 +417,6 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		ClusterID:         c.CloudAuth.ClusterID,
 		State:             "active",
 		Version:           version.GetInfo().Version,
-		NodeCount:         1, // Static value for now
 		ResourceUsage:     c.collectResourceUsage(),
 		APIAddresses:      facts.APIAddresses,
 		CACertFingerprint: facts.CACertFingerprint,
