@@ -157,9 +157,27 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 		return err
 	}
 
+	// Bridge the caller's ctx to the stream for the life of this call. A
+	// blocked Read is only unblocked by transport teardown or CancelRead, so
+	// without this a cancelled caller parks in dec.Decode until the peer
+	// finally replies. Mirrors handleCallStream and msgOpTransport.roundTrip.
+	// The watcher is stopped before the stream can go back in the pool, so a
+	// late cancellation never aborts someone else's call on the same stream.
+	stop := make(chan struct{})
+	if ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				conn.stream.CancelRead(cancelReadCode)
+			case <-stop:
+			}
+		}()
+	}
+
 	// Return stream to pool when done (unless there's an error)
 	shouldReturn := true
 	defer func() {
+		close(stop)
 		if shouldReturn {
 			c.returnStream(conn)
 		} else {
@@ -188,22 +206,21 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 
 	var rr refResponse
 
-	// Read response without timeout loop - let QUIC handle flow control
-	if err := ctx.Err(); err != nil {
-		shouldReturn = false
-		return err
-	}
 	err = conn.dec.Decode(&rr)
 	if err != nil {
 		shouldReturn = false
-		return err
+		return c.readErr(ctx, err)
 	}
 
 	switch rr.Status {
 	case "error":
 		return cond.RemoteError(rr.Category, rr.Code, rr.Error)
 	case "ok":
-		return conn.dec.Decode(ret)
+		if err := conn.dec.Decode(ret); err != nil {
+			shouldReturn = false
+			return c.readErr(ctx, err)
+		}
+		return nil
 	default:
 		if err := ctx.Err(); err != nil {
 			return err
@@ -211,6 +228,16 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 
 		return fmt.Errorf("unknown response status to %s/%s: %s", c.oid, method, rr.Status)
 	}
+}
+
+// readErr maps a failed Decode back to the caller's context error when the
+// read was aborted by our own CancelRead, so callers see a context error
+// rather than a transport-specific stream-cancel error.
+func (c *inlineClient) readErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	return err
 }
 
 func (c *inlineClient) derefOID(ctx context.Context, oid OID) error {
