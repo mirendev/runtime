@@ -98,13 +98,31 @@ func (s *session) Recv() ([]byte, error) {
 	default:
 	}
 
+	// The same rule holds once the reader is parked here. A frame queued in
+	// the same instant as the close leaves both cases ready, and select picks
+	// between ready cases at random; taking the close branch would drop the
+	// frame, since readPump treats EOF as terminal and nothing drains inbound
+	// afterwards. So the close branches look once more before giving up.
 	select {
 	case b := <-s.inbound:
 		s.release(len(b))
 		return b, nil
 	case <-s.closed:
-		return nil, io.EOF
+		return s.recvBuffered()
 	case <-s.ctx.Done():
+		return s.recvBuffered()
+	}
+}
+
+// recvBuffered hands back a frame already queued on inbound, or io.EOF when
+// there is none. It never blocks: it is the last look the closed path takes
+// before reporting the session gone.
+func (s *session) recvBuffered() ([]byte, error) {
+	select {
+	case b := <-s.inbound:
+		s.release(len(b))
+		return b, nil
+	default:
 		return nil, io.EOF
 	}
 }
