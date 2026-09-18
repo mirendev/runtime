@@ -313,7 +313,11 @@ func (m *POPManager) newForwardingHandler(popXID string) http.Handler {
 
 		// Forward via the HTTP ingress proxy handler, which handles
 		// hostname-based routing, lease management, and app activation.
-		proxyReq := r.Clone(r.Context())
+		// The POP only serves visitors over TLS, so their scheme is always
+		// https. Say so explicitly rather than relying on ingress.mode (which
+		// describes the local listener, not this path), on the QUIC
+		// connection's TLS state, or on headers the POP forwards.
+		proxyReq := r.Clone(httpingress.WithOriginScheme(r.Context(), "https"))
 		proxyReq.Host = hostname
 		proxyReq.URL.Host = hostname
 		proxyReq.URL.Scheme = "https"

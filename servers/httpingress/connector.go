@@ -282,7 +282,7 @@ func (s *Server) getOrCreateConnectorHandler(route *ingress_v1alpha.HttpRoute, b
 
 func (s *Server) connectorMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity entity.AttrGetter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scheme := requestScheme(r)
+		scheme := s.requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 		handler, err := s.getOrCreateConnectorHandler(route, baseURL, providerEntity)

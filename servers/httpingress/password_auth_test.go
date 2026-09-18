@@ -1,6 +1,7 @@
 package httpingress
 
 import (
+	"crypto/tls"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ func newPasswordTestServer() *Server {
 
 	return &Server{
 		Log:              slog.Default(),
+		config:           IngressConfig{TrustProxyHeaders: true},
 		sessionManager:   oidc.NewSessionManager(false, "", signingKey),
 		oidcHandlers:     make(map[string]*oidcHandler),
 		passwordHandlers: make(map[string]*passwordHandler),
@@ -381,6 +383,9 @@ func TestPasswordLoginFlow(t *testing.T) {
 // middleware wrote its request's scheme into the one shared SessionManager,
 // so an https login could be handed a non-Secure cookie (and vice versa)
 // whenever an http request was inflight at the same time.
+//
+// The test server trusts proxy headers so the scheme can be driven per
+// request via X-Forwarded-Proto.
 func TestPasswordMiddlewareSecureFlagIsPerScheme(t *testing.T) {
 	srv := newPasswordTestServer()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
@@ -453,4 +458,83 @@ func TestPasswordMiddlewareSecureFlagIsPerScheme(t *testing.T) {
 	if hs.sm == hp.sm || hs.sm == srv.sessionManager || hp.sm == srv.sessionManager {
 		t.Error("expected each scheme's handler to hold its own session manager copy")
 	}
+}
+
+// Regression test for MIR-1899: with proxy headers untrusted (every mode
+// except behind-proxy-http), a client cannot downgrade its own cookie to
+// non-Secure by sending X-Forwarded-Proto: http over a TLS connection.
+func TestPasswordMiddlewareIgnoresForwardedProtoWhenUntrusted(t *testing.T) {
+	srv := newPasswordTestServer()
+	srv.config.TrustProxyHeaders = false
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	route := &ingress_v1alpha.HttpRoute{Host: "app.example.com"}
+	ent := makePasswordProviderEntity("test/pw", string(hash))
+
+	mw := srv.passwordMiddleware(route, ent, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	form := url.Values{"password": {"pw"}}
+	req := httptest.NewRequest("POST", passwordLoginPath, strings.NewReader(form.Encode()))
+	req.Host = route.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.TLS = &tls.ConnectionState{}
+
+	w := httptest.NewRecorder()
+	mw(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == pwSessionCookieName {
+			if !c.Secure {
+				t.Fatal("TLS login was handed a non-Secure cookie via client-sent X-Forwarded-Proto")
+			}
+			return
+		}
+	}
+	t.Fatal("no session cookie set")
+}
+
+// The Anywhere POP forwarder calls ingress.ServeHTTP in-process under
+// whatever ingress.mode the listener uses, so its scheme has to arrive via
+// the context rather than the header trust gate. A login on that path must
+// get a Secure cookie even with proxy headers untrusted and no TLS on the
+// request itself.
+func TestPasswordMiddlewareHonorsOriginSchemeFromContext(t *testing.T) {
+	srv := newPasswordTestServer()
+	srv.config.TrustProxyHeaders = false
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	route := &ingress_v1alpha.HttpRoute{Host: "app.example.com"}
+	ent := makePasswordProviderEntity("test/pw", string(hash))
+
+	mw := srv.passwordMiddleware(route, ent, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	form := url.Values{"password": {"pw"}}
+	req := httptest.NewRequest("POST", passwordLoginPath, strings.NewReader(form.Encode()))
+	req.Host = route.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = req.WithContext(WithOriginScheme(req.Context(), "https"))
+
+	w := httptest.NewRecorder()
+	mw(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == pwSessionCookieName {
+			if !c.Secure {
+				t.Fatal("login via trusted in-process proxy was handed a non-Secure cookie")
+			}
+			return
+		}
+	}
+	t.Fatal("no session cookie set")
 }

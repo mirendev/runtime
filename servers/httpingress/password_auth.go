@@ -211,7 +211,7 @@ func (s *Server) getOrCreatePasswordHandler(route *ingress_v1alpha.HttpRoute, ba
 
 func (s *Server) passwordMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity entity.AttrGetter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scheme := requestScheme(r)
+		scheme := s.requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 		handler, err := s.getOrCreatePasswordHandler(route, baseURL, providerEntity)

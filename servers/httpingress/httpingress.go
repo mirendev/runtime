@@ -83,6 +83,12 @@ type IngressConfig struct {
 	WorkloadIssuer *workloadidentity.Issuer
 	// Instance, when set, adds process identity and readiness to /health.
 	Instance *serverinfo.Source
+	// TrustProxyHeaders honors X-Forwarded-Proto and Forwarded from the peer
+	// when deciding a request's original scheme. Only set this when every
+	// connection comes from a proxy that overwrites those headers; a client
+	// that can reach the listener directly could otherwise downgrade its own
+	// auth cookies to non-Secure.
+	TrustProxyHeaders bool
 }
 
 type Server struct {
@@ -1123,13 +1129,13 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			outReq.URL.Scheme = targetParsed.Scheme
 			outReq.URL.Host = targetParsed.Host
 
-			// Set X-Forwarded-Proto to indicate the original protocol
-			if req.TLS == nil {
-				outReq.Header.Set("X-Forwarded-Proto", "http")
-			} else {
-				outReq.Header.Set("X-Forwarded-Proto", "https")
-			}
-
+			// Tell the app the original protocol. Same trust rules as auth:
+			// a front proxy's header counts only under behind-proxy-http.
+			// The Director path of the reverse proxy doesn't strip inbound
+			// forwarding headers, so drop the client's Forwarded ourselves;
+			// the X-Forwarded-* values below overwrite theirs.
+			outReq.Header.Del("Forwarded")
+			outReq.Header.Set("X-Forwarded-Proto", h.requestScheme(req))
 			outReq.Header.Set("X-Forwarded-Host", req.Host)
 
 			// Mark this as a public request (strip any client-provided value first)

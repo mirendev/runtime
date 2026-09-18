@@ -278,30 +278,6 @@ func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]any) {
 	}
 }
 
-// requestScheme determines the scheme of the incoming request by checking
-// proxy headers (X-Forwarded-Proto, Forwarded), the TLS state, and
-// falling back to http.
-func requestScheme(r *http.Request) string {
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		return proto
-	}
-
-	if fwd := r.Header.Get("Forwarded"); fwd != "" {
-		for part := range strings.SplitSeq(fwd, ";") {
-			part = strings.TrimSpace(part)
-			if after, ok := strings.CutPrefix(part, "proto="); ok {
-				return after
-			}
-		}
-	}
-
-	if r.TLS != nil {
-		return "https"
-	}
-
-	return "http"
-}
-
 // sessionManagerFor returns the session manager an auth handler for baseURL
 // should use. Handlers are cached per (host, scheme) via baseURL, so the
 // Secure flag is fixed for the life of the handler: an https handler always
@@ -371,7 +347,7 @@ func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseUR
 
 func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity entity.AttrGetter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scheme := requestScheme(r)
+		scheme := s.requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 		handler, err := s.getOrCreateOIDCHandler(route, baseURL, providerEntity)
