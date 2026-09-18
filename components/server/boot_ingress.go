@@ -67,10 +67,13 @@ func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadC
 		WorkloadIssuer: identity.issuer,
 		Instance:       b.inputs.instance,
 		// This gates the network listener only. behind-proxy-http is the one
-		// mode where a front proxy owns the scheme; under the others Miren
-		// terminates TLS itself and a client-sent X-Forwarded-Proto must be
-		// ignored. The Anywhere POP forwarder is a separate in-process entry
-		// point and passes the scheme via httpingress.WithOriginScheme.
+		// mode where a front proxy terminates TLS and so owns the scheme.
+		// Under tls-autoprovision Miren faces clients directly. Under
+		// behind-proxy-https the proxy is TCP passthrough: it cannot add
+		// headers, so any X-Forwarded-Proto that arrives came from the
+		// client and must be ignored in favor of the connection's own TLS.
+		// The Anywhere POP forwarder is a separate in-process entry point
+		// and passes the scheme via httpingress.WithOriginScheme.
 		TrustProxyHeaders: b.inputs.ingress.GetMode() == serverconfig.IngressModeBehindProxyHTTP,
 	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
 	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
