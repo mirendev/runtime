@@ -485,6 +485,15 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	return nil
 }
 
+// Server is the runner's RPC server, for services that are not part of the
+// sandbox host. It is nil until Start has returned.
+func (r *ClusterAccess) Server() *rpc.Server {
+	if r.state == nil {
+		return nil
+	}
+	return r.state.Server()
+}
+
 func (r *ClusterAccess) Close() error {
 	var errs []error
 	for _, closer := range r.closers {

@@ -210,6 +210,8 @@ func newTestExecutor(t *testing.T, host *fakeHost) (*Executor, *Store) {
 	opts.ReadyTimeout = 200 * time.Millisecond
 	opts.ProbeInterval = 5 * time.Millisecond
 	opts.PathSymlink = ""
+	// The hand-off has its own tests; the rest exercise the executor alone.
+	opts.UpgradeRunners = false
 	ex := NewExecutor(store, opts, slog.Default()).
 		WithDownloader(host).WithInstaller(host).WithRestarter(host).WithProber(host).
 		WithDataBackup(dataBackup{host})
@@ -871,4 +873,122 @@ func TestRecordRestoreAttemptKeepsAbandonment(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got.Abandoned, "a restore that did complete is recorded as such")
 	require.True(t, got.Settled())
+}
+
+func TestUpgradeHandsOffToTheServerForRunners(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	ex, store := newTestExecutor(t, host)
+	ex.opts.UpgradeRunners = true
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "latest"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseUpgradingRunners, got.Phase, got.Error)
+	require.True(t, got.HandedOff())
+	require.False(t, got.Done())
+	require.Nil(t, got.FinishedAt)
+	require.Equal(t, "v2.0.0", got.NewVersion)
+
+	// A second run finds nothing left for the executor to do.
+	again, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseUpgradingRunners, again.Phase)
+	require.Equal(t, 1, host.restarts)
+}
+
+func TestUpgradeAlreadyOnTargetStillHandsOff(t *testing.T) {
+	host := newFakeHost("v2.0.0")
+	ex, store := newTestExecutor(t, host)
+	ex.opts.UpgradeRunners = true
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "latest"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseUpgradingRunners, got.Phase, got.Error)
+	require.Equal(t, 0, host.restarts)
+}
+
+func TestRestartNeverHandsOff(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	ex, store := newTestExecutor(t, host)
+	ex.opts.UpgradeRunners = true
+
+	op := NewOperation(ActionRestart, "test")
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+}
+
+func TestAwaitAdoptionReturnsOnceTheServerClaimsIt(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "latest"
+	op.Phase = PhaseUpgradingRunners
+	require.NoError(t, store.Create(op))
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		claimed, _ := store.Get(op.ID)
+		claimed.DrivenBy = "inst-2"
+		_ = store.Update(claimed)
+	}()
+	got, err := AwaitAdoption(context.Background(), store, op.ID, time.Second, 5*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, "inst-2", got.DrivenBy)
+	require.Equal(t, PhaseUpgradingRunners, got.Phase)
+}
+
+func TestAwaitAdoptionFailsAnOrphanedHandOff(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "latest"
+	op.Phase = PhaseUpgradingRunners
+	op.NewVersion = "v0.1.0"
+	require.NoError(t, store.Create(op))
+
+	got, err := AwaitAdoption(context.Background(), store, op.ID, 30*time.Millisecond, 5*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "did not take over the runner upgrades")
+	require.Contains(t, got.Error, "v0.1.0")
+	stored, err := store.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, stored.Phase)
+	require.NotNil(t, stored.FinishedAt)
+}
+
+func TestAwaitAdoptionOutlastsAServerMidClaim(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	require.NoError(t, err)
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "latest"
+	op.Phase = PhaseUpgradingRunners
+	require.NoError(t, store.Create(op))
+
+	// The server takes the lock before the deadline and writes its claim
+	// only after it: what the executor sees at the deadline is a locked,
+	// still-unclaimed record.
+	unlock, err := store.LockOperation(op.ID)
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		claimed, _ := store.Get(op.ID)
+		claimed.DrivenBy = "inst-2"
+		_ = store.Update(claimed)
+		unlock()
+	}()
+	got, err := AwaitAdoption(context.Background(), store, op.ID, 20*time.Millisecond, 5*time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, PhaseUpgradingRunners, got.Phase, got.Error)
+	require.Equal(t, "inst-2", got.DrivenBy)
 }

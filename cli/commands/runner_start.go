@@ -64,6 +64,14 @@ func RunnerStart(ctx *Context, opts struct {
 	if err := reconcileRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
 		return err
 	}
+	if cfg.ListenAddress != listenAddr {
+		// Not fatal: the runner serves either way. Only the lifecycle
+		// executor reads this, and it says so when it is missing.
+		cfg.ListenAddress = listenAddr
+		if err := cfg.Save(opts.ConfigPath); err != nil {
+			ctx.Log.Warn("could not record listen address in runner config", "path", opts.ConfigPath, "error", err)
+		}
+	}
 
 	// Create clientconfig from saved certs for RPC authentication
 	clientCfg := clientconfig.NewConfig()

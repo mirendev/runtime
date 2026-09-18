@@ -45,6 +45,8 @@ func (h *containerHost) launcher(t *testing.T) *ContainerLauncher {
 		opts.ReadyTimeout = 200 * time.Millisecond
 		opts.ProbeInterval = 5 * time.Millisecond
 		opts.PathSymlink = ""
+		// The hand-off has its own tests; these exercise the executor alone.
+		opts.UpgradeRunners = false
 		return NewExecutor(h.store, opts, slog.Default()).
 			WithDownloader(h.fakeHost).WithInstaller(h.fakeHost).WithDataBackup(dataBackup{h.fakeHost}).
 			WithRestarter(ContainerRestarter{Shutdown: h.shutdown}).
@@ -199,6 +201,25 @@ func TestContainerResumeWithNothingPendingIsANoop(t *testing.T) {
 	require.NoError(t, launcher.Resume(context.Background(), host.store))
 	launcher.Wait()
 	require.Equal(t, 0, host.shutdowns)
+}
+
+// An upgrade the executor handed to the runner walk is not the executor's
+// to resume; the upgrader in the new instance adopts it from the ledger.
+func TestContainerResumeLeavesAHandedOffUpgradeToTheUpgrader(t *testing.T) {
+	host := newContainerHost(t, "v1.0.0")
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "v2.0.0"
+	op.Phase = PhaseUpgradingRunners
+	require.NoError(t, host.store.Create(op))
+
+	built := 0
+	launcher := NewContainerLauncher(context.Background(), slog.Default(), func() (*Executor, error) {
+		built++
+		return nil, errors.New("should not be built")
+	})
+	require.NoError(t, launcher.Resume(context.Background(), host.store))
+	launcher.Wait()
+	require.Equal(t, 0, built)
 }
 
 // A shutdown request that fails leaves the server running on purpose; the

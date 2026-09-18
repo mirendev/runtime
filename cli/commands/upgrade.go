@@ -13,8 +13,8 @@ import (
 // Upgrade upgrades the server and then the CLI on a systemd server host, and
 // just the CLI anywhere else.
 func Upgrade(ctx *Context, opts struct {
-	Version string `short:"V" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0)"`
-	Channel string `long:"channel" description:"Channel to use: 'latest' (stable releases, default) or 'main' (bleeding edge)"`
+	Version string `short:"V" long:"version" description:"Specific version to upgrade to (e.g., v0.2.0). A runner host defaults to its coordinator's build"`
+	Channel string `long:"channel" description:"Channel to use: 'latest' (stable releases, the default except on a runner host) or 'main' (bleeding edge)"`
 	Check   bool   `short:"c" long:"check" description:"Check for available updates only"`
 	Force   bool   `short:"f" long:"force" description:"Upgrade even if already up to date; without root, upgrade only the CLI even though a server is running"`
 	User    bool   `short:"u" long:"user" description:"Install the CLI to ~/.miren/release/miren instead of the system location"`
@@ -28,42 +28,62 @@ func Upgrade(ctx *Context, opts struct {
 		return fmt.Errorf("failed to resolve binary path: %w", err)
 	}
 
-	version, err := resolveVersionChannel(opts.Version, opts.Channel)
+	// Detection needs no privileges; acting on it does. A host runs one
+	// daemon or the other; the server is also a sandbox host in standalone
+	// mode, so it wins if both units happen to be active.
+	daemon, daemonRunning := runningDaemon()
+
+	// The daemon's target is only wanted on the paths that check or act on
+	// it. A runner's comes from the coordinator, which takes the runner's
+	// own config to ask, and a CLI-only upgrade should not need that.
+	targetFor := daemon
+	if !opts.Check && (opts.User || os.Geteuid() != 0) {
+		targetFor = lifecycleDaemon{}
+	}
+	version, exact, err := daemonTarget(ctx, targetFor, opts.Version, opts.Channel)
 	if err != nil {
 		return err
 	}
 
-	// Detection needs no privileges; acting on it does.
-	serverRunning := release.IsServerRunning()
-	serverOpts := release.DefaultManagerOptions()
-
 	if opts.Check {
-		if serverRunning {
-			return checkServerUpgrade(ctx, version, serverOpts)
+		if daemonRunning {
+			return checkDaemonUpgrade(ctx, daemon, version, exact)
 		}
 		return checkCLIUpgrade(ctx, version, exe)
 	}
 
-	if serverRunning && !opts.User {
+	if daemonRunning && !opts.User {
 		if os.Geteuid() != 0 {
 			if !opts.Force {
-				return errors.New("a miren server is running on this machine; re-run with sudo to upgrade it and the CLI together (or --force to upgrade only this CLI)")
+				return fmt.Errorf("a miren %s is running on this machine; re-run with sudo to upgrade it and the CLI together (or --force to upgrade only this CLI)", daemon.name)
 			}
-			ctx.Warn("Upgrading only the CLI; the running server needs 'sudo miren upgrade'.")
+			ctx.Warn("Upgrading only the CLI; the running %s needs 'sudo miren upgrade'.", daemon.name)
 			return upgradeCLI(ctx, version, exe, opts.Force, false)
 		}
-		return upgradeServerAndCLI(ctx, version, exe, opts.Force, serverOpts, nil)
+		return upgradeDaemonAndCLI(ctx, daemon, version, exact, exe, opts.Force, nil)
 	}
 
 	return upgradeCLI(ctx, version, exe, opts.Force, opts.User)
 }
 
-// upgradeServerAndCLI runs one operation for the server, then brings the
-// invoking CLI binary onto the same build without a second download.
-func upgradeServerAndCLI(ctx *Context, version, exe string, force bool, serverOpts release.ManagerOptions, customize func(*serverlifecycle.Operation)) error {
-	current, _ := release.NewManager(serverOpts).GetCurrentVersion(ctx)
+// runningDaemon reports which daemon this host runs, if any.
+func runningDaemon() (lifecycleDaemon, bool) {
+	switch {
+	case release.IsServerRunning():
+		return serverDaemon, true
+	case release.IsRunnerRunning():
+		return runnerDaemon, true
+	}
+	return lifecycleDaemon{}, false
+}
 
-	needsUpgrade, err := CheckIfUpgradeNeeded(ctx, version, force, &serverOpts)
+// upgradeDaemonAndCLI runs one operation for the daemon, then brings the
+// invoking CLI binary onto the same build without a second download.
+func upgradeDaemonAndCLI(ctx *Context, daemon lifecycleDaemon, version string, exact bool, exe string, force bool, customize func(*serverlifecycle.Operation)) error {
+	mgrOpts := daemon.manager()
+	current, _ := release.NewManager(mgrOpts).GetCurrentVersion(ctx)
+
+	needsUpgrade, err := upgradeNeededFor(ctx, version, exact, force, &mgrOpts)
 	if err != nil {
 		ctx.Log.Warn("could not check version status", "error", err)
 		needsUpgrade = true
@@ -73,8 +93,8 @@ func upgradeServerAndCLI(ctx *Context, version, exe string, force bool, serverOp
 	if needsUpgrade {
 		op = serverlifecycle.NewOperation(serverlifecycle.ActionUpgrade, "cli")
 		op.TargetVersion = version
-	} else if drifted, err := serverDrifted(ctx, serverOpts); err == nil && drifted {
-		ctx.Info("On-disk binary is current but the running server is older; restarting.")
+	} else if drifted, err := daemonDrifted(ctx, mgrOpts); err == nil && drifted {
+		ctx.Info("On-disk binary is current but the running %s is older; restarting.", daemon.name)
 		op = serverlifecycle.NewOperation(serverlifecycle.ActionRestart, "cli")
 	}
 
@@ -82,35 +102,41 @@ func upgradeServerAndCLI(ctx *Context, version, exe string, force bool, serverOp
 		if customize != nil {
 			customize(op)
 		}
-		ctx.Info("Upgrading server...")
-		result, err := runOperation(ctx, op)
+		ctx.Info("Upgrading %s...", daemon.name)
+		result, err := runOperation(ctx, daemon, op)
 		if err != nil {
 			return err
 		}
 		if !result.Succeeded() {
-			return fmt.Errorf("server upgrade %s: %s", result.Phase, result.Error)
+			return fmt.Errorf("%s upgrade %s: %s", daemon.name, result.Phase, result.Error)
 		}
+		op = result
 	} else {
-		ctx.Info("Server is already up to date.")
+		ctx.Info("%s is already up to date.", daemon.title())
 	}
 
-	if err := syncCLIBinary(ctx, serverOpts.InstallPath, exe); err != nil {
-		return fmt.Errorf("server upgraded, but updating the CLI at %s failed: %w", exe, err)
+	if err := syncCLIBinary(ctx, mgrOpts.InstallPath, exe); err != nil {
+		return fmt.Errorf("%s upgraded, but updating the CLI at %s failed: %w", daemon.name, exe, err)
 	}
 
-	newVersion, _ := release.NewManager(serverOpts).GetCurrentVersion(ctx)
+	newVersion, _ := release.NewManager(mgrOpts).GetCurrentVersion(ctx)
 	ctx.Printf("\nUpgrade successful:\n")
-	ctx.Printf("  Server: %s -> %s (%s)\n", current.Display(), newVersion.Display(), serverOpts.InstallPath)
-	ctx.Printf("  CLI:    %s (%s)\n", newVersion.Display(), exe)
+	ctx.Printf("  %-7s %s -> %s (%s)\n", daemon.title()+":", current.Display(), newVersion.Display(), mgrOpts.InstallPath)
+	ctx.Printf("  %-7s %s (%s)\n", "CLI:", newVersion.Display(), exe)
+	if op != nil {
+		for _, step := range op.Nodes {
+			ctx.Printf("  Runner  %s: %s\n", step.Name, describeStep(step))
+		}
+	}
 	return nil
 }
 
-func serverDrifted(ctx *Context, serverOpts release.ManagerOptions) (bool, error) {
-	running, err := release.GetRunningServiceVersion(serverOpts.ServiceName)
+func daemonDrifted(ctx *Context, mgrOpts release.ManagerOptions) (bool, error) {
+	running, err := release.GetRunningServiceVersion(mgrOpts.ServiceName)
 	if err != nil {
 		return false, err
 	}
-	onDisk, err := release.NewManager(serverOpts).GetCurrentVersion(ctx)
+	onDisk, err := release.NewManager(mgrOpts).GetCurrentVersion(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -163,21 +189,24 @@ func syncCLIBinary(ctx *Context, serverBinary, exe string) error {
 	return nil
 }
 
-func checkServerUpgrade(ctx *Context, version string, serverOpts release.ManagerOptions) error {
-	current, latest, err := CheckVersionStatus(ctx, version, &serverOpts)
+func checkDaemonUpgrade(ctx *Context, daemon lifecycleDaemon, version string, exact bool) error {
+	mgrOpts := daemon.manager()
+	current, latest, err := CheckVersionStatus(ctx, version, &mgrOpts)
 	if err != nil {
 		return err
 	}
 	PrintVersionComparison(current, latest)
-	drift := PrintRunningVersionDrift(serverOpts.ServiceName, current)
+	drift := PrintRunningVersionDrift(mgrOpts.ServiceName, current)
 
 	switch {
+	case exact && !current.Equivalent(latest) && !latest.IsNewer(current):
+		fmt.Printf("\nThis %s is ahead of its coordinator (%s). Run 'sudo miren upgrade' to match it.\n", daemon.name, latest.Version)
 	case latest.IsNewer(current):
 		fmt.Println("\nAn update is available! Run 'sudo miren upgrade' to install it.")
 	case drift:
-		fmt.Println("\nOn-disk binary is current, but the running server is older. Run 'sudo miren upgrade' to restart it.")
+		fmt.Printf("\nOn-disk binary is current, but the running %s is older. Run 'sudo miren upgrade' to restart it.\n", daemon.name)
 	default:
-		fmt.Println("\nYour server is already on the latest version.")
+		fmt.Printf("\nYour %s is already on the latest version.\n", daemon.name)
 	}
 	return nil
 }
