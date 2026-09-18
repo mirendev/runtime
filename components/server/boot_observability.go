@@ -78,6 +78,8 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 
 	runtimeMemory := metrics.NewRuntimeMemory(log, operational)
 	go runtimeMemory.Monitor(ctx)
+	processInfo := metrics.NewProcessInfo(log, operational)
+	go processInfo.Monitor(ctx)
 
 	sandboxMetrics := sandbox.NewMetrics()
 	sandboxMetrics.Log = log
