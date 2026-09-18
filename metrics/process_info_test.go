@@ -104,3 +104,34 @@ func TestProcessInfo_MonitorNilWriterIsNoop(t *testing.T) {
 		t.Fatal("Monitor did not return immediately with a nil Writer")
 	}
 }
+
+// chanWriter is a PointWriter that hands every batch to a channel, so a test
+// can observe pushes as they happen rather than through the HTTP writer.
+type chanWriter struct {
+	batches chan []MetricPoint
+}
+
+func (w *chanWriter) WritePoints(_ context.Context, points []MetricPoint) error {
+	w.batches <- points
+	return nil
+}
+
+func TestProcessInfo_MonitorEmitsBeforeFirstTick(t *testing.T) {
+	writer := &chanWriter{batches: make(chan []MetricPoint, 1)}
+	pi := NewProcessInfo(testLogger(), writer)
+
+	go pi.Monitor(t.Context())
+
+	// defaultProcessInfoInterval is a minute, so a batch arriving within a
+	// second can only be the push Monitor makes before waiting on its ticker.
+	select {
+	case batch := <-writer.batches:
+		names := make([]string, 0, len(batch))
+		for _, p := range batch {
+			names = append(names, p.Name)
+		}
+		assert.ElementsMatch(t, []string{"process_start_time_seconds", "miren_build_info"}, names)
+	case <-time.After(time.Second):
+		t.Fatal("Monitor did not push before its first tick")
+	}
+}
