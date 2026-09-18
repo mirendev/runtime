@@ -257,9 +257,9 @@ func TestGetOrCreateOIDCHandlerCacheInvalidation(t *testing.T) {
 	signingKey := make([]byte, 32)
 
 	srv := &Server{
-		Log:                slog.Default(),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
+		Log:            slog.Default(),
+		sessionManager: oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:   make(map[string]*oidcHandler),
 	}
 
 	providerIdent := "test/oidc-provider"

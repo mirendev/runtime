@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -27,10 +28,10 @@ func newPasswordTestServer() *Server {
 	signingKey := make([]byte, 32)
 
 	return &Server{
-		Log:                slog.Default(),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
-		passwordHandlers:   make(map[string]*passwordHandler),
+		Log:              slog.Default(),
+		sessionManager:   oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:     make(map[string]*oidcHandler),
+		passwordHandlers: make(map[string]*passwordHandler),
 	}
 }
 
@@ -372,4 +373,84 @@ func TestPasswordLoginFlow(t *testing.T) {
 		}
 		t.Error("expected session cookie to be cleared")
 	})
+}
+
+// Regression test for MIR-1734: the Secure flag on an auth cookie must be
+// decided by the scheme of the request that receives it, never by whatever
+// scheme a concurrent request happened to present. Before the fix, every
+// middleware wrote its request's scheme into the one shared SessionManager,
+// so an https login could be handed a non-Secure cookie (and vice versa)
+// whenever an http request was inflight at the same time.
+func TestPasswordMiddlewareSecureFlagIsPerScheme(t *testing.T) {
+	srv := newPasswordTestServer()
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	route := &ingress_v1alpha.HttpRoute{Host: "app.example.com"}
+	ent := makePasswordProviderEntity("test/pw", string(hash))
+
+	mw := srv.passwordMiddleware(route, ent, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	login := func(proto string) *http.Cookie {
+		form := url.Values{"password": {"pw"}}
+		req := httptest.NewRequest("POST", passwordLoginPath, strings.NewReader(form.Encode()))
+		req.Host = route.Host
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-Proto", proto)
+
+		w := httptest.NewRecorder()
+		mw(w, req)
+		if w.Code != http.StatusFound {
+			t.Errorf("%s login: expected 302, got %d", proto, w.Code)
+			return nil
+		}
+		for _, c := range w.Result().Cookies() {
+			if c.Name == pwSessionCookieName {
+				return c
+			}
+		}
+		t.Errorf("%s login: no session cookie set", proto)
+		return nil
+	}
+
+	// Hammer both schemes concurrently so a shared-state regression shows up
+	// as a wrong flag (and, under -race, as a detected race).
+	const rounds = 50
+	results := make(chan struct {
+		proto  string
+		secure bool
+	}, rounds*2)
+
+	var wg sync.WaitGroup
+	for i := 0; i < rounds; i++ {
+		for _, proto := range []string{"https", "http"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if c := login(proto); c != nil {
+					results <- struct {
+						proto  string
+						secure bool
+					}{proto, c.Secure}
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	close(results)
+
+	for r := range results {
+		want := r.proto == "https"
+		if r.secure != want {
+			t.Errorf("%s login got Secure=%v, want %v", r.proto, r.secure, want)
+		}
+	}
+
+	// The two handlers are distinct cache entries with distinct managers,
+	// and neither touched the server's shared instance.
+	hs, _ := srv.getOrCreatePasswordHandler(route, "https://app.example.com", ent)
+	hp, _ := srv.getOrCreatePasswordHandler(route, "http://app.example.com", ent)
+	if hs.sm == hp.sm || hs.sm == srv.sessionManager || hp.sm == srv.sessionManager {
+		t.Error("expected each scheme's handler to hold its own session manager copy")
+	}
 }
