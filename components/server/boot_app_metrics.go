@@ -118,6 +118,13 @@ func (b *appMetricsBoot) start(
 	b.shipping = &metrics.Labeled{Sink: b.shipWriter, Labels: identityLabels}
 	b.operational = observability.operationalMetrics
 	b.operational.Attach(b.shipping)
+	// The identity sample the process pushed at boot only reached the
+	// embedded store, since this sink did not exist yet. Push it again so a
+	// process that dies before its next tick still records its start time
+	// and build where the restart and skew rules can see it.
+	if err := observability.processInfo.Emit(ctx); err != nil {
+		log.Warn("failed to ship control-process identity after attaching shipping sink", "error", err)
+	}
 	log.Info("runtime operational metrics shipping through managed metrics",
 		"cluster", config.ClusterID, "runner", b.inputs.runnerID)
 	return nil
