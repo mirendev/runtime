@@ -92,8 +92,17 @@ Every HTTP request that arrives at Miren generates a trace with spans covering:
 - **httpingress.lease** — Sandbox lease management, including whether a cached lease was used or a cold start was required
 - **RPC calls** — Internal service-to-service communication within Miren
 - **containerd gRPC** — Container operations like image pulls, container creation, and task management
+- **BuildKit** — The embedded build daemon's own spans for each deploy's image build: each solve step, cache lookups, and the image export
 
-The most useful spans for app developers are `httpingress` (overall request latency) and `httpingress.lease` (cold start visibility). The RPC and containerd spans are primarily useful for operators debugging Miren itself.
+The most useful spans for app developers are `httpingress` (overall request latency) and `httpingress.lease` (cold start visibility). The RPC, containerd, and BuildKit spans are primarily useful for operators debugging Miren itself.
+
+### Configuring Miren's own export
+
+Operators turn on Miren's trace export by setting `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` if the collector needs credentials) in the environment of the `miren server` process. Miren always exports over OTLP/HTTP (`http/protobuf`), and it hands the embedded BuildKit daemon the same endpoint with the protocol pinned to match, so the collector only needs to accept HTTP. Setting `OTEL_EXPORTER_OTLP_PROTOCOL` yourself overrides that pin for BuildKit, but Miren's own exporter stays on HTTP regardless, so a gRPC-only collector will never see Miren's spans.
+
+:::note[BuildKit metrics are off by default]
+BuildKit can also push its own OTLP metrics, but most trace backends do not accept them, so Miren disables that exporter unless you opt in. Set `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, or `OTEL_METRICS_EXPORTER=otlp`, if you have somewhere to send them.
+:::
 
 ### Trace Context Propagation
 
