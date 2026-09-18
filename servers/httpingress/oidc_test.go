@@ -1,7 +1,9 @@
 package httpingress
 
 import (
+	"crypto/tls"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -303,5 +305,54 @@ func TestGetOrCreateOIDCHandlerCacheInvalidation(t *testing.T) {
 	}
 	if h1 == h3 {
 		t.Error("expected different handler instance after provider change")
+	}
+}
+
+func TestRequestScheme(t *testing.T) {
+	tlsReq := func(hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.TLS = &tls.ConnectionState{}
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	plainReq := func(hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+
+	for _, tc := range []struct {
+		name  string
+		trust bool
+		req   *http.Request
+		want  string
+	}{
+		// Untrusted: only the connection's own TLS state counts.
+		{"untrusted plain", false, plainReq(nil), "http"},
+		{"untrusted tls", false, tlsReq(nil), "https"},
+		{"untrusted ignores downgrade header over tls", false, tlsReq(map[string]string{"X-Forwarded-Proto": "http"}), "https"},
+		{"untrusted ignores upgrade header over plain", false, plainReq(map[string]string{"X-Forwarded-Proto": "https"}), "http"},
+		{"untrusted ignores Forwarded", false, plainReq(map[string]string{"Forwarded": "for=1.2.3.4;proto=https"}), "http"},
+
+		// Trusted: the proxy's header wins over the (plain) hop to Miren.
+		{"trusted plain no header", true, plainReq(nil), "http"},
+		{"trusted X-Forwarded-Proto https", true, plainReq(map[string]string{"X-Forwarded-Proto": "https"}), "https"},
+		{"trusted X-Forwarded-Proto mixed case", true, plainReq(map[string]string{"X-Forwarded-Proto": "HTTPS"}), "https"},
+		{"trusted Forwarded proto", true, plainReq(map[string]string{"Forwarded": "for=1.2.3.4;proto=https;host=x"}), "https"},
+		{"trusted Forwarded quoted proto", true, plainReq(map[string]string{"Forwarded": `proto="https"`}), "https"},
+		{"trusted X-Forwarded-Proto beats Forwarded", true, plainReq(map[string]string{"X-Forwarded-Proto": "http", "Forwarded": "proto=https"}), "http"},
+		{"trusted junk falls back to connection", true, tlsReq(map[string]string{"X-Forwarded-Proto": "gopher"}), "https"},
+		{"trusted empty falls back to connection", true, plainReq(map[string]string{"X-Forwarded-Proto": ""}), "http"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{config: IngressConfig{TrustProxyHeaders: tc.trust}}
+			if got := s.requestScheme(tc.req); got != tc.want {
+				t.Errorf("requestScheme = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

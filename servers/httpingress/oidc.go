@@ -278,20 +278,17 @@ func (h *oidcHandler) injectClaims(r *http.Request, claims map[string]any) {
 	}
 }
 
-// requestScheme determines the scheme of the incoming request by checking
-// proxy headers (X-Forwarded-Proto, Forwarded), the TLS state, and
-// falling back to http.
-func requestScheme(r *http.Request) string {
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		return proto
-	}
-
-	if fwd := r.Header.Get("Forwarded"); fwd != "" {
-		for part := range strings.SplitSeq(fwd, ";") {
-			part = strings.TrimSpace(part)
-			if after, ok := strings.CutPrefix(part, "proto="); ok {
-				return after
-			}
+// requestScheme reports the scheme the client originally used, "http" or
+// "https". The scheme picks the cached auth handler and decides whether the
+// cookies it emits are Secure, so it has to come from something the client
+// cannot forge: the connection's own TLS state, or, only when the server is
+// configured behind a TLS-terminating proxy, that proxy's X-Forwarded-Proto
+// or Forwarded header. Unrecognized header values are ignored rather than
+// passed through.
+func (s *Server) requestScheme(r *http.Request) string {
+	if s.config.TrustProxyHeaders {
+		if proto, ok := forwardedProto(r); ok {
+			return proto
 		}
 	}
 
@@ -300,6 +297,35 @@ func requestScheme(r *http.Request) string {
 	}
 
 	return "http"
+}
+
+// forwardedProto extracts the scheme a front proxy reported, preferring
+// X-Forwarded-Proto over the RFC 7239 Forwarded header.
+func forwardedProto(r *http.Request) (string, bool) {
+	if proto, ok := normalizeScheme(r.Header.Get("X-Forwarded-Proto")); ok {
+		return proto, true
+	}
+
+	if fwd := r.Header.Get("Forwarded"); fwd != "" {
+		for part := range strings.SplitSeq(fwd, ";") {
+			part = strings.TrimSpace(part)
+			if after, ok := strings.CutPrefix(part, "proto="); ok {
+				return normalizeScheme(strings.Trim(after, `"`))
+			}
+		}
+	}
+
+	return "", false
+}
+
+func normalizeScheme(v string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "http":
+		return "http", true
+	case "https":
+		return "https", true
+	}
+	return "", false
 }
 
 // sessionManagerFor returns the session manager an auth handler for baseURL
@@ -371,7 +397,7 @@ func (s *Server) getOrCreateOIDCHandler(route *ingress_v1alpha.HttpRoute, baseUR
 
 func (s *Server) oidcMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity entity.AttrGetter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scheme := requestScheme(r)
+		scheme := s.requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
 
 		handler, err := s.getOrCreateOIDCHandler(route, baseURL, providerEntity)

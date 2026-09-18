@@ -66,6 +66,10 @@ func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadC
 		DataPath:       b.inputs.dataPath,
 		WorkloadIssuer: identity.issuer,
 		Instance:       b.inputs.instance,
+		// Only behind-proxy-http has a proxy that owns the scheme. Under the
+		// other modes Miren terminates TLS itself, so the connection state is
+		// authoritative and a client-sent X-Forwarded-Proto must be ignored.
+		TrustProxyHeaders: b.inputs.ingress.GetMode() == serverconfig.IngressModeBehindProxyHTTP,
 	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
 	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
 		return ingressBootOutput{}, err
