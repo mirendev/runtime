@@ -72,7 +72,7 @@ func New() *Source {
 	return &Source{
 		instanceID:  idgen.ULID(),
 		startedAt:   time.Now().UTC(),
-		installKind: detectInstallKind(),
+		installKind: DetectInstallKind(),
 	}
 }
 
@@ -121,12 +121,13 @@ func (s *Source) componentsCopy() map[string]string {
 	return maps.Clone(s.components)
 }
 
-// systemd wins over the container check: if systemd started this process,
-// `systemctl restart` works wherever that systemd lives (including a
-// systemd-in-docker test host). A container install is only one that came
+// DetectInstallKind reports how this process is supervised, from the
+// environment alone. systemd wins over the container check: if systemd
+// started this process, `systemctl restart` works wherever that systemd lives
+// (including a systemd-in-docker test host). A container install is only one that came
 // through container-boot; anything else in a container is unknown, and
 // unknown gets a clear refusal rather than a restart nothing brings back.
-func detectInstallKind() InstallKind {
+func DetectInstallKind() InstallKind {
 	if os.Getenv("INVOCATION_ID") != "" {
 		return InstallKindSystemd
 	}

@@ -96,3 +96,34 @@ func symlinkPointsInto(linkPath, dir string) bool {
 	dir = filepath.Clean(dir)
 	return tgt == dir || strings.HasPrefix(tgt, dir+string(os.PathSeparator))
 }
+
+// HealPathSymlink is EnsurePathSymlink for a long-running process: it points
+// linkPath at installPath only when exe is (or resolves to) installPath, so a
+// dev build or a copy run out of $HOME never claims the on-$PATH launcher.
+// healed reports whether anything changed, so callers can log the heal
+// without logging every boot.
+func HealPathSymlink(exe, installPath, linkPath string) (healed bool, err error) {
+	if !sameFile(exe, installPath) {
+		return false, nil
+	}
+	if sameFile(linkPath, installPath) {
+		return false, nil
+	}
+	if err := EnsurePathSymlink(installPath, linkPath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// sameFile reports whether a and b name the same file once symlinks resolve.
+func sameFile(a, b string) bool {
+	ra, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	rb, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		return false
+	}
+	return ra == rb
+}
