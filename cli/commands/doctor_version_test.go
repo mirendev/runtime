@@ -220,6 +220,29 @@ func TestVersionCheckTable(t *testing.T) {
 			wantActions: []string{"miren upgrade"},
 		},
 		{
+			// `miren upgrade` targets stable, so it can't close a gap to or
+			// from a prerelease; the skew is a fact, not advice.
+			name:        "prerelease server ahead without latest",
+			env:         withoutLatest(versionEnv("v0.15.0", ready("v0.16.0-rc1"), nil), errors.New("offline")),
+			wantStatus:  checkOK,
+			wantSummary: "CLI v0.15.0, server v0.16.0-rc1, latest unknown (offline) (prerelease skew)",
+		},
+		{
+			name:        "prerelease cli ahead without latest",
+			env:         withoutLatest(versionEnv("v0.16.0-rc1", ready("v0.15.0"), nil), errors.New("offline")),
+			wantStatus:  checkOK,
+			wantSummary: "CLI v0.16.0-rc1, server v0.15.0, latest unknown (offline) (prerelease skew)",
+		},
+		{
+			// A prerelease behind the stable release is what `miren upgrade`
+			// exists for, so that gap keeps its advice.
+			name:        "prerelease cli behind a stable server without latest",
+			env:         withoutLatest(versionEnv("v0.15.0-rc1", ready("v0.15.0"), nil), errors.New("offline")),
+			wantStatus:  checkWarn,
+			wantSummary: "CLI v0.15.0-rc1, server v0.15.0, latest unknown (offline)",
+			wantActions: []string{"miren upgrade"},
+		},
+		{
 			name:        "dev builds differ without latest",
 			env:         withoutLatest(versionEnv("main:abc1234", ready("main:def5678"), nil), errors.New("offline")),
 			wantStatus:  checkOK,

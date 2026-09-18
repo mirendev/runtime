@@ -124,6 +124,15 @@ func checkVersion(env *doctorEnv) checkResult {
 		}
 	}
 
+	// Being behind a prerelease is a fact with no fix: `miren upgrade` targets
+	// stable, so it would do nothing about that gap. Being behind a stable
+	// release is still worth the advice, whichever side is the prerelease.
+	prereleaseAhead := (skew == skewServerBehind && isPrerelease(cli)) ||
+		(skew == skewCLIBehind && isPrerelease(server))
+	if prereleaseAhead {
+		return checkResult{Status: checkOK, Summary: summary + " (prerelease skew)"}
+	}
+
 	switch skew {
 	case skewServerBehind:
 		return checkResult{
@@ -169,6 +178,11 @@ func serverVersionInfo(env *doctorEnv) (release.VersionInfo, bool) {
 
 func metadataVersionInfo(m *release.Metadata) release.VersionInfo {
 	return release.VersionInfo{Version: m.Version, Commit: m.Commit, BuildDate: m.BuildDate}
+}
+
+func isPrerelease(v release.VersionInfo) bool {
+	sem, err := release.ParseSemVer(v.Version)
+	return err == nil && sem.IsPrerelease()
 }
 
 func versionKnown(v release.VersionInfo) bool {
