@@ -47,9 +47,9 @@ type EventType int
 const (
 	// EventSync delivers a full snapshot of the index: Entities holds the
 	// complete current set and Rev is the revision it was read at. Emitted on
-	// initial sync and again after a compaction or resync. Consumers reconcile
-	// their own state against Entities (replace their cache; treat any id no
-	// longer present as removed).
+	// initial sync and again after a compaction. Consumers reconcile their own
+	// state against Entities (replace their cache; treat any id no longer present
+	// as removed).
 	EventSync EventType = iota
 	// EventAdded indicates a live create.
 	EventAdded
@@ -98,11 +98,6 @@ type Event struct {
 type Options struct {
 	// Logger receives operational logs. Defaults to slog.Default().
 	Logger *slog.Logger
-
-	// ResyncPeriod, when > 0, forces a periodic fresh snapshot even while the
-	// watch is healthy, as belt-and-suspenders drift correction. Defaults to 0
-	// (disabled); revision-resume makes it unnecessary in normal operation.
-	ResyncPeriod time.Duration
 
 	// MinBackoff is the initial delay between reconnect attempts. Defaults to
 	// 1 second.
@@ -283,8 +278,8 @@ func (w *Watcher) closeUpdates() {
 }
 
 // run is the main loop. It maintains the revision cursor, snapshots when needed
-// (initially and after a compaction or resync), and otherwise resumes the watch
-// from the cursor on every reconnect.
+// (initially and after a compaction), and otherwise resumes the watch from the
+// cursor on every reconnect.
 func (w *Watcher) run(ctx context.Context) {
 	w.log.Info("starting index watch", "value", w.index.Value)
 	defer w.log.Info("index watch stopped")
@@ -320,7 +315,7 @@ func (w *Watcher) run(ctx context.Context) {
 			return
 		}
 		if resnapshot {
-			// Compaction or periodic resync: take a fresh snapshot, no backoff.
+			// Compaction: take a fresh snapshot, no backoff.
 			needSnapshot = true
 			backoff = w.opts.MinBackoff
 			continue
@@ -363,19 +358,12 @@ func (w *Watcher) snapshot(ctx context.Context) (int64, error) {
 
 // watch establishes a single WatchIndex stream resuming from cursor+1 and
 // forwards live events until it ends. It returns resnapshot=true when the caller
-// should take a fresh snapshot (compaction, or the resync timer firing), and an
-// error for a transient failure the caller should resume from after backoff.
+// should take a fresh snapshot (compaction), and an error for a transient
+// failure the caller should resume from after backoff.
 func (w *Watcher) watch(ctx context.Context) (resnapshot bool, err error) {
-	watchCtx := ctx
-	if w.opts.ResyncPeriod > 0 {
-		var cancel context.CancelFunc
-		watchCtx, cancel = context.WithTimeout(ctx, w.opts.ResyncPeriod)
-		defer cancel()
-	}
-
 	var compacted bool
 
-	_, werr := w.esc.WatchIndex(watchCtx, w.index, w.cursor+1, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
+	_, werr := w.esc.WatchIndex(ctx, w.index, w.cursor+1, stream.Callback(func(op *entityserver_v1alpha.EntityOp) error {
 		switch op.OperationType() {
 		case entityserver_v1alpha.EntityOperationCompacted:
 			// Cursor too old; end the watch and re-snapshot.
@@ -401,12 +389,6 @@ func (w *Watcher) watch(ctx context.Context) (resnapshot bool, err error) {
 	}))
 
 	if compacted {
-		return true, nil
-	}
-
-	// Resync timer fired while the watcher is still running: force a fresh
-	// snapshot rather than a plain resume.
-	if w.opts.ResyncPeriod > 0 && ctx.Err() == nil && watchCtx.Err() != nil {
 		return true, nil
 	}
 

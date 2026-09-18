@@ -24,6 +24,7 @@ type controllerCounters struct {
 	retries   atomic.Uint64
 	failures  atomic.Uint64
 	writes    atomic.Uint64
+	resyncs   atomic.Uint64
 	inFlight  atomic.Int64
 }
 
@@ -59,6 +60,7 @@ func (c *ReconcileController) writeMetrics(ctx context.Context, now time.Time) {
 		{Name: "reconcile_controller_retries_total", Labels: labels, Value: float64(c.counters.retries.Load()), Timestamp: now},
 		{Name: "reconcile_controller_failures_total", Labels: labels, Value: float64(c.counters.failures.Load()), Timestamp: now},
 		{Name: "reconcile_controller_writes_total", Labels: labels, Value: float64(c.counters.writes.Load()), Timestamp: now},
+		{Name: "reconcile_controller_resyncs_total", Labels: labels, Value: float64(c.counters.resyncs.Load()), Timestamp: now},
 	}
 	if err := c.metricWriter.WritePoints(ctx, points); err != nil {
 		c.Log.Debug("failed to report controller metrics", "error", err)
