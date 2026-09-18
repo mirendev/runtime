@@ -12,8 +12,14 @@ type originSchemeKey struct{}
 // trusted in-process proxy that terminated their TLS (the Anywhere POP
 // forwarder). requestScheme honors it ahead of headers and connection state,
 // so it must only ever be set from code paths a client cannot reach directly.
+// Anything other than http or https is not recorded, so requestScheme falls
+// through to its other sources rather than building a baseURL from junk.
 func WithOriginScheme(ctx context.Context, scheme string) context.Context {
-	return context.WithValue(ctx, originSchemeKey{}, scheme)
+	normalized, ok := normalizeScheme(scheme)
+	if !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, originSchemeKey{}, normalized)
 }
 
 // requestScheme reports the scheme the client originally used, "http" or

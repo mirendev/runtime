@@ -2,7 +2,6 @@ package anywhere
 
 import (
 	"log/slog"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -151,28 +150,5 @@ func TestServePOPCleanupSkipsReplacedEntry(t *testing.T) {
 
 	if survivor != newPC {
 		t.Fatal("old goroutine's cleanup deleted the replacement entry")
-	}
-}
-
-func TestPopOriginScheme(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		xfp  string
-		want string
-	}{
-		{"POP reports https", "https", "https"},
-		{"POP reports http", "http", "http"},
-		{"absent defaults to https", "", "https"},
-		{"garbage defaults to https", "gopher", "https"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/", nil)
-			if tc.xfp != "" {
-				r.Header.Set("X-Forwarded-Proto", tc.xfp)
-			}
-			if got := popOriginScheme(r); got != tc.want {
-				t.Errorf("popOriginScheme = %q, want %q", got, tc.want)
-			}
-		})
 	}
 }

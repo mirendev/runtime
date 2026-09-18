@@ -1,6 +1,7 @@
 package httpingress
 
 import (
+	"context"
 	"crypto/tls"
 	"log/slog"
 	"net/http"
@@ -369,6 +370,22 @@ func TestRequestScheme(t *testing.T) {
 		r = r.WithContext(WithOriginScheme(r.Context(), "https"))
 		if got := s.requestScheme(r); got != "https" {
 			t.Errorf("requestScheme = %q, want https", got)
+		}
+	})
+
+	t.Run("origin scheme is normalized", func(t *testing.T) {
+		s := &Server{}
+		r := plainReq(nil).WithContext(WithOriginScheme(context.Background(), " HTTPS "))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https", got)
+		}
+	})
+
+	t.Run("invalid origin scheme is not recorded", func(t *testing.T) {
+		s := &Server{}
+		r := tlsReq(nil).WithContext(WithOriginScheme(context.Background(), ""))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https from connection", got)
 		}
 	})
 }

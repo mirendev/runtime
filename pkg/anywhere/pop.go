@@ -313,27 +313,17 @@ func (m *POPManager) newForwardingHandler(popXID string) http.Handler {
 
 		// Forward via the HTTP ingress proxy handler, which handles
 		// hostname-based routing, lease management, and app activation.
-		// The POP terminated the visitor's TLS, so it, not this hop, knows
-		// the original scheme; hand that to the ingress explicitly rather
-		// than relying on ingress.mode (which describes the local listener,
-		// not this path) or on the QUIC connection's TLS state.
-		proxyReq := r.Clone(httpingress.WithOriginScheme(r.Context(), popOriginScheme(r)))
+		// The POP only serves visitors over TLS, so their scheme is always
+		// https. Say so explicitly rather than relying on ingress.mode (which
+		// describes the local listener, not this path), on the QUIC
+		// connection's TLS state, or on headers the POP forwards.
+		proxyReq := r.Clone(httpingress.WithOriginScheme(r.Context(), "https"))
 		proxyReq.Host = hostname
 		proxyReq.URL.Host = hostname
 		proxyReq.URL.Scheme = "https"
 
 		m.ingress.ServeHTTP(w, proxyReq)
 	})
-}
-
-// popOriginScheme reports the scheme the visitor used at the POP. The POP
-// forwards it in X-Forwarded-Proto; when absent, https is assumed because
-// the POP only serves visitors over TLS.
-func popOriginScheme(r *http.Request) string {
-	if proto, ok := httpingress.ForwardedProto(r); ok {
-		return proto
-	}
-	return "https"
 }
 
 // newWSTunnelHandler returns an http.Handler for POST /_pop/ws that
