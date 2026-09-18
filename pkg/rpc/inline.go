@@ -210,13 +210,13 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	})
 	if err != nil {
 		shouldReturn = false
-		return err
+		return callErr(ctx, err)
 	}
 
 	err = conn.enc.Encode(args)
 	if err != nil {
 		shouldReturn = false
-		return err
+		return callErr(ctx, err)
 	}
 
 	var rr refResponse
@@ -224,7 +224,7 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	err = conn.dec.Decode(&rr)
 	if err != nil {
 		shouldReturn = false
-		return c.readErr(ctx, err)
+		return callErr(ctx, err)
 	}
 
 	switch rr.Status {
@@ -233,7 +233,7 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	case "ok":
 		if err := conn.dec.Decode(ret); err != nil {
 			shouldReturn = false
-			return c.readErr(ctx, err)
+			return callErr(ctx, err)
 		}
 		return nil
 	default:
@@ -245,10 +245,12 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	}
 }
 
-// readErr maps a failed Decode back to the caller's context error when the
-// read was aborted by our own CancelRead, so callers see a context error
-// rather than a transport-specific stream-cancel error.
-func (c *inlineClient) readErr(ctx context.Context, err error) error {
+// callErr maps a failed Encode or Decode back to the caller's context error
+// when our own CancelRead is what aborted it, so callers see a context error
+// rather than a transport-specific stream-cancel error. Writes need it too:
+// on msgStream, CancelRead fails the write side as well, so a cancellation
+// that lands before the request is sent surfaces from Encode.
+func callErr(ctx context.Context, err error) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
