@@ -59,24 +59,6 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren doctor",
 		}),
 	))
-	d.Dispatch("doctor config", Infer("doctor config", "Check configuration files", DoctorConfig,
-		WithExample(mflags.Example{
-			Name: "Check config files",
-			Body: "miren doctor config",
-		}),
-	))
-	d.Dispatch("doctor server", Infer("doctor server", "Check server health and connectivity", DoctorServer,
-		WithExample(mflags.Example{
-			Name: "Check server connectivity",
-			Body: "miren doctor server",
-		}),
-	))
-	d.Dispatch("doctor auth", Infer("doctor auth", "Check authentication and user information", DoctorAuth,
-		WithExample(mflags.Example{
-			Name: "Check authentication",
-			Body: "miren doctor auth",
-		}),
-	))
 
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init,

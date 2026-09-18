@@ -1,10 +1,124 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
+	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/ui"
 )
+
+type cloudUserInfo struct {
+	User struct {
+		ID    string `json:"id"`
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	} `json:"user"`
+}
+
+func fetchCloudUserInfo(ctx context.Context, cloudURL, token string) (*cloudUserInfo, error) {
+	meURL, err := url.JoinPath(cloudURL, "/api/v1/me")
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", meURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	var info cloudUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+func normalizeAuthServerURL(authServer string) string {
+	if !strings.HasPrefix(authServer, "http://") && !strings.HasPrefix(authServer, "https://") {
+		if strings.Contains(authServer, "localhost") || strings.Contains(authServer, "127.0.0.1") {
+			return "http://" + authServer
+		}
+		return "https://" + authServer
+	}
+	return authServer
+}
+
+type authResult struct {
+	Method       string
+	IdentityName string
+	Claims       *auth.ExtendedClaims
+	UserInfo     *cloudUserInfo
+	// Err is why authentication didn't work. Kept rather than discarded so the
+	// auth check can say "your token expired" instead of the useless "couldn't
+	// authenticate".
+	Err error
+}
+
+// tryAuthenticate attempts to authenticate with the cluster using the configured identity.
+// It returns auth details without printing anything - callers handle display.
+func tryAuthenticate(ctx *Context, cfg *clientconfig.Config, cluster *clientconfig.ClusterConfig) authResult {
+	result := authResult{Method: "none"}
+
+	if cluster.Identity == "" || cfg == nil {
+		return result
+	}
+
+	identity, err := cfg.GetIdentity(cluster.Identity)
+	if err != nil {
+		result.Err = err
+		return result
+	}
+	if identity == nil {
+		result.Err = fmt.Errorf("identity %q is not configured", cluster.Identity)
+		return result
+	}
+
+	result.IdentityName = cluster.Identity
+
+	switch identity.Type {
+	case clientconfig.IdentityKeypair, clientconfig.IdentityToken:
+		authServer := identity.Issuer
+		if authServer == "" {
+			authServer = cluster.Hostname
+		}
+		authServer = normalizeAuthServerURL(authServer)
+
+		token, err := cfg.TokenForIdentity(ctx, cluster.Identity, identity, authServer)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+
+		result.Claims, _ = auth.ParseUnverifiedClaims(token)
+		result.Method = string(identity.Type)
+
+		result.UserInfo, _ = fetchCloudUserInfo(ctx, authServer, token)
+
+	case clientconfig.IdentityCertificate:
+		result.Method = "certificate"
+	}
+
+	return result
+}
 
 // checkAuthentication reports who we're signed in as.
 //
@@ -27,9 +141,11 @@ func checkAuthentication(env *doctorEnv) checkResult {
 		return checkResult{Status: checkSkip, Summary: "(server unreachable)"}
 	}
 
-	res := tryAuthenticate(env.ctx, env.cfg, env.cluster)
-
-	if res.Claims == nil && res.UserInfo == nil {
+	// Method stays "none" when no credential could be established. Claims
+	// alone can't be the test: a certificate identity has no bearer token, so
+	// it never carries claims, and it is signed in all the same.
+	res := env.auth
+	if res.Method == "none" {
 		return checkResult{
 			Status:  checkWarn,
 			Summary: fmt.Sprintf("identity %q isn't usable", env.cluster.Identity),

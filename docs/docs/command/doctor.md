@@ -34,9 +34,3 @@ miren doctor [flags]
 ```bash
 miren doctor
 ```
-
-## Subcommands
-
-- [`miren doctor auth`](./doctor-auth.md) — Check authentication and user information
-- [`miren doctor config`](./doctor-config.md) — Check configuration files
-- [`miren doctor server`](./doctor-server.md) — Check server health and connectivity

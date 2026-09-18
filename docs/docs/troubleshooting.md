@@ -20,15 +20,7 @@ miren doctor
 ```
 </CliCommand>
 
-This checks your configuration, server connectivity, and authentication. It provides context-aware suggestions when it detects issues. You can also run the subcommands individually:
-
-<CliCommand context="client">
-```miren
-miren doctor config   # Check cluster configuration
-miren doctor server   # Check server connectivity
-miren doctor auth     # Check authentication
-```
-</CliCommand>
+This checks your configuration, server connectivity, versions, and authentication, and names the command that fixes anything it finds wrong.
 
 :::tip[Get a combined diagnosis]
 Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to

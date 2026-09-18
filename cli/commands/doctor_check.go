@@ -1,11 +1,14 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"sync"
 
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/ui"
+	"miren.dev/runtime/version"
 )
 
 // checkStatus is the outcome of one diagnostic check.
@@ -51,27 +54,37 @@ type checkResult struct {
 	Problem *ui.Diagnostic
 }
 
-// check is one diagnostic in the sweep. Group lets `miren doctor <group>` run a
-// subset without any of them being a separate implementation.
+// check is one diagnostic in the sweep.
 type check struct {
-	Name  string
-	Group string
-	Run   func(*doctorEnv) checkResult
+	Name string
+	Run  func(*doctorEnv) checkResult
 }
-
-const (
-	groupConfig = "config"
-	groupServer = "server"
-	groupAuth   = "auth"
-)
 
 // doctorEnv is the evidence every check reads from.
 //
 // It is gathered once, up front, and concurrently. Checks are pure functions
 // over it, which is what makes the verdict logic testable without a cluster:
 // the probes are data, not calls.
+//
+// The evidence comes in scopes, gathered independently so that none of them
+// depends on the others having worked. What this binary is doesn't depend on
+// which cluster is selected, and neither does whether a server is running on
+// this machine.
 type doctorEnv struct {
 	ctx *Context
+
+	// CLI scope: this binary, and the newest release it could become.
+
+	cliVersion version.Info
+
+	// latest is the metadata of the "latest" channel, the target `miren
+	// upgrade` installs by default. latestErr means the asset service could
+	// not be asked, which is a fact about the network rather than about the
+	// install.
+	latest    *release.Metadata
+	latestErr error
+
+	// Cluster scope: the selected cluster.
 
 	cfg          *clientconfig.Config
 	cluster      *clientconfig.ClusterConfig
@@ -99,6 +112,9 @@ type doctorEnv struct {
 	// server is too old to answer".
 	serverVersion    *serverVersion
 	serverVersionErr error
+
+	// auth is only attempted when the cluster names an identity.
+	auth authResult
 }
 
 // local reports whether the active cluster runs on this machine, which decides
@@ -111,15 +127,36 @@ func (e *doctorEnv) configured() bool {
 	return e.cfg != nil && e.clusterCount > 0 && e.cluster != nil
 }
 
-// gatherDoctorEnv collects everything the checks need. The three network probes
-// are independent, so they run concurrently: doing them in sequence made the
-// all-down case take twice as long as its slowest probe.
+// gatherDoctorEnv collects everything the checks need. The scopes are
+// independent and so are most of the probes within them, so everything that
+// touches the network or a subprocess runs concurrently: in sequence, the
+// all-down case took the sum of every timeout instead of the longest one.
 func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 	env := &doctorEnv{ctx: ctx}
 
+	var wg sync.WaitGroup
+	wg.Go(func() { gatherCLI(ctx, env) })
+	wg.Go(func() { gatherCluster(ctx, opts, env) })
+	wg.Wait()
+
+	return env
+}
+
+func gatherCLI(ctx context.Context, env *doctorEnv) {
+	env.cliVersion = version.GetInfo()
+
+	// The downloader's own timeout is sized for pulling a release, not for a
+	// health sweep. The probe timeout keeps an unreachable asset service from
+	// holding up every other row.
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	env.latest, env.latestErr = release.NewDownloader().GetVersionMetadata(ctx, "latest")
+}
+
+func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 	env.cfg, env.configErr = opts.LoadConfig()
 	if env.configErr != nil && !errors.Is(env.configErr, clientconfig.ErrNoConfig) {
-		return env
+		return
 	}
 
 	if env.cfg != nil {
@@ -136,63 +173,46 @@ func gatherDoctorEnv(ctx *Context, opts ConfigCentric) *doctorEnv {
 	}
 
 	if env.cluster == nil {
-		return env
+		return
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(4)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		client, err := ctx.RPCClient("entities")
 		if err == nil && client != nil {
 			defer client.Close()
 		}
 		env.connErr = err
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		env.serverVersion, env.serverVersionErr = fetchServerVersion(ctx)
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		env.tcp = probeTCP(env.cluster.Hostname)
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		env.udp = probeQUIC(env.cluster.Hostname)
-	}()
+	})
+
+	if env.cluster.Identity != "" {
+		wg.Go(func() {
+			env.auth = tryAuthenticate(ctx, env.cfg, env.cluster)
+		})
+	}
 
 	wg.Wait()
-
-	return env
 }
 
-// doctorChecks is the registry. `miren doctor` runs all of it; the subcommands
-// filter by group.
+// doctorChecks is the registry, in the order the rows are printed.
 func doctorChecks() []check {
 	return []check{
-		{Name: "Configuration", Group: groupConfig, Run: checkConfiguration},
-		{Name: "Server", Group: groupServer, Run: checkServer},
-		{Name: "Version", Group: groupServer, Run: checkVersion},
-		{Name: "Authentication", Group: groupAuth, Run: checkAuthentication},
+		{Name: "Configuration", Run: checkConfiguration},
+		{Name: "Server", Run: checkServer},
+		{Name: "Version", Run: checkVersion},
+		{Name: "Authentication", Run: checkAuthentication},
 	}
-}
-
-func checksForGroup(group string) []check {
-	all := doctorChecks()
-	if group == "" {
-		return all
-	}
-
-	var out []check
-	for _, c := range all {
-		if c.Group == group {
-			out = append(out, c)
-		}
-	}
-	return out
 }
