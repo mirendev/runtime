@@ -347,6 +347,10 @@ func TestRequestScheme(t *testing.T) {
 		{"trusted X-Forwarded-Proto beats Forwarded", true, plainReq(map[string]string{"X-Forwarded-Proto": "http", "Forwarded": "proto=https"}), "http"},
 		{"trusted junk falls back to connection", true, tlsReq(map[string]string{"X-Forwarded-Proto": "gopher"}), "https"},
 		{"trusted empty falls back to connection", true, plainReq(map[string]string{"X-Forwarded-Proto": ""}), "http"},
+
+		// Chained proxies append; the first element is the client-facing hop.
+		{"trusted chained X-Forwarded-Proto", true, plainReq(map[string]string{"X-Forwarded-Proto": "https, http"}), "https"},
+		{"trusted chained Forwarded", true, plainReq(map[string]string{"Forwarded": "for=1.1.1.1;proto=https, for=2.2.2.2;proto=http"}), "https"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Server{config: IngressConfig{TrustProxyHeaders: tc.trust}}
@@ -355,4 +359,16 @@ func TestRequestScheme(t *testing.T) {
 			}
 		})
 	}
+
+	// A trusted in-process proxy (the Anywhere POP forwarder) stamps the
+	// scheme on the context, and that wins regardless of mode, headers, or
+	// connection state.
+	t.Run("origin scheme from context wins", func(t *testing.T) {
+		s := &Server{config: IngressConfig{TrustProxyHeaders: false}}
+		r := plainReq(map[string]string{"X-Forwarded-Proto": "http"})
+		r = r.WithContext(WithOriginScheme(r.Context(), "https"))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https", got)
+		}
+	})
 }

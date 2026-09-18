@@ -498,3 +498,43 @@ func TestPasswordMiddlewareIgnoresForwardedProtoWhenUntrusted(t *testing.T) {
 	}
 	t.Fatal("no session cookie set")
 }
+
+// The Anywhere POP forwarder calls ingress.ServeHTTP in-process under
+// whatever ingress.mode the listener uses, so its scheme has to arrive via
+// the context rather than the header trust gate. A login on that path must
+// get a Secure cookie even with proxy headers untrusted and no TLS on the
+// request itself.
+func TestPasswordMiddlewareHonorsOriginSchemeFromContext(t *testing.T) {
+	srv := newPasswordTestServer()
+	srv.config.TrustProxyHeaders = false
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
+	route := &ingress_v1alpha.HttpRoute{Host: "app.example.com"}
+	ent := makePasswordProviderEntity("test/pw", string(hash))
+
+	mw := srv.passwordMiddleware(route, ent, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	form := url.Values{"password": {"pw"}}
+	req := httptest.NewRequest("POST", passwordLoginPath, strings.NewReader(form.Encode()))
+	req.Host = route.Host
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req = req.WithContext(WithOriginScheme(req.Context(), "https"))
+
+	w := httptest.NewRecorder()
+	mw(w, req)
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d", w.Code)
+	}
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == pwSessionCookieName {
+			if !c.Secure {
+				t.Fatal("login via trusted in-process proxy was handed a non-Secure cookie")
+			}
+			return
+		}
+	}
+	t.Fatal("no session cookie set")
+}

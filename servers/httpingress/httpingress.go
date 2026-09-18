@@ -1131,6 +1131,10 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 
 			// Tell the app the original protocol. Same trust rules as auth:
 			// a front proxy's header counts only under behind-proxy-http.
+			// The Director path of the reverse proxy doesn't strip inbound
+			// forwarding headers, so drop the client's Forwarded ourselves;
+			// the X-Forwarded-* values below overwrite theirs.
+			outReq.Header.Del("Forwarded")
 			outReq.Header.Set("X-Forwarded-Proto", h.requestScheme(req))
 			outReq.Header.Set("X-Forwarded-Host", req.Host)
 
