@@ -104,6 +104,10 @@ Only `behind-proxy-http` trusts `X-Forwarded-Proto` / `Forwarded` from the peer;
 
 The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
 
+:::warning[Widening `behind-proxy-http` off loopback]
+Under `behind-proxy-http`, Miren trusts `X-Forwarded-Proto` from *every* connection to the listener; it does not check the peer address. If you bind to `0.0.0.0`, `[::]`, or any non-loopback address, a firewall or security group must restrict that port to the proxy's addresses. Any other client that can reach it directly can send `X-Forwarded-Proto: http` and be issued auth cookies without the `Secure` flag.
+:::
+
 :::info[Unix socket addresses]
 `unix:/path` is reserved for a future release and rejected today with a clear error.
 :::
