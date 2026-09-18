@@ -41,6 +41,8 @@ func RunnerStart(ctx *Context, opts struct {
 		"coordinator", cfg.CoordinatorAddress,
 		"etcd_endpoints", cfg.EtcdEndpoints)
 
+	healPathSymlinkAtBoot(ctx)
+
 	// Determine listen address. If no explicit address is given, discover the
 	// machine's outbound IP (the one that would route to the coordinator) and
 	// advertise that so the coordinator knows how to reach this runner.

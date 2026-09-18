@@ -38,17 +38,17 @@ func TestSourceReportsComponents(t *testing.T) {
 func TestDetectInstallKind(t *testing.T) {
 	t.Setenv("INVOCATION_ID", "")
 	t.Setenv(ContainerBootEnv, "")
-	if got := detectInstallKind(); got != InstallKindUnknown {
+	if got := DetectInstallKind(); got != InstallKindUnknown {
 		t.Fatalf("with neither marker: got %q, want %q", got, InstallKindUnknown)
 	}
 	t.Setenv(ContainerBootEnv, "1")
-	if got := detectInstallKind(); got != InstallKindContainer {
+	if got := DetectInstallKind(); got != InstallKindContainer {
 		t.Fatalf("under container-boot: got %q, want %q", got, InstallKindContainer)
 	}
 	// systemd wins even inside a container: a systemd-in-docker test host
 	// restarts through systemctl.
 	t.Setenv("INVOCATION_ID", "abc")
-	if got := detectInstallKind(); got != InstallKindSystemd {
+	if got := DetectInstallKind(); got != InstallKindSystemd {
 		t.Fatalf("under systemd: got %q, want %q", got, InstallKindSystemd)
 	}
 }

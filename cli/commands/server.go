@@ -47,6 +47,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// stuck in a memory crashloop never reaches that point.
 	reportPreviousExitEarly(cfg.Server.GetDataPath(), ctx.UILog)
 
+	healPathSymlinkAtBoot(ctx)
+
 	if err := prepareServerConfig(ctx, cfg); err != nil {
 		return err
 	}
