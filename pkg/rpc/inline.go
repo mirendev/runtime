@@ -161,23 +161,38 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	// blocked Read is only unblocked by transport teardown or CancelRead, so
 	// without this a cancelled caller parks in dec.Decode until the peer
 	// finally replies. Mirrors handleCallStream and msgOpTransport.roundTrip.
-	// The watcher is stopped before the stream can go back in the pool, so a
-	// late cancellation never aborts someone else's call on the same stream.
+	//
+	// The watcher must be fully retired before the stream can go back in the
+	// pool. Signalling it is not enough: if ctx fires in the same instant as
+	// cleanup, both cases are ready and select may still take ctx.Done after
+	// the stream has been handed to another caller. So cleanup waits on done,
+	// and a stream the watcher did cancel is closed rather than pooled, since
+	// a cancelled msgStream stays cancelled.
 	stop := make(chan struct{})
+	done := make(chan struct{})
+	fired := false
 	if ctx.Done() != nil {
 		go func() {
+			defer close(done)
 			select {
 			case <-ctx.Done():
+				fired = true
 				conn.stream.CancelRead(cancelReadCode)
 			case <-stop:
 			}
 		}()
+	} else {
+		close(done)
 	}
 
 	// Return stream to pool when done (unless there's an error)
 	shouldReturn := true
 	defer func() {
 		close(stop)
+		<-done
+		if fired {
+			shouldReturn = false
+		}
 		if shouldReturn {
 			c.returnStream(conn)
 		} else {

@@ -65,6 +65,41 @@ func TestInlineClientCallHonorsContext(t *testing.T) {
 	ic.poolMu.Unlock()
 }
 
+// serveInlineOK answers every inline request on every stream the peer accepts
+// with an "ok" response, so the client side can be exercised without a real
+// capability behind it.
+func serveInlineOK(t *testing.T, peer rpcSession) {
+	t.Helper()
+	go func() {
+		for {
+			st, err := peer.AcceptStream(context.Background())
+			if err != nil {
+				return
+			}
+			go func() {
+				dec := cbor.NewDecoder(st)
+				enc := cbor.NewEncoder(st)
+				for {
+					var req streamRequest
+					if err := dec.Decode(&req); err != nil {
+						return
+					}
+					var args cbor.RawMessage
+					if err := dec.Decode(&args); err != nil {
+						return
+					}
+					if err := enc.Encode(refResponse{Status: "ok"}); err != nil {
+						return
+					}
+					if err := enc.Encode(struct{}{}); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+}
+
 // A call that completes normally must leave the stream reusable: the ctx
 // watcher is stopped on return, so cancelling afterwards must not reset a
 // stream that is back in the pool.
@@ -78,19 +113,7 @@ func TestInlineClientCallStopsWatcherOnReturn(t *testing.T) {
 		_ = client.Close()
 		_ = peer.Close()
 	})
-
-	go func() {
-		st, err := peer.AcceptStream(context.Background())
-		if err != nil {
-			return
-		}
-		go func() { _, _ = io.Copy(io.Discard, st) }()
-		enc := cbor.NewEncoder(st)
-		for range 2 {
-			_ = enc.Encode(refResponse{Status: "ok"})
-			_ = enc.Encode(struct{}{})
-		}
-	}()
+	serveInlineOK(t, peer)
 
 	ic := &inlineClient{
 		log:     slog.Default(),
@@ -106,4 +129,39 @@ func TestInlineClientCallStopsWatcherOnReturn(t *testing.T) {
 	// Second call reuses the pooled stream; a leaked watcher from the first
 	// call would have reset it on cancel() and this would fail.
 	r.NoError(ic.Call(t.Context(), "ok", struct{}{}, &out))
+}
+
+// Cancellation landing in the same instant as cleanup must not reach a stream
+// that has already gone back to the pool. Signalling the watcher is not
+// enough: with ctx.Done and stop both ready, select may take ctx.Done after
+// the stream is pooled, and the CancelRead lands on whoever borrows it next.
+// Cancelling right after Call returns puts the watcher in exactly that state,
+// so the next borrower's call is the assertion.
+func TestInlineClientCancelRacingCleanupDoesNotPoisonPool(t *testing.T) {
+	r := require.New(t)
+
+	ca, cb := newMemPipe()
+	client := newMsgSession(ca, true, 0, 0)
+	peer := newMsgSession(cb, false, 0, 0)
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = peer.Close()
+	})
+	serveInlineOK(t, peer)
+
+	ic := &inlineClient{
+		log:     slog.Default(),
+		oid:     OID("cap"),
+		session: client,
+	}
+
+	var out struct{}
+	for i := range 2000 {
+		ctx, cancel := context.WithCancel(t.Context())
+		r.NoError(ic.Call(ctx, "ok", struct{}{}, &out), "iteration %d", i)
+		cancel()
+
+		r.NoError(ic.Call(t.Context(), "ok", struct{}{}, &out),
+			"iteration %d: a stale watcher cancelled the pooled stream", i)
+	}
 }
