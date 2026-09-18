@@ -29,7 +29,7 @@ func TestProcessInfo_Collect(t *testing.T) {
 	pi.Commit = "abc1234def"
 	pi.Channel = "main"
 
-	require.NoError(t, pi.collect(context.Background()))
+	require.NoError(t, pi.Emit(context.Background()))
 	writer.flush()
 
 	lines := map[string]string{}
@@ -64,7 +64,7 @@ func TestProcessInfo_OmitsEmptyChannel(t *testing.T) {
 	pi := NewProcessInfo(testLogger(), writer)
 	pi.Channel = ""
 
-	require.NoError(t, pi.collect(context.Background()))
+	require.NoError(t, pi.Emit(context.Background()))
 	writer.flush()
 
 	assert.Contains(t, receivedData, "miren_build_info{")
@@ -81,6 +81,12 @@ func TestProcessInfo_DefaultsDescribeThisProcess(t *testing.T) {
 	// travel as-is rather than be blanked.
 	assert.NotEmpty(t, pi.Version)
 	assert.NotEmpty(t, pi.Commit)
+}
+
+func TestProcessInfo_EmitNilWriterIsNoop(t *testing.T) {
+	require.NoError(t, NewProcessInfo(testLogger(), nil).Emit(context.Background()))
+	var pi *ProcessInfo
+	require.NoError(t, pi.Emit(context.Background()))
 }
 
 func TestProcessInfo_MonitorNilWriterIsNoop(t *testing.T) {

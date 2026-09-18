@@ -67,7 +67,10 @@ func NewProcessInfo(log *slog.Logger, writer PointWriter) *ProcessInfo {
 // Monitor pushes the identity series immediately and then once per
 // defaultProcessInfoInterval until ctx is cancelled. The first push is not
 // gated on the ticker so a process that restarts faster than the interval
-// still records the new start time.
+// still records the new start time in the embedded store. The sink that
+// ships off-cluster attaches later in boot and does not see that push; the
+// boot stage that attaches it calls Emit so the central store gets the same
+// coverage.
 func (p *ProcessInfo) Monitor(ctx context.Context) {
 	if p.Writer == nil {
 		return
@@ -81,7 +84,7 @@ func (p *ProcessInfo) Monitor(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		if err := p.collect(ctx); err != nil {
+		if err := p.Emit(ctx); err != nil {
 			p.Log.Error("failed to record control-process identity", "err", err)
 		}
 		select {
@@ -92,7 +95,13 @@ func (p *ProcessInfo) Monitor(ctx context.Context) {
 	}
 }
 
-func (p *ProcessInfo) collect(ctx context.Context) error {
+// Emit pushes one sample of each identity series. Both are constants, so an
+// extra push between ticks is harmless; callers use it to prime a sink that
+// attached after the last one. A nil Writer is a no-op.
+func (p *ProcessInfo) Emit(ctx context.Context) error {
+	if p == nil || p.Writer == nil {
+		return nil
+	}
 	ts := time.Now()
 
 	// The *_build_info idiom: an always-1 gauge whose labels are the payload,

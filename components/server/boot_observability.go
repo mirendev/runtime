@@ -26,7 +26,11 @@ type observabilityBootOutput struct {
 	// queues. It always reaches the embedded VictoriaMetrics; the app-metrics
 	// boot attaches the sink that ships the same series off the cluster once
 	// its vmagent is up.
-	operationalMetrics     *metrics.Fanout
+	operationalMetrics *metrics.Fanout
+	// processInfo is the collector behind process_start_time_seconds and
+	// miren_build_info. It is exposed so the app-metrics boot can re-emit
+	// the identity sample once the shipping sink is attached; see Emit.
+	processInfo            *metrics.ProcessInfo
 	metricsReader          *metrics.VictoriaMetricsReader
 	cpu                    *metrics.CPUUsage
 	memory                 *metrics.MemoryUsage
@@ -90,6 +94,7 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 		log:                    log,
 		metricsWriter:          writer,
 		operationalMetrics:     operational,
+		processInfo:            processInfo,
 		metricsReader:          reader,
 		cpu:                    cpu,
 		memory:                 memory,
