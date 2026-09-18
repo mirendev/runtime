@@ -244,3 +244,44 @@ func TestInlineClientCancelRacingCleanupDoesNotPoisonPool(t *testing.T) {
 	r.NoError(ic.Call(t.Context(), "ok", struct{}{}, &out),
 		"a stale watcher cancelled the pooled stream")
 }
+
+// A ctx that is already done never reaches the peer. The pool hands out a
+// stream without consulting ctx and the watcher starts afterwards, so without
+// a pre-check the request could be sent before CancelRead fails the write.
+func TestInlineClientCallRejectsCancelledContextUpFront(t *testing.T) {
+	r := require.New(t)
+
+	ca, cb := newMemPipe()
+	client := newMsgSession(ca, true, 0, 0)
+	peer := newMsgSession(cb, false, 0, 0)
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = peer.Close()
+	})
+
+	accepted := make(chan struct{}, 1)
+	go func() {
+		if _, err := peer.AcceptStream(context.Background()); err == nil {
+			accepted <- struct{}{}
+		}
+	}()
+
+	ic := &inlineClient{
+		log:     slog.Default(),
+		oid:     OID("cap"),
+		session: client,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	var out struct{}
+	err := ic.Call(ctx, "never", struct{}{}, &out)
+	r.ErrorIs(err, context.Canceled)
+
+	select {
+	case <-accepted:
+		t.Fatal("a call on a cancelled ctx opened a stream to the peer")
+	case <-time.After(100 * time.Millisecond):
+	}
+}

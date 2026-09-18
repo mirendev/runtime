@@ -152,6 +152,15 @@ func (c *inlineClient) returnStream(conn *streamConn) {
 }
 
 func (c *inlineClient) Call(ctx context.Context, method string, args any, ret any) error {
+	// A ctx that is already done must not reach the peer at all. The pool
+	// hands out a stream without consulting ctx, and the watcher below only
+	// starts after that, so the request could be encoded and sent before
+	// CancelRead fails the write side, and the peer would run a call whose
+	// caller was told it never happened.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	conn, err := c.getStream(ctx)
 	if err != nil {
 		return err
