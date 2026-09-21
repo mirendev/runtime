@@ -429,20 +429,8 @@ func (c *Component) SetRegistryIP(ip string) error {
 }
 
 func (c *Component) createContainer(ctx context.Context, image containerd.Image, dataPath, configPath, hostsPath string) (containerd.Container, error) {
-	// Collect OTEL env vars to forward to buildkitd so the daemon can export its internal spans.
-	// The daemon shares host network namespace so the collector is reachable.
-	var otelEnv []string
-	for _, key := range []string{
-		"OTEL_EXPORTER_OTLP_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_HEADERS",
-		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-		"OTEL_SERVICE_NAME",
-	} {
-		if v := os.Getenv(key); v != "" {
-			otelEnv = append(otelEnv, key+"="+v)
-		}
-	}
+	// The daemon shares the host network namespace so the collector is reachable.
+	otelEnv := otelEnvForBuildkitd(os.Getenv)
 
 	opts := []oci.SpecOpts{
 		oci.WithImageConfig(image),
