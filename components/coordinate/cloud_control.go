@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -17,8 +18,9 @@ import (
 	"miren.dev/runtime/pkg/apphealthsync"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/cloudrpc"
+	"miren.dev/runtime/pkg/clusternetwork"
+	"miren.dev/runtime/pkg/clusterresources"
 	"miren.dev/runtime/pkg/containerenv"
-	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entitysync"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/serverinfo"
@@ -57,6 +59,20 @@ type CloudControl struct {
 	// Lifecycle, when set, lets cloud restart and upgrade this server over the
 	// uplink.
 	Lifecycle *ServerLifecycle
+
+	// anchorMu guards CloudAuth.IdentityIssuerURL, which the session callback
+	// writes (recordIdentityAnchor) and the periodic loop reads
+	// (anchoredAtCloud) on different goroutines.
+	anchorMu sync.Mutex
+
+	// pollSuppressed is set while a negotiated session carries both the
+	// cluster-network and cluster-resources capabilities, which is when the
+	// status poll has nothing left to say. See reportStatusPeriodically.
+	pollSuppressed atomic.Bool
+	// pollSuppressedBy names the session that set pollSuppressed, so the
+	// teardown of an older session cannot clear what a newer one set.
+	pollSuppressedMu sync.Mutex
+	pollSuppressedBy string
 
 	entitySyncDiagnostics   *entitysync.Diagnostics
 	publishedKeysMu         sync.Mutex
@@ -110,6 +126,7 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 	// The negotiated session is the baseline: every capability rides it, and
 	// cloud selects the ones it wants per cluster. Which capabilities cloud
 	// puts to use is decided there, behind its own per-organization flags.
+	build := version.GetInfo()
 	link := uplink.NewClient(
 		cloudURL,
 		c.authClient,
@@ -117,10 +134,24 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 		c.Log.With("component", "uplink"),
 		uplink.WithStatus(c.entitySyncDiagnostics.ObserveUplink),
 		uplink.WithSession(uplink.SessionIdentity{
-			RuntimeVersion:    version.GetInfo().Version,
+			RuntimeVersion:    build.Version,
 			RuntimeInstanceID: c.instanceID(),
+			RuntimeCommit:     build.KnownCommit(),
+			RuntimeBuildDate:  build.BuildDate,
 		}),
 	)
+	// The welcome repeats the workload identity anchor the status poll's
+	// response used to, so a cluster that no longer polls still learns where
+	// cloud anchors it. Recording is not adopting; see recordIdentityAnchor.
+	link.OnSession(func(_ context.Context, session uplink.Session) {
+		c.recordIdentityAnchor(session.IdentityIssuerURL)
+	})
+	// With both halves of the status report negotiated onto the session, the
+	// poll would only repeat what the session already said. Suppress it for
+	// as long as such a session holds; a cloud that declines either
+	// capability gets the poll as before, which is the compatibility switch
+	// in this direction.
+	link.OnSession(c.suppressPollWhile)
 	if err := entitysync.NewExporter(
 		c.Log.With("component", "entity-sync"), c.store, core_v1alpha.CloudExportContract,
 		entitysync.WithStartGate(entitySyncReady),
@@ -138,6 +169,16 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			// Anywhere or cloud RPC off the shared link when it is unavailable.
 			c.Log.Warn("app health reporting is unavailable for this uplink session", "error", err)
 		}
+	}
+	// The network half of the status poll, over the session. Like the feeds
+	// above it is additive; when cloud selects it the poll has nothing left
+	// to say about the network.
+	if err := clusternetwork.NewReporter(c.Log.With("component", "cluster-network"), c).Register(ctx, link); err != nil {
+		c.Log.Warn("cluster network reporting is unavailable for this uplink session", "error", err)
+	}
+	// And the resource half, at the cadence cloud asks for.
+	if err := clusterresources.NewReporter(c.Log.With("component", "cluster-resources"), c).Register(ctx, link); err != nil {
+		c.Log.Warn("cluster resource reporting is unavailable for this uplink session", "error", err)
 	}
 	// Offered on every negotiated session, like the RPC relay: whether cloud
 	// may drive the server is cloud's decision at negotiation, not a switch on
@@ -183,6 +224,15 @@ func (c *CloudControl) runNetcheck(ctx context.Context) {
 
 	result, err := cloudauth.NetcheckDualStack(ctx, cloudURL, ports)
 	if err != nil {
+		// A check cut short by the caller going away (a session dropping
+		// mid-check, now that the network reporter runs it) says nothing about
+		// reachability. Leave the cache and its age alone so the next caller
+		// re-runs it rather than reporting for an hour as if the check found
+		// nothing.
+		if ctx.Err() != nil {
+			c.Log.Debug("netcheck: cancelled before completion; keeping the previous result")
+			return
+		}
 		if errors.Is(err, cloudauth.ErrPrivateAddress) {
 			c.Log.Info("netcheck: cluster is not publicly reachable (private IP)")
 		} else {
@@ -303,31 +353,14 @@ func (c *CloudControl) ReportStartupStatus(ctx context.Context) error {
 		return fmt.Errorf("cluster ID not configured")
 	}
 
-	// Get CA certificate fingerprint
-	var caFingerprint string
-	if c.authority != nil {
-		caCertPEM := c.authority.GetCACertificate()
-		if caCertPEM != nil {
-			// Parse the PEM to get the certificate
-			block, _ := pem.Decode(caCertPEM)
-			if block != nil && block.Type == "CERTIFICATE" {
-				// Calculate SHA1 fingerprint of the raw DER bytes
-				sum := sha1.Sum(block.Bytes)
-				caFingerprint = hex.EncodeToString(sum[:])
-			}
-		}
-	}
-
-	// Run netcheck to determine public reachability
-	c.runNetcheck(ctx)
-
 	// Build status report
+	facts := c.NetworkFacts(ctx)
 	status := &cloudauth.StatusReport{
 		ClusterID:         c.CloudAuth.ClusterID,
-		APIAddresses:      c.apiAddresses(),
-		CACertFingerprint: caFingerprint,
-		Reachability:      c.reachabilityVerdict(),
-		Containerized:     containerenv.InContainer(),
+		APIAddresses:      facts.APIAddresses,
+		CACertFingerprint: facts.CACertFingerprint,
+		Reachability:      facts.Reachability,
+		Containerized:     facts.Containerized,
 	}
 
 	result, err := c.authClient.ReportClusterStatus(ctx, status)
@@ -339,7 +372,39 @@ func (c *CloudControl) ReportStartupStatus(ctx context.Context) error {
 	return nil
 }
 
-// ReportStatus reports the current cluster status to miren.cloud
+// suppressPollWhile turns the status poll off for the life of a session that
+// carries both of its replacements, and back on when that session ends. See
+// the OnSession registration in RunCloudUplink.
+func (c *CloudControl) suppressPollWhile(ctx context.Context, session uplink.Session) {
+	_, network := session.Capability(uplink.CapabilityClusterNetwork)
+	_, resources := session.Capability(uplink.CapabilityClusterResources)
+	if !network || !resources {
+		return
+	}
+	// Suppression belongs to the session that set it. On a fast reconnect
+	// the new session's callback can run before the old session's teardown
+	// goroutine wakes, and that teardown must not undo the new session's
+	// claim; only the session that currently owns the flag may clear it.
+	c.pollSuppressedMu.Lock()
+	c.pollSuppressedBy = session.ID
+	c.pollSuppressed.Store(true)
+	c.pollSuppressedMu.Unlock()
+	c.Log.Info("cluster status poll suppressed; the uplink session carries its replacements")
+	go func() {
+		<-ctx.Done()
+		c.pollSuppressedMu.Lock()
+		defer c.pollSuppressedMu.Unlock()
+		if c.pollSuppressedBy == session.ID {
+			c.pollSuppressedBy = ""
+			c.pollSuppressed.Store(false)
+		}
+	}()
+}
+
+// ReportStatus sends the legacy status poll to miren.cloud. It is what a
+// cloud that did not negotiate the cluster-network and cluster-resources
+// capabilities still relies on; against one that did, the periodic loop
+// skips it (see pollSuppressed).
 func (c *CloudControl) ReportStatus(ctx context.Context) error {
 	if c.authClient == nil {
 		return fmt.Errorf("auth client not configured")
@@ -349,41 +414,17 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 		return fmt.Errorf("cluster ID not configured")
 	}
 
-	// Get version information
-	versionInfo := version.GetInfo()
-
-	// Count apps (workloads) from entity store
-	var workloadCount int
-	appList, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
-	if err != nil {
-		c.Log.Warn("failed to count apps for status report", "error", err)
-	} else {
-		workloadCount = len(appList.Values())
-	}
-
-	// Re-run netcheck if the cached result is older than 60 minutes
-	c.netcheckMu.RLock()
-	netcheckAge := time.Since(c.netcheckCheckedAt)
-	c.netcheckMu.RUnlock()
-	if netcheckAge > 60*time.Minute {
-		c.runNetcheck(ctx)
-	}
-
-	// Collect resource usage metrics
-	resourceUsage := c.collectResourceUsage()
-
 	// Build status report
+	facts := c.NetworkFacts(ctx)
 	status := &cloudauth.StatusReport{
-		ClusterID:     c.CloudAuth.ClusterID,
-		State:         "active",
-		Version:       versionInfo.Version,
-		InstanceID:    c.instanceID(),
-		NodeCount:     1, // Static value for now
-		WorkloadCount: workloadCount,
-		ResourceUsage: resourceUsage,
-		APIAddresses:  c.apiAddresses(),
-		Reachability:  c.reachabilityVerdict(),
-		Containerized: containerenv.InContainer(),
+		ClusterID:         c.CloudAuth.ClusterID,
+		State:             "active",
+		Version:           version.GetInfo().Version,
+		ResourceUsage:     c.collectResourceUsage(),
+		APIAddresses:      facts.APIAddresses,
+		CACertFingerprint: facts.CACertFingerprint,
+		Reachability:      facts.Reachability,
+		Containerized:     facts.Containerized,
 	}
 
 	result, err := c.authClient.ReportClusterStatus(ctx, status)
@@ -393,6 +434,45 @@ func (c *CloudControl) ReportStatus(ctx context.Context) error {
 
 	c.recordIdentityAnchor(result.IdentityIssuerURL)
 	return nil
+}
+
+// netcheckMaxAge is how old a cached netcheck result may be before the next
+// report re-runs it. Reachability changes rarely and the check costs a round
+// trip to cloud on both address families, so an hour is the balance.
+const netcheckMaxAge = 60 * time.Minute
+
+// NetworkFacts is what this cluster says about how it can be reached, in the
+// shape both the status poll and the cluster-network capability send. It
+// refreshes netcheck when the cached verdict is older than netcheckMaxAge
+// (or was never taken), so whichever path asks first pays for the check and
+// the other reads the cache.
+func (c *CloudControl) NetworkFacts(ctx context.Context) clusternetwork.Report {
+	c.netcheckMu.RLock()
+	stale := c.netcheckCheckedAt.IsZero() || time.Since(c.netcheckCheckedAt) > netcheckMaxAge
+	c.netcheckMu.RUnlock()
+	if stale {
+		c.runNetcheck(ctx)
+	}
+	return clusternetwork.Report{
+		APIAddresses:      c.apiAddresses(),
+		CACertFingerprint: c.caCertFingerprint(),
+		Reachability:      c.reachabilityVerdict(),
+		Containerized:     containerenv.InContainer(),
+	}
+}
+
+// caCertFingerprint is the hex SHA-1 of the cluster CA's DER bytes, which the
+// CLI pins when it connects directly. Empty when there is no authority yet.
+func (c *CloudControl) caCertFingerprint() string {
+	if c.authority == nil {
+		return ""
+	}
+	block, _ := pem.Decode(c.authority.GetCACertificate())
+	if block == nil || block.Type != "CERTIFICATE" {
+		return ""
+	}
+	sum := sha1.Sum(block.Bytes)
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *CloudControl) instanceID() string {
@@ -416,6 +496,27 @@ func (c *CloudControl) collectResourceUsage() cloudauth.ResourceUsage {
 	}
 }
 
+// ResourceSample is one host reading in the cluster-resources wire shape,
+// stamped with when it was taken.
+//
+// The percentages are the ones the status poll carries. The totals are not:
+// the poll's cpu_cores is a load average despite its name and its byte
+// figures are used bytes, which cloud never read. The wire calls these
+// capacities, so they come from the host's core count and total memory and
+// storage.
+func (c *CloudControl) ResourceSample() clusterresources.Sample {
+	stats := sysstats.CollectSystemStats(c.DataPath)
+	return clusterresources.Sample{
+		ObservedAt:     time.Now().UTC(),
+		CPUCores:       float64(stats.CPUCoreCount),
+		CPUPercent:     stats.CPUPercent,
+		MemoryBytes:    stats.MemoryTotalBytes,
+		MemoryPercent:  stats.MemoryPercent,
+		StorageBytes:   stats.StorageTotalBytes,
+		StoragePercent: stats.StoragePercent,
+	}
+}
+
 // reportStatusPeriodically reports cluster status at regular intervals
 func (c *CloudControl) reportStatusPeriodically(ctx context.Context) {
 	// Initial report after a short delay to allow services to start
@@ -427,13 +528,16 @@ func (c *CloudControl) reportStatusPeriodically(ctx context.Context) {
 	case <-timer.C:
 	}
 
-	if err := c.ReportStatus(ctx); err != nil {
+	if c.pollSuppressed.Load() {
+		c.Log.Debug("skipping cluster status poll; the uplink session carries its replacements")
+	} else if err := c.ReportStatus(ctx); err != nil {
 		c.Log.Error("failed to report initial cluster status", "error", err)
 	} else {
 		c.Log.Info("reported cluster status to cloud")
 	}
 
-	// Report status every 5 minutes
+	// Report status every 5 minutes. The ticker keeps running while the poll
+	// is suppressed because it also drives the signing-key republish below.
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -442,7 +546,9 @@ func (c *CloudControl) reportStatusPeriodically(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.ReportStatus(ctx); err != nil {
+			if c.pollSuppressed.Load() {
+				c.Log.Debug("skipping cluster status poll; the uplink session carries its replacements")
+			} else if err := c.ReportStatus(ctx); err != nil {
 				c.Log.Error("failed to report cluster status", "error", err)
 			} else {
 				c.Log.Debug("reported cluster status to cloud")
@@ -587,10 +693,13 @@ func (c *CloudControl) anchoredAtCloud() bool {
 	if c.WorkloadIssuer == nil || c.authClient == nil || !c.CloudAuth.Enabled {
 		return false
 	}
-	if c.CloudAuth.IdentityIssuerURL == "" {
+	c.anchorMu.Lock()
+	anchor := c.CloudAuth.IdentityIssuerURL
+	c.anchorMu.Unlock()
+	if anchor == "" {
 		return false
 	}
-	return c.WorkloadIssuer.IssuerURL() == c.CloudAuth.IdentityIssuerURL
+	return c.WorkloadIssuer.IssuerURL() == anchor
 }
 
 // recordIdentityAnchor persists the anchor cloud reports, so a cluster that
@@ -605,6 +714,10 @@ func (c *CloudControl) anchoredAtCloud() bool {
 // startup from its configured setting, so writing this only makes the move
 // available; `miren server identity-anchor` still has to ask for it.
 func (c *CloudControl) recordIdentityAnchor(issuerURL string) {
+	// Held for the whole read-compare-save so the session callback and the
+	// poll cannot interleave two registration writes.
+	c.anchorMu.Lock()
+	defer c.anchorMu.Unlock()
 	if issuerURL == "" || issuerURL == c.CloudAuth.IdentityIssuerURL {
 		return
 	}

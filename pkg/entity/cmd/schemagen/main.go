@@ -16,7 +16,29 @@ var (
 	fOutput         = flag.String("output", "", "output file")
 	fExportContract = flag.String("export-contract", "", "optional output file for one export contract")
 	fExportTarget   = flag.String("export-target", "", "export target written by -export-contract")
+	fExportMerge    []string
 )
+
+func init() {
+	flag.Func("export-merge", "schema file from another domain whose exports fold into this contract (repeatable)", func(path string) error {
+		fExportMerge = append(fExportMerge, path)
+		return nil
+	})
+}
+
+func loadSchemaFile(path string) (*schemaFile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var sf schemaFile
+	if err := yaml.NewDecoder(f).Decode(&sf); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return &sf, nil
+}
 
 func main() {
 	flag.Parse()
@@ -38,7 +60,16 @@ func main() {
 		panic(err)
 	}
 
-	code, err := GenerateSchema(&sf, *fPkg)
+	var contributors []*schemaFile
+	for _, path := range fExportMerge {
+		contributor, err := loadSchemaFile(path)
+		if err != nil {
+			panic(err)
+		}
+		contributors = append(contributors, contributor)
+	}
+
+	code, err := GenerateSchema(&sf, *fPkg, contributors...)
 	if err != nil {
 		panic(err)
 	}
@@ -76,12 +107,15 @@ func main() {
 		if *fExportTarget == "" {
 			panic("-export-target is required with -export-contract")
 		}
-		contracts, err := GenerateExportContracts(&sf)
+		contracts, err := GenerateExportContracts(&sf, contributors...)
 		if err != nil {
 			panic(err)
 		}
 		contract, ok := contracts[*fExportTarget]
 		if !ok {
+			if spec, declared := sf.Exports[*fExportTarget]; declared {
+				panic(fmt.Sprintf("export target %q is owned by %s; generate the contract there with -export-merge %s", *fExportTarget, spec.Owner, *fInput))
+			}
 			panic(fmt.Sprintf("export target %q is not declared", *fExportTarget))
 		}
 		if err := os.WriteFile(*fExportContract, append(contract, '\n'), 0644); err != nil {

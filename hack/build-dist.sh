@@ -17,6 +17,8 @@ trap cleanup EXIT INT TERM
 # Get version info
 current_branch=$(git rev-parse --abbrev-ref HEAD)
 short_sha=$(git rev-parse --short HEAD)
+commit=$(git rev-parse HEAD)
+build_date=${BUILD_DATE:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}
 
 # Handle detached HEAD state
 if [[ "$current_branch" == "HEAD" ]]; then
@@ -35,8 +37,10 @@ echo "Building portable Linux amd64 binary (version $version)..."
 cat >"$DOCKERFILE" <<EOF
 FROM golang:1.26-alpine AS builder
 
-# Accept version as a build argument
+# Accept version info as build arguments
 ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
 
 # Install build dependencies including C compiler for CGO
 RUN apk add --no-cache git ca-certificates gcc musl-dev linux-headers
@@ -59,7 +63,7 @@ COPY . .
 # But we'll link statically against musl libc for portability
 # Version is safely passed via build arg
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
-    -ldflags "-X miren.dev/runtime/version.Version=\${VERSION} -linkmode external -extldflags '-static'" \
+    -ldflags "-X miren.dev/runtime/version.Version=\${VERSION} -X miren.dev/runtime/version.Commit=\${COMMIT} -X miren.dev/runtime/version.BuildDate=\${BUILD_DATE} -linkmode external -extldflags '-static'" \
     -o miren \
     ./cmd/miren
 
@@ -73,7 +77,7 @@ mkdir -p ./dist
 
 # Build using Docker with version passed as build argument and export binary directly
 # Specify platform to ensure consistent builds across different architectures
-docker build --platform=linux/amd64 -f "$DOCKERFILE" --build-arg "VERSION=$version" --output type=local,dest=./dist .
+docker build --platform=linux/amd64 -f "$DOCKERFILE" --build-arg "VERSION=$version" --build-arg "COMMIT=$commit" --build-arg "BUILD_DATE=$build_date" --output type=local,dest=./dist .
 
 # Rename the binary to miren-dist
 mv ./dist/miren ./dist/miren-dist

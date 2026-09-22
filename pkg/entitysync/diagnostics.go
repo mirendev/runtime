@@ -29,18 +29,25 @@ type SnapshotProgress struct {
 
 // Status is a point-in-time view of runtime entity sync.
 type Status struct {
-	UplinkState        string
-	SessionID          string
-	HandshakeVersion   uint
-	CapabilityState    string
-	CapabilityVersion  uint
-	PreparationState   string
-	PreparationDetail  string
-	SourceEpoch        string
-	SchemaDigest       string
-	Mode               string
-	WaitReason         string
-	CloudCursor        int64
+	UplinkState       string
+	SessionID         string
+	HandshakeVersion  uint
+	CapabilityState   string
+	CapabilityVersion uint
+	PreparationState  string
+	PreparationDetail string
+	SourceEpoch       string
+	SchemaDigest      string
+	Mode              string
+	WaitReason        string
+	CloudCursor       int64
+	// LandedRevision is the highest store revision this process has confirmed
+	// cloud holds durably: a completed snapshot, a committed change batch, or
+	// a session resumed at a cursor cloud reported and the local epoch
+	// validated. Unlike CloudCursor it is never set from an unvalidated
+	// session config, so a consumer deciding whether the runtime may forget
+	// an entity can trust it. Zero means nothing is confirmed yet.
+	LandedRevision     int64
 	NextWatchRevision  int64
 	Snapshot           *SnapshotProgress
 	LastAcknowledgment *Event
@@ -83,6 +90,25 @@ func (d *Diagnostics) SnapshotStatus() Status {
 		status.LastError = &event
 	}
 	return status
+}
+
+// LandedRevision reports the highest store revision cloud has durably
+// landed, and whether entity export applies to this cluster at all. An
+// unregistered cluster reports false, so callers gating local deletion on
+// cloud custody can proceed freely; a registered one reports true with zero
+// until this process confirms progress.
+//
+// Only a positive "disabled" turns export off. Before the uplink has been
+// started the state is not yet known, and a cluster in that window is
+// treated as exporting so a caller holds rather than deletes. An
+// unregistered cluster pays for that with at most one deferred sweep before
+// SetDisabled runs; a registered cluster whose uplink is down or still
+// connecting would otherwise be told cloud does not apply, and prune history
+// cloud never received.
+func (d *Diagnostics) LandedRevision() (int64, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.status.LandedRevision, d.status.UplinkState != "disabled"
 }
 
 func (d *Diagnostics) ObserveUplink(status uplink.Status) {
@@ -145,6 +171,12 @@ func (d *Diagnostics) SetPreparationFailure(state, message string) {
 func (d *Diagnostics) setSource(sourceEpoch string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// Revisions only mean something within one etcd cluster. If the store
+	// under a running process is replaced, the landed watermark from the old
+	// cluster says nothing about the new one's revisions.
+	if d.status.SourceEpoch != "" && d.status.SourceEpoch != sourceEpoch {
+		d.status.LandedRevision = 0
+	}
 	d.status.SourceEpoch = sourceEpoch
 }
 
@@ -159,6 +191,14 @@ func (d *Diagnostics) setCursor(cursor int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.status.CloudCursor = cursor
+}
+
+func (d *Diagnostics) setLanded(revision int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if revision > d.status.LandedRevision {
+		d.status.LandedRevision = revision
+	}
 }
 
 func (d *Diagnostics) setNextWatchRevision(revision int64) {
@@ -193,6 +233,9 @@ func (d *Diagnostics) finishSnapshot(cursor int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.status.CloudCursor = cursor
+	if cursor > d.status.LandedRevision {
+		d.status.LandedRevision = cursor
+	}
 	d.status.NextWatchRevision = cursor + 1
 	d.status.Snapshot = nil
 }

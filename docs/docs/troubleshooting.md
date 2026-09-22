@@ -20,15 +20,7 @@ miren doctor
 ```
 </CliCommand>
 
-This checks your configuration, server connectivity, and authentication. It provides context-aware suggestions when it detects issues. You can also run the subcommands individually:
-
-<CliCommand context="client">
-```miren
-miren doctor config   # Check cluster configuration
-miren doctor server   # Check server connectivity
-miren doctor auth     # Check authentication
-```
-</CliCommand>
+This checks your configuration, server connectivity, versions, and authentication, and names the command that fixes anything it finds wrong.
 
 :::tip[Get a combined diagnosis]
 Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to
@@ -133,6 +125,14 @@ On a systemd host, enable `podman-restart.service`
 plus `loginctl enable-linger` for a rootless install), or generate a dedicated
 unit with `podman generate systemd` / a Quadlet.
 :::
+
+The restart policy is also what `miren cluster restart` and `miren cluster
+upgrade` rely on for a container install: the server exits and the runtime
+brings a new container up on the same data volume. `miren server container
+install` sets `--restart always`; a container started some other way without
+it will stay down after a restart, and a server that wasn't started through
+the image's entrypoint reports `install_kind: unknown` and refuses restart and
+upgrade rather than trying.
 
 **2. Test connectivity**
 

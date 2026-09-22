@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ const (
 	// build its etcd client, so a transient failure at startup does not permanently
 	// disable maintenance (the loop used to return and never run again).
 	clientRetryInterval = 10 * time.Second
+	statusTimeout       = 10 * time.Second
 )
 
 // maintenanceAction is the remediation the maintenance loop should take for the
@@ -212,8 +214,14 @@ func buildMaintenanceTLSConfig(certsDir string) (*tls.Config, error) {
 }
 
 func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv3.Client, endpoint string) {
-	resp, err := client.Status(ctx, endpoint)
+	statusCtx, cancel := context.WithTimeout(ctx, statusTimeout)
+	resp, err := client.Status(statusCtx, endpoint)
+	cancel()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			e.Log.Warn("etcd health check timed out", "timeout", statusTimeout)
+			return
+		}
 		e.Log.Warn("etcd maintenance: failed to get status", "error", err)
 		return
 	}

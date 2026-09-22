@@ -8,6 +8,7 @@ func DefaultConfig() *Config {
 		AppVersion:      DefaultAppVersionConfig(),
 		Buildkit:        DefaultBuildkitConfig(),
 		Containerd:      DefaultContainerdConfig(),
+		Deployment:      DefaultDeploymentConfig(),
 		Etcd:            DefaultEtcdConfig(),
 		Ingress:         DefaultIngressConfig(),
 		Labs:            []string{},
@@ -50,6 +51,14 @@ func DefaultContainerdConfig() ContainerdConfig {
 	}
 }
 
+// DefaultDeploymentConfig returns default DeploymentConfig
+func DefaultDeploymentConfig() DeploymentConfig {
+	return DeploymentConfig{
+		RetentionCount:  new(25),
+		RetentionPeriod: new("30d"),
+	}
+}
+
 // DefaultEtcdConfig returns default EtcdConfig
 func DefaultEtcdConfig() EtcdConfig {
 	return EtcdConfig{
@@ -66,8 +75,9 @@ func DefaultEtcdConfig() EtcdConfig {
 // DefaultIngressConfig returns default IngressConfig
 func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
-		Address: new(""),
-		Mode:    new("tls-autoprovision"),
+		Address:          new(""),
+		Mode:             new("tls-autoprovision"),
+		TrustedProxyHops: new(1),
 	}
 }
 

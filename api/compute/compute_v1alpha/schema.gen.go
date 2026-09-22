@@ -1025,6 +1025,7 @@ func (o *Node) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.String(NodeVersionId, o.Version))
 	}
 	attrs = append(attrs, entity.Ref(entity.EntityKind, KindNode))
+	attrs = append(attrs, entity.Bool(entity.Id("dev.miren.meta/cloud.export"), true))
 	return
 }
 

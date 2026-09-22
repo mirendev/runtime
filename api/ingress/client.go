@@ -295,6 +295,9 @@ func HTTPService(spec *core_v1alpha.ConfigSpec, service string) error {
 		}
 		return fmt.Errorf("app service %q has no HTTP port", service)
 	}
+	if service == "web" && spec.StaticDir != "" {
+		return nil
+	}
 	return fmt.Errorf("app service %q does not exist in the active configuration", service)
 }
 

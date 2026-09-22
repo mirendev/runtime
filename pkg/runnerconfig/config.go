@@ -11,13 +11,18 @@ import (
 const DefaultConfigPath = "/var/lib/miren/runner/config.yaml"
 
 type Config struct {
-	RunnerID           string            `yaml:"runner_id" json:"runner_id"`
-	Name               string            `yaml:"name,omitempty" json:"name,omitempty"`
-	CoordinatorAddress string            `yaml:"coordinator_address" json:"coordinator_address"`
-	CACert             string            `yaml:"ca_cert" json:"ca_cert"`
-	ClientCert         string            `yaml:"client_cert" json:"client_cert"`
-	ClientKey          string            `yaml:"client_key" json:"client_key"`
-	Labels             map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	RunnerID           string `yaml:"runner_id" json:"runner_id"`
+	Name               string `yaml:"name,omitempty" json:"name,omitempty"`
+	CoordinatorAddress string `yaml:"coordinator_address" json:"coordinator_address"`
+	// ListenAddress is where the runner last served its RPC. The runner
+	// discovers it on start and records it here so a process on the same
+	// host (the lifecycle executor) can reach the runner without repeating
+	// the discovery.
+	ListenAddress string            `yaml:"listen_address,omitempty" json:"listen_address,omitempty"`
+	CACert        string            `yaml:"ca_cert" json:"ca_cert"`
+	ClientCert    string            `yaml:"client_cert" json:"client_cert"`
+	ClientKey     string            `yaml:"client_key" json:"client_key"`
+	Labels        map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	// Network configuration for distributed runners
 	EtcdEndpoints []string `yaml:"etcd_endpoints,omitempty" json:"etcd_endpoints,omitempty"`
 	EtcdPrefix    string   `yaml:"etcd_prefix,omitempty" json:"etcd_prefix,omitempty"`

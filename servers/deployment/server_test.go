@@ -1408,3 +1408,61 @@ func TestDeployVersionEphemeral(t *testing.T) {
 		}
 	})
 }
+
+func TestCreateDerivedVersionPreservesConfigVersionSpec(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("create deployment server: %v", err)
+	}
+	configID, err := server.EC.Create(ctx, "static-app-v1-cfg", &core_v1alpha.ConfigVersion{
+		App: entity.Id("app/static-app"),
+		Spec: core_v1alpha.ConfigSpec{
+			StaticDir: "/app/site",
+			Variables: []core_v1alpha.ConfigSpecVariables{{Key: "EXISTING", Value: "kept"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	env := &deployment_v1alpha.EnvironmentVariable{}
+	env.SetKey("ADDED")
+	env.SetValue("override")
+	env.SetSensitive(true)
+
+	derived, err := server.createDerivedVersion(ctx, &core_v1alpha.AppVersion{
+		App:            entity.Id("app/static-app"),
+		ConfigVersion:  configID,
+		StaticArtifact: "sha256:static",
+	}, []*deployment_v1alpha.EnvironmentVariable{env})
+	if err != nil {
+		t.Fatalf("create derived version: %v", err)
+	}
+	if derived.ConfigVersion == "" || derived.ConfigVersion == configID {
+		t.Fatalf("expected a new config version, got %q", derived.ConfigVersion)
+	}
+	if derived.StaticArtifact != "sha256:static" {
+		t.Fatalf("static artifact = %q, want sha256:static", derived.StaticArtifact)
+	}
+
+	var config core_v1alpha.ConfigVersion
+	if err := server.EC.GetById(ctx, derived.ConfigVersion, &config); err != nil {
+		t.Fatalf("get derived config version: %v", err)
+	}
+	if config.Spec.StaticDir != "/app/site" {
+		t.Fatalf("static dir = %q, want /app/site", config.Spec.StaticDir)
+	}
+	variables := make(map[string]core_v1alpha.ConfigSpecVariables)
+	for _, variable := range config.Spec.Variables {
+		variables[variable.Key] = variable
+	}
+	if variables["EXISTING"].Value != "kept" {
+		t.Fatalf("existing variable was not preserved: %#v", variables["EXISTING"])
+	}
+	if variables["ADDED"].Value != "override" || !variables["ADDED"].Sensitive || variables["ADDED"].Source != "manual" {
+		t.Fatalf("environment override was not persisted: %#v", variables["ADDED"])
+	}
+}

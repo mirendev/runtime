@@ -18,6 +18,8 @@ type CLIFlags struct {
 	ContainerdConfigBinaryPath                *string  `long:"containerd-binary" description:"Path to containerd binary" env:"MIREN_CONTAINERD_BINARY_PATH"`
 	ContainerdConfigSocketPath                *string  `long:"containerd-socket" description:"Path to containerd socket" env:"MIREN_CONTAINERD_SOCKET_PATH"`
 	ContainerdConfigStartEmbedded             *bool    `long:"start-containerd" description:"Start embedded containerd daemon" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+	DeploymentConfigRetentionCount            *int     `long:"deployment-retention-count" description:"Number of most-recent deployment records to retain per app regardless of age" env:"MIREN_DEPLOYMENT_RETENTION_COUNT"`
+	DeploymentConfigRetentionPeriod           *string  `long:"deployment-retention-period" description:"Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely." env:"MIREN_DEPLOYMENT_RETENTION_PERIOD"`
 	EtcdConfigClientPort                      *int     `long:"etcd-client-port" description:"Etcd client port" env:"MIREN_ETCD_CLIENT_PORT"`
 	EtcdConfigEndpoints                       []string `long:"etcd" short:"e" description:"Etcd endpoints" env:"MIREN_ETCD_ENDPOINTS"`
 	EtcdConfigHTTPClientPort                  *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
@@ -27,6 +29,7 @@ type CLIFlags struct {
 	EtcdConfigStartEmbedded                   *bool    `long:"start-etcd" description:"Start embedded etcd server" env:"MIREN_ETCD_START_EMBEDDED"`
 	IngressConfigAddress                      *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported." env:"MIREN_INGRESS_ADDRESS"`
 	IngressConfigMode                         *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)" env:"MIREN_INGRESS_MODE"`
+	IngressConfigTrustedProxyHops             *int     `long:"ingress-trusted-proxy-hops" description:"Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For." env:"MIREN_INGRESS_TRUSTED_PROXY_HOPS"`
 	RemoteWriteConfigURL                      *string  `long:"metrics-remote-write-url" description:"Prometheus Remote Write destination for managed application metrics" env:"MIREN_METRICS_REMOTE_WRITE_URL"`
 	RemoteWriteConfigWorkloadIdentityAudience *string  `long:"metrics-remote-write-audience" description:"Workload identity audience for the managed metrics destination" env:"MIREN_METRICS_REMOTE_WRITE_AUDIENCE"`
 	SagaConfigRetentionPeriod                 *string  `long:"saga-retention-period" description:"Delete finished saga executions older than this duration (e.g. 7d, 24h). Set to 0 to keep them indefinitely." env:"MIREN_SAGA_RETENTION_PERIOD"`

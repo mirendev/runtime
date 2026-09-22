@@ -125,9 +125,6 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren doctor`](./command/doctor.md) | Diagnose miren environment and connectivity |
-| [`miren doctor auth`](./command/doctor-auth.md) | Check authentication and user information |
-| [`miren doctor config`](./command/doctor-config.md) | Check configuration files |
-| [`miren doctor server`](./command/doctor-server.md) | Check server health and connectivity |
 
 ## download
 
@@ -215,6 +212,11 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner install`](./command/runner-install.md) | Install systemd service for miren runner |
 | [`miren runner join`](./command/runner-join.md) | Join this machine to a coordinator as a runner |
 | [`miren runner list`](./command/runner-list.md) | List all registered runners |
+| [`miren runner operations`](./command/runner-operations.md) | Durable runner restart and upgrade operations |
+| [`miren runner operations abandon`](./command/runner-operations-abandon.md) | Give up on an unfinished operation |
+| [`miren runner operations list`](./command/runner-operations-list.md) | List recorded restart and upgrade operations |
+| [`miren runner operations run`](./command/runner-operations-run.md) | Execute or resume an operation in the foreground (normally launched by miren upgrade) |
+| [`miren runner operations show`](./command/runner-operations-show.md) | Show one restart or upgrade operation |
 | [`miren runner reissue`](./command/runner-reissue.md) | Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity |
 | [`miren runner remove`](./command/runner-remove.md) | Remove a registered runner and clean up resources |
 | [`miren runner service-status`](./command/runner-service-status.md) | Show miren-runner systemd service status |
@@ -300,7 +302,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (server and CLI on a systemd server host, otherwise the CLI) |
+| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI) |
 
 ## version
 

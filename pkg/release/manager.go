@@ -123,7 +123,7 @@ func (m *Manager) UpgradeArtifact(ctx context.Context, artifact Artifact) error 
 	}
 
 	// Install the artifact
-	fmt.Printf("Installing new binary...\n")
+	fmt.Printf("Installing %s package...\n", artifact.Type)
 	if err := m.installer.Install(ctx, downloaded); err != nil {
 		return fmt.Errorf("installation failed: %w", err)
 	}

@@ -87,9 +87,9 @@ func TestDecideActivation(t *testing.T) {
 		{"not active yet", healthSnapshot{versionActive: false, health: apphealth.Healthy, ready: 1}, decisionWait},
 		{"crashed wins over counts", healthSnapshot{versionActive: true, health: apphealth.Crashed, ready: 1, desired: 1}, decisionCrashed},
 		{"scaled to zero", healthSnapshot{versionActive: true, health: apphealth.Idle, desired: 0}, decisionScaledToZero},
-		// Without its own arm this falls to ready > 0, which a task-only app
-		// never satisfies -- the deploy would time out despite succeeding.
-		{"task-only app is deployed and invokable", healthSnapshot{versionActive: true, health: apphealth.Ready, ready: 0, desired: 0}, decisionTaskOnly},
+		// Without its own arm this falls to ready > 0, which an app without a
+		// service never satisfies -- the deploy would time out despite succeeding.
+		{"service-free app is deployed", healthSnapshot{versionActive: true, health: apphealth.Ready, ready: 0, desired: 0}, decisionNoService},
 		{"one of many serving", healthSnapshot{versionActive: true, health: apphealth.Degraded, ready: 1, desired: 3}, decisionHealthy},
 		{"fully healthy", healthSnapshot{versionActive: true, health: apphealth.Healthy, ready: 2, desired: 2}, decisionHealthy},
 		{"active but nothing serving", healthSnapshot{versionActive: true, health: apphealth.Starting, ready: 0, desired: 1}, decisionWait},

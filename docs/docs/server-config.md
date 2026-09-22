@@ -91,6 +91,7 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 |-------|------|---------|-------------|---------|----------|
 | `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
 | `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
+| `trusted_proxy_hops` | int | `1` | Number of trusted proxies immediately in front of Miren. Used to select the visitor address from `X-Forwarded-For` under `behind-proxy-http`. | `MIREN_INGRESS_TRUSTED_PROXY_HOPS` | `--ingress-trusted-proxy-hops` |
 
 ### Modes
 
@@ -100,7 +101,13 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 | `behind-proxy-http` | `127.0.0.1:80` | no | n/a |
 | `behind-proxy-https` | `127.0.0.1:443` | yes | `[tls]` (self-signed or DNS-01 ACME) |
 
+Only `behind-proxy-http` trusts `X-Forwarded-Proto` / `Forwarded` from the peer; the proxy must set it. It also uses `X-Forwarded-For` for access logs, selecting the address immediately before the configured number of trusted proxy hops from the right. The other modes derive the scheme and visitor address from the connection itself.
+
 The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
+
+:::warning[Widening `behind-proxy-http` off loopback]
+Under `behind-proxy-http`, Miren trusts `X-Forwarded-Proto` from *every* connection to the listener; it does not check the peer address. If you bind to `0.0.0.0`, `[::]`, or any non-loopback address, a firewall or security group must restrict that port to the proxy's addresses. Any other client that can reach it directly can send `X-Forwarded-Proto: http` and be issued auth cookies without the `Secure` flag.
+:::
 
 :::info[Unix socket addresses]
 `unix:/path` is reserved for a future release and rejected today with a clear error.
@@ -237,6 +244,19 @@ On a frequently-deployed cluster this window can pin more image data than the di
 |-------|------|---------|-------------|---------|----------|
 | `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |
 | `retention_period` | string | `30d` | Keep versions newer than this, regardless of count (e.g. `30d`, `2w`) | `MIREN_APP_VERSION_RETENTION_PERIOD` | `--app-version-retention-period` |
+
+## `[deployment]` — Deployment History Retention {#deployment}
+
+Every deploy, rollback, and config change writes a deployment record, and `miren app history` reads them back. Miren keeps a bounded window of these per app rather than every record forever. The records are small, but a cluster that runs for years accumulates thousands, and every history lookup and reconciliation pass pays to scan them.
+
+A record is retained if it is among the most recent `retention_count` for its app **or** newer than `retention_period` — whichever rule keeps it. A few records are always kept regardless of these limits: the deployment that made the app's current version active, any deployment still in progress or holding the app's deploy lock, and any older record whose status still reads `active`. Pruning a record does not touch the app version it produced; versions have their own [retention](#app-version).
+
+Clusters registered with Miren Cloud keep their full history there. Cloud stores deployments as an archive, so a record pruned here stays visible in cloud, and the runtime only prunes a record once cloud has confirmed it holds it. If the cluster cannot reach cloud, eligible records simply wait; nothing is lost while the link is down. On a cluster that runs without cloud, this window *is* the history, so size it to how far back you want `miren app history` to reach.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `retention_count` | int | `25` | Most-recent deployment records to keep per app, regardless of age | `MIREN_DEPLOYMENT_RETENTION_COUNT` | `--deployment-retention-count` |
+| `retention_period` | string | `30d` | Keep records newer than this, regardless of count (e.g. `30d`, `2w`). `0` keeps every record indefinitely | `MIREN_DEPLOYMENT_RETENTION_PERIOD` | `--deployment-retention-period` |
 
 ## `[saga]` — Saga Execution Retention {#saga}
 

@@ -355,6 +355,8 @@ jobs:
       run: |
         echo "=== Miren server logs ==="
         ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+        echo "=== Previous miren server logs (before last restart) ==="
+        ./hack/dev-exec --root bash -c 'tail -100 /tmp/miren-server.log.prev 2>/dev/null' || true
 
     - name: Save Docker image to cache
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
@@ -466,6 +468,8 @@ jobs:
       run: |
         echo "=== Miren server logs ==="
         ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+        echo "=== Previous miren server logs (before last restart) ==="
+        ./hack/dev-exec --root bash -c 'tail -100 /tmp/miren-server.log.prev 2>/dev/null' || true
         echo "=== Cloud server logs ==="
         ./hack/dev-exec --root bash -c 'cat /tmp/bb-bb-cloud-*.log 2>/dev/null | tail -100' || true
         echo "=== POP server logs ==="

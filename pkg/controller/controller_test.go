@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,6 +78,9 @@ func TestReconcileController_Lifecycle(t *testing.T) {
 	controller.Stop()
 }
 
+// TestReconcileController_Resync verifies that periodic reconciliation
+// re-enqueues every entity on each tick without restarting the watch, and that
+// the watch keeps delivering live adds and deletes across those ticks.
 func TestReconcileController_Resync(t *testing.T) {
 	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -92,20 +96,29 @@ func TestReconcileController_Resync(t *testing.T) {
 
 	testIndex := entity.Any(entity.Type, "test/type")
 
-	// Setup test entities
 	store.AddEntity(entity.Id("test/entity1"), entity.New(
 		entity.Ident, "test/entity1",
 		entity.Type, "test/type",
 	))
 
-	resyncCalls := 0
-	eventsChan := make(chan Event, 10)
+	var mu sync.Mutex
+	var seen []Event
 	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
-		if event.Type == EventUpdated {
-			resyncCalls++
-		}
-		eventsChan <- event
+		mu.Lock()
+		seen = append(seen, event)
+		mu.Unlock()
 		return nil, nil
+	}
+	count := func(typ EventType, id entity.Id) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, ev := range seen {
+			if ev.Type == typ && ev.Id == id {
+				n++
+			}
+		}
+		return n
 	}
 
 	controller := NewReconcileController(
@@ -114,23 +127,188 @@ func TestReconcileController_Resync(t *testing.T) {
 		testIndex,
 		sc,
 		handler,
-		100*time.Millisecond, // short resync period for testing
-		1,                    // single worker
+		50*time.Millisecond, // short resync period for testing
+		1,                   // single worker
 	)
 
-	// Start controller
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
+	ctx := t.Context()
+	require.NoError(t, controller.Start(ctx))
+	defer controller.Stop()
 
-	err := controller.Start(ctx)
+	require.NoError(t, store.WaitForIndexWatcher(ctx, testIndex))
+
+	// The initial snapshot plus at least two resync ticks each reconcile entity1.
+	require.Eventually(t, func() bool {
+		return count(EventUpdated, "test/entity1") >= 3
+	}, 5*time.Second, 10*time.Millisecond, "entity1 should be reconciled on each resync tick")
+
+	// Resync ticks must not have torn down and re-established the watch.
+	assert.Len(t, store.WatchFromRevsCopy(), 1, "resync should reuse the healthy watch")
+
+	// The watch is still live: a create and a delete both arrive as events.
+	_, err := store.CreateEntity(ctx, entity.New(
+		entity.Ref(entity.DBId, "test/entity2"),
+		entity.String(entity.Type, "test/type"),
+	))
 	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return count(EventAdded, "test/entity2") >= 1
+	}, 5*time.Second, 10*time.Millisecond, "live add should arrive through the open watch")
 
-	// Wait for at least 2 resyncs
-	<-ctx.Done()
-	controller.Stop()
+	require.NoError(t, store.DeleteEntity(ctx, "test/entity1"))
+	require.Eventually(t, func() bool {
+		return count(EventDeleted, "test/entity1") >= 1
+	}, 5*time.Second, 10*time.Millisecond, "live delete should arrive through the open watch")
 
-	// Should have at least 2 resync calls
-	assert.GreaterOrEqual(t, resyncCalls, 2)
+	assert.Len(t, store.WatchFromRevsCopy(), 1, "watch should still be the original one")
+}
+
+// TestReconcileController_SlowResyncDoesNotResurrectDelete pins the ordering
+// between the periodic resync and the watch. A List held open across an
+// index-only removal (the entity still exists, its index entry is gone, as when
+// a session lease expires) returns a snapshot that predates the removal. If
+// that snapshot were enqueued after the removal had been processed, the worker
+// would read the still-present entity and reconcile it back to life. The
+// resync runs on the watch consumer goroutine so the removal cannot be
+// processed ahead of it.
+func TestReconcileController_SlowResyncDoesNotResurrectDelete(t *testing.T) {
+	log := slog.New(slogfmt.NewTestHandler(t, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := entity.NewMockStore()
+	server := &entityserver.EntityServer{
+		Log:   log,
+		Store: store,
+	}
+
+	sc := &entityserver_v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(server)),
+	}
+
+	testIndex := entity.Any(entity.Type, "test/type")
+	ctx := t.Context()
+
+	store.AddEntity("test/entity1", entity.New(
+		entity.Ref(entity.DBId, "test/entity1"),
+		entity.String(entity.Type, "test/type"),
+	))
+
+	// The test drives the raw watch stream itself so it can deliver an index
+	// removal for an entity the store still holds.
+	watches := make(chan chan clientv3.WatchResponse, 1)
+	store.OnWatchIndex = func(ctx context.Context, attr entity.Attr) (clientv3.WatchChan, error) {
+		ch := make(chan clientv3.WatchResponse)
+		watches <- ch
+		return ch, nil
+	}
+
+	// Hold the resync List open until released. The ids are read when the
+	// List starts and the mock reports the revision it started at, so the held
+	// snapshot predates the removal delivered while it is open, and every List
+	// after the removal correctly reports an empty index.
+	listing := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var holdList, removed atomic.Bool
+	var listsAfterRemoval atomic.Int64
+	store.OnListIndex = func(ctx context.Context, attr entity.Attr) ([]entity.Id, error) {
+		var ids []entity.Id
+		if removed.Load() {
+			listsAfterRemoval.Add(1)
+		} else {
+			ids = []entity.Id{"test/entity1"}
+		}
+		if holdList.CompareAndSwap(true, false) {
+			listing <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
+		return ids, nil
+	}
+
+	var mu sync.Mutex
+	var seen []Event
+	handler := func(ctx context.Context, event Event) ([]entity.Attr, error) {
+		mu.Lock()
+		seen = append(seen, event)
+		mu.Unlock()
+		return nil, nil
+	}
+	snapshot := func() []Event {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]Event(nil), seen...)
+	}
+
+	controller := NewReconcileController("test-controller", log, testIndex, sc, handler, 50*time.Millisecond, 1)
+	require.NoError(t, controller.Start(ctx))
+	defer controller.Stop()
+
+	var watch chan clientv3.WatchResponse
+	select {
+	case watch = <-watches:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the watch to be established")
+	}
+
+	require.Eventually(t, func() bool {
+		return len(snapshot()) >= 1
+	}, 5*time.Second, 10*time.Millisecond, "initial snapshot should reconcile entity1")
+
+	holdList.Store(true)
+	select {
+	case <-listing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a resync List to start")
+	}
+
+	// Remove entity1 from the index under the held List, at a revision after
+	// the List's, and wait for the watcher to deliver it before releasing so
+	// the stale snapshot provably arrives after the removal. With the resync
+	// sequenced behind the consumer the removal parks in the Updates buffer;
+	// an unsequenced resync would let it straight through to the handler.
+	removed.Store(true)
+	watch <- clientv3.WatchResponse{Events: []*clientv3.Event{{
+		Type:   clientv3.EventTypeDelete,
+		Kv:     &mvccpb.KeyValue{Key: []byte("k/test/entity1"), ModRevision: 100},
+		PrevKv: &mvccpb.KeyValue{Key: []byte("k/test/entity1"), Value: []byte("test/entity1"), ModRevision: 99},
+	}}}
+	sawDelete := func() bool {
+		for _, ev := range snapshot() {
+			if ev.Type == EventDeleted && ev.Id == "test/entity1" {
+				return true
+			}
+		}
+		return false
+	}
+	require.Eventually(t, func() bool {
+		return len(controller.watcher.Updates()) == 1 || sawDelete()
+	}, 5*time.Second, time.Millisecond, "the removal should be delivered while the List is held")
+	close(release)
+
+	require.Eventually(t, sawDelete, 5*time.Second, 10*time.Millisecond, "the index removal should reach the handler")
+
+	// Let further resync ticks run and the queue drain. The entity is still in
+	// the store, so an out-of-order snapshot would show up as an Update after
+	// the Delete.
+	require.Eventually(t, func() bool {
+		stats := controller.queue.Stats()
+		return listsAfterRemoval.Load() >= 2 && stats.depth == 0 && controller.counters.inFlight.Load() == 0
+	}, 5*time.Second, 10*time.Millisecond, "later resyncs should run and the queue should drain")
+
+	events := snapshot()
+	lastDelete := -1
+	for i, ev := range events {
+		if ev.Type == EventDeleted && ev.Id == "test/entity1" {
+			lastDelete = i
+		}
+	}
+	require.GreaterOrEqual(t, lastDelete, 0)
+	for _, ev := range events[lastDelete+1:] {
+		if ev.Id == "test/entity1" {
+			t.Fatalf("stale resync resurrected entity1 after its removal: %s", ev.Type)
+		}
+	}
 }
 
 // Test entity for AdaptController tests

@@ -32,9 +32,8 @@ func ServerUpgrade(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
-	serverOpts := release.DefaultManagerOptions()
 	if opts.Check {
-		return checkServerUpgrade(ctx, version, serverOpts)
+		return checkDaemonUpgrade(ctx, serverDaemon, version, false)
 	}
 	if opts.SkipHealth {
 		ctx.Warn("--skip-health is ignored: the upgrade verifies the new server reports ready before finishing.")
@@ -51,7 +50,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 		op.NoRollback = opts.NoAutoRollback
 		op.ReadyTimeoutSeconds = opts.HealthTimeout
 	}
-	return upgradeServerAndCLI(ctx, version, exe, opts.Force, serverOpts, customize)
+	return upgradeDaemonAndCLI(ctx, serverDaemon, version, false, exe, opts.Force, customize)
 }
 
 // ServerUpgradeRollback rolls back the server to the previous version

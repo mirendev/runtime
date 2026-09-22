@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: docker.io/library/postgres:16-alpine
+    image: oci.miren.cloud/postgres:16-alpine
     port: 5432
     environment:
       POSTGRES_USER: cloud
@@ -8,7 +8,7 @@ services:
       POSTGRES_DB: cloud
 
   valkey:
-    image: docker.io/valkey/valkey:8-alpine
+    image: oci.miren.cloud/valkey:8-alpine
     port: 6379
 
   etcd:

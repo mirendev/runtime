@@ -23,6 +23,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("containerd: %w", err)
 	}
 
+	if err := c.Deployment.Validate(); err != nil {
+		return fmt.Errorf("deployment: %w", err)
+	}
+
 	if err := c.Etcd.Validate(); err != nil {
 		return fmt.Errorf("etcd: %w", err)
 	}
@@ -95,6 +99,14 @@ func (c *ContainerdConfig) Validate() error {
 	return nil
 }
 
+// Validate validates DeploymentConfig
+func (c *DeploymentConfig) Validate() error {
+
+	// Check for port conflicts in DeploymentConfig
+
+	return nil
+}
+
 // Validate validates EtcdConfig
 func (c *EtcdConfig) Validate() error {
 
@@ -160,6 +172,11 @@ func (c *IngressConfig) Validate() error {
 		if !validMode[*c.Mode] {
 			return fmt.Errorf("invalid mode %q: must be one of [tls-autoprovision behind-proxy-http behind-proxy-https]", *c.Mode)
 		}
+	}
+
+	// Validate trusted_proxy_hops minimum
+	if c.TrustedProxyHops != nil && *c.TrustedProxyHops < 1 {
+		return fmt.Errorf("trusted_proxy_hops must be at least 1, got %d", *c.TrustedProxyHops)
 	}
 
 	// Check for port conflicts in IngressConfig

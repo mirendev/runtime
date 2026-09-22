@@ -481,29 +481,23 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 // GetEntityAtRevision reads an entity at a specific etcd revision.
 // This is used to retrieve entity data for delete events where the entity
 // may no longer exist at the current revision.
+// GetEntityAtRevision reads the entity as it was at rev, session attributes
+// included. It goes through the same pinned batch read as GetEntities so both
+// halves of the entity come from one point in time; reading the primary key
+// alone would hand back an entity missing every session-scoped attribute,
+// which for a node is its status.
 func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error) {
-	key := s.buildKey(id)
-
-	resp, err := s.client.Get(ctx, key, clientv3.WithRev(rev))
+	entities, undecodable, err := s.getEntities(ctx, []Id{id}, false, rev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entity at revision %d: %w", rev, err)
 	}
-
-	if len(resp.Kvs) == 0 {
+	if undecodable[id] {
+		return nil, cond.Corruption("entity", "failed to deserialize entity %s at revision %d", id, rev)
+	}
+	if entities[0] == nil {
 		return nil, cond.NotFound("entity", id)
 	}
-
-	var entity Entity
-
-	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
-	if err != nil {
-		return nil, cond.Corruption("entity", "failed to deserialize entity: %s", err)
-	}
-
-	entity.SetRevision(resp.Kvs[0].ModRevision)
-	entity.postUnmarshal()
-
-	return &entity, nil
+	return entities[0], nil
 }
 
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {

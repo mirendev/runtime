@@ -41,6 +41,8 @@ func RunnerStart(ctx *Context, opts struct {
 		"coordinator", cfg.CoordinatorAddress,
 		"etcd_endpoints", cfg.EtcdEndpoints)
 
+	healPathSymlinkAtBoot(ctx)
+
 	// Determine listen address. If no explicit address is given, discover the
 	// machine's outbound IP (the one that would route to the coordinator) and
 	// advertise that so the coordinator knows how to reach this runner.
@@ -63,6 +65,14 @@ func RunnerStart(ctx *Context, opts struct {
 	// start; the cert baked into the serving stack below is the reconciled one.
 	if err := reconcileRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
 		return err
+	}
+	if cfg.ListenAddress != listenAddr {
+		// Not fatal: the runner serves either way. Only the lifecycle
+		// executor reads this, and it says so when it is missing.
+		cfg.ListenAddress = listenAddr
+		if err := cfg.Save(opts.ConfigPath); err != nil {
+			ctx.Log.Warn("could not record listen address in runner config", "path", opts.ConfigPath, "error", err)
+		}
 	}
 
 	// Create clientconfig from saved certs for RPC authentication

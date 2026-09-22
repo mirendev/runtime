@@ -59,24 +59,6 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren doctor",
 		}),
 	))
-	d.Dispatch("doctor config", Infer("doctor config", "Check configuration files", DoctorConfig,
-		WithExample(mflags.Example{
-			Name: "Check config files",
-			Body: "miren doctor config",
-		}),
-	))
-	d.Dispatch("doctor server", Infer("doctor server", "Check server health and connectivity", DoctorServer,
-		WithExample(mflags.Example{
-			Name: "Check server connectivity",
-			Body: "miren doctor server",
-		}),
-	))
-	d.Dispatch("doctor auth", Infer("doctor auth", "Check authentication and user information", DoctorAuth,
-		WithExample(mflags.Example{
-			Name: "Check authentication",
-			Body: "miren doctor auth",
-		}),
-	))
 
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init,
@@ -1098,6 +1080,26 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren runner upgrade rollback",
 		}),
 	))
+	d.Dispatch("runner operations", Section("runner operations", "Durable runner restart and upgrade operations", ""))
+	d.Dispatch("runner operations list", Infer("runner operations list", "List recorded restart and upgrade operations", RunnerOperationsList,
+		WithExample(mflags.Example{
+			Name: "List operations",
+			Body: "miren runner operations list",
+		}),
+	))
+	d.Dispatch("runner operations show", Infer("runner operations show", "Show one restart or upgrade operation", RunnerOperationsShow,
+		WithExample(mflags.Example{
+			Name: "Show an operation",
+			Body: "miren runner operations show 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
+	d.Dispatch("runner operations run", Infer("runner operations run", "Execute or resume an operation in the foreground (normally launched by miren upgrade)", RunnerOperationsRun))
+	d.Dispatch("runner operations abandon", Infer("runner operations abandon", "Give up on an unfinished operation", RunnerOperationsAbandon,
+		WithExample(mflags.Example{
+			Name: "Abandon a stuck operation",
+			Body: "sudo miren runner operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
 
 	// Server commands
 	d.Dispatch("server", Infer("server", "Start the miren server", Server,
@@ -1237,14 +1239,14 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren download release",
 		}),
 	))
-	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)", Upgrade,
+	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)", Upgrade,
 		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Upgrade the CLI on a client machine",
 			Body: "miren upgrade",
 		}),
 		WithExample(mflags.Example{
-			Name: "Upgrade the server and CLI on a server host",
+			Name: "Upgrade the server or runner and the CLI on the host that runs it",
 			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{

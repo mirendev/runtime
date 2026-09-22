@@ -47,6 +47,52 @@ func TestDirtyQueueCoalescesByKey(t *testing.T) {
 	assert.Zero(t, q.Stats().depth)
 }
 
+// TestDirtyQueueOrdersLifecycleHintsByRevision covers the resync race: the
+// periodic List runs on its own goroutine, so a positive repair signal read at
+// an older revision can be enqueued after the watch already queued a newer
+// delete. The delete and its tombstone must survive; a repair read at a newer
+// revision (the entity really is back) still wins.
+func TestDirtyQueueOrdersLifecycleHintsByRevision(t *testing.T) {
+	q := newDirtyQueue()
+	defer q.Close()
+
+	tombstone := entity.New(entity.Ref(entity.DBId, "widget/one"))
+	q.Add(workSignal{id: "widget/one", priority: workUrgent, present: false, tombstone: tombstone, rev: 20})
+
+	assert.Equal(t, enqueueCoalesced, q.Add(workSignal{id: "widget/one", priority: workRepair, present: true, rev: 10}))
+	item, ok := q.Get(t.Context())
+	require.True(t, ok)
+	assert.False(t, item.present, "a stale resync must not resurrect a queued delete")
+	assert.Same(t, tombstone, item.tombstone, "the delete's tombstone survives the stale resync")
+	q.Done(item, nil)
+
+	q.Add(workSignal{id: "widget/one", priority: workUrgent, present: false, tombstone: tombstone, rev: 20})
+	q.Add(workSignal{id: "widget/one", priority: workRepair, present: true, rev: 30})
+	item, ok = q.Get(t.Context())
+	require.True(t, ok)
+	assert.True(t, item.present, "a resync read after the delete reflects the current state")
+	assert.Nil(t, item.tombstone)
+	q.Done(item, nil)
+
+	// A bridge's manual Enqueue carries no revision and keeps arrival order.
+	q.Add(workSignal{id: "widget/one", priority: workUrgent, present: false, tombstone: tombstone, rev: 20})
+	q.Add(workSignal{id: "widget/one", priority: workUrgent, present: true})
+	item, ok = q.Get(t.Context())
+	require.True(t, ok)
+	assert.True(t, item.present, "unrevisioned urgent signals are applied in arrival order")
+	q.Done(item, nil)
+
+	// A repair with no revision (a List that reports none) cannot prove it is
+	// newer than a revisioned delete, so it yields.
+	q.Add(workSignal{id: "widget/one", priority: workUrgent, present: false, tombstone: tombstone, rev: 20})
+	q.Add(workSignal{id: "widget/one", priority: workRepair, present: true})
+	item, ok = q.Get(t.Context())
+	require.True(t, ok)
+	assert.False(t, item.present, "an unrevisioned repair must not resurrect a revisioned delete")
+	assert.Same(t, tombstone, item.tombstone)
+	q.Done(item, nil)
+}
+
 func TestDirtyQueuePrioritizesAndPromotesUrgentWork(t *testing.T) {
 	q := newDirtyQueue()
 	defer q.Close()

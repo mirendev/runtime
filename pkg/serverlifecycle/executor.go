@@ -16,6 +16,9 @@ import (
 // a working configuration.
 type Options struct {
 	ServiceName string
+	// Daemon names what is being restarted in progress notes and errors:
+	// "server" or "runner".
+	Daemon string
 	// StateDir is the daemon's state directory, passed through to the
 	// resource-limit refresh that precedes a restart.
 	StateDir     string
@@ -30,20 +33,40 @@ type Options struct {
 	// PathSymlink, when set, is kept pointing at InstallPath after a
 	// successful upgrade so the CLI on $PATH tracks the server.
 	PathSymlink string
+	// UpgradeRunners hands a verified upgrade to the daemon for the
+	// upgrading_runners phase instead of finishing it. On for the server,
+	// which has runners; off for a runner, which is one.
+	UpgradeRunners bool
 }
 
 func DefaultOptions() Options {
 	return Options{
-		ServiceName:   "miren",
-		StateDir:      release.DefaultManagerOptions().StateDir,
-		InstallPath:   release.DefaultManagerOptions().InstallPath,
-		TempDir:       os.TempDir(),
-		ArtifactType:  release.ArtifactTypeBase,
-		ReadyTimeout:  3 * time.Minute,
-		ProbeInterval: 2 * time.Second,
-		AutoRollback:  true,
-		PathSymlink:   release.SystemCLIPath,
+		ServiceName:    "miren",
+		Daemon:         "server",
+		StateDir:       release.DefaultManagerOptions().StateDir,
+		InstallPath:    release.DefaultManagerOptions().InstallPath,
+		TempDir:        os.TempDir(),
+		ArtifactType:   release.ArtifactTypeBase,
+		ReadyTimeout:   3 * time.Minute,
+		ProbeInterval:  2 * time.Second,
+		AutoRollback:   true,
+		PathSymlink:    release.SystemCLIPath,
+		UpgradeRunners: true,
 	}
+}
+
+// RunnerOptions is DefaultOptions for the runner daemon: its unit, its state
+// directory, and no data backup, since a runner keeps no data of its own
+// that a rollback would need to put back. The prober is the caller's to set;
+// a runner has no health URL.
+func RunnerOptions() Options {
+	opts := DefaultOptions()
+	runner := release.RunnerManagerOptions()
+	opts.ServiceName = runner.ServiceName
+	opts.StateDir = runner.StateDir
+	opts.Daemon = "runner"
+	opts.UpgradeRunners = false
+	return opts
 }
 
 // DataBackup snapshots the server's data before an upgrade. The executor
@@ -92,8 +115,9 @@ func (e *Executor) WithRestarter(r Restarter) *Executor           { e.restarter 
 func (e *Executor) WithProber(p Prober) *Executor                 { e.prober = p; return e }
 func (e *Executor) WithDataBackup(b DataBackup) *Executor         { e.backup = b; return e }
 
-// Run drives the operation to a terminal phase or until ctx ends. A finished
-// operation is returned unchanged; an interrupted one resumes where it was.
+// Run drives the operation to a terminal phase, to the hand-off to the
+// server, or until ctx ends. A finished operation is returned unchanged; an
+// interrupted one resumes where it was.
 func (e *Executor) Run(ctx context.Context, id string) (*Operation, error) {
 	unlock, err := e.store.LockOperation(id)
 	if err != nil {
@@ -107,7 +131,7 @@ func (e *Executor) Run(ctx context.Context, id string) (*Operation, error) {
 	if err := op.validate(); err != nil {
 		return op, err
 	}
-	for !op.Done() {
+	for !op.Done() && !op.HandedOff() {
 		if err := ctx.Err(); err != nil {
 			return op, err
 		}
@@ -140,7 +164,7 @@ func (e *Executor) step(ctx context.Context, op *Operation) error {
 		return e.verify(ctx, op)
 	case PhaseRollingBack:
 		return e.rollback(ctx, op)
-	case PhaseSucceeded, PhaseFailed, PhaseRolledBack:
+	case PhaseUpgradingRunners, PhaseSucceeded, PhaseFailed, PhaseRolledBack, StepSkipped:
 		return nil
 	}
 	return e.fail(ctx, op, fmt.Errorf("unknown phase %q", op.Phase))
@@ -152,14 +176,11 @@ func (e *Executor) begin(ctx context.Context, op *Operation) error {
 	snap, err := e.prober.Probe(ctx)
 	if err != nil {
 		// Still worth restarting; we just lose the "is this a new process" check.
-		e.log.Warn("could not identify running server before operation", "operation", op.ID, "error", err)
+		e.log.Warn("could not identify running "+e.opts.Daemon+" before operation", "operation", op.ID, "error", err)
 	} else {
 		op.PreviousInstanceID = snap.InstanceID
 		op.PreviousVersion = snap.Version
 		op.PreviousCommit = snap.Commit
-		if snap.InstallKind == "container" {
-			return e.fail(ctx, op, errors.New("server runs in a container; container installs cannot be upgraded or restarted this way yet (see MIR-882)"))
-		}
 	}
 	switch op.Action {
 	case ActionRestart:
@@ -179,11 +200,12 @@ func (e *Executor) download(ctx context.Context, op *Operation) error {
 	op.ResolvedCommit = metadata.Commit
 
 	if op.PreviousVersion != "" && sameBuild(op.PreviousVersion, op.PreviousCommit, metadata.Version, metadata.Commit) {
-		// Already running the target; succeed without restarting for show.
+		// Already running the target; no restart for show. The runners may
+		// still be behind, so the hand-off happens all the same.
 		op.NewInstanceID = op.PreviousInstanceID
 		op.NewVersion = op.PreviousVersion
 		op.Progress = "already running " + op.ResolvedVersion
-		return e.transition(op, PhaseSucceeded)
+		return e.transition(op, e.upgraded())
 	}
 
 	artifactType := e.opts.ArtifactType
@@ -240,9 +262,13 @@ func (e *Executor) install(ctx context.Context, op *Operation) error {
 }
 
 func (e *Executor) restart(ctx context.Context, op *Operation) error {
-	// Resuming after a restart that took: do not bounce the server again.
+	// Resuming after a restart that took: do not bounce the server again. A
+	// new instance alone is not proof for an upgrade: the server may have
+	// been restarted for some other reason (a host reboot mid-download, say)
+	// and be the previous build again, which still needs the restart.
 	if op.PreviousInstanceID != "" {
-		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID {
+		if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != op.PreviousInstanceID &&
+			(op.Action != ActionUpgrade || sameBuild(snap.Version, snap.Commit, op.ResolvedVersion, op.ResolvedCommit)) {
 			return e.transition(op, PhaseVerifying)
 		}
 	}
@@ -264,11 +290,57 @@ func (e *Executor) verify(ctx context.Context, op *Operation) error {
 	}
 	op.NewInstanceID = snap.InstanceID
 	op.NewVersion = snap.Version
+	op.Components = snap.Components
 	op.Progress = ""
 	if op.Action == ActionUpgrade {
 		e.ensurePathSymlink(op)
+		return e.transition(op, e.upgraded())
 	}
 	return e.transition(op, PhaseSucceeded)
+}
+
+// upgraded is where a verified upgrade goes next.
+func (e *Executor) upgraded() Phase {
+	if e.opts.UpgradeRunners {
+		return PhaseUpgradingRunners
+	}
+	return PhaseSucceeded
+}
+
+// AdoptionTimeout is how long a handed-off operation may wait for a server
+// to take it over before the hand-off is treated as failed.
+const AdoptionTimeout = 2 * time.Minute
+
+// AwaitAdoption waits for the server to take over a handed-off operation.
+// The executor cannot know whether the build it just verified drives runner
+// upgrades: a target older than that support would leave the record in
+// upgrading_runners with nobody to finish it. If nothing has claimed it by
+// the deadline, the operation is failed with that diagnosis. The wait polls
+// rather than holds the operation lock, since the server needs the lock to
+// adopt it.
+func AwaitAdoption(ctx context.Context, store *Store, id string, timeout, interval time.Duration) (*Operation, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		op, err := store.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		if !op.HandedOff() || op.Adopted() {
+			return op, nil
+		}
+		if time.Now().After(deadline) {
+			if failed, err := failUnadopted(store, op, timeout); err != nil || failed != nil {
+				return failed, err
+			}
+			// Locked: the server holds it and is about to write its claim.
+			// Keep polling; the next read sees it.
+		}
+		select {
+		case <-ctx.Done():
+			return op, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }
 
 // rollback restores the binary, then asks the server to restore the data on
@@ -279,6 +351,70 @@ func (e *Executor) verify(ctx context.Context, op *Operation) error {
 // The request is recorded on the operation before the restart, and the
 // server's answer is read back after it.
 func (e *Executor) rollback(ctx context.Context, op *Operation) error {
+	if !e.rollbackRestartTook(ctx, op) {
+		if err := e.restoreAndRestart(ctx, op); err != nil {
+			return err
+		}
+		if op.Done() {
+			return nil
+		}
+	}
+	snap, err := e.awaitReady(ctx, op, func(Snapshot) bool { return true })
+	if err != nil {
+		// A server that refuses to boot because the restore failed says so
+		// in its answer; that reason belongs on the record, not just in the
+		// journal. The request stays pending, so the server keeps refusing
+		// until the restore works or an operator abandons the operation.
+		if result, _ := e.readRestoreResult(op); result != nil && result.Error != "" {
+			op.DataRestore.Error = result.Error
+			return e.fail(ctx, op, fmt.Errorf("%s; server not ready after rollback: %w; data restore failed: %s (the server retries on every boot; 'miren server operations abandon %s' starts it on the data as it is)",
+				op.Error, err, result.Error, op.ID))
+		}
+		return e.fail(ctx, op, fmt.Errorf("%s; server not ready after rollback: %w", op.Error, err))
+	}
+	op.NewInstanceID = snap.InstanceID
+	op.NewVersion = snap.Version
+	op.Components = snap.Components
+	if op.DataRestore != nil {
+		// The server is up, so either it restored the data or it never saw
+		// the request (a build that predates data restore, say). The old
+		// build on new data is exactly what this phase exists to prevent, so
+		// that is recorded as a failure, not a rollback.
+		result, err := e.readRestoreResult(op)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return e.fail(ctx, op, fmt.Errorf("%s; rolled back to %s but it did not restore %s (does that build predate data restore?)",
+				op.Error, snap.Version, op.DataRestore.BackupRef))
+		}
+		if result.Error != "" {
+			op.DataRestore.Error = result.Error
+			return e.fail(ctx, op, fmt.Errorf("%s; rolled back to %s but restoring %s failed: %s",
+				op.Error, snap.Version, op.DataRestore.BackupRef, result.Error))
+		}
+		restoredAt := result.RestoredAt
+		op.DataRestore.RestoredAt = &restoredAt
+	}
+	op.Progress = "rolled back to " + snap.Version
+	return e.transition(op, PhaseRolledBack)
+}
+
+// rollbackRestartTook reports whether a resumed rollback finds the restart
+// it asked for already done: the record names the instance that asked, and
+// a different one is answering now.
+func (e *Executor) rollbackRestartTook(ctx context.Context, op *Operation) bool {
+	if op.RollbackFrom == "" {
+		return false
+	}
+	snap, err := e.prober.Probe(ctx)
+	return err == nil && snap.InstanceID != op.RollbackFrom
+}
+
+// restoreAndRestart puts the previous binary back and restarts onto it,
+// recording each step so a rollback interrupted by its own restart can
+// resume. An outcome that ends the operation is recorded on op.
+func (e *Executor) restoreAndRestart(ctx context.Context, op *Operation) error {
 	// The restore request goes down before the binary does. The moment the
 	// previous binary is back on disk, systemd's Restart=always can launch
 	// it without waiting for us, and a launch that finds no request boots on
@@ -306,47 +442,18 @@ func (e *Executor) rollback(ctx context.Context, op *Operation) error {
 			return e.fail(ctx, op, fmt.Errorf("%s; rollback failed: %w", op.Error, err))
 		}
 	}
+	// Recorded before the restart, since in a container the restart ends
+	// this process and the next one has to know it happened.
+	if snap, err := e.prober.Probe(ctx); err == nil && snap.InstanceID != "" {
+		op.RollbackFrom = snap.InstanceID
+		if err := e.store.Update(op); err != nil {
+			return err
+		}
+	}
 	if err := e.restarter.Restart(ctx); err != nil {
 		return e.fail(ctx, op, fmt.Errorf("%s; restart after rollback failed: %w", op.Error, err))
 	}
-	snap, err := e.awaitReady(ctx, op, func(Snapshot) bool { return true })
-	if err != nil {
-		// A server that refuses to boot because the restore failed says so
-		// in its answer; that reason belongs on the record, not just in the
-		// journal. The request stays pending, so the server keeps refusing
-		// until the restore works or an operator abandons the operation.
-		if result, _ := e.readRestoreResult(op); result != nil && result.Error != "" {
-			op.DataRestore.Error = result.Error
-			return e.fail(ctx, op, fmt.Errorf("%s; server not ready after rollback: %w; data restore failed: %s (the server retries on every boot; 'miren server operations abandon %s' starts it on the data as it is)",
-				op.Error, err, result.Error, op.ID))
-		}
-		return e.fail(ctx, op, fmt.Errorf("%s; server not ready after rollback: %w", op.Error, err))
-	}
-	op.NewInstanceID = snap.InstanceID
-	op.NewVersion = snap.Version
-	if op.DataRestore != nil {
-		// The server is up, so either it restored the data or it never saw
-		// the request (a build that predates data restore, say). The old
-		// build on new data is exactly what this phase exists to prevent, so
-		// that is recorded as a failure, not a rollback.
-		result, err := e.readRestoreResult(op)
-		if err != nil {
-			return err
-		}
-		if result == nil {
-			return e.fail(ctx, op, fmt.Errorf("%s; rolled back to %s but it did not restore %s (does that build predate data restore?)",
-				op.Error, snap.Version, op.DataRestore.BackupRef))
-		}
-		if result.Error != "" {
-			op.DataRestore.Error = result.Error
-			return e.fail(ctx, op, fmt.Errorf("%s; rolled back to %s but restoring %s failed: %s",
-				op.Error, snap.Version, op.DataRestore.BackupRef, result.Error))
-		}
-		restoredAt := result.RestoredAt
-		op.DataRestore.RestoredAt = &restoredAt
-	}
-	op.Progress = "rolled back to " + snap.Version
-	return e.transition(op, PhaseRolledBack)
+	return nil
 }
 
 // readRestoreResult returns nil, nil when the server has not answered.
@@ -359,6 +466,31 @@ func (e *Executor) readRestoreResult(op *Operation) (*RestoreResult, error) {
 		return nil, nil
 	}
 	return result, err
+}
+
+// failUnadopted marks a handed-off operation nobody claimed as failed, under
+// the operation lock so it cannot race the claim. It returns nil, nil when
+// the lock is held: the server is mid-claim, and its write has not landed
+// yet, so a read now would still show the record unclaimed.
+func failUnadopted(store *Store, op *Operation, timeout time.Duration) (*Operation, error) {
+	unlock, err := store.LockOperation(op.ID)
+	if err != nil {
+		if errors.Is(err, ErrLocked) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer unlock()
+	op, err = store.Get(op.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !op.HandedOff() || op.Adopted() {
+		return op, nil
+	}
+	op.Phase = PhaseFailed
+	op.Error = fmt.Sprintf("server %s came up but did not take over the runner upgrades within %s (does that build predate them?); runners were not upgraded", op.NewVersion, timeout)
+	return op, store.Update(op)
 }
 
 // ErrNothingToAbandon is returned by Abandon for an operation that is
@@ -427,14 +559,14 @@ func (e *Executor) awaitReady(ctx context.Context, op *Operation, accept func(Sn
 		snap, err := e.prober.Probe(ctx)
 		switch {
 		case err != nil:
-			last = "waiting for the server to answer"
+			last = "waiting for the " + e.opts.Daemon + " to answer"
 			detail = err.Error()
 		case op.PreviousInstanceID != "" && snap.InstanceID == op.PreviousInstanceID:
-			last = "still the previous server instance " + snap.InstanceID
+			last = "still the previous " + e.opts.Daemon + " instance " + snap.InstanceID
 		case !snap.Ready:
-			last = "server " + snap.InstanceID + " is starting"
+			last = e.opts.Daemon + " " + snap.InstanceID + " is starting"
 		case !accept(snap):
-			last = fmt.Sprintf("server %s is ready but reports version %s", snap.InstanceID, snap.Version)
+			last = fmt.Sprintf("%s %s is ready but reports version %s", e.opts.Daemon, snap.InstanceID, snap.Version)
 		default:
 			return snap, nil
 		}
@@ -452,9 +584,9 @@ func (e *Executor) awaitReady(ctx context.Context, op *Operation, accept func(Sn
 		}
 	}
 	if detail != "" {
-		return Snapshot{}, fmt.Errorf("server not ready within %s: %s (%s)", timeout, last, detail)
+		return Snapshot{}, fmt.Errorf("%s not ready within %s: %s (%s)", e.opts.Daemon, timeout, last, detail)
 	}
-	return Snapshot{}, fmt.Errorf("server not ready within %s: %s", timeout, last)
+	return Snapshot{}, fmt.Errorf("%s not ready within %s: %s", e.opts.Daemon, timeout, last)
 }
 
 // failOrRollback and fail record an outcome, unless the run was cancelled: a
@@ -504,6 +636,12 @@ func appendReason(existing, reason string) string {
 		return reason
 	}
 	return existing + "; " + reason
+}
+
+// SameBuild reports whether two builds are the same: commits decide when
+// both are known, otherwise version strings.
+func SameBuild(versionA, commitA, versionB, commitB string) bool {
+	return sameBuild(versionA, commitA, versionB, commitB)
 }
 
 // sameBuild: commits decide when both are known, otherwise version strings.

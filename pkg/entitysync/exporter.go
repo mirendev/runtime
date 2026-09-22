@@ -150,6 +150,15 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		t.log.Warn("entity sync source epoch unavailable for selected session", "error", err)
 		return
 	}
+	// Record the epoch before validating it. If the store was restored under
+	// this process and cloud still selects the old epoch, every session ends
+	// here, and the landed watermark from the old store must not outlive it:
+	// a consumer gating deletion on that watermark would otherwise compare
+	// the restored store's revisions against a number that means nothing to
+	// them.
+	if t.diagnostics != nil {
+		t.diagnostics.setSource(sourceEpoch)
+	}
 	if config.SourceEpoch != sourceEpoch {
 		err := fmt.Errorf("cloud selected source epoch %s; local source epoch is %s", config.SourceEpoch, sourceEpoch)
 		t.fail("validate-session-config", err)
@@ -160,9 +169,6 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 	}
 
 	s := &stream{exporter: t, ctx: ctx, sourceEpoch: sourceEpoch, waiters: make(map[string]chan Ack)}
-	if t.diagnostics != nil {
-		t.diagnostics.setSource(sourceEpoch)
-	}
 	t.mu.Lock()
 	t.active = s
 	t.mu.Unlock()
@@ -207,6 +213,10 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		} else {
 			t.setMode("watching", "")
 			if t.diagnostics != nil {
+				// Resuming here means cloud reported this cursor for a source
+				// epoch that matched and a head it does not exceed, so
+				// everything at or below it is already in cloud's custody.
+				t.diagnostics.setLanded(cursor)
 				t.diagnostics.setNextWatchRevision(cursor + 1)
 			}
 			watcher, err = t.store.WatchIndex(watchCtx, t.marker(), cursor+1)
@@ -349,6 +359,26 @@ func (t *Exporter) readSourceEpoch(ctx context.Context) (string, error) {
 	return sourceEpoch, nil
 }
 
+// filter applies the contract to an entity found in the marker index. An
+// entity can carry the marker without a place in the contract: its domain
+// declared the export and its encoder stamps the marker, but the owning
+// contract was generated without merging that domain. Failing the stream on
+// one such entity would stop every other kind from syncing, so it is skipped
+// with a warning and the mismatch shows up in the logs instead. Any other
+// filter error is still the stream's to fail on.
+func (t *Exporter) filter(source *entity.Entity, what string) (*entity.Entity, bool, error) {
+	filtered, _, err := t.contract.Filter(source)
+	if err == nil {
+		return filtered, true, nil
+	}
+	if errors.Is(err, entityexport.ErrKindNotExported) {
+		t.log.Warn("skipping marked entity whose kind is not in the export contract",
+			"entity", source.Id(), "kind", entityKind(source), "during", what)
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("filter %s entity %s: %w", what, source.Id(), err)
+}
+
 func (t *Exporter) marker() entity.Attr {
 	return entity.Bool(t.contract.MarkerID(), true)
 }
@@ -415,9 +445,12 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 				}
 				return 0, nil, fmt.Errorf("read snapshot entity %s at revision %d: %w", id, head, err)
 			}
-			filtered, _, err := s.exporter.contract.Filter(source)
+			filtered, ok, err := s.exporter.filter(source, "snapshot")
 			if err != nil {
-				return 0, nil, fmt.Errorf("filter snapshot entity %s: %w", id, err)
+				return 0, nil, err
+			}
+			if !ok {
+				continue
 			}
 			entities = append(entities, filtered)
 		}
@@ -565,12 +598,31 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 		s.exporter.diagnostics.setNextWatchRevision(to + 1)
 		if committed {
 			s.exporter.diagnostics.setCursor(to)
+			s.exporter.diagnostics.setLanded(to)
 		}
 	}
 	return to, nil
 }
 
+// changes turns marker-index watch events into export changes.
+//
+// The marker index holds more than one key per entity when the entity was
+// written through a session: beside the durable index entry, the store adds
+// one leased to the writer's session so etcd drops it with the lease. A node
+// is the standing example, since a runner registers itself under its
+// coordinator health session. Those extra keys mean an entity can produce
+// several events at one revision, and can produce a DELETE event while it
+// lives on: the lease expiring is the runner losing its session, and what
+// changed is the entity (its session-scoped status is gone), not its
+// existence. So a DELETE is only a removal when the entity is absent at the
+// event's revision; otherwise it exports as a change like any other, and
+// events for the same entity and revision collapse into one.
 func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Change, error) {
+	type seenKey struct {
+		id       entity.Id
+		revision int64
+	}
+	seen := make(map[seenKey]struct{}, len(events))
 	changes := make([]Change, 0, len(events))
 	for _, event := range events {
 		revision := fallbackRevision
@@ -587,9 +639,32 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 		if id == "" {
 			return nil, errors.New("cloud export watch event has no entity id")
 		}
+		if _, duplicate := seen[seenKey{id, revision}]; duplicate {
+			continue
+		}
+		seen[seenKey{id, revision}] = struct{}{}
 
 		if event.Type == mvccpb.DELETE {
-			source, err := s.exporter.store.GetEntityAtRevision(s.ctx, id, revision-1)
+			source, err := s.exporter.store.GetEntityAtRevision(s.ctx, id, revision)
+			switch {
+			case err == nil:
+				filtered, ok, err := s.exporter.filter(source, "changed")
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					continue
+				}
+				changes = append(changes, Change{
+					Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
+				})
+				continue
+			case errors.Is(err, rpctypes.ErrCompacted):
+				return nil, errCompacted
+			case !errors.Is(err, cond.ErrNotFound{}):
+				return nil, fmt.Errorf("read entity %s at index deletion revision %d: %w", id, revision, err)
+			}
+			source, err = s.exporter.store.GetEntityAtRevision(s.ctx, id, revision-1)
 			if err != nil {
 				if errors.Is(err, rpctypes.ErrCompacted) {
 					return nil, errCompacted
@@ -601,9 +676,12 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 				}
 				return nil, fmt.Errorf("read deleted entity %s: %w", id, err)
 			}
-			filtered, _, err := s.exporter.contract.Filter(source)
+			filtered, ok, err := s.exporter.filter(source, "deleted")
 			if err != nil {
-				return nil, fmt.Errorf("filter deleted entity %s: %w", id, err)
+				return nil, err
+			}
+			if !ok {
+				continue
 			}
 			changes = append(changes, Change{
 				Op: ChangeDelete, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
@@ -618,9 +696,12 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 			}
 			return nil, fmt.Errorf("read changed entity %s at revision %d: %w", id, revision, err)
 		}
-		filtered, _, err := s.exporter.contract.Filter(source)
+		filtered, ok, err := s.exporter.filter(source, "changed")
 		if err != nil {
-			return nil, fmt.Errorf("filter changed entity %s: %w", id, err)
+			return nil, err
+		}
+		if !ok {
+			continue
 		}
 		changes = append(changes, Change{
 			Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,

@@ -32,7 +32,7 @@ type ociDescriptor struct {
 
 // RunBlobGC performs garbage collection of unreferenced registry blobs.
 // It compares blob files on disk against digests referenced by non-archived
-// artifacts and deletes any that are no longer needed.
+// artifacts or app versions and deletes any that are no longer needed.
 func (w *ImageWatchdog) RunBlobGC(ctx context.Context) (*BlobGCResult, error) {
 	result := &BlobGCResult{
 		DeletedBlobs: []string{},
@@ -91,11 +91,14 @@ func (w *ImageWatchdog) RunBlobGC(ctx context.Context) (*BlobGCResult, error) {
 }
 
 // collectReferencedBlobDigests returns the set of blob digests referenced by
-// non-archived artifacts. Artifacts with empty status (legacy) are treated as
-// active to be safe.
+// non-archived artifacts and app versions. Artifacts with empty status (legacy)
+// are treated as active to be safe.
 func (w *ImageWatchdog) collectReferencedBlobDigests(ctx context.Context) (map[string]bool, error) {
 	digests := make(map[string]bool)
 
+	// OCI config and layer blobs are reached through Artifact manifests. Static
+	// artifacts are standalone blobs, so their digests are collected directly
+	// from AppVersion entities below.
 	resp, err := w.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindArtifact))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list artifacts: %w", err)
@@ -130,6 +133,18 @@ func (w *ImageWatchdog) collectReferencedBlobDigests(ctx context.Context) (map[s
 			if layer.Digest != "" {
 				digests[layer.Digest] = true
 			}
+		}
+	}
+
+	versions, err := w.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindAppVersion))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
+	}
+	for _, e := range versions.Values() {
+		var version core_v1alpha.AppVersion
+		version.Decode(e.Entity())
+		if version.StaticArtifact != "" {
+			digests[version.StaticArtifact] = true
 		}
 	}
 

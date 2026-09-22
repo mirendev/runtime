@@ -32,6 +32,11 @@ type schemaFile struct {
 type exportSpec struct {
 	Marker string                `yaml:"marker"`
 	Kinds  map[string]exportKind `yaml:"kinds"`
+	// Owner names the domain whose schemagen run emits the merged contract
+	// for this target. Empty means this file owns it. A file that names
+	// another domain only marks its own kinds for export; the owner's
+	// -export-merge folds them into the one contract cloud sees.
+	Owner string `yaml:"owner,omitempty"`
 }
 
 type exportKind struct {
@@ -93,8 +98,8 @@ type gen struct {
 	subgen []*gen // for nested attributes
 }
 
-func GenerateSchema(sf *schemaFile, pkg string) (string, error) {
-	exportContracts, err := GenerateExportContracts(sf)
+func GenerateSchema(sf *schemaFile, pkg string, contributors ...*schemaFile) (string, error) {
+	exportContracts, err := GenerateExportContracts(sf, contributors...)
 	if err != nil {
 		return "", err
 	}

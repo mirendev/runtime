@@ -29,24 +29,66 @@ const (
 	// PhaseBackingUp sits after the download so the snapshot is as fresh as
 	// possible when the restart happens, and so a failed download or an
 	// already-installed target never costs a snapshot.
-	PhaseBackingUp   Phase = "backing_up"
-	PhaseInstalling  Phase = "installing"
-	PhaseRestarting  Phase = "restarting"
-	PhaseVerifying   Phase = "verifying"
-	PhaseRollingBack Phase = "rolling_back"
+	PhaseBackingUp  Phase = "backing_up"
+	PhaseInstalling Phase = "installing"
+	PhaseRestarting Phase = "restarting"
+	PhaseVerifying  Phase = "verifying"
+	// PhaseUpgradingRunners follows a verified server upgrade on a cluster
+	// with runners. The executor hands the operation to the server here:
+	// the server has the node inventory and the RPC to each runner, and it
+	// is the new build, which is the one that knows the runner protocol.
+	PhaseUpgradingRunners Phase = "upgrading_runners"
+	PhaseRollingBack      Phase = "rolling_back"
 
 	PhaseSucceeded  Phase = "succeeded"
 	PhaseFailed     Phase = "failed"
 	PhaseRolledBack Phase = "rolled_back"
+
+	// StepSkipped is terminal and step-only: the runner was not asked to
+	// upgrade, and the step's Error says why (not ready, predates managed
+	// upgrades). An operation never has it.
+	StepSkipped Phase = "skipped"
 )
 
 func (p Phase) Terminal() bool {
 	switch p {
-	case PhaseSucceeded, PhaseFailed, PhaseRolledBack:
+	case PhaseSucceeded, PhaseFailed, PhaseRolledBack, StepSkipped:
 		return true
-	case PhasePending, PhaseDownloading, PhaseBackingUp, PhaseInstalling, PhaseRestarting, PhaseVerifying, PhaseRollingBack:
+	case PhasePending, PhaseDownloading, PhaseBackingUp, PhaseInstalling, PhaseRestarting, PhaseVerifying, PhaseUpgradingRunners, PhaseRollingBack:
 	}
 	return false
+}
+
+// NodeStep is one runner's part of an upgrade. The runner runs its own
+// operation in its own ledger; the step mirrors what the server last saw of
+// it, so the cluster record stands on its own.
+type NodeStep struct {
+	Name     string `json:"name"`
+	RunnerID string `json:"runner_id"`
+	// OperationID is the runner-side operation, minted before the request
+	// so a repeated request finds it rather than starting another.
+	OperationID string `json:"operation_id,omitempty"`
+	// Phase is the runner operation's phase as last observed, PhasePending
+	// before the runner was asked, or StepSkipped.
+	Phase           Phase  `json:"phase"`
+	Error           string `json:"error,omitempty"`
+	Progress        string `json:"progress,omitempty"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	NewVersion      string `json:"new_version,omitempty"`
+	// Cordoned records that the walk cordoned the node for this step, so a
+	// resumed walk knows to uncordon it. An operator's cordon is left alone.
+	Cordoned bool `json:"cordoned,omitempty"`
+
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+func (s *NodeStep) Done() bool {
+	return s.Phase.Terminal()
+}
+
+func (s *NodeStep) Succeeded() bool {
+	return s.Phase == PhaseSucceeded
 }
 
 // Operation is the durable record of one restart or upgrade.
@@ -78,6 +120,13 @@ type Operation struct {
 	// Progress is a short note for the current phase, e.g. a download percentage.
 	Progress string `json:"progress,omitempty"`
 
+	// DrivenBy is the server instance that took the operation over for the
+	// runner phase, and Nodes is one step per runner it found. Both are set
+	// together, so DrivenBy on a record with no Nodes means a cluster with
+	// nothing to walk.
+	DrivenBy string      `json:"driven_by,omitempty"`
+	Nodes    []*NodeStep `json:"nodes,omitempty"`
+
 	// A successful operation ends with NewInstanceID != PreviousInstanceID;
 	// that change is how we know the restart actually happened.
 	PreviousInstanceID string `json:"previous_instance_id,omitempty"`
@@ -85,6 +134,23 @@ type Operation struct {
 	PreviousCommit     string `json:"previous_commit,omitempty"`
 	NewInstanceID      string `json:"new_instance_id,omitempty"`
 	NewVersion         string `json:"new_version,omitempty"`
+	// Components are the runtime versions (containerd, runc, ...) the server
+	// reported once it was up. A base upgrade replaces those binaries next to
+	// miren, and this is the record that the restarted server is on them.
+	Components map[string]string `json:"components,omitempty"`
+
+	// RollbackFrom names the instance that asked for the rollback's restart,
+	// so a resumed rollback can tell a restart that already took (the
+	// instance answering now is a different one) from one still to do. The
+	// systemd executor outlives the restart and never resumes; the container
+	// executor is that instance and dies at the restart it asks for.
+	// container-boot, rolling back a build that never answered, writes its
+	// own name.
+	RollbackFrom string `json:"rollback_from,omitempty"`
+	// BootAttempts counts container boots of the new build since the restart
+	// phase, kept by container-boot; it is what catches a build that crashes
+	// before the executor inside it can run.
+	BootAttempts int `json:"boot_attempts,omitempty"`
 
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
@@ -165,6 +231,17 @@ func (o *Operation) Done() bool {
 
 func (o *Operation) Succeeded() bool {
 	return o.Phase == PhaseSucceeded
+}
+
+// HandedOff reports whether the executor is finished with the operation but
+// the operation is not: the server drives it from here.
+func (o *Operation) HandedOff() bool {
+	return o.Phase == PhaseUpgradingRunners
+}
+
+// Adopted reports whether a server has taken over a handed-off operation.
+func (o *Operation) Adopted() bool {
+	return o.DrivenBy != ""
 }
 
 func (o *Operation) validate() error {

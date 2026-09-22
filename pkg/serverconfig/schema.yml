@@ -82,6 +82,11 @@ configs:
         toml: app_version
         nested: true
 
+      deployment:
+        type: DeploymentConfig
+        toml: deployment
+        nested: true
+
       saga:
         type: SagaConfig
         toml: saga
@@ -219,6 +224,17 @@ configs:
           description: "Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported."
         env: MIREN_INGRESS_ADDRESS
         toml: address
+
+      trusted_proxy_hops:
+        type: int
+        default: 1
+        cli:
+          long: ingress-trusted-proxy-hops
+          description: "Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For."
+        env: MIREN_INGRESS_TRUSTED_PROXY_HOPS
+        toml: trusted_proxy_hops
+        validation:
+          min: 1
 
   TLSConfig:
     description: TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
@@ -579,6 +595,27 @@ configs:
           long: app-version-retention-period
           description: Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
         env: MIREN_APP_VERSION_RETENTION_PERIOD
+        toml: retention_period
+
+  DeploymentConfig:
+    description: Deployment record retention garbage collection
+    fields:
+      retention_count:
+        type: int
+        default: 25
+        cli:
+          long: deployment-retention-count
+          description: Number of most-recent deployment records to retain per app regardless of age
+        env: MIREN_DEPLOYMENT_RETENTION_COUNT
+        toml: retention_count
+
+      retention_period:
+        type: string
+        default: "30d"
+        cli:
+          long: deployment-retention-period
+          description: Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely.
+        env: MIREN_DEPLOYMENT_RETENTION_PERIOD
         toml: retention_period
 
   SecretsConfig:

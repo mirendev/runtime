@@ -23,12 +23,21 @@ type Server struct {
 	store    *lifecycle.Store
 	launcher lifecycle.Launcher
 	log      *slog.Logger
+	// command is the CLI subcommand that reads this ledger, for the hint in a
+	// busy error.
+	command string
 }
 
 var _ server_v1alpha.ServerLifecycle = (*Server)(nil)
 
 func NewServer(store *lifecycle.Store, launcher lifecycle.Launcher, log *slog.Logger) *Server {
-	return &Server{store: store, launcher: launcher, log: log}
+	return &Server{store: store, launcher: launcher, log: log, command: "server operations"}
+}
+
+// ForRunner points the CLI hints at the runner's ledger.
+func (s *Server) ForRunner() *Server {
+	s.command = "runner operations"
+	return s
 }
 
 func (s *Server) List(_ context.Context, state *server_v1alpha.ServerLifecycleList) error {
@@ -77,7 +86,7 @@ func (s *Server) Start(ctx context.Context, state *server_v1alpha.ServerLifecycl
 	started, created, err := lifecycle.Start(ctx, s.store, s.launcher, op)
 	if err != nil {
 		if errors.Is(err, lifecycle.ErrBusy) {
-			return fmt.Errorf("%w; see 'miren server operations list'", err)
+			return fmt.Errorf("%w; see 'miren %s list'", err, s.command)
 		}
 		return err
 	}

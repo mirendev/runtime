@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 
 	"miren.dev/runtime/components/appmetrics"
 	"miren.dev/runtime/metrics"
@@ -115,12 +116,31 @@ func (b *appMetricsBoot) start(
 	// A zero timeout takes the writer's 30s default; vmagent is on loopback.
 	b.shipWriter = metrics.NewVictoriaMetricsWriter(log, managed.ImportURL(), 0)
 	b.shipWriter.Start()
-	b.shipping = &metrics.Labeled{Sink: b.shipWriter, Labels: identityLabels}
-	b.operational = observability.operationalMetrics
-	b.operational.Attach(b.shipping)
+	b.attachShipping(ctx, log, observability, b.shipWriter, identityLabels)
 	log.Info("runtime operational metrics shipping through managed metrics",
 		"cluster", config.ClusterID, "runner", b.inputs.runnerID)
 	return nil
+}
+
+// attachShipping joins sink to the operational fanout, labeled with the
+// cluster identity, and then re-emits the process identity series through
+// it. The order matters: the identity sample the process pushed at boot only
+// reached the embedded store, since this sink did not exist yet, so the emit
+// has to come after Attach for a process that dies before its next tick to
+// record its start time and build where the restart and skew rules can see it.
+func (b *appMetricsBoot) attachShipping(
+	ctx context.Context,
+	log *slog.Logger,
+	observability observabilityBootOutput,
+	sink metrics.PointWriter,
+	identityLabels map[string]string,
+) {
+	b.shipping = &metrics.Labeled{Sink: sink, Labels: identityLabels}
+	b.operational = observability.operationalMetrics
+	b.operational.Attach(b.shipping)
+	if err := observability.processInfo.Emit(ctx); err != nil {
+		log.Warn("failed to ship control-process identity after attaching shipping sink", "error", err)
+	}
 }
 
 func (b *appMetricsBoot) stop(ctx context.Context) error {

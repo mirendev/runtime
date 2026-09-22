@@ -45,9 +45,8 @@ func ClusterList(ctx *Context, opts struct {
 		Address  string `json:"address"`
 		Identity string `json:"identity"`
 		Active   bool   `json:"active"`
-		// Source is the config file the cluster came from, which is the one
-		// thing `doctor config` used to show that nothing else did. It answers
-		// "why is this cluster even here?" when an unexpected one shows up.
+		// Source is the config file the cluster came from. It answers "why is
+		// this cluster even here?" when an unexpected one shows up.
 		Source string `json:"source"`
 		// ViaCloud reports that commands reach this cluster through Miren
 		// Cloud, which is why it has no address of its own.

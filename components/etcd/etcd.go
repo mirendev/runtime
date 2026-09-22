@@ -418,7 +418,8 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 	e.tlsEnabled = config.TLS != nil
 
 	// Check if there's already a running task
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, slogout.AttachLogger(e.Log, "etcd",
+		slogout.WithJSONParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err == nil {
 		// Task exists, check its status
 		status, err := task.Status(ctx)
@@ -454,7 +455,7 @@ func (e *EtcdComponent) restartExistingContainer(ctx context.Context, container 
 
 	// Create and start new task with structured logging for JSON output
 	e.Log.Info("creating new task for existing container")
-	task, err = e.createTask(ctx, container)
+	task, err = e.ReplaceTask(ctx, container, e.createTask)
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}

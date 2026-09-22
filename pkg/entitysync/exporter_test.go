@@ -17,7 +17,9 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/uplink"
 )
@@ -386,6 +388,43 @@ func TestSessionValidatesEpochAfterSourcePreparation(t *testing.T) {
 	require.Empty(t, link.sent(), "the restored source must not be sent under the negotiated old epoch")
 }
 
+func TestSessionEpochMismatchResetsLandedRevision(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs lockedBuffer
+	store := &mutableEpochStore{MockStore: entity.NewMockStore(), epoch: "epoch-before-restore"}
+	diagnostics := NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		store,
+		core_v1alpha.CloudExportContract,
+		WithDiagnostics(diagnostics),
+	)
+	// Cloud landed the old store up to revision 64 while it was current.
+	diagnostics.setSource("epoch-before-restore")
+	diagnostics.setLanded(64)
+
+	// The store is restored under the running process; cloud still selects
+	// the epoch it negotiated before.
+	store.setEpoch("epoch-after-restore", nil)
+	config, err := json.Marshal(Config{
+		ExportSchema: core_v1alpha.CloudExportContract.Digest(),
+		SourceEpoch:  "epoch-before-restore",
+	})
+	require.NoError(t, err)
+
+	go exporter.runSession(ctx, uplink.Session{Capabilities: []uplink.CapabilitySelection{{
+		Name: uplink.CapabilityEntitySync, Version: Version1, Config: config,
+	}}}, newFakeLink())
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "cloud selected an unexpected entity source epoch")
+	}, time.Second, time.Millisecond)
+
+	landed, exporting := diagnostics.LandedRevision()
+	require.Zero(t, landed, "the old store's watermark must not vouch for the restored store")
+	require.True(t, exporting, "export still applies; nothing is landed yet")
+}
+
 func TestSnapshotFiltersEntities(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -564,6 +603,8 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(8), cursor)
 	require.Equal(t, int64(8), tenant.diagnostics.SnapshotStatus().CloudCursor)
+	landed, _ := tenant.diagnostics.LandedRevision()
+	require.Equal(t, int64(8), landed)
 	messages := link.sent()
 	require.Equal(t, []string{
 		TypeSnapshotBegin, TypeSnapshotBatch, TypeChangeBatch, TypeSnapshotComplete,
@@ -574,8 +615,24 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	require.Equal(t, "succeeded", entity.MustGet(change.Changes[0].Entity, core_v1alpha.DeploymentOutcomeId).Value.String())
 }
 
+// deletedAtStore answers GetEntityAtRevision the way etcd does around a
+// deletion: the entity is readable at revisions before deletedAt and gone
+// from it on. The plain MockStore ignores the revision, which cannot tell
+// "the index key went away" from "the entity went away".
+type deletedAtStore struct {
+	*entity.MockStore
+	deletedAt int64
+}
+
+func (s *deletedAtStore) GetEntityAtRevision(ctx context.Context, id entity.Id, revision int64) (*entity.Entity, error) {
+	if revision >= s.deletedAt {
+		return nil, cond.NotFound("entity", id)
+	}
+	return s.MockStore.GetEntityAtRevision(ctx, id, revision)
+}
+
 func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
-	store := entity.NewMockStore()
+	store := &deletedAtStore{MockStore: entity.NewMockStore(), deletedAt: 5}
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	app := entity.New(
 		entity.Ref(entity.DBId, "app/web"),
@@ -604,6 +661,98 @@ func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "project/secret")
 	require.NotContains(t, string(raw), string(marker))
+}
+
+// A node is written under the runner's coordinator session, so its marker
+// index carries a leased entry that etcd drops when the session lapses. That
+// DELETE is not the node leaving: the entity is still there, and what cloud
+// must hear is the entity as the store holds it at that revision. (That the
+// store's pinned read drops the session's attributes along with the session
+// is EtcdStore's contract, pinned in its own tests.)
+func TestSessionIndexExpiryExportsTheLiveEntityNotADeletion(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	node := entity.New(
+		entity.Ref(entity.DBId, "node/r1"),
+		(&compute_v1alpha.Node{ID: "node/r1", RunnerId: "runner-1", Name: "r1", Version: "v0.14.0"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(node, 7)
+	store.AddEntity(node.Id(), node)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{{
+		Type: mvccpb.DELETE,
+		Kv:   &mvccpb.KeyValue{ModRevision: 8},
+		PrevKv: &mvccpb.KeyValue{
+			Value: []byte(node.Id()), ModRevision: 7,
+		},
+	}}, 8)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, ChangePut, changes[0].Op)
+	require.Equal(t, int64(8), changes[0].Revision)
+	require.Equal(t, entity.Id("node/r1"), changes[0].EntityID)
+	require.Equal(t, compute_v1alpha.KindNode, changes[0].Kind)
+	version, ok := changes[0].Entity.Get(compute_v1alpha.NodeVersionId)
+	require.True(t, ok)
+	require.Equal(t, "v0.14.0", version.Value.String())
+}
+
+// An entity can carry the marker without a place in the contract when its
+// domain declared the export but the owner's contract was generated without
+// merging it. That is a build mistake, not a reason to stop every other kind
+// from syncing, so the entity is skipped rather than failing the stream.
+func TestMarkedEntityOfUnexportedKindIsSkippedNotFatal(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	stray := entity.New(
+		entity.Ref(entity.DBId, "stray/1"),
+		entity.Ref(entity.EntityKind, entity.Id("dev.miren.example/kind.stray")),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(stray, 3)
+	store.AddEntity(stray.Id(), stray)
+	app := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		(&core_v1alpha.App{ID: "app/web"}).Encode(),
+		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(app, 4)
+	store.AddEntity(app.Id(), app)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(stray.Id()), ModRevision: 3}},
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(app.Id()), ModRevision: 4}},
+	}, 4)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, entity.Id("app/web"), changes[0].EntityID)
+}
+
+// A session-written entity has two index keys, so one save is two events at
+// one revision. Cloud should hear about it once.
+func TestDuplicateIndexEventsAtOneRevisionCollapse(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	node := entity.New(
+		entity.Ref(entity.DBId, "node/r1"),
+		(&compute_v1alpha.Node{ID: "node/r1", RunnerId: "runner-1", Name: "r1"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(node, 9)
+	store.AddEntity(node.Id(), node)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(node.Id()), ModRevision: 9}},
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(node.Id()), ModRevision: 9}},
+	}, 9)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, ChangePut, changes[0].Op)
 }
 
 func TestDeleteSkipsStaleIndexEntryWithoutPriorEntityState(t *testing.T) {

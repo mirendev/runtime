@@ -202,6 +202,14 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Containerd.StartEmbedded = flags.ContainerdConfigStartEmbedded
 	}
 
+	if flags.DeploymentConfigRetentionCount != nil {
+		cfg.Deployment.RetentionCount = flags.DeploymentConfigRetentionCount
+	}
+
+	if flags.DeploymentConfigRetentionPeriod != nil && *flags.DeploymentConfigRetentionPeriod != "" {
+		cfg.Deployment.RetentionPeriod = flags.DeploymentConfigRetentionPeriod
+	}
+
 	if flags.EtcdConfigClientPort != nil {
 		cfg.Etcd.ClientPort = flags.EtcdConfigClientPort
 	}
@@ -236,6 +244,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 
 	if flags.IngressConfigMode != nil && *flags.IngressConfigMode != "" {
 		cfg.Ingress.Mode = flags.IngressConfigMode
+	}
+
+	if flags.IngressConfigTrustedProxyHops != nil {
+		cfg.Ingress.TrustedProxyHops = flags.IngressConfigTrustedProxyHops
 	}
 
 	if flags.RemoteWriteConfigURL != nil && *flags.RemoteWriteConfigURL != "" {

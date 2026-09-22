@@ -143,6 +143,12 @@ Two other modes are available for deployments where Miren sits behind a TLS-term
 | `behind-proxy-http` | Plain HTTP at the configured address (default `127.0.0.1:80`); TLS lives at the proxy | n/a (proxy terminates TLS) |
 | `behind-proxy-https` | TLS terminated at the configured address (default `127.0.0.1:443`); no `:80` listener, so no HTTP-01 ACME | `[tls]` self-signed or DNS-01 ACME only |
 
+Under `behind-proxy-http`, Miren learns the visitor's original scheme from the proxy's `X-Forwarded-Proto` (or RFC 7239 `Forwarded`) header, and uses it to decide whether auth cookies are marked `Secure` and what `X-Forwarded-Proto` your app receives. It selects the visitor address for access logs from `X-Forwarded-For`, counting from the right past `ingress.trusted_proxy_hops` trusted proxies (one by default). In the other two modes Miren terminates TLS itself, so it ignores those headers on inbound requests and goes by the connection. Traffic arriving through a [Miren Anywhere](./miren-cloud/miren-anywhere.md) POP is always https, since the POP terminates TLS for visitors.
+
+:::warning[`behind-proxy-http` trusts the proxy, so lock it down]
+The proxy must set `X-Forwarded-Proto` and overwrite any value the client sent. If the listener is bound anywhere other than loopback, a firewall must limit it to the proxy's addresses; see [`[ingress]`](./server-config.md#ingress) for why.
+:::
+
 See [Server Configuration Reference → `[ingress]`](./server-config.md#ingress) for the full schema. The HTTP-01 ACME flow described above only applies under `tls-autoprovision`; under `behind-proxy-https`, certs must come from DNS-01 ACME or be self-signed because Miren doesn't bind `:80` in that mode (and the public DNS for the hostname points at the proxy anyway, not at Miren).
 
 ## TLS Settings Reference

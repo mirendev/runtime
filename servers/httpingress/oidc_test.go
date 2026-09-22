@@ -1,7 +1,10 @@
 package httpingress
 
 import (
+	"context"
+	"crypto/tls"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -257,9 +260,9 @@ func TestGetOrCreateOIDCHandlerCacheInvalidation(t *testing.T) {
 	signingKey := make([]byte, 32)
 
 	srv := &Server{
-		Log:                slog.Default(),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
+		Log:            slog.Default(),
+		sessionManager: oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:   make(map[string]*oidcHandler),
 	}
 
 	providerIdent := "test/oidc-provider"
@@ -304,4 +307,85 @@ func TestGetOrCreateOIDCHandlerCacheInvalidation(t *testing.T) {
 	if h1 == h3 {
 		t.Error("expected different handler instance after provider change")
 	}
+}
+
+func TestRequestScheme(t *testing.T) {
+	tlsReq := func(hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.TLS = &tls.ConnectionState{}
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	plainReq := func(hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+
+	for _, tc := range []struct {
+		name  string
+		trust bool
+		req   *http.Request
+		want  string
+	}{
+		// Untrusted: only the connection's own TLS state counts.
+		{"untrusted plain", false, plainReq(nil), "http"},
+		{"untrusted tls", false, tlsReq(nil), "https"},
+		{"untrusted ignores downgrade header over tls", false, tlsReq(map[string]string{"X-Forwarded-Proto": "http"}), "https"},
+		{"untrusted ignores upgrade header over plain", false, plainReq(map[string]string{"X-Forwarded-Proto": "https"}), "http"},
+		{"untrusted ignores Forwarded", false, plainReq(map[string]string{"Forwarded": "for=1.2.3.4;proto=https"}), "http"},
+
+		// Trusted: the proxy's header wins over the (plain) hop to Miren.
+		{"trusted plain no header", true, plainReq(nil), "http"},
+		{"trusted X-Forwarded-Proto https", true, plainReq(map[string]string{"X-Forwarded-Proto": "https"}), "https"},
+		{"trusted X-Forwarded-Proto mixed case", true, plainReq(map[string]string{"X-Forwarded-Proto": "HTTPS"}), "https"},
+		{"trusted Forwarded proto", true, plainReq(map[string]string{"Forwarded": "for=1.2.3.4;proto=https;host=x"}), "https"},
+		{"trusted Forwarded quoted proto", true, plainReq(map[string]string{"Forwarded": `proto="https"`}), "https"},
+		{"trusted X-Forwarded-Proto beats Forwarded", true, plainReq(map[string]string{"X-Forwarded-Proto": "http", "Forwarded": "proto=https"}), "http"},
+		{"trusted junk falls back to connection", true, tlsReq(map[string]string{"X-Forwarded-Proto": "gopher"}), "https"},
+		{"trusted empty falls back to connection", true, plainReq(map[string]string{"X-Forwarded-Proto": ""}), "http"},
+
+		// Chained proxies append; the first element is the client-facing hop.
+		{"trusted chained X-Forwarded-Proto", true, plainReq(map[string]string{"X-Forwarded-Proto": "https, http"}), "https"},
+		{"trusted chained Forwarded", true, plainReq(map[string]string{"Forwarded": "for=1.1.1.1;proto=https, for=2.2.2.2;proto=http"}), "https"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{config: IngressConfig{TrustProxyHeaders: tc.trust}}
+			if got := s.requestScheme(tc.req); got != tc.want {
+				t.Errorf("requestScheme = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A trusted in-process proxy (the Anywhere POP forwarder) stamps the
+	// scheme on the context, and that wins regardless of mode, headers, or
+	// connection state.
+	t.Run("origin scheme from context wins", func(t *testing.T) {
+		s := &Server{config: IngressConfig{TrustProxyHeaders: false}}
+		r := plainReq(map[string]string{"X-Forwarded-Proto": "http"})
+		r = r.WithContext(WithOriginScheme(r.Context(), "https"))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https", got)
+		}
+	})
+
+	t.Run("origin scheme is normalized", func(t *testing.T) {
+		s := &Server{}
+		r := plainReq(nil).WithContext(WithOriginScheme(context.Background(), " HTTPS "))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https", got)
+		}
+	})
+
+	t.Run("invalid origin scheme is not recorded", func(t *testing.T) {
+		s := &Server{}
+		r := tlsReq(nil).WithContext(WithOriginScheme(context.Background(), ""))
+		if got := s.requestScheme(r); got != "https" {
+			t.Errorf("requestScheme = %q, want https from connection", got)
+		}
+	})
 }

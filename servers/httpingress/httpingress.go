@@ -83,6 +83,16 @@ type IngressConfig struct {
 	WorkloadIssuer *workloadidentity.Issuer
 	// Instance, when set, adds process identity and readiness to /health.
 	Instance *serverinfo.Source
+	// TrustProxyHeaders honors X-Forwarded-Proto and Forwarded from the peer
+	// when deciding a request's original scheme. Only set this when every
+	// connection comes from a proxy that overwrites those headers; a client
+	// that can reach the listener directly could otherwise downgrade its own
+	// auth cookies to non-Secure.
+	TrustProxyHeaders bool
+	// TrustedProxyHops is the number of trusted proxies in front of Miren,
+	// including its immediate peer. It defaults to one when proxy headers are
+	// trusted.
+	TrustedProxyHops int
 }
 
 type Server struct {
@@ -116,9 +126,12 @@ type Server struct {
 	mu   sync.Mutex
 	apps map[string]*appUsage
 
-	oidcSessionManager *oidc.SessionManager
-	oidcMu             sync.RWMutex
-	oidcHandlers       map[string]*oidcHandler
+	// sessionManager holds the cookie encryption key shared by every
+	// cookie-based auth backend (OIDC, connector, password). Handlers get a
+	// per-scheme copy via sessionManagerFor rather than this instance.
+	sessionManager *oidc.SessionManager
+	oidcMu         sync.RWMutex
+	oidcHandlers   map[string]*oidcHandler
 
 	wafEngine       *waf.Engine
 	wafProfileMu    sync.RWMutex
@@ -131,6 +144,7 @@ type Server struct {
 	connectorHandlers map[string]*connectorHandler
 
 	workloadIssuer *workloadidentity.Issuer
+	staticFiles    staticFileServer
 }
 
 type appUsage struct {
@@ -165,25 +179,26 @@ func NewServer(
 	}
 
 	serv := &Server{
-		Log:                log.With("module", "httpingress"),
-		config:             config,
-		rpcClient:          rpcClient,
-		eac:                eac,
-		ingressClient:      ingress.NewClient(log, rpcClient),
-		appClient:          app.NewClient(log, rpcClient),
-		aa:                 aa,
-		transport:          newProxyTransport(config.RequestTimeout),
-		transports:         make(map[time.Duration]http.RoundTripper),
-		httpMetrics:        httpMetrics,
-		logWriter:          logWriter,
-		apps:               make(map[string]*appUsage),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
-		wafEngine:          waf.NewEngine(log.With("component", "waf")),
-		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
-		passwordHandlers:   make(map[string]*passwordHandler),
-		connectorHandlers:  make(map[string]*connectorHandler),
-		workloadIssuer:     config.WorkloadIssuer,
+		Log:               log.With("module", "httpingress"),
+		config:            config,
+		rpcClient:         rpcClient,
+		eac:               eac,
+		ingressClient:     ingress.NewClient(log, rpcClient),
+		appClient:         app.NewClient(log, rpcClient),
+		aa:                aa,
+		transport:         newProxyTransport(config.RequestTimeout),
+		transports:        make(map[time.Duration]http.RoundTripper),
+		httpMetrics:       httpMetrics,
+		logWriter:         logWriter,
+		apps:              make(map[string]*appUsage),
+		sessionManager:    oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:      make(map[string]*oidcHandler),
+		wafEngine:         waf.NewEngine(log.With("component", "waf")),
+		wafProfileCache:   make(map[entity.Id]*wafProfileEntry),
+		passwordHandlers:  make(map[string]*passwordHandler),
+		connectorHandlers: make(map[string]*connectorHandler),
+		workloadIssuer:    config.WorkloadIssuer,
+		staticFiles:       newArchiveStaticFileServer(config.DataPath),
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
 
@@ -947,6 +962,34 @@ func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralRes
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
+	if target.config.StaticDir != "" && service == "web" {
+		start := time.Now()
+		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		if h.staticFiles == nil {
+			http.Error(staticResponse, "static file service unavailable", http.StatusServiceUnavailable)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		served, err := h.staticFiles.ServeFile(staticResponse, req, &target.version)
+		if err != nil {
+			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
+			if !served {
+				http.Error(staticResponse, "failed to serve static file", http.StatusInternalServerError)
+			}
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if served {
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if !configHasService(target.config, service) {
+			http.NotFound(staticResponse, req)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+	}
+
 	ctx := req.Context()
 	ephemeralLabel := target.ephemeralLabel
 
@@ -1062,6 +1105,47 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	}
 }
 
+func (h *Server) responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
+	return httputil.ProxyStats{
+		StartTime:     start,
+		Duration:      time.Since(start),
+		StatusCode:    response.statusCode,
+		ResponseBytes: int64(response.bytesWritten),
+		RequestMethod: req.Method,
+		RequestPath:   req.URL.Path,
+		RequestQuery:  req.URL.RawQuery,
+		RequestHost:   req.Host,
+		RemoteAddr:    h.requestSourceIP(req),
+		ContentLength: max(0, req.ContentLength),
+	}
+}
+
+func (h *Server) requestSourceIP(req *http.Request) string {
+	remoteAddr := req.RemoteAddr
+	if h.config.TrustProxyHeaders {
+		hops := max(1, h.config.TrustedProxyHops)
+		forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+		if len(forwarded) >= hops {
+			if client := strings.TrimSpace(forwarded[len(forwarded)-hops]); client != "" {
+				remoteAddr = client
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
+func configHasService(config *core_v1alpha.ConfigSpec, name string) bool {
+	for _, service := range config.Services {
+		if service.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
 	if h.logWriter == nil {
 		return
@@ -1120,13 +1204,13 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			outReq.URL.Scheme = targetParsed.Scheme
 			outReq.URL.Host = targetParsed.Host
 
-			// Set X-Forwarded-Proto to indicate the original protocol
-			if req.TLS == nil {
-				outReq.Header.Set("X-Forwarded-Proto", "http")
-			} else {
-				outReq.Header.Set("X-Forwarded-Proto", "https")
-			}
-
+			// Tell the app the original protocol. Same trust rules as auth:
+			// a front proxy's header counts only under behind-proxy-http.
+			// The Director path of the reverse proxy doesn't strip inbound
+			// forwarding headers, so drop the client's Forwarded ourselves;
+			// the X-Forwarded-* values below overwrite theirs.
+			outReq.Header.Del("Forwarded")
+			outReq.Header.Set("X-Forwarded-Proto", h.requestScheme(req))
 			outReq.Header.Set("X-Forwarded-Host", req.Host)
 
 			// Mark this as a public request (strip any client-provided value first)
@@ -1154,6 +1238,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			rw.WriteHeader(http.StatusBadGateway)
 		},
 		Callback: func(stats httputil.ProxyStats) {
+			stats.RemoteAddr = h.requestSourceIP(req)
 			h.logRequestFromStats(appEntityID, appName, stats)
 		},
 	}
@@ -1166,40 +1251,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	}
 	return nil
 }
-
-/*
-func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {
-	labels, err := container.Labels(ctx)
-	if err == nil {
-		if host, ok := labels[httpHostLabel]; ok {
-			h.Log.Info("http endpoint found", "id", container.ID(), "host", host)
-			var ep discovery.Endpoint
-
-			if dir, ok := labels[staticDirLabel]; ok {
-				h.Log.Info("using local container endpoint for static_dir", "id", container.ID())
-				ep = &discovery.LocalContainerEndpoint{
-					Log: h.Log,
-					HTTP: discovery.HTTPEndpoint{
-						Host: "http://" + host,
-					},
-					Client:    h.CC,
-					Namespace: h.Namespace,
-					Dir:       dir,
-					Id:        container.ID(),
-				}
-			} else {
-				ep = &discovery.HTTPEndpoint{
-					Host: "http://" + host,
-				}
-			}
-
-			return ep, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to derive endpoint")
-}
-*/
 
 // responseWriter wraps http.ResponseWriter to capture status code and response size
 type responseWriter struct {

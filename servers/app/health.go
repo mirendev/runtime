@@ -27,17 +27,17 @@ func specAllowsScaleToZero(spec *core_v1alpha.ConfigSpec) bool {
 	return true
 }
 
-// specIsTaskOnly reports whether an app declares work but nothing long-running.
+// specNeedsNoService reports whether an app declares work or static content but
+// no long-running service.
 //
 // Such an app has no pools, so without this it falls into the same "desired ==
-// 0" branch as an autoscaled app that scaled down, and reports idle forever --
-// on a code path that means "deliberately asleep" rather than "deployed and
-// waiting to be invoked".
-func specIsTaskOnly(spec *core_v1alpha.ConfigSpec) bool {
+// 0" branch as an autoscaled app that scaled down and reports idle rather than
+// its actual steady state.
+func specNeedsNoService(spec *core_v1alpha.ConfigSpec) bool {
 	if spec == nil {
 		return false
 	}
-	return len(spec.Services) == 0 && len(spec.Tasks) > 0
+	return len(spec.Services) == 0 && (len(spec.Tasks) > 0 || spec.StaticDir != "")
 }
 
 // poolHealth aggregates the readiness-relevant fields across an app's (or a
@@ -53,9 +53,9 @@ type poolHealth struct {
 	// isAutoscale defaults to true and is cleared when any contributing pool is
 	// configured with fixed concurrency.
 	isAutoscale bool
-	// isTaskOnly marks an app that declares tasks and no services. It has no
-	// pools by design, so it must not be read as one that scaled away.
-	isTaskOnly bool
+	// needsNoService marks an app that has no pools by design, so it must not
+	// be read as one that scaled away.
+	needsNoService bool
 }
 
 // accumulate folds one pool's state into the aggregate.
@@ -140,7 +140,7 @@ func (h poolHealth) classify() string {
 		// is deployed and waiting to be invoked, which is its steady state.
 		// This must be checked before the autoscale branch, which would
 		// otherwise read it as deliberately scaled away.
-		if h.isTaskOnly {
+		if h.needsNoService {
 			return apphealth.Ready
 		}
 		// Deliberately scaled to zero only applies to apps that can autoscale

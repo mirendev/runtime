@@ -11,7 +11,7 @@ func ServerRestart(ctx *Context, opts struct{}) error {
 	if !release.IsServerRunning() {
 		return fmt.Errorf("miren server is not running as a systemd service on this machine")
 	}
-	op, err := runOperation(ctx, serverlifecycle.NewOperation(serverlifecycle.ActionRestart, "cli"))
+	op, err := runOperation(ctx, serverDaemon, serverlifecycle.NewOperation(serverlifecycle.ActionRestart, "cli"))
 	if err != nil {
 		return err
 	}

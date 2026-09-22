@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/components/runner"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/runnerconfig"
+	"miren.dev/runtime/pkg/serverinfo"
 )
 
 const (
@@ -47,6 +48,9 @@ type StartOptions struct {
 type Runtime struct {
 	graph *boot.Graph
 	once  sync.Once
+	// instance identifies this process to anyone asking whether a restart
+	// took, and reports ready once the graph has started every component.
+	instance *serverinfo.Source
 
 	Runner *runner.Runner
 
@@ -66,7 +70,7 @@ func Start(options StartOptions) (*Runtime, error) {
 		return nil, fmt.Errorf("distributed runner errgroup is required")
 	}
 
-	runtime := &Runtime{graph: boot.NewGraph()}
+	runtime := &Runtime{graph: boot.NewGraph(), instance: serverinfo.New()}
 	components := newStartup(runtime, options)
 	if err := components.addComponents(); err != nil {
 		return nil, err
@@ -82,6 +86,7 @@ func Start(options StartOptions) (*Runtime, error) {
 		}
 		return nil, err
 	}
+	runtime.instance.MarkReady()
 	runtime.Runner = &runner.Runner{
 		Access:       components.clusterAccess.output.Value().access,
 		Storage:      components.nodeStorage.output.Value(),

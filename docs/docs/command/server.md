@@ -30,6 +30,8 @@ miren server [flags]
 - `--containerd-binary` — Path to containerd binary
 - `--containerd-socket` — Path to containerd socket
 - `--data-path, -d` — Data path
+- `--deployment-retention-count` — Number of most-recent deployment records to retain per app regardless of age
+- `--deployment-retention-period` — Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely.
 - `--disk-mode` — Disk I/O mode: auto (default, detect from hardware), universal (loop devices), or accelerator (lbd devices)
 - `--dns-names` — Additional DNS names assigned to the server cert
 - `--etcd, -e` — Etcd endpoints
@@ -41,6 +43,7 @@ miren server [flags]
 - `--http-request-timeout` — HTTP request timeout in seconds
 - `--ingress-address` — Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported.
 - `--ingress-mode` — Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)
+- `--ingress-trusted-proxy-hops` — Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For.
 - `--ips` — Additional IPs assigned to the server cert
 - `--labs` — Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable.
 - `--metrics-remote-write-audience` — Workload identity audience for the managed metrics destination
