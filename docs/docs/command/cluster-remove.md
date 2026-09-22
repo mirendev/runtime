@@ -11,7 +11,7 @@ Remove a cluster from the configuration
 ## Usage
 
 ```bash
-miren cluster remove <cluster> [flags]
+miren cluster remove [cluster] [flags]
 ```
 
 ## Arguments

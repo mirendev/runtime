@@ -53,6 +53,61 @@ miren deploy -d path/to/app
 
 Miren reads the app name from `.miren/app.toml`. If you haven't set up your project yet, Miren offers to run `miren init` for you. `miren init` creates `app.toml` with the app name derived from your directory, then scans the project for required environment variables and stages whatever it can — generated secrets, read-from-file values, and sensible defaults — on the app's initial config so they're available on the first deploy. See [What `miren init` Does for You](./app-configuration.md#what-miren-init-does-for-you) for the full picture. If this is the first deploy of the app, Miren creates it automatically on the server.
 
+### Deployment targets
+
+To keep deployment destinations in the repository, add a target from the app directory:
+
+<CliCommand context="client">
+```miren
+miren deploy target add staging
+```
+</CliCommand>
+
+Choose a configured cluster from the picker. For scripts, supply its local name directly:
+
+<CliCommand context="client">
+```miren
+miren deploy target add prod my-prod-cluster
+```
+</CliCommand>
+
+Miren creates `.miren/deploy.toml` alongside `app.toml`, recording both the local cluster name and its stable Miren Cloud ID:
+
+```toml
+[[targets]]
+name = "staging"
+cluster = "miren-staging"
+cluster_id = "cluster-abc123"
+
+[[targets]]
+name = "prod"
+cluster = "miren-prod"
+cluster_id = "cluster-def456"
+```
+
+The first target is the default for `miren deploy`. Select another by name:
+
+<CliCommand context="client">
+```miren
+miren deploy --target prod
+```
+</CliCommand>
+
+`cluster_id` is the stable Miren Cloud cluster ID. The CLI records it automatically for cloud-managed clusters, so the target resolves correctly even when different users added that cluster under different local names. The `cluster` name remains the fallback for clusters without a cloud ID.
+
+Manage the file without editing TOML by hand:
+
+```miren
+miren deploy target                 # list targets
+miren deploy target add qa          # add via cluster picker
+miren deploy target set-default prod
+miren deploy target remove qa
+```
+
+An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with either explicit cluster selection.
+
+Selecting a deployment target affects that deploy only. It does not change the app's pinned cluster for commands such as `miren logs`.
+
 ### Confirmation Prompt
 
 If your cluster config includes multiple clusters, Miren asks you to confirm which cluster to deploy to. Skip the prompt with `--force`:

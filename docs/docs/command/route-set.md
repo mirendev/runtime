@@ -11,7 +11,7 @@ Create or update an HTTP route
 ## Usage
 
 ```bash
-miren route set <host> <appname> [flags]
+miren route set <host> [appname] [flags]
 ```
 
 ## Arguments

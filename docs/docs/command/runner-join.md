@@ -11,7 +11,7 @@ Join this machine to a coordinator as a runner
 ## Usage
 
 ```bash
-miren runner join <tokenarg> [flags]
+miren runner join [tokenarg] [flags]
 ```
 
 ## Arguments

@@ -52,6 +52,7 @@ miren deploy [flags]
 - `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
 - `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
+- `--target` — Deployment target from .miren/deploy.toml
 - `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
 - `--version, -V` — Deploy an existing version (reuse its resolved image; skip image selection and build)
 
@@ -120,3 +121,4 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 ## Subcommands
 
 - [`miren deploy cancel`](./deploy-cancel.md) — Cancel an in-progress deployment
+- [`miren deploy target`](./deploy-target.md) — List deployment targets

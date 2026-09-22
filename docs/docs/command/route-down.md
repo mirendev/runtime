@@ -21,7 +21,7 @@ Preview subdomains resolve through their base route, so taking `app.example.com`
 ## Usage
 
 ```bash
-miren route down <host> [flags]
+miren route down [host] [flags]
 ```
 
 ## Arguments

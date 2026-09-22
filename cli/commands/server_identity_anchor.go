@@ -10,7 +10,7 @@ import (
 // IdentityAnchorOptions contains options for moving a cluster's workload
 // identity anchor.
 type IdentityAnchorOptions struct {
-	Anchor   string `position:"0" usage:"Where to anchor workload identity: cluster or cloud"`
+	Anchor   string `position:"0" usage:"Where to anchor workload identity: cluster or cloud" required:"true"`
 	DataPath string `short:"d" long:"data-path" description:"Server data path" default:"/var/lib/miren"`
 }
 

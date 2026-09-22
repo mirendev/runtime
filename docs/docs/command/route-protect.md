@@ -11,7 +11,7 @@ Protect an HTTP route with an identity provider
 ## Usage
 
 ```bash
-miren route protect <host> [flags]
+miren route protect [host] [flags]
 ```
 
 ## Arguments

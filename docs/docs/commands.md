@@ -104,6 +104,11 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren deploy`](./command/deploy.md) | Deploy an application |
 | [`miren deploy cancel`](./command/deploy-cancel.md) | Cancel an in-progress deployment |
+| [`miren deploy target`](./command/deploy-target.md) | List deployment targets |
+| [`miren deploy target add`](./command/deploy-target-add.md) | Add a deployment target |
+| [`miren deploy target list`](./command/deploy-target-list.md) | List deployment targets |
+| [`miren deploy target remove`](./command/deploy-target-remove.md) | Remove a deployment target |
+| [`miren deploy target set-default`](./command/deploy-target-set-default.md) | Set the default deployment target |
 
 ## disk
 
