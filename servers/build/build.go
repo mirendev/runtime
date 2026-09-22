@@ -208,15 +208,13 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 	return result
 }
 
-// errNoServices is returned when a build produces neither services nor tasks.
-// An app made entirely of tasks is valid — it just has nothing running between
-// invocations — so this only fires when there is no workload of any kind.
-var errNoServices = errors.New("no services or tasks defined: please define at least one service or task in a Procfile or .miren/app.toml")
+// errNoServices is returned when a build produces no service, task, or static
+// content. Static-only apps are valid and run no sandbox between requests.
+var errNoServices = errors.New("no services, tasks, or static_dir defined: please define at least one workload in a Procfile or .miren/app.toml")
 
-// validateWorkloadsExist checks that the app declares something to run: either
-// a long-running service or a task the platform can invoke.
+// validateWorkloadsExist checks that the app declares something to run or serve.
 func validateWorkloadsExist(spec core_v1alpha.ConfigSpec) error {
-	if len(spec.Services) == 0 && len(spec.Tasks) == 0 {
+	if len(spec.Services) == 0 && len(spec.Tasks) == 0 && spec.StaticDir == "" {
 		return errNoServices
 	}
 	return nil
@@ -243,7 +241,7 @@ should have a web service.
 // that. Nothing here is new-user-hostile, since the config shape it fires on
 // cannot exist before tasks.
 func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]string) error {
-	if ac == nil || len(ac.Tasks) == 0 {
+	if ac == nil || len(ac.Tasks) == 0 || ac.StaticDir != "" {
 		return nil
 	}
 	// A service declared anywhere — app.toml or Procfile — answers the question.
@@ -789,6 +787,9 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 
 	// Preserve existing variables for merging later
 	spec.Variables = inputs.ExistingConfig.Variables
+	if ac != nil {
+		spec.StaticDir = ac.StaticDir
+	}
 
 	// Set entrypoint from stack build result
 	if res != nil && res.Entrypoint != "" {
@@ -822,7 +823,7 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 			"file", appconfig.AppConfigPath)
 	}
 
-	ensureWeb := res != nil && inputs.SourceKind != "image"
+	ensureWeb := res != nil && inputs.SourceKind != "image" && spec.StaticDir == ""
 	spec.Services = buildServicesConfig(ac, procfileServices, ensureWeb, webDefault)
 	if inputs.SourceKind == "image" {
 		inheritPrimaryImage(&spec, inputs.SourceValue)
@@ -1739,6 +1740,9 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 		detectedStack, _ = stackbuild.DetectStack(path, detectOpts)
 	case "image":
 		recordDirectImage(resolution.BuildStack.Input)
+	case "static":
+		stackName = "static"
+		buildResult.WorkingDir = "/app"
 	case "auto":
 		detectedStack = resolution.DetectedStack
 		if detectedStack == nil {

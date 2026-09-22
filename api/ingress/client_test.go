@@ -507,6 +507,11 @@ func TestHTTPService(t *testing.T) {
 			wantErr: `app service "api" does not exist`,
 		},
 		{
+			name:    "static-only app accepts web route",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{StaticDir: "/app/dist"},
+		},
+		{
 			name:    "non-web service without a port is not HTTP capable",
 			service: "worker",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "worker"}}},

@@ -140,6 +140,7 @@ type Server struct {
 	connectorHandlers map[string]*connectorHandler
 
 	workloadIssuer *workloadidentity.Issuer
+	staticFiles    staticFileServer
 }
 
 type appUsage struct {
@@ -193,6 +194,7 @@ func NewServer(
 		passwordHandlers:  make(map[string]*passwordHandler),
 		connectorHandlers: make(map[string]*connectorHandler),
 		workloadIssuer:    config.WorkloadIssuer,
+		staticFiles:       newArchiveStaticFileServer(config.DataPath),
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
 
@@ -956,6 +958,28 @@ func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralRes
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
+	if target.config.StaticDir != "" {
+		if h.staticFiles == nil {
+			http.Error(w, "static file service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		served, err := h.staticFiles.ServeFile(w, req, &target.version)
+		if err != nil {
+			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
+			if !served {
+				http.Error(w, "failed to serve static file", http.StatusInternalServerError)
+			}
+			return
+		}
+		if served {
+			return
+		}
+		if !configHasService(target.config, service) {
+			http.NotFound(w, req)
+			return
+		}
+	}
+
 	ctx := req.Context()
 	ephemeralLabel := target.ephemeralLabel
 
@@ -1071,6 +1095,15 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	}
 }
 
+func configHasService(config *core_v1alpha.ConfigSpec, name string) bool {
+	for _, service := range config.Services {
+		if service.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
 	if h.logWriter == nil {
 		return
@@ -1175,40 +1208,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	}
 	return nil
 }
-
-/*
-func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {
-	labels, err := container.Labels(ctx)
-	if err == nil {
-		if host, ok := labels[httpHostLabel]; ok {
-			h.Log.Info("http endpoint found", "id", container.ID(), "host", host)
-			var ep discovery.Endpoint
-
-			if dir, ok := labels[staticDirLabel]; ok {
-				h.Log.Info("using local container endpoint for static_dir", "id", container.ID())
-				ep = &discovery.LocalContainerEndpoint{
-					Log: h.Log,
-					HTTP: discovery.HTTPEndpoint{
-						Host: "http://" + host,
-					},
-					Client:    h.CC,
-					Namespace: h.Namespace,
-					Dir:       dir,
-					Id:        container.ID(),
-				}
-			} else {
-				ep = &discovery.HTTPEndpoint{
-					Host: "http://" + host,
-				}
-			}
-
-			return ep, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to derive endpoint")
-}
-*/
 
 // responseWriter wraps http.ResponseWriter to capture status code and response size
 type responseWriter struct {

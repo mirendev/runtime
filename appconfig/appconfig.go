@@ -299,6 +299,7 @@ func (tc *TaskConfig) ResolvedMaxConcurrent() int {
 
 type AppConfig struct {
 	Name         string                    `toml:"name"`
+	StaticDir    string                    `toml:"static_dir,omitempty"`
 	EnvVars      []AppEnvVar               `toml:"env,omitempty"`
 	Concurrency  *int                      `toml:"concurrency,omitempty"`
 	Services     map[string]*ServiceConfig `toml:"services,omitempty"`
@@ -399,6 +400,13 @@ func decodeAndValidate(data []byte, filePath string) (*AppConfig, error) {
 // Validate checks that the AppConfig has valid values.
 // Returns *ValidationError with a key path for AST-based line resolution.
 func (ac *AppConfig) Validate() error {
+	if ac.StaticDir != "" && !filepath.IsAbs(ac.StaticDir) {
+		return &ValidationError{
+			KeyPath: "static_dir",
+			Message: "static_dir must be an absolute path in the application build output",
+		}
+	}
+
 	// Validate global environment variables
 	// Note: empty values are allowed - secrets may be stored server-side
 	for i, ev := range ac.EnvVars {

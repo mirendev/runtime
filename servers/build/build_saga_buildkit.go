@@ -64,6 +64,9 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
 	status := deps.statuses.SenderFor(in.StreamID)
+	if in.BuildStack.Stack == "static" {
+		return buildImageOut{BuildResult: &BuildResult{WorkingDir: "/app"}}, nil
+	}
 
 	if in.BuildStack.Stack == "image" {
 		image, res, err := b.resolveDirectImage(ctx, in.BuildStack.Input)

@@ -20,10 +20,10 @@ func TestPoolHealthClassify(t *testing.T) {
 		{"in cooldown is crashed regardless of counts", poolHealth{ready: 1, desired: 1, inCooldown: true}, apphealth.Crashed},
 		{"autoscale at zero is idle", poolHealth{ready: 0, desired: 0, isAutoscale: true}, apphealth.Idle},
 		{"fixed at zero is starting, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: false}, apphealth.Starting},
-		// A task-only app has no pools by design; reporting it as idle would
-		// say it went to sleep rather than that it is doing what it was told.
-		{"task-only at zero is ready, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: true, isTaskOnly: true}, apphealth.Ready},
-		{"task-only wins over the autoscale reading", poolHealth{ready: 0, desired: 0, isAutoscale: false, isTaskOnly: true}, apphealth.Ready},
+		// An app that needs no service has no pools by design; reporting it as
+		// idle would say it went to sleep rather than that it is ready.
+		{"service-free app at zero is ready, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: true, needsNoService: true}, apphealth.Ready},
+		{"service-free app wins over the autoscale reading", poolHealth{ready: 0, desired: 0, isAutoscale: false, needsNoService: true}, apphealth.Ready},
 		{"all ready is healthy", poolHealth{ready: 3, desired: 3}, apphealth.Healthy},
 		{"some ready is degraded", poolHealth{ready: 1, desired: 3}, apphealth.Degraded},
 		{"none ready is starting", poolHealth{ready: 0, desired: 2}, apphealth.Starting},
@@ -77,16 +77,17 @@ func TestPoolHealthAccumulate_ExpiredCooldownIgnored(t *testing.T) {
 	assert.Equal(t, apphealth.Healthy, h.classify())
 }
 
-func TestSpecIsTaskOnly(t *testing.T) {
-	assert.False(t, specIsTaskOnly(nil))
-	assert.False(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{}), "an app with neither is not task-only")
+func TestSpecNeedsNoService(t *testing.T) {
+	assert.False(t, specNeedsNoService(nil))
+	assert.False(t, specNeedsNoService(&core_v1alpha.ConfigSpec{}), "an empty app has no valid workload")
 
-	assert.False(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{
+	assert.False(t, specNeedsNoService(&core_v1alpha.ConfigSpec{
 		Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}},
 		Tasks:    []core_v1alpha.ConfigSpecTasks{{Name: "migrate"}},
 	}), "an app with a service still has something long-running")
 
-	assert.True(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{
+	assert.True(t, specNeedsNoService(&core_v1alpha.ConfigSpec{
 		Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "session"}},
 	}))
+	assert.True(t, specNeedsNoService(&core_v1alpha.ConfigSpec{StaticDir: "/site"}))
 }

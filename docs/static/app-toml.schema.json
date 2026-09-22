@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "properties": {
     "name": {"type": "string", "description": "Application name. Inferred from the directory name when omitted."},
+    "static_dir": {"type": "string", "description": "Absolute path exported from the application build output and served directly by HTTP ingress.", "pattern": "^/"},
     "include": {"type": "array", "description": "Extra files or directories to include in the build context.", "items": {"type": "string"}, "uniqueItems": true},
     "concurrency": {"type": "integer", "description": "Legacy global concurrency target. Prefer per-service concurrency.", "minimum": 0, "deprecated": true},
     "workload_role": {"type": "string", "description": "App-scoped role used for in-cluster API access.", "default": "app-readonly"},

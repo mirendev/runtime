@@ -1,6 +1,6 @@
 ---
 title: Static sites & SPAs on Miren
-description: Deploy static sites and single-page apps on Miren with a Dockerfile.miren that serves built assets with Caddy.
+description: Deploy static sites and single-page apps on Miren using direct file serving or Caddy.
 keywords: [static, spa, single page app, vite, react, vue, astro, caddy, nginx, dockerfile, deploy]
 ---
 
@@ -8,21 +8,27 @@ import CliCommand from '@site/src/components/CliCommand';
 
 # Static sites & SPAs on Miren
 
-Miren runs services, not a static file host — but a static site or single-page app is
-just a tiny web server. You deploy one with a `Dockerfile.miren` that builds your assets
-and serves them with [Caddy](https://caddyserver.com), which handles SPA fallback and
-reads the injected `$PORT`.
+Miren can export files from an app image into a dedicated artifact at deploy
+time and serve them directly from HTTP ingress, without mounting the image or
+running a sandbox. Set `static_dir` to the absolute directory containing the
+built site. If you need SPA fallback or custom rewrites, run a web server such
+as Caddy instead.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Vite app on Miren" after installing the
-[Miren agent skills](../agent-skills.md). It adds the build step and `Dockerfile.miren`,
-configures the SPA fallback, and deploys — using this page as its reference.
+[Miren agent skills](../agent-skills.md). It sets `static_dir`, adds a build or
+`Dockerfile.miren` when needed, and deploys — using this page as its reference.
 :::
 
-## Does this source build need a Dockerfile?
+## Does this site need a Dockerfile?
 
-Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead of
-guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
+Not when the repository already contains the files to serve. Miren maps the
+uploaded source tree to `/app`, so `static_dir = "/app/site"` serves the local
+`site/` directory directly without building an image.
+
+A generated site whose tool is not natively detected needs a `Dockerfile.miren`.
+Miren builds it before exporting `static_dir` — see
+[Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
 Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
@@ -30,7 +36,43 @@ without a Dockerfile. This language isn't one of them yet — if you'd like firs
 support, [request it](https://linear.miren.garden/suggest).
 :::
 
-## The Caddyfile
+## Serve files directly
+
+For a plain static site, put the files in a directory such as `site/`:
+
+```text
+site/
+├── index.html
+├── styles.css
+└── images/
+```
+
+Then point ingress at its path under `/app`:
+
+```toml title=".miren/app.toml"
+name = "static-site"
+static_dir = "/app/site"
+```
+
+For a generated site, use a build stage and copy only its output into the final image:
+
+```dockerfile title="Dockerfile.miren"
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM scratch
+COPY --from=builder /app/dist /site
+```
+
+Ingress serves regular files and directory `index.html` files. Missing paths return
+404. No service or sandbox is created for this configuration. If the app also declares
+a `web` service, missing files fall through to that service instead.
+
+## Use Caddy for SPA fallback
 
 Caddy reads the injected `$PORT` and serves your build directory, falling back to
 `index.html` so client-side routing works. Create a `Caddyfile`:
@@ -124,10 +166,11 @@ configuration.
 
 ## Agent quick reference
 
-- **Detection:** none — requires `Dockerfile.miren`
-- **Serve:** `caddy:2-alpine` with a `Caddyfile` using `:{$PORT:8080}` and `try_files {path} /index.html`
+- **Detection:** `static_dir` is sufficient for source that is already static; generated sites need a detected stack or `Dockerfile.miren`
+- **Direct serve:** set `static_dir` to export and serve built files without a sandbox
+- **SPA fallback:** use `caddy:2-alpine` with a `Caddyfile` using `:{$PORT:8080}` and `try_files {path} /index.html`
 - **SPA build:** add a `node:20-alpine` build stage, copy the output dir into `/site`
-- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
+- **Startup:** direct serving needs no `CMD`, `Procfile`, or service command
 - **Port:** Caddy binds `:{$PORT}` from the environment
 - **Runtime env:** not visible to the browser; use build-time `VITE_*` vars or a runtime config API
 

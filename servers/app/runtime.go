@@ -196,8 +196,8 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				spec = resolved
 			}
 			health := poolHealth{
-				isAutoscale: specAllowsScaleToZero(spec),
-				isTaskOnly:  specIsTaskOnly(spec),
+				isAutoscale:    specAllowsScaleToZero(spec),
+				needsNoService: specNeedsNoService(spec),
 			}
 
 			for poolsResp.Next() {
