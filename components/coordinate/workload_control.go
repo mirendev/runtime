@@ -48,6 +48,10 @@ type WorkloadControl struct {
 	runScheduler  *runctrl.Scheduler
 	certProvider  autotls.CertificateProvider
 	autocertReady func() // nil when DNS-01 path is used
+
+	// Installs the ingress's HostChecker into the autocert controller; nil when
+	// the DNS-01 path is used.
+	setHostChecker func(certctrl.HostChecker)
 }
 
 func (c *WorkloadControl) Activator() activator.AppActivator {
@@ -261,6 +265,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		}
 		c.certProvider = autocertController
 		c.autocertReady = autocertController.SetReady
+		c.setHostChecker = autocertController.SetHostChecker
 		cm.AddController(controller.NewReconcileController(
 			"certificate", c.Log,
 			entity.Ref(entity.EntityKind, ingress_v1alpha.KindHttpRoute), eac,
@@ -313,4 +318,13 @@ func (c *WorkloadControl) CertificateProvider() autotls.CertificateProvider {
 // path is used (which doesn't need port 80).
 func (c *WorkloadControl) AutocertReadySignal() func() {
 	return c.autocertReady
+}
+
+// SetCertificateHostChecker hands the autocert controller the function that
+// vouches for on-demand names under a route. Without one, only names that
+// routes name exactly get certificates. A no-op on the DNS-01 path.
+func (c *WorkloadControl) SetCertificateHostChecker(fn certctrl.HostChecker) {
+	if c.setHostChecker != nil {
+		c.setHostChecker(fn)
+	}
 }
