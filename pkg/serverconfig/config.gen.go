@@ -313,8 +313,9 @@ func (c *EtcdConfig) SetStartEmbedded(v bool) {
 
 // IngressConfig HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
 type IngressConfig struct {
-	Address *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
-	Mode    *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+	Address          *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
+	Mode             *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+	TrustedProxyHops *int    `toml:"trusted_proxy_hops" env:"MIREN_INGRESS_TRUSTED_PROXY_HOPS"`
 }
 
 // GetAddress returns the value of Address or its zero value if nil
@@ -341,6 +342,19 @@ func (c *IngressConfig) GetMode() string {
 // SetMode sets the value of Mode
 func (c *IngressConfig) SetMode(v string) {
 	c.Mode = &v
+}
+
+// GetTrustedProxyHops returns the value of TrustedProxyHops or its zero value if nil
+func (c *IngressConfig) GetTrustedProxyHops() int {
+	if c.TrustedProxyHops != nil {
+		return *c.TrustedProxyHops
+	}
+	return 0
+}
+
+// SetTrustedProxyHops sets the value of TrustedProxyHops
+func (c *IngressConfig) SetTrustedProxyHops(v int) {
+	c.TrustedProxyHops = &v
 }
 
 // MetricsConfig Managed application metrics configuration

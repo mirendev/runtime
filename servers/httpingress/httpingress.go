@@ -89,6 +89,10 @@ type IngressConfig struct {
 	// that can reach the listener directly could otherwise downgrade its own
 	// auth cookies to non-Secure.
 	TrustProxyHeaders bool
+	// TrustedProxyHops is the number of trusted proxies in front of Miren,
+	// including its immediate peer. It defaults to one when proxy headers are
+	// trusted.
+	TrustedProxyHops int
 }
 
 type Server struct {
@@ -140,6 +144,7 @@ type Server struct {
 	connectorHandlers map[string]*connectorHandler
 
 	workloadIssuer *workloadidentity.Issuer
+	staticFiles    staticFileServer
 }
 
 type appUsage struct {
@@ -193,6 +198,7 @@ func NewServer(
 		passwordHandlers:  make(map[string]*passwordHandler),
 		connectorHandlers: make(map[string]*connectorHandler),
 		workloadIssuer:    config.WorkloadIssuer,
+		staticFiles:       newArchiveStaticFileServer(config.DataPath),
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
 
@@ -956,6 +962,34 @@ func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralRes
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
+	if target.config.StaticDir != "" && service == "web" {
+		start := time.Now()
+		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		if h.staticFiles == nil {
+			http.Error(staticResponse, "static file service unavailable", http.StatusServiceUnavailable)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		served, err := h.staticFiles.ServeFile(staticResponse, req, &target.version)
+		if err != nil {
+			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
+			if !served {
+				http.Error(staticResponse, "failed to serve static file", http.StatusInternalServerError)
+			}
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if served {
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if !configHasService(target.config, service) {
+			http.NotFound(staticResponse, req)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+	}
+
 	ctx := req.Context()
 	ephemeralLabel := target.ephemeralLabel
 
@@ -1071,6 +1105,47 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	}
 }
 
+func (h *Server) responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
+	return httputil.ProxyStats{
+		StartTime:     start,
+		Duration:      time.Since(start),
+		StatusCode:    response.statusCode,
+		ResponseBytes: int64(response.bytesWritten),
+		RequestMethod: req.Method,
+		RequestPath:   req.URL.Path,
+		RequestQuery:  req.URL.RawQuery,
+		RequestHost:   req.Host,
+		RemoteAddr:    h.requestSourceIP(req),
+		ContentLength: max(0, req.ContentLength),
+	}
+}
+
+func (h *Server) requestSourceIP(req *http.Request) string {
+	remoteAddr := req.RemoteAddr
+	if h.config.TrustProxyHeaders {
+		hops := max(1, h.config.TrustedProxyHops)
+		forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+		if len(forwarded) >= hops {
+			if client := strings.TrimSpace(forwarded[len(forwarded)-hops]); client != "" {
+				remoteAddr = client
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
+func configHasService(config *core_v1alpha.ConfigSpec, name string) bool {
+	for _, service := range config.Services {
+		if service.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
 	if h.logWriter == nil {
 		return
@@ -1163,6 +1238,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			rw.WriteHeader(http.StatusBadGateway)
 		},
 		Callback: func(stats httputil.ProxyStats) {
+			stats.RemoteAddr = h.requestSourceIP(req)
 			h.logRequestFromStats(appEntityID, appName, stats)
 		},
 	}
@@ -1175,40 +1251,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	}
 	return nil
 }
-
-/*
-func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {
-	labels, err := container.Labels(ctx)
-	if err == nil {
-		if host, ok := labels[httpHostLabel]; ok {
-			h.Log.Info("http endpoint found", "id", container.ID(), "host", host)
-			var ep discovery.Endpoint
-
-			if dir, ok := labels[staticDirLabel]; ok {
-				h.Log.Info("using local container endpoint for static_dir", "id", container.ID())
-				ep = &discovery.LocalContainerEndpoint{
-					Log: h.Log,
-					HTTP: discovery.HTTPEndpoint{
-						Host: "http://" + host,
-					},
-					Client:    h.CC,
-					Namespace: h.Namespace,
-					Dir:       dir,
-					Id:        container.ID(),
-				}
-			} else {
-				ep = &discovery.HTTPEndpoint{
-					Host: "http://" + host,
-				}
-			}
-
-			return ep, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to derive endpoint")
-}
-*/
 
 // responseWriter wraps http.ResponseWriter to capture status code and response size
 type responseWriter struct {

@@ -91,6 +91,7 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 |-------|------|---------|-------------|---------|----------|
 | `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
 | `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
+| `trusted_proxy_hops` | int | `1` | Number of trusted proxies immediately in front of Miren. Used to select the visitor address from `X-Forwarded-For` under `behind-proxy-http`. | `MIREN_INGRESS_TRUSTED_PROXY_HOPS` | `--ingress-trusted-proxy-hops` |
 
 ### Modes
 
@@ -100,7 +101,7 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 | `behind-proxy-http` | `127.0.0.1:80` | no | n/a |
 | `behind-proxy-https` | `127.0.0.1:443` | yes | `[tls]` (self-signed or DNS-01 ACME) |
 
-Only `behind-proxy-http` trusts `X-Forwarded-Proto` / `Forwarded` from the peer; the proxy must set it. The other modes derive the scheme from the connection's own TLS state.
+Only `behind-proxy-http` trusts `X-Forwarded-Proto` / `Forwarded` from the peer; the proxy must set it. It also uses `X-Forwarded-For` for access logs, selecting the address immediately before the configured number of trusted proxy hops from the right. The other modes derive the scheme and visitor address from the connection itself.
 
 The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
 

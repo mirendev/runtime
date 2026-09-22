@@ -225,6 +225,17 @@ configs:
         env: MIREN_INGRESS_ADDRESS
         toml: address
 
+      trusted_proxy_hops:
+        type: int
+        default: 1
+        cli:
+          long: ingress-trusted-proxy-hops
+          description: "Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For."
+        env: MIREN_INGRESS_TRUSTED_PROXY_HOPS
+        toml: trusted_proxy_hops
+        validation:
+          min: 1
+
   TLSConfig:
     description: TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
     fields:

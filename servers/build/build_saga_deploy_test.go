@@ -62,6 +62,7 @@ func newDeploySagaHarnessWith(t *testing.T, setActive any) *sagaTestHarness {
 		Action(actionLoadSource, loadSource).Undo(undoLoadSource).
 		Action(actionGetNextVer, getNextVersion).Undo(undoGetNextVersion).
 		Action(actionBuildImage, stubBuildImage).Undo(undoBuildImage).
+		Action(actionExtractStatic, stubExtractStatic).Undo(undoExtractStatic).
 		Action(actionPrepareConfig, prepareConfig).Undo(undoPrepareConfig).
 		Action(actionHandleEphemera, handleEphemeral).Undo(undoHandleEphemeral).
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).

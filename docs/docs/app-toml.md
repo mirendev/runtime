@@ -84,10 +84,11 @@ tail = "logs app -f"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Application name | Inferred from directory name |
+| `static` | table | Static files exported from the app build output and served directly by HTTP ingress | — |
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](./in-cluster-api.md). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
-| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for a task-only app with no services, where leaving it unset is an error |
+| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for static-only apps and task-only apps with no services |
 
 ### `web` and the synthesized web service {#web}
 
@@ -102,6 +103,32 @@ the validation note below.
 `web = false` opts out. It's how an app that only declares tasks says it has no
 long-running process at all — no web service, no route, and nothing running (or
 billed for compute) between invocations.
+
+Setting `static.dir` also opts out of the synthesized web service. The build
+server exports that directory into a dedicated artifact during deployment, and
+HTTP ingress serves it without mounting the image or starting a sandbox. For
+example:
+
+```toml
+[static]
+dir = "/app/dist"
+```
+
+This serves a frontend build written to `/app/dist`. If the app also declares a
+service, requests for files that do not exist fall through to that service; a
+static-only app returns 404 instead.
+
+When no Dockerfile, image, or supported stack is detected, Miren treats the
+uploaded source tree as `/app` and archives `static.dir` directly. Thus
+`dir = "/app/public"` serves a repository's `public/` directory without building
+an OCI image. Miren excludes its `.miren` configuration directory from a source
+artifact.
+
+:::danger[Review a source-root static directory]
+`static.dir = "/app"` publishes every file uploaded from the source tree except
+`.miren`. The upload honors `.gitignore`, but files such as `.env` are public if
+they are not ignored. Prefer a dedicated directory such as `/app/public`.
+:::
 
 It opts out of the *synthesized* service, not of a web service you asked for. A
 `web` declared in `app.toml` or named by a `web:` line in your `Procfile` is an

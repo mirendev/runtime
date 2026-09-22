@@ -197,7 +197,9 @@ func outcomeEvent(o terminalOutcome) deployevents.Outcome {
 		return deployevents.OutcomeHealthy
 	case outcomeScaledToZero:
 		return deployevents.OutcomeScaledToZero
-	case outcomeTaskOnly:
+	case outcomeNoService:
+		// Keep the published value for compatibility. It predates static-only
+		// apps and means the deployment has no service process to wait for.
 		return deployevents.OutcomeTaskOnly
 	case outcomeCrashed:
 		return deployevents.OutcomeCrashed

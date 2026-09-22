@@ -93,9 +93,9 @@ const (
 	decisionScaledToZero
 	// decisionCrashed: a pool is in crash cooldown — the version came up and died.
 	decisionCrashed
-	// decisionTaskOnly: the app has no long-running process by design. It is
-	// deployed and invokable, which is as "up" as it gets.
-	decisionTaskOnly
+	// decisionNoService: the app has no long-running process by design. Its
+	// tasks or static content are available, which is as "up" as it gets.
+	decisionNoService
 )
 
 // decideActivation maps a snapshot to a terminal decision (or "keep waiting").
@@ -119,10 +119,10 @@ func decideActivation(snap healthSnapshot) activationDecision {
 	case snap.health == apphealth.Crashed:
 		return decisionCrashed
 	case snap.health == apphealth.Ready:
-		// A task-only app never has a serving instance, so the ready > 0 test
-		// below would never fire and the deploy would time out despite having
-		// succeeded.
-		return decisionTaskOnly
+		// An app with no service never has a serving instance, so the ready > 0
+		// test below would never fire and the deploy would time out despite
+		// having succeeded.
+		return decisionNoService
 	case snap.health == apphealth.Idle:
 		return decisionScaledToZero
 	case snap.ready > 0:
@@ -188,7 +188,7 @@ type terminalOutcome int
 const (
 	outcomeHealthy terminalOutcome = iota
 	outcomeScaledToZero
-	outcomeTaskOnly
+	outcomeNoService
 	outcomeCrashed
 	outcomeTimeout
 	outcomeCanceled
@@ -208,8 +208,8 @@ func pollOutcome(ctx context.Context, getter appInfoGetter, appName, versionID s
 		return outcomeHealthy, snap, true
 	case decisionScaledToZero:
 		return outcomeScaledToZero, snap, true
-	case decisionTaskOnly:
-		return outcomeTaskOnly, snap, true
+	case decisionNoService:
+		return outcomeNoService, snap, true
 	case decisionCrashed:
 		return outcomeCrashed, snap, true
 	default:
@@ -236,10 +236,10 @@ func healthOutcomeText(versionDisplay string, outcome terminalOutcome, snap heal
 		return fmt.Sprintf("Version %s is live and serving%s", versionDisplay, detail), true
 	case outcomeScaledToZero:
 		return fmt.Sprintf("Version %s deployed — scaled to zero, no instance running right now", versionDisplay), true
-	case outcomeTaskOnly:
+	case outcomeNoService:
 		// Deliberately not the scaled-to-zero wording: nothing went to sleep,
 		// this app never had a long-running process to begin with.
-		return fmt.Sprintf("Version %s deployed — no long-running process; run a task with `miren app run --task`", versionDisplay), true
+		return fmt.Sprintf("Version %s deployed — no long-running service required", versionDisplay), true
 	case outcomeCrashed:
 		detail := ""
 		if snap.crashCount > 0 {

@@ -174,6 +174,11 @@ func (c *IngressConfig) Validate() error {
 		}
 	}
 
+	// Validate trusted_proxy_hops minimum
+	if c.TrustedProxyHops != nil && *c.TrustedProxyHops < 1 {
+		return fmt.Errorf("trusted_proxy_hops must be at least 1, got %d", *c.TrustedProxyHops)
+	}
+
 	// Check for port conflicts in IngressConfig
 
 	return nil

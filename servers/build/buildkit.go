@@ -35,6 +35,12 @@ type Buildkit struct {
 	WorkloadIssuer *workloadidentity.Issuer
 }
 
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error { return nil }
+
 type tarOutput struct {
 	rc    io.ReadCloser
 	mu    sync.Mutex
@@ -600,6 +606,51 @@ func (b *Buildkit) BuildImage(
 	}
 
 	return &res, err
+}
+
+// ExportStatic copies one directory from an image into a tar archive without
+// starting the image. BuildKit resolves the image layers and performs the copy
+// in its content store, so the resulting archive is independent of containerd
+// snapshots and mounts.
+func (b *Buildkit) ExportStatic(ctx context.Context, imageRef, staticDir, destination string) error {
+	image := llb.Image(imageRef)
+	files := llb.Scratch().File(llb.Copy(image, staticDir, "/", &llb.CopyInfo{
+		CopyDirContentsOnly: true,
+		CreateDestPath:      true,
+	}))
+	def, err := files.Marshal(ctx)
+	if err != nil {
+		return fmt.Errorf("preparing static file export: %w", err)
+	}
+
+	output, err := os.Create(destination)
+	if err != nil {
+		return fmt.Errorf("creating static file archive: %w", err)
+	}
+	defer output.Close()
+
+	solveOpt := client.SolveOpt{
+		Ref: idgen.Gen("static"),
+		Exports: []client.ExportEntry{{
+			Type: client.ExporterTar,
+			Output: func(map[string]string) (io.WriteCloser, error) {
+				return nopWriteCloser{Writer: output}, nil
+			},
+		}},
+	}
+	registryHost, _, _ := strings.Cut(imageRef, "/")
+	if err := b.addRegistryAuth(&solveOpt, registryHost); err != nil {
+		return err
+	}
+
+	_, err = b.Client.Solve(ctx, def, solveOpt, nil)
+	if err != nil {
+		return fmt.Errorf("exporting static directory %s: %w", staticDir, err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("closing static file archive: %w", err)
+	}
+	return nil
 }
 
 func (b *Buildkit) addRegistryAuth(solveOpt *client.SolveOpt, registryHost string) error {

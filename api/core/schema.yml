@@ -143,7 +143,7 @@ kinds:
       attrs:
         kind:
           type: string
-          doc: Build source kind (image, dockerfile, or stack)
+          doc: Build source kind (image, dockerfile, stack, or static)
         value:
           type: string
           doc: Normalized image reference or auto-detected stack name, depending on kind
@@ -164,6 +164,10 @@ kinds:
     artifact:
       type: ref
       doc: The artifact to deploy for the version
+
+    static_artifact:
+      type: string
+      doc: Content digest of the tar archive containing files exported from static.dir
 
     manifest:
       type: string
@@ -617,6 +621,9 @@ kinds:
 
 components:
   config_spec:
+    static_dir:
+      type: string
+      doc: Absolute path exported from the application build output and served directly by HTTP ingress
     variables:
       type: component
       doc: Environment variables and configuration values
