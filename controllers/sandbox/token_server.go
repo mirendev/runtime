@@ -90,6 +90,7 @@ func (r *tokenSecretRegistry) repair(sandboxID string, load func() (string, bool
 
 	secret, ok, err := load()
 	if err != nil || !ok || secret == "" {
+		r.reload.reset(sandboxID)
 		return false, err
 	}
 	r.bySandbox[sandboxID] = secret
@@ -149,6 +150,12 @@ func (l *refreshLimiter) allow(key string) bool {
 	}
 	l.last[key] = now
 	return true
+}
+
+func (l *refreshLimiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, key)
 }
 
 func generateTokenSecret() (string, error) {

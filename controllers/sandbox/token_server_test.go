@@ -267,6 +267,36 @@ func TestTokenSecretRegistry_FailedSecretRemovalPreventsRepair(t *testing.T) {
 	assert.False(t, r.verify(testSandboxID, testSecret))
 }
 
+func TestTokenSecretRegistry_FailedReloadDoesNotConsumeCooldown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		load func() (string, bool, error)
+	}{
+		{name: "read error", load: func() (string, bool, error) {
+			return "", false, errors.New("disk unavailable")
+		}},
+		{name: "missing file", load: func() (string, bool, error) {
+			return "", false, nil
+		}},
+		{name: "empty secret", load: func() (string, bool, error) {
+			return "", true, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTokenSecretRegistry()
+			repaired, _ := r.repair(testSandboxID, tc.load)
+			assert.False(t, repaired)
+
+			repaired, err := r.repair(testSandboxID, func() (string, bool, error) {
+				return testSecret, true, nil
+			})
+			require.NoError(t, err)
+			assert.True(t, repaired, "a transient failure must not delay the next usable reload")
+			assert.True(t, r.verify(testSandboxID, testSecret))
+		})
+	}
+}
+
 // TestTokenServer_RecycledIPResolvesToCurrentSandbox reproduces MIR-1511: a sandbox that
 // lands on a recently-recycled address gets 403 "invalid token" forever, because the
 // address still resolves to the sandbox that held it before and the presented secret is
