@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.16.0
+*2026-09-22*
+
 **Breaking Changes**
 - **Wildcard subdomains need a TLS check to get certificates** - A wildcard route used to get a Let's Encrypt certificate for any subdomain a client named, and scanners noticed: one cluster had issued more than 500 certificates for names nothing served. A name that isn't itself a route now gets a real certificate only when a live ephemeral deploy has that label, or when the route's app vouches for it through a TLS check (`miren route tls-check '*.example.com' /tls-check`). Everything else gets the fallback certificate. If you serve tenants off a wildcard route, add a check endpoint that answers `200` for the names you serve, or an exact route for each. Preview deploys need nothing new. ([#1256](https://github.com/mirendev/runtime/pull/1256))
 - **The `sagas` and `distributedrunners` escape hatches are gone** - Sagas and distributed runners have each been on by default for more than a release without anyone reaching for `--labs -sagas` or `--labs -distributedrunners`, so both flags and the code paths behind them are removed. The runner commands are always available and embedded etcd always runs with mTLS. A server still passing either flag logs `unknown labs feature flag` and starts normally; drop it from `--labs` or `MIREN_LABS` to quiet the warning. ([#1191](https://github.com/mirendev/runtime/pull/1191), [#1192](https://github.com/mirendev/runtime/pull/1192))
