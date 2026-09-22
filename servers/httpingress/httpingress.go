@@ -963,7 +963,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		if h.staticFiles == nil {
 			http.Error(staticResponse, "static file service unavailable", http.StatusServiceUnavailable)
-			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
 		served, err := h.staticFiles.ServeFile(staticResponse, req, &target.version)
@@ -972,16 +972,16 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			if !served {
 				http.Error(staticResponse, "failed to serve static file", http.StatusInternalServerError)
 			}
-			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
 		if served {
-			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
 		if !configHasService(target.config, service) {
 			http.NotFound(staticResponse, req)
-			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
 	}
@@ -1101,17 +1101,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 	}
 }
 
-func responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
-	remoteAddr := req.Header.Get("X-Forwarded-For")
-	if idx := strings.Index(remoteAddr, ","); idx >= 0 {
-		remoteAddr = strings.TrimSpace(remoteAddr[:idx])
-	}
-	if remoteAddr == "" {
-		remoteAddr = req.RemoteAddr
-		if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
-			remoteAddr = host
-		}
-	}
+func (h *Server) responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
 	return httputil.ProxyStats{
 		StartTime:     start,
 		Duration:      time.Since(start),
@@ -1121,9 +1111,23 @@ func responseStats(start time.Time, response *responseWriter, req *http.Request)
 		RequestPath:   req.URL.Path,
 		RequestQuery:  req.URL.RawQuery,
 		RequestHost:   req.Host,
-		RemoteAddr:    remoteAddr,
+		RemoteAddr:    h.requestSourceIP(req),
 		ContentLength: max(0, req.ContentLength),
 	}
+}
+
+func (h *Server) requestSourceIP(req *http.Request) string {
+	remoteAddr := req.RemoteAddr
+	if h.config.TrustProxyHeaders {
+		first, _, _ := strings.Cut(req.Header.Get("X-Forwarded-For"), ",")
+		if forwarded := strings.TrimSpace(first); forwarded != "" {
+			remoteAddr = forwarded
+		}
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 func configHasService(config *core_v1alpha.ConfigSpec, name string) bool {
@@ -1227,6 +1231,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			rw.WriteHeader(http.StatusBadGateway)
 		},
 		Callback: func(stats httputil.ProxyStats) {
+			stats.RemoteAddr = h.requestSourceIP(req)
 			h.logRequestFromStats(appEntityID, appName, stats)
 		},
 	}

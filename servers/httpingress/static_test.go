@@ -251,6 +251,7 @@ func TestStaticOnlyRequestWritesRouterAccessLog(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "http://example.com/asset.txt?build=1", nil)
 			request.RemoteAddr = "192.0.2.10:4321"
+			request.Header.Set("X-Forwarded-For", "198.51.100.20")
 			appName := "static-app"
 
 			server.serveAuthenticatedRequest(recorder, request, entity.Id("app-1"), "web", "route", target, &appName, 0)
@@ -263,6 +264,16 @@ func TestStaticOnlyRequestWritesRouterAccessLog(t *testing.T) {
 			assert.Equal(t, "router", logs.entries[0].Attributes["source"])
 		})
 	}
+}
+
+func TestRequestSourceIPHonorsProxyTrust(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	request.RemoteAddr = "192.0.2.10:4321"
+	request.Header.Set("X-Forwarded-For", "198.51.100.20, 203.0.113.30")
+
+	assert.Equal(t, "192.0.2.10", (&Server{}).requestSourceIP(request))
+	trusted := &Server{config: IngressConfig{TrustProxyHeaders: true}}
+	assert.Equal(t, "198.51.100.20", trusted.requestSourceIP(request))
 }
 
 func TestStaticFileFailureReturnsServerError(t *testing.T) {
