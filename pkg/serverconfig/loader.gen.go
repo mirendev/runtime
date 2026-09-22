@@ -246,6 +246,10 @@ func applyCLIFlags(cfg *Config, flags *CLIFlags) {
 		cfg.Ingress.Mode = flags.IngressConfigMode
 	}
 
+	if flags.IngressConfigTrustedProxyHops != nil {
+		cfg.Ingress.TrustedProxyHops = flags.IngressConfigTrustedProxyHops
+	}
+
 	if flags.RemoteWriteConfigURL != nil && *flags.RemoteWriteConfigURL != "" {
 		cfg.Metrics.RemoteWrite.URL = flags.RemoteWriteConfigURL
 	}

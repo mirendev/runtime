@@ -269,11 +269,16 @@ func TestStaticOnlyRequestWritesRouterAccessLog(t *testing.T) {
 func TestRequestSourceIPHonorsProxyTrust(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
 	request.RemoteAddr = "192.0.2.10:4321"
-	request.Header.Set("X-Forwarded-For", "198.51.100.20, 203.0.113.30")
+	request.Header.Set("X-Forwarded-For", "198.51.100.20, 203.0.113.30, 203.0.113.40")
 
 	assert.Equal(t, "192.0.2.10", (&Server{}).requestSourceIP(request))
 	trusted := &Server{config: IngressConfig{TrustProxyHeaders: true}}
-	assert.Equal(t, "198.51.100.20", trusted.requestSourceIP(request))
+	assert.Equal(t, "203.0.113.40", trusted.requestSourceIP(request))
+	twoTrustedHops := &Server{config: IngressConfig{TrustProxyHeaders: true, TrustedProxyHops: 2}}
+	assert.Equal(t, "203.0.113.30", twoTrustedHops.requestSourceIP(request))
+
+	request.Header.Set("X-Forwarded-For", "198.51.100.20")
+	assert.Equal(t, "192.0.2.10", twoTrustedHops.requestSourceIP(request))
 }
 
 func TestStaticFileFailureReturnsServerError(t *testing.T) {

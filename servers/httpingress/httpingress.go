@@ -89,6 +89,10 @@ type IngressConfig struct {
 	// that can reach the listener directly could otherwise downgrade its own
 	// auth cookies to non-Secure.
 	TrustProxyHeaders bool
+	// TrustedProxyHops is the number of trusted proxies in front of Miren,
+	// including its immediate peer. It defaults to one when proxy headers are
+	// trusted.
+	TrustedProxyHops int
 }
 
 type Server struct {
@@ -1119,9 +1123,12 @@ func (h *Server) responseStats(start time.Time, response *responseWriter, req *h
 func (h *Server) requestSourceIP(req *http.Request) string {
 	remoteAddr := req.RemoteAddr
 	if h.config.TrustProxyHeaders {
-		first, _, _ := strings.Cut(req.Header.Get("X-Forwarded-For"), ",")
-		if forwarded := strings.TrimSpace(first); forwarded != "" {
-			remoteAddr = forwarded
+		hops := max(1, h.config.TrustedProxyHops)
+		forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+		if len(forwarded) >= hops {
+			if client := strings.TrimSpace(forwarded[len(forwarded)-hops]); client != "" {
+				remoteAddr = client
+			}
 		}
 	}
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
