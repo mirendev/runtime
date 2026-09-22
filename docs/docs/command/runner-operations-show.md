@@ -11,7 +11,7 @@ Show one restart or upgrade operation
 ## Usage
 
 ```bash
-miren runner operations show <id> [flags]
+miren runner operations show [id] [flags]
 ```
 
 ## Arguments
