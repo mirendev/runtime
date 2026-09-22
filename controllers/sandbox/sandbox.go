@@ -3102,11 +3102,6 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	// what "the run finished" should look like from a terminal.
 	c.hubs.RemoveAll(id)
 
-	// Release in-memory token state first. Container teardown below can be slow or
-	// fail partway, and a sandbox left registered keeps getting fresh tokens minted
-	// for a file that is about to disappear.
-	c.ReleaseTokenState(id)
-
 	if c.NetServ != nil {
 		// Drop the address claim here rather than leaving it to the watcher's delete
 		// event, so a recycled address is free the moment the sandbox holding it goes.
@@ -3114,13 +3109,10 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.NetServ.RemoveSandboxMapping(id.String())
 	}
 
-	// Best-effort removal of the persisted secret. The whole sandbox dir is wiped
-	// further down, but removing the sensitive secret up front ensures it doesn't
-	// linger if teardown errors out before reaching that cleanup.
-	secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
-	if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
-		c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
-	}
+	// Revoke token state after withdrawing the address. ReleaseTokenState serializes
+	// persisted-secret removal with request-side repair, so an in-flight request cannot
+	// re-register this sandbox after teardown has revoked it.
+	c.ReleaseTokenState(id)
 
 	// Get LogEntity from pause container labels for metrics cleanup
 	var le string

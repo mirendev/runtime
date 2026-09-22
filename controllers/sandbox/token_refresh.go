@@ -64,17 +64,33 @@ func (tr *tokenRefresher) snapshot() []tokenEntry {
 	return entries
 }
 
-// ReleaseTokenState drops every in-memory workload identity record for a sandbox.
-// Called from StopSandbox so the state goes away with the sandbox itself rather
-// than with the entity, which outlives it by up to the periodic cleanup horizon,
-// and from the boot-failure cleanup paths, which never reach StopSandbox.
+// ReleaseTokenState revokes every workload identity record for a sandbox, including
+// its persisted token-request secret. Called from StopSandbox so the state goes away
+// with the sandbox itself rather than with the entity, which outlives it by up to the
+// periodic cleanup horizon, and from boot-failure paths that never reach StopSandbox.
 func (c *SandboxController) ReleaseTokenState(id entity.Id) {
 	sandboxID := id.String()
 	if c.tokenRefresher != nil {
 		c.tokenRefresher.unregister(sandboxID)
 	}
+
+	secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
 	if c.tokenSecrets != nil {
-		c.tokenSecrets.unregister(sandboxID)
+		err := c.tokenSecrets.retire(sandboxID, func() error {
+			err := os.Remove(secretPath)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		})
+		if err != nil {
+			c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
+		}
+		return
+	}
+
+	if err := os.Remove(secretPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
 	}
 }
 
