@@ -197,6 +197,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren route set-default`](./command/route-set-default.md) | Set an app as the default route |
 | [`miren route show`](./command/route-show.md) | Show details of an HTTP route |
 | [`miren route timeout`](./command/route-timeout.md) | Override the ingress request timeout for an HTTP route |
+| [`miren route tls-check`](./command/route-tls-check.md) | Ask an app before issuing certificates for names under its route |
 | [`miren route unprotect`](./command/route-unprotect.md) | Remove identity-provider protection from an HTTP route |
 | [`miren route unset-default`](./command/route-unset-default.md) | Remove the default route |
 | [`miren route up`](./command/route-up.md) | Bring an HTTP route out of maintenance |

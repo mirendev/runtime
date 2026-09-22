@@ -627,3 +627,37 @@ func TestClientSetRouteStoresService(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "api", route.Service)
 }
+
+func TestValidateTLSCheckPath(t *testing.T) {
+	tests := []struct {
+		path    string
+		wantErr bool
+	}{
+		{"/tls-check", false},
+		{"/.well-known/tls-check", false},
+		{"/", false},
+		{"", true},
+		{"tls-check", true},
+		{"https://example.com/tls-check", true},
+		{"/tls-check?domain=x", true},
+		{"/tls-check#frag", true},
+		{"/tls check", true},
+		{"//tls-check", true},
+		{"//evil.com/tls-check", true},
+		{"/tls\u00a0check", true},
+		{"/tls\x0bcheck", true},
+		{"/tls%check", true},
+		{"/tls%2Dcheck", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			err := ValidateTLSCheckPath(tt.path)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

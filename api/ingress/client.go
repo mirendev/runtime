@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	compute "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -727,5 +729,63 @@ func (c *Client) ClearRouteRequestTimeout(ctx context.Context, route *ingress_v1
 	}
 
 	route.RequestTimeout = ""
+	return route, nil
+}
+
+// ValidateTLSCheckPath checks that path is usable as a route's tls_check. It
+// must be an absolute path on the app with no query or fragment, since the
+// ingress appends its own "?domain=" query when it asks. A leading "//" is
+// refused because URL parsing reads it as a host, not a path.
+func ValidateTLSCheckPath(path string) error {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return fmt.Errorf("invalid TLS check path %q: must be an absolute path like /tls-check", path)
+	}
+	if strings.ContainsAny(path, "?#") || strings.ContainsFunc(path, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) {
+		return fmt.Errorf("invalid TLS check path %q: must be a bare path with no query, fragment, or whitespace", path)
+	}
+	if _, err := url.PathUnescape(path); err != nil {
+		return fmt.Errorf("invalid TLS check path %q: %w", path, err)
+	}
+	return nil
+}
+
+// SetRouteTLSCheck sets the path the ingress asks before issuing an on-demand
+// certificate for a name under this route.
+func (c *Client) SetRouteTLSCheck(ctx context.Context, route *ingress_v1alpha.HttpRoute, path string) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+	if err := ValidateTLSCheckPath(path); err != nil {
+		return nil, err
+	}
+
+	err := c.ec.Patch(ctx, route.ID, 0,
+		entity.String(ingress_v1alpha.HttpRouteTlsCheckId, path),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set TLS check on route: %w", err)
+	}
+
+	route.TlsCheck = path
+	return route, nil
+}
+
+// ClearRouteTLSCheck removes the route's TLS check, so names under it get
+// certificates only when they are live ephemeral deploys.
+func (c *Client) ClearRouteTLSCheck(ctx context.Context, route *ingress_v1alpha.HttpRoute) (*ingress_v1alpha.HttpRoute, error) {
+	if route == nil {
+		return nil, fmt.Errorf("route is required")
+	}
+
+	err := c.ec.Patch(ctx, route.ID, 0,
+		entity.String(ingress_v1alpha.HttpRouteTlsCheckId, ""),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clear TLS check on route: %w", err)
+	}
+
+	route.TlsCheck = ""
 	return route, nil
 }
