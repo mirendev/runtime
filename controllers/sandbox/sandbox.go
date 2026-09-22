@@ -2061,6 +2061,23 @@ type WaitPort struct {
 	Port int
 }
 
+// tcpPortsToWait returns a container's TCP ports twice over: the plain list
+// PortMonitor watches, and the WaitPorts the create saga blocks on before
+// marking the sandbox healthy. UDP ports are left out of both. Each reader
+// parses /proc/net/tcp{,6}, which never lists UDP sockets, so a UDP port
+// would wait out the timeout and kill a sandbox that was bound the whole
+// time. checkNetworkHealth skips UDP for the same reason.
+func tcpPortsToWait(id string, spec []compute.SandboxSpecContainerPort) (ports []int, wait []WaitPort) {
+	for _, port := range spec {
+		if !portIsTCP(port) {
+			continue
+		}
+		ports = append(ports, int(port.Port))
+		wait = append(wait, WaitPort{ID: id, Port: int(port.Port)})
+	}
+	return ports, wait
+}
+
 const defaultPortWaitTimeout = 15 * time.Second
 
 // resolvePortWaitTimeout parses a user-supplied duration string from
@@ -2175,14 +2192,8 @@ func (c *SandboxController) BootContainers(
 
 		id := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
 
-		var ports []int
-		for _, port := range container.Port {
-			ports = append(ports, int(port.Port))
-			ret = append(ret, WaitPort{
-				ID:   id,
-				Port: int(port.Port),
-			})
-		}
+		ports, waitPorts := tcpPortsToWait(id, container.Port)
+		ret = append(ret, waitPorts...)
 
 		c.Log.Info("creating container", "id", id)
 
