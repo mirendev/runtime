@@ -11,7 +11,7 @@ Remove a CI authentication binding
 ## Usage
 
 ```bash
-miren auth ci remove [id] [flags]
+miren auth ci remove <id> [flags]
 ```
 
 ## Arguments

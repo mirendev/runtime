@@ -55,7 +55,7 @@ func RunnerOperationsList(ctx *Context, opts struct {
 func RunnerOperationsShow(ctx *Context, opts struct {
 	FormatOptions
 	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/runner/lifecycle"`
-	ID  string `position:"0" usage:"Operation id"`
+	ID  string `position:"0" usage:"Operation id" required:"true"`
 }) error {
 	store, err := openStore(opts.Dir)
 	if err != nil {
@@ -72,7 +72,7 @@ func RunnerOperationsShow(ctx *Context, opts struct {
 // executor that died mid-operation. A runner has no data restore to settle.
 func RunnerOperationsAbandon(ctx *Context, opts struct {
 	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/runner/lifecycle"`
-	ID  string `position:"0" usage:"Operation id"`
+	ID  string `position:"0" usage:"Operation id" required:"true"`
 }) error {
 	store, err := serverlifecycle.NewStore(opts.Dir)
 	if err != nil {

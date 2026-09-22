@@ -33,13 +33,16 @@ cluster_id = "cluster-prod-id"
 `)
 
 	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("miren-staging", &clientconfig.ClusterConfig{
+		Hostname: "staging.example.com:8443",
+	})
 	cfg.SetCluster("evans-prod", &clientconfig.ClusterConfig{
 		Hostname: "prod.example.com:8443",
 		XID:      "cluster-prod-id",
 	})
 
 	t.Run("first target is the default", func(t *testing.T) {
-		opts := deployOpts{AppCentric: AppCentric{Dir: dir}}
+		opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{cfg: cfg}}}
 		require.NoError(t, opts.Validate(&GlobalFlags{}))
 		require.Empty(t, opts.Cluster)
 		require.Equal(t, "miren-staging", opts.targetCluster)
@@ -104,6 +107,23 @@ cluster_id = "cluster-missing"
 	}
 	err := opts.Validate(&GlobalFlags{})
 	require.EqualError(t, err, `cluster id "cluster-missing" for deploy target "prod" is not configured; run 'miren cluster add'`)
+}
+
+func TestDeployOptsValidateTargetWithUnknownClusterName(t *testing.T) {
+	dir := t.TempDir()
+	writeAppToml(t, dir, `name = "myapp"`)
+	writeDeployToml(t, dir, `
+[[targets]]
+name = "staging"
+cluster = "miren-staging"
+`)
+
+	opts := deployOpts{
+		AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{cfg: clientconfig.NewConfig()}},
+		Target:     "staging",
+	}
+	err := opts.Validate(&GlobalFlags{})
+	require.EqualError(t, err, `cluster "miren-staging" for deploy target "staging" is not configured; run 'miren cluster add'`)
 }
 
 func TestDeployOptsValidateTargetWithoutClientConfig(t *testing.T) {

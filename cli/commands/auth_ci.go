@@ -151,7 +151,7 @@ func AuthCIList(ctx *Context, opts struct {
 }
 
 func AuthCIRemove(ctx *Context, opts struct {
-	ID string `position:"0" usage:"ID of the CI authentication binding to remove"`
+	ID string `position:"0" usage:"ID of the CI authentication binding to remove" required:"true"`
 	ConfigCentric
 }) error {
 	if opts.ID == "" {

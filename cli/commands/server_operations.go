@@ -305,7 +305,7 @@ func ServerOperationsShow(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 	Dir string `long:"dir" description:"Read operation records from this directory instead of asking the server" default:"/var/lib/miren/server/lifecycle"`
-	ID  string `position:"0" usage:"Operation id"`
+	ID  string `position:"0" usage:"Operation id" required:"true"`
 }) error {
 	op, err := operationSource{ctx: ctx, dir: opts.Dir}.get(opts.ID)
 	if err != nil {
@@ -477,7 +477,7 @@ func phaseStyle(phase serverlifecycle.Phase) lipgloss.Style {
 // server from booting.
 func ServerOperationsAbandon(ctx *Context, opts struct {
 	Dir string `long:"dir" description:"Operation directory" default:"/var/lib/miren/server/lifecycle"`
-	ID  string `position:"0" usage:"Operation id"`
+	ID  string `position:"0" usage:"Operation id" required:"true"`
 }) error {
 	store, err := serverlifecycle.NewStore(opts.Dir)
 	if err != nil {

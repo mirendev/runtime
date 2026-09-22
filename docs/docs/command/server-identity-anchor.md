@@ -11,7 +11,7 @@ Move where this cluster's workload identity is anchored
 ## Usage
 
 ```bash
-miren server identity-anchor [anchor] [flags]
+miren server identity-anchor <anchor> [flags]
 ```
 
 ## Arguments

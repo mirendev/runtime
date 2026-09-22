@@ -159,16 +159,20 @@ func (o *deployOpts) RequestedCluster() string {
 }
 
 func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
-	if target.ClusterID == "" {
-		return target.Cluster, nil
-	}
-
 	cfg, err := o.LoadConfig()
 	if err != nil {
 		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
 			return "", fmt.Errorf("no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target %q", target.Name)
 		}
 		return "", err
+	}
+
+	if target.ClusterID == "" {
+		cluster, err := cfg.GetCluster(target.Cluster)
+		if err != nil || cluster == nil {
+			return "", fmt.Errorf("cluster %q for deploy target %q is not configured; run 'miren cluster add'", target.Cluster, target.Name)
+		}
+		return target.Cluster, nil
 	}
 
 	var match string

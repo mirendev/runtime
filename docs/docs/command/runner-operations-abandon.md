@@ -11,7 +11,7 @@ Give up on an unfinished operation
 ## Usage
 
 ```bash
-miren runner operations abandon [id] [flags]
+miren runner operations abandon <id> [flags]
 ```
 
 ## Arguments
