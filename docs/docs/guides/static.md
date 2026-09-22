@@ -10,24 +10,29 @@ import CliCommand from '@site/src/components/CliCommand';
 
 Miren can export files from an app image into a dedicated artifact at deploy
 time and serve them directly from HTTP ingress, without mounting the image or
-running a sandbox. Set `static_dir` to the absolute directory containing the
-built site. If you need SPA fallback or custom rewrites, run a web server such
-as Caddy instead.
+running a sandbox. Set `static.dir` to the absolute directory containing the
+built site. If you need SPA fallback or custom rewrites, run a web server such as
+Caddy instead.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Vite app on Miren" after installing the
-[Miren agent skills](../agent-skills.md). It sets `static_dir`, adds a build or
+[Miren agent skills](../agent-skills.md). It sets `static.dir`, adds a build or
 `Dockerfile.miren` when needed, and deploys — using this page as its reference.
 :::
 
 ## Does this site need a Dockerfile?
 
 Not when the repository already contains the files to serve. Miren maps the
-uploaded source tree to `/app`, so `static_dir = "/app/site"` serves the local
-`site/` directory directly without building an image.
+uploaded source tree to `/app`, so this serves the local `site/` directory
+directly without building an image:
+
+```toml
+[static]
+dir = "/app/site"
+```
 
 A generated site whose tool is not natively detected needs a `Dockerfile.miren`.
-Miren builds it before exporting `static_dir` — see
+Miren builds it before exporting `static.dir` — see
 [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
@@ -51,7 +56,9 @@ Then point ingress at its path under `/app`:
 
 ```toml title=".miren/app.toml"
 name = "static-site"
-static_dir = "/app/site"
+
+[static]
+dir = "/app/site"
 ```
 
 For a generated site, use a build stage and copy only its output into the final image:
@@ -166,8 +173,8 @@ configuration.
 
 ## Agent quick reference
 
-- **Detection:** `static_dir` is sufficient for source that is already static; generated sites need a detected stack or `Dockerfile.miren`
-- **Direct serve:** set `static_dir` to export and serve built files without a sandbox
+- **Detection:** `static.dir` is sufficient for source that is already static; generated sites need a detected stack or `Dockerfile.miren`
+- **Direct serve:** set `static.dir` to export and serve built files without a sandbox
 - **SPA fallback:** use `caddy:2-alpine` with a `Caddyfile` using `:{$PORT:8080}` and `try_files {path} /index.html`
 - **SPA build:** add a `node:20-alpine` build stage, copy the output dir into `/site`
 - **Startup:** direct serving needs no `CMD`, `Procfile`, or service command

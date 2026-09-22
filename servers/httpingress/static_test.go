@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -83,6 +84,22 @@ func TestServeStaticArtifact(t *testing.T) {
 			assert.Equal(t, tt.wantLocation, recorder.Header().Get("Location"))
 		})
 	}
+
+	first := httptest.NewRecorder()
+	served, err := server.ServeFile(first, httptest.NewRequest(http.MethodGet, "http://example.com/asset.txt", nil), version)
+	require.NoError(t, err)
+	require.True(t, served)
+	etag := first.Header().Get("ETag")
+	require.NotEmpty(t, etag)
+
+	conditional := httptest.NewRecorder()
+	conditionalRequest := httptest.NewRequest(http.MethodGet, "http://example.com/asset.txt", nil)
+	conditionalRequest.Header.Set("If-None-Match", etag)
+	served, err = server.ServeFile(conditional, conditionalRequest, version)
+	require.NoError(t, err)
+	assert.True(t, served)
+	assert.Equal(t, http.StatusNotModified, conditional.Code)
+	assert.Empty(t, conditional.Body.String())
 }
 
 func TestStaticArchiveIndexCacheIsBounded(t *testing.T) {
@@ -113,15 +130,48 @@ func TestStaticArchiveIndexCacheIsBounded(t *testing.T) {
 	assert.LessOrEqual(t, server.indexEntries, maxStaticIndexEntries)
 }
 
+func TestOversizedStaticArchiveIndexIsCachedAlone(t *testing.T) {
+	server := newArchiveStaticFileServer(t.TempDir()).(*archiveStaticFileServer)
+	server.cacheIndex("old", &staticArchiveIndex{
+		files: map[string]staticArchiveFile{"index.html": {}},
+		dirs:  map[string]bool{"": true},
+	})
+	files := make(map[string]staticArchiveFile, maxStaticIndexEntries)
+	for i := 0; i < maxStaticIndexEntries; i++ {
+		files[fmt.Sprintf("file-%d", i)] = staticArchiveFile{}
+	}
+	oversized := &staticArchiveIndex{files: files, dirs: map[string]bool{"": true}}
+
+	assert.Same(t, oversized, server.cacheIndex("oversized", oversized))
+	assert.Equal(t, 1, server.indexes.Len())
+	assert.True(t, server.indexes.Contains("oversized"))
+	assert.Greater(t, server.indexEntries, maxStaticIndexEntries)
+}
+
 type fakeStaticFiles struct {
 	served bool
 	err    error
 	calls  int
+	body   string
 }
 
-func (f *fakeStaticFiles) ServeFile(http.ResponseWriter, *http.Request, *core_v1alpha.AppVersion) (bool, error) {
+func (f *fakeStaticFiles) ServeFile(w http.ResponseWriter, _ *http.Request, _ *core_v1alpha.AppVersion) (bool, error) {
 	f.calls++
+	if f.served && f.body != "" {
+		_, _ = fmt.Fprint(w, f.body)
+	}
 	return f.served, f.err
+}
+
+type recordingLogWriter struct {
+	entities []string
+	entries  []observability.LogEntry
+}
+
+func (w *recordingLogWriter) WriteEntry(entity string, entry observability.LogEntry) error {
+	w.entities = append(w.entities, entity)
+	w.entries = append(w.entries, entry)
+	return nil
 }
 
 type panicActivator struct{}
@@ -172,6 +222,45 @@ func TestStaticOnlyRequestDoesNotAcquireSandbox(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, recorder.Code)
 			assert.Equal(t, 1, files.calls)
+		})
+	}
+}
+
+func TestStaticOnlyRequestWritesRouterAccessLog(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		served     bool
+		body       string
+		wantStatus int
+	}{
+		{name: "served file", served: true, body: "asset", wantStatus: http.StatusOK},
+		{name: "missing file", wantStatus: http.StatusNotFound},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := &recordingLogWriter{}
+			server := &Server{
+				Log:         testutils.TestLogger(t),
+				staticFiles: &fakeStaticFiles{served: tt.served, body: tt.body},
+				aa:          panicActivator{},
+				logWriter:   logs,
+			}
+			target := &resolvedIngressTarget{
+				version: core_v1alpha.AppVersion{ID: entity.Id("version-1")},
+				config:  &core_v1alpha.ConfigSpec{StaticDir: "/app/dist"},
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "http://example.com/asset.txt?build=1", nil)
+			request.RemoteAddr = "192.0.2.10:4321"
+			appName := "static-app"
+
+			server.serveAuthenticatedRequest(recorder, request, entity.Id("app-1"), "web", "route", target, &appName, 0)
+
+			require.Len(t, logs.entries, 1)
+			assert.Equal(t, []string{"app-1"}, logs.entities)
+			assert.Equal(t, observability.UserOOB, logs.entries[0].Stream)
+			assert.Contains(t, logs.entries[0].Body, fmt.Sprintf("status=%d method=GET path=\"/asset.txt?build=1\"", tt.wantStatus))
+			assert.Contains(t, logs.entries[0].Body, "source_ip=192.0.2.10")
+			assert.Equal(t, "router", logs.entries[0].Attributes["source"])
 		})
 	}
 }

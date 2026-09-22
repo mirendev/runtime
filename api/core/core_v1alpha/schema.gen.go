@@ -1522,7 +1522,7 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
 	sb.Component("source", "dev.miren.core/app_version.source", schema.Doc("Sanitized source provenance captured when this version was built"))
 	(&Source{}).InitSchema(sb.Builder("app_version.source"))
-	sb.String("static_artifact", "dev.miren.core/app_version.static_artifact", schema.Doc("Content digest of the tar archive containing files exported from static_dir"))
+	sb.String("static_artifact", "dev.miren.core/app_version.static_artifact", schema.Doc("Content digest of the tar archive containing files exported from static.dir"))
 	sb.String("version", "dev.miren.core/app_version.version", schema.Doc("The version of this app"))
 }
 
@@ -2435,7 +2435,7 @@ func (o *Source) Empty() bool {
 func (o *Source) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("git_branch", "dev.miren.core/source.git_branch", schema.Doc("Git branch used to build the version"))
 	sb.String("git_sha", "dev.miren.core/source.git_sha", schema.Doc("Git commit SHA used to build the version"))
-	sb.String("kind", "dev.miren.core/source.kind", schema.Doc("Build source kind (image, dockerfile, or stack)"))
+	sb.String("kind", "dev.miren.core/source.kind", schema.Doc("Build source kind (image, dockerfile, stack, or static)"))
 	sb.String("repository", "dev.miren.core/source.repository", schema.Doc("Repository URL without credentials, query parameters, or fragments"))
 	sb.String("value", "dev.miren.core/source.value", schema.Doc("Normalized image reference or auto-detected stack name, depending on kind"))
 }

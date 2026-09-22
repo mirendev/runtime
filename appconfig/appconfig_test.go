@@ -1756,13 +1756,17 @@ func TestWantsWebNilConfig(t *testing.T) {
 }
 
 func TestStaticDirMustBeAbsolute(t *testing.T) {
-	_, err := Parse([]byte("name = \"site\"\nstatic_dir = \"dist\"\n"))
+	_, err := Parse([]byte("name = \"site\"\n[static]\n"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "static_dir must be an absolute path")
+	assert.Contains(t, err.Error(), "static.dir is required")
 
-	config, err := Parse([]byte("name = \"site\"\nstatic_dir = \"/app/dist\"\n"))
+	_, err = Parse([]byte("name = \"site\"\n[static]\ndir = \"dist\"\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "static.dir must be an absolute path")
+
+	config, err := Parse([]byte("name = \"site\"\n[static]\ndir = \"/app/dist\"\n"))
 	require.NoError(t, err)
-	assert.Equal(t, "/app/dist", config.StaticDir)
+	assert.Equal(t, "/app/dist", config.StaticDirectory())
 }
 
 func TestTaskValidation(t *testing.T) {

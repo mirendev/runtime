@@ -1415,7 +1415,7 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve base config: %w", err)
 		}
-		varMap := make(map[string]core_v1alpha.ConfigSpecVariables, len(spec.Variables)+len(envVars))
+		varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
 		for _, v := range spec.Variables {
 			varMap[v.Key] = v
 		}
@@ -1440,7 +1440,7 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 		derived.ConfigVersion = configVersionID
 		derived.Config = core_v1alpha.Config{}
 	} else {
-		varMap := make(map[string]core_v1alpha.Variable, len(derived.Config.Variable)+len(envVars))
+		varMap := make(map[string]core_v1alpha.Variable)
 		for _, v := range derived.Config.Variable {
 			varMap[v.Key] = v
 		}

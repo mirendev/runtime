@@ -109,6 +109,7 @@ func (s *archiveStaticFileServer) ServeFile(w http.ResponseWriter, req *http.Req
 	defer archive.Close()
 
 	content := io.NewSectionReader(archive, entry.offset, entry.size)
+	w.Header().Set("ETag", fmt.Sprintf("\"%s-%d-%d\"", strings.TrimPrefix(version.StaticArtifact, "sha256:"), entry.offset, entry.size))
 	http.ServeContent(w, req, path.Base(requestPath), entry.modTime, content)
 	return true, nil
 }
@@ -164,15 +165,15 @@ func (s *archiveStaticFileServer) index(digest string) (*staticArchiveIndex, err
 		index.addDir(path.Dir(name))
 	}
 
-	entries := len(index.files) + len(index.dirs)
-	if entries > maxStaticIndexEntries {
-		return index, nil
-	}
+	return s.cacheIndex(digest, index), nil
+}
 
+func (s *archiveStaticFileServer) cacheIndex(digest string, index *staticArchiveIndex) *staticArchiveIndex {
+	entries := len(index.files) + len(index.dirs)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cached, ok := s.indexes.Get(digest); ok {
-		return cached, nil
+		return cached
 	}
 	if s.indexes.Len() >= maxStaticIndexes {
 		_, evicted, ok := s.indexes.RemoveOldest()
@@ -189,7 +190,7 @@ func (s *archiveStaticFileServer) index(digest string) (*staticArchiveIndex, err
 		}
 		s.indexEntries -= len(evicted.files) + len(evicted.dirs)
 	}
-	return index, nil
+	return index
 }
 
 func (i *staticArchiveIndex) addDir(name string) {

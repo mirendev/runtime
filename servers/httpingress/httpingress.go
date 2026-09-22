@@ -959,23 +959,29 @@ func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralRes
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
 	if target.config.StaticDir != "" && service == "web" {
+		start := time.Now()
+		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		if h.staticFiles == nil {
-			http.Error(w, "static file service unavailable", http.StatusServiceUnavailable)
+			http.Error(staticResponse, "static file service unavailable", http.StatusServiceUnavailable)
+			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
 			return
 		}
-		served, err := h.staticFiles.ServeFile(w, req, &target.version)
+		served, err := h.staticFiles.ServeFile(staticResponse, req, &target.version)
 		if err != nil {
 			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
 			if !served {
-				http.Error(w, "failed to serve static file", http.StatusInternalServerError)
+				http.Error(staticResponse, "failed to serve static file", http.StatusInternalServerError)
 			}
+			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
 			return
 		}
 		if served {
+			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
 			return
 		}
 		if !configHasService(target.config, service) {
-			http.NotFound(w, req)
+			http.NotFound(staticResponse, req)
+			h.logRequestFromStats(targetAppId.String(), *appName, responseStats(start, staticResponse, req))
 			return
 		}
 	}
@@ -1092,6 +1098,31 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			h.releaseLease(ctx, localLease)
 		}
 		return
+	}
+}
+
+func responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
+	remoteAddr := req.Header.Get("X-Forwarded-For")
+	if idx := strings.Index(remoteAddr, ","); idx >= 0 {
+		remoteAddr = strings.TrimSpace(remoteAddr[:idx])
+	}
+	if remoteAddr == "" {
+		remoteAddr = req.RemoteAddr
+		if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+			remoteAddr = host
+		}
+	}
+	return httputil.ProxyStats{
+		StartTime:     start,
+		Duration:      time.Since(start),
+		StatusCode:    response.statusCode,
+		ResponseBytes: int64(response.bytesWritten),
+		RequestMethod: req.Method,
+		RequestPath:   req.URL.Path,
+		RequestQuery:  req.URL.RawQuery,
+		RequestHost:   req.Host,
+		RemoteAddr:    remoteAddr,
+		ContentLength: max(0, req.ContentLength),
 	}
 }
 

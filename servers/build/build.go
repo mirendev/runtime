@@ -210,7 +210,7 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 
 // errNoServices is returned when a build produces no service, task, or static
 // content. Static-only apps are valid and run no sandbox between requests.
-var errNoServices = errors.New("no services, tasks, or static_dir defined: please define at least one workload in a Procfile or .miren/app.toml")
+var errNoServices = errors.New("no services, tasks, or static.dir defined: please define at least one workload in a Procfile or .miren/app.toml")
 
 // validateWorkloadsExist checks that the app declares something to run or serve.
 func validateWorkloadsExist(spec core_v1alpha.ConfigSpec) error {
@@ -241,7 +241,7 @@ should have a web service.
 // that. Nothing here is new-user-hostile, since the config shape it fires on
 // cannot exist before tasks.
 func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]string) error {
-	if ac == nil || len(ac.Tasks) == 0 || ac.StaticDir != "" {
+	if ac == nil || len(ac.Tasks) == 0 || ac.StaticDirectory() != "" {
 		return nil
 	}
 	// A service declared anywhere — app.toml or Procfile — answers the question.
@@ -788,7 +788,7 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	// Preserve existing variables for merging later
 	spec.Variables = inputs.ExistingConfig.Variables
 	if ac != nil {
-		spec.StaticDir = ac.StaticDir
+		spec.StaticDir = ac.StaticDirectory()
 	}
 
 	// Set entrypoint from stack build result

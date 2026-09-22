@@ -96,6 +96,9 @@ func (w *ImageWatchdog) RunBlobGC(ctx context.Context) (*BlobGCResult, error) {
 func (w *ImageWatchdog) collectReferencedBlobDigests(ctx context.Context) (map[string]bool, error) {
 	digests := make(map[string]bool)
 
+	// OCI config and layer blobs are reached through Artifact manifests. Static
+	// artifacts are standalone blobs, so their digests are collected directly
+	// from AppVersion entities below.
 	resp, err := w.EAC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindArtifact))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list artifacts: %w", err)

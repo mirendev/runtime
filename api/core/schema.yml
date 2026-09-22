@@ -143,7 +143,7 @@ kinds:
       attrs:
         kind:
           type: string
-          doc: Build source kind (image, dockerfile, or stack)
+          doc: Build source kind (image, dockerfile, stack, or static)
         value:
           type: string
           doc: Normalized image reference or auto-detected stack name, depending on kind
@@ -167,7 +167,7 @@ kinds:
 
     static_artifact:
       type: string
-      doc: Content digest of the tar archive containing files exported from static_dir
+      doc: Content digest of the tar archive containing files exported from static.dir
 
     manifest:
       type: string

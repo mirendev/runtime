@@ -28,15 +28,16 @@ type extractStaticOut struct {
 }
 
 func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, error) {
-	if in.AppConfig == nil || in.AppConfig.StaticDir == "" {
+	staticDir := in.AppConfig.StaticDirectory()
+	if staticDir == "" {
 		return extractStaticOut{}, nil
 	}
 
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
 	status := deps.statuses.SenderFor(in.StreamID)
-	if in.BuildStack.Stack == "static" && filepath.Clean(in.AppConfig.StaticDir) == "/app" {
-		status.SendLog("warn", "static_dir /app publishes the entire uploaded source tree except .miren and files excluded from the upload")
+	if in.BuildStack.Stack == "static" && filepath.Clean(staticDir) == "/app" {
+		status.SendLog("warn", "static.dir /app publishes the entire uploaded source tree except .miren and files excluded from the upload")
 	}
 
 	tempDir := b.TempDir
@@ -48,15 +49,17 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 	}
 	archivePath := filepath.Join(tempDir, idgen.Gen("static")+".tar")
 	defer os.Remove(archivePath)
+	canonicalPath := archivePath + ".canonical"
+	defer os.Remove(canonicalPath)
 
-	status.SendMessage(fmt.Sprintf("Exporting static files from %s", in.AppConfig.StaticDir))
+	status.SendMessage(fmt.Sprintf("Exporting static files from %s", staticDir))
 	if in.BuildStack.Stack == "static" {
-		if err := exportStaticSource(in.SourceDir, in.AppConfig.StaticDir, archivePath); err != nil {
+		if err := exportStaticSource(in.SourceDir, staticDir, archivePath); err != nil {
 			return extractStaticOut{}, err
 		}
 	} else {
 		if b.BuildKit == nil {
-			return extractStaticOut{}, fmt.Errorf("BuildKit is required to export static_dir")
+			return extractStaticOut{}, fmt.Errorf("BuildKit is required to export static.dir")
 		}
 		client, err := b.BuildKit.Client(ctx)
 		if err != nil {
@@ -65,12 +68,15 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 		defer client.Close()
 
 		bk := &Buildkit{Client: client, Log: b.Log, WorkloadIssuer: b.WorkloadIssuer}
-		if err := bk.ExportStatic(ctx, in.FinalImageURL, in.AppConfig.StaticDir, archivePath); err != nil {
+		if err := bk.ExportStatic(ctx, in.FinalImageURL, staticDir, archivePath); err != nil {
 			return extractStaticOut{}, err
 		}
 	}
+	if err := canonicalizeStaticArchive(archivePath, canonicalPath); err != nil {
+		return extractStaticOut{}, err
+	}
 
-	archive, err := os.Open(archivePath)
+	archive, err := os.Open(canonicalPath)
 	if err != nil {
 		return extractStaticOut{}, fmt.Errorf("opening static file archive: %w", err)
 	}
@@ -81,6 +87,57 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 		return extractStaticOut{}, fmt.Errorf("storing static file artifact: %w", err)
 	}
 	return extractStaticOut{StaticArtifact: digest}, nil
+}
+
+func canonicalizeStaticArchive(source, destination string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("opening static export: %w", err)
+	}
+	defer input.Close()
+
+	output, err := os.Create(destination)
+	if err != nil {
+		return fmt.Errorf("creating canonical static archive: %w", err)
+	}
+	defer output.Close()
+	archive := tar.NewWriter(output)
+	reader := tar.NewReader(input)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading static export: %w", err)
+		}
+
+		canonical := tar.Header{Name: header.Name, Mode: header.Mode}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			canonical.Typeflag = tar.TypeDir
+		case tar.TypeReg:
+			canonical.Typeflag = tar.TypeReg
+			canonical.Size = header.Size
+		default:
+			continue
+		}
+		if err := archive.WriteHeader(&canonical); err != nil {
+			return fmt.Errorf("writing canonical static archive: %w", err)
+		}
+		if canonical.Typeflag == tar.TypeReg {
+			if _, err := io.CopyN(archive, reader, canonical.Size); err != nil {
+				return fmt.Errorf("copying static file into canonical archive: %w", err)
+			}
+		}
+	}
+	if err := archive.Close(); err != nil {
+		return fmt.Errorf("closing canonical static archive: %w", err)
+	}
+	if err := output.Close(); err != nil {
+		return fmt.Errorf("closing canonical static artifact: %w", err)
+	}
+	return nil
 }
 
 func exportStaticSource(sourceDir, staticDir, destination string) error {

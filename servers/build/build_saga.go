@@ -1002,9 +1002,9 @@ func (b *Builder) resolveBuildSource(path string, ac *appconfig.AppConfig, name 
 		b.Log.Info("using service image as build source", "image", image, "app", name)
 		return buildSourceResolution{BuildStack: stack}, nil
 	}
-	if ac != nil && ac.StaticDir != "" && len(ac.Services) == 0 && len(ac.Tasks) == 0 {
+	if ac != nil && ac.StaticDirectory() != "" && len(ac.Services) == 0 && len(ac.Tasks) == 0 {
 		stack.Stack = "static"
-		b.Log.Info("using source directory as static build output", "directory", ac.StaticDir, "app", name)
+		b.Log.Info("using source directory as static build output", "directory", ac.StaticDirectory(), "app", name)
 		return buildSourceResolution{BuildStack: stack}, nil
 	}
 

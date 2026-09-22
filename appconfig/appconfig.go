@@ -299,7 +299,7 @@ func (tc *TaskConfig) ResolvedMaxConcurrent() int {
 
 type AppConfig struct {
 	Name         string                    `toml:"name"`
-	StaticDir    string                    `toml:"static_dir,omitempty"`
+	Static       *StaticConfig             `toml:"static,omitempty"`
 	EnvVars      []AppEnvVar               `toml:"env,omitempty"`
 	Concurrency  *int                      `toml:"concurrency,omitempty"`
 	Services     map[string]*ServiceConfig `toml:"services,omitempty"`
@@ -316,6 +316,19 @@ type AppConfig struct {
 	// synthesizing a web service from the image entrypoint, while `web = false`
 	// is how a task-only app opts out.
 	Web *bool `toml:"web,omitempty"`
+}
+
+// StaticConfig selects build output that HTTP ingress serves directly.
+type StaticConfig struct {
+	Dir string `toml:"dir"`
+}
+
+// StaticDirectory returns the configured static output directory, if any.
+func (ac *AppConfig) StaticDirectory() string {
+	if ac == nil || ac.Static == nil {
+		return ""
+	}
+	return ac.Static.Dir
 }
 
 // WantsWeb reports whether a web service may be synthesized for this app, and
@@ -400,10 +413,16 @@ func decodeAndValidate(data []byte, filePath string) (*AppConfig, error) {
 // Validate checks that the AppConfig has valid values.
 // Returns *ValidationError with a key path for AST-based line resolution.
 func (ac *AppConfig) Validate() error {
-	if ac.StaticDir != "" && !filepath.IsAbs(ac.StaticDir) {
+	if ac.Static != nil && ac.Static.Dir == "" {
 		return &ValidationError{
-			KeyPath: "static_dir",
-			Message: "static_dir must be an absolute path in the application build output",
+			KeyPath: "static.dir",
+			Message: "static.dir is required",
+		}
+	}
+	if staticDir := ac.StaticDirectory(); staticDir != "" && !filepath.IsAbs(staticDir) {
+		return &ValidationError{
+			KeyPath: "static.dir",
+			Message: "static.dir must be an absolute path in the application build output",
 		}
 	}
 
