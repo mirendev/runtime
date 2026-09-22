@@ -11,7 +11,7 @@ Manage WAF protection on an HTTP route
 ## Usage
 
 ```bash
-miren route waf <host> [flags]
+miren route waf [host] [flags]
 ```
 
 ## Arguments

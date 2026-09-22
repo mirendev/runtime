@@ -11,7 +11,7 @@ Show details of an HTTP route
 ## Usage
 
 ```bash
-miren route show <host> [flags]
+miren route show [host] [flags]
 ```
 
 ## Arguments

@@ -11,12 +11,12 @@ Add a deployment target
 ## Usage
 
 ```bash
-miren deploy target add <name> <clustername> [flags]
+miren deploy target add [name] [clustername] [flags]
 ```
 
 ## Arguments
 
-- `name` — Name for the deployment target
+- `name` — Name for the deployment target (prompts when omitted)
 - `clustername` — Configured cluster name (prompts when omitted)
 
 ## Flags

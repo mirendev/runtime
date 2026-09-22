@@ -14,6 +14,7 @@ import (
 
 func writeDeployToml(t *testing.T, dir, content string) {
 	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".miren"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".miren", "deploy.toml"), []byte(content), 0644))
 }
 
@@ -40,16 +41,26 @@ cluster_id = "cluster-prod-id"
 	t.Run("first target is the default", func(t *testing.T) {
 		opts := deployOpts{AppCentric: AppCentric{Dir: dir}}
 		require.NoError(t, opts.Validate(&GlobalFlags{}))
-		require.Equal(t, "miren-staging", opts.Cluster)
+		require.Empty(t, opts.Cluster)
+		require.Equal(t, "miren-staging", opts.targetCluster)
 	})
 
 	t.Run("named target selects its cluster", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
 		opts := deployOpts{
 			AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{cfg: cfg}},
 			Target:     "prod",
 		}
 		require.NoError(t, opts.Validate(&GlobalFlags{}))
-		require.Equal(t, "evans-prod", opts.Cluster)
+		require.Empty(t, opts.Cluster)
+		require.Equal(t, "evans-prod", opts.targetCluster)
+		cluster, name, err := opts.LoadCluster()
+		require.NoError(t, err)
+		require.NotNil(t, cluster)
+		require.Equal(t, "evans-prod", name)
+		state, err := appconfig.LoadAppState("myapp")
+		require.NoError(t, err)
+		require.Nil(t, state)
 	})
 
 	t.Run("explicit cluster overrides the default target", func(t *testing.T) {
@@ -63,8 +74,18 @@ cluster_id = "cluster-prod-id"
 			AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other"}},
 			Target:     "prod",
 		}
-		require.EqualError(t, opts.Validate(&GlobalFlags{}), "--target and --cluster cannot be combined")
+		require.EqualError(t, opts.Validate(&GlobalFlags{}), "--target cannot be combined with --cluster or MIREN_CLUSTER")
 	})
+}
+
+func TestDeployOptsExplicitClusterBypassesInvalidDeployConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeAppToml(t, dir, `name = "myapp"`)
+	writeDeployToml(t, dir, `not valid toml =`)
+
+	opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other"}}}
+	require.NoError(t, opts.Validate(&GlobalFlags{}))
+	require.Equal(t, "other", opts.Cluster)
 }
 
 func TestDeployOptsValidateTargetWithUnknownClusterID(t *testing.T) {
@@ -83,6 +104,24 @@ cluster_id = "cluster-missing"
 	}
 	err := opts.Validate(&GlobalFlags{})
 	require.EqualError(t, err, `cluster id "cluster-missing" for deploy target "prod" is not configured; run 'miren cluster add'`)
+}
+
+func TestDeployOptsValidateTargetWithoutClientConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeAppToml(t, dir, `name = "myapp"`)
+	writeDeployToml(t, dir, `
+[[targets]]
+name = "prod"
+cluster = "miren-prod"
+cluster_id = "cluster-prod-id"
+`)
+
+	opts := deployOpts{
+		AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Config: filepath.Join(dir, "missing.yaml")}},
+		Target:     "prod",
+	}
+	err := opts.Validate(&GlobalFlags{})
+	require.EqualError(t, err, "no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target \"prod\"")
 }
 
 func TestDeployOptsValidateTargetWithoutConfig(t *testing.T) {
@@ -134,4 +173,12 @@ func TestDeployTargetCommandsMaintainConfig(t *testing.T) {
 	dc, err = appconfig.LoadDeployConfigUnder(dir)
 	require.NoError(t, err)
 	require.Nil(t, dc)
+}
+
+func TestDeployTargetAddRequiresNameNonInteractively(t *testing.T) {
+	t.Setenv("CI", "1")
+	var output bytes.Buffer
+	ctx := &Context{Context: context.Background(), Stdout: &output}
+	err := DeployTargetAdd(ctx, deployTargetAddOpts{})
+	require.EqualError(t, err, "name is required in non-interactive mode")
 }

@@ -11,12 +11,27 @@ import (
 
 type deployTargetAddOpts struct {
 	AppCentric
-	Name        string `position:"0" usage:"Name for the deployment target" required:"true"`
+	Name        string `position:"0" usage:"Name for the deployment target (prompts when omitted)"`
 	ClusterName string `position:"1" usage:"Configured cluster name (prompts when omitted)"`
 	Default     bool   `long:"default" description:"Make this the default deployment target"`
 }
 
 func DeployTargetAdd(ctx *Context, opts deployTargetAddOpts) error {
+	name := opts.Name
+	if name == "" {
+		if !ui.IsInteractive() {
+			return fmt.Errorf("name is required in non-interactive mode")
+		}
+		var err error
+		name, err = ui.PromptForInput(ui.WithLabel("Deployment target name"))
+		if err != nil {
+			return fmt.Errorf("failed to read deployment target name: %w", err)
+		}
+		if name == "" {
+			return fmt.Errorf("deployment target name is required")
+		}
+	}
+
 	clusterName, cluster, err := selectDeployTargetCluster(opts.ConfigCentric, opts.ClusterName)
 	if err != nil {
 		return err
@@ -33,7 +48,7 @@ func DeployTargetAdd(ctx *Context, opts deployTargetAddOpts) error {
 		dc = &appconfig.DeployConfig{}
 	}
 
-	target := appconfig.DeployTarget{Name: opts.Name, Cluster: clusterName, ClusterID: cluster.XID}
+	target := appconfig.DeployTarget{Name: name, Cluster: clusterName, ClusterID: cluster.XID}
 	if err := dc.AddTarget(target, opts.Default); err != nil {
 		return err
 	}
@@ -41,13 +56,13 @@ func DeployTargetAdd(ctx *Context, opts deployTargetAddOpts) error {
 		return fmt.Errorf("error saving %s: %w", appconfig.DeployConfigPath, err)
 	}
 
-	ctx.Printf("Added deploy target %q for cluster %q", opts.Name, clusterName)
+	ctx.Printf("Added deploy target %q for cluster %q", name, clusterName)
 	if cluster.XID != "" {
 		ctx.Printf(" (%s)", cluster.XID)
 	}
 	ctx.Printf("\n")
 	if len(dc.Targets) == 1 || opts.Default {
-		ctx.Printf("Default deploy target: %s\n", opts.Name)
+		ctx.Printf("Default deploy target: %s\n", name)
 	}
 	return nil
 }

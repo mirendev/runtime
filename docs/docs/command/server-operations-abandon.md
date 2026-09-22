@@ -11,7 +11,7 @@ Give up on an unfinished operation, including a data restore that keeps the serv
 ## Usage
 
 ```bash
-miren server operations abandon <id> [flags]
+miren server operations abandon [id] [flags]
 ```
 
 ## Arguments

@@ -11,7 +11,7 @@ View system logs
 ## Usage
 
 ```bash
-miren logs system <component> [flags]
+miren logs system [component] [flags]
 ```
 
 ## Arguments

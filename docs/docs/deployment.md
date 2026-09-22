@@ -104,7 +104,9 @@ miren deploy target set-default prod
 miren deploy target remove qa
 ```
 
-An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with `--cluster`.
+An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with either explicit cluster selection.
+
+Selecting a deployment target affects that deploy only. It does not change the app's pinned cluster for commands such as `miren logs`.
 
 ### Confirmation Prompt
 

@@ -86,7 +86,8 @@ func reconcileDeploymentCancellation(
 type deployOpts struct {
 	AppCentric
 
-	Target string `long:"target" description:"Deployment target from .miren/deploy.toml"`
+	Target        string `long:"target" description:"Deployment target from .miren/deploy.toml"`
+	targetCluster string
 
 	// Deploy carries its own format flags rather than the shared FormatOptions:
 	// it is the one command that also speaks jsonl, and the shared help text
@@ -112,6 +113,13 @@ func (o *deployOpts) Validate(glbl *GlobalFlags) error {
 		return err
 	}
 
+	if o.Target != "" && o.Cluster != "" {
+		return fmt.Errorf("--target cannot be combined with --cluster or MIREN_CLUSTER")
+	}
+	if o.Cluster != "" {
+		return nil
+	}
+
 	dc, err := appconfig.LoadDeployConfigUnder(o.ResolvedDir())
 	if err != nil {
 		return fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
@@ -123,22 +131,31 @@ func (o *deployOpts) Validate(glbl *GlobalFlags) error {
 		return nil
 	}
 
-	if o.Target != "" && o.Cluster != "" {
-		return fmt.Errorf("--target and --cluster cannot be combined")
-	}
-	if o.Cluster != "" {
-		return nil
-	}
-
 	target, err := dc.Target(o.Target)
 	if err != nil {
 		return err
 	}
-	o.Cluster, err = o.clusterNameForTarget(target)
+	o.targetCluster, err = o.clusterNameForTarget(target)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (o *deployOpts) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
+	if o.targetCluster == "" {
+		return o.AppCentric.LoadCluster()
+	}
+	config := o.ConfigCentric
+	config.Cluster = o.targetCluster
+	return config.LoadCluster()
+}
+
+func (o *deployOpts) RequestedCluster() string {
+	if o.targetCluster != "" {
+		return o.targetCluster
+	}
+	return o.Cluster
 }
 
 func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
@@ -148,6 +165,9 @@ func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (strin
 
 	cfg, err := o.LoadConfig()
 	if err != nil {
+		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
+			return "", fmt.Errorf("no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target %q", target.Name)
+		}
 		return "", err
 	}
 
