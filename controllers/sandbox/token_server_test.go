@@ -2,12 +2,14 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/dns"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
@@ -48,9 +51,23 @@ func newTestTokenController(t *testing.T) *SandboxController {
 	return &SandboxController{
 		Log:            log,
 		NetServ:        sm,
+		Tempdir:        dir,
 		WorkloadIssuer: issuer,
 		tokenSecrets:   secrets,
 	}
+}
+
+func persistTestTokenSecret(t *testing.T, c *SandboxController, sandboxID, secret string) {
+	t.Helper()
+	path := filepath.Join(c.Tempdir, "containerd", entity.Id(sandboxID).PathSafe(), tokenSecretFilename)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+	require.NoError(t, writeTokenSecret(path, secret))
+}
+
+func forgetTestTokenSecret(r *tokenSecretRegistry, sandboxID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.bySandbox, sandboxID)
 }
 
 func authedRequest(method, url string) *http.Request {
@@ -198,8 +215,86 @@ func TestTokenSecretRegistry_KeyedBySandboxIdentity(t *testing.T) {
 	assert.True(t, r.verify("sandbox/old", "secret-old"))
 	assert.False(t, r.verify("sandbox/new", "secret-old"))
 
-	r.unregister("sandbox/old")
+	forgetTestTokenSecret(r, "sandbox/old")
 	assert.False(t, r.verify("sandbox/old", "secret-old"))
+}
+
+func TestTokenSecretRegistry_RetireWinsAgainstInFlightRepair(t *testing.T) {
+	r := newTokenSecretRegistry()
+	loadStarted := make(chan struct{})
+	continueLoad := make(chan struct{})
+	repairDone := make(chan struct{})
+
+	go func() {
+		defer close(repairDone)
+		_, err := r.repair(testSandboxID, func() (string, bool, error) {
+			close(loadStarted)
+			<-continueLoad
+			return testSecret, true, nil
+		})
+		assert.NoError(t, err)
+	}()
+
+	<-loadStarted
+	retireDone := make(chan struct{})
+	go func() {
+		defer close(retireDone)
+		assert.NoError(t, r.retire(testSandboxID, func() error { return nil }))
+	}()
+
+	close(continueLoad)
+	<-repairDone
+	<-retireDone
+	assert.False(t, r.verify(testSandboxID, testSecret),
+		"retirement must revoke a secret loaded by an already-running repair")
+}
+
+func TestTokenSecretRegistry_FailedSecretRemovalPreventsRepair(t *testing.T) {
+	r := newTokenSecretRegistry()
+	r.register(testSandboxID, testSecret)
+
+	err := r.retire(testSandboxID, func() error { return errors.New("disk unavailable") })
+	require.EqualError(t, err, "disk unavailable")
+
+	loaded := false
+	repaired, err := r.repair(testSandboxID, func() (string, bool, error) {
+		loaded = true
+		return testSecret, true, nil
+	})
+	require.NoError(t, err)
+	assert.False(t, repaired)
+	assert.False(t, loaded, "a retained file must not be read after explicit retirement")
+	assert.False(t, r.verify(testSandboxID, testSecret))
+}
+
+func TestTokenSecretRegistry_FailedReloadDoesNotConsumeCooldown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		load func() (string, bool, error)
+	}{
+		{name: "read error", load: func() (string, bool, error) {
+			return "", false, errors.New("disk unavailable")
+		}},
+		{name: "missing file", load: func() (string, bool, error) {
+			return "", false, nil
+		}},
+		{name: "empty secret", load: func() (string, bool, error) {
+			return "", true, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTokenSecretRegistry()
+			repaired, _ := r.repair(testSandboxID, tc.load)
+			assert.False(t, repaired)
+
+			repaired, err := r.repair(testSandboxID, func() (string, bool, error) {
+				return testSecret, true, nil
+			})
+			require.NoError(t, err)
+			assert.True(t, repaired, "a transient failure must not delay the next usable reload")
+			assert.True(t, r.verify(testSandboxID, testSecret))
+		})
+	}
 }
 
 // TestTokenServer_RecycledIPResolvesToCurrentSandbox reproduces MIR-1511: a sandbox that
@@ -370,4 +465,84 @@ func TestTokenServer_RecoversSecretAfterRestart(t *testing.T) {
 	w = httptest.NewRecorder()
 	c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestTokenServer_RepairsLiveSecretRegistryFromPersistedSecret(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*tokenSecretRegistry)
+	}{
+		{
+			name: "missing entry",
+			setup: func(secrets *tokenSecretRegistry) {
+				forgetTestTokenSecret(secrets, testSandboxID)
+			},
+		},
+		{
+			name: "diverged entry",
+			setup: func(secrets *tokenSecretRegistry) {
+				secrets.register(testSandboxID, "stale-registry-secret")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestTokenController(t)
+			persistTestTokenSecret(t, c, testSandboxID, testSecret)
+			tc.setup(c.tokenSecrets)
+
+			w := httptest.NewRecorder()
+			c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.True(t, c.tokenSecrets.verify(testSandboxID, testSecret))
+		})
+	}
+}
+
+func TestTokenServer_PersistedSecretDoesNotAuthorizeWrongBearer(t *testing.T) {
+	c := newTestTokenController(t)
+	persistTestTokenSecret(t, c, testSandboxID, testSecret)
+	forgetTestTokenSecret(c.tokenSecrets, testSandboxID)
+
+	req := authedRequest("GET", "/v1/token")
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	w := httptest.NewRecorder()
+	c.handleTokenRequest(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.True(t, c.tokenSecrets.verify(testSandboxID, testSecret),
+		"trusted host state should be repaired even though this request stays forbidden")
+
+	w = httptest.NewRecorder()
+	c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
+	assert.Equal(t, http.StatusOK, w.Code,
+		"a wrong request must not consume the legitimate request's recovery opportunity")
+}
+
+func TestTokenServer_ConcurrentRequestsShareSecretRepair(t *testing.T) {
+	c := newTestTokenController(t)
+	persistTestTokenSecret(t, c, testSandboxID, testSecret)
+	forgetTestTokenSecret(c.tokenSecrets, testSandboxID)
+
+	const requests = 8
+	start := make(chan struct{})
+	statuses := make([]int, requests)
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w := httptest.NewRecorder()
+			c.handleTokenRequest(w, authedRequest("GET", "/v1/token"))
+			statuses[i] = w.Code
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	assert.Equal(t, []int{
+		http.StatusOK, http.StatusOK, http.StatusOK, http.StatusOK,
+		http.StatusOK, http.StatusOK, http.StatusOK, http.StatusOK,
+	}, statuses)
 }

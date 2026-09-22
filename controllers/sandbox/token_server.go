@@ -10,11 +10,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
@@ -46,24 +48,22 @@ type tokenErrorResponse struct {
 type tokenSecretRegistry struct {
 	mu        sync.RWMutex
 	bySandbox map[string]string // sandboxID → secret
+	retired   map[string]struct{}
+	reload    refreshLimiter
 }
 
 func newTokenSecretRegistry() *tokenSecretRegistry {
 	return &tokenSecretRegistry{
 		bySandbox: make(map[string]string),
+		retired:   make(map[string]struct{}),
 	}
 }
 
 func (r *tokenSecretRegistry) register(sandboxID, secret string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	delete(r.retired, sandboxID)
 	r.bySandbox[sandboxID] = secret
-}
-
-func (r *tokenSecretRegistry) unregister(sandboxID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.bySandbox, sandboxID)
 }
 
 func (r *tokenSecretRegistry) verify(sandboxID, secret string) bool {
@@ -76,18 +76,55 @@ func (r *tokenSecretRegistry) verify(sandboxID, secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(secret)) == 1
 }
 
-// refreshCooldown bounds how often one source address can force the token server to
-// re-derive its mapping from the entity store.
+// repair reloads the authoritative host-side value while holding the registry lock.
+// Concurrent verifiers wait for the reload and then observe the repaired entry. The
+// reload is independent of the request's bearer: publishing trusted host state cannot
+// authorize a bad bearer, which is verified separately after repair returns.
+func (r *tokenSecretRegistry) repair(sandboxID string, load func() (string, bool, error)) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, retired := r.retired[sandboxID]; retired || !r.reload.allow(sandboxID) {
+		return false, nil
+	}
+
+	secret, ok, err := load()
+	if err != nil || !ok || secret == "" {
+		r.reload.reset(sandboxID)
+		return false, err
+	}
+	r.bySandbox[sandboxID] = secret
+	return true, nil
+}
+
+// retire revokes a sandbox while serialized with repair. A failed removal leaves a
+// tombstone so a retained secret file cannot resurrect the credential; successful
+// cleanup needs no tombstone because future repairs have nothing to load.
+func (r *tokenSecretRegistry) retire(sandboxID string, remove func() error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.bySandbox, sandboxID)
+	err := remove()
+	if err != nil {
+		r.retired[sandboxID] = struct{}{}
+	} else {
+		delete(r.retired, sandboxID)
+	}
+	return err
+}
+
+// refreshCooldown bounds how often one key can force the token server to redo recovery
+// work such as an entity-store scan or persisted-secret read.
 const refreshCooldown = 10 * time.Second
 
-// refreshLimiterSweepAt is the size past which allow drops expired entries. Source
-// addresses come from a bridge subnet, so the map stays far below this in practice; the
-// sweep is here so a long-lived runner churning through addresses cannot grow it without
-// bound.
+// refreshLimiterSweepAt is the size past which allow drops expired entries. The keys are
+// sandbox IDs or addresses from a bridge subnet, so the maps stay far below this in
+// practice; the sweep keeps a long-lived runner's churn from growing them without bound.
 const refreshLimiterSweepAt = 256
 
-// refreshLimiter rate-limits mapping re-resolution per source address. Its zero value is
-// ready to use and allows the first attempt for any address.
+// refreshLimiter rate-limits recovery work per key. Its zero value is ready to use and
+// allows the first attempt for any key.
 type refreshLimiter struct {
 	mu   sync.Mutex
 	last map[string]time.Time
@@ -113,6 +150,12 @@ func (l *refreshLimiter) allow(key string) bool {
 	}
 	l.last[key] = now
 	return true
+}
+
+func (l *refreshLimiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, key)
 }
 
 func generateTokenSecret() (string, error) {
@@ -183,6 +226,29 @@ func (c *SandboxController) verifyTokenSecret(sandboxID, secret string) bool {
 	return c.tokenSecrets != nil && c.tokenSecrets.verify(sandboxID, secret)
 }
 
+// repairTokenSecret restores a missing or diverged in-memory entry from the
+// sandbox-specific persisted secret. Authorization is decided only after this returns,
+// by comparing the request's bearer with the restored value.
+func (c *SandboxController) repairTokenSecret(sandboxID string) bool {
+	if c.tokenSecrets == nil {
+		return false
+	}
+
+	path := filepath.Join(c.Tempdir, "containerd", entity.Id(sandboxID).PathSafe(), tokenSecretFilename)
+	repaired, err := c.tokenSecrets.repair(sandboxID, func() (string, bool, error) {
+		return loadTokenSecret(path)
+	})
+	if err != nil {
+		c.Log.Warn("failed to reload persisted token secret after verification failure",
+			"sandbox", sandboxID, "error", err)
+		return false
+	}
+	if repaired {
+		c.Log.Info("re-registered workload token secret after verification failure", "sandbox", sandboxID)
+	}
+	return repaired
+}
+
 // refreshSandboxByIP re-derives an address's owner from the entity store, subject to the
 // per-address cooldown: a container retrying a bad token request in a loop must not turn
 // every failure into an entity-store scan.
@@ -219,6 +285,9 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 	}
 
 	if !c.verifyTokenSecret(sandboxID, bearerToken) {
+		c.repairTokenSecret(sandboxID)
+	}
+	if !c.verifyTokenSecret(sandboxID, bearerToken) {
 		// The caller holds a secret the sandbox we resolved does not own. Either it is
 		// an impostor, or the address mapping is stale and named the sandbox that used
 		// to hold this address — which a sandbox on a recycled IP could never recover
@@ -226,6 +295,9 @@ func (c *SandboxController) handleTokenRequest(w http.ResponseWriter, r *http.Re
 		// the owner from the entity store and try once more, so a mapping that has gone
 		// wrong costs one rejected request instead of the life of the sandbox.
 		corrected, correctedApp, refreshed := c.refreshSandboxByIP(remoteHost)
+		if refreshed && corrected != sandboxID && !c.verifyTokenSecret(corrected, bearerToken) {
+			c.repairTokenSecret(corrected)
+		}
 		if !refreshed || corrected == sandboxID || !c.verifyTokenSecret(corrected, bearerToken) {
 			c.Log.Warn("workload token request failed verification",
 				"source_ip", remoteHost, "resolved_sandbox", sandboxID, "resolved_app", appName)
