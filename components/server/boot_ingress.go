@@ -77,6 +77,7 @@ func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadC
 		TrustProxyHeaders: b.inputs.ingress.GetMode() == serverconfig.IngressModeBehindProxyHTTP,
 		TrustedProxyHops:  b.inputs.ingress.GetTrustedProxyHops(),
 	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
+	workloadControl.SetCertificateHostChecker(handler.AllowCertificate)
 	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
 		return ingressBootOutput{}, err
 	}

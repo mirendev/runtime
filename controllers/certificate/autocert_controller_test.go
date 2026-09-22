@@ -3,11 +3,16 @@ package certificate
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -136,26 +141,65 @@ func TestAutocertController_Reconcile_WildcardStoresPattern(t *testing.T) {
 	}
 }
 
+// vouchFor installs a HostChecker that allows exactly the given names and
+// counts how often it is asked.
+func vouchFor(c *AutocertController, names ...string) *atomic.Int32 {
+	var calls atomic.Int32
+	allowed := make(map[string]bool, len(names))
+	for _, n := range names {
+		allowed[n] = true
+	}
+	c.SetHostChecker(func(_ context.Context, host string) (bool, error) {
+		calls.Add(1)
+		return allowed[host], nil
+	})
+	return &calls
+}
+
+// Before MIR-1919, any single label under a wildcard route got a certificate,
+// so a scanner guessing names collected one per guess. Now the checker has to
+// vouch for each name.
 func TestAutocertController_IsAllowedHost_WildcardMatching(t *testing.T) {
 	c := newTestAutocertController(t)
 	c.allowedHosts.Store("*.example.com", struct{}{})
+	calls := vouchFor(c, "foo.example.com")
 
 	tests := []struct {
 		host    string
 		allowed bool
 	}{
-		{"foo.example.com", true},
-		{"bar.example.com", true},
+		{"foo.example.com", true},       // vouched for
+		{"bar.example.com", false},      // under the wildcard, but nobody vouches
 		{"example.com", false},          // bare domain requires its own route
 		{"other.com", false},            // unrelated domain
 		{"deep.sub.example.com", false}, // only one level of wildcard
 	}
 
 	for _, tt := range tests {
-		got := c.isAllowedHost(tt.host)
+		got := c.isAllowedHost(context.Background(), tt.host)
 		if got != tt.allowed {
 			t.Errorf("isAllowedHost(%q) = %v, want %v", tt.host, got, tt.allowed)
 		}
+	}
+
+	// Only foo and bar sit under a route; the rest never reach the checker.
+	if got := calls.Load(); got != 2 {
+		t.Errorf("checker asked %d times, want 2", got)
+	}
+}
+
+func TestAutocertController_IsAllowedHost_ClosedWithoutChecker(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+	c.allowedHosts.Store("app.example.com", struct{}{})
+
+	for _, host := range []string{"foo.example.com", "pr-33.app.example.com"} {
+		if c.isAllowedHost(context.Background(), host) {
+			t.Errorf("isAllowedHost(%q) = true with no checker, want false", host)
+		}
+	}
+	if !c.isAllowedHost(context.Background(), "app.example.com") {
+		t.Error("exact route should be allowed without a checker")
 	}
 }
 
@@ -163,69 +207,315 @@ func TestAutocertController_GetCertificate_WildcardSubdomain(t *testing.T) {
 	c := newTestAutocertController(t)
 	c.allowedHosts.Store("*.example.com", struct{}{})
 
-	// A subdomain covered by the wildcard should attempt autocert (and fall back)
+	// Nobody vouches for the name, so it gets the fallback without touching ACME.
 	hello := &tls.ClientHelloInfo{ServerName: "foo.example.com"}
 	cert, err := c.GetCertificate(hello)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cert == nil {
-		t.Fatal("expected a certificate, got nil")
+	if cert != &c.fallbackCert {
+		t.Fatal("expected the fallback certificate")
+	}
+	if c.inCooldown("foo.example.com") {
+		t.Error("a refused name should never reach autocert, so no failure should be recorded")
 	}
 }
 
 func TestAutocertController_HostPolicy_WildcardMatching(t *testing.T) {
 	c := newTestAutocertController(t)
 	c.allowedHosts.Store("*.example.com", struct{}{})
+	vouchFor(c, "foo.example.com")
 
-	// Subdomain covered by wildcard should be accepted
 	if err := c.mgr.HostPolicy(context.Background(), "foo.example.com"); err != nil {
-		t.Errorf("expected wildcard to accept foo.example.com, got: %v", err)
+		t.Errorf("expected vouched-for foo.example.com to be accepted, got: %v", err)
 	}
-
-	// Unrelated domain should be rejected
+	if err := c.mgr.HostPolicy(context.Background(), "bar.example.com"); err == nil {
+		t.Error("expected host policy to reject bar.example.com")
+	}
 	if err := c.mgr.HostPolicy(context.Background(), "other.com"); err == nil {
 		t.Error("expected host policy to reject other.com")
 	}
 }
 
-// TestAutocertController_IsAllowedHost_EphemeralSubdomain verifies that an
-// ephemeral subdomain of a normal (non-wildcard) route is allowed, matching
-// the request-routing behavior in httpingress.lookupEphemeralRoute. Without
-// this, ephemeral deploy URLs like pr-33.app.example.com would serve the
-// fallback self-signed cert instead of provisioning via autocert.
+// An ephemeral subdomain of a normal route gets a certificate only when the
+// checker vouches for it (in production, because the ephemeral deploy exists).
+// A scanner prepending "www." to a real route must not.
 func TestAutocertController_IsAllowedHost_EphemeralSubdomain(t *testing.T) {
 	c := newTestAutocertController(t)
 	c.allowedHosts.Store("app.example.com", struct{}{})
+	vouchFor(c, "pr-33.app.example.com")
 
 	tests := []struct {
 		host    string
 		allowed bool
 	}{
-		{"app.example.com", true},        // exact match (the registered route)
-		{"pr-33.app.example.com", true},  // ephemeral subdomain of the route
-		{"feat-x.app.example.com", true}, // another ephemeral label
-		{"app.example.org", false},       // unrelated TLD
-		{"example.com", false},           // parent of the route, not a subdomain
-		{"other.com", false},             // unrelated domain
+		{"app.example.com", true},       // exact match (the registered route)
+		{"pr-33.app.example.com", true}, // live ephemeral deploy
+		{"www.app.example.com", false},  // scanner guess
+		{"app.example.org", false},      // unrelated TLD
+		{"example.com", false},          // parent of the route, not a subdomain
+		{"other.com", false},            // unrelated domain
 	}
 
 	for _, tt := range tests {
-		got := c.isAllowedHost(tt.host)
+		got := c.isAllowedHost(context.Background(), tt.host)
 		if got != tt.allowed {
 			t.Errorf("isAllowedHost(%q) = %v, want %v", tt.host, got, tt.allowed)
 		}
 	}
 }
 
-func TestAutocertController_HostPolicy_EphemeralSubdomain(t *testing.T) {
+func TestAutocertController_HostCheck_CachesAnswers(t *testing.T) {
 	c := newTestAutocertController(t)
-	c.allowedHosts.Store("app.example.com", struct{}{})
+	c.allowedHosts.Store("*.example.com", struct{}{})
+	calls := vouchFor(c, "foo.example.com")
 
-	// Ephemeral subdomain of a normal route should be accepted by HostPolicy
-	// so autocert will attempt ACME provisioning instead of falling back.
-	if err := c.mgr.HostPolicy(context.Background(), "pr-33.app.example.com"); err != nil {
-		t.Errorf("expected host policy to accept ephemeral subdomain, got: %v", err)
+	for range 3 {
+		c.isAllowedHost(context.Background(), "foo.example.com")
+		c.isAllowedHost(context.Background(), "junk.example.com")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("checker asked %d times, want 2 (one per name)", got)
+	}
+
+	c.SetReady()
+	reconcile := func(tlsCheck string) {
+		t.Helper()
+		route, meta := testRouteMeta("wildcard-route", "*.example.com")
+		route.TlsCheck = tlsCheck
+		if err := c.Reconcile(context.Background(), route, meta); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	// A route the controller hasn't seen could change any answer.
+	reconcile("/tls-check")
+	c.isAllowedHost(context.Background(), "foo.example.com")
+	if got := calls.Load(); got != 3 {
+		t.Errorf("checker asked %d times after a new route, want 3", got)
+	}
+
+	// The hourly resync of an unchanged route keeps what we know.
+	reconcile("/tls-check")
+	c.isAllowedHost(context.Background(), "foo.example.com")
+	if got := calls.Load(); got != 3 {
+		t.Errorf("checker asked %d times after a resync, want 3", got)
+	}
+
+	// A changed tls_check can change the answer.
+	reconcile("/other-check")
+	c.isAllowedHost(context.Background(), "foo.example.com")
+	if got := calls.Load(); got != 4 {
+		t.Errorf("checker asked %d times after tls_check changed, want 4", got)
+	}
+}
+
+// A refusal is remembered only briefly, because a preview deploy can come up
+// right after something probed its name. An approval lasts longer.
+func TestAutocertController_HostCheck_RefusalsExpireSooner(t *testing.T) {
+	if hostDenyTTL >= hostAllowTTL {
+		t.Fatalf("hostDenyTTL (%v) should be shorter than hostAllowTTL (%v)", hostDenyTTL, hostAllowTTL)
+	}
+
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+	vouchFor(c, "foo.example.com")
+
+	c.isAllowedHost(context.Background(), "foo.example.com")
+	c.isAllowedHost(context.Background(), "junk.example.com")
+
+	if _, ok := c.hostAllowed.Get("foo.example.com"); !ok {
+		t.Error("approval should be in the allow cache")
+	}
+	if _, ok := c.hostDenied.Get("junk.example.com"); !ok {
+		t.Error("refusal should be in the deny cache")
+	}
+}
+
+// The checker drives the ingress proxy path, which can panic. A panic must
+// come back as an undecided answer, not crash the process from the
+// singleflight goroutine.
+func TestAutocertController_HostCheck_RecoversCheckerPanic(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	c.SetHostChecker(func(context.Context, string) (bool, error) {
+		calls.Add(1)
+		panic(http.ErrAbortHandler)
+	})
+
+	for range 2 {
+		if c.isAllowedHost(context.Background(), "foo.example.com") {
+			t.Error("a panicking check must not allow the name")
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("checker asked %d times, want 2 (a panic is undecided, not cached)", got)
+	}
+}
+
+// A scan of random names must not fan out into unbounded asks of an app.
+func TestAutocertController_HostCheck_CapsConcurrentChecks(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.hostCheckSlots = make(chan struct{}, 1)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	release := make(chan struct{})
+	c.SetHostChecker(func(_ context.Context, host string) (bool, error) {
+		calls.Add(1)
+		if host == "slow.example.com" {
+			<-release
+		}
+		return true, nil
+	})
+
+	go c.isAllowedHost(context.Background(), "slow.example.com")
+	require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+
+	if c.isAllowedHost(context.Background(), "other.example.com") {
+		t.Error("a name over the cap should be refused")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("checker asked %d times, want 1 (over the cap never asks)", got)
+	}
+
+	close(release)
+	require.Eventually(t, func() bool {
+		_, ok := c.hostAllowed.Get("slow.example.com")
+		return ok
+	}, time.Second, time.Millisecond)
+
+	// The slot frees after the answer is cached, so wait for it.
+	require.Eventually(t, func() bool { return len(c.hostCheckSlots) == 0 }, time.Second, time.Millisecond)
+
+	// The refusal wasn't remembered, so the name gets a real answer next time.
+	if !c.isAllowedHost(context.Background(), "other.example.com") {
+		t.Error("expected other.example.com to be allowed once a slot frees up")
+	}
+}
+
+func TestAutocertController_HostCheck_ErrorsAreNotCached(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	c.SetHostChecker(func(context.Context, string) (bool, error) {
+		calls.Add(1)
+		return true, errors.New("entity store unavailable")
+	})
+
+	for range 2 {
+		if c.isAllowedHost(context.Background(), "foo.example.com") {
+			t.Error("an undecided name must not be allowed")
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("checker asked %d times, want 2 (errors are retried)", got)
+	}
+}
+
+func TestAutocertController_HostCheck_CollapsesConcurrentAsks(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	release := make(chan struct{})
+	c.SetHostChecker(func(context.Context, string) (bool, error) {
+		calls.Add(1)
+		<-release
+		return true, nil
+	})
+
+	const handshakes = 10
+	var wg sync.WaitGroup
+	for range handshakes {
+		wg.Go(func() {
+			if !c.isAllowedHost(context.Background(), "foo.example.com") {
+				t.Error("expected foo.example.com to be allowed")
+			}
+		})
+	}
+	// Let every goroutine join the in-flight ask before it resolves.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Errorf("checker asked %d times, want 1", got)
+	}
+}
+
+// Asking a cold app can block on a sandbox boot far longer than a handshake
+// should wait, and the checker doesn't necessarily honor its deadline. The
+// handshake gives up on its own; the late answer still helps the next one.
+func TestAutocertController_HostCheck_HandshakeDoesNotWaitOnSlowChecker(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.hostCheckTimeout = 50 * time.Millisecond
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	release := make(chan struct{})
+	c.SetHostChecker(func(context.Context, string) (bool, error) {
+		calls.Add(1)
+		<-release // ignores its context, like a lease acquisition would
+		return true, nil
+	})
+
+	start := time.Now()
+	if c.isAllowedHost(context.Background(), "foo.example.com") {
+		t.Error("expected the handshake to give up and refuse")
+	}
+	if waited := time.Since(start); waited > time.Second {
+		t.Errorf("handshake waited %v on the checker", waited)
+	}
+
+	close(release)
+	require.Eventually(t, func() bool {
+		_, ok := c.hostAllowed.Get("foo.example.com")
+		return ok
+	}, time.Second, time.Millisecond, "the late answer should land in the cache")
+	if !c.isAllowedHost(context.Background(), "foo.example.com") {
+		t.Error("the late answer should be remembered for the next handshake")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("checker asked %d times, want 1", got)
+	}
+}
+
+// An answer computed before a route changed must not be remembered after it.
+func TestAutocertController_HostCheck_InvalidationDropsInFlightAnswer(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.allowedHosts.Store("*.example.com", struct{}{})
+
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c.SetHostChecker(func(context.Context, string) (bool, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return true, nil // the old tls_check said yes
+		}
+		return false, nil // the new one says no
+	})
+
+	first := make(chan bool)
+	go func() { first <- c.isAllowedHost(context.Background(), "foo.example.com") }()
+	<-started
+
+	c.forgetHostDecisions()
+	close(release)
+	if !<-first {
+		t.Error("the in-flight handshake should still get its answer")
+	}
+
+	if c.isAllowedHost(context.Background(), "foo.example.com") {
+		t.Error("an answer from before the invalidation must not be reused")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("checker asked %d times, want 2", got)
 	}
 }
 
@@ -453,13 +743,13 @@ func TestAutocertController_ClusterHostnames_IsAllowedHost(t *testing.T) {
 		allowed bool
 	}{
 		{"cluster.miren.systems", true},
-		{"sub.cluster.miren.systems", true}, // ephemeral subdomain
+		{"sub.cluster.miren.systems", false}, // under it, but nobody vouches
 		{"other.miren.systems", false},
 		{"example.com", false},
 	}
 
 	for _, tt := range tests {
-		got := c.isAllowedHost(tt.host)
+		got := c.isAllowedHost(context.Background(), tt.host)
 		if got != tt.allowed {
 			t.Errorf("isAllowedHost(%q) = %v, want %v", tt.host, got, tt.allowed)
 		}

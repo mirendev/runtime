@@ -782,6 +782,21 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 
+	d.Dispatch("route tls-check", Infer("route tls-check", "Ask an app before issuing certificates for names under its route", RouteTLSCheck,
+		WithExample(mflags.Example{
+			Name: "Let a wildcard app vouch for its own subdomains",
+			Body: "miren route tls-check '*.example.com' /tls-check",
+		}),
+		WithExample(mflags.Example{
+			Name: "Show the current check for a route",
+			Body: "miren route tls-check '*.example.com'",
+		}),
+		WithExample(mflags.Example{
+			Name: "Remove the check",
+			Body: "miren route tls-check '*.example.com' --clear",
+		}),
+	))
+
 	d.Dispatch("route down", Infer("route down", "Put an HTTP route into maintenance", RouteDown,
 		WithDescription(routeDownDescription),
 		WithExample(mflags.Example{

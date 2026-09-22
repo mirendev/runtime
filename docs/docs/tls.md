@@ -38,7 +38,7 @@ When a request arrives for a hostname with a configured route, Miren provisions 
 Hostnames without a configured route are served with a self-signed fallback certificate (browsers will show a warning).
 :::
 
-For wildcard routes (e.g., `*.myapp.example.com`), TLS certificates are provisioned for each matching subdomain as requests arrive. See [Wildcard Routes](./traffic-routing.md#wildcard-routes) for details.
+A name one level under a route, such as `foo.myapp.example.com` under a wildcard route `*.myapp.example.com` or `pr-123.myapp.example.com` under `myapp.example.com`, gets a certificate on its first request only if something vouches for it: a live [ephemeral deploy](./pr-environments.md) with that label, or the route's app answering its TLS check. Otherwise it gets the fallback certificate. Wildcard DNS sends every name to your cluster, so without this check anyone could make Miren request a certificate for any name they liked. See [Certificates for wildcard subdomains](./traffic-routing.md#certificates-for-wildcard-subdomains).
 
 ## Challenge Types
 

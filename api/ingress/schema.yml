@@ -21,6 +21,14 @@ kinds:
     request_timeout:
       type: string
       doc: Per-route override for the ingress request timeout (e.g. "10m", "300s"). Empty falls back to the server's http_request_timeout (default 60s). Must be a positive duration; invalid or non-positive values are ignored at request time.
+    tls_check:
+      type: string
+      doc: >-
+        Path on the route's app (e.g. "/tls-check") that the ingress asks before
+        issuing an on-demand certificate for a name under this route that is not
+        itself a route, such as "foo.example.com" under "*.example.com". The
+        ingress requests the path with "?domain=<host>" and issues only on a 200.
+        Empty means no subdomain certificates beyond live ephemeral deploys.
     waf_profile:
       type: ref
       doc: Reference to a WAF profile for request filtering

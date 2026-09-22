@@ -45,6 +45,7 @@ miren route
 - [`miren route set-default`](./route-set-default.md) — Set an app as the default route
 - [`miren route show`](./route-show.md) — Show details of an HTTP route
 - [`miren route timeout`](./route-timeout.md) — Override the ingress request timeout for an HTTP route
+- [`miren route tls-check`](./route-tls-check.md) — Ask an app before issuing certificates for names under its route
 - [`miren route unprotect`](./route-unprotect.md) — Remove identity-provider protection from an HTTP route
 - [`miren route unset-default`](./route-unset-default.md) — Remove the default route
 - [`miren route up`](./route-up.md) — Bring an HTTP route out of maintenance
