@@ -104,18 +104,24 @@ the validation note below.
 long-running process at all — no web service, no route, and nothing running (or
 billed for compute) between invocations.
 
-Setting `static_dir` also opts out of the synthesized web service. HTTP ingress
-exports that directory into a dedicated artifact during deployment and serves
-the artifact without mounting the image or starting a sandbox. For example,
-`static_dir = "/app/dist"` serves a frontend build written to `/app/dist`. If
-the app also declares a service, requests for files that do not exist fall
-through to that service; a static-only app returns 404 instead.
+Setting `static_dir` also opts out of the synthesized web service. The build
+server exports that directory into a dedicated artifact during deployment, and
+HTTP ingress serves it without mounting the image or starting a sandbox. For
+example, `static_dir = "/app/dist"` serves a frontend build written to
+`/app/dist`. If the app also declares a service, requests for files that do not
+exist fall through to that service; a static-only app returns 404 instead.
 
 When no Dockerfile, image, or supported stack is detected, Miren treats the
 uploaded source tree as `/app` and archives `static_dir` directly. Thus
 `static_dir = "/app/public"` serves a repository's `public/` directory without
 building an OCI image. Miren excludes its `.miren` configuration directory
 from a source artifact.
+
+:::danger[Review a source-root static directory]
+`static_dir = "/app"` publishes every file uploaded from the source tree except
+`.miren`. The upload honors `.gitignore`, but files such as `.env` are public if
+they are not ignored. Prefer a dedicated directory such as `/app/public`.
+:::
 
 It opts out of the *synthesized* service, not of a web service you asked for. A
 `web` declared in `app.toml` or named by a `web:` line in your `Procfile` is an

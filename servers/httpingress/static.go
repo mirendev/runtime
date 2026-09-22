@@ -23,14 +23,20 @@ type staticFileServer interface {
 type archiveStaticFileServer struct {
 	blobs *ocireg.BlobStore
 
-	mu      sync.Mutex
-	indexes *lru.Cache[string, *staticArchiveIndex]
+	mu           sync.Mutex
+	indexes      *lru.Cache[string, *staticArchiveIndex]
+	indexEntries int
 }
 
 type staticArchiveIndex struct {
 	files map[string]staticArchiveFile
 	dirs  map[string]bool
 }
+
+const (
+	maxStaticIndexes      = 256
+	maxStaticIndexEntries = 100_000
+)
 
 type staticArchiveFile struct {
 	offset  int64
@@ -53,7 +59,7 @@ func newArchiveStaticFileServer(dataPath string) staticFileServer {
 	if dataPath == "" {
 		return nil
 	}
-	indexes, _ := lru.New[string, *staticArchiveIndex](256)
+	indexes, _ := lru.New[string, *staticArchiveIndex](maxStaticIndexes)
 	return &archiveStaticFileServer{
 		blobs:   ocireg.NewBlobStore(dataPath),
 		indexes: indexes,
@@ -77,11 +83,19 @@ func (s *archiveStaticFileServer) ServeFile(w http.ResponseWriter, req *http.Req
 		requestPath = ""
 	}
 	if index.dirs[requestPath] {
+		indexPath := path.Join(requestPath, "index.html")
+		if _, ok := index.files[indexPath]; !ok {
+			return false, nil
+		}
 		if !strings.HasSuffix(req.URL.Path, "/") {
-			http.Redirect(w, req, path.Base(req.URL.Path)+"/", http.StatusMovedPermanently)
+			target := path.Base(req.URL.Path) + "/"
+			if req.URL.RawQuery != "" {
+				target += "?" + req.URL.RawQuery
+			}
+			http.Redirect(w, req, target, http.StatusMovedPermanently)
 			return true, nil
 		}
-		requestPath = path.Join(requestPath, "index.html")
+		requestPath = indexPath
 	}
 
 	entry, ok := index.files[requestPath]
@@ -101,10 +115,11 @@ func (s *archiveStaticFileServer) ServeFile(w http.ResponseWriter, req *http.Req
 
 func (s *archiveStaticFileServer) index(digest string) (*staticArchiveIndex, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if index, ok := s.indexes.Get(digest); ok {
+		s.mu.Unlock()
 		return index, nil
 	}
+	s.mu.Unlock()
 
 	archive, err := s.blobs.Open(digest)
 	if err != nil {
@@ -149,7 +164,31 @@ func (s *archiveStaticFileServer) index(digest string) (*staticArchiveIndex, err
 		index.addDir(path.Dir(name))
 	}
 
+	entries := len(index.files) + len(index.dirs)
+	if entries > maxStaticIndexEntries {
+		return index, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cached, ok := s.indexes.Get(digest); ok {
+		return cached, nil
+	}
+	if s.indexes.Len() >= maxStaticIndexes {
+		_, evicted, ok := s.indexes.RemoveOldest()
+		if ok {
+			s.indexEntries -= len(evicted.files) + len(evicted.dirs)
+		}
+	}
 	s.indexes.Add(digest, index)
+	s.indexEntries += entries
+	for s.indexEntries > maxStaticIndexEntries && s.indexes.Len() > 1 {
+		_, evicted, ok := s.indexes.RemoveOldest()
+		if !ok {
+			break
+		}
+		s.indexEntries -= len(evicted.files) + len(evicted.dirs)
+	}
 	return index, nil
 }
 

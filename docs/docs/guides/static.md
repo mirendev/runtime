@@ -65,7 +65,7 @@ COPY . .
 RUN npm run build
 
 FROM scratch
-COPY --from=builder /app/dist /site
+COPY --from=builder /app/dist /app/site
 ```
 
 Ingress serves regular files and directory `index.html` files. Missing paths return

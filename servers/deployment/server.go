@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appclient "miren.dev/runtime/api/app"
+	compute "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
@@ -1409,22 +1410,52 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 		Source:         base.Source,
 	}
 
-	// Merge env vars into config
-	varMap := make(map[string]core_v1alpha.Variable)
-	for _, v := range derived.Config.Variable {
-		varMap[v.Key] = v
-	}
-	for _, ev := range envVars {
-		varMap[ev.Key()] = core_v1alpha.Variable{
-			Key:       ev.Key(),
-			Value:     ev.Value(),
-			Sensitive: ev.Sensitive(),
-			Source:    "manual",
+	if base.ConfigVersion != "" {
+		spec, err := compute.ResolveConfig(ctx, d.EAC, base)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve base config: %w", err)
 		}
-	}
-	derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(varMap))
-	for _, v := range varMap {
-		derived.Config.Variable = append(derived.Config.Variable, v)
+		varMap := make(map[string]core_v1alpha.ConfigSpecVariables, len(spec.Variables)+len(envVars))
+		for _, v := range spec.Variables {
+			varMap[v.Key] = v
+		}
+		for _, ev := range envVars {
+			varMap[ev.Key()] = core_v1alpha.ConfigSpecVariables{
+				Key:       ev.Key(),
+				Value:     ev.Value(),
+				Sensitive: ev.Sensitive(),
+				Source:    "manual",
+			}
+		}
+		spec.Variables = make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
+		for _, v := range varMap {
+			spec.Variables = append(spec.Variables, v)
+		}
+
+		configVersion := &core_v1alpha.ConfigVersion{App: base.App, Spec: *spec}
+		configVersionID, err := d.EC.Create(ctx, newVersionName+"-cfg", configVersion)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create derived config version: %w", err)
+		}
+		derived.ConfigVersion = configVersionID
+		derived.Config = core_v1alpha.Config{}
+	} else {
+		varMap := make(map[string]core_v1alpha.Variable, len(derived.Config.Variable)+len(envVars))
+		for _, v := range derived.Config.Variable {
+			varMap[v.Key] = v
+		}
+		for _, ev := range envVars {
+			varMap[ev.Key()] = core_v1alpha.Variable{
+				Key:       ev.Key(),
+				Value:     ev.Value(),
+				Sensitive: ev.Sensitive(),
+				Source:    "manual",
+			}
+		}
+		derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(varMap))
+		for _, v := range varMap {
+			derived.Config.Variable = append(derived.Config.Variable, v)
+		}
 	}
 
 	id, err := d.EC.Create(ctx, newVersionName, derived)

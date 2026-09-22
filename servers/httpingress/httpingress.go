@@ -958,7 +958,7 @@ func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralRes
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
-	if target.config.StaticDir != "" {
+	if target.config.StaticDir != "" && service == "web" {
 		if h.staticFiles == nil {
 			http.Error(w, "static file service unavailable", http.StatusServiceUnavailable)
 			return

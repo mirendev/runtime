@@ -35,6 +35,9 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
 	status := deps.statuses.SenderFor(in.StreamID)
+	if in.BuildStack.Stack == "static" && filepath.Clean(in.AppConfig.StaticDir) == "/app" {
+		status.SendLog("warn", "static_dir /app publishes the entire uploaded source tree except .miren and files excluded from the upload")
+	}
 
 	tempDir := b.TempDir
 	if tempDir == "" {
