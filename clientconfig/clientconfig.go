@@ -1125,7 +1125,7 @@ func getConfigDirPath() (string, error) {
 	}
 
 	// Fall back to default path in user's home directory
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := configHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
@@ -1157,28 +1157,34 @@ func getConfigPath() (string, bool, error) {
 		return filepath.Join(envPath, "clientconfig.yaml"), true, nil
 	}
 
-	var (
-		homeDir string
-		err     error
-	)
-
-	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-		// Running under sudo, get the original user's home
-		u, err := user.Lookup(sudoUser)
-		if err == nil {
-			homeDir = u.HomeDir
-		}
-	}
-
-	if homeDir == "" {
-		// Fall back to default path in user's home directory, load clientconfig.d
-		homeDir, err = os.UserHomeDir()
-		if err != nil {
-			return "", false, fmt.Errorf("failed to get user home directory: %w", err)
-		}
+	homeDir, err := configHomeDir()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	return filepath.Join(homeDir, DefaultConfigPath), true, nil
+}
+
+func configHomeDir() (string, error) {
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil && u.HomeDir != "" {
+			return u.HomeDir, nil
+		}
+	}
+
+	homeDir, envErr := os.UserHomeDir()
+	if envErr == nil && homeDir != "" {
+		return homeDir, nil
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return "", errors.Join(envErr, err)
+	}
+	if u.HomeDir == "" {
+		return "", errors.New("current user has no home directory")
+	}
+	return u.HomeDir, nil
 }
 
 // GetActiveConfigPath returns the path to the active configuration file
@@ -1192,7 +1198,7 @@ func GetConfigDirPath() string {
 	path, _ := getConfigDirPath()
 	if path == "" {
 		// Fallback to default
-		homeDir, _ := os.UserHomeDir()
+		homeDir, _ := configHomeDir()
 		if homeDir != "" {
 			return filepath.Join(homeDir, ".config/miren/clientconfig.d")
 		}
