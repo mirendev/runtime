@@ -91,11 +91,6 @@ const sidebars: SidebarsConfig = {
           id: 'miren-cloud/miren-anywhere',
           label: 'Miren Anywhere',
         },
-        {
-          type: 'doc',
-          id: 'miren-cloud/cloud-updates',
-          label: 'Updates',
-        },
       ],
     },
     {

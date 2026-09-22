@@ -67,4 +67,3 @@ If the cluster entry in Miren Cloud is already gone, or the cluster can't reach 
 - [Subdomains](./subdomains.md) — Claim a hostname like `mycluster.run.garden` for your apps
 - [Miren Anywhere](./miren-anywhere.md) — Serve public apps from a cluster with no public IP
 - [Cluster Connectivity](./connectivity.md) — Tell whether your cluster is online, deployable, and serving apps
-- [Cloud Updates](./cloud-updates.md) — What's new in Miren Cloud
