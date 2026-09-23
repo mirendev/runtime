@@ -95,7 +95,7 @@ func errorRepresentation(accept string) string {
 			best = i
 		}
 	}
-	if best < 0 || preferences[best].specificity == 1 {
+	if best < 0 || (preferences[best].specificity == 1 && preferences[2].q > 0) {
 		return "text/plain"
 	}
 	return mediaTypes[best]
@@ -125,7 +125,7 @@ var errorPage = template.Must(template.New("ingress-error").Parse(`<!DOCTYPE htm
   main { flex: 1; display: flex; align-items: center; padding: 72px 0; }
   .content { max-width: 760px; }
   .eyebrow { color: #545868; font-size: 13px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
-  h1 { margin: 22px 0 24px; font-size: clamp(42px, 6.5vw, 76px); line-height: 1.06; letter-spacing: -.055em; font-weight: 800; }
+  h1 { margin: 22px 0 24px; font-size: clamp(42px, 6.5vw, 76px); line-height: 1.06; letter-spacing: -.055em; font-weight: 800; overflow-wrap: anywhere; }
   h1 em { color: #0056ff; font-style: normal; }
   p { max-width: 590px; margin: 0 0 18px; color: #545868; font-size: clamp(18px, 2vw, 22px); line-height: 1.6; }
   .reason { color: #1b1f27; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -137,6 +137,14 @@ var errorPage = template.Must(template.New("ingress-error").Parse(`<!DOCTYPE htm
     header { height: 76px; }
     main { padding: 64px 0; }
     h1 { letter-spacing: -.04em; }
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark; }
+    body { background-color: #151a23; background-image: radial-gradient(#344052 1px, transparent 1px); color: #f4f5f5; }
+    header, footer { border-color: #393e48; }
+    .eyebrow, p, footer { color: #b6bac1; }
+    .reason { color: #f4f5f5; }
+    .action:focus-visible { outline-color: #f4f5f5; }
   }
 </style>
 </head>

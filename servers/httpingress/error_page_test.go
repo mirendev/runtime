@@ -27,6 +27,8 @@ func TestServeIngressError(t *testing.T) {
 		{"HTML rejected despite XHTML", "text/html;q=0, application/xhtml+xml;q=1", 503, "private-app-id\n", "text/plain"},
 		{"HTML explicitly rejected", "text/html;q=0", 503, "private-app-id\n", "text/plain"},
 		{"wildcard overridden by HTML rejection", "*/*;q=1, text/html;q=0", 503, "private-app-id\n", "text/plain"},
+		{"plain rejected despite wildcard", "text/plain;q=0, */*", 503, "This app is temporarily unavailable.", "text/html"},
+		{"plain and HTML rejected despite wildcard", "text/plain;q=0, text/html;q=0, */*", 503, `"error":"service_unavailable"`, "application/json"},
 		{"HTML explicit over wildcard", "*/*;q=1, text/html;q=1", 404, "This page could not be found.", "text/html"},
 		{"wildcard fallback", "*/*", 404, "private-app-id\n", "text/plain"},
 		{"unspecified accept", "", 404, "private-app-id\n", "text/plain"},
@@ -82,6 +84,7 @@ func TestProxyErrorRetainsEmptyPlainResponseAndSupportsJSON(t *testing.T) {
 		{"", "", ""},
 		{"text/plain", "", ""},
 		{"application/json", "application/json", `"error":"bad_gateway"`},
+		{"text/plain;q=0, */*", "text/html", "This app is temporarily unavailable."},
 	} {
 		t.Run(tt.accept, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "http://app.example.com/", nil)
