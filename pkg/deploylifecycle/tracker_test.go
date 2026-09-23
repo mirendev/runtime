@@ -71,6 +71,7 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 		AppName:   "web",
 		ClusterID: "prod",
 		GitInfo:   core_v1alpha.GitInfo{Sha: "abc123", Branch: "main"},
+		Message:   "ship the new UI",
 	})
 	require.NoError(t, err)
 
@@ -80,6 +81,7 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, entity.Id("app/web"), rec.AppID())
 	assert.Equal(t, string(PhasePreparing), rec.Deployment.Phase)
 	assert.Equal(t, "abc123", rec.Deployment.GitInfo.Sha)
+	assert.Equal(t, "ship the new UI", rec.Deployment.Message)
 	assert.Equal(t, clock.Now().Format(time.RFC3339), rec.Deployment.DeployedBy.Timestamp)
 	assert.Empty(t, rec.AppVersion(), "a forward deploy has no version until the build makes one")
 

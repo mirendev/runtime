@@ -31,6 +31,7 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 		DeployedByUserName string       `json:"deployed_by_user_name,omitempty"`
 		Phase              string       `json:"phase,omitempty"`
 		ErrorMessage       string       `json:"error_message,omitempty"`
+		Message            string       `json:"message,omitempty"`
 		GitInfo            *gitInfoJSON `json:"git_info,omitempty"`
 	}
 
@@ -56,6 +57,9 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 
 		if dep.HasErrorMessage() && dep.ErrorMessage() != "" {
 			d.ErrorMessage = dep.ErrorMessage()
+		}
+		if dep.HasMessage() {
+			d.Message = dep.Message()
 		}
 
 		if dep.HasGitInfo() && dep.GitInfo() != nil {
@@ -215,7 +219,7 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "ID", "ERROR", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
+		headers = append(headers, "WHEN", "ID", "ERROR", "GIT SHA", "BRANCH", "COMMIT MESSAGE", "MESSAGE")
 		// Find ID column index dynamically
 		idColIndex := -1
 		for i, h := range headers {
@@ -225,16 +229,18 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 			}
 		}
 		builder = ui.Columns().
-			NoTruncate(0, idColIndex).   // STATUS and ID
-			MaxWidth(len(headers)-1, 40) // COMMIT MESSAGE
+			NoTruncate(0, idColIndex).
+			MaxWidth(len(headers)-2, 40).
+			MaxWidth(len(headers)-1, 40)
 	} else {
 		headers = []string{"STATUS", "VERSION"}
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "GIT SHA", "BRANCH")
+		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "MESSAGE")
 		builder = ui.Columns().
-			NoTruncate(0) // STATUS
+			NoTruncate(0).
+			MaxWidth(len(headers)-1, 40)
 	}
 
 	for _, dep := range deployments {
@@ -258,13 +264,17 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 	}
 
 	row = append(row, formatDeploymentTime(dep))
+	message := "-"
+	if dep.HasMessage() && strings.TrimSpace(dep.Message()) != "" {
+		message = firstLine(strings.TrimSpace(dep.Message()))
+	}
 
 	if opts.detailed {
 		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
-		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage)
+		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage, message)
 	} else {
 		gitSha, gitBranch, _ := formatGitInfo(dep)
-		row = append(row, gitSha, gitBranch)
+		row = append(row, gitSha, gitBranch, message)
 	}
 
 	return row

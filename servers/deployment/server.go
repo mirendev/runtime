@@ -768,6 +768,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		Operation:          operation,
 		AppVersion:         appVersionId,
 		GitInfo:            gitInfo,
+		Message:            args.Message(),
 		ParentDeploymentID: parentDeploymentID,
 	})
 	if err != nil {
@@ -1180,6 +1181,9 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment,
 	}
 	info.SetStatus(string(status))
 	info.SetPhase(string(rec.Phase()))
+	if deployment.Message != "" {
+		info.SetMessage(deployment.Message)
+	}
 	info.SetDeployedByUserId(deployment.DeployedBy.UserId)
 	info.SetDeployedByUserName(deployment.DeployedBy.UserName)
 	info.SetDeployedByUserEmail(deployment.DeployedBy.UserEmail)

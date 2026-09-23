@@ -76,6 +76,10 @@ types:
         type: GitInfo
         index: 1
         doc: Git state of the working tree being deployed (optional)
+      - name: message
+        type: string
+        index: 2
+        doc: User-supplied description of this deployment (optional)
 
   - type: GitInfo
     doc: Git repository information recorded on the deployment

@@ -256,6 +256,9 @@ func (s *SagaBuilder) startBuild(
 	if eph == nil || eph.label == "" {
 		if deployReq != nil {
 			sb = sb.Input("deploy_cluster_id", deployReq.ClusterId())
+			if deployReq.HasMessage() {
+				sb = sb.Input("deploy_message", deployReq.Message())
+			}
 			if gitJSON := marshalDeployGitInfo(deployReq); gitJSON != "" {
 				sb = sb.Input("deploy_git_info_json", gitJSON)
 			}

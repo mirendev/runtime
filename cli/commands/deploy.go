@@ -37,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/otelproxy"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
@@ -96,6 +97,7 @@ type deployOpts struct {
 	JSON   bool   `long:"json" description:"Shorthand for --format json"`
 
 	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
+	Message       string   `short:"m" long:"message" description:"Description of this deployment"`
 	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" choice:"quiet" default:"auto"` //nolint
@@ -211,6 +213,13 @@ func (o *deployOpts) machineReadable() bool {
 	return o.IsJSON() || o.IsJSONL()
 }
 
+func requireDeploymentMessageSupport(ctx context.Context, cl *rpc.NetworkClient) error {
+	if !cl.HasMethodParam(ctx, "DeployVersion", "message") {
+		return fmt.Errorf("--message requires a newer server; upgrade the server")
+	}
+	return nil
+}
+
 // Deploy runs the deploy and, when asked for a machine-readable format, keeps
 // stdout to that format alone.
 //
@@ -313,6 +322,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	// Normalize and validate ephemeral label
 	var ephemeralLabel, ephemeralTTL string
 	if opts.Ephemeral != "" {
+		if opts.Message != "" {
+			return fmt.Errorf("--message cannot be used with --ephemeral (ephemeral deploys have no deployment record)")
+		}
 		normalized, err := ephemeralx.NormalizeLabel(opts.Ephemeral)
 		if err != nil {
 			return fmt.Errorf("invalid ephemeral label: %w", err)
@@ -323,6 +335,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 			return fmt.Errorf("invalid TTL %q: %w", opts.TTL, err)
 		}
 		ephemeralTTL = opts.TTL
+	}
+	if opts.Message != "" && opts.Analyze {
+		return fmt.Errorf("--message cannot be used with --analyze (no deployment is created)")
 	}
 
 	if ctx.ClientConfig == nil {
@@ -398,6 +413,11 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		if err != nil {
 			return fmt.Errorf("failed to connect to deployment service: %w", err)
 		}
+		if opts.Message != "" {
+			if err := requireDeploymentMessageSupport(ctx.Context, depCl); err != nil {
+				return err
+			}
+		}
 		depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
 		var envVars []*deployment_v1alpha.EnvironmentVariable
@@ -415,7 +435,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 			}
 		}
 
-		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars, ephemeralLabel, ephemeralTTL)
+		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars, ephemeralLabel, ephemeralTTL, opts.Message)
 		if err != nil {
 			return fmt.Errorf("failed to deploy version: %w", err)
 		}
@@ -599,6 +619,17 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if err != nil {
 		return fmt.Errorf("failed to connect to deployment service: %w", err)
 	}
+	// Build and deployment capabilities are served by the same coordinator.
+	// The deployment parameter predates messages, so it alone cannot prove an
+	// older server will retain DeployRequest.message.
+	if opts.Message != "" {
+		if !serverOwnsDeployment {
+			return fmt.Errorf("--message requires a server with deployment tracking support; upgrade the server")
+		}
+		if err := requireDeploymentMessageSupport(ctx.Context, depCl); err != nil {
+			return err
+		}
+	}
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
 	// Convert git.Info to deployment GitInfo
@@ -628,6 +659,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if serverOwnsDeployment {
 		deployReq = &build_v1alpha.DeployRequest{}
 		deployReq.SetClusterId(ctx.ClusterName)
+		if opts.Message != "" {
+			deployReq.SetMessage(opts.Message)
+		}
 		if gi := buildGitInfoFromGit(gitInfo); gi != nil {
 			deployReq.SetGitInfo(gi)
 		}

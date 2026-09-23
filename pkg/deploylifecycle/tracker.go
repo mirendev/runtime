@@ -75,6 +75,7 @@ type BeginParams struct {
 	AppVersion string
 
 	GitInfo        core_v1alpha.GitInfo
+	Message        string
 	DeployedBy     core_v1alpha.DeployedBy
 	Subject        string
 	AuthMethod     string
@@ -174,6 +175,7 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		StartedAt:  startedAt,
 		DeployedBy: deployedBy,
 		GitInfo:    params.GitInfo,
+		Message:    params.Message,
 	}
 	pending := &Record{Deployment: dep}
 	pending.setInProgress()

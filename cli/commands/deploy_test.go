@@ -1,12 +1,87 @@
 package commands
 
 import (
+	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestDeployMessageChecksNewerServerNotJustDeploymentTracking(t *testing.T) {
+	ctx := context.Background()
+	buildClient := rpc.LocalClient(rpc.NewInterface([]rpc.Method{{
+		Name: "buildFromTar", InterfaceName: "Builder", Params: []string{"deployment"},
+		Handler: func(context.Context, rpc.Call) error { return nil },
+	}}, struct{}{}))
+	if !buildClient.HasMethodParam(ctx, "buildFromTar", "deployment") {
+		t.Fatal("test server must advertise the preexisting deployment tracking capability")
+	}
+
+	for _, tc := range []struct {
+		name      string
+		params    []string
+		wantError bool
+	}{
+		{"pre-message server", []string{"app_name", "app_version_id"}, true},
+		{"message-aware server", []string{"app_name", "app_version_id", "message"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			depClient := rpc.LocalClient(rpc.NewInterface([]rpc.Method{{
+				Name: "DeployVersion", InterfaceName: "Deployment", Params: tc.params,
+				Handler: func(context.Context, rpc.Call) error { return nil },
+			}}, struct{}{}))
+			err := requireDeploymentMessageSupport(ctx, depClient)
+			if (err != nil) != tc.wantError {
+				t.Errorf("message support check returned %v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestDeployMessageRequiresDeploymentRecord(t *testing.T) {
+	for _, opts := range []deployOpts{
+		{Message: "ship it", Ephemeral: "preview"},
+		{Message: "ship it", Analyze: true},
+	} {
+		err := runDeploy(&Context{}, opts, &deploySummary{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "--message cannot be used") {
+			t.Errorf("opts=%+v: expected flag incompatibility, got %v", opts, err)
+		}
+	}
+}
+
+func TestDeploymentHistoryShowsMessageSeparatelyFromCommit(t *testing.T) {
+	dep := &deployment_v1alpha.DeploymentInfo{}
+	dep.SetStatus("succeeded")
+	dep.SetMessage("release to staging\nwith cache reset")
+	git := &deployment_v1alpha.GitInfo{}
+	git.SetSha("abcdef0123456789")
+	git.SetCommitMessage("fix parser bug")
+	dep.SetGitInfo(git)
+
+	for _, detailed := range []bool{false, true} {
+		headers, rows, _ := buildDeploymentTable([]*deployment_v1alpha.DeploymentInfo{dep}, historyDisplayOpts{detailed: detailed})
+		if got := rows[0][len(rows[0])-1]; got != "release to staging" {
+			t.Errorf("detailed=%v: message = %q", detailed, got)
+		}
+		if headers[len(headers)-1] != "MESSAGE" {
+			t.Errorf("detailed=%v: last column = %q", detailed, headers[len(headers)-1])
+		}
+		if detailed && rows[0][len(rows[0])-2] != "fix parser bug" {
+			t.Errorf("commit message changed: %q", rows[0][len(rows[0])-2])
+		}
+	}
+	dep = &deployment_v1alpha.DeploymentInfo{}
+	_, rows, _ := buildDeploymentTable([]*deployment_v1alpha.DeploymentInfo{dep}, historyDisplayOpts{})
+	if rows[0][len(rows[0])-1] != "-" {
+		t.Errorf("missing message should display -, got %q", rows[0][len(rows[0])-1])
+	}
+}
 
 func TestBuildPhaseSummary(t *testing.T) {
 	duration := 250 * time.Millisecond
