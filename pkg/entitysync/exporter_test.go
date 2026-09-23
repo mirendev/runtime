@@ -694,6 +694,10 @@ func TestSessionIndexExpiryExportsTheLiveEntityNotADeletion(t *testing.T) {
 	require.Equal(t, int64(8), changes[0].Revision)
 	require.Equal(t, entity.Id("node/r1"), changes[0].EntityID)
 	require.Equal(t, compute_v1alpha.KindNode, changes[0].Kind)
+	// The primary key did not move at 8, so the store still reads the node at
+	// 7. Cloud lands a put at its body's revision and refuses one that
+	// disagrees with the envelope, so the body has to say 8 as well.
+	require.Equal(t, int64(8), changes[0].Entity.GetRevision())
 	version, ok := changes[0].Entity.Get(compute_v1alpha.NodeVersionId)
 	require.True(t, ok)
 	require.Equal(t, "v0.14.0", version.Value.String())
@@ -1227,4 +1231,51 @@ func TestRetryDoesNotWarnAfterSessionCancellation(t *testing.T) {
 
 	require.False(t, stream.retry(ctx, "start entity sync session", context.Canceled))
 	require.NotContains(t, logs.String(), "start entity sync session")
+}
+
+// A batch cloud refuses is rebuilt identically on every retry, so a rejection
+// that can never succeed has to slow down instead of warning once a second
+// forever. Only a committed cursor puts the stream back on the fast path: a
+// batch accepted mid-snapshot, or an ack for the wrong cursor, is not
+// progress, and resetting on either would let a snapshot cloud keeps refusing
+// restart once a second.
+func TestRetryBacksOffUntilCloudCommitsProgress(t *testing.T) {
+	exporter := testExporter(entity.NewMockStore())
+	exporter.retryDelay = time.Millisecond
+	exporter.maxRetryDelay = 4 * time.Millisecond
+	exporter.ackTimeout = time.Hour
+	stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+
+	var delays []time.Duration
+	for range 5 {
+		delays = append(delays, stream.backoff())
+	}
+	require.Equal(t, []time.Duration{
+		time.Millisecond, 2 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond,
+	}, delays)
+
+	ackCursor := int64(0)
+	link := newFakeLink()
+	link.onSend = func(_ string, payload any) {
+		batch := payload.(ChangeBatch)
+		stream.deliver(Ack{MessageID: batch.MessageID, Cursor: ackCursor})
+	}
+	progress := func(revision int64) clientv3.WatchResponse {
+		return clientv3.WatchResponse{Header: etcdserverpb.ResponseHeader{Revision: revision}}
+	}
+
+	ackCursor = 5
+	_, err := stream.sendWatchResponse(link, progress(5), 4, false)
+	require.NoError(t, err)
+	require.Equal(t, 4*time.Millisecond, stream.backoff(), "a batch drained mid-snapshot is not committed")
+
+	ackCursor = 3
+	_, err = stream.sendWatchResponse(link, progress(6), 5, true)
+	require.ErrorContains(t, err, "does not match batch end")
+	require.Equal(t, 4*time.Millisecond, stream.backoff(), "an ack for the wrong cursor is not progress")
+
+	ackCursor = 6
+	_, err = stream.sendWatchResponse(link, progress(6), 5, true)
+	require.NoError(t, err)
+	require.Equal(t, time.Millisecond, stream.backoff())
 }
