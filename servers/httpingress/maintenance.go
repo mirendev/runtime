@@ -2,7 +2,6 @@ package httpingress
 
 import (
 	"encoding/json"
-	"html/template"
 	"math"
 	"net"
 	"net/http"
@@ -45,6 +44,7 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Add("Vary", "Accept")
 
 	if secs, ok := retryAfterSeconds(maint.BackAt, time.Now()); ok {
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
@@ -73,17 +73,15 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
 
-	data := struct {
-		Site   string
-		Reason string
-		BackAt string
-	}{
-		Site:   visitorHost(r),
-		Reason: maint.Reason,
-		BackAt: formatBackAt(maint.BackAt),
+	data := errorPageData{
+		Status:      http.StatusServiceUnavailable,
+		Site:        visitorHost(r),
+		Reason:      maint.Reason,
+		BackAt:      formatBackAt(maint.BackAt),
+		Maintenance: true,
 	}
 
-	if err := maintenancePage.Execute(w, data); err != nil {
+	if err := errorPage.Execute(w, data); err != nil {
 		s.Log.Debug("failed to render maintenance page", "error", err)
 	}
 }
@@ -205,43 +203,3 @@ func parseMediaRange(part string) (string, float64) {
 
 	return media, q
 }
-
-// The page is entirely self-contained — inline styles, no external requests —
-// because it has to render on a network where the app itself doesn't.
-var maintenancePage = template.Must(template.New("maintenance").Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Down for maintenance</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #f6f7f9;
-    color: #1f2430;
-  }
-  main { max-width: 34rem; padding: 2rem; text-align: center; }
-  h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 1rem; }
-  p { font-size: 1.05rem; line-height: 1.6; margin: 0 0 0.75rem; }
-  .muted { color: #5b6472; font-size: 0.95rem; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #14171c; color: #e7eaef; }
-    .muted { color: #9aa3b2; }
-  }
-</style>
-</head>
-<body>
-<main>
-<h1>{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
-{{if .Reason}}<p>{{.Reason}}</p>{{end}}
-{{if .BackAt}}<p class="muted">Expected back at {{.BackAt}}.</p>{{else}}<p class="muted">Please check back shortly.</p>{{end}}
-</main>
-</body>
-</html>
-`))

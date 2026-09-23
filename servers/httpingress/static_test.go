@@ -226,6 +226,28 @@ func TestStaticOnlyRequestDoesNotAcquireSandbox(t *testing.T) {
 	}
 }
 
+func TestStaticOnlyMissingFileServesBrowserErrorPage(t *testing.T) {
+	server := &Server{
+		Log:         testutils.TestLogger(t),
+		staticFiles: &fakeStaticFiles{},
+		aa:          panicActivator{},
+	}
+	target := &resolvedIngressTarget{
+		version: core_v1alpha.AppVersion{ID: entity.Id("version-1")},
+		config:  &core_v1alpha.ConfigSpec{StaticDir: "/app/dist"},
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://example.com/missing", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	appName := "static-app"
+
+	server.serveAuthenticatedRequest(w, r, entity.Id("app-1"), "web", "route", target, &appName, 0)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+	assert.Contains(t, w.Body.String(), "This page could not be found.")
+}
+
 func TestStaticOnlyRequestWritesRouterAccessLog(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

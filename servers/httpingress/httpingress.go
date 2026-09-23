@@ -622,7 +622,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	route, err := h.ingressClient.LookupWithWildcard(ctx, onlyHost)
 	if err != nil {
 		h.Log.Error("error looking up http route", "error", err, "host", onlyHost)
-		http.Error(w, fmt.Sprintf("error looking up http route: %s", onlyHost), http.StatusInternalServerError)
+		serveIngressError(w, req, fmt.Sprintf("error looking up http route: %s", onlyHost), http.StatusInternalServerError)
 		return
 	}
 
@@ -654,13 +654,13 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		defaultRoute, err := h.ingressClient.LookupDefault(ctx)
 		if err != nil {
 			h.Log.Error("error looking up default route", "error", err)
-			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			serveIngressError(w, req, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
 		if defaultRoute == nil {
 			h.Log.Debug("no default route found", "host", onlyHost)
-			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			serveIngressError(w, req, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
@@ -718,7 +718,7 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 	gr, err := h.eac.Get(ctx, appID.String())
 	if err != nil {
 		h.Log.Error("error looking up application", "error", err, "app", appID)
-		http.Error(w, fmt.Sprintf("error looking up application: %s", appID), http.StatusInternalServerError)
+		serveIngressError(w, req, fmt.Sprintf("error looking up application: %s", appID), http.StatusInternalServerError)
 		return nil, false
 	}
 
@@ -731,19 +731,19 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 		ephemeralVersion, err := ephemeralx.LookupByLabel(ctx, h.eac, appID, ephemeralLabel)
 		if err != nil {
 			h.Log.Error("error looking up ephemeral version", "error", err, "label", ephemeralLabel)
-			http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+			serveIngressError(w, req, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
 			return nil, false
 		}
 		if ephemeralVersion == nil && strategy == resolveEphemeralStrict {
 			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", appID)
-			http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			serveIngressError(w, req, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
 			return nil, false
 		}
 		if ephemeralVersion != nil {
 			resolved, err := h.resolveVersionConfig(ctx, ephemeralVersion.ID, ephemeralVersion)
 			if err != nil {
 				h.Log.Error("error resolving ephemeral application configuration", "error", err, "version", ephemeralVersion.ID)
-				http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+				serveIngressError(w, req, "error resolving application configuration", http.StatusInternalServerError)
 				return nil, false
 			}
 			target.version = resolved.version
@@ -755,14 +755,14 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 
 	if target.app.ActiveVersion == "" {
 		h.Log.Debug("no active version for app", "app", appID)
-		http.Error(w, fmt.Sprintf("no active version for app: %s", appID), http.StatusNotFound)
+		serveIngressError(w, req, fmt.Sprintf("no active version for app: %s", appID), http.StatusNotFound)
 		return nil, false
 	}
 
 	resolved, err := h.resolveVersionConfig(ctx, target.app.ActiveVersion, nil)
 	if err != nil {
 		h.Log.Error("error resolving active application configuration", "error", err, "version", target.app.ActiveVersion)
-		http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+		serveIngressError(w, req, "error resolving application configuration", http.StatusInternalServerError)
 		return nil, false
 	}
 	target.version = resolved.version
@@ -887,7 +887,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 		resp, err := h.eac.Get(r.Context(), string(route.AuthProvider))
 		if err != nil {
 			h.Log.Error("failed to get auth provider entity", "error", err, "provider", route.AuthProvider)
-			http.Error(w, "Authentication service unavailable", http.StatusServiceUnavailable)
+			serveIngressError(w, r, "Authentication service unavailable", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -908,7 +908,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 			h.passwordMiddleware(route, ent, next)(w, r)
 		default:
 			h.Log.Error("unknown auth provider kind", "provider", route.AuthProvider)
-			http.Error(w, "Authentication service unavailable", http.StatusServiceUnavailable)
+			serveIngressError(w, r, "Authentication service unavailable", http.StatusServiceUnavailable)
 		}
 	}
 }
@@ -966,7 +966,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		start := time.Now()
 		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		if h.staticFiles == nil {
-			http.Error(staticResponse, "static file service unavailable", http.StatusServiceUnavailable)
+			serveIngressError(staticResponse, req, "static file service unavailable", http.StatusServiceUnavailable)
 			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
@@ -974,7 +974,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		if err != nil {
 			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
 			if !served {
-				http.Error(staticResponse, "failed to serve static file", http.StatusInternalServerError)
+				serveIngressError(staticResponse, req, "failed to serve static file", http.StatusInternalServerError)
 			}
 			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
@@ -984,7 +984,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			return
 		}
 		if !configHasService(target.config, service) {
-			http.NotFound(staticResponse, req)
+			serveIngressError(staticResponse, req, "404 page not found", http.StatusNotFound)
 			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
 			return
 		}
@@ -1017,7 +1017,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		curLease, err := h.useLease(ctx, leaseKey)
 		if err != nil {
 			h.Log.Error("error taking lease", "error", err, "app", targetAppId)
-			http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
+			serveIngressError(w, req, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
 			return
 		}
 
@@ -1073,17 +1073,17 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		if err != nil {
 			if errors.Is(err, activator.ErrSandboxDiedEarly) {
 				h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
-				http.Error(w, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
+				serveIngressError(w, req, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
 			} else {
 				h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
-				http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+				serveIngressError(w, req, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
 			}
 			return
 		}
 
 		if actLease == nil {
 			h.Log.Debug("no lease available for app", "app", targetAppId)
-			http.Error(w, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
+			serveIngressError(w, req, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
 			return
 		}
 
@@ -1191,7 +1191,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		serveIngressError(w, req, "Internal server error", http.StatusInternalServerError)
 		return nil // Not a connection error, don't invalidate
 	}
 
@@ -1227,7 +1227,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			}
 			if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 				h.Log.Warn("request timeout", "url", targetURL, "app", appName)
-				http.Error(rw, timeoutMessage, http.StatusServiceUnavailable)
+				serveIngressError(rw, r, timeoutMessage, http.StatusServiceUnavailable)
 				return
 			}
 			if isProxyConnectionError(err) {
@@ -1235,7 +1235,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			} else {
 				h.Log.Error("proxy error", "error", err, "url", targetURL, "app", appName)
 			}
-			rw.WriteHeader(http.StatusBadGateway)
+			serveIngressError(rw, r, "", http.StatusBadGateway)
 		},
 		Callback: func(stats httputil.ProxyStats) {
 			stats.RemoteAddr = h.requestSourceIP(req)
