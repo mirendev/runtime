@@ -199,6 +199,10 @@ type SandboxController struct {
 	executor     *saga.Executor
 	sagaRegistry *saga.Registry
 	sagaStorage  saga.Storage
+
+	checkpoints        checkpointRuntime
+	checkpointProbe    sync.Once
+	checkpointProbeErr error
 }
 
 // Hubs exposes the registry of attachable containers so the runner's exec
@@ -458,6 +462,7 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	}
 
 	var unhealthySandboxes []entity.Id
+	checkpointOwners := make(map[string]bool)
 	runningCount := 0
 	reattachedCount := 0
 	// Counts surviving sandboxes whose mounted token was minted under a
@@ -467,6 +472,9 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 	for _, e := range resp.Values() {
 		var sb compute.Sandbox
 		sb.Decode(e.Entity())
+		if computeapi.SandboxHibernation(sb.Status) {
+			checkpointOwners[sb.ID.PathSafe()] = true
+		}
 
 		// Only check sandboxes that think they're running
 		if sb.Status != compute.RUNNING {
@@ -625,6 +633,10 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 					"sandbox_id", sb.ID, "error", err)
 			}
 		}
+	}
+
+	if err := c.pruneCheckpointFiles(checkpointOwners); err != nil {
+		c.Log.Warn("failed to prune orphaned checkpoint files", "error", err)
 	}
 
 	// Mark unhealthy sandboxes as DEAD and clean them up
@@ -1285,6 +1297,8 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
 		return c.StopSandbox(ctx, co.ID, co)
+	case compute.HIBERNATING, compute.HIBERNATED, compute.RESTORING:
+		return c.reconcileCheckpoint(ctx, co, meta)
 	case "", compute.PENDING, compute.RUNNING:
 		searchRes, err := c.CheckSandbox(ctx, co, meta)
 		if err != nil {
@@ -2348,7 +2362,7 @@ func (c *SandboxController) monitorTaskExit(
 			// The DEAD patch that follows leaves Exit intact: it is a struct
 			// literal with an empty Exit, which the generated encoder skips.
 			ctx := context.Background()
-			result, err := c.recordExit(c.topCtx, sb.ID, compute.Exit{
+			result, err := c.recordExit(c.topCtx, sb.ID, sb.RestoredAt, compute.Exit{
 				Code:      int64(exitStatus.ExitCode()),
 				At:        exitAt,
 				Container: containerName,
@@ -2361,6 +2375,9 @@ func (c *SandboxController) monitorTaskExit(
 					)
 				}
 				return
+			}
+			if result == nil {
+				return // An intentional checkpoint exit, or an old task generation.
 			}
 			if c.writeTracker != nil && result != nil && result.HasRevision() {
 				c.writeTracker.RecordWrite(result.Revision())
@@ -2419,6 +2436,7 @@ func (c *SandboxController) monitorTaskExit(
 func (c *SandboxController) recordExit(
 	ctx context.Context,
 	id entity.Id,
+	generation time.Time,
 	exit compute.Exit,
 ) (*entityserver_v1alpha.EntityAccessClientPatchResults, error) {
 	const maxAttempts = 100
@@ -2439,6 +2457,15 @@ func (c *SandboxController) recordExit(
 		resp, err := c.EAC.Get(ctx, id.String())
 		if err != nil {
 			return nil, err
+		}
+
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.HIBERNATING || current.Status == compute.HIBERNATED ||
+			current.RestoredAt.After(generation) ||
+			(current.Status == compute.RESTORING && exit.Container == "") ||
+			(!current.RestoredAt.IsZero() && !exit.At.After(current.RestoredAt)) {
+			return nil, nil
 		}
 
 		patchAttrs := entity.New(
@@ -3103,9 +3130,16 @@ func entityFallbackIPs(sb *compute.Sandbox) map[string]bool {
 // once the entity has been deleted from the store, and it is fetched here
 // otherwise.
 func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
+	return c.stopSandbox(ctx, id, sb, compute.DEAD)
+}
+
+func (c *SandboxController) stopSandbox(ctx context.Context, id entity.Id, sb *compute.Sandbox, finalStatus compute.SandboxStatus) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Debug("stopping sandbox", "id", id)
+	if err := os.RemoveAll(c.checkpointPath(id)); err != nil {
+		return fmt.Errorf("removing checkpoint: %w", err)
+	}
 
 	// Drop any stdio fan-out for this sandbox. This is the one place allowed to
 	// close a Hub's stdin: the container is going away, so there is no longer a
@@ -3263,24 +3297,42 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
 
-	// Mark sandbox as DEAD in entity store
-	result, err := c.EAC.Patch(ctx, entity.New(
-		entity.Ref(entity.DBId, id),
-		(&compute.Sandbox{
-			Status: compute.DEAD,
-		}).Encode,
-	).Attrs(), 0)
-	if err != nil {
-		// We ignore if the entity is not found as we run this code path when detecting
-		// the sandbox entity has already been deleted.
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
+	// Cold fallback retains the entity but must drop its released network
+	// addresses before the creation saga allocates new ones.
+	if finalStatus == compute.RESTORING {
+		current, meta, err := c.ops.GetSandbox(ctx, id.String())
+		if err != nil {
+			return err
 		}
-	} else if c.writeTracker != nil && result.HasRevision() {
-		c.writeTracker.RecordWrite(result.Revision())
+		if current.Status != compute.RESTORING {
+			return fmt.Errorf("restore claim was revoked during cleanup")
+		}
+		meta.Remove(compute.SandboxNetworkId)
+		meta.Remove(entity.Revision)
+		result, err := c.EAC.Replace(ctx, meta.Attrs(), meta.Revision)
+		if err != nil {
+			return err
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+	} else {
+		result, err := c.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, id),
+			(&compute.Sandbox{Status: finalStatus}).Encode,
+		).Attrs(), 0)
+		if err != nil {
+			// We ignore if the entity is not found as we run this code path when detecting
+			// the sandbox entity has already been deleted.
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
+			}
+		} else if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
 	}
 
-	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)
+	c.Log.Info("sandbox retired", "id", id, "status", finalStatus)
 
 	// Clean up endpoints associated with this sandbox
 	err = c.deleteEndpoints(ctx, id, sandboxIPs)

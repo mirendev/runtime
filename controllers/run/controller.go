@@ -194,7 +194,7 @@ func (c *Controller) observe(ctx context.Context, r *run_v1alpha.Run) error {
 	}
 
 	switch sb.Status {
-	case compute.PENDING, compute.NOT_READY, compute.RUNNING:
+	case compute.PENDING, compute.NOT_READY, compute.RUNNING, compute.HIBERNATING, compute.HIBERNATED, compute.RESTORING:
 		// Still going; nothing to decide until it stops.
 		return nil
 	case compute.STOPPED, compute.DEAD:

@@ -237,11 +237,19 @@ kinds:
     status:
       type: enum
       doc: The status of the pod
-      choices: [pending, not_ready, running, stopped, dead]
+      choices: [pending, not_ready, running, hibernating, hibernated, restoring, stopped, dead]
 
     last_activity:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
+
+    restored_at:
+      type: time
+      doc: Start of the latest restore attempt; fences delayed exit notifications from the checkpointed task
+
+    hibernated_at:
+      type: time
+      doc: Completion of the latest checkpoint; bounds retention independently of activity updates
 
     # Written once, in the same patch as the STOPPED transition, so any watcher
     # that sees the sandbox stop also sees why.

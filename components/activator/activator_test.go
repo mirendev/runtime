@@ -679,6 +679,15 @@ func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
 // TestActivatorPendingSandboxAwareness verifies that AcquireLease waits for PENDING
 // sandboxes instead of requesting more capacity from the pool
 func TestActivatorPendingSandboxAwareness(t *testing.T) {
+	testActivatorWakingSandboxAwareness(t, compute_v1alpha.PENDING)
+}
+
+func TestCheckpointActivatorWaitsForRestore(t *testing.T) {
+	testActivatorWakingSandboxAwareness(t, compute_v1alpha.RESTORING)
+}
+
+func testActivatorWakingSandboxAwareness(t *testing.T, status compute_v1alpha.SandboxStatus) {
+	t.Helper()
 	ctx := context.Background()
 
 	// Create in-memory entity server
@@ -714,7 +723,7 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 
 	// Create a PENDING sandbox (booting up)
 	pendingSandbox := &compute_v1alpha.Sandbox{
-		Status: compute_v1alpha.PENDING,
+		Status: status,
 		Spec: compute_v1alpha.SandboxSpec{
 			Version: testVer.ID,
 		},

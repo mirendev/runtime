@@ -10,13 +10,14 @@ import (
 )
 
 func TestSandboxStatusCoverage(t *testing.T) {
-	// Every SandboxStatus must be covered by exactly one of
-	// SandboxActive or SandboxDead. If a new status is added to the
-	// schema without updating these helpers, this test will fail.
+	// Hibernation owns resources without advertising an active DNS endpoint.
 	allStatuses := []compute_v1alpha.SandboxStatus{
 		compute_v1alpha.PENDING,
 		compute_v1alpha.NOT_READY,
 		compute_v1alpha.RUNNING,
+		compute_v1alpha.HIBERNATING,
+		compute_v1alpha.HIBERNATED,
+		compute_v1alpha.RESTORING,
 		compute_v1alpha.STOPPED,
 		compute_v1alpha.DEAD,
 	}
@@ -24,12 +25,13 @@ func TestSandboxStatusCoverage(t *testing.T) {
 	for _, s := range allStatuses {
 		active := SandboxActive(s)
 		dead := SandboxDead(s)
+		hibernation := SandboxHibernation(s)
 
-		if !active && !dead {
-			t.Errorf("status %q is neither Active nor Dead", s)
+		if !active && !dead && !hibernation {
+			t.Errorf("status %q is not classified", s)
 		}
-		if active && dead {
-			t.Errorf("status %q is both Active and Dead", s)
+		if (active && dead) || (hibernation && (active || dead)) {
+			t.Errorf("status %q belongs to multiple lifecycle classes", s)
 		}
 	}
 }

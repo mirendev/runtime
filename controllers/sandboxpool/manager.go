@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	computeapi "miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -68,6 +69,13 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		return fmt.Errorf("failed to list sandboxes: %w", err)
 	}
 
+	// A checkpoint owns the zero-to-one slot until it either restores or is
+	// retired. Never launch a replacement while its process may still exist.
+	blocked, err := m.reconcileHibernation(ctx, pool, sandboxes)
+	if err != nil {
+		return err
+	}
+
 	// Count RUNNING and PENDING as "actual" (prevents duplicates while sandboxes boot)
 	// Count only RUNNING as "ready" (sandboxes serving traffic)
 	// We exclude STOPPED (being retired), DEAD (failed), and "" (uninitialized)
@@ -75,12 +83,15 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	actual := int64(0)
 	ready := int64(0)
 	for _, sbm := range sandboxes {
-		if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
+		if sbm.sandbox.Status == compute_v1alpha.RUNNING || computeapi.SandboxWaking(sbm.sandbox.Status) {
 			actual++
 		}
 		if sbm.sandbox.Status == compute_v1alpha.RUNNING {
 			ready++
 		}
+	}
+	if blocked {
+		return m.updatePoolStatus(ctx, pool, actual, ready, meta)
 	}
 
 	// Skip crash detection for decommissioned pools (desired=0, no references).
@@ -210,7 +221,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sbm := range sandboxes {
-			if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING || computeapi.SandboxWaking(sbm.sandbox.Status) {
 				actual++
 			}
 			if sbm.sandbox.Status == compute_v1alpha.RUNNING {
@@ -244,7 +255,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		actual = 0
 		ready = 0
 		for _, sbm := range sandboxes {
-			if sbm.sandbox.Status == compute_v1alpha.RUNNING || sbm.sandbox.Status == compute_v1alpha.PENDING {
+			if sbm.sandbox.Status == compute_v1alpha.RUNNING || computeapi.SandboxWaking(sbm.sandbox.Status) {
 				actual++
 			}
 			if sbm.sandbox.Status == compute_v1alpha.RUNNING {
@@ -305,6 +316,7 @@ type sandboxWithMeta struct {
 	sandbox   *compute_v1alpha.Sandbox
 	createdAt time.Time
 	updatedAt time.Time
+	revision  int64
 }
 
 // listSandboxes returns all sandboxes for a pool with their metadata
@@ -346,6 +358,7 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 			sandbox:   &sbCopy,
 			createdAt: time.UnixMilli(ent.CreatedAt()),
 			updatedAt: time.UnixMilli(ent.UpdatedAt()),
+			revision:  ent.Revision(),
 		})
 	}
 
@@ -458,6 +471,16 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	stopped := int64(0)
 	for i := int64(0); i < count && int(i) < len(candidates); i++ {
 		sb := candidates[i].sb
+		status := compute_v1alpha.STOPPED
+		if checkpointCandidate(pool, sandboxes, sb, now) && m.autoIdle(ctx, pool, sb.LastActivity) {
+			status = compute_v1alpha.HIBERNATING
+		}
+		var revision int64
+		for _, item := range sandboxes {
+			if item.sandbox.ID == sb.ID {
+				revision = item.revision
+			}
+		}
 
 		m.log.Info("retiring sandbox",
 			"pool", pool.ID,
@@ -468,9 +491,9 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		if _, err := m.eac.Patch(ctx, entity.New(
 			entity.DBId, sb.ID,
 			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.STOPPED,
+				Status: status,
 			}).Encode,
-		).Attrs(), 0); err != nil {
+		).Attrs(), revision); err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
 				m.log.Warn("sandbox already deleted during scale-down",
 					"pool", pool.ID,

@@ -292,6 +292,30 @@ func TestGCController_PinnedNow(t *testing.T) {
 	require.False(t, pinned, "unreferenced version is not pinned")
 }
 
+func TestCheckpointPinsVersion(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	gc := &GCController{Log: testutils.TestLogger(t), EAC: inmem.EAC}
+	app, err := inmem.Client.Create(ctx, "checkpoint-app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	for _, status := range []compute_v1alpha.SandboxStatus{
+		compute_v1alpha.HIBERNATING, compute_v1alpha.HIBERNATED, compute_v1alpha.RESTORING, compute_v1alpha.DEAD,
+	} {
+		v := createVersion(t, inmem.EAC, string(status), &core_v1alpha.AppVersion{App: app}, time.Now())
+		_, err := inmem.Client.Create(ctx, string(status), &compute_v1alpha.Sandbox{
+			Status: status, Spec: compute_v1alpha.SandboxSpec{Version: v},
+		})
+		require.NoError(t, err)
+		live, err := gc.versionsWithLiveSandboxes(ctx)
+		require.NoError(t, err)
+		require.Equal(t, status != compute_v1alpha.DEAD, live[v])
+		pinned, err := gc.pinnedNow(ctx, v, app)
+		require.NoError(t, err)
+		require.Equal(t, status != compute_v1alpha.DEAD, pinned)
+	}
+}
+
 func TestGCController_DeletesConfigVersion(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)

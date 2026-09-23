@@ -354,8 +354,8 @@ func (c *GCController) activeVersions(ctx context.Context) (map[entity.Id]entity
 	return active, nil
 }
 
-// versionsWithLiveSandboxes returns the set of version IDs that a pending,
-// not-ready, or running sandbox currently references.
+// versionsWithLiveSandboxes includes sleeping sandboxes: their retained
+// snapshots and process images still depend on the version.
 func (c *GCController) versionsWithLiveSandboxes(ctx context.Context) (map[entity.Id]bool, error) {
 	resp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
@@ -368,7 +368,8 @@ func (c *GCController) versionsWithLiveSandboxes(ctx context.Context) (map[entit
 		sb.Decode(e.Entity())
 
 		switch sb.Status {
-		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.RUNNING:
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.RUNNING,
+			compute_v1alpha.HIBERNATING, compute_v1alpha.HIBERNATED, compute_v1alpha.RESTORING:
 			if sb.Spec.Version != "" {
 				live[sb.Spec.Version] = true
 			}
@@ -405,7 +406,8 @@ func (c *GCController) pinnedNow(ctx context.Context, versionID, appID entity.Id
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(e.Entity())
 		switch sb.Status {
-		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.RUNNING:
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.RUNNING,
+			compute_v1alpha.HIBERNATING, compute_v1alpha.HIBERNATED, compute_v1alpha.RESTORING:
 			return true, nil
 		case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
 			// Terminal sandboxes no longer pin their version.

@@ -42,6 +42,7 @@ import (
 	"sync"
 	"time"
 
+	computeapi "miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -259,7 +260,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 					break
 				}
 				// Track if we have PENDING sandboxes (being created/booting)
-				if s.sandbox.Status == compute_v1alpha.PENDING {
+				if computeapi.SandboxWaking(s.sandbox.Status) {
 					hasPending = true
 				}
 			}
@@ -491,7 +492,7 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 			ps, poolOk := a.poolSandboxes[versionRef.poolID]
 			if poolOk {
 				for _, s := range ps.sandboxes {
-					if s.sandbox.Status == compute_v1alpha.RUNNING || s.sandbox.Status == compute_v1alpha.PENDING {
+					if s.sandbox.Status == compute_v1alpha.RUNNING || computeapi.SandboxWaking(s.sandbox.Status) || computeapi.SandboxHibernation(s.sandbox.Status) {
 						hasPendingOrRunning = true
 					}
 					if s.sandbox.Spec.Version != ver.ID {
@@ -1372,7 +1373,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 
 			// Not tracked yet - check if this is a RUNNING or PENDING sandbox we should track
 			// PENDING sandboxes are tracked to prevent runaway pool growth during boot
-			if sb.Status != compute_v1alpha.RUNNING && sb.Status != compute_v1alpha.PENDING {
+			if sb.Status != compute_v1alpha.RUNNING && !computeapi.SandboxWaking(sb.Status) && !computeapi.SandboxHibernation(sb.Status) {
 				return nil // Only track RUNNING and PENDING sandboxes
 			}
 
@@ -1427,7 +1428,7 @@ func (a *localActivator) watchSandboxes(ctx context.Context) {
 			// so we can notify waiters if they crash during boot
 			var addr string
 			if len(sb.Network) == 0 {
-				if sb.Status == compute_v1alpha.PENDING {
+				if computeapi.SandboxWaking(sb.Status) || computeapi.SandboxHibernation(sb.Status) {
 					// PENDING sandbox without network yet - use placeholder URL
 					// We're only tracking it to detect if it dies, not to route to it
 					addr = ""
@@ -1569,8 +1570,9 @@ func (a *localActivator) recoverSandboxes(ctx context.Context) error {
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
-		// Only recover RUNNING sandboxes
-		if sb.Status != compute_v1alpha.RUNNING {
+		// Recover sleeping claims too, so a restart cannot mistake a wake for
+		// failed capacity. They still cannot serve traffic until RUNNING.
+		if sb.Status != compute_v1alpha.RUNNING && !computeapi.SandboxHibernation(sb.Status) {
 			skippedNotRunning++
 			continue
 		}
