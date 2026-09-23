@@ -4,6 +4,25 @@ import (
 	"testing"
 )
 
+func TestCIBindingID(t *testing.T) {
+	for _, tt := range []struct {
+		input   string
+		want    string
+		wantRPC string
+	}{
+		{"oidc_binding/oidcb-obA1b2", "oidcb-obA1b2", "oidc_binding/oidcb-obA1b2"},
+		{"oidcb-obA1b2", "oidcb-obA1b2", "oidc_binding/oidcb-obA1b2"},
+		{"other/oidcb-obA1b2", "other/oidcb-obA1b2", "oidc_binding/other/oidcb-obA1b2"},
+	} {
+		if got := ciBindingID(tt.input); got != tt.want {
+			t.Errorf("ciBindingID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+		if got := ciBindingPrefix + ciBindingID(tt.input); got != tt.wantRPC {
+			t.Errorf("remove ID for %q = %q, want %q", tt.input, got, tt.wantRPC)
+		}
+	}
+}
+
 func TestGitHubClaimConditions(t *testing.T) {
 	conditions, err := gitHubClaimConditions("acme/web-app", "", "")
 	if err != nil {

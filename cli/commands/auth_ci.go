@@ -9,6 +9,11 @@ import (
 )
 
 const gitHubActionsIssuer = "https://token.actions.githubusercontent.com"
+const ciBindingPrefix = "oidc_binding/"
+
+func ciBindingID(id string) string {
+	return strings.TrimPrefix(id, ciBindingPrefix)
+}
 
 func AuthCIAdd(ctx *Context, opts struct {
 	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)"`
@@ -67,7 +72,7 @@ func AuthCIAdd(ctx *Context, opts struct {
 	b := resp.Binding()
 
 	items := []ui.NamedValue{
-		ui.NewNamedValue("ID", b.Id()),
+		ui.NewNamedValue("ID", ciBindingID(b.Id())),
 		ui.NewNamedValue("App", b.App()),
 		ui.NewNamedValue("Provider", b.Provider()),
 		ui.NewNamedValue("Issuer", b.Issuer()),
@@ -132,7 +137,7 @@ func AuthCIList(ctx *Context, opts struct {
 			}
 		}
 		rows = append(rows, ui.Row{
-			b.Id(),
+			ciBindingID(b.Id()),
 			b.Provider(),
 			b.Issuer(),
 			b.SubjectPattern(),
@@ -166,7 +171,7 @@ func AuthCIRemove(ctx *Context, opts struct {
 
 	oc := oidcbinding_v1alpha.NewOidcBindingsClient(client)
 
-	resp, err := oc.Remove(ctx, opts.ID)
+	resp, err := oc.Remove(ctx, ciBindingPrefix+ciBindingID(opts.ID))
 	if err != nil {
 		return err
 	}
@@ -175,7 +180,7 @@ func AuthCIRemove(ctx *Context, opts struct {
 		return fmt.Errorf("%s", resp.Error())
 	}
 
-	ctx.Printf("Removed CI authentication binding %s\n", opts.ID)
+	ctx.Printf("Removed CI authentication binding %s\n", ciBindingID(opts.ID))
 	return nil
 }
 
