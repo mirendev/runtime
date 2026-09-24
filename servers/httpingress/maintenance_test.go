@@ -142,6 +142,7 @@ func TestMaintenanceMiddlewareServesHoldingPage(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, body, "Down for maintenance")
 	assert.Contains(t, body, "Upgrading the database")
+	assert.NotContains(t, body, "Try again")
 }
 
 func TestMaintenanceMiddlewareEscapesOperatorReason(t *testing.T) {

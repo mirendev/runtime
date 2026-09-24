@@ -18,6 +18,7 @@ func TestServeIngressError(t *testing.T) {
 		contentType  string
 	}{
 		{"browser missing route", "text/html,application/xhtml+xml", 404, "This page could not be found.", "text/html"},
+		{"browser boot failure", "text/html", 408, "check its logs with miren logs", "text/html"},
 		{"browser proxy error", "text/html", 502, "This app is temporarily unavailable.", "text/html"},
 		{"browser internal error", "text/html", 500, "Something went wrong.", "text/html"},
 		{"API client", "application/json", 503, `"error":"service_unavailable"`, "application/json"},
@@ -48,7 +49,9 @@ func TestServeIngressError(t *testing.T) {
 				assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
 				assert.NotContains(t, w.Body.String(), "private-app-id")
 				assert.Contains(t, w.Body.String(), "Powered by Miren")
-				assert.Equal(t, tt.status != 404, strings.Contains(w.Body.String(), "Try again"))
+				assert.Contains(t, w.Body.String(), `viewBox="0 0 230 54"`)
+				assert.Contains(t, w.Body.String(), `fill="currentColor"`)
+				assert.Equal(t, tt.status != 404 && tt.status != 408, strings.Contains(w.Body.String(), "Try again"))
 			case "application/json":
 				assert.NotContains(t, w.Body.String(), "private-app-id")
 				var body struct {
