@@ -1279,3 +1279,51 @@ func TestRetryBacksOffUntilCloudCommitsProgress(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, time.Millisecond, stream.backoff())
 }
+
+// A completed snapshot is progress too: once cloud acknowledges the snapshot
+// at the tail it committed, the stream is back on the fast path. An ack for any
+// other cursor fails the snapshot and must leave the backoff where it was.
+func TestSnapshotCompletionResetsBackoff(t *testing.T) {
+	store := entity.NewMockStore()
+	app := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		(&core_v1alpha.App{ID: "app/web"}).Encode(),
+		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
+		entity.Bool(core_v1alpha.CloudExportContract.MarkerID(), true),
+	)
+	stampExportMetadata(app, 4)
+	store.AddEntity(app.Id(), app)
+
+	exporter := testExporter(store)
+	exporter.retryDelay = time.Millisecond
+	exporter.maxRetryDelay = 4 * time.Millisecond
+	s := &stream{exporter: exporter, ctx: t.Context(), sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
+	exporter.active = s
+
+	ackOffset := int64(0)
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeSnapshotComplete {
+			return
+		}
+		complete := payload.(SnapshotComplete)
+		s.deliver(Ack{MessageID: complete.MessageID, Cursor: complete.SourceHead + ackOffset})
+	}
+	backedOff := func() {
+		for range 3 {
+			s.backoff()
+		}
+	}
+
+	backedOff()
+	ackOffset = 1
+	_, _, err := s.snapshot(t.Context(), link)
+	require.ErrorContains(t, err, "does not match committed tail")
+	require.Equal(t, 4*time.Millisecond, s.backoff(), "an ack for the wrong cursor is not progress")
+
+	backedOff()
+	ackOffset = 0
+	_, _, err = s.snapshot(t.Context(), link)
+	require.NoError(t, err)
+	require.Equal(t, time.Millisecond, s.backoff())
+}
