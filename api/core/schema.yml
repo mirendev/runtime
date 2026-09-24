@@ -629,6 +629,9 @@ components:
     static_dir:
       type: string
       doc: Absolute path exported from the application build output and served directly by HTTP ingress
+    static_error_page:
+      type: string
+      doc: Relative path to the HTML error template in the static artifact
     variables:
       type: component
       doc: Environment variables and configuration values

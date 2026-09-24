@@ -18,6 +18,7 @@ import (
 
 type staticFileServer interface {
 	ServeFile(http.ResponseWriter, *http.Request, *core_v1alpha.AppVersion) (bool, error)
+	ReadFile(*core_v1alpha.AppVersion, string) ([]byte, error)
 }
 
 type archiveStaticFileServer struct {
@@ -112,6 +113,34 @@ func (s *archiveStaticFileServer) ServeFile(w http.ResponseWriter, req *http.Req
 	w.Header().Set("ETag", fmt.Sprintf("\"%s-%d-%d\"", strings.TrimPrefix(version.StaticArtifact, "sha256:"), entry.offset, entry.size))
 	http.ServeContent(w, req, path.Base(requestPath), entry.modTime, content)
 	return true, nil
+}
+
+// ReadFile loads a bounded template directly from a version's static artifact;
+// it does not need a running sandbox or make a request through the app.
+func (s *archiveStaticFileServer) ReadFile(version *core_v1alpha.AppVersion, name string) ([]byte, error) {
+	if version.StaticArtifact == "" {
+		return nil, fmt.Errorf("application version has no static artifact")
+	}
+	if name == "" || path.IsAbs(name) || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, "\\") {
+		return nil, fmt.Errorf("invalid static template path")
+	}
+	index, err := s.index(version.StaticArtifact)
+	if err != nil {
+		return nil, err
+	}
+	entry, ok := index.files[name]
+	if !ok {
+		return nil, fmt.Errorf("static template %q not found", name)
+	}
+	if entry.size > maxErrorTemplateSize {
+		return nil, fmt.Errorf("static template %q exceeds size limit", name)
+	}
+	archive, err := s.blobs.Open(version.StaticArtifact)
+	if err != nil {
+		return nil, fmt.Errorf("opening static artifact: %w", err)
+	}
+	defer archive.Close()
+	return io.ReadAll(io.NewSectionReader(archive, entry.offset, entry.size))
 }
 
 func (s *archiveStaticFileServer) index(digest string) (*staticArchiveIndex, error) {
