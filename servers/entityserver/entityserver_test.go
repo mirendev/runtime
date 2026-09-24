@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -27,6 +28,30 @@ import (
 
 func setupTestEtcd(t *testing.T) (*clientv3.Client, string) {
 	return etcdtest.TestEtcdClient(t)
+}
+
+func TestCheckIndexHealthIsReadOnly(t *testing.T) {
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(t.Context(), slog.Default(), client, prefix)
+	require.NoError(t, err)
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+	id := entity.Id("missing/sandbox")
+	key := prefix + "/collections/test_orphan/" + base58.Encode([]byte(id))
+	_, err = client.Put(t.Context(), key, id.String())
+	require.NoError(t, err)
+
+	eac := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	result, err := eac.CheckIndexHealth(t.Context())
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, result.OrphanedEntries())
+	resp, err := client.Get(t.Context(), key)
+	require.NoError(t, err)
+	assert.Len(t, resp.Kvs, 1, "diagnostic must not repair the index")
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = eac.CheckIndexHealth(canceled)
+	require.Error(t, err, "an interrupted scan must not report a clean result")
 }
 
 func TestEntityServer_Get(t *testing.T) {

@@ -62,10 +62,11 @@ func AppStatus(ctx *Context, opts struct {
 	if err != nil {
 		recentResult = nil
 	}
+	health, healthErr := fetchServiceHealth(ctx, opts.App)
 
 	// JSON output
 	if opts.IsJSON() {
-		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId)
+		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId, health, healthErr)
 	}
 
 	// Define styles
@@ -231,6 +232,16 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("\n%s\n", yellowStyle.Render("No active deployment found"))
 	}
 
+	ctx.Printf("\n%s\n", labelStyle.Render("Service Sandboxes:"))
+	switch {
+	case healthErr != nil:
+		ctx.Printf("  Health unavailable: %v\n", healthErr)
+	case len(health) == 0:
+		ctx.Printf("  No service pools found\n")
+	default:
+		ctx.Printf("%s", renderServiceHealth(health))
+	}
+
 	// Recent deployments summary
 	ctx.Printf("\n%s\n", labelStyle.Render("Recent Activity:"))
 
@@ -288,7 +299,7 @@ func printAppStatusJSON(
 	appConfig *app_v1alpha.Configuration,
 	activeDeployment *deployment_v1alpha.DeploymentClientGetActiveDeploymentResults,
 	recentResult *deployment_v1alpha.DeploymentClientListDeploymentsResults,
-	app, cluster string,
+	app, cluster string, health []serviceHealth, healthErr error,
 ) error {
 	type gitInfo struct {
 		Sha               string `json:"sha,omitempty"`
@@ -396,11 +407,17 @@ func printAppStatusJSON(
 		Configuration     *configuration   `json:"configuration,omitempty"`
 		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
 		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
+		Services          []serviceHealth  `json:"services,omitempty"`
+		HealthError       string           `json:"health_error,omitempty"`
 	}{
 		App:               app,
 		Cluster:           cluster,
 		WorkloadRole:      appResult.WorkloadRole(),
 		MaintenanceRoutes: appResult.MaintenanceRoutes(),
+		Services:          health,
+	}
+	if healthErr != nil {
+		output.HealthError = healthErr.Error()
 	}
 
 	if appResult.HasVersionId() && appResult.VersionId() != "" {

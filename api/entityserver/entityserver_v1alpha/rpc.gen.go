@@ -2190,6 +2190,58 @@ func (v *EntityAccessReindexResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessCheckIndexHealthArgsData struct{}
+
+type EntityAccessCheckIndexHealthArgs struct {
+	call rpc.Call
+	data entityAccessCheckIndexHealthArgsData
+}
+
+func (v *EntityAccessCheckIndexHealthArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessCheckIndexHealthResultsData struct {
+	OrphanedEntries *int64 `cbor:"0,keyasint,omitempty" json:"orphaned_entries,omitempty"`
+}
+
+type EntityAccessCheckIndexHealthResults struct {
+	call rpc.Call
+	data entityAccessCheckIndexHealthResultsData
+}
+
+func (v *EntityAccessCheckIndexHealthResults) SetOrphanedEntries(orphaned_entries int64) {
+	v.data.OrphanedEntries = &orphaned_entries
+}
+
+func (v *EntityAccessCheckIndexHealthResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessCheckIndexHealthResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type entityAccessGetAttributesByTagArgsData struct {
 	Tag *string `cbor:"0,keyasint,omitempty" json:"tag,omitempty"`
 }
@@ -2802,6 +2854,32 @@ func (t *EntityAccessReindex) Results() *EntityAccessReindexResults {
 	return results
 }
 
+type EntityAccessCheckIndexHealth struct {
+	rpc.Call
+	args    EntityAccessCheckIndexHealthArgs
+	results EntityAccessCheckIndexHealthResults
+}
+
+func (t *EntityAccessCheckIndexHealth) Args() *EntityAccessCheckIndexHealthArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessCheckIndexHealth) Results() *EntityAccessCheckIndexHealthResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccessGetAttributesByTag struct {
 	rpc.Call
 	args    EntityAccessGetAttributesByTagArgs
@@ -2850,6 +2928,7 @@ type EntityAccess interface {
 	RevokeSession(ctx context.Context, state *EntityAccessRevokeSession) error
 	PingSession(ctx context.Context, state *EntityAccessPingSession) error
 	Reindex(ctx context.Context, state *EntityAccessReindex) error
+	CheckIndexHealth(ctx context.Context, state *EntityAccessCheckIndexHealth) error
 	GetAttributesByTag(ctx context.Context, state *EntityAccessGetAttributesByTag) error
 }
 
@@ -2938,6 +3017,10 @@ func (reexportEntityAccess) PingSession(ctx context.Context, state *EntityAccess
 }
 
 func (reexportEntityAccess) Reindex(ctx context.Context, state *EntityAccessReindex) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) CheckIndexHealth(ctx context.Context, state *EntityAccessCheckIndexHealth) error {
 	panic("not implemented")
 }
 
@@ -3159,6 +3242,16 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Params:        []string{"dry_run"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Reindex(ctx, &EntityAccessReindex{Call: call})
+			},
+		},
+		{
+			Name:          "check_index_health",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.CheckIndexHealth(ctx, &EntityAccessCheckIndexHealth{Call: call})
 			},
 		},
 		{
@@ -3931,6 +4024,35 @@ func (v EntityAccessClient) Reindex(ctx context.Context, dry_run bool) (*EntityA
 	}
 
 	return &EntityAccessClientReindexResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientCheckIndexHealthResults struct {
+	client rpc.Client
+	data   entityAccessCheckIndexHealthResultsData
+}
+
+func (v *EntityAccessClientCheckIndexHealthResults) HasOrphanedEntries() bool {
+	return v.data.OrphanedEntries != nil
+}
+
+func (v *EntityAccessClientCheckIndexHealthResults) OrphanedEntries() int64 {
+	if v.data.OrphanedEntries == nil {
+		return 0
+	}
+	return *v.data.OrphanedEntries
+}
+
+func (v EntityAccessClient) CheckIndexHealth(ctx context.Context) (*EntityAccessClientCheckIndexHealthResults, error) {
+	args := EntityAccessCheckIndexHealthArgs{}
+
+	var ret entityAccessCheckIndexHealthResultsData
+
+	err := v.Call(ctx, "check_index_health", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientCheckIndexHealthResults{client: v.Client, data: ret}, nil
 }
 
 type EntityAccessClientGetAttributesByTagResults struct {

@@ -115,6 +115,11 @@ type doctorEnv struct {
 
 	// auth is only attempted when the cluster names an identity.
 	auth authResult
+
+	resources    *doctorResources
+	resourcesErr error
+	orphans      int64
+	indexErr     error
 }
 
 // local reports whether the active cluster runs on this machine, which decides
@@ -189,6 +194,12 @@ func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 	wg.Go(func() {
 		env.serverVersion, env.serverVersionErr = fetchServerVersion(ctx)
 	})
+	wg.Go(func() {
+		env.resources, env.resourcesErr = gatherDoctorResources(ctx)
+	})
+	wg.Go(func() {
+		env.orphans, env.indexErr = gatherDoctorIndex(ctx)
+	})
 
 	wg.Go(func() {
 		env.tcp = probeTCP(env.cluster.Hostname)
@@ -214,5 +225,9 @@ func doctorChecks() []check {
 		{Name: "Server", Run: checkServer},
 		{Name: "Version", Run: checkVersion},
 		{Name: "Authentication", Run: checkAuthentication},
+		{Name: "Entity indexes", Run: checkEntityIndexes},
+		{Name: "Sandboxes", Run: checkSandboxes},
+		{Name: "Pools", Run: checkPools},
+		{Name: "Disks and volumes", Run: checkDisks},
 	}
 }
