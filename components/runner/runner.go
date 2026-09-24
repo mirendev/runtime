@@ -237,8 +237,9 @@ func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, er
 // runner. It has no container or host-network responsibilities.
 type ClusterAccess struct {
 	RunnerConfig
-	Log  *slog.Logger
-	deps RunnerDeps
+	Log                   *slog.Logger
+	deps                  RunnerDeps
+	coordinatorInternalIP netip.Addr
 
 	state       *rpc.State
 	eac         *es.EntityAccessClient
@@ -601,6 +602,9 @@ func (r *ClusterAccess) WorkloadIssuer() workloadidentity.TokenIssuer {
 	return r.deps.WorkloadIssuer
 }
 
+// CoordinatorInternalIP is the coordinator's current WireGuard-routed bridge gateway.
+func (r *ClusterAccess) CoordinatorInternalIP() netip.Addr { return r.coordinatorInternalIP }
+
 // setupSqliteDisks connects to the coordinator's SQLite backup service so
 // sqlite-provider disks are replicated as they are written.
 //
@@ -681,6 +685,12 @@ func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.S
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(issuerInfoRetryDelay):
+		}
+	}
+	if info.HasCoordinatorInternalIp() {
+		r.coordinatorInternalIP, err = netip.ParseAddr(info.CoordinatorInternalIp())
+		if err != nil || !r.coordinatorInternalIP.Is4() {
+			return fmt.Errorf("invalid coordinator internal IP %q", info.CoordinatorInternalIp())
 		}
 	}
 

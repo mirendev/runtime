@@ -52,6 +52,7 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 		Authority:              c.authority,
 		EAC:                    c.eac,
 		CoordinatorAddr:        c.Address,
+		CoordinatorInternalIP:  c.CoordinatorInternalIP,
 		EtcdEndpoints:          c.EtcdEndpoints,
 		EtcdPrefix:             c.Prefix,
 		VictoriametricsAddress: c.VictoriametricsAddress,

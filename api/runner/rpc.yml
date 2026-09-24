@@ -163,9 +163,9 @@ interfaces:
         index: 6
         doc: |
           Report whether the coordinator has a workload identity issuer
-          configured, and its issuer URL. Distributed runners call this once at
-          startup to decide whether to mint workload identity tokens via the
-          coordinator.
+          configured, its issuer URL, and its internal WireGuard address.
+          Distributed runners call this once at startup to configure identity
+          tokens and registry pulls.
         results:
           - name: enabled
             type: bool
@@ -173,6 +173,9 @@ interfaces:
           - name: issuer_url
             type: string
             doc: The issuer URL (iss claim anchor) when enabled
+          - name: coordinator_internal_ip
+            type: string
+            doc: Current coordinator bridge gateway reachable over WireGuard
 
       - name: IssueWorkloadToken
         index: 7

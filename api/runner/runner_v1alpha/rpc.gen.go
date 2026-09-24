@@ -967,8 +967,9 @@ func (v *RunnerRegistrationWorkloadIssuerInfoArgs) UnmarshalJSON(data []byte) er
 }
 
 type runnerRegistrationWorkloadIssuerInfoResultsData struct {
-	Enabled   *bool   `cbor:"0,keyasint,omitempty" json:"enabled,omitempty"`
-	IssuerUrl *string `cbor:"1,keyasint,omitempty" json:"issuer_url,omitempty"`
+	Enabled               *bool   `cbor:"0,keyasint,omitempty" json:"enabled,omitempty"`
+	IssuerUrl             *string `cbor:"1,keyasint,omitempty" json:"issuer_url,omitempty"`
+	CoordinatorInternalIp *string `cbor:"2,keyasint,omitempty" json:"coordinator_internal_ip,omitempty"`
 }
 
 type RunnerRegistrationWorkloadIssuerInfoResults struct {
@@ -982,6 +983,10 @@ func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetEnabled(enabled bool) {
 
 func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetIssuerUrl(issuer_url string) {
 	v.data.IssuerUrl = &issuer_url
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetCoordinatorInternalIp(coordinator_internal_ip string) {
+	v.data.CoordinatorInternalIp = &coordinator_internal_ip
 }
 
 func (v *RunnerRegistrationWorkloadIssuerInfoResults) MarshalCBOR() ([]byte, error) {
@@ -2483,6 +2488,17 @@ func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) IssuerUrl() string {
 		return ""
 	}
 	return *v.data.IssuerUrl
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) HasCoordinatorInternalIp() bool {
+	return v.data.CoordinatorInternalIp != nil
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) CoordinatorInternalIp() string {
+	if v.data.CoordinatorInternalIp == nil {
+		return ""
+	}
+	return *v.data.CoordinatorInternalIp
 }
 
 func (v RunnerRegistrationClient) WorkloadIssuerInfo(ctx context.Context) (*RunnerRegistrationClientWorkloadIssuerInfoResults, error) {

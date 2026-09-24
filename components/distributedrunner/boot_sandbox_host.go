@@ -92,7 +92,7 @@ func (b *sandboxHostBoot) start(
 		EtcdEndpoints: append([]string(nil), b.inputs.etcdEndpoints...),
 		EtcdPrefix:    b.inputs.etcdPrefix,
 	}
-	if err := b.prepareNetworkDeps(&dependencies); err != nil {
+	if err := b.prepareNetworkDeps(&dependencies, access.access.CoordinatorInternalIP()); err != nil {
 		return nil, err
 	}
 
@@ -107,9 +107,16 @@ func (b *sandboxHostBoot) start(
 	return b.value, nil
 }
 
-func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps) error {
+func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps, coordinatorInternalIP netip.Addr) error {
+	if !coordinatorInternalIP.Is4() {
+		return fmt.Errorf("coordinator internal WireGuard address is unavailable")
+	}
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	deps.Resolver = resolver
+	if err := hostMapper.SetHost("cluster.local", coordinatorInternalIP); err != nil {
+		return fmt.Errorf("mapping cluster registry: %w", err)
+	}
+	b.inputs.log.Info("mapped cluster.local to coordinator WireGuard gateway", "addr", coordinatorInternalIP)
 	coordinatorHost, coordinatorPort, splitErr := net.SplitHostPort(b.inputs.coordinator)
 	if splitErr != nil {
 		b.inputs.log.Warn("in-cluster API access disabled: coordinator address has no usable host and port",
@@ -120,10 +127,8 @@ func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps) error {
 		// Sandboxes reach the API on the coordinator rather than the local bridge
 		// router. This must be an IP because sandbox DNS resolves app.miren names
 		// and nothing else, so the coordinator hostname would not resolve there.
-		hostMapper.SetHost("cluster.local", coordinatorAddr)
 		deps.ApiAddress = net.JoinHostPort(coordinatorAddr.String(), coordinatorPort)
 		deps.CACert = []byte(b.inputs.caCert)
-		b.inputs.log.Info("mapped cluster.local to coordinator", "hostname", coordinatorHost, "addr", coordinatorAddr)
 		b.inputs.log.Info("sandboxes will reach the cluster API at", "address", deps.ApiAddress)
 	}
 
