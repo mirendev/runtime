@@ -23,7 +23,8 @@ import (
 
 const snapshotBatchSize = 100
 const maxLiveBatchesBetweenSnapshotBatches = 8
-const sessionRetryDelay = time.Second
+const defaultRetryDelay = time.Second
+const defaultMaxRetryDelay = time.Minute
 const defaultMinimumResnapshotInterval = time.Hour
 const defaultAckTimeout = 30 * time.Second
 const defaultSnapshotAckTimeout = 5 * time.Minute
@@ -49,6 +50,8 @@ type Exporter struct {
 	ackTimeout                time.Duration
 	snapshotAckTimeout        time.Duration
 	preparationLogInterval    time.Duration
+	retryDelay                time.Duration
+	maxRetryDelay             time.Duration
 	diagnostics               *Diagnostics
 
 	mu     sync.Mutex
@@ -62,6 +65,13 @@ type stream struct {
 
 	mu      sync.Mutex
 	waiters map[string]chan Ack
+
+	// nextRetry is how long the next retry waits. It doubles on every retry
+	// and falls back to the exporter's base delay once cloud commits a cursor
+	// past where the stream stood, so a rejection that can never succeed
+	// settles at the cap instead of filling the log at the base rate.
+	retryMu   sync.Mutex
+	nextRetry time.Duration
 }
 
 type Option func(*Exporter)
@@ -85,6 +95,8 @@ func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Co
 		ackTimeout:                defaultAckTimeout,
 		snapshotAckTimeout:        defaultSnapshotAckTimeout,
 		preparationLogInterval:    defaultPreparationLogInterval,
+		retryDelay:                defaultRetryDelay,
+		maxRetryDelay:             defaultMaxRetryDelay,
 	}
 	for _, option := range options {
 		option(exporter)
@@ -311,12 +323,13 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 	if ctx.Err() != nil {
 		return false
 	}
+	delay := s.backoff()
 	if err != nil {
 		s.exporter.fail(message, err)
-		s.exporter.log.Warn(message, "error", err, "retry_in", sessionRetryDelay)
+		s.exporter.log.Warn(message, "error", err, "retry_in", delay)
 	}
 	s.exporter.setMode("retrying", message)
-	timer := time.NewTimer(sessionRetryDelay)
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -324,6 +337,25 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// backoff returns the delay for this retry and doubles the next one, up to
+// the exporter's cap.
+func (s *stream) backoff() time.Duration {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	delay := s.nextRetry
+	if delay <= 0 {
+		delay = s.exporter.retryDelay
+	}
+	s.nextRetry = min(delay*2, s.exporter.maxRetryDelay)
+	return delay
+}
+
+func (s *stream) resetBackoff() {
+	s.retryMu.Lock()
+	s.nextRetry = 0
+	s.retryMu.Unlock()
 }
 
 func (t *Exporter) waitForStartGate(ctx context.Context) bool {
@@ -499,6 +531,7 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 	if ack.Cursor != tailCursor {
 		return 0, nil, fmt.Errorf("snapshot ack cursor %d does not match committed tail %d", ack.Cursor, tailCursor)
 	}
+	s.resetBackoff()
 	if s.exporter.diagnostics != nil {
 		s.exporter.diagnostics.finishSnapshot(ack.Cursor)
 	}
@@ -594,6 +627,12 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	if ack.Cursor != to {
 		return cursor, fmt.Errorf("change ack cursor %d does not match batch end %d", ack.Cursor, to)
 	}
+	// A batch drained mid-snapshot is accepted but not committed until the
+	// snapshot completes, so it is not progress: resetting on it would let a
+	// snapshot that cloud keeps refusing restart at the base rate.
+	if committed {
+		s.resetBackoff()
+	}
 	if s.exporter.diagnostics != nil {
 		s.exporter.diagnostics.setNextWatchRevision(to + 1)
 		if committed {
@@ -655,9 +694,7 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 				if !ok {
 					continue
 				}
-				changes = append(changes, Change{
-					Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
-				})
+				changes = append(changes, putChange(id, revision, filtered))
 				continue
 			case errors.Is(err, rpctypes.ErrCompacted):
 				return nil, errCompacted
@@ -703,11 +740,22 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 		if !ok {
 			continue
 		}
-		changes = append(changes, Change{
-			Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
-		})
+		changes = append(changes, putChange(id, revision, filtered))
 	}
 	return changes, nil
+}
+
+// putChange stamps the exported body with the revision of the index event
+// that produced it. The store reports an entity's revision as its primary
+// key's, and every save rewrites the primary key, but a session ending (its
+// lease lapsing or being revoked) removes the session keys and the leased
+// index entry without touching it.
+// Cloud lands a put at its body's revision and refuses one whose body and
+// envelope disagree, so a node whose session lapsed would otherwise reject
+// the whole batch on every retry.
+func putChange(id entity.Id, revision int64, filtered *entity.Entity) Change {
+	filtered.SetRevision(revision)
+	return Change{Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered}
 }
 
 func (s *stream) sendAndWait(link Link, messageType string, payload any, messageID string) (Ack, error) {
