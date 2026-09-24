@@ -1599,6 +1599,57 @@ func TestCrashLoopCooldownCapsDesiredWithRunningSiblings(t *testing.T) {
 	assert.Equal(t, int64(2), updated.ReadyInstances)
 }
 
+func TestCooldownPreservesPendingSiblingsAfterTheyStart(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 5,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 4 {
+		status := compute_v1alpha.RUNNING
+		if i >= 2 {
+			status = compute_v1alpha.PENDING
+		}
+		_, err = server.Client.Create(ctx, fmt.Sprintf("sibling-%d", i),
+			&compute_v1alpha.Sandbox{Status: status, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	_, err = server.Client.Create(ctx, "failed",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(5), updated.DesiredInstances)
+	assert.Equal(t, int64(4), updated.CurrentInstances)
+	assert.Equal(t, int64(2), updated.ReadyInstances)
+
+	// Both pending siblings finish booting before the cooldown ends.
+	for _, sb := range listSandboxesForPool(t, ctx, server, pool) {
+		if sb.Status == compute_v1alpha.PENDING {
+			_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sb.ID,
+				(&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}).Encode).Attrs(), 0)
+			require.NoError(t, err)
+		}
+	}
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.SandboxPool{CooldownUntil: time.Now().Add(-time.Second)}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated = getPool(t, ctx, server, id)
+	assert.Equal(t, int64(5), updated.DesiredInstances)
+	assert.Equal(t, int64(5), updated.CurrentInstances, "a replacement may start without retiring a healthy sibling")
+	assert.Equal(t, int64(4), updated.ReadyInstances)
+}
+
 func TestManagerLongStartupFailureBackoff(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
