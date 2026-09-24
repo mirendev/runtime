@@ -669,9 +669,13 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	}
 
 	var ret []*entityserver_v1alpha.Entity
+	cleanups := 0
 	for i, entity := range entities {
 		if entity == nil {
-			e.cleanupOrphan(ctx, index, ids[i])
+			if cleanups < maxIndexCleanupsPerList {
+				e.cleanupOrphan(ctx, index, ids[i])
+				cleanups++
+			}
 			continue
 		}
 
@@ -690,6 +694,10 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 
 	return nil
 }
+
+// A large legacy backlog should not turn a listing into an unbounded series
+// of etcd writes. Later lists and the background sweep drain the rest.
+const maxIndexCleanupsPerList = 16
 
 // ListPage reads a bounded page of entities from an index.
 func (e *EntityServer) ListPage(ctx context.Context, req *entityserver_v1alpha.EntityAccessListPage) error {
@@ -1088,6 +1096,7 @@ func (e *EntityServer) resolve(
 	total, revision int64,
 ) *resolvedPage {
 	resolved := make([]*entity.Entity, 0, len(entities))
+	cleanups := 0
 
 	for i, ent := range entities {
 		if ent != nil {
@@ -1098,8 +1107,9 @@ func (e *EntityServer) resolve(
 		if undecodable[ids[i]] {
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
-		} else {
+		} else if cleanups < maxIndexCleanupsPerList {
 			e.cleanupOrphan(ctx, index, ids[i])
+			cleanups++
 		}
 
 		if total > 0 {

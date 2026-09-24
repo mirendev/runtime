@@ -1299,6 +1299,54 @@ func TestEntityServer_ListsCleanOrphansOnce(t *testing.T) {
 	require.NotContains(t, logs.String(), "entity in index but not in store")
 }
 
+func TestEntityServer_ListCleanupIsBounded(t *testing.T) {
+	for _, paged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("paged=%t", paged), func(t *testing.T) {
+			ctx := t.Context()
+			client, prefix := setupTestEtcd(t)
+			store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+			require.NoError(t, err)
+			index := entity.String(entity.Id("test/kind"), "widget")
+			_, err = store.CreateEntity(ctx, entity.New(
+				entity.Ident, "test/kind", entity.Doc, "indexed kind",
+				entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+			))
+			require.NoError(t, err)
+			live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
+			require.NoError(t, err)
+			indexPrefix, err := store.IndexPrefix(ctx, index)
+			require.NoError(t, err)
+			for i := range maxIndexCleanupsPerList + 2 {
+				id := entity.Id(fmt.Sprintf("orphan-%02d", i))
+				_, err := client.Put(ctx, indexPrefix+base58.Encode([]byte(id)), id.String())
+				require.NoError(t, err)
+			}
+
+			var logs bytes.Buffer
+			server, err := NewEntityServer(slog.New(slog.NewTextHandler(&logs, nil)), store)
+			require.NoError(t, err)
+			sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+			for pass, remaining := range []int64{2, 0, 0} {
+				if paged {
+					page, err := sc.ListPage(ctx, index, "", 100)
+					require.NoError(t, err)
+					require.Len(t, page.Values(), 1)
+					require.Equal(t, live.Id().String(), page.Values()[0].Id())
+				} else {
+					list, err := sc.List(ctx, index)
+					require.NoError(t, err)
+					require.Len(t, list.Values(), 1)
+					require.Equal(t, live.Id().String(), list.Values()[0].Id())
+				}
+				entries, err := client.Get(ctx, indexPrefix, clientv3.WithPrefix())
+				require.NoError(t, err)
+				require.Equal(t, remaining+1, entries.Count, "pass %d", pass)
+			}
+			require.Equal(t, maxIndexCleanupsPerList+2, strings.Count(logs.String(), "cleaned up orphaned index entry"))
+		})
+	}
+}
+
 func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
