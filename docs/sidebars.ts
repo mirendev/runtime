@@ -172,6 +172,7 @@ const sidebars: SidebarsConfig = {
         'system-requirements',
         'app-toml',
         'server-config',
+        'victorialogs-upgrade',
         {
           type: 'category',
           label: 'CLI',

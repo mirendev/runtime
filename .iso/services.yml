@@ -24,7 +24,7 @@ services:
       - http://localhost:2380
 
   victorialogs:
-    image: oci.miren.cloud/victoria-logs:v1
+    image: oci.miren.cloud/victoria-logs@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e
     port: 9428
 
   victoriametrics:

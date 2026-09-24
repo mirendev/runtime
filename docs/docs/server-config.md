@@ -186,6 +186,10 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 
 \* Defaults to `true` in standalone mode only.
 
+Miren snapshots embedded VictoriaLogs data before image upgrades. See
+[VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md) for backup
+retention and rollback details. External VictoriaLogs is not managed by Miren.
+
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 
 Controls the embedded VictoriaMetrics instance used for Miren's own runtime
