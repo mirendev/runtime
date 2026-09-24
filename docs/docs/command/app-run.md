@@ -12,6 +12,10 @@ This command runs a command in a fresh sandbox built from your app's active vers
 
 With no arguments it opens an interactive shell. With arguments it runs that command. With `--task` it runs a task declared in `app.toml`.
 
+Pass a single command string to use shell syntax (such as `$HOME`, `|`, or `>`). Separate operator arguments, such as `|` between two commands, also invoke a shell. Other arguments retain their boundaries without shell interpretation, even when they contain characters used by a shell.
+
+Quote the expression for your local shell so it reaches Miren intact: `miren app run -- 'echo $HOME | wc -c'`. Shell expressions require a cluster that supports durable runs; older clusters cannot safely preserve them.
+
 This is useful for:
 - Debugging application issues in an isolated environment
 - Running one-off commands with your app's configuration

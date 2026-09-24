@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -102,34 +101,23 @@ func runCommand(args []string) []string {
 	if len(args) == 0 {
 		return args
 	}
-	if len(args) == 1 && strings.ContainsAny(args[0], " \t") {
+
+	const shellSyntax = "$|&;<>()`\\*?[]{}~\n"
+	// A single command string is shell source. For multiple arguments the
+	// caller's shell has already stripped its quotes, so only whole operator
+	// tokens distinguish shell structure from literal data (e.g. SQL or code).
+	if len(args) == 1 && strings.ContainsAny(args[0], shellSyntax+" \t") {
 		return []string{"/bin/sh", "-c", args[0]}
 	}
 
-	// An explicit shell already owns parsing its -c argument, including when
-	// -c is combined with other flags or follows separate options.
-	if len(args) >= 3 {
-		switch filepath.Base(args[0]) {
-		case "sh", "bash", "dash", "ash", "ksh", "zsh":
-			for _, option := range args[1 : len(args)-1] {
-				if !strings.HasPrefix(option, "-") || option == "--" {
-					break
-				}
-				if strings.Contains(option[1:], "c") {
-					return args
-				}
-			}
-		}
-	}
-
-	const shellSyntax = "$|&;<>()`\\*?[]{}~\n"
 	usesShell := false
 	parts := make([]string, len(args))
 	for i, arg := range args {
-		if strings.ContainsAny(arg, shellSyntax) {
+		switch arg {
+		case "|", "||", "&&", ";", "&", ">", ">>", "<", "<<", "2>", "2>>":
 			usesShell = true
 			parts[i] = arg
-		} else {
+		default:
 			parts[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 		}
 	}

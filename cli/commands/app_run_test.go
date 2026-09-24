@@ -23,14 +23,21 @@ func TestRunCommand(t *testing.T) {
 		{"console", nil, nil},
 		{"single executable", []string{"date"}, []string{"date"}},
 		{"ordinary arguments", []string{"echo", "hello   world", "O'Reilly"}, []string{"echo", "hello   world", "O'Reilly"}},
-		{"variable", []string{"echo", "$HOME"}, []string{"/bin/sh", "-c", "'echo' $HOME"}},
+		{"variable argument stays literal", []string{"echo", "$HOME"}, []string{"echo", "$HOME"}},
 		{"pipeline with spaced argument", []string{"printf", "%s", "hello world", "|", "wc", "-c"}, []string{"/bin/sh", "-c", "'printf' '%s' 'hello world' | 'wc' '-c'"}},
 		{"empty argument in pipeline", []string{"printf", "%s", "", "|", "wc", "-c"}, []string{"/bin/sh", "-c", "'printf' '%s' '' | 'wc' '-c'"}},
 		{"single shell expression", []string{"echo $HOME | wc -c"}, []string{"/bin/sh", "-c", "echo $HOME | wc -c"}},
 		{"single command string", []string{"exit 7"}, []string{"/bin/sh", "-c", "exit 7"}},
 		{"redirect", []string{"echo", "hi", ">", "/tmp/result"}, []string{"/bin/sh", "-c", "'echo' 'hi' > '/tmp/result'"}},
+		{"python code is data", []string{"python", "-c", "print('hi')"}, []string{"python", "-c", "print('hi')"}},
+		{"SQL is data", []string{"psql", "-c", "SELECT * FROM users;"}, []string{"psql", "-c", "SELECT * FROM users;"}},
+		{"URL is data", []string{"curl", "https://x/?a=1&b=2"}, []string{"curl", "https://x/?a=1&b=2"}},
+		{"grep pattern is data", []string{"grep", "-E", "foo|bar", "log"}, []string{"grep", "-E", "foo|bar", "log"}},
+		{"substitution is data", []string{"echo", "it's $HOME"}, []string{"echo", "it's $HOME"}},
 		{"explicit shell", []string{"/bin/sh", "-c", "echo $HOME | wc -c"}, []string{"/bin/sh", "-c", "echo $HOME | wc -c"}},
 		{"combined shell flags", []string{"sh", "-ec", "exit 7; echo unexpected"}, []string{"sh", "-ec", "exit 7; echo unexpected"}},
+		{"shell option value", []string{"sh", "-o", "pipefail", "-c", "echo 'x' | cat"}, []string{"sh", "-o", "pipefail", "-c", "echo 'x' | cat"}},
+		{"env shell", []string{"/usr/bin/env", "bash", "-c", "echo $HOME"}, []string{"/usr/bin/env", "bash", "-c", "echo $HOME"}},
 		{"login shell flags", []string{"bash", "-lc", "echo $1", "unused", "word"}, []string{"bash", "-lc", "echo $1", "unused", "word"}},
 		{"separate shell flags", []string{"bash", "-e", "-c", "echo $1", "unused", "word"}, []string{"bash", "-e", "-c", "echo $1", "unused", "word"}},
 	}
@@ -93,7 +100,9 @@ func TestRunCommandPreservesExplicitShellExit(t *testing.T) {
 func TestLegacyRunCommandCheck(t *testing.T) {
 	assert.NoError(t, legacyRunCommandCheck([]string{"echo", "plain text"}))
 	assert.NoError(t, legacyRunCommandCheck(nil))
-	assert.ErrorContains(t, legacyRunCommandCheck([]string{"echo", "$HOME"}), "require a newer cluster")
+	assert.NoError(t, legacyRunCommandCheck([]string{"python", "-c", "print(1)"}))
+	assert.NoError(t, legacyRunCommandCheck([]string{"psql", "-c", "SELECT * FROM t"}))
+	assert.ErrorContains(t, legacyRunCommandCheck([]string{"echo $HOME"}), "require a newer cluster")
 	assert.ErrorContains(t, legacyRunCommandCheck([]string{"echo", "hi", "|", "wc"}), "require a newer cluster")
 }
 
