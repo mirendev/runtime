@@ -1052,6 +1052,13 @@ func TestDeployVersion(t *testing.T) {
 		}
 	})
 
+	t.Run("ephemeral message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "preview", "", "reason")
+		if err == nil || !strings.Contains(err.Error(), "deployment message is not supported") {
+			t.Fatalf("expected early ephemeral message rejection: %v", err)
+		}
+	})
+
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
 		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", "")
 		if err != nil {

@@ -27,6 +27,8 @@ const updateRetryLimit = 100
 const maxFailureSummaryBytes = 4 * 1024
 const failureSummaryEllipsis = "…"
 
+const maxDeploymentMessageBytes = 1024
+
 // Tracker is the deployment lifecycle as a set of operations, and the surface
 // the build paths call. It exists so the record is a byproduct of the work
 // actually happening rather than something a client narrates.
@@ -96,6 +98,9 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	if params.AppName == "" {
 		return nil, cond.ValidationFailure("missing-field",
 			"app_name is required to begin a deployment")
+	}
+	if len(params.Message) > maxDeploymentMessageBytes {
+		return nil, cond.ValidationFailure("invalid-message", "deployment message must be at most 1024 bytes")
 	}
 	if params.Operation == "" {
 		params.Operation = OperationBuild

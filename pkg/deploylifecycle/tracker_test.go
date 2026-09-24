@@ -90,6 +90,28 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, string(rec.Deployment.ID), holder.DeploymentID)
 }
 
+func TestBeginRejectsOversizedDeploymentMessage(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	// The limit is in bytes, not runes: 341 three-byte runes fit, 342 do not.
+	tooLong := strings.Repeat("界", 342)
+	_, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: tooLong})
+	require.ErrorContains(t, err, "at most 1024 bytes")
+	records, err := tr.Store().List(ctx, Query{AppName: "web"})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	lock, err := tr.Locks().Blocking(ctx, "web")
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	message := strings.Repeat("界", 341) + "x"
+	require.Len(t, []byte(message), maxDeploymentMessageBytes)
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: message})
+	require.NoError(t, err)
+	require.Equal(t, message, rec.Deployment.Message)
+}
+
 func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{

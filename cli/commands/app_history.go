@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
@@ -267,6 +268,12 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 	message := "-"
 	if dep.HasMessage() && strings.TrimSpace(dep.Message()) != "" {
 		message = firstLine(strings.TrimSpace(dep.Message()))
+		message = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return '�'
+			}
+			return r
+		}, message)
 	}
 
 	if opts.detailed {

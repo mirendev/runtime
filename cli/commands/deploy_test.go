@@ -83,6 +83,18 @@ func TestDeploymentHistoryShowsMessageSeparatelyFromCommit(t *testing.T) {
 	}
 }
 
+func TestDeploymentHistoryMessageDoesNotEmitTerminalControls(t *testing.T) {
+	dep := &deployment_v1alpha.DeploymentInfo{}
+	dep.SetMessage("Ship \x1b[2J\tcheckout\ninternal detail")
+	for _, detailed := range []bool{false, true} {
+		row := buildDeploymentRow(dep, historyDisplayOpts{detailed: detailed})
+		got := row[len(row)-1]
+		if got != "Ship �[2J�checkout" {
+			t.Errorf("detailed=%v: message = %q", detailed, got)
+		}
+	}
+}
+
 func TestBuildPhaseSummary(t *testing.T) {
 	duration := 250 * time.Millisecond
 

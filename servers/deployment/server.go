@@ -612,6 +612,9 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
+	if args.EphemeralLabel() != "" && args.Message() != "" {
+		return cond.ValidationFailure("invalid-message", "deployment message is not supported for ephemeral versions")
+	}
 
 	// Verify the AppVersion entity exists
 	var appVersion core_v1alpha.AppVersion
