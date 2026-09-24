@@ -1,12 +1,93 @@
 package httpingress
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+const maxErrorTemplateSize = 128 << 10
+
+type errorPageTargetKey struct{}
+
+func parseErrorTemplate(src string) (*template.Template, error) {
+	if strings.TrimSpace(src) == "" {
+		return nil, fmt.Errorf("error page template is empty")
+	}
+	return template.New("ingress-error").Funcs(template.FuncMap{
+		"brandLogo": func() template.HTML { return brandLogo },
+	}).Parse(src)
+}
+
+// LoadErrorPageTemplate validates an operator's cluster template at startup.
+func LoadErrorPageTemplate(filename string) (*template.Template, error) {
+	if !filepath.IsAbs(filename) {
+		return nil, fmt.Errorf("ingress.error_page must be an absolute path")
+	}
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxErrorTemplateSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxErrorTemplateSize {
+		return nil, fmt.Errorf("error page template exceeds %d bytes", maxErrorTemplateSize)
+	}
+	return parseErrorTemplate(string(data))
+}
+
+func (h *Server) htmlErrorTemplate(r *http.Request) *template.Template {
+	if target, ok := r.Context().Value(errorPageTargetKey{}).(*resolvedIngressTarget); ok &&
+		target.config != nil && target.config.StaticErrorPage != "" && h.staticFiles != nil {
+		data, err := h.staticFiles.ReadFile(&target.version, target.config.StaticErrorPage)
+		if err == nil {
+			var page *template.Template
+			page, err = parseErrorTemplate(string(data))
+			if err == nil {
+				return page
+			}
+		}
+		h.Log.Debug("unable to use app error page; falling back", "error", err, "version", target.version.ID)
+	}
+	if h.config.ErrorPageTemplate != nil {
+		return h.config.ErrorPageTemplate
+	}
+	return errorPage
+}
+
+func (h *Server) serveIngressError(w http.ResponseWriter, r *http.Request, message string, status int) {
+	page := errorPage
+	if errorRepresentation(r.Header.Get("Accept")) == "text/html" {
+		page = h.htmlErrorTemplate(r)
+	}
+	serveIngressErrorWithTemplate(w, r, message, status, page, h.config.ErrorPageTemplate)
+}
+
+func renderErrorPage(page, cluster *template.Template, data errorPageData) []byte {
+	var buf bytes.Buffer
+	if err := page.Execute(&buf, data); err == nil {
+		return buf.Bytes()
+	}
+	buf.Reset()
+	if cluster != nil && page != cluster {
+		if err := cluster.Execute(&buf, data); err == nil {
+			return buf.Bytes()
+		}
+		buf.Reset()
+	}
+	_ = errorPage.Execute(&buf, data)
+	return buf.Bytes()
+}
 
 type errorPageData struct {
 	Status      int
@@ -29,6 +110,10 @@ var brandLogo = template.HTML(strings.ReplaceAll(logoSVG, `fill="#0059FF"`, `fil
 // serveIngressError negotiates public error responses without exposing internal
 // identifiers or failure details in HTML or JSON.
 func serveIngressError(w http.ResponseWriter, r *http.Request, message string, status int) {
+	serveIngressErrorWithTemplate(w, r, message, status, errorPage, nil)
+}
+
+func serveIngressErrorWithTemplate(w http.ResponseWriter, r *http.Request, message string, status int, page, cluster *template.Template) {
 	w.Header().Add("Vary", "Accept")
 	data := errorPageData{Status: status}
 	switch status {
@@ -68,7 +153,7 @@ func serveIngressError(w http.ResponseWriter, r *http.Request, message string, s
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = errorPage.Execute(w, data)
+	_, _ = w.Write(renderErrorPage(page, cluster, data))
 }
 
 // Choose among the representations we actually emit. A more specific media

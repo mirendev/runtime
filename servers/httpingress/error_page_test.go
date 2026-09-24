@@ -1,14 +1,99 @@
 package httpingress
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 )
+
+func TestCustomErrorPagePrecedence(t *testing.T) {
+	cluster, err := parseErrorTemplate("<h1>cluster {{.Status}} {{.Title}}</h1>")
+	require.NoError(t, err)
+	app := &fakeStaticFiles{template: []byte("<h1>app {{.Status}} {{.Title}}</h1>")}
+	h := &Server{Log: testutils.TestLogger(t), config: IngressConfig{ErrorPageTemplate: cluster}, staticFiles: app}
+	target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{StaticErrorPage: "errors/page.html"}}
+
+	for _, tt := range []struct {
+		name, accept, appTemplate, want, notWant string
+		target                                   bool
+	}{
+		{"app HTML", "text/html", "<h1>app {{.Status}} {{.Title}}</h1>", "app 502", "cluster", true},
+		{"unknown host", "text/html", "", "cluster 502", "app 502", false},
+		{"missing app template", "text/html", "", "cluster 502", "app 502", true},
+		{"malformed app template", "text/html", "{{if", "cluster 502", "app 502", true},
+		{"app execution fails", "text/html", "{{index .Site 0}}", "cluster 502", "app 502", true},
+		{"JSON unaffected", "application/json", "<h1>app</h1>", `"error":"bad_gateway"`, "<h1>app", true},
+		{"plain unaffected", "text/plain", "<h1>app</h1>", "private-id\n", "<h1>app", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			app.template = []byte(tt.appTemplate)
+			if tt.name == "missing app template" {
+				app.template = nil
+			}
+			r := httptest.NewRequest("GET", "http://app.test/", nil)
+			r.Header.Set("Accept", tt.accept)
+			if tt.target {
+				r = r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target))
+			}
+			w := httptest.NewRecorder()
+			h.serveIngressError(w, r, "private-id", http.StatusBadGateway)
+			assert.Equal(t, http.StatusBadGateway, w.Code)
+			assert.Contains(t, w.Body.String(), tt.want)
+			assert.NotContains(t, w.Body.String(), tt.notWant)
+			if tt.accept == "text/html" {
+				assert.NotContains(t, w.Body.String(), "private-id")
+			}
+		})
+	}
+}
+
+func TestLoadErrorPageTemplate(t *testing.T) {
+	_, err := LoadErrorPageTemplate("relative/error.html")
+	assert.ErrorContains(t, err, "absolute path")
+	file := filepath.Join(t.TempDir(), "error.html")
+	require.NoError(t, os.WriteFile(file, []byte("<p>{{.Status}} {{.Description}}</p>"), 0600))
+	page, err := LoadErrorPageTemplate(file)
+	require.NoError(t, err)
+	assert.NotNil(t, page)
+	require.NoError(t, os.WriteFile(file, []byte("{{if"), 0600))
+	_, err = LoadErrorPageTemplate(file)
+	require.Error(t, err)
+	require.NoError(t, os.WriteFile(file, []byte(strings.Repeat("x", maxErrorTemplateSize+1)), 0600))
+	_, err = LoadErrorPageTemplate(file)
+	assert.ErrorContains(t, err, "exceeds")
+}
+
+func TestAppErrorPageUsedAfterPreparationBeforeAuth(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	h := &Server{Log: testutils.TestLogger(t), eac: inmem.EAC,
+		staticFiles: &fakeStaticFiles{template: []byte("<h1>app error {{.Status}}</h1>")}}
+	target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{StaticErrorPage: "error.html"}}
+	prepare := func(_ http.ResponseWriter, r *http.Request) *http.Request {
+		return r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target))
+	}
+	route := &ingress_v1alpha.HttpRoute{AuthProvider: entity.Id("missing-auth-provider")}
+	r := httptest.NewRequest("GET", "http://app.test/", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	h.buildRouteHandler(route, nil, prepare, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("auth failure reached app")
+	})(w, r)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "app error 503")
+}
 
 func TestServeIngressError(t *testing.T) {
 	for _, tt := range []struct {

@@ -1,6 +1,7 @@
 package httpingress
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net"
@@ -39,8 +40,18 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 	// Metrics want the app; the visitor wants the site they opened. The app's
 	// name is an operator's identifier, so "payments-api is down" means nothing
 	// to someone who typed shop.example.com.
-	if appName != nil && *appName == "" {
-		*appName = s.maintenanceAppName(r, appID)
+	var app core_v1alpha.App
+	if !entity.Empty(appID) && s.eac != nil {
+		if gr, err := s.eac.Get(r.Context(), appID.String()); err == nil {
+			app.Decode(gr.Entity().Entity())
+			if appName != nil && *appName == "" {
+				var md core_v1alpha.Metadata
+				md.Decode(gr.Entity().Entity())
+				*appName = md.Name
+			}
+		} else {
+			s.Log.Debug("failed to look up app for maintenance page", "error", err, "app", appID)
+		}
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -50,7 +61,19 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 	}
 
-	if prefersJSON(r.Header.Get("Accept")) {
+	accept := r.Header.Get("Accept")
+	representation := errorRepresentation(accept)
+	if representation == "text/plain" && accept != "" && accept != "*/*" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("Down for maintenance\n"))
+		if maint.Reason != "" {
+			_, _ = w.Write([]byte(maint.Reason + "\n"))
+		}
+		return
+	}
+
+	if representation == "application/json" || prefersJSON(accept) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 
@@ -70,9 +93,6 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusServiceUnavailable)
-
 	data := errorPageData{
 		Status:      http.StatusServiceUnavailable,
 		Site:        visitorHost(r),
@@ -81,9 +101,18 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 		Maintenance: true,
 	}
 
-	if err := errorPage.Execute(w, data); err != nil {
-		s.Log.Debug("failed to render maintenance page", "error", err)
+	page := s.htmlErrorTemplate(r)
+	// Maintenance runs before target preparation. Resolve the active version
+	// only for the optional HTML page; failure never blocks the holding page.
+	if !entity.Empty(app.ActiveVersion) {
+		if resolved, err := s.resolveVersionConfig(r.Context(), app.ActiveVersion, nil); err == nil {
+			target := &resolvedIngressTarget{version: resolved.version, config: &resolved.config}
+			page = s.htmlErrorTemplate(r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target)))
+		}
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write(renderErrorPage(page, s.config.ErrorPageTemplate, data))
 }
 
 // visitorHost is the hostname the visitor actually opened, without its port.
@@ -100,27 +129,6 @@ func visitorHost(r *http.Request) string {
 	}
 
 	return host
-}
-
-// maintenanceAppName resolves the app's name for request metrics, so a window's
-// traffic stays attributed to the app instead of landing in "unknown". It
-// returns an empty string on any failure — a lookup problem must not turn a
-// planned outage into a 500.
-func (s *Server) maintenanceAppName(r *http.Request, appID entity.Id) string {
-	if entity.Empty(appID) {
-		return ""
-	}
-
-	gr, err := s.eac.Get(r.Context(), appID.String())
-	if err != nil {
-		s.Log.Debug("failed to look up app for maintenance page", "error", err, "app", appID)
-		return ""
-	}
-
-	var md core_v1alpha.Metadata
-	md.Decode(gr.Entity().Entity())
-
-	return md.Name
 }
 
 // retryAfterSeconds converts a stored RFC 3339 return time into the

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +104,35 @@ func TestServeStaticArtifact(t *testing.T) {
 	assert.Empty(t, conditional.Body.String())
 }
 
+func TestReadStaticErrorTemplate(t *testing.T) {
+	var contents bytes.Buffer
+	archive := tar.NewWriter(&contents)
+	markup := "<h1>{{.Status}}</h1>"
+	require.NoError(t, archive.WriteHeader(&tar.Header{Name: "errors/page.html", Mode: 0644, Size: int64(len(markup)), Typeflag: tar.TypeReg}))
+	_, err := archive.Write([]byte(markup))
+	require.NoError(t, err)
+	big := strings.Repeat("x", maxErrorTemplateSize+1)
+	require.NoError(t, archive.WriteHeader(&tar.Header{Name: "errors/large.html", Mode: 0644, Size: int64(len(big)), Typeflag: tar.TypeReg}))
+	_, err = archive.Write([]byte(big))
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+	dataPath := t.TempDir()
+	digest, _, err := ocireg.NewBlobStore(dataPath).Put(bytes.NewReader(contents.Bytes()))
+	require.NoError(t, err)
+	server := newArchiveStaticFileServer(dataPath)
+	version := &core_v1alpha.AppVersion{StaticArtifact: digest}
+
+	data, err := server.ReadFile(version, "errors/page.html")
+	require.NoError(t, err)
+	assert.Equal(t, markup, string(data))
+	_, err = server.ReadFile(version, "../errors/page.html")
+	assert.ErrorContains(t, err, "invalid")
+	_, err = server.ReadFile(version, "errors/missing.html")
+	assert.ErrorContains(t, err, "not found")
+	_, err = server.ReadFile(version, "errors/large.html")
+	assert.ErrorContains(t, err, "exceeds")
+}
+
 func TestStaticArchiveIndexCacheIsBounded(t *testing.T) {
 	dataPath := t.TempDir()
 	blobs := ocireg.NewBlobStore(dataPath)
@@ -149,10 +180,11 @@ func TestOversizedStaticArchiveIndexIsCachedAlone(t *testing.T) {
 }
 
 type fakeStaticFiles struct {
-	served bool
-	err    error
-	calls  int
-	body   string
+	served   bool
+	err      error
+	calls    int
+	body     string
+	template []byte
 }
 
 func (f *fakeStaticFiles) ServeFile(w http.ResponseWriter, _ *http.Request, _ *core_v1alpha.AppVersion) (bool, error) {
@@ -161,6 +193,13 @@ func (f *fakeStaticFiles) ServeFile(w http.ResponseWriter, _ *http.Request, _ *c
 		_, _ = fmt.Fprint(w, f.body)
 	}
 	return f.served, f.err
+}
+
+func (f *fakeStaticFiles) ReadFile(_ *core_v1alpha.AppVersion, _ string) ([]byte, error) {
+	if f.template == nil {
+		return nil, os.ErrNotExist
+	}
+	return f.template, f.err
 }
 
 type recordingLogWriter struct {

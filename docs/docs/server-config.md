@@ -92,6 +92,24 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 | `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
 | `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
 | `trusted_proxy_hops` | int | `1` | Number of trusted proxies immediately in front of Miren. Used to select the visitor address from `X-Forwarded-For` under `behind-proxy-http`. | `MIREN_INGRESS_TRUSTED_PROXY_HOPS` | `--ingress-trusted-proxy-hops` |
+| `error_page` | string | — | Absolute path to a cluster-wide HTML error template. Loaded at server startup. | `MIREN_INGRESS_ERROR_PAGE` | — |
+
+### Custom error pages
+
+Set `error_page = "/etc/miren/error.html"` under `[ingress]` to replace the
+built-in HTML page for the cluster. The file must exist and be a valid Go
+`html/template` (up to 128 KiB), or ingress will fail to start. Restart the
+server after changing it. For an app-specific override, see
+[app.toml static error pages](./app-toml.md#static-error-pages).
+
+Templates receive `.Status` (HTTP status number), `.Title`, `.Description`,
+`.Site` (visitor hostname on maintenance pages), `.Reason`, `.BackAt`, and
+`.Maintenance` (boolean). `{{brandLogo}}` renders the built-in Miren logo.
+Use self-contained markup and inline CSS if the page must work when the app
+is unavailable. Only HTML responses use these templates: `Accept` negotiation
+still selects JSON or plain text for API clients. If the app's template is
+missing or cannot render, ingress falls back to the cluster template, then
+to the built-in page. Errors without a resolved app use the cluster template.
 
 ### Modes
 

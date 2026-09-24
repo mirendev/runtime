@@ -314,6 +314,7 @@ func (c *EtcdConfig) SetStartEmbedded(v bool) {
 // IngressConfig HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
 type IngressConfig struct {
 	Address          *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
+	ErrorPage        *string `toml:"error_page" env:"MIREN_INGRESS_ERROR_PAGE"`
 	Mode             *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
 	TrustedProxyHops *int    `toml:"trusted_proxy_hops" env:"MIREN_INGRESS_TRUSTED_PROXY_HOPS"`
 }
@@ -329,6 +330,19 @@ func (c *IngressConfig) GetAddress() string {
 // SetAddress sets the value of Address
 func (c *IngressConfig) SetAddress(v string) {
 	c.Address = &v
+}
+
+// GetErrorPage returns the value of ErrorPage or its zero value if nil
+func (c *IngressConfig) GetErrorPage() string {
+	if c.ErrorPage != nil {
+		return *c.ErrorPage
+	}
+	return ""
+}
+
+// SetErrorPage sets the value of ErrorPage
+func (c *IngressConfig) SetErrorPage(v string) {
+	c.ErrorPage = &v
 }
 
 // GetMode returns the value of Mode or its zero value if nil

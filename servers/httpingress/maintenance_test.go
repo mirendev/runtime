@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -143,6 +144,53 @@ func TestMaintenanceMiddlewareServesHoldingPage(t *testing.T) {
 	assert.Contains(t, body, "Down for maintenance")
 	assert.Contains(t, body, "Upgrading the database")
 	assert.NotContains(t, body, "Try again")
+}
+
+func TestMaintenanceUsesClusterPageAndPlainNegotiation(t *testing.T) {
+	page, err := parseErrorTemplate("<h1>{{.Site}}: {{.Reason}}</h1>")
+	require.NoError(t, err)
+	s := newTestMaintenanceServer()
+	s.config.ErrorPageTemplate = page
+	maint := ingress_v1alpha.Maintenance{Reason: "Upgrade"}
+	for _, tt := range []struct{ accept, want, contentType string }{
+		{"text/html", "<h1>app.example.com: Upgrade</h1>", "text/html"},
+		{"text/plain", "Down for maintenance\nUpgrade\n", "text/plain"},
+		{"application/json", `"error":"maintenance"`, "application/json"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "http://app.example.com/", nil)
+		req.Header.Set("Accept", tt.accept)
+		s.serveMaintenance(rec, req, "", nil, maint)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		assert.Contains(t, rec.Header().Get("Content-Type"), tt.contentType)
+		assert.Contains(t, rec.Body.String(), tt.want)
+	}
+}
+
+func TestMaintenanceUsesActiveAppPage(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	appID, err := inmem.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	cvID, err := inmem.Client.Create(ctx, "cfg", &core_v1alpha.ConfigVersion{
+		App: appID, Spec: core_v1alpha.ConfigSpec{StaticDir: "/app/public", StaticErrorPage: "error.html"},
+	})
+	require.NoError(t, err)
+	verID, err := inmem.Client.Create(ctx, "ver", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cvID})
+	require.NoError(t, err)
+	require.NoError(t, inmem.Client.Update(ctx, &core_v1alpha.App{ID: appID, ActiveVersion: verID}))
+	cluster, err := parseErrorTemplate("<h1>cluster</h1>")
+	require.NoError(t, err)
+	s := &Server{Log: testutils.TestLogger(t), eac: inmem.EAC,
+		config: IngressConfig{ErrorPageTemplate: cluster}, staticFiles: &fakeStaticFiles{template: []byte("<h1>app {{.Site}} {{.Reason}}</h1>")}}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "http://shop.test/", nil)
+	req.Header.Set("Accept", "text/html")
+	s.serveMaintenance(rec, req, appID, nil, ingress_v1alpha.Maintenance{Reason: "Upgrade"})
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<h1>app shop.test Upgrade</h1>")
+	assert.NotContains(t, rec.Body.String(), "cluster")
 }
 
 func TestMaintenanceMiddlewareEscapesOperatorReason(t *testing.T) {
