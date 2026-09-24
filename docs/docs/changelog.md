@@ -9,7 +9,10 @@ keywords: [changelog, releases, updates, version history]
 All notable changes to Miren Runtime will be documented in this file.
 
 ## Unreleased
-*main*
+*release/0.16*
+
+**Bug Fixes**
+- **Cloud stays in sync after a server restart** - On v0.16.0, restarting a server connected to Miren Cloud (a reboot, a crash, a manual restart) could freeze cloud's view of the cluster for up to a day while the server log repeated `entity sync stream interrupted` warnings. Sync now carries on after a restart, and a rejection it can't get past retries once a minute instead of every second. ([#1262](https://github.com/mirendev/runtime/pull/1262))
 
 ---
 
