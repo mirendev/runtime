@@ -1059,6 +1059,13 @@ func TestDeployVersion(t *testing.T) {
 		}
 	})
 
+	t.Run("oversized message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", strings.Repeat("x", deploylifecycle.MaxDeploymentMessageBytes+1))
+		if err == nil || !strings.Contains(err.Error(), "at most 1024 bytes") {
+			t.Fatalf("expected actionable message length error: %v", err)
+		}
+	})
+
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
 		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", "")
 		if err != nil {

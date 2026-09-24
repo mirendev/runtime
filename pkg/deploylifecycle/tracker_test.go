@@ -106,7 +106,7 @@ func TestBeginRejectsOversizedDeploymentMessage(t *testing.T) {
 	require.Nil(t, lock)
 
 	message := strings.Repeat("界", 341) + "x"
-	require.Len(t, []byte(message), maxDeploymentMessageBytes)
+	require.Len(t, []byte(message), MaxDeploymentMessageBytes)
 	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: message})
 	require.NoError(t, err)
 	require.Equal(t, message, rec.Deployment.Message)

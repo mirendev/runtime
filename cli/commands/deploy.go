@@ -339,6 +339,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if opts.Message != "" && opts.Analyze {
 		return fmt.Errorf("--message cannot be used with --analyze (no deployment is created)")
 	}
+	if len(opts.Message) > deploylifecycle.MaxDeploymentMessageBytes {
+		return fmt.Errorf("--message must be at most %d bytes (got %d)", deploylifecycle.MaxDeploymentMessageBytes, len(opts.Message))
+	}
 
 	if ctx.ClientConfig == nil {
 		return fmt.Errorf("no client configuration available; run `miren login` to authenticate or install a server locally")

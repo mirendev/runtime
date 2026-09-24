@@ -27,7 +27,8 @@ const updateRetryLimit = 100
 const maxFailureSummaryBytes = 4 * 1024
 const failureSummaryEllipsis = "…"
 
-const maxDeploymentMessageBytes = 1024
+// MaxDeploymentMessageBytes is the record size limit shared by clients and RPC handlers.
+const MaxDeploymentMessageBytes = 1024
 
 // Tracker is the deployment lifecycle as a set of operations, and the surface
 // the build paths call. It exists so the record is a byproduct of the work
@@ -99,8 +100,8 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		return nil, cond.ValidationFailure("missing-field",
 			"app_name is required to begin a deployment")
 	}
-	if len(params.Message) > maxDeploymentMessageBytes {
-		return nil, cond.ValidationFailure("invalid-message", "deployment message must be at most 1024 bytes")
+	if len(params.Message) > MaxDeploymentMessageBytes {
+		return nil, cond.ValidationFailure("invalid-message", fmt.Sprintf("deployment message must be at most %d bytes", MaxDeploymentMessageBytes))
 	}
 	if params.Operation == "" {
 		params.Operation = OperationBuild

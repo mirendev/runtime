@@ -8,6 +8,7 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
@@ -27,9 +28,15 @@ type buildArgs interface {
 	EphemeralTtl() string
 }
 
-func validateEphemeralMessage(label string, deployment *build_v1alpha.DeployRequest) error {
-	if label != "" && deployment != nil && deployment.Message() != "" {
+func validateDeploymentMessage(label string, deployment *build_v1alpha.DeployRequest) error {
+	if deployment == nil {
+		return nil
+	}
+	if label != "" && deployment.Message() != "" {
 		return cond.ValidationFailure("invalid-message", "deployment message is not supported for ephemeral builds")
+	}
+	if len(deployment.Message()) > deploylifecycle.MaxDeploymentMessageBytes {
+		return cond.ValidationFailure("invalid-message", fmt.Sprintf("deployment message must be at most %d bytes", deploylifecycle.MaxDeploymentMessageBytes))
 	}
 	return nil
 }
@@ -121,7 +128,7 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
-	if err := validateEphemeralMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
+	if err := validateDeploymentMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
 		return err
 	}
 	work := newDeploymentContext(ctx)
@@ -165,7 +172,7 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 // path is ready so the saga's receive-tar action returns it directly.
 func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alpha.BuilderBuildFromPrepared) (retErr error) {
 	args := state.Args()
-	if err := validateEphemeralMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
+	if err := validateDeploymentMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
 		return err
 	}
 	sessionID := args.SessionId()

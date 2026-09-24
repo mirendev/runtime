@@ -55,6 +55,14 @@ func TestDeployMessageRequiresDeploymentRecord(t *testing.T) {
 	}
 }
 
+func TestDeployRejectsOversizedMessageBeforeConnecting(t *testing.T) {
+	message := strings.Repeat("界", 342)
+	err := runDeploy(&Context{}, deployOpts{Message: message}, &deploySummary{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--message must be at most 1024 bytes (got 1026)") {
+		t.Fatalf("expected actionable local message length error, got %v", err)
+	}
+}
+
 func TestDeploymentHistoryShowsMessageSeparatelyFromCommit(t *testing.T) {
 	dep := &deployment_v1alpha.DeploymentInfo{}
 	dep.SetStatus("succeeded")
