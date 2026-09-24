@@ -3,6 +3,7 @@ package httpingress
 import (
 	"context"
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -59,6 +61,41 @@ func TestCustomErrorPagePrecedence(t *testing.T) {
 	}
 }
 
+func TestErrorTemplateRenderLimitFallsBack(t *testing.T) {
+	cluster, err := parseErrorTemplate("<h1>cluster</h1>")
+	require.NoError(t, err)
+	oversized, err := parseErrorTemplate(strings.Repeat("{{brandLogo}}", 30))
+	require.NoError(t, err)
+	assert.Equal(t, "<h1>cluster</h1>", string(renderErrorPage(oversized, cluster, errorPageData{Status: 502})))
+	fallback := string(renderErrorPage(oversized, oversized, errorPageData{Status: 502}))
+	assert.Contains(t, fallback, "Powered by Miren")
+	assert.Equal(t, 1, strings.Count(fallback, "<svg"))
+
+	withinLimit, err := parseErrorTemplate(strings.Repeat("{{brandLogo}}", 2))
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(string(renderErrorPage(withinLimit, cluster, errorPageData{Status: 502})), "<svg"))
+}
+
+func TestAppErrorTemplateCacheUsesDigestAndPath(t *testing.T) {
+	files := &fakeStaticFiles{template: []byte("app {{.Status}}")}
+	cache, err := lru.New[string, *template.Template](2)
+	require.NoError(t, err)
+	h := &Server{Log: testutils.TestLogger(t), staticFiles: files, errorTemplates: cache}
+	target := &resolvedIngressTarget{version: core_v1alpha.AppVersion{StaticArtifact: "sha256:one"},
+		config: &core_v1alpha.ConfigSpec{StaticErrorPage: "error.html"}}
+	r := httptest.NewRequest("GET", "http://app.test/", nil).WithContext(context.WithValue(context.Background(), errorPageTargetKey{}, target))
+	for i := 0; i < 2; i++ {
+		assert.Contains(t, string(renderErrorPage(h.htmlErrorTemplate(r), nil, errorPageData{Status: 502})), "app 502")
+	}
+	assert.Equal(t, 1, files.reads)
+	target.version.StaticArtifact = "sha256:two"
+	h.htmlErrorTemplate(r)
+	target.config.StaticErrorPage = "other.html"
+	h.htmlErrorTemplate(r)
+	assert.Equal(t, 3, files.reads)
+	assert.Equal(t, 2, cache.Len())
+}
+
 func TestLoadErrorPageTemplate(t *testing.T) {
 	_, err := LoadErrorPageTemplate("relative/error.html")
 	assert.ErrorContains(t, err, "absolute path")
@@ -73,6 +110,35 @@ func TestLoadErrorPageTemplate(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte(strings.Repeat("x", maxErrorTemplateSize+1)), 0600))
 	_, err = LoadErrorPageTemplate(file)
 	assert.ErrorContains(t, err, "exceeds")
+}
+
+func TestDocumentedErrorPageTemplate(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/docs/server-config.md")
+	require.NoError(t, err)
+	_, after, ok := strings.Cut(string(doc), "Copy this into `/etc/miren/error.html`")
+	require.True(t, ok)
+	_, after, ok = strings.Cut(after, "```html\n")
+	require.True(t, ok)
+	source, _, ok := strings.Cut(after, "\n```")
+	require.True(t, ok)
+	page, err := parseErrorTemplate(source)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name string
+		data errorPageData
+		want string
+	}{
+		{"ordinary error", errorPageData{Status: 502, Title: "Unavailable", Description: "Try later"}, "<h1>Unavailable</h1>"},
+		{"maintenance", errorPageData{Status: 503, Site: "shop.test", Reason: "Upgrading", BackAt: "12:00 UTC", Maintenance: true}, "shop.test is down for maintenance"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := string(renderErrorPage(page, nil, tt.data))
+			assert.Contains(t, body, tt.want)
+			assert.NotContains(t, body, "{{")
+			assert.NotContains(t, body, "Powered by Miren")
+		})
+	}
 }
 
 func TestAppErrorPageUsedAfterPreparationBeforeAuth(t *testing.T) {
@@ -107,6 +173,7 @@ func TestServeIngressError(t *testing.T) {
 		{"browser proxy error", "text/html", 502, "This app is temporarily unavailable.", "text/html"},
 		{"browser internal error", "text/html", 500, "Something went wrong.", "text/html"},
 		{"API client", "application/json", 503, `"error":"service_unavailable"`, "application/json"},
+		{"vendor JSON client", "application/problem+json", 503, `"error":"service_unavailable"`, "application/json"},
 		{"JSON preferred over HTML", "text/html;q=0.2, application/json;q=0.9", 503, `"error":"service_unavailable"`, "application/json"},
 		{"HTML preferred over JSON", "application/json;q=0.4, text/html;q=0.9", 503, "This app is temporarily unavailable.", "text/html"},
 		{"plain preferred over HTML", "text/html;q=0.1, text/plain;q=1", 503, "private-app-id\n", "text/plain"},

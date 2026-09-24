@@ -121,6 +121,7 @@ type Server struct {
 	// an active-version switch takes effect immediately, while the metrics
 	// privacy check does not add a ConfigVersion lookup to every request.
 	versionConfigs *lru.Cache[entity.Id, *cachedVersionConfig]
+	errorTemplates *lru.Cache[string, *template.Template]
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -203,6 +204,7 @@ func NewServer(
 		staticFiles:       newArchiveStaticFileServer(config.DataPath),
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
+	serv.errorTemplates, _ = lru.New[string, *template.Template](256)
 
 	if httpMetrics == nil {
 		serv.Log.Warn("HTTPMetrics is nil in httpingress")

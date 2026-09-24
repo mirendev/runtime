@@ -13,7 +13,19 @@ import (
 	"strings"
 )
 
-const maxErrorTemplateSize = 128 << 10
+const (
+	maxErrorTemplateSize = 128 << 10
+	maxErrorPageSize     = 256 << 10
+)
+
+type cappedErrorPageBuffer struct{ bytes.Buffer }
+
+func (b *cappedErrorPageBuffer) Write(p []byte) (int, error) {
+	if len(p) > maxErrorPageSize-b.Len() {
+		return 0, fmt.Errorf("error page exceeds %d bytes", maxErrorPageSize)
+	}
+	return b.Buffer.Write(p)
+}
 
 type errorPageTargetKey struct{}
 
@@ -49,11 +61,20 @@ func LoadErrorPageTemplate(filename string) (*template.Template, error) {
 func (h *Server) htmlErrorTemplate(r *http.Request) *template.Template {
 	if target, ok := r.Context().Value(errorPageTargetKey{}).(*resolvedIngressTarget); ok &&
 		target.config != nil && target.config.StaticErrorPage != "" && h.staticFiles != nil {
+		key := target.version.StaticArtifact + "\x00" + target.config.StaticErrorPage
+		if h.errorTemplates != nil && target.version.StaticArtifact != "" {
+			if page, ok := h.errorTemplates.Get(key); ok {
+				return page
+			}
+		}
 		data, err := h.staticFiles.ReadFile(&target.version, target.config.StaticErrorPage)
 		if err == nil {
 			var page *template.Template
 			page, err = parseErrorTemplate(string(data))
 			if err == nil {
+				if h.errorTemplates != nil && target.version.StaticArtifact != "" {
+					h.errorTemplates.Add(key, page)
+				}
 				return page
 			}
 		}
@@ -74,7 +95,7 @@ func (h *Server) serveIngressError(w http.ResponseWriter, r *http.Request, messa
 }
 
 func renderErrorPage(page, cluster *template.Template, data errorPageData) []byte {
-	var buf bytes.Buffer
+	var buf cappedErrorPageBuffer
 	if err := page.Execute(&buf, data); err == nil {
 		return buf.Bytes()
 	}
@@ -180,6 +201,10 @@ func errorRepresentation(accept string) string {
 				specificity = 2
 			case "*/*":
 				specificity = 1
+			default:
+				if offered == "application/json" && strings.HasSuffix(media, "+json") {
+					specificity = 3
+				}
 			}
 			if specificity > preferences[i].specificity || (specificity != 0 && specificity == preferences[i].specificity && q > preferences[i].q) {
 				preferences[i] = preference{q, specificity}

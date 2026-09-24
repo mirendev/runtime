@@ -73,7 +73,7 @@ func (s *Server) serveMaintenance(w http.ResponseWriter, r *http.Request, appID 
 		return
 	}
 
-	if representation == "application/json" || prefersJSON(accept) {
+	if representation == "application/json" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 
@@ -166,28 +166,6 @@ func formatBackAt(backAt string) string {
 	}
 
 	return t.UTC().Format("15:04 UTC on 2 January 2006")
-}
-
-// prefersJSON reports whether the client's Accept header ranks JSON above HTML.
-// An absent or unparseable header means HTML, which is what a browser gets.
-func prefersJSON(accept string) bool {
-	var jsonQ, htmlQ float64
-
-	for _, part := range strings.Split(accept, ",") {
-		media, q := parseMediaRange(part)
-		if media == "" {
-			continue
-		}
-
-		switch {
-		case media == "application/json" || strings.HasSuffix(media, "+json"):
-			jsonQ = math.Max(jsonQ, q)
-		case media == "text/html" || media == "application/xhtml+xml":
-			htmlQ = math.Max(htmlQ, q)
-		}
-	}
-
-	return jsonQ > htmlQ
 }
 
 func parseMediaRange(part string) (string, float64) {

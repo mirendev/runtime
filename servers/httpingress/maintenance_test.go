@@ -261,25 +261,36 @@ func TestMaintenanceMiddlewareServesJSON(t *testing.T) {
 	assert.Equal(t, backAt, body.BackAt)
 }
 
-func TestPrefersJSON(t *testing.T) {
+func TestMaintenanceAcceptNegotiation(t *testing.T) {
+	backAt := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	tests := []struct {
-		accept string
-		want   bool
+		accept, contentType string
 	}{
-		{"", false},
-		{"*/*", false},
-		{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false},
-		{"application/json", true},
-		{"application/json, text/plain, */*", true},
-		{"application/vnd.api+json", true},
-		{"text/html,application/json;q=0.9", false},
-		{"application/json;q=0.9,text/html;q=0.8", true},
-		{"application/json;q=bogus", true},
+		{"", "text/html"},
+		{"*/*", "text/html"},
+		{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "text/html"},
+		{"application/json", "application/json"},
+		{"application/json, text/plain, */*", "application/json"},
+		{"application/problem+json", "application/json"},
+		{"application/vnd.api+json", "application/json"},
+		{"text/plain;q=0.9, application/problem+json;q=0.2", "text/plain"},
+		{"application/problem+json;q=0.9, text/plain;q=0.2", "application/json"},
+		{"text/html,application/json;q=0.9", "text/html"},
+		{"application/json;q=0.9,text/html;q=0.8", "application/json"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.accept, func(t *testing.T) {
-			assert.Equal(t, tt.want, prefersJSON(tt.accept))
+			rec := runMaintenance(t, ingress_v1alpha.Maintenance{Reason: "Upgrading", BackAt: backAt}, tt.accept)
+			assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			assert.Contains(t, rec.Header().Get("Content-Type"), tt.contentType)
+			if tt.contentType == "application/json" {
+				var body struct {
+					BackAt string `json:"back_at"`
+				}
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+				assert.Equal(t, backAt, body.BackAt)
+			}
 		})
 	}
 }

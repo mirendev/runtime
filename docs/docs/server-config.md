@@ -111,6 +111,69 @@ still selects JSON or plain text for API clients. If the app's template is
 missing or cannot render, ingress falls back to the cluster template, then
 to the built-in page. Errors without a resolved app use the cluster template.
 
+For ordinary errors, `.Status`, `.Title`, and `.Description` are set; `.Site`,
+`.Reason`, and `.BackAt` are empty. During maintenance, `.Status` is 503,
+`.Maintenance` is true, `.Site` is the visitor's hostname, `.Reason` is the
+operator's message, and `.BackAt` is a formatted UTC time when provided.
+`.Title` and `.Description` are empty on maintenance pages. These are the only
+template data fields; app IDs, raw failure messages, and request details are
+not exposed. HTML escaping is automatic. Templates must be at most 128 KiB;
+rendered output is capped at 256 KiB and falls back if it exceeds that limit.
+
+Copy this into `/etc/miren/error.html` for a cluster template, or into the
+app's `static.dir` output for an app template. Replace “Example” with your
+brand. It requires no external assets, so it still works during an outage:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Maintenance}}Maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Example</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #fdfaf2; color: #1b1f27;
+      font-family: system-ui, sans-serif; }
+    .page { min-height: 100vh; display: flex; flex-direction: column;
+      padding: 0 clamp(24px, 7vw, 112px); }
+    header, footer { padding: 28px 0; border-bottom: 1px solid #eadfd6; }
+    header { color: #0059ff; font-size: 24px; font-weight: 700; }
+    footer { border-top: 1px solid #eadfd6; border-bottom: 0; color: #656b76; }
+    main { flex: 1; display: flex; align-items: center; padding: 64px 0; }
+    .content { max-width: 760px; }
+    .label { color: #545868; font-size: 13px; font-weight: 700;
+      letter-spacing: .14em; text-transform: uppercase; }
+    h1 { font-size: clamp(40px, 6vw, 72px); line-height: 1.08;
+      letter-spacing: -.04em; overflow-wrap: anywhere; }
+    .detail { color: #545868; font-size: 20px; line-height: 1.6; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #151a23; color: #f4f5f5; }
+      header, footer { border-color: #393e48; }
+      .label, .detail, footer { color: #b6bac1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>Example</header>
+    <main><div class="content">
+      <div class="label">{{if .Maintenance}}Maintenance{{else}}Error {{.Status}}{{end}}</div>
+      {{if .Maintenance}}
+        <h1>{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
+        {{if .Reason}}<p class="detail">{{.Reason}}</p>{{else}}<p class="detail">Please check back soon.</p>{{end}}
+        {{if .BackAt}}<p class="detail">Expected back at {{.BackAt}}.</p>{{end}}
+      {{else}}
+        <h1>{{.Title}}</h1>
+        <p class="detail">{{.Description}}</p>
+      {{end}}
+    </div></main>
+    <footer>Example</footer>
+  </div>
+</body>
+</html>
+```
+
 ### Modes
 
 | Mode | Default bind | TLS terminated | Cert source |

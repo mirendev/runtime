@@ -183,6 +183,7 @@ type fakeStaticFiles struct {
 	served   bool
 	err      error
 	calls    int
+	reads    int
 	body     string
 	template []byte
 }
@@ -196,6 +197,7 @@ func (f *fakeStaticFiles) ServeFile(w http.ResponseWriter, _ *http.Request, _ *c
 }
 
 func (f *fakeStaticFiles) ReadFile(_ *core_v1alpha.AppVersion, _ string) ([]byte, error) {
+	f.reads++
 	if f.template == nil {
 		return nil, os.ErrNotExist
 	}

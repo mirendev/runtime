@@ -77,13 +77,28 @@ func TestCanonicalizeStaticArchiveRemovesVolatileMetadata(t *testing.T) {
 	second := writeArchive(t, time.Unix(200, 0), 2000)
 	firstCanonical := filepath.Join(t.TempDir(), "canonical.tar")
 	secondCanonical := filepath.Join(t.TempDir(), "canonical.tar")
-	require.NoError(t, canonicalizeStaticArchive(first, firstCanonical))
-	require.NoError(t, canonicalizeStaticArchive(second, secondCanonical))
+	require.NoError(t, canonicalizeStaticArchive(first, firstCanonical, ""))
+	require.NoError(t, canonicalizeStaticArchive(second, secondCanonical, ""))
 	firstBytes, err := os.ReadFile(firstCanonical)
 	require.NoError(t, err)
 	secondBytes, err := os.ReadFile(secondCanonical)
 	require.NoError(t, err)
 	assert.True(t, bytes.Equal(firstBytes, secondBytes), "canonical archives should be byte-identical")
+}
+
+func TestStaticErrorPageMustBeInExport(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(source, "errors"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "errors", "page.html"), []byte("<h1>{{.Title}}</h1>"), 0644))
+	archive := filepath.Join(t.TempDir(), "static.tar")
+	require.NoError(t, exportStaticSource(source, "/app", archive))
+	canonical := filepath.Join(t.TempDir(), "canonical.tar")
+	require.NoError(t, canonicalizeStaticArchive(archive, canonical, "errors/page.html"))
+	assert.ErrorContains(t, canonicalizeStaticArchive(archive, canonical, "errors/missing.html"), "not found in static.dir")
+
+	require.NoError(t, os.WriteFile(filepath.Join(source, "errors", "page.html"), bytes.Repeat([]byte("x"), (128<<10)+1), 0644))
+	require.NoError(t, exportStaticSource(source, "/app", archive))
+	assert.ErrorContains(t, canonicalizeStaticArchive(archive, canonical, "errors/page.html"), "exceeds 128 KiB")
 }
 
 func TestExportStaticSourceRejectsPathsOutsideSourceRoot(t *testing.T) {

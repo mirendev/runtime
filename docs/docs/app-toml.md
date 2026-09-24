@@ -130,7 +130,8 @@ error_page = "errors/error.html"
 ```
 
 `error_page` is relative to `static.dir` and must name a file in the build
-output (up to 128 KiB). The file is published as a static file, so do not put
+output (up to 128 KiB). Deployment fails if that file is missing or too large.
+The file is published as a static file, so do not put
 secrets in it. The page is rendered by ingress even when the app sandbox cannot
 start. If your app needs a web process, explicitly declare `[services.web]`:
 setting `static.dir` disables the automatically synthesized web service.
