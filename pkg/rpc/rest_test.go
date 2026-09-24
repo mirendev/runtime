@@ -308,6 +308,10 @@ func (echoLogs) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStre
 	panic("streaming is not exposed over REST")
 }
 
+func (echoLogs) StreamLogChunksV2(ctx context.Context, state *app_v1alpha.LogsStreamLogChunksV2) error {
+	panic("streaming is not exposed over REST")
+}
+
 func TestRESTGatewayTypedQueryParams(t *testing.T) {
 	newServer := func() *httptest.Server {
 		mux := http.NewServeMux()

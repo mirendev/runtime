@@ -64,7 +64,7 @@ var (
 	// appRead: read one app's own state.
 	appRead = perms{
 		"appstatus": set("appinfo"),
-		"logs":      set("applogs", "streamlogs", "streamlogchunks"),
+		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),

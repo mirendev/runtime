@@ -5017,6 +5017,128 @@ func (v *LogsStreamLogChunksResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type logsStreamLogChunksV2ArgsData struct {
+	Target *LogTarget          `cbor:"0,keyasint,omitempty" json:"target,omitempty"`
+	From   *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
+	Follow *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
+	Filter *string             `cbor:"3,keyasint,omitempty" json:"filter,omitempty"`
+	Grep   *string             `cbor:"4,keyasint,omitempty" json:"grep,omitempty"`
+	Chunks *rpc.Capability     `cbor:"5,keyasint,omitempty" json:"chunks,omitempty"`
+	To     *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"to,omitempty"`
+}
+
+type LogsStreamLogChunksV2Args struct {
+	call rpc.Call
+	data logsStreamLogChunksV2ArgsData
+}
+
+func (v *LogsStreamLogChunksV2Args) HasTarget() bool {
+	return v.data.Target != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Target() *LogTarget {
+	return v.data.Target
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFrom() bool {
+	return v.data.From != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) From() *standard.Timestamp {
+	return v.data.From
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFollow() bool {
+	return v.data.Follow != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Follow() bool {
+	if v.data.Follow == nil {
+		return false
+	}
+	return *v.data.Follow
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFilter() bool {
+	return v.data.Filter != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Filter() string {
+	if v.data.Filter == nil {
+		return ""
+	}
+	return *v.data.Filter
+}
+
+func (v *LogsStreamLogChunksV2Args) HasGrep() bool {
+	return v.data.Grep != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Grep() string {
+	if v.data.Grep == nil {
+		return ""
+	}
+	return *v.data.Grep
+}
+
+func (v *LogsStreamLogChunksV2Args) HasChunks() bool {
+	return v.data.Chunks != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Chunks() *stream.SendStreamClient[*LogChunk] {
+	if v.data.Chunks == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*LogChunk]{Client: v.call.NewClient(v.data.Chunks)}
+}
+
+func (v *LogsStreamLogChunksV2Args) HasTo() bool {
+	return v.data.To != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) To() *standard.Timestamp {
+	return v.data.To
+}
+
+func (v *LogsStreamLogChunksV2Args) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logsStreamLogChunksV2ResultsData struct{}
+
+type LogsStreamLogChunksV2Results struct {
+	call rpc.Call
+	data logsStreamLogChunksV2ResultsData
+}
+
+func (v *LogsStreamLogChunksV2Results) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type LogsAppLogs struct {
 	rpc.Call
 	args    LogsAppLogsArgs
@@ -5121,11 +5243,38 @@ func (t *LogsStreamLogChunks) Results() *LogsStreamLogChunksResults {
 	return results
 }
 
+type LogsStreamLogChunksV2 struct {
+	rpc.Call
+	args    LogsStreamLogChunksV2Args
+	results LogsStreamLogChunksV2Results
+}
+
+func (t *LogsStreamLogChunksV2) Args() *LogsStreamLogChunksV2Args {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LogsStreamLogChunksV2) Results() *LogsStreamLogChunksV2Results {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Logs interface {
 	AppLogs(ctx context.Context, state *LogsAppLogs) error
 	SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error
 	StreamLogs(ctx context.Context, state *LogsStreamLogs) error
 	StreamLogChunks(ctx context.Context, state *LogsStreamLogChunks) error
+	StreamLogChunksV2(ctx context.Context, state *LogsStreamLogChunksV2) error
 }
 
 type reexportLogs struct {
@@ -5145,6 +5294,10 @@ func (reexportLogs) StreamLogs(ctx context.Context, state *LogsStreamLogs) error
 }
 
 func (reexportLogs) StreamLogChunks(ctx context.Context, state *LogsStreamLogChunks) error {
+	panic("not implemented")
+}
+
+func (reexportLogs) StreamLogChunksV2(ctx context.Context, state *LogsStreamLogChunksV2) error {
 	panic("not implemented")
 }
 
@@ -5212,6 +5365,16 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Params:        []string{"target", "from", "follow", "filter", "chunks", "to"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogChunks(ctx, &LogsStreamLogChunks{Call: call})
+			},
+		},
+		{
+			Name:          "streamLogChunksV2",
+			InterfaceName: "Logs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"target", "from", "follow", "filter", "grep", "chunks", "to"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.StreamLogChunksV2(ctx, &LogsStreamLogChunksV2{Call: call})
 			},
 		},
 	}
@@ -5349,6 +5512,36 @@ func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from
 	}
 
 	return &LogsClientStreamLogChunksResults{client: v.Client, data: ret}, nil
+}
+
+type LogsClientStreamLogChunksV2Results struct {
+	client rpc.Client
+	data   logsStreamLogChunksV2ResultsData
+}
+
+func (v LogsClient) StreamLogChunksV2(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, filter string, grep string, chunks stream.SendStream[*LogChunk], to *standard.Timestamp) (*LogsClientStreamLogChunksV2Results, error) {
+	args := LogsStreamLogChunksV2Args{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.Target = target
+	args.data.From = from
+	args.data.Follow = &follow
+	args.data.Filter = &filter
+	args.data.Grep = &grep
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*LogChunk](chunks), chunks)
+		args.data.Chunks = c
+		caps[oid] = ic
+	}
+	args.data.To = to
+
+	var ret logsStreamLogChunksV2ResultsData
+
+	err := v.CallWithCaps(ctx, "streamLogChunksV2", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LogsClientStreamLogChunksV2Results{client: v.Client, data: ret}, nil
 }
 
 type disksNewArgsData struct {
