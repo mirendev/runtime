@@ -49,21 +49,28 @@ Logs ingested after the backup was taken will not appear in the restored store;
 they remain in the moved-aside directory. Miren does not delete backups or
 replaced directories automatically. If a spec is revisited, a subsequent image
 upgrade refreshes its backup from current stopped data and retains the older
-copy with a `.superseded-<timestamp>` suffix. After the rollback window, remove stale
-ones **only after** verifying which snapshots are still needed. In particular,
-`backup-legacy` is needed to roll back to a pre-backup Miren release; remove it
-only after accepting that rollback is no longer possible. Remove old
-`superseded-*` and `replaced-*` directories once their historical logs and
-forward-retry data are no longer needed. Deletion is manual because Miren
-cannot infer when an operator has closed the rollback window.
+copy with a `.superseded-<timestamp>` suffix. There is no automatic newest-three
+limit: port or retention changes also create backups, so a count-only limit
+could delete the only snapshot of an earlier image needed for rollback. Monitor
+disk use and remove stale backups **only after** verifying which image snapshots
+are still needed. In particular, `backup-legacy` is needed to roll back to a
+pre-backup Miren release; remove it only after accepting that rollback is no
+longer possible. Remove old `superseded-*` and `replaced-*` directories once
+their historical logs and forward-retry data are no longer needed. Deletion is
+manual because Miren cannot infer when an operator has closed the rollback
+window.
 
 :::danger[Rolling back to a pre-backup Miren release]
 
 An older Miren binary does not understand these backups. In particular, a
 rollback to a release embedding VictoriaLogs v1.0 is **not** a binary-only
-rollback: it cannot safely open the v1.52 directory. Stop Miren, verify that
-VictoriaLogs and its container/rootfs snapshot have stopped and been removed,
-move the upgraded data directory aside, then restore the stopped
+rollback: it cannot safely open the v1.52 directory. This also applies when
+`miren upgrade` automatically rolls back to that release after VictoriaLogs
+has migrated its data; the old server may fail to start with
+`FATAL: unsupported part format version` in the VictoriaLogs logs. The
+automatic rollback does not restore the VictoriaLogs backup. Stop Miren,
+verify that VictoriaLogs and its container/rootfs snapshot have stopped and
+been removed, move the upgraded data directory aside, then restore the stopped
 `victorialogs.backup-legacy` directory to `victorialogs` while preserving its
 ownership and permissions. Only then start the old Miren release. If the
 backup is absent or cannot be restored, do not start the old binary on the
