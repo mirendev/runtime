@@ -71,6 +71,7 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 		AppName:   "web",
 		ClusterID: "prod",
 		GitInfo:   core_v1alpha.GitInfo{Sha: "abc123", Branch: "main"},
+		Message:   "ship the new UI",
 	})
 	require.NoError(t, err)
 
@@ -80,12 +81,35 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, entity.Id("app/web"), rec.AppID())
 	assert.Equal(t, string(PhasePreparing), rec.Deployment.Phase)
 	assert.Equal(t, "abc123", rec.Deployment.GitInfo.Sha)
+	assert.Equal(t, "ship the new UI", rec.Deployment.Message)
 	assert.Equal(t, clock.Now().Format(time.RFC3339), rec.Deployment.DeployedBy.Timestamp)
 	assert.Empty(t, rec.AppVersion(), "a forward deploy has no version until the build makes one")
 
 	holder, err := tr.Locks().Get(ctx, "web")
 	require.NoError(t, err)
 	assert.Equal(t, string(rec.Deployment.ID), holder.DeploymentID)
+}
+
+func TestBeginRejectsOversizedDeploymentMessage(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	// The limit is in bytes, not runes: 341 three-byte runes fit, 342 do not.
+	tooLong := strings.Repeat("界", 342)
+	_, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: tooLong})
+	require.ErrorContains(t, err, "at most 1024 bytes")
+	records, err := tr.Store().List(ctx, Query{AppName: "web"})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	lock, err := tr.Locks().Blocking(ctx, "web")
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	message := strings.Repeat("界", 341) + "x"
+	require.Len(t, []byte(message), MaxDeploymentMessageBytes)
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: message})
+	require.NoError(t, err)
+	require.Equal(t, message, rec.Deployment.Message)
 }
 
 func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {

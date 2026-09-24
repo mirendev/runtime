@@ -207,6 +207,9 @@ interfaces:
           - name: ephemeral_ttl
             type: string
             doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
+          - name: message
+            type: string
+            doc: User-supplied description of this deployment (optional)
         results:
           - name: deployment
             type: DeploymentInfo
@@ -385,6 +388,10 @@ types:
         type: string
         index: 24
         doc: Short human-friendly ID for the app version
+      - name: message
+        type: string
+        index: 25
+        doc: User-supplied description of this deployment
 
   - type: GitInfo
     doc: Git repository information

@@ -35,6 +35,7 @@ exports:
           - dev.miren.core/deployment.phase
           - dev.miren.core/deployment.started_at
           - dev.miren.core/deployment.completed_at
+          - dev.miren.core/deployment.message
           - dev.miren.core/deployed_by.subject
           - dev.miren.core/deployed_by.auth_method
           - dev.miren.core/deployed_by.organization_id
@@ -414,6 +415,10 @@ kinds:
     completed_at:
       type: string
       doc: RFC3339 time when the attempt reached a terminal outcome
+
+    message:
+      type: string
+      doc: User-supplied description of this deployment
 
     app_name:
       type: string

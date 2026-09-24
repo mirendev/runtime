@@ -9,6 +9,19 @@ import (
 )
 
 const gitHubActionsIssuer = "https://token.actions.githubusercontent.com"
+const ciBindingPrefix = "oidc_binding/"
+
+func ciBindingID(id string) string {
+	return strings.TrimPrefix(id, ciBindingPrefix)
+}
+
+func ciBindingEntityID(id string) (string, error) {
+	bare := ciBindingID(id)
+	if strings.Contains(bare, "/") {
+		return "", fmt.Errorf("invalid CI authentication binding ID %q", id)
+	}
+	return ciBindingPrefix + bare, nil
+}
 
 func AuthCIAdd(ctx *Context, opts struct {
 	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)"`
@@ -67,7 +80,7 @@ func AuthCIAdd(ctx *Context, opts struct {
 	b := resp.Binding()
 
 	items := []ui.NamedValue{
-		ui.NewNamedValue("ID", b.Id()),
+		ui.NewNamedValue("ID", ciBindingID(b.Id())),
 		ui.NewNamedValue("App", b.App()),
 		ui.NewNamedValue("Provider", b.Provider()),
 		ui.NewNamedValue("Issuer", b.Issuer()),
@@ -132,7 +145,7 @@ func AuthCIList(ctx *Context, opts struct {
 			}
 		}
 		rows = append(rows, ui.Row{
-			b.Id(),
+			ciBindingID(b.Id()),
 			b.Provider(),
 			b.Issuer(),
 			b.SubjectPattern(),
@@ -157,6 +170,10 @@ func AuthCIRemove(ctx *Context, opts struct {
 	if opts.ID == "" {
 		return fmt.Errorf("binding ID is required")
 	}
+	entityID, err := ciBindingEntityID(opts.ID)
+	if err != nil {
+		return err
+	}
 
 	client, err := ctx.RPCClient("dev.miren.runtime/oidc-bindings")
 	if err != nil {
@@ -166,16 +183,17 @@ func AuthCIRemove(ctx *Context, opts struct {
 
 	oc := oidcbinding_v1alpha.NewOidcBindingsClient(client)
 
-	resp, err := oc.Remove(ctx, opts.ID)
+	resp, err := oc.Remove(ctx, entityID)
 	if err != nil {
 		return err
 	}
 
 	if resp.HasError() && resp.Error() != "" {
-		return fmt.Errorf("%s", resp.Error())
+		message := strings.Replace(resp.Error(), fmt.Sprintf("%q", entityID), fmt.Sprintf("%q", ciBindingID(opts.ID)), 1)
+		return fmt.Errorf("%s", message)
 	}
 
-	ctx.Printf("Removed CI authentication binding %s\n", opts.ID)
+	ctx.Printf("Removed CI authentication binding %s\n", ciBindingID(opts.ID))
 	return nil
 }
 
