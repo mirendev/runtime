@@ -131,15 +131,21 @@ func fetchServiceHealth(ctx *Context, app string) ([]serviceHealth, error) {
 	if err := entityserver.NewClient(ctx.Log, eac).Get(ctx, app, &appEntity); err != nil {
 		return nil, fmt.Errorf("get app %q: %w", app, err)
 	}
-	poolRes, err := eac.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appEntity.ID))
-	if err != nil {
-		return nil, err
-	}
 	var pools []compute_v1alpha.SandboxPool
-	for _, entry := range poolRes.Values() {
-		var pool compute_v1alpha.SandboxPool
-		pool.Decode(entry.Entity())
-		pools = append(pools, pool)
+	for cursor := ""; ; {
+		page, err := eac.ListPage(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appEntity.ID), cursor, 200)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range page.Values() {
+			var pool compute_v1alpha.SandboxPool
+			pool.Decode(entry.Entity())
+			pools = append(pools, pool)
+		}
+		cursor = page.Cursor()
+		if cursor == "" {
+			break
+		}
 	}
 	pools = activeServicePools(pools, appEntity.ActiveVersion)
 	if len(pools) == 0 {
