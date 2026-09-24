@@ -18,6 +18,7 @@ import (
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/errorpage"
 )
 
 func TestCustomErrorPagePrecedence(t *testing.T) {
@@ -76,6 +77,32 @@ func TestErrorTemplateRenderLimitFallsBack(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(string(renderErrorPage(withinLimit, cluster, errorPageData{Status: 502})), "<svg"))
 }
 
+func TestAppErrorTemplateRejectsUnboundedWork(t *testing.T) {
+	cluster, err := parseErrorTemplate("<h1>cluster</h1>")
+	require.NoError(t, err)
+	for _, source := range []string{
+		`{{define "empty"}}{{end}}{{template "empty"}}`,
+		`{{range .Description}}{{.}}{{end}}`,
+		`{{printf "%1000000000s" "x"}}`,
+		`{{if printf "%1000000000s" "x"}}hi{{end}}`,
+	} {
+		_, err := errorpage.ParseApp(source, brandLogo)
+		assert.ErrorContains(t, err, "cannot use define, block, template, range, or printf")
+		files := &fakeStaticFiles{template: []byte(source)}
+		h := &Server{Log: testutils.TestLogger(t), config: IngressConfig{ErrorPageTemplate: cluster}, staticFiles: files}
+		target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{StaticErrorPage: "error.html"}}
+		r := httptest.NewRequest("GET", "http://app.test/", nil)
+		r.Header.Set("Accept", "text/html")
+		r = r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target))
+		w := httptest.NewRecorder()
+		h.serveIngressError(w, r, "private-id", http.StatusBadGateway)
+		assert.Equal(t, "<h1>cluster</h1>", w.Body.String())
+	}
+	page, err := errorpage.ParseApp("{{if .Maintenance}}Later{{else}}{{with .Title}}{{.}}{{end}}{{end}}", brandLogo)
+	require.NoError(t, err)
+	assert.Equal(t, "Unavailable", string(renderErrorPage(page, cluster, errorPageData{Title: "Unavailable"})))
+}
+
 func TestAppErrorTemplateCacheUsesDigestAndPath(t *testing.T) {
 	files := &fakeStaticFiles{template: []byte("app {{.Status}}")}
 	cache, err := lru.New[string, *template.Template](2)
@@ -122,6 +149,8 @@ func TestDocumentedErrorPageTemplate(t *testing.T) {
 	source, _, ok := strings.Cut(after, "\n```")
 	require.True(t, ok)
 	page, err := parseErrorTemplate(source)
+	require.NoError(t, err)
+	_, err = errorpage.ParseApp(source, brandLogo)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {

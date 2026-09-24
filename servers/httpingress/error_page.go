@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"miren.dev/runtime/pkg/errorpage"
 )
 
 const (
@@ -30,12 +32,7 @@ func (b *cappedErrorPageBuffer) Write(p []byte) (int, error) {
 type errorPageTargetKey struct{}
 
 func parseErrorTemplate(src string) (*template.Template, error) {
-	if strings.TrimSpace(src) == "" {
-		return nil, fmt.Errorf("error page template is empty")
-	}
-	return template.New("ingress-error").Funcs(template.FuncMap{
-		"brandLogo": func() template.HTML { return brandLogo },
-	}).Parse(src)
+	return errorpage.Parse(src, brandLogo)
 }
 
 // LoadErrorPageTemplate validates an operator's cluster template at startup.
@@ -70,7 +67,7 @@ func (h *Server) htmlErrorTemplate(r *http.Request) *template.Template {
 		data, err := h.staticFiles.ReadFile(&target.version, target.config.StaticErrorPage)
 		if err == nil {
 			var page *template.Template
-			page, err = parseErrorTemplate(string(data))
+			page, err = errorpage.ParseApp(string(data), brandLogo)
 			if err == nil {
 				if h.errorTemplates != nil && target.version.StaticArtifact != "" {
 					h.errorTemplates.Add(key, page)

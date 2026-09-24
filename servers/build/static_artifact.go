@@ -12,6 +12,7 @@ import (
 
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/pkg/errorpage"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -138,6 +139,19 @@ func canonicalizeStaticArchive(source, destination, errorPage string) error {
 			return fmt.Errorf("writing canonical static archive: %w", err)
 		}
 		if canonical.Typeflag == tar.TypeReg {
+			if errorPage != "" && path.Clean(strings.TrimPrefix(header.Name, "./")) == errorPage {
+				data, err := io.ReadAll(reader)
+				if err != nil {
+					return fmt.Errorf("reading static.error_page %q: %w", errorPage, err)
+				}
+				if _, err := errorpage.ParseApp(string(data), ""); err != nil {
+					return fmt.Errorf("invalid static.error_page %q: %w", errorPage, err)
+				}
+				if _, err := archive.Write(data); err != nil {
+					return fmt.Errorf("writing static.error_page %q: %w", errorPage, err)
+				}
+				continue
+			}
 			if _, err := io.CopyN(archive, reader, canonical.Size); err != nil {
 				return fmt.Errorf("copying static file into canonical archive: %w", err)
 			}

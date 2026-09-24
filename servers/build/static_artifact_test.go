@@ -99,6 +99,17 @@ func TestStaticErrorPageMustBeInExport(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(source, "errors", "page.html"), bytes.Repeat([]byte("x"), (128<<10)+1), 0644))
 	require.NoError(t, exportStaticSource(source, "/app", archive))
 	assert.ErrorContains(t, canonicalizeStaticArchive(archive, canonical, "errors/page.html"), "exceeds 128 KiB")
+
+	for _, tt := range []struct{ source, want string }{
+		{"{{if", "unclosed"},
+		{`{{define "leaf"}}{{end}}{{template "leaf"}}`, "cannot use define, block, template, range, or printf"},
+		{`{{range .Description}}{{.}}{{end}}`, "cannot use define, block, template, range, or printf"},
+		{`{{printf "%1000000000s" "x"}}`, "cannot use define, block, template, range, or printf"},
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(source, "errors", "page.html"), []byte(tt.source), 0644))
+		require.NoError(t, exportStaticSource(source, "/app", archive))
+		assert.ErrorContains(t, canonicalizeStaticArchive(archive, canonical, "errors/page.html"), tt.want)
+	}
 }
 
 func TestExportStaticSourceRejectsPathsOutsideSourceRoot(t *testing.T) {
