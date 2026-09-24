@@ -612,6 +612,12 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
+	if args.EphemeralLabel() != "" && args.Message() != "" {
+		return cond.ValidationFailure("invalid-message", "deployment message is not supported for ephemeral versions")
+	}
+	if len(args.Message()) > deploylifecycle.MaxDeploymentMessageBytes {
+		return cond.ValidationFailure("invalid-message", fmt.Sprintf("deployment message must be at most %d bytes", deploylifecycle.MaxDeploymentMessageBytes))
+	}
 
 	// Verify the AppVersion entity exists
 	var appVersion core_v1alpha.AppVersion
@@ -768,6 +774,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		Operation:          operation,
 		AppVersion:         appVersionId,
 		GitInfo:            gitInfo,
+		Message:            args.Message(),
 		ParentDeploymentID: parentDeploymentID,
 	})
 	if err != nil {
@@ -1180,6 +1187,9 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment,
 	}
 	info.SetStatus(string(status))
 	info.SetPhase(string(rec.Phase()))
+	if deployment.Message != "" {
+		info.SetMessage(deployment.Message)
+	}
 	info.SetDeployedByUserId(deployment.DeployedBy.UserId)
 	info.SetDeployedByUserName(deployment.DeployedBy.UserName)
 	info.SetDeployedByUserEmail(deployment.DeployedBy.UserEmail)

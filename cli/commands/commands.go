@@ -1466,6 +1466,8 @@ miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
 
+Use ` + "`" + `-m "describe this deploy"` + "`" + ` to attach a description to this deployment (including an existing-version deploy). It appears in ` + "`" + `miren app history` + "`" + ` and is separate from the Git commit message.
+
 ## Scripting and CI
 
 When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:

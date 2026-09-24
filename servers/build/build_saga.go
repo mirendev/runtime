@@ -809,6 +809,7 @@ type beginDeploymentIn struct {
 	StreamID       string `json:"stream_id" saga:"stream_id"`
 	ClusterID      string `json:"deploy_cluster_id,omitempty" saga:"deploy_cluster_id,optional"`
 	GitInfo        string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+	Message        string `json:"deploy_message,omitempty" saga:"deploy_message,optional"`
 	Subject        string `json:"deploy_subject,omitempty" saga:"deploy_subject,optional"`
 	AuthMethod     string `json:"deploy_auth_method,omitempty" saga:"deploy_auth_method,optional"`
 	OrganizationID string `json:"deploy_organization_id,omitempty" saga:"deploy_organization_id,optional"`
@@ -840,6 +841,7 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 		ClusterID:      in.ClusterID,
 		Operation:      deploylifecycle.OperationBuild,
 		GitInfo:        gitInfo,
+		Message:        in.Message,
 		Subject:        in.Subject,
 		AuthMethod:     in.AuthMethod,
 		OrganizationID: in.OrganizationID,
