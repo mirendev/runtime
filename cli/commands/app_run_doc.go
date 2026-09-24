@@ -4,6 +4,10 @@ const appRunDescription = `This command runs a command in a fresh sandbox built 
 
 With no arguments it opens an interactive shell. With arguments it runs that command. With ` + "`" + `--task` + "`" + ` it runs a task declared in ` + "`" + `app.toml` + "`" + `.
 
+Commands containing shell syntax (such as ` + "`" + `$HOME` + "`" + `, ` + "`" + `|` + "`" + `, or ` + "`" + `>` + "`" + `) run through ` + "`" + `/bin/sh -c` + "`" + ` so expansions, pipelines, and redirects work. Other commands retain their argument boundaries without shell interpretation.
+
+Quote the expression for your local shell so it reaches Miren intact: ` + "`" + `miren app run -- 'echo $HOME | wc -c'` + "`" + `. Shell expressions require a cluster that supports durable runs; older clusters cannot safely preserve them.
+
 This is useful for:
 - Debugging application issues in an isolated environment
 - Running one-off commands with your app's configuration

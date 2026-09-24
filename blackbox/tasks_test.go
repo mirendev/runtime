@@ -261,6 +261,24 @@ func TestRunPreservesArgumentBoundaries(t *testing.T) {
 	if !strings.Contains(r.Stdout, "hello   world") {
 		t.Fatalf("argument boundaries were lost; want \"hello   world\" in output, got:\n%s", r.Stdout)
 	}
+
+	r = m.MustRun("app", "run", "-a", name, "--", "printf", "%s", "hello world", "|", "wc", "-c")
+	if strings.TrimSpace(r.Stdout) != "11" {
+		t.Fatalf("shell pipeline did not preserve the spaced argument; want 11, got:\n%s", r.Stdout)
+	}
+
+	r = m.MustRun("app", "run", "-a", name, "--", "echo", "$MIREN_APP")
+	if strings.TrimSpace(r.Stdout) != name {
+		t.Fatalf("shell variable did not expand; want %q, got:\n%s", name, r.Stdout)
+	}
+
+	r = m.MustRun("app", "run", "-a", name, "--", "printf 'redirected' > /tmp/miren-run-redirect; cat /tmp/miren-run-redirect")
+	if strings.TrimSpace(r.Stdout) != "redirected" {
+		t.Fatalf("shell redirection did not write a readable file; got:\n%s", r.Stdout)
+	}
+
+	r = m.Run("app", "run", "-a", name, "--", "exit 7")
+	r.RequireExitCode(t, 7)
 }
 
 // [tasks.<name>.env] has to reach the container. A task names no service, so

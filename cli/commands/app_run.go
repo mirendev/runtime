@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,6 +55,9 @@ func AppRun(ctx *Context, opts struct {
 			if opts.Task != "" || opts.Detach {
 				return fmt.Errorf("--task and --detach need a newer cluster that supports durable runs; a plain `miren app run` still works against this one")
 			}
+			if err := legacyRunCommandCheck(opts.Args); err != nil {
+				return err
+			}
 			return appRunLegacy(ctx, opts.App, opts.Args)
 		}
 		return err
@@ -65,7 +70,7 @@ func AppRun(ctx *Context, opts struct {
 	// separate for whatever is reading them.
 	wantTTY := !opts.Detach && stdinIsTerminal()
 
-	created, err := runs.CreateRun(ctx, opts.App, opts.Task, opts.Args, wantTTY)
+	created, err := runs.CreateRun(ctx, opts.App, opts.Task, runCommand(opts.Args), wantTTY)
 	if err != nil {
 		return err
 	}
@@ -88,6 +93,60 @@ func AppRun(ctx *Context, opts struct {
 	}
 
 	return reportRunExit(ctx, runs, runID)
+}
+
+// runCommand keeps ordinary argv intact, but lets shell expressions be parsed
+// by a shell. Quote plain arguments inside an expression so an unrelated space
+// in an argument does not turn it into multiple words.
+func runCommand(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	if len(args) == 1 && strings.ContainsAny(args[0], " \t") {
+		return []string{"/bin/sh", "-c", args[0]}
+	}
+
+	// An explicit shell already owns parsing its -c argument, including when
+	// -c is combined with other flags or follows separate options.
+	if len(args) >= 3 {
+		switch filepath.Base(args[0]) {
+		case "sh", "bash", "dash", "ash", "ksh", "zsh":
+			for _, option := range args[1 : len(args)-1] {
+				if !strings.HasPrefix(option, "-") || option == "--" {
+					break
+				}
+				if strings.Contains(option[1:], "c") {
+					return args
+				}
+			}
+		}
+	}
+
+	const shellSyntax = "$|&;<>()`\\*?[]{}~\n"
+	usesShell := false
+	parts := make([]string, len(args))
+	for i, arg := range args {
+		if strings.ContainsAny(arg, shellSyntax) {
+			usesShell = true
+			parts[i] = arg
+		} else {
+			parts[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+		}
+	}
+	if !usesShell {
+		return args
+	}
+	return []string{"/bin/sh", "-c", strings.Join(parts, " ")}
+}
+
+func legacyRunCommandCheck(args []string) error {
+	// Old servers join argv into shell source when the app has an entrypoint.
+	// There is no way to preserve a -c script argument both there and on
+	// images without an entrypoint, so do not silently run a different command.
+	if !slices.Equal(runCommand(args), args) {
+		return fmt.Errorf("shell expressions in `miren app run` require a newer cluster; this cluster cannot safely preserve the command")
+	}
+	return nil
 }
 
 // serverPredatesRuns reports whether a runsClient error means the cluster is
