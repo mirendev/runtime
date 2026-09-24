@@ -120,9 +120,11 @@ template data fields; app IDs, raw failure messages, and request details are
 not exposed. HTML escaping is automatic. Templates must be at most 128 KiB;
 rendered output is capped at 256 KiB and falls back if it exceeds that limit.
 App templates are also checked at deployment: they may use `if` and `with`,
-but not `define`, `block`, `template`, `range`, or `printf` actions. This prevents
-an app from doing unbounded work in the shared ingress process. Cluster templates may
-use the full Go template syntax.
+but not `define`, `block`, `template`, or `range` actions. Only `brandLogo`,
+`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`, `not`, and `len` are available
+as functions. This prevents expressions from growing without writing output
+in the shared ingress process. Cluster templates may use the full Go template
+syntax.
 
 Copy this into `/etc/miren/error.html` for a cluster template, or into the
 app's `static.dir` output for an app template. Replace “Example” with your

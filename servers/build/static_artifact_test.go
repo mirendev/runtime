@@ -102,9 +102,11 @@ func TestStaticErrorPageMustBeInExport(t *testing.T) {
 
 	for _, tt := range []struct{ source, want string }{
 		{"{{if", "unclosed"},
-		{`{{define "leaf"}}{{end}}{{template "leaf"}}`, "cannot use define, block, template, range, or printf"},
-		{`{{range .Description}}{{.}}{{end}}`, "cannot use define, block, template, range, or printf"},
-		{`{{printf "%1000000000s" "x"}}`, "cannot use define, block, template, range, or printf"},
+		{`{{define "leaf"}}{{end}}{{template "leaf"}}`, "unsupported action or function"},
+		{`{{range .Description}}{{.}}{{end}}`, "unsupported action or function"},
+		{`{{printf "%1000000000s" "x"}}`, "unsupported action or function"},
+		{`{{if js (js "'")}}ok{{end}}`, "unsupported action or function"},
+		{`{{$x := "a"}}{{$x = print $x $x}}`, "unsupported action or function"},
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(source, "errors", "page.html"), []byte(tt.source), 0644))
 		require.NoError(t, exportStaticSource(source, "/app", archive))

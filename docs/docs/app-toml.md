@@ -132,8 +132,10 @@ error_page = "errors/error.html"
 `error_page` is relative to `static.dir` and must name a file in the build
 output (up to 128 KiB). Deployment fails if that file is missing, too large,
 or not a valid app error template. App templates may use `if` and `with`, but
-not `define`, `block`, `template`, `range`, or `printf` actions; this bounds work
-in the shared ingress process. Cluster templates are not subject to this restriction.
+not `define`, `block`, `template`, or `range` actions. The only permitted
+functions are `brandLogo`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`, `not`,
+and `len`; this prevents expressions from growing without writing output in
+the shared ingress process. Cluster templates are not subject to this restriction.
 The file is published as a static file, so do not put
 secrets in it. The page is rendered by ingress even when the app sandbox cannot
 start. If your app needs a web process, explicitly declare `[services.web]`:

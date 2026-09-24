@@ -24,7 +24,7 @@ func ParseApp(src string, logo template.HTML) (*template.Template, error) {
 		return nil, err
 	}
 	if len(page.Templates()) != 1 || !bounded(page.Tree.Root) {
-		return nil, fmt.Errorf("app error page cannot use define, block, template, range, or printf actions")
+		return nil, fmt.Errorf("app error page uses an unsupported action or function; only if, with, brandLogo, comparisons, and/or/not, and len are allowed")
 	}
 	return page, nil
 }
@@ -54,8 +54,12 @@ func bounded(node parse.Node) bool {
 		}
 	case *parse.CommandNode:
 		for _, arg := range n.Args {
-			if ident, ok := arg.(*parse.IdentifierNode); ok && ident.Ident == "printf" {
-				return false // A huge width allocates before the output cap sees a write.
+			if ident, ok := arg.(*parse.IdentifierNode); ok {
+				switch ident.Ident {
+				case "brandLogo", "eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not", "len":
+				default:
+					return false
+				}
 			}
 			if !bounded(arg) {
 				return false

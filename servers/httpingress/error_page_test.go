@@ -85,9 +85,12 @@ func TestAppErrorTemplateRejectsUnboundedWork(t *testing.T) {
 		`{{range .Description}}{{.}}{{end}}`,
 		`{{printf "%1000000000s" "x"}}`,
 		`{{if printf "%1000000000s" "x"}}hi{{end}}`,
+		"{{if " + strings.Repeat("js (", 45) + `"'"` + strings.Repeat(")", 45) + "}}ok{{end}}",
+		`{{$x := "aaaaaaaa"}}` + strings.Repeat(`{{$x = print $x $x}}`, 40),
+		strings.Repeat("{{with print . .}}", 40) + "ok" + strings.Repeat("{{end}}", 40),
 	} {
 		_, err := errorpage.ParseApp(source, brandLogo)
-		assert.ErrorContains(t, err, "cannot use define, block, template, range, or printf")
+		assert.ErrorContains(t, err, "unsupported action or function")
 		files := &fakeStaticFiles{template: []byte(source)}
 		h := &Server{Log: testutils.TestLogger(t), config: IngressConfig{ErrorPageTemplate: cluster}, staticFiles: files}
 		target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{StaticErrorPage: "error.html"}}
@@ -98,9 +101,9 @@ func TestAppErrorTemplateRejectsUnboundedWork(t *testing.T) {
 		h.serveIngressError(w, r, "private-id", http.StatusBadGateway)
 		assert.Equal(t, "<h1>cluster</h1>", w.Body.String())
 	}
-	page, err := errorpage.ParseApp("{{if .Maintenance}}Later{{else}}{{with .Title}}{{.}}{{end}}{{end}}", brandLogo)
+	page, err := errorpage.ParseApp("{{if and (eq .Status 502) (not .Maintenance)}}{{with .Title}}{{.}}{{end}}{{else}}Later{{end}}", brandLogo)
 	require.NoError(t, err)
-	assert.Equal(t, "Unavailable", string(renderErrorPage(page, cluster, errorPageData{Title: "Unavailable"})))
+	assert.Equal(t, "Unavailable", string(renderErrorPage(page, cluster, errorPageData{Status: 502, Title: "Unavailable"})))
 }
 
 func TestAppErrorTemplateCacheUsesDigestAndPath(t *testing.T) {
