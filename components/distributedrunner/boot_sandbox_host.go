@@ -108,15 +108,14 @@ func (b *sandboxHostBoot) start(
 }
 
 func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps, coordinatorInternalIP netip.Addr) error {
-	if !coordinatorInternalIP.Is4() {
-		return fmt.Errorf("coordinator internal WireGuard address is unavailable")
-	}
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	deps.Resolver = resolver
-	if err := hostMapper.SetHost("cluster.local", coordinatorInternalIP); err != nil {
-		return fmt.Errorf("mapping cluster registry: %w", err)
+	if coordinatorInternalIP.Is4() {
+		if err := hostMapper.SetHost("cluster.local", coordinatorInternalIP); err != nil {
+			return fmt.Errorf("mapping cluster registry: %w", err)
+		}
+		b.inputs.log.Info("mapped cluster.local to coordinator WireGuard gateway", "addr", coordinatorInternalIP)
 	}
-	b.inputs.log.Info("mapped cluster.local to coordinator WireGuard gateway", "addr", coordinatorInternalIP)
 	coordinatorHost, coordinatorPort, splitErr := net.SplitHostPort(b.inputs.coordinator)
 	if splitErr != nil {
 		b.inputs.log.Warn("in-cluster API access disabled: coordinator address has no usable host and port",
@@ -130,6 +129,13 @@ func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps, coordinato
 		deps.ApiAddress = net.JoinHostPort(coordinatorAddr.String(), coordinatorPort)
 		deps.CACert = []byte(b.inputs.caCert)
 		b.inputs.log.Info("sandboxes will reach the cluster API at", "address", deps.ApiAddress)
+		if !coordinatorInternalIP.IsValid() {
+			// Older coordinators serve the registry on the same address as the API.
+			if err := hostMapper.SetHost("cluster.local", coordinatorAddr); err != nil {
+				return fmt.Errorf("mapping legacy cluster registry: %w", err)
+			}
+			b.inputs.log.Warn("coordinator did not advertise an internal address; using its API address for registry pulls", "addr", coordinatorAddr)
+		}
 	}
 
 	if b.inputs.clientCert == "" || b.inputs.clientKey == "" || b.inputs.caCert == "" {

@@ -475,8 +475,8 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	r.state = rs
 	r.eac = es.NewEntityAccessClient(client)
 	r.entityBase = entityserver.NewClient(r.Log, r.eac)
-	if err := r.setupRemoteWorkloadIssuer(ctx, rs); err != nil {
-		r.Log.Warn("failed to set up workload identity issuer", "error", err)
+	if err := r.setupRemoteCoordinatorInfo(ctx, rs); err != nil {
+		return fmt.Errorf("setting up coordinator registry and workload identity: %w", err)
 	}
 	if err := r.setupRemoteSecrets(rs); err != nil {
 		return fmt.Errorf("setting up secret resolution: %w", err)
@@ -649,14 +649,10 @@ func (c sqliteDiskCloser) Close() error {
 	return c.m.Close(ctx)
 }
 
-// setupRemoteWorkloadIssuer wires a remote workload identity issuer for
-// distributed runners. Runners do not hold the cluster signing key, so they
-// mint tokens by calling the coordinator's RunnerRegistration service. When the
-// coordinator reports no issuer is configured, token issuance stays disabled
-// (deps.WorkloadIssuer remains nil). The coordinator's embedded runner
-// (r.Config == nil) keeps the concrete issuer it was constructed with.
-func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) error {
-	if r.Config == nil || r.deps.WorkloadIssuer != nil {
+// setupRemoteCoordinatorInfo obtains the internal registry address and optional
+// workload issuer from the coordinator. The embedded runner already has both.
+func (r *ClusterAccess) setupRemoteCoordinatorInfo(ctx context.Context, rs *rpc.State) error {
+	if r.Config == nil {
 		return nil
 	}
 
@@ -668,8 +664,8 @@ func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.S
 	regClient := runner_v1alpha.NewRunnerRegistrationClient(client)
 
 	// Retry transient failures: the entities connection was just established, so
-	// a failure here is usually a brief blip. Giving up immediately would leave
-	// the runner with no token issuance until it is restarted.
+	// a failure here is usually a brief blip. This result is required to set up
+	// registry routing, even when workload identity is disabled.
 	var info *runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults
 	for attempt := 1; ; attempt++ {
 		info, err = queryWorkloadIssuerInfo(ctx, regClient)
@@ -694,6 +690,9 @@ func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.S
 		}
 	}
 
+	if r.deps.WorkloadIssuer != nil {
+		return nil
+	}
 	if !info.Enabled() {
 		r.Log.Info("coordinator has no workload identity issuer; sandbox tokens disabled")
 		return nil

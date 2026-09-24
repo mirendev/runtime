@@ -199,6 +199,10 @@ Day-to-day fleet management happens through the `runner` subcommands. A quick to
 
 A typical maintenance window looks like: drain the node, do your work, then uncordon it (or remove it if it's not coming back).
 
+:::warning[Upgrade runners before changing the registry address]
+Upgrade runner binaries first, while the coordinator still serves the registry on its old address. Then upgrade the coordinator and restart the runners so they learn its internal WireGuard address. Image pulls on runners that have not restarted after the coordinator upgrade will fail; plan a maintenance window for this transition.
+:::
+
 ## Things to know
 
 A few properties of distributed clusters are worth keeping in mind as you plan:
