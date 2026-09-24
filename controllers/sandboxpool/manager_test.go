@@ -1526,6 +1526,44 @@ func TestCountStartupFailures(t *testing.T) {
 	assert.ElementsMatch(t, []entity.Id{"old-failure", "first", "fast-healthy", "legacy"}, pool.CountedFailures)
 }
 
+func TestPartialNodeLossKeepsPoolDesiredDuringCooldown(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 5,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 4 {
+		_, err = server.Client.Create(ctx, fmt.Sprintf("healthy-%d", i),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-6 * time.Minute) }
+	failedID, err := server.Client.Create(ctx, "lost-node",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, failedID,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(1), updated.ConsecutiveCrashCount)
+	assert.Equal(t, int64(5), updated.DesiredInstances, "a failed boot must not downsize four healthy instances")
+	assert.Equal(t, int64(4), updated.ReadyInstances)
+	assert.WithinDuration(t, time.Now().Add(10*time.Second), updated.CooldownUntil, 2*time.Second)
+	assert.Len(t, listSandboxesForPool(t, ctx, server, pool), 5, "replacement waits for cooldown")
+}
+
 func TestManagerLongStartupFailureBackoff(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
