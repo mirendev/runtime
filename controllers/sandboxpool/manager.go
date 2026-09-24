@@ -108,14 +108,14 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		// Unreferenced pools should be allowed to scale to 0 even during cooldown
 		isUnreferenced := len(pool.ReferencedByVersions) == 0
 
-		// Reset empty pools to prevent activator-driven accumulation, but do
-		// not shrink a pool that still has healthy RUNNING instances after a
-		// partial failure (including node loss).
-		targetDesired := pool.DesiredInstances
+		// Allow one replacement beyond the RUNNING count. This preserves
+		// healthy siblings after a partial failure (including node loss),
+		// without letting activator requests accumulate a full crash loop.
+		targetDesired := int64(1)
 		if isUnreferenced {
 			targetDesired = 0
-		} else if ready == 0 {
-			targetDesired = 1
+		} else if ready > 0 {
+			targetDesired = max(1, min(pool.DesiredInstances, ready+1))
 		}
 
 		if pool.DesiredInstances != targetDesired {

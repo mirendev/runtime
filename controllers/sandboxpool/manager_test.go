@@ -1564,6 +1564,41 @@ func TestPartialNodeLossKeepsPoolDesiredDuringCooldown(t *testing.T) {
 	assert.Len(t, listSandboxesForPool(t, ctx, server, pool), 5, "replacement waits for cooldown")
 }
 
+func TestCrashLoopCooldownCapsDesiredWithRunningSiblings(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 8,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 2 {
+		_, err = server.Client.Create(ctx, fmt.Sprintf("running-%d", i),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-20 * time.Second) }
+	failedID, err := server.Client.Create(ctx, "quick-crash",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, failedID,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+
+	reconcilePool(t, ctx, server, NewManager(testutils.TestLogger(t), server.EAC), pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(1), updated.ConsecutiveCrashCount)
+	assert.Equal(t, int64(3), updated.DesiredInstances, "only one replacement may be queued beyond the two running siblings")
+	assert.Equal(t, int64(2), updated.ReadyInstances)
+}
+
 func TestManagerLongStartupFailureBackoff(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := testutils.NewInMemEntityServer(t)
