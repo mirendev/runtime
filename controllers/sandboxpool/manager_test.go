@@ -1110,6 +1110,32 @@ func TestCheckForStalePendingSandboxes(t *testing.T) {
 		"RUNNING sandbox should remain RUNNING")
 }
 
+func TestStalePendingDoesNotOverwriteRunning(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-6 * time.Minute) }
+	id, err := server.Client.Create(ctx, "pending", &compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING})
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+
+	// The monitor's snapshot predates a successful setRunning patch.
+	stale, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}).Encode).Attrs(), stale.Entity().Revision())
+	require.NoError(t, err)
+
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	manager.retireStalePending(ctx, stale.Entity())
+	resp, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var sb compute_v1alpha.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	assert.Equal(t, compute_v1alpha.RUNNING, sb.Status)
+	assert.Equal(t, compute_v1alpha.STARTUP_RUNNING, sb.StartupOutcome)
+}
+
 // TestStalePendingSandboxUnblocksPoolCapacity tests that marking a stale
 // PENDING sandbox as STOPPED frees pool capacity, allowing the pool to
 // create a replacement sandbox on the next reconcile.
@@ -1481,4 +1507,88 @@ func TestManagerCrashResetDoesNotRecount(t *testing.T) {
 		"crash count should remain 0 after reset — old dead sandboxes must not be re-counted")
 	assert.True(t, updatedPool.CooldownUntil.IsZero(),
 		"pool should not re-enter cooldown from old dead sandboxes")
+}
+
+func TestCountStartupFailures(t *testing.T) {
+	now := time.Now()
+	manager := &Manager{}
+	sandboxes := []*sandboxWithMeta{
+		{sandbox: &compute_v1alpha.Sandbox{ID: "first", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-time.Minute)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "healthy", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-time.Hour), updatedAt: now.Add(-30 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "fast-healthy", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-20 * time.Second), updatedAt: now.Add(-10 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-20 * time.Second), updatedAt: now.Add(-10 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "old-legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-time.Minute)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "old-failure", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-10 * time.Minute), updatedAt: now.Add(-2 * time.Minute)},
+	}
+	pool := &compute_v1alpha.SandboxPool{LastCrashTime: now.Add(-90 * time.Second), CountedFailures: []entity.Id{"old-failure"}}
+	assert.Equal(t, int64(2), manager.countStartupFailures(sandboxes, pool),
+		"long pre-running failure and legacy quick crash count, but running and previously counted failures do not")
+	assert.ElementsMatch(t, []entity.Id{"old-failure", "first", "legacy"}, pool.CountedFailures)
+}
+
+func TestManagerLongStartupFailureBackoff(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 1,
+		SandboxSpec: compute_v1alpha.SandboxSpec{Version: entity.Id("ver-1")},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+
+	for streak := int64(1); streak <= 2; streak++ {
+		if streak == 2 {
+			// A failure can become DEAD after the pool's List snapshot but
+			// before its watermark advances. Its older update time must not
+			// suppress a never-accounted-for sandbox.
+			_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+				(&compute_v1alpha.SandboxPool{LastCrashTime: time.Now().Add(time.Minute)}).Encode).Attrs(), 0)
+			require.NoError(t, err)
+		}
+		created := time.Now().Add(-6 * time.Minute)
+		server.Store.NowFunc = func() time.Time { return created }
+		sbID, err := server.Client.Create(ctx, fmt.Sprintf("failed-%d", streak),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+		server.Store.NowFunc = nil
+		_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sbID,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}).Encode).Attrs(), 0)
+		require.NoError(t, err)
+		before := time.Now()
+		reconcilePool(t, ctx, server, manager, pool)
+		updated := getPool(t, ctx, server, id)
+		assert.Equal(t, streak, updated.ConsecutiveCrashCount)
+		assert.WithinDuration(t, before.Add(backoffDuration(streak)), updated.CooldownUntil, 2*time.Second)
+		assert.Equal(t, int64(0), updated.CurrentInstances)
+		assert.Len(t, listSandboxesForPool(t, ctx, server, pool), int(streak), "no replacement during cooldown")
+		assert.Len(t, updated.CountedFailures, int(streak))
+		// An exit recorder may rewrite DEAD to STOPPED after the pool
+		// counted it, and cleanup can then restore DEAD with a new UpdatedAt.
+		_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sbID,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.STOPPED}).Encode).Attrs(), 0)
+		require.NoError(t, err)
+		_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sbID,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}).Encode).Attrs(), 0)
+		require.NoError(t, err)
+		// The same terminal entity must not increase the streak on another reconcile.
+		reconcilePool(t, ctx, server, manager, pool)
+		updated = getPool(t, ctx, server, id)
+		assert.Equal(t, streak, updated.ConsecutiveCrashCount)
+		assert.Len(t, updated.CountedFailures, int(streak))
+	}
+	// A deployment clears the streak, not the identities already counted.
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, id),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 0),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, time.Time{}),
+	}, 0)
+	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
+	assert.Len(t, updated.CountedFailures, 2)
 }

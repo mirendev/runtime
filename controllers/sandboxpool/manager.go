@@ -86,7 +86,7 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	// Skip crash detection for decommissioned pools (desired=0, no references).
 	// Sandbox deaths during intentional scale-down are expected, not crashes.
 	if pool.DesiredInstances > 0 || len(pool.ReferencedByVersions) > 0 {
-		newCrashes := m.countQuickCrashes(sandboxes, pool.LastCrashTime)
+		newCrashes := m.countStartupFailures(sandboxes, pool)
 		if newCrashes > 0 {
 			pool.ConsecutiveCrashCount += int64(newCrashes)
 			pool.LastCrashTime = time.Now()
@@ -781,56 +781,65 @@ func (m *Manager) checkForStalePendingSandboxes(ctx context.Context) error {
 		if createdAt.After(threshold) {
 			continue
 		}
-
-		m.log.Warn("marking stale PENDING sandbox as STOPPED",
-			"sandbox", sb.ID,
-			"created_at", createdAt,
-			"age", now.Sub(createdAt))
-
-		if _, err := m.eac.Patch(ctx, entity.New(
-			entity.DBId, sb.ID,
-			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.STOPPED,
-			}).Encode,
-		).Attrs(), 0); err != nil {
-			if errors.Is(err, cond.ErrNotFound{}) {
-				m.log.Warn("sandbox already deleted during stale pending check",
-					"sandbox", sb.ID)
-			} else {
-				m.log.Error("failed to stop stale PENDING sandbox",
-					"sandbox", sb.ID,
-					"error", err)
-			}
-			continue
-		}
+		m.retireStalePending(ctx, ent)
 	}
 
 	return nil
 }
 
-// countQuickCrashes counts sandboxes that died within 60 seconds of creation
-// and occurred after lastCrashTime
-func (m *Manager) countQuickCrashes(sandboxes []*sandboxWithMeta, lastCrashTime time.Time) int64 {
+func (m *Manager) retireStalePending(ctx context.Context, ent *entityserver_v1alpha.Entity) {
+	var sb compute_v1alpha.Sandbox
+	sb.Decode(ent.Entity())
+	createdAt := time.UnixMilli(ent.CreatedAt())
+	m.log.Warn("marking stale PENDING sandbox as STOPPED",
+		"sandbox", sb.ID,
+		"created_at", createdAt,
+		"age", time.Since(createdAt))
+
+	if _, err := m.eac.Patch(ctx, entity.New(
+		entity.DBId, sb.ID,
+		(&compute_v1alpha.Sandbox{
+			Status:         compute_v1alpha.STOPPED,
+			StartupOutcome: compute_v1alpha.STARTUP_FAILED,
+		}).Encode,
+	).Attrs(), ent.Revision()); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			m.log.Warn("sandbox already deleted during stale pending check", "sandbox", sb.ID)
+		} else if errors.Is(err, cond.ErrConflict{}) {
+			m.log.Debug("sandbox changed during stale pending check", "sandbox", sb.ID)
+		} else {
+			m.log.Error("failed to stop stale PENDING sandbox", "sandbox", sb.ID, "error", err)
+		}
+	}
+}
+
+// countStartupFailures records each sandbox ID with the counter in the pool
+// update. UpdatedAt is mutable and cannot identify an already counted failure.
+// Legacy sandboxes without an outcome retain the old quick-crash heuristic.
+func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compute_v1alpha.SandboxPool) int64 {
 	count := int64(0)
-	crashThreshold := 60 * time.Second
+	counted := make(map[entity.Id]bool, len(pool.CountedFailures))
+	for _, id := range pool.CountedFailures {
+		counted[id] = true
+	}
 
 	for _, sbm := range sandboxes {
-		if sbm.sandbox.Status != compute_v1alpha.DEAD {
+		if sbm.sandbox.Status != compute_v1alpha.DEAD || counted[sbm.sandbox.ID] {
 			continue
 		}
 
-		// Check if this is a quick crash (died within 60s of creation)
-		lifetime := sbm.updatedAt.Sub(sbm.createdAt)
-
-		if lifetime >= crashThreshold {
-			continue // Lived long enough, not a quick crash
+		if sbm.sandbox.StartupOutcome == compute_v1alpha.STARTUP_RUNNING ||
+			(sbm.sandbox.StartupOutcome == "" && sbm.updatedAt.Sub(sbm.createdAt) >= 60*time.Second) {
+			continue
 		}
 
-		// Check if this crash is new (after lastCrashTime)
-		if !lastCrashTime.IsZero() && !sbm.updatedAt.After(lastCrashTime) {
-			continue // Already counted this crash
+		// Pre-upgrade crashes did not have durable IDs. The old watermark
+		// protects them across deploys that reset the streak.
+		if sbm.sandbox.StartupOutcome == "" && !pool.LastCrashTime.IsZero() && !sbm.updatedAt.After(pool.LastCrashTime) {
+			continue
 		}
 
+		pool.CountedFailures = append(pool.CountedFailures, sbm.sandbox.ID)
 		count++
 	}
 

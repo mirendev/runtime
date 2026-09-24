@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	entitytestutils "miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
@@ -1692,6 +1693,36 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 		checkSb.Decode(result.Entity().Entity())
 		return checkSb.Status == compute.RUNNING
 	}, 5*time.Second, 50*time.Millisecond, "sandbox should remain RUNNING when exit status has an error")
+}
+
+func TestRecordExitStartupOutcome(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	c := &SandboxController{EAC: server.EAC}
+
+	for _, tc := range []struct {
+		status compute.SandboxStatus
+		want   compute.SandboxStartupOutcome
+		final  compute.SandboxStatus
+	}{
+		{compute.PENDING, compute.STARTUP_FAILED, compute.STOPPED},
+		{compute.RUNNING, compute.STARTUP_RUNNING, compute.STOPPED},
+		{compute.DEAD, "", compute.DEAD},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			id, err := server.Client.Create(ctx, string(tc.status), &compute.Sandbox{Status: tc.status})
+			require.NoError(t, err)
+			_, err = c.recordExit(ctx, id, compute.Exit{At: time.Now(), Container: "app"})
+			require.NoError(t, err)
+			resp, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			var sb compute.Sandbox
+			sb.Decode(resp.Entity().Entity())
+			require.Equal(t, tc.final, sb.Status)
+			require.Equal(t, tc.want, sb.StartupOutcome)
+		})
+	}
 }
 
 // TestMonitorTaskExitHandlesValidExit verifies that monitorTaskExit correctly

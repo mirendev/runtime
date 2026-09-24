@@ -89,9 +89,17 @@ func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *comput
 		// NOTE: this runs at the call site, so a crash between saga completion
 		// and this patch leaves the entity PENDING (retried by reconciler).
 		// Durable saga outcome declaration is future work.
+		current, _, getErr := c.ops.GetSandbox(ctx, co.ID.String())
+		if getErr != nil {
+			return fmt.Errorf("fetching sandbox after saga failure: %w", getErr)
+		}
+		failure := &compute.Sandbox{Status: compute.DEAD}
+		if current.StartupOutcome != compute.STARTUP_RUNNING && current.Status != compute.RUNNING {
+			failure.StartupOutcome = compute.STARTUP_FAILED
+		}
 		patchAttrs := entity.New(
 			entity.Ref(entity.DBId, co.ID),
-			(&compute.Sandbox{Status: compute.DEAD}).Encode,
+			failure.Encode,
 		)
 		if _, patchErr := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0); patchErr != nil {
 			c.Log.Error("failed to mark sandbox DEAD after saga failure", "id", co.ID, "error", patchErr)

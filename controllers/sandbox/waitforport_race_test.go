@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -28,6 +29,28 @@ func newPortTestController() *SandboxController {
 
 func boundPort(port int) observability.BoundPort {
 	return observability.BoundPort{Port: port}
+}
+
+func TestWaitForPortProcessExit(t *testing.T) {
+	c := newPortTestController()
+	result := make(chan error, 1)
+	go func() { result <- c.WaitForPort(context.Background(), "app", 8080, time.Minute) }()
+	c.setProcessExited("app")
+	select {
+	case err := <-result:
+		require.True(t, errors.Is(err, errProcessExited), "got %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("port wait did not stop on process exit")
+	}
+
+	// A later wait must not forget an exit or mistake a stale bound port for readiness.
+	c.SetPortStatus("app", boundPort(8080), observability.PortStatusBound)
+	require.ErrorIs(t, c.WaitForPort(context.Background(), "app", 8080, time.Minute), errProcessExited)
+
+	other := newPortTestController()
+	err := other.WaitForPort(context.Background(), "still-running", 8080, 20*time.Millisecond)
+	require.ErrorContains(t, err, "timeout waiting for port 8080")
+	require.NotErrorIs(t, err, errProcessExited)
 }
 
 // TestWaitForPortNoSpuriousTimeoutWhenPortBound is the deterministic regression
