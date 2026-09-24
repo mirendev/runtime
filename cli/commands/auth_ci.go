@@ -15,6 +15,14 @@ func ciBindingID(id string) string {
 	return strings.TrimPrefix(id, ciBindingPrefix)
 }
 
+func ciBindingEntityID(id string) (string, error) {
+	bare := ciBindingID(id)
+	if strings.Contains(bare, "/") {
+		return "", fmt.Errorf("invalid CI authentication binding ID %q", id)
+	}
+	return ciBindingPrefix + bare, nil
+}
+
 func AuthCIAdd(ctx *Context, opts struct {
 	GitHub        string `long:"github" description:"GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)"`
 	Issuer        string `long:"issuer" description:"OIDC issuer URL"`
@@ -162,6 +170,10 @@ func AuthCIRemove(ctx *Context, opts struct {
 	if opts.ID == "" {
 		return fmt.Errorf("binding ID is required")
 	}
+	entityID, err := ciBindingEntityID(opts.ID)
+	if err != nil {
+		return err
+	}
 
 	client, err := ctx.RPCClient("dev.miren.runtime/oidc-bindings")
 	if err != nil {
@@ -171,13 +183,14 @@ func AuthCIRemove(ctx *Context, opts struct {
 
 	oc := oidcbinding_v1alpha.NewOidcBindingsClient(client)
 
-	resp, err := oc.Remove(ctx, ciBindingPrefix+ciBindingID(opts.ID))
+	resp, err := oc.Remove(ctx, entityID)
 	if err != nil {
 		return err
 	}
 
 	if resp.HasError() && resp.Error() != "" {
-		return fmt.Errorf("%s", resp.Error())
+		message := strings.Replace(resp.Error(), fmt.Sprintf("%q", entityID), fmt.Sprintf("%q", ciBindingID(opts.ID)), 1)
+		return fmt.Errorf("%s", message)
 	}
 
 	ctx.Printf("Removed CI authentication binding %s\n", ciBindingID(opts.ID))
