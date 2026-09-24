@@ -1972,6 +1972,36 @@ func TestDeadPatchPreservesRecordedExit(t *testing.T) {
 	r.Equal("app", got.Exit.Container)
 }
 
+func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	deps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+	c, err := newSandboxController(deps)
+	require.NoError(t, err)
+	defer c.Close()
+	require.NoError(t, c.Init(ctx))
+	id := entity.Id(idgen.GenNS("sb"))
+	stale := &compute.Sandbox{ID: id, Status: compute.PENDING}
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, stale.Encode).Attrs())
+	_, err = c.EAC.Put(ctx, &rpcE)
+	require.NoError(t, err)
+
+	// The cleanup caller still holds PENDING, but boot has already persisted RUNNING.
+	_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.NoError(t, c.StopSandbox(ctx, id, stale))
+	resp, err := c.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var got compute.Sandbox
+	got.Decode(resp.Entity().Entity())
+	require.Equal(t, compute.DEAD, got.Status)
+	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
+}
+
 // A sandbox whose command must execute at most once is finished when its
 // containers vanish. Rebooting it would re-run the command -- for a migration,
 // not a recoverable mistake.

@@ -199,7 +199,12 @@ type SandboxController struct {
 	// or unwinds on restart rather than stranding containers, addresses, and
 	// disk leases. ops adapts this controller to the domain interfaces the
 	// saga's actions are written against.
-	ops          *sandboxOps
+	ops interface {
+		SandboxEntityStore
+		SandboxNetworking
+		SandboxContainerRuntime
+		SandboxObservability
+	}
 	executor     *saga.Executor
 	sagaRegistry *saga.Registry
 	sagaStorage  saga.Storage
@@ -3311,28 +3316,10 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
 
-	// Preserve the lifecycle outcome when retiring a sandbox. Intentional
-	// STOPPED sandboxes (including scale-down) acquire no failure outcome.
-	retired := &compute.Sandbox{Status: compute.DEAD}
-	if sb != nil {
-		if sb.Status == compute.PENDING && sb.StartupOutcome != compute.STARTUP_RUNNING {
-			retired.StartupOutcome = compute.STARTUP_FAILED
-		} else if sb.Status == compute.RUNNING && sb.StartupOutcome == "" {
-			retired.StartupOutcome = compute.STARTUP_RUNNING
-		}
-	}
-	result, err := c.EAC.Patch(ctx, entity.New(
-		entity.Ref(entity.DBId, id),
-		retired.Encode,
-	).Attrs(), 0)
-	if err != nil {
-		// We ignore if the entity is not found as we run this code path when detecting
-		// the sandbox entity has already been deleted.
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
-		}
-	} else if c.writeTracker != nil && result.HasRevision() {
-		c.writeTracker.RecordWrite(result.Revision())
+	// Use the current entity, not the cleanup snapshot: boot or an exit may
+	// have changed the lifecycle while resources were being torn down.
+	if err := c.retireSandbox(ctx, id); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+		c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
 	}
 
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)
@@ -3343,6 +3330,43 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
 	}
 
+	return nil
+}
+
+func (c *SandboxController) retireSandbox(ctx context.Context, id entity.Id) error {
+	for attempt := range 10 {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return err
+		}
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		retired := &compute.Sandbox{Status: compute.DEAD}
+		if current.StartupOutcome == "" {
+			switch current.Status {
+			case compute.PENDING:
+				retired.StartupOutcome = compute.STARTUP_FAILED
+			case compute.RUNNING:
+				retired.StartupOutcome = compute.STARTUP_RUNNING
+			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
+				// No lifecycle conclusion from these states alone.
+			}
+		}
+		result, err := c.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, id),
+			retired.Encode,
+		).Attrs(), resp.Entity().Revision())
+		if errors.Is(err, cond.ErrConflict{}) && attempt < 9 {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+		return nil
+	}
 	return nil
 }
 

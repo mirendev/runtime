@@ -828,8 +828,8 @@ func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compu
 			continue
 		}
 
-		if sbm.sandbox.StartupOutcome == compute_v1alpha.STARTUP_RUNNING ||
-			(sbm.sandbox.StartupOutcome == "" && sbm.updatedAt.Sub(sbm.createdAt) >= 60*time.Second) {
+		if sbm.sandbox.StartupOutcome != compute_v1alpha.STARTUP_FAILED &&
+			sbm.updatedAt.Sub(sbm.createdAt) >= 60*time.Second {
 			continue
 		}
 

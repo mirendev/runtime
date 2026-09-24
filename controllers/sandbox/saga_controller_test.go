@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -13,6 +14,37 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
+
+type sagaFailureOps struct {
+	SandboxEntityStore
+	SandboxNetworking
+	SandboxContainerRuntime
+	SandboxObservability
+}
+
+func TestSagaFailureMarksDeadWhenFinalFetchFails(t *testing.T) {
+	h := newTestHarness(t)
+	h.networking.allocateErr = errors.New("no IPs available")
+	h.entities.getSandboxFunc = func(_ context.Context, _ string) (*compute.Sandbox, *entity.Meta, error) {
+		if h.entities.getCalls > 1 {
+			return nil, nil, errors.New("transient fetch failure")
+		}
+		return h.entities.sandbox, h.entities.meta, nil
+	}
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+	err := c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false)
+	require.ErrorContains(t, err, "no IPs available")
+	require.Len(t, h.entities.patchCalls, 1)
+	patch := entity.New(h.entities.patchCalls[0])
+	status, ok := patch.Get(compute.SandboxStatusId)
+	require.True(t, ok)
+	assert.Equal(t, compute.SandboxStatusDeadId, status.Value.Id())
+	_, outcomeSet := patch.Get(compute.SandboxStartupOutcomeId)
+	assert.False(t, outcomeSet, "a failed fetch must not derive an outcome from the stale snapshot")
+}
 
 // newSagaControllerForResume wires up only what sagaResumeNeeded reads
 // (storage + log), so no live containerd client is needed.

@@ -2226,7 +2226,7 @@ func (o *SandboxPool) Empty() bool {
 
 func (o *SandboxPool) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("app", "dev.miren.compute/sandbox_pool.app", schema.Doc("Reference to the app this pool belongs to"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
-	sb.Int64("consecutive_crash_count", "dev.miren.compute/sandbox_pool.consecutive_crash_count", schema.Doc("Number of consecutive sandbox failures before reaching RUNNING"))
+	sb.Int64("consecutive_crash_count", "dev.miren.compute/sandbox_pool.consecutive_crash_count", schema.Doc("Number of consecutive sandbox failures, including quick crashes after RUNNING"))
 	sb.Time("cooldown_until", "dev.miren.compute/sandbox_pool.cooldown_until", schema.Doc("Timestamp until which new sandbox creation is paused due to crash loop"))
 	sb.Ref("counted_failures", "dev.miren.compute/sandbox_pool.counted_failures", schema.Doc("Sandbox IDs already included in the failure streak; kept across streak resets"), schema.Many)
 	sb.Int64("current_instances", "dev.miren.compute/sandbox_pool.current_instances", schema.Doc("Current number of sandbox instances (non-STOPPED)"))

@@ -1521,9 +1521,9 @@ func TestCountStartupFailures(t *testing.T) {
 		{sandbox: &compute_v1alpha.Sandbox{ID: "old-failure", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-10 * time.Minute), updatedAt: now.Add(-2 * time.Minute)},
 	}
 	pool := &compute_v1alpha.SandboxPool{LastCrashTime: now.Add(-90 * time.Second), CountedFailures: []entity.Id{"old-failure"}}
-	assert.Equal(t, int64(2), manager.countStartupFailures(sandboxes, pool),
-		"long pre-running failure and legacy quick crash count, but running and previously counted failures do not")
-	assert.ElementsMatch(t, []entity.Id{"old-failure", "first", "legacy"}, pool.CountedFailures)
+	assert.Equal(t, int64(3), manager.countStartupFailures(sandboxes, pool),
+		"long pre-running failure and quick crashes count, but long-running and previously counted failures do not")
+	assert.ElementsMatch(t, []entity.Id{"old-failure", "first", "fast-healthy", "legacy"}, pool.CountedFailures)
 }
 
 func TestManagerLongStartupFailureBackoff(t *testing.T) {
