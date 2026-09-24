@@ -1,15 +1,18 @@
 package entityserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -1242,4 +1245,113 @@ func TestEntityServer_ListPage(t *testing.T) {
 		r.Equal(testKind, kind.Value.Id().String())
 	})
 
+}
+
+func TestEntityServer_ListsCleanOrphansOnce(t *testing.T) {
+	ctx := t.Context()
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
+	require.NoError(t, err)
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+
+	var logs bytes.Buffer
+	server, err := NewEntityServer(slog.New(slog.NewTextHandler(&logs, nil)), store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+
+	for _, paged := range []bool{false, true} {
+		id := entity.Id(fmt.Sprintf("missing-%t", paged))
+		key := indexPrefix + base58.Encode([]byte(id))
+		entryKey := key
+		if paged {
+			entryKey += "/old-session"
+		}
+		_, err := client.Put(ctx, entryKey, id.String())
+		require.NoError(t, err)
+		for range 2 {
+			if paged {
+				page, err := sc.ListPage(ctx, index, "", 10)
+				require.NoError(t, err)
+				require.Len(t, page.Values(), 1)
+				require.Equal(t, int64(1), page.Total())
+				require.Equal(t, live.Id().String(), page.Values()[0].Id())
+			} else {
+				list, err := sc.List(ctx, index)
+				require.NoError(t, err)
+				require.Len(t, list.Values(), 1)
+				require.Equal(t, live.Id().String(), list.Values()[0].Id())
+			}
+		}
+		response, err := client.Get(ctx, key, clientv3.WithPrefix())
+		require.NoError(t, err)
+		require.Empty(t, response.Kvs)
+	}
+	require.Equal(t, 2, strings.Count(logs.String(), "cleaned up orphaned index entry"))
+	require.NotContains(t, logs.String(), "entity in index but not in store")
+}
+
+func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client, prefix := setupTestEtcd(t)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	server, err := NewEntityServer(log, store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	_, err = client.Put(ctx, indexPrefix+base58.Encode([]byte(id)), id.String())
+	require.NoError(t, err)
+	listed, err := client.Get(ctx, indexPrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	deletes := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, listed.Header.Revision+1, stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deletes <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	result, err := sc.List(ctx, index)
+	require.NoError(t, err)
+	require.Empty(t, result.Values())
+	select {
+	case op := <-deletes:
+		require.Equal(t, id.String(), op.EntityId())
+		require.False(t, op.HasEntity())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for orphan delete event")
+	}
+	cancel()
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watch to stop")
+	}
+	require.Equal(t, 1, strings.Count(logs.String(), "level=WARN msg=\"cleaned up orphaned index entry\""))
+	require.NotContains(t, logs.String(), "level=ERROR")
 }

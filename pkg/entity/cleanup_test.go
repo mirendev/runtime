@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -18,6 +19,98 @@ func seedStaleEntry(t *testing.T, store *EtcdStore, client *clientv3.Client, col
 	_, err := client.Put(t.Context(), key, string(entityID))
 	require.NoError(t, err)
 	return key
+}
+
+func TestCleanupOrphanedIndexEntry_ConcurrentChanges(t *testing.T) {
+	store, client := setupReindexTestStore(t)
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/kind", Doc, "indexed kind", Cardinality, CardinalityOne,
+		Type, TypeStr, Index, true,
+	))
+	require.NoError(t, err)
+	index := String(Id("test/kind"), "widget")
+	id := Id("recreated")
+	key := seedStaleEntry(t, store, client, collectionSegmentFor(index), id)
+
+	// A new backing entity after the listing makes the observed miss obsolete.
+	_, err = store.CreateEntity(ctx, New(Ref(DBId, id), index))
+	require.NoError(t, err)
+	removed, err := store.CleanupOrphanedIndexEntry(ctx, index, id)
+	require.NoError(t, err)
+	assert.False(t, removed)
+	response, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Len(t, response.Kvs, 1)
+
+	// A stale listing must not delete a slot now pointing at a different id.
+	other := Id("other")
+	_, err = client.Put(ctx, key, other.String())
+	require.NoError(t, err)
+	removed, err = store.CleanupOrphanedIndexEntry(ctx, index, id)
+	require.NoError(t, err)
+	assert.False(t, removed)
+	response, err = client.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, other.String(), string(response.Kvs[0].Value))
+}
+
+func TestCleanupOrphanedIndexEntry_LeavesUnreadableEntity(t *testing.T) {
+	store, client := setupReindexTestStore(t)
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/kind", Doc, "indexed kind", Cardinality, CardinalityOne,
+		Type, TypeStr, Index, true,
+	))
+	require.NoError(t, err)
+	index := String(Id("test/kind"), "widget")
+	live, err := store.CreateEntity(ctx, New(Ident, "live", index))
+	require.NoError(t, err)
+	key := store.Prefix() + "/collections/" + collectionSegmentFor(index) + "/" + base58.Encode([]byte(live.Id()))
+	_, err = client.Put(ctx, store.buildKey(live.Id()), "invalid cbor")
+	require.NoError(t, err)
+	removed, err := store.CleanupOrphanedIndexEntry(ctx, index, live.Id())
+	require.NoError(t, err)
+	assert.False(t, removed)
+	resp, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Len(t, resp.Kvs, 1)
+}
+
+func TestCleanupOrphanedIndexEntry_BatchesSessionVariants(t *testing.T) {
+	store, client := setupReindexTestStore(t)
+	ctx := t.Context()
+	_, err := store.CreateEntity(ctx, New(
+		Ident, "test/kind", Doc, "indexed kind", Cardinality, CardinalityOne,
+		Type, TypeStr, Index, true,
+	))
+	require.NoError(t, err)
+	index := String(Id("test/kind"), "widget")
+	id := Id("orphan")
+	key := seedStaleEntry(t, store, client, collectionSegmentFor(index), id)
+	for i := range 140 {
+		_, err := client.Put(ctx, fmt.Sprintf("%s/session-%03d", key, i), id.String())
+		require.NoError(t, err)
+	}
+	// Another slot sharing the byte prefix must not be deleted.
+	_, err = client.Put(ctx, key+"suffix", "other")
+	require.NoError(t, err)
+
+	removed, err := store.CleanupOrphanedIndexEntry(ctx, index, id)
+	require.NoError(t, err)
+	assert.True(t, removed)
+	resp, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Kvs)
+	resp, err = client.Get(ctx, key+"/", clientv3.WithPrefix())
+	require.NoError(t, err)
+	assert.Empty(t, resp.Kvs)
+	resp, err = client.Get(ctx, key+"suffix")
+	require.NoError(t, err)
+	assert.Len(t, resp.Kvs, 1)
+	removed, err = store.CleanupOrphanedIndexEntry(ctx, index, id)
+	require.NoError(t, err)
+	assert.False(t, removed)
 }
 
 func TestCleanup_RemovesStaleKeepsLive(t *testing.T) {

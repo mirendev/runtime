@@ -591,13 +591,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					// and the entity key are removed together in one atomic txn, so
 					// the entity is already gone at this event's revision; read it at
 					// the prior revision to recover what was deleted.
-					en, err := e.Store.GetEntity(ctx, entityId)
-					if err != nil {
-						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
+					en, currentErr := e.Store.GetEntity(ctx, entityId)
+					readErr := currentErr
+					if currentErr != nil {
+						en, readErr = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
 					}
-					if err != nil {
-						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)
-					} else {
+					if readErr != nil && (!isNotFound(currentErr) || !isNotFound(readErr)) {
+						e.Log.Error("failed to get entity for delete event", "error", readErr, "id", entityId)
+					} else if readErr == nil {
 						var rpcEntity entityserver_v1alpha.Entity
 						rpcEntity.SetId(en.Id().String())
 						rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
@@ -670,9 +671,7 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i],
-				"index", index)
+			e.cleanupOrphan(ctx, index, ids[i])
 			continue
 		}
 
@@ -1048,7 +1047,7 @@ func (e *EntityServer) entityPage(
 			return nil, fmt.Errorf("failed to get entities: %w", err)
 		}
 
-		return e.resolve(index, ids, entities, nil, next, total, 0), nil
+		return e.resolve(ctx, index, ids, entities, nil, next, total, 0), nil
 	}
 
 	page, err := e.Store.ListIndexEntitiesPage(ctx, index, cursor, limit)
@@ -1056,7 +1055,20 @@ func (e *EntityServer) entityPage(
 		return nil, fmt.Errorf("failed to list entities: %w", err)
 	}
 
-	return e.resolve(index, page.Ids, page.Entities, page.Undecodable, page.Cursor, page.Total, page.Revision), nil
+	return e.resolve(ctx, index, page.Ids, page.Entities, page.Undecodable, page.Cursor, page.Total, page.Revision), nil
+}
+
+func (e *EntityServer) cleanupOrphan(ctx context.Context, index entity.Attr, id entity.Id) {
+	store, ok := e.Store.(*entity.EtcdStore)
+	if !ok || index.ID == entity.AttrSession || index.ID == entity.DBId {
+		return
+	}
+	removed, err := store.CleanupOrphanedIndexEntry(ctx, index, id)
+	if err != nil {
+		e.Log.Warn("failed to clean up orphaned index entry", "id", id, "index", index, "error", err)
+	} else if removed {
+		e.Log.Warn("cleaned up orphaned index entry", "id", id, "index", index)
+	}
 }
 
 // resolve drops the ids the store could not answer for and keeps the reported
@@ -1067,6 +1079,7 @@ func (e *EntityServer) entityPage(
 // work; a key that will not decode is a corrupt entity nobody should assume is
 // gone.
 func (e *EntityServer) resolve(
+	ctx context.Context,
 	index entity.Attr,
 	ids []entity.Id,
 	entities []*entity.Entity,
@@ -1086,8 +1099,7 @@ func (e *EntityServer) resolve(
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
 		} else {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i], "index", index)
+			e.cleanupOrphan(ctx, index, ids[i])
 		}
 
 		if total > 0 {
