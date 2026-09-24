@@ -39,6 +39,9 @@ func TestSummarizeServiceHealth(t *testing.T) {
 			t.Errorf("status output %q missing %q", output, fragment)
 		}
 	}
+	if strings.Contains(output[strings.Index(output, "web:"):], "crash") {
+		t.Fatalf("healthy web service reports a crash: %q", output)
+	}
 	encoded, err := json.Marshal(got[0])
 	if err != nil || !strings.Contains(string(encoded), `"last_exit_code":17`) || !strings.Contains(string(encoded), `"crash_streak":2`) {
 		t.Fatalf("JSON status = %s, err = %v", encoded, err)
@@ -48,8 +51,16 @@ func TestSummarizeServiceHealth(t *testing.T) {
 		t.Fatalf("zero exit code must be present: %+v", zero)
 	}
 	early := summarizeServiceHealth(pools, []sandboxHealthRecord{{Pool: "pool-db", Sandbox: compute_v1alpha.Sandbox{ID: "db-early", Status: compute_v1alpha.DEAD}, Updated: now.Add(-time.Minute)}}, now)[0]
-	if early.CrashStreak != 2 || early.LastExitCode != nil || early.lastSandbox != "db-early" {
+	if early.CrashStreak != 2 || early.LastExitCode != nil || early.lastSandbox != "" {
 		t.Fatalf("early failure without an exit record = %+v", early)
+	}
+	latest := summarizeServiceHealth(pools, []sandboxHealthRecord{
+		{Pool: "pool-db", Sandbox: compute_v1alpha.Sandbox{ID: "success", Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 0, At: now.Add(-time.Minute)}}},
+		{Pool: "pool-db", Sandbox: compute_v1alpha.Sandbox{ID: "failure", Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 17, At: now.Add(-2 * time.Minute)}}},
+		{Pool: "pool-db", Sandbox: compute_v1alpha.Sandbox{ID: "retired", Status: compute_v1alpha.DEAD}, Updated: now},
+	}, now)[0]
+	if latest.LastExitCode == nil || *latest.LastExitCode != 0 || latest.lastSandbox != "failure" || !latest.lastFailure.Equal(now.Add(-2*time.Minute)) {
+		t.Fatalf("newer successful exit hid earlier failure or was replaced by retirement: %+v", latest)
 	}
 	if idle := summarizeServiceHealth([]compute_v1alpha.SandboxPool{{ID: "pool-db", Service: "db", DesiredInstances: 0, ConsecutiveCrashCount: 4, LastCrashTime: now.Add(-time.Minute), CooldownUntil: now.Add(time.Minute)}}, sandboxes, now)[0]; idle.CrashStreak != 0 || idle.CrashLooping {
 		t.Fatalf("scaled-to-zero service should not appear to be failing: %+v", idle)
@@ -131,6 +142,9 @@ func TestDoctorResourceChecks(t *testing.T) {
 			}
 		})
 	}
+	if got := checkPools(env); got.Problem == nil || got.Problem.Actions[0].Command != "miren sandbox-pool list" {
+		t.Fatalf("pool diagnostic suggests invalid command: %+v", got)
+	}
 	env.indexErr = context.DeadlineExceeded
 	if got := checkEntityIndexes(env); got.Status != checkWarn {
 		t.Fatalf("timed-out index check = %+v, want warning", got)
@@ -139,6 +153,11 @@ func TestDoctorResourceChecks(t *testing.T) {
 	env.resources = nil
 	env.resourcesErr = context.DeadlineExceeded
 	env.indexErr = nil
+	for _, check := range []func(*doctorEnv) checkResult{checkSandboxes, checkPools, checkDisks} {
+		if got := check(env); got.Status != checkSkip {
+			t.Fatalf("incomplete resource scan reported health: %+v", got)
+		}
+	}
 	if got := checkEntityIndexes(env); got.Status != checkWarn {
 		t.Fatalf("independent index check = %+v, want warning for two orphans", got)
 	}

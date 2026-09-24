@@ -22,7 +22,9 @@ type doctorResources struct {
 }
 
 func gatherDoctorResources(ctx *Context) (*doctorResources, error) {
-	cl, err := ctx.RPCClient("entities")
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cl, err := ctx.rpcClient(probeCtx, "entities")
 	if err != nil {
 		return nil, err
 	}
@@ -30,43 +32,54 @@ func gatherDoctorResources(ctx *Context) (*doctorResources, error) {
 	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
 	r := &doctorResources{}
 	for _, kindName := range []string{"sandbox_pool", "sandbox", "disk", "disk_volume"} {
-		kind, err := eac.LookupKind(ctx, kindName)
+		kind, err := eac.LookupKind(probeCtx, kindName)
 		if err != nil {
 			return nil, fmt.Errorf("lookup %s: %w", kindName, err)
 		}
-		list, err := eac.List(ctx, kind.Attr())
-		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", kindName, err)
-		}
-		for _, entry := range list.Values() {
-			switch kindName {
-			case "sandbox_pool":
-				var pool compute_v1alpha.SandboxPool
-				pool.Decode(entry.Entity())
-				r.pools = append(r.pools, pool)
-			case "sandbox":
-				var sb compute_v1alpha.Sandbox
-				sb.Decode(entry.Entity())
-				var meta core_v1alpha.Metadata
-				meta.Decode(entry.Entity())
-				pool, _ := meta.Labels.Get("pool")
-				r.sandboxes = append(r.sandboxes, sandboxHealthRecord{Sandbox: sb, Pool: pool, Updated: time.UnixMilli(entry.UpdatedAt())})
-			case "disk":
-				var disk storage_v1alpha.Disk
-				disk.Decode(entry.Entity())
-				r.disks = append(r.disks, disk)
-			case "disk_volume":
-				var volume storage_v1alpha.DiskVolume
-				volume.Decode(entry.Entity())
-				r.volumes = append(r.volumes, volume)
+		for cursor := ""; ; {
+			page, err := eac.ListPage(probeCtx, kind.Attr(), cursor, 200)
+			if err != nil {
+				return nil, fmt.Errorf("list %s: %w", kindName, err)
+			}
+			for _, entry := range page.Values() {
+				switch kindName {
+				case "sandbox_pool":
+					var pool compute_v1alpha.SandboxPool
+					pool.Decode(entry.Entity())
+					r.pools = append(r.pools, pool)
+				case "sandbox":
+					var sb compute_v1alpha.Sandbox
+					sb.Decode(entry.Entity())
+					var meta core_v1alpha.Metadata
+					meta.Decode(entry.Entity())
+					pool, _ := meta.Labels.Get("pool")
+					r.sandboxes = append(r.sandboxes, sandboxHealthRecord{Sandbox: sb, Pool: pool, Updated: time.UnixMilli(entry.UpdatedAt())})
+				case "disk":
+					var disk storage_v1alpha.Disk
+					disk.Decode(entry.Entity())
+					r.disks = append(r.disks, disk)
+				case "disk_volume":
+					var volume storage_v1alpha.DiskVolume
+					volume.Decode(entry.Entity())
+					r.volumes = append(r.volumes, volume)
+				}
+			}
+			cursor = page.Cursor()
+			if cursor == "" {
+				break
 			}
 		}
+	}
+	if err := probeCtx.Err(); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
 
 func gatherDoctorIndex(ctx *Context) (int64, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	// This is a full-store scan, not a connectivity probe. Keep it bounded,
+	// but allow a larger cluster enough time to finish.
+	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cl, err := ctx.rpcClient(probeCtx, "entities")
 	if err != nil {
@@ -103,7 +116,7 @@ func checkEntityIndexes(env *doctorEnv) checkResult {
 	if env.indexErr != nil {
 		return checkResult{Status: checkWarn, Summary: "index scan unavailable", Problem: &ui.Diagnostic{
 			Summary: "could not check for orphaned index entries", Detail: env.indexErr.Error(),
-			Actions: []ui.Action{{Command: "miren version", Note: "check that the server supports index diagnostics"}, {Command: "miren doctor", Note: "retry the bounded scan"}},
+			Actions: []ui.Action{{Command: "miren version", Note: "check that the server supports index diagnostics"}, {Command: "miren debug reindex --dry-run", Note: "run a complete scan without the doctor deadline"}},
 		}}
 	}
 	n := env.orphans
@@ -161,7 +174,7 @@ func checkPools(env *doctorEnv) checkResult {
 	sort.Strings(failing)
 	return checkResult{Status: checkFail, Summary: strings.Join(failing, ", "), Problem: &ui.Diagnostic{
 		Summary: "service pools are crash-looping", Detail: strings.Join(failing, ", "),
-		Actions: []ui.Action{{Command: "miren sandbox pool list", Note: "inspect failing pools"}, {Command: "miren sandbox list --all", Note: "find failed sandboxes"}},
+		Actions: []ui.Action{{Command: "miren sandbox-pool list", Note: "inspect failing pools"}, {Command: "miren sandbox list --all", Note: "find failed sandboxes"}},
 	}}
 }
 

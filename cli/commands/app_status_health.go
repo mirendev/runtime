@@ -29,7 +29,7 @@ type serviceHealth struct {
 
 	lastSandbox string
 	lastExit    time.Time
-	lastFailed  bool
+	lastFailure time.Time
 }
 
 type sandboxHealthRecord struct {
@@ -66,20 +66,13 @@ func summarizeServiceHealth(pools []compute_v1alpha.SandboxPool, sandboxes []san
 			h.Running++
 		case compute_v1alpha.DEAD:
 			h.Dead++
-			when := sb.Exit.At
-			if when.IsZero() {
-				when = record.Updated
+			if !sb.Exit.At.IsZero() && (h.LastExitCode == nil || sb.Exit.At.After(h.lastExit)) {
+				code := sb.Exit.Code
+				h.LastExitCode = &code
+				h.lastExit = sb.Exit.At
 			}
-			failed := !sb.Exit.At.IsZero() && sb.Exit.Code != 0
-			if failed && !h.lastFailed || failed == h.lastFailed && when.After(h.lastExit) {
-				h.lastFailed = failed
-				if !sb.Exit.At.IsZero() {
-					code := sb.Exit.Code
-					h.LastExitCode = &code
-				} else {
-					h.LastExitCode = nil
-				}
-				h.lastExit = when
+			if sb.Exit.Code != 0 && !sb.Exit.At.IsZero() && (h.lastSandbox == "" || sb.Exit.At.After(h.lastFailure)) {
+				h.lastFailure = sb.Exit.At
 				h.lastSandbox = sb.ID.String()
 			}
 		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.STOPPED:
@@ -96,7 +89,10 @@ func summarizeServiceHealth(pools []compute_v1alpha.SandboxPool, sandboxes []san
 func renderServiceHealth(health []serviceHealth) string {
 	var b strings.Builder
 	for _, svc := range health {
-		state := fmt.Sprintf("%d running, %d dead; %d crashes in current streak (last crash in 10 minutes)", svc.Running, svc.Dead, svc.CrashStreak)
+		state := fmt.Sprintf("%d running, %d dead", svc.Running, svc.Dead)
+		if svc.CrashStreak > 0 {
+			state += fmt.Sprintf("; %d crashes in current streak (last within 10m)", svc.CrashStreak)
+		}
 		if svc.CrashLooping {
 			state = infoRed.Render("crash-looping") + ", " + state
 		}
@@ -153,23 +149,38 @@ func fetchServiceHealth(ctx *Context, app string) ([]serviceHealth, error) {
 	if err != nil {
 		return nil, err
 	}
-	sbRes, err := eac.List(ctx, kind.Attr())
-	if err != nil {
-		return nil, err
-	}
 	var sandboxes []sandboxHealthRecord
-	for _, entry := range sbRes.Values() {
-		var meta core_v1alpha.Metadata
-		meta.Decode(entry.Entity())
-		pool, _ := meta.Labels.Get("pool")
-		var sb compute_v1alpha.Sandbox
-		sb.Decode(entry.Entity())
-		sandboxes = append(sandboxes, sandboxHealthRecord{Sandbox: sb, Pool: pool, Updated: time.UnixMilli(entry.UpdatedAt())})
+	selected := make(map[string]bool, len(pools))
+	for _, pool := range pools {
+		selected[pool.ID.String()] = true
+	}
+	// Pool is a metadata label, not an indexed attribute. Page the kind index
+	// rather than materializing every sandbox in the cluster in one RPC.
+	for cursor := ""; ; {
+		page, err := eac.ListPage(ctx, kind.Attr(), cursor, 200)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range page.Values() {
+			var meta core_v1alpha.Metadata
+			meta.Decode(entry.Entity())
+			pool, _ := meta.Labels.Get("pool")
+			if !selected[pool] {
+				continue
+			}
+			var sb compute_v1alpha.Sandbox
+			sb.Decode(entry.Entity())
+			sandboxes = append(sandboxes, sandboxHealthRecord{Sandbox: sb, Pool: pool, Updated: time.UnixMilli(entry.UpdatedAt())})
+		}
+		cursor = page.Cursor()
+		if cursor == "" {
+			break
+		}
 	}
 	health := summarizeServiceHealth(pools, sandboxes, time.Now())
 	for i := range health {
-		if health[i].lastSandbox != "" && health[i].lastExit.After(time.Now().Add(-failureWindow)) && health[i].CrashStreak > 0 {
-			health[i].LastFailureLog = recentSandboxFailureLog(ctx, health[i].lastSandbox, health[i].lastExit)
+		if health[i].lastSandbox != "" && health[i].lastFailure.After(time.Now().Add(-failureWindow)) && health[i].CrashStreak > 0 {
+			health[i].LastFailureLog = recentSandboxFailureLog(ctx, health[i].lastSandbox, health[i].lastFailure)
 		}
 	}
 	return health, nil
