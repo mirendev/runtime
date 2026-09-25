@@ -25,7 +25,7 @@ Yes. Add a `Dockerfile.miren` to your project root. Miren builds from it instead
 guessing the stack — see [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::tip[Want native support?]
-Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+Miren auto-detects and builds [common stacks](./index.md#auto-detected-vs-dockerfile)
 without a Dockerfile. This language isn't one of them yet — if you'd like first-class
 support, [request it](https://linear.miren.garden/suggest).
 :::

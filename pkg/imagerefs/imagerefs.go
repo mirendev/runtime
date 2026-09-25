@@ -90,6 +90,63 @@ func GetNodeImage(version string) string {
 	return "oci.miren.cloud/node:" + version + "-slim"
 }
 
+// hexpm tags pair an Elixir release with a specific OTP release and a dated
+// Debian rebuild (1.19.6-erlang-28.5.0.7-debian-bookworm-20260918-slim), so
+// there is no floating "1.19" tag to point at. ElixirReleases maps the
+// versions people actually write onto tags known to exist in one rebuild, and
+// is bumped deliberately, all at once. It must stay on bookworm so the
+// release's ERTS links against the same glibc and OpenSSL as DebianSlim, where
+// the release runs.
+const elixirBuild = "debian-bookworm-20260918-slim"
+
+// ElixirRelease is the build we use for one Elixir minor version.
+type ElixirRelease struct {
+	// Patch is the full Elixir version built for this minor.
+	Patch string
+	// OTP maps each supported OTP major to the full OTP version built.
+	OTP map[string]string
+	// DefaultOTP is the OTP major used when none is asked for.
+	DefaultOTP string
+}
+
+// ElixirReleases is keyed by Elixir minor version ("1.19").
+var ElixirReleases = map[string]ElixirRelease{
+	"1.16": {Patch: "1.16.3", DefaultOTP: "26", OTP: map[string]string{"24": "24.3.4.17", "25": "25.3.2.21", "26": "26.2.5.21"}},
+	"1.17": {Patch: "1.17.3", DefaultOTP: "27", OTP: map[string]string{"25": "25.3.2.21", "26": "26.2.5.21", "27": "27.3.4.18"}},
+	"1.18": {Patch: "1.18.5", DefaultOTP: "27", OTP: map[string]string{"25": "25.3.2.21", "26": "26.2.5.21", "27": "27.3.4.18"}},
+	"1.19": {Patch: "1.19.6", DefaultOTP: "28", OTP: map[string]string{"26": "26.2.5.21", "27": "27.3.4.18", "28": "28.5.0.7"}},
+	"1.20": {Patch: "1.20.4", DefaultOTP: "28", OTP: map[string]string{"27": "27.3.4.18", "28": "28.5.0.7", "29": "29.1.1"}},
+}
+
+// ElixirDefaultVersion is the Elixir minor used when an app doesn't pick one.
+const ElixirDefaultVersion = "1.19"
+
+// ElixirDefaultTag is the full hexpm tag for ElixirDefaultVersion on its
+// default OTP.
+var ElixirDefaultTag = ElixirTag(ElixirDefaultVersion, ElixirReleases[ElixirDefaultVersion].DefaultOTP)
+
+// ElixirTag returns the hexpm tag for an Elixir minor and OTP major from
+// ElixirReleases, or "" when that pairing isn't in the table.
+func ElixirTag(minor, otpMajor string) string {
+	rel, ok := ElixirReleases[minor]
+	if !ok {
+		return ""
+	}
+	otp, ok := rel.OTP[otpMajor]
+	if !ok {
+		return ""
+	}
+	return rel.Patch + "-erlang-" + otp + "-" + elixirBuild
+}
+
+// GetElixirImage returns a hexpm/elixir builder image reference for the given
+// full hexpm tag (e.g. ElixirDefaultTag). It keeps the hexpm/ namespace rather
+// than a bare "elixir", which on Docker Hub is a different image with
+// different tags.
+func GetElixirImage(tag string) string {
+	return "oci.miren.cloud/hexpm/elixir:" + tag
+}
+
 // GetRustImage returns a Rust image reference with the specified version
 func GetRustImage(version string) string {
 	return "oci.miren.cloud/rust:" + version

@@ -1,193 +1,120 @@
 ---
 title: Elixir on Miren
-description: Deploy Elixir and Phoenix apps on Miren with a Dockerfile.miren that builds a Mix release.
-keywords: [elixir, phoenix, mix release, otp, ecto, secret_key_base, dockerfile, deploy]
+description: Deploy Elixir and Phoenix apps on Miren. Miren detects mix.exs, builds a Mix release, and runs it on a slim image, no Dockerfile required.
+keywords: [elixir, phoenix, mix release, otp, ecto, liveview, secret_key_base, deploy]
 ---
 
 import CliCommand from '@site/src/components/CliCommand';
 
 # Elixir on Miren
 
-Elixir isn't auto-detected, so you deploy it with a `Dockerfile.miren` that builds a
-Mix release. This guide uses Phoenix as the example — the same pattern works for any
-Elixir release. The Dockerfile and steps below were validated end-to-end on a live
-Miren cluster with a fresh `mix phx.new` app, Postgres addon, and migrations.
+Miren auto-detects Elixir apps from `mix.exs`, builds a [Mix
+release](https://hexdocs.pm/mix/Mix.Tasks.Release.html), and ships just the release on a
+slim Debian image. Phoenix apps get their assets built and their endpoint started
+automatically. No Dockerfile required.
 
 :::tip[Let your agent do this]
 Ask your AI coding agent to "set up this Phoenix app on Miren" after installing the
-[Miren agent skills](../agent-skills.md). It can generate the release
-(`mix phx.gen.release`), drop in the `Dockerfile.miren`, wire up the database addon and
-secrets, and deploy — using this page as its reference.
+[Miren agent skills](../agent-skills.md). It wires up the database addon and secrets and
+deploys, using this page as its reference.
 :::
 
 ## Does this source build need a Dockerfile?
 
-Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
-project root. Miren builds from it instead of guessing the stack — see
+No. Miren detects Elixir from `mix.exs` and builds the release for you. Provide a
+`Dockerfile.miren` only for custom build steps. See
 [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
-:::tip[Want native support?]
-Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
-without a Dockerfile. This language isn't one of them yet — if you'd like first-class
-support, [request it](https://linear.miren.garden/suggest).
-:::
+## Set up the app
 
-## Generate a release
-
-If you're on Phoenix and haven't set up a release yet:
-
-```bash
-mix phx.gen.release
-```
-
-This generates `rel/overlays/bin/server` and `rel/overlays/bin/migrate`, which get
-copied into the release root during `mix release`.
-
-:::info[Version requirements]
-Phoenix 1.8+ requires Elixir 1.15+ (1.18 recommended) and works well on Erlang/OTP 27.
-Match the Elixir image's OTP suffix to your Erlang version.
-:::
-
-## The Dockerfile
-
-Create `Dockerfile.miren` in your project root. Replace `my_app` with your OTP app name
-(the `:app` in `mix.exs`):
-
-```dockerfile
-ARG ELIXIR_VERSION=1.18.4
-ARG OTP_VERSION=27.3.4
-ARG DEBIAN_CODENAME=bookworm
-
-ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_CODENAME}-20250929-slim"
-ARG RUNNER_IMAGE="debian:${DEBIAN_CODENAME}-slim"
-
-# ----- Build stage -----
-FROM ${BUILDER_IMAGE} AS builder
-
-RUN apt-get update -y && apt-get install -y build-essential git \
-    && apt-get clean && rm -f /var/lib/apt/lists/*_*
-
-WORKDIR /app
-RUN mix local.hex --force && mix local.rebar --force
-
-ENV MIX_ENV="prod"
-
-COPY mix.exs mix.lock ./
-RUN mix deps.get --only $MIX_ENV
-RUN mkdir config
-COPY config/config.exs config/${MIX_ENV}.exs config/
-RUN mix deps.compile
-
-COPY priv priv
-COPY lib lib
-COPY assets assets
-COPY rel rel
-
-RUN mix compile
-RUN mix assets.deploy
-
-COPY config/runtime.exs config/
-RUN mix release
-
-# ----- Runtime stage -----
-FROM ${RUNNER_IMAGE}
-
-RUN apt-get update -y && \
-    apt-get install -y libstdc++6 openssl libncurses5 locales ca-certificates \
-    && apt-get clean && rm -f /var/lib/apt/lists/*_*
-
-RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
-ENV LANG=en_US.UTF-8
-ENV LANGUAGE=en_US:en
-ENV LC_ALL=en_US.UTF-8
-
-WORKDIR /app
-RUN chown nobody /app
-ENV MIX_ENV="prod"
-
-COPY --from=builder --chown=nobody:root /app/_build/${MIX_ENV}/rel/my_app ./
-
-USER nobody
-
-ENV PHX_SERVER=true
-EXPOSE 4000
-
-CMD ["/app/bin/server"]
-```
-
-:::warning[Two easy-to-miss build steps]
-`mix compile` must run **before** `mix assets.deploy` — Phoenix 1.8's colocated
-LiveView JavaScript is generated during compile and esbuild needs it. And you must
-`COPY rel rel` so the `bin/server` and `bin/migrate` overlay scripts exist in the
-release. Skipping either produces a build that fails at runtime.
-:::
-
-Pick a `hexpm/elixir` tag that actually exists — not every date is published. Browse
-[hub.docker.com/r/hexpm/elixir/tags](https://hub.docker.com/r/hexpm/elixir/tags).
-
-### .dockerignore
-
-Keep build artifacts out of the image context:
-
-```text
-.git
-_build
-deps
-*.ez
-erl_crash.dump
-priv/static/assets
-priv/static/cache_manifest.json
-node_modules
-.elixir_ls
-.env
-mise.toml
-```
-
-## Deploy
-
-The Dockerfile's `CMD` starts the app. Miren uses it as the web service's startup default,
-so you don't need a `Procfile` or service command.
-
-Create `.miren/app.toml` naming your app and declaring the database addon
-(covered in the next section):
-
-```toml
-name = "my_app"
-
-[addons.miren-postgresql]
-variant = "small"
-```
-
-Phoenix's generated `config/runtime.exs` already reads `PORT` (defaulting to 4000) and
-binds the endpoint to `0.0.0.0`, so it works with Miren's injected `PORT` without changes.
-
-Before you deploy, wire up the database and secrets the release needs at boot — see the
-next section — then deploy from your project root:
+From your project root:
 
 <CliCommand context="client">
 ```miren
+miren init
 miren deploy
 ```
 </CliCommand>
 
+For a Phoenix app, `miren init` generates and stores `SECRET_KEY_BASE` for you, and
+flags the other variables your app reads. Set those before the first deploy (see
+[Environment variables](#environment-variables)).
+
+### Build process
+
+Miren builds on the [hexpm/elixir](https://hub.docker.com/r/hexpm/elixir) image with
+`MIX_ENV=prod`:
+
+1. `mix deps.get --only prod` and `mix deps.compile`, from `mix.exs`, `mix.lock` and
+   `config/` alone, so dependency builds are cached across code changes.
+2. `mix compile`.
+3. `mix assets.deploy`, if your `mix.exs` defines that alias (Phoenix apps do).
+4. `mix release`.
+
+The release bundles the Erlang runtime, so the final image is `debian:bookworm-slim`
+plus the release at `/app`. The Elixir toolchain and your source stay behind.
+
+### Versions
+
+Miren picks the Elixir and Erlang/OTP versions in this order:
+
+1. `[build] version` in `.miren/app.toml`
+2. The `elixir` (and `erlang`) entries in `.tool-versions` or `mise.toml`
+3. The default, **Elixir 1.19 on Erlang/OTP 28**
+
+Versions take the forms version managers use: `1.18`, `1.18.4`, or `1.18.4-otp-27`.
+An `erlang` entry picks the OTP when the Elixir version doesn't. Miren builds
+Elixir 1.16 through 1.20, each on its most recent patch release, so `1.18.4` builds on
+1.18.5. The build output says exactly which versions it used.
+
+```toml
+[build]
+version = "1.18-otp-26"
+```
+
+For an exact pairing outside that set, set `version` to a full
+[hexpm/elixir tag](https://hub.docker.com/r/hexpm/elixir/tags) on Debian bookworm,
+such as `1.18.4-erlang-27.3.4.18-debian-bookworm-20260918-slim`.
+
+### Release name
+
+Miren builds the release named in a `releases:` block in `mix.exs`, or, without one,
+the default release named after your OTP app (the `app:` in `project/0`). Umbrella
+projects need a `releases:` block.
+
+In an umbrella Phoenix app, Miren doesn't build the web app's assets yet, since they
+live under `apps/`. Build them with an `onbuild` command, which runs before the
+release is assembled:
+
+```toml
+[build]
+onbuild = ["cd apps/my_app_web && mix assets.deploy"]
+```
+
+### Start command
+
+The web service runs `/app/bin/<release> start`. For Phoenix, Miren sets
+`PHX_SERVER=true` so the endpoint starts, and the `runtime.exs` from `mix phx.new`
+already binds `$PORT` on all interfaces. Other apps should read `PORT` from the
+environment and bind `0.0.0.0`.
+
 ## Environment variables
 
 A production Phoenix app needs a database and a few secrets, and they must exist
-**before the app boots** — `config/runtime.exs` raises on a missing `DATABASE_URL` or
-`SECRET_KEY_BASE`. Set them before your first `miren deploy`.
+**before the app boots**: `config/runtime.exs` raises on a missing `DATABASE_URL` or
+`SECRET_KEY_BASE`.
 
 :::warning[Set secrets before the app serves traffic]
 A web app autoscales to zero, so a deploy can report success without ever starting an
-instance — the missing-secret error only surfaces when the first request tries to boot
+instance. The missing-secret error only surfaces when the first request tries to boot
 one, and the instance crashes. Configure the addon and secrets first.
 :::
 
 ### Database via an addon
 
-The simplest way to get `DATABASE_URL` is a managed Postgres [addon](../addons.md) — Miren
-provisions it and injects the connection string (plus `PG*` variables) as environment
-variables automatically. Declare it in `.miren/app.toml` (as shown in
-[Deploy](#deploy)):
+The simplest way to get `DATABASE_URL` is a managed Postgres [addon](../addons.md).
+Miren provisions it and injects the connection string (plus `PG*` variables)
+automatically. Declare it in `.miren/app.toml`:
 
 ```toml
 [addons.miren-postgresql]
@@ -196,35 +123,35 @@ variant = "small"
 
 ### Secrets and settings
 
-Set the remaining variables with `miren env set` — `-s` masks secrets in output and logs:
+`miren init` stores a generated `SECRET_KEY_BASE`. Set the rest with `miren env set`,
+where `-s` masks secrets in output and logs:
 
 <CliCommand context="client">
 ```miren
-miren env set -s SECRET_KEY_BASE
 miren env set -e PHX_HOST=my_app.example.com
 ```
 </CliCommand>
 
-Generate `SECRET_KEY_BASE` with `mix phx.gen.secret` (or `openssl rand -base64 64`) and
-paste it at the masked prompt. You can also set these at deploy time with
-`miren deploy -s SECRET_KEY_BASE=... -e PHX_HOST=...`.
-
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `DATABASE_URL` | Yes | Injected by the `miren-postgresql` addon; or set manually (`ecto://USER:PASS@HOST/DATABASE`) |
-| `SECRET_KEY_BASE` | Yes | Generate with `mix phx.gen.secret` |
-| `PHX_HOST` | Yes | Public hostname used for URL generation |
-| `PHX_SERVER` | Set in Dockerfile | Enables the HTTP server in the release |
-| `PORT` | No | Injected by Miren; `runtime.exs` defaults to 4000 |
+| `DATABASE_URL` | Yes | Injected by the `miren-postgresql` addon |
+| `SECRET_KEY_BASE` | Yes | Generated by `miren init`, or `mix phx.gen.secret` |
+| `PHX_HOST` | For LiveView | Your public hostname. Phoenix uses it for URLs and for the websocket origin check, so LiveView can't connect until it matches your route |
+| `PHX_SERVER` | Set by Miren | Starts the endpoint in the release |
+| `PORT` | No | Injected by Miren |
 | `POOL_SIZE` | No | DB pool size, defaults to 10 |
 | `DNS_CLUSTER_QUERY` | No | Enables Erlang clustering via DNS discovery |
 
-See [App Configuration — Environment Variables](../app-configuration.md#environment-variables).
+Miren also scans your code and config for `System.fetch_env!/1` and
+`System.get_env/1` and reports what it finds. A `fetch_env!` or a `get_env(...) ||
+raise` counts as required.
+
+See [App Configuration: Environment Variables](../app-configuration.md#environment-variables).
 
 ## Migrations
 
-The release includes a `migrate` script at `/app/bin/migrate` (from
-`mix phx.gen.release`). Run it against your deployed app to apply migrations:
+Run migrations with a one-off command against the release. If you generated release
+helpers with `mix phx.gen.release`, use its `migrate` script:
 
 <CliCommand context="client">
 ```miren
@@ -232,28 +159,33 @@ miren app run -a my_app -- /app/bin/migrate
 ```
 </CliCommand>
 
+Otherwise, call your release module directly, for example
+`/app/bin/my_app eval "MyApp.Release.migrate()"`. Running migrations at boot from your
+application's supervision tree (with `Ecto.Migrator`) also works well for small apps.
+
 ## Clustering
 
-A plain Phoenix app with controller routes is stateless — run multiple replicas behind
-Miren's load balancer with no extra setup. Erlang clustering (for cross-node LiveView
-or channels) is off unless you set `DNS_CLUSTER_QUERY` to a headless DNS name that
-resolves all instance IPs, which activates the scaffolded `DNSCluster`.
+A Phoenix app is stateless by default, so you can run multiple replicas behind Miren's
+load balancer with no extra setup. Erlang clustering (for cross-node PubSub, presence,
+or distributed LiveView) stays off unless you set `DNS_CLUSTER_QUERY` to a DNS name that
+resolves all instance IPs, which activates the `DNSCluster` that `mix phx.new`
+scaffolds.
 
 ## Agent quick reference
 
-- **Detection:** none — requires `Dockerfile.miren` (multi-stage Mix release)
-- **Release:** `mix phx.gen.release`; `mix compile` **before** `mix assets.deploy`; `COPY rel rel`
-- **Runtime image:** `debian-slim` is fine — `mix release` bundles ERTS, so the runner needs no Erlang install
-- **Runtime env:** `PHX_SERVER=true` in the Dockerfile; endpoint binds `0.0.0.0:$PORT` via `runtime.exs`
-- **Startup:** inherited from the Dockerfile `CMD`; no `Procfile` or service command needed
-- **Secrets first:** set `SECRET_KEY_BASE` + `PHX_HOST` before the app serves traffic, or the instance crashloops
-- **Database:** `[addons.miren-postgresql]` injects `DATABASE_URL` (and `PG*`) automatically
-- **Migrations:** `miren app run -a <app> -- /app/bin/migrate`
-- **Image tags:** pick an existing `hexpm/elixir` tag; match the OTP suffix to your Erlang version
+- **Detection:** `mix.exs` in the project
+- **Version:** `[build] version`, else `.tool-versions` / `mise.toml`, else Elixir 1.19 / OTP 28; forms like `1.18`, `1.18.4-otp-27`, or a full bookworm hexpm tag
+- **Build:** `deps.get`, `deps.compile`, `compile`, `assets.deploy` (if aliased), `release`, all with `MIX_ENV=prod`
+- **Release:** the `releases:` entry in `mix.exs`, else the OTP app name; umbrellas need `releases:`
+- **Umbrella Phoenix:** web app assets aren't built automatically; add `cd apps/<app>_web && mix assets.deploy` to `[build] onbuild`
+- **Start command:** `/app/bin/<release> start`; `PHX_SERVER=true` is set for Phoenix
+- **Secrets:** `SECRET_KEY_BASE` generated by `miren init`; set `PHX_HOST` for LiveView
+- **Database:** `[addons.miren-postgresql]` injects `DATABASE_URL` (and `PG*`)
+- **Migrations:** `miren app run -a <app> -- /app/bin/migrate` (from `mix phx.gen.release`)
+- **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
 
 ## Next steps
 
-- [Using Dockerfile.miren](./index.md#using-dockerfilemiren) — how custom builds work
-- [Addons](../addons.md) — managed Postgres and other backing services
-- [App Configuration](../app-configuration.md) — customize `.miren/app.toml`
-- [Deployment](../deployment.md) — how deploys build and activate
+- [Addons](../addons.md): managed Postgres and other backing services
+- [App Configuration](../app-configuration.md): customize `.miren/app.toml`
+- [Deployment](../deployment.md): how deploys build and activate

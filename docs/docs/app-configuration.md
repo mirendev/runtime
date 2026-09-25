@@ -56,7 +56,7 @@ miren deploy
 
 ### Detection
 
-For each supported stack (Python, Node.js, Bun, Go, Ruby, Rust), `miren init`:
+For each supported stack (Python, Node.js, Bun, Go, Ruby, Rust, Elixir), `miren init`:
 
 - Reads your manifest (`Gemfile`, `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`) to map known libraries to the env vars they typically expect — `pg` → `DATABASE_URL`, `@sentry/node` → `SENTRY_DSN`, and so on.
 - Greps your source code for direct env reads (`ENV['X']`, `process.env.X`, `os.Getenv("X")`, `std::env::var("X")`, `Bun.env.X`) and notes whether each one has a fallback.

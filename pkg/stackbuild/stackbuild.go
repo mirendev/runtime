@@ -96,6 +96,9 @@ func DetectStack(dir string, opts BuildOptions) (Stack, error) {
 	stacks := []Stack{
 		&RubyStack{MetaStack: ms},
 		&PythonStack{MetaStack: ms},
+		// Ahead of Bun/Node: a Phoenix app may carry a package.json for its
+		// assets, which the npm augmentation handles.
+		&ElixirStack{MetaStack: ms},
 		&BunStack{MetaStack: ms},
 		&NodeStack{MetaStack: ms},
 		&GoStack{MetaStack: ms},
