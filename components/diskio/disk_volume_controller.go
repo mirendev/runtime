@@ -421,13 +421,35 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 
 	c.log.Info("deleting disk volume", "entity_id", entityId)
 
+	volState := c.state.GetVolume(entityId)
+	if volState == nil {
+		c.log.Warn("volume not found in state", "entity_id", entityId)
+		// A restore can put its image in place before the volume's first
+		// reconcile. If deletion wins that race, no local state owns the
+		// directory, so reclaim it here rather than orphaning the image.
+		if volume.ActualState == storage_v1alpha.DV_PENDING {
+			volumePath := c.getVolumePath(entityId)
+			if c.ops.VolumePathExists(volumePath) {
+				imagePath := filepath.Join(volumePath, "disk.img")
+				dev, err := c.mntOps.FindLoopByBacking(imagePath)
+				if err != nil {
+					return fmt.Errorf("checking pending volume backing: %w", err)
+				}
+				if dev != "" {
+					return fmt.Errorf("pending volume image %s is still attached to %s", imagePath, dev)
+				}
+				if err := c.ops.RemoveVolumeDir(volumePath); err != nil {
+					return fmt.Errorf("removing untracked pending volume directory %s: %w", volumePath, err)
+				}
+			}
+		}
+	}
+
 	if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_DELETING, "", ""); err != nil {
 		c.log.Warn("failed to update volume state to deleting", "error", err)
 	}
 
-	volState := c.state.GetVolume(entityId)
 	if volState == nil {
-		c.log.Warn("volume not found in state", "entity_id", entityId)
 		if err := c.updateVolumeState(ctx, volume.ID, storage_v1alpha.DV_DELETED, "", ""); err != nil {
 			c.log.Warn("failed to update volume state to deleted", "error", err)
 		}

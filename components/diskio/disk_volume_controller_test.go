@@ -560,6 +560,68 @@ func TestDiskVolumeControllerDeleteNotInState(t *testing.T) {
 	assert.Equal(t, storage_v1alpha.DV_DELETED, updated.ActualState)
 }
 
+func TestDiskVolumeControllerDeleteUntrackedPendingImage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		attached  bool
+		removeErr bool
+	}{
+		{name: "unattached"},
+		{name: "attached", attached: true},
+		{name: "remove failure", removeErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			es, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			dataPath := t.TempDir()
+			state := NewState()
+			ops := newMockDiskVolumeOps()
+			mntOps := newMockDiskMountOps()
+			volumePath := filepath.Join(dataPath, "volumes", "vol-pending")
+			imagePath := filepath.Join(volumePath, "disk.img")
+			ops.existingPaths[volumePath] = true
+			if tc.attached {
+				mntOps.loopBacking = make(map[string]string)
+				mntOps.loopBacking[imagePath] = "/dev/loop7"
+			}
+			if tc.removeErr {
+				ops.removeDirErr = errors.New("disk I/O failure")
+			}
+
+			vc := NewDiskVolumeController(testutils.TestLogger(t), dataPath, compute.NewNodeId("test-node-1"), state, ops, mntOps)
+			vc.SetEAC(es.EAC)
+			vol := &storage_v1alpha.DiskVolume{
+				ID:           "disk_volume/vol-pending",
+				NodeId:       compute.NewNodeId("test-node-1").Id(),
+				DesiredState: storage_v1alpha.DV_ABSENT,
+				ActualState:  storage_v1alpha.DV_PENDING,
+			}
+			createDiskVolumeEntity(ctx, t, es, vol)
+
+			err := vc.reconcileVolume(ctx, vol)
+			resp, getErr := es.EAC.Get(ctx, string(vol.ID))
+			require.NoError(t, getErr)
+			var updated storage_v1alpha.DiskVolume
+			updated.Decode(resp.Entity().Entity())
+			if tc.attached {
+				require.ErrorContains(t, err, "still attached")
+				assert.Empty(t, ops.removedDirs)
+				assert.Equal(t, storage_v1alpha.DV_PENDING, updated.ActualState)
+			} else if tc.removeErr {
+				require.ErrorContains(t, err, "disk I/O failure")
+				assert.Empty(t, ops.removedDirs)
+				assert.Equal(t, storage_v1alpha.DV_PENDING, updated.ActualState)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, []string{volumePath}, ops.removedDirs)
+				assert.Equal(t, storage_v1alpha.DV_DELETED, updated.ActualState)
+			}
+		})
+	}
+}
+
 func TestDiskVolumeControllerUniversalMountAtCreation(t *testing.T) {
 	ctx := t.Context()
 	log := testutils.TestLogger(t)
