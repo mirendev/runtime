@@ -115,6 +115,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		etcd.output,
 		buildkit.output,
+		registryHostMapping.output,
 		observability.output,
 	)
 	appData := newAppDataBoot(foundation.output)
@@ -160,7 +161,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	serverInfo := newServerInfoBoot(instance, foundation.output)
 	serverLifecycle := newServerLifecycleBoot(serverLifecycleInputsFrom(options), instance, foundation.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output, serverLifecycle.output)
-	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
+	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.output, sandboxHost.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
 		buildSagaRecoveryInputs(options),
