@@ -3125,7 +3125,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 
 		ids := []Id{Id(created.Id())}
 
-		pinned, undecodable, err := store.getEntities(t.Context(), ids, false, before)
+		pinned, undecodable, err := store.getEntities(t.Context(), ids, before)
 		require.NoError(t, err)
 		require.Len(t, pinned, 1)
 		require.NotNil(t, pinned[0], "the entity existed at that revision")
@@ -3135,7 +3135,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		assert.Equal(t, "before", doc.Value.String(),
 			"a pinned read must see the entity as it was, not as it is")
 
-		current, _, err := store.getEntities(t.Context(), ids, false, 0)
+		current, _, err := store.getEntities(t.Context(), ids, 0)
 		require.NoError(t, err)
 		require.Len(t, current, 1)
 		require.NotNil(t, current[0])
@@ -3159,7 +3159,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		// slice and silently shift every entity after it onto the wrong id.
 		ids := []Id{"missing-before", Id(created.Id()), "missing-after"}
 
-		entities, undecodable, err := store.getEntities(t.Context(), ids, false, 0)
+		entities, undecodable, err := store.getEntities(t.Context(), ids, 0)
 		require.NoError(t, err)
 		require.Len(t, entities, 3)
 		assert.Nil(t, entities[0])
@@ -3183,7 +3183,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		require.NoError(t, err)
 
 		entities, _, err := store.getEntities(t.Context(),
-			[]Id{Id(first.Id()), Id(later.Id())}, false, first.GetRevision())
+			[]Id{Id(first.Id()), Id(later.Id())}, first.GetRevision())
 		require.NoError(t, err)
 		require.Len(t, entities, 2)
 		assert.NotNil(t, entities[0])
@@ -3193,7 +3193,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 	t.Run("returns an indexable map for an empty request", func(t *testing.T) {
 		store, _ := setupTestEtcdStore(t)
 
-		entities, undecodable, err := store.getEntities(t.Context(), nil, false, 0)
+		entities, undecodable, err := store.getEntities(t.Context(), nil, 0)
 		require.NoError(t, err)
 		assert.Empty(t, entities)
 

@@ -560,6 +560,114 @@ func TestDiskVolumeControllerDeleteNotInState(t *testing.T) {
 	assert.Equal(t, storage_v1alpha.DV_DELETED, updated.ActualState)
 }
 
+func TestDiskVolumeControllerDeleteUntrackedPendingImage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		attached bool
+		moveErr  bool
+	}{
+		{name: "unattached"},
+		{name: "attached", attached: true},
+		{name: "move failure", moveErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			es, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			dataPath := t.TempDir()
+			state := NewState()
+			ops := newMockDiskVolumeOps()
+			mntOps := newMockDiskMountOps()
+			volumePath := filepath.Join(dataPath, "volumes", "vol-pending")
+			imagePath := filepath.Join(volumePath, "disk.img")
+			require.NoError(t, os.MkdirAll(volumePath, 0755))
+			require.NoError(t, os.WriteFile(imagePath, []byte("recovered data"), 0600))
+			ops.existingPaths[volumePath] = true
+			if tc.attached {
+				mntOps.loopBacking = make(map[string]string)
+				mntOps.loopBacking[imagePath] = "/dev/loop7"
+			}
+			if tc.moveErr {
+				ops.moveDirErr = errors.New("disk I/O failure")
+			}
+
+			vc := NewDiskVolumeController(testutils.TestLogger(t), dataPath, compute.NewNodeId("test-node-1"), state, ops, mntOps)
+			vc.SetEAC(es.EAC)
+			vol := &storage_v1alpha.DiskVolume{
+				ID:           "disk_volume/vol-pending",
+				NodeId:       compute.NewNodeId("test-node-1").Id(),
+				DesiredState: storage_v1alpha.DV_ABSENT,
+				ActualState:  storage_v1alpha.DV_PENDING,
+			}
+			createDiskVolumeEntity(ctx, t, es, vol)
+
+			err := vc.reconcileVolume(ctx, vol)
+			resp, getErr := es.EAC.Get(ctx, string(vol.ID))
+			require.NoError(t, getErr)
+			var updated storage_v1alpha.DiskVolume
+			updated.Decode(resp.Entity().Entity())
+			if tc.attached {
+				require.ErrorContains(t, err, "still attached")
+				assert.Empty(t, ops.removedDirs)
+				assert.Empty(t, ops.movedDirs)
+				assert.Equal(t, storage_v1alpha.DV_PENDING, updated.ActualState)
+			} else if tc.moveErr {
+				require.ErrorContains(t, err, "disk I/O failure")
+				assert.Empty(t, ops.removedDirs)
+				assert.Empty(t, ops.movedDirs)
+				assert.Equal(t, storage_v1alpha.DV_PENDING, updated.ActualState)
+				data, readErr := os.ReadFile(imagePath)
+				require.NoError(t, readErr)
+				assert.Equal(t, "recovered data", string(data))
+			} else {
+				require.NoError(t, err)
+				assert.Empty(t, ops.removedDirs)
+				require.Len(t, ops.movedDirs, 1)
+				assert.Equal(t, volumePath, ops.movedDirs[0].src)
+				assert.Equal(t, filepath.Join(dataPath, "deleted-volumes", "vol-pending"), ops.movedDirs[0].dst)
+				assert.Equal(t, storage_v1alpha.DV_DELETED, updated.ActualState)
+			}
+		})
+	}
+}
+
+func TestDiskVolumeControllerSoftDeletesUntrackedUndelete(t *testing.T) {
+	ctx := t.Context()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	volumePath := filepath.Join(dataPath, "volumes", "vol-recovered")
+	require.NoError(t, os.MkdirAll(volumePath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(volumePath, "disk.img"), []byte("recovered data"), 0600))
+
+	log := testutils.TestLogger(t)
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId("test-node-1"), NewState(), NewRealDiskVolumeOps(log), newMockDiskMountOps())
+	vc.SetEAC(es.EAC)
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-recovered",
+		Name:         "recovered",
+		VolumeId:     "vol-recovered",
+		NodeId:       compute.NewNodeId("test-node-1").Id(),
+		DesiredState: storage_v1alpha.DV_ABSENT,
+		ActualState:  storage_v1alpha.DV_PENDING,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+	require.NoError(t, vc.reconcileVolume(ctx, vol))
+
+	deletedPath := filepath.Join(dataPath, "deleted-volumes", "vol-recovered")
+	data, err := os.ReadFile(filepath.Join(deletedPath, "disk.img"))
+	require.NoError(t, err)
+	assert.Equal(t, "recovered data", string(data))
+	meta, err := LoadDeletedVolumeMetadata(deletedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "recovered", meta.DiskName)
+	assert.Equal(t, "vol-recovered", meta.VolumeID)
+	_, err = os.Stat(volumePath)
+	assert.True(t, os.IsNotExist(err))
+}
+
 func TestDiskVolumeControllerUniversalMountAtCreation(t *testing.T) {
 	ctx := t.Context()
 	log := testutils.TestLogger(t)
@@ -1079,4 +1187,116 @@ func TestDiskVolumeControllerAcceleratorNoMountAtCreation(t *testing.T) {
 	volState := state.GetVolume("disk_volume/vol-acc")
 	require.NotNil(t, volState)
 	assert.False(t, volState.Mounted)
+}
+
+// TestDiskVolumeControllerDoesNotAdoptADeletedBacking is the counterpart to the
+// adoption test above, for the case where the loop device is holding a file
+// that is no longer at that path.
+//
+// The kernel reports such a device's backing_file as the original path with
+// " (deleted)" appended. Matching on the path alone makes it look like the
+// image is already attached, so the controller adopts it, finds the old
+// filesystem, decides no formatting is needed, and mounts the contents that
+// were replaced — after a restore wrote a new image and renamed it into place,
+// exactly the data the operator had just discarded.
+//
+// The live image must get its own loop device instead.
+func TestDiskVolumeControllerDoesNotAdoptADeletedBacking(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+
+	volPath := filepath.Join(dataPath, "volumes", "vol-ghost")
+	mountPath := filepath.Join(dataPath, "vol-ghost")
+	imagePath := filepath.Join(volPath, "disk.img")
+
+	state.SetVolume("disk_volume/vol-ghost", &VolumeState{
+		EntityId:   "disk_volume/vol-ghost",
+		VolumeId:   "vol-ghost",
+		DiskPath:   volPath,
+		SizeBytes:  10 * 1024 * 1024 * 1024,
+		Filesystem: "ext4",
+		Mode:       storage_v1alpha.VM_UNIVERSAL,
+		Mounted:    false,
+		MountPath:  mountPath,
+	})
+	volOps.existingPaths[volPath] = true
+
+	// A loop device still pinning the image that used to be at this path.
+	const ghostLoopDev = "/dev/loop9"
+	mntOps.loopBacking = map[string]string{imagePath: ghostLoopDev}
+	mntOps.deletedBacking = map[string]bool{imagePath: true}
+	mntOps.formattedDevs[ghostLoopDev] = "ext4"
+
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
+	vc.SetEAC(es.EAC)
+
+	vol := &storage_v1alpha.DiskVolume{
+		ID:           "disk_volume/vol-ghost",
+		NodeId:       compute.NewNodeId(nodeId).Id(),
+		SizeGb:       10,
+		Filesystem:   "ext4",
+		VolumeMode:   storage_v1alpha.VM_UNIVERSAL,
+		DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState:  storage_v1alpha.DV_READY,
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+
+	// The live image gets a loop of its own rather than the ghost.
+	require.Len(t, mntOps.attachedLoops, 1,
+		"the live image must be attached rather than the device holding the deleted one")
+
+	require.Len(t, mntOps.mounts, 1)
+	assert.NotEqual(t, ghostLoopDev, mntOps.mounts[0].device,
+		"mounting the device that holds the deleted inode serves the data the operator replaced")
+
+	volState := state.GetVolume("disk_volume/vol-ghost")
+	require.NotNil(t, volState)
+	assert.True(t, volState.Mounted)
+	assert.NotEqual(t, ghostLoopDev, volState.DevicePath)
+}
+
+// TestDiskVolumeControllerOrphanSweepReclaimsDeletedBackings is the other half
+// of the deleted-backing distinction.
+//
+// Adoption must ignore a loop holding an unlinked inode, but the sweep must
+// still reclaim it: a device pinning a file that no longer has a name is
+// precisely the leftover this sweep exists for, and it is what keeps the
+// non-adoption above from leaking a device forever.
+func TestDiskVolumeControllerOrphanSweepReclaimsDeletedBackings(t *testing.T) {
+	ctx := t.Context()
+	log := testutils.TestLogger(t)
+
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	dataPath := t.TempDir()
+	nodeId := "test-node-1"
+	state := NewState()
+	volOps := newMockDiskVolumeOps()
+	mntOps := newMockDiskMountOps()
+
+	ghostImage := filepath.Join(dataPath, "volumes", "vol-ghost", "disk.img")
+	const ghostLoopDev = "/dev/loop11"
+
+	mntOps.loopBacking = map[string]string{ghostImage: ghostLoopDev}
+	mntOps.deletedBacking = map[string]bool{ghostImage: true}
+
+	vc := NewDiskVolumeController(log, dataPath, compute.NewNodeId(nodeId), state, volOps, mntOps)
+	vc.SetEAC(es.EAC)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+
+	assert.Contains(t, mntOps.detachedLoops, ghostLoopDev,
+		"a loop holding an unlinked image under the volumes dir must still be reclaimed")
 }
