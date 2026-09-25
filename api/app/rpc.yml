@@ -258,6 +258,37 @@ types:
         type: int64
         index: 3
 
+  - type: ServiceHealth
+    fields:
+      - name: service
+        type: string
+        index: 0
+      - name: health
+        type: string
+        index: 1
+      - name: running
+        type: int32
+        index: 2
+      - name: dead
+        type: int32
+        index: 3
+      - name: crashCount
+        type: int64
+        index: 4
+      - name: cooldownSeconds
+        type: int32
+        index: 5
+      - name: lastExitCode
+        type: int64
+        index: 6
+        optional: true
+      - name: lastFailureSandbox
+        type: string
+        index: 7
+      - name: lastFailureAt
+        type: standard.Timestamp
+        index: 8
+
   - type: WindowStatus
     fields:
       - name: version
@@ -359,6 +390,10 @@ types:
         element: string
         index: 21
         doc: "Hostnames of this app's routes currently in maintenance, serving a holding page instead of the app. The default route appears as an empty string."
+      - name: services
+        type: list
+        element: '*ServiceHealth'
+        index: 22
 
   - type: LogEntry
     fields:

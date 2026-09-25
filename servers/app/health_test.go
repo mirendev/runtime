@@ -1,14 +1,24 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/apphealth"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func TestPoolHealthClassify(t *testing.T) {
@@ -75,6 +85,80 @@ func TestPoolHealthAccumulate_ExpiredCooldownIgnored(t *testing.T) {
 
 	assert.False(t, h.inCooldown)
 	assert.Equal(t, apphealth.Healthy, h.classify())
+}
+
+func TestCollectServiceHealthUsesSharedCooldownAndLatestExit(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	r := &AppInfo{Log: slog.Default(), EC: ec}
+	now := time.Now().Truncate(time.Second)
+	pools := []compute_v1alpha.SandboxPool{
+		{ID: "pool-db", Service: "db", DesiredInstances: 1, ConsecutiveCrashCount: 7, CooldownUntil: now.Add(3 * time.Minute), LastCrashTime: now.Add(-12 * time.Minute)},
+		{ID: "pool-web", Service: "web", DesiredInstances: 1, ReadyInstances: 1},
+	}
+	failedID, err := ec.Create(ctx, "failed", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 17, At: now.Add(-12 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "success", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 0, At: now.Add(-11 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "retired", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "web", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, BoundPort: []compute_v1alpha.BoundPort{{Port: 8888, Address: "0.0.0.0"}}}, entityserver.WithLabels(types.LabelSet("pool", "pool-web")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "foreign", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 99, At: now}}, entityserver.WithLabels(types.LabelSet("pool", "other")))
+	require.NoError(t, err)
+
+	got, ports, err := r.collectServiceHealth(ctx, pools, nil, now, true)
+	require.NoError(t, err)
+	require.Len(t, ports, 1)
+	assert.EqualValues(t, 8888, ports[0].Port())
+	require.Len(t, got, 2)
+	assert.Equal(t, "db", got[0].Service())
+	assert.Equal(t, apphealth.Crashed, got[0].Health(), "cooldown still active past the 10-minute failure window")
+	assert.EqualValues(t, 7, got[0].CrashCount())
+	assert.EqualValues(t, 3, got[0].Dead())
+	require.True(t, got[0].HasLastExitCode())
+	assert.Zero(t, got[0].LastExitCode(), "latest successful exit replaces the older code")
+	assert.Equal(t, failedID.String(), got[0].LastFailureSandbox())
+	assert.Equal(t, apphealth.Healthy, got[1].Health())
+	assert.EqualValues(t, 1, got[1].Running())
+	fixed, ports, err := r.collectServiceHealth(ctx,
+		[]compute_v1alpha.SandboxPool{{ID: "pool-fixed", Service: "fixed"}},
+		&core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "fixed", Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{Mode: "fixed"}}}}, now, false)
+	require.NoError(t, err)
+	assert.Empty(t, ports)
+	require.Len(t, fixed, 1)
+	assert.Equal(t, apphealth.Starting, fixed[0].Health(), "fixed service at zero must not be classified as idle")
+}
+
+func TestCollectServiceHealthListFailure(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	inmem.Store.OnListIndex = func(context.Context, entity.Attr) ([]entity.Id, error) {
+		return nil, errors.New("sandbox index unavailable")
+	}
+	r := &AppInfo{Log: slog.Default(), EC: entityserver.NewClient(slog.Default(), inmem.EAC)}
+	services, ports, err := r.collectServiceHealth(context.Background(),
+		[]compute_v1alpha.SandboxPool{{ID: "pool-web", Service: "web", DesiredInstances: 1}}, nil, time.Now(), true)
+	require.ErrorContains(t, err, "sandbox index unavailable")
+	assert.Empty(t, services)
+	assert.Empty(t, ports)
+}
+
+func TestEmptyServiceHealthSurvivesRPCEncoding(t *testing.T) {
+	r := &AppInfo{}
+	services, ports, err := r.collectServiceHealth(context.Background(), nil, nil, time.Now(), false)
+	require.NoError(t, err)
+	assert.Empty(t, ports)
+	var status app_v1alpha.ApplicationStatus
+	status.SetServices(services)
+	data, err := cbor.Marshal(&status)
+	require.NoError(t, err)
+	var decoded app_v1alpha.ApplicationStatus
+	require.NoError(t, cbor.Unmarshal(data, &decoded))
+	assert.True(t, decoded.HasServices(), "empty services must differ from an unavailable sandbox scan")
+	assert.Empty(t, decoded.Services())
 }
 
 func TestSpecNeedsNoService(t *testing.T) {

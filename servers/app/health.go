@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -9,6 +10,7 @@ import (
 	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 // specAllowsScaleToZero reports whether an app's resolved config lets it sit at
@@ -73,59 +75,124 @@ func (h *poolHealth) accumulate(pool *compute_v1alpha.SandboxPool, now time.Time
 	}
 }
 
-// collectBoundPortDivergence scans the sandboxes belonging to the given pools
-// and returns the ports they actually bound that diverge from the configured
-// port. The sandbox controller records a bound_port component only on
-// divergence (MIR-1246), so any bound_port present is by definition a port the
-// app chose for itself. Best effort: a listing error just yields no divergence.
-func (r *AppInfo) collectBoundPortDivergence(ctx context.Context, poolIDs map[string]bool) []*app_v1alpha.BoundPort {
-	if len(poolIDs) == 0 {
-		return nil
-	}
+// serviceSandboxHealth uses the same pool classifier as app list, while
+// retaining the sandbox details needed to explain a failure in app status.
+type serviceSandboxHealth struct {
+	pool       poolHealth
+	running    int32
+	dead       int32
+	lastExit   time.Time
+	lastCode   int64
+	hasExit    bool
+	lastFailed time.Time
+	failedID   string
+}
 
-	sbList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
-	if err != nil {
-		r.Log.Warn("failed to list sandboxes for bound-port check", "error", err)
-		return nil
-	}
-
-	seen := make(map[int64]bool)
-	var result []*app_v1alpha.BoundPort
-
-	for sbList.Next() {
-		var sb compute_v1alpha.Sandbox
-		if err := sbList.Read(&sb); err != nil {
-			continue
+func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1alpha.SandboxPool, spec *core_v1alpha.ConfigSpec, now time.Time, hasInstances bool) ([]*app_v1alpha.ServiceHealth, []*app_v1alpha.BoundPort, error) {
+	byService := make(map[string]*serviceSandboxHealth)
+	byPool := make(map[string]*serviceSandboxHealth)
+	for i := range pools {
+		pool := &pools[i]
+		h := byService[pool.Service]
+		if h == nil {
+			h = &serviceSandboxHealth{pool: poolHealth{isAutoscale: true}}
+			if spec != nil {
+				for _, svc := range spec.Services {
+					if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
+						h.pool.isAutoscale = false
+					}
+				}
+			}
+			byService[pool.Service] = h
 		}
+		h.pool.accumulate(pool, now)
+		byPool[pool.ID.String()] = h
+	}
+	if len(pools) == 0 {
+		return []*app_v1alpha.ServiceHealth{}, nil, nil
+	}
 
-		md := sbList.Metadata()
+	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return nil, nil, err
+	}
+	seenPorts := make(map[int64]bool)
+	var boundPorts []*app_v1alpha.BoundPort
+	for list.Next() {
+		md := list.Metadata()
 		if md == nil {
 			continue
 		}
-		poolLabel, _ := md.Labels.Get("pool")
-		if !poolIDs[poolLabel] {
+		poolID, _ := md.Labels.Get("pool")
+		h := byPool[poolID]
+		if h == nil {
 			continue
 		}
-
-		// Only living sandboxes describe where the app is serving now.
-		if sb.Status != compute_v1alpha.RUNNING && sb.Status != compute_v1alpha.PENDING {
+		var sb compute_v1alpha.Sandbox
+		if err := list.Read(&sb); err != nil {
 			continue
 		}
-
-		for _, bp := range sb.BoundPort {
-			if bp.Port == 0 || seen[bp.Port] {
-				continue
+		switch sb.Status {
+		case compute_v1alpha.RUNNING:
+			h.running++
+		case compute_v1alpha.DEAD:
+			h.dead++
+			if !sb.Exit.At.IsZero() {
+				if !h.hasExit || sb.Exit.At.After(h.lastExit) {
+					h.lastCode = sb.Exit.Code
+					h.lastExit = sb.Exit.At
+					h.hasExit = true
+				}
+				if sb.Exit.Code != 0 && (h.failedID == "" || sb.Exit.At.After(h.lastFailed)) {
+					h.lastFailed = sb.Exit.At
+					h.failedID = sb.ID.String()
+				}
 			}
-			seen[bp.Port] = true
-
-			var rbp app_v1alpha.BoundPort
-			rbp.SetPort(bp.Port)
-			rbp.SetAddress(bp.Address)
-			result = append(result, &rbp)
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.STOPPED:
+		}
+		// The controller only records bound_port on divergence. Preserve the
+		// existing behavior of reporting it for running or booting instances.
+		if hasInstances && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING) {
+			for _, bp := range sb.BoundPort {
+				if bp.Port == 0 || seenPorts[bp.Port] {
+					continue
+				}
+				seenPorts[bp.Port] = true
+				var port app_v1alpha.BoundPort
+				port.SetPort(bp.Port)
+				port.SetAddress(bp.Address)
+				boundPorts = append(boundPorts, &port)
+			}
 		}
 	}
 
-	return result
+	names := make([]string, 0, len(byService))
+	for name := range byService {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]*app_v1alpha.ServiceHealth, 0, len(names))
+	for _, name := range names {
+		h := byService[name]
+		var svc app_v1alpha.ServiceHealth
+		svc.SetService(name)
+		svc.SetHealth(h.pool.classify())
+		svc.SetRunning(h.running)
+		svc.SetDead(h.dead)
+		if h.pool.inCooldown {
+			svc.SetCrashCount(h.pool.crashCount)
+			svc.SetCooldownSeconds(int32(h.pool.cooldownLeft.Seconds()))
+		}
+		if h.hasExit {
+			svc.SetLastExitCode(h.lastCode)
+		}
+		if h.failedID != "" {
+			svc.SetLastFailureSandbox(h.failedID)
+			svc.SetLastFailureAt(standard.ToTimestamp(h.lastFailed))
+		}
+		result = append(result, &svc)
+	}
+	return result, boundPorts, nil
 }
 
 // classify maps the aggregate to a health string. A pool in cooldown is
