@@ -689,6 +689,15 @@ func EnsureLbdDevices(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if status.Loaded && !status.ControlDevicePresent {
+		if err := lbdmod.EnsureControlDevice(); err != nil {
+			return err
+		}
+		status, err = lbdmod.Probe(lbdmod.HostOptions(""))
+		if err != nil {
+			return err
+		}
+	}
 	if !status.Available() {
 		return errors.New(status.Explain())
 	}

@@ -372,6 +372,32 @@ func TestEnsureCurrentSkipsAHealthyHost(t *testing.T) {
 	assert.False(t, builder.called)
 }
 
+func TestEnsureCurrentRebuildsALoadedModuleFromAnOlderRelease(t *testing.T) {
+	root := ubuntuRoot(t)
+	dataPath := t.TempDir()
+	writeFile(t, root, "proc/modules", "lbd 65536 0 - Live 0x0000000000000000\n")
+	writeFile(t, root, ControlDevice, "")
+	writeFile(t, root, modulePath(testRelease), "")
+	writeFile(t, root, "usr/local/bin/lbdctl", "")
+	require.NoError(t, writeMarker(dataPath, Marker{
+		LbdVersion: "older-lbd", KernelRelease: testRelease,
+		ModulePath: modulePath(testRelease),
+	}))
+
+	i := testInstaller(t, root, dataPath)
+	i.Options.SearchPath = []string{"/usr/local/bin"}
+	status, err := Probe(i.Options)
+	require.NoError(t, err)
+	require.True(t, status.Available())
+	require.True(t, status.Stale())
+
+	// It must attempt an install even though the old module still works.
+	// The fixture has no real builder, so an error is expected, not a no-op.
+	rebuilt, err := i.EnsureCurrent(t.Context())
+	require.False(t, rebuilt)
+	require.Error(t, err)
+}
+
 func TestEnsureCurrentRebuildsAfterAKernelUpgrade(t *testing.T) {
 	root := ubuntuRoot(t)
 	dataPath := t.TempDir()

@@ -1,10 +1,17 @@
 package lbdmod
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	lbdsrc "miren.dev/runtime/third_party/lbd"
 )
@@ -34,6 +41,53 @@ type Options struct {
 // containerd's PATH but not to miren's own, so without this every caller would
 // have to remember to add it.
 const systemReleasePath = "/var/lib/miren/release"
+
+// EnsureControlDevice creates the misc device node when /dev is a private
+// tmpfs without udev. The module must already be loaded so sysfs can supply
+// its assigned device number.
+func EnsureControlDevice() error {
+	return ensureControlDevice("/sys/class/misc/lbd-control/dev", ControlDevice)
+}
+
+func ensureControlDevice(sysDev, devicePath string) error {
+	data, err := os.ReadFile(sysDev)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", sysDev, err)
+	}
+	majorStr, minorStr, ok := strings.Cut(strings.TrimSpace(string(data)), ":")
+	if !ok {
+		return fmt.Errorf("invalid device number in %s: %q", sysDev, strings.TrimSpace(string(data)))
+	}
+	major, err := strconv.ParseUint(majorStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid major number in %s: %w", sysDev, err)
+	}
+	minor, err := strconv.ParseUint(minorStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid minor number in %s: %w", sysDev, err)
+	}
+	want := unix.Mkdev(uint32(major), uint32(minor))
+	verify := func() error {
+		fi, err := os.Stat(devicePath)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || fi.Mode()&os.ModeCharDevice == 0 || uint64(st.Rdev) != want {
+			return fmt.Errorf("%s is not the expected character device %d:%d", devicePath, major, minor)
+		}
+		return nil
+	}
+	if err := verify(); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := unix.Mknod(devicePath, unix.S_IFCHR|0660, int(want)); err != nil && !errors.Is(err, unix.EEXIST) {
+		return fmt.Errorf("mknod %s (%d:%d): %w", devicePath, major, minor, err)
+	}
+	return verify()
+}
 
 // HostOptions builds the options for inspecting this host. dataPath is where
 // miren keeps its data; empty means DefaultDataPath.

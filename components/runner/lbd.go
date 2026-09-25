@@ -51,11 +51,11 @@ const rebuildTimeout = 10 * time.Minute
 // Neither failing nor timing out is fatal. Universal mode works everywhere, so
 // the worst case is slower disks, not a runner that will not start.
 func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
-	if err := diskio.EnsureLbdDevices(ctx, log); err == nil {
-		return
-	}
+	ready := diskio.EnsureLbdDevices(ctx, log) == nil
 	if deps.CC == nil || deps.Resolver == nil {
-		log.Warn("cannot rebuild the lbd kernel module without containerd and a cluster registry resolver; disks will use loop devices")
+		if !ready {
+			log.Warn("cannot rebuild the lbd kernel module without containerd and a cluster registry resolver; disks will use loop devices")
+		}
 		return
 	}
 
@@ -83,19 +83,21 @@ func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
 
 	rebuilt, err := installer.EnsureCurrent(ctx)
 	if errors.Is(err, context.DeadlineExceeded) {
-		log.Warn("gave up rebuilding the lbd kernel module, disks will use loop devices",
+		log.Warn("gave up rebuilding the lbd kernel module",
 			"timeout", rebuildTimeout,
+			"existing_module_usable", ready,
 			"retry_with", "miren disk accelerator install")
 		return
 	}
 	if err != nil {
-		log.Warn("could not rebuild the lbd kernel module, disks will use loop devices", "error", err)
+		log.Warn("could not rebuild the lbd kernel module", "error", err, "existing_module_usable", ready)
 		return
 	}
 	if !rebuilt {
-		// Nothing to rebuild: this host never installed the module.
-		log.Info("accelerator mode is not enabled on this host, disks will use loop devices",
-			"enable_with", "miren disk accelerator install")
+		if !ready {
+			log.Info("accelerator mode is not enabled on this host, disks will use loop devices",
+				"enable_with", "miren disk accelerator install")
+		}
 		return
 	}
 

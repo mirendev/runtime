@@ -379,6 +379,9 @@ func (i *Installer) load(ctx context.Context, host Host) error {
 	if out, err := exec.CommandContext(ctx, "modprobe", ModuleName).CombinedOutput(); err != nil {
 		return fmt.Errorf("modprobe %s failed: %w: %s", ModuleName, err, strings.TrimSpace(string(out)))
 	}
+	if err := EnsureControlDevice(); err != nil {
+		return fmt.Errorf("lbd control device: %w", err)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(modulesLoadConf), 0755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(modulesLoadConf), err)

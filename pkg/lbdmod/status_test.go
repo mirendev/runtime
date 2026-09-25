@@ -1,13 +1,16 @@
 package lbdmod
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 const testRelease = "6.8.0-51-generic"
@@ -106,6 +109,36 @@ func TestLoadedWithoutControlDeviceIsNotAvailable(t *testing.T) {
 	assert.False(t, status.ControlDevicePresent)
 	assert.False(t, status.Available())
 	assert.Contains(t, status.Explain(), ControlDevice+" is missing")
+}
+
+func TestEnsureControlDevice(t *testing.T) {
+	dir := t.TempDir()
+	sysDev := filepath.Join(dir, "sysdev")
+	device := filepath.Join(dir, "lbd-control")
+	require.NoError(t, os.WriteFile(sysDev, []byte("10:263\n"), 0644))
+
+	// Wrong existing nodes must never be overwritten, even without mknod privileges.
+	require.NoError(t, os.WriteFile(device, []byte("not a device"), 0644))
+	require.ErrorContains(t, ensureControlDevice(sysDev, device), "not the expected character device")
+	require.NoError(t, os.Remove(device))
+	require.NoError(t, os.WriteFile(sysDev, []byte("bad-number"), 0644))
+	require.ErrorContains(t, ensureControlDevice(sysDev, device), "invalid device number")
+	require.NoError(t, os.WriteFile(sysDev, []byte("10:263\n"), 0644))
+
+	err := ensureControlDevice(sysDev, device)
+	if errors.Is(err, os.ErrPermission) {
+		t.Skip("mknod requires CAP_MKNOD")
+	}
+	require.NoError(t, err)
+	info, err := os.Stat(device)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeCharDevice)
+	require.Equal(t, unix.Mkdev(10, 263), uint64(info.Sys().(*syscall.Stat_t).Rdev))
+	require.NoError(t, ensureControlDevice(sysDev, device), "an existing matching node is retained")
+
+	require.NoError(t, os.WriteFile(sysDev, []byte("10:264\n"), 0644))
+	err = ensureControlDevice(sysDev, device)
+	require.ErrorContains(t, err, "not the expected character device")
 }
 
 func TestStaleAfterAKernelUpgrade(t *testing.T) {
