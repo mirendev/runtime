@@ -131,7 +131,7 @@ func PrintVersionComparison(current, latest release.VersionInfo) {
 		fmt.Printf("Current commit:  %s\n", sc)
 	}
 	if !current.BuildDate.IsZero() {
-		fmt.Printf("Current build:   %s\n", current.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+		fmt.Printf("Current build:   %s\n", current.BuildDate.UTC().Format("2006-01-02 15:04:05 UTC"))
 	}
 
 	fmt.Printf("\nLatest version:  %s\n", latest.Version)
@@ -139,7 +139,7 @@ func PrintVersionComparison(current, latest release.VersionInfo) {
 		fmt.Printf("Latest commit:   %s\n", sc)
 	}
 	if !latest.BuildDate.IsZero() {
-		fmt.Printf("Latest build:    %s\n", latest.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+		fmt.Printf("Latest build:    %s\n", latest.BuildDate.UTC().Format("2006-01-02 15:04:05 UTC"))
 	}
 }
 
@@ -164,8 +164,8 @@ func CheckIfUpgradeNeeded(ctx context.Context, targetVersion string, force bool,
 		} else {
 			fmt.Printf("Current version %s is already up to date (target: %s)\n", current.Version, latest.Version)
 			if !current.BuildDate.IsZero() && !latest.BuildDate.IsZero() {
-				fmt.Printf("Current build: %s\n", current.BuildDate.Format("2006-01-02 15:04:05 UTC"))
-				fmt.Printf("Target build:  %s\n", latest.BuildDate.Format("2006-01-02 15:04:05 UTC"))
+				fmt.Printf("Current build: %s\n", current.BuildDate.UTC().Format("2006-01-02 15:04:05 UTC"))
+				fmt.Printf("Target build:  %s\n", latest.BuildDate.UTC().Format("2006-01-02 15:04:05 UTC"))
 			}
 		}
 		return false, nil
