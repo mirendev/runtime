@@ -71,7 +71,7 @@ func TestElixirDetect(t *testing.T) {
 		assert.Equal(t, "hopwatch", s.releaseName)
 		assert.True(t, s.hasPhoenix)
 		assert.True(t, s.hasAssets)
-		assert.Equal(t, "/app/bin/hopwatch start", s.WebCommand())
+		assert.Equal(t, `RELEASE_DISTRIBUTION=${RELEASE_DISTRIBUTION:-name} RELEASE_NODE=${RELEASE_NODE:-hopwatch@$(hostname -i)} exec /app/bin/hopwatch start`, s.WebCommand())
 	})
 
 	t.Run("no mix.exs", func(t *testing.T) {
@@ -179,7 +179,10 @@ func TestElixirEnvVars(t *testing.T) {
 
 		assert.Equal(t, "required", vars["SECRET_KEY_BASE"].Confidence)
 		assert.True(t, vars["SECRET_KEY_BASE"].CanGenerate)
-		assert.Equal(t, "recommended", vars["PHX_HOST"].Confidence)
+		assert.Equal(t, "required", vars["PHX_HOST"].Confidence)
+		assert.Equal(t, "web.app.miren", vars["DNS_CLUSTER_QUERY"].DefaultValue)
+		assert.True(t, vars["RELEASE_COOKIE"].CanGenerate)
+		assert.Equal(t, "required", vars["RELEASE_COOKIE"].Confidence)
 		// postgrex is in the lock, and runtime.exs raises without it.
 		assert.Equal(t, "required", vars["DATABASE_URL"].Confidence)
 		assert.Equal(t, "optional", vars["POOL_SIZE"].Confidence)
@@ -196,6 +199,22 @@ func TestElixirEnvVars(t *testing.T) {
 		assert.Equal(t, "required", vars["API_TOKEN"].Confidence)
 		assert.Equal(t, "optional", vars["GREETING"].Confidence)
 		assert.NotContains(t, vars, "SECRET_KEY_BASE")
+		assert.NotContains(t, vars, "DNS_CLUSTER_QUERY")
+		assert.NotContains(t, vars, "RELEASE_COOKIE")
+	})
+
+	t.Run("dns_cluster dependency without runtime query does not enable clustering", func(t *testing.T) {
+		dir := copyFixture(t, "phoenix")
+		path := filepath.Join(dir, "config", "runtime.exs")
+		config, err := os.ReadFile(path)
+		require.NoError(t, err)
+		config = []byte(strings.ReplaceAll(string(config), `System.get_env("DNS_CLUSTER_QUERY")`, "nil"))
+		require.NoError(t, os.WriteFile(path, config, 0o644))
+		s := initElixir(t, dir)
+		vars := envByName(s.RequiredEnvVars())
+		assert.NotContains(t, vars, "DNS_CLUSTER_QUERY")
+		assert.NotContains(t, vars, "RELEASE_COOKIE")
+		assert.Equal(t, "/app/bin/hopwatch start", s.WebCommand())
 	})
 
 	t.Run("dev-only config is ignored", func(t *testing.T) {

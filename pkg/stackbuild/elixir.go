@@ -69,6 +69,7 @@ type ElixirStack struct {
 	umbrella     bool
 	hasPhoenix   bool
 	hasAssets    bool
+	dnsCluster   bool
 	// assetsNpm is set when assets/package.json exists: Phoenix keeps npm
 	// dependencies there, out of reach of the root-level npm augmentation.
 	assetsNpm bool
@@ -342,7 +343,13 @@ func (s *ElixirStack) WebCommand() string {
 	if s.releaseName == "" {
 		return ""
 	}
-	return "/app/bin/" + s.releaseName + " start"
+	if !s.dnsCluster {
+		return "/app/bin/" + s.releaseName + " start"
+	}
+	// DNSCluster discovers peers by IP and constructs release_name@IP. The
+	// release must use the same naming scheme on every replica. Leave explicit
+	// node settings alone for applications with their own clustering setup.
+	return `RELEASE_DISTRIBUTION=${RELEASE_DISTRIBUTION:-name} RELEASE_NODE=${RELEASE_NODE:-` + s.releaseName + `@$(hostname -i)} exec /app/bin/` + s.releaseName + ` start`
 }
 
 // RequiredEnvVars returns the detected environment variable requirements
@@ -355,6 +362,7 @@ func (s *ElixirStack) detectEnvVars() []EnvVarRequirement {
 
 	sourceVars := scanSourceFilesForEnvVars(s.dir, []string{".ex", ".exs"}, elixirEnvPatterns, elixirOptionalEnvPatterns)
 	sourceVars = withoutDevOnlyConfig(s.dir, sourceVars)
+	lock, _ := s.readFile("mix.lock")
 
 	// 1. Phoenix core. phx.new's runtime.exs raises without SECRET_KEY_BASE,
 	// and PHX_HOST drives both URL generation and the websocket origin
@@ -369,14 +377,29 @@ func (s *ElixirStack) detectEnvVars() []EnvVarRequirement {
 		}, EnvVarRequirement{
 			Name:       "PHX_HOST",
 			Source:     "phoenix_core",
-			Confidence: "recommended",
-			Reason:     "Public hostname for URLs and the LiveView websocket origin check",
+			Confidence: "required",
+			Reason:     "Set to the public route hostname before deploy; Phoenix checks LiveView websocket origins against it",
+		})
+	}
+	// Only scaffolded DNSCluster apps need these settings. Do not turn on
+	// clustering for an arbitrary Mix app (or one with a custom discovery setup).
+	usesDNSCluster := false
+	for _, v := range sourceVars {
+		usesDNSCluster = usesDNSCluster || v.name == "DNS_CLUSTER_QUERY"
+	}
+	s.dnsCluster = s.hasLockedDep("dns_cluster", lock) && usesDNSCluster
+	if s.dnsCluster {
+		results = append(results, EnvVarRequirement{
+			Name: "DNS_CLUSTER_QUERY", Source: "dns_cluster", Confidence: "required",
+			DefaultValue: "web.app.miren", Reason: "Discover Miren web replicas by DNS",
+		}, EnvVarRequirement{
+			Name: "RELEASE_COOKIE", Source: "dns_cluster", Confidence: "required",
+			CanGenerate: true, Reason: "Shared Erlang cookie for all replicas",
 		})
 	}
 
 	// 2. Dependency-based inference, elevated when the code reads the var
 	// without a fallback.
-	lock, _ := s.readFile("mix.lock")
 	deps := make([]string, 0, len(elixirDepEnvVars))
 	for dep := range elixirDepEnvVars {
 		deps = append(deps, dep)
