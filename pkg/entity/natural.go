@@ -8,8 +8,10 @@ type SchemaField struct {
 
 	Many bool `json:"many,omitempty" cbor:"many,omitempty"`
 
-	EnumValues map[string]Id  `json:"enum_values,omitempty" cbor:"enum_values,omitempty"`
-	Component  *EncodedSchema `json:"component,omitempty" cbor:"component,omitempty"`
+	Enum             string          `json:"enum,omitempty" cbor:"enum,omitempty"`
+	EnumValues       map[string]Id   `json:"enum_values,omitempty" cbor:"enum_values,omitempty"`
+	EnumLegacyValues map[string][]Id `json:"enum_legacy_values,omitempty" cbor:"enum_legacy_values,omitempty"`
+	Component        *EncodedSchema  `json:"component,omitempty" cbor:"component,omitempty"`
 }
 
 type EncodedDomain struct {
@@ -36,4 +38,27 @@ func (es *EncodedSchema) GetField(name string) *SchemaField {
 		}
 	}
 	return nil
+}
+
+// EnumValue maps a schema-facing enum member to its physical entity value.
+func (f *SchemaField) EnumValue(member string) (Value, bool) {
+	id, ok := f.EnumValues[member]
+	return RefValue(id), ok
+}
+
+// EnumMember maps a physical entity value back to its schema-facing member.
+func (f *SchemaField) EnumMember(value Value) (string, bool) {
+	for member, id := range f.EnumValues {
+		if value.Equal(RefValue(id)) {
+			return member, true
+		}
+	}
+	for member, aliases := range f.EnumLegacyValues {
+		for _, alias := range aliases {
+			if value.Equal(RefValue(alias)) {
+				return member, true
+			}
+		}
+	}
+	return "", false
 }

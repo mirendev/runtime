@@ -12,6 +12,7 @@ import (
 type catalogEntry struct {
 	attribute entityexport.Attribute
 	ancestors []entityexport.Attribute
+	namedEnum string
 }
 
 // ownsExport reports whether this schema file emits the contract for target.
@@ -116,6 +117,13 @@ func exportKinds(sf *schemaFile, catalog map[string]catalogEntry, targetName str
 			if entry.attribute.Type == "component" {
 				return nil, fmt.Errorf("export target %s kind %s must select component fields, not whole component %s", targetName, kindName, id)
 			}
+			// Named enum fields store shared member IDs and may still carry
+			// legacy per-field IDs, so the contract's enum_values would need a
+			// decision about which to advertise. Refuse until that's made rather
+			// than silently exporting an empty value set.
+			if entry.namedEnum != "" {
+				return nil, fmt.Errorf("export target %s kind %s includes %s, which uses named enum %q; named enums are not yet supported in export contracts", targetName, kindName, id, entry.namedEnum)
+			}
 			for _, ancestor := range entry.ancestors {
 				allowed[ancestor.ID] = ancestor
 			}
@@ -198,7 +206,7 @@ func collectExportAttrs(
 		if _, exists := catalog[id]; exists {
 			return fmt.Errorf("duplicate export attribute %s", id)
 		}
-		catalog[id] = catalogEntry{attribute: entry, ancestors: slices.Clone(ancestors)}
+		catalog[id] = catalogEntry{attribute: entry, ancestors: slices.Clone(ancestors), namedEnum: attr.Enum}
 
 		if attr.Type != "component" {
 			continue
