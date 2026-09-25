@@ -109,7 +109,7 @@ func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1al
 		byPool[pool.ID.String()] = h
 	}
 	if len(pools) == 0 {
-		return nil, nil, nil
+		return []*app_v1alpha.ServiceHealth{}, nil, nil
 	}
 
 	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))

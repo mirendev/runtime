@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -142,6 +144,21 @@ func TestCollectServiceHealthListFailure(t *testing.T) {
 	require.ErrorContains(t, err, "sandbox index unavailable")
 	assert.Empty(t, services)
 	assert.Empty(t, ports)
+}
+
+func TestEmptyServiceHealthSurvivesRPCEncoding(t *testing.T) {
+	r := &AppInfo{}
+	services, ports, err := r.collectServiceHealth(context.Background(), nil, nil, time.Now(), false)
+	require.NoError(t, err)
+	assert.Empty(t, ports)
+	var status app_v1alpha.ApplicationStatus
+	status.SetServices(services)
+	data, err := cbor.Marshal(&status)
+	require.NoError(t, err)
+	var decoded app_v1alpha.ApplicationStatus
+	require.NoError(t, cbor.Unmarshal(data, &decoded))
+	assert.True(t, decoded.HasServices(), "empty services must differ from an unavailable sandbox scan")
+	assert.Empty(t, decoded.Services())
 }
 
 func TestSpecNeedsNoService(t *testing.T) {
