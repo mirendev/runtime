@@ -85,8 +85,8 @@ func (s Status) Available() bool {
 
 // Stale reports whether this host installed the module before but what is on
 // disk no longer fits -- almost always because the kernel was upgraded, but
-// also when miren itself now carries a newer lbd. Callers use this to decide
-// whether to rebuild without being asked.
+// also when miren itself now carries a newer lbd. A usable old module is
+// reported as stale but is not swapped out unattended.
 func (s Status) Stale() bool {
 	return s.staleReason() != ""
 }
@@ -120,7 +120,7 @@ func (s Status) Explain() string {
 	switch {
 	// A loaded module can still be the wrong one -- most often after miren
 	// was upgraded to a build carrying a newer lbd. Saying only that it is
-	// loaded would read as healthy while a rebuild is pending.
+	// loaded would hide that an operator should arrange an upgrade.
 	case s.Available() && stale != "":
 		return "lbd is loaded but " + stale
 	case s.Available():

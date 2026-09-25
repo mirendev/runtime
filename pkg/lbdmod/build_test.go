@@ -372,7 +372,7 @@ func TestEnsureCurrentSkipsAHealthyHost(t *testing.T) {
 	assert.False(t, builder.called)
 }
 
-func TestEnsureCurrentRebuildsALoadedModuleFromAnOlderRelease(t *testing.T) {
+func TestEnsureCurrentDefersAnOlderWorkingModule(t *testing.T) {
 	root := ubuntuRoot(t)
 	dataPath := t.TempDir()
 	writeFile(t, root, "proc/modules", "lbd 65536 0 - Live 0x0000000000000000\n")
@@ -386,16 +386,19 @@ func TestEnsureCurrentRebuildsALoadedModuleFromAnOlderRelease(t *testing.T) {
 
 	i := testInstaller(t, root, dataPath)
 	i.Options.SearchPath = []string{"/usr/local/bin"}
+	builder := &fakeBuilder{}
+	i.Builder = builder
 	status, err := Probe(i.Options)
 	require.NoError(t, err)
 	require.True(t, status.Available())
 	require.True(t, status.Stale())
 
-	// It must attempt an install even though the old module still works.
-	// The fixture has no real builder, so an error is expected, not a no-op.
+	// A successful compile does not guarantee the new module will load. Keep the
+	// working version until an operator can drain disks and upgrade explicitly.
 	rebuilt, err := i.EnsureCurrent(t.Context())
+	require.NoError(t, err)
 	require.False(t, rebuilt)
-	require.Error(t, err)
+	require.False(t, builder.called)
 }
 
 func TestEnsureCurrentRebuildsAfterAKernelUpgrade(t *testing.T) {

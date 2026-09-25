@@ -112,6 +112,11 @@ This only happens on hosts that installed the module in the first place. A host
 that never turned accelerator mode on never pays for an unattended compile at
 startup.
 
+When a Miren upgrade bundles a newer `lbd` but the installed module still
+works, startup leaves it running. Replacing a working module automatically
+could strand disks if the new one fails to load. Drain disks from the node,
+then run `miren disk accelerator install <node>` to upgrade it deliberately.
+
 The startup rebuild is capped at ten minutes. If it runs over, the server logs a
 warning, carries on booting, and the node stays on loop devices until you run
 `install` yourself. Accelerator mode is a speed-up, so a build that will not

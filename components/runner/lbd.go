@@ -82,15 +82,18 @@ func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
 	defer cancel()
 
 	rebuilt, err := installer.EnsureCurrent(ctx)
-	if errors.Is(err, context.DeadlineExceeded) {
-		log.Warn("gave up rebuilding the lbd kernel module",
-			"timeout", rebuildTimeout,
-			"existing_module_usable", ready,
-			"retry_with", "miren disk accelerator install")
-		return
-	}
 	if err != nil {
-		log.Warn("could not rebuild the lbd kernel module", "error", err, "existing_module_usable", ready)
+		// A failed swap can unload the old module; the pre-build result is not
+		// evidence that accelerator mode is still available.
+		status, probeErr := lbdmod.Probe(lbdmod.HostOptions(deps.DataPath))
+		usable := probeErr == nil && status.Available()
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Warn("gave up rebuilding the lbd kernel module",
+				"timeout", rebuildTimeout, "module_usable", usable,
+				"retry_with", "miren disk accelerator install")
+		} else {
+			log.Warn("could not rebuild the lbd kernel module", "error", err, "module_usable", usable)
+		}
 		return
 	}
 	if !rebuilt {

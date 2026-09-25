@@ -147,9 +147,9 @@ func (i *Installer) Install(ctx context.Context, force bool) (Status, error) {
 	return after, nil
 }
 
-// EnsureCurrent rebuilds the module when this host has installed it before but
-// what is on disk no longer fits -- almost always because the kernel was
-// upgraded, which leaves a module that cannot load.
+// EnsureCurrent rebuilds an installed module when it is no longer usable.
+// An older but working module is left alone: swapping it unattended after a
+// miren upgrade could strand disks if the new module fails to load.
 //
 // A host with no install record is left alone: it never opted into accelerator
 // mode, so it should not pay for an unattended compile at startup. It reports
@@ -160,7 +160,11 @@ func (i *Installer) EnsureCurrent(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	if status.Available() && !status.Stale() {
+	if status.Available() {
+		if status.Stale() {
+			i.Log.Warn("lbd is usable but out of date; defer the upgrade until disks can be detached",
+				"reason", status.Explain(), "upgrade_with", "miren disk accelerator install <node>")
+		}
 		return false, nil
 	}
 
