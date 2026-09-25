@@ -669,13 +669,10 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	}
 
 	var ret []*entityserver_v1alpha.Entity
-	cleanups := 0
 	for i, entity := range entities {
 		if entity == nil {
-			if cleanups < maxIndexCleanupsPerList {
-				e.cleanupOrphan(ctx, index, ids[i])
-				cleanups++
-			}
+			e.Log.Debug("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
 			continue
 		}
 
@@ -694,10 +691,6 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 
 	return nil
 }
-
-// A large legacy backlog should not turn a listing into an unbounded series
-// of etcd writes. Later lists and the background sweep drain the rest.
-const maxIndexCleanupsPerList = 16
 
 // ListPage reads a bounded page of entities from an index.
 func (e *EntityServer) ListPage(ctx context.Context, req *entityserver_v1alpha.EntityAccessListPage) error {
@@ -1055,7 +1048,7 @@ func (e *EntityServer) entityPage(
 			return nil, fmt.Errorf("failed to get entities: %w", err)
 		}
 
-		return e.resolve(ctx, index, ids, entities, nil, next, total, 0), nil
+		return e.resolve(index, ids, entities, nil, next, total, 0), nil
 	}
 
 	page, err := e.Store.ListIndexEntitiesPage(ctx, index, cursor, limit)
@@ -1063,20 +1056,7 @@ func (e *EntityServer) entityPage(
 		return nil, fmt.Errorf("failed to list entities: %w", err)
 	}
 
-	return e.resolve(ctx, index, page.Ids, page.Entities, page.Undecodable, page.Cursor, page.Total, page.Revision), nil
-}
-
-func (e *EntityServer) cleanupOrphan(ctx context.Context, index entity.Attr, id entity.Id) {
-	store, ok := e.Store.(*entity.EtcdStore)
-	if !ok || index.ID == entity.AttrSession || index.ID == entity.DBId {
-		return
-	}
-	removed, err := store.CleanupOrphanedIndexEntry(ctx, index, id)
-	if err != nil {
-		e.Log.Warn("failed to clean up orphaned index entry", "id", id, "index", index, "error", err)
-	} else if removed {
-		e.Log.Warn("cleaned up orphaned index entry", "id", id, "index", index)
-	}
+	return e.resolve(index, page.Ids, page.Entities, page.Undecodable, page.Cursor, page.Total, page.Revision), nil
 }
 
 // resolve drops the ids the store could not answer for and keeps the reported
@@ -1087,7 +1067,6 @@ func (e *EntityServer) cleanupOrphan(ctx context.Context, index entity.Attr, id 
 // work; a key that will not decode is a corrupt entity nobody should assume is
 // gone.
 func (e *EntityServer) resolve(
-	ctx context.Context,
 	index entity.Attr,
 	ids []entity.Id,
 	entities []*entity.Entity,
@@ -1096,7 +1075,6 @@ func (e *EntityServer) resolve(
 	total, revision int64,
 ) *resolvedPage {
 	resolved := make([]*entity.Entity, 0, len(entities))
-	cleanups := 0
 
 	for i, ent := range entities {
 		if ent != nil {
@@ -1107,9 +1085,9 @@ func (e *EntityServer) resolve(
 		if undecodable[ids[i]] {
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
-		} else if cleanups < maxIndexCleanupsPerList {
-			e.cleanupOrphan(ctx, index, ids[i])
-			cleanups++
+		} else {
+			e.Log.Debug("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
 		}
 
 		if total > 0 {

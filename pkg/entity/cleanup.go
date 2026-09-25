@@ -8,78 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mr-tron/base58"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
-
-// CleanupOrphanedIndexEntry removes the entries for one index/id only if the
-// backing entity is still absent and the entries have not changed. A list may
-// have read an older revision, so both checks belong in the delete transaction.
-// It returns true only when it actually removed an entry.
-func (s *EtcdStore) CleanupOrphanedIndexEntry(ctx context.Context, attr Attr, id Id) (bool, error) {
-	prefix, err := s.IndexPrefix(ctx, attr)
-	if err != nil {
-		return false, err
-	}
-	key := prefix + base58.Encode([]byte(id))
-
-	plain, err := s.client.Get(ctx, key)
-	if err != nil {
-		return false, err
-	}
-	sessions, err := s.client.Get(ctx, key+"/", clientv3.WithPrefix())
-	if err != nil {
-		return false, err
-	}
-	kvs := append(plain.Kvs, sessions.Kvs...)
-	if len(kvs) == 0 {
-		return false, nil
-	}
-
-	entries := make([]*mvccpb.KeyValue, 0, len(kvs))
-	for _, kv := range kvs {
-		if string(kv.Value) == string(id) {
-			entries = append(entries, kv)
-		}
-	}
-	removed := false
-	// One primary compare plus one compare and delete per entry must fit
-	// etcd's transaction operation limit, even for an old session backlog.
-	for start := 0; start < len(entries); start += (etcdMaxTxnOps - 1) / 2 {
-		end := min(start+(etcdMaxTxnOps-1)/2, len(entries))
-		batch := entries[start:end]
-		cmps := []clientv3.Cmp{clientv3.Compare(clientv3.CreateRevision(s.buildKey(id)), "=", 0)}
-		ops := make([]clientv3.Op, 0, len(batch))
-		for _, kv := range batch {
-			entryKey := string(kv.Key)
-			cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(entryKey), "=", kv.ModRevision))
-			ops = append(ops, clientv3.OpDelete(entryKey))
-		}
-		resp, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Commit()
-		if err != nil {
-			return removed, err
-		}
-		if resp.Succeeded {
-			removed = true
-			continue
-		}
-		// A concurrent write changed at least one slot (or recreated the
-		// entity). Retry individually so unrelated stale slots still drain.
-		for _, kv := range batch {
-			entryKey := string(kv.Key)
-			resp, err := s.client.Txn(ctx).If(
-				clientv3.Compare(clientv3.CreateRevision(s.buildKey(id)), "=", 0),
-				clientv3.Compare(clientv3.ModRevision(entryKey), "=", kv.ModRevision),
-			).Then(clientv3.OpDelete(entryKey)).Commit()
-			if err != nil {
-				return removed, err
-			}
-			removed = removed || resp.Succeeded
-		}
-	}
-	return removed, nil
-}
 
 // cleanupDeleteBatchSize is how many stale entries we delete between rate-limit
 // pauses. Deletes are issued one CAS'd transaction at a time (see

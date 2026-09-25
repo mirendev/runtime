@@ -1247,10 +1247,12 @@ func TestEntityServer_ListPage(t *testing.T) {
 
 }
 
-func TestEntityServer_ListsCleanOrphansOnce(t *testing.T) {
+func TestEntityServer_OrphanReadsStayQuietAndPure(t *testing.T) {
 	ctx := t.Context()
 	client, prefix := setupTestEtcd(t)
-	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
 	require.NoError(t, err)
 	index := entity.String(entity.Id("test/kind"), "widget")
 	_, err = store.CreateEntity(ctx, entity.New(
@@ -1260,91 +1262,33 @@ func TestEntityServer_ListsCleanOrphansOnce(t *testing.T) {
 	require.NoError(t, err)
 	live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
 	require.NoError(t, err)
-	indexPrefix, err := store.IndexPrefix(ctx, index)
-	require.NoError(t, err)
-
-	var logs bytes.Buffer
-	server, err := NewEntityServer(slog.New(slog.NewTextHandler(&logs, nil)), store)
+	server, err := NewEntityServer(log, store)
 	require.NoError(t, err)
 	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	key := indexPrefix + base58.Encode([]byte(id))
+	_, err = client.Put(ctx, key, id.String())
+	require.NoError(t, err)
+	logs.Reset()
 
-	for _, paged := range []bool{false, true} {
-		id := entity.Id(fmt.Sprintf("missing-%t", paged))
-		key := indexPrefix + base58.Encode([]byte(id))
-		entryKey := key
-		if paged {
-			entryKey += "/old-session"
-		}
-		_, err := client.Put(ctx, entryKey, id.String())
+	for range 2 {
+		list, err := sc.List(ctx, index)
 		require.NoError(t, err)
-		for range 2 {
-			if paged {
-				page, err := sc.ListPage(ctx, index, "", 10)
-				require.NoError(t, err)
-				require.Len(t, page.Values(), 1)
-				require.Equal(t, int64(1), page.Total())
-				require.Equal(t, live.Id().String(), page.Values()[0].Id())
-			} else {
-				list, err := sc.List(ctx, index)
-				require.NoError(t, err)
-				require.Len(t, list.Values(), 1)
-				require.Equal(t, live.Id().String(), list.Values()[0].Id())
-			}
-		}
-		response, err := client.Get(ctx, key, clientv3.WithPrefix())
+		require.Len(t, list.Values(), 1)
+		require.Equal(t, live.Id().String(), list.Values()[0].Id())
+		page, err := sc.ListPage(ctx, index, "", 10)
 		require.NoError(t, err)
-		require.Empty(t, response.Kvs)
+		require.Len(t, page.Values(), 1)
+		require.Equal(t, int64(1), page.Total())
+		entry, err := client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Len(t, entry.Kvs, 1, "listing must leave GC to repair the orphan")
 	}
-	require.Equal(t, 2, strings.Count(logs.String(), "cleaned up orphaned index entry"))
-	require.NotContains(t, logs.String(), "entity in index but not in store")
-}
-
-func TestEntityServer_ListCleanupIsBounded(t *testing.T) {
-	for _, paged := range []bool{false, true} {
-		t.Run(fmt.Sprintf("paged=%t", paged), func(t *testing.T) {
-			ctx := t.Context()
-			client, prefix := setupTestEtcd(t)
-			store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
-			require.NoError(t, err)
-			index := entity.String(entity.Id("test/kind"), "widget")
-			_, err = store.CreateEntity(ctx, entity.New(
-				entity.Ident, "test/kind", entity.Doc, "indexed kind",
-				entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
-			))
-			require.NoError(t, err)
-			live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
-			require.NoError(t, err)
-			indexPrefix, err := store.IndexPrefix(ctx, index)
-			require.NoError(t, err)
-			for i := range maxIndexCleanupsPerList + 2 {
-				id := entity.Id(fmt.Sprintf("orphan-%02d", i))
-				_, err := client.Put(ctx, indexPrefix+base58.Encode([]byte(id)), id.String())
-				require.NoError(t, err)
-			}
-
-			var logs bytes.Buffer
-			server, err := NewEntityServer(slog.New(slog.NewTextHandler(&logs, nil)), store)
-			require.NoError(t, err)
-			sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
-			for pass, remaining := range []int64{2, 0, 0} {
-				if paged {
-					page, err := sc.ListPage(ctx, index, "", 100)
-					require.NoError(t, err)
-					require.Len(t, page.Values(), 1)
-					require.Equal(t, live.Id().String(), page.Values()[0].Id())
-				} else {
-					list, err := sc.List(ctx, index)
-					require.NoError(t, err)
-					require.Len(t, list.Values(), 1)
-					require.Equal(t, live.Id().String(), list.Values()[0].Id())
-				}
-				entries, err := client.Get(ctx, indexPrefix, clientv3.WithPrefix())
-				require.NoError(t, err)
-				require.Equal(t, remaining+1, entries.Count, "pass %d", pass)
-			}
-			require.Equal(t, maxIndexCleanupsPerList+2, strings.Count(logs.String(), "cleaned up orphaned index entry"))
-		})
-	}
+	require.Equal(t, 4, strings.Count(logs.String(), "level=DEBUG msg=\"entity in index but not in store, skipping\""))
+	require.NotContains(t, logs.String(), "level=WARN")
+	require.NotContains(t, logs.String(), "level=ERROR")
 }
 
 func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
@@ -1387,6 +1331,9 @@ func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
 	result, err := sc.List(ctx, index)
 	require.NoError(t, err)
 	require.Empty(t, result.Values())
+	stats, err := store.CleanupStaleCollectionEntries(ctx, log, entity.CleanupOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, stats.StaleEntriesRemoved)
 	select {
 	case op := <-deletes:
 		require.Equal(t, id.String(), op.EntityId())
@@ -1400,6 +1347,5 @@ func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for watch to stop")
 	}
-	require.Equal(t, 1, strings.Count(logs.String(), "level=WARN msg=\"cleaned up orphaned index entry\""))
 	require.NotContains(t, logs.String(), "level=ERROR")
 }
