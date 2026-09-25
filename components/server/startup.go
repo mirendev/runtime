@@ -100,7 +100,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
-	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)
+	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), tracing.component, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
 	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	dataRestore := newDataRestoreBoot(dataRestoreInputsFrom(options), containerd.Output, observability.output)
