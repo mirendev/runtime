@@ -529,8 +529,8 @@ func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("starting sandbox host", "id", r.Id)
 
 	// Initialize Flannel/WireGuard network if distributed runner configuration is provided
-	if len(r.deps.EtcdEndpoints) > 0 {
-		if err := r.initializeNetwork(ctx, eg...); err != nil {
+	if len(r.deps.EtcdEndpoints) > 0 && r.deps.Subnet == nil {
+		if err := InitializeDistributedNetwork(ctx, r.Log, r.DataPath, &r.deps, eg...); err != nil {
 			return fmt.Errorf("failed to initialize network: %w", err)
 		}
 	}
@@ -754,28 +754,28 @@ func (r *ClusterAccess) setupRemoteSecrets(rs *rpc.State) error {
 	return nil
 }
 
-// initializeNetwork sets up the Flannel network for distributed runners.
-// This is only called when EtcdEndpoints are configured (distributed runner mode).
-func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
-	r.Log.Info("Initializing distributed runner network",
-		"etcd_endpoints", r.deps.EtcdEndpoints,
-		"etcd_prefix", r.deps.EtcdPrefix)
+// InitializeDistributedNetwork joins the mesh before storage tries to pull
+// the lbd builder image from the coordinator's WireGuard-routed registry.
+func InitializeDistributedNetwork(ctx context.Context, log *slog.Logger, dataPath string, deps *RunnerDeps, eg ...*errgroup.Group) error {
+	log.Info("Initializing distributed runner network",
+		"etcd_endpoints", deps.EtcdEndpoints,
+		"etcd_prefix", deps.EtcdPrefix)
 
 	grungeOpts := grunge.NetworkOptions{
-		EtcdEndpoints: r.deps.EtcdEndpoints,
-		EtcdPrefix:    r.deps.EtcdPrefix,
-		PrevIPv4:      r.deps.IPv4Routable,
+		EtcdEndpoints: deps.EtcdEndpoints,
+		EtcdPrefix:    deps.EtcdPrefix,
+		PrevIPv4:      deps.IPv4Routable,
 	}
 
 	// Add TLS config if provided
-	if r.deps.EtcdTLSCertFile != "" && r.deps.EtcdTLSKeyFile != "" && r.deps.EtcdTLSCAFile != "" {
-		r.Log.Info("Using etcd TLS", "cert", r.deps.EtcdTLSCertFile, "ca", r.deps.EtcdTLSCAFile)
-		grungeOpts.TLSCertFile = r.deps.EtcdTLSCertFile
-		grungeOpts.TLSKeyFile = r.deps.EtcdTLSKeyFile
-		grungeOpts.TLSCAFile = r.deps.EtcdTLSCAFile
+	if deps.EtcdTLSCertFile != "" && deps.EtcdTLSKeyFile != "" && deps.EtcdTLSCAFile != "" {
+		log.Info("Using etcd TLS", "cert", deps.EtcdTLSCertFile, "ca", deps.EtcdTLSCAFile)
+		grungeOpts.TLSCertFile = deps.EtcdTLSCertFile
+		grungeOpts.TLSKeyFile = deps.EtcdTLSKeyFile
+		grungeOpts.TLSCAFile = deps.EtcdTLSCAFile
 	}
 
-	gn, err := grunge.NewNetwork(r.Log, grungeOpts)
+	gn, err := grunge.NewNetwork(log, grungeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create grunge network: %w", err)
 	}
@@ -799,18 +799,18 @@ func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Gro
 	if localGroup {
 		go func() {
 			if err := runGroup.Wait(); err != nil {
-				r.Log.Error("network errgroup failed", "error", err)
+				log.Error("network errgroup failed", "error", err)
 			}
 		}()
 	}
 
 	// Update deps with the leased IP and subnet
 	lease := gn.Lease()
-	r.deps.IPv4Routable = lease.IPv4()
+	deps.IPv4Routable = lease.IPv4()
 
 	// Initialize netdb subnet from the flannel lease so the sandbox
 	// controller can allocate IPs within this runner's subnet.
-	ndb, err := netdb.New(filepath.Join(r.DataPath, "net.db"))
+	ndb, err := netdb.New(filepath.Join(dataPath, "net.db"))
 	if err != nil {
 		return fmt.Errorf("failed to open netdb: %w", err)
 	}
@@ -818,9 +818,9 @@ func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Gro
 	if err != nil {
 		return fmt.Errorf("failed to create subnet from lease: %w", err)
 	}
-	r.deps.Subnet = subnet
+	deps.Subnet = subnet
 
-	r.Log.Info("Joined Flannel network", "ipv4", lease.IPv4().String())
+	log.Info("Joined Flannel network", "ipv4", lease.IPv4().String())
 
 	return nil
 }

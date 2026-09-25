@@ -54,6 +54,10 @@ func setupLbd(ctx context.Context, deps lbdDeps, log *slog.Logger) {
 	if err := diskio.EnsureLbdDevices(ctx, log); err == nil {
 		return
 	}
+	if deps.CC == nil || deps.Resolver == nil {
+		log.Warn("cannot rebuild the lbd kernel module without containerd and a cluster registry resolver; disks will use loop devices")
+		return
+	}
 
 	// The toolchain image lives in the cluster registry and nowhere public, so
 	// the pull needs the cluster's own address mapping and a registry token.
