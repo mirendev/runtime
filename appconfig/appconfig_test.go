@@ -3,6 +3,7 @@ package appconfig
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1767,6 +1768,16 @@ func TestStaticDirMustBeAbsolute(t *testing.T) {
 	config, err := Parse([]byte("name = \"site\"\n[static]\ndir = \"/app/dist\"\n"))
 	require.NoError(t, err)
 	assert.Equal(t, "/app/dist", config.StaticDirectory())
+}
+
+func TestStaticErrorPagePath(t *testing.T) {
+	for _, page := range []string{"/etc/passwd", "../private.html", "errors/../index.html", `errors\page.html`} {
+		_, err := Parse([]byte("name = \"site\"\n[static]\ndir = \"/app/dist\"\nerror_page = " + strconv.Quote(page)))
+		require.ErrorContains(t, err, "static.error_page must be a relative path")
+	}
+	config, err := Parse([]byte("name = \"site\"\n[static]\ndir = \"/app/dist\"\nerror_page = \"errors/page.html\""))
+	require.NoError(t, err)
+	assert.Equal(t, "errors/page.html", config.Static.ErrorPage)
 }
 
 func TestTaskValidation(t *testing.T) {

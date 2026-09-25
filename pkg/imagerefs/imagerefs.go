@@ -24,8 +24,11 @@ const (
 	// Minio object storage server (quay.io/minio/minio)
 	Minio = "oci.miren.cloud/minio:RELEASE.2025-04-03T14-56-28Z"
 
-	// VictoriaLogs log storage server (docker.io/victoriametrics/victoria-logs)
-	VictoriaLogs = "oci.miren.cloud/victoria-logs:v1.0.0-victorialogs"
+	// VictoriaLogs log storage server (docker.io/victoriametrics/victoria-logs).
+	// v1.52.0 includes all-field LogsQL filters. Keep the multi-platform manifest
+	// digest pinned; Miren snapshots data before changes that may migrate its
+	// storage format. A pre-snapshot Miren binary still needs manual data restore.
+	VictoriaLogs = "oci.miren.cloud/victoria-logs@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
 
 	// VictoriaMetrics metrics storage server (docker.io/victoriametrics/victoria-metrics)
 	VictoriaMetrics = "oci.miren.cloud/victoria-metrics:v1.106.1"

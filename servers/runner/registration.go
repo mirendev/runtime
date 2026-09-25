@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -36,12 +37,13 @@ const (
 )
 
 type RegistrationServerConfig struct {
-	Log             *slog.Logger
-	Authority       *caauth.Authority
-	EAC             *entityserver_v1alpha.EntityAccessClient
-	CoordinatorAddr string
-	EtcdEndpoints   []string
-	EtcdPrefix      string
+	Log                   *slog.Logger
+	Authority             *caauth.Authority
+	EAC                   *entityserver_v1alpha.EntityAccessClient
+	CoordinatorAddr       string
+	CoordinatorInternalIP netip.Addr
+	EtcdEndpoints         []string
+	EtcdPrefix            string
 
 	// Observability endpoints provided to runners at join time
 	VictoriametricsAddress string
@@ -960,12 +962,13 @@ func (s *RegistrationServer) DrainRunner(ctx context.Context, req *runner_v1alph
 	return nil
 }
 
-// WorkloadIssuerInfo reports whether the coordinator has a workload identity
-// issuer configured and, if so, its issuer URL. Distributed runners call this
-// once at startup to decide whether to mint workload identity tokens via the
-// coordinator.
+// WorkloadIssuerInfo reports the issuer and current coordinator internal address.
+// Distributed runners read both at startup, including when identity is disabled.
 func (s *RegistrationServer) WorkloadIssuerInfo(ctx context.Context, req *runner_v1alpha.RunnerRegistrationWorkloadIssuerInfo) error {
 	results := req.Results()
+	if s.CoordinatorInternalIP.IsValid() {
+		results.SetCoordinatorInternalIp(s.CoordinatorInternalIP.String())
+	}
 
 	if s.WorkloadIssuer == nil {
 		results.SetEnabled(false)

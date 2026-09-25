@@ -35,6 +35,7 @@ exports:
           - dev.miren.core/deployment.phase
           - dev.miren.core/deployment.started_at
           - dev.miren.core/deployment.completed_at
+          - dev.miren.core/deployment.message
           - dev.miren.core/deployed_by.subject
           - dev.miren.core/deployed_by.auth_method
           - dev.miren.core/deployed_by.organization_id
@@ -415,6 +416,10 @@ kinds:
       type: string
       doc: RFC3339 time when the attempt reached a terminal outcome
 
+    message:
+      type: string
+      doc: User-supplied description of this deployment
+
     app_name:
       type: string
       doc: "[DEPRECATED] Denormalized app name retained for downgrade compatibility; canonical identity is app"
@@ -624,6 +629,9 @@ components:
     static_dir:
       type: string
       doc: Absolute path exported from the application build output and served directly by HTTP ingress
+    static_error_page:
+      type: string
+      doc: Relative path to the HTML error template in the static artifact
     variables:
       type: component
       doc: Environment variables and configuration values

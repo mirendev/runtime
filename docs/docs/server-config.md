@@ -92,6 +92,93 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 | `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
 | `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
 | `trusted_proxy_hops` | int | `1` | Number of trusted proxies immediately in front of Miren. Used to select the visitor address from `X-Forwarded-For` under `behind-proxy-http`. | `MIREN_INGRESS_TRUSTED_PROXY_HOPS` | `--ingress-trusted-proxy-hops` |
+| `error_page` | string | — | Absolute path to a cluster-wide HTML error template. Loaded at server startup. | `MIREN_INGRESS_ERROR_PAGE` | — |
+
+### Custom error pages
+
+Set `error_page = "/etc/miren/error.html"` under `[ingress]` to replace the
+built-in HTML page for the cluster. The file must exist and be a valid Go
+`html/template` (up to 128 KiB), or ingress will fail to start. Restart the
+server after changing it. For an app-specific override, see
+[app.toml static error pages](./app-toml.md#static-error-pages).
+
+Templates receive `.Status` (HTTP status number), `.Title`, `.Description`,
+`.Site` (visitor hostname on maintenance pages), `.Reason`, `.BackAt`, and
+`.Maintenance` (boolean). `{{brandLogo}}` renders the built-in Miren logo.
+Use self-contained markup and inline CSS if the page must work when the app
+is unavailable. Only HTML responses use these templates: `Accept` negotiation
+still selects JSON or plain text for API clients. If the app's template is
+missing or cannot render, ingress falls back to the cluster template, then
+to the built-in page. Errors without a resolved app use the cluster template.
+
+For ordinary errors, `.Status`, `.Title`, and `.Description` are set; `.Site`,
+`.Reason`, and `.BackAt` are empty. During maintenance, `.Status` is 503,
+`.Maintenance` is true, `.Site` is the visitor's hostname, `.Reason` is the
+operator's message, and `.BackAt` is a formatted UTC time when provided.
+`.Title` and `.Description` are empty on maintenance pages. These are the only
+template data fields; app IDs, raw failure messages, and request details are
+not exposed. HTML escaping is automatic. Templates must be at most 128 KiB;
+rendered output is capped at 256 KiB and falls back if it exceeds that limit.
+App templates are also checked at deployment: they may use `if` and `with`,
+but not `define`, `block`, `template`, or `range` actions. Only `brandLogo`,
+`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`, `not`, and `len` are available
+as functions. This prevents expressions from growing without writing output
+in the shared ingress process. Cluster templates may use the full Go template
+syntax.
+
+Copy this into `/etc/miren/error.html` for a cluster template, or into the
+app's `static.dir` output for an app template. Replace “Example” with your
+brand. It requires no external assets, so it still works during an outage:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Maintenance}}Maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Example</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #fdfaf2; color: #1b1f27;
+      font-family: system-ui, sans-serif; }
+    .page { min-height: 100vh; display: flex; flex-direction: column;
+      padding: 0 clamp(24px, 7vw, 112px); }
+    header, footer { padding: 28px 0; border-bottom: 1px solid #eadfd6; }
+    header { color: #0059ff; font-size: 24px; font-weight: 700; }
+    footer { border-top: 1px solid #eadfd6; border-bottom: 0; color: #656b76; }
+    main { flex: 1; display: flex; align-items: center; padding: 64px 0; }
+    .content { max-width: 760px; }
+    .label { color: #545868; font-size: 13px; font-weight: 700;
+      letter-spacing: .14em; text-transform: uppercase; }
+    h1 { font-size: clamp(40px, 6vw, 72px); line-height: 1.08;
+      letter-spacing: -.04em; overflow-wrap: anywhere; }
+    .detail { color: #545868; font-size: 20px; line-height: 1.6; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #151a23; color: #f4f5f5; }
+      header, footer { border-color: #393e48; }
+      .label, .detail, footer { color: #b6bac1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>Example</header>
+    <main><div class="content">
+      <div class="label">{{if .Maintenance}}Maintenance{{else}}Error {{.Status}}{{end}}</div>
+      {{if .Maintenance}}
+        <h1>{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
+        {{if .Reason}}<p class="detail">{{.Reason}}</p>{{else}}<p class="detail">Please check back soon.</p>{{end}}
+        {{if .BackAt}}<p class="detail">Expected back at {{.BackAt}}.</p>{{end}}
+      {{else}}
+        <h1>{{.Title}}</h1>
+        <p class="detail">{{.Description}}</p>
+      {{end}}
+    </div></main>
+    <footer>Example</footer>
+  </div>
+</body>
+</html>
+```
 
 ### Modes
 
@@ -185,6 +272,10 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 | `address` | string | `victorialogs:9428` | Address when not using embedded | `MIREN_VICTORIALOGS_ADDRESS` | `--victorialogs-addr` |
 
 \* Defaults to `true` in standalone mode only.
+
+Miren snapshots embedded VictoriaLogs data before image upgrades. See
+[VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md) for backup
+retention and rollback details. External VictoriaLogs is not managed by Miren.
 
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 

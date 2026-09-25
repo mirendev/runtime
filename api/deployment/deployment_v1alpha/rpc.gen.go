@@ -28,6 +28,7 @@ type deploymentInfoData struct {
 	SourceDeploymentId  *string             `cbor:"22,keyasint,omitempty" json:"source_deployment_id,omitempty"`
 	ShortId             *string             `cbor:"23,keyasint,omitempty" json:"short_id,omitempty"`
 	AppVersionShortId   *string             `cbor:"24,keyasint,omitempty" json:"app_version_short_id,omitempty"`
+	Message             *string             `cbor:"25,keyasint,omitempty" json:"message,omitempty"`
 }
 
 type DeploymentInfo struct {
@@ -278,6 +279,21 @@ func (v *DeploymentInfo) AppVersionShortId() string {
 
 func (v *DeploymentInfo) SetAppVersionShortId(app_version_short_id string) {
 	v.data.AppVersionShortId = &app_version_short_id
+}
+
+func (v *DeploymentInfo) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DeploymentInfo) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
+}
+
+func (v *DeploymentInfo) SetMessage(message string) {
+	v.data.Message = &message
 }
 
 func (v *DeploymentInfo) MarshalCBOR() ([]byte, error) {
@@ -1550,6 +1566,7 @@ type deploymentDeployVersionArgsData struct {
 	EnvVars        *[]*EnvironmentVariable `cbor:"4,keyasint,omitempty" json:"env_vars,omitempty"`
 	EphemeralLabel *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl   *string                 `cbor:"6,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	Message        *string                 `cbor:"7,keyasint,omitempty" json:"message,omitempty"`
 }
 
 type DeploymentDeployVersionArgs struct {
@@ -1632,6 +1649,17 @@ func (v *DeploymentDeployVersionArgs) EphemeralTtl() string {
 		return ""
 	}
 	return *v.data.EphemeralTtl
+}
+
+func (v *DeploymentDeployVersionArgs) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DeploymentDeployVersionArgs) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
 }
 
 func (v *DeploymentDeployVersionArgs) MarshalCBOR() ([]byte, error) {
@@ -2534,7 +2562,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			InterfaceName: "Deployment",
 			Index:         9,
 			Public:        false,
-			Params:        []string{"app_name", "cluster_id", "app_version_id", "is_rollback", "env_vars", "ephemeral_label", "ephemeral_ttl"},
+			Params:        []string{"app_name", "cluster_id", "app_version_id", "is_rollback", "env_vars", "ephemeral_label", "ephemeral_ttl", "message"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeployVersion(ctx, &DeploymentDeployVersion{Call: call})
 			},
@@ -2922,7 +2950,7 @@ func (v *DeploymentClientDeployVersionResults) AccessInfo() *AccessInfo {
 	return *v.data.AccessInfo
 }
 
-func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*DeploymentClientDeployVersionResults, error) {
+func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string, message string) (*DeploymentClientDeployVersionResults, error) {
 	args := DeploymentDeployVersionArgs{}
 	args.data.AppName = &app_name
 	args.data.ClusterId = &cluster_id
@@ -2931,6 +2959,7 @@ func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cl
 	args.data.EnvVars = &env_vars
 	args.data.EphemeralLabel = &ephemeral_label
 	args.data.EphemeralTtl = &ephemeral_ttl
+	args.data.Message = &message
 
 	var ret deploymentDeployVersionResultsData
 

@@ -199,6 +199,10 @@ Day-to-day fleet management happens through the `runner` subcommands. A quick to
 
 A typical maintenance window looks like: drain the node, do your work, then uncordon it (or remove it if it's not coming back).
 
+:::warning[Upgrading to the internal-only registry]
+When upgrading from a release that serves the registry on the coordinator's public address to one that serves it only over WireGuard, image pulls can briefly fail. Miren Cloud-managed upgrades update the coordinator first, then restart runners one at a time; each runner resumes pulling images after its upgrade. For manual upgrades, upgrade runner binaries first while the old coordinator still serves the registry, then upgrade the coordinator and restart the runners again so they learn its internal address.
+:::
+
 ## Things to know
 
 A few properties of distributed clusters are worth keeping in mind as you plan:

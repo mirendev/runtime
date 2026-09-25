@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/pkg/errorpage"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -72,7 +74,11 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 			return extractStaticOut{}, err
 		}
 	}
-	if err := canonicalizeStaticArchive(archivePath, canonicalPath); err != nil {
+	errorPage := ""
+	if in.AppConfig != nil && in.AppConfig.Static != nil {
+		errorPage = in.AppConfig.Static.ErrorPage
+	}
+	if err := canonicalizeStaticArchive(archivePath, canonicalPath, errorPage); err != nil {
 		return extractStaticOut{}, err
 	}
 
@@ -89,7 +95,7 @@ func extractStatic(ctx context.Context, in extractStaticIn) (extractStaticOut, e
 	return extractStaticOut{StaticArtifact: digest}, nil
 }
 
-func canonicalizeStaticArchive(source, destination string) error {
+func canonicalizeStaticArchive(source, destination, errorPage string) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return fmt.Errorf("opening static export: %w", err)
@@ -103,6 +109,7 @@ func canonicalizeStaticArchive(source, destination string) error {
 	defer output.Close()
 	archive := tar.NewWriter(output)
 	reader := tar.NewReader(input)
+	foundErrorPage := false
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -119,6 +126,12 @@ func canonicalizeStaticArchive(source, destination string) error {
 		case tar.TypeReg:
 			canonical.Typeflag = tar.TypeReg
 			canonical.Size = header.Size
+			if errorPage != "" && path.Clean(strings.TrimPrefix(header.Name, "./")) == errorPage {
+				if header.Size > 128<<10 {
+					return fmt.Errorf("static.error_page %q exceeds 128 KiB", errorPage)
+				}
+				foundErrorPage = true
+			}
 		default:
 			continue
 		}
@@ -126,10 +139,26 @@ func canonicalizeStaticArchive(source, destination string) error {
 			return fmt.Errorf("writing canonical static archive: %w", err)
 		}
 		if canonical.Typeflag == tar.TypeReg {
+			if errorPage != "" && path.Clean(strings.TrimPrefix(header.Name, "./")) == errorPage {
+				data, err := io.ReadAll(reader)
+				if err != nil {
+					return fmt.Errorf("reading static.error_page %q: %w", errorPage, err)
+				}
+				if _, err := errorpage.ParseApp(string(data), ""); err != nil {
+					return fmt.Errorf("invalid static.error_page %q: %w", errorPage, err)
+				}
+				if _, err := archive.Write(data); err != nil {
+					return fmt.Errorf("writing static.error_page %q: %w", errorPage, err)
+				}
+				continue
+			}
 			if _, err := io.CopyN(archive, reader, canonical.Size); err != nil {
 				return fmt.Errorf("copying static file into canonical archive: %w", err)
 			}
 		}
+	}
+	if errorPage != "" && !foundErrorPage {
+		return fmt.Errorf("static.error_page %q not found in static.dir build output", errorPage)
 	}
 	if err := archive.Close(); err != nil {
 		return fmt.Errorf("closing canonical static archive: %w", err)

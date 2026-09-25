@@ -789,6 +789,9 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	spec.Variables = inputs.ExistingConfig.Variables
 	if ac != nil {
 		spec.StaticDir = ac.StaticDirectory()
+		if ac.Static != nil {
+			spec.StaticErrorPage = ac.Static.ErrorPage
+		}
 	}
 
 	// Set entrypoint from stack build result
