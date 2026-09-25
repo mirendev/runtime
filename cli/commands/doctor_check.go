@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/ui"
@@ -118,8 +119,8 @@ type doctorEnv struct {
 
 	resources    *doctorResources
 	resourcesErr error
-	orphans      int64
-	indexErr     error
+	apps         []*app_v1alpha.AppInfo
+	appsErr      error
 }
 
 // local reports whether the active cluster runs on this machine, which decides
@@ -198,7 +199,7 @@ func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 		env.resources, env.resourcesErr = gatherDoctorResources(ctx)
 	})
 	wg.Go(func() {
-		env.orphans, env.indexErr = gatherDoctorIndex(ctx)
+		env.apps, env.appsErr = gatherDoctorApps(ctx)
 	})
 
 	wg.Go(func() {
@@ -225,9 +226,7 @@ func doctorChecks() []check {
 		{Name: "Server", Run: checkServer},
 		{Name: "Version", Run: checkVersion},
 		{Name: "Authentication", Run: checkAuthentication},
-		{Name: "Entity indexes", Run: checkEntityIndexes},
-		{Name: "Sandboxes", Run: checkSandboxes},
-		{Name: "Pools", Run: checkPools},
+		{Name: "Apps", Run: checkApps},
 		{Name: "Disks and volumes", Run: checkDisks},
 	}
 }

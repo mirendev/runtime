@@ -373,11 +373,6 @@ interfaces:
             type: list
             element: ReindexStat
 
-      - name: check_index_health
-        results:
-          - name: orphaned_entries
-            type: int64
-
       - name: get_attributes_by_tag
         parameters:
           - name: tag

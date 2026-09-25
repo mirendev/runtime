@@ -183,6 +183,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			rai.SetHealth(apphealth.Unknown)
 		} else {
 			var pools []*app_v1alpha.PoolStatus
+			var servicePools []compute_v1alpha.SandboxPool
 			poolIDs := make(map[string]bool)
 			hasInstances := false
 			now := time.Now()
@@ -203,6 +204,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			for poolsResp.Next() {
 				var pool compute_v1alpha.SandboxPool
 				poolsResp.Read(&pool)
+				servicePools = append(servicePools, pool)
 
 				poolIDs[pool.ID.String()] = true
 				if pool.CurrentInstances > 0 {
@@ -229,6 +231,11 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			}
 
 			rai.SetPools(pools)
+			services, err := a.collectServiceHealth(ctx, servicePools, spec, now)
+			if err != nil {
+				return err
+			}
+			rai.SetServices(services)
 			rai.SetHealth(health.classify())
 			rai.SetReadyInstances(int32(health.ready))
 			rai.SetDesiredInstances(int32(health.desired))

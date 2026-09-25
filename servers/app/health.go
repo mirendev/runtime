@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -9,6 +10,7 @@ import (
 	core_v1alpha "miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/apphealth"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc/standard"
 )
 
 // specAllowsScaleToZero reports whether an app's resolved config lets it sit at
@@ -71,6 +73,110 @@ func (h *poolHealth) accumulate(pool *compute_v1alpha.SandboxPool, now time.Time
 			h.cooldownLeft = left
 		}
 	}
+}
+
+// serviceSandboxHealth uses the same pool classifier as app list, while
+// retaining the sandbox details needed to explain a failure in app status.
+type serviceSandboxHealth struct {
+	pool       poolHealth
+	running    int32
+	dead       int32
+	lastExit   time.Time
+	lastCode   int64
+	hasExit    bool
+	lastFailed time.Time
+	failedID   string
+}
+
+func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1alpha.SandboxPool, spec *core_v1alpha.ConfigSpec, now time.Time) ([]*app_v1alpha.ServiceHealth, error) {
+	byService := make(map[string]*serviceSandboxHealth)
+	byPool := make(map[string]*serviceSandboxHealth)
+	for i := range pools {
+		pool := &pools[i]
+		h := byService[pool.Service]
+		if h == nil {
+			h = &serviceSandboxHealth{pool: poolHealth{isAutoscale: true}}
+			if spec != nil {
+				for _, svc := range spec.Services {
+					if svc.Name == pool.Service && svc.Concurrency.Mode == "fixed" {
+						h.pool.isAutoscale = false
+					}
+				}
+			}
+			byService[pool.Service] = h
+		}
+		h.pool.accumulate(pool, now)
+		byPool[pool.ID.String()] = h
+	}
+	if len(pools) == 0 {
+		return nil, nil
+	}
+
+	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return nil, err
+	}
+	for list.Next() {
+		md := list.Metadata()
+		if md == nil {
+			continue
+		}
+		poolID, _ := md.Labels.Get("pool")
+		h := byPool[poolID]
+		if h == nil {
+			continue
+		}
+		var sb compute_v1alpha.Sandbox
+		if err := list.Read(&sb); err != nil {
+			continue
+		}
+		switch sb.Status {
+		case compute_v1alpha.RUNNING:
+			h.running++
+		case compute_v1alpha.DEAD:
+			h.dead++
+			if !sb.Exit.At.IsZero() {
+				if !h.hasExit || sb.Exit.At.After(h.lastExit) {
+					h.lastCode = sb.Exit.Code
+					h.lastExit = sb.Exit.At
+					h.hasExit = true
+				}
+				if sb.Exit.Code != 0 && (h.failedID == "" || sb.Exit.At.After(h.lastFailed)) {
+					h.lastFailed = sb.Exit.At
+					h.failedID = sb.ID.String()
+				}
+			}
+		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.STOPPED:
+		}
+	}
+
+	names := make([]string, 0, len(byService))
+	for name := range byService {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]*app_v1alpha.ServiceHealth, 0, len(names))
+	for _, name := range names {
+		h := byService[name]
+		var svc app_v1alpha.ServiceHealth
+		svc.SetService(name)
+		svc.SetHealth(h.pool.classify())
+		svc.SetRunning(h.running)
+		svc.SetDead(h.dead)
+		if h.pool.inCooldown {
+			svc.SetCrashCount(h.pool.crashCount)
+			svc.SetCooldownSeconds(int32(h.pool.cooldownLeft.Seconds()))
+		}
+		if h.hasExit {
+			svc.SetLastExitCode(h.lastCode)
+		}
+		if h.failedID != "" {
+			svc.SetLastFailureSandbox(h.failedID)
+			svc.SetLastFailureAt(standard.ToTimestamp(h.lastFailed))
+		}
+		result = append(result, &svc)
+	}
+	return result, nil
 }
 
 // collectBoundPortDivergence scans the sandboxes belonging to the given pools

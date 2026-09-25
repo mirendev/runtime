@@ -1,14 +1,20 @@
 package app
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/apphealth"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func TestPoolHealthClassify(t *testing.T) {
@@ -75,6 +81,48 @@ func TestPoolHealthAccumulate_ExpiredCooldownIgnored(t *testing.T) {
 
 	assert.False(t, h.inCooldown)
 	assert.Equal(t, apphealth.Healthy, h.classify())
+}
+
+func TestCollectServiceHealthUsesSharedCooldownAndLatestExit(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	r := &AppInfo{Log: slog.Default(), EC: ec}
+	now := time.Now().Truncate(time.Second)
+	pools := []compute_v1alpha.SandboxPool{
+		{ID: "pool-db", Service: "db", DesiredInstances: 1, ConsecutiveCrashCount: 7, CooldownUntil: now.Add(3 * time.Minute), LastCrashTime: now.Add(-12 * time.Minute)},
+		{ID: "pool-web", Service: "web", DesiredInstances: 1, ReadyInstances: 1},
+	}
+	failedID, err := ec.Create(ctx, "failed", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 17, At: now.Add(-12 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "success", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 0, At: now.Add(-11 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "retired", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "web", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}, entityserver.WithLabels(types.LabelSet("pool", "pool-web")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "foreign", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 99, At: now}}, entityserver.WithLabels(types.LabelSet("pool", "other")))
+	require.NoError(t, err)
+
+	got, err := r.collectServiceHealth(ctx, pools, nil, now)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "db", got[0].Service())
+	assert.Equal(t, apphealth.Crashed, got[0].Health(), "cooldown still active past the 10-minute failure window")
+	assert.EqualValues(t, 7, got[0].CrashCount())
+	assert.EqualValues(t, 3, got[0].Dead())
+	require.True(t, got[0].HasLastExitCode())
+	assert.Zero(t, got[0].LastExitCode(), "latest successful exit replaces the older code")
+	assert.Equal(t, failedID.String(), got[0].LastFailureSandbox())
+	assert.Equal(t, apphealth.Healthy, got[1].Health())
+	assert.EqualValues(t, 1, got[1].Running())
+	fixed, err := r.collectServiceHealth(ctx,
+		[]compute_v1alpha.SandboxPool{{ID: "pool-fixed", Service: "fixed"}},
+		&core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "fixed", Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{Mode: "fixed"}}}}, now)
+	require.NoError(t, err)
+	require.Len(t, fixed, 1)
+	assert.Equal(t, apphealth.Starting, fixed[0].Health(), "fixed service at zero must not be classified as idle")
 }
 
 func TestSpecNeedsNoService(t *testing.T) {

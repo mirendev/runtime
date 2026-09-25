@@ -1303,19 +1303,6 @@ func (e *EntityServer) Reindex(ctx context.Context, req *entityserver_v1alpha.En
 	return nil
 }
 
-func (e *EntityServer) CheckIndexHealth(ctx context.Context, req *entityserver_v1alpha.EntityAccessCheckIndexHealth) error {
-	store, ok := e.Store.(*entity.EtcdStore)
-	if !ok {
-		return fmt.Errorf("index health requires EtcdStore")
-	}
-	stats, err := store.CleanupStaleCollectionEntries(ctx, e.Log, entity.CleanupOptions{DryRun: true})
-	if err != nil {
-		return fmt.Errorf("scan index health: %w", err)
-	}
-	req.Results().SetOrphanedEntries(stats.OrphanedEntriesFound)
-	return nil
-}
-
 func (e *EntityServer) GetAttributesByTag(ctx context.Context, req *entityserver_v1alpha.EntityAccessGetAttributesByTag) error {
 	args := req.Args()
 	tag := args.Tag()
