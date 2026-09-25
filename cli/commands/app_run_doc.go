@@ -4,9 +4,9 @@ const appRunDescription = `This command runs a command in a fresh sandbox built 
 
 With no arguments it opens an interactive shell. With arguments it runs that command. With ` + "`" + `--task` + "`" + ` it runs a task declared in ` + "`" + `app.toml` + "`" + `.
 
-Pass a single command string to use shell syntax (such as ` + "`" + `$HOME` + "`" + `, ` + "`" + `|` + "`" + `, or ` + "`" + `>` + "`" + `). Separate operator arguments, such as ` + "`" + `|` + "`" + ` between two commands, also invoke a shell. Other arguments retain their boundaries without shell interpretation, even when they contain characters used by a shell.
+Pass a single command string to use shell syntax (such as ` + "`" + `$HOME` + "`" + `, ` + "`" + `|` + "`" + `, or ` + "`" + `>` + "`" + `). Multiple arguments retain their boundaries without shell interpretation, including quoted or escaped operator characters.
 
-Quote the expression for your local shell so it reaches Miren intact: ` + "`" + `miren app run -- 'echo $HOME | wc -c'` + "`" + `. Shell expressions require a cluster that supports durable runs; older clusters cannot safely preserve them.
+Quote the expression for your local shell so it reaches Miren intact: ` + "`" + `miren app run -- 'echo $HOME | wc -c'` + "`" + `. Older clusters keep their existing command handling and may not interpret a single command string the same way.
 
 This is useful for:
 - Debugging application issues in an isolated environment

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -54,9 +53,6 @@ func AppRun(ctx *Context, opts struct {
 			if opts.Task != "" || opts.Detach {
 				return fmt.Errorf("--task and --detach need a newer cluster that supports durable runs; a plain `miren app run` still works against this one")
 			}
-			if err := legacyRunCommandCheck(opts.Args); err != nil {
-				return err
-			}
 			return appRunLegacy(ctx, opts.App, opts.Args)
 		}
 		return err
@@ -94,47 +90,15 @@ func AppRun(ctx *Context, opts struct {
 	return reportRunExit(ctx, runs, runID)
 }
 
-// runCommand keeps ordinary argv intact, but lets shell expressions be parsed
-// by a shell. Quote plain arguments inside an expression so an unrelated space
-// in an argument does not turn it into multiple words.
+// runCommand treats a single command string as shell source. Multiple args
+// remain argv: the caller's shell already removed quoting, so even a standalone
+// operator token may be literal data deliberately quoted or escaped locally.
 func runCommand(args []string) []string {
-	if len(args) == 0 {
-		return args
-	}
-
 	const shellSyntax = "$|&;<>()`\\*?[]{}~\n"
-	// A single command string is shell source. For multiple arguments the
-	// caller's shell has already stripped its quotes, so only whole operator
-	// tokens distinguish shell structure from literal data (e.g. SQL or code).
 	if len(args) == 1 && strings.ContainsAny(args[0], shellSyntax+" \t") {
 		return []string{"/bin/sh", "-c", args[0]}
 	}
-
-	usesShell := false
-	parts := make([]string, len(args))
-	for i, arg := range args {
-		switch arg {
-		case "|", "||", "&&", ";", "&", ">", ">>", "<", "<<", "2>", "2>>":
-			usesShell = true
-			parts[i] = arg
-		default:
-			parts[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
-		}
-	}
-	if !usesShell {
-		return args
-	}
-	return []string{"/bin/sh", "-c", strings.Join(parts, " ")}
-}
-
-func legacyRunCommandCheck(args []string) error {
-	// Old servers join argv into shell source when the app has an entrypoint.
-	// There is no way to preserve a -c script argument both there and on
-	// images without an entrypoint, so do not silently run a different command.
-	if !slices.Equal(runCommand(args), args) {
-		return fmt.Errorf("shell expressions in `miren app run` require a newer cluster; this cluster cannot safely preserve the command")
-	}
-	return nil
+	return args
 }
 
 // serverPredatesRuns reports whether a runsClient error means the cluster is

@@ -24,11 +24,12 @@ func TestRunCommand(t *testing.T) {
 		{"single executable", []string{"date"}, []string{"date"}},
 		{"ordinary arguments", []string{"echo", "hello   world", "O'Reilly"}, []string{"echo", "hello   world", "O'Reilly"}},
 		{"variable argument stays literal", []string{"echo", "$HOME"}, []string{"echo", "$HOME"}},
-		{"pipeline with spaced argument", []string{"printf", "%s", "hello world", "|", "wc", "-c"}, []string{"/bin/sh", "-c", "'printf' '%s' 'hello world' | 'wc' '-c'"}},
-		{"empty argument in pipeline", []string{"printf", "%s", "", "|", "wc", "-c"}, []string{"/bin/sh", "-c", "'printf' '%s' '' | 'wc' '-c'"}},
+		{"operator argument stays literal", []string{"grep", "-F", "|", "log"}, []string{"grep", "-F", "|", "log"}},
+		{"find exec terminator", []string{"find", ".", "-name", "x", "-exec", "rm", "{}", ";"}, []string{"find", ".", "-name", "x", "-exec", "rm", "{}", ";"}},
+		{"expr comparison", []string{"expr", "3", ">", "2"}, []string{"expr", "3", ">", "2"}},
 		{"single shell expression", []string{"echo $HOME | wc -c"}, []string{"/bin/sh", "-c", "echo $HOME | wc -c"}},
 		{"single command string", []string{"exit 7"}, []string{"/bin/sh", "-c", "exit 7"}},
-		{"redirect", []string{"echo", "hi", ">", "/tmp/result"}, []string{"/bin/sh", "-c", "'echo' 'hi' > '/tmp/result'"}},
+		{"redirect is data", []string{"echo", "hi", ">", "/tmp/result"}, []string{"echo", "hi", ">", "/tmp/result"}},
 		{"python code is data", []string{"python", "-c", "print('hi')"}, []string{"python", "-c", "print('hi')"}},
 		{"SQL is data", []string{"psql", "-c", "SELECT * FROM users;"}, []string{"psql", "-c", "SELECT * FROM users;"}},
 		{"URL is data", []string{"curl", "https://x/?a=1&b=2"}, []string{"curl", "https://x/?a=1&b=2"}},
@@ -51,7 +52,7 @@ func TestRunCommand(t *testing.T) {
 }
 
 func TestRunCommandExecutesShellExpression(t *testing.T) {
-	args := runCommand([]string{"printf", "%s", "hello world", "|", "wc", "-c"})
+	args := runCommand([]string{`printf '%s' 'hello world' | wc -c`})
 	out, err := exec.Command(args[0], args[1:]...).Output()
 	if err != nil {
 		t.Fatal(err)
@@ -61,16 +62,16 @@ func TestRunCommandExecutesShellExpression(t *testing.T) {
 	}
 }
 
-func TestRunCommandPreservesLiteralArgumentsInPipeline(t *testing.T) {
+func TestRunCommandPreservesLiteralArguments(t *testing.T) {
 	for _, literal := range []string{"O'Reilly book", "a # b", "a = b", ""} {
 		t.Run(literal, func(t *testing.T) {
-			args := runCommand([]string{"printf", "%s", literal, "|", "cat"})
+			args := runCommand([]string{"printf", "%s", literal})
 			out, err := exec.Command(args[0], args[1:]...).Output()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if string(out) != literal {
-				t.Fatalf("pipeline output = %q, want %q", out, literal)
+				t.Fatalf("command output = %q, want %q", out, literal)
 			}
 		})
 	}
@@ -95,15 +96,6 @@ func TestRunCommandPreservesExplicitShellExit(t *testing.T) {
 	if err != nil || string(out) != "two words" {
 		t.Fatalf("positional argument output = %q, error = %v; want two words", out, err)
 	}
-}
-
-func TestLegacyRunCommandCheck(t *testing.T) {
-	assert.NoError(t, legacyRunCommandCheck([]string{"echo", "plain text"}))
-	assert.NoError(t, legacyRunCommandCheck(nil))
-	assert.NoError(t, legacyRunCommandCheck([]string{"python", "-c", "print(1)"}))
-	assert.NoError(t, legacyRunCommandCheck([]string{"psql", "-c", "SELECT * FROM t"}))
-	assert.ErrorContains(t, legacyRunCommandCheck([]string{"echo $HOME"}), "require a newer cluster")
-	assert.ErrorContains(t, legacyRunCommandCheck([]string{"echo", "hi", "|", "wc"}), "require a newer cluster")
 }
 
 // The compatibility fallback hinges on one distinction: a server that answered

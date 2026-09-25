@@ -262,9 +262,14 @@ func TestRunPreservesArgumentBoundaries(t *testing.T) {
 		t.Fatalf("argument boundaries were lost; want \"hello   world\" in output, got:\n%s", r.Stdout)
 	}
 
-	r = m.MustRun("app", "run", "-a", name, "--", "printf", "%s", "hello world", "|", "wc", "-c")
+	r = m.MustRun("app", "run", "-a", name, "--", "printf '%s' 'hello world' | wc -c")
 	if strings.TrimSpace(r.Stdout) != "11" {
-		t.Fatalf("shell pipeline did not preserve the spaced argument; want 11, got:\n%s", r.Stdout)
+		t.Fatalf("shell pipeline did not run; want 11, got:\n%s", r.Stdout)
+	}
+
+	r = m.MustRun("app", "run", "-a", name, "--", "expr", "3", ">", "2")
+	if strings.TrimSpace(r.Stdout) != "1" {
+		t.Fatalf("quoted comparison was interpreted as redirection; want 1, got:\n%s", r.Stdout)
 	}
 
 	r = m.MustRun("app", "run", "-a", name, "--", "echo $MIREN_APP")
