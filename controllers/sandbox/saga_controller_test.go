@@ -46,6 +46,20 @@ func TestSagaFailureMarksDeadWhenFinalFetchFails(t *testing.T) {
 	assert.False(t, outcomeSet, "a failed fetch must not derive an outcome from the stale snapshot")
 }
 
+func TestSagaFailureDoesNotRewriteDead(t *testing.T) {
+	h := newTestHarness(t)
+	h.networking.allocateErr = errors.New("no IPs available")
+	h.entities.sandbox.Status = compute.DEAD
+	h.entities.sandbox.StartupOutcome = compute.STARTUP_FAILED
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+	err := c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false)
+	require.ErrorContains(t, err, "no IPs available")
+	require.Empty(t, h.entities.patchCalls, "already-DEAD sandbox must retain its failure timestamp")
+}
+
 // newSagaControllerForResume wires up only what sagaResumeNeeded reads
 // (storage + log), so no live containerd client is needed.
 func newSagaControllerForResume(t *testing.T) *SandboxController {

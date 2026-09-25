@@ -2007,6 +2007,22 @@ func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
 	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
 }
 
+func TestRetireSandboxDoesNotRewriteDead(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	id, err := server.Client.Create(ctx, "dead", &compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_FAILED})
+	require.NoError(t, err)
+	before, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+
+	c := &SandboxController{EAC: server.EAC}
+	require.NoError(t, c.retireSandbox(ctx, id))
+	after, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	require.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "already-DEAD sandbox must retain its failure timestamp")
+}
+
 // A sandbox whose command must execute at most once is finished when its
 // containers vanish. Rebooting it would re-run the command -- for a migration,
 // not a recoverable mistake.

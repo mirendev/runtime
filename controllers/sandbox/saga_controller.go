@@ -95,6 +95,9 @@ func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *comput
 		if getErr != nil {
 			c.Log.Warn("failed to fetch sandbox after saga failure; leaving startup outcome unchanged", "id", co.ID, "error", getErr)
 		} else {
+			if current.Status == compute.DEAD {
+				return fmt.Errorf("saga sandbox creation failed: %w", err)
+			}
 			revision = meta.GetRevision()
 			if current.StartupOutcome != compute.STARTUP_RUNNING && current.Status != compute.RUNNING {
 				failure.StartupOutcome = compute.STARTUP_FAILED

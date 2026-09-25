@@ -3340,6 +3340,9 @@ func (c *SandboxController) retireSandbox(ctx context.Context, id entity.Id) err
 		}
 		var current compute.Sandbox
 		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.DEAD {
+			return nil
+		}
 		retired := &compute.Sandbox{Status: compute.DEAD}
 		if current.StartupOutcome == "" {
 			switch current.Status {
