@@ -272,7 +272,7 @@ func TestRunPreservesArgumentBoundaries(t *testing.T) {
 		t.Fatalf("quoted comparison was interpreted as redirection; want 1, got:\n%s", r.Stdout)
 	}
 
-	r = m.MustRun("app", "run", "-a", name, "--", "echo $MIREN_APP")
+	r = m.MustRun("app", "run", "-a", name, "--", "echo $MIREN_RUNTIME_APP")
 	if strings.TrimSpace(r.Stdout) != name {
 		t.Fatalf("shell variable did not expand; want %q, got:\n%s", name, r.Stdout)
 	}
