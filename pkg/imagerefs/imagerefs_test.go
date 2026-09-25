@@ -34,3 +34,31 @@ func TestGetGolangImage(t *testing.T) {
 		}
 	}
 }
+
+func TestGetElixirImage(t *testing.T) {
+	// hexpm has no floating version tags, so the full tag passes through.
+	want := "oci.miren.cloud/hexpm/elixir:" + ElixirDefaultTag
+	if got := GetElixirImage(ElixirDefaultTag); got != want {
+		t.Errorf("GetElixirImage(%q) = %q, want %q", ElixirDefaultTag, got, want)
+	}
+}
+
+func TestElixirTag(t *testing.T) {
+	if ElixirDefaultTag != "1.19.6-erlang-28.5.0.7-debian-bookworm-20260918-slim" {
+		t.Errorf("ElixirDefaultTag = %q", ElixirDefaultTag)
+	}
+	if got := ElixirTag("1.20", "29"); got != "1.20.4-erlang-29.1.1-debian-bookworm-20260918-slim" {
+		t.Errorf("ElixirTag(1.20, 29) = %q", got)
+	}
+	if got := ElixirTag("1.20", "24"); got != "" {
+		t.Errorf("unsupported OTP should be empty, got %q", got)
+	}
+	if got := ElixirTag("1.9", "22"); got != "" {
+		t.Errorf("unknown minor should be empty, got %q", got)
+	}
+	for minor, rel := range ElixirReleases {
+		if _, ok := rel.OTP[rel.DefaultOTP]; !ok {
+			t.Errorf("Elixir %s default OTP %s isn't in its OTP map", minor, rel.DefaultOTP)
+		}
+	}
+}

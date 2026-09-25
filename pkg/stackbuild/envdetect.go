@@ -43,6 +43,9 @@ var ignoredEnvVars = map[string]bool{
 	"RAILS_MASTER_KEY":      true, // Detected via rails_core
 	"RAILS_ENV":             true, // Detected via rails_core with default
 	"PORT":                  true,
+	"MIX_ENV":               true, // Set to prod by the Elixir stack
+	"PHX_SERVER":            true, // Set by the Elixir stack for Phoenix apps
+	"PHX_HOST":              true, // Detected via phoenix_core
 }
 
 // parseEnvSampleFile parses a .env.sample or .env.example file and returns variable names
@@ -142,6 +145,8 @@ var skipDirs = map[string]bool{
 	"log":          true,
 	"logs":         true,
 	"target":       true, // Rust build directory
+	"deps":         true, // Mix dependency sources
+	"_build":       true, // Mix build output
 	"dist":         true,
 	"build":        true,
 	".venv":        true,

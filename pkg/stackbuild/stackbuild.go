@@ -96,6 +96,9 @@ func DetectStack(dir string, opts BuildOptions) (Stack, error) {
 	stacks := []Stack{
 		&RubyStack{MetaStack: ms},
 		&PythonStack{MetaStack: ms},
+		// Ahead of Bun/Node: a Phoenix app may carry a package.json for its
+		// assets, which the npm augmentation handles.
+		&ElixirStack{MetaStack: ms},
 		&BunStack{MetaStack: ms},
 		&NodeStack{MetaStack: ms},
 		&GoStack{MetaStack: ms},
@@ -389,15 +392,26 @@ func (h *highlevelBuilder) CacheMountFrom(path string, from llb.State) llb.RunOp
 	)
 }
 
+// lockedCacheMount is CacheMount for tools that can't share a cache directory
+// with a concurrent run of themselves: BuildKit hands it to one step at a time.
+func (h *highlevelBuilder) lockedCacheMount(path string) llb.RunOption {
+	return llb.AddMount(path, llb.Scratch(),
+		llb.AsPersistentCacheDir(h.CacheNS+"-"+path, llb.CacheMountLocked),
+	)
+}
+
 func (h *highlevelBuilder) Access(cur llb.State, path, into string) llb.RunOption {
 	return llb.AddMount(into, cur, llb.SourcePath(path), llb.Readonly)
 }
 
 func (h *highlevelBuilder) aptInstall(cur llb.State, pkgs ...string) llb.State {
+	// Locked, not shared: apt takes an exclusive lock on these directories, so
+	// two stages installing packages in parallel (a builder and its runtime
+	// image) would otherwise fail on each other's lock.
 	return cur.Run(
 		llb.Shlexf("sh -c 'apt-get update && apt-get install -y %s'", strings.Join(pkgs, " ")),
-		h.CacheMount("/var/lib/apt/lists"),
-		h.CacheMount("/var/cache/apt/archives"),
+		h.lockedCacheMount("/var/lib/apt/lists"),
+		h.lockedCacheMount("/var/cache/apt/archives"),
 		llb.WithCustomName("[phase] Installing OS packages"),
 	).State
 }
