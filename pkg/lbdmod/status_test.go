@@ -198,6 +198,7 @@ func TestMarkerRoundTrip(t *testing.T) {
 	want := Marker{
 		LbdVersion:    "v0.0.0-20260824210626-be4cec661034",
 		KernelRelease: testRelease,
+		BuilderImage:  "cluster.local:5000/miren-system/lbd-builder:miren-system-lbd-builder-oldhash",
 		ModulePath:    modulePath(testRelease),
 		LbdctlPath:    "/usr/local/bin/lbdctl",
 		BuiltAt:       time.Now().UTC().Truncate(time.Second),

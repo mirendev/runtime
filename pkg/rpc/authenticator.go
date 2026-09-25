@@ -47,8 +47,8 @@ const (
 
 // CoordinatorCertSubject is the common name on the certificate the coordinator
 // dials with. A runner uses it to tell the coordinator apart from anything else
-// that can reach its API, which matters because the runner's listener does not
-// require a client certificate at all.
+// that can reach its API. The listener accepts certless connections but
+// authenticates non-public calls with a verified client certificate.
 const CoordinatorCertSubject = "miren-api"
 
 // Identity represents an authenticated caller

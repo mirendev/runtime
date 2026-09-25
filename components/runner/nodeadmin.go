@@ -36,9 +36,9 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 		return nil
 	}
 
-	// Pinned to the cluster's own toolchain repository. The image's entrypoint
+	// Pinned to the cluster's toolchain tag family. The image's entrypoint
 	// runs here and its output is loaded into this kernel as root, so a
-	// reference pointing anywhere else is not something to act on even from a
+	// reference pointing at any other tag is not something to act on even from a
 	// caller that got past the check above.
 	image := req.Args().Image()
 	if !lbdmod.IsBuilderImage(image) {

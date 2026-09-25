@@ -124,6 +124,7 @@ func (i *Installer) Install(ctx context.Context, force bool) (Status, error) {
 	marker := Marker{
 		LbdVersion:    SourceVersion(),
 		KernelRelease: status.Host.KernelRelease,
+		BuilderImage:  i.image(),
 		ModulePath:    modulePath(status.Host.KernelRelease),
 		LbdctlPath:    filepath.Join(lbdctlInstallDir, "lbdctl"),
 		BuiltAt:       time.Now().UTC(),
@@ -167,6 +168,9 @@ func (i *Installer) EnsureCurrent(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
+	if i.Image == "" {
+		i.Image = status.Marker.BuilderImage
+	}
 	i.Log.Info("rebuilding the lbd kernel module", "reason", status.Explain())
 	if _, err := i.Install(ctx, false); err != nil {
 		return false, err

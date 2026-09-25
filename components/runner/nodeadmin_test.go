@@ -47,6 +47,22 @@ func TestRequireCoordinatorAcceptsTheCoordinator(t *testing.T) {
 		&rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})))
 }
 
+func TestRunnerListenerNeedsAClusterCA(t *testing.T) {
+	access, err := NewClusterAccess(slog.Default(), RunnerDeps{}, RunnerConfig{
+		Id: "runner", DataPath: t.TempDir(), ListenAddress: "localhost:0",
+	})
+	require.NoError(t, err)
+	_, err = access.newRPCState(t.Context())
+	require.ErrorContains(t, err, "cluster config is required")
+
+	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("cluster", &clientconfig.ClusterConfig{Hostname: "localhost:0"})
+	require.NoError(t, cfg.SetActiveCluster("cluster"))
+	access.Config = cfg
+	_, err = access.newRPCState(t.Context())
+	require.ErrorContains(t, err, "cluster CA is required")
+}
+
 func TestNodeAdminAuthenticatesCoordinatorOverWire(t *testing.T) {
 	ca, err := caauth.New(caauth.Options{CommonName: "cluster-ca", Organization: "miren", ValidFor: time.Hour})
 	require.NoError(t, err)

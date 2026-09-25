@@ -64,20 +64,18 @@ func BuilderImage(registryHost string) string {
 	return fmt.Sprintf("%s/%s:%s", registryHost, BuilderRepository, BuilderTag())
 }
 
-// IsBuilderImage reports whether a reference names the cluster's own lbd
-// toolchain image.
+// IsBuilderImage reports whether a reference names a cluster lbd toolchain tag.
 //
 // This is an authorization check rather than a convenience. A node asked to
 // build runs whatever the image's entrypoint says and then loads the result
-// into its own kernel as root, so the reference has to be pinned to the one
-// repository this cluster publishes to.
+// into its own kernel as root. The registry resolves manifests by tag alone,
+// so checking the repository without the tag prefix would also accept an app
+// image under a forged repository name.
 //
-// The tag is deliberately not checked. A coordinator running a newer miren
-// carries a different content hash, and asking a node to build with it is
-// legitimate; what must not be legitimate is pointing the node somewhere else
-// entirely.
+// The content hash is deliberately not checked: a newer coordinator may
+// publish a different version of the toolchain for this node to build with.
 func IsBuilderImage(ref string) bool {
-	prefix := ocireg.Host + "/" + BuilderRepository + ":"
+	prefix := ocireg.Host + "/" + BuilderRepository + ":" + core_v1alpha.SystemArtifactPrefix + "lbd-builder-"
 	return strings.HasPrefix(ref, prefix) && len(ref) > len(prefix)
 }
 

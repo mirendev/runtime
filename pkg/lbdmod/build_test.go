@@ -369,6 +369,28 @@ func TestEnsureCurrentRebuildsAfterAKernelUpgrade(t *testing.T) {
 		"a stale module must trigger a rebuild attempt, not silence")
 }
 
+func TestEnsureCurrentUsesThePublishedImageFromTheInstallRecord(t *testing.T) {
+	root := ubuntuRoot(t)
+	dataPath := t.TempDir()
+	previousImage := "cluster.local:5000/miren-system/lbd-builder:miren-system-lbd-builder-previous"
+	require.NoError(t, writeMarker(dataPath, Marker{
+		LbdVersion: SourceVersion(), KernelRelease: "6.8.0-45-generic", BuilderImage: previousImage,
+	}))
+
+	i := testInstaller(t, root, dataPath)
+	// No builder is needed to verify image selection: the install will fail
+	// its preflight check before it could touch the host kernel.
+	_, err := i.EnsureCurrent(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, previousImage, i.image(), "a new binary's toolchain tag may not have been published")
+
+	// An explicit image from a coordinator install must still take precedence.
+	i.Image = "cluster.local:5000/miren-system/lbd-builder:miren-system-lbd-builder-new"
+	_, err = i.EnsureCurrent(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, "cluster.local:5000/miren-system/lbd-builder:miren-system-lbd-builder-new", i.image())
+}
+
 func TestBuildFailedErrorQuotesTheOutput(t *testing.T) {
 	err := &BuildFailedError{ExitCode: 2, Output: "error: no kernel headers for 6.8.0-51-generic"}
 	assert.Contains(t, err.Error(), "exit 2")

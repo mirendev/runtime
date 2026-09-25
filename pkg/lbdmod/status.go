@@ -35,6 +35,11 @@ type Marker struct {
 	// for one release will not load on another.
 	KernelRelease string `json:"kernel_release"`
 
+	// BuilderImage is the cluster image used for this install. Retaining the
+	// reference lets startup rebuild without asking the coordinator to publish
+	// the current binary's potentially newer toolchain tag first.
+	BuilderImage string `json:"builder_image,omitempty"`
+
 	// ModulePath is where the built module was installed.
 	ModulePath string `json:"module_path"`
 

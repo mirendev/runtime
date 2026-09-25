@@ -54,9 +54,8 @@ type RunnerConfig struct {
 	Workers       int    `json:"workers" cbor:"workers" yaml:"workers"`
 	DataPath      string `json:"data_path" cbor:"data_path" yaml:"data_path"`
 
-	// Optional RPC configuration for advanced setups
-	// If not provided, a default insecure connection will be used
-	// to connect to the server address.
+	// RPC configuration supplies the cluster CA used to authenticate callers
+	// on the runner listener, as well as its outbound coordinator connection.
 	Config *clientconfig.Config `json:"config" cbor:"config" yaml:"config"`
 
 	// Optional cloud authentication configuration for disk replication
@@ -443,7 +442,7 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 		client *rpc.NetworkClient
 	)
 
-	r.Log.Info("establishing cluster access", "listen", r.ListenAddress, "distributed", r.Config != nil)
+	r.Log.Info("establishing cluster access", "listen", r.ListenAddress)
 	rs, err = r.newRPCState(ctx)
 	if err != nil {
 		return err
@@ -459,11 +458,7 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 			r.state = nil
 		}
 	}()
-	if r.Config == nil {
-		client, err = rs.Connect("", "entities")
-	} else {
-		client, err = rs.Client("entities")
-	}
+	client, err = rs.Client("entities")
 	if err != nil {
 		return err
 	}
@@ -497,7 +492,7 @@ func (r *ClusterAccess) newRPCState(ctx context.Context) (*rpc.State, error) {
 		rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}),
 	}
 	if r.Config == nil {
-		return rpc.NewState(ctx, append(opts, rpc.WithSkipVerify)...)
+		return nil, fmt.Errorf("runner cluster config is required to authenticate coordinator requests")
 	}
 
 	cluster, err := r.Config.GetActiveCluster()

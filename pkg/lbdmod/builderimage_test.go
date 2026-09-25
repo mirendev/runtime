@@ -111,6 +111,10 @@ func TestIsBuilderImageRejectsForeignReferences(t *testing.T) {
 		"cluster.local:5000/someapp:latest",
 		// A prefix match on the host alone is not enough.
 		"cluster.local:5000/miren-system/lbd-builder-evil:v1",
+		// The registry ignores the repository on lookup, so an app tag can
+		// masquerade behind the toolchain repository name.
+		ocireg.Host + "/" + BuilderRepository + ":app-version-123",
+		ocireg.Host + "/" + BuilderRepository + ":" + core_v1alpha.SystemArtifactPrefix + "lbd-builder-",
 		// No tag at all.
 		"cluster.local:5000/" + BuilderRepository,
 		"cluster.local:5000/" + BuilderRepository + ":",
