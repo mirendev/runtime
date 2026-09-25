@@ -52,31 +52,39 @@ const (
 
 // handlePermissionError handles permission errors by offering options to the user.
 // In interactive mode, it shows a picker menu. In non-interactive mode, it prints
-// helpful error messages with command suggestions.
-func handlePermissionError(ctx *Context, currentPath string, permErr error) (upgradeInstallOption, error) {
+// helpful error messages with command suggestions. rerun is nil when sudo is
+// not installed, which leaves only the user directory to offer.
+func handlePermissionError(ctx *Context, currentPath string, rerun *sudoRerun) (upgradeInstallOption, error) {
 	userPath, err := getUserMirenPath()
 	if err != nil {
 		return upgradeOptionCancel, fmt.Errorf("cannot determine user install path: %w", err)
 	}
 
 	if ui.IsInteractive() {
-		return handlePermissionErrorInteractive(ctx, currentPath, userPath)
+		return handlePermissionErrorInteractive(ctx, currentPath, userPath, rerun)
 	}
-	return handlePermissionErrorNonInteractive(ctx, currentPath, userPath)
+	return handlePermissionErrorNonInteractive(ctx, currentPath, userPath, rerun != nil)
 }
 
-func handlePermissionErrorInteractive(ctx *Context, currentPath, userPath string) (upgradeInstallOption, error) {
+func handlePermissionErrorInteractive(ctx *Context, currentPath, userPath string, rerun *sudoRerun) (upgradeInstallOption, error) {
 	ctx.Warn("Cannot write to %s: permission denied", filepath.Dir(currentPath))
 	ctx.Info("")
 	ctx.Info("The binary is installed in a location that requires elevated permissions.")
 	ctx.Info("Current location: %s", currentPath)
 	ctx.Info("")
 
-	items := []ui.PickerItem{
-		ui.SimplePickerItem{Text: "Cancel and re-run with sudo"},
-		ui.SimplePickerItem{Text: fmt.Sprintf("Install to %s (user directory)", userPath)},
-		ui.SimplePickerItem{Text: "Cancel"},
+	sudoText := "Re-run with sudo"
+	userText := fmt.Sprintf("Install to %s (user directory)", userPath)
+
+	var items []ui.PickerItem
+	if rerun != nil {
+		rerun.explain(ctx)
+		items = append(items, ui.SimplePickerItem{Text: sudoText})
 	}
+	items = append(items,
+		ui.SimplePickerItem{Text: userText},
+		ui.SimplePickerItem{Text: "Cancel"},
+	)
 
 	selected, err := ui.RunPicker(items,
 		ui.WithTitle("How would you like to proceed?"),
@@ -89,22 +97,27 @@ func handlePermissionErrorInteractive(ctx *Context, currentPath, userPath string
 	}
 
 	switch selected.ID() {
-	case "Cancel and re-run with sudo":
+	case sudoText:
 		return upgradeOptionSudo, nil
-	case fmt.Sprintf("Install to %s (user directory)", userPath):
+	case userText:
 		return upgradeOptionUser, nil
 	default:
 		return upgradeOptionCancel, nil
 	}
 }
 
-func handlePermissionErrorNonInteractive(ctx *Context, currentPath, userPath string) (upgradeInstallOption, error) {
+func handlePermissionErrorNonInteractive(ctx *Context, currentPath, userPath string, suggestSudo bool) (upgradeInstallOption, error) {
 	ctx.Warn("Cannot write to %s: permission denied", filepath.Dir(currentPath))
 	ctx.Info("")
-	ctx.Info("To fix this, either:")
-	ctx.Info("  1. Run with sudo: sudo miren upgrade")
-	ctx.Info("  2. Install to user directory: miren upgrade --user")
-	ctx.Info("     (installs to %s)", userPath)
+	if suggestSudo {
+		ctx.Info("To fix this, either:")
+		ctx.Info("  1. Run with sudo: sudo miren upgrade")
+		ctx.Info("  2. Install to user directory: miren upgrade --user")
+		ctx.Info("     (installs to %s)", userPath)
+	} else {
+		ctx.Info("To fix this, install to the user directory: miren upgrade --user")
+		ctx.Info("  (installs to %s)", userPath)
+	}
 	ctx.Info("")
 
 	return upgradeOptionCancel, fmt.Errorf("permission denied: cannot write to %s", filepath.Dir(currentPath))

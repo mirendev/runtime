@@ -96,4 +96,4 @@ miren server --mode standalone
 - [`miren server status`](./server-status.md) — Show miren service status
 - [`miren server uninstall`](./server-uninstall.md) — Remove systemd service for miren server
 - [`miren server unregister`](./server-unregister.md) — Detach this cluster from miren.cloud
-- [`miren server upgrade`](./server-upgrade.md) — Upgrade miren server (deprecated: use 'sudo miren upgrade')
+- [`miren server upgrade`](./server-upgrade.md) — Upgrade miren server (deprecated: use 'miren upgrade')

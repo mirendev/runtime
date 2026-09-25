@@ -290,7 +290,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server status`](./command/server-status.md) | Show miren service status |
 | [`miren server uninstall`](./command/server-uninstall.md) | Remove systemd service for miren server |
 | [`miren server unregister`](./command/server-unregister.md) | Detach this cluster from miren.cloud |
-| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'sudo miren upgrade') |
+| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'miren upgrade') |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
 ## top

@@ -18,7 +18,7 @@ A registered cluster's page in Miren Cloud has a **Server** section. Its tiles s
 
 ## What an upgrade does
 
-An upgrade from Cloud runs the same operation as `sudo miren upgrade` on the host. The server downloads the release, snapshots its data, installs the release, and restarts. It counts as done only when the new server reports ready on the new version. If that doesn't happen, the server puts the previous version and its data back on its own.
+An upgrade from Cloud runs the same operation as `miren upgrade` on the host. The server downloads the release, snapshots its data, installs the release, and restarts. It counts as done only when the new server reports ready on the new version. If that doesn't happen, the server puts the previous version and its data back on its own.
 
 Once the server is on the new version, it upgrades any [distributed runners](../distributed-runners.md) one at a time. If the first runner fails, the rest are left alone.
 

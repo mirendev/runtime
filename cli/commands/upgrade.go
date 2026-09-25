@@ -8,6 +8,7 @@ import (
 
 	"miren.dev/runtime/pkg/release"
 	"miren.dev/runtime/pkg/serverlifecycle"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // Upgrade upgrades the server and then the CLI on a systemd server host, and
@@ -33,13 +34,7 @@ func Upgrade(ctx *Context, opts struct {
 	// mode, so it wins if both units happen to be active.
 	daemon, daemonRunning := runningDaemon()
 
-	// The daemon's target is only wanted on the paths that check or act on
-	// it. A runner's comes from the coordinator, which takes the runner's
-	// own config to ask, and a CLI-only upgrade should not need that.
-	targetFor := daemon
-	if !opts.Check && (opts.User || os.Geteuid() != 0) {
-		targetFor = lifecycleDaemon{}
-	}
+	targetFor := targetDaemon(daemon, opts.Check, opts.User, os.Geteuid() == 0)
 	version, exact, err := daemonTarget(ctx, targetFor, opts.Version, opts.Channel)
 	if err != nil {
 		return err
@@ -55,15 +50,48 @@ func Upgrade(ctx *Context, opts struct {
 	if daemonRunning && !opts.User {
 		if os.Geteuid() != 0 {
 			if !opts.Force {
-				return fmt.Errorf("a miren %s is running on this machine; re-run with sudo to upgrade it and the CLI together (or --force to upgrade only this CLI)", daemon.name)
+				return offerDaemonSudo(ctx, daemon, exe)
 			}
-			ctx.Warn("Upgrading only the CLI; the running %s needs 'sudo miren upgrade'.", daemon.name)
-			return upgradeCLI(ctx, version, exe, opts.Force, false)
+			ctx.Warn("Upgrading only the CLI; run 'miren upgrade' without --force to upgrade the running %s too.", daemon.name)
+			return upgradeCLI(ctx, version, exe, opts.Force, false, false)
 		}
 		return upgradeDaemonAndCLI(ctx, daemon, version, exact, exe, opts.Force, nil)
 	}
 
-	return upgradeCLI(ctx, version, exe, opts.Force, opts.User)
+	return upgradeCLI(ctx, version, exe, opts.Force, opts.User, true)
+}
+
+// offerDaemonSudo re-runs this upgrade under sudo when someone is at the
+// terminal to say yes, and otherwise explains how to.
+func offerDaemonSudo(ctx *Context, daemon lifecycleDaemon, exe string) error {
+	refusal := fmt.Errorf("a miren %s is running on this machine; re-run with sudo to upgrade it and the CLI together (or --force to upgrade only this CLI)", daemon.name)
+	if !ui.IsInteractive() {
+		return refusal
+	}
+	rerun, ok := newSudoRerun(exe, daemonSudoSteps(daemon, exe))
+	if !ok {
+		return fmt.Errorf("%w; sudo is not installed", refusal)
+	}
+	proceed, err := confirmDaemonSudo(ctx, daemon, rerun)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		return nil
+	}
+	return rerun.exec(ctx)
+}
+
+// targetDaemon picks whose upgrade target to resolve. The daemon's target is
+// only wanted on the paths that check or act on it. A runner's comes from
+// the coordinator, which takes the runner's root-only config to ask, so a
+// non-root run must not need it: that run is either CLI-only or about to
+// offer sudo, and the re-run resolves the target as root.
+func targetDaemon(daemon lifecycleDaemon, check, user, root bool) lifecycleDaemon {
+	if !check && (user || !root) {
+		return lifecycleDaemon{}
+	}
+	return daemon
 }
 
 // runningDaemon reports which daemon this host runs, if any.
@@ -146,10 +174,7 @@ func daemonDrifted(ctx *Context, mgrOpts release.ManagerOptions) (bool, error) {
 // syncCLIBinary is a no-op when exe already is the server binary, directly or
 // through the /usr/local/bin symlink.
 func syncCLIBinary(ctx *Context, serverBinary, exe string) error {
-	if exe == serverBinary {
-		return nil
-	}
-	if resolved, err := filepath.EvalSymlinks(serverBinary); err == nil && resolved == exe {
+	if sharesBinary(serverBinary, exe) {
 		return nil
 	}
 	serverVer, err := release.GetCurrentVersion(serverBinary)
@@ -182,10 +207,12 @@ func syncCLIBinary(ctx *Context, serverBinary, exe string) error {
 		return copyErr
 	}
 	installer := release.NewInstaller(release.InstallOptions{InstallPath: exe, BackupSuffix: ".old"})
+	restoreOwner := keepOwner(ctx, exe)
 	if err := installer.Install(ctx, &release.DownloadedArtifact{Path: stagedPath}); err != nil {
 		os.Remove(stagedPath)
 		return err
 	}
+	restoreOwner()
 	return nil
 }
 
@@ -200,11 +227,11 @@ func checkDaemonUpgrade(ctx *Context, daemon lifecycleDaemon, version string, ex
 
 	switch {
 	case exact && !current.Equivalent(latest) && !latest.IsNewer(current):
-		fmt.Printf("\nThis %s is ahead of its coordinator (%s). Run 'sudo miren upgrade' to match it.\n", daemon.name, latest.Version)
+		fmt.Printf("\nThis %s is ahead of its coordinator (%s). Run 'miren upgrade' to match it.\n", daemon.name, latest.Version)
 	case latest.IsNewer(current):
-		fmt.Println("\nAn update is available! Run 'sudo miren upgrade' to install it.")
+		fmt.Println("\nAn update is available! Run 'miren upgrade' to install it.")
 	case drift:
-		fmt.Printf("\nOn-disk binary is current, but the running %s is older. Run 'sudo miren upgrade' to restart it.\n", daemon.name)
+		fmt.Printf("\nOn-disk binary is current, but the running %s is older. Run 'miren upgrade' to restart it.\n", daemon.name)
 	default:
 		fmt.Printf("\nYour %s is already on the latest version.\n", daemon.name)
 	}
@@ -228,8 +255,10 @@ func checkCLIUpgrade(ctx *Context, version, exe string) error {
 	return nil
 }
 
-// upgradeCLI is the client-only path.
-func upgradeCLI(ctx *Context, version, exe string, force, user bool) error {
+// upgradeCLI is the client-only path. offerSudo is false when a daemon runs
+// here and the caller opted out of upgrading it: as root, the same arguments
+// would upgrade the daemon too, which is not what the caller asked for.
+func upgradeCLI(ctx *Context, version, exe string, force, user, offerSudo bool) error {
 	mgrOpts := release.DefaultManagerOptions()
 	mgrOpts.InstallPath = exe
 	mgrOpts.SkipHealthCheck = true
@@ -244,19 +273,22 @@ func upgradeCLI(ctx *Context, version, exe string, force, user bool) error {
 		}
 		installPath = userPath
 	} else if err := checkInstallPermissions(installPath); err != nil {
-		permErr, ok := errors.AsType[*permissionError](err)
-		if !ok {
+		if _, ok := errors.AsType[*permissionError](err); !ok {
 			return fmt.Errorf("permission check failed: %w", err)
 		}
-		option, handleErr := handlePermissionError(ctx, installPath, permErr)
+		// Root can still fail access(W_OK), on a read-only mount or an
+		// immutable file, and a sudo re-run would only land back here.
+		var rerun *sudoRerun
+		if offerSudo && os.Geteuid() != 0 {
+			rerun, _ = newSudoRerun(exe, cliSudoSteps(exe))
+		}
+		option, handleErr := handlePermissionError(ctx, installPath, rerun)
 		if handleErr != nil {
 			return handleErr
 		}
 		switch option {
 		case upgradeOptionSudo:
-			ctx.Info("")
-			ctx.Info("Please re-run with: sudo miren upgrade")
-			return nil
+			return rerun.exec(ctx)
 		case upgradeOptionUser:
 			userPath, err := getUserMirenPath()
 			if err != nil {
@@ -301,9 +333,11 @@ func upgradeCLI(ctx *Context, version, exe string, force, user bool) error {
 
 	current, _ := mgr.GetCurrentVersion(ctx)
 	artifact := release.NewArtifact(release.ArtifactTypeBinary, version)
+	restoreOwner := keepOwner(ctx, installPath)
 	if err := mgr.UpgradeArtifact(ctx, artifact); err != nil {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
+	restoreOwner()
 	PrintUpgradeSuccess(ctx, current, "CLI", &mgrOpts)
 	return nil
 }

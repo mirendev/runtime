@@ -20,7 +20,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure (also skips the pre-upgrade etcd snapshot)"`
 	HealthTimeout  int    `long:"health-timeout" default:"0" description:"Seconds to wait for the restarted server to report ready"`
 }) error {
-	ctx.Warn("'miren server upgrade' is deprecated; 'sudo miren upgrade' now upgrades the server and the CLI together.")
+	ctx.Warn("'miren server upgrade' is deprecated; 'miren upgrade' now upgrades the server and the CLI together.")
 
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("server upgrade requires root privileges (use sudo)")
