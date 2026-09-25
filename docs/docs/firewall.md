@@ -26,8 +26,8 @@ Host-level rules are managed for you. The only thing to configure yourself is yo
 
 Also open any `node_port` values your apps declare for TCP/UDP services, and the [inter-node ports](#between-nodes-distributed-runners) if you run distributed runners.
 
-:::danger[Keep the registry off the internet]
-TCP port 5000 is cluster-internal. Do not expose it externally, including on bare-metal hosts without a cloud security group. The OCI registry listens on the coordinator's Miren bridge gateway, not on its public interfaces.
+:::warning[Registry port 5000]
+Starting with the release that routes registry pulls over WireGuard, the OCI registry listens only on the coordinator's Miren bridge gateway; you never need to open 5000/tcp on public interfaces. On older releases, it listens on all interfaces. If you still run one, block untrusted access to 5000/tcp with a host firewall (and a cloud security group, if applicable); allow only trusted runner addresses if you use distributed runners.
 :::
 
 ## How Miren Configures Firewall Rules
