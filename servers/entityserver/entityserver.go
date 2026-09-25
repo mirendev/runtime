@@ -591,13 +591,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					// and the entity key are removed together in one atomic txn, so
 					// the entity is already gone at this event's revision; read it at
 					// the prior revision to recover what was deleted.
-					en, err := e.Store.GetEntity(ctx, entityId)
-					if err != nil {
-						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
+					en, currentErr := e.Store.GetEntity(ctx, entityId)
+					readErr := currentErr
+					if currentErr != nil {
+						en, readErr = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
 					}
-					if err != nil {
-						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)
-					} else {
+					if readErr != nil && (!isNotFound(currentErr) || !isNotFound(readErr)) {
+						e.Log.Error("failed to get entity for delete event", "error", readErr, "id", entityId)
+					} else if readErr == nil {
 						var rpcEntity entityserver_v1alpha.Entity
 						rpcEntity.SetId(en.Id().String())
 						rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
@@ -670,9 +671,8 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i],
-				"index", index)
+			e.Log.Debug("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
 			continue
 		}
 
@@ -1086,7 +1086,7 @@ func (e *EntityServer) resolve(
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
 		} else {
-			e.Log.Error("entity in index but not in store, skipping",
+			e.Log.Debug("entity in index but not in store, skipping",
 				"id", ids[i], "index", index)
 		}
 
