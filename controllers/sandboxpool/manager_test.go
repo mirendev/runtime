@@ -1110,6 +1110,32 @@ func TestCheckForStalePendingSandboxes(t *testing.T) {
 		"RUNNING sandbox should remain RUNNING")
 }
 
+func TestStalePendingDoesNotOverwriteRunning(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-6 * time.Minute) }
+	id, err := server.Client.Create(ctx, "pending", &compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING})
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+
+	// The monitor's snapshot predates a successful setRunning patch.
+	stale, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}).Encode).Attrs(), stale.Entity().Revision())
+	require.NoError(t, err)
+
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	manager.retireStalePending(ctx, stale.Entity())
+	resp, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var sb compute_v1alpha.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	assert.Equal(t, compute_v1alpha.RUNNING, sb.Status)
+	assert.Equal(t, compute_v1alpha.STARTUP_RUNNING, sb.StartupOutcome)
+}
+
 // TestStalePendingSandboxUnblocksPoolCapacity tests that marking a stale
 // PENDING sandbox as STOPPED frees pool capacity, allowing the pool to
 // create a replacement sandbox on the next reconcile.
@@ -1481,4 +1507,202 @@ func TestManagerCrashResetDoesNotRecount(t *testing.T) {
 		"crash count should remain 0 after reset — old dead sandboxes must not be re-counted")
 	assert.True(t, updatedPool.CooldownUntil.IsZero(),
 		"pool should not re-enter cooldown from old dead sandboxes")
+}
+
+func TestCountStartupFailures(t *testing.T) {
+	now := time.Now()
+	manager := &Manager{}
+	sandboxes := []*sandboxWithMeta{
+		{sandbox: &compute_v1alpha.Sandbox{ID: "first", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-40 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "healthy", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-time.Hour), updatedAt: now.Add(-30 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "fast-healthy", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-20 * time.Second), updatedAt: now.Add(-10 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-25 * time.Second), updatedAt: now.Add(-15 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "old-legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-time.Minute)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "old-failure", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-10 * time.Minute), updatedAt: now.Add(-2 * time.Minute)},
+	}
+	pool := &compute_v1alpha.SandboxPool{LastCrashTime: now.Add(-90 * time.Second)}
+	count, latest := manager.countStartupFailures(sandboxes, pool)
+	assert.Equal(t, int64(3), count,
+		"long pre-running failure and quick crashes count, but long-running and previously counted failures do not")
+	assert.Equal(t, now.Add(-10*time.Second), latest, "use the newest counted update, not time.Now or the newest healthy exit")
+	pool.LastCrashTime = latest
+	count, _ = manager.countStartupFailures(sandboxes, pool)
+	assert.Zero(t, count, "reconciliation must not count the same DEAD sandboxes again")
+}
+
+func TestPartialNodeLossKeepsPoolDesiredDuringCooldown(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 5,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 4 {
+		_, err = server.Client.Create(ctx, fmt.Sprintf("healthy-%d", i),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-6 * time.Minute) }
+	failedID, err := server.Client.Create(ctx, "lost-node",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, failedID,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(1), updated.ConsecutiveCrashCount)
+	assert.Equal(t, int64(5), updated.DesiredInstances, "a failed boot must not downsize four healthy instances")
+	assert.Equal(t, int64(4), updated.ReadyInstances)
+	assert.WithinDuration(t, time.Now().Add(10*time.Second), updated.CooldownUntil, 2*time.Second)
+	assert.Len(t, listSandboxesForPool(t, ctx, server, pool), 5, "replacement waits for cooldown")
+}
+
+func TestCrashLoopCooldownCapsDesiredWithRunningSiblings(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 8,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 2 {
+		_, err = server.Client.Create(ctx, fmt.Sprintf("running-%d", i),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-20 * time.Second) }
+	failedID, err := server.Client.Create(ctx, "quick-crash",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, failedID,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+
+	reconcilePool(t, ctx, server, NewManager(testutils.TestLogger(t), server.EAC), pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(1), updated.ConsecutiveCrashCount)
+	assert.Equal(t, int64(3), updated.DesiredInstances, "only one replacement may be queued beyond the two running siblings")
+	assert.Equal(t, int64(2), updated.ReadyInstances)
+}
+
+func TestCooldownPreservesPendingSiblingsAfterTheyStart(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 5,
+		ReferencedByVersions: []entity.Id{"ver-1"},
+		SandboxSpec:          compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	for i := range 4 {
+		status := compute_v1alpha.RUNNING
+		if i >= 2 {
+			status = compute_v1alpha.PENDING
+		}
+		_, err = server.Client.Create(ctx, fmt.Sprintf("sibling-%d", i),
+			&compute_v1alpha.Sandbox{Status: status, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+	}
+	_, err = server.Client.Create(ctx, "failed",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(5), updated.DesiredInstances)
+	assert.Equal(t, int64(4), updated.CurrentInstances)
+	assert.Equal(t, int64(2), updated.ReadyInstances)
+
+	// Both pending siblings finish booting before the cooldown ends.
+	for _, sb := range listSandboxesForPool(t, ctx, server, pool) {
+		if sb.Status == compute_v1alpha.PENDING {
+			_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sb.ID,
+				(&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}).Encode).Attrs(), 0)
+			require.NoError(t, err)
+		}
+	}
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.SandboxPool{CooldownUntil: time.Now().Add(-time.Second)}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated = getPool(t, ctx, server, id)
+	assert.Equal(t, int64(5), updated.DesiredInstances)
+	assert.Equal(t, int64(5), updated.CurrentInstances, "a replacement may start without retiring a healthy sibling")
+	assert.Equal(t, int64(4), updated.ReadyInstances)
+}
+
+func TestManagerLongStartupFailureBackoff(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 1,
+		SandboxSpec: compute_v1alpha.SandboxSpec{Version: entity.Id("ver-1")},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+
+	for streak := int64(1); streak <= 2; streak++ {
+		created := time.Now().Add(-6 * time.Minute)
+		server.Store.NowFunc = func() time.Time { return created }
+		sbID, err := server.Client.Create(ctx, fmt.Sprintf("failed-%d", streak),
+			&compute_v1alpha.Sandbox{Status: compute_v1alpha.PENDING, Spec: pool.SandboxSpec},
+			entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+		require.NoError(t, err)
+		server.Store.NowFunc = nil
+		diedAt := time.Now().Add(-time.Duration(3-streak) * time.Second).Truncate(time.Millisecond).UTC()
+		server.Store.NowFunc = func() time.Time { return diedAt }
+		_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, sbID,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}).Encode).Attrs(), 0)
+		require.NoError(t, err)
+		server.Store.NowFunc = nil
+		before := time.Now()
+		reconcilePool(t, ctx, server, manager, pool)
+		updated := getPool(t, ctx, server, id)
+		assert.Equal(t, streak, updated.ConsecutiveCrashCount)
+		assert.Equal(t, diedAt, updated.LastCrashTime, "watermark must use the counted event, not reconciliation time")
+		assert.WithinDuration(t, before.Add(backoffDuration(streak)), updated.CooldownUntil, 2*time.Second)
+		assert.Equal(t, int64(0), updated.CurrentInstances)
+		assert.Len(t, listSandboxesForPool(t, ctx, server, pool), int(streak), "no replacement during cooldown")
+		// The same terminal entity must not increase the streak on another reconcile.
+		reconcilePool(t, ctx, server, manager, pool)
+		updated = getPool(t, ctx, server, id)
+		assert.Equal(t, streak, updated.ConsecutiveCrashCount)
+	}
+	// A deployment clears the streak but preserves the failure watermark.
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, id),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 0),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, time.Time{}),
+	}, 0)
+	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
+	assert.False(t, updated.LastCrashTime.IsZero())
 }

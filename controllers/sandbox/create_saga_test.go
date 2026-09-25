@@ -556,6 +556,15 @@ func TestCreateSandboxSaga_HappyPath(t *testing.T) {
 	assert.Equal(t, 1, h.runtime.waitForPortCalls)
 	assert.Equal(t, 1, h.obs.addMetricsCalls)
 	assert.Equal(t, 1, h.obs.updateSvcsCalls)
+	runningOutcome := false
+	for _, attrs := range h.entities.patchCalls {
+		for _, attr := range attrs {
+			if attr.ID == compute.SandboxStartupOutcomeId && attr.Value.Id() == compute.SandboxStartupOutcomeStartupRunningId {
+				runningOutcome = true
+			}
+		}
+	}
+	assert.True(t, runningOutcome, "reaching RUNNING must persist the startup outcome")
 
 	// No undo actions called
 	assert.Equal(t, 0, h.networking.releaseCalls)
@@ -715,6 +724,20 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 	assert.Equal(t, 1, h.runtime.unconfigureFirewallCalls)
 	assert.Equal(t, 1, h.runtime.cleanupContainerCalls)
 	assert.Equal(t, 1, h.networking.releaseCalls)
+}
+
+func TestCreateSandboxSaga_WaitPortsProcessExit(t *testing.T) {
+	h := newTestHarness(t)
+	h.runtime.waitForPortErr = errProcessExited
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+
+	err := h.execute(t)
+	require.ErrorContains(t, err, errProcessExited.Error())
+	assert.Equal(t, 0, h.runtime.diagnoseListeningCalls,
+		"an exited process cannot be auto-routed to a different port")
+	assert.Equal(t, saga.StatusFailed, h.execution(t).Status)
 }
 
 func TestSingleAlternativePort(t *testing.T) {

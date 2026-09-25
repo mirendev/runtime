@@ -239,6 +239,11 @@ kinds:
       doc: The status of the pod
       choices: [pending, not_ready, running, stopped, dead]
 
+    startup_outcome:
+      type: enum
+      choices: [startup_running, startup_failed]
+      doc: Durable distinction between a sandbox that reached RUNNING and one that failed before then
+
     last_activity:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
@@ -503,11 +508,11 @@ kinds:
     # Crash loop detection and cooldown (managed by SandboxPoolManager)
     consecutive_crash_count:
       type: int
-      doc: Number of consecutive quick crashes (sandboxes that died within 60s of creation)
+      doc: Number of consecutive sandbox failures, including quick crashes after RUNNING
 
     last_crash_time:
       type: time
-      doc: Timestamp of the most recent quick crash
+      doc: Timestamp of the most recently counted sandbox failure
 
     cooldown_until:
       type: time

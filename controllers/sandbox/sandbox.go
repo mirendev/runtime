@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -71,8 +72,11 @@ func cleanupAttach() cio.Attach {
 }
 
 type containerPorts struct {
-	Ports []observability.BoundPort
+	Ports  []observability.BoundPort
+	exited bool
 }
+
+var errProcessExited = stderrors.New("sandbox process exited")
 
 // SandboxControllerDeps holds required dependencies for SandboxController.
 type SandboxControllerDeps struct {
@@ -195,7 +199,12 @@ type SandboxController struct {
 	// or unwinds on restart rather than stranding containers, addresses, and
 	// disk leases. ops adapts this controller to the domain interfaces the
 	// saga's actions are written against.
-	ops          *sandboxOps
+	ops interface {
+		SandboxEntityStore
+		SandboxNetworking
+		SandboxContainerRuntime
+		SandboxObservability
+	}
 	executor     *saga.Executor
 	sagaRegistry *saga.Registry
 	sagaStorage  saga.Storage
@@ -365,8 +374,8 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
-	// Create a channel to signal when port is ready
-	done := make(chan struct{})
+	// Signal either readiness or process exit.
+	done := make(chan error, 1)
 	cancelled := make(chan struct{})
 
 	go func() {
@@ -385,10 +394,14 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 				ports = &containerPorts{}
 				c.portMap[id] = ports
 			}
+			if ports.exited {
+				done <- fmt.Errorf("%w: %s while waiting for port %d", errProcessExited, id, port)
+				return
+			}
 
 			for _, p := range ports.Ports {
 				if p.Port == port {
-					close(done)
+					done <- nil
 					return
 				}
 			}
@@ -398,8 +411,8 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 	}()
 
 	select {
-	case <-done:
-		return nil
+	case err := <-done:
+		return err
 	case <-ctx.Done():
 		close(cancelled)
 		c.portCond.Broadcast() // Wake up the waiting goroutine
@@ -412,6 +425,12 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 		// return a spurious timeout even though the port is in fact bound.
 		c.portMu.Lock()
 		if ports, ok := c.portMap[id]; ok {
+			if ports.exited {
+				c.portMu.Unlock()
+				close(cancelled)
+				c.portCond.Broadcast()
+				return fmt.Errorf("%w: %s while waiting for port %d", errProcessExited, id, port)
+			}
 			for _, p := range ports.Ports {
 				if p.Port == port {
 					c.portMu.Unlock()
@@ -424,6 +443,18 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 		c.portCond.Broadcast() // Wake up the waiting goroutine
 		return fmt.Errorf("timeout waiting for port %d to be bound after %v", port, timeout)
 	}
+}
+
+func (c *SandboxController) setProcessExited(id string) {
+	c.portMu.Lock()
+	defer c.portMu.Unlock()
+	ports := c.portMap[id]
+	if ports == nil {
+		ports = &containerPorts{}
+		c.portMap[id] = ports
+	}
+	ports.exited = true
+	c.portCond.Broadcast()
 }
 
 // mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
@@ -1327,7 +1358,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 							"id", co.ID, "createdAt", createdAt, "age", age)
 						patchAttrs := entity.New(
 							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{Status: compute.RUNNING}).Encode,
+							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 						)
 						_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {
@@ -1356,7 +1387,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 					c.Log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
 					patchAttrs := entity.New(
 						entity.Ref(entity.DBId, co.ID),
-						(&compute.Sandbox{Status: compute.DEAD}).Encode,
+						(&compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 					)
 					_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 					if err != nil {
@@ -1416,7 +1447,7 @@ func (c *SandboxController) markDeadNoRestart(ctx context.Context, co *compute.S
 	if co.Status != compute.DEAD {
 		patchAttrs := entity.New(
 			entity.Ref(entity.DBId, co.ID),
-			(&compute.Sandbox{Status: compute.DEAD}).Encode,
+			(&compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 		)
 		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 		if err != nil {
@@ -2253,6 +2284,9 @@ func (c *SandboxController) BootContainers(
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
+		c.portMu.Lock()
+		c.portMap[cc.ID()] = &containerPorts{}
+		c.portMu.Unlock()
 
 		if hub != nil {
 			hub.SetResizer(task)
@@ -2321,6 +2355,7 @@ func (c *SandboxController) monitorTaskExit(
 				"exit_code", exitStatus.ExitCode(),
 				"exit_time", exitStatus.ExitTime(),
 			)
+			c.setProcessExited(containerID)
 
 			// We don't delete the task here so that our destroySubContainers function
 			// has a consistent view of the state of containers and tasks.
@@ -2441,9 +2476,26 @@ func (c *SandboxController) recordExit(
 			return nil, err
 		}
 
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.DEAD {
+			// Do not advance UpdatedAt on an already-counted failure.
+			return nil, nil
+		}
+		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
+		if current.StartupOutcome == "" {
+			switch current.Status {
+			case compute.RUNNING:
+				stopped.StartupOutcome = compute.STARTUP_RUNNING
+			case compute.PENDING:
+				stopped.StartupOutcome = compute.STARTUP_FAILED
+			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
+				// No lifecycle conclusion from these states alone.
+			}
+		}
 		patchAttrs := entity.New(
 			entity.Ref(entity.DBId, id),
-			(&compute.Sandbox{Status: compute.STOPPED, Exit: exit}).Encode,
+			stopped.Encode,
 		)
 
 		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), resp.Entity().Revision())
@@ -3263,21 +3315,10 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
 
-	// Mark sandbox as DEAD in entity store
-	result, err := c.EAC.Patch(ctx, entity.New(
-		entity.Ref(entity.DBId, id),
-		(&compute.Sandbox{
-			Status: compute.DEAD,
-		}).Encode,
-	).Attrs(), 0)
-	if err != nil {
-		// We ignore if the entity is not found as we run this code path when detecting
-		// the sandbox entity has already been deleted.
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
-		}
-	} else if c.writeTracker != nil && result.HasRevision() {
-		c.writeTracker.RecordWrite(result.Revision())
+	// Use the current entity, not the cleanup snapshot: boot or an exit may
+	// have changed the lifecycle while resources were being torn down.
+	if err := c.retireSandbox(ctx, id); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+		c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
 	}
 
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)
@@ -3288,6 +3329,46 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
 	}
 
+	return nil
+}
+
+func (c *SandboxController) retireSandbox(ctx context.Context, id entity.Id) error {
+	for attempt := range 10 {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return err
+		}
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.DEAD {
+			return nil
+		}
+		retired := &compute.Sandbox{Status: compute.DEAD}
+		if current.StartupOutcome == "" {
+			switch current.Status {
+			case compute.PENDING:
+				retired.StartupOutcome = compute.STARTUP_FAILED
+			case compute.RUNNING:
+				retired.StartupOutcome = compute.STARTUP_RUNNING
+			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
+				// No lifecycle conclusion from these states alone.
+			}
+		}
+		result, err := c.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, id),
+			retired.Encode,
+		).Attrs(), resp.Entity().Revision())
+		if errors.Is(err, cond.ErrConflict{}) && attempt < 9 {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+		return nil
+	}
 	return nil
 }
 

@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	entitytestutils "miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
@@ -1694,6 +1695,41 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "sandbox should remain RUNNING when exit status has an error")
 }
 
+func TestRecordExitStartupOutcome(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	c := &SandboxController{EAC: server.EAC}
+
+	for _, tc := range []struct {
+		status compute.SandboxStatus
+		want   compute.SandboxStartupOutcome
+		final  compute.SandboxStatus
+	}{
+		{compute.PENDING, compute.STARTUP_FAILED, compute.STOPPED},
+		{compute.RUNNING, compute.STARTUP_RUNNING, compute.STOPPED},
+		{compute.DEAD, "", compute.DEAD},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			id, err := server.Client.Create(ctx, string(tc.status), &compute.Sandbox{Status: tc.status})
+			require.NoError(t, err)
+			before, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			_, err = c.recordExit(ctx, id, compute.Exit{At: time.Now(), Container: "app"})
+			require.NoError(t, err)
+			resp, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			if tc.status == compute.DEAD {
+				require.Equal(t, before.Entity().Revision(), resp.Entity().Revision(), "late exit must not rewrite a DEAD sandbox")
+			}
+			var sb compute.Sandbox
+			sb.Decode(resp.Entity().Entity())
+			require.Equal(t, tc.final, sb.Status)
+			require.Equal(t, tc.want, sb.StartupOutcome)
+		})
+	}
+}
+
 // TestMonitorTaskExitHandlesValidExit verifies that monitorTaskExit correctly
 // marks a sandbox as STOPPED when receiving a valid exit status (no error).
 func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
@@ -1939,6 +1975,52 @@ func TestDeadPatchPreservesRecordedExit(t *testing.T) {
 	r.Equal(compute.DEAD, got.Status)
 	r.False(got.Exit.Empty(), "the DEAD patch must not clobber the recorded exit")
 	r.Equal("app", got.Exit.Container)
+}
+
+func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	deps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+	c, err := newSandboxController(deps)
+	require.NoError(t, err)
+	defer c.Close()
+	require.NoError(t, c.Init(ctx))
+	id := entity.Id(idgen.GenNS("sb"))
+	stale := &compute.Sandbox{ID: id, Status: compute.PENDING}
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, stale.Encode).Attrs())
+	_, err = c.EAC.Put(ctx, &rpcE)
+	require.NoError(t, err)
+
+	// The cleanup caller still holds PENDING, but boot has already persisted RUNNING.
+	_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.NoError(t, c.StopSandbox(ctx, id, stale))
+	resp, err := c.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var got compute.Sandbox
+	got.Decode(resp.Entity().Entity())
+	require.Equal(t, compute.DEAD, got.Status)
+	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
+}
+
+func TestRetireSandboxDoesNotRewriteDead(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	id, err := server.Client.Create(ctx, "dead", &compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_FAILED})
+	require.NoError(t, err)
+	before, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+
+	c := &SandboxController{EAC: server.EAC}
+	require.NoError(t, c.retireSandbox(ctx, id))
+	after, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	require.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "already-DEAD sandbox must retain its failure timestamp")
 }
 
 // A sandbox whose command must execute at most once is finished when its
