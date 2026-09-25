@@ -117,8 +117,8 @@ func (h *highlevelBuilder) installNpm(cur llb.State, distro string) llb.State {
 	default:
 		return cur.Run(
 			llb.Shlex("sh -c 'apt-get update && apt-get install -y nodejs npm'"),
-			h.CacheMount("/var/lib/apt/lists"),
-			h.CacheMount("/var/cache/apt/archives"),
+			h.lockedCacheMount("/var/lib/apt/lists"),
+			h.lockedCacheMount("/var/cache/apt/archives"),
 			llb.WithCustomName("[phase] Installing npm augmentation"),
 		).State
 	}
