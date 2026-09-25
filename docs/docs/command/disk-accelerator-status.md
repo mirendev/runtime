@@ -36,4 +36,4 @@ miren disk accelerator status
 
 ## See also
 
-- [`miren disk accelerator`](/command/disk-accelerator)
+- [`miren disk accelerator`](./disk-accelerator.md)

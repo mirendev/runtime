@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/pkg/lbdmod"
+	"miren.dev/runtime/pkg/ui"
 )
 
 // DiskAcceleratorStatus reports whether accelerator mode can run on this host.
@@ -23,7 +24,7 @@ func DiskAcceleratorStatus(ctx *Context, opts struct {
 		return PrintJSON(newAcceleratorStatusJSON(status))
 	}
 
-	rows := [][]string{
+	rows := []ui.Row{
 		{"Available", yesNo(status.Available())},
 		{"State", status.Explain()},
 		{"Kernel", status.Host.KernelRelease},
@@ -36,12 +37,13 @@ func DiskAcceleratorStatus(ctx *Context, opts struct {
 	}
 	if status.Marker != nil {
 		rows = append(rows,
-			[]string{"Installed version", status.Marker.LbdVersion},
-			[]string{"Built for kernel", status.Marker.KernelRelease},
-			[]string{"Built at", status.Marker.BuiltAt.Local().Format(time.RFC3339)},
+			ui.Row{"Installed version", status.Marker.LbdVersion},
+			ui.Row{"Built for kernel", status.Marker.KernelRelease},
+			ui.Row{"Built at", status.Marker.BuiltAt.Local().Format(time.RFC3339)},
 		)
 	}
-	ctx.DisplayTable([]string{"", ""}, rows)
+	table := ui.NewTable(ui.WithColumns(ui.AutoSizeColumns([]string{"", ""}, rows, nil)), ui.WithRows(rows))
+	ctx.Printf("%s\n", table.Render())
 
 	switch {
 	case status.Available() && !status.Stale():

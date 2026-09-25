@@ -34,4 +34,4 @@ sudo miren disk accelerator uninstall
 
 ## See also
 
-- [`miren disk accelerator`](/command/disk-accelerator)
+- [`miren disk accelerator`](./disk-accelerator.md)

@@ -3,12 +3,15 @@ package build
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/tonistiigi/fsutil"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/components/ocireg"
 	"miren.dev/runtime/pkg/lbdmod"
+	"miren.dev/runtime/pkg/workloadidentity"
 )
 
 // lbdBuilderLock serializes the toolchain build within one coordinator. Two
@@ -20,6 +23,16 @@ import (
 // cancellable.
 var lbdBuilderLock = make(chan struct{}, 1)
 
+// LbdToolchain builds the image before workload control starts; it cannot
+// depend on the app builder, which is initialized after runner endpoints.
+type LbdToolchain struct {
+	Log      *slog.Logger
+	BuildKit BuildKitProvider
+	Issuer   *workloadidentity.Issuer
+	EC       *entityserver.Client
+	TempDir  string
+}
+
 // EnsureLbdBuilderImage makes sure the lbd toolchain image is in the cluster
 // registry and returns the reference nodes should pull.
 //
@@ -30,7 +43,7 @@ var lbdBuilderLock = make(chan struct{}, 1)
 //
 // It is keyed by a content hash of the embedded Dockerfile and build script, so
 // this is a no-op on every call after the first until that content changes.
-func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
+func (b *LbdToolchain) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 	ref := lbdmod.BuilderImage(ocireg.Host)
 
 	if b.present(ctx) {
@@ -79,7 +92,7 @@ func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 
 	b.Log.Info("building the lbd toolchain image", "image", ref)
 
-	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.WorkloadIssuer}
+	bk := &Buildkit{Client: bkc, Log: b.Log, WorkloadIssuer: b.Issuer}
 	res, err := bk.BuildImage(ctx, dfs, BuildStack{
 		Stack: "dockerfile",
 		Input: lbdmod.BuilderDockerfile,
@@ -95,13 +108,13 @@ func (b *Builder) EnsureLbdBuilderImage(ctx context.Context) (string, error) {
 // present reports whether the toolchain image for this content hash is already
 // in the registry. An artifact's entity name is the tag it was pushed under,
 // so the tag is the lookup key.
-func (b *Builder) present(ctx context.Context) bool {
-	if b.ec == nil {
+func (b *LbdToolchain) present(ctx context.Context) bool {
+	if b.EC == nil {
 		return false
 	}
 
 	var artifact core_v1alpha.Artifact
-	if err := b.ec.Get(ctx, lbdmod.BuilderTag(), &artifact); err != nil {
+	if err := b.EC.Get(ctx, lbdmod.BuilderTag(), &artifact); err != nil {
 		return false
 	}
 	// An archived artifact has had, or is about to have, its blobs collected,
