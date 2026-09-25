@@ -424,9 +424,8 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 	volState := c.state.GetVolume(entityId)
 	if volState == nil {
 		c.log.Warn("volume not found in state", "entity_id", entityId)
-		// A restore can put its image in place before the volume's first
-		// reconcile. If deletion wins that race, no local state owns the
-		// directory, so reclaim it here rather than orphaning the image.
+		// Restore and undelete can put an image in place before the volume's
+		// first reconcile. Keep the same recovery window as a tracked volume.
 		if volume.ActualState == storage_v1alpha.DV_PENDING {
 			volumePath := c.getVolumePath(entityId)
 			if c.ops.VolumePathExists(volumePath) {
@@ -438,8 +437,11 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 				if dev != "" {
 					return fmt.Errorf("pending volume image %s is still attached to %s", imagePath, dev)
 				}
-				if err := c.ops.RemoveVolumeDir(volumePath); err != nil {
-					return fmt.Errorf("removing untracked pending volume directory %s: %w", volumePath, err)
+				pending := &VolumeState{EntityId: entityId, VolumeId: localVolumeID(volume), DiskPath: volumePath}
+				if err := c.softDeleteVolume(ctx, volume, pending); err != nil {
+					// Without local state this may be the only copy of an undeleted
+					// disk. Never fall back to hard deletion if the move fails.
+					return fmt.Errorf("soft-deleting untracked pending volume %s: %w", volumePath, err)
 				}
 			}
 		}
