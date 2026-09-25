@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
@@ -13,6 +15,7 @@ import (
 	"miren.dev/runtime/pkg/logfilter"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
+	"miren.dev/runtime/pkg/rpc/stream"
 )
 
 type Server struct {
@@ -255,8 +258,39 @@ func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTa
 
 func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStreamLogChunks) error {
 	args := state.Args()
-	send := args.Chunks()
-	target := args.Target()
+	filter := ""
+	if args.HasFilter() {
+		var err error
+		filter, err = compileLogFilter(args.Filter())
+		if err != nil {
+			return fmt.Errorf("invalid filter: %w", err)
+		}
+	}
+	return s.streamLogChunks(ctx, args.Target(), args.From(), args.HasFrom(), args.To(), args.HasTo(), args.Follow(), filter, args.Chunks())
+}
+
+func (s *Server) StreamLogChunksV2(ctx context.Context, state *app_v1alpha.LogsStreamLogChunksV2) error {
+	args := state.Args()
+	filter, err := compileSeparatedFilter(args.Filter(), args.Grep())
+	if err != nil {
+		return fmt.Errorf("invalid filter: %w", err)
+	}
+	return s.streamLogChunks(ctx, args.Target(), args.From(), args.HasFrom(), args.To(), args.HasTo(), args.Follow(), filter, args.Chunks())
+}
+
+func (s *Server) streamLogChunks(
+	ctx context.Context,
+	target *app_v1alpha.LogTarget,
+	from *standard.Timestamp,
+	hasFrom bool,
+	to *standard.Timestamp,
+	hasTo bool,
+	follow bool,
+	filter string,
+	send interface {
+		Send(context.Context, *app_v1alpha.LogChunk) (*stream.SendStreamClientSendResults[*app_v1alpha.LogChunk], error)
+	},
+) error {
 
 	if target.HasApp() && target.App() != "" {
 		if !rpc.AllowApp(ctx, target.App()) {
@@ -267,14 +301,14 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	}
 
 	var opts []observability.LogReaderOption
-	if args.HasFrom() {
-		fromTime := standard.FromTimestamp(args.From())
+	if hasFrom {
+		fromTime := standard.FromTimestamp(from)
 		opts = append(opts, observability.WithFromTime(fromTime))
-	} else if !args.Follow() {
+	} else if !follow {
 		opts = append(opts, observability.WithLimit(defaultTailLimit))
 	}
-	if args.HasTo() {
-		toTime := standard.FromTimestamp(args.To())
+	if hasTo {
+		toTime := standard.FromTimestamp(to)
 		opts = append(opts, observability.WithUntilTime(toTime))
 	}
 
@@ -282,18 +316,10 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	if err != nil {
 		return err
 	}
-	s.Log.Debug("streaming log chunks", "target", logTarget, "follow", args.Follow())
-
-	// Parse and compile filter to LogsQL for VictoriaLogs
-	if args.HasFilter() && args.Filter() != "" {
-		filter, err := logfilter.Parse(args.Filter())
-		if err != nil {
-			return fmt.Errorf("invalid filter: %w", err)
-		}
-		if filter != nil {
-			logTarget.Filter = filter.ToLogsQL()
-			s.Log.Debug("applying filter", "input", args.Filter(), "logsql", logTarget.Filter)
-		}
+	s.Log.Debug("streaming log chunks", "target", logTarget, "follow", follow)
+	if filter != "" {
+		logTarget.Filter = filter
+		s.Log.Debug("applying filter", "logsql", logTarget.Filter)
 	}
 
 	// Create channel for log entries
@@ -304,7 +330,7 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	go func() {
 		defer close(logCh)
 		var err error
-		if args.Follow() {
+		if follow {
 			err = s.LogReader.TailStream(ctx, logTarget, logCh, opts...)
 		} else {
 			err = s.LogReader.ReadStream(ctx, logTarget, logCh, opts...)
@@ -334,7 +360,7 @@ func (s *Server) StreamLogChunks(ctx context.Context, state *app_v1alpha.LogsStr
 	}
 
 	// In follow mode, use a ticker to flush chunks periodically
-	if args.Follow() {
+	if follow {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 
@@ -389,4 +415,104 @@ done:
 	default:
 		return nil
 	}
+}
+
+func compileLogFilter(input string) (string, error) {
+	structural, grep := splitStructuralFilter(input)
+	filter, err := logfilter.Parse(grep)
+	if err != nil {
+		return "", err
+	}
+	if filter == nil {
+		return structural, nil
+	}
+	if structural == "" {
+		return filter.ToLogsQL(), nil
+	}
+	return structural + " " + filter.ToLogsQL(), nil
+}
+
+func compileSeparatedFilter(structural, grep string) (string, error) {
+	structural, remainder := splitStructuralFilter(structural)
+	if remainder != "" {
+		return "", fmt.Errorf("invalid structural filter %q", remainder)
+	}
+	filter, err := logfilter.Parse(grep)
+	if err != nil {
+		return "", err
+	}
+	if filter == nil {
+		return structural, nil
+	}
+	if structural == "" {
+		return filter.ToLogsQL(), nil
+	}
+	return structural + " " + filter.ToLogsQL(), nil
+}
+
+func splitStructuralFilter(input string) (string, string) {
+	rest := strings.TrimSpace(input)
+	var clauses []string
+
+	// Keep these in sync with the structural builders in cli/commands/logs.go:
+	// systemExclusion, buildFilterWithService, buildRunFilter,
+	// buildBuildFilter, and buildSystemFilter. New CLI selectors must also be
+	// allowlisted here or the V2 RPC rejects them.
+	for rest != "" {
+		var n int
+		switch {
+		case hasTokenPrefix(rest, `-source:"system"`):
+			n = len(`-source:"system"`)
+		case serviceSelector.MatchString(rest):
+			n = len(serviceSelector.FindString(rest))
+		case runSelector.MatchString(rest):
+			n = len(runSelector.FindString(rest))
+		case hasTokenPrefix(rest, "source:build"):
+			n = len("source:build")
+		case hasTokenPrefix(rest, `source:"system"`):
+			n = len(`source:"system"`)
+		case strings.HasPrefix(rest, `version:"`):
+			n = quotedFieldEnd(rest, len("version:"))
+		case strings.HasPrefix(rest, `module:"`):
+			n = quotedFieldEnd(rest, len("module:"))
+		}
+		if n <= 0 || !tokenBoundary(rest, n) {
+			break
+		}
+		clauses = append(clauses, rest[:n])
+		rest = strings.TrimSpace(rest[n:])
+	}
+
+	return strings.Join(clauses, " "), rest
+}
+
+var (
+	serviceSelector = regexp.MustCompile(`^\(service:"(?:\\.|[^"\\])*" OR miren\.service:"(?:\\.|[^"\\])*"\)`)
+	runSelector     = regexp.MustCompile(`^\(run:"(?:\\.|[^"\\])*" OR miren\.run:"(?:\\.|[^"\\])*"\)`)
+)
+
+func hasTokenPrefix(s, prefix string) bool {
+	return strings.HasPrefix(s, prefix) && tokenBoundary(s, len(prefix))
+}
+
+func tokenBoundary(s string, end int) bool {
+	return end == len(s) || s[end] == ' ' || s[end] == '\t'
+}
+
+func quotedFieldEnd(s string, valueStart int) int {
+	escaped := false
+	for i := valueStart + 1; i < len(s); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if s[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if s[i] == '"' {
+			return i + 1
+		}
+	}
+	return 0
 }

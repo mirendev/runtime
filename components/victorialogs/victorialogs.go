@@ -4,15 +4,21 @@ package victorialogs
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/components/base"
 	"miren.dev/runtime/pkg/containerdx"
@@ -23,6 +29,11 @@ import (
 const (
 	victoriaLogsContainerName = "miren-victorialogs"
 	defaultHTTPPort           = 9428
+	componentSpecLabel        = "dev.miren.victorialogs.spec"
+	componentSpecFile         = "victorialogs.spec"
+	// Bump this whenever createContainer changes an arg, mount, or other spec
+	// detail not represented by desiredSpecFingerprint.
+	componentSpecVersion = "1"
 )
 
 var (
@@ -98,30 +109,107 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 	c.httpPort = config.HTTPPort
 	c.config = config
 
+	specFingerprint := desiredSpecFingerprint(image, dataPath, config)
+	// Keep the spec with its data so restoring a snapshot also restores the
+	// identity of the store. An older state file outside the data directory
+	// cannot be trusted after a manual rollback and is intentionally ignored.
+	statePath := filepath.Join(dataPath, componentSpecFile)
+	savedSpec, err := os.ReadFile(statePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read victorialogs spec state: %w", err)
+	}
+	state := strings.Split(strings.TrimSpace(string(savedSpec)), "\n")
+	previousSpec := state[0]
+	previousImage := ""
+	if len(state) >= 2 {
+		previousImage = state[1]
+	}
+	var imageHistory []string
+	if len(state) > 2 {
+		imageHistory = slices.Clone(state[2:])
+	} else if previousImage != "" {
+		imageHistory = []string{previousImage}
+	}
+
 	// Check if container already exists
 	existingContainer, err := c.CC.LoadContainer(ctx, victoriaLogsContainerName)
 	if err == nil {
-		c.Log.Info("found existing victorialogs container, attempting restart", "container_id", existingContainer.ID())
-		err = c.restartExistingContainer(ctx, existingContainer, config)
-		if err == nil {
-			return nil
+		var restartErr error
+		info, matchErr := existingContainer.Info(ctx)
+		if matchErr != nil {
+			return fmt.Errorf("inspect existing victorialogs container: %w", matchErr)
 		}
-		// If restart failed (e.g., port mismatch), try deleting the container and creating fresh
-		c.Log.Warn("restart of existing container failed, recreating", "error", err)
+		if info.Labels[componentSpecLabel] != "" {
+			previousSpec = info.Labels[componentSpecLabel]
+		}
+		previousImage = info.Image
+		if previousImage != "" && !slices.Contains(imageHistory, previousImage) {
+			imageHistory = append(imageHistory, previousImage)
+		}
+		matches := info.Labels[componentSpecLabel] == specFingerprint
+		if matches {
+			c.Log.Info("found matching victorialogs container, attempting restart", "container_id", existingContainer.ID())
+			restartErr = c.restartExistingContainer(ctx, existingContainer, config)
+			if restartErr == nil {
+				return writeSpecState(statePath, specFingerprint, victoriaLogsImage, imageHistory...)
+			}
+			c.Log.Warn("restart of existing container failed, recreating", "error", restartErr)
+		} else {
+			c.Log.Warn("victorialogs image or spec changed; on-disk format may migrate irreversibly", "old_image", info.Image, "new_image", victoriaLogsImage, "backup", backupPath(dataPath, previousSpec), "guide", "https://miren.md/victorialogs-upgrade")
+		}
+		if !matches {
+			// Stop before hardlinking. Deleting the container comes after the
+			// backup so a failed backup can be retried on the next boot.
+			task, taskErr := existingContainer.Task(ctx, nil)
+			if taskErr == nil {
+				taskErr = c.StopTask(ctx, task)
+			}
+			if taskErr != nil && !errdefs.IsNotFound(taskErr) {
+				return fmt.Errorf("stopping victorialogs before backup: %w", taskErr)
+			}
+			if err := c.reconcileData(dataPath, previousSpec, specFingerprint, previousImage != victoriaLogsImage, isRollbackImage(imageHistory, previousImage, victoriaLogsImage)); err != nil {
+				return fmt.Errorf("preserving victorialogs data before image change: %w", err)
+			}
+		}
 		cleanupErr := c.CleanupExistingContainer(ctx, existingContainer)
 		if cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("cleaning up failed victorialogs restart: %w", cleanupErr))
+			return errors.Join(restartErr, fmt.Errorf("cleaning up existing victorialogs container: %w", cleanupErr))
 		}
 		c.ClearRuntimeState()
 		if ctx.Err() != nil {
-			return err
+			return errors.Join(restartErr, ctx.Err())
 		}
+	} else if !errdefs.IsNotFound(err) {
+		return fmt.Errorf("load victorialogs container: %w", err)
+	} else if previousSpec != specFingerprint {
+		entries, readErr := os.ReadDir(dataPath)
+		if readErr != nil {
+			return readErr
+		}
+		if len(entries) > 0 {
+			c.Log.Warn("victorialogs image or spec changed without a container; on-disk format may migrate irreversibly", "new_image", victoriaLogsImage, "backup", backupPath(dataPath, previousSpec), "guide", "https://miren.md/victorialogs-upgrade")
+			if err := c.reconcileData(dataPath, previousSpec, specFingerprint, previousImage != victoriaLogsImage, isRollbackImage(imageHistory, previousImage, victoriaLogsImage)); err != nil {
+				return fmt.Errorf("preserving stopped victorialogs data: %w", err)
+			}
+		}
+	}
+	// Retain the order read before a restore: the snapshot itself predates later
+	// images, but a subsequent roll-forward must not restore their old data.
+	if !slices.Contains(imageHistory, victoriaLogsImage) {
+		imageHistory = append(imageHistory, victoriaLogsImage)
+	}
+
+	// Persist the attempted image before it can touch the data directory. If
+	// startup or migration fails, a later rollback must still recognize the
+	// pre-upgrade backup even though no new container survives.
+	if err := writeSpecState(statePath, specFingerprint, victoriaLogsImage, imageHistory...); err != nil {
+		return fmt.Errorf("record victorialogs spec before startup: %w", err)
 	}
 
 	c.Log.Info("starting victorialogs with host networking", "http_port", config.HTTPPort)
 
 	// Create container
-	container, err := c.createContainer(ctx, image, dataPath, config)
+	container, err := c.createContainer(ctx, image, dataPath, config, specFingerprint)
 	if err != nil {
 		return fmt.Errorf("failed to create victorialogs container: %w", err)
 	}
@@ -164,7 +252,7 @@ func (c *VictoriaLogsComponent) Start(ctx context.Context, config VictoriaLogsCo
 	// Start monitoring for unexpected exits
 	c.StartExitMonitor(ctx)
 
-	return nil
+	return writeSpecState(statePath, specFingerprint, victoriaLogsImage, imageHistory...)
 }
 
 func (c *VictoriaLogsComponent) HTTPEndpoint() string {
@@ -238,7 +326,219 @@ func (c *VictoriaLogsComponent) restartExistingContainer(ctx context.Context, co
 	return nil
 }
 
-func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image containerd.Image, dataPath string, config VictoriaLogsConfig) (containerd.Container, error) {
+func desiredSpecFingerprint(image containerd.Image, dataPath string, config VictoriaLogsConfig) string {
+	parts := []string{
+		componentSpecVersion,
+		image.Target().Digest.String(),
+		filepath.Clean(dataPath),
+		fmt.Sprintf("%d", config.HTTPPort),
+		config.RetentionPeriod,
+	}
+	return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(strings.Join(parts, "\x00"))))
+}
+
+var specFingerprintPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func writeSpecState(path, fingerprint, image string, history ...string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".victorialogs-spec-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if len(history) == 0 {
+		history = []string{image}
+	}
+	if _, err := tmp.WriteString(fingerprint + "\n" + image + "\n" + strings.Join(history, "\n") + "\n"); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func isRollbackImage(history []string, current, desired string) bool {
+	currentIndex := slices.Index(history, current)
+	desiredIndex := slices.Index(history, desired)
+	return currentIndex >= 0 && desiredIndex >= 0 && desiredIndex < currentIndex
+}
+
+func (c *VictoriaLogsComponent) reconcileData(dataPath, previousSpec, desiredSpec string, imageChanged, rollback bool) error {
+	var restore string
+	if rollback {
+		var err error
+		restore, err = restoreBackup(dataPath, desiredSpec, victoriaLogsImage)
+		if err != nil {
+			return err
+		}
+	}
+	if rollback && restore != "" {
+		c.Log.Warn("restoring prior victorialogs data for requested image; later logs will be unavailable", "backup", restore)
+	} else {
+		if rollback {
+			c.Log.Warn("no matching victorialogs snapshot for requested image; older image may not open current data", "image", victoriaLogsImage)
+		}
+		c.Log.Warn("creating stopped victorialogs data backup", "backup", backupPath(dataPath, previousSpec))
+	}
+	return preserveOrRestoreData(dataPath, previousSpec, restore, imageChanged)
+}
+
+func backupPath(dataPath, fingerprint string) string {
+	if !specFingerprintPattern.MatchString(fingerprint) {
+		fingerprint = "legacy"
+	}
+	return dataPath + ".backup-" + fingerprint
+}
+
+func restoreBackup(dataPath, desiredSpec, desiredImage string) (string, error) {
+	exact := backupPath(dataPath, desiredSpec)
+	if _, err := os.Stat(exact); err == nil {
+		return exact, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	entries, err := os.ReadDir(filepath.Dir(dataPath))
+	if err != nil {
+		return "", err
+	}
+	prefix := filepath.Base(dataPath) + ".backup-"
+	var newest string
+	var newestTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !specFingerprintPattern.MatchString(strings.TrimPrefix(entry.Name(), prefix)) {
+			continue
+		}
+		candidate := filepath.Join(filepath.Dir(dataPath), entry.Name())
+		state, err := os.ReadFile(filepath.Join(candidate, componentSpecFile))
+		if os.IsNotExist(err) {
+			continue // A pre-feature snapshot has no verifiable image identity.
+		}
+		if err != nil {
+			return "", err
+		}
+		parts := strings.Split(strings.TrimSpace(string(state)), "\n")
+		if len(parts) < 2 || parts[1] != desiredImage {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return "", err
+		}
+		if newest == "" || info.ModTime().After(newestTime) {
+			newest, newestTime = candidate, info.ModTime()
+		}
+	}
+	return newest, nil
+}
+
+// preserveOrRestoreData runs only after the old task has stopped. VictoriaLogs
+// creates and unlinks immutable part files, so hard links preserve the stopped
+// state without copying the full store. A failure must not launch a new image
+// against an unprotected directory.
+func preserveOrRestoreData(dataPath, previousSpec, restore string, imageChanged bool) error {
+	if imageChanged && restore != "" {
+		// A matching backup is a pre-upgrade snapshot. Move the upgraded data
+		// aside, leaving it available for diagnosis or a forward retry.
+		quarantine := dataPath + ".replaced-" + previousSpec
+		if !specFingerprintPattern.MatchString(previousSpec) {
+			quarantine = dataPath + ".replaced-legacy"
+		}
+		if _, err := os.Stat(quarantine); err == nil {
+			quarantine = fmt.Sprintf("%s-%d", quarantine, time.Now().UnixNano())
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if _, err := os.Stat(quarantine); err == nil {
+			return fmt.Errorf("rollback directory already exists: %s", quarantine)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		staged, err := hardlinkData(restore)
+		if err != nil {
+			return fmt.Errorf("restore victorialogs snapshot (backup must share a filesystem with the data directory): %w", err)
+		}
+		defer os.RemoveAll(staged)
+		if err := os.Rename(dataPath, quarantine); err != nil {
+			return err
+		}
+		if err := os.Rename(staged, dataPath); err != nil {
+			return errors.Join(err, os.Rename(quarantine, dataPath))
+		}
+		return nil
+	}
+
+	backup := backupPath(dataPath, previousSpec)
+	_, backupErr := os.Stat(backup)
+	if backupErr != nil && !os.IsNotExist(backupErr) {
+		return backupErr
+	}
+	if backupErr == nil && !imageChanged {
+		return nil
+	}
+	tmp, err := hardlinkData(dataPath)
+	if err != nil {
+		return fmt.Errorf("snapshot victorialogs data (backup must share a filesystem with the data directory): %w", err)
+	}
+	defer os.RemoveAll(tmp)
+	if backupErr == nil {
+		// The same spec can be revisited after logs have changed. Keep the
+		// older snapshot, but use current stopped data for this image change.
+		archived := fmt.Sprintf("%s.superseded-%d", backup, time.Now().UnixNano())
+		if err := os.Rename(backup, archived); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, backup); err != nil {
+			return errors.Join(err, os.Rename(archived, backup))
+		}
+		return nil
+	}
+	return os.Rename(tmp, backup)
+}
+
+func hardlinkData(source string) (string, error) {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("victorialogs data path is not a real directory: %s", source)
+	}
+	tmp, err := os.MkdirTemp(filepath.Dir(source), ".victorialogs-backup-")
+	if err != nil {
+		return "", err
+	}
+	if err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		dest := filepath.Join(tmp, rel)
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			return os.Mkdir(dest, info.Mode().Perm())
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("unexpected non-regular victorialogs data file: %s", path)
+		}
+		return os.Link(path, dest)
+	}); err != nil {
+		_ = os.RemoveAll(tmp)
+		return "", err
+	}
+	return tmp, nil
+}
+
+func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image containerd.Image, dataPath string, config VictoriaLogsConfig, specFingerprint string) (containerd.Container, error) {
 	// Loopback only. VictoriaLogs authenticates nobody, so whatever can reach
 	// this port can read and write the cluster's logs, which include anything
 	// an app prints. Nothing off-host needs to reach it: the coordinator's own
@@ -280,6 +580,7 @@ func (c *VictoriaLogsComponent) createContainer(ctx context.Context, image conta
 		ctx,
 		victoriaLogsContainerName,
 		containerd.WithImage(image),
+		containerd.WithContainerLabels(map[string]string{componentSpecLabel: specFingerprint}),
 		containerd.WithNewSnapshot(victoriaLogsContainerName+"-snapshot", image),
 		containerd.WithNewSpec(opts...),
 	)
