@@ -70,6 +70,8 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 	// came up the old way.
 	if err := diskio.EnsureLbdDevices(ctx, s.log); err != nil {
 		s.log.Warn("lbd installed but is not usable yet", "error", err)
+		res.SetError(fmt.Sprintf("lbd installed but is not usable: %v", err))
+		return nil
 	}
 
 	res.SetKernelRelease(status.Host.KernelRelease)
@@ -79,15 +81,9 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 
 // requireCoordinator refuses anyone but the coordinator.
 //
-// The runner's API listener is built with rpc.WithSkipVerify and no
-// authenticator, so it accepts clients that present no certificate at all and
-// every caller arrives anonymous unless it brought one. That is tolerable for
-// the services it already exposes; it is not tolerable here, where the handler
-// pulls an image, runs it, and loads the result into the kernel as root.
-// Anyone who could reach the port would otherwise have root on the node.
-//
-// The coordinator dials with its API certificate, so its subject is what
-// separates it from everything else that can route to this port.
+// The listener verifies client certificates against the cluster CA. The
+// coordinator dials with its API certificate, whose subject separates it from
+// other cluster members that can also reach this port.
 func requireCoordinator(ctx context.Context) error {
 	identity := rpc.IdentityFromContext(ctx)
 	if identity == nil || identity.Method == rpc.AuthMethodAnonymous {

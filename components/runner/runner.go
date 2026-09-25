@@ -444,11 +444,7 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	)
 
 	r.Log.Info("establishing cluster access", "listen", r.ListenAddress, "distributed", r.Config != nil)
-	if r.Config == nil {
-		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
-	} else {
-		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
-	}
+	rs, err = r.newRPCState(ctx)
 	if err != nil {
 		return err
 	}
@@ -493,6 +489,29 @@ func (r *ClusterAccess) Server() *rpc.Server {
 		return nil
 	}
 	return r.state.Server()
+}
+
+func (r *ClusterAccess) newRPCState(ctx context.Context) (*rpc.State, error) {
+	opts := []rpc.StateOption{
+		rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress),
+		rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}),
+	}
+	if r.Config == nil {
+		return rpc.NewState(ctx, append(opts, rpc.WithSkipVerify)...)
+	}
+
+	cluster, err := r.Config.GetActiveCluster()
+	if err != nil {
+		return nil, fmt.Errorf("runner cluster CA: %w", err)
+	}
+	if cluster.CACert == "" {
+		return nil, fmt.Errorf("runner cluster CA is required to authenticate coordinator requests")
+	}
+	// Config.State supplies the runner's own certificate for outbound calls.
+	// Apply the CA last so even an insecure outbound configuration cannot turn
+	// off verification of certificates presented to this listener.
+	opts = append(opts, rpc.WithCertificateVerification([]byte(cluster.CACert)))
+	return r.Config.State(ctx, opts...)
 }
 
 func (r *ClusterAccess) Close() error {
