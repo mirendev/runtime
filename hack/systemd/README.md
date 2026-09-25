@@ -100,7 +100,7 @@ systemctl status miren
 
 # Test upgrade commands
 miren upgrade --check                     # Check for updates
-sudo miren server upgrade --version main  # Upgrade to main branch
+miren upgrade --version main              # Upgrade server + CLI (offers sudo)
 sudo miren server upgrade rollback        # Rollback to previous
 ```
 

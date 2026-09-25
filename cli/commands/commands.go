@@ -1168,7 +1168,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "sudo miren server operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
 		}),
 	))
-	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'sudo miren upgrade')", ServerUpgrade,
+	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'miren upgrade')", ServerUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade to the latest version",
 			Body: "sudo miren server upgrade",
@@ -1261,7 +1261,11 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren upgrade",
 		}),
 		WithExample(mflags.Example{
-			Name: "Upgrade the server or runner and the CLI on the host that runs it",
+			Name: "Upgrade the server or runner and the CLI on the host that runs it (offers to re-run with sudo)",
+			Body: "miren upgrade",
+		}),
+		WithExample(mflags.Example{
+			Name: "The same from a script or other non-interactive shell, which gets no sudo prompt",
 			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{

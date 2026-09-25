@@ -1,12 +1,12 @@
 ---
 title: "miren server upgrade"
 sidebar_label: "server upgrade"
-description: "Upgrade miren server (deprecated: use 'sudo miren upgrade')"
+description: "Upgrade miren server (deprecated: use 'miren upgrade')"
 ---
 
 # miren server upgrade
 
-Upgrade miren server (deprecated: use 'sudo miren upgrade')
+Upgrade miren server (deprecated: use 'miren upgrade')
 
 ## Usage
 

@@ -133,7 +133,7 @@ if docker exec miren-systemd-test systemctl status --no-pager 2>/dev/null | head
     echo "Test upgrade commands:"
     echo "  miren upgrade --check                     # Check for updates"
     echo "  miren upgrade --version main --force      # Upgrade CLI to main"
-    echo "  sudo miren server upgrade --version main  # Upgrade running server"
+    echo "  miren upgrade --version main              # Upgrade server + CLI (offers sudo)"
     echo "  sudo miren server upgrade rollback        # Rollback to previous"
     echo
     echo "To check systemd services:"
