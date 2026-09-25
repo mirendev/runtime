@@ -1713,10 +1713,15 @@ func TestRecordExitStartupOutcome(t *testing.T) {
 		t.Run(string(tc.status), func(t *testing.T) {
 			id, err := server.Client.Create(ctx, string(tc.status), &compute.Sandbox{Status: tc.status})
 			require.NoError(t, err)
+			before, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
 			_, err = c.recordExit(ctx, id, compute.Exit{At: time.Now(), Container: "app"})
 			require.NoError(t, err)
 			resp, err := server.EAC.Get(ctx, id.String())
 			require.NoError(t, err)
+			if tc.status == compute.DEAD {
+				require.Equal(t, before.Entity().Revision(), resp.Entity().Revision(), "late exit must not rewrite a DEAD sandbox")
+			}
 			var sb compute.Sandbox
 			sb.Decode(resp.Entity().Entity())
 			require.Equal(t, tc.final, sb.Status)

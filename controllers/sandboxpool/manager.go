@@ -2,7 +2,6 @@ package sandboxpool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,13 +86,10 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	// Skip crash detection for decommissioned pools (desired=0, no references).
 	// Sandbox deaths during intentional scale-down are expected, not crashes.
 	if pool.DesiredInstances > 0 || len(pool.ReferencedByVersions) > 0 {
-		newCrashes, err := m.countStartupFailures(sandboxes, pool)
-		if err != nil {
-			return err
-		}
+		newCrashes, latestCrash := m.countStartupFailures(sandboxes, pool)
 		if newCrashes > 0 {
 			pool.ConsecutiveCrashCount += int64(newCrashes)
-			pool.LastCrashTime = time.Now()
+			pool.LastCrashTime = latestCrash
 			pool.CooldownUntil = m.calculateBackoff(pool.ConsecutiveCrashCount)
 
 			m.log.Warn("crash detected, entering cooldown",
@@ -820,32 +816,13 @@ func (m *Manager) retireStalePending(ctx context.Context, ent *entityserver_v1al
 	}
 }
 
-// countStartupFailures records each sandbox ID with the counter in the pool
-// update. UpdatedAt is mutable and cannot identify an already counted failure.
-// Legacy sandboxes without an outcome retain the old quick-crash heuristic.
-func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compute_v1alpha.SandboxPool) (int64, error) {
-	var ids []entity.Id
-	if pool.CountedFailures != "" {
-		if err := json.Unmarshal([]byte(pool.CountedFailures), &ids); err != nil {
-			return 0, fmt.Errorf("decoding counted sandbox failures for pool %s: %w", pool.ID, err)
-		}
-	}
-	listed := make(map[entity.Id]bool, len(sandboxes))
-	for _, sbm := range sandboxes {
-		listed[sbm.sandbox.ID] = true
-	}
-	retained := make([]entity.Id, 0, len(ids))
-	counted := make(map[entity.Id]bool, len(ids))
-	for _, id := range ids {
-		if listed[id] {
-			retained = append(retained, id)
-			counted[id] = true
-		}
-	}
-
+// countStartupFailures uses the latest counted sandbox update as a watermark.
+// DEAD sandboxes must not be rewritten after counting or they can be counted again.
+func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compute_v1alpha.SandboxPool) (int64, time.Time) {
 	count := int64(0)
+	latest := pool.LastCrashTime
 	for _, sbm := range sandboxes {
-		if sbm.sandbox.Status != compute_v1alpha.DEAD || counted[sbm.sandbox.ID] {
+		if sbm.sandbox.Status != compute_v1alpha.DEAD || !sbm.updatedAt.After(pool.LastCrashTime) {
 			continue
 		}
 
@@ -854,23 +831,12 @@ func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compu
 			continue
 		}
 
-		// Pre-upgrade crashes did not have durable IDs. The old watermark
-		// protects them across deploys that reset the streak.
-		if sbm.sandbox.StartupOutcome == "" && !pool.LastCrashTime.IsZero() && !sbm.updatedAt.After(pool.LastCrashTime) {
-			continue
-		}
-
-		retained = append(retained, sbm.sandbox.ID)
-		counted[sbm.sandbox.ID] = true
 		count++
+		if sbm.updatedAt.After(latest) {
+			latest = sbm.updatedAt
+		}
 	}
-
-	encoded, err := json.Marshal(retained)
-	if err != nil {
-		return 0, fmt.Errorf("encoding counted sandbox failures for pool %s: %w", pool.ID, err)
-	}
-	pool.CountedFailures = string(encoded)
-	return count, nil
+	return count, latest
 }
 
 // backoffDuration calculates the exponential backoff duration based on consecutive crash count

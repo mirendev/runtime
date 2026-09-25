@@ -2478,12 +2478,11 @@ func (c *SandboxController) recordExit(
 
 		var current compute.Sandbox
 		current.Decode(resp.Entity().Entity())
-		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
 		if current.Status == compute.DEAD {
-			// A failure or node-loss handler already retired it. A delayed
-			// exit report may attach the result, but must not revive STOPPED.
-			stopped.Status = ""
+			// Do not advance UpdatedAt on an already-counted failure.
+			return nil, nil
 		}
+		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
 		if current.StartupOutcome == "" {
 			switch current.Status {
 			case compute.RUNNING:
