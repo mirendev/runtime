@@ -43,7 +43,7 @@ func renderServiceHealth(health []serviceHealth) string {
 }
 
 func fetchServiceHealth(ctx *Context, app string) ([]serviceHealth, error) {
-	cl, err := ctx.RPCClient("dev.miren.runtime/app")
+	cl, err := ctx.RPCClient(rpcAppStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func fetchServiceHealth(ctx *Context, app string) ([]serviceHealth, error) {
 	if err != nil {
 		return nil, err
 	}
-	if res.Status().Health() == "unknown" && res.Status().ActiveVersion() != "" {
+	if res.Status().ActiveVersion() != "" && (res.Status().Health() == "unknown" || !res.Status().HasServices()) {
 		return nil, fmt.Errorf("service health unavailable for %s", app)
 	}
 	var health []serviceHealth

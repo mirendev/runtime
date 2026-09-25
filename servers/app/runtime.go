@@ -184,7 +184,6 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		} else {
 			var pools []*app_v1alpha.PoolStatus
 			var servicePools []compute_v1alpha.SandboxPool
-			poolIDs := make(map[string]bool)
 			hasInstances := false
 			now := time.Now()
 
@@ -206,7 +205,6 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				poolsResp.Read(&pool)
 				servicePools = append(servicePools, pool)
 
-				poolIDs[pool.ID.String()] = true
 				if pool.CurrentInstances > 0 {
 					hasInstances = true
 				}
@@ -231,11 +229,15 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 			}
 
 			rai.SetPools(pools)
-			services, err := a.collectServiceHealth(ctx, servicePools, spec, now)
+			services, boundPorts, err := a.collectServiceHealth(ctx, servicePools, spec, now, hasInstances)
 			if err != nil {
-				return err
+				a.Log.Warn("failed to collect service sandbox details", "error", err)
+			} else {
+				rai.SetServices(services)
+				if len(boundPorts) > 0 {
+					rai.SetBoundPorts(boundPorts)
+				}
 			}
-			rai.SetServices(services)
 			rai.SetHealth(health.classify())
 			rai.SetReadyInstances(int32(health.ready))
 			rai.SetDesiredInstances(int32(health.desired))
@@ -244,16 +246,6 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				rai.SetCooldownSeconds(int32(health.cooldownLeft.Seconds()))
 			}
 
-			// Scan for port divergence once there's an instance (running or
-			// booting), not only once it's ready: a wrong bound port can be the
-			// reason ready stays 0, and that's exactly when we want to surface
-			// it. Skipping when there are no instances keeps the global sandbox
-			// scan out of the scaled-to-zero path.
-			if hasInstances {
-				if bp := a.collectBoundPortDivergence(ctx, poolIDs); len(bp) > 0 {
-					rai.SetBoundPorts(bp)
-				}
-			}
 		}
 	} else {
 		rai.SetHealth(apphealth.Unknown)

@@ -88,7 +88,7 @@ type serviceSandboxHealth struct {
 	failedID   string
 }
 
-func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1alpha.SandboxPool, spec *core_v1alpha.ConfigSpec, now time.Time) ([]*app_v1alpha.ServiceHealth, error) {
+func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1alpha.SandboxPool, spec *core_v1alpha.ConfigSpec, now time.Time, hasInstances bool) ([]*app_v1alpha.ServiceHealth, []*app_v1alpha.BoundPort, error) {
 	byService := make(map[string]*serviceSandboxHealth)
 	byPool := make(map[string]*serviceSandboxHealth)
 	for i := range pools {
@@ -109,13 +109,15 @@ func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1al
 		byPool[pool.ID.String()] = h
 	}
 	if len(pools) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	seenPorts := make(map[int64]bool)
+	var boundPorts []*app_v1alpha.BoundPort
 	for list.Next() {
 		md := list.Metadata()
 		if md == nil {
@@ -148,6 +150,20 @@ func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1al
 			}
 		case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY, compute_v1alpha.STOPPED:
 		}
+		// The controller only records bound_port on divergence. Preserve the
+		// existing behavior of reporting it for running or booting instances.
+		if hasInstances && (sb.Status == compute_v1alpha.RUNNING || sb.Status == compute_v1alpha.PENDING) {
+			for _, bp := range sb.BoundPort {
+				if bp.Port == 0 || seenPorts[bp.Port] {
+					continue
+				}
+				seenPorts[bp.Port] = true
+				var port app_v1alpha.BoundPort
+				port.SetPort(bp.Port)
+				port.SetAddress(bp.Address)
+				boundPorts = append(boundPorts, &port)
+			}
+		}
 	}
 
 	names := make([]string, 0, len(byService))
@@ -176,62 +192,7 @@ func (r *AppInfo) collectServiceHealth(ctx context.Context, pools []compute_v1al
 		}
 		result = append(result, &svc)
 	}
-	return result, nil
-}
-
-// collectBoundPortDivergence scans the sandboxes belonging to the given pools
-// and returns the ports they actually bound that diverge from the configured
-// port. The sandbox controller records a bound_port component only on
-// divergence (MIR-1246), so any bound_port present is by definition a port the
-// app chose for itself. Best effort: a listing error just yields no divergence.
-func (r *AppInfo) collectBoundPortDivergence(ctx context.Context, poolIDs map[string]bool) []*app_v1alpha.BoundPort {
-	if len(poolIDs) == 0 {
-		return nil
-	}
-
-	sbList, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
-	if err != nil {
-		r.Log.Warn("failed to list sandboxes for bound-port check", "error", err)
-		return nil
-	}
-
-	seen := make(map[int64]bool)
-	var result []*app_v1alpha.BoundPort
-
-	for sbList.Next() {
-		var sb compute_v1alpha.Sandbox
-		if err := sbList.Read(&sb); err != nil {
-			continue
-		}
-
-		md := sbList.Metadata()
-		if md == nil {
-			continue
-		}
-		poolLabel, _ := md.Labels.Get("pool")
-		if !poolIDs[poolLabel] {
-			continue
-		}
-
-		// Only living sandboxes describe where the app is serving now.
-		if sb.Status != compute_v1alpha.RUNNING && sb.Status != compute_v1alpha.PENDING {
-			continue
-		}
-
-		for _, bp := range sb.BoundPort {
-			if bp.Port == 0 || seen[bp.Port] {
-				continue
-			}
-			seen[bp.Port] = true
-
-			var rbp app_v1alpha.BoundPort
-			rbp.SetPort(bp.Port)
-			rbp.SetAddress(bp.Address)
-			result = append(result, &rbp)
-		}
-	}
-
-	return result
+	return result, boundPorts, nil
 }
 
 // classify maps the aggregate to a health string. A pool in cooldown is
