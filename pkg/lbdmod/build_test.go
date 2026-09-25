@@ -103,6 +103,34 @@ func TestCheckCanBuildAcceptsAGoodHost(t *testing.T) {
 	require.NoError(t, testInstaller(t, root, t.TempDir()).checkCompilerAndHeaders(status))
 }
 
+func TestInstallDoesNotSkipALoadedModuleWithoutAnInstallRecord(t *testing.T) {
+	root := ubuntuRoot(t)
+	dataPath := t.TempDir()
+	writeFile(t, root, "proc/modules", "lbd 65536 0 - Live 0x0000000000000000\n")
+	writeFile(t, root, ControlDevice, "")
+	writeFile(t, root, modulePath(testRelease), "")
+	writeFile(t, root, "usr/local/bin/lbdctl", "")
+
+	i := testInstaller(t, root, dataPath)
+	i.Options.SearchPath = []string{"/usr/local/bin"}
+	status, err := Probe(i.Options)
+	require.NoError(t, err)
+	require.True(t, status.Available())
+	require.Nil(t, status.Marker)
+
+	// A load followed by a failed verification leaves no marker. It must not
+	// report the next install as successful without recording opt-in for rebuilds.
+	_, err = i.Install(t.Context(), false)
+	require.Error(t, err, "a missing builder must prevent completing the install")
+
+	require.NoError(t, writeMarker(dataPath, Marker{
+		LbdVersion: SourceVersion(), KernelRelease: testRelease,
+		ModulePath: modulePath(testRelease),
+	}))
+	_, err = i.Install(t.Context(), false)
+	require.NoError(t, err, "a completed install can skip the build")
+}
+
 func TestSecureBootDetection(t *testing.T) {
 	// No EFI at all: not enforcing, rather than guessing yes and blocking a
 	// host that simply is not using EFI.

@@ -71,7 +71,7 @@ func (i *Installer) Install(ctx context.Context, force bool) (Status, error) {
 		return status, err
 	}
 
-	if !force && status.Available() && !status.Stale() {
+	if !force && status.Marker != nil && status.Available() && !status.Stale() {
 		i.Log.Info("lbd is already installed and current", "kernel", status.Host.KernelRelease)
 		return status, nil
 	}
@@ -93,7 +93,7 @@ func (i *Installer) Install(ctx context.Context, force bool) (Status, error) {
 	// Another process may have finished the very build this one was about to
 	// start while we waited to be let in.
 	if !force {
-		if current, err := Probe(i.Options); err == nil && current.Available() && !current.Stale() {
+		if current, err := Probe(i.Options); err == nil && current.Marker != nil && current.Available() && !current.Stale() {
 			i.Log.Info("another process installed lbd while this one waited",
 				"kernel", current.Host.KernelRelease)
 			return current, nil
