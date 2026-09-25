@@ -38,6 +38,35 @@ type sandboxHostBoot struct {
 	output    boot.Output[*runner.SandboxHost]
 }
 
+// networkDepsBoot maps the cluster registry before storage can rebuild lbd,
+// and shares the same resolver with the later sandbox host.
+type networkDepsBoot struct {
+	component *boot.Component
+	inputs    sandboxHostBootInputs
+	output    boot.Output[runner.RunnerDeps]
+}
+
+func newNetworkDepsBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput]) *networkDepsBoot {
+	b := &networkDepsBoot{inputs: inputs}
+	b.component, b.output = boot.Provide1("runner-network-deps", access, b.start)
+	return b
+}
+
+func (b *networkDepsBoot) start(ctx context.Context, access clusterAccessBootOutput) (runner.RunnerDeps, error) {
+	var deps runner.RunnerDeps
+	if err := b.inputs.prepareNetworkDeps(&deps, access.access.CoordinatorInternalIP()); err != nil {
+		return runner.RunnerDeps{}, err
+	}
+	deps.EtcdEndpoints = append([]string(nil), b.inputs.etcdEndpoints...)
+	deps.EtcdPrefix = b.inputs.etcdPrefix
+	if len(deps.EtcdEndpoints) > 0 {
+		if err := runner.InitializeDistributedNetwork(ctx, b.inputs.log, b.inputs.dataPath, &deps, b.inputs.group); err != nil {
+			return runner.RunnerDeps{}, fmt.Errorf("initializing network before node storage: %w", err)
+		}
+	}
+	return deps, nil
+}
+
 func sandboxHostInputs(options StartOptions) sandboxHostBootInputs {
 	return sandboxHostBootInputs{
 		log:             options.Log,
@@ -59,10 +88,11 @@ func newSandboxHostBoot(
 	storage boot.Output[*runner.NodeStorage],
 	containerd boot.Output[containerdBootOutput],
 	telemetry boot.Output[telemetryBootOutput],
+	networkDeps boot.Output[runner.RunnerDeps],
 ) *sandboxHostBoot {
 	b := &sandboxHostBoot{inputs: inputs}
-	b.component, b.output = boot.Provide4(
-		"sandbox-host", access, storage, containerd, telemetry, b.start,
+	b.component, b.output = boot.Provide5(
+		"sandbox-host", access, storage, containerd, telemetry, networkDeps, b.start,
 		boot.WithStop(b.stop, 0),
 	)
 	return b
@@ -74,27 +104,19 @@ func (b *sandboxHostBoot) start(
 	storage *runner.NodeStorage,
 	containerd containerdBootOutput,
 	telemetry telemetryBootOutput,
+	dependencies runner.RunnerDeps,
 ) (*runner.SandboxHost, error) {
-	dependencies := runner.RunnerDeps{
-		CC:        containerd.Client,
-		Namespace: containerd.Namespace,
-		Bridge:    "rt0",
-		Tempdir:   os.TempDir(),
-
-		DisableLocalNet: true,
-		LogsMaintainer:  observability.NewLogsMaintainer(),
-		LogWriter:       telemetry.logWriter,
-		StatusMon:       observability.NewStatusMonitor(b.inputs.log),
-		SandboxMetrics:  telemetry.sandboxMetrics,
-		MetricsWriter:   telemetry.metricsWriter,
-		ServicePrefixes: b.inputs.servicePrefixes,
-
-		EtcdEndpoints: append([]string(nil), b.inputs.etcdEndpoints...),
-		EtcdPrefix:    b.inputs.etcdPrefix,
-	}
-	if err := b.prepareNetworkDeps(&dependencies, access.access.CoordinatorInternalIP()); err != nil {
-		return nil, err
-	}
+	dependencies.CC = containerd.Client
+	dependencies.Namespace = containerd.Namespace
+	dependencies.Bridge = "rt0"
+	dependencies.Tempdir = os.TempDir()
+	dependencies.DisableLocalNet = true
+	dependencies.LogsMaintainer = observability.NewLogsMaintainer()
+	dependencies.LogWriter = telemetry.logWriter
+	dependencies.StatusMon = observability.NewStatusMonitor(b.inputs.log)
+	dependencies.SandboxMetrics = telemetry.sandboxMetrics
+	dependencies.MetricsWriter = telemetry.metricsWriter
+	dependencies.ServicePrefixes = b.inputs.servicePrefixes
 
 	var err error
 	b.value, err = runner.NewSandboxHost(access.access, storage, dependencies, access.config)
@@ -107,54 +129,54 @@ func (b *sandboxHostBoot) start(
 	return b.value, nil
 }
 
-func (b *sandboxHostBoot) prepareNetworkDeps(deps *runner.RunnerDeps, coordinatorInternalIP netip.Addr) error {
+func (i sandboxHostBootInputs) prepareNetworkDeps(deps *runner.RunnerDeps, coordinatorInternalIP netip.Addr) error {
 	resolver, hostMapper := netresolve.NewLocalResolver()
 	deps.Resolver = resolver
 	if coordinatorInternalIP.Is4() {
 		if err := hostMapper.SetHost("cluster.local", coordinatorInternalIP); err != nil {
 			return fmt.Errorf("mapping cluster registry: %w", err)
 		}
-		b.inputs.log.Info("mapped cluster.local to coordinator WireGuard gateway", "addr", coordinatorInternalIP)
+		i.log.Info("mapped cluster.local to coordinator WireGuard gateway", "addr", coordinatorInternalIP)
 	}
-	coordinatorHost, coordinatorPort, splitErr := net.SplitHostPort(b.inputs.coordinator)
+	coordinatorHost, coordinatorPort, splitErr := net.SplitHostPort(i.coordinator)
 	if splitErr != nil {
-		b.inputs.log.Warn("in-cluster API access disabled: coordinator address has no usable host and port",
-			"coordinator", b.inputs.coordinator, "error", splitErr)
+		i.log.Warn("in-cluster API access disabled: coordinator address has no usable host and port",
+			"coordinator", i.coordinator, "error", splitErr)
 	} else if coordinatorAddr, err := resolveHost(coordinatorHost); err != nil {
-		b.inputs.log.Warn("could not resolve coordinator address", "host", coordinatorHost, "error", err)
+		i.log.Warn("could not resolve coordinator address", "host", coordinatorHost, "error", err)
 	} else {
 		// Sandboxes reach the API on the coordinator rather than the local bridge
 		// router. This must be an IP because sandbox DNS resolves app.miren names
 		// and nothing else, so the coordinator hostname would not resolve there.
 		deps.ApiAddress = net.JoinHostPort(coordinatorAddr.String(), coordinatorPort)
-		deps.CACert = []byte(b.inputs.caCert)
-		b.inputs.log.Info("sandboxes will reach the cluster API at", "address", deps.ApiAddress)
+		deps.CACert = []byte(i.caCert)
+		i.log.Info("sandboxes will reach the cluster API at", "address", deps.ApiAddress)
 		if !coordinatorInternalIP.IsValid() {
 			// Older coordinators serve the registry on the same address as the API.
 			if err := hostMapper.SetHost("cluster.local", coordinatorAddr); err != nil {
 				return fmt.Errorf("mapping legacy cluster registry: %w", err)
 			}
-			b.inputs.log.Warn("coordinator did not advertise an internal address; using its API address for registry pulls", "addr", coordinatorAddr)
+			i.log.Warn("coordinator did not advertise an internal address; using its API address for registry pulls", "addr", coordinatorAddr)
 		}
 	}
 
-	if b.inputs.clientCert == "" || b.inputs.clientKey == "" || b.inputs.caCert == "" {
+	if i.clientCert == "" || i.clientKey == "" || i.caCert == "" {
 		return nil
 	}
-	etcdCertsDir := filepath.Join(b.inputs.dataPath, "etcd-certs")
+	etcdCertsDir := filepath.Join(i.dataPath, "etcd-certs")
 	if err := os.MkdirAll(etcdCertsDir, 0700); err != nil {
 		return fmt.Errorf("creating etcd certs directory: %w", err)
 	}
 	deps.EtcdTLSCertFile = filepath.Join(etcdCertsDir, "client.crt")
 	deps.EtcdTLSKeyFile = filepath.Join(etcdCertsDir, "client.key")
 	deps.EtcdTLSCAFile = filepath.Join(etcdCertsDir, "ca.crt")
-	if err := os.WriteFile(deps.EtcdTLSCertFile, []byte(b.inputs.clientCert), 0644); err != nil {
+	if err := os.WriteFile(deps.EtcdTLSCertFile, []byte(i.clientCert), 0644); err != nil {
 		return fmt.Errorf("writing etcd client cert: %w", err)
 	}
-	if err := os.WriteFile(deps.EtcdTLSKeyFile, []byte(b.inputs.clientKey), 0600); err != nil {
+	if err := os.WriteFile(deps.EtcdTLSKeyFile, []byte(i.clientKey), 0600); err != nil {
 		return fmt.Errorf("writing etcd client key: %w", err)
 	}
-	if err := os.WriteFile(deps.EtcdTLSCAFile, []byte(b.inputs.caCert), 0644); err != nil {
+	if err := os.WriteFile(deps.EtcdTLSCAFile, []byte(i.caCert), 0644); err != nil {
 		return fmt.Errorf("writing etcd CA cert: %w", err)
 	}
 	return nil

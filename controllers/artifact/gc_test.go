@@ -124,3 +124,33 @@ func TestGCController_SkipsArchived(t *testing.T) {
 	require.Equal(t, 0, result.TotalArtifacts, "archived artifacts are not evaluated")
 	require.Equal(t, 0, len(result.ArchivedArtifacts))
 }
+
+func TestGCController_RetainsSystemArtifacts(t *testing.T) {
+	// The toolchain image miren builds for itself belongs to no app, so the
+	// AppVersion set will never name it. Collecting it would delete blobs out
+	// from under nodes still pulling the image.
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	log := testutils.TestLogger(t)
+
+	sysID, err := inmem.Client.Create(ctx,
+		core_v1alpha.SystemArtifactPrefix+"lbd-builder-21c0e11624c12f31",
+		&core_v1alpha.Artifact{Status: core_v1alpha.ACTIVE})
+	require.NoError(t, err)
+
+	// A genuine orphan alongside it, to prove the exemption is narrow and not
+	// just "artifacts with no app survive".
+	orphanID, err := inmem.Client.Create(ctx, "orphan", &core_v1alpha.Artifact{Status: core_v1alpha.ACTIVE})
+	require.NoError(t, err)
+
+	gc := &GCController{Log: log, EAC: inmem.EAC, Config: GCConfig{CheckInterval: time.Hour}}
+
+	result, err := gc.RunGC(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, result.RetainedArtifacts)
+	require.Equal(t, []entity.Id{orphanID}, result.ArchivedArtifacts)
+	require.Equal(t, core_v1alpha.ACTIVE, artifactStatus(t, inmem.EAC, sysID))
+	require.Equal(t, core_v1alpha.ARCHIVED, artifactStatus(t, inmem.EAC, orphanID))
+}

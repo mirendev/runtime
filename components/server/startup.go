@@ -140,7 +140,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 		runnerEndpoints.component,
 	)
-	nodeStorage := newNodeStorageBoot(clusterAccess.output, registration.output, observability.output)
+	nodeStorage := newNodeStorageBoot(resolver, registryHostMapping.component, clusterAccess.output, registration.output, observability.output, containerd.Output)
 	sandboxHost := newSandboxHostBoot(
 		sandboxHostInputs(options, resolver, serverPort(options.Log, address)),
 		clusterAccess.output,

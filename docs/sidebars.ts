@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'disks',
+        'disk-accelerator',
         'addons',
         'managing-disk-space',
       ],

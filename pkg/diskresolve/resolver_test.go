@@ -20,6 +20,13 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
+func TestDetectVolumeModeExplicitOverrides(t *testing.T) {
+	t.Setenv("MIREN_DISK_MODE", "universal")
+	require.Equal(t, storage_v1alpha.VM_UNIVERSAL, DetectVolumeMode())
+	t.Setenv("MIREN_DISK_MODE", "accelerator")
+	require.Equal(t, storage_v1alpha.VM_ACCELERATOR, DetectVolumeMode())
+}
+
 // faultRPC wraps an rpc.Client and fails the failAt-th (1-based) call to the
 // named entity-server method, simulating the partial-Finalize RPC failure the
 // bug report describes (one of Finalize's two writes succeeding and the other

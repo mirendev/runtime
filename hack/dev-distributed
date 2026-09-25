@@ -34,7 +34,13 @@ bootstrap_peer() {
   # build VCS stamping fails the build. Unlike the standalone dev flow
   # (hack/dev.sh), which builds as the host user, this path builds as root, so
   # mark /src safe. Mirrors hack/package-release.sh.
-  peer_exec "$peer" git config --global --add safe.directory /src
+  #
+  # Run it from / rather than /src. In a git worktree /src/.git is a file
+  # pointing at the parent repo, which is not mounted in the peer, so git
+  # resolves the repo before writing global config and exits 128 on a path it
+  # cannot see. Writing global config needs no repo, so stepping outside the
+  # worktree sidesteps it.
+  peer_exec "$peer" bash -c "cd / && git config --global --add safe.directory /src"
   # Build binary
   peer_exec "$peer" make bin/miren
   # Symlinks

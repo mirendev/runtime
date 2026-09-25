@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/telemetry/telemetry_v1alpha"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/build"
 	disksrv "miren.dev/runtime/servers/disk"
 	runnerserver "miren.dev/runtime/servers/runner"
 	sqlitebackupsrv "miren.dev/runtime/servers/sqlitebackup"
@@ -84,6 +85,14 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 		VictoriametricsAddress: c.VictoriametricsAddress,
 		VictorialogsAddress:    c.VictorialogsAddress,
 		WorkloadIssuer:         c.WorkloadIssuer,
+		LbdBuilder: &build.LbdToolchain{
+			Log:      c.Log,
+			BuildKit: c.BuildKit,
+			Issuer:   c.WorkloadIssuer,
+			EC:       aes.NewClient(c.Log, c.eac),
+			TempDir:  c.TempDir,
+		},
+		RPC: c.state,
 	})
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 	server.ExposeValue("dev.miren.runtime/telemetry", telemetry_v1alpha.AdaptTelemetry(telemetrysrv.NewServer(c.Log)))
