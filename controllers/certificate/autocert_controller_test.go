@@ -756,6 +756,48 @@ func TestAutocertController_ClusterHostnames_IsAllowedHost(t *testing.T) {
 	}
 }
 
+// A server named by --dns-names often sits one label under a route for its
+// parent domain. Nobody vouches for it, but as a cluster hostname it still gets
+// a cert, and keeps it after an exact route for the same name is removed.
+func TestAutocertController_ClusterHostnames_UnderRoute(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	c := NewAutocertController(AutocertControllerOpts{
+		Log:              log,
+		EAC:              server.EAC,
+		DataPath:         t.TempDir(),
+		Email:            "test@example.com",
+		ClusterHostnames: []string{"srv.example.com"},
+	})
+	if err := c.Init(ctx); err != nil {
+		t.Fatalf("failed to init: %v", err)
+	}
+	c.allowedHosts.Store("example.com", struct{}{})
+	c.allowedHosts.Store("srv.example.com", struct{}{})
+	calls := vouchFor(c)
+
+	if !c.isAllowedHost(ctx, "srv.example.com") {
+		t.Error("expected cluster hostname under a route to be allowed")
+	}
+	if c.isAllowedHost(ctx, "other.example.com") {
+		t.Error("expected other.example.com to be refused: nobody vouches")
+	}
+
+	if err := c.Delete(ctx, "some-route-id"); err != nil {
+		t.Fatalf("unexpected error from Delete: %v", err)
+	}
+	if !c.isAllowedHost(ctx, "srv.example.com") {
+		t.Error("expected cluster hostname to stay allowed after its route is removed")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("host checker asked %d times, want 1 (only for other.example.com)", got)
+	}
+}
+
 func TestAutocertController_ClusterHostnames_GetCertificateAttempts(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	c := NewAutocertController(AutocertControllerOpts{

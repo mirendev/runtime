@@ -115,13 +115,13 @@ Under `behind-proxy-http`, Miren trusts `X-Forwarded-Proto` from *every* connect
 
 ## `[tls]` — TLS Settings {#tls}
 
-Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. See [TLS](./tls.md) for setup guides.
+Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. Under `tls-autoprovision`, `additional_names` entries can also get ingress certs. See [TLS](./tls.md#tls-settings-reference) for how, and for setup guides.
 
 `additional_ips` does more than its name suggests. Alongside adding SANs, every address listed there is passed straight through to the addresses the server advertises to Miren Cloud, skipping the filtering that discovered addresses go through. That makes it the way to pin an address discovery gets wrong — a host behind a static NAT, or one where you want a specific interface used. See [Running Miren on a Tailnet](./tailscale.md) for a worked example, and run `miren debug advertise` on the host to see what discovery decided and why.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `additional_names` | string[] | `[]` | Extra DNS names for the server certificate | `MIREN_TLS_ADDITIONAL_NAMES` | `--dns-names` |
+| `additional_names` | string[] | `[]` | Extra DNS names for the server certificate, and for the ingress certificate under autoprovisioning | `MIREN_TLS_ADDITIONAL_NAMES` | `--dns-names` |
 | `additional_ips` | string[] | `[]` | Extra IPs for the server certificate, and forced into the advertised address list | `MIREN_TLS_ADDITIONAL_IPS` | `--ips` |
 | `acme_dns_provider` | string | — | DNS provider for ACME DNS-01 challenges (e.g. `cloudflare`, `route53`). Required under `behind-proxy-https` if not using `self_signed`. | `MIREN_TLS_ACME_DNS_PROVIDER` | `--acme-dns-provider` |
 | `acme_email` | string | — | Email for ACME account registration | `MIREN_TLS_ACME_EMAIL` | `--acme-email` |

@@ -165,8 +165,23 @@ Two additional `[tls]` settings apply to the API server and etcd certs rather th
 
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|
-| `additional_names` | `--dns-names` | Extra DNS names appended to the API server and etcd cert SANs |
+| `additional_names` | `--dns-names` | Extra DNS names appended to the API server and etcd cert SANs. Under `tls-autoprovision`, these can also get an ingress cert (see below) |
 | `additional_ips` | `--ips` | Extra IPs appended to the API server and etcd cert SANs, and forced into the advertised address list |
+
+:::info[`additional_names` and the ingress cert]
+Under `tls-autoprovision` with HTTP-01 challenges, Miren treats each
+`additional_names` entry as a name the server answers to as itself. It gets an
+ACME certificate without needing a route, as soon as its DNS points at the
+cluster. That's what lets a self-hosted cluster serve its
+[workload identity](./workload-identity.md) issuer over valid TLS. IPs,
+single-label names, wildcards, and reserved suffixes like `.internal` and
+`.local` are skipped.
+
+With `acme_dns_provider` set, only the first entry gets an ingress cert, and
+only when it's the workload identity issuer. DNS-01 can issue for a name even
+when it doesn't point at the cluster, so the rest stay on the API and etcd
+certs rather than being sent to Let's Encrypt.
+:::
 
 :::tip[`additional_ips` also controls advertisement]
 Addresses in `additional_ips` bypass the filtering applied to auto-discovered
@@ -207,4 +222,4 @@ miren route
 ```
 </CliCommand>
 
-Miren only provisions ACME certificates for hostnames with explicitly configured routes. All other hostnames get the self-signed fallback.
+Miren provisions ACME certificates for hostnames with configured routes, names that something vouches for under those routes, and the server's own names (its Miren Cloud hostname and its `additional_names`, as described above). All other hostnames get the self-signed fallback.
