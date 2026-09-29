@@ -13,6 +13,14 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.16.2
+*2026-09-29*
+
+**Bug Fixes**
+- **Servers named with `--dns-names` get a real certificate again** - Since v0.16.0, a server started with `--dns-names` under `tls-autoprovision` served the self-signed fallback certificate for its own hostname unless a route named that host exactly, a side effect of the wildcard certificate change. That also broke anything verifying the cluster's workload identity tokens, which fetch their keys from that hostname. `--dns-names` hosts now get their certificate without a route, and with a DNS-01 provider the workload identity issuer's name does too. If you can't upgrade yet, an exact route brings the certificate back: `miren route set <host> <app>`, then `miren route down <host>` if the route shouldn't serve anything. See [TLS](./tls.md#tls-settings-reference). ([#1281](https://github.com/mirendev/runtime/pull/1281))
+
+---
+
 ## v0.16.1
 *2026-09-24*
 

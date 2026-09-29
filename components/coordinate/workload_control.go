@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
@@ -236,11 +240,17 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		controller.AdaptController(defaultRoute), 0, 1,
 	))
 
-	var clusterHostnames []string
-	if c.CloudAuth.DNSHostname != "" {
-		clusterHostnames = append(clusterHostnames, c.CloudAuth.DNSHostname)
-	}
 	if c.AcmeDNSProvider != "" {
+		// DNS-01 proves control through the provider's zone, so unlike the
+		// autocert path it would issue for names that never point at this
+		// cluster, and most --dns-names exist only for the internal API cert.
+		// Only the one serving as the workload identity issuer comes along;
+		// it is public by definition, since verifiers fetch JWKS from it.
+		var issuerURL string
+		if c.WorkloadIssuer != nil {
+			issuerURL = c.WorkloadIssuer.IssuerURL()
+		}
+		clusterHostnames := acmeClusterHostnames(c.CloudAuth.DNSHostname, selfIssuerHostnames(issuerURL, c.AdditionalNames))
 		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider, clusterHostnames)
 		if err := dnsController.Init(ctx); err != nil {
 			return fmt.Errorf("initializing DNS certificate controller: %w", err)
@@ -258,7 +268,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 			DataPath:         c.DataPath,
 			Email:            c.AcmeEmail,
 			PublicIPs:        c.PublicIPs,
-			ClusterHostnames: clusterHostnames,
+			ClusterHostnames: acmeClusterHostnames(c.CloudAuth.DNSHostname, c.AdditionalNames),
 		})
 		if err := autocertController.Init(ctx); err != nil {
 			return fmt.Errorf("initializing autocert controller: %w", err)
@@ -305,6 +315,61 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 	runScheduler := runctrl.NewScheduler(c.Log, ec, eac)
 	runScheduler.Start(ctx)
 	c.runScheduler = runScheduler
+	return nil
+}
+
+// reservedSuffixes are special-use and private-use names that no public CA
+// will issue for.
+var reservedSuffixes = []string{
+	".localhost", ".local", ".internal", ".lan", ".home.arpa",
+	".test", ".example", ".invalid",
+}
+
+// acmeClusterHostnames lists the names the server answers to as itself: the
+// cloud-assigned hostname plus any --dns-names. The autocert controller always
+// allows these and provisions them eagerly, so they keep valid TLS without a
+// route or a vouch. Names ACME can never issue for (IPs, single labels,
+// wildcards, reserved suffixes) are dropped; --dns-names also feeds the
+// internal API cert, where they are legitimate.
+func acmeClusterHostnames(dnsHostname string, additionalNames []string) []string {
+	var names []string
+	seen := make(map[string]struct{})
+	for _, name := range append([]string{dnsHostname}, additionalNames...) {
+		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+		if !strings.Contains(name, ".") || strings.Contains(name, "*") {
+			continue
+		}
+		if slices.ContainsFunc(reservedSuffixes, func(suffix string) bool {
+			return strings.HasSuffix(name, suffix)
+		}) {
+			continue
+		}
+		if _, err := netip.ParseAddr(name); err == nil {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
+}
+
+// selfIssuerHostnames returns the workload identity issuer's host when it is
+// one of the server's own --dns-names, and nothing when the issuer lives
+// elsewhere (a cloud anchor) or on a name the server didn't configure.
+func selfIssuerHostnames(issuerURL string, additionalNames []string) []string {
+	u, err := url.Parse(issuerURL)
+	if err != nil || u.Scheme != "https" {
+		return nil
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, name := range additionalNames {
+		if strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".") == host {
+			return []string{host}
+		}
+	}
 	return nil
 }
 
