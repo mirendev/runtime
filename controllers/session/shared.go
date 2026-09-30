@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	shared "miren.dev/runtime/api/session"
@@ -99,24 +100,22 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 		return err
 	}
 	host, err := c.getSandbox(ctx, entity.Id(binding.Sandbox))
-	if errors.Is(err, cond.ErrNotFound{}) {
-		reason := fmt.Sprintf("shared sandbox %s no longer exists", binding.Sandbox)
-		if s.Phase == sessionapi.FAILED && s.Failure == reason {
-			return nil
+	missing := errors.Is(err, cond.ErrNotFound{})
+	if err != nil && !missing {
+		return err
+	}
+	if missing {
+		host = &compute.Sandbox{ID: entity.Id(binding.Sandbox), Status: compute.DEAD}
+	} else {
+		// Already-bound hosts may still use the old app+opaque-group key. Keep
+		// their assignments until replacement, but never admit new Sessions there.
+		if (host.SessionInfo.Group != group && host.Spec.LogEntity != s.App.String()) ||
+			host.SessionInfo.Capacity != s.MaxSessionsPerSandbox || host.SessionInfo.Owner != "" {
+			return c.fail(ctx, s.ID, fmt.Errorf("session %s cannot change its shared sandbox group", s.ID))
 		}
-		return c.fail(ctx, s.ID, errors.New(reason))
-	}
-	if err != nil {
-		return err
-	}
-	// Already-bound hosts may still use the old app+opaque-group key. Keep
-	// their assignments until replacement, but never admit new Sessions there.
-	if (host.SessionInfo.Group != group && host.Spec.LogEntity != s.App.String()) ||
-		host.SessionInfo.Capacity != s.MaxSessionsPerSandbox || host.SessionInfo.Owner != "" {
-		return c.fail(ctx, s.ID, fmt.Errorf("session %s cannot change its shared sandbox group", s.ID))
-	}
-	if retiring, err := c.retireOutdatedHost(ctx, s, host); retiring || err != nil {
-		return err
+		if retiring, err := c.retireOutdatedHost(ctx, s, host); retiring || err != nil {
+			return err
+		}
 	}
 	if terminal(host.Status) {
 		ack, err := c.teardownDone(ctx, host.ID)
@@ -234,14 +233,17 @@ func (c *Controller) nextSharedHost(ctx context.Context, group string) (entity.I
 			for _, host := range hosts.Values() {
 				advance(host.Id())
 			}
-			teardowns, listErr := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxTeardown))
-			if listErr != nil {
-				return "", listErr
-			}
-			for _, record := range teardowns.Values() {
-				var ack compute.SandboxTeardown
-				ack.Decode(record.Entity())
-				advance(ack.Sandbox)
+			// Old allocators used contiguous host numbers. Probe only this group's
+			// retired IDs rather than listing every teardown in the cluster.
+			for {
+				_, err := c.EAC.Get(ctx, computeapi.TeardownID(sharedHostID(group, next)).String())
+				if errors.Is(err, cond.ErrNotFound{}) {
+					break
+				}
+				if err != nil {
+					return "", err
+				}
+				next++
 			}
 			_, err = c.EAC.Create(ctx, entity.New(entity.DBId, id,
 				(&sessionapi.GroupCounter{NextNumber: next + 1}).Encode).Attrs())

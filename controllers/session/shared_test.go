@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -210,11 +211,24 @@ func TestSharedHostCounterSkipsRetiredHostsWithoutRepeatedScan(t *testing.T) {
 	inm, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	group := "existing-group"
+	// Many unrelated teardown records must not affect this group's allocation.
+	for number := int64(0); number < 100; number++ {
+		_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(sharedHostID("other-group", number)),
+			(&compute.SandboxTeardown{Sandbox: sharedHostID("other-group", number).String()}).Encode).Attrs())
+		require.NoError(t, err)
+	}
 	for number := int64(0); number < 100; number++ {
 		host := sharedHostID(group, number)
 		_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(host),
 			(&compute.SandboxTeardown{Sandbox: host.String()}).Encode).Attrs())
 		require.NoError(t, err)
+	}
+	var globalTeardownScans int
+	inm.Store.OnListIndex = func(_ context.Context, attr entity.Attr) ([]entity.Id, error) {
+		if attr.CAS() == entity.Ref(entity.EntityKind, compute.KindSandboxTeardown).CAS() {
+			globalTeardownScans++
+		}
+		return nil, nil // There are no live hosts in this group.
 	}
 	c := NewController(slog.Default(), inm.EAC)
 	for number := int64(100); number < 103; number++ {
@@ -223,6 +237,53 @@ func TestSharedHostCounterSkipsRetiredHostsWithoutRepeatedScan(t *testing.T) {
 		require.Equal(t, sharedHostID(group, number), host)
 		c = NewController(slog.Default(), inm.EAC) // The counter is durable across restarts.
 	}
+	require.Zero(t, globalTeardownScans, "allocation must not list all historical teardowns")
+}
+
+func TestSharedSessionReplacesDeletedHostOnlyAfterTeardown(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c := NewController(slog.Default(), inm.EAC)
+	id := entity.Id("session/lost-node")
+	s := &sessionapi.Session{ID: id, App: "app/one", MaxSessionsPerSandbox: 2,
+		Spec:         sessionapi.SandboxSpec{Container: []sessionapi.SandboxSpecContainer{{Image: "example:v1"}}},
+		DesiredState: sessionapi.RUNNING, Phase: sessionapi.READY}
+	group := sharedGroup(s)
+	old := sharedHostID(group, 0)
+	s.Sandbox = old
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id, s.Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.BindingID(id),
+		(&sessionapi.Binding{Session: id.String(), Sandbox: old.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.SlotID(old, 0),
+		(&sessionapi.Slot{Session: id.String(), Sandbox: old.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	// Nodehealth has deleted the host, but no teardown proof is visible yet.
+	require.NoError(t, c.Reconcile(ctx, s, &entity.Meta{}))
+	resp, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var waiting sessionapi.Session
+	waiting.Decode(resp.Entity().Entity())
+	require.Equal(t, old, waiting.Sandbox)
+	require.Equal(t, sessionapi.READY, waiting.Phase)
+
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(old),
+		(&compute.SandboxTeardown{Sandbox: old.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	require.NoError(t, c.Reconcile(ctx, &waiting, &entity.Meta{}))
+	resp, err = inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var replaced sessionapi.Session
+	replaced.Decode(resp.Entity().Entity())
+	require.Equal(t, sessionapi.ACTIVATING, replaced.Phase)
+	require.NotEqual(t, old, replaced.Sandbox)
+	bound, err := inm.EAC.Get(ctx, shared.BindingID(id).String())
+	require.NoError(t, err)
+	var binding sessionapi.Binding
+	binding.Decode(bound.Entity().Entity())
+	require.Equal(t, replaced.Sandbox.String(), binding.Sandbox)
 }
 
 func TestSharedHostCounterConcurrentControllers(t *testing.T) {
