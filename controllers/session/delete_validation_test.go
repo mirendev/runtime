@@ -68,4 +68,27 @@ func TestLostNodePermitsTerminalSessionSandboxReplacement(t *testing.T) {
 	require.True(t, done)
 	_, err = inm.EAC.Delete(ctx, id.String())
 	require.NoError(t, err)
+	done, err = c.teardownDone(ctx, id)
+	require.NoError(t, err)
+	require.True(t, done, "operator deletion must leave durable teardown proof")
+}
+
+func TestLostNodeDeletionRecordsSharedHostTeardown(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	inm.Server.DeleteValidators = map[entity.Id]func(context.Context, *entity.Entity, entity.Store) error{
+		compute.KindSandbox: ValidateSandboxDelete,
+	}
+	id := entity.Id("sandbox/shared-lost-node")
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.DEAD, SessionInfo: compute.SessionInfo{Group: "group"}}).Encode,
+		(&compute.Schedule{Key: compute.Key{Node: "node/removed"}}).Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Delete(ctx, id.String())
+	require.NoError(t, err)
+	c := NewController(slog.Default(), inm.EAC)
+	done, err := c.teardownDone(ctx, id)
+	require.NoError(t, err)
+	require.True(t, done, "shared Sessions must see teardown after host deletion")
 }

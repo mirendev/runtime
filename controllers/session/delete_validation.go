@@ -24,9 +24,14 @@ func ValidateSandboxDelete(ctx context.Context, stored *entity.Entity, store ent
 		if schedule.Key.Node != "" {
 			_, err := store.GetEntity(ctx, schedule.Key.Node)
 			if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, entity.ErrEntityNotFound) {
-				return nil // A removed node cannot leave running containers to acknowledge teardown.
-			}
-			if err != nil {
+				// Persist proof before deletion: once the sandbox is gone, the
+				// Session controller can no longer inspect its missing node.
+				_, err = store.CreateEntity(ctx, entity.New(entity.DBId, computeapi.TeardownID(sb.ID),
+					(&compute.SandboxTeardown{Sandbox: sb.ID.String(), Session: sb.SessionInfo.Owner.String()}).Encode))
+				if err != nil && !errors.Is(err, cond.ErrConflict{}) {
+					return err
+				}
+			} else if err != nil {
 				return err
 			}
 		}
