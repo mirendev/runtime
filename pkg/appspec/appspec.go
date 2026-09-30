@@ -22,6 +22,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/secret"
@@ -158,10 +159,17 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 
 	appEnv := appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeApp, opts.AppName)
 	appEnv = append(appEnv, appclient.RuntimeEnvWithAlias(appclient.EnvRuntimeVersion, ver.Version)...)
+	image := opts.Image
+	for _, svc := range cfgSpec.Services {
+		if svc.Name == serviceName && svc.Image != "" {
+			image = containerdx.NormalizeImageReference(svc.Image)
+			break
+		}
+	}
 
 	appCont := compute_v1alpha.SandboxSpecContainer{
 		Name:      "app",
-		Image:     opts.Image,
+		Image:     image,
 		Env:       appEnv,
 		Directory: startDir,
 		Stdin:     opts.Stdin,

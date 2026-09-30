@@ -64,6 +64,7 @@ var (
 	// appRead: read one app's own state.
 	appRead = perms{
 		"appstatus": set("appinfo"),
+		"sessions":  set("list", "get"),
 		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
@@ -72,6 +73,7 @@ var (
 
 	// appDeploy: build and (re)deploy one app.
 	appDeploy = perms{
+		"sessions": set("create", "setdesiredstate", "delete"),
 		"deployment": set(
 			"deployversion", "createdeployment", "updatedeploymentstatus",
 			"updatedeploymentphase", "updatefaileddeployment",

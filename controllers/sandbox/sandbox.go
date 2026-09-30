@@ -1300,6 +1300,12 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	switch co.Status {
 	case compute.DEAD:
+		if co.SessionInfo.Owner != "" || co.SessionInfo.Group != "" {
+			// DEAD can be written before teardown begins on failure paths.
+			// A Session may replace this incarnation only after StopSandbox's
+			// durable acknowledgment, so retry cleanup after runner restarts.
+			return c.StopSandbox(ctx, co.ID, co)
+		}
 		return nil
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
@@ -2770,6 +2776,10 @@ func (c *SandboxController) buildSubContainerSpec(
 		envVars = append(instanceEnv, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
 	}
+	if sb.SessionInfo.Owner != "" {
+		envVars = append(envVars, "MIREN_SESSION_ID="+sb.SessionInfo.Owner.String())
+	}
+
 	if c.WorkloadIssuer != nil {
 		metadataURL := fmt.Sprintf("http://%s:%d/v1", c.Subnet.Router().Addr(), metadataServerPort)
 		envVars = append(envVars,
@@ -3304,6 +3314,42 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	// Clean up temp directory
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
+
+	if sb != nil && (sb.SessionInfo.Owner != "" || sb.SessionInfo.Group != "") {
+		// Status alone is not a teardown acknowledgment: STOPPED is a request,
+		// and some failure paths publish DEAD before destroying containers.
+		// An unfinished create saga can still boot containers after this scan,
+		// especially during startup recovery. Fail closed until it finishes;
+		// a subsequent reconcile will clean up and acknowledge the child.
+		exec, sagaErr := c.sagaStorage.Get(ctx, createSandboxSagaID(sb))
+		if sagaErr != nil && !errors.Is(sagaErr, saga.ErrExecutionNotFound) {
+			return fmt.Errorf("checking session sandbox creation: %w", sagaErr)
+		}
+		if sagaErr == nil && exec.Status != saga.StatusCompleted && exec.Status != saga.StatusFailed {
+			return fmt.Errorf("session sandbox %s creation saga is still %s", id, exec.Status)
+		}
+		remaining, err := c.CC.Containers(ctx)
+		if err != nil {
+			return fmt.Errorf("verifying session sandbox teardown: %w", err)
+		}
+		for _, cont := range remaining {
+			if cont.ID() == pauseID || strings.HasPrefix(cont.ID(), containerPrefix(id)+"-") {
+				return fmt.Errorf("session sandbox %s still has container %s", id, cont.ID())
+			}
+		}
+		ackID := computeapi.TeardownID(id)
+		if _, err := c.EAC.Get(ctx, ackID.String()); errors.Is(err, cond.ErrNotFound{}) {
+			_, err = c.EAC.Create(ctx, entity.New(
+				entity.DBId, ackID,
+				(&compute.SandboxTeardown{Sandbox: id.String(), Session: sb.SessionInfo.Owner.String()}).Encode,
+			).Attrs())
+			if err != nil {
+				return fmt.Errorf("acknowledging session sandbox teardown: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("reading session sandbox teardown: %w", err)
+		}
+	}
 
 	// Use the current entity, not the cleanup snapshot: boot or an exit may
 	// have changed the lifecycle while resources were being torn down.

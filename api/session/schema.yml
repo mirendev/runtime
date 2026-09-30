@@ -1,0 +1,312 @@
+domain: dev.miren.session
+version: v1alpha
+
+components:
+  sandbox_spec:
+    version:
+      type: ref
+      doc: Application version reference
+
+    logEntity:
+      type: string
+      doc: Entity to associate log output with
+
+    logAttribute:
+      type: label
+      doc: Labels for log entries
+      many: true
+
+    hostNetwork:
+      type: bool
+      doc: Whether to use host networking
+
+    port_wait_timeout:
+      type: string
+      doc: Maximum time to wait for container ports to bind
+
+    restart_policy:
+      type: enum
+      choices: [always, never]
+      doc: Whether the sandbox controller may restart this sandbox's containers
+
+    route:
+      type: component
+      doc: Network route configuration
+      many: true
+      attrs:
+        destination:
+          type: string
+          doc: Network destination
+        gateway:
+          type: string
+          doc: Next hop for destination
+
+    volume:
+      type: component
+      doc: Volume configuration
+      many: true
+      attrs:
+        name:
+          type: string
+          doc: Volume name
+        provider:
+          type: string
+          doc: Volume provider
+        labels:
+          type: label
+          doc: Labels identifying the volume
+          many: true
+        disk_name:
+          type: string
+          doc: Name of the disk to attach
+        mount_path:
+          type: string
+          doc: Path where the disk should be mounted
+        read_only:
+          type: bool
+          doc: Whether to mount the disk as read-only
+        size_gb:
+          type: int
+          doc: Disk size in GB for auto-creation
+        filesystem:
+          type: string
+          doc: Filesystem type for auto-creation
+        db_file:
+          type: string
+          doc: Database filename inside the disk directory
+        sqlite_id:
+          type: string
+          doc: Identity of the database this volume attaches to
+        lease_timeout:
+          type: string
+          doc: Timeout for acquiring the disk lease
+        owner:
+          type: string
+          doc: Ownership policy for the mounted disk
+
+    static_host:
+      type: component
+      doc: Static host-to-IP mapping
+      many: true
+      attrs:
+        host:
+          type: string
+          doc: Hostname
+        ip:
+          type: string
+          doc: IP address
+
+    container:
+      type: component
+      doc: Container specification
+      many: true
+      required: true
+      attrs:
+        image:
+          type: string
+          doc: Container image
+          required: true
+        name:
+          type: string
+          doc: Container name
+        privileged:
+          type: bool
+          doc: Whether the container runs in privileged mode
+        tty:
+          type: bool
+          doc: Allocate a TTY for the container
+        stdin:
+          type: bool
+          doc: Keep stdin open for the container
+        command:
+          type: string
+          doc: Command to run
+        args:
+          type: string
+          doc: Arguments that replace the image CMD while preserving its ENTRYPOINT
+          many: true
+        directory:
+          type: string
+          doc: Working directory
+        env:
+          type: string
+          doc: Environment variable
+          many: true
+        port:
+          type: component
+          doc: Network port declaration
+          many: true
+          attrs:
+            port:
+              type: int
+              doc: Port number
+              required: true
+            name:
+              type: string
+              doc: Port name
+              required: true
+            protocol:
+              type: enum
+              doc: Port protocol
+              choices: [tcp, udp]
+            type:
+              type: string
+              doc: High-level port type (e.g., http)
+            node_port:
+              type: int
+              doc: The port number forwarded from the node to the container
+        mount:
+          type: component
+          doc: Mounted directory
+          many: true
+          attrs:
+            source:
+              type: string
+              doc: Mount source path
+            destination:
+              type: string
+              doc: Mount destination path
+        oom_score:
+          type: int
+          doc: OOM score adjustment
+        config_file:
+          type: component
+          doc: File to write into the container
+          many: true
+          attrs:
+            path:
+              type: string
+              doc: File path in the container
+            data:
+              type: string
+              doc: File contents
+            mode:
+              type: string
+              doc: File mode
+        shutdown_timeout:
+          type: string
+          doc: Time to wait for graceful shutdown before force-killing
+
+kinds:
+  group_counter:
+    next_number:
+      type: int
+      doc: Next unused shared sandbox number for this app, service, and group
+
+  slot:
+    session:
+      type: string
+      indexed: true
+      doc: Session holding this sandbox capacity slot
+
+    sandbox:
+      type: string
+      indexed: true
+      doc: Sandbox whose capacity this slot reserves
+
+  binding:
+    session:
+      type: string
+      doc: Session ID retained after the Session is deleted
+
+    sandbox:
+      type: string
+      doc: Shared sandbox ID; retained even if the sandbox is removed
+      indexed: true
+
+    deleted_at:
+      type: time
+      doc: When the Session was deleted
+
+    acknowledged_at:
+      type: time
+      doc: When the sandbox acknowledged the deletion
+
+  session:
+    spec:
+      type: sandbox_spec
+      doc: Resolved app configuration updated on deploy and copied to new sandbox incarnations
+
+    app:
+      type: ref
+      doc: Application this Session belongs to
+      indexed: true
+
+    version:
+      type: ref
+      doc: Desired active application version for this Session
+
+    service:
+      type: string
+      doc: Service this Session belongs to
+
+    group:
+      type: string
+      doc: Optional opaque key for sharing a sandbox with Sessions of the same app and service
+
+    disk:
+      type: ref
+      doc: Optional stable disk reference retained across sandbox incarnations
+
+    desired_state:
+      type: enum
+      choices: [running, suspended]
+      doc: Whether the Session should run or remain suspended
+
+    sandbox:
+      type: ref
+      doc: Current incarnation; absent once suspension finishes
+      indexed: true
+
+    max_sessions_per_sandbox:
+      type: int
+      doc: Capacity of a controller-managed shared sandbox; values greater than one opt into sharing
+
+    phase:
+      type: enum
+      choices: [pending, activating, ready, suspending, inactive, failed]
+      doc: Observed lifecycle phase
+      indexed: true
+
+    generation:
+      type: int
+      doc: Monotonic incarnation number; deterministic sandbox IDs make creation idempotent
+
+    last_transition:
+      type: time
+      doc: When the observed phase last changed
+
+    failure:
+      type: string
+      doc: Reason the Session failed
+
+    activity:
+      type: enum
+      choices: [unknown, active, idle]
+      doc: Most recent sandbox self-reported activity state
+
+    activity_at:
+      type: time
+      doc: When the sandbox reported its activity state
+
+    incarnation:
+      type: component
+      doc: Historical sandbox incarnations
+      many: true
+      attrs:
+        generation:
+          type: int
+          doc: Generation of the sandbox incarnation
+          required: true
+        sandbox:
+          type: string
+          doc: Historical sandbox ID; remains queryable after entity GC
+        started_at:
+          type: time
+          doc: When the incarnation began
+        ended_at:
+          type: time
+          doc: When the incarnation ended
+        reason:
+          type: string
+          doc: Why the incarnation ended

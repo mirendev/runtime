@@ -16,11 +16,13 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	deploymentattemptsctrl "miren.dev/runtime/controllers/deploymentattempts"
+	sessionctrl "miren.dev/runtime/controllers/session"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/entity"
@@ -700,6 +702,9 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	if err != nil {
 		c.Log.Error("failed to create entity server", "error", err)
 		return err
+	}
+	ess.DeleteValidators = map[entity.Id]func(context.Context, *entity.Entity, entity.Store) error{
+		compute.KindSandbox: sessionctrl.ValidateSandboxDelete,
 	}
 
 	server.ExposeValue("entities", esv1.AdaptEntityAccess(ess))

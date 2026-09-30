@@ -22,6 +22,8 @@ func (c *SandboxController) metadataHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/token", c.handleTokenRequest)
 	mux.HandleFunc("/v1/activity", c.handleActivityRequest)
+	mux.HandleFunc("/v1/sessions", c.handleSessionsRequest)
+	mux.HandleFunc("/v1/sessions/deletions/ack", c.handleSessionAcknowledgment)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeMetadataError(w, http.StatusNotFound, "not found")
 	})
