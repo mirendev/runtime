@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
@@ -17,6 +18,7 @@ import (
 const activityRenewAt = 30 * time.Second
 
 var errTerminalSandbox = errors.New("sandbox is terminal")
+var errStartingSandbox = errors.New("sandbox is not running yet")
 
 type activityOrder struct {
 	mu     sync.Mutex
@@ -95,6 +97,10 @@ func (c *SandboxController) handleActivityRequest(w http.ResponseWriter, r *http
 			writeMetadataError(w, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, errStartingSandbox) {
+			writeMetadataError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		c.Log.Warn("failed to record sandbox activity", "sandbox", sandboxID, "error", err)
 		writeMetadataError(w, http.StatusInternalServerError, "failed to record activity")
 		return
@@ -124,7 +130,10 @@ func (c *SandboxController) recordSandboxActivity(ctx context.Context, sandboxID
 		var sb compute.Sandbox
 		sb.Decode(resp.Entity().Entity())
 		if sb.Status != compute.RUNNING {
-			return errTerminalSandbox
+			if computeapi.SandboxDead(sb.Status) {
+				return errTerminalSandbox
+			}
+			return errStartingSandbox
 		}
 		if sb.Activity.ReportedAt.After(now) {
 			return nil // A later request already won the CAS race.
@@ -132,11 +141,14 @@ func (c *SandboxController) recordSandboxActivity(ctx context.Context, sandboxID
 		if sb.Activity.State == state && sb.ShutdownAt.IsZero() && !sb.Activity.ReportedAt.IsZero() && now.Sub(sb.Activity.ReportedAt) < activityRenewAt {
 			return nil
 		}
-		_, err = c.EAC.Patch(ctx, entity.New(
+		result, err := c.EAC.Patch(ctx, entity.New(
 			entity.DBId, entity.Id(sandboxID),
 			(&compute.Sandbox{Activity: compute.Activity{State: state, ReportedAt: now}}).Encode,
 		).Attrs(), resp.Entity().Revision())
 		if err == nil {
+			if c.writeTracker != nil && result.HasRevision() {
+				c.writeTracker.RecordWrite(result.Revision())
+			}
 			return nil
 		}
 		if !errors.Is(err, cond.ErrConflict{}) {

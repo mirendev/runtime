@@ -286,8 +286,7 @@ func TestActivityServer_TransitionsAndTeardown(t *testing.T) {
 		}
 		assert.Equal(t, want, sb.SelfReportedActivity(time.Now()))
 	}
-	// A delayed earlier request cannot overwrite a newer state, even after a
-	// revision conflict makes it retry its store read.
+	// A delayed earlier request cannot overwrite a newer state.
 	before, err := inm.EAC.Get(ctx, id.String())
 	require.NoError(t, err)
 	var latest compute.Sandbox
@@ -354,6 +353,28 @@ func TestActivityServer_ShutdownNoticeAndActiveHeartbeat(t *testing.T) {
 		(&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusConflict, request("GET", "").Code)
+}
+
+func TestActivityServer_StartingSandboxIsRetryable(t *testing.T) {
+	c := newTestTokenController(t)
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c.EAC = inm.EAC
+	id := entity.Id(testSandboxID)
+	_, err := inm.EAC.Create(t.Context(), entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.PENDING}).Encode).Attrs())
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/activity", strings.NewReader(`{"state":"idle"}`))
+	req.RemoteAddr = testSandboxIP + ":12345"
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	w := httptest.NewRecorder()
+	c.handleActivityRequest(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	resp, err := inm.EAC.Get(t.Context(), id.String())
+	require.NoError(t, err)
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	require.True(t, sb.Activity.ReportedAt.IsZero())
 }
 
 func TestActivityServer_CoalescedNewerReportDoesNotExposeOlderIdle(t *testing.T) {

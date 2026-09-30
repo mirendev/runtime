@@ -81,7 +81,7 @@ curl -X POST "$MIREN_ACTIVITY_URL" \
   -d '{"state":"idle"}'
 ```
 
-Send `{"state":"active"}` when work resumes. The endpoint returns `204` on success, `400` for an invalid state, `401` or `403` for failed authentication, and `409` if the sandbox is no longer running. Repeating the same state is safe; Miren persists transitions immediately and limits unchanged renewals to one write per 30 seconds unless a shutdown notice is pending.
+Send `{"state":"active"}` when work resumes. The endpoint returns `204` on success, `400` for an invalid state, `401` or `403` for failed authentication, `503` while a sandbox is still starting (retry later), and `409` if it is stopped or dead. Repeating the same state is safe; Miren persists transitions immediately and limits unchanged renewals to one write per 30 seconds unless a shutdown notice is pending. Activity reporting requires workload identity to be enabled on the runner.
 
 ## Draining a Session before suspension
 
