@@ -25,9 +25,10 @@ var oidcDeployRole = map[string]map[string]bool{
 		"updatedeploymentappversion": true,
 	},
 	"logs": {
-		"applogs":         true,
-		"streamlogs":      true,
-		"streamlogchunks": true,
+		"applogs":           true,
+		"streamlogs":        true,
+		"streamlogchunks":   true,
+		"streamlogchunksv2": true,
 	},
 	"crud": {
 		"list":             true,

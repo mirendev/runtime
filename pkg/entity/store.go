@@ -487,7 +487,7 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 // alone would hand back an entity missing every session-scoped attribute,
 // which for a node is its status.
 func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error) {
-	entities, undecodable, err := s.getEntities(ctx, []Id{id}, false, rev)
+	entities, undecodable, err := s.getEntities(ctx, []Id{id}, rev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entity at revision %d: %w", rev, err)
 	}
@@ -501,7 +501,7 @@ func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (
 }
 
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
-	entities, _, err := s.getEntities(ctx, ids, true, 0)
+	entities, _, err := s.getEntities(ctx, ids, 0)
 	return entities, err
 }
 
@@ -531,7 +531,7 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 		return nil, err
 	}
 
-	entities, undecodable, err := s.getEntities(ctx, page.Ids, false, page.Revision)
+	entities, undecodable, err := s.getEntities(ctx, page.Ids, page.Revision)
 	if err != nil {
 		return nil, err
 	}
@@ -547,9 +547,7 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 }
 
 // getEntities reads entities in batches, leaving nil in the result for any id
-// that is absent. warnMissing is false for callers where a miss is expected
-// input rather than a surprise, such as the index sweep resolving ids read out
-// of the index itself.
+// that is absent. Callers decide whether a missing entity needs attention.
 //
 // A non-zero rev reads every key as of that revision instead of the latest.
 //
@@ -560,7 +558,6 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 func (s *EtcdStore) getEntities(
 	ctx context.Context,
 	ids []Id,
-	warnMissing bool,
 	rev int64,
 ) (entities []*Entity, undecodable map[Id]bool, err error) {
 	undecodable = map[Id]bool{}
@@ -615,9 +612,6 @@ func (s *EtcdStore) getEntities(
 			primaryResp := tr.Responses[primaryIdx].GetResponseRange()
 			if len(primaryResp.Kvs) == 0 {
 				// Entity not found, leave nil in the result array
-				if warnMissing {
-					s.log.Warn("failed to get primary entity from etcd", "id", batchIds[i])
-				}
 				continue
 			}
 
@@ -625,7 +619,7 @@ func (s *EtcdStore) getEntities(
 			err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
 			if err != nil {
 				// The key is there, so this entity exists; we just cannot read
-				// it. Always worth a line, whatever warnMissing says.
+				// it. Always worth a line even though missing keys are expected.
 				s.log.Error("failed to decode entity from etcd", "id", batchIds[i], "error", err)
 				undecodable[batchIds[i]] = true
 				continue

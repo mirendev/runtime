@@ -225,6 +225,13 @@ configs:
         env: MIREN_INGRESS_ADDRESS
         toml: address
 
+      error_page:
+        type: string
+        default: ""
+        description: "Path to the cluster-wide HTML error page template"
+        env: MIREN_INGRESS_ERROR_PAGE
+        toml: error_page
+
       trusted_proxy_hops:
         type: int
         default: 1

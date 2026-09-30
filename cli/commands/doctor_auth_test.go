@@ -26,7 +26,7 @@ func TestAuthenticationCheckTable(t *testing.T) {
 	}{
 		{
 			name:       "token with claims",
-			res:        authResult{Method: "token", IdentityName: "prod", Claims: &auth.ExtendedClaims{}},
+			res:        authResult{Method: "token", IdentityName: "prod", Claims: &auth.Claims{}},
 			wantStatus: checkOK,
 		},
 		{

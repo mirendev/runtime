@@ -235,10 +235,12 @@ miren app history -a myapp
 
 ```text
 STATUS  VERSION                              WHEN     DEPLOYED BY
-✓       myapp-vCVkjR6u7744AsMebwMjGU         2m ago   paul@miren.dev
-✓       myapp-vCVkjJSe4fydvxEHfhsKfA         1h ago   paul@miren.dev
-✗       myapp-vCVmuoeQCzjoNN9hGsu14c         3h ago   paul@miren.dev
+✓       myapp-vCVkjR6u7744AsMebwMjGU         2m ago   Paul Hinze
+✓       myapp-vCVkjJSe4fydvxEHfhsKfA         1h ago   github:acme/myapp@main
+✗       myapp-vCVmuoeQCzjoNN9hGsu14c         3h ago   Paul Hinze
 ```
+
+**Deployed by** shows the deployer's name from their Miren Cloud login, falling back to their email and then to the identity they authenticated as. Deploys from GitHub Actions show the repository and branch.
 
 Status icons:
 - **✓** — active (currently running) or succeeded

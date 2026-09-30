@@ -21,8 +21,9 @@ page as its reference.
 
 ## Does this source build need a Dockerfile?
 
-Yes. Miren doesn't auto-detect the BEAM yet, so add a `Dockerfile.miren` to your
-project root. Miren builds from it instead of guessing the stack — see
+Yes. Miren auto-detects Elixir's `mix.exs` but not Gleam projects yet, so add a
+`Dockerfile.miren` to your project root. Miren builds from it instead of guessing the
+stack — see
 [Using Dockerfile.miren](./index.md#using-dockerfilemiren).
 
 :::info[Validated pattern — adapt the versions]
@@ -35,7 +36,7 @@ the warning below the Dockerfile).
 :::
 
 :::tip[Want native support?]
-Miren auto-detects and builds common stacks (Python, Node, Bun, Go, Ruby, Rust)
+Miren auto-detects and builds [common stacks](./index.md#auto-detected-vs-dockerfile)
 without a Dockerfile. This language isn't one of them yet — if you'd like first-class
 support, [request it](https://linear.miren.garden/suggest).
 :::

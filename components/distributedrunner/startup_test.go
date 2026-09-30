@@ -43,6 +43,7 @@ func TestSandboxHostDoesNotStartAfterContainerdFailure(t *testing.T) {
 		boot.ResolvedOutput((*runner.NodeStorage)(nil)),
 		containerdOutput,
 		boot.ResolvedOutput(telemetryBootOutput{}),
+		boot.ResolvedOutput(runner.RunnerDeps{}),
 	)
 
 	graph := boot.NewGraph()

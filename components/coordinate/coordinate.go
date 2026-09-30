@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,14 +28,15 @@ type EtcdTLSConfig struct {
 }
 
 type CoordinatorConfig struct {
-	Address         string              `json:"address" yaml:"address"`
-	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
-	Prefix          string              `json:"prefix" yaml:"prefix"`
-	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
-	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
-	DataPath        string              `json:"data_path" yaml:"data_path"`
-	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
-	IPs             *IPSet              `json:"ips" yaml:"ips"`
+	Address               string              `json:"address" yaml:"address"`
+	CoordinatorInternalIP netip.Addr          `json:"-" yaml:"-"`
+	EtcdEndpoints         []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
+	Prefix                string              `json:"prefix" yaml:"prefix"`
+	Resolver              netresolve.Resolver `json:"resolver" yaml:"resolver"`
+	TempDir               string              `json:"temp_dir" yaml:"temp_dir"`
+	DataPath              string              `json:"data_path" yaml:"data_path"`
+	AdditionalNames       []string            `json:"additional_names" yaml:"additional_names"`
+	IPs                   *IPSet              `json:"ips" yaml:"ips"`
 
 	// ACME certificate configuration
 	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`

@@ -8,6 +8,22 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type PortProtocol string
+
+const (
+	PortProtocolTcp PortProtocol = "tcp"
+	PortProtocolUdp PortProtocol = "udp"
+)
+const (
+	PortProtocolTcpMemberId = entity.Id("dev.miren.compute/protocol.tcp")
+	PortProtocolUdpMemberId = entity.Id("dev.miren.compute/protocol.udp")
+)
+
+func initEnumMembers(sb *schema.SchemaBuilder) {
+	sb.Singleton("dev.miren.compute/protocol.tcp")
+	sb.Singleton("dev.miren.compute/protocol.udp")
+}
+
 const (
 	SandboxSpecContainerId           = entity.Id("dev.miren.compute/component.sandbox_spec.container")
 	SandboxSpecHostNetworkId         = entity.Id("dev.miren.compute/component.sandbox_spec.hostNetwork")
@@ -494,22 +510,22 @@ const (
 )
 
 type SandboxSpecContainerPort struct {
-	Name     string                           `cbor:"name" json:"name"`
-	NodePort int64                            `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64                            `cbor:"port" json:"port"`
-	Protocol SandboxSpecContainerPortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string                           `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type SandboxSpecContainerPortProtocol string
+type SandboxSpecContainerPortProtocol = PortProtocol
 
 const (
-	SandboxSpecContainerPortTCP SandboxSpecContainerPortProtocol = "component.sandbox_spec.container.port.protocol.tcp"
-	SandboxSpecContainerPortUDP SandboxSpecContainerPortProtocol = "component.sandbox_spec.container.port.protocol.udp"
+	SandboxSpecContainerPortTCP PortProtocol = PortProtocolTcp
+	SandboxSpecContainerPortUDP PortProtocol = PortProtocolUdp
 )
 
-var SandboxSpecContainerPortprotocolFromId = map[entity.Id]SandboxSpecContainerPortProtocol{SandboxSpecContainerPortProtocolTcpId: SandboxSpecContainerPortTCP, SandboxSpecContainerPortProtocolUdpId: SandboxSpecContainerPortUDP}
-var SandboxSpecContainerPortprotocolToId = map[SandboxSpecContainerPortProtocol]entity.Id{SandboxSpecContainerPortTCP: SandboxSpecContainerPortProtocolTcpId, SandboxSpecContainerPortUDP: SandboxSpecContainerPortProtocolUdpId}
+var SandboxSpecContainerPortProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, SandboxSpecContainerPortProtocolTcpId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp, SandboxSpecContainerPortProtocolUdpId: PortProtocolUdp}
+var SandboxSpecContainerPortProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("component.sandbox_spec.container.port.protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("component.sandbox_spec.container.port.protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SandboxSpecContainerPortNameId); ok && a.Value.Kind() == entity.KindString {
@@ -522,7 +538,7 @@ func (o *SandboxSpecContainerPort) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(SandboxSpecContainerPortProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = SandboxSpecContainerPortprotocolFromId[a.Value.Id()]
+		o.Protocol = SandboxSpecContainerPortProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(SandboxSpecContainerPortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -537,7 +553,7 @@ func (o *SandboxSpecContainerPort) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(SandboxSpecContainerPortNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(SandboxSpecContainerPortPortId, o.Port))
-	if a, ok := SandboxSpecContainerPortprotocolToId[o.Protocol]; ok {
+	if a, ok := SandboxSpecContainerPortProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(SandboxSpecContainerPortProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -566,12 +582,11 @@ func (o *SandboxSpecContainerPort) Empty() bool {
 }
 
 func (o *SandboxSpecContainerPort) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.compute/component.sandbox_spec.container.port.name", schema.Doc("Port name"), schema.Required)
 	sb.Int64("node_port", "dev.miren.compute/component.sandbox_spec.container.port.node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
 	sb.Int64("port", "dev.miren.compute/component.sandbox_spec.container.port.port", schema.Doc("Port number"), schema.Required)
-	sb.Singleton("dev.miren.compute/component.sandbox_spec.container.port.protocol.tcp")
-	sb.Singleton("dev.miren.compute/component.sandbox_spec.container.port.protocol.udp")
-	sb.Ref("protocol", "dev.miren.compute/component.sandbox_spec.container.port.protocol", schema.Doc("Port protocol"), schema.Choices(SandboxSpecContainerPortProtocolTcpId, SandboxSpecContainerPortProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.compute/component.sandbox_spec.container.port.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId}, schema.Doc("Port protocol"))
 	sb.String("type", "dev.miren.compute/component.sandbox_spec.container.port.type", schema.Doc("High-level port type (e.g., http)"))
 }
 
@@ -1075,50 +1090,64 @@ func (o *Node) InitSchema(sb *schema.SchemaBuilder) {
 }
 
 const (
-	SandboxActivityId       = entity.Id("dev.miren.compute/sandbox.activity")
-	SandboxBoundPortId      = entity.Id("dev.miren.compute/sandbox.bound_port")
-	SandboxContainerId      = entity.Id("dev.miren.compute/sandbox.container")
-	SandboxExitId           = entity.Id("dev.miren.compute/sandbox.exit")
-	SandboxHostNetworkId    = entity.Id("dev.miren.compute/sandbox.hostNetwork")
-	SandboxLabelsId         = entity.Id("dev.miren.compute/sandbox.labels")
-	SandboxLastActivityId   = entity.Id("dev.miren.compute/sandbox.last_activity")
-	SandboxLogAttributeId   = entity.Id("dev.miren.compute/sandbox.logAttribute")
-	SandboxLogEntityId      = entity.Id("dev.miren.compute/sandbox.logEntity")
-	SandboxNetworkId        = entity.Id("dev.miren.compute/sandbox.network")
-	SandboxRouteId          = entity.Id("dev.miren.compute/sandbox.route")
-	SandboxSessionInfoId    = entity.Id("dev.miren.compute/sandbox.session_info")
-	SandboxShutdownAtId     = entity.Id("dev.miren.compute/sandbox.shutdown_at")
-	SandboxSpecId           = entity.Id("dev.miren.compute/sandbox.spec")
-	SandboxStaticHostId     = entity.Id("dev.miren.compute/sandbox.static_host")
-	SandboxStatusId         = entity.Id("dev.miren.compute/sandbox.status")
-	SandboxStatusPendingId  = entity.Id("dev.miren.compute/status.pending")
-	SandboxStatusNotReadyId = entity.Id("dev.miren.compute/status.not_ready")
-	SandboxStatusRunningId  = entity.Id("dev.miren.compute/status.running")
-	SandboxStatusStoppedId  = entity.Id("dev.miren.compute/status.stopped")
-	SandboxStatusDeadId     = entity.Id("dev.miren.compute/status.dead")
-	SandboxVolumeId         = entity.Id("dev.miren.compute/sandbox.volume")
+	SandboxActivityId                     = entity.Id("dev.miren.compute/sandbox.activity")
+	SandboxBoundPortId                    = entity.Id("dev.miren.compute/sandbox.bound_port")
+	SandboxContainerId                    = entity.Id("dev.miren.compute/sandbox.container")
+	SandboxExitId                         = entity.Id("dev.miren.compute/sandbox.exit")
+	SandboxHostNetworkId                  = entity.Id("dev.miren.compute/sandbox.hostNetwork")
+	SandboxLabelsId                       = entity.Id("dev.miren.compute/sandbox.labels")
+	SandboxLastActivityId                 = entity.Id("dev.miren.compute/sandbox.last_activity")
+	SandboxLogAttributeId                 = entity.Id("dev.miren.compute/sandbox.logAttribute")
+	SandboxLogEntityId                    = entity.Id("dev.miren.compute/sandbox.logEntity")
+	SandboxNetworkId                      = entity.Id("dev.miren.compute/sandbox.network")
+	SandboxRouteId                        = entity.Id("dev.miren.compute/sandbox.route")
+	SandboxSessionInfoId                  = entity.Id("dev.miren.compute/sandbox.session_info")
+	SandboxShutdownAtId                   = entity.Id("dev.miren.compute/sandbox.shutdown_at")
+	SandboxSpecId                         = entity.Id("dev.miren.compute/sandbox.spec")
+	SandboxStartupOutcomeId               = entity.Id("dev.miren.compute/sandbox.startup_outcome")
+	SandboxStartupOutcomeStartupRunningId = entity.Id("dev.miren.compute/startup_outcome.startup_running")
+	SandboxStartupOutcomeStartupFailedId  = entity.Id("dev.miren.compute/startup_outcome.startup_failed")
+	SandboxStaticHostId                   = entity.Id("dev.miren.compute/sandbox.static_host")
+	SandboxStatusId                       = entity.Id("dev.miren.compute/sandbox.status")
+	SandboxStatusPendingId                = entity.Id("dev.miren.compute/status.pending")
+	SandboxStatusNotReadyId               = entity.Id("dev.miren.compute/status.not_ready")
+	SandboxStatusRunningId                = entity.Id("dev.miren.compute/status.running")
+	SandboxStatusStoppedId                = entity.Id("dev.miren.compute/status.stopped")
+	SandboxStatusDeadId                   = entity.Id("dev.miren.compute/status.dead")
+	SandboxVolumeId                       = entity.Id("dev.miren.compute/sandbox.volume")
 )
 
 type Sandbox struct {
-	ID           entity.Id     `json:"id"`
-	Activity     Activity      `cbor:"activity,omitempty" json:"activity"`
-	BoundPort    []BoundPort   `cbor:"bound_port,omitempty" json:"bound_port,omitempty"`
-	Container    []Container   `cbor:"container" json:"container"`
-	Exit         Exit          `cbor:"exit,omitempty" json:"exit"`
-	HostNetwork  bool          `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
-	Labels       []string      `cbor:"labels,omitempty" json:"labels,omitempty"`
-	LastActivity time.Time     `cbor:"last_activity,omitempty" json:"last_activity"`
-	LogAttribute types.Labels  `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
-	LogEntity    string        `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
-	Network      []Network     `cbor:"network,omitempty" json:"network,omitempty"`
-	Route        []Route       `cbor:"route,omitempty" json:"route,omitempty"`
-	SessionInfo  SessionInfo   `cbor:"session_info,omitempty" json:"session_info"`
-	ShutdownAt   time.Time     `cbor:"shutdown_at,omitempty" json:"shutdown_at"`
-	Spec         SandboxSpec   `cbor:"spec,omitempty" json:"spec"`
-	StaticHost   []StaticHost  `cbor:"static_host,omitempty" json:"static_host,omitempty"`
-	Status       SandboxStatus `cbor:"status,omitempty" json:"status,omitempty"`
-	Volume       []Volume      `cbor:"volume,omitempty" json:"volume,omitempty"`
+	ID             entity.Id             `json:"id"`
+	Activity       Activity              `cbor:"activity,omitempty" json:"activity"`
+	BoundPort      []BoundPort           `cbor:"bound_port,omitempty" json:"bound_port,omitempty"`
+	Container      []Container           `cbor:"container" json:"container"`
+	Exit           Exit                  `cbor:"exit,omitempty" json:"exit"`
+	HostNetwork    bool                  `cbor:"hostNetwork,omitempty" json:"hostNetwork,omitempty"`
+	Labels         []string              `cbor:"labels,omitempty" json:"labels,omitempty"`
+	LastActivity   time.Time             `cbor:"last_activity,omitempty" json:"last_activity"`
+	LogAttribute   types.Labels          `cbor:"logAttribute,omitempty" json:"logAttribute,omitempty"`
+	LogEntity      string                `cbor:"logEntity,omitempty" json:"logEntity,omitempty"`
+	Network        []Network             `cbor:"network,omitempty" json:"network,omitempty"`
+	Route          []Route               `cbor:"route,omitempty" json:"route,omitempty"`
+	SessionInfo    SessionInfo           `cbor:"session_info,omitempty" json:"session_info"`
+	ShutdownAt     time.Time             `cbor:"shutdown_at,omitempty" json:"shutdown_at"`
+	Spec           SandboxSpec           `cbor:"spec,omitempty" json:"spec"`
+	StartupOutcome SandboxStartupOutcome `cbor:"startup_outcome,omitempty" json:"startup_outcome,omitempty"`
+	StaticHost     []StaticHost          `cbor:"static_host,omitempty" json:"static_host,omitempty"`
+	Status         SandboxStatus         `cbor:"status,omitempty" json:"status,omitempty"`
+	Volume         []Volume              `cbor:"volume,omitempty" json:"volume,omitempty"`
 }
+
+type SandboxStartupOutcome string
+
+const (
+	STARTUP_RUNNING SandboxStartupOutcome = "startup_outcome.startup_running"
+	STARTUP_FAILED  SandboxStartupOutcome = "startup_outcome.startup_failed"
+)
+
+var sandboxstartup_outcomeFromId = map[entity.Id]SandboxStartupOutcome{SandboxStartupOutcomeStartupRunningId: STARTUP_RUNNING, SandboxStartupOutcomeStartupFailedId: STARTUP_FAILED}
+var sandboxstartup_outcomeToId = map[SandboxStartupOutcome]entity.Id{STARTUP_RUNNING: SandboxStartupOutcomeStartupRunningId, STARTUP_FAILED: SandboxStartupOutcomeStartupFailedId}
 
 type SandboxStatus string
 
@@ -1197,6 +1226,9 @@ func (o *Sandbox) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(SandboxSpecId); ok && a.Value.Kind() == entity.KindComponent {
 		o.Spec.Decode(a.Value.Component())
 	}
+	if a, ok := e.Get(SandboxStartupOutcomeId); ok && a.Value.Kind() == entity.KindId {
+		o.StartupOutcome = sandboxstartup_outcomeFromId[a.Value.Id()]
+	}
 	for _, a := range e.GetAll(SandboxStaticHostId) {
 		if a.Value.Kind() == entity.KindComponent {
 			var v StaticHost
@@ -1273,6 +1305,9 @@ func (o *Sandbox) Encode() (attrs []entity.Attr) {
 	if !o.Spec.Empty() {
 		attrs = append(attrs, entity.Component(SandboxSpecId, o.Spec.Encode()))
 	}
+	if a, ok := sandboxstartup_outcomeToId[o.StartupOutcome]; ok {
+		attrs = append(attrs, entity.Ref(SandboxStartupOutcomeId, a))
+	}
 	for _, v := range o.StaticHost {
 		attrs = append(attrs, entity.Component(SandboxStaticHostId, v.Encode()))
 	}
@@ -1329,6 +1364,9 @@ func (o *Sandbox) Empty() bool {
 	if !o.Spec.Empty() {
 		return false
 	}
+	if o.StartupOutcome != "" {
+		return false
+	}
 	if len(o.StaticHost) != 0 {
 		return false
 	}
@@ -1363,6 +1401,9 @@ func (o *Sandbox) InitSchema(sb *schema.SchemaBuilder) {
 	(&SessionInfo{}).InitSchema(sb.Builder("sandbox.session_info"))
 	sb.Time("shutdown_at", "dev.miren.compute/sandbox.shutdown_at", schema.Doc("Session-initiated drain deadline; workloads should stop accepting work before this time"))
 	sb.Component("spec", "dev.miren.compute/sandbox.spec", schema.Doc("Immutable sandbox configuration"))
+	sb.Singleton("dev.miren.compute/startup_outcome.startup_running")
+	sb.Singleton("dev.miren.compute/startup_outcome.startup_failed")
+	sb.Ref("startup_outcome", "dev.miren.compute/sandbox.startup_outcome", schema.Doc("Durable distinction between a sandbox that reached RUNNING and one that failed before then"), schema.Choices(SandboxStartupOutcomeStartupRunningId, SandboxStartupOutcomeStartupFailedId))
 	sb.Component("static_host", "dev.miren.compute/sandbox.static_host", schema.Doc("A name to ip mapping configured staticly for the sandbox"), schema.Many)
 	(&StaticHost{}).InitSchema(sb.Builder("sandbox.static_host"))
 	sb.Singleton("dev.miren.compute/status.pending")
@@ -1769,8 +1810,8 @@ const (
 	PortNodePortId    = entity.Id("dev.miren.compute/port.node_port")
 	PortPortId        = entity.Id("dev.miren.compute/port.port")
 	PortProtocolId    = entity.Id("dev.miren.compute/port.protocol")
-	PortProtocolTcpId = entity.Id("dev.miren.compute/protocol.tcp")
-	PortProtocolUdpId = entity.Id("dev.miren.compute/protocol.udp")
+	PortProtocolTcpId = PortProtocolTcpMemberId
+	PortProtocolUdpId = PortProtocolUdpMemberId
 	PortTypeId        = entity.Id("dev.miren.compute/port.type")
 )
 
@@ -1782,15 +1823,13 @@ type Port struct {
 	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type PortProtocol string
-
 const (
-	TCP PortProtocol = "protocol.tcp"
-	UDP PortProtocol = "protocol.udp"
+	TCP PortProtocol = PortProtocolTcp
+	UDP PortProtocol = PortProtocolUdp
 )
 
-var PortprotocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpId: TCP, PortProtocolUdpId: UDP}
-var PortprotocolToId = map[PortProtocol]entity.Id{TCP: PortProtocolTcpId, UDP: PortProtocolUdpId}
+var PortProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp}
+var PortProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *Port) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(PortNameId); ok && a.Value.Kind() == entity.KindString {
@@ -1803,7 +1842,7 @@ func (o *Port) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(PortProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = PortprotocolFromId[a.Value.Id()]
+		o.Protocol = PortProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(PortTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -1818,7 +1857,7 @@ func (o *Port) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(PortNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(PortPortId, o.Port))
-	if a, ok := PortprotocolToId[o.Protocol]; ok {
+	if a, ok := PortProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -1847,12 +1886,11 @@ func (o *Port) Empty() bool {
 }
 
 func (o *Port) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.compute/port.name", schema.Doc("Name of the port for reference"), schema.Required)
 	sb.Int64("node_port", "dev.miren.compute/port.node_port", schema.Doc("The port number that should be forwarded from the node to the container"))
 	sb.Int64("port", "dev.miren.compute/port.port", schema.Doc("Port number"), schema.Required)
-	sb.Singleton("dev.miren.compute/protocol.tcp")
-	sb.Singleton("dev.miren.compute/protocol.udp")
-	sb.Ref("protocol", "dev.miren.compute/port.protocol", schema.Doc("Port protocol"), schema.Choices(PortProtocolTcpId, PortProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.compute/port.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId}, schema.Doc("Port protocol"))
 	sb.String("type", "dev.miren.compute/port.type", schema.Doc("The highlevel type of the port"))
 }
 
@@ -2363,12 +2401,12 @@ func (o *SandboxPool) Empty() bool {
 
 func (o *SandboxPool) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Ref("app", "dev.miren.compute/sandbox_pool.app", schema.Doc("Reference to the app this pool belongs to"), schema.Indexed, schema.Tags("dev.miren.app_ref"))
-	sb.Int64("consecutive_crash_count", "dev.miren.compute/sandbox_pool.consecutive_crash_count", schema.Doc("Number of consecutive quick crashes (sandboxes that died within 60s of creation)"))
+	sb.Int64("consecutive_crash_count", "dev.miren.compute/sandbox_pool.consecutive_crash_count", schema.Doc("Number of consecutive sandbox failures, including quick crashes after RUNNING"))
 	sb.Time("cooldown_until", "dev.miren.compute/sandbox_pool.cooldown_until", schema.Doc("Timestamp until which new sandbox creation is paused due to crash loop"))
 	sb.Int64("current_instances", "dev.miren.compute/sandbox_pool.current_instances", schema.Doc("Current number of sandbox instances (non-STOPPED)"))
 	sb.Int64("desired_instances", "dev.miren.compute/sandbox_pool.desired_instances", schema.Doc("Target number of sandbox instances"))
 	sb.Bool("ephemeral", "dev.miren.compute/sandbox_pool.ephemeral", schema.Doc("True when this pool backs an ephemeral AppVersion. Ephemeral pools never scale beyond 1 instance."))
-	sb.Time("last_crash_time", "dev.miren.compute/sandbox_pool.last_crash_time", schema.Doc("Timestamp of the most recent quick crash"))
+	sb.Time("last_crash_time", "dev.miren.compute/sandbox_pool.last_crash_time", schema.Doc("Timestamp of the most recently counted sandbox failure"))
 	sb.Int64("ready_instances", "dev.miren.compute/sandbox_pool.ready_instances", schema.Doc("Number of RUNNING sandboxes"))
 	sb.Ref("referenced_by_versions", "dev.miren.compute/sandbox_pool.referenced_by_versions", schema.Doc("AppVersions that reference this pool (enables reuse when specs match)"), schema.Many, schema.Indexed)
 	sb.Label("sandbox_labels", "dev.miren.compute/sandbox_pool.sandbox_labels", schema.Doc("Labels that will be added to the metadata of sandboxes created from this pool"), schema.Many)
@@ -2553,5 +2591,5 @@ func init() {
 		(&SandboxTeardown{}).InitSchema(sb)
 		(&Schedule{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\ۮ\xf3:\x11~\r6\x87\xcd\xf9\f\xf9\x01q\x16\xa7-\xe0\x96W\x88\xdcx\x9az5\xb5\xb3l\xa7\xab\xe5\x0e\x10\x12B\x80\xc4+\xf0\xaf\xb5\xdf\x10\xae\x91O\x89\x9d؉\x93\"q\x93\x9b\xcav=\x9f\xed\xf1xf<\x99\xe4\x15St\x81g\f\xd7\xe2B8Тb\x97\xb6\x93\x00gB\xb1\xf8\xf8\xf6\xa9\xc9?\xef\xd4?\x05e\x18>ִ\xd7i\x0f\xf5\xa7\x01\xf8\xcf\x11\xb3\v\"t:\xc0\xf1H\xa0\xc1\xe2/\xef\x0f\x04߾\x10\xc7(PKJ\x841\a!\xf4Xg\xbfA\xde[8\n\xc9\t\xad_\xe7@*F\x85\xe4\x88P)\xf0\x05\xd1\xfb\xbf\r\x94߬\xa0\xa0A\ah\xf4t\"\x8b\xd6H\x8a\x0e\x0f?\xde\x044ٗ\x12d\x1cj\"$p\xc0%\x92\x9a\xf4\x126) ,\xc9\x054\xcc\xe7R0\x1d\xa5\xc0K\x825\x04\x19\xaacF|>\x01 \xaa\x13\xe0\xae!\xb4\xd6\bO^]\xcf\x00hw9\xab\x9f\xf2\x8a\x9a\x0eĿN\x15\xe3\x98Q\xc0\xb7/O!\a\xea\xc2u;\xdb6th\xe0\xf6\xb5Y\x12\xaf\xa7\x9e\xf3gRs\x96Hvf\xf3\x8f\xb6\x1c\x9d\xeb+p@\xf8~\xfb02\xaa&+\xf4\xffuGϔ\xbd\xd0\x18\x93m?\xdbㄉP\xb3\x8b\xb2\xd3vu]HGO\x80\x1ay\xbaǄ\xb0ǵ}\xf4&G\xe6\xa9\xd7{\x05.\b\xa3z\xc1\xb5\xabx\x1b\xec\xda\xea\xebwQӞP\xd3rrA\xfc^\xaa\xe3\x86\x15\xc4\xedӉ#\xdb\x00\x12\xf6̾L\xbb\xe8\x7f3\x0f\xed\x9f\xf4\x12\xbe\x92\x00)\x1a$dy\x02\xc4\xe5\x01\xac\xc0\xd3Q[(\xf1\x9fM!\xb5\x9c=Ae jWQ\xb4\a\x82\xe7)\x05\xa2\xf8\xc0n\x86\xd2U,\xe5,\x0fA\xd3\xc7\xf6G3\xd1B\x196\xde>\x88\xec\xb6\xe9\x90\xc9\xc9\x7f\xa64\x97\x85)P%ɕȻ\x1e\xef\xd4\xd7\xd4J\x88\xea\xcb(P9\x94켦\x80\xc5\x180s\x82\x7fLm\xb5\xc3)8\xb4\x8c\xcbA\xb7\x9d\xfd\x86~\x9f_\x13\x9a\xad\x87Q\xa7\xc4\xe8U0ŸJ\xc2\x047Q\x11\xd7D\x85\xfa\xf7\xa81\xa3[h:\x99\xffg\xa5\xa0\xe7\xf4[B\xb1;v\x1eXGq\xa9\x16\xecٖ'\xafua\xa7\xa6\xd0\xc5\x14z\xd5^E&; \x15\xbe5\xad#\x96\xf4}\u0080x\x10zY\xda\x00\xf6\v\xac\b\x95\xb3\xfc$\x9a^\xf5\xd7\f\xfdb\x9a\xa1\x15\xa3\x12\x11\n\xdc\xe3'\x19\x1a\x17\xd89\x05.&\xc0\x99\xdc\xfc\xfb\xfb\xc4L{ \xd5rA\xd4\xd8\xe3\xdaU<f\xea\xb5~u\x1e\x81\x1eI]\x1eI\x03#ߤo^X\xf1\xbb\x8c\x15\xfbìR\xf1\x11\xc5\xe4A\x15\x18Id$A\x97\xc6b\xb4@}a\xd8:R\xba\xb4\x92\xbaE\xf2d\xa5P\x95rM\xe4\x93\xc1P\x10z\x94\x88c3\xb0\r\x13\x0e\x95d\xdch_2T\xc7\x1eW\xc4\f\r(@\xaf\xde\xdeV\xaa\x9aq\xe0\x06zrA\xb5Ռ\xa68\x96\xb0Y\xea\v먯\x9b\xc04,H\xd5\xd7s\xa4J#\xad\xd2M\x91ӤA\n\fB\x12\x8a\xa4s}\xce~Ø[\x11\xc5nP\x04\xebx\x05\xd6Y4\xe5\\\xb90lI\xf9\xdfÚ\x17\xae\x00\xb3\xe2\xc4إ\x14\x15㆖\fU\xa7B\xdf\x16\x87\x1f\x19\x1a\x9ccb\xa6\x8exd/W\x98\x99?\xa7\xeeH\xda:,0(\xb2:C\xc60\x94\xbde!C\xd5\xf1fvЄIJ\x9dMCÙd\x15k\x8cg\xd5\xd7\xe2nG%\xab6&w\x8e\xac\x90U[ux\xbeO\x87\xdb\xd9U\xe8\xa1{\xae\xe5{\xfd\x8a8\xe5\xa6y;\xccɕ4P\x83\xb1WO^]\x0fw`\xcc\xdc~\xbf5\x87\"N\x9d\xc4셖ʩc\x9d\xe1z;i]\xa5\xe0\x84Ą:\xd7O\x15\xc3\xf9\xcc*Wi]\xe3JZ\xafX\xd3\xcd\xfb\"=\xf5kB\x9b\xb8\xe3\x017b\xc5J\x97\x16\xce\xd9\x14\xa8\xf0\x81V\x19\xde\xc8\xc5Ba\x14\xd6\xc7>L\xaeP\x11\x99\xd2\x04Uod+gd\xfb\xd3\x149\x8b\x96\xc6y[\x11\xe7+K\"\x15LJ\x1f:\x9e\x9c\x98\x90\xbf\x03\xf9\xc2\xf8٨|\xbf\xa1\xdf\xc9Խ\xc1\xa1蠍\x1f\xd79ږ\xb1\x04Fܰ\x01C\xc82\xb8h]¦\xf0\x16\x139e=\x12\xab?\x92\x92\x93C'}\x7f\xae\t\xdaG\xc1\xa6\x19_\xb8a\xf5o\xa9t\x93\"C5\xc3\x03p\x18\xd4rt\x98MM=&\xcf\xc8\xf3\x14\xb4\x18\x81\xae\xb2\xfd\xb1\xa8\x94\x81ɻ\x94\xc4\xc2b\x96^t\a\n\xd2\xda}S\xce\x15Uǌ\xb7\x84\xa6q+\xe6,\xdcR0\r\v,\x9c\x02\x16\x01\xe0\xa3Γ\x06Y\xe7<E\xd6hPj$\xe1\x05\x19Q\xab]%\xdb}\xd2\x18K\xc7C\x80P\b%\xa1Gf\x0eFв\xc0\xcc)p\x11\x03^\xe5\xc5Ĵ\x82\x87UT\xa8EU\x1f~\xe9k\x81\x1a\x9d\xfa\xca#\x8c\x86\tBk\x17\x1fy\xf2\xea\xa1\x0e\x8f\x85\x19| hYe\xee<`\x8a\xc14\x96\xa8kκ\xd6P\x9bbF\xf8:\x00`/\xce$\x80)\xe6\x84\xd3\xce\x16B!,Y\x84ދp\x91$\xbf!\xd4\xc13F[\xb4P\x19\x8b\xa7K\xab\x9d\xe3w}\x17'^\xa5\x02\xca\x14\xab\xbfjE\xf2\xbd\\\xd4\a\xc3\x1d\xd3q\x8a\xa5q2\xd7\xf1\x0f\xcd\xe6\x1f\xad_G\x81x\xed\xdbc\xac\xebcY\xfb\xe9\x06\xe0\xach\xcb/6\x01?\x1a\x84\x99\x8e\xba\xb8\x0f\x9bc2\xbf~l\x85KA\x9bG\xe1\x17\xa2:\x8f\xc2o\f\xfb\xdc>\xb4\xd8\n\xbaG\x1eł~\xb6an\xd9!\xa2\x1fn\x00ψ\x1c\xfdx\x03\xecb@i\v\xe8\xb68\xd3t\xa4僳>\xec\xf4\x9b\xad\xebY\xe7Z\xfdr\xf30\x0f\x04\xaen\x1f\xc4${\x88fmQ\xe1\v1\x9c-\xe7$/\xf6\xb5e\xb2[Bb\xd3q\x96\xc5nu\x84l\v\x9brBh\x1fm\xc6͊\xb1m\x9e\xf6\\\x10\xeeW\x9bAWG\xe9\xb6\x1c\xf6`\xa8>\x96\xf78\x92\x8b\xf8m\xe6\xe9Ɛ\xe0\xed\x131\xa5\xd0\xc7\t\x7f\xbee:\xb9\xe1\xc3-\x16~cTq\x8b\x9dZ\b6n1\xd3\x1bb\x902\xb6?z\x02\xdfϞ\xc0\x8a\x00\xda\x0f\xb2A\xb7D\xb0\xf2o;9\x01\xad\x95\xf7\x03%\xd4\xe5\v\"2\x90\x9d\xe7i\xf3\xd8!˷5\x1c\x84D\\\x96-kHe\xa6NGmq}\x04\x14\xae\xc0W\x1c\xb7\x10\xb5\xd0\xe4GԼ\xa0\xbbXq\xb3\x19\xa1\x18zm_\x8b|\x8cM\xf1\xae)~ʮ\xae\x0f\x7f\xe5\x8bĆ\xa8X\xfe\xb1\xff\x1f\x04\xcbZ\xef\xf0k\xb8\xb7u\a_H$IU\xaa\xe3\xee\xdfW\xfd\xe6\x85}\x9a\x8e\x95\xda'\x0ft\xd5n\xfdd\xcbj\xb4J3\xe6\xae_\x85\xbfK\xf9G\xd6\a%&\xeau m\xf6\x0eu\xde\x0e\x19(\x85\xa4\xe7\xf0\x9d\xec9$S\xf9\x0e\x04\xeb\x1d\x9f\xa6n$\xa1X\xd3]\xfc\xe3x\xb4-\xeb\x93CfG\xc8\xdc\u2fed\xdc\r\x03^\xe0\x83\t\xa6h\x86\xb8\xcax\x8f\xf3\x05ǡ\x12q.{o\x99\f\xd5\xed6\xc5\"\xab\xf9\x89\xbb\x90p1.\x8fW\xdf~\xbb\xb7سϭ<ۚo;\x1c0 \x01\x81-\xbc\x84M\x0f\xb3E\xdf-\xcb>\x10\xf3\xe4\xd5\xc7\xd8\xf9:\xcdb/\\}\xf2\xfd\x18\x8b\x17\x8dYos!-b\xcbٕ`\vz\xeak\x0f\x8b1\a\x84KF\x1b\xeb\x1a\r\xd5\xd0?]}\xe8\x04\xf9=\x94\xf5\xc1&\xc2\xdaJp\xe1[=U\xf1\xdc\x10\t}\"\xfaP\xcdU\xafϞz5\x98\xb3\xdd\x1b\x7f\x12oK\x0f\x11\x1e6\x8eS\xf0\"\x02\xbe\xca\x1a&\xb2\xc23\xcd^\"W\xfd\x01\xfb\xf64\x18\xb5\xa5\a\xec\xb9\t\xf8o\x18\x03\x8a\xe6\xf1\xbbdy@\xb8n\x81bB\xeb\x99\xf4{ۣ\xe6\x1d\xa5\xf3=m\x8fZHֶ\x90dS'\nۃP&K\xf3\x9a@:M\xbf\xef\x93J\xc6r\x8c\xd9j\x93\xa7\x90E\b\x99\xfb4 \x95ݴ\xd2\xc2Dv,O\x19G\x1e\xe8g\xeb\xc8Y\xe9<f\xe8\x04\x97\xd3\x1fc\x80I\xd47/\x98\xd8\x17\x1en\x9f\x8cl\xa4\xed\x91\xc9\xef?$\x1f<Z\x9c\xe2\f6\x0e\xa0\n\x1b\x92\x85<\x9cU\xda%\xb2\xb63\xdc\v\xf3F\x88\xda9]\xf2_\x9bHP\xd0\xfe\xd9\ru\xcfn\x96\x9e蝹\xcegһe\xc5\xf2\x17\xfcW*ʖ\xb1&ɝw~\xafU\x19\xdc\xe9\x97+4V\x81Z\xa3?+U\xf0\x99\x14\xf1\xe9\x02\u008aQ\x01U'\xc9\x15ʊ#q*+\xfd\xc8C\x81\xbd\xa4\xfe\f,\xef\xb7\x17G`\x8d\x0e\x80uT\x12\x13\x02\xa5\xa3\xb60\x83 r9\t\x01;\u0381ʒP!\x11\xad\xc0\xe8\xf5\xe7is0\xcd%T\f\x82p\xc0c\xd4is\x80\x1a{?\xccG\x85\xf6\x04\x17\xe0Ȭ\x9b\f\xd5\xd0!\x8a\x844\x02\x18\x9d\xc9ev@\xb1I\x83\xb1qc\xc8\xc5%Hm\x1eF\xabe\xe3\xc6 \xfc\x1d\xf1[G\x88G\xe0@+\xc0\xe5\xe1^\xda\xe3\xe4\xeb\xeek\xa2\x87\x95\xd7\xd7\x1cir\x95\x89a\xa0\xa3\x7fF\x06\"\x17\xb7\xe5p$\xb7\x10Ѷ\x8d\xafK\xdf̄\xecs9\x02\x17p\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8e=\xa7c\xcf\xe9\xd8s:\xf6\x9c\x8eL\xc8\xffgNG\xea\xe3\x15\xe13\x01\xe0Wb\x03*\xb5\xab\xe4ή\xf1\xa1bo\xfd\x06O\"% \xae.)ɯ\xa9\xbd\x1b\xf7\\eG\xbf\xb1\x8c\xe7\xa6bWk+c\x81\xcc\x022\xef\xdf:\xb6\x89U\x1f\x14l\xc7p\xe3\xdegqRN\xb9\xf9X\xa8\xf9\xfc\xe0\xdc\x17C\xed\xc7\xf5f\xbfP\xd8?\xd9_\xf8\x04\xdf\xf0`y)\x05 \xdc\xfc\x9c\xc7Гug\x8b\xcc\x7f\x01\x00\x00\xff\xff\x01\x00\x00\xff\xff%K\x9c\xc1PU\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.compute", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\\˲\xeb:\xd1~\x8d\xff\xfc\xc0\xe1~\ao\x0eŽ\xb8\x9d\x02\xa6\xbc\x82K\xb1:\x8eV\x1c\xc9[\x92\xb3\x12f\a\x8a*\x8a\x02\x06<\x02{\xad\xfd\x860\xa6t\xb3%[\xb2e\xe7\f\x18x\x92\xb2\x14\xf5'\xa9\xd5\xean\xb5[~\xc1\x14]\xe0-\x86kq!\x1chQ\xb1K\xdbI\x803\xa1X\xbc\xbf}f\xf2\xcf\x1b\xf5OA\x19\x86\xf7\x9a\xf6:m\xa1\xfe4\x00\xff9bvA\x84N;8\x1e\t4X\xfc\xe5݁\xe0ۗ\xe2\x18\x05jI\x890\xe6 \x84\xee\xeb\xecW\xc8{\vG!9\xa1\xf5\xcb\x1cHŨ\x90\x1c\x11*\x05\xbe z\xff\xb7\x81\xf2\xab\x15\x144\xe8\x00\x8d\x1eNd\xd2\x1aI\xd1\xe1\xe1\xc7\x1b\x80&\xfbJ\x82\x8cCM\x84\x04\x0e\xb8DR\x93^\xc2*\x05\x84%\xb9\x80\x86\xf9B\n\xa6\xa3\x14xI\xb0\x86 Cq̈/&\x00Du\x02\xdc5\x84\xd6\x1a\xe1\xc9+\xeb\x11\x00\xed.g\xf5S^QӁ\xf8שb\x1c3\n\xf8\xf6\xd5)\xe4@]\xb8fg[\x87\x0e\rܾ1K\xe2\xb5\xd4c\xfe\\j\xcc\x12\xc9\xce,\xfe\xd1>G\xc7\xfa\x02\x1c\x10\xbe\xdf>\x8c\xf4\xaa\xc9\n\xfd\x7f\xdd\xd13e\xcf4\xc6d\xdbζ8a\"\xd4\xe8\xa2\xec\xb4M]\x13\xd2\xd1\x13\xa0F\x9e\xee1!\xecqm\x1b\xbdȑq\xea\xf9^\x81\v¨\x9ep\xed\n\xde\x02\xbb\xba\xfa\xfa\x11j\xda\x13jZN.\x88\xdfK\xb5ݰ\x82\xb8}6\xb1e\x1b@\xc2\xee\xd9\xe7i\x13\xfdo\xe6\xa6\xfd\x93\x9e\xc2\xd7\x12 E\x83\x84,O\x80\xb8<\x80\x15x:\xaa\v%\xfe\xf3)\xa4\x96\xb3'\xa8\fD\xed\n\x8a\xf6@\xf0<\xa5@\x14\x1f\xd8\xcdP\xba\x82\xa5\x9c\xe5!h\xfa\xd8\xfah&Z(\xc3\xc6\xdb\a\x91\xd56\r29\xf9ϔ\xe6\xb20\x05\xaa$\xb9\x12y\xd7\xfd\x9d\xfa\x92\x9a\tQm\x19\x05*\x87';\xae)`1\x06\xcc\x1c\xe0\x1fSK\xedp\n\x0e-\xe3r\xd0mg\xbf\xa2_痄f\xeba\xd4.1z\x15\xccc\\%a\x82\x9b\xa8\x88k\xa2B\xfd{Ԙ\xd1%4\x8d\xcc\xff\xb3R\xd0s\xfa5\xa1\xd8\x1d;\x0f\xac\xa3\xb8T\x13\xf6l˓W\xbb\xb0RS\xe8b\n\xbdj\xad\"\x83\x1d\x90\nߚ\xd6\x11K\xfa.a@<\b=-m\x00\xfb\tV\x84\xcaY~\x12M\xaf\xdak\x86~9\xcdЊQ\x89\b\x05\xee\xf1\x93\f\x95\v\xec\x9c\x02\x17\x13\xe0Ln\xfe\xfd]b\xa4=\x90\xaa\xb9 j\xecq\xed\n\x1e3\xf5\\\xbf>\x8f@\x8f\xa4.\x8f\xa4\x81\x91o\xd2W/\xcc\xf8Mƌ\xfdnV\xa9\xf8\x88b\xf2\xa0\n\x8c$2\x92\xa0\x9f\xc6b\xb4@}a\xd8:R\xfai%u\x8b\xe4\xc9J\xa1z\xca5\x91O\x06CA\xe8^\"\x8e\xcd\xc06L8T\x92q\xa3}\xc9P\x1c{\\\x1134\xa0\x00\xbdzk[\xa9bƆ\x1b\xe8\xc9\x05\xd5V3\x9aǱ\x84\xcdR_XG}\xdd\x04\xa6bA\xaa\xbe\x99#U\x1ai\x95n\x8a\xec&\rR`\x10\x92P$\x9d\xebs\xf6+\xc6܊(v\x83\"X\xc7+\xb0\u03a2yΕ\vÖ\x94\xff=\xccy\xe1\b0+N\x8c]JQ1nh\xc9Pt*\xf4u\xb1\xfb\x91\xa1\xc19&f\xea\x88G\xd6r\x85\x99\xf9sꌤ\xad\xc3\x02\x83\"\xb33d\fC\xd9[\x162\x14\x1dof;M\x98\xa4\xd7\xc4\xde44\x9cIV\xb1F\xfb\x181\xab\xa9\xea5r\xd97\xd5NX_\x8a{(\x95\xacژ\x88:\xb2BVm\xd5\xe1\xf96\x1dng'\xac\xbb\xee\x19\x9c\x7f@P\xc4)\x8f\xce\x13\x06N\xae\xa4\x81\x1a\x8ci{\xf2ʺ\xbb\x03c\xe6\xa0\xfc\x9d9\x14q\xea$fϴT\xfe\x1f\xeb\xcc\x02\xb5\x93\xdaU\xbaPHL\xa8\xf3\x12\xd5c8\x9eY=,\xad\x17]I\xeb@k\xbay\xb7\xa5\xa7~I(\x1e\xb7\x93\xe0F\xac\x04꧅-9\x05*|\xa0U6:r\x06Q\x18\x85u\xc7\x0f\x93\xd3VD\xa64A\xd5\xdb\xe3\xca\xd9\xe3~\xe3E\xb6\xad\xa5q\x8eY\xc4O˒H\x05\x93R\x9d\x8e''&\xe4\xefA>3~6\xd6\xc1\xaf\xe8W2u\xc4p(:\xbe㇀\x8e\xb6f,\x81\x11\x8fm\xc0\x10\xb2\f\xced\x97\xb0*<\xf0DvY\x8f\xc4ꏥ\xe4\xe4\xd0I\xdf\xf5k\x82\xfaQ\\j\xc6mnX\xfd;*ݠ\xc8P\xccp\x16\x1c\x06\xb5\x1c\x1dFSS\x8f\xc93\xf2<\x05-F\xa0\xab܄X\x00\xcb\xc0\xe4\x9d_b\x114K/\xba\x03\x05i]\x04\xf3\x9c+\xaa\x8e\x19)\xab\xe2f\xccY\xb8\xa4`*\x16X8\x05,\x02\xc0G\xfd,\r\xb2\xceϊ\xccѠ\xd4H\xc232\xa2V\xbbB\xb6\xa7\xa51\x96\xb6\x87\x00\xa1\x10JB\x8f\xccl\x8c\xa0f\x81\x99S\xe0\"\x06\xbc\xca\xe1\x89i\x05\x0f\xab\xa8P\x8b\xaa>Rӗ\x025:u\xabG\x18\r\x13\x84\xd6.\x94\xf2\xe4\x95C\x1d\x1e\x8bH\xf8@в\xca\x1c\x8f\xc0<\x06\xc3X\xa2\xae9\xebZCm\x1e3\"\xdd\x01\x00{v&\x01\xcccN\xe4\xedl!\x14\u0092E\xe8\xbd\b\x17t\xf2+B\x1d<c\xb4E\v\x95\xb1x\xfai\xb5\x1f\xfd\xa6o\xe2īT@\x99b\xf5W\xadH\xbe\x9f\x8b\xfa`dd\xdaO\xb1\xd4O\xe6<\xfe\xa1\xd9\xfc\xe3\xf5\xf3(\x10\xaf}{\x8cuy,k?\xdb\x00\x9c\x15\x98\xf9\xe5&\xe0G\xe35\xd3^\x17\xd7as\xf8\xe67\x8f\xcdp)\xbe\xf3(\xfcB\x00\xe8Q\xf8\x8d\x11\xa2ۇ\x16[A\xf7ȣ\xb0\xd1\xcf7\x8c-;\x9a\xf4\xa3\r\xe0\x19A\xa6\x9fl\x80]\x8c=m\x01\xdd\x16\x92\x9a\xf6\xb4\xbcq\xd6G\xa8~\xbbu>\xeb\\\xab_m\xee\xe6\x81\x18\xd7탘d\x0f\x81\xaf-*|!ܳe\x9f\xe4\x85ɶ\fvK\xf4l\xdaϲح\x0e\xa6maSN\xb4\xed\xe3\u0378Y\xe1\xb8\xcd\xc3N\xc4\xeb\xde+\xd0_o\x06\xfd\x1f\x0f\xe8q\r\xda@\x8d\xaa\xbb\x8f\xfd\xc9&\xa5\x13L\xd9\r\xe1Ӏr\xa1\xc7͋\xbb16y\xfb\xbf\x98v\xea\x03\x96\xbf\xd82\x9c\xdc8\xe6\x16Wccxs\x8b\xc1\\\x88zn\xf1\x176\x04Cel}\xf4\x00~\x90=\x80\x15\x91\xbc\x1ff\x83n\t\xa5\xe5\x1f\xbbr\"k+\x0f*Z\a=#\"\x03\xd9y;\xad\x1e{\x86\xf9F\x8f\x83\x90Hi:\u0590\xca\f\x9d\x8e\xea\xe2\xda\x0e(\\\x81\xaf\xd8n!j\xa1ɏ\xa8yFw\xb1\xe2\x885B1\xf4\xda\xd0\x17\xf9\x18\x9b\x02oS\xfc\x94\x81_\x1f\x87\xcb\x17\x89\r\xe1\xb9\xfcm\xff)D\xedZo\xf3k\xb8\xd7u\x1b_H$IU\xaa\xed\xee\x1f\x9c\xfd\xea\x85u\x9a\xf6\x95Z'\x0ft\xd5j\xfdt\xcbl\xb4J3殟\x85\xbfJ\xf9[\xd6\a%&\xfcv m\xf6\nu\xde\n\x19(\x85\xa4\xc7\xf0\xbd\xec1$\xd3\x0f\x0f\x04\xeb\x15\x9f\xa6\x9b$\xa1X\xd3]\xfc\xedx\xb45\xeb\x13Zf{\xc8\\\u2fed\\\r\x03^\xe0\x83\x89\xeah\x86\xb8\xc2x\x8d\xf3\x05ǡ\x12q.{\xb7\x9d\f\xc5\xed6\xc5\"\xab\U00049ed0p1.\x8fW\xde\x1ef\xb0س/\xd0<ۚo;\x1c0 \x01\x81-\xbc\x84U\x0f\xb3E\x1fr\xcb>\"\xf4\xe4\x95\xc7\xd8\xf9:\xcdb/\x9c\xc1\xf2\xfd\x18\x8b\x17\r\x9eos!-b\xcbٕ`\vz\xeaK\x0f\x8b1\a\x84KF\x1b\xeb\x1a\r\xc5\xd0?]\xbd\xe9\x04\xf9\x03\x94\xf5\xc1&\xef\xdaBp\xf2\\=T\xf1\xb6!\x12\xfa\xe4\xf9\xa1\x98\xab^\xdfz\xea\xd5`\xce6o\xfcA\xbc\xa4\xde\xfd\xb8\xf7\x10\xca\xf5\xe9ڒu\xb2bV\x8eظ2\xee\xaeQ\xd7숔f\x8a\xa9\xfa\x11P\x11R\xf4\xfd\xf0\x8eRB\xeb\xdbG\xf9\b\x96\xe4u\xe9e\xcdö\x7f\n^D\xc0W\x19\xfbD\xa2~\xa6UO\\\x1fx\xc0|?\r6{)\x91!\xf7N\xc4+ƀ\xa2W+\xdc\xfd\x05@\xb8n\x81b\xb5\xee\xe9\x1b\x11\xb6E\xed$$\xddҶ\xa8\x85dm\vI6u\xa2\xb0-\be\xb2477\xd27'\xfa6\xa9\xfc8ǘ\xad.\xc7\x14\xb2\b!sߺ\xa4\x92AW\x1a\xd0Ȋ\xe5ٚH\xe2D\xb6\t\x98\x95\xcec\x86\xcas\xd7,b\f0w'̝\x1f{\a\xe5\xf6\xff\x91\x85\xb4-2\xf9\xfdI\xf2\x05\xaf\xc5)\xce`\xc3\x1c\xeaaCR\x96\x87\xb3J\xbbD\xe6v\x86{a.騕\xd3O\xfeM\x96\x04\x05\xedߑQ\xf7\x8el\xe9=\xba\x9a\xeb\xfc\xe5\x067\xadX\x9e\x88\x7f˥l\x19k\x92\xdcy\xe3\xb7Z\x95T\x9f\xbe\uf8b1\n\xd4\x1a\xfdY\xa9\a\x9fI\x11\x975 \xac\x18\x15Pu\x92\\\xa1\xac8\x12\xa7\xb2ү\x96\x14\xd8s\xea\xcf\xc0\xb1\xf8\xeeb\x0f\xac\xd1\xf1\xbd\x8eJb\xe2\xc7tT\x17fj\xc4\fr\x00\xd8q\x0eT\x96DYrZ\x81\xd1\xebo\xa7\xd5\xc10\x97P1\b\xc2\x01\x8fQ\xa7\xd5\x01j\xecʞ\x8f\n\xed\t.\xc0\x91\x997\x19\x8a\xa1\xbf\x17\x89\xd8\x040:cά\x80b\x93qwƕ!\x17\x97 \xb5y\x18͖\x8d+\xdd\\S\xe1\xc5\x11\xe2\x118\xd0\npy\xb8\x97v;\xf9\xba\xfb\x9aha\xe5\xf5%G\x9a\\ab\x18\xe8蟑\x81\xc8\xc5m9\x1c\xc9-D\xb4u\xe3\xd3\xe0\xb73!\xfb\x9c\x99\xc0\xc3\xddsg\xf6ܙ=wfϝ\xd9sg\xf6ܙ=wfϝ\xd9sg\xf6ܙ=wfϝ\xd9sg\xf6ܙ=wfϝ\xd9sg\xf6ܙ=wfϝ\xd9sg\xf6ܙ=wfϝ\xc9ϝI}\xad$|9\x01\xfcJld\xa7v\x85\xdc\xd15>T\xec\x9aw\xf0JT\x02\xe2ꐒ\xfc\xd2ޛq\xcbUv\xf4[\xcbxn(v\xb6\xb60\x16\xc8, s\xe1ڱM\xac\xfa\xd8d;\x86\x1b\xb7>\x8b\x93r\xca͇dͧ)\xe7\xbe&k?\xbc8\xfb\xf5\xca>\xc5`\xe1\xf3\x8c\xc3\x1b\xee\xa5\\\x84p\xf1sއO\xe6\x9d-2\xff\x05\x00\x00\xff\xff\x01\x00\x00\xff\xff\x87\xc9\x11\x13lW\x00\x00"))
 }

@@ -207,6 +207,9 @@ interfaces:
           - name: ephemeral_ttl
             type: string
             doc: TTL for ephemeral version (e.g., "48h"), defaults to "24h" when ephemeral_label is set
+          - name: message
+            type: string
+            doc: User-supplied description of this deployment (optional)
         results:
           - name: deployment
             type: DeploymentInfo
@@ -344,15 +347,15 @@ types:
       - name: deployed_by_user_id
         type: string
         index: 6
-        doc: ID of the user who deployed
+        doc: "[DEPRECATED] Mirrors deployed_by_subject for older clients"
       - name: deployed_by_user_email
         type: string
         index: 7
-        doc: Email of the user who deployed
+        doc: "[DEPRECATED] Mirrors deployed_by_email for older clients"
       - name: deployed_by_user_name
         type: string
         index: 21
-        doc: Username of the user who deployed
+        doc: "[DEPRECATED] Display form of the deployer for older clients; use the deployed_by_* fields"
       - name: deployed_at
         type: standard.Timestamp
         index: 8
@@ -385,6 +388,26 @@ types:
         type: string
         index: 24
         doc: Short human-friendly ID for the app version
+      - name: deployed_by_subject
+        type: string
+        index: 26
+        doc: Authenticated subject that started the deployment
+      - name: deployed_by_auth_method
+        type: string
+        index: 27
+        doc: How the deploying subject authenticated (jwt, oidc, cert, ...)
+      - name: deployed_by_email
+        type: string
+        index: 28
+        doc: Deployer's email from their verified cloud token, when they had one
+      - name: deployed_by_name
+        type: string
+        index: 29
+        doc: Deployer's display name from their verified cloud token, when they had one
+      - name: message
+        type: string
+        index: 25
+        doc: User-supplied description of this deployment
 
   - type: GitInfo
     doc: Git repository information

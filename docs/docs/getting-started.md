@@ -166,7 +166,7 @@ That's it! You have an app running on Miren.
 
 Now that you've got something deployed, here's where to go depending on what you need.
 
-**Deploy your own app.** Miren auto-detects Python, Node, Bun, Go, Ruby, and Rust projects. Run `miren init` in your project to create a [`.miren/app.toml`](./app-configuration.md) config, then `miren deploy`. If your app already has a runnable container image, [configure it directly](./deployment.md#deploying-an-existing-image). Use a `Dockerfile` when the deployment still needs to add source, packages, or build steps. For a step-by-step source-build walkthrough, see the [Language Guides](./guides/index.md).
+**Deploy your own app.** Miren auto-detects Python, Node, Bun, Go, Ruby, Rust, and Elixir projects. Run `miren init` in your project to create a [`.miren/app.toml`](./app-configuration.md) config, then `miren deploy`. If your app already has a runnable container image, [configure it directly](./deployment.md#deploying-an-existing-image). Use a `Dockerfile` when the deployment still needs to add source, packages, or build steps. For a step-by-step source-build walkthrough, see the [Language Guides](./guides/index.md).
 
 :::tip[Set up your own app with an agent]
 Install the [Miren agent skills](./agent-skills.md) and ask your AI coding agent to

@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
@@ -54,6 +55,32 @@ func newTestServer(t *testing.T) (*testEnv, func()) {
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
 
 	return &testEnv{client: client, ec: es.Client, store: es.Store, server: regServer, ca: ca}, cleanup
+}
+
+func TestWorkloadIssuerInfoPublishesCoordinatorInternalIPWithoutIssuer(t *testing.T) {
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+	env.server.CoordinatorInternalIP = netip.MustParseAddr("10.8.42.1")
+
+	result, err := env.client.WorkloadIssuerInfo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Enabled() || result.CoordinatorInternalIp() != "10.8.42.1" {
+		t.Fatalf("unexpected coordinator internal address: enabled=%t ip=%q", result.Enabled(), result.CoordinatorInternalIp())
+	}
+}
+
+func TestWorkloadIssuerInfoInternalAddressJSONField(t *testing.T) {
+	var result runner_v1alpha.RunnerRegistrationWorkloadIssuerInfoResults
+	result.SetCoordinatorInternalIp("10.8.42.1")
+	data, err := result.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"coordinator_internal_ip":"10.8.42.1"}` {
+		t.Fatalf("unexpected coordinator internal address field: %s", data)
+	}
 }
 
 // issueLeafCert issues a certificate from the given authority and returns the

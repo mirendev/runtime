@@ -98,7 +98,7 @@ func TestDeploy_RejectsCrossAppVersion(t *testing.T) {
 
 	t.Run("DeployVersion rejects another app's version", func(t *testing.T) {
 		for _, versionRef := range []string{"app-y-v1", string(appYVersionID)} {
-			res, err := client.DeployVersion(ctx, "app-x", "cluster-1", versionRef, false, nil, "", "")
+			res, err := client.DeployVersion(ctx, "app-x", "cluster-1", versionRef, false, nil, "", "", "")
 			// The mismatch surfaces as a hard error (ValidationFailure), not a
 			// results.Error field.
 			if err == nil {
@@ -135,7 +135,7 @@ func TestDeploy_RejectsCrossAppVersion(t *testing.T) {
 	t.Run("own version is accepted past the ownership check", func(t *testing.T) {
 		// app-x deploying app-x-v1 must clear the ownership check (it may still
 		// fail later for unrelated reasons, but never with a mismatch error).
-		res, err := client.DeployVersion(ctx, "app-x", "cluster-1", string(appXVersionID), false, nil, "", "")
+		res, err := client.DeployVersion(ctx, "app-x", "cluster-1", string(appXVersionID), false, nil, "", "", "")
 		if err != nil && strings.Contains(err.Error(), "does not belong to app") {
 			t.Fatalf("own version was wrongly rejected: %v", err)
 		}

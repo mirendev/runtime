@@ -62,10 +62,11 @@ func AppStatus(ctx *Context, opts struct {
 	if err != nil {
 		recentResult = nil
 	}
+	health, healthErr := fetchServiceHealth(ctx, opts.App)
 
 	// JSON output
 	if opts.IsJSON() {
-		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId)
+		return printAppStatusJSON(appResult, appConfig, activeDeployment, recentResult, opts.App, clusterId, health, healthErr)
 	}
 
 	// Define styles
@@ -154,18 +155,7 @@ func AppStatus(ctx *Context, opts struct {
 		}
 
 		// Deployed info
-		user := deployment.DeployedByUserEmail()
-		// Replace placeholder emails with username or user ID as fallback
-		if user == "" || user == "unknown@example.com" || user == "user@example.com" {
-			if deployment.HasDeployedByUserName() && deployment.DeployedByUserName() != "" {
-				user = deployment.DeployedByUserName()
-			} else if deployment.HasDeployedByUserId() && deployment.DeployedByUserId() != "" {
-				user = deployment.DeployedByUserId()
-			} else {
-				user = "-"
-			}
-		}
-		if user != "-" {
+		if user := deployerOf(deployment); user != "" {
 			ctx.Printf("  Deployed By: %s\n", user)
 		}
 
@@ -231,6 +221,16 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("\n%s\n", yellowStyle.Render("No active deployment found"))
 	}
 
+	ctx.Printf("\n%s\n", labelStyle.Render("Service Sandboxes:"))
+	switch {
+	case healthErr != nil:
+		ctx.Printf("  Health unavailable: %v\n", healthErr)
+	case len(health) == 0:
+		ctx.Printf("  No service pools found\n")
+	default:
+		ctx.Printf("%s", renderServiceHealth(health))
+	}
+
 	// Recent deployments summary
 	ctx.Printf("\n%s\n", labelStyle.Render("Recent Activity:"))
 
@@ -288,7 +288,7 @@ func printAppStatusJSON(
 	appConfig *app_v1alpha.Configuration,
 	activeDeployment *deployment_v1alpha.DeploymentClientGetActiveDeploymentResults,
 	recentResult *deployment_v1alpha.DeploymentClientListDeploymentsResults,
-	app, cluster string,
+	app, cluster string, health []serviceHealth, healthErr error,
 ) error {
 	type gitInfo struct {
 		Sha               string `json:"sha,omitempty"`
@@ -307,14 +307,14 @@ func printAppStatusJSON(
 		Value string `json:"value,omitempty"`
 	}
 	type deploymentJSON struct {
-		ID           string   `json:"id"`
-		Status       string   `json:"status"`
-		AppVersionID string   `json:"app_version_id,omitempty"`
-		DeployedBy   string   `json:"deployed_by,omitempty"`
-		DeployedAt   string   `json:"deployed_at,omitempty"`
-		Phase        string   `json:"phase,omitempty"`
-		ErrorMessage string   `json:"error_message,omitempty"`
-		GitInfo      *gitInfo `json:"git_info,omitempty"`
+		ID           string          `json:"id"`
+		Status       string          `json:"status"`
+		AppVersionID string          `json:"app_version_id,omitempty"`
+		DeployedBy   *deployedByJSON `json:"deployed_by,omitempty"`
+		DeployedAt   string          `json:"deployed_at,omitempty"`
+		Phase        string          `json:"phase,omitempty"`
+		ErrorMessage string          `json:"error_message,omitempty"`
+		GitInfo      *gitInfo        `json:"git_info,omitempty"`
 	}
 
 	marshalDeployment := func(dep *deployment_v1alpha.DeploymentInfo) deploymentJSON {
@@ -324,15 +324,7 @@ func printAppStatusJSON(
 			AppVersionID: dep.AppVersionId(),
 		}
 
-		// Deployed by: prefer username, fall back to email, then user ID
-		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-			d.DeployedBy = dep.DeployedByUserName()
-		} else if dep.HasDeployedByUserEmail() && dep.DeployedByUserEmail() != "" &&
-			dep.DeployedByUserEmail() != "unknown@example.com" && dep.DeployedByUserEmail() != "user@example.com" {
-			d.DeployedBy = dep.DeployedByUserEmail()
-		} else if dep.HasDeployedByUserId() && dep.DeployedByUserId() != "" {
-			d.DeployedBy = dep.DeployedByUserId()
-		}
+		d.DeployedBy = deployedByOf(dep)
 
 		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
 			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
@@ -396,11 +388,17 @@ func printAppStatusJSON(
 		Configuration     *configuration   `json:"configuration,omitempty"`
 		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
 		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
+		Services          []serviceHealth  `json:"services,omitempty"`
+		HealthError       string           `json:"health_error,omitempty"`
 	}{
 		App:               app,
 		Cluster:           cluster,
 		WorkloadRole:      appResult.WorkloadRole(),
 		MaintenanceRoutes: appResult.MaintenanceRoutes(),
+		Services:          health,
+	}
+	if healthErr != nil {
+		output.HealthError = healthErr.Error()
 	}
 
 	if appResult.HasVersionId() && appResult.VersionId() != "" {

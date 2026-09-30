@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"time"
@@ -61,11 +62,20 @@ func newIngressBoot(inputs ingressBootInputs, workloadControl boot.Output[worklo
 func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadControlBootOutput, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, observability observabilityBootOutput) (ingressBootOutput, error) {
 	b.observability = observability
 	workloadControl := workloadControlOutput.workloadControl
+	var pageTemplate *template.Template
+	if filename := b.inputs.ingress.GetErrorPage(); filename != "" {
+		var err error
+		pageTemplate, err = httpingress.LoadErrorPageTemplate(filename)
+		if err != nil {
+			return ingressBootOutput{}, fmt.Errorf("loading ingress.error_page: %w", err)
+		}
+	}
 	handler := httpingress.NewServer(ctx, observability.log, httpingress.IngressConfig{
-		RequestTimeout: b.inputs.requestTimeout,
-		DataPath:       b.inputs.dataPath,
-		WorkloadIssuer: identity.issuer,
-		Instance:       b.inputs.instance,
+		RequestTimeout:    b.inputs.requestTimeout,
+		DataPath:          b.inputs.dataPath,
+		ErrorPageTemplate: pageTemplate,
+		WorkloadIssuer:    identity.issuer,
+		Instance:          b.inputs.instance,
 		// This gates the network listener only. behind-proxy-http is the one
 		// mode where a front proxy terminates TLS and so owns the scheme.
 		// Under tls-autoprovision Miren faces clients directly. Under

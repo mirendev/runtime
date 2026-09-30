@@ -76,6 +76,7 @@ func DefaultEtcdConfig() EtcdConfig {
 func DefaultIngressConfig() IngressConfig {
 	return IngressConfig{
 		Address:          new(""),
+		ErrorPage:        new(""),
 		Mode:             new("tls-autoprovision"),
 		TrustedProxyHops: new(1),
 	}

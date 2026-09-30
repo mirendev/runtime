@@ -100,7 +100,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
-	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)
+	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), tracing.component, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
 	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	dataRestore := newDataRestoreBoot(dataRestoreInputsFrom(options), containerd.Output, observability.output)
@@ -115,6 +115,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		etcd.output,
 		buildkit.output,
+		registryHostMapping.output,
 		observability.output,
 	)
 	appData := newAppDataBoot(foundation.output)
@@ -139,7 +140,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 		runnerEndpoints.component,
 	)
-	nodeStorage := newNodeStorageBoot(clusterAccess.output, registration.output, observability.output)
+	nodeStorage := newNodeStorageBoot(resolver, registryHostMapping.component, clusterAccess.output, registration.output, observability.output, containerd.Output)
 	sandboxHost := newSandboxHostBoot(
 		sandboxHostInputs(options, resolver, serverPort(options.Log, address)),
 		clusterAccess.output,
@@ -160,7 +161,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	serverInfo := newServerInfoBoot(instance, foundation.output)
 	serverLifecycle := newServerLifecycleBoot(serverLifecycleInputsFrom(options), instance, foundation.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output, serverLifecycle.output)
-	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
+	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.output, sandboxHost.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
 		buildSagaRecoveryInputs(options),

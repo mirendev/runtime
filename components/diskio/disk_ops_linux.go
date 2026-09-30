@@ -17,7 +17,11 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"miren.dev/runtime/pkg/lbdmod"
 )
+
+// Bound modprobe on the runner startup path.
+const modprobeTimeout = 30 * time.Second
 
 const (
 	loopCtlGetFree = 0x4C82
@@ -166,7 +170,8 @@ func (r *realDiskMountOps) LoopDetach(devicePath string) error {
 }
 
 // FindLoopByBacking walks /sys/block/loop*/loop/backing_file and returns the
-// loop device path currently backing imagePath, or "" if none is attached.
+// loop device path currently backing the file at imagePath, or "" if none is
+// attached.
 //
 // The kernel never deletes a stale loop device just because miren restarted,
 // so finding a match here means a previous miren (or an uncleanly shut down
@@ -174,6 +179,15 @@ func (r *realDiskMountOps) LoopDetach(devicePath string) error {
 // produce two loop devices with independent, incoherent page caches and
 // corrupt the filesystem. Callers should reuse the returned device, fail
 // loudly, or detach it explicitly.
+//
+// A loop whose backing inode has been unlinked is deliberately not a match,
+// even though the kernel still reports this exact path for it. That device is
+// holding the file that used to be here, not the one here now — after a restore
+// wrote a new image and renamed it into place, say. Treating it as a match is
+// how stale data gets mounted over good data: the caller adopts the device,
+// finds the old filesystem on it, decides no formatting is needed, and serves
+// the contents the operator just replaced. Use FindAllLoopBackings, which
+// reports the distinction, to find such devices and reclaim them.
 func (r *realDiskMountOps) FindLoopByBacking(imagePath string) (string, error) {
 	absPath, err := filepath.Abs(imagePath)
 	if err != nil {
@@ -185,7 +199,7 @@ func (r *realDiskMountOps) FindLoopByBacking(imagePath string) (string, error) {
 		return "", err
 	}
 	for dev, backing := range all {
-		if backing == absPath {
+		if backing.Path == absPath && !backing.Deleted {
 			return dev, nil
 		}
 	}
@@ -195,13 +209,13 @@ func (r *realDiskMountOps) FindLoopByBacking(imagePath string) (string, error) {
 // FindAllLoopBackings walks /sys/block/loop*/loop/backing_file and returns
 // a map of loop device path → backing file path for every loop device in
 // the kernel. Devices that race with a concurrent detach are skipped.
-func (r *realDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
+func (r *realDiskMountOps) FindAllLoopBackings() (map[string]LoopBacking, error) {
 	entries, err := filepath.Glob("/sys/block/loop*/loop/backing_file")
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob loop backing files: %w", err)
 	}
 
-	result := make(map[string]string, len(entries))
+	result := make(map[string]LoopBacking, len(entries))
 	for _, entry := range entries {
 		data, err := os.ReadFile(entry)
 		if err != nil {
@@ -212,17 +226,42 @@ func (r *realDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
 			return nil, fmt.Errorf("failed to read %s: %w", entry, err)
 		}
 
-		backing := strings.TrimSpace(string(data))
-		// The kernel appends " (deleted)" when the backing inode is
-		// unlinked; strip it so callers can compare against a live path.
-		backing = strings.TrimSuffix(backing, " (deleted)")
-
 		// entry is /sys/block/loopN/loop/backing_file — extract loopN.
 		loopName := filepath.Base(filepath.Dir(filepath.Dir(entry)))
-		result["/dev/"+loopName] = backing
+		result["/dev/"+loopName] = parseLoopBacking(string(data))
 	}
 
 	return result, nil
+}
+
+// deletedBackingSuffix is what the kernel appends to a loop device's backing
+// file path once that file has been unlinked.
+const deletedBackingSuffix = " (deleted)"
+
+// parseLoopBacking reads one backing_file line.
+//
+// The deleted marker is reported rather than stripped: to a caller comparing
+// against a live path, a deleted backing that still reads as that path is a
+// trap, because the file at the path now is a different file entirely.
+//
+// What the kernel actually does, confirmed against a live loop device: it
+// tracks the backing inode's current name, so renaming the file simply changes
+// what this reports, with no marker. The marker appears only once the inode has
+// no name left. That is exactly what a restore does to the image it replaces —
+// renaming a new image over the old path unlinks the old inode — which is how a
+// loop device ends up reporting a path whose file it is no longer holding.
+//
+// The marker is ambiguous for a file whose own name ends in " (deleted)", and
+// the kernel offers no way to tell the two apart. Reading it as deleted is the
+// safe way to be wrong: the cost is attaching a second loop device rather than
+// adopting one, where the other way round serves stale data.
+func parseLoopBacking(raw string) LoopBacking {
+	path := strings.TrimSpace(raw)
+	deleted := strings.HasSuffix(path, deletedBackingSuffix)
+	return LoopBacking{
+		Path:    strings.TrimSuffix(path, deletedBackingSuffix),
+		Deleted: deleted,
+	}
 }
 
 func (r *realDiskMountOps) LbdAttach(ctx context.Context, imagePath, logDir string) (string, error) {
@@ -633,19 +672,37 @@ func ensureLoopDeviceNode(log *slog.Logger, index int) error {
 	return nil
 }
 
-// EnsureLbdDevices checks if the lbd kernel module and lbdctl are available.
-func EnsureLbdDevices(log *slog.Logger) error {
-	// Try modprobe lbd
-	if out, err := exec.Command("modprobe", "lbd").CombinedOutput(); err != nil {
-		log.Warn("modprobe lbd failed", "error", err, "output", string(out))
+// EnsureLbdDevices loads the lbd kernel module and proves it is usable.
+//
+// modprobe's exit code is not the test: a module can be absent, or present but
+// wedged, and lbdctl can be installed on a host whose module never loaded.
+// What settles it is the same probe accelerator mode itself relies on, so a
+// node never selects accelerator mode it cannot serve.
+func EnsureLbdDevices(ctx context.Context, log *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(ctx, modprobeTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "modprobe", lbdmod.ModuleName).CombinedOutput(); err != nil {
+		log.Debug("modprobe lbd failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 
-	// Check that lbdctl is in PATH
-	if _, err := exec.LookPath("lbdctl"); err != nil {
-		return fmt.Errorf("lbdctl not found in PATH: %w", err)
+	status, err := lbdmod.Probe(lbdmod.HostOptions(""))
+	if err != nil {
+		return err
+	}
+	if status.Loaded && !status.ControlDevicePresent {
+		if err := lbdmod.EnsureControlDevice(); err != nil {
+			return err
+		}
+		status, err = lbdmod.Probe(lbdmod.HostOptions(""))
+		if err != nil {
+			return err
+		}
+	}
+	if !status.Available() {
+		return errors.New(status.Explain())
 	}
 
-	log.Info("lbd devices available")
+	log.Info("lbd devices available", "kernel", status.Host.KernelRelease, "lbdctl", status.LbdctlPath)
 	return nil
 }
 

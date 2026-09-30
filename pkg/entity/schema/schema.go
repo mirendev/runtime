@@ -285,9 +285,14 @@ func (s *SchemaBuilder) Duration(name, id string, opts ...AttrOption) entity.Id 
 	return s.Attr(name, id, entity.TypeDuration, opts...)
 }
 
-func (s *SchemaBuilder) Enum(name, id string, values any, opts ...AttrOption) entity.Id {
+func (s *SchemaBuilder) Enum(name, id string, values []entity.Id, opts ...AttrOption) entity.Id {
+	storedValues := make([]any, len(values))
+	for i, value := range values {
+		storedValues[i] = value
+	}
 	opts = append(opts, AdditionalAttrs(
-		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(values)},
+		entity.Attr{ID: entity.EnumValues, Value: entity.ArrayValue(storedValues...)},
+		entity.Ref(entity.EntityElemType, entity.TypeRef),
 	))
 
 	return s.Attr(name, id, entity.TypeEnum, opts...)
@@ -303,7 +308,9 @@ func (s *SchemaBuilder) Ref(name, id string, opts ...AttrOption) entity.Id {
 
 func (s *SchemaBuilder) Singleton(id string, opts ...AttrOption) entity.Id {
 	eid := entity.Id(id)
-	s.singletons = append(s.singletons, eid)
+	if !slices.Contains(s.singletons, eid) {
+		s.singletons = append(s.singletons, eid)
+	}
 	return eid
 }
 

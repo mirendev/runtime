@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'disks',
+        'disk-accelerator',
         'addons',
         'managing-disk-space',
       ],
@@ -172,6 +173,7 @@ const sidebars: SidebarsConfig = {
         'system-requirements',
         'app-toml',
         'server-config',
+        'victorialogs-upgrade',
         {
           type: 'category',
           label: 'CLI',

@@ -84,6 +84,32 @@ func TestGenerateExportContractRejectsWholeComponent(t *testing.T) {
 	require.ErrorContains(t, err, "must select component fields")
 }
 
+func TestGenerateExportContractRejectsNamedEnum(t *testing.T) {
+	sf := &schemaFile{
+		Domain:  "example.dev",
+		Version: "v1",
+		Enums: map[string]schemaEnum{
+			"port_protocol": {Values: []string{"tcp", "udp"}},
+		},
+		Kinds: map[string]schemaAttrs{
+			"app": {
+				"protocol": {Type: "enum", Enum: "port_protocol"},
+			},
+		},
+		Exports: map[string]exportSpec{
+			"cloud": {
+				Marker: "example.dev/cloud.export",
+				Kinds: map[string]exportKind{
+					"app": {Lifecycle: "mirror", Include: []string{"example.dev/app.protocol"}},
+				},
+			},
+		},
+	}
+
+	_, err := GenerateExportContracts(sf)
+	require.ErrorContains(t, err, `uses named enum "port_protocol"`)
+}
+
 func exportOwnerSchema() *schemaFile {
 	return &schemaFile{
 		Domain:  "example.dev",

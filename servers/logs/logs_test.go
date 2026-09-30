@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +66,10 @@ func createFilteringMockVictoriaLogs(t *testing.T, entries []mockLogEntry) *http
 			parts := strings.Split(query, " ")
 			shouldInclude := true
 			for _, part := range parts[1:] { // Skip the entity/sandbox part
+				part = strings.TrimPrefix(part, "*:")
+				if unquoted, err := strconv.Unquote(part); err == nil {
+					part = unquoted
+				}
 				if part != "" && !strings.Contains(entry.Msg, part) {
 					shouldInclude = false
 					break
@@ -701,6 +706,10 @@ func TestStreamLogChunks_FilterWithFollow(t *testing.T) {
 			parts := strings.Split(query, " ")
 			shouldInclude := true
 			for _, part := range parts[1:] {
+				part = strings.TrimPrefix(part, "*:")
+				if unquoted, err := strconv.Unquote(part); err == nil {
+					part = unquoted
+				}
 				if part != "" && !strings.Contains(entry.Msg, part) {
 					shouldInclude = false
 					break
@@ -818,6 +827,64 @@ func TestStreamLogChunks_InvalidFilterRegex(t *testing.T) {
 	r.Contains(err.Error(), "invalid filter")
 }
 
+func TestCompileLogFilter(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "app word", input: `-source:"system" error`, want: `-source:"system" *:"error"`},
+		{name: "sandbox phrase", input: `"connection failed"`, want: `*:"connection failed"`},
+		{name: "service and multiple terms", input: `(service:"web" OR miren.service:"web") error timeout`, want: `(service:"web" OR miren.service:"web") *:"error" *:"timeout"`},
+		{name: "build regex", input: `source:build version:"v3" /fail.*/`, want: `source:build version:"v3" *:~"fail.*"`},
+		{name: "run negation", input: `(run:"run/abc" OR miren.run:"run/abc") -debug`, want: `(run:"run/abc" OR miren.run:"run/abc") -(*:"debug")`},
+		{name: "system phrase", input: `source:"system" module:"scheduler" "lease expired"`, want: `source:"system" module:"scheduler" *:"lease expired"`},
+		{name: "near build prefix remains grep", input: `-source:"system" source:builder`, want: `-source:"system" *:"source:builder"`},
+		{name: "malformed service selector remains grep", input: `(service:"web") error`, want: `*:"(service:\"web\")" *:"error"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := compileLogFilter(tt.input)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCompileSeparatedFilter(t *testing.T) {
+	tests := []struct {
+		name       string
+		structural string
+		grep       string
+		want       string
+		wantErr    bool
+	}{
+		{name: "service selector and punctuation", structural: `(service:"web" OR miren.service:"web")`, grep: `status=500`, want: `(service:"web" OR miren.service:"web") *:"status=500"`},
+		{name: "build selector", structural: `source:build version:"v3"`, grep: `error`, want: `source:build version:"v3" *:"error"`},
+		{name: "run selector", structural: `(run:"run/abc" OR miren.run:"run/abc")`, grep: `timeout`, want: `(run:"run/abc" OR miren.run:"run/abc") *:"timeout"`},
+		{name: "system selector", structural: `source:"system" module:"scheduler"`, grep: `error`, want: `source:"system" module:"scheduler" *:"error"`},
+		{name: "structural-looking grep remains literal", structural: `-source:"system"`, grep: `module:"scheduler"`, want: `-source:"system" *:"module:\"scheduler\""`},
+		{name: "grep only", grep: `source:builder`, want: `*:"source:builder"`},
+		{name: "operator rejected", structural: `OR *`, wantErr: true},
+		{name: "pipe rejected", structural: `-source:"system" | fields _msg`, wantErr: true},
+		{name: "trailing unknown clause rejected", structural: `source:build arbitrary:true`, wantErr: true},
+		{name: "service escaped-quote injection rejected", structural: `(service:"safe\\") OR * # " OR miren.service:"x")`, wantErr: true},
+		{name: "run escaped-quote injection rejected", structural: `(run:"safe\\") OR * # " OR miren.run:"x")`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := compileSeparatedFilter(tt.structural, tt.grep)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "invalid structural filter")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestStreamLogChunks_FilterWithRegex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -871,7 +938,7 @@ func TestStreamLogChunks_FilterWithRegex(t *testing.T) {
 	r.NoError(err)
 
 	// Verify the query contains the compiled LogsQL regex format
-	r.Contains(capturedQuery, `~"ERR(OR)?"`)
+	r.Contains(capturedQuery, `*:~"ERR(OR)?"`)
 }
 
 func TestStreamLogChunks_FilterWithNegation(t *testing.T) {
@@ -924,8 +991,8 @@ func TestStreamLogChunks_FilterWithNegation(t *testing.T) {
 	r.NoError(err)
 
 	// Verify the query contains negation
-	r.Contains(capturedQuery, "error")
-	r.Contains(capturedQuery, "-debug")
+	r.Contains(capturedQuery, `*:"error"`)
+	r.Contains(capturedQuery, `-(*:"debug")`)
 }
 
 func TestStreamLogChunks_QueryContract(t *testing.T) {

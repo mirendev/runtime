@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -67,6 +68,19 @@ func pollerContext(base context.Context) (*Context, *bytes.Buffer) {
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	return ctx, buf
+}
+
+func TestRecentAppLogsKeepsNewestTail(t *testing.T) {
+	ctx, _ := pollerContext(t.Context())
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+
+	got := recentAppLogs(ctx, fakeTailer{lines: lines}, "app")
+	require.Len(t, got, 20)
+	require.Equal(t, "line-10", got[0])
+	require.Equal(t, "line-29", got[19])
 }
 
 func status(active, health string, ready, desired int32) *app_v1alpha.ApplicationStatus {

@@ -65,7 +65,7 @@ func normalizeAuthServerURL(authServer string) string {
 type authResult struct {
 	Method       string
 	IdentityName string
-	Claims       *auth.ExtendedClaims
+	Claims       *auth.Claims
 	UserInfo     *cloudUserInfo
 	// Err is why authentication didn't work. Kept rather than discarded so the
 	// auth check can say "your token expired" instead of the useless "couldn't
@@ -173,6 +173,9 @@ func checkAuthentication(env *doctorEnv) checkResult {
 func authSummary(res authResult) string {
 	if res.UserInfo != nil && res.UserInfo.User.Email != "" {
 		return res.UserInfo.User.Email
+	}
+	if res.Claims != nil && res.Claims.Email != "" {
+		return res.Claims.Email
 	}
 	if res.Claims != nil && res.Claims.Subject != "" {
 		return res.Claims.Subject

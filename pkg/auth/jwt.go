@@ -44,6 +44,10 @@ type Claims struct {
 	jwt.RegisteredClaims
 	OrganizationID string   `json:"organization_id,omitempty"`
 	GroupIDs       []string `json:"group_ids,omitempty"`
+	// Email and Name describe the user at the time cloud minted the token.
+	// Service-account tokens, and user tokens from older clouds, carry neither.
+	Email string `json:"email,omitempty"`
+	Name  string `json:"name,omitempty"`
 }
 
 // ValidateToken validates a JWT token and returns the claims

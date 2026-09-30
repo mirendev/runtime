@@ -65,7 +65,7 @@ func AppRun(ctx *Context, opts struct {
 	// separate for whatever is reading them.
 	wantTTY := !opts.Detach && stdinIsTerminal()
 
-	created, err := runs.CreateRun(ctx, opts.App, opts.Task, opts.Args, wantTTY)
+	created, err := runs.CreateRun(ctx, opts.App, opts.Task, runCommand(opts.Args), wantTTY)
 	if err != nil {
 		return err
 	}
@@ -88,6 +88,17 @@ func AppRun(ctx *Context, opts struct {
 	}
 
 	return reportRunExit(ctx, runs, runID)
+}
+
+// runCommand treats a single command string as shell source. Multiple args
+// remain argv: the caller's shell already removed quoting, so even a standalone
+// operator token may be literal data deliberately quoted or escaped locally.
+func runCommand(args []string) []string {
+	const shellSyntax = "$|&;<>()`\\*?[]{}~\n"
+	if len(args) == 1 && strings.ContainsAny(args[0], shellSyntax+" \t") {
+		return []string{"/bin/sh", "-c", args[0]}
+	}
+	return args
 }
 
 // serverPredatesRuns reports whether a runsClient error means the cluster is

@@ -16,6 +16,7 @@ type startup struct {
 	runtime       *Runtime
 	containerd    *containerdcomp.Boot
 	clusterAccess *clusterAccessBoot
+	networkDeps   *networkDepsBoot
 	lifecycle     *lifecycleBoot
 	nodeStorage   *nodeStorageBoot
 	telemetry     *telemetryBoot
@@ -28,15 +29,17 @@ type startup struct {
 func newStartup(runtime *Runtime, options StartOptions) *startup {
 	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
 	clusterAccess := newClusterAccessBoot(clusterAccessInputs(options))
+	networkDeps := newNetworkDepsBoot(sandboxHostInputs(options), clusterAccess.output)
 	lifecycle := newLifecycleBoot(options.Log, runtime.instance, clusterAccess.output)
 	telemetry := newTelemetryBoot(telemetryInputs(options), clusterAccess.output)
-	nodeStorage := newNodeStorageBoot(clusterAccess.output, telemetry.output)
+	nodeStorage := newNodeStorageBoot(clusterAccess.output, telemetry.output, containerd.Output, networkDeps.output)
 	sandboxHost := newSandboxHostBoot(
 		sandboxHostInputs(options),
 		clusterAccess.output,
 		nodeStorage.output,
 		containerd.Output,
 		telemetry.output,
+		networkDeps.output,
 	)
 	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, 0)
 	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, 0)
@@ -46,6 +49,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		runtime:       runtime,
 		containerd:    containerd,
 		clusterAccess: clusterAccess,
+		networkDeps:   networkDeps,
 		lifecycle:     lifecycle,
 		nodeStorage:   nodeStorage,
 		telemetry:     telemetry,
@@ -60,6 +64,7 @@ func (s *startup) addComponents() error {
 	components := []*boot.Component{
 		s.containerd.Component,
 		s.clusterAccess.component,
+		s.networkDeps.component,
 		s.lifecycle.component,
 		s.nodeStorage.component,
 		s.telemetry.component,

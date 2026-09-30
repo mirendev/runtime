@@ -253,6 +253,7 @@ func TestCompositeAuthorizer_OIDCAllowed(t *testing.T) {
 		{"logs", "applogs"},
 		{"logs", "streamlogs"},
 		{"logs", "streamlogchunks"},
+		{"logs", "streamlogchunksv2"},
 		{"crud", "list"},
 		{"crud", "getconfiguration"},
 		{"builder", "buildfromtar"},

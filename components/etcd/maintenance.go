@@ -18,8 +18,6 @@ import (
 const (
 	maintenanceInterval = 5 * time.Minute
 	defragBloatRatio    = 2.0
-	warnBloatRatio      = 1.5
-	errorBloatRatio     = 3.0
 
 	// quotaHighWaterFraction triggers a proactive compact+defrag once the physical
 	// backend size passes this fraction of the quota — before it reaches the hard
@@ -93,7 +91,7 @@ func (e *EtcdComponent) maintenanceLoop(ctx context.Context) {
 
 	// Run a check immediately so a wedged (NOSPACE) or near-full etcd is remediated
 	// within seconds of startup rather than waiting for the first ticker interval.
-	e.runMaintenanceCheck(ctx, client, endpoint)
+	e.runMaintenanceCheck(ctx, client, endpoint, true)
 
 	ticker := time.NewTicker(maintenanceInterval)
 	defer ticker.Stop()
@@ -101,12 +99,12 @@ func (e *EtcdComponent) maintenanceLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			e.runMaintenanceCheck(ctx, client, endpoint)
+			e.runMaintenanceCheck(ctx, client, endpoint, false)
 		case <-e.metricsKick:
 			// The metrics writer was just attached (see SetMetricsWriter); run a check
 			// now so the first health sample lands promptly rather than up to a full
 			// interval later. The immediate check above ran before the writer existed.
-			e.runMaintenanceCheck(ctx, client, endpoint)
+			e.runMaintenanceCheck(ctx, client, endpoint, false)
 		case <-ctx.Done():
 			return
 		}
@@ -213,7 +211,11 @@ func buildMaintenanceTLSConfig(certsDir string) (*tls.Config, error) {
 	}, nil
 }
 
-func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv3.Client, endpoint string) {
+// runMaintenanceCheck samples backend health, publishes it as metrics, and takes
+// whatever remediation decideMaintenance calls for. The metrics are the record of
+// routine state; it logs only when something needs attention, plus once at startup
+// (announce) so the journal shows the loop connected and where the backend began.
+func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv3.Client, endpoint string, announce bool) {
 	statusCtx, cancel := context.WithTimeout(ctx, statusTimeout)
 	resp, err := client.Status(statusCtx, endpoint)
 	cancel()
@@ -244,15 +246,14 @@ func (e *EtcdComponent) runMaintenanceCheck(ctx context.Context, client *clientv
 		"nospace_alarm", noSpace,
 	}
 
+	// No log for bloat ratio alone. A healthy small backend can sit well above 1:1 for
+	// good, since BoltDB reuses freed pages but never shrinks the file, and every case
+	// that needs action (defrag, near-quota reclaim, NOSPACE) is handled and logged below.
 	switch {
 	case noSpace:
 		e.Log.Error("etcd NOSPACE alarm is active", attrs...)
-	case bloatRatio >= errorBloatRatio:
-		e.Log.Error("etcd database bloat is critically high", attrs...)
-	case bloatRatio >= warnBloatRatio:
-		e.Log.Warn("etcd database bloat is elevated", attrs...)
-	default:
-		e.Log.Info("etcd database status", attrs...)
+	case announce:
+		e.Log.Info("etcd database status at startup", attrs...)
 	}
 
 	e.emitMetrics(ctx, dbSize, dbSizeInUse, bloatRatio, noSpace)

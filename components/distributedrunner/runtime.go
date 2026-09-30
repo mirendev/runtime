@@ -70,7 +70,7 @@ func Start(options StartOptions) (*Runtime, error) {
 		return nil, fmt.Errorf("distributed runner errgroup is required")
 	}
 
-	runtime := &Runtime{graph: boot.NewGraph(), instance: serverinfo.New()}
+	runtime := &Runtime{graph: boot.NewGraph(boot.WithLogger(options.Log)), instance: serverinfo.New()}
 	components := newStartup(runtime, options)
 	if err := components.addComponents(); err != nil {
 		return nil, err

@@ -1,8 +1,36 @@
 package commands
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestCIBindingID(t *testing.T) {
+	for _, tt := range []struct {
+		input   string
+		want    string
+		wantRPC string
+	}{
+		{"oidc_binding/oidcb-obA1b2", "oidcb-obA1b2", "oidc_binding/oidcb-obA1b2"},
+		{"oidcb-obA1b2", "oidcb-obA1b2", "oidc_binding/oidcb-obA1b2"},
+	} {
+		if got := ciBindingID(tt.input); got != tt.want {
+			t.Errorf("ciBindingID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+		got, err := ciBindingEntityID(tt.input)
+		if err != nil {
+			t.Fatalf("ciBindingEntityID(%q): %v", tt.input, err)
+		}
+		if got != tt.wantRPC {
+			t.Errorf("remove ID for %q = %q, want %q", tt.input, got, tt.wantRPC)
+		}
+	}
+	for _, input := range []string{"other/oidcb-obA1b2", "oidc_binding/other/oidcb-obA1b2"} {
+		if _, err := ciBindingEntityID(input); err == nil || !strings.Contains(err.Error(), input) {
+			t.Errorf("ciBindingEntityID(%q) should reject the foreign namespace and name the input, got %v", input, err)
+		}
+	}
+}
 
 func TestGitHubClaimConditions(t *testing.T) {
 	conditions, err := gitHubClaimConditions("acme/web-app", "", "")

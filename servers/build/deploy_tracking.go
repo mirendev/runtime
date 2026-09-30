@@ -71,6 +71,10 @@ func (b *Builder) beginDeploy(
 		clusterID = req.ClusterId()
 	}
 	gitInfo := gitInfoFromRequest(req)
+	message := ""
+	if req != nil {
+		message = req.Message()
+	}
 
 	rec, err := b.deploy.Begin(ctx, deploylifecycle.BeginParams{
 		AppName:   appName,
@@ -78,6 +82,7 @@ func (b *Builder) beginDeploy(
 		ClusterID: clusterID,
 		Operation: deploylifecycle.OperationBuild,
 		GitInfo:   gitInfo,
+		Message:   message,
 	})
 	if err != nil {
 		return nil, err

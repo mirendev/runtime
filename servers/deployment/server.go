@@ -74,7 +74,7 @@ func (d *DeploymentServer) lockInfoFor(ctx context.Context, holder *deploylifecy
 	info.SetBlockingDeploymentId(holder.DeploymentID)
 	info.SetLockExpiresAt(standard.ToTimestamp(holder.ExpiresAt))
 
-	displayEmail := "-"
+	startedBy := "-"
 	if rec, err := d.tracker.Store().Get(ctx, holder.DeploymentID); err == nil {
 		// The lock is app-scoped, so cluster for display comes from the blocking
 		// record rather than the lock.
@@ -82,15 +82,15 @@ func (d *DeploymentServer) lockInfoFor(ctx context.Context, holder *deploylifecy
 		info.SetCurrentPhase(string(rec.Phase()))
 		info.SetBlockingDeploymentShortId(shortIDFromRPCEntity(rec.Entity))
 
-		if email := rec.Deployment.DeployedBy.UserEmail; email != "" &&
-			email != "unknown@example.com" && email != "user@example.com" {
-			displayEmail = email
+		by := rec.Deployment.DeployedBy
+		if who := deploylifecycle.DescribeDeployer(by.Name, by.Email, by.Subject, by.AuthMethod); who != "" {
+			startedBy = who
 		}
 		if ts := rec.StartedAt(); !ts.IsZero() {
 			info.SetStartedAt(standard.ToTimestamp(ts))
 		}
 	}
-	info.SetStartedBy(displayEmail)
+	info.SetStartedBy(startedBy)
 
 	return info
 }
@@ -612,6 +612,12 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
+	if args.EphemeralLabel() != "" && args.Message() != "" {
+		return cond.ValidationFailure("invalid-message", "deployment message is not supported for ephemeral versions")
+	}
+	if len(args.Message()) > deploylifecycle.MaxDeploymentMessageBytes {
+		return cond.ValidationFailure("invalid-message", fmt.Sprintf("deployment message must be at most %d bytes", deploylifecycle.MaxDeploymentMessageBytes))
+	}
 
 	// Verify the AppVersion entity exists
 	var appVersion core_v1alpha.AppVersion
@@ -768,6 +774,7 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		Operation:          operation,
 		AppVersion:         appVersionId,
 		GitInfo:            gitInfo,
+		Message:            args.Message(),
 		ParentDeploymentID: parentDeploymentID,
 	})
 	if err != nil {
@@ -1180,9 +1187,19 @@ func (d *DeploymentServer) toDeploymentInfo(deployment *core_v1alpha.Deployment,
 	}
 	info.SetStatus(string(status))
 	info.SetPhase(string(rec.Phase()))
-	info.SetDeployedByUserId(deployment.DeployedBy.UserId)
-	info.SetDeployedByUserName(deployment.DeployedBy.UserName)
-	info.SetDeployedByUserEmail(deployment.DeployedBy.UserEmail)
+	if deployment.Message != "" {
+		info.SetMessage(deployment.Message)
+	}
+	by := deployment.DeployedBy
+	info.SetDeployedBySubject(by.Subject)
+	info.SetDeployedByAuthMethod(by.AuthMethod)
+	info.SetDeployedByEmail(by.Email)
+	info.SetDeployedByName(by.Name)
+	// Older clients only read the user_* fields. The stored user_* attrs never
+	// held a real identity, so fill them from the authenticated one instead.
+	info.SetDeployedByUserId(by.Subject)
+	info.SetDeployedByUserEmail(by.Email)
+	info.SetDeployedByUserName(deploylifecycle.DescribeDeployer(by.Name, by.Email, by.Subject, by.AuthMethod))
 
 	// Parse timestamps
 	if deployedAt := rec.StartedAt(); !deployedAt.IsZero() {

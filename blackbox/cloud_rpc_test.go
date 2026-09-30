@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,12 +114,18 @@ func TestRPCViaCloud(t *testing.T) {
 // Asserting the app runs, rather than that the command exited zero, is the
 // point. A deploy that uploaded nothing and reported success is exactly the
 // failure this should catch.
+// The persona the harness logs in as (dev login's ?user=blackbox).
+const (
+	devUserEmail = "dev+blackbox@localhost"
+	devUserName  = "Blackbox (dev)"
+)
+
 func TestDeployViaCloud(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 	env := harness.NewCloudEnv(t, m)
 
-	configPath, _ := env.SetupViaCloudCluster(t, "viacloud")
+	configPath, userXID := env.SetupViaCloudCluster(t, "viacloud")
 	m.SetEnv("MIREN_CONFIG", configPath)
 	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
 
@@ -142,6 +149,47 @@ func TestDeployViaCloud(t *testing.T) {
 	if !slices.Contains(apps, appName) {
 		t.Fatalf("deployed %s over the relay but the cluster does not list it: %v", appName, apps)
 	}
+
+	// The deploy was made with the dev user's own cloud token, which the
+	// cluster verified itself. History has to name that person, from the
+	// profile cloud stamped on the token, without the cluster asking cloud.
+	t.Run("history names the deployer", func(t *testing.T) {
+		deployments := appHistory(t, m, appName)
+		if len(deployments) == 0 {
+			t.Fatal("expected the deploy in history")
+		}
+		by := deployments[0].DeployedBy
+		if by == nil {
+			t.Fatalf("latest deployment records no deployer: %+v", deployments[0])
+		}
+		if by.Subject != userXID || by.AuthMethod != "jwt" {
+			t.Fatalf("deployer is %s via %s, want %s via jwt", by.Subject, by.AuthMethod, userXID)
+		}
+		if by.Email != devUserEmail || by.Name != devUserName || by.Display != devUserName {
+			t.Fatalf("deployer profile = email %q, name %q, display %q; want %q, %q, %q",
+				by.Email, by.Name, by.Display, devUserEmail, devUserName, devUserName)
+		}
+
+		table := m.MustRun("app", "history", "-a", appName).Stdout
+		if !strings.Contains(table, devUserName) {
+			t.Fatalf("history table does not show %q:\n%s", devUserName, table)
+		}
+	})
+
+	t.Run("whoami names the user", func(t *testing.T) {
+		var who struct {
+			UserID    string `json:"user_id"`
+			UserEmail string `json:"user_email"`
+			UserName  string `json:"user_name"`
+		}
+		r := m.MustRun("whoami", "--format", "json")
+		if err := json.Unmarshal([]byte(r.Stdout), &who); err != nil {
+			t.Fatalf("parse whoami: %v\n%s", err, r.Stdout)
+		}
+		if who.UserID != userXID || who.UserEmail != devUserEmail || who.UserName != devUserName {
+			t.Fatalf("whoami = %+v, want id %s, email %s, name %s", who, userXID, devUserEmail, devUserName)
+		}
+	})
 
 	// The stock testdata apps are ~24 KB, which is one small chunk and touches
 	// none of the limits this route actually risks. A context big enough to

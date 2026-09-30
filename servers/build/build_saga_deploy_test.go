@@ -128,7 +128,7 @@ func TestBuildSaga_PersistsInitiatingOrganizationWithoutActionIdentity(t *testin
 	h.streams.Register("stream-identity", makeTar(t, dockerfileTarball(t)))
 	requestCtx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{
 		Subject: "user-42", Method: rpc.AuthMethodJWT,
-		Metadata: map[string]any{"organization_id": "org-42"},
+		Metadata: map[string]any{"organization_id": "org-42", "email": "ada@example.com", "name": "Ada Lovelace"},
 	})
 	sb := &SagaBuilder{executor: h.executor}
 	// Actions run without the initiating RPC identity, as they do on recovery.
@@ -140,6 +140,8 @@ func TestBuildSaga_PersistsInitiatingOrganizationWithoutActionIdentity(t *testin
 	require.Equal(t, "user-42", actor.Subject)
 	require.Equal(t, "jwt", actor.AuthMethod)
 	require.Equal(t, "org-42", actor.OrganizationId)
+	require.Equal(t, "ada@example.com", actor.Email)
+	require.Equal(t, "Ada Lovelace", actor.Name)
 }
 
 // A direct-image deploy has no build or push phase to report, but it must still

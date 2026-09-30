@@ -36,7 +36,13 @@ miren upgrade [flags]
 miren upgrade
 ```
 
-**Upgrade the server or runner and the CLI on the host that runs it:**
+**Upgrade the server or runner and the CLI on the host that runs it (offers to re-run with sudo):**
+
+```bash
+miren upgrade
+```
+
+**The same from a script or other non-interactive shell, which gets no sudo prompt:**
 
 ```bash
 sudo miren upgrade

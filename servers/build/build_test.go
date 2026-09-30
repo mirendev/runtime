@@ -2074,10 +2074,11 @@ func TestValidateWorkloadsExist(t *testing.T) {
 func TestBuildVersionConfigStaticOnlyDoesNotCreateWebService(t *testing.T) {
 	spec := buildVersionConfig(ConfigInputs{
 		BuildResult: &BuildResult{WorkingDir: "/app"},
-		AppConfig:   &appconfig.AppConfig{Static: &appconfig.StaticConfig{Dir: "/app/dist"}},
+		AppConfig:   &appconfig.AppConfig{Static: &appconfig.StaticConfig{Dir: "/app/dist", ErrorPage: "errors/page.html"}},
 	})
 
 	assert.Equal(t, "/app/dist", spec.StaticDir)
+	assert.Equal(t, "errors/page.html", spec.StaticErrorPage)
 	assert.Empty(t, spec.Services)
 }
 

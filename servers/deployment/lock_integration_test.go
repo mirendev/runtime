@@ -141,7 +141,7 @@ func TestDeployVersionReleasesLockWhenDone(t *testing.T) {
 	require.NoError(t, err)
 
 	// A successful rollback-style deploy must leave the lock free afterward.
-	res, err := client.DeployVersion(ctx, "web", "prod", "web-v1", false, nil, "", "")
+	res, err := client.DeployVersion(ctx, "web", "prod", "web-v1", false, nil, "", "", "")
 	require.NoError(t, err)
 	require.False(t, res.HasError() && res.Error() != "", "deploy should succeed: %s", res.Error())
 
@@ -150,7 +150,7 @@ func TestDeployVersionReleasesLockWhenDone(t *testing.T) {
 	assert.False(t, lock.Held(), "a completed DeployVersion must release the lock")
 
 	// And a subsequent deploy is not blocked.
-	res2, err := client.DeployVersion(ctx, "web", "prod", "web-v1", false, nil, "", "")
+	res2, err := client.DeployVersion(ctx, "web", "prod", "web-v1", false, nil, "", "", "")
 	require.NoError(t, err)
 	assert.False(t, res2.HasError() && res2.Error() != "", "the next deploy must not be blocked")
 }
@@ -165,7 +165,7 @@ func TestDeployVersionMissingAppDoesNotCreateLock(t *testing.T) {
 	_, err := inmem.Client.Create(ctx, "ghost-v1", &core_v1alpha.AppVersion{Version: "ghost-v1"})
 	require.NoError(t, err)
 
-	res, err := client.DeployVersion(ctx, "ghost", "prod", "ghost-v1", false, nil, "", "")
+	res, err := client.DeployVersion(ctx, "ghost", "prod", "ghost-v1", false, nil, "", "", "")
 	require.NoError(t, err)
 	require.True(t, res.HasError() && res.Error() != "", "deploy should reject the missing app")
 

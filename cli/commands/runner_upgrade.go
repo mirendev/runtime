@@ -21,7 +21,7 @@ func RunnerUpgrade(ctx *Context, opts struct {
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure"`
 	HealthTimeout  int    `long:"health-timeout" default:"0" description:"Seconds to wait for the restarted runner to report ready"`
 }) error {
-	ctx.Warn("'miren runner upgrade' is deprecated; 'sudo miren upgrade' now upgrades the runner and the CLI together.")
+	ctx.Warn("'miren runner upgrade' is deprecated; 'miren upgrade' now upgrades the runner and the CLI together.")
 
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("runner upgrade requires root privileges (use sudo)")

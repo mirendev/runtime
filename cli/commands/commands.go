@@ -1179,7 +1179,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "sudo miren server operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
 		}),
 	))
-	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'sudo miren upgrade')", ServerUpgrade,
+	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'miren upgrade')", ServerUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade to the latest version",
 			Body: "sudo miren server upgrade",
@@ -1272,7 +1272,11 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren upgrade",
 		}),
 		WithExample(mflags.Example{
-			Name: "Upgrade the server or runner and the CLI on the host that runs it",
+			Name: "Upgrade the server or runner and the CLI on the host that runs it (offers to re-run with sudo)",
+			Body: "miren upgrade",
+		}),
+		WithExample(mflags.Example{
+			Name: "The same from a script or other non-interactive shell, which gets no sudo prompt",
 			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{
@@ -1413,11 +1417,40 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug entity ensure", Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure))
 
 	// Disk commands
-	d.Dispatch("disk", Section("disk", "Disk backup and recovery", "", WithSectionGroup(GroupServer)))
+	d.Dispatch("disk", Section("disk", "Disk backup, recovery, and acceleration", "", WithSectionGroup(GroupServer)))
 	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
 	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
 	d.Dispatch("disk undelete", Infer("disk undelete", "Restore a recently deleted disk", DiskUndelete))
 	d.Dispatch("disk list-deleted", Infer("disk list-deleted", "List deleted disks available for recovery", DiskListDeleted))
+
+	// Accelerator mode. These build and load the lbd kernel module, so they
+	// only do anything on Linux; the non-Linux builds register stubs that say
+	// so rather than leaving the command missing.
+	d.Dispatch("disk accelerator", Section("disk accelerator", "Faster block-device disks via the lbd kernel module", "",
+		WithSectionGroup(GroupServer),
+		WithSectionDescription(acceleratorSectionDescription)))
+	d.Dispatch("disk accelerator status", Infer("disk accelerator status", "Show whether accelerator mode can run on this host", DiskAcceleratorStatus,
+		WithExample(mflags.Example{
+			Name: "Check accelerator mode",
+			Body: "miren disk accelerator status",
+		}),
+	))
+	d.Dispatch("disk accelerator install", Infer("disk accelerator install", "Build and load the lbd kernel module for this kernel", DiskAcceleratorInstall,
+		WithExample(mflags.Example{
+			Name: "Enable accelerator mode on a runner",
+			Body: "miren disk accelerator install runner1",
+		}),
+		WithExample(mflags.Example{
+			Name: "Rebuild after a kernel upgrade",
+			Body: "miren disk accelerator install runner1 --force",
+		}),
+	))
+	d.Dispatch("disk accelerator uninstall", Infer("disk accelerator uninstall", "Unload and remove the lbd kernel module", DiskAcceleratorUninstall,
+		WithExample(mflags.Example{
+			Name: "Go back to loop devices",
+			Body: "sudo miren disk accelerator uninstall",
+		}),
+	))
 
 	// Debug disk commands
 	d.Dispatch("debug disk", Section("debug disk", "Disk entity debug commands", "", WithSectionDescription(diskSectionDescription)))
@@ -1435,6 +1468,13 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-delete", Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete))
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
+	// Break-glass: `miren disk backup`/`restore` drive the server and are the
+	// supported commands. These touch the image directly, for a host whose RPC
+	// listener is down, and so must run on the server.
+	d.Dispatch("debug disk backup", Infer("debug disk backup", "Back up a disk by reading its image directly (break-glass)", DebugDiskBackup))
+	d.Dispatch("debug disk restore", Infer("debug disk restore", "Restore a disk by writing its image directly (break-glass)", DebugDiskRestore))
+	d.Dispatch("debug disk undelete", Infer("debug disk undelete", "Recover a deleted disk by moving its data directly (break-glass)", DebugDiskUndelete))
+	d.Dispatch("debug disk list-deleted", Infer("debug disk list-deleted", "Read the soft-delete holding area directly (break-glass)", DebugDiskListDeleted))
 
 	// Debug saga commands
 	d.Dispatch("debug saga", Section("debug saga", "Saga execution debug commands", "", WithSectionDescription(sagaSectionDescription)))
@@ -1476,6 +1516,8 @@ To activate an existing version without selecting or building another image, pas
 miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+
+Use ` + "`" + `-m "describe this deploy"` + "`" + ` to attach a description to this deployment (including an existing-version deploy). It appears in ` + "`" + `miren app history` + "`" + ` and is separate from the Git commit message.
 
 ## Scripting and CI
 

@@ -320,7 +320,8 @@ type AppConfig struct {
 
 // StaticConfig selects build output that HTTP ingress serves directly.
 type StaticConfig struct {
-	Dir string `toml:"dir"`
+	Dir       string `toml:"dir"`
+	ErrorPage string `toml:"error_page,omitempty"`
 }
 
 // StaticDirectory returns the configured static output directory, if any.
@@ -423,6 +424,12 @@ func (ac *AppConfig) Validate() error {
 		return &ValidationError{
 			KeyPath: "static.dir",
 			Message: "static.dir must be an absolute path in the application build output",
+		}
+	}
+	if ac.Static != nil && ac.Static.ErrorPage != "" {
+		page := ac.Static.ErrorPage
+		if filepath.IsAbs(page) || filepath.Clean(page) != page || page == "." || page == ".." || strings.HasPrefix(page, "../") || strings.Contains(page, "\\") {
+			return &ValidationError{KeyPath: "static.error_page", Message: "static.error_page must be a relative path within static.dir"}
 		}
 	}
 

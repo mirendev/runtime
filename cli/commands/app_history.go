@@ -6,9 +6,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -24,14 +26,15 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 		CommitAuthorEmail string `json:"commit_author_email,omitempty"`
 	}
 	type deploymentJSON struct {
-		ID                 string       `json:"id"`
-		Status             string       `json:"status"`
-		AppVersionID       string       `json:"app_version_id,omitempty"`
-		DeployedAt         string       `json:"deployed_at,omitempty"`
-		DeployedByUserName string       `json:"deployed_by_user_name,omitempty"`
-		Phase              string       `json:"phase,omitempty"`
-		ErrorMessage       string       `json:"error_message,omitempty"`
-		GitInfo            *gitInfoJSON `json:"git_info,omitempty"`
+		ID           string          `json:"id"`
+		Status       string          `json:"status"`
+		AppVersionID string          `json:"app_version_id,omitempty"`
+		DeployedAt   string          `json:"deployed_at,omitempty"`
+		DeployedBy   *deployedByJSON `json:"deployed_by,omitempty"`
+		Phase        string          `json:"phase,omitempty"`
+		ErrorMessage string          `json:"error_message,omitempty"`
+		Message      string          `json:"message,omitempty"`
+		GitInfo      *gitInfoJSON    `json:"git_info,omitempty"`
 	}
 
 	var deps []deploymentJSON
@@ -42,9 +45,7 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 			AppVersionID: dep.AppVersionId(),
 		}
 
-		if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-			d.DeployedByUserName = dep.DeployedByUserName()
-		}
+		d.DeployedBy = deployedByOf(dep)
 
 		if dep.HasDeployedAt() && dep.DeployedAt() != nil {
 			d.DeployedAt = time.Unix(dep.DeployedAt().Seconds(), 0).UTC().Format(time.RFC3339)
@@ -56,6 +57,9 @@ func printAppHistoryJSON(deployments []*deployment_v1alpha.DeploymentInfo, app, 
 
 		if dep.HasErrorMessage() && dep.ErrorMessage() != "" {
 			d.ErrorMessage = dep.ErrorMessage()
+		}
+		if dep.HasMessage() {
+			d.Message = dep.Message()
 		}
 
 		if dep.HasGitInfo() && dep.GitInfo() != nil {
@@ -215,7 +219,7 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "ID", "ERROR", "GIT SHA", "BRANCH", "COMMIT MESSAGE")
+		headers = append(headers, "WHEN", "ID", "ERROR", "GIT SHA", "BRANCH", "COMMIT MESSAGE", "MESSAGE")
 		// Find ID column index dynamically
 		idColIndex := -1
 		for i, h := range headers {
@@ -225,16 +229,18 @@ func buildDeploymentTable(deployments []*deployment_v1alpha.DeploymentInfo, opts
 			}
 		}
 		builder = ui.Columns().
-			NoTruncate(0, idColIndex).   // STATUS and ID
-			MaxWidth(len(headers)-1, 40) // COMMIT MESSAGE
+			NoTruncate(0, idColIndex).
+			MaxWidth(len(headers)-2, 40).
+			MaxWidth(len(headers)-1, 40)
 	} else {
 		headers = []string{"STATUS", "VERSION"}
 		if opts.hasIdentity {
 			headers = append(headers, "DEPLOYED BY")
 		}
-		headers = append(headers, "WHEN", "GIT SHA", "BRANCH")
+		headers = append(headers, "WHEN", "GIT SHA", "BRANCH", "MESSAGE")
 		builder = ui.Columns().
-			NoTruncate(0) // STATUS
+			NoTruncate(0).
+			MaxWidth(len(headers)-1, 40)
 	}
 
 	for _, dep := range deployments {
@@ -258,13 +264,23 @@ func buildDeploymentRow(dep *deployment_v1alpha.DeploymentInfo, opts historyDisp
 	}
 
 	row = append(row, formatDeploymentTime(dep))
+	message := "-"
+	if dep.HasMessage() && strings.TrimSpace(dep.Message()) != "" {
+		message = firstLine(strings.TrimSpace(dep.Message()))
+		message = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return '�'
+			}
+			return r
+		}, message)
+	}
 
 	if opts.detailed {
 		gitSha, gitBranch, gitMessage := formatGitInfo(dep)
-		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage)
+		row = append(row, ui.DisplayShortID(dep.ShortId(), dep.Id()), formatErrorInfo(dep, status), gitSha, gitBranch, gitMessage, message)
 	} else {
 		gitSha, gitBranch, _ := formatGitInfo(dep)
-		row = append(row, gitSha, gitBranch)
+		row = append(row, gitSha, gitBranch, message)
 	}
 
 	return row
@@ -305,10 +321,41 @@ func formatDeploymentTime(dep *deployment_v1alpha.DeploymentInfo) string {
 }
 
 func formatUser(dep *deployment_v1alpha.DeploymentInfo) string {
-	if dep.HasDeployedByUserName() && dep.DeployedByUserName() != "" {
-		return dep.DeployedByUserName()
+	if who := deployerOf(dep); who != "" {
+		return who
 	}
 	return "-"
+}
+
+// deployerOf names who started a deployment, or "" when nobody is recorded.
+func deployerOf(dep *deployment_v1alpha.DeploymentInfo) string {
+	return deploylifecycle.DescribeDeployer(
+		dep.DeployedByName(), dep.DeployedByEmail(), dep.DeployedBySubject(), dep.DeployedByAuthMethod())
+}
+
+// deployedByJSON is the deployer as app history and app status report it in
+// JSON: the recorded identity, plus the same rendering the tables show.
+type deployedByJSON struct {
+	Subject    string `json:"subject"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	Email      string `json:"email,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Display    string `json:"display"`
+}
+
+// deployedByOf returns nil when no deployer was recorded, so the key is
+// omitted rather than reported as an empty identity.
+func deployedByOf(dep *deployment_v1alpha.DeploymentInfo) *deployedByJSON {
+	if dep.DeployedBySubject() == "" {
+		return nil
+	}
+	return &deployedByJSON{
+		Subject:    dep.DeployedBySubject(),
+		AuthMethod: dep.DeployedByAuthMethod(),
+		Email:      dep.DeployedByEmail(),
+		Name:       dep.DeployedByName(),
+		Display:    deployerOf(dep),
+	}
 }
 
 func formatGitInfo(dep *deployment_v1alpha.DeploymentInfo) (sha, branch, message string) {

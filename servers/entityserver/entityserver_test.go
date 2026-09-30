@@ -1,15 +1,18 @@
 package entityserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -227,6 +230,42 @@ func TestEntityServer_DeleteValidationByKind(t *testing.T) {
 	_, err = sc.Delete(ctx, "example/two")
 	require.NoError(t, err)
 	require.Equal(t, 1, called)
+}
+
+func TestEntityServer_MakeAttrNamedEnum(t *testing.T) {
+	store := entity.NewMockStore()
+	sb := schema.Builder("make_attr_enum_test", "v1")
+	sb.Singleton("make_attr_enum_test/canonical.ready")
+	sb.Enum("Status", "make_attr_enum_test/status", []entity.Id{"make_attr_enum_test/canonical.ready"})
+	require.NoError(t, sb.Apply(t.Context(), store))
+
+	client := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(&EntityServer{
+			Log:   slog.Default(),
+			Store: store,
+		})),
+	}
+
+	result, err := client.MakeAttr(t.Context(), "make_attr_enum_test/status", "ready")
+	require.NoError(t, err)
+	assert.True(t, entity.RefValue("make_attr_enum_test/canonical.ready").Equal(result.Attr().Value))
+
+	_, err = client.MakeAttr(t.Context(), "make_attr_enum_test/status", "nope")
+	require.ErrorContains(t, err, "invalid enum value: nope")
+}
+
+func TestEnumValueFromStringRejectsAmbiguousShortRef(t *testing.T) {
+	values := []entity.Value{
+		entity.RefValue("test/first.ready"),
+		entity.RefValue("test/second.ready"),
+	}
+
+	exact, ok := enumRefFromString(values, "test/second.ready")
+	require.True(t, ok)
+	assert.True(t, exact.Equal(entity.RefValue("test/second.ready")))
+
+	_, ok = enumRefFromString(values, "ready")
+	assert.False(t, ok)
 }
 
 func TestEntityServer_WatchIndex(t *testing.T) {
@@ -1271,4 +1310,107 @@ func TestEntityServer_ListPage(t *testing.T) {
 		r.Equal(testKind, kind.Value.Id().String())
 	})
 
+}
+
+func TestEntityServer_OrphanReadsStayQuietAndPure(t *testing.T) {
+	ctx := t.Context()
+	client, prefix := setupTestEtcd(t)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
+	require.NoError(t, err)
+	server, err := NewEntityServer(log, store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	key := indexPrefix + base58.Encode([]byte(id))
+	_, err = client.Put(ctx, key, id.String())
+	require.NoError(t, err)
+	logs.Reset()
+
+	for range 2 {
+		list, err := sc.List(ctx, index)
+		require.NoError(t, err)
+		require.Len(t, list.Values(), 1)
+		require.Equal(t, live.Id().String(), list.Values()[0].Id())
+		page, err := sc.ListPage(ctx, index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Values(), 1)
+		require.Equal(t, int64(1), page.Total())
+		entry, err := client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Len(t, entry.Kvs, 1, "listing must leave GC to repair the orphan")
+	}
+	require.Equal(t, 4, strings.Count(logs.String(), "level=DEBUG msg=\"entity in index but not in store, skipping\""))
+	require.NotContains(t, logs.String(), "level=WARN")
+	require.NotContains(t, logs.String(), "level=ERROR")
+}
+
+func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client, prefix := setupTestEtcd(t)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	server, err := NewEntityServer(log, store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	_, err = client.Put(ctx, indexPrefix+base58.Encode([]byte(id)), id.String())
+	require.NoError(t, err)
+	listed, err := client.Get(ctx, indexPrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	deletes := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, listed.Header.Revision+1, stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deletes <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	result, err := sc.List(ctx, index)
+	require.NoError(t, err)
+	require.Empty(t, result.Values())
+	stats, err := store.CleanupStaleCollectionEntries(ctx, log, entity.CleanupOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, stats.StaleEntriesRemoved)
+	select {
+	case op := <-deletes:
+		require.Equal(t, id.String(), op.EntityId())
+		require.False(t, op.HasEntity())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for orphan delete event")
+	}
+	cancel()
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watch to stop")
+	}
+	require.NotContains(t, logs.String(), "level=ERROR")
 }

@@ -298,7 +298,7 @@ func LogsSystem(ctx *Context, opts struct {
 	target := &app_v1alpha.LogTarget{}
 	target.SetSystem(true)
 
-	combinedFilter := buildSystemFilter(opts.Component, opts.Filter)
+	structuralFilter := buildSystemFilter(opts.Component, "")
 
 	printer, flush := logPrinter(ctx, opts.IsJSON(), opts.Follow)
 	defer flush()
@@ -311,7 +311,11 @@ func LogsSystem(ctx *Context, opts struct {
 		return nil
 	})
 
-	_, err = ac.StreamLogChunks(ctx, target, from, opts.Follow, combinedFilter, callback, until)
+	if cl.HasMethod(ctx, "streamLogChunksV2") {
+		_, err = ac.StreamLogChunksV2(ctx, target, from, opts.Follow, structuralFilter, opts.Filter, callback, until)
+	} else {
+		_, err = ac.StreamLogChunks(ctx, target, from, opts.Follow, buildSystemFilter(opts.Component, opts.Filter), callback, until)
+	}
 	return err
 }
 
@@ -357,8 +361,15 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 			return fmt.Errorf("--until requires a newer server version")
 		}
 
-		// Append system exclusion for server-side filtering on app queries
 		filter := args.combinedFilter
+		grep := ""
+		useV2 := cl.HasMethod(ctx, "streamLogChunksV2")
+		if useV2 {
+			filter = structuralFilter(args.combinedFilter, args.rawFilter)
+			grep = args.rawFilter
+		}
+
+		// Append system exclusion for server-side filtering on app queries.
 		if args.app != "" {
 			if filter == "" {
 				filter = systemExclusion
@@ -366,7 +377,7 @@ func dispatchLogs(ctx *Context, cl *rpc.NetworkClient, args logDispatchArgs) err
 				filter = systemExclusion + " " + filter
 			}
 		}
-		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.from, args.until, args.follow, filter, printer)
+		return streamLogChunks(ctx, cl, args.app, args.sandbox, args.from, args.until, args.follow, filter, grep, useV2, printer)
 	}
 
 	// Servers without streamLogChunks can't honor an upper bound at all.
@@ -892,7 +903,17 @@ func streamLogs(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from *
 	return err
 }
 
-func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from, until *standard.Timestamp, follow bool, filter string, printer func(*app_v1alpha.LogEntry)) error {
+func structuralFilter(combined, grep string) string {
+	if grep == "" {
+		return combined
+	}
+	if combined == grep {
+		return ""
+	}
+	return strings.TrimSuffix(combined, " "+grep)
+}
+
+func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, from, until *standard.Timestamp, follow bool, filter, grep string, useV2 bool, printer func(*app_v1alpha.LogEntry)) error {
 	ac := app_v1alpha.LogsClient{Client: cl}
 
 	// Build target
@@ -915,7 +936,12 @@ func streamLogChunks(ctx *Context, cl *rpc.NetworkClient, app, sandbox string, f
 		return nil
 	})
 
-	_, err := ac.StreamLogChunks(ctx, target, from, follow, filter, callback, until)
+	var err error
+	if useV2 {
+		_, err = ac.StreamLogChunksV2(ctx, target, from, follow, filter, grep, callback, until)
+	} else {
+		_, err = ac.StreamLogChunks(ctx, target, from, follow, filter, callback, until)
+	}
 	return err
 }
 

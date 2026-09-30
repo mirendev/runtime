@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -260,8 +261,8 @@ func WithFromTime(t time.Time) LogReaderOption {
 	}
 }
 
-// WithUntilTime bounds the query to entries at or before t. When unset, queries
-// read up to the present.
+// WithUntilTime bounds the query to entries before t. VictoriaLogs treats the
+// end parameter as exclusive. When unset, queries read up to the present.
 func WithUntilTime(t time.Time) LogReaderOption {
 	return func(o *logReadOpts) {
 		o.Until = t
@@ -381,9 +382,9 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 
 	// Avoid sort pipes — they force VictoriaLogs to buffer and sort all
 	// matching entries server-side before returning results. Instead, use
-	// the native limit query parameter (returns most recent N) and accept
-	// VictoriaLogs' ingestion order, which is approximately chronological
-	// for a single-writer server.
+	// the native limit query parameter to select the most recent N, then sort
+	// that bounded result locally because VictoriaLogs versions differ in
+	// whether they return limited rows oldest-first or newest-first.
 	params := url.Values{}
 	params.Set("query", query)
 
@@ -422,7 +423,23 @@ func (l *LogReader) executeStreamQuery(ctx context.Context, query string, logCh 
 		return fmt.Errorf("victorialogs returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return l.parseLogStream(ctx, resp.Body, logCh)
+	if o.Limit <= 0 {
+		return l.parseLogStream(ctx, resp.Body, logCh)
+	}
+
+	entries, err := l.parseLogEntries(resp.Body)
+	if err != nil {
+		return err
+	}
+	sortLogEntries(entries)
+	for _, entry := range entries {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case logCh <- entry:
+		}
+	}
+	return nil
 }
 
 func (l *LogReader) executeTailQuery(ctx context.Context, query string, logCh chan<- LogEntry, opts ...LogReaderOption) error {
@@ -488,6 +505,28 @@ func (l *LogReader) parseLogStream(ctx context.Context, body io.Reader, logCh ch
 	}
 
 	return scanner.Err()
+}
+
+func (l *LogReader) parseLogEntries(body io.Reader) ([]LogEntry, error) {
+	var entries []LogEntry
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		entry, err := l.parseLogLine(line)
+		if err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, scanner.Err()
+}
+
+func sortLogEntries(entries []LogEntry) {
+	slices.SortStableFunc(entries, func(a, b LogEntry) int {
+		return a.Timestamp.Compare(b.Timestamp)
+	})
 }
 
 func (l *LogReader) parseLogLine(line []byte) (LogEntry, error) {
@@ -592,5 +631,6 @@ func (l *LogReader) executeQuery(ctx context.Context, query string, limit int, s
 		entries = append(entries, entry)
 	}
 
+	sortLogEntries(entries)
 	return entries, nil
 }

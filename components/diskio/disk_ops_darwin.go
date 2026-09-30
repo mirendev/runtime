@@ -60,7 +60,7 @@ func (s *stubDiskMountOps) FindLoopByBacking(_ string) (string, error) {
 	return "", nil
 }
 
-func (s *stubDiskMountOps) FindAllLoopBackings() (map[string]string, error) {
+func (s *stubDiskMountOps) FindAllLoopBackings() (map[string]LoopBacking, error) {
 	return nil, nil
 }
 
@@ -108,7 +108,7 @@ func EnsureLoopDevices(_ *slog.Logger) error {
 	return fmt.Errorf("loop devices not supported on darwin")
 }
 
-func EnsureLbdDevices(_ *slog.Logger) error {
+func EnsureLbdDevices(_ context.Context, _ *slog.Logger) error {
 	return fmt.Errorf("lbd not supported on darwin")
 }
 

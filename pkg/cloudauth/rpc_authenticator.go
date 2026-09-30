@@ -171,6 +171,8 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 		Method:  rpc.AuthMethodJWT,
 		Metadata: map[string]any{
 			"organization_id": claims.OrganizationID,
+			"email":           claims.Email,
+			"name":            claims.Name,
 		},
 	}, nil
 }

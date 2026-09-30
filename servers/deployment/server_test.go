@@ -67,6 +67,7 @@ func TestToDeploymentInfo(t *testing.T) {
 			name: "deployment with dirty git state",
 			deployment: &core_v1alpha.Deployment{
 				ID:         "test-deployment-1",
+				Message:    "deploy the hotfix",
 				AppName:    "test-app",
 				AppVersion: "v1.0.0",
 				ClusterId:  "test-cluster",
@@ -86,6 +87,9 @@ func TestToDeploymentInfo(t *testing.T) {
 				},
 			},
 			checkFunc: func(t *testing.T, info *deployment_v1alpha.DeploymentInfo) {
+				if info.Message() != "deploy the hotfix" {
+					t.Errorf("Expected deployment message, got %q", info.Message())
+				}
 				if !info.HasGitInfo() {
 					t.Fatal("Expected git info")
 				}
@@ -1028,28 +1032,42 @@ func TestDeployVersion(t *testing.T) {
 	}
 
 	t.Run("missing app_name returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_name")
 		}
 	})
 
 	t.Run("missing cluster_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty cluster_id")
 		}
 	})
 
 	t.Run("missing app_version_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_version_id")
 		}
 	})
 
+	t.Run("ephemeral message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "preview", "", "reason")
+		if err == nil || !strings.Contains(err.Error(), "deployment message is not supported") {
+			t.Fatalf("expected early ephemeral message rejection: %v", err)
+		}
+	})
+
+	t.Run("oversized message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", strings.Repeat("x", deploylifecycle.MaxDeploymentMessageBytes+1))
+		if err == nil || !strings.Contains(err.Error(), "at most 1024 bytes") {
+			t.Fatalf("expected actionable message length error: %v", err)
+		}
+	})
+
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -1081,6 +1099,7 @@ func TestDeployVersion(t *testing.T) {
 		// Create a prior deployment record for this version (to serve as source)
 		priorDep := &core_v1alpha.Deployment{
 			AppName:    "testapp",
+			Message:    "previous deployment",
 			ClusterId:  "cluster1",
 			AppVersion: "testapp-v1abc",
 			Status:     "succeeded",
@@ -1098,7 +1117,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Deploy the version
-		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil, "", "", "redeploy for maintenance")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1127,6 +1146,9 @@ func TestDeployVersion(t *testing.T) {
 		}
 		if dep.GitInfo().Sha() != "abc123" {
 			t.Errorf("Expected git SHA 'abc123', got %s", dep.GitInfo().Sha())
+		}
+		if dep.Message() != "redeploy for maintenance" {
+			t.Errorf("Expected new deployment message, got %q", dep.Message())
 		}
 	})
 
@@ -1180,7 +1202,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Roll back to v1
-		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", string(version1ID), true, nil, "", "")
+		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", string(version1ID), true, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion (rollback) failed: %v", err)
 		}
@@ -1240,7 +1262,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Try to deploy — should be blocked
-		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -1289,7 +1311,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 	}
 
 	t.Run("ephemeral deploy sets label and TTL without activating", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "ephapp", "cluster1", "ephapp-v1abc", false, nil, "feat-preview", "48h")
+		result, err := client.DeployVersion(ctx, "ephapp", "cluster1", "ephapp-v1abc", false, nil, "feat-preview", "48h", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1362,7 +1384,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Fatalf("Failed to create version: %v", err)
 		}
 
-		result, err := client.DeployVersion(ctx, "ephapp-bad", "cluster1", "ephapp-bad-v1", false, nil, "bad-ttl", "notaduration")
+		result, err := client.DeployVersion(ctx, "ephapp-bad", "cluster1", "ephapp-bad-v1", false, nil, "bad-ttl", "notaduration", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1388,7 +1410,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Fatalf("Failed to create version: %v", err)
 		}
 
-		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "")
+		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}

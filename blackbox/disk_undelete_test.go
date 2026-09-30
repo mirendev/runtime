@@ -60,17 +60,16 @@ func TestDiskUndelete(t *testing.T) {
 		},
 	)
 
-	// Step 6: Verify the disk appears in list-deleted
-	// These commands need sudo because /var/lib/miren/disk-data is owned by root
+	// Step 6: Verify the disk appears in list-deleted.
+	// No sudo and no --data-path: these go through the server now, so they work
+	// from a client that cannot see /var/lib/miren at all.
 	t.Log("Checking list-deleted...")
-	r = m.RunCmd("sudo", "m", "disk", "list-deleted")
-	r.RequireSuccess(t)
+	r = m.MustRun("disk", "list-deleted")
 	r.RequireContains(t, diskName)
 
 	// Step 7: Undelete the disk
 	t.Log("Undeleting disk...")
-	r = m.RunCmd("sudo", "m", "disk", "undelete", "-n", diskName)
-	r.RequireSuccess(t)
+	r = m.MustRun("disk", "undelete", "-n", diskName)
 	r.RequireContains(t, "Disk restored successfully")
 
 	// Step 8: Verify the disk is back and provisioned
@@ -89,8 +88,7 @@ func TestDiskUndelete(t *testing.T) {
 	)
 
 	// Step 9: Verify it's no longer in list-deleted
-	r = m.RunCmd("sudo", "m", "disk", "list-deleted")
-	r.RequireSuccess(t)
+	r = m.MustRun("disk", "list-deleted")
 	if r.OutputContains(diskName) {
 		t.Error("disk should no longer appear in list-deleted after undelete")
 	}

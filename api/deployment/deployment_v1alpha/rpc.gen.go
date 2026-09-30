@@ -11,23 +11,28 @@ import (
 )
 
 type deploymentInfoData struct {
-	Id                  *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
-	AppName             *string             `cbor:"1,keyasint,omitempty" json:"app_name,omitempty"`
-	AppVersionId        *string             `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
-	ClusterId           *string             `cbor:"3,keyasint,omitempty" json:"cluster_id,omitempty"`
-	Status              *string             `cbor:"4,keyasint,omitempty" json:"status,omitempty"`
-	Phase               *string             `cbor:"5,keyasint,omitempty" json:"phase,omitempty"`
-	DeployedByUserId    *string             `cbor:"6,keyasint,omitempty" json:"deployed_by_user_id,omitempty"`
-	DeployedByUserEmail *string             `cbor:"7,keyasint,omitempty" json:"deployed_by_user_email,omitempty"`
-	DeployedAt          *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"deployed_at,omitempty"`
-	CompletedAt         *standard.Timestamp `cbor:"9,keyasint,omitempty" json:"completed_at,omitempty"`
-	ErrorMessage        *string             `cbor:"10,keyasint,omitempty" json:"error_message,omitempty"`
-	BuildLogs           *string             `cbor:"11,keyasint,omitempty" json:"build_logs,omitempty"`
-	GitInfo             *GitInfo            `cbor:"12,keyasint,omitempty" json:"git_info,omitempty"`
-	DeployedByUserName  *string             `cbor:"21,keyasint,omitempty" json:"deployed_by_user_name,omitempty"`
-	SourceDeploymentId  *string             `cbor:"22,keyasint,omitempty" json:"source_deployment_id,omitempty"`
-	ShortId             *string             `cbor:"23,keyasint,omitempty" json:"short_id,omitempty"`
-	AppVersionShortId   *string             `cbor:"24,keyasint,omitempty" json:"app_version_short_id,omitempty"`
+	Id                   *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	AppName              *string             `cbor:"1,keyasint,omitempty" json:"app_name,omitempty"`
+	AppVersionId         *string             `cbor:"2,keyasint,omitempty" json:"app_version_id,omitempty"`
+	ClusterId            *string             `cbor:"3,keyasint,omitempty" json:"cluster_id,omitempty"`
+	Status               *string             `cbor:"4,keyasint,omitempty" json:"status,omitempty"`
+	Phase                *string             `cbor:"5,keyasint,omitempty" json:"phase,omitempty"`
+	DeployedByUserId     *string             `cbor:"6,keyasint,omitempty" json:"deployed_by_user_id,omitempty"`
+	DeployedByUserEmail  *string             `cbor:"7,keyasint,omitempty" json:"deployed_by_user_email,omitempty"`
+	DeployedAt           *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"deployed_at,omitempty"`
+	CompletedAt          *standard.Timestamp `cbor:"9,keyasint,omitempty" json:"completed_at,omitempty"`
+	ErrorMessage         *string             `cbor:"10,keyasint,omitempty" json:"error_message,omitempty"`
+	BuildLogs            *string             `cbor:"11,keyasint,omitempty" json:"build_logs,omitempty"`
+	GitInfo              *GitInfo            `cbor:"12,keyasint,omitempty" json:"git_info,omitempty"`
+	DeployedByUserName   *string             `cbor:"21,keyasint,omitempty" json:"deployed_by_user_name,omitempty"`
+	SourceDeploymentId   *string             `cbor:"22,keyasint,omitempty" json:"source_deployment_id,omitempty"`
+	ShortId              *string             `cbor:"23,keyasint,omitempty" json:"short_id,omitempty"`
+	AppVersionShortId    *string             `cbor:"24,keyasint,omitempty" json:"app_version_short_id,omitempty"`
+	Message              *string             `cbor:"25,keyasint,omitempty" json:"message,omitempty"`
+	DeployedBySubject    *string             `cbor:"26,keyasint,omitempty" json:"deployed_by_subject,omitempty"`
+	DeployedByAuthMethod *string             `cbor:"27,keyasint,omitempty" json:"deployed_by_auth_method,omitempty"`
+	DeployedByEmail      *string             `cbor:"28,keyasint,omitempty" json:"deployed_by_email,omitempty"`
+	DeployedByName       *string             `cbor:"29,keyasint,omitempty" json:"deployed_by_name,omitempty"`
 }
 
 type DeploymentInfo struct {
@@ -278,6 +283,81 @@ func (v *DeploymentInfo) AppVersionShortId() string {
 
 func (v *DeploymentInfo) SetAppVersionShortId(app_version_short_id string) {
 	v.data.AppVersionShortId = &app_version_short_id
+}
+
+func (v *DeploymentInfo) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DeploymentInfo) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
+}
+
+func (v *DeploymentInfo) SetMessage(message string) {
+	v.data.Message = &message
+}
+
+func (v *DeploymentInfo) HasDeployedBySubject() bool {
+	return v.data.DeployedBySubject != nil
+}
+
+func (v *DeploymentInfo) DeployedBySubject() string {
+	if v.data.DeployedBySubject == nil {
+		return ""
+	}
+	return *v.data.DeployedBySubject
+}
+
+func (v *DeploymentInfo) SetDeployedBySubject(deployed_by_subject string) {
+	v.data.DeployedBySubject = &deployed_by_subject
+}
+
+func (v *DeploymentInfo) HasDeployedByAuthMethod() bool {
+	return v.data.DeployedByAuthMethod != nil
+}
+
+func (v *DeploymentInfo) DeployedByAuthMethod() string {
+	if v.data.DeployedByAuthMethod == nil {
+		return ""
+	}
+	return *v.data.DeployedByAuthMethod
+}
+
+func (v *DeploymentInfo) SetDeployedByAuthMethod(deployed_by_auth_method string) {
+	v.data.DeployedByAuthMethod = &deployed_by_auth_method
+}
+
+func (v *DeploymentInfo) HasDeployedByEmail() bool {
+	return v.data.DeployedByEmail != nil
+}
+
+func (v *DeploymentInfo) DeployedByEmail() string {
+	if v.data.DeployedByEmail == nil {
+		return ""
+	}
+	return *v.data.DeployedByEmail
+}
+
+func (v *DeploymentInfo) SetDeployedByEmail(deployed_by_email string) {
+	v.data.DeployedByEmail = &deployed_by_email
+}
+
+func (v *DeploymentInfo) HasDeployedByName() bool {
+	return v.data.DeployedByName != nil
+}
+
+func (v *DeploymentInfo) DeployedByName() string {
+	if v.data.DeployedByName == nil {
+		return ""
+	}
+	return *v.data.DeployedByName
+}
+
+func (v *DeploymentInfo) SetDeployedByName(deployed_by_name string) {
+	v.data.DeployedByName = &deployed_by_name
 }
 
 func (v *DeploymentInfo) MarshalCBOR() ([]byte, error) {
@@ -1550,6 +1630,7 @@ type deploymentDeployVersionArgsData struct {
 	EnvVars        *[]*EnvironmentVariable `cbor:"4,keyasint,omitempty" json:"env_vars,omitempty"`
 	EphemeralLabel *string                 `cbor:"5,keyasint,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl   *string                 `cbor:"6,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	Message        *string                 `cbor:"7,keyasint,omitempty" json:"message,omitempty"`
 }
 
 type DeploymentDeployVersionArgs struct {
@@ -1632,6 +1713,17 @@ func (v *DeploymentDeployVersionArgs) EphemeralTtl() string {
 		return ""
 	}
 	return *v.data.EphemeralTtl
+}
+
+func (v *DeploymentDeployVersionArgs) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DeploymentDeployVersionArgs) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
 }
 
 func (v *DeploymentDeployVersionArgs) MarshalCBOR() ([]byte, error) {
@@ -2534,7 +2626,7 @@ func AdaptDeployment(t Deployment) *rpc.Interface {
 			InterfaceName: "Deployment",
 			Index:         9,
 			Public:        false,
-			Params:        []string{"app_name", "cluster_id", "app_version_id", "is_rollback", "env_vars", "ephemeral_label", "ephemeral_ttl"},
+			Params:        []string{"app_name", "cluster_id", "app_version_id", "is_rollback", "env_vars", "ephemeral_label", "ephemeral_ttl", "message"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.DeployVersion(ctx, &DeploymentDeployVersion{Call: call})
 			},
@@ -2922,7 +3014,7 @@ func (v *DeploymentClientDeployVersionResults) AccessInfo() *AccessInfo {
 	return *v.data.AccessInfo
 }
 
-func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string) (*DeploymentClientDeployVersionResults, error) {
+func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cluster_id string, app_version_id string, is_rollback bool, env_vars []*EnvironmentVariable, ephemeral_label string, ephemeral_ttl string, message string) (*DeploymentClientDeployVersionResults, error) {
 	args := DeploymentDeployVersionArgs{}
 	args.data.AppName = &app_name
 	args.data.ClusterId = &cluster_id
@@ -2931,6 +3023,7 @@ func (v DeploymentClient) DeployVersion(ctx context.Context, app_name string, cl
 	args.data.EnvVars = &env_vars
 	args.data.EphemeralLabel = &ephemeral_label
 	args.data.EphemeralTtl = &ephemeral_ttl
+	args.data.Message = &message
 
 	var ret deploymentDeployVersionResultsData
 

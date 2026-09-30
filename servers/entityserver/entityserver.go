@@ -611,13 +611,14 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					// and the entity key are removed together in one atomic txn, so
 					// the entity is already gone at this event's revision; read it at
 					// the prior revision to recover what was deleted.
-					en, err := e.Store.GetEntity(ctx, entityId)
-					if err != nil {
-						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
+					en, currentErr := e.Store.GetEntity(ctx, entityId)
+					readErr := currentErr
+					if currentErr != nil {
+						en, readErr = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
 					}
-					if err != nil {
-						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)
-					} else {
+					if readErr != nil && (!isNotFound(currentErr) || !isNotFound(readErr)) {
+						e.Log.Error("failed to get entity for delete event", "error", readErr, "id", entityId)
+					} else if readErr == nil {
 						var rpcEntity entityserver_v1alpha.Entity
 						rpcEntity.SetId(en.Id().String())
 						rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
@@ -690,9 +691,8 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i],
-				"index", index)
+			e.Log.Debug("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
 			continue
 		}
 
@@ -837,12 +837,9 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 		}
 
 	case entity.TypeEnum:
-		value = entity.RefValue(id)
-
-		// Look up the enum value in the schema
-		if !slices.ContainsFunc(schema.EnumValues, func(v entity.Value) bool {
-			return v.Equal(value)
-		}) {
+		var ok bool
+		value, ok = enumRefFromString(schema.EnumValues, args.Value())
+		if !ok {
 			return fmt.Errorf("invalid enum value: %s", args.Value())
 		}
 
@@ -853,6 +850,28 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 	req.Results().SetAttr(&entity.Attr{ID: id, Value: value})
 
 	return nil
+}
+
+func enumRefFromString(values []entity.Value, input string) (entity.Value, bool) {
+	// Ref-backed enum values accept their short member names as input.
+	for _, value := range values {
+		if value.Kind() == entity.KindId && string(value.Id()) == input {
+			return value, true
+		}
+	}
+
+	var match entity.Value
+	matches := 0
+	for _, value := range values {
+		if value.Kind() == entity.KindId && strings.HasSuffix(string(value.Id()), "."+input) {
+			match = value
+			matches++
+		}
+	}
+	if matches == 1 {
+		return match, true
+	}
+	return entity.Value{}, false
 }
 
 func (e *EntityServer) LookupKind(ctx context.Context, req *entityserver_v1alpha.EntityAccessLookupKind) error {
@@ -1106,7 +1125,7 @@ func (e *EntityServer) resolve(
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
 		} else {
-			e.Log.Error("entity in index but not in store, skipping",
+			e.Log.Debug("entity in index but not in store, skipping",
 				"id", ids[i], "index", index)
 		}
 

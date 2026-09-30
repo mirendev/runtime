@@ -1235,6 +1235,170 @@ func (v *PoolStatus) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type serviceHealthData struct {
+	Service            *string             `cbor:"0,keyasint,omitempty" json:"service,omitempty"`
+	Health             *string             `cbor:"1,keyasint,omitempty" json:"health,omitempty"`
+	Running            *int32              `cbor:"2,keyasint,omitempty" json:"running,omitempty"`
+	Dead               *int32              `cbor:"3,keyasint,omitempty" json:"dead,omitempty"`
+	CrashCount         *int64              `cbor:"4,keyasint,omitempty" json:"crash_count,omitempty"`
+	CooldownSeconds    *int32              `cbor:"5,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
+	LastExitCode       *int64              `cbor:"6,keyasint,omitempty" json:"last_exit_code,omitempty"`
+	LastFailureSandbox *string             `cbor:"7,keyasint,omitempty" json:"last_failure_sandbox,omitempty"`
+	LastFailureAt      *standard.Timestamp `cbor:"8,keyasint,omitempty" json:"last_failure_at,omitempty"`
+}
+
+type ServiceHealth struct {
+	data serviceHealthData
+}
+
+func (v *ServiceHealth) HasService() bool {
+	return v.data.Service != nil
+}
+
+func (v *ServiceHealth) Service() string {
+	if v.data.Service == nil {
+		return ""
+	}
+	return *v.data.Service
+}
+
+func (v *ServiceHealth) SetService(service string) {
+	v.data.Service = &service
+}
+
+func (v *ServiceHealth) HasHealth() bool {
+	return v.data.Health != nil
+}
+
+func (v *ServiceHealth) Health() string {
+	if v.data.Health == nil {
+		return ""
+	}
+	return *v.data.Health
+}
+
+func (v *ServiceHealth) SetHealth(health string) {
+	v.data.Health = &health
+}
+
+func (v *ServiceHealth) HasRunning() bool {
+	return v.data.Running != nil
+}
+
+func (v *ServiceHealth) Running() int32 {
+	if v.data.Running == nil {
+		return 0
+	}
+	return *v.data.Running
+}
+
+func (v *ServiceHealth) SetRunning(running int32) {
+	v.data.Running = &running
+}
+
+func (v *ServiceHealth) HasDead() bool {
+	return v.data.Dead != nil
+}
+
+func (v *ServiceHealth) Dead() int32 {
+	if v.data.Dead == nil {
+		return 0
+	}
+	return *v.data.Dead
+}
+
+func (v *ServiceHealth) SetDead(dead int32) {
+	v.data.Dead = &dead
+}
+
+func (v *ServiceHealth) HasCrashCount() bool {
+	return v.data.CrashCount != nil
+}
+
+func (v *ServiceHealth) CrashCount() int64 {
+	if v.data.CrashCount == nil {
+		return 0
+	}
+	return *v.data.CrashCount
+}
+
+func (v *ServiceHealth) SetCrashCount(crashCount int64) {
+	v.data.CrashCount = &crashCount
+}
+
+func (v *ServiceHealth) HasCooldownSeconds() bool {
+	return v.data.CooldownSeconds != nil
+}
+
+func (v *ServiceHealth) CooldownSeconds() int32 {
+	if v.data.CooldownSeconds == nil {
+		return 0
+	}
+	return *v.data.CooldownSeconds
+}
+
+func (v *ServiceHealth) SetCooldownSeconds(cooldownSeconds int32) {
+	v.data.CooldownSeconds = &cooldownSeconds
+}
+
+func (v *ServiceHealth) HasLastExitCode() bool {
+	return v.data.LastExitCode != nil
+}
+
+func (v *ServiceHealth) LastExitCode() int64 {
+	if v.data.LastExitCode == nil {
+		return 0
+	}
+	return *v.data.LastExitCode
+}
+
+func (v *ServiceHealth) SetLastExitCode(lastExitCode int64) {
+	v.data.LastExitCode = &lastExitCode
+}
+
+func (v *ServiceHealth) HasLastFailureSandbox() bool {
+	return v.data.LastFailureSandbox != nil
+}
+
+func (v *ServiceHealth) LastFailureSandbox() string {
+	if v.data.LastFailureSandbox == nil {
+		return ""
+	}
+	return *v.data.LastFailureSandbox
+}
+
+func (v *ServiceHealth) SetLastFailureSandbox(lastFailureSandbox string) {
+	v.data.LastFailureSandbox = &lastFailureSandbox
+}
+
+func (v *ServiceHealth) HasLastFailureAt() bool {
+	return v.data.LastFailureAt != nil
+}
+
+func (v *ServiceHealth) LastFailureAt() *standard.Timestamp {
+	return v.data.LastFailureAt
+}
+
+func (v *ServiceHealth) SetLastFailureAt(lastFailureAt *standard.Timestamp) {
+	v.data.LastFailureAt = lastFailureAt
+}
+
+func (v *ServiceHealth) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ServiceHealth) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ServiceHealth) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ServiceHealth) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type windowStatusData struct {
 	Version *string `cbor:"0,keyasint,omitempty" json:"version,omitempty"`
 	Leases  *int32  `cbor:"1,keyasint,omitempty" json:"leases,omitempty"`
@@ -1329,6 +1493,7 @@ type applicationStatusData struct {
 	BoundPorts        *[]*BoundPort       `cbor:"19,keyasint,omitempty" json:"bound_ports,omitempty"`
 	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"21,keyasint,omitempty" json:"maintenance_routes,omitempty"`
+	Services          *[]*ServiceHealth   `cbor:"22,keyasint,omitempty" json:"services,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1669,6 +1834,22 @@ func (v *ApplicationStatus) MaintenanceRoutes() []string {
 func (v *ApplicationStatus) SetMaintenanceRoutes(maintenanceRoutes []string) {
 	x := slices.Clone(maintenanceRoutes)
 	v.data.MaintenanceRoutes = &x
+}
+
+func (v *ApplicationStatus) HasServices() bool {
+	return v.data.Services != nil
+}
+
+func (v *ApplicationStatus) Services() []*ServiceHealth {
+	if v.data.Services == nil {
+		return nil
+	}
+	return *v.data.Services
+}
+
+func (v *ApplicationStatus) SetServices(services []*ServiceHealth) {
+	x := slices.Clone(services)
+	v.data.Services = &x
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {
@@ -5017,6 +5198,128 @@ func (v *LogsStreamLogChunksResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type logsStreamLogChunksV2ArgsData struct {
+	Target *LogTarget          `cbor:"0,keyasint,omitempty" json:"target,omitempty"`
+	From   *standard.Timestamp `cbor:"1,keyasint,omitempty" json:"from,omitempty"`
+	Follow *bool               `cbor:"2,keyasint,omitempty" json:"follow,omitempty"`
+	Filter *string             `cbor:"3,keyasint,omitempty" json:"filter,omitempty"`
+	Grep   *string             `cbor:"4,keyasint,omitempty" json:"grep,omitempty"`
+	Chunks *rpc.Capability     `cbor:"5,keyasint,omitempty" json:"chunks,omitempty"`
+	To     *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"to,omitempty"`
+}
+
+type LogsStreamLogChunksV2Args struct {
+	call rpc.Call
+	data logsStreamLogChunksV2ArgsData
+}
+
+func (v *LogsStreamLogChunksV2Args) HasTarget() bool {
+	return v.data.Target != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Target() *LogTarget {
+	return v.data.Target
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFrom() bool {
+	return v.data.From != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) From() *standard.Timestamp {
+	return v.data.From
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFollow() bool {
+	return v.data.Follow != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Follow() bool {
+	if v.data.Follow == nil {
+		return false
+	}
+	return *v.data.Follow
+}
+
+func (v *LogsStreamLogChunksV2Args) HasFilter() bool {
+	return v.data.Filter != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Filter() string {
+	if v.data.Filter == nil {
+		return ""
+	}
+	return *v.data.Filter
+}
+
+func (v *LogsStreamLogChunksV2Args) HasGrep() bool {
+	return v.data.Grep != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Grep() string {
+	if v.data.Grep == nil {
+		return ""
+	}
+	return *v.data.Grep
+}
+
+func (v *LogsStreamLogChunksV2Args) HasChunks() bool {
+	return v.data.Chunks != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) Chunks() *stream.SendStreamClient[*LogChunk] {
+	if v.data.Chunks == nil {
+		return nil
+	}
+	return &stream.SendStreamClient[*LogChunk]{Client: v.call.NewClient(v.data.Chunks)}
+}
+
+func (v *LogsStreamLogChunksV2Args) HasTo() bool {
+	return v.data.To != nil
+}
+
+func (v *LogsStreamLogChunksV2Args) To() *standard.Timestamp {
+	return v.data.To
+}
+
+func (v *LogsStreamLogChunksV2Args) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Args) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type logsStreamLogChunksV2ResultsData struct{}
+
+type LogsStreamLogChunksV2Results struct {
+	call rpc.Call
+	data logsStreamLogChunksV2ResultsData
+}
+
+func (v *LogsStreamLogChunksV2Results) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *LogsStreamLogChunksV2Results) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type LogsAppLogs struct {
 	rpc.Call
 	args    LogsAppLogsArgs
@@ -5121,11 +5424,38 @@ func (t *LogsStreamLogChunks) Results() *LogsStreamLogChunksResults {
 	return results
 }
 
+type LogsStreamLogChunksV2 struct {
+	rpc.Call
+	args    LogsStreamLogChunksV2Args
+	results LogsStreamLogChunksV2Results
+}
+
+func (t *LogsStreamLogChunksV2) Args() *LogsStreamLogChunksV2Args {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *LogsStreamLogChunksV2) Results() *LogsStreamLogChunksV2Results {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Logs interface {
 	AppLogs(ctx context.Context, state *LogsAppLogs) error
 	SandboxLogs(ctx context.Context, state *LogsSandboxLogs) error
 	StreamLogs(ctx context.Context, state *LogsStreamLogs) error
 	StreamLogChunks(ctx context.Context, state *LogsStreamLogChunks) error
+	StreamLogChunksV2(ctx context.Context, state *LogsStreamLogChunksV2) error
 }
 
 type reexportLogs struct {
@@ -5145,6 +5475,10 @@ func (reexportLogs) StreamLogs(ctx context.Context, state *LogsStreamLogs) error
 }
 
 func (reexportLogs) StreamLogChunks(ctx context.Context, state *LogsStreamLogChunks) error {
+	panic("not implemented")
+}
+
+func (reexportLogs) StreamLogChunksV2(ctx context.Context, state *LogsStreamLogChunksV2) error {
 	panic("not implemented")
 }
 
@@ -5212,6 +5546,16 @@ func AdaptLogs(t Logs) *rpc.Interface {
 			Params:        []string{"target", "from", "follow", "filter", "chunks", "to"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.StreamLogChunks(ctx, &LogsStreamLogChunks{Call: call})
+			},
+		},
+		{
+			Name:          "streamLogChunksV2",
+			InterfaceName: "Logs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"target", "from", "follow", "filter", "grep", "chunks", "to"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.StreamLogChunksV2(ctx, &LogsStreamLogChunksV2{Call: call})
 			},
 		},
 	}
@@ -5349,6 +5693,36 @@ func (v LogsClient) StreamLogChunks(ctx context.Context, target *LogTarget, from
 	}
 
 	return &LogsClientStreamLogChunksResults{client: v.Client, data: ret}, nil
+}
+
+type LogsClientStreamLogChunksV2Results struct {
+	client rpc.Client
+	data   logsStreamLogChunksV2ResultsData
+}
+
+func (v LogsClient) StreamLogChunksV2(ctx context.Context, target *LogTarget, from *standard.Timestamp, follow bool, filter string, grep string, chunks stream.SendStream[*LogChunk], to *standard.Timestamp) (*LogsClientStreamLogChunksV2Results, error) {
+	args := LogsStreamLogChunksV2Args{}
+	caps := map[rpc.OID]*rpc.InlineCapability{}
+	args.data.Target = target
+	args.data.From = from
+	args.data.Follow = &follow
+	args.data.Filter = &filter
+	args.data.Grep = &grep
+	{
+		ic, oid, c := v.NewInlineCapability(stream.AdaptSendStream[*LogChunk](chunks), chunks)
+		args.data.Chunks = c
+		caps[oid] = ic
+	}
+	args.data.To = to
+
+	var ret logsStreamLogChunksV2ResultsData
+
+	err := v.CallWithCaps(ctx, "streamLogChunksV2", &args, &ret, caps)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LogsClientStreamLogChunksV2Results{client: v.Client, data: ret}, nil
 }
 
 type disksNewArgsData struct {

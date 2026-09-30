@@ -49,7 +49,7 @@ Miren detects services in this order:
 
 1. **`.miren/app.toml`** — Services defined in the `[services.*]` sections
 2. **`Procfile`** — Services inferred from Procfile entries
-3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust), Miren synthesizes a `web` service from the start command it detects for your framework
+3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust, Elixir), Miren synthesizes a `web` service from the start command it detects for your framework
 
 If none of these provide a service definition, Miren usually synthesizes a `web` service
 for a runnable container image. That service uses the image's `ENTRYPOINT` and `CMD`

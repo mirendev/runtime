@@ -153,7 +153,11 @@ func (c *GCController) RunGC(ctx context.Context) (*GCResult, error) {
 		var art core_v1alpha.Artifact
 		art.Decode(e.Entity())
 
-		if referenced[art.ID] {
+		// System artifacts belong to no app by design -- the toolchain image
+		// miren builds for itself is the case -- so the AppVersion set will
+		// never name them. Collecting them would delete blobs out from under
+		// nodes still pulling the image.
+		if referenced[art.ID] || core_v1alpha.IsSystemArtifact(art.ID) {
 			result.RetainedArtifacts++
 			continue
 		}

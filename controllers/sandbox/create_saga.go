@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -493,6 +494,9 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 		if err == nil {
 			continue // configured port bound — the normal case
 		}
+		if errors.Is(err, errProcessExited) {
+			return waitPortsOut{}, err
+		}
 		if ctx.Err() != nil {
 			// We're shutting down, not looking at a port mismatch — skip
 			// diagnosis so we don't emit misleading "listening elsewhere" events.
@@ -616,6 +620,7 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 		func() []entity.Attr {
 			attrs := []entity.Attr{
 				entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId),
+				entity.Ref(compute.SandboxStartupOutcomeId, compute.SandboxStartupOutcomeStartupRunningId),
 			}
 			for _, op := range in.ObservedPorts {
 				bp := compute.BoundPort{Port: int64(op.Port), Address: op.Address}

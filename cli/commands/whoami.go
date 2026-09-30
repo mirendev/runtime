@@ -55,7 +55,7 @@ func Whoami(ctx *Context, opts struct {
 	}
 
 	// Try to parse JWT claims if we have a token
-	var claims *auth.ExtendedClaims
+	var claims *auth.Claims
 	if token != "" {
 		claims, _ = auth.ParseUnverifiedClaims(token)
 	}
@@ -68,8 +68,8 @@ func Whoami(ctx *Context, opts struct {
 		Identity       string   `json:"identity,omitempty"`
 		UserID         string   `json:"user_id,omitempty"`
 		UserEmail      string   `json:"user_email,omitempty"`
+		UserName       string   `json:"user_name,omitempty"`
 		OrganizationID string   `json:"organization_id,omitempty"`
-		Groups         []string `json:"groups,omitempty"`
 		GroupIDs       []string `json:"group_ids,omitempty"`
 	}
 
@@ -85,10 +85,10 @@ func Whoami(ctx *Context, opts struct {
 
 	// Add claims data if available
 	if claims != nil {
-		output.UserEmail = claims.Subject
-		output.UserID = claims.UserID
+		output.UserID = claims.Subject
+		output.UserEmail = claims.Email
+		output.UserName = claims.Name
 		output.OrganizationID = claims.OrganizationID
-		output.Groups = claims.Groups
 		output.GroupIDs = claims.GroupIDs
 	}
 
@@ -108,13 +108,12 @@ func Whoami(ctx *Context, opts struct {
 
 	if claims != nil {
 		ctx.Info("")
-		ctx.Info("User:          %s", claims.Subject)
-		ctx.Info("User ID:       %s", claims.UserID)
+		if user := describeUser(claims.Name, claims.Email); user != "" {
+			ctx.Info("User:          %s", user)
+		}
+		ctx.Info("User ID:       %s", claims.Subject)
 		if claims.OrganizationID != "" {
 			ctx.Info("Organization:  %s", claims.OrganizationID)
-		}
-		if len(claims.Groups) > 0 {
-			ctx.Info("Groups:        %v", claims.Groups)
 		}
 		if len(claims.GroupIDs) > 0 {
 			ctx.Info("Group IDs:     %v", claims.GroupIDs)
@@ -125,4 +124,17 @@ func Whoami(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+// describeUser renders a person as "Name <email>", or whichever half is known.
+// Tokens minted before cloud added these claims carry neither.
+func describeUser(name, email string) string {
+	switch {
+	case name != "" && email != "":
+		return fmt.Sprintf("%s <%s>", name, email)
+	case name != "":
+		return name
+	default:
+		return email
+	}
 }

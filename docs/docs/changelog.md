@@ -13,12 +13,27 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.16.2
+*2026-09-29*
+
+**Bug Fixes**
+- **Servers named with `--dns-names` get a real certificate again** - Since v0.16.0, a server started with `--dns-names` under `tls-autoprovision` served the self-signed fallback certificate for its own hostname unless a route named that host exactly, a side effect of the wildcard certificate change. That also broke anything verifying the cluster's workload identity tokens, which fetch their keys from that hostname. `--dns-names` hosts now get their certificate without a route, and with a DNS-01 provider the workload identity issuer's name does too. If you can't upgrade yet, an exact route brings the certificate back: `miren route set <host> <app>`, then `miren route down <host>` if the route shouldn't serve anything. See [TLS](./tls.md#tls-settings-reference). ([#1281](https://github.com/mirendev/runtime/pull/1281))
+
+---
+
+## v0.16.1
+*2026-09-24*
+
+**Bug Fixes**
+- **Cloud stays in sync after a server restart** - On v0.16.0, restarting a server connected to Miren Cloud (a reboot, a crash, a manual restart) could freeze cloud's view of the cluster for up to a day while the server log repeated `entity sync stream interrupted` warnings. Sync now carries on after a restart, and a rejection it can't get past retries once a minute instead of every second. ([#1262](https://github.com/mirendev/runtime/pull/1262))
+
+---
+
 ## v0.16.0
 *2026-09-22*
 
 **Breaking Changes**
 - **Wildcard subdomains need a TLS check to get certificates** - A wildcard route used to get a Let's Encrypt certificate for any subdomain a client named, and scanners noticed: one cluster had issued more than 500 certificates for names nothing served. A name that isn't itself a route now gets a real certificate only when a live ephemeral deploy has that label, or when the route's app vouches for it through a TLS check (`miren route tls-check '*.example.com' /tls-check`). Everything else gets the fallback certificate. If you serve tenants off a wildcard route, add a check endpoint that answers `200` for the names you serve, or an exact route for each. Preview deploys need nothing new. ([#1256](https://github.com/mirendev/runtime/pull/1256))
-- **The `sagas` and `distributedrunners` escape hatches are gone** - Sagas and distributed runners have each been on by default for more than a release without anyone reaching for `--labs -sagas` or `--labs -distributedrunners`, so both flags and the code paths behind them are removed. The runner commands are always available and embedded etcd always runs with mTLS. A server still passing either flag logs `unknown labs feature flag` and starts normally; drop it from `--labs` or `MIREN_LABS` to quiet the warning. ([#1191](https://github.com/mirendev/runtime/pull/1191), [#1192](https://github.com/mirendev/runtime/pull/1192))
 
 **Features**
 - **Your apps and deploys in Miren Cloud** - Until now the Miren Cloud dashboard knew little more than how many workloads a cluster ran. Registered clusters on v0.16.0 now report their apps, versions, deploys, and runners to Cloud. The dashboard's new Apps view shows each app's health and running version, and its deploy history with the commit, branch, and person behind every deploy. Each cluster page gets an apps section and a list of its runners. Cloud keeps deploy history after the cluster prunes its own copy, so nothing is lost to the new local retention limit. Clusters on earlier releases don't report apps, and the dashboard tells you to upgrade them. ([#1218](https://github.com/mirendev/runtime/pull/1218), [#1230](https://github.com/mirendev/runtime/pull/1230), [#1239](https://github.com/mirendev/runtime/pull/1239))

@@ -25,17 +25,18 @@ type foundationBoot struct {
 	output    boot.Output[foundationBootOutput]
 }
 
-func newFoundationBoot(config coordinate.CoordinatorConfig, ipDiscovery boot.Output[ipDiscoveryBootOutput], registration boot.Output[registrationBootOutput], identity boot.Output[workloadIdentityBootOutput], etcd boot.Output[etcdBootOutput], buildkit boot.Output[buildkitBootOutput], observability boot.Output[observabilityBootOutput]) *foundationBoot {
+func newFoundationBoot(config coordinate.CoordinatorConfig, ipDiscovery boot.Output[ipDiscoveryBootOutput], registration boot.Output[registrationBootOutput], identity boot.Output[workloadIdentityBootOutput], etcd boot.Output[etcdBootOutput], buildkit boot.Output[buildkitBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput]) *foundationBoot {
 	b := &foundationBoot{config: config}
-	b.component, b.output = boot.Provide6(
-		"cluster-foundation", ipDiscovery, registration, identity, etcd, buildkit, observability,
+	b.component, b.output = boot.Provide7(
+		"cluster-foundation", ipDiscovery, registration, identity, etcd, buildkit, registryHostMapping, observability,
 		b.start, boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *foundationBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, registration registrationBootOutput, identity workloadIdentityBootOutput, etcd etcdBootOutput, buildkit buildkitBootOutput, observability observabilityBootOutput) (foundationBootOutput, error) {
+func (b *foundationBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, registration registrationBootOutput, identity workloadIdentityBootOutput, etcd etcdBootOutput, buildkit buildkitBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput) (foundationBootOutput, error) {
 	config := b.config
+	config.CoordinatorInternalIP = hostMapping.registryIP
 	config.IPs = ipDiscovery.ipSet
 	config.CloudAuth = registration.cloudAuth
 	config.WorkloadIssuer = identity.issuer

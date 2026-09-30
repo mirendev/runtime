@@ -395,14 +395,6 @@ func (s *ServiceController) addNodePort(tx *knftables.Transaction, pending map[s
 }
 
 func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Service, meta *entity.Meta) error {
-	// Named fields rather than the whole struct: %+v on a Service renders its
-	// address list, match rules and full port table inline, which came to ~300
-	// bytes a line for something that is mostly reporting an identifier.
-	s.Log.Info("Creating service",
-		"service", srv.ID,
-		"addrs", len(srv.Ip),
-		"ports", len(srv.Port))
-
 	lr, err := s.EAC.List(ctx, entity.Ref(network_v1alpha.EndpointsServiceId, srv.ID))
 	if err != nil {
 		return fmt.Errorf("failed to list endpoints: %w", err)
@@ -483,6 +475,18 @@ func (s *ServiceController) Create(ctx context.Context, srv *network_v1alpha.Ser
 		return fmt.Errorf("apply nftables changes: %w", err)
 	}
 	s.commitChainCache(pending)
+
+	// Resync re-applies every service each minute, so Info is reserved for a
+	// pass that actually rewrote a chain body.
+	level := slog.LevelDebug
+	if len(pending) > 0 {
+		level = slog.LevelInfo
+	}
+	s.Log.Log(ctx, level, "Applied service rules",
+		"service", srv.ID,
+		"addrs", len(srv.Ip),
+		"ports", len(srv.Port),
+		"changed_chains", len(pending))
 	return nil
 }
 

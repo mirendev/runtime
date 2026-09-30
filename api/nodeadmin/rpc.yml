@@ -1,0 +1,38 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+# Work the coordinator asks one specific node to do to itself.
+#
+# This is separate from the exec service because it is not about a sandbox: it
+# acts on the host, and the coordinator picks the node rather than deriving it
+# from a workload's placement.
+
+interfaces:
+  - name: NodeAdmin
+    methods:
+      - name: install_disk_accelerator
+        doc: |
+          Build and load the lbd kernel module on this node, so its disks can
+          use accelerator mode instead of loop devices.
+
+          The module has to be compiled against the kernel actually running
+          here, which is why this happens on the node rather than centrally.
+          The toolchain image is built once by the coordinator and pulled from
+          the cluster registry.
+        parameters:
+          - name: image
+            type: string
+            doc: Toolchain image reference to build with
+          - name: force
+            type: bool
+            doc: Rebuild even when the installed module is already current
+        results:
+          - name: kernel_release
+            type: string
+            doc: Kernel the module was built for
+          - name: lbd_version
+            type: string
+            doc: lbd version that was installed
+          - name: error
+            type: string
+            doc: Error message if the install failed

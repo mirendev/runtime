@@ -103,6 +103,16 @@ System logs contain output from the Miren server process itself — controller r
 
 Use `--grep` (or `-g`) to filter log output. The filter supports multiple syntax options:
 
+:::warning[Searches include metadata]
+
+On VictoriaLogs v1.50 or newer, terms (including negated terms) search every
+field, not just the message. Metadata includes the app's `entity` name,
+`stream` (`stdout`/`stderr`), and service. For example, `-g web` can match
+every entry of app `web`, while `-g -web` can exclude all of them because
+their entity name contains `web`.
+
+:::
+
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `word` | Match logs containing "word" (case-insensitive) | `error` |

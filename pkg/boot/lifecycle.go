@@ -5,7 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
+
+// slowStopThreshold is how long a component stop may take before the graph
+// says so. Most stops finish in milliseconds; one that takes seconds is holding
+// up everything below it, and without a log line an operator sees only a
+// silent gap in the shutdown.
+const slowStopThreshold = time.Second
 
 // Start validates the graph, starts independent components concurrently, and
 // waits until every component has returned successfully.
@@ -110,7 +117,16 @@ func (g *Graph) Stop(ctx context.Context) error {
 					stopCtx, cancelStop = context.WithTimeout(ctx, n.component.stopTimeout)
 				}
 				defer cancelStop()
-				if err := n.component.stop(stopCtx); err != nil {
+				began := time.Now()
+				// The budget is whatever the stop context actually allows,
+				// which is less than stopTimeout once earlier layers have
+				// eaten into the caller's overall deadline, and nothing at
+				// all if that deadline had already passed.
+				deadline, bounded := stopCtx.Deadline()
+				budget := max(deadline.Sub(began), 0)
+				err := n.component.stop(stopCtx)
+				g.reportStopDuration(n.component, time.Since(began), budget, bounded)
+				if err != nil {
 					errCh <- fmt.Errorf("stopping %s: %w", n.component, err)
 				}
 			})
@@ -122,4 +138,22 @@ func (g *Graph) Stop(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reportStopDuration names a component whose stop took long enough to notice.
+// A stop that returns nil gives no other sign that it spent most of its budget,
+// and a stop that ignores its context can run past the budget entirely.
+func (g *Graph) reportStopDuration(component *Component, elapsed, budget time.Duration, bounded bool) {
+	if g.log == nil || elapsed < slowStopThreshold {
+		return
+	}
+	attrs := []any{"component", component.name, "duration", elapsed.Round(time.Millisecond)}
+	if bounded {
+		attrs = append(attrs, "budget", budget.Round(time.Millisecond))
+		if elapsed >= budget {
+			g.log.Warn("component stop used its entire budget", attrs...)
+			return
+		}
+	}
+	g.log.Info("component stop was slow", attrs...)
 }

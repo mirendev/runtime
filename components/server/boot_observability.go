@@ -11,11 +11,15 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/entitysync"
 )
 
 type observabilityBootInputs struct {
 	log     *slog.Logger
 	timeout time.Duration
+	// entitySync is the exporter's shared diagnostics; its state is published
+	// as an operational gauge alongside the control process's own health.
+	entitySync *entitysync.Diagnostics
 }
 
 type observabilityBootOutput struct {
@@ -52,10 +56,11 @@ type observabilityBoot struct {
 	output      boot.Output[observabilityBootOutput]
 }
 
-func observabilityInputs(options StartOptions) observabilityBootInputs {
+func observabilityInputs(options StartOptions, entitySync *entitysync.Diagnostics) observabilityBootInputs {
 	return observabilityBootInputs{
-		log:     options.Log,
-		timeout: 30 * time.Second,
+		log:        options.Log,
+		timeout:    30 * time.Second,
+		entitySync: entitySync,
 	}
 }
 
@@ -84,6 +89,7 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 	go runtimeMemory.Monitor(ctx)
 	processInfo := metrics.NewProcessInfo(log, operational)
 	go processInfo.Monitor(ctx)
+	go entitysync.NewStateMetrics(log, operational, b.inputs.entitySync).Monitor(ctx)
 
 	sandboxMetrics := sandbox.NewMetrics()
 	sandboxMetrics.Log = log

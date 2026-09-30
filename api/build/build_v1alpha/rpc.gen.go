@@ -256,6 +256,7 @@ func (v *DeploymentProgress) UnmarshalJSON(data []byte) error {
 type deployRequestData struct {
 	ClusterId *string  `cbor:"0,keyasint,omitempty" json:"cluster_id,omitempty"`
 	GitInfo   *GitInfo `cbor:"1,keyasint,omitempty" json:"git_info,omitempty"`
+	Message   *string  `cbor:"2,keyasint,omitempty" json:"message,omitempty"`
 }
 
 type DeployRequest struct {
@@ -287,6 +288,21 @@ func (v *DeployRequest) GitInfo() *GitInfo {
 
 func (v *DeployRequest) SetGitInfo(git_info *GitInfo) {
 	v.data.GitInfo = git_info
+}
+
+func (v *DeployRequest) HasMessage() bool {
+	return v.data.Message != nil
+}
+
+func (v *DeployRequest) Message() string {
+	if v.data.Message == nil {
+		return ""
+	}
+	return *v.data.Message
+}
+
+func (v *DeployRequest) SetMessage(message string) {
+	v.data.Message = &message
 }
 
 func (v *DeployRequest) MarshalCBOR() ([]byte, error) {

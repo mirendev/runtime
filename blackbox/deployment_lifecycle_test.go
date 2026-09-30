@@ -24,6 +24,13 @@ type deploymentHistoryItem struct {
 	AppVersionID string `json:"app_version_id,omitempty"`
 	Phase        string `json:"phase,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
+	DeployedBy   *struct {
+		Subject    string `json:"subject"`
+		AuthMethod string `json:"auth_method"`
+		Email      string `json:"email"`
+		Name       string `json:"name"`
+		Display    string `json:"display"`
+	} `json:"deployed_by,omitempty"`
 }
 
 func appHistory(t *testing.T, m *harness.Miren, name string) []deploymentHistoryItem {
