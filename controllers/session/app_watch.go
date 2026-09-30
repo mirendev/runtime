@@ -17,6 +17,10 @@ import (
 // The Session controller owns the subsequent sandbox rollout.
 type AppWatchController struct{ Sessions *Controller }
 
+func serviceMissingFailure(app entity.Id, service string) string {
+	return fmt.Sprintf("app %s no longer defines Session service %s", app, service)
+}
+
 func (w *AppWatchController) Init(context.Context) error { return nil }
 
 func (w *AppWatchController) Create(ctx context.Context, app *core.App, _ *entity.Meta) error {
@@ -60,8 +64,8 @@ func (w *AppWatchController) Update(ctx context.Context, app *core.App, _ *entit
 			found = found || service.Name == s.Service
 		}
 		if !found {
-			cause := fmt.Errorf("app %s no longer defines Session service %s", app.ID, s.Service)
-			if err := w.Sessions.patch(ctx, s.ID, &sessionapi.Session{Phase: sessionapi.FAILED, Failure: cause.Error(), LastTransition: time.Now()}); err != nil {
+			cause := serviceMissingFailure(app.ID, s.Service)
+			if err := w.Sessions.patch(ctx, s.ID, &sessionapi.Session{Phase: sessionapi.FAILED, Failure: cause, LastTransition: time.Now()}); err != nil {
 				return err
 			}
 			w.Sessions.Log.Warn("session service removed during deploy", "session", s.ID, "error", cause)
@@ -85,6 +89,9 @@ func (w *AppWatchController) Update(ctx context.Context, app *core.App, _ *entit
 		e := entity.New(value.Attrs())
 		e.Remove(sessionapi.SessionSpecId)
 		e.Remove(sessionapi.SessionVersionId)
+		if s.Failure == serviceMissingFailure(app.ID, s.Service) {
+			e.Remove(sessionapi.SessionFailureId)
+		}
 		for _, attr := range (&sessionapi.Session{Spec: sessionSpec, Version: version.ID}).Encode() {
 			if attr.ID == sessionapi.SessionSpecId || attr.ID == sessionapi.SessionVersionId {
 				e.Set(attr)

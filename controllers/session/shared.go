@@ -23,6 +23,9 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 	if s.Disk != "" {
 		return c.fail(ctx, s.ID, fmt.Errorf("shared session %s cannot mount a per-Session disk", s.ID))
 	}
+	if s.Phase == sessionapi.FAILED && s.Failure == serviceMissingFailure(s.App, s.Service) {
+		return nil
+	}
 	if s.Version != "" {
 		appResp, err := c.EAC.Get(ctx, s.App.String())
 		if err != nil {

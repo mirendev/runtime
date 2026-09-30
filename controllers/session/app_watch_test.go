@@ -15,6 +15,39 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
+func TestRemovedServiceDoesNotBlockOtherSessions(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	app, err := inm.Client.Create(ctx, "worker", &core.App{})
+	require.NoError(t, err)
+	config, err := inm.Client.Create(ctx, "next-config", &core.ConfigVersion{App: app,
+		Spec: core.ConfigSpec{Services: []core.ConfigSpecServices{{Name: "web", Image: "example:v2"}}}})
+	require.NoError(t, err)
+	version, err := inm.Client.Create(ctx, "next", &core.AppVersion{App: app, ConfigVersion: config, ImageUrl: "example:v2"})
+	require.NoError(t, err)
+	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, app, (&core.App{ActiveVersion: version}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	for _, service := range []string{"removed", "web"} {
+		_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, entity.Id("session/worker/"+service),
+			(&sessionapi.Session{App: app, Service: service, Version: "app_version/previous", DesiredState: sessionapi.RUNNING}).Encode).Attrs())
+		require.NoError(t, err)
+	}
+	controller := NewController(slog.Default(), inm.EAC)
+	require.NoError(t, (&AppWatchController{Sessions: controller}).Update(ctx, &core.App{ID: app}, nil))
+	failedResp, err := inm.EAC.Get(ctx, "session/worker/removed")
+	require.NoError(t, err)
+	var failed sessionapi.Session
+	failed.Decode(failedResp.Entity().Entity())
+	require.Equal(t, sessionapi.FAILED, failed.Phase)
+	require.NoError(t, controller.Reconcile(ctx, &failed, &entity.Meta{}))
+	updatedResp, err := inm.EAC.Get(ctx, "session/worker/web")
+	require.NoError(t, err)
+	var updated sessionapi.Session
+	updated.Decode(updatedResp.Entity().Entity())
+	require.Equal(t, version, updated.Version)
+}
+
 func TestAppDeployRollsSessions(t *testing.T) {
 	for _, capacity := range []int64{1, 2} {
 		t.Run(map[int64]string{1: "dedicated", 2: "shared"}[capacity], func(t *testing.T) {

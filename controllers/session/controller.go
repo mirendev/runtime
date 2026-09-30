@@ -69,6 +69,9 @@ func (c *Controller) Reconcile(ctx context.Context, s *sessionapi.Session, _ *en
 	if s.DesiredState == sessionapi.SUSPENDED {
 		return c.suspend(ctx, s)
 	}
+	if s.Phase == sessionapi.FAILED && s.Failure == serviceMissingFailure(s.App, s.Service) {
+		return nil // Wait for a deploy that restores the service instead of clearing this failure.
+	}
 	return c.run(ctx, s)
 }
 
