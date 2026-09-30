@@ -243,6 +243,18 @@ kinds:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
 
+    activity:
+      type: component
+      doc: Latest authenticated self-report; absent or expired means unknown (treated as active)
+      attrs:
+        state:
+          type: enum
+          choices: [active, idle]
+          required: true
+        reported_at:
+          type: time
+          required: true
+
     # Written once, in the same patch as the STOPPED transition, so any watcher
     # that sees the sandbox stop also sees why.
     #
