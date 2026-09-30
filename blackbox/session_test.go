@@ -58,7 +58,7 @@ func TestSessionDedicatedAndSharedSandboxes(t *testing.T) {
 			args = append(args, "--max-sessions-per-sandbox", fmt.Sprint(capacity))
 		}
 		id := strings.TrimSpace(m.MustRun(args...).Stdout)
-		if id != "session/"+app+"-"+name {
+		if id != "session/"+app+"/"+name {
 			t.Fatalf("unexpected created Session ID %q", id)
 		}
 		t.Cleanup(func() {
