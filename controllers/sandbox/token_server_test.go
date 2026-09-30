@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,9 +17,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/dns"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
@@ -194,6 +198,187 @@ func TestTokenServer_RejectsPost(t *testing.T) {
 	c.handleTokenRequest(w, authedRequest("POST", "/v1/token"))
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestActivityServer_RequiresPostAndWorkloadAuthentication(t *testing.T) {
+	c := newTestTokenController(t)
+	post := func() *http.Request {
+		r := httptest.NewRequest("POST", "/v1/activity", strings.NewReader(`{"state":"idle"}`))
+		r.RemoteAddr = testSandboxIP + ":12345"
+		return r
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *http.Request
+		want int
+	}{
+		{name: "method", req: authedRequest("PUT", "/v1/activity"), want: http.StatusMethodNotAllowed},
+		{name: "missing secret", req: func() *http.Request {
+			return post()
+		}(), want: http.StatusUnauthorized},
+		{name: "wrong source", req: func() *http.Request {
+			r := post()
+			r.Header.Set("Authorization", "Bearer "+testSecret)
+			r.RemoteAddr = "10.0.0.99:12345"
+			return r
+		}(), want: http.StatusForbidden},
+		{name: "wrong secret", req: func() *http.Request {
+			r := post()
+			r.Header.Set("Authorization", "Bearer another-sandbox-secret")
+			return r
+		}(), want: http.StatusForbidden},
+		{name: "invalid state", req: func() *http.Request {
+			r := httptest.NewRequest("POST", "/v1/activity", strings.NewReader(`{"state":"stopped"}`))
+			r.RemoteAddr = testSandboxIP + ":12345"
+			r.Header.Set("Authorization", "Bearer "+testSecret)
+			return r
+		}(), want: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c.handleActivityRequest(w, tc.req)
+			assert.Equal(t, tc.want, w.Code)
+		})
+	}
+}
+
+func TestSelfReportedActivityExpiresConservatively(t *testing.T) {
+	now := time.Now()
+	sb := compute.Sandbox{Status: compute.RUNNING, Activity: compute.Activity{State: compute.IDLE, ReportedAt: now}}
+	assert.Equal(t, compute.IDLE, sb.SelfReportedActivity(now.Add(time.Minute)))
+	assert.Equal(t, compute.ActivityUnknown, sb.SelfReportedActivity(now.Add(compute.ActivityFreshFor)))
+	assert.Equal(t, compute.ActivityUnknown, (compute.Sandbox{}).SelfReportedActivity(now))
+	sb.Status = compute.STOPPED
+	assert.Equal(t, compute.ActivityUnknown, sb.SelfReportedActivity(now))
+}
+
+func TestActivityServer_TransitionsAndTeardown(t *testing.T) {
+	ctx := t.Context()
+	c := newTestTokenController(t)
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c.EAC = inm.EAC
+	id := entity.Id(testSandboxID)
+	var e entityserver_v1alpha.Entity
+	e.SetId(id.String())
+	e.SetAttrs(entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.RUNNING}).Encode).Attrs())
+	_, err := inm.EAC.Put(ctx, &e)
+	require.NoError(t, err)
+
+	report := func(state string) int {
+		r := httptest.NewRequest("POST", "/v1/activity", strings.NewReader(`{"state":"`+state+`"}`))
+		r.RemoteAddr = testSandboxIP + ":12345"
+		r.Header.Set("Authorization", "Bearer "+testSecret)
+		w := httptest.NewRecorder()
+		c.handleActivityRequest(w, r)
+		return w.Code
+	}
+	for _, state := range []string{"idle", "active", "idle"} {
+		require.Equal(t, http.StatusNoContent, report(state))
+		resp, err := inm.EAC.Get(ctx, id.String())
+		require.NoError(t, err)
+		var sb compute.Sandbox
+		sb.Decode(resp.Entity().Entity())
+		want := compute.IDLE
+		if state == "active" {
+			want = compute.ACTIVE
+		}
+		assert.Equal(t, want, sb.SelfReportedActivity(time.Now()))
+	}
+	// A delayed earlier request cannot overwrite a newer state.
+	before, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var latest compute.Sandbox
+	latest.Decode(before.Entity().Entity())
+	require.NoError(t, c.recordSandboxActivity(ctx, id.String(), compute.ACTIVE, latest.Activity.ReportedAt.Add(-time.Second)))
+	after, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var unchanged compute.Sandbox
+	unchanged.Decode(after.Entity().Entity())
+	assert.Equal(t, compute.IDLE, unchanged.Activity.State)
+	// A runner restart loses the in-memory secret but not the report or the
+	// host-side secret; repair permits subsequent transitions.
+	persistTestTokenSecret(t, c, id.String(), testSecret)
+	forgetTestTokenSecret(c.tokenSecrets, id.String())
+	require.Equal(t, http.StatusNoContent, report("active"))
+	after, err = inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	unchanged = compute.Sandbox{}
+	unchanged.Decode(after.Entity().Entity())
+	assert.Equal(t, compute.ACTIVE, unchanged.Activity.State)
+	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, report("idle"))
+}
+
+func TestActivityServer_StartingSandboxIsRetryable(t *testing.T) {
+	c := newTestTokenController(t)
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c.EAC = inm.EAC
+	id := entity.Id(testSandboxID)
+	_, err := inm.EAC.Create(t.Context(), entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.PENDING}).Encode).Attrs())
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/activity", strings.NewReader(`{"state":"idle"}`))
+	req.RemoteAddr = testSandboxIP + ":12345"
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	w := httptest.NewRecorder()
+	c.handleActivityRequest(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	resp, err := inm.EAC.Get(t.Context(), id.String())
+	require.NoError(t, err)
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	require.True(t, sb.Activity.ReportedAt.IsZero())
+}
+
+func TestActivityServer_CoalescedNewerReportDoesNotExposeOlderIdle(t *testing.T) {
+	ctx := t.Context()
+	c := newTestTokenController(t)
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c.EAC = inm.EAC
+	id := entity.Id(testSandboxID)
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.RUNNING, Activity: compute.Activity{State: compute.ACTIVE, ReportedAt: time.Now()}}).Encode).Attrs())
+	require.NoError(t, err)
+	order := &activityOrder{issued: 1, latest: 1}
+	c.activity = map[string]*activityOrder{id.String(): order}
+	order.mu.Lock()
+	report := func(state string) <-chan int {
+		result := make(chan int, 1)
+		go func() {
+			r := httptest.NewRequest("POST", "/v1/activity", strings.NewReader(`{"state":"`+state+`"}`))
+			r.RemoteAddr = testSandboxIP + ":12345"
+			r.Header.Set("Authorization", "Bearer "+testSecret)
+			w := httptest.NewRecorder()
+			c.handleActivityRequest(w, r)
+			result <- w.Code
+		}()
+		return result
+	}
+	waitIssued := func(n uint64) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			c.activityMu.Lock()
+			defer c.activityMu.Unlock()
+			return order.issued == n
+		}, time.Second, time.Millisecond)
+	}
+	older := report("idle")
+	waitIssued(2)
+	newer := report("active")
+	waitIssued(3)
+	order.mu.Unlock()
+	require.Equal(t, http.StatusNoContent, <-older)
+	require.Equal(t, http.StatusNoContent, <-newer)
+	resp, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	require.Equal(t, compute.ACTIVE, sb.Activity.State)
 }
 
 func TestTokenServer_InvalidTTL(t *testing.T) {
