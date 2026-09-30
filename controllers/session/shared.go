@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,11 +215,67 @@ func sharedHostID(group string, number int64) entity.Id {
 	return entity.Id(fmt.Sprintf("sandbox/session-group-%s-%d", group, number))
 }
 
+func (c *Controller) nextSharedHost(ctx context.Context, group string) (entity.Id, error) {
+	id := entity.Id("session_group_counter/" + group)
+	for {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if errors.Is(err, cond.ErrNotFound{}) {
+			// Seed the counter from existing hosts when upgrading a cluster that
+			// already has shared sandboxes but predates this allocator.
+			next := int64(0)
+			prefix := sharedHostID(group, 0).String()
+			prefix = strings.TrimSuffix(prefix, "0")
+			advance := func(sandbox string) {
+				if number, err := strconv.ParseInt(strings.TrimPrefix(sandbox, prefix), 10, 64); err == nil && strings.HasPrefix(sandbox, prefix) && number >= next {
+					next = number + 1
+				}
+			}
+			hosts, listErr := c.EAC.List(ctx, entity.String(compute.SessionInfoGroupId, group))
+			if listErr != nil {
+				return "", listErr
+			}
+			for _, host := range hosts.Values() {
+				advance(host.Id())
+			}
+			teardowns, listErr := c.EAC.List(ctx, entity.Ref(entity.EntityKind, compute.KindSandboxTeardown))
+			if listErr != nil {
+				return "", listErr
+			}
+			for _, record := range teardowns.Values() {
+				var ack compute.SandboxTeardown
+				ack.Decode(record.Entity())
+				advance(ack.Sandbox)
+			}
+			_, err = c.EAC.Create(ctx, entity.New(entity.DBId, id,
+				(&sessionapi.GroupCounter{NextNumber: next + 1}).Encode).Attrs())
+			if err == nil {
+				return sharedHostID(group, next), nil
+			}
+		} else if err == nil {
+			var counter sessionapi.GroupCounter
+			counter.Decode(resp.Entity().Entity())
+			_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
+				(&sessionapi.GroupCounter{NextNumber: counter.NextNumber + 1}).Encode).Attrs(), resp.Entity().Revision())
+			if err == nil {
+				return sharedHostID(group, counter.NextNumber), nil
+			}
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return "", err
+		}
+	}
+}
+
 func (c *Controller) reserveSharedSlot(ctx context.Context, s *sessionapi.Session, group string) (entity.Id, error) {
-	for number := int64(0); ; number++ {
-		host := sharedHostID(group, number)
-		sb, err := c.getSandbox(ctx, host)
-		if err == nil {
+admission:
+	for {
+		resp, err := c.EAC.List(ctx, entity.String(compute.SessionInfoGroupId, group))
+		if err != nil {
+			return "", err
+		}
+		for _, e := range resp.Values() {
+			var sb compute.Sandbox
+			sb.Decode(e.Entity())
 			if terminal(sb.Status) || !sb.SessionInfo.ClosingAt.IsZero() || sb.SessionInfo.Group != group ||
 				(s.Version != "" && sb.Spec.Version != s.Version) {
 				continue
@@ -226,51 +283,70 @@ func (c *Controller) reserveSharedSlot(ctx context.Context, s *sessionapi.Sessio
 			if sb.SessionInfo.Capacity != s.MaxSessionsPerSandbox {
 				return "", c.fail(ctx, s.ID, fmt.Errorf("app %s shared host already has capacity %d (requested %d)", s.App, sb.SessionInfo.Capacity, s.MaxSessionsPerSandbox))
 			}
-		} else if !errors.Is(err, cond.ErrNotFound{}) {
-			return "", err
-		} else if done, err := c.teardownDone(ctx, host); err != nil {
-			return "", err
-		} else if done {
-			continue
-		}
-		for index := int64(0); index < s.MaxSessionsPerSandbox; index++ {
-			slotID := shared.SlotID(host, index)
-			_, err := c.EAC.Create(ctx, entity.New(entity.DBId, slotID,
-				(&sessionapi.Slot{Session: s.ID.String(), Sandbox: host.String()}).Encode).Attrs())
-			if err == nil {
-				if sb != nil {
-					current, err := c.EAC.Get(ctx, host.String())
-					if err != nil {
-						return "", err
-					}
-					var latest compute.Sandbox
-					latest.Decode(current.Entity().Entity())
-					if !latest.SessionInfo.ClosingAt.IsZero() || terminal(latest.Status) || latest.SessionInfo.Group != group {
-						if _, err := c.EAC.Delete(ctx, slotID.String()); err != nil {
-							return "", err
-						}
-						break
-					}
-					latest.SessionInfo.Epoch++
-					_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, host,
-						(&compute.Sandbox{SessionInfo: latest.SessionInfo}).Encode).Attrs(), current.Entity().Revision())
-					if errors.Is(err, cond.ErrConflict{}) {
-						if _, err := c.EAC.Delete(ctx, slotID.String()); err != nil {
-							return "", err
-						}
-						break
-					}
-					if err != nil {
-						return "", err
-					}
-				}
-				return host, nil
-			}
-			if !errors.Is(err, cond.ErrConflict{}) {
+			reserved, retry, err := c.trySharedSlot(ctx, s, group, sb.ID, true)
+			if err != nil {
 				return "", err
 			}
+			if reserved {
+				return sb.ID, nil
+			}
+			if retry {
+				continue admission // The host changed during admission; refresh the list.
+			}
+		}
+		host, err := c.nextSharedHost(ctx, group)
+		if err != nil {
+			return "", err
+		}
+		reserved, _, err := c.trySharedSlot(ctx, s, group, host, false)
+		if err != nil {
+			return "", err
+		}
+		if reserved {
+			return host, nil
 		}
 	}
+}
+
+func (c *Controller) trySharedSlot(ctx context.Context, s *sessionapi.Session, group string, host entity.Id, existing bool) (reserved, retry bool, err error) {
+	for index := int64(0); index < s.MaxSessionsPerSandbox; index++ {
+		slotID := shared.SlotID(host, index)
+		_, err := c.EAC.Create(ctx, entity.New(entity.DBId, slotID,
+			(&sessionapi.Slot{Session: s.ID.String(), Sandbox: host.String()}).Encode).Attrs())
+		if err == nil {
+			if existing {
+				current, err := c.EAC.Get(ctx, host.String())
+				if err != nil {
+					return false, false, err
+				}
+				var latest compute.Sandbox
+				latest.Decode(current.Entity().Entity())
+				if !latest.SessionInfo.ClosingAt.IsZero() || terminal(latest.Status) || latest.SessionInfo.Group != group {
+					if _, err := c.EAC.Delete(ctx, slotID.String()); err != nil {
+						return false, false, err
+					}
+					return false, true, nil
+				}
+				latest.SessionInfo.Epoch++
+				_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, host,
+					(&compute.Sandbox{SessionInfo: latest.SessionInfo}).Encode).Attrs(), current.Entity().Revision())
+				if errors.Is(err, cond.ErrConflict{}) {
+					if _, err := c.EAC.Delete(ctx, slotID.String()); err != nil {
+						return false, false, err
+					}
+					return false, true, nil
+				}
+				if err != nil {
+					return false, false, err
+				}
+			}
+			return true, false, nil
+		}
+		if !errors.Is(err, cond.ErrConflict{}) {
+			return false, false, err
+		}
+	}
+	return false, false, nil
 }
 
 func (c *Controller) ensureSharedHost(ctx context.Context, s *sessionapi.Session, group string, id entity.Id) error {
@@ -368,7 +444,17 @@ func (c *Controller) sweepDeletedBindings(ctx context.Context) error {
 		binding.Decode(e.Entity())
 		if !binding.DeletedAt.IsZero() {
 			if binding.AcknowledgedAt.IsZero() {
-				continue
+				done, err := c.teardownDone(ctx, entity.Id(binding.Sandbox))
+				if err != nil {
+					return err
+				}
+				if !done {
+					continue
+				}
+				if _, err := c.EAC.Patch(ctx, entity.New(entity.DBId, binding.ID,
+					(&sessionapi.Binding{AcknowledgedAt: time.Now()}).Encode).Attrs(), e.Revision()); err != nil {
+					return err
+				}
 			}
 			slots, err := c.EAC.List(ctx, entity.String(sessionapi.SlotSessionId, binding.Session))
 			if err != nil {
@@ -445,7 +531,13 @@ func (c *Controller) sweepSharedSlots(ctx context.Context) error {
 					continue
 				}
 			} else if binding.AcknowledgedAt.IsZero() {
-				continue
+				done, err := c.teardownDone(ctx, entity.Id(slot.Sandbox))
+				if err != nil {
+					return err
+				}
+				if !done {
+					continue
+				}
 			}
 		}
 		if _, err := c.EAC.Delete(ctx, slot.ID.String()); err != nil && !errors.Is(err, cond.ErrNotFound{}) {

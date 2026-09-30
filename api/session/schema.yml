@@ -188,6 +188,11 @@ components:
           doc: Time to wait for graceful shutdown before force-killing
 
 kinds:
+  group_counter:
+    next_number:
+      type: int
+      doc: Next unused shared sandbox number for this app, service, and group
+
   slot:
     session:
       type: string

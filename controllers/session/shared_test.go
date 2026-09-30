@@ -174,6 +174,80 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	require.Equal(t, compute.STOPPED, sb.Status)
 }
 
+func TestSharedDeletionReleasesBindingAfterHostTeardown(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c := NewController(slog.Default(), inm.EAC)
+	id := entity.Id("session/deleted-before-ack")
+	host := entity.Id("sandbox/terminated-host")
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, host,
+		(&compute.Sandbox{Status: compute.DEAD, SessionInfo: compute.SessionInfo{Group: "group"}}).Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.BindingID(id),
+		(&sessionapi.Binding{Session: id.String(), Sandbox: host.String(), DeletedAt: time.Now()}).Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.SlotID(host, 0),
+		(&sessionapi.Slot{Session: id.String(), Sandbox: host.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	require.NoError(t, c.SweepOrphans(ctx))
+	_, err = inm.EAC.Get(ctx, shared.BindingID(id).String())
+	require.NoError(t, err, "the binding must remain until teardown is proven")
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(host),
+		(&compute.SandboxTeardown{Sandbox: host.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	require.NoError(t, c.SweepOrphans(ctx))
+	require.NoError(t, c.SweepOrphans(ctx))
+	_, err = inm.EAC.Get(ctx, shared.BindingID(id).String())
+	require.Error(t, err, "host teardown releases the deleted Session's name")
+	slots, err := inm.EAC.List(ctx, entity.String(sessionapi.SlotSessionId, id.String()))
+	require.NoError(t, err)
+	require.Empty(t, slots.Values())
+}
+
+func TestSharedHostCounterSkipsRetiredHostsWithoutRepeatedScan(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	group := "existing-group"
+	for number := int64(0); number < 100; number++ {
+		host := sharedHostID(group, number)
+		_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(host),
+			(&compute.SandboxTeardown{Sandbox: host.String()}).Encode).Attrs())
+		require.NoError(t, err)
+	}
+	c := NewController(slog.Default(), inm.EAC)
+	for number := int64(100); number < 103; number++ {
+		host, err := c.nextSharedHost(ctx, group)
+		require.NoError(t, err)
+		require.Equal(t, sharedHostID(group, number), host)
+		c = NewController(slog.Default(), inm.EAC) // The counter is durable across restarts.
+	}
+}
+
+func TestSharedHostCounterConcurrentControllers(t *testing.T) {
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	const count = 8
+	ids := make([]entity.Id, count)
+	errs := make([]error, count)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids[i], errs[i] = NewController(slog.Default(), inm.EAC).nextSharedHost(t.Context(), "concurrent-group")
+		}()
+	}
+	wg.Wait()
+	seen := make(map[entity.Id]bool)
+	for i, id := range ids {
+		require.NoError(t, errs[i])
+		require.False(t, seen[id], "host number was allocated twice")
+		seen[id] = true
+	}
+}
+
 func TestSharedSessionsRecoverReservationBeforeBinding(t *testing.T) {
 	ctx := t.Context()
 	inm, cleanup := testutils.NewInMemEntityServer(t)
