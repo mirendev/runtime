@@ -286,6 +286,47 @@ func TestSharedSessionReplacesDeletedHostOnlyAfterTeardown(t *testing.T) {
 	require.Equal(t, replaced.Sandbox.String(), binding.Sandbox)
 }
 
+func TestSharedSessionReusesUncreatedReplacementReservation(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c := NewController(slog.Default(), inm.EAC)
+	id := entity.Id("session/interrupted-replacement")
+	s := &sessionapi.Session{ID: id, App: "app/one", MaxSessionsPerSandbox: 2,
+		Spec:         sessionapi.SandboxSpec{Container: []sessionapi.SandboxSpecContainer{{Image: "example:v1"}}},
+		DesiredState: sessionapi.RUNNING, Phase: sessionapi.READY}
+	group := sharedGroup(s)
+	old, reserved := sharedHostID(group, 0), sharedHostID(group, 1)
+	s.Sandbox = old
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id, s.Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.BindingID(id),
+		(&sessionapi.Binding{Session: id.String(), Sandbox: old.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	for _, host := range []entity.Id{old, reserved} {
+		_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, shared.SlotID(host, 0),
+			(&sessionapi.Slot{Session: id.String(), Sandbox: host.String()}).Encode).Attrs())
+		require.NoError(t, err)
+	}
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(old),
+		(&compute.SandboxTeardown{Sandbox: old.String()}).Encode).Attrs())
+	require.NoError(t, err)
+	require.NoError(t, c.Reconcile(ctx, s, &entity.Meta{}))
+	resp, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var replaced sessionapi.Session
+	replaced.Decode(resp.Entity().Entity())
+	require.Equal(t, reserved, replaced.Sandbox)
+	require.Equal(t, sessionapi.ACTIVATING, replaced.Phase)
+	require.NoError(t, c.SweepOrphans(ctx))
+	slots, err := inm.EAC.List(ctx, entity.String(sessionapi.SlotSessionId, id.String()))
+	require.NoError(t, err)
+	require.Len(t, slots.Values(), 1)
+	var slot sessionapi.Slot
+	slot.Decode(slots.Values()[0].Entity())
+	require.Equal(t, reserved.String(), slot.Sandbox)
+}
+
 func TestSharedHostCounterConcurrentControllers(t *testing.T) {
 	inm, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)

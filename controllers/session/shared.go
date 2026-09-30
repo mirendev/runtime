@@ -136,13 +136,31 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 			var slot sessionapi.Slot
 			slot.Decode(e.Entity())
 			if slot.Sandbox != binding.Sandbox {
-				candidate, err := c.getSandbox(ctx, entity.Id(slot.Sandbox))
+				candidateID := entity.Id(slot.Sandbox)
+				candidate, err := c.getSandbox(ctx, candidateID)
 				if err == nil && candidate.SessionInfo.Group == group && !terminal(candidate.Status) &&
 					(s.Version == "" || candidate.Spec.Version == s.Version) {
 					next = candidate.ID
 					break
 				}
-				if err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+				if errors.Is(err, cond.ErrNotFound{}) {
+					done, err := c.teardownDone(ctx, candidateID)
+					if err != nil {
+						return err
+					}
+					if done {
+						if _, err := c.EAC.Delete(ctx, slot.ID.String()); err != nil {
+							return err
+						}
+						continue
+					}
+					if strings.HasPrefix(candidateID.String(), strings.TrimSuffix(sharedHostID(group, 0).String(), "0")) {
+						next = candidateID // A reserved host may not have been created before a crash.
+						break
+					}
+					return nil // An old-group host is missing without teardown proof.
+				}
+				if err != nil {
 					return err
 				}
 			}
