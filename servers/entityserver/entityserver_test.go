@@ -200,6 +200,35 @@ func TestEntityServer_Delete(t *testing.T) {
 	}
 }
 
+func TestEntityServer_DeleteValidationByKind(t *testing.T) {
+	ctx := t.Context()
+	store := entity.NewMockStore()
+	called := 0
+	server := &EntityServer{Log: slog.Default(), Store: store,
+		DeleteValidators: map[entity.Id]func(context.Context, *entity.Entity, entity.Store) error{
+			"example/protected": func(_ context.Context, stored *entity.Entity, _ entity.Store) error {
+				called++
+				require.Equal(t, entity.Id("example/one"), stored.Id())
+				return errors.New("deletion denied")
+			},
+		}}
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	for _, tc := range []struct {
+		id   entity.Id
+		kind entity.Id
+	}{{"example/one", "example/protected"}, {"example/two", "example/other"}} {
+		_, err := sc.Create(ctx, entity.New(entity.DBId, tc.id, entity.Ref(entity.EntityKind, tc.kind)).Attrs())
+		require.NoError(t, err)
+	}
+	_, err := sc.Delete(ctx, "example/one")
+	require.ErrorContains(t, err, "deletion denied")
+	_, err = sc.Get(ctx, "example/one")
+	require.NoError(t, err)
+	_, err = sc.Delete(ctx, "example/two")
+	require.NoError(t, err)
+	require.Equal(t, 1, called)
+}
+
 func TestEntityServer_WatchIndex(t *testing.T) {
 	r := require.New(t)
 

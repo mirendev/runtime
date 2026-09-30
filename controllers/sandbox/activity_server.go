@@ -25,8 +25,35 @@ type activityOrder struct {
 }
 
 func (c *SandboxController) handleActivityRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeMetadataError(w, http.StatusMethodNotAllowed, "only POST is allowed")
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		writeMetadataError(w, http.StatusMethodNotAllowed, "only GET and POST are allowed")
+		return
+	}
+	if r.Method == http.MethodGet {
+		sandboxID, _, ok := c.authenticateWorkload(w, r)
+		if !ok {
+			return
+		}
+		resp, err := c.EAC.Get(r.Context(), sandboxID)
+		if err != nil {
+			writeMetadataError(w, http.StatusInternalServerError, "failed to read activity")
+			return
+		}
+		var sb compute.Sandbox
+		sb.Decode(resp.Entity().Entity())
+		if sb.Status != compute.RUNNING {
+			writeMetadataError(w, http.StatusConflict, errTerminalSandbox.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		var shutdownAt *time.Time
+		if !sb.ShutdownAt.IsZero() {
+			shutdownAt = &sb.ShutdownAt
+		}
+		_ = json.NewEncoder(w).Encode(struct {
+			ShutdownAt *time.Time `json:"shutdown_at"`
+		}{ShutdownAt: shutdownAt})
 		return
 	}
 	var report struct {
@@ -72,6 +99,17 @@ func (c *SandboxController) handleActivityRequest(w http.ResponseWriter, r *http
 		writeMetadataError(w, http.StatusInternalServerError, "failed to record activity")
 		return
 	}
+	// Preserve the 204 contract while exposing the notice to heartbeat clients.
+	resp, err := c.EAC.Get(r.Context(), sandboxID)
+	if err != nil {
+		writeMetadataError(w, http.StatusInternalServerError, "failed to read activity")
+		return
+	}
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	if !sb.ShutdownAt.IsZero() {
+		w.Header().Set("Miren-Shutdown-At", sb.ShutdownAt.Format(time.RFC3339Nano))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -91,7 +129,7 @@ func (c *SandboxController) recordSandboxActivity(ctx context.Context, sandboxID
 		if sb.Activity.ReportedAt.After(now) {
 			return nil // A later request already won the CAS race.
 		}
-		if sb.Activity.State == state && !sb.Activity.ReportedAt.IsZero() && now.Sub(sb.Activity.ReportedAt) < activityRenewAt {
+		if sb.Activity.State == state && sb.ShutdownAt.IsZero() && !sb.Activity.ReportedAt.IsZero() && now.Sub(sb.Activity.ReportedAt) < activityRenewAt {
 			return nil
 		}
 		_, err = c.EAC.Patch(ctx, entity.New(

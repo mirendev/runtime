@@ -29,6 +29,8 @@ import (
 type EntityServer struct {
 	Log   *slog.Logger
 	Store entity.Store
+	// DeleteValidators are registered at startup by the owners of the kinds.
+	DeleteValidators map[entity.Id]func(context.Context, *entity.Entity, entity.Store) error
 
 	tf *model.TextFormatter
 	sc *entity.SchemaCache
@@ -451,6 +453,24 @@ func (e *EntityServer) Delete(ctx context.Context, req *entityserver_v1alpha.Ent
 
 	if id == "" {
 		return fmt.Errorf("id cannot be empty")
+	}
+	if len(e.DeleteValidators) != 0 {
+		stored, err := e.Store.GetEntity(ctx, entity.Id(id))
+		if err != nil && !isNotFound(err) {
+			return err
+		}
+		if err == nil {
+			for _, kind := range stored.GetAll(entity.EntityKind) {
+				if kind.Value.Kind() != entity.KindId {
+					continue
+				}
+				if validate := e.DeleteValidators[kind.Value.Id()]; validate != nil {
+					if err := validate(ctx, stored, e.Store); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 
 	return e.Store.DeleteEntity(ctx, entity.Id(args.Id()))

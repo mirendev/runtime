@@ -54,7 +54,7 @@ No secret is shared in advance. The external system trusts your cluster's *issue
 A sandbox can obtain its identity token two ways:
 
 1. **Read the file** at `/var/run/miren/identity-token` — the simplest path, always present, refreshed for you.
-2. **Call the token server** when you need a token with a specific audience or a shorter lifetime than the standard refresh provides.
+2. **Call the workload metadata API** when you need a token with a specific audience or a shorter lifetime than the standard refresh provides.
 
 Both are wired up through environment variables that Miren injects into every sandbox:
 
@@ -62,17 +62,17 @@ Both are wired up through environment variables that Miren injects into every sa
 | --- | --- | --- |
 | `MIREN_IDENTITY_TOKEN_PATH` | `/var/run/miren/identity-token` | Path to the auto-refreshed token file |
 | `MIREN_OIDC_ISSUER_URL` | e.g. `https://cluster.example.com` | The cluster's issuer; matches the token's `iss` claim |
-| `MIREN_METADATA_URL` | e.g. `http://10.x.x.1:7123/v1` | Base URL for workload metadata |
-| `MIREN_METADATA_SECRET` | a 32-byte hex secret | Sandbox-bound bearer credential for workload metadata |
+| `MIREN_METADATA_URL` | e.g. `http://10.x.x.1:7123/v1` | Base URL for sandbox-local metadata endpoints |
+| `MIREN_METADATA_SECRET` | a 32-byte hex secret | Bearer credential for the metadata API |
 | `MIREN_IDENTITY_TOKEN_URL` | e.g. `http://10.x.x.1:7123/v1/token` | On-demand token endpoint |
 | `MIREN_IDENTITY_TOKEN_SECRET` | same as `MIREN_METADATA_SECRET` | Existing token endpoint credential, retained for compatibility |
-| `MIREN_ACTIVITY_URL` | e.g. `http://10.x.x.1:7123/v1/activity` | Report sandbox activity |
+| `MIREN_ACTIVITY_URL` | e.g. `http://10.x.x.1:7123/v1/activity` | Report this sandbox's active or idle state |
 
-Prefer these environment variables over hardcoding paths or URLs — the metadata server address is internal and not a stable value.
+The metadata API serves `GET /token`, `GET`/`POST /activity`, `GET /sessions`, and `POST /sessions/deletions/ack` at `MIREN_METADATA_URL`. All endpoints use the same sandbox-bound credential. The individual URLs and legacy token secret remain available; prefer the injected variables over hardcoding the internal address or port.
 
 ## Reporting sandbox activity
 
-A workload can report its own activity independently of routed traffic. The runner identifies the sandbox from its source address and validates its sandbox-specific metadata secret:
+A workload can report its own activity independently of routed traffic. The runner derives the sandbox from the request's source address and verifies its sandbox-specific secret; the request cannot name another sandbox.
 
 ```bash
 curl -X POST "$MIREN_ACTIVITY_URL" \
@@ -81,9 +81,65 @@ curl -X POST "$MIREN_ACTIVITY_URL" \
   -d '{"state":"idle"}'
 ```
 
-Send `{"state":"active"}` when work resumes. The endpoint returns `204` on success, `400` for an invalid state, `401` or `403` for failed authentication, and `409` if the sandbox is no longer running. Miren persists transitions immediately and limits unchanged renewals to one write per 30 seconds.
+Send `{"state":"active"}` when work resumes. The endpoint returns `204` on success, `400` for an invalid state, `401` or `403` for failed authentication, and `409` if the sandbox is no longer running. Repeating the same state is safe; Miren persists transitions immediately and limits unchanged renewals to one write per 30 seconds unless a shutdown notice is pending.
 
-The last report and its timestamp are stored on the Sandbox as `activity`, separate from lifecycle `status` and traffic-derived `last_activity`. A report remains fresh for **two minutes**. To keep idle advertised, repeat the idle report at least once per minute. If no report exists, it expires, or the sandbox is not running, readers get **unknown**, which must be treated as active rather than safe to suspend. This signal does not change existing pool scale-down policy.
+## Draining a Session before suspension
+
+For a Session sandbox, the runtime publishes a shutdown notice before requesting teardown. Poll the same authenticated URL with `GET` to read `{"shutdown_at":null}` normally, or an RFC 3339 deadline when suspension is pending:
+
+```bash
+curl "$MIREN_ACTIVITY_URL" -H "Authorization: Bearer $MIREN_METADATA_SECRET"
+# {"shutdown_at":"2026-09-23T20:30:00Z"}
+```
+
+Activity `POST` responses remain `204`, but also carry a `Miren-Shutdown-At` header while a notice is pending. Once notified, stop accepting new work, finish outstanding work, and report `{"state":"idle"}`. The Session controller waits at least one minute from publishing the notice before requesting STOPPED; a fresh `active` report after the notice defers teardown until a subsequent `idle` report or until that active report expires. The final STOPPED transition is revision-checked against activity reports, so a concurrent report cannot silently be ignored. Without a post-notice active report, explicit suspension proceeds after the deadline even if the workload never polls. If suspension is cancelled, the notice is cleared. This is a cooperative warning, not a guarantee that a workload can continue indefinitely: explicit deletion and other sandbox shutdown paths still stop containers directly.
+
+The last report and its timestamp are stored on the Sandbox as `activity`, separate from lifecycle `status` and the traffic-derived `last_activity`. A report remains fresh for **two minutes** after it was persisted. To keep idle advertised, repeat the idle report at least once per minute. If no report exists, the report expires, or the sandbox is not running, readers get **unknown**, which must be treated as active rather than safe to suspend. Runner and coordinator restarts retain the durable timestamp but do not extend its validity. This signal does not change existing pool scale-down policy.
+
+## Handling multiple Sessions in one sandbox
+
+Create Sessions from a deployed app's active version without copying its resolved sandbox spec:
+
+```bash
+miren session create -a myapp --name customer-1
+miren session create -a myapp --name customer-2 --max-sessions-per-sandbox 4
+miren session list --format json
+miren session get session/myapp-customer-1
+miren session suspend session/myapp-customer-1
+miren session resume session/myapp-customer-1
+miren session delete session/myapp-customer-1
+```
+
+By default, a Session owns a dedicated sandbox. To opt into controller-managed sharing, set `max_sessions_per_sandbox` greater than one. All shared Sessions in an app use the same host pool up to its capacity, even when their service or resolved specs differ. The first Session to boot a host supplies its execution spec, so the app's shared workload must handle all Sessions assigned to it. Existing hosts reject a different capacity for the same app. Deploying a new app version drains and replaces hosts that run the old version. The Session controller reserves a durable capacity slot, creates a host sandbox when needed, and starts another host when existing ones are full. Callers do not provide a sandbox ID. The slot and host assignment survive coordinator restarts; a slot remains reserved until its Session is deleted and the workload acknowledges cleanup. A suspended Session no longer appears in the active list, but retains its assignment for resumption. Once all slots have been released, the controller stops the host and waits for runner teardown before it can be deleted. The CLI does not attach the service's disks; per-Session disk mounts are not supported in shared mode. A Session cannot switch between dedicated and shared modes after it has been bound.
+
+The workload fetches an initial snapshot from the authenticated metadata API:
+
+```bash
+curl "$MIREN_METADATA_URL/sessions" -H "Authorization: Bearer $MIREN_METADATA_SECRET"
+# {"sessions":["session/one"],"session_details":{"session/one":{"app":"app/myapp","version":"app_version/myapp-v1","service":"web","idle_timeout":"","spec":{"container":[{"image":"example:v1"}]}}},"deleted":["session/old"],"version":"..."}
+```
+
+Then send the returned `version` as `wait` to hold the next request open until the snapshot changes. A changed response is a new `200` snapshot and version; after 20 seconds without a change, the endpoint returns `304` with no body. Reissue the request with the same version after `304`, or use the new version after `200`. If the workload reconnects with a stale version, it receives the current snapshot immediately. Changes are detected by the server within roughly one second; no local comparison or callback URL is needed. Cancel a waiting request when shutting down.
+
+```bash
+curl -G "$MIREN_METADATA_URL/sessions" \
+  -H "Authorization: Bearer $MIREN_METADATA_SECRET" \
+  --data-urlencode "wait=$version"
+```
+
+`sessions` contains currently running-intent Session IDs assigned to this sandbox; suspended Sessions are omitted. `session_details` is keyed by those IDs and includes each Session's app, version, service, optional group key, idle timeout, and resolved execution `spec`. Shared hosts admit Sessions with the same app, service, and group key; a host can still inspect each assigned Session's configuration, which can differ from the host's execution spec. The details can include environment variables and config-file contents, so treat responses as sensitive and do not log them. Changes to those details also change `version` and wake a waiting request. `deleted` contains Session IDs that were deleted from the entity store; their details are no longer returned. Once the workload has cleaned up a deleted Session, acknowledge it:
+
+```bash
+curl -X POST "$MIREN_METADATA_URL/sessions/deletions/ack" \
+  -H "Authorization: Bearer $MIREN_METADATA_SECRET" \
+  -H 'Content-Type: application/json' -d '{"session":"session/old"}'
+```
+
+Acknowledgment returns `204` and may be repeated. Deletion notices are durable and reappear in snapshots until acknowledged; the runner also detects a missing Session if the coordinator missed its deletion event. Only the sandbox assigned to a Session can see or acknowledge its binding. Acknowledging before deletion returns `409`. Long polling delivers changes over the waiting request; suspension is not a deletion notification. Activity reports and shutdown notices remain sandbox-wide; a shared host's activity does not independently suspend its individual Sessions.
+
+:::warning[Session details lead host replacement]
+During a deploy, `session_details` can show the new desired app version before the old host stops. The old process still runs its original image and environment; use the shutdown notice to drain it, and only assume the new image is running after host replacement.
+:::
 
 ## The Identity Token File
 
@@ -335,7 +391,7 @@ In a cluster with [distributed runners](./distributed-runners.md), only the coor
 
 ### Restarts and the token-server secret
 
-The token server authenticates on-demand requests using a per-sandbox secret (`MIREN_IDENTITY_TOKEN_SECRET`) held in an in-memory registry. To survive a controller or server restart, each secret is also persisted host-side and re-registered for still-running sandboxes during boot reconciliation. This is handled for you; it's documented here so the behavior isn't surprising if you're inspecting the host filesystem.
+The metadata API authenticates on-demand requests using a per-sandbox secret (`MIREN_METADATA_SECRET`, also exposed as `MIREN_IDENTITY_TOKEN_SECRET`) held in an in-memory registry. To survive a controller or server restart, each secret is also persisted host-side and re-registered for still-running sandboxes during boot reconciliation. This is handled for you; it's documented here so the behavior isn't surprising if you're inspecting the host filesystem.
 
 ### Key rotation is operator-driven
 

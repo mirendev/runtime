@@ -382,6 +382,23 @@
       "command/server-upgrade-rollback"
     ]
   },
+  {
+    "type": "category",
+    "label": "session",
+    "collapsed": true,
+    "link": {
+      "type": "doc",
+      "id": "command/session"
+    },
+    "items": [
+      "command/session-create",
+      "command/session-delete",
+      "command/session-get",
+      "command/session-list",
+      "command/session-resume",
+      "command/session-suspend"
+    ]
+  },
   "command/top",
   "command/upgrade",
   "command/version",

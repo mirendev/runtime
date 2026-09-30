@@ -65,8 +65,8 @@ The default is **`app-readonly`** — a fresh app's workloads can read their own
 | Role | Scope | What it grants |
 | --- | --- | --- |
 | `none` | — | Authenticates but authorizes nothing |
-| `app-readonly` *(default)* | own app | Read own app status, logs, and deployment history |
-| `app-deployer` | own app | `app-readonly` + build and (re)deploy its own app |
+| `app-readonly` *(default)* | own app | Read own app status, logs, deployment history, and Sessions |
+| `app-deployer` | own app | `app-readonly` + build, (re)deploy, and manage its own Sessions |
 | `app-debugger` | own app | `app-readonly` + open a shell / run commands in its own sandboxes |
 | `app-admin` | own app | `app-deployer` + edit config/env and exec — everything for its own app except deleting it |
 | `cluster-readonly` | cluster | Read status, logs, and infrastructure state across all apps |
@@ -103,6 +103,30 @@ miren app set-workload-role -a tooling cluster-readonly
 :::
 
 You can see an app's current role in `miren app status`.
+
+## Managing Sessions over REST
+
+A queue-aware scheduler running in a sandbox can manage Sessions for its own app with `app-deployer` (or `app-admin`). The coordinator serves this API over HTTPS on `MIREN_API_ADDRESS`; use the cluster CA and workload identity token rather than the sandbox-local `MIREN_METADATA_SECRET`. The certificate is issued for `api.miren`, not the bridge IP, so a raw HTTP client must connect to the injected address while verifying that TLS name:
+
+```bash
+port="${MIREN_API_ADDRESS##*:}"
+base="https://api.miren:$port/api/v1/apps/my-app/sessions"
+curl --connect-to "api.miren:$port:$MIREN_API_ADDRESS" --cacert "$MIREN_CA_CERT_PATH" \
+  -H "Authorization: Bearer $(cat "$MIREN_IDENTITY_TOKEN_PATH")" \
+  -H 'Content-Type: application/json' -d '{"name":"redis-1","service":"worker","max_sessions_per_sandbox":4}' \
+  "$base"
+```
+
+`POST` creates a Session from the app's active version and returns `{"session":{"id":"session/my-app-redis-1", ...}}`. Omit `name` to generate one, or choose stable names so a scheduler can reconcile after retries; creating an existing name returns `409`. Set `max_sessions_per_sandbox` greater than one to share hosts with Sessions of the same app, service, and optional `group` key. Omit `group` to share with other ungrouped Sessions; its value is opaque and scoped to that app and service. `service` defaults to `web` and must be defined on the app. A deploy updates attached Sessions to the app's new version and replaces their sandboxes after draining. An optional `idle_timeout` is stored but does not currently trigger automatic suspension.
+
+| Method | Path relative to `base` | Purpose |
+| --- | --- | --- |
+| `GET` | Base path | List Sessions for this app with desired and observed state |
+| `GET` | `/{name}` | Inspect one Session |
+| `PUT` | `/{name}/desired-state` | Set `{"desired_state":"running"}` or `{"desired_state":"suspended"}` |
+| `DELETE` | `/{name}` | Delete the Session; the workload must acknowledge shared-session cleanup |
+
+The `{name}` path segment is the Session's name within the app, **not** its full `session/...` ID. Writes return before reconciliation finishes: use `GET` to observe `phase` and `sandbox`. The responses omit the execution spec and its credentials; the assigned sandbox reads per-Session specs from its [metadata API](./workload-identity.md#handling-multiple-sessions-in-one-sandbox). Calls targeting another app are forbidden for app-scoped identities.
 
 ## Sharp edges
 

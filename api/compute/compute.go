@@ -1,9 +1,17 @@
 package compute
 
-import "miren.dev/runtime/api/compute/compute_v1alpha"
+import (
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+)
 
 //go:generate go run ../../pkg/entity/cmd/schemagen -input schema.yml -output compute_v1alpha/schema.gen.go -pkg compute_v1alpha
 //go:generate go run ../../pkg/rpc/cmd/rpcgen -pkg compute_v1alpha -input rpc.yml -output compute_v1alpha/rpc.gen.go
+
+// TeardownID names the runner's durable acknowledgment for a sandbox ID.
+func TeardownID(id entity.Id) entity.Id {
+	return entity.Id("sandbox_teardown/" + id.PathSafe())
+}
 
 // SandboxActive reports whether a sandbox status indicates the sandbox
 // may be actively running (PENDING, NOT_READY, or RUNNING).
