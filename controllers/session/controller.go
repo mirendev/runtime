@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -538,7 +539,28 @@ func (c *Controller) children(ctx context.Context, id entity.Id) ([]*compute.San
 func (c *Controller) teardownDone(ctx context.Context, id entity.Id) (bool, error) {
 	resp, err := c.EAC.Get(ctx, computeapi.TeardownID(id).String())
 	if errors.Is(err, cond.ErrNotFound{}) {
-		return false, nil
+		sandbox, getErr := c.EAC.Get(ctx, id.String())
+		if errors.Is(getErr, cond.ErrNotFound{}) {
+			return false, nil
+		}
+		if getErr != nil {
+			return false, getErr
+		}
+		var sb compute.Sandbox
+		sb.Decode(sandbox.Entity().Entity())
+		var schedule compute.Schedule
+		if !terminal(sb.Status) || !schedule.Is(sandbox.Entity().Entity()) {
+			return false, nil
+		}
+		schedule.Decode(sandbox.Entity().Entity())
+		if schedule.Key.Node == "" {
+			return false, nil
+		}
+		_, nodeErr := c.EAC.Get(ctx, schedule.Key.Node.String())
+		if errors.Is(nodeErr, cond.ErrNotFound{}) {
+			return true, nil // The node was removed; runner teardown cannot arrive.
+		}
+		return false, nodeErr
 	}
 	if err != nil {
 		return false, err
@@ -558,9 +580,8 @@ func terminal(status compute.SandboxStatus) bool {
 }
 
 func sandboxID(session entity.Id, generation int64) entity.Id {
-	name := strings.TrimPrefix(session.String(), "session/")
-	name = strings.ReplaceAll(name, "/", "-")
-	return entity.Id(fmt.Sprintf("sandbox/session-%s-%d", name, generation))
+	name := sha256.Sum256([]byte(session))
+	return entity.Id(fmt.Sprintf("sandbox/session-%x-%d", name[:16], generation))
 }
 
 // The schema generator cannot reference a component in another domain. Keep

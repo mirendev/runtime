@@ -27,12 +27,11 @@ type sessionsResponse struct {
 }
 
 type sessionDetails struct {
-	App         entity.Id              `json:"app"`
-	Version     entity.Id              `json:"version"`
-	Service     string                 `json:"service"`
-	Group       string                 `json:"group,omitempty"`
-	IdleTimeout string                 `json:"idle_timeout"`
-	Spec        sessionapi.SandboxSpec `json:"spec"`
+	App     entity.Id              `json:"app"`
+	Version entity.Id              `json:"version"`
+	Service string                 `json:"service"`
+	Group   string                 `json:"group,omitempty"`
+	Spec    sessionapi.SandboxSpec `json:"spec"`
 }
 
 // The sandbox sees only bindings addressed to its authenticated identity.
@@ -108,7 +107,7 @@ func (c *SandboxController) sessionsSnapshot(ctx context.Context, sandboxID stri
 			result.Sessions = append(result.Sessions, binding.Session)
 			result.SessionDetails[binding.Session] = sessionDetails{
 				App: s.App, Version: s.Version, Service: s.Service, Group: s.Group,
-				IdleTimeout: s.IdleTimeout, Spec: s.Spec,
+				Spec: s.Spec,
 			}
 		}
 	}

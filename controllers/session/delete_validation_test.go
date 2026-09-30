@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,4 +38,34 @@ func TestSessionSandboxDeletionRequiresRunnerTeardown(t *testing.T) {
 		_, err = inm.EAC.Delete(ctx, tc.id.String())
 		require.NoError(t, err)
 	}
+}
+
+func TestLostNodePermitsTerminalSessionSandboxReplacement(t *testing.T) {
+	ctx := t.Context()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	inm.Server.DeleteValidators = map[entity.Id]func(context.Context, *entity.Entity, entity.Store) error{
+		compute.KindSandbox: ValidateSandboxDelete,
+	}
+	id := entity.Id("sandbox/lost-node")
+	node := entity.Id("node/lost")
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, node, (&compute.Node{}).Encode).Attrs())
+	require.NoError(t, err)
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.DEAD, SessionInfo: compute.SessionInfo{Owner: "session/one"}}).Encode,
+		(&compute.Schedule{Key: compute.Key{Node: node}}).Encode).Attrs())
+	require.NoError(t, err)
+	c := NewController(slog.Default(), inm.EAC)
+	done, err := c.teardownDone(ctx, id)
+	require.NoError(t, err)
+	require.False(t, done)
+	_, err = inm.EAC.Delete(ctx, id.String())
+	require.Error(t, err)
+	_, err = inm.EAC.Delete(ctx, node.String())
+	require.NoError(t, err)
+	done, err = c.teardownDone(ctx, id)
+	require.NoError(t, err)
+	require.True(t, done)
+	_, err = inm.EAC.Delete(ctx, id.String())
+	require.NoError(t, err)
 }

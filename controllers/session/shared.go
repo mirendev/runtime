@@ -221,7 +221,7 @@ func (c *Controller) reserveSharedSlot(ctx context.Context, s *sessionapi.Sessio
 				continue
 			}
 			if sb.SessionInfo.Capacity != s.MaxSessionsPerSandbox {
-				return "", fmt.Errorf("app %s shared host already has capacity %d (requested %d)", s.App, sb.SessionInfo.Capacity, s.MaxSessionsPerSandbox)
+				return "", c.fail(ctx, s.ID, fmt.Errorf("app %s shared host already has capacity %d (requested %d)", s.App, sb.SessionInfo.Capacity, s.MaxSessionsPerSandbox))
 			}
 		} else if !errors.Is(err, cond.ErrNotFound{}) {
 			return "", err
@@ -364,6 +364,19 @@ func (c *Controller) sweepDeletedBindings(ctx context.Context) error {
 		var binding sessionapi.Binding
 		binding.Decode(e.Entity())
 		if !binding.DeletedAt.IsZero() {
+			if binding.AcknowledgedAt.IsZero() {
+				continue
+			}
+			slots, err := c.EAC.List(ctx, entity.String(sessionapi.SlotSessionId, binding.Session))
+			if err != nil {
+				return err
+			}
+			if len(slots.Values()) != 0 {
+				continue // The reservation still protects the workload's cleanup.
+			}
+			if _, err := c.EAC.Delete(ctx, binding.ID.String()); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+				return err
+			}
 			continue
 		}
 		_, err := c.EAC.Get(ctx, binding.Session)

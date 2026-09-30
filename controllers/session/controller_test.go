@@ -18,6 +18,10 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 )
 
+func TestSandboxIDsSeparateAppAndSessionNames(t *testing.T) {
+	require.NotEqual(t, sandboxID("session/my/app-x", 1), sandboxID("session/my-app/x", 1))
+}
+
 func TestSessionLifecycleAndRestart(t *testing.T) {
 	ctx := context.Background()
 	inm, cleanup := testutils.NewInMemEntityServer(t)

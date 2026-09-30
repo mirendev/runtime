@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	coreutil "miren.dev/runtime/api/core"
 	core "miren.dev/runtime/api/core/core_v1alpha"
@@ -59,7 +60,12 @@ func (w *AppWatchController) Update(ctx context.Context, app *core.App, _ *entit
 			found = found || service.Name == s.Service
 		}
 		if !found {
-			return fmt.Errorf("app %s no longer defines Session service %s", app.ID, s.Service)
+			cause := fmt.Errorf("app %s no longer defines Session service %s", app.ID, s.Service)
+			if err := w.Sessions.patch(ctx, s.ID, &sessionapi.Session{Phase: sessionapi.FAILED, Failure: cause.Error(), LastTransition: time.Now()}); err != nil {
+				return err
+			}
+			w.Sessions.Log.Warn("session service removed during deploy", "session", s.ID, "error", cause)
+			continue
 		}
 		spec, err := appspec.Build(w.Sessions.Log, appspec.Options{
 			AppID: app.ID, AppName: metadata.Name, Version: &version,

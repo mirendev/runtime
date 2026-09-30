@@ -22,21 +22,18 @@ types:
       - name: max_sessions_per_sandbox
         type: int64
         index: 5
-      - name: idle_timeout
-        type: string
-        index: 6
       - name: desired_state
         type: string
-        index: 7
+        index: 6
       - name: phase
         type: string
-        index: 8
+        index: 7
       - name: sandbox
         type: string
-        index: 9
+        index: 8
       - name: failure
         type: string
-        index: 10
+        index: 9
 
 interfaces:
   - name: Sessions
@@ -58,8 +55,6 @@ interfaces:
             type: string
           - name: max_sessions_per_sandbox
             type: int64
-          - name: idle_timeout
-            type: string
         results:
           - name: session
             type: SessionInfo

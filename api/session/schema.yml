@@ -248,10 +248,6 @@ kinds:
       choices: [running, suspended]
       doc: Whether the Session should run or remain suspended
 
-    idle_timeout:
-      type: string
-      doc: Duration of inactivity before suspending the Session
-
     sandbox:
       type: ref
       doc: Current incarnation; absent once suspension finishes

@@ -104,10 +104,10 @@ Create Sessions from a deployed app's active version without copying its resolve
 miren session create -a myapp --name customer-1
 miren session create -a myapp --name customer-2 --max-sessions-per-sandbox 4
 miren session list --format json
-miren session get session/myapp-customer-1
-miren session suspend session/myapp-customer-1
-miren session resume session/myapp-customer-1
-miren session delete session/myapp-customer-1
+miren session get session/myapp/customer-1
+miren session suspend session/myapp/customer-1
+miren session resume session/myapp/customer-1
+miren session delete session/myapp/customer-1
 ```
 
 By default, a Session owns a dedicated sandbox. To opt into controller-managed sharing, set `max_sessions_per_sandbox` greater than one. All shared Sessions in an app use the same host pool up to its capacity, even when their service or resolved specs differ. The first Session to boot a host supplies its execution spec, so the app's shared workload must handle all Sessions assigned to it. Existing hosts reject a different capacity for the same app. Deploying a new app version drains and replaces hosts that run the old version. The Session controller reserves a durable capacity slot, creates a host sandbox when needed, and starts another host when existing ones are full. Callers do not provide a sandbox ID. The slot and host assignment survive coordinator restarts; a slot remains reserved until its Session is deleted and the workload acknowledges cleanup. A suspended Session no longer appears in the active list, but retains its assignment for resumption. Once all slots have been released, the controller stops the host and waits for runner teardown before it can be deleted. The CLI does not attach the service's disks; per-Session disk mounts are not supported in shared mode. A Session cannot switch between dedicated and shared modes after it has been bound.
@@ -116,7 +116,7 @@ The workload fetches an initial snapshot from the authenticated metadata API:
 
 ```bash
 curl "$MIREN_METADATA_URL/sessions" -H "Authorization: Bearer $MIREN_METADATA_SECRET"
-# {"sessions":["session/one"],"session_details":{"session/one":{"app":"app/myapp","version":"app_version/myapp-v1","service":"web","idle_timeout":"","spec":{"container":[{"image":"example:v1"}]}}},"deleted":["session/old"],"version":"..."}
+# {"sessions":["session/one"],"session_details":{"session/one":{"app":"app/myapp","version":"app_version/myapp-v1","service":"web","spec":{"container":[{"image":"example:v1"}]}}},"deleted":["session/old"],"version":"..."}
 ```
 
 Then send the returned `version` as `wait` to hold the next request open until the snapshot changes. A changed response is a new `200` snapshot and version; after 20 seconds without a change, the endpoint returns `304` with no body. Reissue the request with the same version after `304`, or use the new version after `200`. If the workload reconnects with a stale version, it receives the current snapshot immediately. Changes are detected by the server within roughly one second; no local comparison or callback URL is needed. Cancel a waiting request when shutting down.
@@ -127,7 +127,7 @@ curl -G "$MIREN_METADATA_URL/sessions" \
   --data-urlencode "wait=$version"
 ```
 
-`sessions` contains currently running-intent Session IDs assigned to this sandbox; suspended Sessions are omitted. `session_details` is keyed by those IDs and includes each Session's app, version, service, optional group key, idle timeout, and resolved execution `spec`. Shared hosts admit Sessions with the same app, service, and group key; a host can still inspect each assigned Session's configuration, which can differ from the host's execution spec. The details can include environment variables and config-file contents, so treat responses as sensitive and do not log them. Changes to those details also change `version` and wake a waiting request. `deleted` contains Session IDs that were deleted from the entity store; their details are no longer returned. Once the workload has cleaned up a deleted Session, acknowledge it:
+`sessions` contains currently running-intent Session IDs assigned to this sandbox; suspended Sessions are omitted. `session_details` is keyed by those IDs and includes each Session's app, version, service, optional group key, and resolved execution `spec`. Shared hosts admit Sessions with the same app, service, and group key; a host can still inspect each assigned Session's configuration, which can differ from the host's execution spec. The details can include environment variables and config-file contents, so treat responses as sensitive and do not log them. Changes to those details also change `version` and wake a waiting request. `deleted` contains Session IDs that were deleted from the entity store; their details are no longer returned. Once the workload has cleaned up a deleted Session, acknowledge it:
 
 ```bash
 curl -X POST "$MIREN_METADATA_URL/sessions/deletions/ack" \

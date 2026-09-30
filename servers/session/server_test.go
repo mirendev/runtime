@@ -70,7 +70,7 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 		} `json:"session"`
 	}
 	require.NoError(t, json.Unmarshal(created.Body.Bytes(), &result))
-	require.Equal(t, "session/workers-queue-1", result.Session.ID)
+	require.Equal(t, "session/workers/queue-1", result.Session.ID)
 	require.Equal(t, "priority", result.Session.Group)
 	require.Equal(t, int64(2), result.Session.MaxSessionsPerSandbox)
 	require.Equal(t, "running", result.Session.DesiredState)
@@ -94,7 +94,7 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 	require.Len(t, listing.Sessions, 1)
 	get := request("workers", http.MethodGet, path+"/queue-1", "")
 	require.Equal(t, http.StatusOK, get.Code)
-	require.Contains(t, get.Body.String(), "session/workers-queue-1")
+	require.Contains(t, get.Body.String(), "session/workers/queue-1")
 	require.Equal(t, http.StatusBadRequest, request("workers", http.MethodPut, path+"/queue-1/desired-state",
 		`{"desired_state":"draining"}`).Code)
 	updated := request("workers", http.MethodPut, path+"/queue-1/desired-state", `{"desired_state":"suspended"}`)
@@ -117,8 +117,17 @@ func TestSessionsRPCAppScope(t *testing.T) {
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
 		Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "one"},
 	})
-	_, err := client.Create(ctx, "two", "job", "web", "", 1, "")
+	_, err := client.Create(ctx, "two", "job", "web", "", 1)
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)
 	_, err = client.List(ctx, "two")
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+}
+
+func TestSessionNamesDoNotCollideAcrossApps(t *testing.T) {
+	first, err := sessionID("my", "app-x")
+	require.NoError(t, err)
+	second, err := sessionID("my-app", "x")
+	require.NoError(t, err)
+	require.NotEqual(t, first, second)
+	require.Equal(t, entity.Id("session/my/app-x"), first)
 }

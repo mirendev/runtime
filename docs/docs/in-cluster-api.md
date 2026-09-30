@@ -117,7 +117,7 @@ curl --connect-to "api.miren:$port:$MIREN_API_ADDRESS" --cacert "$MIREN_CA_CERT_
   "$base"
 ```
 
-`POST` creates a Session from the app's active version and returns `{"session":{"id":"session/my-app-redis-1", ...}}`. Omit `name` to generate one, or choose stable names so a scheduler can reconcile after retries; creating an existing name returns `409`. Set `max_sessions_per_sandbox` greater than one to share hosts with Sessions of the same app, service, and optional `group` key. Omit `group` to share with other ungrouped Sessions; its value is opaque and scoped to that app and service. `service` defaults to `web` and must be defined on the app. A deploy updates attached Sessions to the app's new version and replaces their sandboxes after draining. An optional `idle_timeout` is stored but does not currently trigger automatic suspension.
+`POST` creates a Session from the app's active version and returns `{"session":{"id":"session/my-app/redis-1", ...}}`. Omit `name` to generate one, or choose stable names so a scheduler can reconcile after retries; creating an existing name returns `409`. Set `max_sessions_per_sandbox` greater than one to share hosts with Sessions of the same app, service, and optional `group` key. Omit `group` to share with other ungrouped Sessions; its value is opaque and scoped to that app and service. `service` defaults to `web` and must be defined on the app. A deploy updates attached Sessions to the app's new version and replaces their sandboxes after draining.
 
 | Method | Path relative to `base` | Purpose |
 | --- | --- | --- |

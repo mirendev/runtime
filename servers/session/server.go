@@ -5,15 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
-	"time"
 
 	coreutil "miren.dev/runtime/api/core"
 	core "miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	shared "miren.dev/runtime/api/session"
 	sessionapi "miren.dev/runtime/api/session/session_v1alpha"
 	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/cond"
@@ -60,7 +61,7 @@ func sessionID(app, name string) (entity.Id, error) {
 	if !validName(name) {
 		return "", invalid("invalid Session name")
 	}
-	return entity.Id("session/" + app + "-" + name), nil
+	return entity.Id("session/" + app + "/" + name), nil
 }
 
 func (s *Server) read(ctx context.Context, app *core.App, name string) (*sessionapi.Session, error) {
@@ -88,7 +89,6 @@ func info(current *sessionapi.Session) *sessionapi.SessionInfo {
 	result.SetService(current.Service)
 	result.SetGroup(current.Group)
 	result.SetMaxSessionsPerSandbox(current.MaxSessionsPerSandbox)
-	result.SetIdleTimeout(current.IdleTimeout)
 	result.SetDesiredState(strings.TrimPrefix(string(current.DesiredState), "desired_state."))
 	result.SetPhase(strings.TrimPrefix(string(current.Phase), "phase."))
 	result.SetSandbox(current.Sandbox.String())
@@ -109,11 +109,6 @@ func (s *Server) Create(ctx context.Context, state *sessionapi.SessionsCreate) e
 	if capacity < 1 {
 		return invalid("max_sessions_per_sandbox must be greater than zero")
 	}
-	if args.IdleTimeout() != "" {
-		if _, err := time.ParseDuration(args.IdleTimeout()); err != nil {
-			return invalid("invalid idle_timeout: " + err.Error())
-		}
-	}
 	name := args.Name()
 	if name == "" {
 		var random [6]byte
@@ -124,6 +119,11 @@ func (s *Server) Create(ctx context.Context, state *sessionapi.SessionsCreate) e
 	}
 	id, err := sessionID(args.App(), name)
 	if err != nil {
+		return err
+	}
+	if _, err := s.EAC.Get(ctx, shared.BindingID(id).String()); err == nil {
+		return invalid("previous shared Session cleanup is still pending")
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
 		return err
 	}
 	if app.ActiveVersion == "" {
@@ -178,7 +178,7 @@ func (s *Server) Create(ctx context.Context, state *sessionapi.SessionsCreate) e
 	}
 	current := &sessionapi.Session{ID: id, App: app.ID, Version: version.ID, Service: service, Group: args.Group(),
 		Spec: sessionSpec, MaxSessionsPerSandbox: capacity,
-		DesiredState: sessionapi.RUNNING, IdleTimeout: args.IdleTimeout()}
+		DesiredState: sessionapi.RUNNING}
 	if _, err := s.EAC.Create(ctx, entity.New(entity.DBId, id, current.Encode).Attrs()); err != nil {
 		return err
 	}

@@ -103,7 +103,14 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 		sharedGroup(&sessionapi.Session{App: "app/one", Service: "a", Group: "b\x00c"}))
 	wrongCapacity := &sessionapi.Session{ID: "session/wrong-capacity", App: "app/one",
 		MaxSessionsPerSandbox: 3, Spec: spec, DesiredState: sessionapi.RUNNING}
+	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, wrongCapacity.ID, wrongCapacity.Encode).Attrs())
+	require.NoError(t, err)
 	require.ErrorContains(t, c.Reconcile(ctx, wrongCapacity, &entity.Meta{}), "already has capacity 2")
+	resp, err := inm.EAC.Get(ctx, wrongCapacity.ID.String())
+	require.NoError(t, err)
+	var failed sessionapi.Session
+	failed.Decode(resp.Entity().Entity())
+	require.Equal(t, sessionapi.FAILED, failed.Phase)
 	for _, id := range ids[:2] {
 		slots, err := inm.EAC.List(ctx, entity.String(sessionapi.SlotSessionId, id.String()))
 		require.NoError(t, err)
@@ -126,7 +133,7 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	_, err = inm.EAC.Delete(ctx, ids[0].String())
 	require.NoError(t, err)
 	require.NoError(t, c.Delete(ctx, ids[0]))
-	resp, err := inm.EAC.Get(ctx, shared.BindingID(ids[0]).String())
+	resp, err = inm.EAC.Get(ctx, shared.BindingID(ids[0]).String())
 	require.NoError(t, err)
 	var binding sessionapi.Binding
 	binding.Decode(resp.Entity().Entity())
@@ -145,6 +152,9 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	slots, err = inm.EAC.List(ctx, entity.String(sessionapi.SlotSandboxId, host.String()))
 	require.NoError(t, err)
 	require.Len(t, slots.Values(), 1)
+	require.NoError(t, c.SweepOrphans(ctx))
+	_, err = inm.EAC.Get(ctx, shared.BindingID(ids[0]).String())
+	require.Error(t, err, "acknowledged deletion releases the name after its slot")
 	require.Equal(t, host, reconcile(ids[1]).Sandbox)
 
 	_, err = inm.EAC.Delete(ctx, ids[1].String())

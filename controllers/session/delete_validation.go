@@ -18,6 +18,19 @@ func ValidateSandboxDelete(ctx context.Context, stored *entity.Entity, store ent
 	if sb.SessionInfo.Owner == "" && sb.SessionInfo.Group == "" {
 		return nil
 	}
+	var schedule compute.Schedule
+	if terminal(sb.Status) && schedule.Is(stored) {
+		schedule.Decode(stored)
+		if schedule.Key.Node != "" {
+			_, err := store.GetEntity(ctx, schedule.Key.Node)
+			if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, entity.ErrEntityNotFound) {
+				return nil // A removed node cannot leave running containers to acknowledge teardown.
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
 	ack, err := store.GetEntity(ctx, computeapi.TeardownID(sb.ID))
 	if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, entity.ErrEntityNotFound) {
 		return cond.ValidationFailure("sandbox-teardown", "session sandbox must finish runner teardown before deletion")
