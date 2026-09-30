@@ -204,15 +204,16 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		entity.Ref(entity.EntityKind, core_v1alpha.KindApp), eac,
 		controller.AdaptController(&sessionctrl.AppWatchController{Sessions: sessionController}), time.Minute, 1,
 	))
+	sessionSandboxWatch := sessionctrl.NewSandboxWatchController(sessionReconciler, eac)
 	cm.AddController(controller.NewReconcileController(
 		"session-sandbox-watch", c.Log,
 		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), eac,
-		controller.AdaptController(sessionctrl.NewSandboxWatchController(sessionReconciler)), 0, 1,
+		controller.AdaptController(sessionSandboxWatch), 0, 1,
 	))
 	cm.AddController(controller.NewReconcileController(
 		"session-teardown-watch", c.Log,
 		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxTeardown), eac,
-		controller.AdaptController(&sessionctrl.TeardownWatchController{SandboxWatchController: sessionctrl.SandboxWatchController{Sessions: sessionReconciler}}), 0, 1,
+		controller.AdaptController(&sessionctrl.TeardownWatchController{SandboxWatchController: *sessionSandboxWatch}), 0, 1,
 	))
 
 	cm.AddController(controller.NewReconcileController(

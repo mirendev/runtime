@@ -329,9 +329,13 @@ func TestSharedSessionsReplaceHostOnlyAfterTeardown(t *testing.T) {
 	}
 	old := reconcile().Sandbox
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, old,
+		(&compute.Sandbox{Status: compute.RUNNING}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.Equal(t, sessionapi.READY, reconcile().Phase)
+	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, old,
 		(&compute.Sandbox{Status: compute.DEAD}).Encode).Attrs(), 0)
 	require.NoError(t, err)
-	require.Equal(t, sessionapi.FAILED, reconcile().Phase)
+	require.Equal(t, sessionapi.READY, reconcile().Phase, "teardown pending must not fail a Session")
 	require.Equal(t, old, reconcile().Sandbox)
 	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, computeapi.TeardownID(old),
 		(&compute.SandboxTeardown{Sandbox: old.String()}).Encode).Attrs())

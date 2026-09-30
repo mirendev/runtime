@@ -124,10 +124,7 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 			return err
 		}
 		if !ack {
-			if s.Phase == sessionapi.FAILED {
-				return nil
-			}
-			return c.patch(ctx, s.ID, &sessionapi.Session{Phase: sessionapi.FAILED, LastTransition: time.Now()})
+			return nil // Wait for runner teardown before assigning a replacement.
 		}
 		// If the coordinator crashed after claiming a replacement but before
 		// updating the binding, reuse that reservation instead of taking a third.
