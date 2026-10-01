@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -227,6 +228,52 @@ func (a *AuthClient) Authenticate(ctx context.Context) (string, error) {
 // GetToken returns a valid JWT, refreshing if necessary
 func (a *AuthClient) GetToken(ctx context.Context) (string, error) {
 	return a.Authenticate(ctx)
+}
+
+// GetUserGroups returns the current group IDs for a user in this cluster's organization.
+func (a *AuthClient) GetUserGroups(ctx context.Context, userID string) ([]string, error) {
+	token, err := a.GetToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get service account token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/v1/self/users/%s/groups", a.serverURL, url.PathEscape(userID)), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create user groups request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch user groups: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch user groups: status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Groups []struct {
+			ID string `json:"id"`
+		} `json:"groups"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode user groups: %w", err)
+	}
+	if result.Groups == nil {
+		return nil, fmt.Errorf("user groups missing from response")
+	}
+
+	groups := make([]string, 0, len(result.Groups))
+	for _, group := range result.Groups {
+		if group.ID == "" {
+			return nil, fmt.Errorf("user group missing ID")
+		}
+		groups = append(groups, group.ID)
+	}
+	return groups, nil
 }
 
 // InvalidateToken clears the cached token

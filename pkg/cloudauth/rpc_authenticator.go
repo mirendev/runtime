@@ -18,6 +18,7 @@ const DefaultCloudURL = "https://api.miren.cloud"
 type RPCAuthenticator struct {
 	jwtValidator  *auth.JWTValidator
 	tokenCache    *auth.TokenCache
+	authClient    *AuthClient
 	rbacEval      *rbac.Evaluator
 	policyFetcher *PolicyFetcher
 	logger        *slog.Logger
@@ -75,8 +76,9 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	}
 
 	a := &RPCAuthenticator{
-		logger: config.Logger.With("module", "cloud-auth"),
-		tags:   config.Tags,
+		logger:     config.Logger.With("module", "cloud-auth"),
+		tags:       config.Tags,
+		authClient: config.AuthClient,
 	}
 
 	// Set default tags if not provided
@@ -165,9 +167,20 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 		"organization_id", claims.OrganizationID,
 	)
 
+	groups := claims.GroupIDs
+	if a.authClient != nil {
+		currentGroups, err := a.authClient.GetUserGroups(ctx, claims.Subject)
+		if err != nil {
+			a.logger.Warn("failed to retrieve current user groups; using token groups",
+				"subject", claims.Subject, "error", err)
+		} else {
+			groups = currentGroups
+		}
+	}
+
 	return &rpc.Identity{
 		Subject: claims.Subject,
-		Groups:  claims.GroupIDs,
+		Groups:  groups,
 		Method:  rpc.AuthMethodJWT,
 		Metadata: map[string]any{
 			"organization_id": claims.OrganizationID,

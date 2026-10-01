@@ -1,8 +1,16 @@
 package cloudauth
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
+	"time"
+
+	jwt "github.com/golang-jwt/jwt/v5"
+	"miren.dev/runtime/pkg/auth"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -137,6 +145,68 @@ func TestDefaultCloudURL(t *testing.T) {
 	// Verify policy fetcher is created
 	if auth.policyFetcher == nil {
 		t.Error("expected policy fetcher to be initialized with default CloudURL")
+	}
+}
+
+func TestRPCAuthenticatorUsesCurrentCloudGroups(t *testing.T) {
+	response := `{"groups":[{"id":"grp_current","name":"Current"}]}`
+	status := http.StatusOK
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/self/users/usr_123/groups" {
+			t.Errorf("unexpected groups request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer service-token" || r.Header.Get("Accept") != "application/json" {
+			t.Errorf("unexpected request headers: %v", r.Header)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(response))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client := &AuthClient{
+		serverURL:    server.URL,
+		httpClient:   server.Client(),
+		currentToken: "service-token",
+		tokenExpiry:  time.Now().Add(time.Hour),
+	}
+	a := &RPCAuthenticator{
+		authClient: client,
+		tokenCache: auth.NewTokenCache(ctx),
+		logger:     slog.Default(),
+	}
+	a.tokenCache.Set("user-token", &auth.Claims{GroupIDs: []string{"grp_old"}, RegisteredClaims: jwt.RegisteredClaims{Subject: "usr_123"}})
+
+	checkGroups := func(want ...string) {
+		t.Helper()
+		identity, err := a.authenticateJWT(ctx, "Bearer user-token")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(identity.Groups, want) {
+			t.Errorf("groups = %v, want %v", identity.Groups, want)
+		}
+	}
+
+	checkGroups("grp_current")
+	response = `{"groups":[{"id":"grp_new","name":"New"}]}`
+	checkGroups("grp_new") // The same cached JWT must not cache its groups.
+	response = `{"groups":[]}`
+	checkGroups() // An empty cloud result must not fall back to the token.
+	status = http.StatusServiceUnavailable
+	checkGroups("grp_old")
+	status = http.StatusNotFound
+	checkGroups("grp_old")
+	status = http.StatusOK
+	response = `{"groups":[{}]}`
+	checkGroups("grp_old")
+	a.authClient = nil
+	checkGroups("grp_old")
+	if requests != 6 {
+		t.Errorf("groups requests = %d, want 6", requests)
 	}
 }
 
