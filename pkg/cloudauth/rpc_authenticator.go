@@ -171,7 +171,8 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 	if a.authClient != nil {
 		currentGroups, err := a.authClient.GetUserGroups(ctx, claims.Subject)
 		if err != nil {
-			a.logger.Warn("failed to retrieve current user groups; using token groups",
+			// This can repeat on every RPC, including for non-user subjects.
+			a.logger.Debug("failed to retrieve current user groups; using token groups",
 				"subject", claims.Subject, "error", err)
 		} else {
 			groups = currentGroups

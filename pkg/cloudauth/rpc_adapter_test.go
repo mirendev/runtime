@@ -2,10 +2,14 @@ package cloudauth
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -149,19 +153,34 @@ func TestDefaultCloudURL(t *testing.T) {
 }
 
 func TestRPCAuthenticatorUsesCurrentCloudGroups(t *testing.T) {
-	response := `{"groups":[{"id":"grp_current","name":"Current"}]}`
-	status := http.StatusOK
-	requests := 0
+	responses := []struct {
+		status int
+		body   string
+		groups []string
+	}{
+		{http.StatusOK, `{"groups":[{"id":"grp_current","name":"Current"}]}`, []string{"grp_current"}},
+		{http.StatusOK, `{"groups":[{"id":"grp_new","name":"New"}]}`, []string{"grp_new"}},
+		{http.StatusOK, `{"groups":[]}`, nil},
+		{http.StatusServiceUnavailable, `{"error":"unavailable"}`, []string{"grp_old"}},
+		{http.StatusNotFound, `{"error":"user not found"}`, []string{"grp_old"}},
+		{http.StatusOK, `{"groups":[{}]}`, []string{"grp_old"}},
+	}
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		i := int(requests.Add(1)) - 1
+		if i >= len(responses) {
+			t.Error("unexpected extra groups request")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/self/users/usr_123/groups" {
 			t.Errorf("unexpected groups request: %s %s", r.Method, r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer service-token" || r.Header.Get("Accept") != "application/json" {
 			t.Errorf("unexpected request headers: %v", r.Header)
 		}
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(response))
+		w.WriteHeader(responses[i].status)
+		_, _ = w.Write([]byte(responses[i].body))
 	}))
 	defer server.Close()
 
@@ -191,22 +210,49 @@ func TestRPCAuthenticatorUsesCurrentCloudGroups(t *testing.T) {
 		}
 	}
 
-	checkGroups("grp_current")
-	response = `{"groups":[{"id":"grp_new","name":"New"}]}`
-	checkGroups("grp_new") // The same cached JWT must not cache its groups.
-	response = `{"groups":[]}`
-	checkGroups() // An empty cloud result must not fall back to the token.
-	status = http.StatusServiceUnavailable
-	checkGroups("grp_old")
-	status = http.StatusNotFound
-	checkGroups("grp_old")
-	status = http.StatusOK
-	response = `{"groups":[{}]}`
-	checkGroups("grp_old")
+	// The same cached JWT must see changed membership, including empty groups.
+	for _, response := range responses {
+		checkGroups(response.groups...)
+	}
 	a.authClient = nil
 	checkGroups("grp_old")
-	if requests != 6 {
-		t.Errorf("groups requests = %d, want 6", requests)
+	if got := requests.Load(); got != int32(len(responses)) {
+		t.Errorf("groups requests = %d, want %d", got, len(responses))
+	}
+}
+
+func TestUserGroupsLookupDeadline(t *testing.T) {
+	for _, refreshToken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh_token=%t", refreshToken), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			keyPair, err := GenerateKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := NewAuthClient(server.URL, keyPair)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !refreshToken {
+				client.currentToken = "service-token"
+				client.tokenExpiry = time.Now().Add(time.Hour)
+			}
+			// A longer caller deadline ensures this exercises the lookup's own bound.
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			start := time.Now()
+			_, err = client.GetUserGroups(ctx, "usr_123")
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected lookup deadline error, got %v", err)
+			}
+			if elapsed := time.Since(start); elapsed >= 4*time.Second {
+				t.Errorf("lookup took %v; expected its own short deadline", elapsed)
+			}
+		})
 	}
 }
 

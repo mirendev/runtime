@@ -232,6 +232,11 @@ func (a *AuthClient) GetToken(ctx context.Context) (string, error) {
 
 // GetUserGroups returns the current group IDs for a user in this cluster's organization.
 func (a *AuthClient) GetUserGroups(ctx context.Context, userID string) ([]string, error) {
+	// Bound the entire lookup, including service-account token refresh, so cloud
+	// outages cannot stall each RPC for the HTTP client's full timeout.
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
 	token, err := a.GetToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get service account token: %w", err)
