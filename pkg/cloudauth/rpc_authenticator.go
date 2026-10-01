@@ -4,7 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
+	"golang.org/x/sync/singleflight"
 
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
@@ -14,11 +19,19 @@ import (
 // DefaultCloudURL is the default URL for miren.cloud
 const DefaultCloudURL = "https://api.miren.cloud"
 
+type groupLookupResult struct {
+	groups    []string
+	err       error
+	expiresAt time.Time
+}
+
 // RPCAuthenticator adapts cloud authentication for RPC usage
 type RPCAuthenticator struct {
 	jwtValidator  *auth.JWTValidator
 	tokenCache    *auth.TokenCache
 	authClient    *AuthClient
+	groupCache    *lru.Cache[string, groupLookupResult]
+	groupLookups  singleflight.Group
 	rbacEval      *rbac.Evaluator
 	policyFetcher *PolicyFetcher
 	logger        *slog.Logger
@@ -75,10 +88,16 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	groupCache, err := lru.New[string, groupLookupResult](1024)
+	if err != nil {
+		return nil, fmt.Errorf("create user group cache: %w", err)
+	}
+
 	a := &RPCAuthenticator{
 		logger:     config.Logger.With("module", "cloud-auth"),
 		tags:       config.Tags,
 		authClient: config.AuthClient,
+		groupCache: groupCache,
 	}
 
 	// Set default tags if not provided
@@ -169,7 +188,7 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 
 	groups := claims.GroupIDs
 	if a.authClient != nil {
-		currentGroups, err := a.authClient.GetUserGroups(ctx, claims.Subject)
+		currentGroups, err := a.getUserGroups(ctx, claims.Subject)
 		if err != nil {
 			// This can repeat on every RPC, including for non-user subjects.
 			a.logger.Debug("failed to retrieve current user groups; using token groups",
@@ -189,6 +208,37 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 			"name":            claims.Name,
 		},
 	}, nil
+}
+
+func (a *RPCAuthenticator) getUserGroups(ctx context.Context, subject string) ([]string, error) {
+	if cached, ok := a.groupCache.Get(subject); ok && time.Now().Before(cached.expiresAt) {
+		return slices.Clone(cached.groups), cached.err
+	}
+
+	result := a.groupLookups.DoChan(subject, func() (any, error) {
+		if cached, ok := a.groupCache.Get(subject); ok && time.Now().Before(cached.expiresAt) {
+			return cached.groups, cached.err
+		}
+		// A canceled caller must not cancel the shared lookup or cache its
+		// cancellation for other callers. GetUserGroups still enforces its 2s bound.
+		groups, err := a.authClient.GetUserGroups(context.WithoutCancel(ctx), subject)
+		ttl := 10 * time.Second
+		if err != nil {
+			ttl = 3 * time.Second
+		}
+		a.groupCache.Add(subject, groupLookupResult{groups: groups, err: err, expiresAt: time.Now().Add(ttl)})
+		return groups, err
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case lookup := <-result:
+		if lookup.Err != nil {
+			return nil, lookup.Err
+		}
+		// RBAC sorts request groups in place; never expose the shared cache slice.
+		return slices.Clone(lookup.Val.([]string)), nil
+	}
 }
 
 // Authorize implements rpc.Authorizer.
