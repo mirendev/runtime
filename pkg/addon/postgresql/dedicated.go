@@ -96,6 +96,7 @@ type CreateDedicatedPoolIn struct {
 	Username      string
 	Password      string
 	VariantConfig map[string]string
+	StorageReady  saga.Edge `saga:"storage_ready,optional"`
 }
 
 type CreateDedicatedPoolOut struct {

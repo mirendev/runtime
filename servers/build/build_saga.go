@@ -13,9 +13,11 @@ import (
 
 	"github.com/tonistiigi/fsutil"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -523,10 +525,10 @@ func undoCreateVersion(ctx context.Context, _ createVersionIn, out createVersion
 	return nil
 }
 
-// provisionAddons calls into the addons client to materialize the
-// addons declared in app.toml. Skipped for ephemeral deploys (which
-// don't get addons) and when there's no app config at all. The undo
-// is a no-op: provisionAddons handles "already attached" gracefully
+// provisionAddons calls into the addons client to materialize the addons
+// declared in app.toml. Ephemeral deploys instead request version-scoped
+// clones of the app's active associations. The undo is a no-op:
+// provisionAddons handles "already attached" gracefully
 // on retry, and removing addons created during a build would surprise
 // users running concurrent ops against the same app.
 
@@ -545,10 +547,20 @@ type provisionAddonsOut struct {
 }
 
 func provisionAddons(ctx context.Context, in provisionAddonsIn) (provisionAddonsOut, error) {
-	if in.EphemeralLabel != "" || in.AppConfig == nil {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if in.EphemeralLabel != "" {
+		appRec, err := deps.builder.appClient.GetByName(ctx, in.AppName)
+		if err != nil {
+			return provisionAddonsOut{}, fmt.Errorf("reading app for addon clones: %w", err)
+		}
+		if err := addon.RequestClones(ctx, deps.builder.EAS, appRec.ID, entity.Id(in.AppVersionID)); err != nil {
+			return provisionAddonsOut{}, fmt.Errorf("requesting addon clones: %w", err)
+		}
 		return provisionAddonsOut{}, nil
 	}
-	deps := saga.Get[*buildSagaDeps](ctx)
+	if in.AppConfig == nil {
+		return provisionAddonsOut{}, nil
+	}
 	if deps.builder.addonsClient == nil {
 		return provisionAddonsOut{}, nil
 	}
@@ -578,6 +590,7 @@ type waitAddonsIn struct {
 	StreamID       string               `json:"stream_id" saga:"stream_id"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AppVersionID   string               `json:"app_version_id" saga:"app_version_id"`
 	Provisioned    saga.Edge            `saga:"addons_provisioned"`
 }
 
@@ -586,10 +599,33 @@ type waitAddonsOut struct {
 }
 
 func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
-	// An ephemeral preview shares the app's addons and is not gated on them;
-	// the launcher holds its pools back the same way it does the app's.
 	if in.EphemeralLabel != "" {
-		return waitAddonsOut{}, nil
+		deps := saga.Get[*buildSagaDeps](ctx)
+		deadline := time.NewTicker(250 * time.Millisecond)
+		defer deadline.Stop()
+		for {
+			resp, err := deps.builder.EAS.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, entity.Id(in.AppVersionID)))
+			if err != nil {
+				return waitAddonsOut{}, fmt.Errorf("listing addon clones: %w", err)
+			}
+			ready := true
+			for _, ent := range resp.Values() {
+				var assoc addon_v1alpha.AddonAssociation
+				assoc.Decode(ent.Entity())
+				if assoc.Status == "error" {
+					return waitAddonsOut{}, fmt.Errorf("addon clone %s failed: %s", addon.NameFromRef(assoc.Addon), assoc.ErrorMessage)
+				}
+				ready = ready && assoc.Status == "active"
+			}
+			if ready {
+				return waitAddonsOut{}, nil
+			}
+			select {
+			case <-ctx.Done():
+				return waitAddonsOut{}, ctx.Err()
+			case <-deadline.C:
+			}
+		}
 	}
 	expected := expectedAddons(in.AppConfig)
 	if len(expected) == 0 {

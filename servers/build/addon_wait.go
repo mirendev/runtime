@@ -189,6 +189,9 @@ func (s *addonWaitState) observe(en *entity.Entity) {
 	}
 	var assoc addon_v1alpha.AddonAssociation
 	assoc.Decode(en)
+	if assoc.AppVersion != "" {
+		return
+	}
 	name := addon.NameFromRef(assoc.Addon)
 	if !s.expects(name) {
 		return

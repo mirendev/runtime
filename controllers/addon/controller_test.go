@@ -76,9 +76,11 @@ type testProvider struct {
 	deprovisionFn  func(ctx context.Context, assoc addon.AddonAssociation) error
 	deprovisionErr error
 	adjustErr      error
+	cloneFn        func(ctx context.Context, source, target addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error)
 
 	provisionCalled   bool
 	deprovisionCalled bool
+	cloneCalled       bool
 }
 
 func (p *testProvider) LocalityMode() addon.LocalityMode {
@@ -118,6 +120,14 @@ func (p *testProvider) Deprovision(ctx context.Context, assoc addon.AddonAssocia
 	return nil
 }
 
+func (p *testProvider) Clone(ctx context.Context, source, target addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+	p.cloneCalled = true
+	if p.cloneFn != nil {
+		return p.cloneFn(ctx, source, target, app, variant)
+	}
+	return &addon.ProvisionResult{EnvVars: []addon.Variable{{Key: "DATABASE_URL", Value: "postgres://clone"}}}, nil
+}
+
 func setupControllerTest(t *testing.T) (context.Context, *Controller, *entityserver.Client, *testProvider) {
 	t.Helper()
 
@@ -142,6 +152,40 @@ func setupControllerTest(t *testing.T) (context.Context, *Controller, *entityser
 	ctrl := NewController(slog.Default(), ec, inmem.EAC, registry, saga.NewMemoryStorage())
 
 	return ctx, ctrl, ec, provider
+}
+
+func TestProvisionClonedAssociationDelegatesConsistencyToProvider(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{Name: "miren-postgresql"})
+	require.NoError(t, err)
+	sourceID, err := ec.Create(ctx, "source", &addon_v1alpha.AddonAssociation{
+		App: appID, Addon: addonID, Variant: "small", Status: "active",
+	})
+	require.NoError(t, err)
+	targetID, err := ec.Create(ctx, "target", &addon_v1alpha.AddonAssociation{
+		App: appID, AppVersion: "app_version/preview", SourceAssociation: sourceID,
+		Addon: addonID, Variant: "small", Status: "pending",
+	})
+	require.NoError(t, err)
+	provider.cloneFn = func(_ context.Context, source, target addon.AddonAssociation, _ addon.App, _ addon.Variant) (*addon.ProvisionResult, error) {
+		assert.Equal(t, sourceID, source.ID)
+		assert.Equal(t, targetID, target.ID)
+		return &addon.ProvisionResult{EnvVars: []addon.Variable{{Key: "DATABASE_URL", Value: "postgres://clone"}}}, nil
+	}
+
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, targetID, &assoc)
+	require.NoError(t, err)
+	require.NoError(t, ctrl.Reconcile(ctx, &assoc, meta))
+	assert.True(t, provider.cloneCalled)
+	assert.False(t, provider.provisionCalled)
+
+	var updated addon_v1alpha.AddonAssociation
+	updated.Decode(meta.Entity)
+	assert.Equal(t, "active", updated.Status)
+	require.Len(t, updated.Variables, 1)
+	assert.Equal(t, "postgres://clone", updated.Variables[0].Value)
 }
 
 // Naming a teardown after its association makes a failed one permanent unless

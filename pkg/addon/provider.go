@@ -48,6 +48,13 @@ type AddonProvider interface {
 	Deprovision(ctx context.Context, assoc AddonAssociation) error
 }
 
+// AddonCloner is an optional provider capability used by ephemeral versions.
+// The provider owns consistency: it may coordinate with a live engine before
+// copying storage, or use an engine-native clone for shared infrastructure.
+type AddonCloner interface {
+	Clone(ctx context.Context, source, target AddonAssociation, app App, variant Variant) (*ProvisionResult, error)
+}
+
 // CredentialRotator is an optional capability for providers that support
 // rotating a backing server credential in place. Rotation applies a freshly
 // generated secret to the live engine and updates the stored value; the
@@ -144,10 +151,12 @@ type ProvisionResult struct {
 // work after it, plus the entity so a teardown or rotation can read what an
 // earlier run recorded.
 type AddonAssociation struct {
-	ID      entity.Id
-	App     entity.Id
-	Addon   entity.Id
-	Variant string
+	ID                entity.Id
+	App               entity.Id
+	AppVersion        entity.Id
+	SourceAssociation entity.Id
+	Addon             entity.Id
+	Variant           string
 
 	// Read-only in practice, despite the type. Providers report writes by
 	// returning Attrs on a ProvisionResult, and a resumed saga could not write
@@ -164,11 +173,13 @@ type AddonAssociation struct {
 // conversion at once.
 func AssociationFrom(assoc *addon_v1alpha.AddonAssociation, ent *entity.Entity) AddonAssociation {
 	return AddonAssociation{
-		ID:      assoc.ID,
-		App:     assoc.App,
-		Addon:   assoc.Addon,
-		Variant: assoc.Variant,
-		Entity:  ent,
+		ID:                assoc.ID,
+		App:               assoc.App,
+		AppVersion:        assoc.AppVersion,
+		SourceAssociation: assoc.SourceAssociation,
+		Addon:             assoc.Addon,
+		Variant:           assoc.Variant,
+		Entity:            ent,
 	}
 }
 
@@ -238,4 +249,8 @@ func ProvisionExecutionID(assocID entity.Id) string {
 
 func DeprovisionExecutionID(assocID entity.Id) string {
 	return "deprovision-" + assocID.String()
+}
+
+func CloneExecutionID(assocID entity.Id) string {
+	return "clone-" + assocID.String()
 }

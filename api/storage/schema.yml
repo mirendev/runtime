@@ -49,6 +49,10 @@ kinds:
       indexed: true
       tags: [dev.miren.app_ref]
 
+    clone_source:
+      type: ref
+      doc: Disk whose detached image seeds this disk during provisioning
+
   disk_lease:
     disk_id:
       type: ref
@@ -143,6 +147,10 @@ kinds:
     image_path:
       type: string
       doc: Path to backing image file
+
+    clone_source_image_path:
+      type: string
+      doc: Node-local image copied to seed this volume; source must be detached
 
     desired_state:
       type: enum

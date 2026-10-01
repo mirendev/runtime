@@ -122,15 +122,34 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		return c.setError(meta, fmt.Errorf("resolving app name: %w", err))
 	}
 
-	// Step 2: Call provider.Provision
+	// Step 2: Call provider.Provision, or let the provider coordinate an
+	// ephemeral clone from its primary association.
 	app := addon.App{
 		ID:   assoc.App,
 		Name: appName,
 	}
-	result, err := provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, addon.Variant{
+	variant := addon.Variant{
 		Name:   assoc.Variant,
 		Config: variantConfig,
-	})
+	}
+	var result *addon.ProvisionResult
+	if assoc.SourceAssociation != "" {
+		cloner, ok := provider.(addon.AddonCloner)
+		if !ok {
+			return c.setError(meta, fmt.Errorf("addon %q does not support cloning", addonName))
+		}
+		sourceResp, sourceErr := c.eac.Get(ctx, assoc.SourceAssociation.String())
+		if sourceErr != nil {
+			return c.setError(meta, fmt.Errorf("reading clone source association: %w", sourceErr))
+		}
+		var source addon_v1alpha.AddonAssociation
+		source.Decode(sourceResp.Entity().Entity())
+		result, err = cloner.Clone(ctx,
+			addon.AssociationFrom(&source, sourceResp.Entity().Entity()),
+			addon.AssociationFrom(assoc, meta.Entity), app, variant)
+	} else {
+		result, err = provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, variant)
+	}
 	if err != nil {
 		return c.setError(meta, fmt.Errorf("provisioning: %w", err))
 	}

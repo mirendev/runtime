@@ -38,6 +38,10 @@ func (s *stubDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	return fmt.Errorf("disk images not supported on darwin")
 }
 
+func (s *stubDiskVolumeOps) CloneDiskImage(src, dst string) error {
+	return fmt.Errorf("disk image cloning not supported on darwin")
+}
+
 type stubDiskMountOps struct{}
 
 func NewRealDiskMountOps(_ *slog.Logger) DiskMountOps {

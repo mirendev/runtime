@@ -109,7 +109,8 @@ func UndoWaitForSharedService(ctx context.Context, in WaitForSharedServiceIn, ou
 // IncrementAssociationCount bumps the association count on a shared server.
 
 type IncrementAssociationCountIn struct {
-	ServerID entity.Id
+	ServerID        entity.Id
+	DatabaseCreated bool `saga:"database_created,optional"`
 }
 
 type IncrementAssociationCountOut struct {

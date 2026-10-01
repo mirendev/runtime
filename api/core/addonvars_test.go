@@ -102,6 +102,28 @@ func TestResolveRuntimeConfigSuppliesBindingToVersionThatPredatesAddon(t *testin
 		"ResolveConfig feeds the write paths and must not carry the overlay")
 }
 
+func TestResolveRuntimeConfigUsesEphemeralAddonClone(t *testing.T) {
+	f := newOverlayFixture(t)
+	ver := f.version(t, "myapp-preview")
+	ver.EphemeralLabel = "preview"
+	require.NoError(t, f.ec.Update(f.ctx, ver))
+
+	primaryID, err := f.ec.Create(f.ctx, "pg-primary", &addon_v1alpha.AddonAssociation{
+		App: f.appID, Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "DATABASE_URL", Value: "postgres://primary"}},
+	})
+	require.NoError(t, err)
+	_, err = f.ec.Create(f.ctx, "pg-preview", &addon_v1alpha.AddonAssociation{
+		App: f.appID, AppVersion: ver.ID, SourceAssociation: primaryID, Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "DATABASE_URL", Value: "postgres://preview"}},
+	})
+	require.NoError(t, err)
+
+	spec, err := ResolveRuntimeConfig(f.ctx, f.inmem.EAC, ver)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://preview", varsByKey(spec)["DATABASE_URL"].Value)
+}
+
 // TestResolveRuntimeConfigPrefersAssociationOverStoredCopy covers a version that
 // still carries a copy from when provisioning wrote one. The association is the
 // record that gets updated, so it wins.

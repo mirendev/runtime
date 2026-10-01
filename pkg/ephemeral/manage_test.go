@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	testutils "miren.dev/runtime/pkg/entity/testutils"
 )
@@ -116,7 +117,11 @@ func TestReplaceExisting(t *testing.T) {
 			EphemeralLabel: "feat-x",
 			EphemeralTtl:   "24h",
 		}
-		_, err := inmem.Client.Create(ctx, "myapp-eph1", v)
+		versionID, err := inmem.Client.Create(ctx, "myapp-eph1", v)
+		require.NoError(t, err)
+		cloneID, err := inmem.Client.Create(ctx, "myapp-eph1-postgresql", &addon_v1alpha.AddonAssociation{
+			App: appID, AppVersion: versionID, Addon: "addon/miren-postgresql", Status: "active",
+		})
 		require.NoError(t, err)
 
 		// Verify it exists
@@ -132,6 +137,10 @@ func TestReplaceExisting(t *testing.T) {
 		found, err = LookupByLabel(ctx, inmem.EAC, appID, "feat-x")
 		require.NoError(t, err)
 		require.Nil(t, found)
+
+		var clone addon_v1alpha.AddonAssociation
+		require.NoError(t, inmem.Client.GetById(ctx, cloneID, &clone))
+		require.Equal(t, "deprovisioning", clone.Status)
 	})
 
 	t.Run("no-op when label does not exist", func(t *testing.T) {

@@ -67,19 +67,21 @@ Open the URL — your preview is live. TLS provisions on first request.
 Workers, background jobs, scheduled tasks, and any other services defined in `.miren/app.toml` aren't started for ephemeral versions — HTTP traffic to the subdomain is the only thing wired up. If reviewing your PR requires a worker too, use a separate staging app instead.
 :::
 
-:::warning[Configuration is shared with the active version]
-Env vars, secrets, addons, and build config all come from the app's current settings. There's no per-ephemeral override:
+:::warning[Most configuration is shared with the active version]
+Env vars, secrets, and build config come from the app's current settings. There's no per-ephemeral override for those values:
 
-- Your preview connects to the same database, queues, and external services as production.
+- Manually configured database, queue, and external-service URLs still point at the same services as production.
 - You can't change `RAILS_ENV`, feature flags, or service URLs just for the preview.
-- Updates to app config (via `miren config set`, addons, etc.) affect both active and ephemeral versions.
+- Updates to app config via `miren config set` affect both active and ephemeral versions.
 :::
 
-If you need isolation from production data, run ephemeral deploys against a separate staging app.
+Miren clones attached PostgreSQL addons when it creates an ephemeral version. The preview receives a separate endpoint and a database seeded from the addon's current data. Shared PostgreSQL uses PostgreSQL's database-template operation; dedicated PostgreSQL uses an online `pg_basebackup`, so the source remains available while PostgreSQL streams a consistent copy and the required WAL into the preview's disk.
+
+Addon providers opt into cloning. Creating an ephemeral version fails rather than silently sharing an addon whose provider does not support a safe clone. If you need isolation for manually configured services or another addon type, run ephemeral deploys against a separate staging app.
 
 ## Using a Staging App
 
-Because ephemeral versions share config with the active version, a preview deployed against your production app talks to your production database, queues, and external services. That's fine for read-mostly UI changes, but risky as soon as a PR writes data, runs migrations, or fires background jobs.
+Ephemeral versions clone PostgreSQL addons, but still share manually configured service URLs and other app configuration. Use a staging app when a preview must be isolated from queues, object stores, external services, or a provider that does not support cloning.
 
 Set up a second app — typically `myapp-staging` — that points at a staging database and any other backing services you want isolated, then run all PR previews against that app instead of production.
 
@@ -113,7 +115,7 @@ miren deploy -a myapp-staging --ephemeral pr-123 --ttl 48h
 ```
 </CliCommand>
 
-The preview is reachable at `pr-123.staging.myapp.example.com`, isolated from production data. Redeploy the staging app's active version periodically (or on every push to `main`) to keep its baseline fresh — ephemeral previews inherit the staging app's current config and addons, not production's.
+The preview is reachable at `pr-123.staging.myapp.example.com`, isolated from production data. Redeploy the staging app's active version periodically (or on every push to `main`) to keep its baseline fresh — ephemeral previews inherit the staging app's current config and clone its addons, not production's.
 
 In CI, set `MIREN_APP=myapp-staging` (or pass `app: myapp-staging` to the deploy action) so PR workflows always target staging.
 

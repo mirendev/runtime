@@ -88,6 +88,27 @@ func TestDiskVolumeControllerReconcileVolumePresent(t *testing.T) {
 	assert.Equal(t, filepath.Join(expectedVolPath, "disk.img"), updated.ImagePath)
 }
 
+func TestDiskVolumeControllerClonesSourceImage(t *testing.T) {
+	ctx := t.Context()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	dataPath := t.TempDir()
+	ops := newMockDiskVolumeOps()
+	vc := newTestDiskVolumeController(testutils.TestLogger(t), dataPath, "test-node-1", es.EAC, NewState(), ops)
+	vol := &storage_v1alpha.DiskVolume{
+		ID: "disk_volume/clone", NodeId: compute.NewNodeId("test-node-1").Id(),
+		SizeGb: 10, Filesystem: "ext4", DesiredState: storage_v1alpha.DV_PRESENT,
+		ActualState: storage_v1alpha.DV_PENDING, CloneSourceImagePath: "/volumes/source/disk.img",
+	}
+	createDiskVolumeEntity(ctx, t, es, vol)
+
+	require.NoError(t, vc.ReconcileWithEntities(ctx))
+	require.Len(t, ops.clonedImages, 1)
+	assert.Equal(t, "/volumes/source/disk.img", ops.clonedImages[0].src)
+	assert.Equal(t, filepath.Join(dataPath, "volumes", "clone", "disk.img"), ops.clonedImages[0].dst)
+	assert.Empty(t, ops.createdImages, "a clone must not be replaced with an empty sparse image")
+}
+
 // TestDiskVolumeControllerCreateSkipsExistingImage covers the restore path:
 // when a disk.img is already present (moved back into place by `disk
 // undelete`), createVolume must preserve it rather than reimaging, so the

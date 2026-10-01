@@ -14,6 +14,7 @@ import (
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -716,6 +717,11 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		if createErr != nil {
 			d.Log.Error("Failed to create ephemeral version entity", "error", createErr)
 			results.SetError(fmt.Sprintf("failed to create ephemeral version: %v", createErr))
+			return nil
+		}
+		if err := addon.RequestClones(ctx, d.EAC, appEntity.ID, ephID); err != nil {
+			_ = d.EC.Delete(ctx, ephID)
+			results.SetError(fmt.Sprintf("failed to clone addons: %v", err))
 			return nil
 		}
 

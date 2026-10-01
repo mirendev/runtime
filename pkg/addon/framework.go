@@ -3,6 +3,7 @@ package addon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -75,6 +77,75 @@ type CreateSandboxPoolSpec struct {
 	// check budget. Parsed via time.ParseDuration (e.g. "60s"). Empty means
 	// use the default (15s). Addons with slow cold-init should set this.
 	PortWaitTimeout string
+}
+
+// OneShotSandboxSpec describes a command that runs once with addon-managed
+// storage attached. The sandbox is retained after exit so a resumed saga can
+// observe the original result instead of executing the command twice.
+type OneShotSandboxSpec struct {
+	Name    string
+	Image   string
+	Command string
+	Env     []string
+	Labels  types.Labels
+	Mounts  []compute_v1alpha.SandboxSpecContainerMount
+	Volumes []compute_v1alpha.SandboxSpecVolume
+}
+
+// RunOneShotSandbox creates an at-most-once sandbox and waits for its command
+// to exit. The caller owns deleting the returned sandbox after durably recording
+// the result.
+func (fw *ProviderFramework) RunOneShotSandbox(ctx context.Context, spec OneShotSandboxSpec, timeout time.Duration) (entity.Id, error) {
+	id := entity.Id("sandbox/" + spec.Name)
+	if _, err := fw.EAC.Get(ctx, id.String()); err != nil {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			return "", fmt.Errorf("checking one-shot sandbox %s: %w", id, err)
+		}
+		sandbox := &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.PENDING,
+			Spec: compute_v1alpha.SandboxSpec{
+				RestartPolicy: compute_v1alpha.SandboxSpecNEVER,
+				LogAttribute:  metricLabels(spec.Labels),
+				Container: []compute_v1alpha.SandboxSpecContainer{{
+					Name: "addon", Image: spec.Image, Command: spec.Command,
+					Env: spec.Env, Mount: spec.Mounts,
+				}},
+				Volume: spec.Volumes,
+			},
+		}
+		if _, err := fw.EAC.Create(ctx, entity.New(
+			(&core_v1alpha.Metadata{Name: spec.Name, Labels: spec.Labels}).Encode,
+			entity.DBId, id,
+			sandbox.Encode,
+		).Attrs()); err != nil {
+			return "", fmt.Errorf("creating one-shot sandbox %s: %w", id, err)
+		}
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		resp, err := fw.EAC.Get(waitCtx, id.String())
+		if err != nil {
+			return id, fmt.Errorf("reading one-shot sandbox %s: %w", id, err)
+		}
+		var sandbox compute_v1alpha.Sandbox
+		sandbox.Decode(resp.Entity().Entity())
+		if !sandbox.Exit.Empty() {
+			if sandbox.Exit.Code != 0 {
+				return id, fmt.Errorf("one-shot sandbox %s exited with code %d", id, sandbox.Exit.Code)
+			}
+			return id, nil
+		}
+		if sandbox.Status == compute_v1alpha.DEAD || sandbox.Status == compute_v1alpha.STOPPED {
+			return id, fmt.Errorf("one-shot sandbox %s stopped without an exit code", id)
+		}
+		select {
+		case <-waitCtx.Done():
+			return id, fmt.Errorf("timed out waiting for one-shot sandbox %s: %w", id, waitCtx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // CreateSandboxPool creates a fixed-mode SandboxPool entity.
@@ -233,6 +304,86 @@ func (fw *ProviderFramework) DeleteDiskByName(ctx context.Context, diskName stri
 	}
 
 	return nil
+}
+
+// CloneDisk creates a disk whose initial image is copied from source. The
+// source must already be quiesced and detached; the disk controller enforces
+// the latter before exposing its image to the runner-side copy.
+func (fw *ProviderFramework) CloneDisk(ctx context.Context, sourceName, targetName string) (entity.Id, error) {
+	resp, err := fw.EAC.List(ctx, entity.String(storage_v1alpha.DiskNameId, sourceName))
+	if err != nil {
+		return "", fmt.Errorf("querying clone source disk %q: %w", sourceName, err)
+	}
+	if len(resp.Values()) != 1 {
+		return "", fmt.Errorf("expected one clone source disk %q, found %d", sourceName, len(resp.Values()))
+	}
+	var source storage_v1alpha.Disk
+	source.Decode(resp.Values()[0].Entity())
+
+	existing, err := fw.EAC.List(ctx, entity.String(storage_v1alpha.DiskNameId, targetName))
+	if err != nil {
+		return "", fmt.Errorf("querying clone target disk %q: %w", targetName, err)
+	}
+	var id entity.Id
+	if len(existing.Values()) > 0 {
+		id = entity.Id(existing.Values()[0].Id())
+	} else {
+		target := &storage_v1alpha.Disk{
+			Name:        targetName,
+			SizeGb:      source.SizeGb,
+			Filesystem:  source.Filesystem,
+			Status:      storage_v1alpha.PROVISIONING,
+			CreatedBy:   source.CreatedBy,
+			CloneSource: source.ID,
+		}
+		id, err = fw.EC.Create(ctx, idgen.GenNS("disk"), target)
+		if err != nil {
+			return "", fmt.Errorf("creating clone target disk: %w", err)
+		}
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	for {
+		var current storage_v1alpha.Disk
+		if err := fw.EC.GetById(waitCtx, id, &current); err != nil {
+			return "", fmt.Errorf("reading clone target disk: %w", err)
+		}
+		switch current.Status {
+		case storage_v1alpha.PROVISIONED, storage_v1alpha.DETACHED:
+			return id, nil
+		case storage_v1alpha.ERROR:
+			return "", fmt.Errorf("cloning disk %q failed", targetName)
+		case storage_v1alpha.PROVISIONING, storage_v1alpha.ATTACHED, storage_v1alpha.DELETING, storage_v1alpha.RESTORING:
+		}
+		select {
+		case <-waitCtx.Done():
+			return "", fmt.Errorf("timed out cloning disk %q: %w", targetName, waitCtx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// WaitForPoolStopped waits until a pool reports no running or pending
+// instances. Sandbox teardown and disk-lease release may still be finishing;
+// callers that need detached storage must also wait on that storage's lease.
+func (fw *ProviderFramework) WaitForPoolStopped(ctx context.Context, poolID entity.Id, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		var pool compute_v1alpha.SandboxPool
+		if err := fw.EC.GetById(ctx, poolID, &pool); err != nil {
+			return fmt.Errorf("reading pool %s: %w", poolID, err)
+		}
+		if pool.CurrentInstances == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for pool %s to stop: %w", poolID, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // DeleteService deletes a network Service entity.

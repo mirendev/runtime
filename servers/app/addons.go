@@ -99,7 +99,7 @@ func (s *AddonsServer) CreateInstance(ctx context.Context, state *app_v1alpha.Ad
 		if err := existing.Read(&assoc); err != nil {
 			return fmt.Errorf("reading addon association: %w", err)
 		}
-		if assoc.Addon == addonEntity.ID {
+		if assoc.AppVersion == "" && assoc.Addon == addonEntity.ID {
 			return fmt.Errorf("addon %q is already attached to app %q", addonName, appName)
 		}
 	}
@@ -154,6 +154,9 @@ func (s *AddonsServer) ListInstances(ctx context.Context, state *app_v1alpha.Add
 		if err := results.Read(&assoc); err != nil {
 			return fmt.Errorf("reading addon association: %w", err)
 		}
+		if assoc.AppVersion != "" {
+			continue
+		}
 
 		instance := &app_v1alpha.AddonInstance{}
 		instance.SetId(string(assoc.ID))
@@ -196,6 +199,9 @@ func (s *AddonsServer) DeleteInstance(ctx context.Context, state *app_v1alpha.Ad
 		var assoc addon_v1alpha.AddonAssociation
 		if err := results.Read(&assoc); err != nil {
 			return fmt.Errorf("reading addon association: %w", err)
+		}
+		if assoc.AppVersion != "" {
+			continue
 		}
 
 		if addon.NameFromRef(assoc.Addon) == addonName {
@@ -247,6 +253,9 @@ func (s *AddonsServer) RotateCredential(ctx context.Context, state *app_v1alpha.
 		var assoc addon_v1alpha.AddonAssociation
 		if err := results.Read(&assoc); err != nil {
 			return fmt.Errorf("reading addon association: %w", err)
+		}
+		if assoc.AppVersion != "" {
+			continue
 		}
 		if addon.NameFromRef(assoc.Addon) != addonName {
 			continue

@@ -464,7 +464,7 @@ type CreateSharedDatabaseIn struct {
 }
 
 type CreateSharedDatabaseOut struct {
-	DatabaseCreated bool
+	DatabaseCreated bool `saga:"database_created"`
 }
 
 func CreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn) (CreateSharedDatabaseOut, error) {

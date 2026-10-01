@@ -236,16 +236,51 @@ func (d *DiskController) handleProvisioning(ctx context.Context, disk *storage_v
 
 	// Create new disk_volume entity
 	filesystem := strings.TrimPrefix(string(disk.Filesystem), "filesystem.")
+	cloneSourceImagePath := ""
+	volumeMode := diskModeToVolumeMode(d.diskMode)
+	if disk.CloneSource != "" {
+		sourceResp, err := d.EAC.Get(ctx, disk.CloneSource.String())
+		if err != nil {
+			return fmt.Errorf("looking up clone source disk %s: %w", disk.CloneSource, err)
+		}
+		var source storage_v1alpha.Disk
+		source.Decode(sourceResp.Entity().Entity())
+
+		leases, err := d.EAC.List(ctx, entity.Ref(storage_v1alpha.DiskLeaseDiskIdId, source.ID))
+		if err != nil {
+			return fmt.Errorf("checking clone source leases: %w", err)
+		}
+		for _, ent := range leases.Values() {
+			var lease storage_v1alpha.DiskLease
+			lease.Decode(ent.Entity())
+			if lease.Status == storage_v1alpha.BOUND {
+				d.Log.Debug("waiting for clone source disk to detach", "source", source.ID, "lease", lease.ID)
+				return nil
+			}
+		}
+
+		sourceVolume, err := d.getDiskVolumeForDisk(ctx, source.ID)
+		if err != nil {
+			return fmt.Errorf("looking up clone source volume: %w", err)
+		}
+		if sourceVolume == nil || sourceVolume.ActualState != storage_v1alpha.DV_READY || sourceVolume.ImagePath == "" {
+			d.Log.Debug("waiting for clone source volume", "source", source.ID)
+			return nil
+		}
+		cloneSourceImagePath = sourceVolume.ImagePath
+		volumeMode = sourceVolume.VolumeMode
+	}
 
 	diskVolume := &storage_v1alpha.DiskVolume{
-		Name:         disk.Name,
-		DiskId:       disk.ID,
-		SizeGb:       disk.SizeGb,
-		Filesystem:   filesystem,
-		VolumeMode:   diskModeToVolumeMode(d.diskMode),
-		DesiredState: storage_v1alpha.DV_PRESENT,
-		ActualState:  storage_v1alpha.DV_PENDING,
-		NodeId:       myNodeId,
+		Name:                 disk.Name,
+		DiskId:               disk.ID,
+		SizeGb:               disk.SizeGb,
+		Filesystem:           filesystem,
+		VolumeMode:           volumeMode,
+		CloneSourceImagePath: cloneSourceImagePath,
+		DesiredState:         storage_v1alpha.DV_PRESENT,
+		ActualState:          storage_v1alpha.DV_PENDING,
+		NodeId:               myNodeId,
 	}
 
 	volumeId := idgen.GenNS("disk-vol")

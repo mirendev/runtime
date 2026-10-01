@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -57,10 +58,42 @@ func Delete(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, v
 // pass can retry — otherwise we would leak pools that can no longer be traced
 // back to any version.
 func DeleteWithPools(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
+	if err := cleanupAddonClones(ctx, eac, version.ID); err != nil {
+		return err
+	}
 	if err := cleanupSandboxPools(ctx, eac, version.ID, log); err != nil {
 		return err
 	}
 	return Delete(ctx, eac, version, log)
+}
+
+func cleanupAddonClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, versionID entity.Id) error {
+	resp, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, versionID))
+	if err != nil {
+		return fmt.Errorf("failed to list addon clones for app version %s: %w", versionID, err)
+	}
+	if len(resp.Values()) == 0 {
+		return nil
+	}
+	for _, ent := range resp.Values() {
+		var assoc addon_v1alpha.AddonAssociation
+		assoc.Decode(ent.Entity())
+		if assoc.Status == "error" {
+			if _, err := eac.Delete(ctx, assoc.ID.String()); err != nil {
+				return fmt.Errorf("deleting failed addon clone %s: %w", assoc.ID, err)
+			}
+			continue
+		}
+		if assoc.Status != "deprovisioning" {
+			if _, err := eac.Patch(ctx, []entity.Attr{
+				entity.Ref(entity.DBId, assoc.ID),
+				entity.String(addon_v1alpha.AddonAssociationStatusId, "deprovisioning"),
+			}, 0); err != nil {
+				return fmt.Errorf("requesting teardown of addon clone %s: %w", assoc.ID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // cleanupSandboxPools removes the sandbox pools that reference the given

@@ -99,7 +99,7 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	// database. The activator treats this as a failed on-demand creation and
 	// tries again on the next request; the normal reconcile creates the pool
 	// once the association flips to active.
-	ready, err := l.addonsReady(ctx, ver.App)
+	ready, err := l.addonsReady(ctx, ver.App, ver.ID)
 	if err != nil {
 		return "", fmt.Errorf("checking addon readiness for app %s: %w", ver.App, err)
 	}
@@ -163,7 +163,7 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 
 	span.SetAttributes(attribute.String("miren.app.active_version", current.ActiveVersion.String()))
 
-	ready, err := l.addonsReady(ctx, current.ID)
+	ready, err := l.addonsReady(ctx, current.ID, "")
 	if err != nil {
 		l.Log.Error("failed to check addon readiness", "app", current.ID, "error", err)
 	} else if !ready {
@@ -186,24 +186,45 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 // addon controller, so blocking on it would turn every later env change or
 // rollback on that app into a silent no-op. The deploy path fails loudly on
 // error before the version is ever activated; here it is only worth a warning.
-func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, error) {
+func (l *Launcher) addonsReady(ctx context.Context, appID, versionID entity.Id) (bool, error) {
 	results, err := l.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
 	if err != nil {
 		return false, fmt.Errorf("listing addon associations: %w", err)
 	}
 
+	primaryCount := 0
+	cloneCount := 0
 	for _, ent := range results.Values() {
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
+		if versionID != "" && assoc.AppVersion == "" {
+			primaryCount++
+			if assoc.Status != "active" {
+				return false, nil
+			}
+			continue
+		}
+		if assoc.AppVersion != versionID {
+			continue
+		}
+		cloneCount++
 
 		switch assoc.Status {
 		case "pending", "provisioning":
 			l.Log.Info("addon not ready", "association", assoc.ID, "status", assoc.Status)
 			return false, nil
 		case "error":
+			if versionID != "" {
+				l.Log.Warn("addon clone failed; ephemeral pool will remain unavailable",
+					"association", assoc.ID, "app", appID, "version", versionID, "error", assoc.ErrorMessage)
+				return false, nil
+			}
 			l.Log.Warn("addon failed to provision; app will launch without its variables",
 				"association", assoc.ID, "app", appID, "error", assoc.ErrorMessage)
 		}
+	}
+	if versionID != "" && cloneCount != primaryCount {
+		return false, nil
 	}
 
 	return true, nil

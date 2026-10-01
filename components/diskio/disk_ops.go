@@ -13,6 +13,7 @@ type DiskVolumeOps interface {
 	MoveVolumeDir(src, dst string) error
 	VolumePathExists(path string) bool
 	CreateDiskImage(path string, sizeBytes int64) error
+	CloneDiskImage(src, dst string) error
 }
 
 // ActiveMount describes a mount found on the running system.

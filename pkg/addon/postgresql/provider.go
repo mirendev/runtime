@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/dbsaga"
@@ -12,6 +13,7 @@ import (
 // Provider implements the AddonProvider interface for PostgreSQL.
 type Provider struct {
 	dbsaga.BaseProvider
+	cloneLocks sync.Map
 }
 
 // NewProvider creates a new PostgreSQL addon provider.
@@ -37,6 +39,18 @@ func (p *Provider) Deprovision(ctx context.Context, assoc addon.AddonAssociation
 		return p.deprovisionShared(ctx, assoc)
 	}
 	return p.deprovisionDedicated(ctx, assoc)
+}
+
+func (p *Provider) Clone(ctx context.Context, source, target addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+	value, _ := p.cloneLocks.LoadOrStore(source.ID, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if IsSharedVariant(variant.Name) {
+		return p.cloneShared(ctx, source, target, app)
+	}
+	return p.cloneDedicated(ctx, source, target, app, variant)
 }
 
 // buildDatabaseURL constructs a postgres:// connection URL.

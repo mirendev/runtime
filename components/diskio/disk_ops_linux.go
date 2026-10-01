@@ -67,6 +67,20 @@ func (r *realDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	return nil
 }
 
+func (r *realDiskVolumeOps) CloneDiskImage(src, dst string) error {
+	tmp := dst + ".clone"
+	_ = os.Remove(tmp)
+	if out, err := exec.Command("cp", "--reflink=auto", "--sparse=always", src, tmp).CombinedOutput(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("failed to clone disk image: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("failed to install cloned disk image: %w", err)
+	}
+	return nil
+}
+
 // realDiskMountOps implements DiskMountOps with real loop device operations
 type realDiskMountOps struct {
 	log *slog.Logger

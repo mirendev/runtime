@@ -3879,9 +3879,8 @@ func TestCreatePoolForVersionEphemeral(t *testing.T) {
 }
 
 // TestCreatePoolForVersionDefersWhileAddonsPending guards the on-demand path
-// with the same gate Reconcile has. An ephemeral version shares the app's
-// addons and skips provisioning, so a request arriving while the addon is
-// still coming up used to build a pool whose config had no DATABASE_URL.
+// with the same gate Reconcile has. An ephemeral version must wait for its
+// version-scoped clone rather than falling back to the app's primary addon.
 func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
@@ -3924,6 +3923,21 @@ func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 	assert.Empty(t, listAllPools(t, ctx, server), "no pool may exist while the addon is provisioning")
 
 	require.NoError(t, server.Client.Patch(ctx, assocID, 0,
+		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
+	cloneID, err := server.Client.Create(ctx, "assoc-pg-clone", &addon_v1alpha.AddonAssociation{
+		App:               app.ID,
+		AppVersion:        version.ID,
+		SourceAssociation: assocID,
+		Addon:             entity.Id("addon/miren-postgresql"),
+		Status:            "error",
+		ErrorMessage:      "copy failed",
+	})
+	require.NoError(t, err)
+	_, err = launcher.CreatePoolForVersion(ctx, version, "web")
+	require.Error(t, err, "a failed clone must never let the preview use the primary addon")
+	assert.Empty(t, listAllPools(t, ctx, server))
+
+	require.NoError(t, server.Client.Patch(ctx, cloneID, 0,
 		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
 
 	poolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
