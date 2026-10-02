@@ -1477,7 +1477,7 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug saga show", Infer("debug saga show", "Show a saga execution in detail", DebugSagaShow,
 		WithDescription(sagaShowDescription),
 	))
-	d.Dispatch("debug saga abandon", Infer("debug saga abandon", "Give up a saga execution the server refused to resume (break-glass)", DebugSagaAbandon,
+	d.Dispatch("debug saga abandon", Infer("debug saga abandon", "Give up a blocked saga execution (break-glass)", DebugSagaAbandon,
 		WithDescription(sagaAbandonDescription),
 	))
 

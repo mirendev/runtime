@@ -15,6 +15,8 @@ Action outputs are truncated by default so a long saga stays readable. Pass `--f
 
 A saga marked **BLOCKED** is one the server refused to resume, usually because it was started by an older release whose saga definition the running one cannot vouch for. Nothing ran or was undone when it refused, and nothing will drive the saga until someone acts: running a release that can still resume it lets it finish or compensate normally, and `miren debug saga abandon` gives it up when that is not possible.
 
+A saga is also **BLOCKED** when one of its undos has failed at least three times over more than an hour. The release that gave up won't try that undo again, and the action shows its undo error and how long it has been failing. A different release tries it once more when it starts, so deploying a fix usually clears the block without anyone stepping in. If the undo can't succeed under any release, abandon the saga and clean up after the action by hand.
+
 Where a saga stopped is the last action listed. This shows the actions that ran, not the complete set the definition declares, since the saga definitions live in the server process and are not exposed over the API.
 :::
 

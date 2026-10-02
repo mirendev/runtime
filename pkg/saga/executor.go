@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/version"
 )
 
 // ErrExecutionNotFound is returned by Storage.Get when no execution exists for the given ID.
@@ -120,6 +121,12 @@ type Executor struct {
 	recoveryScope string
 	counts        *Counts
 
+	// build identifies the binary this executor runs in, as buildIdentity
+	// describes. An undo that keeps
+	// failing is blocked on the build that gave up on it, and only a different
+	// build tries it again. See undo_block.go.
+	build string
+
 	// inFlight names the executions this Executor is currently driving. A
 	// caller that names its execution after the entity it belongs to will
 	// re-enter Execute on every reconcile pass, and without this the second
@@ -173,6 +180,15 @@ func WithCounts(c *Counts) ExecutorOption {
 	}
 }
 
+// WithBuild sets the build identity an executor blocks failing undos under.
+// It defaults to the stamped version and commit (see buildIdentity); tests use
+// it to stand in for an upgrade.
+func WithBuild(build string) ExecutorOption {
+	return func(e *Executor) {
+		e.build = build
+	}
+}
+
 // NewExecutor creates an executor with the given storage and options.
 func NewExecutor(storage Storage, opts ...ExecutorOption) *Executor {
 	e := &Executor{
@@ -180,6 +196,7 @@ func NewExecutor(storage Storage, opts ...ExecutorOption) *Executor {
 		registry: globalRegistry,
 		log:      slog.Default(),
 		counts:   DefaultCounts,
+		build:    buildIdentity(version.GetInfo()),
 		inFlight: make(map[string]struct{}),
 	}
 	for _, opt := range opts {
@@ -501,9 +518,9 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("undo failed after serialization error", "action", actionName, "error", undoErr)
 				// Record the action even though undo failed, so runUndo can retry.
 				// Output is nil since serialization failed.
-				exec.ExecutedActions[actionName] = &ActionResult{
-					ExecutedAt: now,
-				}
+				result := &ActionResult{ExecutedAt: now}
+				result.recordUndoFailure(undoErr, time.Now())
+				exec.ExecutedActions[actionName] = result
 				exec.ExecutionOrder = append(exec.ExecutionOrder, actionName)
 			} else {
 				// Record as executed and undone so runUndo skips it
@@ -610,6 +627,10 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution) error {
 	log := e.log.With("saga", def.Name, "execution", exec.ID)
 
+	if err := e.holdUndoBlock(ctx, exec); err != nil {
+		return err
+	}
+
 	// Update status to undoing
 	exec.Status = StatusUndoing
 	exec.UpdatedAt = time.Now()
@@ -622,12 +643,13 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	ctx = context.WithValue(ctx, executorCtxKey{}, e)
 	ctx = context.WithValue(ctx, executionIDCtxKey{}, exec.ID)
 
-	// Build outputs map from executed actions
+	// Undone actions' outputs are included on purpose. An undo gets the inputs
+	// its action ran with, and a failed undo is retried after the pass has gone
+	// on to undo the actions before it, which are often the ones that produced
+	// those inputs. Leaving them out makes the retry fail on a missing input,
+	// every time, so the execution could never finish compensating.
 	outputs := make(map[string]json.RawMessage)
 	for actionName, result := range exec.ExecutedActions {
-		if result.UndoneAt != nil {
-			continue
-		}
 		node := def.Actions[actionName]
 		if node == nil {
 			continue
@@ -675,6 +697,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			if err := json.Unmarshal(result.Output, &output); err != nil {
 				log.Warn("failed to deserialize output for undo", "action", actionName, "error", err)
 				undoErrors = append(undoErrors, fmt.Errorf("deserialize output for undo %q: %w", actionName, err))
+				result.recordUndoFailure(err, time.Now())
 				continue
 			}
 		}
@@ -694,8 +717,18 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 				return e.blockOnNested(ctx, exec, err,
 					fmt.Errorf("undo %q reached a nested saga that cannot be resumed: %w", actionName, err))
 			}
+			// A nested saga whose own undo is blocked. Its parent stops for
+			// the same reason as above, rather than counting a failure and
+			// unwinding the actions the child's work may stand on.
+			if errors.Is(err, ErrUndoBlocked) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("undo %q reached a nested saga whose undo is blocked: %w", actionName, err))
+			}
 			log.Error("undo failed", "action", actionName, "error", err)
 			undoErrors = append(undoErrors, fmt.Errorf("undo %q: %w", actionName, err))
+			if ctx.Err() == nil {
+				result.recordUndoFailure(err, time.Now())
+			}
 			// Continue with other undos even on failure
 			// Don't mark as undone - recovery should retry this action
 			continue
@@ -704,6 +737,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		// Record successful undo
 		now := time.Now()
 		result.UndoneAt = &now
+		result.UndoBlockedBuild = ""
 		exec.UpdatedAt = now
 
 		if err := e.storage.Save(ctx, exec); err != nil {
@@ -725,12 +759,23 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			return fmt.Errorf("saga undo interrupted: %w", err)
 		}
 
-		// Keep StatusUndoing so recovery can retry failed undos
+		// Keep StatusUndoing so recovery can retry failed undos, unless one
+		// has failed for long enough that this build should stop trying.
 		exec.UpdatedAt = time.Now()
+		blocked := e.blockFailingUndo(exec, exec.UpdatedAt)
 		if err := e.storage.Save(ctx, exec); err != nil {
 			log.Error("failed to persist undoing state", "error", err)
 		}
 		e.counts.Add(def.Name, EventCompensationFailed, 1)
+		if blocked != nil {
+			log.Error("blocking saga execution: an undo keeps failing, and only a new build will retry it",
+				"action", blocked.Action,
+				"attempts", blocked.Attempts,
+				"failing_since", blocked.Since,
+				"build", blocked.Build,
+				"error", blocked.Err)
+			return blocked
+		}
 		log.Info("saga undo incomplete, will retry on recovery", "undo_errors", len(undoErrors))
 		return fmt.Errorf("saga failed with %d undo errors: %v", len(undoErrors), undoErrors)
 	}

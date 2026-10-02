@@ -298,7 +298,7 @@ func DebugSagaAbandon(ctx *Context, opts struct {
 	left, err := saga.Abandon(exec, time.Now())
 	if err != nil {
 		if errors.Is(err, saga.ErrNotBlocked) {
-			return fmt.Errorf("%w\n\nAbandon is only for executions the server refused to resume. "+
+			return fmt.Errorf("%w\n\nAbandon is only for blocked executions. "+
 				"This one will be finished or compensated by the server on its own", err)
 		}
 		return err
@@ -389,7 +389,13 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 		// Last in the header and set apart, because it changes what every
 		// other line means: nothing is driving this execution, and nothing
 		// will until someone acts.
-		ctx.Printf("\nBLOCKED: the server refused to resume this execution.\n")
+		if action, _ := saga.BlockedUndo(exec); action != "" {
+			ctx.Printf("\nBLOCKED: the undo of %s kept failing, and this release will not retry it.\n", action)
+		} else if childUndoBlocked(exec, children) {
+			ctx.Printf("\nBLOCKED: waiting on a child saga whose undo kept failing.\n")
+		} else {
+			ctx.Printf("\nBLOCKED: the server refused to resume this execution.\n")
+		}
 		ctx.Printf("  %s\n", exec.BlockedReason)
 		if exec.BlockedOn != "" {
 			ctx.Printf("  Waiting on child saga %s; nothing here runs until it can be resumed or is abandoned.\n",
@@ -418,6 +424,10 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 			if result.Error != "" {
 				ctx.Printf("     error: %s\n", result.Error)
 			}
+			if result.UndoAttempts > 0 {
+				ctx.Printf("     undo error: %s\n", result.UndoError)
+				ctx.Printf("     %s\n", sagaUndoFailures(result))
+			}
 			if len(result.Output) > 0 {
 				ctx.Printf("     output: %s\n", formatSagaJSON(result.Output, full, 5))
 			}
@@ -430,6 +440,18 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 			ctx.Printf("  %s  %s  %s\n", ui.CleanEntityID(c.exec.ID), c.exec.DefinitionName, sagaStatusLabel(c.exec))
 		}
 	}
+}
+
+// childUndoBlocked reports whether the child exec is blocked on is itself
+// blocked on a failing undo, rather than refused by a version check.
+func childUndoBlocked(exec *saga.Execution, children []*sagaRecord) bool {
+	for _, c := range children {
+		if c.exec.ID == exec.BlockedOn {
+			action, _ := saga.BlockedUndo(c.exec)
+			return action != ""
+		}
+	}
+	return false
 }
 
 // sagaStatusLabel is the status as a person should read it. A blocked
@@ -475,6 +497,22 @@ func sagaActionSummary(result *saga.ActionResult) string {
 	}
 
 	return summary
+}
+
+// sagaUndoFailures says how long an action's undo has been failing, or, once
+// it went through, how many tries that took.
+func sagaUndoFailures(result *saga.ActionResult) string {
+	attempts := "1 failed undo attempt"
+	if result.UndoAttempts != 1 {
+		attempts = fmt.Sprintf("%d failed undo attempts", result.UndoAttempts)
+	}
+	if result.UndoFailingSince != nil {
+		attempts += fmt.Sprintf(", the first %s", humanFriendlyTimestamp(*result.UndoFailingSince))
+	}
+	if result.UndoneAt != nil {
+		return "undone after " + attempts
+	}
+	return attempts
 }
 
 func sagaTimestamp(t time.Time) string {
@@ -562,6 +600,12 @@ func sagaStatusIndex(s saga.Status) (entity.Attr, error) {
 // resolve too. The unqualified form is also what sagas minted before IDs grew
 // their namespace look like, so it stays a valid thing to type.
 func sagaIDCandidates(id string) []string {
+	// Convergent executions are named after their entity, as in
+	// create-sandbox-sandbox/web-abc, so they carry no saga/ namespace. Adding
+	// one is the natural mistake, and the error would claim the saga is gone.
+	if rest, ok := strings.CutPrefix(id, sagaIDNamespace); ok && strings.Contains(rest, "/") {
+		return []string{id, rest}
+	}
 	if strings.Contains(id, "/") {
 		return []string{id}
 	}
@@ -688,6 +732,10 @@ type sagaActionJSON struct {
 	UndoneAt   string          `json:"undone_at,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	Output     json.RawMessage `json:"output,omitempty"`
+
+	UndoError        string `json:"undo_error,omitempty"`
+	UndoAttempts     int    `json:"undo_attempts,omitempty"`
+	UndoFailingSince string `json:"undo_failing_since,omitempty"`
 }
 
 type sagaChildJSON struct {
@@ -725,6 +773,11 @@ func newSagaShowJSON(r *sagaRecord, children []*sagaRecord) sagaShowJSON {
 				action.UndoneAt = sagaJSONTime(*result.UndoneAt)
 			}
 			action.Error = result.Error
+			action.UndoError = result.UndoError
+			action.UndoAttempts = result.UndoAttempts
+			if result.UndoFailingSince != nil {
+				action.UndoFailingSince = sagaJSONTime(*result.UndoFailingSince)
+			}
 			if len(result.Output) > 0 {
 				action.Output = json.RawMessage(result.Output)
 			}

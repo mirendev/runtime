@@ -159,8 +159,12 @@ func (e *Executor) recordBlocked(ctx context.Context, exec *Execution, refusal e
 // remembering which execution refused so checkNestedBlock can re-check it.
 func (e *Executor) blockOnNested(ctx context.Context, exec *Execution, cause, refusal error) error {
 	var inner *IncompatibleDefinitionError
-	if errors.As(cause, &inner) {
+	var undoBlocked *UndoBlockedError
+	switch {
+	case errors.As(cause, &inner):
 		exec.BlockedOn = inner.ExecutionID
+	case errors.As(cause, &undoBlocked):
+		exec.BlockedOn = undoBlocked.ExecutionID
 	}
 	e.recordBlocked(ctx, exec, refusal)
 	return refusal
@@ -207,9 +211,13 @@ func (e *Executor) checkNestedBlock(ctx context.Context, exec *Execution) error 
 		return nil
 	}
 
-	if def, ok := e.registry.Get(child.DefinitionName); ok && checkResumable(def, cloneExecution(child)) == nil {
-		exec.BlockedOn = ""
-		return nil
+	// A child this build blocked on a failing undo is resumable as far as its
+	// definition goes, and still will not be undone here.
+	if e.undoBlockedHere(child) == nil {
+		if def, ok := e.registry.Get(child.DefinitionName); ok && checkResumable(def, cloneExecution(child)) == nil {
+			exec.BlockedOn = ""
+			return nil
+		}
 	}
 
 	// Nothing has been written since checkResumable admitted exec, so the

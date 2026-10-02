@@ -43,6 +43,31 @@ type ActionResult struct {
 
 	// Error is set if the action failed during execution.
 	Error string `json:"error,omitempty"`
+
+	// UndoError is the most recent error from undoing this action. It stays
+	// after a later attempt succeeds, alongside UndoAttempts, so the record
+	// still shows that compensating this action took more than one try.
+	UndoError string `json:"undo_error,omitempty"`
+
+	// UndoAttempts counts the undo attempts that failed. Attempts cut short
+	// by a shutdown are not counted; they say nothing about the undo.
+	UndoAttempts int `json:"undo_attempts,omitempty"`
+
+	// UndoFailingSince is when the first counted undo attempt failed.
+	UndoFailingSince *time.Time `json:"undo_failing_since,omitempty"`
+
+	// UndoBlockedBuild is the build that gave up retrying this undo. That
+	// build leaves the execution blocked; any other build tries once more.
+	UndoBlockedBuild string `json:"undo_blocked_build,omitempty"`
+}
+
+// recordUndoFailure notes a failed attempt to undo this action.
+func (r *ActionResult) recordUndoFailure(err error, now time.Time) {
+	r.UndoError = err.Error()
+	r.UndoAttempts++
+	if r.UndoFailingSince == nil {
+		r.UndoFailingSince = &now
+	}
 }
 
 // Execution tracks the runtime state of a saga, persisted after each step.

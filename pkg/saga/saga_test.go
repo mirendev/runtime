@@ -932,6 +932,106 @@ func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
 	assert.Equal(t, StatusUndoing, exec.Status, "saga should stay in Undoing status when undo fails")
 }
 
+type handoffController struct {
+	undoFailures int
+	undoneWith   []string
+}
+
+type handoffProduceOut struct {
+	HandleID string `json:"handle_id" saga:"handle_id"`
+}
+
+type handoffConsumeIn struct {
+	HandleID string `json:"handle_id" saga:"handle_id"`
+}
+
+type handoffConsumeOut struct {
+	Consumed bool `json:"consumed" saga:"consumed"`
+}
+
+type handoffFailIn struct {
+	Consumed bool `json:"consumed" saga:"consumed"`
+}
+
+func handoffProduce(ctx context.Context, _ struct{}) (handoffProduceOut, error) {
+	return handoffProduceOut{HandleID: "handle-1"}, nil
+}
+
+func undoHandoffProduce(ctx context.Context, _ struct{}, _ handoffProduceOut) error {
+	return nil
+}
+
+func handoffConsume(ctx context.Context, in handoffConsumeIn) (handoffConsumeOut, error) {
+	return handoffConsumeOut{Consumed: true}, nil
+}
+
+func undoHandoffConsume(ctx context.Context, in handoffConsumeIn, _ handoffConsumeOut) error {
+	ctrl := Get[*handoffController](ctx)
+	if ctrl.undoFailures > 0 {
+		ctrl.undoFailures--
+		return errors.New("transient undo failure")
+	}
+	ctrl.undoneWith = append(ctrl.undoneWith, in.HandleID)
+	return nil
+}
+
+func handoffFail(ctx context.Context, _ handoffFailIn) (struct{}, error) {
+	return struct{}{}, errors.New("late failure")
+}
+
+func undoHandoffFail(ctx context.Context, _ handoffFailIn, _ struct{}) error {
+	return nil
+}
+
+// TestExecutor_RetriedUndoSeesOutputsOfUndoneActions is MIR-2007. A failed
+// undo does not stop the pass, so the actions that ran before it are undone
+// in the same pass. When recovery retries the failed undo, the action that
+// produced its inputs is already undone, and those outputs are still what the
+// action ran with. Dropping them left a create-sandbox undo on toys failing
+// with "missing required input" on every restart for four weeks.
+func TestExecutor_RetriedUndoSeesOutputsOfUndoneActions(t *testing.T) {
+	registry := NewRegistry()
+	ctrl := &handoffController{undoFailures: 1}
+	err := Define("handoff").
+		Using(ctrl).
+		Action("produce", handoffProduce).Undo(undoHandoffProduce).
+		Action("consume", handoffConsume).Undo(undoHandoffConsume).
+		Action("fail", handoffFail).Undo(undoHandoffFail).
+		RegisterTo(registry)
+	require.NoError(t, err)
+
+	storage := NewMemoryStorage()
+	executor := NewExecutor(storage, WithRegistry(registry))
+
+	err = executor.Start("handoff").WithID("handoff-exec").Execute(context.Background())
+	require.Error(t, err)
+
+	exec, err := storage.Get(context.Background(), "handoff-exec")
+	require.NoError(t, err)
+	require.Equal(t, StatusUndoing, exec.Status)
+	require.NotNil(t, exec.ExecutedActions["produce"].UndoneAt,
+		"the first pass carries on past the failed undo and undoes produce")
+	consume := exec.ExecutedActions["consume"]
+	require.Nil(t, consume.UndoneAt)
+	assert.Equal(t, "transient undo failure", consume.UndoError,
+		"the undo error belongs on the record, not only in the runner's log")
+	assert.Equal(t, 1, consume.UndoAttempts)
+	require.NotNil(t, consume.UndoFailingSince)
+
+	// A finished rollback still reports the saga as failed, so the error alone
+	// can't say whether the undo went through. The record and the undo can.
+	_ = executor.Recover(context.Background())
+
+	exec, err = storage.Get(context.Background(), "handoff-exec")
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, exec.Status, "the retried undo should succeed and finish the rollback")
+	assert.Equal(t, []string{"handle-1"}, ctrl.undoneWith,
+		"the retried undo should get the input produce gave it originally")
+	consume = exec.ExecutedActions["consume"]
+	assert.NotNil(t, consume.UndoneAt)
+	assert.Equal(t, 1, consume.UndoAttempts, "the history of the failure stays once the undo goes through")
+}
+
 func TestExecutor_RecoveryAfterActionFailure(t *testing.T) {
 	// This test simulates a crash after an action fails but before undo starts.
 	// Without the fix, recovery would incorrectly complete the saga instead of undoing.

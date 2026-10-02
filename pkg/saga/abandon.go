@@ -47,7 +47,7 @@ func Abandon(exec *Execution, now time.Time) ([]string, error) {
 
 	left := Uncompensated(exec)
 
-	msg := "abandoned by an operator after a binary refused to resume it; compensation was skipped"
+	msg := "abandoned by an operator while it was blocked; compensation was skipped"
 	if len(left) > 0 {
 		msg += ", so work from these actions may remain: " + strings.Join(left, ", ")
 	}
