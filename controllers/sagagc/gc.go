@@ -242,12 +242,17 @@ func (c *GCController) sweepStalled(ctx context.Context) {
 			"forced", result.Forced,
 			"failed", result.Failed,
 			"skipped", result.Skipped,
+			"blocked", result.Blocked,
 			"recovered", result.Recovered,
 			"scanned", result.Scanned,
 			"capped", result.Capped)
 	} else {
+		// Blocked executions are deliberately not an Info trigger: the count
+		// would read the same every tick until an operator acts, and the
+		// refusal was already logged at Error when it happened.
 		c.Log.Debug("saga stalled sweep complete, nothing stranded",
-			"scanned", result.Scanned)
+			"scanned", result.Scanned,
+			"blocked", result.Blocked)
 	}
 }
 

@@ -66,6 +66,11 @@ type StalledResult struct {
 	// their parent stops being live.
 	Skipped int
 
+	// Blocked is how many were held back because a binary refused to resume
+	// them. They are waiting on an operator rather than stranded: failing one
+	// would let its entity's next reconcile retry over work nobody undid.
+	Blocked int
+
 	// Recovered is how many refused the transition because they had moved on
 	// between the page that named them and the write. Not an error; a lot of
 	// them means the sweep is acting on pages that are too old.
@@ -128,6 +133,11 @@ func RunStalledSweep(ctx context.Context, storage StalledStorage, cfg StalledCon
 			result.Scanned++
 
 			if summary.LastChanged.After(cutoff) {
+				continue
+			}
+
+			if summary.Blocked {
+				result.Blocked++
 				continue
 			}
 

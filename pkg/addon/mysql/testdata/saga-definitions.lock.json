@@ -1,0 +1,702 @@
+{
+  "deprovision-dedicated-mysql": {
+    "version": 1,
+    "actions": {
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "delete-dedicated-pool": {
+        "inputs": [
+          "dedicatedpoolid"
+        ],
+        "outputs": [
+          "dedicated_pool_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-server-entity": {
+        "inputs": [
+          "dedicated_pool_deleted",
+          "dedicatedserverid",
+          "dedicatedservername"
+        ],
+        "outputs": [
+          "serverdeleted"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs",
+          "delete-dedicated-pool",
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-service": {
+        "inputs": [
+          "dedicatedserviceid"
+        ],
+        "outputs": [
+          "dedicated_service_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "lookup-dedicated-server": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedpoolid",
+          "dedicatedservername",
+          "dedicatedserviceid"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "deprovision-shared-mysql": {
+    "version": 1,
+    "actions": {
+      "cleanup-shared-server": {
+        "inputs": [
+          "remainingcount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedserverref",
+          "sharedserviceref"
+        ],
+        "outputs": [
+          "cleanedup"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "decrement-association-count",
+          "lookup-shared-server"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "decrement-association-count": {
+        "inputs": [
+          "databasedropped",
+          "sharedserverref",
+          "userdropped"
+        ],
+        "outputs": [
+          "remainingcount"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "drop-shared-database",
+          "drop-shared-user"
+        ]
+      },
+      "drop-shared-database": {
+        "inputs": [
+          "connectionsterminated",
+          "shareddbname",
+          "sharedrootpassword",
+          "sharedservicehost"
+        ],
+        "outputs": [
+          "databasedropped"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server",
+          "terminate-connections"
+        ]
+      },
+      "drop-shared-user": {
+        "inputs": [
+          "connectionsterminated",
+          "sharedrootpassword",
+          "sharedservicehost",
+          "sharedusername"
+        ],
+        "outputs": [
+          "userdropped"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server",
+          "terminate-connections"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedrootpassword",
+          "sharedservicehost",
+          "sharedserviceref"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "terminate-connections": {
+        "inputs": [
+          "shareddbname",
+          "sharedrootpassword",
+          "sharedservicehost"
+        ],
+        "outputs": [
+          "connectionsterminated"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      }
+    }
+  },
+  "ensure-shared-mysql-server": {
+    "version": 1,
+    "actions": {
+      "activate-shared-server": {
+        "inputs": [
+          "diskname",
+          "poolid",
+          "rootpassword",
+          "serverid",
+          "servicehost",
+          "serviceid"
+        ],
+        "outputs": [
+          "activated"
+        ],
+        "dependencies": [
+          "create-shared-pool",
+          "create-shared-server-entity",
+          "create-shared-service",
+          "wait-for-shared-service"
+        ]
+      },
+      "create-shared-pool": {
+        "inputs": [
+          "diskname",
+          "rootpassword",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ]
+      },
+      "create-shared-server-entity": {
+        "inputs": [
+          "diskname",
+          "rootpassword",
+          "variantconfig"
+        ],
+        "outputs": [
+          "serverid"
+        ]
+      },
+      "create-shared-service": {
+        "outputs": [
+          "serviceid"
+        ]
+      },
+      "wait-for-shared-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "poolready"
+        ],
+        "dependencies": [
+          "create-shared-pool"
+        ]
+      },
+      "wait-for-shared-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-shared-service"
+        ]
+      }
+    }
+  },
+  "provision-dedicated-mysql": {
+    "version": 1,
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "databasename",
+          "password",
+          "rootpassword",
+          "servername",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-mysql-server": {
+        "inputs": [
+          "rootpassword",
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "generate-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "databasename",
+          "password",
+          "rootpassword",
+          "servername",
+          "servicename",
+          "username"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "poolid",
+          "rootpassword",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-mysql-server",
+          "generate-credentials",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  },
+  "provision-shared-mysql": {
+    "version": 1,
+    "actions": {
+      "create-shared-database": {
+        "inputs": [
+          "rootpassword",
+          "servicehost",
+          "shareddatabasename",
+          "sharedusername"
+        ],
+        "outputs": [
+          "databasecreated"
+        ],
+        "dependencies": [
+          "create-shared-user",
+          "find-or-create-shared-server",
+          "generate-shared-credentials"
+        ]
+      },
+      "create-shared-user": {
+        "inputs": [
+          "generatedsharedusername",
+          "rootpassword",
+          "servicehost",
+          "sharedpassword"
+        ],
+        "outputs": [
+          "sharedusername"
+        ],
+        "dependencies": [
+          "find-or-create-shared-server",
+          "generate-shared-credentials"
+        ]
+      },
+      "find-or-create-shared-server": {
+        "inputs": [
+          "appname",
+          "variantconfig"
+        ],
+        "outputs": [
+          "rootpassword",
+          "serverid",
+          "servicehost"
+        ]
+      },
+      "generate-shared-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "generatedsharedusername",
+          "shareddatabasename",
+          "sharedpassword"
+        ]
+      },
+      "increment-association-count": {
+        "inputs": [
+          "serverid"
+        ],
+        "outputs": [
+          "incremented"
+        ],
+        "dependencies": [
+          "find-or-create-shared-server"
+        ]
+      }
+    }
+  },
+  "rotate-dedicated-mysql-root": {
+    "version": 1,
+    "actions": {
+      "alter-dedicated-root-password": {
+        "inputs": [
+          "dedicatedrootpassword",
+          "dedicatedservicehost",
+          "rootnewpassword"
+        ],
+        "outputs": [
+          "root_altered"
+        ],
+        "dependencies": [
+          "load-dedicated-rotation-state"
+        ]
+      },
+      "capture-root-result": {
+        "inputs": [
+          "root_altered"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "alter-dedicated-root-password"
+        ]
+      },
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "load-dedicated-rotation-state": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedrootpassword",
+          "dedicatedservicehost"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      },
+      "update-dedicated-root-entity": {
+        "inputs": [
+          "dedicatedrootpassword",
+          "dedicatedserverid",
+          "root_altered",
+          "rootnewpassword"
+        ],
+        "outputs": [
+          "rootrecorded"
+        ],
+        "dependencies": [
+          "alter-dedicated-root-password",
+          "decode-dedicated-attrs",
+          "load-dedicated-rotation-state"
+        ]
+      }
+    }
+  },
+  "rotate-dedicated-mysql-user": {
+    "version": 1,
+    "actions": {
+      "alter-dedicated-user-password": {
+        "inputs": [
+          "dedicatedrootpassword",
+          "dedicatedservicehost",
+          "dedicateduser",
+          "dedicatedusernewpass",
+          "dedicateduseroldpass"
+        ],
+        "outputs": [
+          "dedicateduseraltered"
+        ],
+        "dependencies": [
+          "capture-dedicated-conn-info",
+          "load-dedicated-rotation-state"
+        ]
+      },
+      "build-dedicated-user-result": {
+        "inputs": [
+          "dedicateddatabase",
+          "dedicatedservicehost",
+          "dedicateduser",
+          "dedicatedusernewpass"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "capture-dedicated-conn-info",
+          "load-dedicated-rotation-state"
+        ]
+      },
+      "capture-dedicated-conn-info": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicateddatabase",
+          "dedicateduser",
+          "dedicateduseroldpass"
+        ]
+      },
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "load-dedicated-rotation-state": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedrootpassword",
+          "dedicatedservicehost"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "rotate-shared-mysql-root": {
+    "version": 1,
+    "actions": {
+      "alter-shared-root-password": {
+        "inputs": [
+          "root_disk_ensured",
+          "rootnewpassword",
+          "sharedrootpassword",
+          "sharedservicehost"
+        ],
+        "outputs": [
+          "root_altered"
+        ],
+        "dependencies": [
+          "backfill-root-disk-name",
+          "lookup-shared-server"
+        ]
+      },
+      "backfill-root-disk-name": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "root_disk_ensured"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "capture-root-result": {
+        "inputs": [
+          "root_altered"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "alter-shared-root-password"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedrootpassword",
+          "sharedservicehost",
+          "sharedserviceref"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "update-shared-root-entity": {
+        "inputs": [
+          "root_altered",
+          "rootnewpassword",
+          "sharedrootpassword",
+          "sharedserverref"
+        ],
+        "outputs": [
+          "rootrecorded"
+        ],
+        "dependencies": [
+          "alter-shared-root-password",
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      }
+    }
+  },
+  "rotate-shared-mysql-user": {
+    "version": 1,
+    "actions": {
+      "alter-shared-user-password": {
+        "inputs": [
+          "sharedrootpassword",
+          "sharedservicehost",
+          "sharedusername",
+          "usernewpassword",
+          "useroldpassword"
+        ],
+        "outputs": [
+          "useraltered"
+        ],
+        "dependencies": [
+          "capture-old-user-password",
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      },
+      "build-user-rotation-result": {
+        "inputs": [
+          "shareddbname",
+          "sharedservicehost",
+          "sharedusername",
+          "usernewpassword"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      },
+      "capture-old-user-password": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "useroldpassword"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedrootpassword",
+          "sharedservicehost",
+          "sharedserviceref"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      }
+    }
+  }
+}

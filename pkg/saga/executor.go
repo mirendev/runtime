@@ -447,6 +447,17 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 		now := time.Now()
 
 		if err != nil {
+			// A nested saga this action started refused to be resumed. Treating
+			// that as an action failure would compensate the actions before it,
+			// and skip this one's undo because it carries an error, so the
+			// child's work would be left behind under a parent that reads as
+			// compensated. Stop and block this execution instead, as runUndo
+			// does when it meets the same refusal.
+			if errors.Is(err, ErrIncompatibleDefinition) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("action %q reached a nested saga that cannot be resumed: %w", actionName, err))
+			}
+
 			actionErr := currentActionCtx.Err()
 			if hasDedicatedActionContext(currentActionCtx) && actionErr != nil && errors.Is(err, actionErr) {
 				log.Info("action cancelled, starting compensation", "action", actionName, "error", err)
@@ -673,6 +684,16 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		// Execute undo
 		actionCtx := context.WithValue(ctx, actionNameCtxKey{}, actionName)
 		if err := node.Action.Undo(actionCtx, actionInputs, output); err != nil {
+			// A nested saga this action started refused to be undone. That is
+			// not a failure to retry around: the earlier actions may be what
+			// the child's remaining work stands on, so compensating them now
+			// could strand it further. Stop, and block this execution too, so
+			// it is visible and out of the stalled sweep's reach until the
+			// child can be resumed.
+			if errors.Is(err, ErrIncompatibleDefinition) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("undo %q reached a nested saga that cannot be resumed: %w", actionName, err))
+			}
 			log.Error("undo failed", "action", actionName, "error", err)
 			undoErrors = append(undoErrors, fmt.Errorf("undo %q: %w", actionName, err))
 			// Continue with other undos even on failure
@@ -773,7 +794,10 @@ func (e *Executor) Recover(ctx context.Context) error {
 	}
 
 	if len(recoverErrors) > 0 {
-		return fmt.Errorf("recovery completed with %d errors", len(recoverErrors))
+		// Joined rather than counted: the callers log this at Error, and a
+		// refusal is only actionable if the operator can read which execution
+		// and why.
+		return fmt.Errorf("recovery completed with %d errors: %w", len(recoverErrors), errors.Join(recoverErrors...))
 	}
 	return nil
 }
@@ -895,18 +919,38 @@ func (e *Executor) resumeWithActionContext(ctx, actionCtx context.Context, def *
 	// A name that means one saga to the caller and another to the record is an
 	// id collision, and resuming across it would run this definition's actions
 	// against the other's recorded outputs. Naming executions after entities
-	// makes collisions the thing worth guarding, so this is an error rather
-	// than the warning a version skew gets.
+	// makes collisions the thing worth guarding.
 	if def.Name != exec.DefinitionName {
 		return fmt.Errorf("execution %q belongs to saga %q, not %q",
 			exec.ID, exec.DefinitionName, def.Name)
 	}
 
-	if def.Version != exec.DefinitionVersion {
-		e.log.Warn("saga definition version mismatch",
-			"saga", exec.DefinitionName,
-			"execution_version", exec.DefinitionVersion,
-			"current_version", def.Version)
+	// A copy that says blocked may be stale in the one way that matters: an
+	// operator can abandon a blocked execution while a release that can resume
+	// it is starting up with that copy in hand from a recovery page. Driving
+	// the copy would overwrite the abandonment and run or undo actions after
+	// the operator was told they would not. Saves here are not conditional, so
+	// re-reading narrows that window to the moment before the first write
+	// rather than closing it.
+	if exec.BlockedReason != "" {
+		fresh, err := e.storage.Get(ctx, exec.ID)
+		if err != nil {
+			return fmt.Errorf("re-reading blocked execution %q: %w", exec.ID, err)
+		}
+		*exec = *fresh
+	}
+
+	// Terminal executions run nothing, so the definition they were recorded
+	// under no longer matters. Everything else has to clear the check before
+	// runExecution or runUndo writes a status, let alone touches an action.
+	if exec.Status != StatusCompleted && exec.Status != StatusFailed {
+		if err := checkResumable(def, exec); err != nil {
+			e.recordBlocked(ctx, exec, err)
+			return err
+		}
+		if err := e.checkNestedBlock(ctx, exec); err != nil {
+			return err
+		}
 	}
 
 	switch exec.Status {

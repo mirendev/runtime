@@ -374,6 +374,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug rbac test`](./command/debug-rbac-test.md) | Test RBAC evaluation with fetched rules |
 | [`miren debug reindex`](./command/debug-reindex.md) | Rebuild all entity indexes from scratch |
 | [`miren debug saga`](./command/debug-saga.md) | Saga execution debug commands |
+| [`miren debug saga abandon`](./command/debug-saga-abandon.md) | Give up a saga execution the server refused to resume (break-glass) |
 | [`miren debug saga list`](./command/debug-saga-list.md) | List saga executions |
 | [`miren debug saga show`](./command/debug-saga-show.md) | Show a saga execution in detail |
 | [`miren debug test`](./command/debug-test.md) | Debug test commands |

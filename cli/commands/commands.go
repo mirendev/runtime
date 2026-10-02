@@ -1477,6 +1477,9 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug saga show", Infer("debug saga show", "Show a saga execution in detail", DebugSagaShow,
 		WithDescription(sagaShowDescription),
 	))
+	d.Dispatch("debug saga abandon", Infer("debug saga abandon", "Give up a saga execution the server refused to resume (break-glass)", DebugSagaAbandon,
+		WithDescription(sagaAbandonDescription),
+	))
 
 	// Debug netdb commands
 	d.Dispatch("debug netdb", Section("debug netdb", "Network database debug commands", ""))

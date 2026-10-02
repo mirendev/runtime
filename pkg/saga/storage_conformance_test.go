@@ -243,6 +243,45 @@ func TestStorageConformance_RecoveryScopeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStorageConformance_BlockedReasonClears pins that a save can take a
+// blocked reason away again. EACStorage writes through an update that merges
+// attributes, so a field that is simply left out keeps its old value there,
+// and a block would outlive the binary that resolved it.
+func TestStorageConformance_BlockedReasonClears(t *testing.T) {
+	for _, backend := range allStorageBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			storage := backend.make(t)
+
+			exec := &Execution{
+				ID:              "create-sandbox-blocked",
+				DefinitionName:  "create-sandbox",
+				Status:          StatusRunning,
+				InitialInputs:   map[string]any{"sandbox_id": "sandbox/example"},
+				ExecutedActions: map[string]*ActionResult{},
+				ExecutionOrder:  []string{},
+				BlockedReason:   "refusing to resume: recorded at v1",
+				BlockedOn:       "saga/sg-child",
+			}
+			require.NoError(t, storage.Save(ctx, exec))
+
+			got, err := storage.Get(ctx, exec.ID)
+			require.NoError(t, err)
+			assert.Equal(t, "refusing to resume: recorded at v1", got.BlockedReason)
+			assert.Equal(t, "saga/sg-child", got.BlockedOn)
+
+			exec.BlockedReason = ""
+			exec.BlockedOn = ""
+			require.NoError(t, storage.Save(ctx, exec))
+
+			got, err = storage.Get(ctx, exec.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.BlockedReason)
+			assert.Empty(t, got.BlockedOn)
+		})
+	}
+}
+
 func containsExecution(execs []*Execution, id string) bool {
 	for _, e := range execs {
 		if e != nil && e.ID == id {

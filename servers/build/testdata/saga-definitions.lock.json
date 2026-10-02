@@ -1,0 +1,307 @@
+{
+  "build-from-tar": {
+    "version": 1,
+    "actions": {
+      "activate-deployment": {
+        "inputs": [
+          "app_version_recorded",
+          "deployment_id",
+          "set_active_skipped"
+        ],
+        "dependencies": [
+          "begin-deployment",
+          "record-app-version",
+          "set-active-version"
+        ]
+      },
+      "begin-deployment": {
+        "inputs": [
+          "app_id",
+          "app_name",
+          "deploy_auth_method",
+          "deploy_cluster_id",
+          "deploy_email",
+          "deploy_git_info_json",
+          "deploy_message",
+          "deploy_name",
+          "deploy_organization_id",
+          "deploy_subject",
+          "ephemeral_label",
+          "stream_id"
+        ],
+        "outputs": [
+          "deployment_id"
+        ],
+        "dependencies": [
+          "get-next-version"
+        ]
+      },
+      "build-image": {
+        "inputs": [
+          "app_config",
+          "app_id",
+          "app_name",
+          "build_stack",
+          "cli_env_vars",
+          "deployment_id",
+          "existing_config_json",
+          "image_url",
+          "source_dir",
+          "stream_id",
+          "version_name"
+        ],
+        "outputs": [
+          "artifact_id",
+          "build_result",
+          "final_image_url",
+          "manifest_digest"
+        ],
+        "dependencies": [
+          "begin-deployment",
+          "get-next-version",
+          "load-source",
+          "receive-tar"
+        ]
+      },
+      "create-config-version": {
+        "inputs": [
+          "app_id",
+          "config_spec_json",
+          "version_name"
+        ],
+        "outputs": [
+          "config_version_id"
+        ],
+        "dependencies": [
+          "get-next-version",
+          "prepare-config"
+        ]
+      },
+      "create-version": {
+        "inputs": [
+          "admin_token",
+          "app_id",
+          "artifact_id",
+          "config_version_id",
+          "deploy_git_info_json",
+          "ephemeral_expires_at",
+          "ephemeral_label",
+          "ephemeral_ttl",
+          "final_image_url",
+          "manifest_digest",
+          "source_kind",
+          "source_value",
+          "static_artifact",
+          "version_name"
+        ],
+        "outputs": [
+          "app_version_id"
+        ],
+        "dependencies": [
+          "build-image",
+          "create-config-version",
+          "extract-static",
+          "get-next-version",
+          "handle-ephemeral",
+          "load-source"
+        ]
+      },
+      "extract-static": {
+        "inputs": [
+          "app_config",
+          "build_stack",
+          "final_image_url",
+          "source_dir",
+          "stream_id"
+        ],
+        "outputs": [
+          "static_artifact"
+        ],
+        "dependencies": [
+          "build-image",
+          "load-source",
+          "receive-tar"
+        ]
+      },
+      "finalize": {
+        "inputs": [
+          "app_id",
+          "app_name",
+          "artifact_id",
+          "config_spec_json",
+          "ephemeral_label",
+          "final_image_url",
+          "set_active_skipped",
+          "stream_id",
+          "version_name"
+        ],
+        "dependencies": [
+          "build-image",
+          "get-next-version",
+          "prepare-config",
+          "set-active-version"
+        ]
+      },
+      "get-next-version": {
+        "inputs": [
+          "app_name"
+        ],
+        "outputs": [
+          "admin_token",
+          "app_id",
+          "artifact_suffix",
+          "existing_config_json",
+          "image_url",
+          "version_name"
+        ]
+      },
+      "handle-ephemeral": {
+        "inputs": [
+          "app_id",
+          "app_name",
+          "ephemeral_label",
+          "ephemeral_ttl",
+          "stream_id"
+        ],
+        "outputs": [
+          "ephemeral_expires_at"
+        ],
+        "dependencies": [
+          "get-next-version"
+        ]
+      },
+      "load-source": {
+        "inputs": [
+          "app_name",
+          "source_dir",
+          "stream_id"
+        ],
+        "outputs": [
+          "app_config",
+          "build_stack",
+          "procfile_services",
+          "source_kind",
+          "source_value"
+        ],
+        "dependencies": [
+          "receive-tar"
+        ]
+      },
+      "prepare-config": {
+        "inputs": [
+          "app_config",
+          "app_id",
+          "app_name",
+          "build_result",
+          "cli_env_vars",
+          "existing_config_json",
+          "procfile_services",
+          "source_kind",
+          "source_value",
+          "stream_id"
+        ],
+        "outputs": [
+          "config_spec_json"
+        ],
+        "dependencies": [
+          "build-image",
+          "get-next-version",
+          "load-source"
+        ]
+      },
+      "provision-addons": {
+        "inputs": [
+          "app_config",
+          "app_name",
+          "app_version_id",
+          "ephemeral_label"
+        ],
+        "outputs": [
+          "addons_provisioned"
+        ],
+        "dependencies": [
+          "create-version",
+          "load-source"
+        ]
+      },
+      "receive-tar": {
+        "inputs": [
+          "app_name",
+          "stream_id"
+        ],
+        "outputs": [
+          "source_dir"
+        ]
+      },
+      "record-app-version": {
+        "inputs": [
+          "app_version_id",
+          "deployment_id"
+        ],
+        "outputs": [
+          "app_version_recorded"
+        ],
+        "dependencies": [
+          "begin-deployment",
+          "create-version"
+        ]
+      },
+      "run-deploy-tasks": {
+        "inputs": [
+          "addons_ready",
+          "app_name",
+          "app_version_id",
+          "config_spec_json",
+          "ephemeral_label",
+          "stream_id"
+        ],
+        "outputs": [
+          "deploy_tasks_ran"
+        ],
+        "dependencies": [
+          "create-version",
+          "prepare-config",
+          "wait-addons"
+        ]
+      },
+      "set-active-version": {
+        "inputs": [
+          "addons_ready",
+          "app_config",
+          "app_name",
+          "app_version_id",
+          "deploy_tasks_ran",
+          "deployment_id",
+          "ephemeral_label",
+          "stream_id"
+        ],
+        "outputs": [
+          "set_active_skipped"
+        ],
+        "dependencies": [
+          "begin-deployment",
+          "create-version",
+          "load-source",
+          "run-deploy-tasks",
+          "wait-addons"
+        ]
+      },
+      "wait-addons": {
+        "inputs": [
+          "addons_provisioned",
+          "app_config",
+          "app_name",
+          "ephemeral_label",
+          "stream_id"
+        ],
+        "outputs": [
+          "addons_ready"
+        ],
+        "dependencies": [
+          "load-source",
+          "provision-addons"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "deprovision-dedicated-rabbitmq": {
+    "version": 1,
+    "actions": {
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "delete-dedicated-pool": {
+        "inputs": [
+          "dedicatedpoolid"
+        ],
+        "outputs": [
+          "dedicated_pool_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-server-entity": {
+        "inputs": [
+          "dedicated_pool_deleted",
+          "dedicated_service_deleted",
+          "dedicatedserverid",
+          "dedicatedservername"
+        ],
+        "outputs": [
+          "serverdeleted"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs",
+          "delete-dedicated-pool",
+          "delete-dedicated-service",
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-service": {
+        "inputs": [
+          "dedicatedserviceid"
+        ],
+        "outputs": [
+          "dedicated_service_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "lookup-dedicated-server": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedpoolid",
+          "dedicatedservername",
+          "dedicatedserviceid"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "provision-dedicated-rabbitmq": {
+    "version": 1,
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "password",
+          "servername",
+          "username",
+          "variantconfig",
+          "vhost"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-rabbitmq-server": {
+        "inputs": [
+          "password",
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "generate-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "password",
+          "servername",
+          "servicename",
+          "username",
+          "vhost"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "password",
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-rabbitmq-server",
+          "generate-credentials",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  },
+  "rotate-dedicated-rabbitmq": {
+    "version": 1,
+    "actions": {
+      "build-rotation-result": {
+        "inputs": [
+          "rotatenewpassword",
+          "rotateservicehost"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "load-rotation-state"
+        ]
+      },
+      "change-password": {
+        "inputs": [
+          "rotatenewpassword",
+          "rotateoldpassword",
+          "rotatepoolid"
+        ],
+        "outputs": [
+          "rmq_password_changed"
+        ],
+        "dependencies": [
+          "load-rotation-state"
+        ]
+      },
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "load-rotation-state": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "rotateoldpassword",
+          "rotatepoolid",
+          "rotateservicehost"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      },
+      "update-server-password": {
+        "inputs": [
+          "dedicatedserverid",
+          "rmq_password_changed",
+          "rotatenewpassword",
+          "rotateoldpassword"
+        ],
+        "outputs": [
+          "recorded"
+        ],
+        "dependencies": [
+          "change-password",
+          "decode-dedicated-attrs",
+          "load-rotation-state"
+        ]
+      }
+    }
+  }
+}

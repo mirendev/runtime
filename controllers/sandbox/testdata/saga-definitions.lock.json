@@ -1,0 +1,128 @@
+{
+  "create-sandbox": {
+    "version": 1,
+    "actions": {
+      "add-metrics": {
+        "inputs": [
+          "all_cgroups",
+          "sandbox_id"
+        ],
+        "outputs": [
+          "log_entity"
+        ],
+        "dependencies": [
+          "boot-containers"
+        ]
+      },
+      "alloc-network": {
+        "inputs": [
+          "sandbox_id"
+        ],
+        "outputs": [
+          "addresses"
+        ]
+      },
+      "boot-containers": {
+        "inputs": [
+          "addresses",
+          "cgroups",
+          "container_id",
+          "revision",
+          "sandbox_id",
+          "task_pid"
+        ],
+        "outputs": [
+          "all_cgroups",
+          "port_wait_timeout",
+          "wait_port_ids",
+          "wait_port_ports"
+        ],
+        "dependencies": [
+          "alloc-network",
+          "boot-task",
+          "create-container",
+          "patch-network"
+        ]
+      },
+      "boot-task": {
+        "inputs": [
+          "addresses",
+          "container_id",
+          "sandbox_id"
+        ],
+        "outputs": [
+          "cgroups",
+          "task_pid"
+        ],
+        "dependencies": [
+          "alloc-network",
+          "create-container"
+        ]
+      },
+      "create-container": {
+        "inputs": [
+          "addresses",
+          "revision",
+          "sandbox_id"
+        ],
+        "outputs": [
+          "container_id"
+        ],
+        "dependencies": [
+          "alloc-network",
+          "patch-network"
+        ]
+      },
+      "patch-network": {
+        "inputs": [
+          "addresses",
+          "sandbox_id"
+        ],
+        "outputs": [
+          "revision"
+        ],
+        "dependencies": [
+          "alloc-network"
+        ]
+      },
+      "set-running": {
+        "inputs": [
+          "observed_ports",
+          "ports_ready",
+          "sandbox_id"
+        ],
+        "dependencies": [
+          "wait-ports"
+        ]
+      },
+      "update-services": {
+        "inputs": [
+          "addresses",
+          "ports_ready",
+          "revision",
+          "sandbox_id"
+        ],
+        "dependencies": [
+          "alloc-network",
+          "patch-network",
+          "wait-ports"
+        ]
+      },
+      "wait-ports": {
+        "inputs": [
+          "port_wait_timeout",
+          "sandbox_id",
+          "wait_port_ids",
+          "wait_port_ports"
+        ],
+        "outputs": [
+          "observed_ports",
+          "ports_ready"
+        ],
+        "dependencies": [
+          "boot-containers"
+        ]
+      }
+    }
+  }
+}

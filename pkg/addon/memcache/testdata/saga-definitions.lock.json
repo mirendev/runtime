@@ -1,0 +1,156 @@
+{
+  "deprovision-dedicated-memcache": {
+    "version": 1,
+    "actions": {
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "delete-dedicated-pool": {
+        "inputs": [
+          "dedicatedpoolid"
+        ],
+        "outputs": [
+          "dedicated_pool_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-server-entity": {
+        "inputs": [
+          "dedicated_pool_deleted",
+          "dedicated_service_deleted",
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "serverdeleted"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs",
+          "delete-dedicated-pool",
+          "delete-dedicated-service"
+        ]
+      },
+      "delete-dedicated-service": {
+        "inputs": [
+          "dedicatedserviceid"
+        ],
+        "outputs": [
+          "dedicated_service_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "lookup-dedicated-server": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedpoolid",
+          "dedicatedserviceid"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "provision-dedicated-memcache": {
+    "version": 1,
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "servername",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "generate-names"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-names"
+        ]
+      },
+      "create-memcache-server": {
+        "inputs": [
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-names"
+        ]
+      },
+      "generate-names": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "servername",
+          "servicename"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-memcache-server",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  }
+}

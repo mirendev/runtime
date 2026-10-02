@@ -20,6 +20,7 @@ miren debug saga [flags]
 
 ## Subcommands
 
+- [`miren debug saga abandon`](./debug-saga-abandon.md) — Give up a saga execution the server refused to resume (break-glass)
 - [`miren debug saga list`](./debug-saga-list.md) — List saga executions
 - [`miren debug saga show`](./debug-saga-show.md) — Show a saga execution in detail
 

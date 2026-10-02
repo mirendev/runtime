@@ -160,6 +160,7 @@
       "command/debug-rbac-test",
       "command/debug-reindex",
       "command/debug-saga",
+      "command/debug-saga-abandon",
       "command/debug-saga-list",
       "command/debug-saga-show",
       "command/debug-test",

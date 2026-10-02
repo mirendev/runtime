@@ -1,9 +1,3 @@
-// Package saga implements the Saga pattern for distributed operations with
-// crash recovery. Each saga is a sequence of steps where each step has a
-// corresponding undo operation. The framework guarantees that either all
-// steps complete successfully or all completed steps are rolled back.
-//
-// See RFD-35 for detailed design documentation.
 package saga
 
 import (
@@ -85,6 +79,22 @@ type Execution struct {
 
 	// Error is set if the saga failed.
 	Error string `json:"error,omitempty"`
+
+	// BlockedReason is set when a binary refused to resume this execution
+	// because its definition could not vouch for the recorded one. It is a
+	// diagnostic, not a status: the execution keeps the status it had, and the
+	// next binary that can resume it clears this as it does.
+	BlockedReason string `json:"blocked_reason,omitempty"`
+
+	// BlockedOn names the nested execution whose refusal blocked this one.
+	// Before driving this execution again the executor re-checks that one,
+	// and while it still cannot be resumed nothing here runs: re-running the
+	// action that started it can do real damage on the way back to it.
+	BlockedOn string `json:"blocked_on,omitempty"`
+
+	// clearedBlock is the BlockedReason admit cleared in memory, for
+	// recordBlocked to recognize a repeat. Never persisted.
+	clearedBlock string
 
 	// CreatedAt is when the execution was created.
 	CreatedAt time.Time `json:"created_at"`
@@ -194,6 +204,11 @@ type IncompleteSummary struct {
 	// v0.11.1's saga schema had no updated_at at all, so the records this sweep
 	// exists to drain would otherwise all read as infinitely old.
 	LastChanged time.Time
+
+	// Blocked reports that a binary refused to resume this execution. Such an
+	// execution is not stranded but waiting on an operator, and forcing it to
+	// failed would let a reconcile retry over the work it never compensated.
+	Blocked bool
 
 	// ParentID is set when this execution ran as a nested child, and matters
 	// for the same reason it does to retention: a live parent re-finds its

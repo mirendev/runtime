@@ -13,6 +13,8 @@ Shows one saga execution in full: its status, its initial inputs, and every acti
 :::note[Output details]
 Action outputs are truncated by default so a long saga stays readable. Pass `--full` to print them whole. `--format json` always carries them in full, since a partial record is worse than a large one for anything parsing it.
 
+A saga marked **BLOCKED** is one the server refused to resume, usually because it was started by an older release whose saga definition the running one cannot vouch for. Nothing ran or was undone when it refused, and nothing will drive the saga until someone acts: running a release that can still resume it lets it finish or compensate normally, and `miren debug saga abandon` gives it up when that is not possible.
+
 Where a saga stopped is the last action listed. This shows the actions that ran, not the complete set the definition declares, since the saga definitions live in the server process and are not exposed over the API.
 :::
 

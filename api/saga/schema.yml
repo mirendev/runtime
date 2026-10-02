@@ -42,6 +42,14 @@ kinds:
       type: string
       doc: Error message if the saga failed
 
+    blocked_reason:
+      type: string
+      doc: Why the running binary refused to resume this execution; empty when nothing is blocking it
+
+    blocked_on:
+      type: string
+      doc: The nested execution whose refusal is blocking this one, re-checked before this one is driven again
+
     created_at:
       type: time
       doc: When the execution was created

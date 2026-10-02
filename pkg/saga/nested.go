@@ -94,6 +94,20 @@ func RunNested(ctx context.Context, sagaName string, opts ...NestedOption) (*Nes
 		return nil, fmt.Errorf("creating nested execution: %w", err)
 	}
 
+	// A terminal child is reported, not re-driven, which is the contract
+	// resume gives a top-level execution. Running a completed child again
+	// would execute whatever actions the current definition has that it
+	// never ran, and running a failed one, abandoned ones included, would
+	// redo work that was compensated or deliberately given up.
+	switch exec.Status {
+	case StatusCompleted:
+		return collectOutputs(def, exec), nil
+	case StatusFailed:
+		return nil, fmt.Errorf("nested saga %q execution %q failed: %s", sagaName, exec.ID, exec.Error)
+	case StatusPending, StatusRunning, StatusUndoing:
+		// Still in flight: drive it below.
+	}
+
 	// Run the child saga
 	if err := parent.runExecution(controlCtx, ctx, def, exec); err != nil {
 		return nil, err
@@ -111,9 +125,17 @@ func (e *Executor) createChildExecution(ctx context.Context, def *Definition, in
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
-		if exec.DefinitionName != def.Name || exec.DefinitionVersion != def.Version {
-			return nil, fmt.Errorf("existing execution %s has definition %s@%d, expected %s@%d",
-				id, exec.DefinitionName, exec.DefinitionVersion, def.Name, def.Version)
+		if exec.DefinitionName != def.Name {
+			return nil, fmt.Errorf("existing execution %s belongs to saga %q, expected %q",
+				id, exec.DefinitionName, def.Name)
+		}
+		// Terminal children run nothing here (RunNested reports them as they
+		// stand), so like resume this only vouches for ones it would drive.
+		if !isTerminal(exec.Status) {
+			if err := checkResumable(def, exec); err != nil {
+				e.recordBlocked(ctx, exec, err)
+				return nil, err
+			}
 		}
 		if exec.ParentExecutionID != parentExecID {
 			return nil, fmt.Errorf("execution %s already exists for parent %s, expected parent %s",
@@ -172,8 +194,26 @@ func UndoNested(ctx context.Context, executionID string) error {
 	if !ok {
 		return fmt.Errorf("saga definition %q not found for nested undo", exec.DefinitionName)
 	}
+	// A failed child is already compensated, or was abandoned, which gave up
+	// compensating it on purpose. Either way there is nothing left to undo.
+	if exec.Status == StatusFailed {
+		return nil
+	}
 
-	return parent.runUndo(ctx, def, exec)
+	if err := checkResumable(def, exec); err != nil {
+		parent.recordBlocked(ctx, exec, err)
+		return err
+	}
+
+	// runUndo reports a finished compensation as "saga failed", which is right
+	// for whoever started a saga but wrong for a parent asking whether its
+	// child was undone: it would read success as an undo error and never
+	// finish unwinding. Failed is only reached once every undo succeeded.
+	err = parent.runUndo(ctx, def, exec)
+	if exec.Status == StatusFailed {
+		return nil
+	}
+	return err
 }
 
 // deriveChildID produces a deterministic execution ID from the parent execution,

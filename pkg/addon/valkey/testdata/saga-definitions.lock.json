@@ -1,0 +1,267 @@
+{
+  "deprovision-dedicated-valkey": {
+    "version": 1,
+    "actions": {
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "delete-dedicated-pool": {
+        "inputs": [
+          "dedicatedpoolid"
+        ],
+        "outputs": [
+          "dedicated_pool_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-server-entity": {
+        "inputs": [
+          "dedicated_pool_deleted",
+          "dedicated_service_deleted",
+          "dedicatedserverid",
+          "dedicatedservername"
+        ],
+        "outputs": [
+          "serverdeleted"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs",
+          "delete-dedicated-pool",
+          "delete-dedicated-service",
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-service": {
+        "inputs": [
+          "dedicatedserviceid"
+        ],
+        "outputs": [
+          "dedicated_service_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "lookup-dedicated-server": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedpoolid",
+          "dedicatedservername",
+          "dedicatedserviceid"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "provision-dedicated-valkey": {
+    "version": 1,
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "password",
+          "servername",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-valkey-server": {
+        "inputs": [
+          "password",
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "generate-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "password",
+          "servername",
+          "servicename"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "password",
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-valkey-server",
+          "generate-credentials",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  },
+  "rotate-dedicated-valkey": {
+    "version": 1,
+    "actions": {
+      "capture-valkey-rotation-result": {
+        "inputs": [
+          "rotatenewpassword",
+          "rotateservicehost"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "load-valkey-rotation-state"
+        ]
+      },
+      "decode-valkey-server-ref": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "rotateserverid"
+        ]
+      },
+      "delete-old-valkey-pool": {
+        "inputs": [
+          "rotateoldpoolid",
+          "valkey_pool_ready"
+        ],
+        "outputs": [
+          "rotateoldpooldeleted"
+        ],
+        "dependencies": [
+          "load-valkey-rotation-state",
+          "wait-valkey-pool-ready"
+        ]
+      },
+      "load-valkey-rotation-state": {
+        "inputs": [
+          "rotateserverid"
+        ],
+        "outputs": [
+          "rotateoldpassword",
+          "rotateoldpoolid",
+          "rotateservicehost"
+        ],
+        "dependencies": [
+          "decode-valkey-server-ref"
+        ]
+      },
+      "scale-down-old-valkey-pool": {
+        "inputs": [
+          "rotateoldpoolid"
+        ],
+        "outputs": [
+          "valkey_pool_scaled_down"
+        ],
+        "dependencies": [
+          "load-valkey-rotation-state"
+        ]
+      },
+      "set-valkey-server-password": {
+        "inputs": [
+          "rotatenewpassword",
+          "rotateoldpassword",
+          "rotateserverid"
+        ],
+        "outputs": [
+          "rotatepasswordset"
+        ],
+        "dependencies": [
+          "decode-valkey-server-ref",
+          "load-valkey-rotation-state"
+        ]
+      },
+      "swap-valkey-pool": {
+        "inputs": [
+          "rotatenewpassword",
+          "rotateoldpoolid",
+          "rotateserverid",
+          "valkey_pool_scaled_down"
+        ],
+        "outputs": [
+          "rotatenewpoolid"
+        ],
+        "dependencies": [
+          "decode-valkey-server-ref",
+          "load-valkey-rotation-state",
+          "scale-down-old-valkey-pool"
+        ]
+      },
+      "wait-valkey-pool-ready": {
+        "inputs": [
+          "rotatenewpoolid"
+        ],
+        "outputs": [
+          "valkey_pool_ready"
+        ],
+        "dependencies": [
+          "swap-valkey-pool"
+        ]
+      }
+    }
+  }
+}

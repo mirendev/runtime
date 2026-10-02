@@ -59,13 +59,29 @@ func executionToEntity(exec *Execution) (*entity.Entity, error) {
 		ExecutedActions:   executedActions,
 		ExecutionOrder:    executionOrder,
 		Error:             exec.Error,
+		BlockedReason:     exec.BlockedReason,
+		BlockedOn:         exec.BlockedOn,
 		CreatedAt:         exec.CreatedAt,
 		UpdatedAt:         exec.UpdatedAt,
 	}
 
+	attrs := sagaEntity.Encode()
+
+	// Encode drops empty fields, which ReplaceEntity reads as "remove" but
+	// EACStorage's merging update reads as "keep". A block has to be able to
+	// clear on every backend once a binary that can resume the execution
+	// takes it over, so an empty reason is written out as an explicit empty
+	// value rather than left to whichever way the backend reads an absence.
+	if exec.BlockedReason == "" {
+		attrs = append(attrs, entity.String(saga_v1alpha.SagaBlockedReasonId, ""))
+	}
+	if exec.BlockedOn == "" {
+		attrs = append(attrs, entity.String(saga_v1alpha.SagaBlockedOnId, ""))
+	}
+
 	return entity.New(
 		entity.DBId, entity.Id(exec.ID),
-		sagaEntity.Encode(),
+		attrs,
 	), nil
 }
 
@@ -327,7 +343,7 @@ func (s *EntityStorage) ForceFailed(ctx context.Context, id string, cutoff time.
 		return false, fmt.Errorf("entity %s is not a saga", id)
 	}
 
-	if isTerminal(statusFromEntity(sagaEntity.Status)) {
+	if isTerminal(statusFromEntity(sagaEntity.Status)) || sagaEntity.BlockedReason != "" {
 		return false, nil
 	}
 
@@ -458,6 +474,7 @@ func incompleteSummary(ent *entity.Entity) (IncompleteSummary, summaryVerdict) {
 		CreatedAt:      createdAt(ent, &s),
 		LastChanged:    changed,
 		ParentID:       string(s.ParentExecutionId),
+		Blocked:        s.BlockedReason != "",
 	}, summaryOK
 }
 
@@ -580,6 +597,8 @@ func entityToExecution(sagaEntity *saga_v1alpha.Saga) (*Execution, error) {
 		RecoveryScope:     sagaEntity.RecoveryScope,
 		Status:            statusFromEntity(sagaEntity.Status),
 		Error:             sagaEntity.Error,
+		BlockedReason:     sagaEntity.BlockedReason,
+		BlockedOn:         sagaEntity.BlockedOn,
 		CreatedAt:         sagaEntity.CreatedAt,
 		UpdatedAt:         sagaEntity.UpdatedAt,
 	}

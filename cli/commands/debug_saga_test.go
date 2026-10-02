@@ -43,6 +43,8 @@ func sagaEntityFor(t *testing.T, exec *saga.Execution, createdAt, updatedAt time
 		ExecutedActions:   executedActions,
 		ExecutionOrder:    executionOrder,
 		Error:             exec.Error,
+		BlockedReason:     exec.BlockedReason,
+		BlockedOn:         exec.BlockedOn,
 	}
 
 	ent := entity.New(entity.DBId, entity.Id(exec.ID), sagaEntity.Encode())
@@ -181,6 +183,54 @@ func TestPrintSagaShow(t *testing.T) {
 	assert.Contains(t, out, "format_disk")
 
 	assert.Less(t, strings.Index(out, "create_disk"), strings.Index(out, "attach_disk"))
+}
+
+// TestPrintSagaShowBlocked covers the case the status alone hides: a blocked
+// execution keeps the status it had, so without the banner a saga nothing will
+// ever drive reads like one in progress.
+func TestPrintSagaShowBlocked(t *testing.T) {
+	exec := wedgedSaga()
+	exec.BlockedReason = `refusing to resume saga "provision_mysql_dedicated": recorded at v1`
+	exec.BlockedOn = "saga/sg-Child1"
+
+	record, err := decodeSagaRecord(sagaEntityFor(t, exec, time.Now(), time.Now()))
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	printSagaShow(&Context{Stdout: &buf}, record, nil, false)
+	out := buf.String()
+
+	assert.Contains(t, out, "running (blocked)")
+	assert.Contains(t, out, "BLOCKED: the server refused to resume this execution.")
+	assert.Contains(t, out, "recorded at v1")
+	assert.Contains(t, out, "Waiting on child saga sg-Child1")
+
+	listed := newSagaListJSON(record)
+	assert.Equal(t, "running", listed.Status, "JSON keeps the raw status")
+	assert.Equal(t, exec.BlockedReason, listed.BlockedReason)
+}
+
+func TestSagaAbandonBlockers(t *testing.T) {
+	child := func(id string, status saga.Status, blocked string) *sagaRecord {
+		return &sagaRecord{exec: &saga.Execution{ID: id, Status: status, BlockedReason: blocked}}
+	}
+
+	assert.NoError(t, sagaAbandonBlockers(nil))
+	assert.NoError(t, sagaAbandonBlockers([]*sagaRecord{
+		child("saga/sg-Done", saga.StatusCompleted, ""),
+		child("saga/sg-Gone", saga.StatusFailed, ""),
+	}), "finished children don't hold the parent")
+
+	err := sagaAbandonBlockers([]*sagaRecord{
+		child("saga/sg-Done", saga.StatusCompleted, ""),
+		child("saga/sg-Stuck", saga.StatusRunning, "refusing to resume"),
+		child("saga/sg-Unundone", saga.StatusCompleted, "refusing to resume"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sg-Stuck (running (blocked))")
+	assert.Contains(t, err.Error(), "sg-Unundone (completed (blocked))",
+		"a completed child whose undo was refused still holds its parent")
+	assert.NotContains(t, err.Error(), "sg-Done")
 }
 
 func TestPrintSagaShowNoActions(t *testing.T) {
