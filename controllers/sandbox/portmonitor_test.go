@@ -114,7 +114,10 @@ func TestListListeningPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := listListeningPorts(path)
+	got, ok := listListeningPorts(path)
+	if !ok {
+		t.Fatal("expected ok=true for a readable file")
+	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 listening sockets, got %d: %+v", len(got), got)
 	}
@@ -144,7 +147,10 @@ func TestListeningPortsForPIDClassification(t *testing.T) {
 	defer loopbackLn.Close()
 	loopbackPort := loopbackLn.Addr().(*net.TCPAddr).Port
 
-	routable, loopback := listeningPortsForPID(os.Getpid())
+	routable, loopback, ok := listeningPortsForPID(os.Getpid())
+	if !ok {
+		t.Fatal("expected ok=true reading this process's sockets")
+	}
 
 	if !slices.Contains(routable, routablePort) {
 		t.Errorf("expected routable ports %v to contain %d", routable, routablePort)
@@ -161,8 +167,8 @@ func TestListeningPortsForPIDClassification(t *testing.T) {
 func TestDiagnoseListening(t *testing.T) {
 	pm := &PortMonitor{
 		tasks: map[string]*monitorTask{"c1": {pid: 1234}},
-		listPorts: func(pid int) ([]int, []int) {
-			return []int{8080}, []int{5000}
+		listPorts: func(pid int) ([]int, []int, bool) {
+			return []int{8080}, []int{5000}, true
 		},
 	}
 
@@ -200,5 +206,24 @@ func TestCheckPortWithCurrentProcess(t *testing.T) {
 
 	if checkPort(pid, port+1) {
 		t.Errorf("checkPort(%d, %d) = true, want false for non-listening port", pid, port+1)
+	}
+}
+
+func TestListListeningPortsUnreadable(t *testing.T) {
+	_, ok := listListeningPorts(filepath.Join(t.TempDir(), "missing"))
+	if ok {
+		t.Fatal("an unreadable socket table must not look like a process listening on nothing")
+	}
+}
+
+func TestDiagnoseListeningUnreadable(t *testing.T) {
+	pm := &PortMonitor{
+		tasks: map[string]*monitorTask{"c1": {pid: 1234}},
+		listPorts: func(pid int) ([]int, []int, bool) {
+			return nil, nil, false
+		},
+	}
+	if _, _, ok := pm.DiagnoseListening("c1"); ok {
+		t.Fatal("expected ok=false when the sockets couldn't be read")
 	}
 }

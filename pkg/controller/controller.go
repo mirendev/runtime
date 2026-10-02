@@ -280,7 +280,8 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 		processErr := errors.Join(loadErr, handlerErr, writeErr)
 		if processErr != nil && ctx.Err() == nil {
 			c.counters.failures.Add(1)
-			c.Log.Error("reconcile failed", "entity", item.id, "error", processErr)
+			c.Log.Log(ctx, reconcileFailureLevel(loadErr, handlerErr, writeErr),
+				"reconcile failed", "entity", item.id, "error", processErr)
 		}
 		if ctx.Err() != nil {
 			processErr = nil
@@ -289,6 +290,17 @@ func (c *ReconcileController) runWorker(ctx context.Context) {
 			c.counters.retries.Add(1)
 		}
 	}
+}
+
+// reconcileFailureLevel is Warn only when the handler's error is the whole
+// failure and it's marked as the workload's own. A failed load or write is
+// the platform's, so it keeps the line at Error even when the handler's error
+// is marked too.
+func reconcileFailureLevel(loadErr, handlerErr, writeErr error) slog.Level {
+	if loadErr == nil && writeErr == nil && cond.IsWorkload(handlerErr) {
+		return slog.LevelWarn
+	}
+	return slog.LevelError
 }
 
 func (c *ReconcileController) currentEvent(ctx context.Context, item workItem) (Event, error) {

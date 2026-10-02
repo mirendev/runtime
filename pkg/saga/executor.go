@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -451,7 +452,11 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 			if hasDedicatedActionContext(currentActionCtx) && actionErr != nil && errors.Is(err, actionErr) {
 				log.Info("action cancelled, starting compensation", "action", actionName, "error", err)
 			} else {
-				log.Error("action failed", "action", actionName, "error", err)
+				if cond.IsWorkload(err) {
+					log.Warn("action failed", "action", actionName, "error", err)
+				} else {
+					log.Error("action failed", "action", actionName, "error", err)
+				}
 			}
 
 			// Record the failure
@@ -474,7 +479,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, err)
 		}
 
 		// Serialize output
@@ -515,7 +520,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 
 		// Record success
@@ -539,7 +544,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 
 		// An action may ignore cancellation and still return success after mutating
@@ -555,7 +560,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
 					log.Error("failed to persist undoing state", "error", saveErr)
 				}
-				return e.runUndo(ctx, def, exec)
+				return e.runUndo(ctx, def, exec, nil)
 			}
 		}
 
@@ -579,7 +584,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 	}
 
@@ -595,8 +600,10 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 	return nil
 }
 
-// runUndo rolls back completed actions in reverse order.
-func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution) error {
+// runUndo rolls back completed actions in reverse order. cause is the action
+// error that started the rollback, when this process saw it; the returned
+// error unwraps to it so callers can tell what kind of failure it was.
+func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution, cause error) error {
 	log := e.log.With("saga", def.Name, "execution", exec.ID)
 
 	// Update status to undoing
@@ -726,7 +733,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	}
 
 	log.Info("saga failed and rolled back")
-	return fmt.Errorf("saga failed: %s", exec.Error)
+	return &rolledBackError{msg: "saga failed: " + exec.Error, cause: cause}
 }
 
 // Recover finds and resumes incomplete sagas after a restart.
@@ -916,11 +923,11 @@ func (e *Executor) resumeWithActionContext(ctx, actionCtx context.Context, def *
 		if exec.Error != "" {
 			e.log.Info("found failed action, starting undo",
 				"saga", exec.DefinitionName, "error", exec.Error)
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 		return e.runExecution(ctx, actionCtx, def, exec)
 	case StatusUndoing:
-		return e.runUndo(ctx, def, exec)
+		return e.runUndo(ctx, def, exec, nil)
 	case StatusCompleted:
 		return nil
 	case StatusFailed:
@@ -1022,3 +1029,16 @@ const (
 func generateID() string {
 	return sagaIDKind + "/" + idgen.GenNS(sagaIDName)
 }
+
+// rolledBackError is what a saga that failed and rolled back returns. Its
+// message is the recorded failure. It unwraps to the action error behind it
+// when this process saw that error happen; a saga resumed by recovery only
+// has the recorded string, and unwraps to nothing.
+type rolledBackError struct {
+	msg   string
+	cause error
+}
+
+func (e *rolledBackError) Error() string { return e.msg }
+
+func (e *rolledBackError) Unwrap() error { return e.cause }

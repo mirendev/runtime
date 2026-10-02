@@ -28,6 +28,10 @@ type VictoriaMetricsWriter struct {
 	flushChan chan struct{}
 	wg        sync.WaitGroup
 	client    *http.Client
+
+	// failingSince is when the current run of failed sends started; zero
+	// while sends succeed. Guarded by mu.
+	failingSince time.Time
 }
 
 const (
@@ -189,15 +193,38 @@ func (w *VictoriaMetricsWriter) flush() {
 	w.mu.Unlock()
 
 	err := w.sendMetrics(toFlush)
-	if err != nil {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-
-		// Re-add failed metrics to the front of the buffer
-		w.buffer = append(toFlush, w.buffer...)
-
-		w.Log.Error("failed to send metrics to victoriametrics", "error", err, "count", len(toFlush))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err == nil {
+		w.failingSince = time.Time{}
+		return
 	}
+
+	// Re-add failed metrics to the front of the buffer
+	w.buffer = append(toFlush, w.buffer...)
+
+	now := time.Now()
+	if w.failingSince.IsZero() {
+		w.failingSince = now
+	}
+	w.Log.Log(context.Background(), sendFailureLevel(w.failingSince, now, len(w.buffer)),
+		"failed to send metrics to victoriametrics", "error", err, "count", len(toFlush),
+		"failing_for", now.Sub(w.failingSince).Round(time.Second))
+}
+
+// persistentSendFailure is how long sends may fail before it's an error.
+const persistentSendFailure = 5 * time.Minute
+
+// sendFailureLevel is Warn while failures are short and nothing is lost: the
+// points stay buffered, and every coordinator restart causes a minute or two
+// of this. Once failures outlast that, or the buffer is full and new writes
+// are being rejected, points are being lost or the sink is broken, and it's
+// an Error.
+func sendFailureLevel(failingSince, now time.Time, buffered int) slog.Level {
+	if buffered >= maxMetricBufferSize || now.Sub(failingSince) >= persistentSendFailure {
+		return slog.LevelError
+	}
+	return slog.LevelWarn
 }
 
 // sendMetrics sends metrics to VictoriaMetrics using the import API

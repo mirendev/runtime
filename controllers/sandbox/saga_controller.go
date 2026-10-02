@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -81,7 +82,11 @@ func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *comput
 	}
 
 	if err != nil {
-		c.Log.Error("saga sandbox creation failed, marking DEAD", "id", co.ID, "error", err)
+		if cond.IsWorkload(err) {
+			c.Log.Warn("sandbox's app failed during creation, marking DEAD", "id", co.ID, "error", err)
+		} else {
+			c.Log.Error("saga sandbox creation failed, marking DEAD", "id", co.ID, "error", err)
+		}
 
 		// Saga compensating actions handle resource cleanup. The controller
 		// owns the domain-level outcome: mark the sandbox DEAD so the pool
@@ -96,6 +101,9 @@ func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *comput
 			c.Log.Warn("failed to fetch sandbox after saga failure; leaving startup outcome unchanged", "id", co.ID, "error", getErr)
 		} else {
 			if current.Status == compute.DEAD {
+				if cond.IsWorkload(err) {
+					return nil
+				}
 				return fmt.Errorf("saga sandbox creation failed: %w", err)
 			}
 			revision = meta.GetRevision()
@@ -109,6 +117,11 @@ func (c *SandboxController) createSandboxViaSaga(ctx context.Context, co *comput
 		)
 		if _, patchErr := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), revision); patchErr != nil {
 			c.Log.Error("failed to mark sandbox DEAD after saga failure", "id", co.ID, "error", patchErr)
+		} else if cond.IsWorkload(err) {
+			// The app's failure is reported above and the sandbox is DEAD, so
+			// the pool replaces it. Returning the error would only make the
+			// reconcile loop log it a third time and retry a dead entity.
+			return nil
 		}
 
 		return fmt.Errorf("saga sandbox creation failed: %w", err)

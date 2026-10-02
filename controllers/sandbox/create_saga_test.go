@@ -24,6 +24,7 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/network"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/saga"
@@ -579,6 +580,7 @@ func TestCreateSandboxSaga_AllocNetworkFails(t *testing.T) {
 
 	err := h.execute(t)
 	require.Error(t, err)
+	assert.False(t, cond.IsWorkload(err), "running out of IPs is the platform's failure")
 
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
@@ -698,6 +700,8 @@ func TestCreateSandboxSaga_WaitPortsFails(t *testing.T) {
 
 	err := h.execute(t)
 	require.Error(t, err)
+	assert.False(t, cond.IsWorkload(err),
+		"without a diagnosis of what the app bound, the cause could be ours")
 
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
@@ -735,6 +739,11 @@ func TestCreateSandboxSaga_WaitPortsProcessExit(t *testing.T) {
 
 	err := h.execute(t)
 	require.ErrorContains(t, err, errProcessExited.Error())
+	assert.True(t, cond.IsWorkload(err),
+		"the app exiting is its own failure, and that has to survive the saga's rollback")
+	assert.ErrorIs(t, err, errProcessExited)
+	assert.ErrorContains(t, err, `saga failed: action "wait-ports" failed: sandbox process exited`,
+		"the message callers see is unchanged")
 	assert.Equal(t, 0, h.runtime.diagnoseListeningCalls,
 		"an exited process cannot be auto-routed to a different port")
 	assert.Equal(t, saga.StatusFailed, h.execution(t).Status)
@@ -820,11 +829,43 @@ func TestCreateSandboxSaga_WaitPortAmbiguousFails(t *testing.T) {
 
 	err := h.execute(t)
 	require.Error(t, err)
+	assert.True(t, cond.IsWorkload(err), "the app bound the wrong ports, which is its own configuration")
 
 	exec := h.execution(t)
 	assert.Equal(t, saga.StatusFailed, exec.Status)
 	assert.Equal(t, 1, h.runtime.diagnoseListeningCalls)
 	assert.Equal(t, 1, h.runtime.destroySubCtrsCalls)
+}
+
+func TestCreateSandboxSaga_WaitPortNothingListeningIsWorkload(t *testing.T) {
+	h := newTestHarness(t)
+	// The diagnosis ran and the app bound nothing at all (MIR-1519's case).
+	h.runtime.waitForPortErr = fmt.Errorf("timeout waiting for port 8080")
+	h.runtime.diagnoseOK = true
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+
+	err := h.execute(t)
+	require.ErrorContains(t, err, "port 8080 not reachable")
+	assert.True(t, cond.IsWorkload(err))
+	assert.Equal(t, saga.StatusFailed, h.execution(t).Status)
+}
+
+func TestCreateSandboxSaga_WaitPortTimeoutWithConfiguredPortBoundStaysError(t *testing.T) {
+	h := newTestHarness(t)
+	// The app holds the declared port, yet the wait timed out: a race on our
+	// side, not the app's configuration.
+	h.runtime.waitForPortErr = fmt.Errorf("timeout waiting for port 8080")
+	h.runtime.diagnoseOK = true
+	h.runtime.diagnoseRoutable = []int{8080}
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+
+	err := h.execute(t)
+	require.Error(t, err)
+	assert.False(t, cond.IsWorkload(err))
 }
 
 func TestCreateSandboxSaga_PortWaitTimeoutDefault(t *testing.T) {

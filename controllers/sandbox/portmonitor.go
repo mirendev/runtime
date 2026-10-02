@@ -30,8 +30,9 @@ type PortMonitor struct {
 	cancel context.CancelFunc
 
 	// listPorts enumerates the routable and loopback-only listening ports in a
-	// pid's netns. Defaults to listeningPortsForPID; overridable in tests.
-	listPorts func(pid int) (routable []int, loopback []int)
+	// pid's netns, and reports whether it could read them at all. Defaults to
+	// listeningPortsForPID; overridable in tests.
+	listPorts func(pid int) (routable []int, loopback []int, ok bool)
 }
 
 type monitorTask struct {
@@ -104,7 +105,9 @@ func (pm *PortMonitor) Close() error {
 
 // DiagnoseListening reports the ports a container is listening on inside its
 // netns, split into routable (reachable from the host) and loopback-only sets.
-// ok is false when the container is not being monitored (its pid is unknown).
+// ok is false when the container is not being monitored (its pid is unknown)
+// or its sockets couldn't be read, so an empty result with ok set really
+// means the app listens on nothing.
 // It is used on the port-wait timeout path: when the configured port never
 // bound, this reveals what the app actually listened on so we can route to it
 // or explain the failure.
@@ -120,8 +123,7 @@ func (pm *PortMonitor) DiagnoseListening(containerID string) (routable []int, lo
 	if listPorts == nil {
 		listPorts = listeningPortsForPID
 	}
-	routable, loopback = listPorts(task.pid)
-	return routable, loopback, true
+	return listPorts(task.pid)
 }
 
 func (pm *PortMonitor) resolveIP(ip string) netip.Addr {
@@ -281,10 +283,13 @@ type listenSocket struct {
 // LISTEN state (0A) with its bind address and port. Unlike portListening, which
 // answers "is this one port listening?", this enumerates whatever the process
 // actually bound so we can detect an app that ignored $PORT.
-func listListeningPorts(path string) []listenSocket {
+//
+// ok is false when the file couldn't be opened, which is different from a
+// process listening on nothing.
+func listListeningPorts(path string) (sockets []listenSocket, ok bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 
@@ -293,7 +298,7 @@ func listListeningPorts(path string) []listenSocket {
 	scanner := bufio.NewScanner(f)
 	// Skip header line
 	if !scanner.Scan() {
-		return nil
+		return nil, true
 	}
 
 	for scanner.Scan() {
@@ -322,7 +327,7 @@ func listListeningPorts(path string) []listenSocket {
 		out = append(out, listenSocket{addr: addr, port: int(port)})
 	}
 
-	return out
+	return out, true
 }
 
 // parseHexAddr decodes the hex local address from /proc/net/tcp{,6}. The bytes
@@ -357,14 +362,20 @@ func parseHexAddr(hexAddr string) (netip.Addr, bool) {
 // of pid, splitting them into routable ports (bound on a non-loopback address,
 // reachable from the host) and loopback-only ports (127.0.0.0/8, ::1). A port
 // that listens on any routable address is reported as routable even if it also
-// has a loopback socket. Results are de-duplicated and sorted.
-func listeningPortsForPID(pid int) (routable []int, loopback []int) {
+// has a loopback socket. Results are de-duplicated and sorted. ok is false
+// when the IPv4 table couldn't be read; tcp6 is allowed to be missing, since
+// a host without IPv6 has no such file.
+func listeningPortsForPID(pid int) (routable []int, loopback []int, ok bool) {
 	seenRoutable := map[int]bool{}
 	seenLoopback := map[int]bool{}
 
 	for _, proto := range []string{"tcp", "tcp6"} {
 		path := fmt.Sprintf("/proc/%d/net/%s", pid, proto)
-		for _, s := range listListeningPorts(path) {
+		sockets, read := listListeningPorts(path)
+		if proto == "tcp" {
+			ok = read
+		}
+		for _, s := range sockets {
 			if s.addr.IsValid() && s.addr.IsLoopback() {
 				seenLoopback[s.port] = true
 			} else {
@@ -384,5 +395,5 @@ func listeningPortsForPID(pid int) (routable []int, loopback []int) {
 
 	sort.Ints(routable)
 	sort.Ints(loopback)
-	return routable, loopback
+	return routable, loopback, ok
 }
