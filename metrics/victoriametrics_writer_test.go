@@ -674,3 +674,13 @@ func TestVictoriaMetricsWriter_Transport(t *testing.T) {
 			req.URL.String())
 	})
 }
+
+func TestSendFailureLevel(t *testing.T) {
+	start := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	assert.Equal(t, slog.LevelWarn, sendFailureLevel(start, start.Add(90*time.Second), 100),
+		"a short failure with room in the buffer only delays points")
+	assert.Equal(t, slog.LevelError, sendFailureLevel(start, start.Add(persistentSendFailure), 100),
+		"a failure that outlasts a coordinator restart means the sink is broken")
+	assert.Equal(t, slog.LevelError, sendFailureLevel(start, start.Add(time.Second), maxMetricBufferSize),
+		"a full buffer rejects new writes, so points are being lost")
+}

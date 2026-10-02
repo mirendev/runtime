@@ -277,6 +277,24 @@ func (w *Watcher) closeUpdates() {
 	close(w.updates)
 }
 
+// persistentFailure is how long a watcher may fail before it logs at Error.
+// Every watcher on a runner disconnects together whenever its coordinator
+// restarts, which takes a minute or two, and resumes on its own; that is a
+// warning. A watcher still failing after this long has left its controllers
+// blind, which is an error.
+const persistentFailure = 5 * time.Minute
+
+// connectedLongEnough is how long a watch has to stay up for its end to count
+// as a fresh disconnect rather than another failed attempt.
+const connectedLongEnough = time.Minute
+
+func retryLevel(failingSince, now time.Time) slog.Level {
+	if now.Sub(failingSince) >= persistentFailure {
+		return slog.LevelError
+	}
+	return slog.LevelWarn
+}
+
 // run is the main loop. It maintains the revision cursor, snapshots when needed
 // (initially and after a compaction), and otherwise resumes the watch from the
 // cursor on every reconnect.
@@ -286,6 +304,8 @@ func (w *Watcher) run(ctx context.Context) {
 
 	backoff := w.opts.MinBackoff
 	needSnapshot := true
+	// When the current run of failures started; zero while healthy.
+	var failingSince time.Time
 
 	for {
 		if ctx.Err() != nil {
@@ -298,7 +318,11 @@ func (w *Watcher) run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				w.log.Error("snapshot failed, will retry", "error", err, "backoff", backoff)
+				if failingSince.IsZero() {
+					failingSince = time.Now()
+				}
+				w.log.Log(ctx, retryLevel(failingSince, time.Now()), "snapshot failed, will retry",
+					"error", err, "backoff", backoff, "failing_for", time.Since(failingSince).Round(time.Second))
 				if !w.sleep(ctx, &backoff) {
 					return
 				}
@@ -306,11 +330,18 @@ func (w *Watcher) run(ctx context.Context) {
 			}
 			w.cursor = rev
 			needSnapshot = false
+			failingSince = time.Time{}
 			w.markSynced()
 			backoff = w.opts.MinBackoff
 		}
 
+		watchStarted := time.Now()
 		resnapshot, err := w.watch(ctx)
+		if time.Since(watchStarted) > connectedLongEnough {
+			// The stream was up, so whatever ends it starts a new run of
+			// failures rather than extending an old one.
+			failingSince = time.Time{}
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -324,7 +355,11 @@ func (w *Watcher) run(ctx context.Context) {
 		// before resuming either way so an unexpected run of clean ends can't
 		// become a tight reconnect loop.
 		if err != nil {
-			w.log.Error("watch disconnected, will resume", "error", err, "cursor", w.cursor, "backoff", backoff)
+			if failingSince.IsZero() {
+				failingSince = time.Now()
+			}
+			w.log.Log(ctx, retryLevel(failingSince, time.Now()), "watch disconnected, will resume",
+				"error", err, "cursor", w.cursor, "backoff", backoff, "failing_for", time.Since(failingSince).Round(time.Second))
 		} else {
 			w.log.Info("watch ended cleanly, will resume", "cursor", w.cursor, "backoff", backoff)
 		}

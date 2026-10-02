@@ -2,8 +2,10 @@ package indexwatch
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"miren.dev/runtime/pkg/entity"
 )
@@ -57,5 +59,15 @@ func TestConcurrentSendCloseNoPanic(t *testing.T) {
 	// The channel must end up closed exactly once (a second close would panic).
 	if !w.closed {
 		t.Fatal("closed flag not set after closeUpdates")
+	}
+}
+
+func TestRetryLevelEscalatesPersistentFailures(t *testing.T) {
+	start := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	if got := retryLevel(start, start.Add(90*time.Second)); got != slog.LevelWarn {
+		t.Errorf("a coordinator restart's worth of failure logged at %v, want Warn", got)
+	}
+	if got := retryLevel(start, start.Add(persistentFailure)); got != slog.LevelError {
+		t.Errorf("failing for %v logged at %v, want Error", persistentFailure, got)
 	}
 }
