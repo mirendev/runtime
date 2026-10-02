@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -656,4 +658,16 @@ collectLoop:
 
 	// Verify the ring doesn't contain revision 1 (the "failed" write)
 	assert.False(t, controller.recentWrites.Contains(1), "Failed write should not be recorded in ring")
+}
+
+func TestReconcileFailureLevel(t *testing.T) {
+	appFault := cond.Workload(errors.New("sandbox process exited"))
+	platform := errors.New("etcd unavailable")
+
+	assert.Equal(t, slog.LevelWarn, reconcileFailureLevel(nil, appFault, nil),
+		"the app's own failure, and nothing else went wrong")
+	assert.Equal(t, slog.LevelError, reconcileFailureLevel(nil, appFault, platform),
+		"a failed write is ours even when the handler's error is the app's")
+	assert.Equal(t, slog.LevelError, reconcileFailureLevel(platform, nil, nil))
+	assert.Equal(t, slog.LevelError, reconcileFailureLevel(nil, platform, nil))
 }

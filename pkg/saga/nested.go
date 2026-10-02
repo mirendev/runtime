@@ -173,7 +173,7 @@ func UndoNested(ctx context.Context, executionID string) error {
 		return fmt.Errorf("saga definition %q not found for nested undo", exec.DefinitionName)
 	}
 
-	return parent.runUndo(ctx, def, exec)
+	return parent.runUndo(ctx, def, exec, nil)
 }
 
 // deriveChildID produces a deterministic execution ID from the parent execution,

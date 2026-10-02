@@ -242,7 +242,7 @@ func Wrap(err error) error {
 
 	// Return existing cond errors unchanged
 	switch err.(type) {
-	case ErrNotFound, ErrConflict, ErrCorruption, ErrGeneric, ErrRemote, ErrPanic, ErrClosed, ErrValidationFailure:
+	case ErrNotFound, ErrConflict, ErrCorruption, ErrGeneric, ErrRemote, ErrPanic, ErrClosed, ErrValidationFailure, ErrWorkload:
 		return err
 	}
 
@@ -282,4 +282,35 @@ func ValidationFailure(category, message string) error {
 		Category: category,
 		Message:  message,
 	}
+}
+
+// ErrWorkload marks a failure caused by the workload itself rather than the
+// platform, such as an app that exits before binding its declared port. The
+// platform handled it correctly, so code that logs it along the way should
+// log a warning, not an error: error is for failures we're responsible for,
+// and it's what the error-rate alerts count.
+type ErrWorkload struct {
+	Err error
+}
+
+func (e ErrWorkload) Error() string {
+	return e.Err.Error()
+}
+
+func (e ErrWorkload) Unwrap() error {
+	return e.Err
+}
+
+// Workload marks err as the workload's own failure. A nil err stays nil.
+func Workload(err error) error {
+	if err == nil {
+		return nil
+	}
+	return ErrWorkload{Err: err}
+}
+
+// IsWorkload reports whether anything in err's chain was marked by Workload.
+func IsWorkload(err error) bool {
+	var w ErrWorkload
+	return errors.As(err, &w)
 }
