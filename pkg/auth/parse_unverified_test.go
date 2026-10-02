@@ -17,3 +17,22 @@ func TestParseUnverifiedClaimsProfile(t *testing.T) {
 	assert.Equal(t, "ada@example.com", claims.Email)
 	assert.Equal(t, "Ada Lovelace", claims.Name)
 }
+
+func TestParseUnverifiedOrganizationFormats(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    string
+	}{
+		{`{"sub":"usr-current"}`, ""},
+		{`{"sub":"usr-current","organization_id":null}`, ""},
+		{`{"sub":"svc-current","organization_id":9223372036854775807}`, "9223372036854775807"},
+		{`{"sub":"usr-legacy","organization_id":"org-1"}`, "org-1"},
+	} {
+		t.Run(tc.payload, func(t *testing.T) {
+			payload := base64.RawURLEncoding.EncodeToString([]byte(tc.payload))
+			claims, err := ParseUnverifiedClaims("e30." + payload + ".sig")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, claims.OrganizationID)
+		})
+	}
+}

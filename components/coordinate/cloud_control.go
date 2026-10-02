@@ -140,6 +140,9 @@ func (c *CloudControl) RunCloudUplink(ctx context.Context, ingress *httpingress.
 			RuntimeBuildDate:  build.BuildDate,
 		}),
 	)
+	if c.cloudAuthenticator != nil {
+		c.cloudAuthenticator.RegisterAuthorization(link)
+	}
 	// The welcome repeats the workload identity anchor the status poll's
 	// response used to, so a cluster that no longer polls still learns where
 	// cloud anchors it. Recording is not adopting; see recordIdentityAnchor.

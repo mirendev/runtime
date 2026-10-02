@@ -42,12 +42,41 @@ func NewJWTValidator(cloudURL string, logger *slog.Logger) *JWTValidator {
 // Claims represents the JWT claims from miren.cloud
 type Claims struct {
 	jwt.RegisteredClaims
+	// Cloud service accounts carry a numeric database ID; user tokens omit it.
+	// Older callers may carry a string. This claim is diagnostic, not RBAC scope.
 	OrganizationID string   `json:"organization_id,omitempty"`
 	GroupIDs       []string `json:"group_ids,omitempty"`
 	// Email and Name describe the user at the time cloud minted the token.
 	// Service-account tokens, and user tokens from older clouds, carry neither.
 	Email string `json:"email,omitempty"`
 	Name  string `json:"name,omitempty"`
+}
+
+// UnmarshalJSON preserves the diagnostic string API while accepting cloud's
+// numeric organization claim without losing int64 precision.
+func (c *Claims) UnmarshalJSON(data []byte) error {
+	type claims Claims
+	var decoded struct {
+		*claims
+		OrganizationID json.RawMessage `json:"organization_id"`
+	}
+	decoded.claims = (*claims)(c)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	c.OrganizationID = ""
+	if len(decoded.OrganizationID) == 0 || string(decoded.OrganizationID) == "null" {
+		return nil
+	}
+	if decoded.OrganizationID[0] == '"' {
+		return json.Unmarshal(decoded.OrganizationID, &c.OrganizationID)
+	}
+	var id json.Number
+	if err := json.Unmarshal(decoded.OrganizationID, &id); err != nil {
+		return err
+	}
+	c.OrganizationID = id.String()
+	return nil
 }
 
 // ValidateToken validates a JWT token and returns the claims

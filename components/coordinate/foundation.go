@@ -66,8 +66,9 @@ type Foundation struct {
 	// listener and armed later by managed metrics; nil without a workload issuer.
 	metricsPush *metricspush.Ingest
 
-	authClient        *cloudauth.AuthClient // For status reporting to cloud
-	oidcAuthenticator *oidcauth.OIDCAuthenticator
+	authClient         *cloudauth.AuthClient // For status reporting to cloud
+	cloudAuthenticator *cloudauth.RPCAuthenticator
+	oidcAuthenticator  *oidcauth.OIDCAuthenticator
 
 	netcheckMu        sync.RWMutex
 	netcheckResult    *cloudauth.NetcheckDualStackResult
@@ -587,7 +588,6 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 			return fmt.Errorf("failed to create auth client: %w", err)
 		}
 
-		authConfig.AuthClient = authClient
 		c.authClient = authClient // Store for status reporting
 		c.Log.Info("service account authentication configured",
 			"fingerprint", keyPair.Fingerprint())
@@ -597,6 +597,7 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 			c.Log.Error("failed to create cloud authenticator", "error", err)
 			return err
 		}
+		c.cloudAuthenticator = authenticator
 
 		// Create OIDC authenticator and wrap with composite auth.
 		// EAC is set later after entity store initialization.

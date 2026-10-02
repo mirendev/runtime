@@ -129,14 +129,9 @@ func TestDefaultCloudURL(t *testing.T) {
 		t.Error("expected JWT validator to be initialized with default CloudURL")
 	}
 
-	// Verify RBAC evaluator is created
-	if auth.rbacEval == nil {
-		t.Error("expected RBAC evaluator to be initialized with default CloudURL")
-	}
-
-	// Verify policy fetcher is created
-	if auth.policyFetcher == nil {
-		t.Error("expected policy fetcher to be initialized with default CloudURL")
+	// Authorization waits for the shared uplink, without fetching over HTTP.
+	if auth.authorization == nil {
+		t.Error("expected authorization state to be initialized")
 	}
 }
 

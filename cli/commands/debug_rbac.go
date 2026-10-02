@@ -57,8 +57,7 @@ func DebugRBAC(ctx *Context, opts struct {
 	}
 
 	// Create PolicyFetcher
-	fetcher := cloudauth.NewPolicyFetcher(cloudURL, authClient,
-		cloudauth.WithLogger(ctx.Log))
+	fetcher := cloudauth.NewPolicyFetcher(cloudURL, authClient)
 
 	// Fetch the policy immediately
 	if err := fetcher.Fetch(ctx); err != nil {
@@ -184,8 +183,7 @@ func DebugRBACTest(ctx *Context, opts struct {
 	}
 
 	// Create PolicyFetcher
-	fetcher := cloudauth.NewPolicyFetcher(cloudURL, authClient,
-		cloudauth.WithLogger(ctx.Log))
+	fetcher := cloudauth.NewPolicyFetcher(cloudURL, authClient)
 
 	// Fetch the policy immediately
 	bgCtx := context.Background()

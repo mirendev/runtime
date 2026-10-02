@@ -28,9 +28,10 @@ import (
 //
 // The RBAC grant in the setup is load-bearing evidence, not boilerplate:
 // without it the cluster refuses these calls with its own policy decision,
-// which is only reachable if it authenticated the caller's bearer and read the
-// groups out of it. Cloud never sees that token — it is inside a CBOR frame —
-// so nothing here could be cloud vouching for the traffic it carries.
+// which is only reachable if it authenticated the caller's bearer and resolved
+// the user against its pushed memberships. Cloud never sees that token — it is
+// inside a CBOR frame — so nothing here could be cloud vouching for the traffic
+// it carries.
 func TestRPCViaCloud(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
@@ -48,10 +49,8 @@ func TestRPCViaCloud(t *testing.T) {
 
 	directApps := appNames(t, direct.Stdout)
 
-	// The cluster caches the RBAC policy it fetched at startup and only
-	// re-reads it once a denial tells it something may have changed, so the
-	// grant made a moment ago takes a beat to be visible. Polling waits that
-	// out; it does not paper over a relay that never works.
+	// Wait for the newly granted policy's authorization snapshot to arrive
+	// over the uplink; requests themselves do not refresh authorization state.
 	var relayedApps []string
 	harness.Poll(t, "app list via cloud", 90*time.Second, 3*time.Second, func() (bool, string) {
 		r := m.Run("app", "list", "--format", "json")
@@ -129,9 +128,7 @@ func TestDeployViaCloud(t *testing.T) {
 	m.SetEnv("MIREN_CONFIG", configPath)
 	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
 
-	// The cluster only re-reads its RBAC policy once a denial tells it to, so
-	// the grant made a moment ago needs a call to land first. Deploy is far too
-	// expensive to use as the thing that provokes that, so a cheap read does it.
+	// Wait for the pushed grant before attempting the more expensive deploy.
 	harness.Poll(t, "cloud-routed cluster reachable", 90*time.Second, 3*time.Second, func() (bool, string) {
 		r := m.Run("app", "list", "--format", "json")
 		if !r.Success() {

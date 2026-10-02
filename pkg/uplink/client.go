@@ -14,8 +14,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
-
-	"miren.dev/runtime/pkg/cloudauth"
 )
 
 const (
@@ -59,7 +57,7 @@ const (
 // coordination service with automatic reconnection.
 type Client struct {
 	cloudURL   string
-	authClient *cloudauth.AuthClient
+	authClient TokenSource
 	router     *MessageRouter
 	log        *slog.Logger
 	outbox     chan *Envelope
@@ -137,13 +135,18 @@ func (c *Client) setStatus(status Status) {
 	}
 }
 
+// TokenSource supplies the service-account token used to authenticate the link.
+type TokenSource interface {
+	GetToken(context.Context) (string, error)
+}
+
 // NewClient creates a new WebSocket client.
 //
 // Without WithSession, the client preserves the legacy clock-sync and
 // organization-lookup requests on every connection. With it, those link facts
 // arrive in session.welcome instead. Tenants layer their own handlers,
 // capability offers, and hooks on top.
-func NewClient(cloudURL string, authClient *cloudauth.AuthClient, router *MessageRouter, log *slog.Logger, opts ...ClientOption) *Client {
+func NewClient(cloudURL string, authClient TokenSource, router *MessageRouter, log *slog.Logger, opts ...ClientOption) *Client {
 	c := &Client{
 		cloudURL:        cloudURL,
 		authClient:      authClient,
