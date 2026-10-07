@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -76,7 +77,7 @@ func DeleteWithPools(ctx context.Context, eac *entityserver_v1alpha.EntityAccess
 // DeleteWithPoolsAndWait waits for asynchronous addon teardown during interactive
 // deletion or compensation. GC uses DeleteWithPools and retries on its next sweep.
 func DeleteWithPoolsAndWait(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, addon.CloneCleanupWaitCeiling)
 	defer cancel()
 	for {
 		err := DeleteWithPools(ctx, eac, version, log)

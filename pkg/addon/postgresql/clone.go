@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -322,7 +321,7 @@ PGPASSWORD="$TARGET_PASSWORD" pg_restore -h "$TARGET_HOST" -U "$TARGET_USERNAME"
 			"TARGET_PASSWORD=" + in.SharedPassword, "TARGET_DATABASE=" + in.SharedDatabaseName,
 		},
 		Labels: types.LabelSet("addon", AddonName, "app", in.AppName, "operation", "clone-restore"),
-	}, poolReadyTimeout)
+	}, addon.CloneCopyTimeout)
 	if err != nil {
 		if id != "" {
 			_, cleanupErr := fw.EAC.Delete(context.WithoutCancel(ctx), id.String())
@@ -451,7 +450,7 @@ func undoGenerateDedicatedCloneName(ctx context.Context, _ generateDedicatedClon
 }
 
 const (
-	baseBackupTimeout  = 30 * time.Minute
+	baseBackupTimeout  = addon.CloneCopyTimeout
 	replicationHBALine = "host replication all 0.0.0.0/0 scram-sha-256 # miren-addon-basebackup"
 )
 

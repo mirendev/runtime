@@ -11,6 +11,7 @@ import (
 )
 
 var addonWaitCeiling = addon.WaitCeiling
+var cloneWaitCeiling = addon.CloneWaitCeiling
 
 type expectedAddon = addon.ExpectedAddon
 
@@ -36,5 +37,9 @@ func expectedAddons(ac *appconfig.AppConfig) []expectedAddon {
 }
 
 func (b *Builder) awaitAddons(ctx context.Context, appName string, appID, versionID entity.Id, expected []expectedAddon, status StatusSender) error {
-	return addon.WaitForAssociations(ctx, b.EAS, b.Log, appName, appID, versionID, expected, addonWaitCeiling, status)
+	ceiling := addonWaitCeiling
+	if versionID != "" {
+		ceiling = cloneWaitCeiling
+	}
+	return addon.WaitForAssociations(ctx, b.EAS, b.Log, appName, appID, versionID, expected, ceiling, status)
 }

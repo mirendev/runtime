@@ -47,7 +47,7 @@ type DeploymentServer struct {
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
-var addonWaitCeiling = addon.WaitCeiling
+var addonWaitCeiling = addon.CloneWaitCeiling
 
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string, secrets secret.Resolver) (*DeploymentServer, error) {
 	return &DeploymentServer{

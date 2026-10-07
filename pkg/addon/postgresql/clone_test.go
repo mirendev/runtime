@@ -17,6 +17,15 @@ import (
 	"miren.dev/runtime/pkg/saga"
 )
 
+func TestCloneWaitBudgetsCoverProviderAndRecovery(t *testing.T) {
+	// Dedicated copies also run two bounded execs and two readiness waits.
+	forwardBudget := baseBackupTimeout + 2*poolReadyTimeout + 4*time.Minute
+	require.Greater(t, addon.CloneWaitCeiling, forwardBudget)
+	// Interrupted teardown can finish the current pass, recover forward work,
+	// and run the two-minute replication-rule undo before deleting resources.
+	require.Greater(t, addon.CloneCleanupWaitCeiling, 2*forwardBudget+2*time.Minute)
+}
+
 func TestCloneSagaGraphs(t *testing.T) {
 	fw := &addon.ProviderFramework{}
 	require.NoError(t, registerCloneSharedSaga(saga.NewRegistry(), fw))

@@ -17,6 +17,17 @@ import (
 // their failure to surface, while staying below the thirty-minute deploy lock.
 const WaitCeiling = 10 * time.Minute
 
+// CloneCopyTimeout applies to both physical backups and logical dump/restore.
+const CloneCopyTimeout = 30 * time.Minute
+
+// Preview deploys do not hold the normal deployment lock. Allow a full copy,
+// pool/service readiness, and exec overhead rather than the primary's budget.
+const CloneWaitCeiling = CloneCopyTimeout + 3*WaitCeiling
+
+// Teardown may wait for an in-flight clone and then resume its unfinished saga
+// before undoing it. Both passes need room for copying and rollback.
+const CloneCleanupWaitCeiling = 2 * CloneWaitCeiling
+
 // ExpectedAddon is one addon the deploy declared and therefore requires to
 // be active before the version can serve.
 type ExpectedAddon struct {

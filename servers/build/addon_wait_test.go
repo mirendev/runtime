@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -33,8 +35,13 @@ func newAddonWaitFixture(t *testing.T, ceiling time.Duration) *addonWaitFixture 
 	t.Cleanup(cleanup)
 
 	origCeiling := addonWaitCeiling
+	origCloneCeiling := cloneWaitCeiling
 	addonWaitCeiling = ceiling
-	t.Cleanup(func() { addonWaitCeiling = origCeiling })
+	cloneWaitCeiling = ceiling
+	t.Cleanup(func() {
+		addonWaitCeiling = origCeiling
+		cloneWaitCeiling = origCloneCeiling
+	})
 
 	return &addonWaitFixture{
 		b:     &Builder{Log: testutils.TestLogger(t), EAS: inmem.EAC},
@@ -259,4 +266,41 @@ func TestAwaitAddonClonesFailsOnTeardownAndStalledProvisioning(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAwaitAddonClonesUsesLongerPreviewBudget(t *testing.T) {
+	f := newAddonWaitFixture(t, 20*time.Millisecond)
+	cloneWaitCeiling = time.Second
+	versionID := entity.Id("app_version/slow-preview")
+	id := f.association(t, "slow-clone", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: "provisioning"})
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		f.setStatus(t, id, "active")
+	}()
+	require.NoError(t, f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{}))
+}
+
+func TestAwaitAddonClonesTimeoutAllowsInflightCleanup(t *testing.T) {
+	f := newAddonWaitFixture(t, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	configID, err := f.inmem.Client.Create(ctx, "slow-config", &core_v1alpha.ConfigVersion{})
+	require.NoError(t, err)
+	version := &core_v1alpha.AppVersion{ConfigVersion: configID, EphemeralLabel: "slow-preview"}
+	version.ID, err = f.inmem.Client.Create(ctx, "slow-preview", version)
+	require.NoError(t, err)
+	id := f.association(t, "slow-clone", &addon_v1alpha.AddonAssociation{AppVersion: version.ID, Status: "provisioning"})
+	require.ErrorContains(t, f.b.awaitAddons(ctx, "demo", f.appID, version.ID, expectPostgres, &recordingSender{}), "did not become ready")
+	controllerDone := make(chan error, 1)
+	go func() {
+		// The controller is still copying after the deploy has timed out.
+		time.Sleep(60 * time.Millisecond)
+		controllerDone <- f.inmem.Client.Delete(ctx, id)
+	}()
+	require.NoError(t, appversion.DeleteWithPoolsAndWait(ctx, f.inmem.EAC, version, testutils.TestLogger(t)))
+	require.NoError(t, <-controllerDone)
+	_, err = f.inmem.EAC.Get(ctx, version.ID.String())
+	require.Error(t, err)
+	_, err = f.inmem.EAC.Get(ctx, configID.String())
+	require.Error(t, err)
 }
