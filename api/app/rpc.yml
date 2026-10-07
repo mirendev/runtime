@@ -509,6 +509,10 @@ types:
         type: string
         index: 12
         doc: Short, human-typeable form of the run id; empty for runs recorded before short-ids
+      - name: worker_status
+        type: string
+        index: 13
+        doc: Observed sandbox state; pending is not confirmation of process startup
 
 interfaces:
   - name: Crud
@@ -911,7 +915,30 @@ interfaces:
   # one returns immediately with an id: the run controller does the admitting
   # and the launching, so a caller never blocks on capacity.
   - name: Runs
+    http:
+      prefix: /api/v1
     methods:
+      - name: submitRun
+        doc: Idempotent orchestrator submission; request_id is scoped to the app and must not be reused for different work
+        http:
+          post: /apps/{app}/runs/submit
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+          - name: task
+            type: string
+          - name: command
+            type: list
+            element: string
+          - name: version
+            type: string
+            doc: Required immutable app_version entity ID belonging to this app
+          - name: request_id
+            type: string
+        results:
+          - name: id
+            type: string
       - name: createRun
         parameters:
           - name: app
@@ -937,6 +964,8 @@ interfaces:
             doc: Deterministic name of the sandbox the run will use, for attaching
 
       - name: listRuns
+        http:
+          get: /apps/{app}/runs
         parameters:
           - name: app
             type: string
@@ -951,6 +980,8 @@ interfaces:
             element: RunInfo
 
       - name: getRun
+        http:
+          get: /runs/{id}
         parameters:
           - name: id
             type: string
@@ -959,6 +990,8 @@ interfaces:
             type: RunInfo
 
       - name: cancelRun
+        http:
+          post: /runs/{id}/cancel
         parameters:
           - name: id
             type: string

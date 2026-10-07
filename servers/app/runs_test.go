@@ -1,15 +1,86 @@
 package app
 
 import (
+	"context"
+	"log/slog"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
+	ctx := context.Background()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	app, err := inm.Client.Create(ctx, "dagster", &core_v1alpha.App{})
+	require.NoError(t, err)
+	ver, err := inm.Client.Create(ctx, "pinned", &core_v1alpha.AppVersion{App: app})
+	require.NoError(t, err)
+	r := &AppInfo{Log: slog.Default(), EC: inm.Client}
+	client := &app_v1alpha.RunsClient{Client: rpc.LocalClient(app_v1alpha.AdaptRuns(r))}
+	command := []string{"python", "-m", "dagster", "argument with ' quotes"}
+	// All callers see one identity, even with a simultaneous absent-ID race.
+	var wg sync.WaitGroup
+	ids := make(chan string, 8)
+	for range 8 {
+		wg.Go(func() {
+			ret, err := client.SubmitRun(ctx, "dagster", "", command, ver.String(), "request-1")
+			assert.NoError(t, err)
+			if err == nil {
+				ids <- ret.Id()
+			}
+		})
+	}
+	wg.Wait()
+	close(ids)
+	var id string
+	for other := range ids {
+		if id == "" {
+			id = other
+		}
+		require.Equal(t, id, other)
+	}
+	require.NotEmpty(t, id)
+	sb, err := inm.Client.Create(ctx, "worker", &compute.Sandbox{Status: compute.PENDING})
+	require.NoError(t, err)
+	require.NoError(t, inm.Client.Patch(ctx, entity.Id(id), 0,
+		entity.Ref(run_v1alpha.RunStatusId, run_v1alpha.RunStatusRunningId),
+		entity.Ref(run_v1alpha.RunSandboxId, sb)))
+	ret, err := client.SubmitRun(ctx, "dagster", "", command, ver.String(), "request-1")
+	require.NoError(t, err)
+	require.Equal(t, id, ret.Id())
+	info, err := client.GetRun(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", info.Run().Status(), "retry must not reset state")
+	assert.Equal(t, "pending", info.Run().WorkerStatus(), "admission is not startup")
+	require.NoError(t, inm.Client.Patch(ctx, sb, 0, entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId)))
+	info, err = client.GetRun(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", info.Run().WorkerStatus())
+	_, err = client.SubmitRun(ctx, "dagster", "", []string{"different"}, ver.String(), "request-1")
+	require.ErrorContains(t, err, "different work")
+	otherApp, err := inm.Client.Create(ctx, "other", &core_v1alpha.App{})
+	require.NoError(t, err)
+	foreign, err := inm.Client.Create(ctx, "foreign", &core_v1alpha.AppVersion{App: otherApp})
+	require.NoError(t, err)
+	_, err = client.SubmitRun(ctx, "dagster", "", command, foreign.String(), "request-2")
+	require.ErrorContains(t, err, "does not belong")
+	denied := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "other"}})
+	_, err = client.SubmitRun(denied, "dagster", "", command, ver.String(), "request-1")
+	require.Error(t, err, "deduplication must not bypass app authorization")
+}
 
 // A canceled or timed-out run does produce an observed exit code -- the
 // platform killed the process and the kernel reported something -- but that is

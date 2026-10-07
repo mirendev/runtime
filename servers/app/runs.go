@@ -3,6 +3,8 @@ package app
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	runapi "miren.dev/runtime/api/run"
@@ -73,6 +76,86 @@ func (r *AppInfo) refuseIfAtLimit(ctx context.Context, appID entity.Id, taskName
 }
 
 var _ app_v1alpha.Runs = &AppInfo{}
+
+// SubmitRun queues finite work using a stable, app-scoped execution identity.
+// Unlike interactive invocations, orchestrators can safely retry after a lost
+// response, including after the controller has changed the run's state.
+func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRun) error {
+	a := state.Args()
+	if !rpc.AllowApp(ctx, a.App()) {
+		return rpc.AppAccessError(ctx, a.App())
+	}
+	if a.RequestId() == "" || a.Version() == "" || len(a.Command()) == 0 {
+		return fmt.Errorf("request_id, version and command are required")
+	}
+	var app core_v1alpha.App
+	if err := r.EC.Get(ctx, a.App(), &app); err != nil {
+		return err
+	}
+	var ver core_v1alpha.AppVersion
+	if err := r.EC.GetById(ctx, entity.Id(a.Version()), &ver); err != nil {
+		return err
+	}
+	if ver.App != app.ID {
+		return fmt.Errorf("version does not belong to app")
+	}
+	taskName := a.Task()
+	if taskName == "" {
+		taskName = ConsoleTask
+	}
+	command := resolveCommand(nil, a.Command())
+	// Keep the full digest while leaving room for the sandbox/attempt and
+	// container suffixes under containerd's 76-character identifier limit.
+	digest := sha256.Sum256([]byte(app.ID.String() + "\x00" + a.RequestId()))
+	name := "s-" + base64.RawURLEncoding.EncodeToString(digest[:])
+	id := entity.Id("run/" + name)
+	match := func() error {
+		var existing run_v1alpha.Run
+		if err := r.EC.GetById(ctx, id, &existing); err != nil {
+			return err
+		}
+		if existing.App != app.ID || existing.Version != ver.ID || existing.Task != taskName || existing.Command != command {
+			return fmt.Errorf("request_id already used for different work")
+		}
+		state.Results().SetId(id.String())
+		return nil
+	}
+	// Read before config resolution: an accepted request remains retrievable
+	// even if the app has been redeployed or capacity is currently exhausted.
+	if err := match(); err == nil {
+		return nil
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
+		return err
+	}
+	cfg, err := r.resolveActiveConfig(ctx, ver.ID)
+	if err != nil {
+		return err
+	}
+	task := findTask(cfg, taskName)
+	if task == nil && taskName != ConsoleTask {
+		return fmt.Errorf("app declares no task named %q", taskName)
+	}
+	run := &run_v1alpha.Run{
+		App: app.ID, Version: ver.ID, Task: taskName, Command: command,
+		Trigger: run_v1alpha.MANUAL, Status: run_v1alpha.PENDING, MaxAttempts: 1,
+	}
+	if task != nil {
+		run.Timeout = task.Timeout
+	}
+	// Create, not Put: a concurrent retry must never reset a running or
+	// terminal entity back to pending. The store arbitrates the absent-ID CAS.
+	_, err = r.EC.EAC().Create(ctx, entity.New(
+		entity.DBId, id, (&core_v1alpha.Metadata{Name: name}).Encode, run.Encode,
+	).Attrs())
+	if err != nil {
+		if readErr := match(); readErr == nil {
+			return nil
+		}
+		return err
+	}
+	state.Results().SetId(id.String())
+	return nil
+}
 
 // CreateRun records a run and returns immediately.
 //
@@ -244,7 +327,20 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 		return err
 	}
 
-	state.Results().SetRun(runInfo(run, shortId))
+	info := runInfo(run, shortId)
+	info.SetWorkerStatus("pending")
+	if run.Sandbox != "" {
+		var sb compute.Sandbox
+		if err := r.EC.GetById(ctx, run.Sandbox, &sb); err != nil {
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				return err
+			}
+			info.SetWorkerStatus("missing")
+		} else {
+			info.SetWorkerStatus(strings.TrimPrefix(string(sb.Status), "status."))
+		}
+	}
+	state.Results().SetRun(info)
 	return nil
 }
 
