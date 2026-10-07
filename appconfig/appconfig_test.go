@@ -19,6 +19,7 @@ func TestCloneAddonsConfig(t *testing.T) {
 		{"[addons.miren-postgresql]\nclone = false", nil},
 		{"[addons.miren-postgresql]\nclone_variant = \"shared\"", nil},
 		{"[addons.miren-postgresql]\nclone = true\n[addons.miren-valkey]\nvariant = \"small\"", []string{"miren-postgresql"}},
+		{"[addons.\"miren-postgresql:small\"]\nclone = true\nclone_variant = \"shared\"", []string{"miren-postgresql"}},
 	} {
 		cfg, err := Parse([]byte(tc.config))
 		require.NoError(t, err)

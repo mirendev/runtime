@@ -216,6 +216,7 @@ func TestEphemeralPostgresqlCloneVariantMismatch(t *testing.T) {
 	active := getEphemeralAppVersion(t, m, name)
 	dir := ephemeralCloneConfigDir(t, m, m.ContainerPath(filepath.Join(c.TestdataDir, "bun-postgres-versioned")), "miren-postgresql")
 	m.RunCmd("sed", "-i", `/^clone = true/a clone_variant = "shared"`, dir+"/.miren/app.toml").RequireSuccess(t)
+	m.RunCmd("sed", "-i", `s/^\[addons\.miren-postgresql\]/[addons."miren-postgresql:small"]/`, dir+"/.miren/app.toml").RequireSuccess(t)
 	r := m.Run("deploy", "-a", name, "-d", dir, "--ephemeral", "mismatch", "--ttl", "1h", "-f")
 	if r.Success() {
 		t.Fatal("preview must not silently change PostgreSQL versions to use the shared server")

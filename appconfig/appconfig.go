@@ -340,8 +340,9 @@ type AppConfig struct {
 func (ac *AppConfig) CloneAddons() []string {
 	var names []string
 	if ac != nil {
-		for name, cfg := range ac.Addons {
+		for key, cfg := range ac.Addons {
 			if cfg != nil && cfg.Clone {
+				name, _, _ := strings.Cut(key, ":")
 				names = append(names, name)
 			}
 		}
