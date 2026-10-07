@@ -50,9 +50,7 @@ func TestResolveSyscallFile(t *testing.T) {
 }
 
 func TestSyscallPathsLive(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root tracepoints")
-	}
+	requireHostPIDNamespace(t)
 	for _, phase := range []string{"entry", "completion"} {
 		t.Run(phase, func(t *testing.T) {
 			f, err := os.CreateTemp(t.TempDir(), "fsync-target")
@@ -119,9 +117,7 @@ func TestSyscallPathsLive(t *testing.T) {
 }
 
 func TestSyscallPathsRetainedAfterClose(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root tracepoints")
-	}
+	requireHostPIDNamespace(t)
 	for _, name := range []string{"closed_reused", "mount_boundary", "capture_bounds"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

@@ -15,9 +15,7 @@ import (
 )
 
 func TestProbeSyscallCompletionLive(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root for live raw tracepoints")
-	}
+	requireHostPIDNamespace(t)
 	r, err := ParseMonitorQuery(fmt.Sprintf(`syscalls:completion where pid = %d and syscall = :getpid and duration_ns > 0 { @calls[pid] = {calls: count(), elapsed: sum(duration_ns)} } every 1s { emit @calls; clear @calls } after 3s { stop }`, os.Getpid()))
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +58,7 @@ func TestProbeSyscallCompletionLive(t *testing.T) {
 }
 
 func TestSyscallCompletionLive(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root for live raw tracepoints")
-	}
+	requireHostPIDNamespace(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var mu sync.Mutex

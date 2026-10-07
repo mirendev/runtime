@@ -246,6 +246,31 @@ func TestGenericTracepointKernelCommonPIDValues(t *testing.T) {
 	}
 }
 
+func TestGenericTracepointFieldBounds(t *testing.T) {
+	for _, tc := range []struct {
+		offset, size string
+		valid        bool
+	}{
+		{"4092", "4", true},
+		{"4093", "4", false},
+		{"32768", "4", false},
+		{"9223372036854775806", "4", false},
+		{"24", "2147483648", false},
+		{"24", "9223372036854775807", false},
+	} {
+		t.Run(tc.offset+"/"+tc.size, func(t *testing.T) {
+			format := fmt.Sprintf("field:pid_t pid; offset:%s; size:%s; signed:1;", tc.offset, tc.size)
+			fields, err := parseTracepointFormat(format, []string{"pid"})
+			if (err == nil) != tc.valid {
+				t.Fatalf("fields=%+v error=%v; valid=%v", fields, err, tc.valid)
+			}
+			if tc.valid && (fields[0].offset != 4092 || fields[0].size != 4) {
+				t.Fatalf("unexpected boundary field: %+v", fields[0])
+			}
+		})
+	}
+}
+
 func TestGenericTracepointRejectsUnsupportedFields(t *testing.T) {
 	for _, name := range []string{"comm", "filename", "ptr", "missing", "common_type", "common_flags", "common_preempt_count"} {
 		if _, err := parseTracepointFormat(schedWakeupFormat, []string{name}); err == nil {

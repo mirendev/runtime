@@ -129,9 +129,7 @@ func TestDiskCompletionProgramsLoad(t *testing.T) {
 // keys/byte counts. This distinguishes pointer pairing from dev/sector pairing
 // and verifies partial completions, final deletion, errors, and loss counters.
 func TestDiskCompletionPairingLive(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root raw tracepoints")
-	}
+	requireHostPIDNamespace(t)
 	pending, err := ebpf.NewMap(&ebpf.MapSpec{Type: ebpf.Hash, KeySize: 8, ValueSize: 72, MaxEntries: 16})
 	if err != nil {
 		t.Fatal(err)

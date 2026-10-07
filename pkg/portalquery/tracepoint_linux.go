@@ -22,7 +22,7 @@ import (
 
 type tracepointField struct {
 	offset    int16
-	size      int
+	size      int32
 	signed    bool
 	commonPID bool
 }
@@ -58,8 +58,8 @@ func parseTracepointFormat(format string, names []string) ([]tracepointField, er
 			return nil, fmt.Errorf("duplicate tracepoint field %q", name)
 		}
 		seen[name] = true
-		offset, err1 := strconv.Atoi(m[2])
-		size, err2 := strconv.Atoi(m[3])
+		offset, err1 := strconv.ParseInt(m[2], 10, 16)
+		size, err2 := strconv.ParseInt(m[3], 10, 32)
 		if strings.ContainsAny(declaration, "*[]:") || strings.Contains(declaration, "__data_loc") || strings.Contains(declaration, "__rel_loc") || err1 != nil || err2 != nil ||
 			(size != 1 && size != 2 && size != 4 && size != 8) || offset < 0 || offset+size > 4096 {
 			return nil, fmt.Errorf("unsupported tracepoint field %q", name)
@@ -71,7 +71,7 @@ func parseTracepointFormat(format string, names []string) ([]tracepointField, er
 		if offset < 8 && !commonPID {
 			return nil, fmt.Errorf("tracepoint header field %q is unavailable to eBPF", name)
 		}
-		fields[i] = tracepointField{offset: int16(offset), size: size, signed: m[4] == "1", commonPID: commonPID}
+		fields[i] = tracepointField{offset: int16(offset), size: int32(size), signed: m[4] == "1", commonPID: commonPID}
 	}
 	for _, name := range names {
 		if !seen[name] {
@@ -127,7 +127,7 @@ func tracepointInstructions(fields []tracepointField, eventsFD int, stackState *
 			asm.StoreMem(asm.RFP, offset, asm.R7, asm.DWord),
 			asm.Mov.Reg(asm.R1, asm.RFP),
 			asm.Add.Imm(asm.R1, int32(offset)),
-			asm.Mov.Imm(asm.R2, int32(field.size)),
+			asm.Mov.Imm(asm.R2, field.size),
 			asm.Mov.Reg(asm.R3, asm.R6),
 			asm.Add.Imm(asm.R3, int32(field.offset)),
 			asm.FnProbeReadKernel.Call(),

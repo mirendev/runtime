@@ -12,8 +12,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestSymbolMappingsIgnoreHeapButRetainExecutableIdentity(t *testing.T) {
@@ -143,7 +146,34 @@ func TestUnresolvedMappingMetadataUsesMapRelativeFileOffset(t *testing.T) {
 	}
 }
 
+func requireMatchingProcessELFIdentity(t *testing.T) {
+	t.Helper()
+	address := uint64(reflect.ValueOf(requireMatchingProcessELFIdentity).Pointer())
+	// Overlay filesystems can expose a different inode through procfs than
+	// stat. The resolver deliberately refuses to trust that mismatched ELF.
+	var stat unix.Stat_t
+	if err := unix.Stat("/proc/self/exe", &stat); err != nil {
+		t.Fatal(err)
+	}
+	maps, err := os.ReadFile("/proc/self/maps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(maps), "\n") {
+		var start, end, offset, inode uint64
+		var perms, dev string
+		if n, _ := fmt.Sscanf(line, "%x-%x %s %x %s %d", &start, &end, &perms, &offset, &dev, &inode); n != 6 || address < start || address >= end {
+			continue
+		}
+		if inode != stat.Ino || dev != fmt.Sprintf("%02x:%02x", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev))) {
+			t.Skip("requires matching procfs and filesystem executable identities")
+		}
+		break
+	}
+}
+
 func TestProcessSymbolsResolveCurrentFunction(t *testing.T) {
+	requireMatchingProcessELFIdentity(t)
 	address := uint64(reflect.ValueOf(TestProcessSymbolsResolveCurrentFunction).Pointer())
 	result, err := InspectSymbols(context.Background(), SymbolRequest{Target: "process", PID: uint32(os.Getpid()), Addresses: []uint64{address, 1}})
 	if err != nil {
@@ -159,6 +189,7 @@ func TestProcessSymbolsResolveCurrentFunction(t *testing.T) {
 }
 
 func TestStrippedProcessAddressFallsBackToMappedFile(t *testing.T) {
+	requireMatchingProcessELFIdentity(t)
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		t.Skip("C compiler required for stripped ELF fixture")
@@ -235,6 +266,7 @@ int main(void) {
 }
 
 func TestProcessSymbolsSearchExecutableAndLibrary(t *testing.T) {
+	requireMatchingProcessELFIdentity(t)
 	cc, err := exec.LookPath("cc")
 	if err != nil {
 		t.Skip("C compiler required for PIE/shared-library fixture")

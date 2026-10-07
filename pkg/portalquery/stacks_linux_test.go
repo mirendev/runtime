@@ -35,9 +35,7 @@ func TestDecodeSignedStackCaptureFailure(t *testing.T) {
 }
 
 func TestSyscallRawTracepointStackCapture(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root to verify raw-tracepoint stack helper compatibility")
-	}
+	requireHostPIDNamespace(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	complete := errors.New("captured syscall stacks")
@@ -79,9 +77,7 @@ func TestSyscallRawTracepointStackCapture(t *testing.T) {
 }
 
 func TestGenericTracepointStackCapture(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root for live tracepoint stack capture")
-	}
+	requireHostPIDNamespace(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	complete := errors.New("captured generic tracepoint stacks")

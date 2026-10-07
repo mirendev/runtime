@@ -14,8 +14,13 @@ Local adaptations: external-package test imports and symbol-test function names
 use the Miren import path. The documented rollup example and its parser test use
 the local README and Miren CLI. The kernel loss-counter test filters its pinned
 thread rather than all process threads so runtime syscalls cannot inflate the
-expected count. Upstream lint exceptions are scoped in `.golangci.yml` to
-preserve the copied implementation.
+expected count. PID-sensitive live eBPF tests require the host PID namespace,
+since kernel events use host IDs, and are skipped in nested namespaces such as
+iso. Process-symbol fixtures require matching procfs and filesystem executable
+identities; overlay filesystems that expose different identities are skipped.
+Tracepoint field offsets and sizes are parsed at their destination bit
+widths to reject integer overflow before building eBPF instructions. Upstream
+lint exceptions are scoped in `.golangci.yml` to preserve the other copied code.
 The upstream repository has no `LICENSE` or `NOTICE`
 file at this revision; no upstream licensing terms are inferred by this copy.
 

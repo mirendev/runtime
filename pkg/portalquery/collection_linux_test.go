@@ -17,6 +17,31 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func requireHostPIDNamespace(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("requires root eBPF in the host PID namespace")
+	}
+	// Compare the kernel's actual ID with userspace rather than guessing from
+	// procfs, which can hide ancestor PID namespaces.
+	program, err := ebpf.NewProgram(&ebpf.ProgramSpec{
+		Type: ebpf.Syscall, License: "GPL",
+		Flags:        unix.BPF_F_SLEEPABLE,
+		Instructions: asm.Instructions{asm.FnGetCurrentPidTgid.Call(), asm.RSh.Imm(asm.R0, 32), asm.Return()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer program.Close()
+	pid, err := program.Run(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != uint32(os.Getpid()) {
+		t.Skipf("eBPF reports host PID %d, not this namespace's PID %d", pid, os.Getpid())
+	}
+}
+
 func TestEventProcessNameEnrichment(t *testing.T) {
 	exe, err := os.Readlink("/proc/self/exe")
 	if err != nil {
@@ -75,9 +100,7 @@ func TestUnifiedCgroupMembership(t *testing.T) {
 }
 
 func TestEnrichedEventFiltersLive(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root eBPF")
-	}
+	requireHostPIDNamespace(t)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -121,9 +144,7 @@ func TestEnrichedEventFiltersLive(t *testing.T) {
 }
 
 func TestCollectionKernelLossCounters(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("requires root for forced BPF capture loss")
-	}
+	requireHostPIDNamespace(t)
 	for _, collision := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ring_full", true: "stack_collision"}[collision], func(t *testing.T) {
 			// Keep unrelated runtime threads' getpid calls out of the exact loss count.
