@@ -187,7 +187,7 @@ test-blackbox: ## Run blackbox tests (requires `make dev` running)
 	# Cloud-backed tests are excluded: each stands up a whole cloud on fixed
 	# ports and restarts the server, which interferes with everything after it.
 	# Run them explicitly against a cloud checkout instead.
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
+	go test -tags blackbox -timeout 60m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \

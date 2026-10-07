@@ -450,11 +450,11 @@ jobs:
       # Each shard runs only its assigned subset, built into a -run regex from
       # the matrix. Cloud-backed tests need a cloud checkout and their server
       # restart interferes with subsequent deploys; -skip guards against one
-      # ever slipping into a shard. Per-shard runtime is ~5 min, so 10m
-      # restores fast failure on a genuine hang.
+      # ever slipping into a shard. The clone lifecycle matrix waits for real
+      # preview expiry and GC across four variants and takes about 22 minutes.
       run: |
         RUN=$(echo '${{ toJson(matrix.group.tests) }}' | jq -r 'join("|")')
-        go test -tags blackbox -timeout 10m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$' ./blackbox/...
+        go test -tags blackbox -timeout 35m -v -count=1 -p 1 -run "^(${RUN})$" -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$' ./blackbox/...
 
     - name: Server logs on failure
       if: failure()
