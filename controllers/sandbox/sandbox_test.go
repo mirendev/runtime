@@ -2129,6 +2129,48 @@ func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
 	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
 }
 
+func TestRetirementReasonSurvivesExitAndTeardown(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		sb     compute.Sandbox
+		want   compute.SandboxStopReason
+		noExit bool
+	}{
+		{"intentional", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING, StopReason: compute.RETIRED}, compute.RETIRED, false},
+		{"external-stop", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING}, compute.RETIRED, false},
+		{"cancelled-boot", compute.Sandbox{Status: compute.STOPPED}, compute.RETIRED, false},
+		{"unexpected", compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}, compute.EXITED, false},
+		{"failed-boot", compute.Sandbox{Status: compute.PENDING}, compute.EXITED, false},
+		{"timed-out-boot", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, compute.EXITED, false},
+		{"retired-without-exit", compute.Sandbox{Status: compute.STOPPED}, compute.RETIRED, true},
+		{"timeout-without-exit", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := entitytestutils.NewInMemEntityServer(t)
+			defer cleanup()
+			c := &SandboxController{EAC: server.EAC}
+			id, err := server.Client.Create(ctx, "sandbox", &tc.sb)
+			require.NoError(t, err)
+			if !tc.noExit {
+				exit := compute.Exit{Code: 2, At: time.Now(), Container: "app"}
+				_, err = c.recordExit(ctx, id, exit)
+				require.NoError(t, err)
+			}
+			require.NoError(t, c.retireSandbox(ctx, id))
+			resp, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			var got compute.Sandbox
+			got.Decode(resp.Entity().Entity())
+			require.Equal(t, compute.DEAD, got.Status)
+			require.Equal(t, tc.want, got.StopReason)
+			if !tc.noExit {
+				require.Equal(t, int64(2), got.Exit.Code)
+			}
+		})
+	}
+}
+
 func TestRetireSandboxDoesNotRewriteDead(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := entitytestutils.NewInMemEntityServer(t)

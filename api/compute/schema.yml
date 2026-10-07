@@ -249,6 +249,11 @@ kinds:
       choices: [startup_running, startup_failed]
       doc: Durable distinction between a sandbox that reached RUNNING and one that failed before then
 
+    stop_reason:
+      type: enum
+      choices: [retired, exited]
+      doc: Distinguishes intentional retirement from an unexpected process exit, surviving teardown to DEAD
+
     last_activity:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)

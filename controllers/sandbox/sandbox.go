@@ -2492,6 +2492,12 @@ func (c *SandboxController) recordExit(
 			return nil, nil
 		}
 		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
+		if current.StopReason == "" {
+			stopped.StopReason = compute.EXITED
+			if current.Status == compute.STOPPED && current.Exit.Empty() && current.StartupOutcome != compute.STARTUP_FAILED {
+				stopped.StopReason = compute.RETIRED
+			}
+		}
 		if current.StartupOutcome == "" {
 			switch current.Status {
 			case compute.RUNNING:
@@ -3596,6 +3602,9 @@ func (c *SandboxController) retireSandbox(ctx context.Context, id entity.Id) err
 			return nil
 		}
 		retired := &compute.Sandbox{Status: compute.DEAD}
+		if current.StopReason == "" && current.Status == compute.STOPPED && current.Exit.Empty() && current.StartupOutcome != compute.STARTUP_FAILED {
+			retired.StopReason = compute.RETIRED
+		}
 		if current.StartupOutcome == "" {
 			switch current.Status {
 			case compute.PENDING:
