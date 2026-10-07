@@ -63,3 +63,26 @@ func TestRequestClonesRejectsUnreadySource(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready to clone")
 }
+
+func TestRequestClonesRejectsMissingPrimaryBeforeCreatingAnyClones(t *testing.T) {
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ctx := t.Context()
+	appID, err := es.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	_, err = es.Client.Create(ctx, "primary", &addon_v1alpha.AddonAssociation{
+		App: appID, Addon: "addon/miren-postgresql", Status: "active",
+	})
+	require.NoError(t, err)
+	_, err = es.Client.Create(ctx, "other-preview", &addon_v1alpha.AddonAssociation{
+		App: appID, AppVersion: "app_version/other", Addon: "addon/miren-valkey", Status: "active",
+	})
+	require.NoError(t, err)
+	versionID := entity.Id("app_version/preview")
+	err = RequestClones(ctx, es.EAC, appID, versionID,
+		core_v1alpha.ConfigSpec{CloneAddons: []string{"miren-postgresql", "miren-valkey"}})
+	require.ErrorContains(t, err, `addon "miren-valkey" has no primary association`)
+	clones, err := es.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, versionID))
+	require.NoError(t, err)
+	require.Empty(t, clones.Values(), "validate all requested sources before creating any clone")
+}

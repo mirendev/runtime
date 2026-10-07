@@ -247,9 +247,16 @@ func TestAwaitAddonClonesFailsOnTeardownAndStalledProvisioning(t *testing.T) {
 			f := newAddonWaitFixture(t, 30*time.Millisecond)
 			versionID := entity.Id("app_version/preview")
 			f.association(t, "preview", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: status, ErrorMessage: "copy failed"})
-			err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{})
+			sender := &recordingSender{}
+			err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, sender)
 			want := map[string]string{"provisioning": "did not become ready", "deprovisioning": "being removed", "error": "copy failed"}[status]
 			require.ErrorContains(t, err, want)
+			require.NotContains(t, err.Error(), "addon destroy")
+			if status != "provisioning" {
+				require.Contains(t, err.Error(), "this preview")
+				require.Equal(t, []string{err.Error()}, sender.Errors)
+				require.NotContains(t, sender.Errors[0], "addon destroy")
+			}
 		})
 	}
 }

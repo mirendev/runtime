@@ -2,7 +2,6 @@ package ephemeral
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -30,7 +29,7 @@ func ReplaceExisting(ctx context.Context, eac *entityserver_v1alpha.EntityAccess
 		if v.version.EphemeralLabel == label {
 			log.Info("replacing existing ephemeral version",
 				"label", label, "version_id", v.version.ID)
-			if err := deleteForDeploy(ctx, eac, v.version, log); err != nil {
+			if err := appversion.DeleteWithPoolsAndWait(ctx, eac, v.version, log); err != nil {
 				return fmt.Errorf("failed to delete existing ephemeral version %s: %w", v.version.ID, err)
 			}
 		}
@@ -64,29 +63,11 @@ func EnforceLimit(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCli
 			"label", v.version.EphemeralLabel,
 			"version_id", v.version.ID,
 			"expires_at", v.version.EphemeralExpiresAt)
-		if err := deleteForDeploy(ctx, eac, v.version, log); err != nil {
+		if err := appversion.DeleteWithPoolsAndWait(ctx, eac, v.version, log); err != nil {
 			return fmt.Errorf("failed to evict ephemeral version %s: %w", v.version.ID, err)
 		}
 	}
 	return nil
-}
-
-// Interactive replacement waits for the addon controller; GC instead retains
-// the version and retries on its next sweep.
-func deleteForDeploy(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	for {
-		err := appversion.DeleteWithPools(ctx, eac, version, log)
-		if !errors.Is(err, appversion.ErrAddonCleanupPending) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
 }
 
 // DeleteExpired finds and deletes all ephemeral versions that have passed their

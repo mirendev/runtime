@@ -2,7 +2,6 @@ package deployment
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -1285,9 +1284,25 @@ func TestDeployVersion(t *testing.T) {
 }
 
 func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cloning=%t", enabled), func(t *testing.T) {
-			ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		status  string
+		error   string
+	}{
+		{name: "sharing"},
+		{name: "cloning", enabled: true, status: "active"},
+		{name: "clone error", enabled: true, status: "error", error: "copy failed"},
+		{name: "clone teardown", enabled: true, status: "deprovisioning", error: "being removed from this preview"},
+		{name: "clone timeout", enabled: true, status: "provisioning", error: "did not become ready"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enabled := tc.enabled
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			oldCeiling := addonWaitCeiling
+			addonWaitCeiling = 200 * time.Millisecond
+			t.Cleanup(func() { addonWaitCeiling = oldCeiling })
 			inmem, cleanup := testutils.NewInMemEntityServer(t)
 			defer cleanup()
 			server, err := newTestDeploymentServer(t, slog.Default(), inmem)
@@ -1319,10 +1334,59 @@ func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
 			envVar := &deployment_v1alpha.EnvironmentVariable{}
 			envVar.SetKey("GREETING")
 			envVar.SetValue("preview")
+			controllerDone := make(chan error, 1)
+			if enabled {
+				go func() {
+					ticker := time.NewTicker(5 * time.Millisecond)
+					defer ticker.Stop()
+					updated := false
+					for {
+						associations, err := inmem.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
+						if err != nil {
+							controllerDone <- err
+							return
+						}
+						for _, ent := range associations.Values() {
+							var clone addon_v1alpha.AddonAssociation
+							clone.Decode(ent.Entity())
+							if clone.AppVersion != "" {
+								if !updated {
+									err := inmem.Client.Patch(ctx, clone.ID, 0,
+										entity.String(addon_v1alpha.AddonAssociationStatusId, tc.status),
+										entity.String(addon_v1alpha.AddonAssociationErrorMessageId, "copy failed"))
+									if err != nil || tc.error == "" {
+										controllerDone <- err
+										return
+									}
+									updated = true
+								} else if clone.Status == "deprovisioning" {
+									controllerDone <- inmem.Client.Delete(ctx, clone.ID)
+									return
+								}
+							}
+						}
+						select {
+						case <-ctx.Done():
+							controllerDone <- ctx.Err()
+							return
+						case <-ticker.C:
+						}
+					}
+				}()
+			}
 			result, err := client.DeployVersion(ctx, "policy-app", "cluster1", "source-version", false,
 				[]*deployment_v1alpha.EnvironmentVariable{envVar}, "preview", "1h", "")
 			require.NoError(t, err)
-			require.Empty(t, result.Error())
+			if enabled {
+				require.NoError(t, <-controllerDone)
+			}
+			if tc.error == "" {
+				require.Empty(t, result.Error())
+			} else {
+				require.Contains(t, result.Error(), tc.error)
+				require.NotContains(t, result.Error(), "addon destroy")
+				require.False(t, result.HasDeployment(), "a failed clone must not report a successful preview")
+			}
 			versions, err := inmem.EAC.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, appID))
 			require.NoError(t, err)
 			var preview core_v1alpha.AppVersion
@@ -1332,6 +1396,19 @@ func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
 				if ver.EphemeralLabel == "preview" {
 					preview = ver
 				}
+			}
+			if tc.error != "" {
+				require.Empty(t, preview.ID, "failed preview must be removed without a restart")
+				associations, err := inmem.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
+				require.NoError(t, err)
+				require.Len(t, associations.Values(), 1)
+				var primary addon_v1alpha.AddonAssociation
+				primary.Decode(associations.Values()[0].Entity())
+				require.Empty(t, primary.AppVersion)
+				require.Equal(t, "active", primary.Status)
+				_, err = inmem.EAC.Get(ctx, cvID.String())
+				require.NoError(t, err, "failed preview cleanup must preserve source config")
+				return
 			}
 			require.NotEmpty(t, preview.ID)
 			spec, err := coreutil.ResolveConfig(ctx, inmem.EAC, &preview)

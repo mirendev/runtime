@@ -35,14 +35,29 @@ func RequestClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCl
 	if err != nil {
 		return fmt.Errorf("listing addon clone sources: %w", err)
 	}
+	found := make(map[string]bool, len(names))
+	for _, ent := range sources.Values() {
+		var source addon_v1alpha.AddonAssociation
+		source.Decode(ent.Entity())
+		name := NameFromRef(source.Addon)
+		if source.AppVersion != "" || !slices.Contains(names, name) {
+			continue
+		}
+		found[name] = true
+		if source.Status != "active" {
+			return fmt.Errorf("addon association %s is not ready to clone (status %s)", source.ID, source.Status)
+		}
+	}
+	for _, name := range names {
+		if !found[name] {
+			return fmt.Errorf("addon %q has no primary association to clone; attach it to the app before deploying a preview", name)
+		}
+	}
 	for _, ent := range sources.Values() {
 		var source addon_v1alpha.AddonAssociation
 		source.Decode(ent.Entity())
 		if source.AppVersion != "" || !slices.Contains(names, NameFromRef(source.Addon)) {
 			continue
-		}
-		if source.Status != "active" {
-			return fmt.Errorf("addon association %s is not ready to clone (status %s)", source.ID, source.Status)
 		}
 		if cloned[source.ID] {
 			continue

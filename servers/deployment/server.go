@@ -47,6 +47,8 @@ type DeploymentServer struct {
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
 
+var addonWaitCeiling = addon.WaitCeiling
+
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string, secrets secret.Resolver) (*DeploymentServer, error) {
 	return &DeploymentServer{
 		Log:           log.With("module", "deployment"),
@@ -746,9 +748,17 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			return nil
 		}
 		if len(spec.CloneAddons) > 0 {
-			if err := addon.RequestClones(ctx, d.EAC, appEntity.ID, ephID, *spec); err != nil {
+			err := addon.RequestClones(ctx, d.EAC, appEntity.ID, ephID, *spec)
+			if err == nil {
+				expected := make([]addon.ExpectedAddon, 0, len(spec.CloneAddons))
+				for _, name := range spec.CloneAddons {
+					expected = append(expected, addon.ExpectedAddon{Name: name})
+				}
+				err = addon.WaitForAssociations(ctx, d.EAC, d.Log, appName, appEntity.ID, ephID, expected, addonWaitCeiling, nil)
+			}
+			if err != nil {
 				ephVersion.ID = ephID
-				if cleanupErr := appversion.DeleteWithPools(context.WithoutCancel(ctx), d.EAC, &ephVersion, d.Log); cleanupErr != nil {
+				if cleanupErr := appversion.DeleteWithPoolsAndWait(context.WithoutCancel(ctx), d.EAC, &ephVersion, d.Log); cleanupErr != nil {
 					d.Log.Warn("retaining failed preview for cleanup retry", "version", ephID, "error", cleanupErr)
 				}
 				results.SetError(fmt.Sprintf("failed to clone addons: %v", err))

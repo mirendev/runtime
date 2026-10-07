@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -59,7 +60,7 @@ func (r *recordingSender) SendBuildkit(payload []byte) {
 func (r *recordingSender) SendError(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.Errors = append(r.Errors, format) // tests don't need full Sprintf
+	r.Errors = append(r.Errors, fmt.Sprintf(format, args...))
 }
 
 func (r *recordingSender) SendLog(level, text string, fields ...*build_v1alpha.LogField) {

@@ -1,7 +1,9 @@
 package appversion
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,6 +30,9 @@ func TestDeleteRetainsVersionUntilFailedCloneIsCleanedUp(t *testing.T) {
 	var clone addon_v1alpha.AddonAssociation
 	require.NoError(t, server.Client.GetById(ctx, cloneID, &clone))
 	require.Equal(t, "deprovisioning", clone.Status)
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, DeleteWithPoolsAndWait(waitCtx, server.EAC, version, log), context.DeadlineExceeded)
 	_, err = server.EAC.Get(ctx, version.ID.String())
 	require.NoError(t, err)
 	_, err = server.EAC.Get(ctx, configID.String())

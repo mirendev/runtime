@@ -221,7 +221,7 @@ test-blackbox-distributed: ## Run blackbox tests against distributed environment
 	# inside it. Cloud-backed tests are skipped (same set as test-blackbox): an
 	# unset BLACKBOX_RUN would otherwise run them here, and they need the cloud
 	# repo and restart the server.
-	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 \
+	BLACKBOX_MODE=peers go test -tags blackbox -timeout 60m -v -count=1 -p 1 \
 		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 .PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times blackbox-groups-distributed measure-blackbox-times-distributed

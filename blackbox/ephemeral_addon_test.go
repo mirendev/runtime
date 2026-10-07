@@ -224,6 +224,11 @@ func TestEphemeralPostgresqlCloneVariantMismatch(t *testing.T) {
 	if got := getEphemeralAppVersion(t, m, name); got != active {
 		t.Fatalf("failed preview changed primary version: got %s, want %s", got, active)
 	}
+	r = m.MustRun("app", "versions", "-a", name, "--ephemeral", "--format", "json")
+	var previews []json.RawMessage
+	if err := json.Unmarshal([]byte(r.Stdout), &previews); err != nil || len(previews) != 0 {
+		t.Fatalf("failed preview must be cleaned up without a restart: %s (err=%v)", r.Stdout, err)
+	}
 	harness.WaitForAppReady(t, m, name, time.Minute)
 }
 
@@ -296,17 +301,31 @@ func TestEphemeralUnsupportedAddonFailsClosed(t *testing.T) {
 		return err == nil && code == 200, fmt.Sprintf("status=%d body=%s err=%v", code, body, err)
 	})
 	dir := ephemeralCloneConfigDir(t, m, m.ContainerPath(filepath.Join(c.TestdataDir, "bun-valkey")), "miren-valkey")
-	r := m.Run("deploy", "-a", name, "-d", dir, "-f", "--ephemeral", "unsupported", "--ttl", "1h")
-	if r.Success() {
-		t.Fatal("preview must fail instead of sharing an addon that cannot be cloned")
-	}
-	r.RequireContains(t, "does not support cloning")
-	if got := getEphemeralAppVersion(t, m, name); got != activeVersion {
-		t.Fatalf("failed preview changed active version: got %s, want %s", got, activeVersion)
-	}
-	code, body, err := harness.HTTPGet(m, "unsupported."+host, "/health")
-	if err != nil || code == 200 {
-		t.Fatalf("failed preview must not serve with primary credentials: status=%d body=%s err=%v", code, body, err)
+	m.MustRun("deploy", "-a", name, "-d", dir, "-f")
+	activeVersion = getEphemeralAppVersion(t, m, name)
+	for _, args := range [][]string{{"-d", dir, "-f"}, {"--version", activeVersion}} {
+		r := m.Run(append([]string{"deploy", "-a", name, "--ephemeral", "unsupported", "--ttl", "1h"}, args...)...)
+		if r.Success() {
+			t.Fatal("preview must fail instead of sharing an addon that cannot be cloned")
+		}
+		r.RequireContains(t, "does not support cloning")
+		if r.OutputContains("addon destroy") {
+			t.Fatal("clone failure must not recommend destroying the primary addon")
+		}
+		if got := getEphemeralAppVersion(t, m, name); got != activeVersion {
+			t.Fatalf("failed preview changed active version: got %s, want %s", got, activeVersion)
+		}
+		code, body, err := harness.HTTPGet(m, "unsupported."+host, "/health")
+		if err != nil || code == 200 {
+			t.Fatalf("failed preview must not serve with primary credentials: status=%d body=%s err=%v", code, body, err)
+		}
+		r = m.MustRun("app", "versions", "-a", name, "--ephemeral", "--format", "json")
+		var previews []struct {
+			Label string `json:"ephemeral_label"`
+		}
+		if err := json.Unmarshal([]byte(r.Stdout), &previews); err != nil || len(previews) != 1 || previews[0].Label != "shared" {
+			t.Fatalf("only the successful shared preview should remain: %s (err=%v)", r.Stdout, err)
+		}
 	}
 	harness.Poll(t, "primary addon still usable", 30*time.Second, 2*time.Second, func() (bool, string) {
 		code, body, err := harness.HTTPGet(m, host, "/health")

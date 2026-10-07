@@ -534,7 +534,7 @@ func undoCreateVersion(ctx context.Context, _ createVersionIn, out createVersion
 		}
 		return err
 	}
-	return appversion.DeleteWithPools(ctx, deps.builder.EAS, &version, deps.builder.Log)
+	return appversion.DeleteWithPoolsAndWait(ctx, deps.builder.EAS, &version, deps.builder.Log)
 }
 
 // provisionAddons calls into the addons client to materialize the addons
