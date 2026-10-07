@@ -9,6 +9,7 @@ import (
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/lbdmod"
 	"miren.dev/runtime/pkg/lbdmod/ctrbuild"
+	query "miren.dev/runtime/pkg/portalquery"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -18,8 +19,9 @@ import (
 // this host: a kernel module has to be compiled against the kernel actually
 // running here, and loaded into it.
 type nodeAdminServer struct {
-	log  *slog.Logger
-	deps lbdDeps
+	log         *slog.Logger
+	deps        lbdDeps
+	queryEngine query.Engine
 }
 
 // InstallDiskAccelerator builds and loads the lbd kernel module on this node.
@@ -87,13 +89,13 @@ func (s *nodeAdminServer) InstallDiskAccelerator(ctx context.Context, req *nodea
 func requireCoordinator(ctx context.Context) error {
 	identity := rpc.IdentityFromContext(ctx)
 	if identity == nil || identity.Method == rpc.AuthMethodAnonymous {
-		return fmt.Errorf("installing a kernel module requires the coordinator's certificate, and this caller presented none")
+		return fmt.Errorf("node administration requires the coordinator's certificate, and this caller presented none")
 	}
 	if identity.Method != rpc.AuthMethodCert {
-		return fmt.Errorf("installing a kernel module requires a certificate, got %q", identity.Method)
+		return fmt.Errorf("node administration requires a certificate, got %q", identity.Method)
 	}
 	if identity.Subject != rpc.CoordinatorCertSubject {
-		return fmt.Errorf("only the coordinator may install a kernel module, not %q", identity.Subject)
+		return fmt.Errorf("only the coordinator may administer this node, not %q", identity.Subject)
 	}
 	return nil
 }

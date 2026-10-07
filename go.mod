@@ -30,6 +30,7 @@ require (
 	github.com/docker/cli v27.5.0+incompatible
 	github.com/docker/docker v27.5.1+incompatible
 	github.com/docker/go-connections v0.5.0
+	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/flannel-io/flannel v0.26.7
 	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/go-acme/lego/v4 v4.28.1
@@ -43,6 +44,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.8.0
+	github.com/lab47/peggysue v0.0.0-20250702204832-6234b23da0a5
 	github.com/lucasb-eyer/go-colorful v1.2.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
@@ -64,6 +66,7 @@ require (
 	github.com/prometheus/common v0.66.1
 	github.com/quic-go/quic-go v0.62.0
 	github.com/quic-go/webtransport-go v0.13.0
+	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/pflag v1.0.9
 	github.com/stretchr/testify v1.12.1
@@ -90,22 +93,22 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0
 	go.opentelemetry.io/proto/otlp v1.7.1
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/crypto v0.54.0
-	golang.org/x/net v0.56.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/term v0.45.0
-	golang.org/x/text v0.40.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
+	golang.org/x/text v0.42.0
 	golang.org/x/time v0.15.0
-	golang.org/x/tools v0.47.0
+	golang.org/x/tools v0.49.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog/v2 v2.130.1
 	miren.dev/lbd v0.0.0-20260824210626-be4cec661034
-	miren.dev/mflags v0.0.0-20260913023833-b11db8e63177
+	miren.dev/mflags v0.0.0-20261002160926-2c18f3c616d1
 	modernc.org/sqlite v1.45.0
 	sigs.k8s.io/knftables v0.0.21
 )
@@ -162,6 +165,7 @@ require (
 	github.com/valllabh/ocsf-schema-golang v1.0.3 // indirect
 	github.com/wasilibs/go-re2 v1.3.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
@@ -251,7 +255,6 @@ require (
 	github.com/dnsimple/dnsimple-go/v4 v4.0.0 // indirect
 	github.com/docker/docker-credential-helpers v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
-	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/exoscale/egoscale/v3 v3.1.27 // indirect
 	github.com/fatih/structs v1.1.0 // indirect
@@ -305,7 +308,6 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/kolo/xmlrpc v0.0.0-20220921171641-a4b6fa1dd06b // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/lab47/peggysue v0.0.0-20250702204832-6234b23da0a5
 	github.com/labbsr0x/bindman-dns-webhook v1.0.2 // indirect
 	github.com/labbsr0x/goh v1.0.1 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -367,7 +369,6 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.4.0 // indirect
 	github.com/selectel/domains-go v1.1.0 // indirect
 	github.com/selectel/go-selvpcclient/v4 v4.1.0 // indirect
-	github.com/shirou/gopsutil/v4 v4.26.8
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/smartystreets/go-aws-auth v0.0.0-20180515143844-0c1422d1fdb9 // indirect
 	github.com/softlayer/softlayer-go v1.2.1 // indirect
@@ -404,7 +405,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/ratelimit v0.3.1 // indirect
 	go.uber.org/zap v1.27.0
-	golang.org/x/mod v0.37.0
+	golang.org/x/mod v0.41.0
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6 // indirect
 	google.golang.org/api v0.280.0 // indirect

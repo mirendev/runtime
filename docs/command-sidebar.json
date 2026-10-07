@@ -295,6 +295,7 @@
       "command/runner-operations-list",
       "command/runner-operations-run",
       "command/runner-operations-show",
+      "command/runner-query",
       "command/runner-reissue",
       "command/runner-remove",
       "command/runner-service-status",

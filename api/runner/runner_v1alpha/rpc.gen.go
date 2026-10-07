@@ -1639,6 +1639,94 @@ func (v *RunnerRegistrationInstallDiskAcceleratorResults) UnmarshalJSON(data []b
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationQueryArgsData struct {
+	Runner     *string `cbor:"0,keyasint,omitempty" json:"runner,omitempty"`
+	Expression *string `cbor:"1,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type RunnerRegistrationQueryArgs struct {
+	call rpc.Call
+	data runnerRegistrationQueryArgsData
+}
+
+func (v *RunnerRegistrationQueryArgs) HasRunner() bool {
+	return v.data.Runner != nil
+}
+
+func (v *RunnerRegistrationQueryArgs) Runner() string {
+	if v.data.Runner == nil {
+		return ""
+	}
+	return *v.data.Runner
+}
+
+func (v *RunnerRegistrationQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *RunnerRegistrationQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *RunnerRegistrationQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationQueryResultsData struct {
+	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Data  *[]byte `cbor:"1,keyasint,omitempty" json:"data,omitempty"`
+	Error *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationQueryResults struct {
+	call rpc.Call
+	data runnerRegistrationQueryResultsData
+}
+
+func (v *RunnerRegistrationQueryResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationQueryResults) SetData(data []byte) {
+	x := slices.Clone(data)
+	v.data.Data = &x
+}
+
+func (v *RunnerRegistrationQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -2003,6 +2091,32 @@ func (t *RunnerRegistrationInstallDiskAccelerator) Results() *RunnerRegistration
 	return results
 }
 
+type RunnerRegistrationQuery struct {
+	rpc.Call
+	args    RunnerRegistrationQueryArgs
+	results RunnerRegistrationQueryResults
+}
+
+func (t *RunnerRegistrationQuery) Args() *RunnerRegistrationQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationQuery) Results() *RunnerRegistrationQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -2018,6 +2132,7 @@ type RunnerRegistration interface {
 	DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error
 	IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error
 	InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error
+	Query(ctx context.Context, state *RunnerRegistrationQuery) error
 }
 
 type reexportRunnerRegistration struct {
@@ -2077,6 +2192,10 @@ func (reexportRunnerRegistration) IssueSystemWorkloadToken(ctx context.Context, 
 }
 
 func (reexportRunnerRegistration) InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) Query(ctx context.Context, state *RunnerRegistrationQuery) error {
 	panic("not implemented")
 }
 
@@ -2224,6 +2343,16 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"query", "force"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.InstallDiskAccelerator(ctx, &RunnerRegistrationInstallDiskAccelerator{Call: call})
+			},
+		},
+		{
+			Name:          "Query",
+			InterfaceName: "RunnerRegistration",
+			Index:         14,
+			Public:        false,
+			Params:        []string{"runner", "expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Query(ctx, &RunnerRegistrationQuery{Call: call})
 			},
 		},
 	}
@@ -3041,4 +3170,57 @@ func (v RunnerRegistrationClient) InstallDiskAccelerator(ctx context.Context, qu
 	}
 
 	return &RunnerRegistrationClientInstallDiskAcceleratorResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientQueryResults struct {
+	client rpc.Client
+	data   runnerRegistrationQueryResultsData
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) Query(ctx context.Context, runner string, expression string) (*RunnerRegistrationClientQueryResults, error) {
+	args := RunnerRegistrationQueryArgs{}
+	args.data.Runner = &runner
+	args.data.Expression = &expression
+
+	var ret runnerRegistrationQueryResultsData
+
+	err := v.Call(ctx, "Query", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientQueryResults{client: v.Client, data: ret}, nil
 }

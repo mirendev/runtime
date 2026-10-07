@@ -3,6 +3,7 @@ package nodeadmin_v1alpha
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
@@ -95,6 +96,77 @@ func (v *NodeAdminInstallDiskAcceleratorResults) UnmarshalJSON(data []byte) erro
 	return json.Unmarshal(data, &v.data)
 }
 
+type nodeAdminQueryArgsData struct {
+	Expression *string `cbor:"0,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type NodeAdminQueryArgs struct {
+	call rpc.Call
+	data nodeAdminQueryArgsData
+}
+
+func (v *NodeAdminQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *NodeAdminQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *NodeAdminQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminQueryResultsData struct {
+	Data  *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+	Error *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type NodeAdminQueryResults struct {
+	call rpc.Call
+	data nodeAdminQueryResultsData
+}
+
+func (v *NodeAdminQueryResults) SetData(data []byte) {
+	x := slices.Clone(data)
+	v.data.Data = &x
+}
+
+func (v *NodeAdminQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *NodeAdminQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type NodeAdminInstallDiskAccelerator struct {
 	rpc.Call
 	args    NodeAdminInstallDiskAcceleratorArgs
@@ -121,8 +193,35 @@ func (t *NodeAdminInstallDiskAccelerator) Results() *NodeAdminInstallDiskAcceler
 	return results
 }
 
+type NodeAdminQuery struct {
+	rpc.Call
+	args    NodeAdminQueryArgs
+	results NodeAdminQueryResults
+}
+
+func (t *NodeAdminQuery) Args() *NodeAdminQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *NodeAdminQuery) Results() *NodeAdminQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type NodeAdmin interface {
 	InstallDiskAccelerator(ctx context.Context, state *NodeAdminInstallDiskAccelerator) error
+	Query(ctx context.Context, state *NodeAdminQuery) error
 }
 
 type reexportNodeAdmin struct {
@@ -130,6 +229,10 @@ type reexportNodeAdmin struct {
 }
 
 func (reexportNodeAdmin) InstallDiskAccelerator(ctx context.Context, state *NodeAdminInstallDiskAccelerator) error {
+	panic("not implemented")
+}
+
+func (reexportNodeAdmin) Query(ctx context.Context, state *NodeAdminQuery) error {
 	panic("not implemented")
 }
 
@@ -147,6 +250,16 @@ func AdaptNodeAdmin(t NodeAdmin) *rpc.Interface {
 			Params:        []string{"image", "force"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.InstallDiskAccelerator(ctx, &NodeAdminInstallDiskAccelerator{Call: call})
+			},
+		},
+		{
+			Name:          "query",
+			InterfaceName: "NodeAdmin",
+			Index:         1,
+			Public:        false,
+			Params:        []string{"expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Query(ctx, &NodeAdminQuery{Call: call})
 			},
 		},
 	}
@@ -217,4 +330,45 @@ func (v NodeAdminClient) InstallDiskAccelerator(ctx context.Context, image strin
 	}
 
 	return &NodeAdminClientInstallDiskAcceleratorResults{client: v.Client, data: ret}, nil
+}
+
+type NodeAdminClientQueryResults struct {
+	client rpc.Client
+	data   nodeAdminQueryResultsData
+}
+
+func (v *NodeAdminClientQueryResults) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *NodeAdminClientQueryResults) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v *NodeAdminClientQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *NodeAdminClientQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v NodeAdminClient) Query(ctx context.Context, expression string) (*NodeAdminClientQueryResults, error) {
+	args := NodeAdminQueryArgs{}
+	args.data.Expression = &expression
+
+	var ret nodeAdminQueryResultsData
+
+	err := v.Call(ctx, "query", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeAdminClientQueryResults{client: v.Client, data: ret}, nil
 }

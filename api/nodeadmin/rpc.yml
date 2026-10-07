@@ -36,3 +36,18 @@ interfaces:
           - name: error
             type: string
             doc: Error message if the install failed
+
+      - name: query
+        index: 1
+        doc: Run a Portal monitoring query on this host, bounded to one minute.
+        parameters:
+          - name: expression
+            type: string
+            doc: Portal query DSL (not SQL)
+        results:
+          - name: data
+            type: bytes
+            doc: JSON-encoded Portal snapshot or aggregate
+          - name: error
+            type: string
+            doc: Error message if parsing or execution failed

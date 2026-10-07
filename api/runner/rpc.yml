@@ -363,6 +363,27 @@ interfaces:
             type: string
             doc: Error message if the install failed
 
+      - name: Query
+        index: 14
+        doc: Run a Portal monitoring query on one runner, bounded to one minute.
+        parameters:
+          - name: runner
+            type: string
+            doc: Runner name, ID, or short ID
+          - name: expression
+            type: string
+            doc: Portal query DSL (not SQL), such as memory or process where name = worker*
+        results:
+          - name: name
+            type: string
+            doc: Name of the queried runner
+          - name: data
+            type: bytes
+            doc: JSON-encoded Portal snapshot or aggregate
+          - name: error
+            type: string
+            doc: Error message if lookup, parsing, or execution failed
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

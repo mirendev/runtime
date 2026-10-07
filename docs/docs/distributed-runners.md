@@ -199,6 +199,123 @@ Day-to-day fleet management happens through the `runner` subcommands. A quick to
 
 A typical maintenance window looks like: drain the node, do your work, then uncordon it (or remove it if it's not coming back).
 
+### Experimental host queries
+
+Use [`runner query`](./command/runner-query.md) to send a query through the
+coordinator to a runner by name, ID, or short ID:
+
+<CliCommand context="client">
+```miren
+miren runner query --reference
+miren runner query runner1 memory
+miren runner query runner1 "memory avg(used) over 10s every 1s"
+```
+</CliCommand>
+
+`--reference` prints the full supported query reference entirely offline; it
+needs no runner argument, cluster connection, or credentials. It includes compact
+and selector/action syntax, source filters and fields, sampling semantics, joins,
+rollups, computed columns, stacks, JSON result shapes, limits, and validated
+examples. Built-in field names, types, units, and counter/gauge semantics come
+directly from the vendored engine's metadata. No external reference is needed.
+
+The command prints the Portal snapshot or aggregate as JSON, suitable for piping
+to `jq`. Query failures print an error and exit nonzero without a result on
+stdout. Quote expressions containing spaces so the shell passes them as one
+argument.
+
+The coordinator's `dev.miren.runtime/runner` RPC service exposes
+`RunnerRegistration.Query(runner, expression)`. It resolves a runner by name,
+runner ID, entity ID, or short ID, forwards the expression to that runner, and
+returns its name and a JSON-encoded Portal result in `data` (bytes). Failures
+are reported in `error`; transport failures can also fail the RPC call.
+
+Expressions use Portal's monitoring DSL, not SQL. Use
+`miren runner query --reference` for the complete syntax. For example:
+
+```text
+memory
+network where name = lo
+process where name = worker*
+memory avg(used) over 10s every 1s
+```
+
+Miren adds two containerd-backed sources:
+
+- `sandboxes` is a snapshot of the containers currently known to the runtime,
+  with `sandbox_id`, `container_id`, `app`, `version`, numeric `pid`, `state`,
+  and `cgroup` fields.
+- `sandbox_events` is an event/aggregation-only source with `sandbox_id`,
+  `container_id`, `app`, `version`, `action` (`start`, `exit`, or `oom`), numeric
+  `pid`, and numeric `exit_status` fields.
+
+Inventory has one row per labeled Miren container, including sandbox pause
+containers. `state` is the containerd task state, or `no_task` when no task
+exists. Snapshot filters support equality and membership, not numeric
+inequalities or sampled aggregation. Event `pid` is present on starts/exits;
+`exit_status` is present only on exits. Exec-process exits are excluded.
+App names are best-effort enrichment from version metadata and may be empty.
+Events whose container metadata has already disappeared cannot be attributed
+and are omitted. These sources never return container environment variables.
+
+These sources reflect containerd runtime truth, not application readiness.
+Snapshots describe the current state and event aggregations cover only their
+current query window; neither source is historical storage. `runner query` is a
+finite request/response command, so snapshots and bounded aggregates are
+supported, but unbounded event streaming is not.
+
+Use inventory correlation to discover an app's cgroups and measure its disk I/O
+in a **single query**, without a separate client-side cgroup lookup:
+
+```bash
+miren runner query runner1 'cgroups using (sandboxes where app = "my-app" and state = running) on path = cgroup where result.format = rows rate(io.write_bytes), rate(io.write_ios) over 10s every 1s by inventory.app'
+```
+
+The result contains app-total bytes/second and operations/second in
+`aggregation.rows`, with values aligned to `columns`. Remove the aggregate
+suffix to inspect lifetime counters: correlated snapshots use a flat `data`
+array with literal keys such as `io.write_bytes` and `inventory.app`, not a
+`cgroups` array. Selector/action blocks support the same `using (...) on ...`
+clause; `--reference` includes the full syntax and examples.
+
+:::warning[Inventory attribution is frozen for the query]
+Inventory is resolved once per selector; new sandboxes are not discovered during
+the window. Missing or recreated cgroups need fresh counter baselines. Identical
+inventory rows deduplicate, while ambiguous owners and overlapping parent/child
+cgroups fail rather than double-counting I/O. Choose disjoint workload cgroups.
+:::
+
+:::warning[Queries inspect the runner host]
+Queries run with the runner daemon's host visibility and privileges, not inside
+an app sandbox. The coordinator applies its normal RPC authentication and
+authorization; the runner accepts host queries only from the coordinator's
+cluster certificate. eBPF-backed sources require kernel support and appropriate
+host privileges.
+:::
+
+Using the generated Go client with an authenticated coordinator connection:
+
+```go
+cl, err := state.Connect(coordinatorAddress, rpc.ServiceRunner)
+if err != nil {
+    return err
+}
+defer cl.Close()
+
+result, err := runner_v1alpha.NewRunnerRegistrationClient(cl).Query(ctx, "runner1", "memory")
+if err != nil {
+    return err
+}
+if result.Error() != "" {
+    return fmt.Errorf("host query failed: %s", result.Error())
+}
+// result.Data() contains Portal's JSON snapshot or aggregate.
+```
+
+Execution has a one-minute deadline and also respects caller
+cancellation. This is a single-runner, request/response API, not a streaming or
+cluster-wide query service. Both coordinator and runner must support this RPC.
+
 :::warning[Upgrading to the internal-only registry]
 When upgrading from a release that serves the registry on the coordinator's public address to one that serves it only over WireGuard, image pulls can briefly fail. Miren Cloud-managed upgrades update the coordinator first, then restart runners one at a time; each runner resumes pulling images after its upgrade. For manual upgrades, upgrade runner binaries first while the old coordinator still serves the registry, then upgrade the coordinator and restart the runners again so they learn its internal address.
 :::
