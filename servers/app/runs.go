@@ -4,13 +4,14 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/mr-tron/base58"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -88,6 +89,9 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 	if a.RequestId() == "" || a.Version() == "" || len(a.Command()) == 0 {
 		return fmt.Errorf("request_id, version and command are required")
 	}
+	if a.Task() == "" || a.Task() == ConsoleTask {
+		return fmt.Errorf("an explicit non-console task is required for orchestrator submission")
+	}
 	var app core_v1alpha.App
 	if err := r.EC.Get(ctx, a.App(), &app); err != nil {
 		return err
@@ -100,14 +104,12 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 		return fmt.Errorf("version does not belong to app")
 	}
 	taskName := a.Task()
-	if taskName == "" {
-		taskName = ConsoleTask
-	}
 	command := resolveCommand(nil, a.Command())
 	// Keep the full digest while leaving room for the sandbox/attempt and
 	// container suffixes under containerd's 76-character identifier limit.
+	// Base58 avoids adjacent separators rejected by containerd.
 	digest := sha256.Sum256([]byte(app.ID.String() + "\x00" + a.RequestId()))
-	name := "s-" + base64.RawURLEncoding.EncodeToString(digest[:])
+	name := "s-" + base58.Encode(digest[:])
 	id := entity.Id("run/" + name)
 	match := func() error {
 		var existing run_v1alpha.Run
@@ -132,15 +134,13 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 		return err
 	}
 	task := findTask(cfg, taskName)
-	if task == nil && taskName != ConsoleTask {
+	if task == nil {
 		return fmt.Errorf("app declares no task named %q", taskName)
 	}
 	run := &run_v1alpha.Run{
 		App: app.ID, Version: ver.ID, Task: taskName, Command: command,
 		Trigger: run_v1alpha.MANUAL, Status: run_v1alpha.PENDING, MaxAttempts: 1,
-	}
-	if task != nil {
-		run.Timeout = task.Timeout
+		Timeout: task.Timeout,
 	}
 	// Create, not Put: a concurrent retry must never reset a running or
 	// terminal entity back to pending. The store arbitrates the absent-ID CAS.
@@ -329,6 +329,9 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 
 	info := runInfo(run, shortId)
 	info.SetWorkerStatus("pending")
+	if isRunTerminal(run.Status) {
+		info.SetWorkerStatus("none")
+	}
 	if run.Sandbox != "" {
 		var sb compute.Sandbox
 		if err := r.EC.GetById(ctx, run.Sandbox, &sb); err != nil {

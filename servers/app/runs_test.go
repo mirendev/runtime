@@ -2,18 +2,22 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/containerd/containerd/v2/pkg/identifiers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -26,7 +30,10 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	t.Cleanup(cleanup)
 	app, err := inm.Client.Create(ctx, "dagster", &core_v1alpha.App{})
 	require.NoError(t, err)
-	ver, err := inm.Client.Create(ctx, "pinned", &core_v1alpha.AppVersion{App: app})
+	cfg, err := inm.Client.Create(ctx, "worker-config", &core_v1alpha.ConfigVersion{App: app,
+		Spec: core_v1alpha.ConfigSpec{Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "dagster"}}}})
+	require.NoError(t, err)
+	ver, err := inm.Client.Create(ctx, "pinned", &core_v1alpha.AppVersion{App: app, ConfigVersion: cfg})
 	require.NoError(t, err)
 	r := &AppInfo{Log: slog.Default(), EC: inm.Client}
 	client := &app_v1alpha.RunsClient{Client: rpc.LocalClient(app_v1alpha.AdaptRuns(r))}
@@ -36,7 +43,7 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	ids := make(chan string, 8)
 	for range 8 {
 		wg.Go(func() {
-			ret, err := client.SubmitRun(ctx, "dagster", "", command, ver.String(), "request-1")
+			ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), "request-1")
 			assert.NoError(t, err)
 			if err == nil {
 				ids <- ret.Id()
@@ -58,7 +65,7 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	require.NoError(t, inm.Client.Patch(ctx, entity.Id(id), 0,
 		entity.Ref(run_v1alpha.RunStatusId, run_v1alpha.RunStatusRunningId),
 		entity.Ref(run_v1alpha.RunSandboxId, sb)))
-	ret, err := client.SubmitRun(ctx, "dagster", "", command, ver.String(), "request-1")
+	ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), "request-1")
 	require.NoError(t, err)
 	require.Equal(t, id, ret.Id())
 	info, err := client.GetRun(ctx, id)
@@ -69,17 +76,36 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	info, err = client.GetRun(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, "running", info.Run().WorkerStatus())
-	_, err = client.SubmitRun(ctx, "dagster", "", []string{"different"}, ver.String(), "request-1")
+	_, err = client.SubmitRun(ctx, "dagster", "dagster", []string{"different"}, ver.String(), "request-1")
 	require.ErrorContains(t, err, "different work")
 	otherApp, err := inm.Client.Create(ctx, "other", &core_v1alpha.App{})
 	require.NoError(t, err)
 	foreign, err := inm.Client.Create(ctx, "foreign", &core_v1alpha.AppVersion{App: otherApp})
 	require.NoError(t, err)
-	_, err = client.SubmitRun(ctx, "dagster", "", command, foreign.String(), "request-2")
+	_, err = client.SubmitRun(ctx, "dagster", "dagster", command, foreign.String(), "request-2")
 	require.ErrorContains(t, err, "does not belong")
 	denied := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "other"}})
-	_, err = client.SubmitRun(denied, "dagster", "", command, ver.String(), "request-1")
+	_, err = client.SubmitRun(denied, "dagster", "dagster", command, ver.String(), "request-1")
 	require.Error(t, err, "deduplication must not bypass app authorization")
+	for _, task := range []string{"", "console", "undeclared"} {
+		_, err = client.SubmitRun(ctx, "dagster", task, command, ver.String(), "invalid-task")
+		require.Error(t, err)
+	}
+	// Exercise the submitted identity, not a separately implemented encoding.
+	// Base64url used to produce leading or adjacent separators for some keys.
+	for i := range 256 {
+		ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), fmt.Sprintf("key-%d", i))
+		require.NoError(t, err)
+		sandbox := runapi.SandboxName(entity.Id(ret.Id()), 1)
+		prefix := "sandbox." + strings.TrimPrefix(sandbox.String(), "sandbox/")
+		require.NoError(t, identifiers.Validate(prefix+"_pause"))
+		require.NoError(t, identifiers.Validate(prefix+"-dagster"))
+	}
+	terminal, err := inm.Client.Create(ctx, "never-started", &run_v1alpha.Run{App: app, Status: run_v1alpha.CANCELED})
+	require.NoError(t, err)
+	info, err = client.GetRun(ctx, terminal.String())
+	require.NoError(t, err)
+	assert.Equal(t, "none", info.Run().WorkerStatus())
 }
 
 // A canceled or timed-out run does produce an observed exit code -- the
