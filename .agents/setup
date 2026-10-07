@@ -26,6 +26,22 @@ if ((${#missing_packages[@]})); then
 	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing_packages[@]}"
 fi
 
+step "Starting Docker"
+# The setup process cannot acquire the docker group added by docker.io, but orb
+# users already belong to the root group.
+sudo install -d -m 0755 /etc/systemd/system/docker.socket.d
+printf '[Socket]\nSocketGroup=root\n' |
+	sudo tee /etc/systemd/system/docker.socket.d/override.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now docker.socket docker.service
+for _ in {1..30}; do
+	if docker info >/dev/null 2>&1; then
+		break
+	fi
+	sleep 1
+done
+docker info >/dev/null
+
 step "Installing Go ${GO_VERSION}"
 if [[ "$(/usr/local/go/bin/go version 2>/dev/null || true)" != "go version go${GO_VERSION} "* ]]; then
 	case "$(uname -m)" in

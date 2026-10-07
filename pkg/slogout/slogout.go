@@ -14,6 +14,8 @@ import (
 	"sync"
 
 	"github.com/containerd/containerd/v2/pkg/cio"
+
+	"miren.dev/runtime/pkg/logcount"
 )
 
 // LoggerOpts provides options for configuring log processing behavior
@@ -24,6 +26,14 @@ type LoggerOpts struct {
 	ParseJSON bool
 	// ParseKeyValue indicates whether to parse each line as key=value pairs
 	ParseKeyValue bool
+	// ParseVictoria indicates whether to parse each line in the tab-separated
+	// format VictoriaMetrics components log in by default
+	ParseVictoria bool
+
+	// Source is the child process this output comes from. Its lines are
+	// counted under that name and at their own level, even when ClampLevel
+	// prints them lower. SourceMiren, the zero value, counts them as miren's.
+	Source logcount.Source
 
 	ClampLevel bool       // If true, will clamp log levels to MaxLevel
 	MaxLevel   slog.Level // Maximum log level to process (default: Info)
@@ -55,6 +65,23 @@ func WithKeyValueParsing() LoggerOption {
 	}
 }
 
+// WithVictoriaParsing enables parsing of the VictoriaMetrics log format
+// (timestamp, level, caller and message separated by tabs), used by
+// vmagent, victoria-metrics and victoria-logs.
+func WithVictoriaParsing() LoggerOption {
+	return func(opts *LoggerOpts) {
+		opts.ParseVictoria = true
+	}
+}
+
+// WithSource names the child process whose output this is, for log line
+// counting. WithLogger and AttachLogger set it from their module argument.
+func WithSource(name string) LoggerOption {
+	return func(opts *LoggerOpts) {
+		opts.Source = logcount.SourceFor(name)
+	}
+}
+
 // WithMaxLevel sets the maximum log level to process
 func WithMaxLevel(level slog.Level) LoggerOption {
 	return func(opts *LoggerOpts) {
@@ -71,6 +98,10 @@ type logWriter struct {
 	opts   LoggerOpts
 	buf    []byte
 	mu     sync.Mutex
+
+	// relayCtx caches one counting context per child level, so a relayed
+	// line costs no allocation. Guarded by mu.
+	relayCtx map[slog.Level]context.Context
 }
 
 // newLogWriter creates a new logWriter that routes output to slog.Logger
@@ -150,10 +181,39 @@ func (w *logWriter) processLine(line string) {
 		w.processJSONLine(line)
 	case w.opts.ParseKeyValue:
 		w.processKeyValueLine(line)
+	case w.opts.ParseVictoria:
+		w.processVictoriaLine(line)
 	default:
-		// Log as plain text
-		w.logger.Log(context.TODO(), w.level, line)
+		w.emit(w.level, false, line)
 	}
+}
+
+// emit logs one line that the child wrote at level. With clamp set and
+// ClampLevel configured, a level above MaxLevel is printed at MaxLevel and
+// the child's own level is kept in an orig-level attribute. Either way the
+// line is counted at the child's level.
+func (w *logWriter) emit(level slog.Level, clamp bool, msg string, attrs ...slog.Attr) {
+	ctx := w.countContext(level)
+	if clamp && w.opts.ClampLevel && level > w.opts.MaxLevel {
+		attrs = append(attrs, slog.String("orig-level", level.String()))
+		level = w.opts.MaxLevel
+	}
+	w.logger.LogAttrs(ctx, level, msg, attrs...)
+}
+
+func (w *logWriter) countContext(level slog.Level) context.Context {
+	if w.opts.Source == logcount.SourceMiren {
+		return context.TODO()
+	}
+	if ctx, ok := w.relayCtx[level]; ok {
+		return ctx
+	}
+	if w.relayCtx == nil {
+		w.relayCtx = make(map[slog.Level]context.Context)
+	}
+	ctx := logcount.Relayed(context.TODO(), w.opts.Source, level)
+	w.relayCtx[level] = ctx
+	return ctx
 }
 
 var jsonIgnoreKeys = map[string]struct{}{
@@ -169,8 +229,7 @@ func (w *logWriter) processJSONLine(line string) {
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(line), &jsonData); err != nil {
 		// If JSON parsing fails, log as plain text
-		w.logger.Log(context.TODO(), w.level, line,
-			"json_parse_error", err.Error())
+		w.emit(w.level, false, line, slog.String("json_parse_error", err.Error()))
 		return
 	}
 
@@ -184,11 +243,6 @@ func (w *logWriter) processJSONLine(line string) {
 
 	// Build attributes from JSON data, excluding 'ts' and 'level'
 	var attrs []slog.Attr
-
-	if w.opts.ClampLevel && level > w.opts.MaxLevel {
-		level = w.opts.MaxLevel // Respect maximum log level
-		attrs = append(attrs, slog.String("orig-level", level.String()))
-	}
 
 	for key, value := range jsonData {
 		if _, ignore := jsonIgnoreKeys[key]; ignore {
@@ -216,18 +270,18 @@ func (w *logWriter) processJSONLine(line string) {
 		message = line // Use full JSON line as message
 	}
 
-	w.logger.LogAttrs(context.TODO(), level, message, attrs...)
+	w.emit(level, true, message, attrs...)
 }
 
 // keyValuePattern matches key=value pairs, handling quoted values
-var keyValuePattern = regexp.MustCompile(`(\w+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
+var keyValuePattern = regexp.MustCompile(`([\w.-]+)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 
 // processKeyValueLine parses a line containing key=value pairs
 func (w *logWriter) processKeyValueLine(line string) {
 	matches := keyValuePattern.FindAllStringSubmatch(line, -1)
 	if len(matches) == 0 {
 		// No key=value pairs found, log as plain text
-		w.logger.Log(context.TODO(), w.level, line)
+		w.emit(w.level, false, line)
 		return
 	}
 
@@ -266,12 +320,19 @@ func (w *logWriter) processKeyValueLine(line string) {
 		message = line // Use the full line as message if no msg key found
 	}
 
-	if level > w.opts.MaxLevel && w.opts.ClampLevel {
-		level = w.opts.MaxLevel // Respect maximum log level
-		attrs = append(attrs, slog.String("orig-level", level.String()))
-	}
+	w.emit(level, true, message, attrs...)
+}
 
-	w.logger.LogAttrs(context.TODO(), level, message, attrs...)
+// processVictoriaLine parses a line in the VictoriaMetrics default format:
+// timestamp, level, caller and message, separated by tabs. The timestamp is
+// dropped because the logger stamps its own.
+func (w *logWriter) processVictoriaLine(line string) {
+	parts := strings.SplitN(line, "\t", 4)
+	if len(parts) != 4 {
+		w.emit(w.level, false, line)
+		return
+	}
+	w.emit(parseLogLevel(parts[1]), true, parts[3], slog.String("caller", parts[2]))
 }
 
 // parseLogLevel converts a string level to slog.Level
@@ -283,27 +344,37 @@ func parseLogLevel(levelStr string) slog.Level {
 		return slog.LevelInfo
 	case "warn", "warning":
 		return slog.LevelWarn
-	case "error":
+	case "error", "dpanic", "panic", "fatal":
 		return slog.LevelError
 	default:
 		return slog.LevelInfo // Default fallback
 	}
 }
 
-// WithLogger creates a cio.Creator that routes container output through slog.Logger
-// instead of the default stdio. The module parameter is used to tag log entries
-// with the source module (e.g., "etcd").
-func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Creator {
-	opts := LoggerOpts{}
+func loggerStreams(logger *slog.Logger, module string, options ...LoggerOption) cio.Opt {
+	opts := LoggerOpts{Source: logcount.SourceFor(module)}
 	for _, option := range options {
 		option(&opts)
 	}
 
-	return cio.NewCreator(cio.WithStreams(
+	return cio.WithStreams(
 		nil, // stdin - not used
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
 		newLogWriter(logger.With("module", module), slog.LevelInfo, opts),
-	))
+	)
+}
+
+// WithLogger creates a cio.Creator that routes container output through slog.Logger
+// instead of the default stdio. The module parameter is used to tag log entries
+// with the source module (e.g., "etcd").
+func WithLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Creator {
+	return cio.NewCreator(loggerStreams(logger, module, options...))
+}
+
+// AttachLogger creates a cio.Attach that reconnects an existing task's output
+// FIFOs to slog.Logger.
+func AttachLogger(logger *slog.Logger, module string, options ...LoggerOption) cio.Attach {
+	return cio.NewAttach(loggerStreams(logger, module, options...))
 }
 
 // NewWriter creates an io.WriteCloser that can be used as cmd.Stdout/cmd.Stderr

@@ -34,12 +34,12 @@ func buildkitInputs(options StartOptions) buildkitBootInputs {
 	return buildkitBootInputs{config: options.Config.Buildkit, dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *buildkitBoot {
+func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput], tracing boot.Output[tracingBootOutput]) *buildkitBoot {
 	b := &buildkitBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
 	switch {
 	case inputs.config.GetStartEmbedded():
-		b.component, b.output = boot.Provide4("buildkit", containerd, registryHostMapping, network, observability, b.startEmbedded, stop)
+		b.component, b.output = boot.Provide5("buildkit", containerd, registryHostMapping, network, observability, tracing, b.startEmbedded, stop)
 	case inputs.config.GetSocketPath() != "":
 		b.component, b.output = boot.Provide1("buildkit", observability, b.start, stop)
 	default:
@@ -64,7 +64,7 @@ func (b *buildkitBoot) startDisabled(context.Context) (buildkitBootOutput, error
 	return buildkitBootOutput{}, nil
 }
 
-func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, network networkBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
+func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput, hostMapping registryHostMappingBootOutput, network networkBootOutput, observability observabilityBootOutput, tracing tracingBootOutput) (buildkitBootOutput, error) {
 	b.observability = observability
 	log := observability.log
 	log.Info("starting embedded buildkit daemon", "socket-dir", b.inputs.config.GetSocketDir())
@@ -97,11 +97,28 @@ func (b *buildkitBoot) startEmbedded(ctx context.Context, containerd containerdB
 		GCKeepDuration: int64(gcDuration.Seconds()),
 		RegistryHost:   ocireg.Host,
 		DNSNameservers: dnsNameservers,
+		Traces:         buildkitTraces(tracing),
 	}); err != nil {
 		return buildkitBootOutput{}, err
 	}
 	log.Info("embedded buildkit started", "socket-path", b.result.component.SocketPath())
 	return b.result, nil
+}
+
+// buildkitTraces decides where buildkitd's spans go from where the server's go.
+// When traces need a workload identity token, buildkitd exports through the
+// server's loopback relay, since it cannot refresh a token itself.
+func buildkitTraces(tracing tracingBootOutput) buildkit.TracesExport {
+	switch {
+	case tracing.destination == nil:
+		return buildkit.TracesExport{}
+	case tracing.destination.Token == nil:
+		return buildkit.TracesExport{Endpoint: tracing.destination.Endpoint}
+	case tracing.relayURL != "":
+		return buildkit.TracesExport{Endpoint: tracing.relayURL, Relayed: true}
+	default:
+		return buildkit.TracesExport{Disabled: true}
+	}
 }
 
 func buildkitEnabled(config serverconfig.BuildkitConfig) bool {

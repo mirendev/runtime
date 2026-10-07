@@ -16,7 +16,7 @@ miren auth ci add [flags]
 
 ## Flags
 
-- `--allowed-events` — Comma-separated event names to allow (default: push,workflow_dispatch)
+- `--allowed-events` — Comma-separated event names to allow (default: push,workflow_dispatch,pull_request)
 - `--allowed-refs` — Glob pattern for allowed git refs
 - `--description` — Human-readable description of this binding
 - `--github` — GitHub owner/repo shorthand (sets issuer, provider, and repository claim conditions)

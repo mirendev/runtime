@@ -127,6 +127,7 @@
       "command/debug-ctr-nuke",
       "command/debug-deploy-events",
       "command/debug-disk",
+      "command/debug-disk-backup",
       "command/debug-disk-create",
       "command/debug-disk-delete",
       "command/debug-disk-lease",
@@ -135,8 +136,11 @@
       "command/debug-disk-lease-release",
       "command/debug-disk-lease-status",
       "command/debug-disk-list",
+      "command/debug-disk-list-deleted",
       "command/debug-disk-mounts",
+      "command/debug-disk-restore",
       "command/debug-disk-status",
+      "command/debug-disk-undelete",
       "command/debug-entity",
       "command/debug-entity-create",
       "command/debug-entity-delete",
@@ -156,6 +160,7 @@
       "command/debug-rbac-test",
       "command/debug-reindex",
       "command/debug-saga",
+      "command/debug-saga-abandon",
       "command/debug-saga-list",
       "command/debug-saga-show",
       "command/debug-test",
@@ -171,7 +176,12 @@
       "id": "command/deploy"
     },
     "items": [
-      "command/deploy-cancel"
+      "command/deploy-cancel",
+      "command/deploy-target",
+      "command/deploy-target-add",
+      "command/deploy-target-list",
+      "command/deploy-target-remove",
+      "command/deploy-target-set-default"
     ]
   },
   {
@@ -183,26 +193,17 @@
       "id": "command/disk"
     },
     "items": [
+      "command/disk-accelerator",
+      "command/disk-accelerator-install",
+      "command/disk-accelerator-status",
+      "command/disk-accelerator-uninstall",
       "command/disk-backup",
       "command/disk-list-deleted",
       "command/disk-restore",
       "command/disk-undelete"
     ]
   },
-  {
-    "type": "category",
-    "label": "doctor",
-    "collapsed": true,
-    "link": {
-      "type": "doc",
-      "id": "command/doctor"
-    },
-    "items": [
-      "command/doctor-auth",
-      "command/doctor-config",
-      "command/doctor-server"
-    ]
-  },
+  "command/doctor",
   {
     "type": "category",
     "label": "download",
@@ -268,6 +269,7 @@
       "command/route-set-default",
       "command/route-show",
       "command/route-timeout",
+      "command/route-tls-check",
       "command/route-unprotect",
       "command/route-unset-default",
       "command/route-up",
@@ -288,6 +290,11 @@
       "command/runner-install",
       "command/runner-join",
       "command/runner-list",
+      "command/runner-operations",
+      "command/runner-operations-abandon",
+      "command/runner-operations-list",
+      "command/runner-operations-run",
+      "command/runner-operations-show",
       "command/runner-reissue",
       "command/runner-remove",
       "command/runner-service-status",

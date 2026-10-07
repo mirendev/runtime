@@ -2,12 +2,16 @@ package entity
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/cond"
 )
@@ -26,9 +30,24 @@ type MockStore struct {
 	watchersMu sync.RWMutex
 	watchers   map[Id][]chan EntityOp
 
+	// rev is the store-wide revision, advanced by every write and stamped onto
+	// the written entity the way etcd stamps ModRevision. It is the axis that
+	// ListIndexRevision reports and WatchIndex resumes along, so a cursor taken
+	// from a list is directly comparable to the revision of a later event.
+	// Guarded by mu.
+	rev int64
+
 	// Index watchers - maps index key (attr.CAS()) to list of channels to notify
 	indexWatchersMu sync.RWMutex
 	indexWatchers   map[string][]chan clientv3.WatchResponse
+
+	// indexLog records every index event in commit order so WatchIndex can
+	// replay from a revision. The mock never compacts it. Guarded by
+	// indexWatchersMu, as is indexEntryCreated, which remembers the revision
+	// each (index, entity) entry first appeared at so a put can be reported as
+	// a create or a modify the way etcd's CreateRevision does.
+	indexLog          []indexLogEntry
+	indexEntryCreated map[string]int64
 
 	// WatchFromRevs records the fromRev argument of every WatchIndex call, in
 	// order, so tests can assert resume behavior.
@@ -37,16 +56,43 @@ type MockStore struct {
 	// staleIndexEntries holds fault-injected index entries, keyed by attr.CAS().
 	// See AddStaleIndexEntry.
 	staleIndexEntries map[string][]Id
+
+	// Sessions model etcd leases. A live session owns the attribute blob each
+	// write under it stores, and the entities bound to it; revoking it drops
+	// both, so the entity, and every index match a session value gave it, goes
+	// with the session. Entities holds the merged view GetEntity returns.
+	// Guarded by mu.
+	sessionSeq   int64
+	sessions     map[string]bool
+	sessionBlobs map[Id]map[string][]Attr
+	boundTo      map[Id]string
 }
 
 var _ Store = &MockStore{}
 
+// indexLogEntry is one index event as WatchIndex delivers it, tagged with the
+// revision it was committed at and the index it belongs to.
+type indexLogEntry struct {
+	rev      int64
+	indexKey string
+	resp     clientv3.WatchResponse
+}
+
+// indexWatchBuffer is the slack a WatchIndex channel has for live events beyond
+// its replayed backlog. Delivery is non-blocking, so a consumer that falls
+// this far behind loses events, the same as before replay existed.
+const indexWatchBuffer = 10
+
 func NewMockStore() *MockStore {
 	return &MockStore{
-		Entities:        make(map[Id]*Entity),
-		deletedEntities: make(map[Id]*Entity),
-		watchers:        make(map[Id][]chan EntityOp),
-		indexWatchers:   make(map[string][]chan clientv3.WatchResponse),
+		Entities:          make(map[Id]*Entity),
+		deletedEntities:   make(map[Id]*Entity),
+		watchers:          make(map[Id][]chan EntityOp),
+		indexWatchers:     make(map[string][]chan clientv3.WatchResponse),
+		indexEntryCreated: make(map[string]int64),
+		sessions:          make(map[string]bool),
+		sessionBlobs:      make(map[Id]map[string][]Attr),
+		boundTo:           make(map[Id]string),
 	}
 }
 
@@ -82,19 +128,53 @@ func (m *MockStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (
 	return nil, cond.NotFound("entity", id)
 }
 
-// AddEntity is a thread-safe helper to directly add an entity to the mock store
+// AddEntity is a thread-safe helper to directly add an entity to the mock store.
+// It is fixture setup rather than a write: no revision is assigned and no watch
+// event is produced. A fixture that carries its own revision moves the store
+// head up to it so a watch resumed from that head starts past the fixture.
 func (m *MockStore) AddEntity(id Id, entity *Entity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entity.Fixup()
 	m.Entities[id] = entity
+	if rev := entity.GetRevision(); rev > m.rev {
+		m.rev = rev
+	}
+
+	// The fixture's index entries exist from here on, so a later write to the
+	// entity must read as a modify of them rather than a create. Record them
+	// at the fixture's own revision, which is below any revision a write can
+	// be stamped with.
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		key := indexEntryKey(attr.CAS(), entity.Id())
+		if _, ok := m.indexEntryCreated[key]; !ok {
+			m.indexEntryCreated[key] = entity.GetRevision()
+		}
+	}
 }
 
 // RemoveEntity is a thread-safe helper to directly remove an entity from the mock store
 func (m *MockStore) RemoveEntity(id Id) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entity, ok := m.Entities[id]
 	delete(m.Entities, id)
+	if !ok {
+		return
+	}
+
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		delete(m.indexEntryCreated, indexEntryKey(attr.CAS(), entity.Id()))
+	}
+}
+
+// indexEntryKey names one (index, entity) entry in indexEntryCreated.
+func indexEntryKey(indexKey string, id Id) string {
+	return indexKey + "\x00" + string(id)
 }
 
 func (m *MockStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
@@ -150,26 +230,78 @@ func (m *MockStore) ListIndexEntitiesPage(
 }
 
 // validateSessionAttrs checks that if any attributes are session-scoped,
-// a session ID was provided via EntityOption. This matches EtcdStore behavior.
+// a session ID was provided via EntityOption, and that no attribute definition
+// is both indexed and session-scoped. This matches EtcdStore behavior.
 func (m *MockStore) validateSessionAttrs(ctx context.Context, attrs []Attr, opts []EntityOption) error {
+	if err := rejectIndexedSession(attrs); err != nil {
+		return err
+	}
+
 	var o entityOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 
-	for _, attr := range attrs {
-		schema, err := m.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			continue
-		}
-		if schema.Session {
-			if len(o.session) == 0 {
-				return fmt.Errorf("session ID is required for session attributes")
-			}
-			return nil
-		}
+	if len(o.session) == 0 && len(m.sessionAttrIDs(ctx, attrs)) > 0 {
+		return fmt.Errorf("session ID is required for session attributes")
 	}
 	return nil
+}
+
+// sessionAttrIDs returns the IDs among attrs whose schema is session-scoped.
+// Schema lookups read the store, so this runs before a write takes m.mu.
+func (m *MockStore) sessionAttrIDs(ctx context.Context, attrs ...[]Attr) map[Id]bool {
+	ids := make(map[Id]bool)
+	for _, set := range attrs {
+		for _, attr := range set {
+			schema, err := m.GetAttributeSchema(ctx, attr.ID)
+			if err == nil && schema.Session {
+				ids[attr.ID] = true
+			}
+		}
+	}
+	return ids
+}
+
+// checkSessionLocked fails a write under a session that is not live, the way
+// etcd refuses a put carrying an unknown lease.
+func (m *MockStore) checkSessionLocked(o *entityOpts) error {
+	if len(o.session) != 0 && !m.sessions[string(o.session)] {
+		return rpctypes.ErrLeaseNotFound
+	}
+	return nil
+}
+
+// recordSessionWriteLocked mirrors what an EtcdStore write does to session
+// state once view, the entity as written, is stored. The writing session's
+// blob is rewritten with every session attribute the entity carries, and the
+// entity key is leased to the session only when the write binds it, so a later
+// unbound write makes the entity durable again. Session attributes written
+// without a session (fixtures) are left as plain attributes.
+func (m *MockStore) recordSessionWriteLocked(view *Entity, o *entityOpts, sessionIDs map[Id]bool) {
+	id := view.Id()
+	tok := string(o.session)
+
+	if tok != "" {
+		var blob []Attr
+		for _, attr := range view.attrs {
+			if sessionIDs[attr.ID] {
+				blob = append(blob, attr)
+			}
+		}
+		if len(blob) > 0 {
+			if m.sessionBlobs[id] == nil {
+				m.sessionBlobs[id] = make(map[string][]Attr)
+			}
+			m.sessionBlobs[id][tok] = blob
+		}
+	}
+
+	if o.bind {
+		m.boundTo[id] = tok
+	} else {
+		delete(m.boundTo, id)
+	}
 }
 
 // ensureShortIdLocked mirrors the real store's auto-allocation of db/short-id
@@ -222,9 +354,14 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 		entity.SetCreatedAt(m.Now())
 	}
 	entity.SetUpdatedAt(m.Now())
-	entity.SetRevision(1)
+
+	sessionIDs := m.sessionAttrIDs(ctx, entity.attrs)
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkSessionLocked(&o); err != nil {
+		return nil, err
+	}
 	// Mirror EtcdStore.CreateEntity (store.go:281-326): create is put-if-absent.
 	// A create against an already-existing id is a conflict, not a silent
 	// overwrite, unless WithOverwrite was passed. An idempotent re-create with
@@ -232,23 +369,22 @@ func (m *MockStore) CreateEntity(ctx context.Context, entity *Entity, opts ...En
 	// tests would diverge from production, which enforces uniqueness via an etcd
 	// CreateRevision==0 transaction, masking bugs (e.g. duplicate runner_id
 	// joins) that production actually rejects.
-	if existing, ok := m.Entities[entity.Id()]; ok && !o.overwrite {
+	existing := m.Entities[entity.Id()]
+	if existing != nil && !o.overwrite {
+		// The revision is the store's to assign, so it is not part of what
+		// makes a re-create identical.
+		entity.SetRevision(existing.GetRevision())
 		if slices.EqualFunc(existing.attrs, entity.attrs, func(a, b Attr) bool { return a.Equal(b) }) {
-			m.mu.Unlock()
 			return existing, nil
 		}
-		m.mu.Unlock()
 		return nil, cond.Conflict("entity", entity.Id())
 	}
 	if err := m.ensureShortIdLocked(entity); err != nil {
-		m.mu.Unlock()
 		return nil, err
 	}
 	m.Entities[entity.Id()] = entity
-	m.mu.Unlock()
-
-	// Notify index watchers of the new entity
-	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, nil)
+	m.recordSessionWriteLocked(entity, &o, sessionIDs)
+	m.commitLocked(entity, clientv3.EventTypePut, existing)
 
 	return entity, nil
 }
@@ -278,7 +414,21 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 		}
 	}
 
+	// The written entity's session attributes include ones it already
+	// carried, so classify those too, ahead of taking the lock.
+	m.mu.RLock()
+	var existingAttrs []Attr
+	if e, ok := m.Entities[id]; ok {
+		existingAttrs = e.attrs
+	}
+	m.mu.RUnlock()
+	sessionIDs := m.sessionAttrIDs(ctx, entity.attrs, existingAttrs)
+
 	m.mu.Lock()
+	if err := m.checkSessionLocked(&o); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	e, ok := m.Entities[id]
 	if !ok {
 		m.mu.Unlock()
@@ -311,7 +461,6 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	// Create a copy to avoid modifying the original
 	updated := New(combinedAttrs)
 
-	updated.SetRevision(e.GetRevision() + 1)
 	updated.SetUpdatedAt(m.Now())
 	// Preserve CreatedAt from existing entity
 	if !e.GetCreatedAt().IsZero() {
@@ -319,13 +468,12 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	}
 
 	// Update the entity in the store
-	prevEntity := e
 	m.Entities[id] = updated
+	m.recordSessionWriteLocked(updated, &o, sessionIDs)
+	m.commitLocked(updated, clientv3.EventTypePut, e)
 	m.mu.Unlock()
 
-	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: updated})
-	go m.notifyIndexWatchers(updated, clientv3.EventTypePut, prevEntity)
 
 	return updated, nil
 }
@@ -336,12 +484,22 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 		return nil, cond.NotFound("entity", "empty id")
 	}
 
+	if err := m.validateSessionAttrs(ctx, entity.attrs, opts); err != nil {
+		return nil, err
+	}
+
 	var o entityOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 
+	sessionIDs := m.sessionAttrIDs(ctx, entity.attrs)
+
 	m.mu.Lock()
+	if err := m.checkSessionLocked(&o); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	existing, ok := m.Entities[id]
 	if !ok {
 		m.mu.Unlock()
@@ -358,21 +516,32 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 		return nil, cond.Conflict("entity", id)
 	}
 
-	// Update revision and timestamp
-	entity.SetRevision(existing.GetRevision() + 1)
 	entity.SetUpdatedAt(m.Now())
 	// Preserve CreatedAt from existing entity
 	if !existing.GetCreatedAt().IsZero() {
 		entity.SetCreatedAt(existing.GetCreatedAt())
 	}
 
-	prevEntity := existing
+	// A replace rewrites the entity key and at most its own session's blob,
+	// which it fills from the replacement alone, so record that before any
+	// other session's attributes join the view. Every blob the write left
+	// alone, the writer's own included when the replacement carries no
+	// session attributes, still holds its attributes, so they stay in the
+	// view the way GetEntity would merge them back in.
+	m.recordSessionWriteLocked(entity, &o, sessionIDs)
+	rewrote := len(o.session) != 0 && slices.ContainsFunc(entity.attrs, func(a Attr) bool { return sessionIDs[a.ID] })
+	for _, tok := range slices.Sorted(maps.Keys(m.sessionBlobs[id])) {
+		if rewrote && tok == string(o.session) {
+			continue
+		}
+		entity.attrs = append(entity.attrs, m.sessionBlobs[id][tok]...)
+	}
+
 	m.Entities[id] = entity
+	m.commitLocked(entity, clientv3.EventTypePut, existing)
 	m.mu.Unlock()
 
-	// Notify watchers
 	go m.notifyWatchers(id, EntityOp{Type: EntityOpUpdate, Entity: entity})
-	go m.notifyIndexWatchers(entity, clientv3.EventTypePut, prevEntity)
 
 	return entity, nil
 }
@@ -393,6 +562,13 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 		return nil, false, cond.NotFound("entity", "empty id")
 	}
 
+	var o entityOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	sessionIDs := m.sessionAttrIDs(ctx, entity.attrs)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -401,32 +577,46 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 		return e, false, nil
 	}
 
+	if err := m.checkSessionLocked(&o); err != nil {
+		return nil, false, err
+	}
+
 	// Create new entity
 	if err := m.ensureShortIdLocked(entity); err != nil {
 		return nil, false, err
 	}
-	entity.SetRevision(1)
 	entity.SetCreatedAt(m.Now())
 	entity.SetUpdatedAt(m.Now())
 	m.Entities[id] = entity
+	m.recordSessionWriteLocked(entity, &o, sessionIDs)
+	m.commitLocked(entity, clientv3.EventTypePut, nil)
 	return entity, true, nil
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
 	m.mu.Lock()
 	entity, existed := m.Entities[id]
-	delete(m.Entities, id)
-	if existed {
-		m.deletedEntities[id] = entity
-	}
+	m.deleteLocked(id)
 	m.mu.Unlock()
 
 	if existed {
 		go m.notifyWatchers(id, EntityOp{Type: EntityOpDelete, Entity: entity})
-		go m.notifyIndexWatchers(entity, clientv3.EventTypeDelete, entity)
 	}
 
 	return nil
+}
+
+// deleteLocked removes an entity along with its session state. The caller
+// holds m.mu.
+func (m *MockStore) deleteLocked(id Id) {
+	entity, existed := m.Entities[id]
+	delete(m.Entities, id)
+	delete(m.sessionBlobs, id)
+	delete(m.boundTo, id)
+	if existed {
+		m.deletedEntities[id] = entity
+		m.commitLocked(entity, clientv3.EventTypeDelete, entity)
+	}
 }
 
 // WatchFromRevsCopy returns a snapshot of the fromRev arguments seen by
@@ -437,13 +627,15 @@ func (m *MockStore) WatchFromRevsCopy() []int64 {
 	return append([]int64(nil), m.WatchFromRevs...)
 }
 
-// WatchIndex registers a watcher and delivers changes from that moment on.
+// WatchIndex registers a watcher for the index. With fromRev > 0 it first
+// replays every event committed at or after that revision, the way etcd's
+// WithRev does, so a write landing between a caller's List and its WatchIndex
+// is resumed rather than lost. Consumers built on indexwatch.Watcher depend on
+// that for gap-free delivery. With fromRev == 0 it delivers changes from this
+// moment on only.
 //
-// Unlike EtcdStore, it records fromRev for assertions but does not replay from
-// it, so a write landing between a caller's List and its WatchIndex is lost
-// rather than resumed. Consumers built on indexwatch.Watcher rely on that
-// replay for gap-free delivery, so a test that writes right after starting a
-// watch must wait for the watch to register first — see WaitForIndexWatcher.
+// Replay and registration happen under one lock, so a write can never fall
+// between them. The mock never compacts, so any fromRev is resumable.
 func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (clientv3.WatchChan, error) {
 	m.indexWatchersMu.Lock()
 	m.WatchFromRevs = append(m.WatchFromRevs, fromRev)
@@ -453,10 +645,21 @@ func (m *MockStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (c
 		return m.OnWatchIndex(ctx, attr)
 	}
 
-	ch := make(chan clientv3.WatchResponse, 10)
 	indexKey := attr.CAS()
 
 	m.indexWatchersMu.Lock()
+	var backlog []clientv3.WatchResponse
+	if fromRev > 0 {
+		for _, entry := range m.indexLog {
+			if entry.rev >= fromRev && entry.indexKey == indexKey {
+				backlog = append(backlog, entry.resp)
+			}
+		}
+	}
+	ch := make(chan clientv3.WatchResponse, len(backlog)+indexWatchBuffer)
+	for _, resp := range backlog {
+		ch <- resp
+	}
 	m.indexWatchers[indexKey] = append(m.indexWatchers[indexKey], ch)
 	m.indexWatchersMu.Unlock()
 
@@ -561,49 +764,105 @@ func (m *MockStore) notifyWatchers(id Id, op EntityOp) {
 	}
 }
 
-// notifyIndexWatchers sends a watch response to all index watchers that match the entity's attributes.
-// eventType should be clientv3.EventTypePut for create/update or clientv3.EventTypeDelete for delete.
-// For delete events, prevEntity should be the entity before deletion (to get its ID).
-func (m *MockStore) notifyIndexWatchers(entity *Entity, eventType mvccpb.Event_EventType, prevEntity *Entity) {
-	m.indexWatchersMu.RLock()
-	defer m.indexWatchersMu.RUnlock()
+// commitLocked assigns the next store revision to a write, stamps it onto the
+// entity for a put, and records and delivers the index events the write
+// produces. The caller holds m.mu, which is what makes revision order and
+// event order the same thing: no other write can commit in between.
+//
+// eventType is clientv3.EventTypePut for create/update or
+// clientv3.EventTypeDelete for delete. prevEntity is the entity's prior value
+// when it had one (for a delete, the entity being deleted), so events can
+// carry PrevKv the way etcd's WithPrevKV does.
+func (m *MockStore) commitLocked(entity *Entity, eventType mvccpb.Event_EventType, prevEntity *Entity) {
+	m.rev++
+	rev := m.rev
+	if eventType == clientv3.EventTypePut {
+		entity.SetRevision(rev)
+	}
 
-	// Check each registered index watcher to see if this entity matches
-	allAttrs := enumerateAllAttrs(entity.attrs)
+	m.indexWatchersMu.Lock()
+	defer m.indexWatchersMu.Unlock()
 
-	for indexKey, watchers := range m.indexWatchers {
-		// Check if any of the entity's attributes produce this index key
-		for _, attr := range allAttrs {
-			if attr.CAS() == indexKey {
-				// Entity matches this index - notify all watchers
-				event := &clientv3.Event{
-					Type: eventType,
-					Kv: &mvccpb.KeyValue{
-						Key:   []byte(indexKey),
-						Value: []byte(entity.Id()),
-					},
-				}
-				if prevEntity != nil {
-					event.PrevKv = &mvccpb.KeyValue{
-						Key:         []byte(indexKey),
-						Value:       []byte(prevEntity.Id()),
-						ModRevision: prevEntity.GetRevision(),
-					}
-				}
-
-				resp := clientv3.WatchResponse{
-					Events: []*clientv3.Event{event},
-				}
-
-				for _, ch := range watchers {
-					select {
-					case ch <- resp:
-					default:
-						// Channel full, skip
-					}
-				}
-				break // Only notify once per index key
+	// A put that drops a value deletes that value's index entry, as the real
+	// store's buildCollectionOps does, so a watcher on the old value hears it go.
+	if eventType == clientv3.EventTypePut && prevEntity != nil {
+		current := make(map[string]bool)
+		for _, attr := range enumerateAllAttrs(entity.attrs) {
+			current[attr.CAS()] = true
+		}
+		gone := make(map[string]bool)
+		for _, attr := range enumerateAllAttrs(prevEntity.attrs) {
+			indexKey := attr.CAS()
+			if current[indexKey] || gone[indexKey] {
+				continue
 			}
+			gone[indexKey] = true
+			m.emitIndexEventLocked(indexKey, entity.Id(), clientv3.EventTypeDelete, rev, prevEntity)
+		}
+	}
+
+	// An index is a keyspace, so a write touches each index key at most once no
+	// matter how many of the entity's attributes map to it.
+	seen := make(map[string]bool)
+	for _, attr := range enumerateAllAttrs(entity.attrs) {
+		indexKey := attr.CAS()
+		if seen[indexKey] {
+			continue
+		}
+		seen[indexKey] = true
+		m.emitIndexEventLocked(indexKey, entity.Id(), eventType, rev, prevEntity)
+	}
+}
+
+// emitIndexEventLocked records and delivers one index event for the entity's
+// entry under indexKey. The caller holds m.mu and m.indexWatchersMu.
+func (m *MockStore) emitIndexEventLocked(indexKey string, id Id, eventType mvccpb.Event_EventType, rev int64, prevEntity *Entity) {
+	// etcd reports a put as a create when the key's CreateRevision equals
+	// its ModRevision, and as a modify otherwise. Track when each index
+	// entry first appeared so the mock can say the same.
+	entryKey := indexEntryKey(indexKey, id)
+	createRev := rev
+	switch eventType {
+	case clientv3.EventTypePut:
+		if first, ok := m.indexEntryCreated[entryKey]; ok {
+			createRev = first
+		} else {
+			m.indexEntryCreated[entryKey] = rev
+		}
+	case clientv3.EventTypeDelete:
+		// A deleted key has no CreateRevision, only the revision it left at.
+		createRev = 0
+		delete(m.indexEntryCreated, entryKey)
+	}
+
+	event := &clientv3.Event{
+		Type: eventType,
+		Kv: &mvccpb.KeyValue{
+			Key:            []byte(indexKey),
+			Value:          []byte(id),
+			CreateRevision: createRev,
+			ModRevision:    rev,
+		},
+	}
+	if prevEntity != nil {
+		event.PrevKv = &mvccpb.KeyValue{
+			Key:         []byte(indexKey),
+			Value:       []byte(prevEntity.Id()),
+			ModRevision: prevEntity.GetRevision(),
+		}
+	}
+
+	resp := clientv3.WatchResponse{
+		Header: etcdserverpb.ResponseHeader{Revision: rev},
+		Events: []*clientv3.Event{event},
+	}
+	m.indexLog = append(m.indexLog, indexLogEntry{rev: rev, indexKey: indexKey, resp: resp})
+
+	for _, ch := range m.indexWatchers[indexKey] {
+		select {
+		case ch <- resp:
+		default:
+			// Channel full, skip
 		}
 	}
 }
@@ -614,10 +873,15 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 		return m.OnListIndex(ctx, attr)
 	}
 
-	// Default implementation: Filter entities by the given attribute
-	// Recursively enumerate attributes including nested ones in components
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listIndexLocked(attr), nil
+}
+
+// listIndexLocked filters entities by the given attribute, recursively
+// enumerating attributes including nested ones in components. The caller
+// holds m.mu.
+func (m *MockStore) listIndexLocked(attr Attr) []Id {
 	var ids []Id
 	seen := make(map[Id]bool)
 	for id, entity := range m.Entities {
@@ -640,7 +904,7 @@ func (m *MockStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
 		}
 	}
 
-	return ids, nil
+	return ids
 }
 
 // AddStaleIndexEntry makes ListIndex report id under attr even though the stored
@@ -658,25 +922,30 @@ func (m *MockStore) AddStaleIndexEntry(attr Attr, id Id) {
 	m.staleIndexEntries[key] = append(m.staleIndexEntries[key], id)
 }
 
-// ListIndexRevision returns the matching ids along with a revision. The mock
-// uses the highest entity revision currently in the store as a monotonic proxy
-// for the cluster revision, which is sufficient for resume-cursor tests.
+// ListIndexRevision returns the matching ids along with the store revision
+// they were read at. A WatchIndex resumed from one past that revision sees
+// exactly the writes that landed after this list, the way etcd's header
+// revision pairs with WithRev. The ids and the revision are read under one
+// lock so no write can land between them.
+//
+// With OnListIndex installed, the revision is read before the hook runs, so a
+// hook that blocks to model a slow List reports the revision the List started
+// at rather than one that includes writes landing while it was held open.
 func (m *MockStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int64, error) {
-	ids, err := m.ListIndex(ctx, attr)
-	if err != nil {
-		return nil, 0, err
+	if m.OnListIndex != nil {
+		m.mu.RLock()
+		rev := m.rev
+		m.mu.RUnlock()
+		ids, err := m.OnListIndex(ctx, attr)
+		if err != nil {
+			return nil, 0, err
+		}
+		return ids, rev, nil
 	}
 
 	m.mu.RLock()
-	var rev int64
-	for _, e := range m.Entities {
-		if r := e.GetRevision(); r > rev {
-			rev = r
-		}
-	}
-	m.mu.RUnlock()
-
-	return ids, rev, nil
+	defer m.mu.RUnlock()
+	return m.listIndexLocked(attr), m.rev, nil
 }
 
 // ListIndexPage pages the mock's index by sorting the ids and slicing. The real
@@ -748,30 +1017,127 @@ func (m *MockStore) ListCollection(ctx context.Context, collection string) ([]Id
 	return ids, nil
 }
 
-func (m *MockStore) CreateSession(ctx context.Context, id int64) ([]byte, error) {
-	return []byte("mock-session-id"), nil
+// CreateSession starts a session. Tokens are varint-encoded like the lease ids
+// EtcdStore hands out. The mock has no clock, so a session lives until it is
+// revoked and ttl is ignored.
+func (m *MockStore) CreateSession(ctx context.Context, ttl int64) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionSeq++
+	tok := binary.AppendVarint(nil, m.sessionSeq)
+	m.sessions[string(tok)] = true
+	return tok, nil
 }
 
-// ListSessionEntities
-func (m *MockStore) ListSessionEntities(ctx context.Context, id []byte) ([]Id, error) {
-	// For simplicity, return all entities as a list
+// ListSessionEntities returns the entities the session holds a key of: those
+// bound to it and those it has stored session attributes on.
+func (m *MockStore) ListSessionEntities(ctx context.Context, session []byte) ([]Id, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	tok := string(session)
 	var ids []Id
-	for eid := range m.Entities {
-		ids = append(ids, eid)
+	for id := range m.Entities {
+		_, hasBlob := m.sessionBlobs[id][tok]
+		if hasBlob || (m.boundTo[id] == tok && tok != "") {
+			ids = append(ids, id)
+		}
 	}
+	slices.Sort(ids)
 	return ids, nil
 }
 
-// PingSession
-func (m *MockStore) PingSession(ctx context.Context, id []byte) error {
+// PingSession fails once the session is gone, with the error etcd's keepalive
+// returns for a lease it no longer holds.
+func (m *MockStore) PingSession(ctx context.Context, session []byte) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.sessions[string(session)] {
+		return rpctypes.ErrLeaseNotFound
+	}
 	return nil
 }
 
-// RevokeSession
-func (m *MockStore) RevokeSession(ctx context.Context, id []byte) error {
+// RevokeSession ends a session the way revoking its lease does: entities bound
+// to it are deleted, and every entity it stored session attributes on loses
+// them, leaving whatever the entity key and other sessions still hold.
+func (m *MockStore) RevokeSession(ctx context.Context, session []byte) error {
+	tok := string(session)
+
+	m.mu.Lock()
+	if !m.sessions[tok] {
+		m.mu.Unlock()
+		return rpctypes.ErrLeaseNotFound
+	}
+	delete(m.sessions, tok)
+
+	var updates []EntityOp
+	for id, owner := range m.boundTo {
+		if owner == tok {
+			if e, ok := m.Entities[id]; ok {
+				updates = append(updates, EntityOp{Type: EntityOpDelete, Entity: e})
+			}
+			m.deleteLocked(id)
+		}
+	}
+	for id, blobs := range m.sessionBlobs {
+		if _, ok := blobs[tok]; !ok {
+			continue
+		}
+		if updated := m.dropSessionBlobLocked(id, tok); updated != nil {
+			updates = append(updates, EntityOp{Type: EntityOpUpdate, Entity: updated})
+		}
+	}
+	m.mu.Unlock()
+
+	for _, op := range updates {
+		go m.notifyWatchers(op.Id(), op)
+	}
 	return nil
+}
+
+// dropSessionBlobLocked removes one session's blob from an entity and rebuilds
+// its view from what remains: the entity key's attributes plus every other
+// session's blob. Removing the blob leaves the entity key alone, so the entity
+// keeps its revision. The caller holds m.mu.
+func (m *MockStore) dropSessionBlobLocked(id Id, tok string) *Entity {
+	blobs := m.sessionBlobs[id]
+	sessionIDs := make(map[Id]bool)
+	for _, blob := range blobs {
+		for _, attr := range blob {
+			sessionIDs[attr.ID] = true
+		}
+	}
+	delete(blobs, tok)
+	if len(blobs) == 0 {
+		delete(m.sessionBlobs, id)
+	}
+
+	prev, ok := m.Entities[id]
+	if !ok {
+		return nil
+	}
+
+	var attrs []Attr
+	for _, attr := range prev.attrs {
+		if !sessionIDs[attr.ID] {
+			attrs = append(attrs, attr)
+		}
+	}
+	others := make([]string, 0, len(blobs))
+	for other := range blobs {
+		others = append(others, other)
+	}
+	slices.Sort(others)
+	for _, other := range others {
+		attrs = append(attrs, blobs[other]...)
+	}
+
+	updated := &Entity{attrs: attrs}
+	rev := prev.GetRevision()
+	m.Entities[id] = updated
+	m.commitLocked(updated, clientv3.EventTypePut, prev)
+	updated.SetRevision(rev)
+	return updated
 }
 
 func (m *MockStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSchema, error) {

@@ -62,6 +62,8 @@ func TestCLIFlagsParsing(t *testing.T) {
 		"--etcd-client-port=2379",
 		"--metrics-remote-write-url=https://metrics.example.com/write",
 		"--metrics-remote-write-audience=metrics.example.com",
+		"--telemetry-traces-endpoint=https://traces.example.com",
+		"--telemetry-traces-audience=traces.example.com",
 	}
 
 	err = fs.Parse(args)
@@ -87,6 +89,12 @@ func TestCLIFlagsParsing(t *testing.T) {
 	}
 	if opts.RemoteWriteConfigWorkloadIdentityAudience == nil || *opts.RemoteWriteConfigWorkloadIdentityAudience != "metrics.example.com" {
 		t.Errorf("expected metrics remote-write audience to be parsed, got %v", opts.RemoteWriteConfigWorkloadIdentityAudience)
+	}
+	if opts.TelemetryTracesConfigEndpoint == nil || *opts.TelemetryTracesConfigEndpoint != "https://traces.example.com" {
+		t.Errorf("expected traces endpoint to be parsed, got %v", opts.TelemetryTracesConfigEndpoint)
+	}
+	if opts.TelemetryTracesConfigWorkloadIdentityAudience == nil || *opts.TelemetryTracesConfigWorkloadIdentityAudience != "traces.example.com" {
+		t.Errorf("expected traces audience to be parsed, got %v", opts.TelemetryTracesConfigWorkloadIdentityAudience)
 	}
 }
 

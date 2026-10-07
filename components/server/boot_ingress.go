@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
 	"time"
@@ -61,12 +62,32 @@ func newIngressBoot(inputs ingressBootInputs, workloadControl boot.Output[worklo
 func (b *ingressBoot) start(ctx context.Context, workloadControlOutput workloadControlBootOutput, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, observability observabilityBootOutput) (ingressBootOutput, error) {
 	b.observability = observability
 	workloadControl := workloadControlOutput.workloadControl
+	var pageTemplate *template.Template
+	if filename := b.inputs.ingress.GetErrorPage(); filename != "" {
+		var err error
+		pageTemplate, err = httpingress.LoadErrorPageTemplate(filename)
+		if err != nil {
+			return ingressBootOutput{}, fmt.Errorf("loading ingress.error_page: %w", err)
+		}
+	}
 	handler := httpingress.NewServer(ctx, observability.log, httpingress.IngressConfig{
-		RequestTimeout: b.inputs.requestTimeout,
-		DataPath:       b.inputs.dataPath,
-		WorkloadIssuer: identity.issuer,
-		Instance:       b.inputs.instance,
+		RequestTimeout:    b.inputs.requestTimeout,
+		DataPath:          b.inputs.dataPath,
+		ErrorPageTemplate: pageTemplate,
+		WorkloadIssuer:    identity.issuer,
+		Instance:          b.inputs.instance,
+		// This gates the network listener only. behind-proxy-http is the one
+		// mode where a front proxy terminates TLS and so owns the scheme.
+		// Under tls-autoprovision Miren faces clients directly. Under
+		// behind-proxy-https the proxy is TCP passthrough: it cannot add
+		// headers, so any X-Forwarded-Proto that arrives came from the
+		// client and must be ignored in favor of the connection's own TLS.
+		// The Anywhere POP forwarder is a separate in-process entry point
+		// and passes the scheme via httpingress.WithOriginScheme.
+		TrustProxyHeaders: b.inputs.ingress.GetMode() == serverconfig.IngressModeBehindProxyHTTP,
+		TrustedProxyHops:  b.inputs.ingress.GetTrustedProxyHops(),
 	}, entityAccess.rpcClient, workloadControl.Activator(), observability.http, observability.logWriter)
+	workloadControl.SetCertificateHostChecker(handler.AllowCertificate)
 	if err := b.serve(ctx, handler, workloadControl.CertificateProvider(), workloadControl.AutocertReadySignal()); err != nil {
 		return ingressBootOutput{}, err
 	}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,9 +28,10 @@ import (
 //
 // The RBAC grant in the setup is load-bearing evidence, not boilerplate:
 // without it the cluster refuses these calls with its own policy decision,
-// which is only reachable if it authenticated the caller's bearer and read the
-// groups out of it. Cloud never sees that token — it is inside a CBOR frame —
-// so nothing here could be cloud vouching for the traffic it carries.
+// which is only reachable if it authenticated the caller's bearer and resolved
+// the user against its pushed memberships. Cloud never sees that token — it is
+// inside a CBOR frame — so nothing here could be cloud vouching for the traffic
+// it carries.
 func TestRPCViaCloud(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
@@ -47,10 +49,8 @@ func TestRPCViaCloud(t *testing.T) {
 
 	directApps := appNames(t, direct.Stdout)
 
-	// The cluster caches the RBAC policy it fetched at startup and only
-	// re-reads it once a denial tells it something may have changed, so the
-	// grant made a moment ago takes a beat to be visible. Polling waits that
-	// out; it does not paper over a relay that never works.
+	// Wait for the newly granted policy's authorization snapshot to arrive
+	// over the uplink; requests themselves do not refresh authorization state.
 	var relayedApps []string
 	harness.Poll(t, "app list via cloud", 90*time.Second, 3*time.Second, func() (bool, string) {
 		r := m.Run("app", "list", "--format", "json")
@@ -113,18 +113,22 @@ func TestRPCViaCloud(t *testing.T) {
 // Asserting the app runs, rather than that the command exited zero, is the
 // point. A deploy that uploaded nothing and reported success is exactly the
 // failure this should catch.
+// The persona the harness logs in as (dev login's ?user=blackbox).
+const (
+	devUserEmail = "dev+blackbox@localhost"
+	devUserName  = "Blackbox (dev)"
+)
+
 func TestDeployViaCloud(t *testing.T) {
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 	env := harness.NewCloudEnv(t, m)
 
-	configPath, _ := env.SetupViaCloudCluster(t, "viacloud")
+	configPath, userXID := env.SetupViaCloudCluster(t, "viacloud")
 	m.SetEnv("MIREN_CONFIG", configPath)
 	t.Cleanup(func() { m.SetEnv("MIREN_CONFIG", "") })
 
-	// The cluster only re-reads its RBAC policy once a denial tells it to, so
-	// the grant made a moment ago needs a call to land first. Deploy is far too
-	// expensive to use as the thing that provokes that, so a cheap read does it.
+	// Wait for the pushed grant before attempting the more expensive deploy.
 	harness.Poll(t, "cloud-routed cluster reachable", 90*time.Second, 3*time.Second, func() (bool, string) {
 		r := m.Run("app", "list", "--format", "json")
 		if !r.Success() {
@@ -142,6 +146,48 @@ func TestDeployViaCloud(t *testing.T) {
 	if !slices.Contains(apps, appName) {
 		t.Fatalf("deployed %s over the relay but the cluster does not list it: %v", appName, apps)
 	}
+
+	// The deploy was made with the dev user's own cloud token, which the
+	// cluster verified itself. History has to name that person, from the
+	// profile cloud stamped on the token, without the cluster asking cloud.
+	t.Run("history names the deployer", func(t *testing.T) {
+		deployments := appHistory(t, m, appName)
+		if len(deployments) == 0 {
+			t.Fatal("expected the deploy in history")
+		}
+		by := deployments[0].DeployedBy
+		if by == nil {
+			t.Fatalf("latest deployment records no deployer: %+v", deployments[0])
+		}
+		if by.Subject != userXID || by.AuthMethod != "jwt" {
+			t.Fatalf("deployer is %s via %s, want %s via jwt", by.Subject, by.AuthMethod, userXID)
+		}
+		wantDisplay := devUserName + " (" + devUserEmail + ")"
+		if by.Email != devUserEmail || by.Name != devUserName || by.Display != wantDisplay {
+			t.Fatalf("deployer profile = email %q, name %q, display %q; want %q, %q, %q",
+				by.Email, by.Name, by.Display, devUserEmail, devUserName, wantDisplay)
+		}
+
+		table := m.MustRun("app", "history", "-a", appName).Stdout
+		if !strings.Contains(table, devUserName) {
+			t.Fatalf("history table does not show %q:\n%s", devUserName, table)
+		}
+	})
+
+	t.Run("whoami names the user", func(t *testing.T) {
+		var who struct {
+			UserID    string `json:"user_id"`
+			UserEmail string `json:"user_email"`
+			UserName  string `json:"user_name"`
+		}
+		r := m.MustRun("whoami", "--format", "json")
+		if err := json.Unmarshal([]byte(r.Stdout), &who); err != nil {
+			t.Fatalf("parse whoami: %v\n%s", err, r.Stdout)
+		}
+		if who.UserID != userXID || who.UserEmail != devUserEmail || who.UserName != devUserName {
+			t.Fatalf("whoami = %+v, want id %s, email %s, name %s", who, userXID, devUserEmail, devUserName)
+		}
+	})
 
 	// The stock testdata apps are ~24 KB, which is one small chunk and touches
 	// none of the limits this route actually risks. A context big enough to

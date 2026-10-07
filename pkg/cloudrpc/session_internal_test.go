@@ -3,6 +3,7 @@ package cloudrpc
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -140,4 +141,38 @@ func TestSessionReportsARemoteForAuditing(t *testing.T) {
 	remote, ok := conn.(rpc.MessageRemote)
 	require.True(t, ok, "a relayed session must be able to name its far end")
 	require.Equal(t, "cloud-relay/cluster-abc.xyz", remote.Remote())
+}
+
+// A frame that lands in the same instant as the close is still delivered.
+// Recv's contract is EOF only once nothing buffered remains, and readPump
+// treats EOF as final, so a frame left behind is a frame lost.
+//
+// The window is the gap between Recv's two selects: a reader that is already
+// parked gets the frame handed to it directly, so the loss only shows when
+// the frame and the close both land while the reader is between the two.
+// That is narrow (a handful of hits per hundred thousand tries on the old
+// code), so this runs enough iterations to make a clean pass meaningful.
+func TestRecvDrainsFrameRacingClose(t *testing.T) {
+	for i := range 200_000 {
+		sess := newSession(t.Context(), "race", nil)
+
+		got := make(chan []byte, 1)
+		errs := make(chan error, 1)
+		go func() {
+			b, err := sess.Recv()
+			got <- b
+			errs <- err
+		}()
+
+		sess.inbound <- []byte("last")
+		sess.shutdown()
+
+		b, err := <-got, <-errs
+		require.NoError(t, err, "iteration %d: frame lost behind EOF", i)
+		require.Equal(t, []byte("last"), b)
+
+		// Once drained, the closed session reports EOF.
+		_, err = sess.Recv()
+		require.ErrorIs(t, err, io.EOF)
+	}
 }

@@ -59,6 +59,8 @@ require (
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/common v0.66.1
 	github.com/quic-go/quic-go v0.62.0
 	github.com/quic-go/webtransport-go v0.13.0
 	github.com/sirupsen/logrus v1.9.3
@@ -101,7 +103,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog/v2 v2.130.1
-	miren.dev/lbd v0.0.0-20260224020427-8914d8db2233
+	miren.dev/lbd v0.0.0-20260824210626-be4cec661034
 	miren.dev/mflags v0.0.0-20260913023833-b11db8e63177
 	modernc.org/sqlite v1.45.0
 	sigs.k8s.io/knftables v0.0.21
@@ -144,8 +146,6 @@ require (
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/psanford/sqlite3vfs v0.0.0-20260519004904-f9180fa2acc9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -394,7 +394,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/ratelimit v0.3.1 // indirect
 	go.uber.org/zap v1.27.0
-	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/mod v0.37.0
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6 // indirect
 	google.golang.org/api v0.280.0 // indirect
@@ -403,6 +403,7 @@ require (
 	gopkg.in/ns1/ns1-go.v2 v2.15.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
+	miren.dev/runtime/x v0.0.0-20261001184021-278732e65f6c
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	tags.cncf.io/container-device-interface v0.8.0 // indirect
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
@@ -420,3 +421,5 @@ replace github.com/flannel-io/flannel => github.com/mirendev/flannel v0.26.8-0.2
 // Remove this fork and AllowLegacyDraft06 once all supported coordinators
 // and runners use the modern handshake. See the fork's MIREN.md.
 replace github.com/quic-go/webtransport-go => github.com/mirendev/webtransport-go v0.13.1-0.20260909145345-cfc776d34bca
+
+replace miren.dev/runtime/x => ./x

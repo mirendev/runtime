@@ -1,7 +1,9 @@
 package runnertelemetry_test
 
 import (
-	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,66 +44,17 @@ func (s *stubIssuer) IssueSystemWorkloadToken(workload workloadidentity.SystemWo
 	return "token", nil
 }
 
-// Until the runner has connected there is no issuer, and the honest answer is a
-// failure. Returning an empty token instead would have the coordinator reject
-// the batch, which looks like a credential problem rather than a startup
-// ordering one.
-func TestTokenSourceFailsBeforeIssuerArrives(t *testing.T) {
-	src := runnertelemetry.NewIssuerTokenSource()
-
-	_, err := src.Token()
-	require.ErrorIs(t, err, runnertelemetry.ErrIssuerUnavailable)
-}
-
-func TestTokenSourceMintsAndCaches(t *testing.T) {
+// The runner's source has to mint telemetry writer tokens for the ingest
+// audience; the coordinator verifies both before accepting a batch.
+func TestTokenSourceScopesToIngest(t *testing.T) {
 	iss := &stubIssuer{}
-	src := runnertelemetry.NewIssuerTokenSource()
+	src := runnertelemetry.NewTokenSource()
 	src.SetIssuer(iss)
 
-	first, err := src.Token()
+	_, err := src.Token()
 	require.NoError(t, err)
-	require.Equal(t, "token", first)
-
-	second, err := src.Token()
-	require.NoError(t, err)
-	require.Equal(t, first, second)
-	require.Equal(t, 1, iss.mints, "a live token should be reused rather than reminted per request")
-
-	// The audience is what keeps this token from being spendable at another
-	// service, and the explicit TTL is what lets the source know when to renew
-	// without decoding the token.
 	require.Equal(t, workloadidentity.SystemWorkloadTelemetryWriter, iss.gotLoad)
 	require.Equal(t, []string{runnertelemetry.Audience}, iss.gotOpts.Audience)
-	require.NotZero(t, iss.gotOpts.TTL)
-}
-
-func TestTokenSourcePropagatesMintFailure(t *testing.T) {
-	iss := &stubIssuer{err: errors.New("coordinator refused")}
-	src := runnertelemetry.NewIssuerTokenSource()
-	src.SetIssuer(iss)
-
-	_, err := src.Token()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "coordinator refused")
-}
-
-// Re-arming drops the cached token. A new issuer means a new connection to the
-// coordinator, and holding a token minted through the old one would keep a
-// stale credential alive past the event that replaced it.
-func TestTokenSourceResetsOnNewIssuer(t *testing.T) {
-	iss := &stubIssuer{tokenSeq: []string{"first", "second"}}
-	src := runnertelemetry.NewIssuerTokenSource()
-
-	src.SetIssuer(iss)
-	first, err := src.Token()
-	require.NoError(t, err)
-	require.Equal(t, "first", first)
-
-	src.SetIssuer(iss)
-	second, err := src.Token()
-	require.NoError(t, err)
-	require.Equal(t, "second", second)
-	require.Equal(t, 2, iss.mints)
 }
 
 func TestClientRequiresTokenSource(t *testing.T) {
@@ -132,7 +85,7 @@ func TestClientClosesItsTransport(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	src := runnertelemetry.NewIssuerTokenSource()
+	src := runnertelemetry.NewTokenSource()
 	src.SetIssuer(&stubIssuer{})
 
 	client, err := runnertelemetry.NewClient(runnertelemetry.ClientConfig{
@@ -156,7 +109,7 @@ func TestNilClientCloseIsSafe(t *testing.T) {
 }
 
 func TestClientRejectsUnparseableCA(t *testing.T) {
-	src := runnertelemetry.NewIssuerTokenSource()
+	src := runnertelemetry.NewTokenSource()
 	src.SetIssuer(&stubIssuer{})
 
 	_, err := runnertelemetry.NewClient(runnertelemetry.ClientConfig{
@@ -166,4 +119,31 @@ func TestClientRejectsUnparseableCA(t *testing.T) {
 		TokenSource:   src,
 	})
 	require.Error(t, err)
+}
+
+type recordingTransport struct {
+	gotStream []string
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.gotStream = append(t.gotStream, r.Header.Get(runnertelemetry.StreamHeader))
+	return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+}
+
+// The operational client is how the coordinator tells a runner's own series
+// from its sandboxes', so it has to mark every request, and the ordinary
+// client it was derived from must stay unmarked.
+func TestOperationalClientMarksItsRequests(t *testing.T) {
+	transport := &recordingTransport{}
+	client := &runnertelemetry.Client{HTTP: &http.Client{Transport: transport}}
+
+	resp, err := client.Operational().Post("https://coordinator.invalid/x", "text/plain", strings.NewReader("m 1 1\n"))
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	resp, err = client.HTTP.Post("https://coordinator.invalid/x", "text/plain", strings.NewReader("m 1 1\n"))
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	require.Equal(t, []string{runnertelemetry.StreamOperational, ""}, transport.gotStream)
 }

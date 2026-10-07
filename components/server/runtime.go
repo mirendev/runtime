@@ -41,7 +41,7 @@ type Runtime struct {
 
 // Start assembles, validates, and starts the server dependency graph.
 func Start(options StartOptions) (*Runtime, error) {
-	runtime := &Runtime{graph: boot.NewGraph(), instance: serverinfo.New()}
+	runtime := &Runtime{graph: boot.NewGraph(boot.WithLogger(options.Log)), instance: serverinfo.New()}
 	components := newStartup(runtime, options)
 	runtime.observability = components.observability.output
 

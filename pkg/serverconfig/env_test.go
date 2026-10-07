@@ -24,8 +24,10 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 	t.Setenv("MIREN_ETCD_ENDPOINTS", "http://e1:2379,http://e2:2379")
 	t.Setenv("MIREN_ETCD_CLIENT_PORT", "23790")
 	t.Setenv("MIREN_LABS", "alpha,beta")
-	t.Setenv("MIREN_METRICS_REMOTE_WRITE_URL", "https://metrics.example.com/write")
-	t.Setenv("MIREN_METRICS_REMOTE_WRITE_AUDIENCE", "metrics.example.com")
+	t.Setenv("MIREN_TELEMETRY_METRICS_REMOTE_WRITE_URL", "https://metrics.example.com/write")
+	t.Setenv("MIREN_TELEMETRY_METRICS_AUDIENCE", "metrics.example.com")
+	t.Setenv("MIREN_TELEMETRY_TRACES_ENDPOINT", "https://traces.example.com")
+	t.Setenv("MIREN_TELEMETRY_TRACES_AUDIENCE", "traces.example.com")
 
 	cfg, err := Load(configPath, nil, nil)
 	if err != nil {
@@ -61,11 +63,17 @@ func TestLoad_EnvAppliesViaMflags(t *testing.T) {
 			}
 		}
 	}
-	if got := cfg.Metrics.RemoteWrite.GetURL(); got != "https://metrics.example.com/write" {
-		t.Errorf("Metrics.RemoteWrite.URL = %q, want remote-write URL from env", got)
+	if got := cfg.Telemetry.Metrics.GetRemoteWriteURL(); got != "https://metrics.example.com/write" {
+		t.Errorf("Telemetry.Metrics.RemoteWriteURL = %q, want remote-write URL from env", got)
 	}
-	if got := cfg.Metrics.RemoteWrite.GetWorkloadIdentityAudience(); got != "metrics.example.com" {
-		t.Errorf("Metrics.RemoteWrite.WorkloadIdentityAudience = %q, want audience from env", got)
+	if got := cfg.Telemetry.Metrics.GetWorkloadIdentityAudience(); got != "metrics.example.com" {
+		t.Errorf("Telemetry.Metrics.WorkloadIdentityAudience = %q, want audience from env", got)
+	}
+	if got := cfg.Telemetry.Traces.GetEndpoint(); got != "https://traces.example.com" {
+		t.Errorf("Telemetry.Traces.Endpoint = %q, want endpoint from env", got)
+	}
+	if got := cfg.Telemetry.Traces.GetWorkloadIdentityAudience(); got != "traces.example.com" {
+		t.Errorf("Telemetry.Traces.WorkloadIdentityAudience = %q, want audience from env", got)
 	}
 }
 
@@ -121,5 +129,32 @@ func TestLoad_CLIBeatsEnv(t *testing.T) {
 	}
 	if cfg.Server.Address == nil || *cfg.Server.Address != "10.0.0.1:8888" {
 		t.Errorf("Server.Address = %v, want 10.0.0.1:8888 (CLI should beat env)", cfg.Server.Address)
+	}
+}
+
+// TestLoad_DeprecatedMetricsEnv keeps the v0.15 remote-write env vars working:
+// they load into the retired section and ResolveDeprecatedConfig carries them
+// to [telemetry.metrics], where everything downstream reads.
+func TestLoad_DeprecatedMetricsEnv(t *testing.T) {
+	t.Setenv("MIREN_METRICS_REMOTE_WRITE_URL", "https://metrics.example.com/write")
+	t.Setenv("MIREN_METRICS_REMOTE_WRITE_AUDIENCE", "metrics.example.com")
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	if err := os.WriteFile(configPath, []byte(`mode = "standalone"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(configPath, nil, nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := cfg.ResolveDeprecatedConfig(); err != nil {
+		t.Fatalf("ResolveDeprecatedConfig: %v", err)
+	}
+	if got := cfg.Telemetry.Metrics.GetRemoteWriteURL(); got != "https://metrics.example.com/write" {
+		t.Errorf("Telemetry.Metrics.RemoteWriteURL = %q, want deprecated env carried over", got)
+	}
+	if got := cfg.Telemetry.Metrics.GetWorkloadIdentityAudience(); got != "metrics.example.com" {
+		t.Errorf("Telemetry.Metrics.WorkloadIdentityAudience = %q, want deprecated env carried over", got)
 	}
 }

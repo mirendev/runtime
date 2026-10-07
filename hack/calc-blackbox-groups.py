@@ -142,9 +142,10 @@ def main():
 
     new_tests = []
     if not args.no_discover:
-        known = {t["name"] for t in all_tests} | ALWAYS_SKIP
+        known = {t["name"] for t in tests} | ALWAYS_SKIP
         discovered = discover_tests()
-        new = [n for n in discovered if n not in known]
+        new = [n for n in discovered if n not in known
+               and (args.env != "standalone" or not n.startswith("TestDistributed"))]
         if new:
             print(f"Discovered {len(new)} test(s) with no timing data "
                   f"(assigned to lightest shard):")

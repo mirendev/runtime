@@ -9,12 +9,46 @@ import (
 	types "miren.dev/runtime/pkg/entity/types"
 )
 
+type DiskProvider string
+
+const (
+	DiskProviderMiren  DiskProvider = "miren"
+	DiskProviderLocal  DiskProvider = "local"
+	DiskProviderSqlite DiskProvider = "sqlite"
+)
+const (
+	DiskProviderMirenMemberId  = entity.Id("dev.miren.core/provider.miren")
+	DiskProviderLocalMemberId  = entity.Id("dev.miren.core/provider.local")
+	DiskProviderSqliteMemberId = entity.Id("dev.miren.core/provider.sqlite")
+)
+
+type PortProtocol string
+
+const (
+	PortProtocolTcp PortProtocol = "tcp"
+	PortProtocolUdp PortProtocol = "udp"
+)
+const (
+	PortProtocolTcpMemberId = entity.Id("dev.miren.core/protocol.tcp")
+	PortProtocolUdpMemberId = entity.Id("dev.miren.core/protocol.udp")
+)
+
+func initEnumMembers(sb *schema.SchemaBuilder) {
+	sb.Singleton("dev.miren.core/provider.miren")
+	sb.Singleton("dev.miren.core/provider.local")
+	sb.Singleton("dev.miren.core/provider.sqlite")
+	sb.Singleton("dev.miren.core/protocol.tcp")
+	sb.Singleton("dev.miren.core/protocol.udp")
+}
+
 const (
 	ConfigSpecCloneAddonVariantsId = entity.Id("dev.miren.core/component.config_spec.clone_addon_variants")
 	ConfigSpecCloneAddonsId        = entity.Id("dev.miren.core/component.config_spec.clone_addons")
 	ConfigSpecEntrypointId         = entity.Id("dev.miren.core/component.config_spec.entrypoint")
 	ConfigSpecServicesId           = entity.Id("dev.miren.core/component.config_spec.services")
 	ConfigSpecStartDirectoryId     = entity.Id("dev.miren.core/component.config_spec.start_directory")
+	ConfigSpecStaticDirId          = entity.Id("dev.miren.core/component.config_spec.static_dir")
+	ConfigSpecStaticErrorPageId    = entity.Id("dev.miren.core/component.config_spec.static_error_page")
 	ConfigSpecTasksId              = entity.Id("dev.miren.core/component.config_spec.tasks")
 	ConfigSpecVariablesId          = entity.Id("dev.miren.core/component.config_spec.variables")
 )
@@ -25,6 +59,8 @@ type ConfigSpec struct {
 	Entrypoint         string                         `cbor:"entrypoint,omitempty" json:"entrypoint,omitempty"`
 	Services           []ConfigSpecServices           `cbor:"services,omitempty" json:"services,omitempty"`
 	StartDirectory     string                         `cbor:"start_directory,omitempty" json:"start_directory,omitempty"`
+	StaticDir          string                         `cbor:"static_dir,omitempty" json:"static_dir,omitempty"`
+	StaticErrorPage    string                         `cbor:"static_error_page,omitempty" json:"static_error_page,omitempty"`
 	Tasks              []ConfigSpecTasks              `cbor:"tasks,omitempty" json:"tasks,omitempty"`
 	Variables          []ConfigSpecVariables          `cbor:"variables,omitempty" json:"variables,omitempty"`
 }
@@ -54,6 +90,12 @@ func (o *ConfigSpec) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(ConfigSpecStartDirectoryId); ok && a.Value.Kind() == entity.KindString {
 		o.StartDirectory = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecStaticDirId); ok && a.Value.Kind() == entity.KindString {
+		o.StaticDir = a.Value.String()
+	}
+	if a, ok := e.Get(ConfigSpecStaticErrorPageId); ok && a.Value.Kind() == entity.KindString {
+		o.StaticErrorPage = a.Value.String()
 	}
 	for _, a := range e.GetAll(ConfigSpecTasksId) {
 		if a.Value.Kind() == entity.KindComponent {
@@ -87,6 +129,12 @@ func (o *ConfigSpec) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.StartDirectory) {
 		attrs = append(attrs, entity.String(ConfigSpecStartDirectoryId, o.StartDirectory))
 	}
+	if !entity.Empty(o.StaticDir) {
+		attrs = append(attrs, entity.String(ConfigSpecStaticDirId, o.StaticDir))
+	}
+	if !entity.Empty(o.StaticErrorPage) {
+		attrs = append(attrs, entity.String(ConfigSpecStaticErrorPageId, o.StaticErrorPage))
+	}
 	for _, v := range o.Tasks {
 		attrs = append(attrs, entity.Component(ConfigSpecTasksId, v.Encode()))
 	}
@@ -112,6 +160,12 @@ func (o *ConfigSpec) Empty() bool {
 	if !entity.Empty(o.StartDirectory) {
 		return false
 	}
+	if !entity.Empty(o.StaticDir) {
+		return false
+	}
+	if !entity.Empty(o.StaticErrorPage) {
+		return false
+	}
 	if len(o.Tasks) != 0 {
 		return false
 	}
@@ -129,6 +183,8 @@ func (o *ConfigSpec) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("services", "dev.miren.core/component.config_spec.services", schema.Doc("Per-service configuration"), schema.Many)
 	(&ConfigSpecServices{}).InitSchema(sb.Builder("component.config_spec.services"))
 	sb.String("start_directory", "dev.miren.core/component.config_spec.start_directory", schema.Doc("Directory to start the process in; defaults to /app."))
+	sb.String("static_dir", "dev.miren.core/component.config_spec.static_dir", schema.Doc("Absolute path exported from the application build output and served directly by HTTP ingress"))
+	sb.String("static_error_page", "dev.miren.core/component.config_spec.static_error_page", schema.Doc("Relative path to the HTML error template in the static artifact"))
 	sb.Component("tasks", "dev.miren.core/component.config_spec.tasks", schema.Doc("Per-task configuration. A task is a command the platform knows how to run, as opposed to a service, which is a process it keeps up. Tasks carry no ports, concurrency, image, or disks: a task always runs in the app's image, and both per-task image and per-task disks are deliberate v1 cuts tracked in RFD-97."), schema.Many)
 	(&ConfigSpecTasks{}).InitSchema(sb.Builder("component.config_spec.tasks"))
 	sb.Component("variables", "dev.miren.core/component.config_spec.variables", schema.Doc("Environment variables and configuration values"), schema.Many)
@@ -472,29 +528,29 @@ const (
 )
 
 type ConfigSpecServicesDisks struct {
-	DbFile       string                          `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string                          `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string                          `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string                          `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string                          `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string                          `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     ConfigSpecServicesDisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool                            `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64                           `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string                          `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string                          `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type ConfigSpecServicesDisksProvider string
+type ConfigSpecServicesDisksProvider = DiskProvider
 
 const (
-	ConfigSpecServicesDisksMIREN  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.miren"
-	ConfigSpecServicesDisksLOCAL  ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.local"
-	ConfigSpecServicesDisksSQLITE ConfigSpecServicesDisksProvider = "component.config_spec.services.disks.provider.sqlite"
+	ConfigSpecServicesDisksMIREN  DiskProvider = DiskProviderMiren
+	ConfigSpecServicesDisksLOCAL  DiskProvider = DiskProviderLocal
+	ConfigSpecServicesDisksSQLITE DiskProvider = DiskProviderSqlite
 )
 
-var ConfigSpecServicesDisksproviderFromId = map[entity.Id]ConfigSpecServicesDisksProvider{ConfigSpecServicesDisksProviderMirenId: ConfigSpecServicesDisksMIREN, ConfigSpecServicesDisksProviderLocalId: ConfigSpecServicesDisksLOCAL, ConfigSpecServicesDisksProviderSqliteId: ConfigSpecServicesDisksSQLITE}
-var ConfigSpecServicesDisksproviderToId = map[ConfigSpecServicesDisksProvider]entity.Id{ConfigSpecServicesDisksMIREN: ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksLOCAL: ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksSQLITE: ConfigSpecServicesDisksProviderSqliteId}
+var ConfigSpecServicesDisksProviderFromId = map[entity.Id]DiskProvider{DiskProviderMirenMemberId: DiskProviderMiren, ConfigSpecServicesDisksProviderMirenId: DiskProviderMiren, DiskProviderLocalMemberId: DiskProviderLocal, ConfigSpecServicesDisksProviderLocalId: DiskProviderLocal, DiskProviderSqliteMemberId: DiskProviderSqlite, ConfigSpecServicesDisksProviderSqliteId: DiskProviderSqlite}
+var ConfigSpecServicesDisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: DiskProviderMirenMemberId, DiskProvider("component.config_spec.services.disks.provider.miren"): DiskProviderMirenMemberId, DiskProviderLocal: DiskProviderLocalMemberId, DiskProvider("component.config_spec.services.disks.provider.local"): DiskProviderLocalMemberId, DiskProviderSqlite: DiskProviderSqliteMemberId, DiskProvider("component.config_spec.services.disks.provider.sqlite"): DiskProviderSqliteMemberId}
 
 func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesDisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -516,7 +572,7 @@ func (o *ConfigSpecServicesDisks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = ConfigSpecServicesDisksproviderFromId[a.Value.Id()]
+		o.Provider = ConfigSpecServicesDisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesDisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -551,7 +607,7 @@ func (o *ConfigSpecServicesDisks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(ConfigSpecServicesDisksOwnerId, o.Owner))
 	}
-	if a, ok := ConfigSpecServicesDisksproviderToId[o.Provider]; ok {
+	if a, ok := ConfigSpecServicesDisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesDisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(ConfigSpecServicesDisksReadOnlyId, o.ReadOnly))
@@ -605,16 +661,14 @@ func (o *ConfigSpecServicesDisks) Empty() bool {
 }
 
 func (o *ConfigSpecServicesDisks) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("db_file", "dev.miren.core/component.config_spec.services.disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/component.config_spec.services.disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/component.config_spec.services.disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease"))
 	sb.String("mount_path", "dev.miren.core/component.config_spec.services.disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
 	sb.String("name", "dev.miren.core/component.config_spec.services.disks.name", schema.Doc("The name of the disk"))
 	sb.String("owner", "dev.miren.core/component.config_spec.services.disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.miren")
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.local")
-	sb.Singleton("dev.miren.core/component.config_spec.services.disks.provider.sqlite")
-	sb.Ref("provider", "dev.miren.core/component.config_spec.services.disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(ConfigSpecServicesDisksProviderMirenId, ConfigSpecServicesDisksProviderLocalId, ConfigSpecServicesDisksProviderSqliteId))
+	sb.Enum("provider", "dev.miren.core/component.config_spec.services.disks.provider", []entity.Id{DiskProviderMirenMemberId, DiskProviderLocalMemberId, DiskProviderSqliteMemberId}, schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"))
 	sb.Bool("read_only", "dev.miren.core/component.config_spec.services.disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/component.config_spec.services.disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
 	sb.String("source", "dev.miren.core/component.config_spec.services.disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
@@ -808,22 +862,22 @@ const (
 )
 
 type ConfigSpecServicesPorts struct {
-	Name     string                          `cbor:"name" json:"name"`
-	NodePort int64                           `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64                           `cbor:"port" json:"port"`
-	Protocol ConfigSpecServicesPortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string                          `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type ConfigSpecServicesPortsProtocol string
+type ConfigSpecServicesPortsProtocol = PortProtocol
 
 const (
-	ConfigSpecServicesPortsTCP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.tcp"
-	ConfigSpecServicesPortsUDP ConfigSpecServicesPortsProtocol = "component.config_spec.services.ports.protocol.udp"
+	ConfigSpecServicesPortsTCP PortProtocol = PortProtocolTcp
+	ConfigSpecServicesPortsUDP PortProtocol = PortProtocolUdp
 )
 
-var ConfigSpecServicesPortsprotocolFromId = map[entity.Id]ConfigSpecServicesPortsProtocol{ConfigSpecServicesPortsProtocolTcpId: ConfigSpecServicesPortsTCP, ConfigSpecServicesPortsProtocolUdpId: ConfigSpecServicesPortsUDP}
-var ConfigSpecServicesPortsprotocolToId = map[ConfigSpecServicesPortsProtocol]entity.Id{ConfigSpecServicesPortsTCP: ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsUDP: ConfigSpecServicesPortsProtocolUdpId}
+var ConfigSpecServicesPortsProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, ConfigSpecServicesPortsProtocolTcpId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp, ConfigSpecServicesPortsProtocolUdpId: PortProtocolUdp}
+var ConfigSpecServicesPortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("component.config_spec.services.ports.protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("component.config_spec.services.ports.protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(ConfigSpecServicesPortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -836,7 +890,7 @@ func (o *ConfigSpecServicesPorts) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = ConfigSpecServicesPortsprotocolFromId[a.Value.Id()]
+		o.Protocol = ConfigSpecServicesPortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(ConfigSpecServicesPortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -851,7 +905,7 @@ func (o *ConfigSpecServicesPorts) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(ConfigSpecServicesPortsPortId, o.Port))
-	if a, ok := ConfigSpecServicesPortsprotocolToId[o.Protocol]; ok {
+	if a, ok := ConfigSpecServicesPortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(ConfigSpecServicesPortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -880,12 +934,11 @@ func (o *ConfigSpecServicesPorts) Empty() bool {
 }
 
 func (o *ConfigSpecServicesPorts) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.core/component.config_spec.services.ports.name", schema.Required)
 	sb.Int64("node_port", "dev.miren.core/component.config_spec.services.ports.node_port")
 	sb.Int64("port", "dev.miren.core/component.config_spec.services.ports.port", schema.Required)
-	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.tcp")
-	sb.Singleton("dev.miren.core/component.config_spec.services.ports.protocol.udp")
-	sb.Ref("protocol", "dev.miren.core/component.config_spec.services.ports.protocol", schema.Choices(ConfigSpecServicesPortsProtocolTcpId, ConfigSpecServicesPortsProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.core/component.config_spec.services.ports.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId})
 	sb.String("type", "dev.miren.core/component.config_spec.services.ports.type")
 }
 
@@ -1392,6 +1445,7 @@ const (
 	AppVersionManifestId           = entity.Id("dev.miren.core/app_version.manifest")
 	AppVersionManifestDigestId     = entity.Id("dev.miren.core/app_version.manifest_digest")
 	AppVersionSourceId             = entity.Id("dev.miren.core/app_version.source")
+	AppVersionStaticArtifactId     = entity.Id("dev.miren.core/app_version.static_artifact")
 	AppVersionVersionId            = entity.Id("dev.miren.core/app_version.version")
 )
 
@@ -1409,6 +1463,7 @@ type AppVersion struct {
 	Manifest           string    `cbor:"manifest,omitempty" json:"manifest,omitempty"`
 	ManifestDigest     string    `cbor:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
 	Source             Source    `cbor:"source,omitempty" json:"source"`
+	StaticArtifact     string    `cbor:"static_artifact,omitempty" json:"static_artifact,omitempty"`
 	Version            string    `cbor:"version,omitempty" json:"version,omitempty"`
 }
 
@@ -1449,6 +1504,9 @@ func (o *AppVersion) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(AppVersionSourceId); ok && a.Value.Kind() == entity.KindComponent {
 		o.Source.Decode(a.Value.Component())
+	}
+	if a, ok := e.Get(AppVersionStaticArtifactId); ok && a.Value.Kind() == entity.KindString {
+		o.StaticArtifact = a.Value.String()
 	}
 	if a, ok := e.Get(AppVersionVersionId); ok && a.Value.Kind() == entity.KindString {
 		o.Version = a.Value.String()
@@ -1508,6 +1566,9 @@ func (o *AppVersion) Encode() (attrs []entity.Attr) {
 	if !o.Source.Empty() {
 		attrs = append(attrs, entity.Component(AppVersionSourceId, o.Source.Encode()))
 	}
+	if !entity.Empty(o.StaticArtifact) {
+		attrs = append(attrs, entity.String(AppVersionStaticArtifactId, o.StaticArtifact))
+	}
 	if !entity.Empty(o.Version) {
 		attrs = append(attrs, entity.String(AppVersionVersionId, o.Version))
 	}
@@ -1553,6 +1614,9 @@ func (o *AppVersion) Empty() bool {
 	if !o.Source.Empty() {
 		return false
 	}
+	if !entity.Empty(o.StaticArtifact) {
+		return false
+	}
 	if !entity.Empty(o.Version) {
 		return false
 	}
@@ -1574,6 +1638,7 @@ func (o *AppVersion) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("manifest_digest", "dev.miren.core/app_version.manifest_digest", schema.Doc("The digest of the manifest"), schema.Indexed)
 	sb.Component("source", "dev.miren.core/app_version.source", schema.Doc("Sanitized source provenance captured when this version was built"))
 	(&Source{}).InitSchema(sb.Builder("app_version.source"))
+	sb.String("static_artifact", "dev.miren.core/app_version.static_artifact", schema.Doc("Content digest of the tar archive containing files exported from static.dir"))
 	sb.String("version", "dev.miren.core/app_version.version", schema.Doc("The version of this app"))
 }
 
@@ -1880,9 +1945,9 @@ const (
 	DisksNameId           = entity.Id("dev.miren.core/disks.name")
 	DisksOwnerId          = entity.Id("dev.miren.core/disks.owner")
 	DisksProviderId       = entity.Id("dev.miren.core/disks.provider")
-	DisksProviderMirenId  = entity.Id("dev.miren.core/provider.miren")
-	DisksProviderLocalId  = entity.Id("dev.miren.core/provider.local")
-	DisksProviderSqliteId = entity.Id("dev.miren.core/provider.sqlite")
+	DisksProviderMirenId  = DiskProviderMirenMemberId
+	DisksProviderLocalId  = DiskProviderLocalMemberId
+	DisksProviderSqliteId = DiskProviderSqliteMemberId
 	DisksReadOnlyId       = entity.Id("dev.miren.core/disks.read_only")
 	DisksSizeGbId         = entity.Id("dev.miren.core/disks.size_gb")
 	DisksSourceId         = entity.Id("dev.miren.core/disks.source")
@@ -1890,29 +1955,29 @@ const (
 )
 
 type Disks struct {
-	DbFile       string        `cbor:"db_file,omitempty" json:"db_file,omitempty"`
-	Filesystem   string        `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
-	LeaseTimeout string        `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
-	MountPath    string        `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
-	Name         string        `cbor:"name,omitempty" json:"name,omitempty"`
-	Owner        string        `cbor:"owner,omitempty" json:"owner,omitempty"`
-	Provider     DisksProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
-	ReadOnly     bool          `cbor:"read_only,omitempty" json:"read_only,omitempty"`
-	SizeGb       int64         `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
-	Source       string        `cbor:"source,omitempty" json:"source,omitempty"`
-	SqliteId     string        `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
+	DbFile       string       `cbor:"db_file,omitempty" json:"db_file,omitempty"`
+	Filesystem   string       `cbor:"filesystem,omitempty" json:"filesystem,omitempty"`
+	LeaseTimeout string       `cbor:"lease_timeout,omitempty" json:"lease_timeout,omitempty"`
+	MountPath    string       `cbor:"mount_path,omitempty" json:"mount_path,omitempty"`
+	Name         string       `cbor:"name,omitempty" json:"name,omitempty"`
+	Owner        string       `cbor:"owner,omitempty" json:"owner,omitempty"`
+	Provider     DiskProvider `cbor:"provider,omitempty" json:"provider,omitempty"`
+	ReadOnly     bool         `cbor:"read_only,omitempty" json:"read_only,omitempty"`
+	SizeGb       int64        `cbor:"size_gb,omitempty" json:"size_gb,omitempty"`
+	Source       string       `cbor:"source,omitempty" json:"source,omitempty"`
+	SqliteId     string       `cbor:"sqlite_id,omitempty" json:"sqlite_id,omitempty"`
 }
 
-type DisksProvider string
+type DisksProvider = DiskProvider
 
 const (
-	MIREN  DisksProvider = "provider.miren"
-	LOCAL  DisksProvider = "provider.local"
-	SQLITE DisksProvider = "provider.sqlite"
+	MIREN  DiskProvider = DiskProviderMiren
+	LOCAL  DiskProvider = DiskProviderLocal
+	SQLITE DiskProvider = DiskProviderSqlite
 )
 
-var DisksproviderFromId = map[entity.Id]DisksProvider{DisksProviderMirenId: MIREN, DisksProviderLocalId: LOCAL, DisksProviderSqliteId: SQLITE}
-var DisksproviderToId = map[DisksProvider]entity.Id{MIREN: DisksProviderMirenId, LOCAL: DisksProviderLocalId, SQLITE: DisksProviderSqliteId}
+var DisksProviderFromId = map[entity.Id]DiskProvider{DiskProviderMirenMemberId: DiskProviderMiren, DiskProviderLocalMemberId: DiskProviderLocal, DiskProviderSqliteMemberId: DiskProviderSqlite}
+var DisksProviderToId = map[DiskProvider]entity.Id{DiskProviderMiren: DiskProviderMirenMemberId, DiskProvider("provider.miren"): DiskProviderMirenMemberId, DiskProviderLocal: DiskProviderLocalMemberId, DiskProvider("provider.local"): DiskProviderLocalMemberId, DiskProviderSqlite: DiskProviderSqliteMemberId, DiskProvider("provider.sqlite"): DiskProviderSqliteMemberId}
 
 func (o *Disks) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DisksDbFileId); ok && a.Value.Kind() == entity.KindString {
@@ -1934,7 +1999,7 @@ func (o *Disks) Decode(e entity.AttrGetter) {
 		o.Owner = a.Value.String()
 	}
 	if a, ok := e.Get(DisksProviderId); ok && a.Value.Kind() == entity.KindId {
-		o.Provider = DisksproviderFromId[a.Value.Id()]
+		o.Provider = DisksProviderFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(DisksReadOnlyId); ok && a.Value.Kind() == entity.KindBool {
 		o.ReadOnly = a.Value.Bool()
@@ -1969,7 +2034,7 @@ func (o *Disks) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.Owner) {
 		attrs = append(attrs, entity.String(DisksOwnerId, o.Owner))
 	}
-	if a, ok := DisksproviderToId[o.Provider]; ok {
+	if a, ok := DisksProviderToId[o.Provider]; ok {
 		attrs = append(attrs, entity.Ref(DisksProviderId, a))
 	}
 	attrs = append(attrs, entity.Bool(DisksReadOnlyId, o.ReadOnly))
@@ -2023,16 +2088,14 @@ func (o *Disks) Empty() bool {
 }
 
 func (o *Disks) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("db_file", "dev.miren.core/disks.db_file", schema.Doc("Database filename inside the disk directory, for sqlite disks only; a bare filename, not a path (defaults to data.db)"))
 	sb.String("filesystem", "dev.miren.core/disks.filesystem", schema.Doc("Filesystem type (ext4, xfs, btrfs) for auto-creating the disk"))
 	sb.String("lease_timeout", "dev.miren.core/disks.lease_timeout", schema.Doc("Timeout for acquiring the disk lease (e.g. 5m, 10m)"))
 	sb.String("mount_path", "dev.miren.core/disks.mount_path", schema.Doc("The path inside the container where the disk will be mounted"))
 	sb.String("name", "dev.miren.core/disks.name", schema.Doc("The name of the disk"))
 	sb.String("owner", "dev.miren.core/disks.owner", schema.Doc("Ownership policy for the mounted disk. Empty (default) makes the disk writable by the container's run user; \"keep\" leaves the raw mount ownership untouched; \"uid\" or \"uid:gid\" pins a specific numeric owner."))
-	sb.Singleton("dev.miren.core/provider.miren")
-	sb.Singleton("dev.miren.core/provider.local")
-	sb.Singleton("dev.miren.core/provider.sqlite")
-	sb.Ref("provider", "dev.miren.core/disks.provider", schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"), schema.Choices(DisksProviderMirenId, DisksProviderLocalId, DisksProviderSqliteId))
+	sb.Enum("provider", "dev.miren.core/disks.provider", []entity.Id{DiskProviderMirenMemberId, DiskProviderLocalMemberId, DiskProviderSqliteMemberId}, schema.Doc("Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"))
 	sb.Bool("read_only", "dev.miren.core/disks.read_only", schema.Doc("Whether to mount the disk as read-only"))
 	sb.Int64("size_gb", "dev.miren.core/disks.size_gb", schema.Doc("Size in GB for auto-creating the disk if it doesn't exist"))
 	sb.String("source", "dev.miren.core/disks.source", schema.Doc("Where this disk came from. Empty or \"config\" means the user declared it; \"addon\" means an addon contributed it and owns its removal."))
@@ -2144,28 +2207,28 @@ const (
 	PortsNodePortId    = entity.Id("dev.miren.core/ports.node_port")
 	PortsPortId        = entity.Id("dev.miren.core/ports.port")
 	PortsProtocolId    = entity.Id("dev.miren.core/ports.protocol")
-	PortsProtocolTcpId = entity.Id("dev.miren.core/protocol.tcp")
-	PortsProtocolUdpId = entity.Id("dev.miren.core/protocol.udp")
+	PortsProtocolTcpId = PortProtocolTcpMemberId
+	PortsProtocolUdpId = PortProtocolUdpMemberId
 	PortsTypeId        = entity.Id("dev.miren.core/ports.type")
 )
 
 type Ports struct {
-	Name     string        `cbor:"name" json:"name"`
-	NodePort int64         `cbor:"node_port,omitempty" json:"node_port,omitempty"`
-	Port     int64         `cbor:"port" json:"port"`
-	Protocol PortsProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
-	Type     string        `cbor:"type,omitempty" json:"type,omitempty"`
+	Name     string       `cbor:"name" json:"name"`
+	NodePort int64        `cbor:"node_port,omitempty" json:"node_port,omitempty"`
+	Port     int64        `cbor:"port" json:"port"`
+	Protocol PortProtocol `cbor:"protocol,omitempty" json:"protocol,omitempty"`
+	Type     string       `cbor:"type,omitempty" json:"type,omitempty"`
 }
 
-type PortsProtocol string
+type PortsProtocol = PortProtocol
 
 const (
-	TCP PortsProtocol = "protocol.tcp"
-	UDP PortsProtocol = "protocol.udp"
+	TCP PortProtocol = PortProtocolTcp
+	UDP PortProtocol = PortProtocolUdp
 )
 
-var PortsprotocolFromId = map[entity.Id]PortsProtocol{PortsProtocolTcpId: TCP, PortsProtocolUdpId: UDP}
-var PortsprotocolToId = map[PortsProtocol]entity.Id{TCP: PortsProtocolTcpId, UDP: PortsProtocolUdpId}
+var PortsProtocolFromId = map[entity.Id]PortProtocol{PortProtocolTcpMemberId: PortProtocolTcp, PortProtocolUdpMemberId: PortProtocolUdp}
+var PortsProtocolToId = map[PortProtocol]entity.Id{PortProtocolTcp: PortProtocolTcpMemberId, PortProtocol("protocol.tcp"): PortProtocolTcpMemberId, PortProtocolUdp: PortProtocolUdpMemberId, PortProtocol("protocol.udp"): PortProtocolUdpMemberId}
 
 func (o *Ports) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(PortsNameId); ok && a.Value.Kind() == entity.KindString {
@@ -2178,7 +2241,7 @@ func (o *Ports) Decode(e entity.AttrGetter) {
 		o.Port = a.Value.Int64()
 	}
 	if a, ok := e.Get(PortsProtocolId); ok && a.Value.Kind() == entity.KindId {
-		o.Protocol = PortsprotocolFromId[a.Value.Id()]
+		o.Protocol = PortsProtocolFromId[a.Value.Id()]
 	}
 	if a, ok := e.Get(PortsTypeId); ok && a.Value.Kind() == entity.KindString {
 		o.Type = a.Value.String()
@@ -2193,7 +2256,7 @@ func (o *Ports) Encode() (attrs []entity.Attr) {
 		attrs = append(attrs, entity.Int64(PortsNodePortId, o.NodePort))
 	}
 	attrs = append(attrs, entity.Int64(PortsPortId, o.Port))
-	if a, ok := PortsprotocolToId[o.Protocol]; ok {
+	if a, ok := PortsProtocolToId[o.Protocol]; ok {
 		attrs = append(attrs, entity.Ref(PortsProtocolId, a))
 	}
 	if !entity.Empty(o.Type) {
@@ -2222,12 +2285,11 @@ func (o *Ports) Empty() bool {
 }
 
 func (o *Ports) InitSchema(sb *schema.SchemaBuilder) {
+	initEnumMembers(sb)
 	sb.String("name", "dev.miren.core/ports.name", schema.Required)
 	sb.Int64("node_port", "dev.miren.core/ports.node_port")
 	sb.Int64("port", "dev.miren.core/ports.port", schema.Required)
-	sb.Singleton("dev.miren.core/protocol.tcp")
-	sb.Singleton("dev.miren.core/protocol.udp")
-	sb.Ref("protocol", "dev.miren.core/ports.protocol", schema.Choices(PortsProtocolTcpId, PortsProtocolUdpId))
+	sb.Enum("protocol", "dev.miren.core/ports.protocol", []entity.Id{PortProtocolTcpMemberId, PortProtocolUdpMemberId})
 	sb.String("type", "dev.miren.core/ports.type")
 }
 
@@ -2486,7 +2548,7 @@ func (o *Source) Empty() bool {
 func (o *Source) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("git_branch", "dev.miren.core/source.git_branch", schema.Doc("Git branch used to build the version"))
 	sb.String("git_sha", "dev.miren.core/source.git_sha", schema.Doc("Git commit SHA used to build the version"))
-	sb.String("kind", "dev.miren.core/source.kind", schema.Doc("Build source kind (image, dockerfile, or stack)"))
+	sb.String("kind", "dev.miren.core/source.kind", schema.Doc("Build source kind (image, dockerfile, stack, or static)"))
 	sb.String("repository", "dev.miren.core/source.repository", schema.Doc("Repository URL without credentials, query parameters, or fragments"))
 	sb.String("value", "dev.miren.core/source.value", schema.Doc("Normalized image reference or auto-detected stack name, depending on kind"))
 }
@@ -2664,6 +2726,7 @@ const (
 	DeploymentDeployedById         = entity.Id("dev.miren.core/deployment.deployed_by")
 	DeploymentErrorMessageId       = entity.Id("dev.miren.core/deployment.error_message")
 	DeploymentGitInfoId            = entity.Id("dev.miren.core/deployment.git_info")
+	DeploymentMessageId            = entity.Id("dev.miren.core/deployment.message")
 	DeploymentOperationId          = entity.Id("dev.miren.core/deployment.operation")
 	DeploymentOutcomeId            = entity.Id("dev.miren.core/deployment.outcome")
 	DeploymentParentDeploymentId   = entity.Id("dev.miren.core/deployment.parent_deployment")
@@ -2684,6 +2747,7 @@ type Deployment struct {
 	DeployedBy         DeployedBy `cbor:"deployed_by,omitempty" json:"deployed_by"`
 	ErrorMessage       string     `cbor:"error_message,omitempty" json:"error_message,omitempty"`
 	GitInfo            GitInfo    `cbor:"git_info,omitempty" json:"git_info"`
+	Message            string     `cbor:"message,omitempty" json:"message,omitempty"`
 	Operation          string     `cbor:"operation,omitempty" json:"operation,omitempty"`
 	Outcome            string     `cbor:"outcome,omitempty" json:"outcome,omitempty"`
 	ParentDeployment   entity.Id  `cbor:"parent_deployment,omitempty" json:"parent_deployment,omitempty"`
@@ -2719,6 +2783,9 @@ func (o *Deployment) Decode(e entity.AttrGetter) {
 	}
 	if a, ok := e.Get(DeploymentGitInfoId); ok && a.Value.Kind() == entity.KindComponent {
 		o.GitInfo.Decode(a.Value.Component())
+	}
+	if a, ok := e.Get(DeploymentMessageId); ok && a.Value.Kind() == entity.KindString {
+		o.Message = a.Value.String()
 	}
 	if a, ok := e.Get(DeploymentOperationId); ok && a.Value.Kind() == entity.KindString {
 		o.Operation = a.Value.String()
@@ -2787,6 +2854,9 @@ func (o *Deployment) Encode() (attrs []entity.Attr) {
 	if !o.GitInfo.Empty() {
 		attrs = append(attrs, entity.Component(DeploymentGitInfoId, o.GitInfo.Encode()))
 	}
+	if !entity.Empty(o.Message) {
+		attrs = append(attrs, entity.String(DeploymentMessageId, o.Message))
+	}
 	if !entity.Empty(o.Operation) {
 		attrs = append(attrs, entity.String(DeploymentOperationId, o.Operation))
 	}
@@ -2841,6 +2911,9 @@ func (o *Deployment) Empty() bool {
 	if !o.GitInfo.Empty() {
 		return false
 	}
+	if !entity.Empty(o.Message) {
+		return false
+	}
 	if !entity.Empty(o.Operation) {
 		return false
 	}
@@ -2879,6 +2952,7 @@ func (o *Deployment) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("error_message", "dev.miren.core/deployment.error_message", schema.Doc("[DEPRECATED] Bounded failure summary retained until lifecycle errors are queryable from the log stream"))
 	sb.Component("git_info", "dev.miren.core/deployment.git_info", schema.Doc("Source metadata submitted with this attempt, including builds that never produce an AppVersion"))
 	(&GitInfo{}).InitSchema(sb.Builder("deployment.git_info"))
+	sb.String("message", "dev.miren.core/deployment.message", schema.Doc("User-supplied description of this deployment"))
 	sb.String("operation", "dev.miren.core/deployment.operation", schema.Doc("The intent of this attempt"))
 	sb.String("outcome", "dev.miren.core/deployment.outcome", schema.Doc("Terminal result of this attempt; absent while the attempt is in progress"), schema.Indexed)
 	sb.Ref("parent_deployment", "dev.miren.core/deployment.parent_deployment", schema.Doc("Optional deployment this attempt was based on"))
@@ -2891,6 +2965,8 @@ func (o *Deployment) InitSchema(sb *schema.SchemaBuilder) {
 
 const (
 	DeployedByAuthMethodId     = entity.Id("dev.miren.core/deployed_by.auth_method")
+	DeployedByEmailId          = entity.Id("dev.miren.core/deployed_by.email")
+	DeployedByNameId           = entity.Id("dev.miren.core/deployed_by.name")
 	DeployedByOrganizationIdId = entity.Id("dev.miren.core/deployed_by.organization_id")
 	DeployedBySubjectId        = entity.Id("dev.miren.core/deployed_by.subject")
 	DeployedByTimestampId      = entity.Id("dev.miren.core/deployed_by.timestamp")
@@ -2901,6 +2977,8 @@ const (
 
 type DeployedBy struct {
 	AuthMethod     string `cbor:"auth_method,omitempty" json:"auth_method,omitempty"`
+	Email          string `cbor:"email,omitempty" json:"email,omitempty"`
+	Name           string `cbor:"name,omitempty" json:"name,omitempty"`
 	OrganizationId string `cbor:"organization_id,omitempty" json:"organization_id,omitempty"`
 	Subject        string `cbor:"subject,omitempty" json:"subject,omitempty"`
 	Timestamp      string `cbor:"timestamp,omitempty" json:"timestamp,omitempty"`
@@ -2912,6 +2990,12 @@ type DeployedBy struct {
 func (o *DeployedBy) Decode(e entity.AttrGetter) {
 	if a, ok := e.Get(DeployedByAuthMethodId); ok && a.Value.Kind() == entity.KindString {
 		o.AuthMethod = a.Value.String()
+	}
+	if a, ok := e.Get(DeployedByEmailId); ok && a.Value.Kind() == entity.KindString {
+		o.Email = a.Value.String()
+	}
+	if a, ok := e.Get(DeployedByNameId); ok && a.Value.Kind() == entity.KindString {
+		o.Name = a.Value.String()
 	}
 	if a, ok := e.Get(DeployedByOrganizationIdId); ok && a.Value.Kind() == entity.KindString {
 		o.OrganizationId = a.Value.String()
@@ -2936,6 +3020,12 @@ func (o *DeployedBy) Decode(e entity.AttrGetter) {
 func (o *DeployedBy) Encode() (attrs []entity.Attr) {
 	if !entity.Empty(o.AuthMethod) {
 		attrs = append(attrs, entity.String(DeployedByAuthMethodId, o.AuthMethod))
+	}
+	if !entity.Empty(o.Email) {
+		attrs = append(attrs, entity.String(DeployedByEmailId, o.Email))
+	}
+	if !entity.Empty(o.Name) {
+		attrs = append(attrs, entity.String(DeployedByNameId, o.Name))
 	}
 	if !entity.Empty(o.OrganizationId) {
 		attrs = append(attrs, entity.String(DeployedByOrganizationIdId, o.OrganizationId))
@@ -2962,6 +3052,12 @@ func (o *DeployedBy) Empty() bool {
 	if !entity.Empty(o.AuthMethod) {
 		return false
 	}
+	if !entity.Empty(o.Email) {
+		return false
+	}
+	if !entity.Empty(o.Name) {
+		return false
+	}
 	if !entity.Empty(o.OrganizationId) {
 		return false
 	}
@@ -2985,6 +3081,8 @@ func (o *DeployedBy) Empty() bool {
 
 func (o *DeployedBy) InitSchema(sb *schema.SchemaBuilder) {
 	sb.String("auth_method", "dev.miren.core/deployed_by.auth_method", schema.Doc("Authentication method used by the initiating subject"))
+	sb.String("email", "dev.miren.core/deployed_by.email", schema.Doc("Email from the initiating identity's verified cloud token, as of the deploy"))
+	sb.String("name", "dev.miren.core/deployed_by.name", schema.Doc("Display name from the initiating identity's verified cloud token, as of the deploy"))
 	sb.String("organization_id", "dev.miren.core/deployed_by.organization_id", schema.Doc("Organization from the initiating authenticated identity; not the cluster's ownership"))
 	sb.String("subject", "dev.miren.core/deployed_by.subject", schema.Doc("Stable subject from the server-authenticated RPC identity"))
 	sb.String("timestamp", "dev.miren.core/deployed_by.timestamp", schema.Doc("[DEPRECATED] RFC3339 start time retained for compatibility; use started_at"))
@@ -3728,7 +3826,7 @@ var (
 	KindSecretVersion = entity.Id("dev.miren.core/kind.secret_version")
 	Schema            = entity.Id("dev.miren.core/schema.v1alpha")
 )
-var CloudExportContract = export.MustParse("{\"version\":1,\"target\":\"cloud\",\"marker\":\"dev.miren.meta/cloud.export\",\"kinds\":[{\"id\":\"dev.miren.core/kind.app\",\"lifecycle\":\"mirror\",\"attributes\":[{\"id\":\"dev.miren.core/app.active_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app.active_version\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/metadata.name\",\"type\":\"string\"}]},{\"id\":\"dev.miren.core/kind.app_version\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/app_version.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app_version.manifest_digest\",\"type\":\"string\"},{\"id\":\"dev.miren.core/app_version.source\",\"type\":\"component\"},{\"id\":\"dev.miren.core/app_version.version\",\"type\":\"string\"},{\"id\":\"dev.miren.core/source.git_branch\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.git_sha\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.kind\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.repository\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.value\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"}]},{\"id\":\"dev.miren.core/kind.deployment\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployed_by.auth_method\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployed_by.organization_id\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployed_by.subject\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployment.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.app_name\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.completed_at\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.deployed_by\",\"type\":\"component\"},{\"id\":\"dev.miren.core/deployment.git_info\",\"type\":\"component\"},{\"id\":\"dev.miren.core/deployment.operation\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.outcome\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.parent_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.phase\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.started_at\",\"type\":\"time\"},{\"id\":\"dev.miren.core/deployment.version\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/git_info.author\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.branch\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.commit_author_email\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.commit_timestamp\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.is_dirty\",\"type\":\"bool\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.message\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.repository\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.sha\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.working_tree_hash\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"}]}]}")
+var CloudExportContract = export.MustParse("{\"version\":1,\"target\":\"cloud\",\"marker\":\"dev.miren.meta/cloud.export\",\"kinds\":[{\"id\":\"dev.miren.compute/kind.node\",\"lifecycle\":\"mirror\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.compute/node.api_address\",\"type\":\"string\"},{\"id\":\"dev.miren.compute/node.constraints\",\"type\":\"label\",\"many\":true},{\"id\":\"dev.miren.compute/node.name\",\"type\":\"string\"},{\"id\":\"dev.miren.compute/node.registered_at\",\"type\":\"time\"},{\"id\":\"dev.miren.compute/node.runner_id\",\"type\":\"string\"},{\"id\":\"dev.miren.compute/node.scheduling\",\"type\":\"enum\",\"enum_values\":[\"dev.miren.compute/scheduling.cordoned\",\"dev.miren.compute/scheduling.schedulable\"]},{\"id\":\"dev.miren.compute/node.status\",\"type\":\"enum\",\"enum_values\":[\"dev.miren.compute/status.disabled\",\"dev.miren.compute/status.ready\",\"dev.miren.compute/status.unhealthy\",\"dev.miren.compute/status.unknown\"]},{\"id\":\"dev.miren.compute/node.version\",\"type\":\"string\"}]},{\"id\":\"dev.miren.core/kind.app\",\"lifecycle\":\"mirror\",\"attributes\":[{\"id\":\"dev.miren.core/app.active_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app.active_version\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/metadata.name\",\"type\":\"string\"}]},{\"id\":\"dev.miren.core/kind.app_version\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/app_version.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/app_version.manifest_digest\",\"type\":\"string\"},{\"id\":\"dev.miren.core/app_version.source\",\"type\":\"component\"},{\"id\":\"dev.miren.core/app_version.version\",\"type\":\"string\"},{\"id\":\"dev.miren.core/source.git_branch\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.git_sha\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.kind\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.repository\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"},{\"id\":\"dev.miren.core/source.value\",\"type\":\"string\",\"parent\":\"dev.miren.core/app_version.source\"}]},{\"id\":\"dev.miren.core/kind.deployment\",\"lifecycle\":\"archive\",\"attributes\":[{\"id\":\"db/short-id\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployed_by.auth_method\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployed_by.organization_id\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployed_by.subject\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.deployed_by\"},{\"id\":\"dev.miren.core/deployment.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.app_name\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.completed_at\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.deployed_by\",\"type\":\"component\"},{\"id\":\"dev.miren.core/deployment.git_info\",\"type\":\"component\"},{\"id\":\"dev.miren.core/deployment.message\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.operation\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.outcome\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.parent_deployment\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/deployment.phase\",\"type\":\"string\"},{\"id\":\"dev.miren.core/deployment.started_at\",\"type\":\"time\"},{\"id\":\"dev.miren.core/deployment.version\",\"type\":\"ref\"},{\"id\":\"dev.miren.core/git_info.author\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.branch\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.commit_author_email\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.commit_timestamp\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.is_dirty\",\"type\":\"bool\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.message\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.repository\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.sha\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"},{\"id\":\"dev.miren.core/git_info.working_tree_hash\",\"type\":\"string\",\"parent\":\"dev.miren.core/deployment.git_info\"}]},{\"id\":\"dev.miren.ingress/kind.http_route\",\"lifecycle\":\"mirror\",\"attributes\":[{\"id\":\"dev.miren.ingress/http_route.app\",\"type\":\"ref\"},{\"id\":\"dev.miren.ingress/http_route.default\",\"type\":\"bool\"},{\"id\":\"dev.miren.ingress/http_route.host\",\"type\":\"string\"}]}]}")
 
 func init() {
 	schema.Register("dev.miren.core", "v1alpha", func(sb *schema.SchemaBuilder) {
@@ -3745,5 +3843,5 @@ func init() {
 		(&Secret{}).InitSchema(sb)
 		(&SecretVersion{}).InitSchema(sb)
 	})
-	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xb4\\˲\xf46\x11~\r\x02\t\x10\xee\x04\xe2$\x84p'\xc5eA\x15\x1b\x1e\xc1\xa5\xb1e[gl˿\xa4\x99\xffLvܡ\xa8T\xf1\f\xfc\xe7g\x93\xe7\x835e\xdd,\xb5eK\xf2\x1c6\xa7Ԓ\xfbӭ\xbb\xd5j\xf5\x99\xa7zD\x03\x1ek|-\x06\xc2\xf0XT\x94a|&c\xcd?{\xe9\u05fe7\xd7\x16h\x9a\xfe-y\x18hEӤ\xf8\xfe\xdb\xd4t@d\x04\xa0MCp_\xf3\xbf\xbc:\x91\xfa\xf1kk\xe6\x02U\x82\\qY㩧\xb7\x01\x8fBv\xf3b]-n\x13>\x91Z\x02\xbd\xbd\rtŌ\x13:\xaa\t\x82:\r\xf14C|%\x00\xb1\xf4V\xf6\xb4:K\f\n+g\x10R\xd1a\xa2#\x1e\xc5RR\xeb\x03q\x8b\x00nʂ\xfdQ\xce\xf3\x1d0H\x00T\xa0\xeaŅ0\\\x97H-\xdb٭\x98\aZ\v2`\t\xf5\xdd\b\x94C\x93Z\x82\r~\xd5\f\xd7p\xc1\xc8\xd8J\xc0oG\x00\xf1\xe3D\x18\xe6fh\x0f\x0emG\xd6\xea\x9di\xaf\x1f\xa0~\xeaP?12 v+\xe7\x15\x1a\x17\xc4\x19ps\xe3\xc9H\x04A}Yѱ!\xad\xdaxP\xe7\xca\xce\xe7\x03\x10\x13\xa3\x0f\xb8R\x03m\r\xe12}9\xc0\xf4\x92\xb2sOQ]2\xdac\xb5b~\x95\xb3b\xbb\x13\xad\xd04\xad\x86%Վ\xe3\x8aa-Y\x17\xf0\x81jK\x91\xa5?\xc8)|=\xc8_T\x17\xc6\xe6=s\xf5\x86\xc2ʽ\xf5\xd38\x13\x12\x9dd\xaee)u\xee\x8db\x7f\xfcBh\xfaz'\xd4\xfc\xaf\xe0\vݘ\xb2\x00\xbf\x97\x03\x7f3\fPЗ#f\xb2\v\xac\x8a\xa9c7\x92\xb2BV&\x93\t\xd2 3zhUMk\xca\xf0\xff$\x87\x0fW\xc8 \xcc\x16Fv1\x8bѾ\xd0\x1a\x8e\x01\x8d\xa4\xc1\\\xc9{g)\xa8\xe1ߌ\xf1\x975i\r\f\x85\x95\x0e\x9a4\xb8_\xdcB\xe3\x02\x89\v\x97 \x8d.K\x03\x81\xc7\xcbp\x9e\xff\x94W\xd4_0\xffW\xa3\xcc\xf9j\xb9\x15\x93>\x00:Ī\x8e\\\xf1\xbaC\xf3\x99n\xdf\xdd\xdaΌ.\xbc\xb7\x03\x16\xa8F\x02\x85\xf7ִ&\xd9\xf9\xe0\xda\x18\x84\xa2G'\xdc\xf3z@\xe3\xed?j\x85tͼBX\x96\x83\xb2m\x01\xa4F.\x7f\xe0\x16\x7fi\x8bo\xcf\"\uebdc\x81XMJ\xae\xdcb\xd3\xf5y\xf9\xc6\xe61\x92\xb2|\xff\x94\xb3xk\x13c[9\xe0\xf9\xef\xf3\x94v\xc9:K\xc1\xb5\x83\x06\x15 \xb8\x06\xf5\xecV@\x1c\xe8\x1598U\x7f\xe1\x023s\"?84D\xf9\xc6\x0e\n\x1d\xa6\x1e\x8b\xc5M\xe8\xbd\x1a\xa8\xa8;\xf3RE\\\x97\xa7\x9b\x9a\x97[\x11q\x8c\x00l\x11\x86M\xd9\xf4\xbf\xeeLX\x82\x14\xe8\"\xbar\xc0\xa2\xa3\xb5^\x7f\xa7\x02\xae\\\xd8\xc9R@\x94\xb5h$\x9f A\xe8hv\x81\xc2J\b\x18\x16-\x05\xc8/\xa7E\xaf\f\x91&\x11\n`v\x9b\xb8@\x83\x12k\xb2\x90i\xe2\xa9@.\x1c\xb3\x12\x0f\x88\xf4J\xae\x1c:g2\x92M\xafJk\x88\x9c\xc9H\x1e\xabjd!S\x8f\xe0\a\x83v\xba\x05\x8f,G\xc80c\x94\x95\x03\xe6\x1c\xb5\xda]\xf3\xab\xa0\x1e\xecX\x88\x96\x88\x92\x8c\rU\x16\xc2R\x99W\x83\x00`\x8a\xf8\xff\xfdU\xe8\xc80\bR\xf6\xa9\xf2g\x1a]\x86[\xb2\xc9{bh\xac\x94\x1b\xd7\xe82\xe4\xfd\xce\x16oE\x87\x81\x88Ru\xe9\b\x17\x0f5@\xd4oEP}\xa9\x9fV\xb5\x10\x0f\xba>\x16\x8f\xf0\xb2&L(\xf3\xd5YJ:\x1c'J\xfb\xe0\xa9h\xb9]\xe9i\x03r\x13\xd4\x18\xcb\xcd\xf0D9\x11\x94\xa9\xde\x1f\x1c\x1ab@g\xcfb\xf0\x0e\xa9\xf3l.Įd\x96k\xbe\x97\x90\xb1-\x05ø\xec\x10W[\xfcb]\x9d\xec\xfa\xb6D\xccȲۯn+\n\x9d0\x93vR)\xf8B¡Ë\x9d\x8bq\x11\x15\xd5&\xa25DL,\x1d\xfe\tɻ\f\x8c0\xac\xab]\xf7\x00\x8a\x80\x8b\xd7!\xaeF\x83U\x11\x8e\xa5\xd8\xe6\xe5\xf4\xc2*7\xaca̧\b\xb6d\xb8\n\\ \xe6\x1c\xf1\x0f\x0e\xed\a\x02\xa0j\xf8\x18!O<q\x9f\\\x87\xa7\x057\xc7\x14#>\x83\xac\xd6\xddD\x9f\x8c\xf7\xa4Mi\xe0\x12o\xbeH1\xa1\x9f\x06=\b\a\xa4@\xf5@\xc6R\xd036\x1e\x9cS\x11\xb3\xa7\x1eЖ\x03\n\xb5\xc6cҷ\x0f\xed\x81\x1aʍ_\x05\"!\x96݉\x844N\x04d\xe7hz{\x1d\xb5\x02hIQ\xbeס\xd5P\xfcҒ\xa3\xb1v/3\x9d\xad\x8b\f\xef\x9d\xe8\xf0,|z@\x04\x8a\x9aA0PJ\x90\r\x11\xbb9Yn\x8eٕT\xda\\\x19\"ծ\xda\x15\t\xaa\xaa\x9e*\x1e\x05\xbbM\x94\x8c&\xb2\xb6\xd0p\x94PO4\xc2D\x99\xd0\xc1\x9a\xb94sUd\x14{ۧg\xe2m\x9f\xad\xbb\x7f\xfb\fT\x92\x03\xf4:t\xe93\bEM\xf8\xd9\x1d&V\x15\x911\xbe\x9f>F\xd5C\xcaH\xff\x11\xbc\x9cK\xf6\xa2>\x95\rс\xc3\xd6\x101)S\xac\xf3\xa7\xfc\xc6\x05\x1e\x94\x008t\xd4}\x97\x00=F\x1cK\xf7\x89^\x94 \f~U\xda8\x06z\x19Ei#\x7f\x0f\x0e\r\x01V\xd7|\t\x10\x89N@\xe9UL{\xf1\xba\xa7`8@\xb2M\x8c^I\xad9;K\x05CM\xafpO+ԯ\x90\fW!\x9b\xb1l\xd9\xfeH\xd65\xfcEO\x04^\xa9\x95\xfdJ\xb5\a\xcf\x115p\x86Q]ұW^#YH\xdfi\rK\x19'\x9f\xe0\xb2=ik\xa4\t\xa3\xefAWS\xf3IwD\xbb\x02\xaa\x1c;\xf54\xa3\x9c\x8eqk\xc8B\xa6\x9a@\xa5\xae\xafCC\xb3\n\x88ǫ\xa3\xe0\xd5LFԻ\xc8Po<^\xd3\xc3\x10PF\xf1x-N\xa8\x9a\xdd\x04\xb5膈-\xdf\xccXc^12Y\x87\xf9\xecV\x00\x00\x18\x0f\x9f\xf9\xcfX\tI5\x17bw\x8a\x99\x81a\xf5^\xa4\x94\xc2R\xfb\x9253r<r\"\xc8U\xdf\xdc\x17\xd2g\x85j/Y\xe3\xa2\xf5\xb9\x00\x9b\xd4L\xa5\xf6\xaa\x98\xfc\xbc\x82\xc7k0Lh7\x9c\f\xe6R\x87U\x11\x8eg\x15q6\x9c\x11\x03\xb6ɷq\x00\a]l\x8fɉ\x96,d\xccI\xf7\x11\xe4\x0e-\b\xeav\xb0 \xec\x1f\xae3\x8bw\xb8\xaa\x8ag<\\%`\x8a\xfe\xfd9(a\x92=\xb6/+c\xac\x98h\x8dK\xbb3d!\xbd\xed\tw\xb8\xb1\xa1\xc1\xf3Hs0*hE{{\x1e)*\xfc\xf4Q\x89jZ)\xb0\xe1)D5U\x97z\xe7\x83K=\xed\x8c\xdd\nD\rea\xdfPK\xee\xa7\xd0\xed\xdbn\xa6.\x94\x15\x1d՛b\xa5\f\x14\x0f5D\x84\xe8\xe3\f!\n\xc0\xa7\x8b\x14\f\"\x06\xc0\x8a\x81\xd6z\xcdd\t\n\xd8\xfb\t\x10\xf3\xf6\x92\x91\v4\xce.\xb4t\xc2\xfc*O\xec~\x94\x808\xdbo\xcc\x05/'\xcc,\x8ez<\x0e7y=|\x98\xd0\x03\x9fݞ\xb2\xa6/ǲ\xc6=R\x9b9\xadj\xe1r$Aw\x17!!\\\xb7tZզJ'\xd3}8]\xec\u07fc\x8c\xec\x04\x83\xe7F\xbe\x04b\xa2\xac\tÕ\r\xe3QX\tm\xe9ƅ\xea\x8a\x18A\xa7\x1e\xbb\x17*[w\xff\x85\xca@\xa5{2\xd0\xc77\bi\xee\f\fgX\xee\x1c\x9ffe\xc1,ʮg\x03\xefɖ+ɽ\x81\xa7\xa5\xe5N\xf4q\xe0\xfe.\xfcqG\a\x1e\r\x96\xf7\xb0\xb7ceh?\xedBII0j\xbc\x16&?\xa9\nԹ1\xad\xf7v\xa0\xf0\xd4\xe1\x013ԗ 3H\x04[\xfc\xa0%|\xa3\v\x03\xcb\xf7p\xa5\x94\xb02\xf6\xe0\x10\x06\x14\xa2\xd7/E^U,,\xeb\x82I\x87\xb2\xbc0\x05D\x162\xa6@.Hb\xc2\xc6\xde*\x1d\xca\xd9\xd8\v2nH\xf7\xc1 \xa3BH?\xa3\xa1\xca+~\xf9\x8e\xe6<b=8tL\xf5\x1c\x04\xf3\xc8\xd2\x1a\"\x16\x98м\xf3\xe8\x95S K13\xa5\xb9\xeex\x16\xd2\b\x87\x8d\x85\u07b8`\xa4\xc8ݝ\xcd\xd0~J'n\xf2\xc3j\rd|\xff\x8co%\xa3B\xbe\fiYY\xe5\x839\x9f\xa4K\t4m.JփpP\xcd=\xb4\x86ѡ4\xa7Tg\xa9ث\xbc\x87\xc1\xf0K\x86\xa6I\x9fWd!\xbd\xeb\x04\xdc(\x0f\"5\x99ꩮ\xe9\xb8~G\xd19Rs[\xd3 \xd2\xe3\xc0\x1dV}\xa2Z;\x86\x05\x99'\xb7\x95me\xda\x1f\xf4d\xe6OWz`>5_\x04\xe5ћ\xa6\xa0v\xad\x1b]N\x15\xc7\xde\x05\n\xcb#%uU\x9e\xc8X\x93\xb1ݐG\xf7\x93\xf4\x04h\xe8b\xb9(\xc1\x97\xa2ס\xd4]\x8f\xab\xea\x11\x19fG\xba&\xf3\x84ܻ\xf9\xb4j\x8b\x18h\xd0Q\xb1\xdbQ\xfaC\v<\xd9 Ҿs\aoc+\xee\t\t\x81\x996N\x86H\x95\x06*\xe1\x16\xb4`\x97\xde:d\xf9\xb3P\x88=$\xc2\xf9Eǣ\x1b]\x8e\x99\x1c\x8f\x7f'\xa2\xbd\xf74\xeea\xe8\x14\xa4\xd2]D\n+\x93U˅^+\xf0\xacZ\xbe\xf3\xa8\xe5\x0e\x1e\xc5\xfeG\xe9\x82\x06\xdd\x15\x1f'\xa8`A\x8b\n\xf8\xf8\x84+u\xac\xcbRD\x89\xe0\x96\xd9v3\xf7\x19$\xe9V&\x95\xff\xc7)pE\xd5\xd3\x11\x97h6ꥼ\x00\x8c^\x94N\x04\xdb#\x13\x01=\x17\xe9=\xa7\xef\xd8Ǉg\x17\v\xf1\xfd\xf28\xb2.hoG\x13\xa9:\xf0\xf8\xa6\u009f\xe1%\xba\x047\xd8R\xdc>\xc8\x1d\x9a\xbb\x95\xbdW\x0fg\r/`a\xe8\xb4\ad)~\xef&\x01\xde\xf38\xfcn\x92\x98\xe5\xbc\x0f\x7f*W\xf9{Y#/\x10k\xdd\xe1ג\x86\xcb\xfbQ\x1ef,\x91\xe0)]\xc1\x1dL?\x92zΈ\xa0\xa6it\xa8\xabt\x97;M\xa3C}\xc4b\xaa\xbf9\x8e\x9c\x17j\xfd\xdd\xf1\x8e\xee\x8b\xc0\xfe\xf6x\xc7\a\x03\xb3\xf7\xf4\xf8\xbc\xf1\xdaǷ\x16\xbbi\xfas\xba{\x1d\n#GF{,\x11\xe4\xc3<%\xc9\xcc\x05\xf9\xe9\x81)\xa4\xa5\x8ad*^v&Iځ\n\xf0\xb3\x13M\x0e\xcd\"#\x0f\x05>\xa3$\xe1G\\\x8dL\v\x9e\x98\xc5\xf2\xb3#\xa8G\x92\\~uOG^&\xcc}H\x92Ѥ\xcb\xfc\xfa.('\xa7\xe6\xe7G\x80\x12Sn\x0e)s<#\xe7'\x87`\xe3\x8f\r\x87\x96\xe2\xee|\x9e\x97k\xbb\xbed\xf8\xa4\xb9\xc2w\xe4\xfd|\x90gͳR\x7f2\xf5>93(s\x9fr\x13\x87r\xbd\xd8hbQ\xa6\xbc&\xe7\x1de\xaaWFZR\xe6)\x90\x98\xb5\xf4\xc3|\xd4Ñ\xfb\xcbZ\xabL\x9aS\xa6\x97\xb4\x97\xfc\xf4t@\\\x06,\x18\xa9\x94\x97\xdd\x1a\"\xa2\xa5\x1f\xe5i\xa9FM\xbf\x94dj\x94\xc6/\xf0(\x1f\xe3\xd5T\f\xe1KR\xa6\xbfb\x90\xc9(0\xbb\"\x9d\xfcc\xa9;5ˠo\xff/\xfe]\xa8;9k\x99Ί\x85\xbc\x9cz\xa2bk\x8d.\xdb\xe5ݿ-\xbc\xb1\x96\x7f\r\xfa\xea\xc0\xe5?\xe2\xe0e\xa2\xed-T\xa6\x8dHN\xf9\xcb\xdcS\x95\xf9\xe7\xb8\xe5\xbdWs\xa7eKN3\xcc4Uǒ\x0f3/t\x99\xf9\x87\x99GIRzb\xa6\xb9\xca\xc9^<4ܽ\xe4\xc6L\xcd?\x9a\xfb\xf8\x8b{\xba\xb1\t\x92\xf7\xa1\x98,\xcaCkx0\xc92\xe0=K\xbc\xfdܷ5\x93\x1c\xf8\xf7\xd3\x06~$\xc9\r\xa6\x9e\x84\xa1\x05\x02\x11\x19U\x91\x99\xed\xb6\x83\x9d\xa2\xb7\x7f˰\xe9\x124\x1aǕ+\x00\xff\xebs\x0f\xf0\xfe\xff_\x88\xa0\xa7_b\xd2\x0e\x0e\v\x9cw\xd3\xc8Y\xe4\xe85#\xcd\x0f]\xc0(#-Q\x83lt\xf9ع\xb6@&][\xd2\xcc\xc3\x02\x9axgɝ~\u0085%\xcd\x1e,\x90\x87o+\x8eARj\xaa\xaf*i7h5\x80\x01=.\xf9\xc2\xea8\x1aA\x9dwҥ=\x85)\xecg\xf1\xff\x14\x14\x9b\xbdP\xfd\xc8\xd0\x1ab7\xcfz\x0f\x8dW\x1d\xae/:\xf4\xdbY\xea\x9e\x01\xba^_\xbb\xe5\xf0e\x012Ҷ:\xe4\xd8\x1a\"=\xff\u0097\x8c\fSj\x12]\xdd\x03\x85,\x95\xcfbP-\\\xbaA\xfdA\xde\xe0\xd3BBiVz\x01\xfd?X\xe9\x05|\xd7J\xa7\x99\xd4\x05\xec\x19M\xea\x02\xfa\xac&Ձ}.\x93\xba@\x1e6\xa9|Q\x1c\x8b\xb6\x9f\x86\xe9\f`\xffw\x17\xfd\xf4\x97p\x1e\x8f\xfaپH\x1e\x8f\xffQz\x9a\x1cL\xce\xf6q\x8a\x8aL\x1df\x02?\xea\xf4\x05\x87\x9eW\x0f\x9fnB;\xbc0\x17\a\x00\x9d\xf1\xd9\x04\xb6\x1b]\x8e%`\x01\x04Ej\x89Pe7\xb1\bf\xbeAn\x81\x84\xde|U\f\xbfӘ\xd0S0\x15\x13\x9b(UW\x13\xae>[m\x83\xfc\xcc4\x93\x1as\xc1\xe8m\xe3\x17\xf2\xe4?l\xa8\xf6\x8d\x7f\x86\xf2\xa6 \x87X\x0e\xa82\xe6אp!a*.\xc0љ\xaee\x8d\xd5Ϯ\x9e݊eW\xf7\x05\xd7ǄߞyG\x99P\xca\xf3Y\x85\xa6i\xeb\x97n\xcdoR\xee\xfc$\xa7\xfd\xe9ǽ߭\x8c\xfc\x88\xa0i]~1o\xf7\xb7\x06\xdd_I\x89\xfc\xb4\x9e\x97q\x1d\xfbE\x95\x84|X\xf7\v?\xc7/\x9a>\x9bdL\xfco\xc06\xa6؟\xff\x01\x00\x00\xff\xff\x01\x00\x00\xff\xffgx+\xff\xd0X\x00\x00"))
+	schema.RegisterEncodedSchema("dev.miren.core", "v1alpha", []byte("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xdc\\۲\xec6\xd1~\x8d??\t\x10\xce\x04\xe2$\x84p&\xc5\xe1\x82*nx\x04\x97\xc6\xd6x\xb4ƶ\xbce\xcd\xec5\xb9ۜ)\n\xaax\x05\xf6\u07b9\xe1\xf9\xe0\x9a\xb2Z\x92\xa5\xb6lI\x9eE\x15\xc5\xcd*\xb5\xac\xfet\xean\xb5Z\xbd\xe6Uݓ\x8e\xf65\xbd\x16\x1d\x13\xb4/*.(=\xb3\xbe\x1e\xff\xf1ܯ}o\xaa-\xc80|\xaax\x04\xfaJ\x86\x01\xf8\xfeu\xacyGX\x8f@\x8fGF\xdbz\xfc\xfd\xcb\x03\xab\x1f\xbf\xb4d.H%ٕ\x965\x1dZ~\xebh/U7ϖ\xd5\xf26\xd0\x03\xab\x15\xd0\xdb\xeb@W*F\xc6{\x98 \xaa\xd3\x10\xaf&\x88/\x04 \xe6\xdeʖWg\x85\xc1q\xe5\x04\xc2*\xde\r\xbc\xa7\xbd\x9cK\xb0>\x18\xb7\b\xe0\xa6,\xd8o\xd4<\xdfA\x83D@\x05\xa9\x9e]\x98\xa0uI`\xd9\xcen\xc54\xd0Z\xb2\x8e*\xa8oF\xa0\x1c\x9a\xd5\n\xac\xf3\xab&\xb8\xe3(\x05\xeb\x1b\x05\xf8\xf5\b }\x1c\x98\xa0\xa3\x19ڃCۑ5zg\x9a\xeb\a\xa4\x1dN\xa4\x1d\x04눸\x95\xd3\n\xf53\xe2\x04\xb8\xba\xf1\xacg\x92\x91\xb6\xacx\x7fd\rl<\xaase\xe7\xff\x03\x10\x83\xe0\x0f\xb4\x82\x816\x86p\x99>\x1f`z\xceŹ\xe5\xa4.\x05o)\xac\x98_\xe5\xac\xd8\xe6D+2\f\x8ba)\xb5\x1bi%\xa8\x96\xac\vj\x00\xdfRd\xe9\xd7j\n_\x0e\xf2\x17\xd5E\x88i\xcf\\\xbd\xe1\xb8rk\xfd4\xce@\xe4I1ת\x94:\xf7#\xb0?~&4}\xbd\x130\xff+j\xa1?\xa6,\xc0\v5\xf07\xc3\x00\x05\x7f\xdeS\xa1\xba\xa0PL\x1d\xbb\x91\x94\x052\x98L!ّ\x98\xd1c\xabj\xbe\xa6\f\xff\xb7j\xf8x\x85\f\xc2daT\x17\x93\x18m\v\xad\xe1\xe8Hώt\x04y?Y\nk\xf8Wc\xfce\xcd\x1a\x03\xc3q\xa5\x83\xa6\f\xeeg\xd7\xd0FI\xe4eT G]V\x06\x82\xf6\x97\xee<\xfd)\xaf\xa4\xbd\xd0\xf1\xefG0\xe7\x8b\xe5\x06&}\x00\x9c\x88\xa8N\xecJ\x97\x1d\x9af\xfa\xfb\xe6֞\xcc\xe8\xc2{\xdbQIj\"Ixo\xcd\xd7$;\x1f\\\x1b\x83P\xb4\xe4@۱\xeeH\x7f\xfb'\xac\x90\xae\x99V\x88\xaarP\xb6-\x80\xd2\xc8\xf9\x0f\xde\xe2ϭ\xf1mY\xc4\xed\x953\x10\x8bI\xa9\x95\x9bm\xba>/\xdfX=FR\x96\xefoj\x16o\xadb\xac+\a>\xff}\x9e\xd2.\xd9\xc9Rx\xed\xb0AE\b\xaeA=\xbb\x15\x18\a{E\x0eN\xd5^FI\x859\x91\x1f\x1c\x1a\xa3|e\x03\x85wCK\xe5\xec&\xb4^\rVԍyA\x91\xd6\xe5\xe1\x06\xf3r+\"\x8e\x11\x82-°)\x9b\xfe\xa7\x8d\t+\x90\x82\\\xe4\xa9\xec\xa8<\xf1Z\xaf\xbfS\x81W\x0e\x9bI\x17\x88v\x84\xb5p6@1\xa6@.sD\xf7\xc2\xce\x1d\xb0rѐ\x9e}B$\xe3\xbd\xd9}\x8e+1`X\xa4\x01p\xbc\x1cf}6D\x9a$\x02\xc0䮍\x92t\xa0Nl&\xd3\xd4\x02@.#\x15弦\x0f\x0e\x9d3\x19ŦW\xa51D\xced\x14\x8f\xdd\x196\x93\xa9G\xff\x83A;܂G\xa5#\xdcT\b.ʎ\x8e#i\xb4\x9b\xe8Wa\xfd۰L\r\x93%\xeb\x8f\x1c,\x93\xa52\xaf$\x01\xc0t\xb5\xc3V\xdd (\x9d\xe3\xe0G\x1du\x19o\xc9*\xefA\x90\xbe\x02\xf7\xf1\xa8˘\xf7\x1bk\xbc\x15\xef:&K\xe8\xd2\x11\xae1\xf4\x01\xa3~-\x82\xeaK\xfd\xb0\xa8\x8d\xd9\x12\x8b\xc7ƲfB\x82\xd9<YJ9:\a\xce۠1\xb1ܮ\xf44\x01\xb9\tj\x8c\xe5\x16t\xe0#\x93\\@\xef\x0f\x0e\x8d1\xb0\x93i1\xc6\x13\x81st*Į\x82\x96k\xba\x0f\xb1\xbe)\xa5\xa0\xb4<\x91\x11\xb6\xf8ٲ:\xd9\xe5n\x98\x9c\x90\x83\x97AG\xae\x93\x16\xec\x8b\xeb\xfc|\xa0B\xd9Y0\x103\x8916\xc6\xc0/\xb2\xe2\xda\xc44\x86\x88\x89\xb5\xc3?\x10u\aÑ\x91e\xb5\xebք\xcf#\xc0;\x91\x11FC\xa1\x88\xc7R\xac\xf3\x8e\xfc\"*7\x1cc̯\f~\xc9pqFI\x84\xe3\x9a<8\xb4\x1f\xc0\b\x1f\xd3\x06#t\x83H\xdc'\xd7QkЍ7\xe5\x10\x98@\x16\xebn\xa2f\xc6\xebӦ8\x10|0-RL\xf0_\x83\x9e\x8f\x03R\x90\xbac})\xf9\x99\x1a\xcfө\x88\xd9c\x0fh\xcdq\xc6Z\xe31\xe9[\x93\xf6\x9c\r\xe5\xc6\xdd\x02\x11\x1c\xcb\xeeDp\x8eN\xe4f\xe3h{{\x19mChI\xd1\xc9ס\xd5\x00~u\x12\x90\xbev/a'[\x17\x19\xde;\xd1\xe1Y\xf8\xf4@\x0e\x165\x83`\xa0@\x90\r\x11sX-\xf7HŕU\xda\\\x19\"\xd5.\xdb\x15\t\xaa\xaa\x9e*\xed\xa5\xb8\r\x9c\xf5&\"8\xd3x\x94XO4\xc2\xc0\x85\xd4A\xa6\xa94qU\xac\x97[ۧg\xe2m\x9f\xad\xbb\x7f\xfb\fT\x92\x03\xf5:tY5\bE\xcdƳ;L\n\x15\x911\xbe\x9f>F\xe8!e\xa4\x7f\x0e\x06\x15\x14{Q\x1f\xca#\xd3\x01\xcf\xc6\x10\xd1k\x91b\x9d\x9a\x8e\xb7Q\xd2\x0e\x04\xc0\xa1\xa3\xee\xbf\x02h)\x19\xa9r\xbf\xf8\x05\x04\xa1\xf3\xab\xd2\xc6\xd1\xf1K/K\x1b\xb1|ph\f\xb0\bO(\x80\xc8\xcd\x0eK/0m\xc5\x19\x83\x92\x01l\x83\xe0WVS\xa1\xe2a\v\xf39U\xaa}-m;%\xe2\x96\n\x86\xd2^ҖW\xa4]\xf4h\xb8\n\xf5\x99\xaa/\xeb\x8dT\xddq|\xd62I\x17\xeag[\xc1\xf7\xe0y\x03\x13\x14\x94\xd4%\xef[\xf0N\xd9L\xfa\xceqX\x1aG\xf6\t-\x9b\x83\xb6Z\x9a0v!\xe8\xd2j>\xe5\xb6h\x97\x01ʱ\xd3Q3\xaa\xe9\x18\xf7\x87\xcdd\xaa\xa9\x04\xb5~\x1d\x1a\x9aUT\xda_\x1dCPMd\xc4\f\x14\x19f\x80\xf6\xd7\x14#\xf0\x87\xa0,\xd3\xfeZ\x1cH5\xb9\x13\xb0膈-\xdf\xc4Xӱ\x12l\xb0\x8e\xf5٭@\x008\xde?\xf1\x9f)\bI5\x15bw\x97\x89APx\x0f\x03\xa5\xb0ԶdM\x8c#\xedG&\xd9UG\bf\xd2g\xc5\xe6A\xb1\xc6E\xeb\xff\x02lJ3\xc1<@1\xf9\xf9\x88\xf6\xd7`\x18\xd4n8\xeb\xcc]\x88B\x11\x8fg\x11Q7\x9c\x11C\xb7ʷrP\a]q\x8fɉ\xca\xccd̙\xf7\x11\xd4\x0e\xcd\bp\x8b\x88\x98Z\x0f\xc1;\x84\xa1\xe2\t\x0fa\x05\x98\xa2\x7f\xbf\vJ\x98b\x8f\xed\xcb\xc2\x18\x03\x13\xafiiw\x86ͤ\xb7=\xe1\x0e\xb7<\xaf\xc5\x01\x01\x1c\x82K^\xf1v\xe3\xdcR\xfbcۙs\v\xa8\xf0\x13P%\xaba\xa1膧\x90\xd5P]\xea\x8d\x06\x97zؘ\xa3\x15\x9c\x1a\xcb̶AWܯB\xb7y\xbb\xe9\xbaPV\xbc\x87\xb7\xd5\n\f\xd9\x18\xfa\x10\x11\xb6\x8f3\x84-\x00\x9f.z8\xa8\x19\x00+:^\xeb5S%,\x88\xef'@L\xdb\xcb\xfaQ\x92~rɕS\xe7Wy\xe2\xf9\xbd\x04\xc4\xc9\xce\xd3Q\x8e\xe5@\x85ŁG\xf4\xf0'\xaf\x87\x0f\x13z\x18'\xf7\xa8\xac\xf9\xf3\xbe\xaciK`3\x87E-^\x8e$\xe8\xd3E*\b\xd7\xcd\x1d\x16\xb5\xa9\xd2)t\x1fN\x17\xdb79#;\xc1`\xbe\x91/I\x84,k&heÊ\x1cWb\x9b\xbbrA\xbb\x12\xc1ȡ\xa5\xee\x05\xcd\xd6\xdd\x7fA3P\xe9\x1e\x0f\xbe3\x18\x844\xb7\a\x87G,w\x8eﳰ`\x16e\xd3\x03\xc2\xf7n˕\xe4\x06a\x13m\xb9\x13}!\xbc\xbf3\x7f\xdc!\xc2G\x88\xe5\xdd\xed\x15Y\x19\xdaN?\x01)\tF\xb1\x97\xc2\xe4'\x97\xa1:7F\xf6\xde\x06\x14\x1dN\xb4\xa3\x82\xb4%ʐ\x92\xc1/~\x10\x14\xbf\x19\x86\x81U^\x00(%\xae\x8c=\x80\x84\x01\xa5l\xf5˕W\x15\v\xf3\xba`\xca\xf1,/\x02\x80\xd8L\xc6\x14\xc8\x05IL\\\xd9Z\xa5]\xb9+[A\xcb\x15\xe9\xde\x19\xb4\x04\x84\xf43\x1a\xab<\xf0\xabw=\xe7Q\xed\xc1\xa1c\xaa\xe7 \x98G\x9f\xc6\x10\xb1@\x87\xe6\x9dF\x0fN\x81*\xc5̔\xe6\xba\xe3\x99J#\xec6\x16z\xe3\xa2\xc23J\"YUzan\x8e+c\xa1,\x17p\xf5\xed!e\xd4nV\xc9bQ\xd5\x03ę\xdeJ\xc1\xa5z\xba\xd2·H\xb4s\x9a\xa4\x8b\x1d\xb6\x95.J\u058bw\xd0nxhG\xc1\xbb\xd2\x1c{'K\xc5\xd2\x0e<\fA\x9f\v2\f\xfa\x00d3i\x1c\xbf\xe0û\a\x91\x9a\xa5\xf6\xaa\xaey\xbf|\xe8\xd1\xc9gӷ㑰\x96\x06.\xcf\xd0\x04\xbe\x9e\x04\x95l\x9a\xdcZ\x1a\x9b\xf9\xfe\xa0'35](\x96ijZ\x04\xe5ћ\xa6\xe4v\xad\x8f\xba\x9c*\x8e\xad\v\x14\x96G\xce\xea\xaa<\xb0\xbef}\xb3\"\x8fn\x93\xf4\xccr쳹(\xc1\xa7\xacס\x9ch\x8f\xabj\t\xeb&ϼfӄܠ\xc0\xb0\xf8\x16\xb1\xf8\xa8\xa3b\xb3\xa3\xf4\x97 |Tb\xa4mo\x11_\xef\x16\xdc\x03\x91\x92\nm\x9c\f\x91*\r\\\xc1\xcdh\xc1.\xbdu\xc8r\x90\xb1\x10{Hl\x1c/:\x10~\xd4\xe5\x98\xc9\xf1\xf87B\xe9[o\xf7\x1e\x86α*\xddE\xe4\xb82Y\xb5\\\xe8\xa5\x02O\xaa\xe5{\xa3Z\xee\xf0\xd9\xee7J\x174\xec\xff\xf88A\x05\vZT\xc47\x0e\xb4\x02?A\x95\"J\x84\xb7\xcc~7s\x9f@\xd2\xdfᾟ\x02WT-\xefiI&\xa3^\xaa\x1bE\xef\x85\ae\xf0{d\"\xa8\xe7\"\xbd\xe7\xf4\x1d\xfbx\xf7\xecb\xb1ş\xeeG\xd6\x05\xed\xedh\"U\a\x1e\xdf\x04\xfc\t^\xa1+p\x83\xad\xc4\xed\x83ܡ\xb9[\xd9z\xf5x\xd6\xf8F\x17\x86N{\xe1V\xe2\xf7n\x12\xe0=\xaf\xd7\xef&\x89Y\xce\x03\xf6_\xd4*\x7f+k\xe4\x05\x11\x8d;\xfcZ\xd1xy?\xcaÌe:\xbcJWp\a\xd3\x0f͞3B\xb2i\x1a\x1d\xea*\xdd\xe5N\xd3\xe8P\x1f\xb1 \xed/\xf6#\xe7\xc5n\x7f\xb5\xbf\xa3\xfbB\xba\xbf\xdc\xdf\xf1\xceH\xef==>m\x00\xf8\xf1\xad\xd9n\x9a\xfe\x9c\xee^\x87\xe2ґ\xd1\xee\xcbT\xf90OI2\x93U~\xb8c\ni\xb9,\x99\x8a\x97\x9d\xea\x92v\xa0\"\xfc\xecL\x98]\xb3\xc8H\x94\xc1\xef2I\xf8\x11W#ӂ\xc7\xd3l>\x9dP\x7f\xb4\a\xf5\x7f#\vG\xa8\xde[ڐ\xea\xe6\x0f\xe2\xc5\xe3\xcf\xeeY\x16w\xa8\xf7B\xb9\x13z\xf1\xf8\U000fbc1c\xe4\xa3\x1f\xef\x01J\xccM\xdae|\xe2\xa9K?\xd8\x05\x1b\x7fmٵ\x14w'>=_\x9eCs*T\x9a\xeb~G\x82\xd4\ay\xa7OV\x8eT\xa6\x9dJN\xa1\xcaܧ\xdc\f\xab\\\xaf;\x9a\x81\x95)\xaf\xc9\tZ\x99ꕑ\xbf\x95yj%\xa6w}7\x1fu\xf7\xd3\xc5e\xa9U&\x1f,ӫ\xdb\xca\x12{\xb5C\\:*\x05\xab\xe0V\xd0\x18\"\xa2\xa5\x1f\xe5i\xa9FM\xbfDej\x94\xc6/h\xaf\xb2\x11`*\x86\xf0%)ӿ2Ȭ\x97T\\\x89\xce~\xb2ԝ\x9ae\xd0\xd7\x7f\x94\xe1.ԍ\xe4\xbeL\xe7\xcaB^\x0e-\x83X\xe0Q\x97\xed\xf2n\xdfn\xdeXʿ\x06}\xb9#X\x11qH3Ѷ\x16*\xd3F$\xe7Ff\xee)\xa4H:\u05c8֫\xb9Ӳ%\xe7cf\x9a\xaa}Y\x9a\x99\x17\xd0\xccD\xcḍ$)\x8f3\xd3\\\xe5\xa4y\xee\x1a\xee\x8a@\xef\xb9V\xfdW'\x89\x06\xeeI\n\xf5\xc5\xe3O\ue665\xe9\xfb^\x18\x93ƺk\x0fwf\xb9\x06\xbcw\x85\xb7\x9d|\xb8dR\x03\xffv\xda\xc03\xb3\f3\x02\xf5:g\xa3fpQ\x7fph\f\xf8\x9d\x1c@\xc8s\x18\x8c#\xf5lY\x8d-\x1fN7\t\xc3K\x82\"nP\x91\x99\x1e\xb9\x81\x9db\xe7\xfe\x98q\x06*\xd0h\x9c^\xad\x00\xfe\xb7\xe3-\xc0\xfb\xff1&\x82\x9e~\xe9K;h-p\xde\xcd,g\x91\xa3ײ4\xbf}\x06\xe3\x825\f\x06y\xd4\xe5}~\xc0\f\x99t\xcdK3g3h\xe2\x1d/w\xfa\t\x17\xbc4\xfb5C\xee\xbe\xdd9\x06\x14\xd4T_\xed\xd2\"\x0e0\x80\x8e<\xce\t\xe6p|\xf7\xa8\xce\xf3\f\xd2,(`?\x89\xbf\fPb\xf2\xda\xf5#Rc\x88\xcd\xc4\xfc-\xb4\xb1:\xd1\xfa\xa2C\xfb'K\xdd3@\xd7Kn\xd6\x1c\xe4,@\xc1\x9aF\x87\x8a\x1bC\xa4\xe7\xd7\xf8\x92\x91aJMf\xb4{\xa0\xb0\xb9\xf2I\f\xaa\x85K7\xa8i\a\xad\x05N\v\xa1\xa5Y\xe9\x19\xf4?`\xa5g\xf0M+\x9dfRg\xb0'4\xa93蓚T\a\xf6\xa9L\xea\f\xb9ۤ\x8e\xb3\xe2X\xb4\xed4[g\x00\xdb?X\xea\xa77\x85\xf3\xb4\xe0\xf7.#yZ~\xa3\xf44H\x9c\xcd\xef\xe3\x14\x15\x1bNTH\xfa\xa8\xd3S\x1czZ=z\xb8I\xed\xa0\xe3\\+\x04t\xa6g\xf3\x10p\xd4\xe5X\x82\x1dB\x00RK\x04\x94\xdd\xc41\x9cو\xb9%\x91z\xf3\xa1\x18~_3\xa1\xba`\xaa-5Q\xbdS\xcdFh\xb6\xd8\x06\xd5\xcc|f5\x1d\xa5\u0dd5\x9f\x96T\xff\xe1\x03\xdfW\xfe{Λ\x82\x1abّʘ_C\xe2\x85ĩ\xd6\bGg2\x975\x85\xdf+>\xbb\x15\xf3\xaen\v\xae\x8f\x89۞\xc7\xd3t\a\x87\x9f\x87\xae\xc80\xac\xfdD\xb4\xf91\u05cd߲\xb5\xbf\x99\xba\xf5\x83\xaf\x91_\xdf4_矚\xdc\xfc\x91N\xf7gz\"\xbfI\xe9e\xd4\xc7~\xd2'!\xdf\xd9m\xe1\xe7pFӣ\x93\x8c\x89\xdf\x06mc\x8a\xfd\xf97\x00\x00\x00\xff\xff\x01\x00\x00\xff\xff\xf2A@\x85\t\\\x00\x00"))
 }

@@ -25,20 +25,22 @@ type foundationBoot struct {
 	output    boot.Output[foundationBootOutput]
 }
 
-func newFoundationBoot(config coordinate.CoordinatorConfig, ipDiscovery boot.Output[ipDiscoveryBootOutput], registration boot.Output[registrationBootOutput], identity boot.Output[workloadIdentityBootOutput], etcd boot.Output[etcdBootOutput], buildkit boot.Output[buildkitBootOutput], observability boot.Output[observabilityBootOutput]) *foundationBoot {
+func newFoundationBoot(config coordinate.CoordinatorConfig, ipDiscovery boot.Output[ipDiscoveryBootOutput], registration boot.Output[registrationBootOutput], identity boot.Output[workloadIdentityBootOutput], etcd boot.Output[etcdBootOutput], buildkit boot.Output[buildkitBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], observability boot.Output[observabilityBootOutput], tracing boot.Output[tracingBootOutput]) *foundationBoot {
 	b := &foundationBoot{config: config}
-	b.component, b.output = boot.Provide6(
-		"cluster-foundation", ipDiscovery, registration, identity, etcd, buildkit, observability,
+	b.component, b.output = boot.Provide8(
+		"cluster-foundation", ipDiscovery, registration, identity, etcd, buildkit, registryHostMapping, observability, tracing,
 		b.start, boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *foundationBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, registration registrationBootOutput, identity workloadIdentityBootOutput, etcd etcdBootOutput, buildkit buildkitBootOutput, observability observabilityBootOutput) (foundationBootOutput, error) {
+func (b *foundationBoot) start(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, registration registrationBootOutput, identity workloadIdentityBootOutput, etcd etcdBootOutput, buildkit buildkitBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput, tracing tracingBootOutput) (foundationBootOutput, error) {
 	config := b.config
+	config.CoordinatorInternalIP = hostMapping.registryIP
 	config.IPs = ipDiscovery.ipSet
 	config.CloudAuth = registration.cloudAuth
 	config.WorkloadIssuer = identity.issuer
+	config.TracesDestination = tracing.destination
 	config.EtcdEndpoints = etcd.endpoints
 	config.BuildKit = buildkit.component
 	if etcd.tls != nil {
@@ -100,6 +102,23 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 			"error", reason)
 	}
 
+	deploymentRetentionPeriod, err := units.ParseDuration(config.Deployment.GetRetentionPeriod())
+	if err != nil || deploymentRetentionPeriod < 0 {
+		defaultDeployment := serverconfig.DefaultDeploymentConfig()
+		invalid := deploymentRetentionPeriod
+		deploymentRetentionPeriod, _ = units.ParseDuration(defaultDeployment.GetRetentionPeriod())
+
+		reason := "negative duration"
+		if err != nil {
+			reason = err.Error()
+		}
+		options.Log.Warn("invalid deployment.retention_period, falling back to default",
+			"value", config.Deployment.GetRetentionPeriod(),
+			"parsed", invalid,
+			"default", deploymentRetentionPeriod,
+			"error", reason)
+	}
+
 	return coordinate.CoordinatorConfig{
 		Address:                   address,
 		EtcdEndpoints:             append([]string(nil), config.Etcd.Endpoints...),
@@ -114,6 +133,9 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 		AppVersionRetentionCount:  config.AppVersion.GetRetentionCount(),
 		AppVersionRetentionPeriod: appVersionRetentionPeriod,
 		SagaRetentionPeriod:       sagaRetentionPeriod,
+		DeploymentRetentionCount:  config.Deployment.GetRetentionCount(),
+		DeploymentRetentionPeriod: deploymentRetentionPeriod,
 		SecretKeyRotationPeriod:   secretKeyRotationPeriod,
+		ManagedMetricsEnabled:     config.Telemetry.Metrics.GetRemoteWriteURL() != "",
 	}
 }

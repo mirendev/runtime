@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	containerdclient "github.com/containerd/containerd/v2/client"
@@ -32,6 +33,11 @@ type BootConfig struct {
 	Embedded         *Config
 	ReadinessTimeout time.Duration
 	StopTimeout      time.Duration
+	// ReportVersion, when set, receives the version of each runtime piece
+	// once it is confirmed running: the containerd daemon, and for an
+	// embedded daemon the runc beside it. An upgrade that replaced them on
+	// disk reads this back to see that the swap took.
+	ReportVersion func(component, version string)
 }
 
 // ExternalBootConfig connects to a daemon managed outside this process.
@@ -119,10 +125,38 @@ func (b *Boot) start(ctx context.Context) (Capability, error) {
 	}
 	readyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if _, err := client.Version(readyCtx); err != nil {
+	daemon, err := client.Version(readyCtx)
+	if err != nil {
 		return Capability{}, fmt.Errorf("checking containerd readiness: %w", err)
 	}
+	b.report("containerd", daemon.Version)
+	if b.config.Embedded != nil {
+		b.report("runc", runcVersion(readyCtx, b.config.Embedded.BinDir))
+	}
 	return b.result, nil
+}
+
+func (b *Boot) report(component, version string) {
+	if b.config.ReportVersion == nil || version == "" {
+		return
+	}
+	b.config.ReportVersion(component, version)
+}
+
+// runcVersion asks the runc an embedded daemon's shims will exec. Empty when
+// there is no answer; the version is a report, not a requirement.
+func runcVersion(ctx context.Context, binDir string) string {
+	path := "runc"
+	if binDir != "" {
+		path = filepath.Join(binDir, "runc")
+	}
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	// First line is "runc version 1.2.2"; the rest is commit and spec.
+	line, _, _ := strings.Cut(string(out), "\n")
+	return strings.TrimSpace(strings.TrimPrefix(line, "runc version "))
 }
 
 func (b *Boot) stop(ctx context.Context) error {

@@ -1,15 +1,19 @@
 package entityserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
@@ -198,6 +202,42 @@ func TestEntityServer_Delete(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestEntityServer_MakeAttrNamedEnum(t *testing.T) {
+	store := entity.NewMockStore()
+	sb := schema.Builder("make_attr_enum_test", "v1")
+	sb.Singleton("make_attr_enum_test/canonical.ready")
+	sb.Enum("Status", "make_attr_enum_test/status", []entity.Id{"make_attr_enum_test/canonical.ready"})
+	require.NoError(t, sb.Apply(t.Context(), store))
+
+	client := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(&EntityServer{
+			Log:   slog.Default(),
+			Store: store,
+		})),
+	}
+
+	result, err := client.MakeAttr(t.Context(), "make_attr_enum_test/status", "ready")
+	require.NoError(t, err)
+	assert.True(t, entity.RefValue("make_attr_enum_test/canonical.ready").Equal(result.Attr().Value))
+
+	_, err = client.MakeAttr(t.Context(), "make_attr_enum_test/status", "nope")
+	require.ErrorContains(t, err, "invalid enum value: nope")
+}
+
+func TestEnumValueFromStringRejectsAmbiguousShortRef(t *testing.T) {
+	values := []entity.Value{
+		entity.RefValue("test/first.ready"),
+		entity.RefValue("test/second.ready"),
+	}
+
+	exact, ok := enumRefFromString(values, "test/second.ready")
+	require.True(t, ok)
+	assert.True(t, exact.Equal(entity.RefValue("test/second.ready")))
+
+	_, ok = enumRefFromString(values, "ready")
+	assert.False(t, ok)
 }
 
 func TestEntityServer_WatchIndex(t *testing.T) {
@@ -546,6 +586,216 @@ func TestEntityServer_WatchIndex_DeleteIncludesEntity_Etcd(t *testing.T) {
 	case <-watchDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
+// A runner holds its node's status under its session, so the node's durable
+// index entries carry a presence marker for that session (see the index layout
+// comment in pkg/entity). Watchers must see the marker only as what it means:
+// nothing extra when the runner writes, an update when its session lapses and
+// the status goes, and a single delete when the node itself goes.
+func TestEntityServer_WatchIndex_SessionMarkers_Etcd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	kindAttr, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test/marker-kind"),
+		entity.Ref(entity.Type, entity.TypeStr),
+		entity.Bool(entity.Index, true),
+	))
+	require.NoError(t, err)
+	statusAttr, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test/marker-status"),
+		entity.Ref(entity.Type, entity.TypeStr),
+		entity.Bool(entity.Session, true),
+	))
+	require.NoError(t, err)
+
+	kind := entity.String(kindAttr.Id(), "runner")
+	status := entity.String(statusAttr.Id(), "ready")
+
+	sid, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+
+	ops := make(chan *v1alpha.EntityOp, 16)
+	watchDone := make(chan error, 1)
+	go func() {
+		_, err := sc.WatchIndex(ctx, kind, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
+			ops <- op
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	// Give the watch time to establish
+	time.Sleep(100 * time.Millisecond)
+
+	next := func(what string) *v1alpha.EntityOp {
+		t.Helper()
+		select {
+		case op := <-ops:
+			return op
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+			return nil
+		}
+	}
+	hasStatus := func(op *v1alpha.EntityOp) bool {
+		return slices.ContainsFunc(op.Entity().Attrs(), status.Equal)
+	}
+
+	node, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test-marker-node"),
+		kind,
+		status,
+	), entity.WithSession(sid))
+	require.NoError(t, err)
+
+	op := next("the session write")
+	assert.Equal(t, int64(v1alpha.EntityOperationCreate), op.Operation())
+	assert.True(t, hasStatus(op))
+
+	require.NoError(t, store.RevokeSession(ctx, sid))
+
+	// Had the marker's put from the write come through, it would arrive here,
+	// still carrying the status.
+	op = next("the session lapse")
+	assert.Equal(t, int64(v1alpha.EntityOperationUpdate), op.Operation(),
+		"a lapsed session leaves the entity in the index, changed")
+	assert.Equal(t, node.Id().String(), op.EntityId())
+	assert.False(t, hasStatus(op), "the update carries the entity without the session's attributes")
+
+	// Write again under a fresh session, then delete: the plain entry's delete
+	// is the one removal, and the marker's delete beside it adds nothing.
+	sid2, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+	_, err = store.UpdateEntity(ctx, node.Id(), entity.New(status), entity.WithSession(sid2))
+	require.NoError(t, err)
+	op = next("the second session write")
+	assert.Equal(t, int64(v1alpha.EntityOperationUpdate), op.Operation())
+
+	require.NoError(t, store.DeleteEntity(ctx, node.Id()))
+	op = next("the delete")
+	assert.Equal(t, int64(v1alpha.EntityOperationDelete), op.Operation())
+
+	// A stray op from the marker would already be queued behind the delete,
+	// which came from the same transaction.
+	select {
+	case extra := <-ops:
+		t.Fatalf("unexpected op after the delete: operation %d", extra.Operation())
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for watch to finish")
+	}
+}
+
+// An entity can leave an index while sessions hold markers beside its match:
+// a session changes the value, taking every marker with it, or the sweep
+// later removes a marker an older writer left for an old value. Either way a
+// marker's delete must not follow the match's delete with an update that puts
+// the entity back.
+func TestEntityServer_WatchIndex_MarkerOfLeavingEntity_Etcd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client, prefix := setupTestEtcd(t)
+	store, err := entity.NewEtcdStore(ctx, slog.Default(), client, prefix)
+	require.NoError(t, err)
+
+	server, err := NewEntityServer(slog.Default(), store)
+	require.NoError(t, err)
+
+	sc := v1alpha.EntityAccessClient{
+		Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server)),
+	}
+
+	kindAttr, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test/leave-kind"),
+		entity.Ref(entity.Type, entity.TypeStr),
+		entity.Bool(entity.Index, true),
+	))
+	require.NoError(t, err)
+	statusAttr, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test/leave-status"),
+		entity.Ref(entity.Type, entity.TypeStr),
+		entity.Bool(entity.Session, true),
+	))
+	require.NoError(t, err)
+
+	runner := entity.String(kindAttr.Id(), "runner")
+	worker := entity.String(kindAttr.Id(), "worker")
+	status := entity.String(statusAttr.Id(), "ready")
+
+	sid, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), sid) })
+	other, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), other) })
+
+	node, err := store.CreateEntity(ctx, entity.New(
+		entity.String(entity.Ident, "test-leave-node"),
+		runner,
+		status,
+	), entity.WithSession(sid))
+	require.NoError(t, err)
+	_, err = store.UpdateEntity(ctx, node.Id(), entity.New(status), entity.WithSession(other))
+	require.NoError(t, err)
+
+	ops := make(chan *v1alpha.EntityOp, 16)
+	go func() {
+		_, _ = sc.WatchIndex(ctx, runner, 0, stream.Callback(func(op *v1alpha.EntityOp) error {
+			ops <- op
+			return nil
+		}))
+	}()
+
+	// Give the watch time to establish
+	time.Sleep(100 * time.Millisecond)
+
+	_, err = store.UpdateEntity(ctx, node.Id(), entity.New(worker), entity.WithSession(sid))
+	require.NoError(t, err)
+
+	select {
+	case op := <-ops:
+		assert.Equal(t, int64(v1alpha.EntityOperationDelete), op.Operation())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the entity to leave the index")
+	}
+
+	// A marker a writer before MIR-1991 would have left on the old value, for
+	// the sweep to remove.
+	indexPrefix, err := store.IndexPrefix(ctx, runner)
+	require.NoError(t, err)
+	otherLease, _ := binary.Varint(other)
+	_, err = client.Put(ctx, indexPrefix+base58.Encode([]byte(node.Id()))+"/"+base58.Encode(other),
+		node.Id().String(), clientv3.WithLease(clientv3.LeaseID(otherLease)))
+	require.NoError(t, err)
+
+	stats, err := store.CleanupStaleCollectionEntries(ctx, slog.Default(), entity.CleanupOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, stats.StaleEntriesRemoved, "the leftover marker on the old value")
+
+	select {
+	case extra := <-ops:
+		t.Fatalf("unexpected op after the entity left: operation %d", extra.Operation())
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
@@ -1242,4 +1492,107 @@ func TestEntityServer_ListPage(t *testing.T) {
 		r.Equal(testKind, kind.Value.Id().String())
 	})
 
+}
+
+func TestEntityServer_OrphanReadsStayQuietAndPure(t *testing.T) {
+	ctx := t.Context()
+	client, prefix := setupTestEtcd(t)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	live, err := store.CreateEntity(ctx, entity.New(entity.Ident, "live", index))
+	require.NoError(t, err)
+	server, err := NewEntityServer(log, store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	key := indexPrefix + base58.Encode([]byte(id))
+	_, err = client.Put(ctx, key, id.String())
+	require.NoError(t, err)
+	logs.Reset()
+
+	for range 2 {
+		list, err := sc.List(ctx, index)
+		require.NoError(t, err)
+		require.Len(t, list.Values(), 1)
+		require.Equal(t, live.Id().String(), list.Values()[0].Id())
+		page, err := sc.ListPage(ctx, index, "", 10)
+		require.NoError(t, err)
+		require.Len(t, page.Values(), 1)
+		require.Equal(t, int64(1), page.Total())
+		entry, err := client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Len(t, entry.Kvs, 1, "listing must leave GC to repair the orphan")
+	}
+	require.Equal(t, 4, strings.Count(logs.String(), "level=DEBUG msg=\"entity in index but not in store, skipping\""))
+	require.NotContains(t, logs.String(), "level=WARN")
+	require.NotContains(t, logs.String(), "level=ERROR")
+}
+
+func TestEntityServer_OrphanCleanupWatchDelete(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client, prefix := setupTestEtcd(t)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	store, err := entity.NewEtcdStore(ctx, log, client, prefix)
+	require.NoError(t, err)
+	index := entity.String(entity.Id("test/kind"), "widget")
+	_, err = store.CreateEntity(ctx, entity.New(
+		entity.Ident, "test/kind", entity.Doc, "indexed kind",
+		entity.Cardinality, entity.CardinalityOne, entity.Type, entity.TypeStr, entity.Index, true,
+	))
+	require.NoError(t, err)
+	server, err := NewEntityServer(log, store)
+	require.NoError(t, err)
+	sc := v1alpha.EntityAccessClient{Client: rpc.LocalClient(v1alpha.AdaptEntityAccess(server))}
+	id := entity.Id("orphan")
+	indexPrefix, err := store.IndexPrefix(ctx, index)
+	require.NoError(t, err)
+	_, err = client.Put(ctx, indexPrefix+base58.Encode([]byte(id)), id.String())
+	require.NoError(t, err)
+	listed, err := client.Get(ctx, indexPrefix, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	deletes := make(chan *v1alpha.EntityOp, 1)
+	watchDone := make(chan error, 1)
+	go func() {
+		_, err := sc.WatchIndex(ctx, index, listed.Header.Revision+1, stream.Callback(func(op *v1alpha.EntityOp) error {
+			if op.Operation() == int64(v1alpha.EntityOperationDelete) {
+				deletes <- op
+			}
+			return nil
+		}))
+		watchDone <- err
+	}()
+
+	result, err := sc.List(ctx, index)
+	require.NoError(t, err)
+	require.Empty(t, result.Values())
+	stats, err := store.CleanupStaleCollectionEntries(ctx, log, entity.CleanupOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, stats.StaleEntriesRemoved)
+	select {
+	case op := <-deletes:
+		require.Equal(t, id.String(), op.EntityId())
+		require.False(t, op.HasEntity())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for orphan delete event")
+	}
+	cancel()
+	select {
+	case <-watchDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watch to stop")
+	}
+	require.NotContains(t, logs.String(), "level=ERROR")
 }

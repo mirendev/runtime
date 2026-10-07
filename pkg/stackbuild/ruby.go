@@ -230,17 +230,26 @@ func (s *RubyStack) parseRubyVersion() string {
 	return ""
 }
 
+// detectGem reports whether the app depends on gem, matched by its exact
+// name. A substring match would count a comment like `# gem "rails"` or a gem
+// like rails-html-sanitizer as Rails, which then gets Rails' start command and
+// build steps.
 func (s *RubyStack) detectGem(gem string) bool {
 	data, lock, err := s.Gemfile()
 	if err != nil {
 		return false
 	}
 
-	if strings.Contains(string(lock), gem) {
+	name := regexp.QuoteMeta(gem)
+
+	// Gemfile.lock lists every resolved gem, transitive ones included, as
+	// `name (version)`.
+	if regexp.MustCompile(`(?m)^\s*` + name + ` \(`).Match(lock) {
 		return true
 	}
 
-	return strings.Contains(string(data), gem)
+	// Without a lockfile, take the Gemfile's own gem declarations.
+	return regexp.MustCompile(`(?m)^\s*gem\s*\(?\s*["']` + name + `["']`).Match(data)
 }
 
 func (s *RubyStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions) (*llb.State, error) {

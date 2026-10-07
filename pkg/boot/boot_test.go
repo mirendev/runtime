@@ -1,10 +1,13 @@
 package boot_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -269,4 +272,83 @@ func TestStopGivesEachComponentItsOwnTimeout(t *testing.T) {
 	require.NoError(t, g.Add(leaf))
 	require.NoError(t, g.Start(t.Context()))
 	require.NoError(t, g.Stop(t.Context()))
+}
+
+func TestStopNamesSlowComponents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		g := boot.NewGraph(boot.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+
+		sleepingStop := func(d time.Duration) boot.StopFunc {
+			return func(context.Context) error {
+				time.Sleep(d)
+				return nil
+			}
+		}
+		// A stop that honors its context and returns nil at its deadline is
+		// exactly the case that otherwise leaves no trace.
+		budgetedStop := func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		}
+		require.NoError(t, g.Add(boot.Run0("quick", func(context.Context) error { return nil },
+			boot.WithStop(sleepingStop(10*time.Millisecond), time.Minute))))
+		require.NoError(t, g.Add(boot.Run0("slow", func(context.Context) error { return nil },
+			boot.WithStop(sleepingStop(2*time.Second), time.Minute))))
+		require.NoError(t, g.Add(boot.Run0("budget-spender", func(context.Context) error { return nil },
+			boot.WithStop(budgetedStop, 30*time.Second))))
+		require.NoError(t, g.Add(boot.Run0("context-ignorer", func(context.Context) error { return nil },
+			boot.WithStop(sleepingStop(5*time.Second), 2*time.Second))))
+
+		require.NoError(t, g.Start(t.Context()))
+		require.NoError(t, g.Stop(context.Background()))
+
+		out := logs.String()
+		require.NotContains(t, out, "component=quick")
+		require.Contains(t, out, `level=INFO msg="component stop was slow" component=slow duration=2s budget=1m0s`)
+		require.Contains(t, out, `level=WARN msg="component stop used its entire budget" component=budget-spender duration=30s budget=30s`)
+		require.Contains(t, out, `level=WARN msg="component stop used its entire budget" component=context-ignorer duration=5s budget=2s`)
+	})
+}
+
+func TestStopMeasuresAgainstTheDeadlineItActuallyHad(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		g := boot.NewGraph(boot.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+		// The component's own budget is a minute, but the caller's overall
+		// deadline leaves it ten seconds. Using all ten is using all it had.
+		require.NoError(t, g.Add(boot.Run0("squeezed", func(context.Context) error { return nil },
+			boot.WithStop(func(ctx context.Context) error {
+				<-ctx.Done()
+				return nil
+			}, time.Minute))))
+
+		require.NoError(t, g.Start(t.Context()))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		require.NoError(t, g.Stop(ctx))
+
+		require.Contains(t, logs.String(), `level=WARN msg="component stop used its entire budget" component=squeezed duration=10s budget=10s`)
+	})
+}
+
+func TestStopFlagsAnOverrunAfterTheDeadlineHasPassed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		g := boot.NewGraph(boot.WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+		// Earlier layers have spent the whole shutdown deadline, so this stop
+		// starts with no budget left and then ignores its context anyway.
+		require.NoError(t, g.Add(boot.Run0("late", func(context.Context) error { return nil },
+			boot.WithStop(func(context.Context) error {
+				time.Sleep(3 * time.Second)
+				return nil
+			}, time.Minute))))
+
+		require.NoError(t, g.Start(t.Context()))
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		require.NoError(t, g.Stop(ctx))
+
+		require.Contains(t, logs.String(), `level=WARN msg="component stop used its entire budget" component=late duration=3s budget=0s`)
+	})
 }

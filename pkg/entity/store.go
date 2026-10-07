@@ -240,33 +240,14 @@ func (s *EtcdStore) CreateEntity(
 		return nil, err
 	}
 
-	var (
-		sid      int64
-		sessPart string
-	)
-
-	if len(o.session) > 0 {
-		sid, _ = binary.Varint(o.session)
-		sessPart = base58.Encode(o.session)
-	}
-
 	// Separate attributes into primary and session, and collect indexed attributes
-	primary, session, indexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
+	primary, session, indexed, err := s.separateSessionAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build collection operations for indexed attributes
-	var coltxopt []clientv3.Op
-	for _, attrs := range indexedAttrs {
-		for _, attr := range attrs {
-			coltxopt = append(coltxopt, s.addToCollectionOp(entity, attr.CAS(), plainIndexLease(o.bind, sid)))
-
-			if sessPart != "" {
-				coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
-			}
-		}
-	}
+	w := newIndexWrite(&o, session, nil)
+	coltxopt := s.indexPutOps(entity, indexed, w)
 
 	// Collect unique-value attributes and build transaction conditions + ops
 	uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
@@ -394,15 +375,7 @@ func (s *EtcdStore) CreateEntity(
 		}
 		uniqueConditions = nil
 		// Rebuild coltxopt without old unique ops — keep collection ops, replace unique ops
-		coltxopt = coltxopt[:0]
-		for _, attrs := range indexedAttrs {
-			for _, attr := range attrs {
-				coltxopt = append(coltxopt, s.addToCollectionOp(entity, attr.CAS(), plainIndexLease(o.bind, sid)))
-				if sessPart != "" {
-					coltxopt = append(coltxopt, s.addToCollectionSessionOp(entity, attr.CAS(), sessPart, sid))
-				}
-			}
-		}
+		coltxopt = s.indexPutOps(entity, indexed, w)
 		for _, attr := range uniqueAttrs {
 			uniqueKey := s.buildUniqueKey(attr)
 			uniqueConditions = append(uniqueConditions, clientv3.Compare(clientv3.CreateRevision(uniqueKey), "=", 0))
@@ -481,33 +454,27 @@ func (s *EtcdStore) GetEntity(ctx context.Context, id Id) (*Entity, error) {
 // GetEntityAtRevision reads an entity at a specific etcd revision.
 // This is used to retrieve entity data for delete events where the entity
 // may no longer exist at the current revision.
+// GetEntityAtRevision reads the entity as it was at rev, session attributes
+// included. It goes through the same pinned batch read as GetEntities so both
+// halves of the entity come from one point in time; reading the primary key
+// alone would hand back an entity missing every session-scoped attribute,
+// which for a node is its status.
 func (s *EtcdStore) GetEntityAtRevision(ctx context.Context, id Id, rev int64) (*Entity, error) {
-	key := s.buildKey(id)
-
-	resp, err := s.client.Get(ctx, key, clientv3.WithRev(rev))
+	entities, undecodable, err := s.getEntities(ctx, []Id{id}, rev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get entity at revision %d: %w", rev, err)
 	}
-
-	if len(resp.Kvs) == 0 {
+	if undecodable[id] {
+		return nil, cond.Corruption("entity", "failed to deserialize entity %s at revision %d", id, rev)
+	}
+	if entities[0] == nil {
 		return nil, cond.NotFound("entity", id)
 	}
-
-	var entity Entity
-
-	err = decoder.Unmarshal(resp.Kvs[0].Value, &entity)
-	if err != nil {
-		return nil, cond.Corruption("entity", "failed to deserialize entity: %s", err)
-	}
-
-	entity.SetRevision(resp.Kvs[0].ModRevision)
-	entity.postUnmarshal()
-
-	return &entity, nil
+	return entities[0], nil
 }
 
 func (s *EtcdStore) GetEntities(ctx context.Context, ids []Id) ([]*Entity, error) {
-	entities, _, err := s.getEntities(ctx, ids, true, 0)
+	entities, _, err := s.getEntities(ctx, ids, 0)
 	return entities, err
 }
 
@@ -537,7 +504,7 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 		return nil, err
 	}
 
-	entities, undecodable, err := s.getEntities(ctx, page.Ids, false, page.Revision)
+	entities, undecodable, err := s.getEntities(ctx, page.Ids, page.Revision)
 	if err != nil {
 		return nil, err
 	}
@@ -553,9 +520,7 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 }
 
 // getEntities reads entities in batches, leaving nil in the result for any id
-// that is absent. warnMissing is false for callers where a miss is expected
-// input rather than a surprise, such as the index sweep resolving ids read out
-// of the index itself.
+// that is absent. Callers decide whether a missing entity needs attention.
 //
 // A non-zero rev reads every key as of that revision instead of the latest.
 //
@@ -566,7 +531,6 @@ func (s *EtcdStore) ListIndexEntitiesPage(
 func (s *EtcdStore) getEntities(
 	ctx context.Context,
 	ids []Id,
-	warnMissing bool,
 	rev int64,
 ) (entities []*Entity, undecodable map[Id]bool, err error) {
 	undecodable = map[Id]bool{}
@@ -621,9 +585,6 @@ func (s *EtcdStore) getEntities(
 			primaryResp := tr.Responses[primaryIdx].GetResponseRange()
 			if len(primaryResp.Kvs) == 0 {
 				// Entity not found, leave nil in the result array
-				if warnMissing {
-					s.log.Warn("failed to get primary entity from etcd", "id", batchIds[i])
-				}
 				continue
 			}
 
@@ -631,7 +592,7 @@ func (s *EtcdStore) getEntities(
 			err = decoder.Unmarshal(primaryResp.Kvs[0].Value, &entity)
 			if err != nil {
 				// The key is there, so this entity exists; we just cannot read
-				// it. Always worth a line, whatever warnMissing says.
+				// it. Always worth a line even though missing keys are expected.
 				s.log.Error("failed to decode entity from etcd", "id", batchIds[i], "error", err)
 				undecodable[batchIds[i]] = true
 				continue
@@ -803,7 +764,7 @@ func (s *EtcdStore) UpdateEntity(
 	originalEntity := entity.Clone()
 
 	// Keep track of original indexed attributes for removal (including nested ones)
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+	originalIndexed, err := s.collectIndexedValues(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -845,25 +806,15 @@ func (s *EtcdStore) UpdateEntity(
 		return nil, err
 	}
 
-	var (
-		sessPart string
-		sid      int64
-	)
-
-	if len(o.session) != 0 {
-		sid, _ = binary.Varint(o.session)
-		sessPart = base58.Encode(o.session)
-	}
-
 	// Separate attributes into primary and session, and collect indexed attributes (including nested ones)
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
+	primary, session, newIndexed, err := s.separateSessionAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Reindex changed attributes via the shared helper so the lease and watcher
 	// semantics stay in one place (also used by ReplaceEntity/PatchEntity).
-	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid, o.bind)
+	coltxopt := s.buildCollectionOps(entity, originalIndexed, newIndexed, newIndexWrite(&o, session, originalEntity.attrs))
 
 	// Build unique-value update operations (release old, claim new)
 	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
@@ -946,23 +897,6 @@ func (s *EtcdStore) checkRevisionConflict(entity *Entity, expectedRevision int64
 	return nil
 }
 
-// collectIndexedAttributes builds a map of indexed attributes from the entity
-func (s *EtcdStore) collectIndexedAttributes(ctx context.Context, attrs []Attr) (map[Id][]Attr, error) {
-	indexedAttrs := make(map[Id][]Attr)
-	// Enumerate all attributes including nested ones in components
-	allAttrs := enumerateAllAttrs(attrs)
-	for _, attr := range allAttrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
-		}
-		if schema.Index {
-			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
-		}
-	}
-	return indexedAttrs, nil
-}
-
 // separateSessionAttributes separates attributes into primary and session attributes
 // hasSessionAttr reports whether any of the given attributes is session-scoped.
 // It's a lighter-weight check than separateSessionAttributes for callers that
@@ -981,21 +915,7 @@ func (s *EtcdStore) hasSessionAttr(ctx context.Context, attrs []Attr) (bool, err
 	return false, nil
 }
 
-func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr) (primary, session []Attr, indexedAttrs map[Id][]Attr, err error) {
-	indexedAttrs = make(map[Id][]Attr)
-	// Enumerate all attributes including nested ones in components for indexing
-	allAttrs := enumerateAllAttrs(attrs)
-	for _, attr := range allAttrs {
-		schema, err := s.GetAttributeSchema(ctx, attr.ID)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to get attribute schema: %w", err)
-		}
-
-		if schema.Index {
-			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
-		}
-	}
-
+func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr) (primary, session []Attr, indexed map[Id][]Attr, err error) {
 	// Separate top-level attributes into session vs primary (don't enumerate here)
 	for _, attr := range attrs {
 		schema, err := s.GetAttributeSchema(ctx, attr.ID)
@@ -1009,35 +929,171 @@ func (s *EtcdStore) separateSessionAttributes(ctx context.Context, attrs []Attr)
 			primary = append(primary, attr)
 		}
 	}
-	return primary, session, indexedAttrs, nil
+
+	indexed, err = indexedValues(ctx, s, primary, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return primary, session, indexed, nil
+}
+
+// collectIndexedValues returns the indexed values among attrs that the entity
+// key stores, which are the only ones indexed (see the index layout comment
+// above indexWrite).
+func (s *EtcdStore) collectIndexedValues(ctx context.Context, attrs []Attr) (map[Id][]Attr, error) {
+	return indexedValues(ctx, s, attrs, false)
+}
+
+// indexedValues collects the indexed values among attrs, nested ones
+// included, skipping any top-level attribute that is session-scoped: it and
+// everything nested in it live in a session's blob and are never indexed. A
+// tolerant read skips a value whose schema cannot be read, which suits
+// reindex; otherwise that is an error, since dropping the value would read as
+// the entity not carrying it.
+func indexedValues(ctx context.Context, store Store, attrs []Attr, tolerant bool) (map[Id][]Attr, error) {
+	indexed := make(map[Id][]Attr)
+	for _, top := range attrs {
+		schema, err := store.GetAttributeSchema(ctx, top.ID)
+		if err != nil {
+			if tolerant {
+				continue
+			}
+			return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+		}
+		if schema.Session {
+			continue
+		}
+		for _, attr := range enumerateAllAttrs([]Attr{top}) {
+			schema, err := store.GetAttributeSchema(ctx, attr.ID)
+			if err != nil {
+				if tolerant {
+					continue
+				}
+				return nil, fmt.Errorf("failed to get attribute schema: %w", err)
+			}
+			if schema.Index {
+				indexed[attr.ID] = append(indexed[attr.ID], attr)
+			}
+		}
+	}
+	return indexed, nil
+}
+
+// Index (collection) layout
+//
+// Only what the entity key stores is indexed. A session attribute, and
+// anything nested in one, lives in a session's attribute blob and is never
+// indexed; schema validation refuses an attribute that is both indexed and
+// session-scoped. Every entry lives under "{prefix}/collections/{colKey}/" and
+// holds the entity id as its value, in one of two shapes:
+//
+//	{colKey}/{base58 id}              the match
+//	{colKey}/{base58 id}/{session}    a presence marker, leased to the session
+//
+// The match is the only key that says the entity has the value: one per
+// value, leased only when the entity is bound to a session. A marker sits
+// beside it while that session holds a blob on the entity, so it lapses with
+// the session, and its delete is how an index watcher hears that the entity
+// just lost that session's attributes. Readers tell them apart by shape alone:
+// listings and counts skip markers, and watchers read a marker's delete as the
+// entity changing, not leaving (see WatchIndex in servers/entityserver). See
+// MIR-1991.
+//
+// A session's markers are written by that session's own writes. A write by
+// anything else that introduces a value leaves blob-holding sessions without a
+// marker under it, so their lapse goes unannounced on that value until they
+// write again: writing one for them would attach their lease inside someone
+// else's write, which would fail if the lease expired mid-transaction. Reindex
+// rebuilds matches only, for the same reason. A node's indexed values are
+// written by its runner under its own session, so nodes are not affected.
+
+// indexWrite is the part of a write that decides which index entries it owns,
+// following the layout above.
+type indexWrite struct {
+	bind     bool
+	sid      int64
+	sessPart string
+
+	// holdsSessionBlob is set when the write's session has a blob on the
+	// entity once the write lands, whether this write stores it or an earlier
+	// one did and this one leaves it be. That is what earns its markers.
+	holdsSessionBlob bool
+}
+
+// newIndexWrite describes a write made with opts that stores session (its
+// session-scoped attributes) in the session's blob, to an entity read as
+// existing beforehand (nil for a create).
+func newIndexWrite(o *entityOpts, session, existing []Attr) indexWrite {
+	var w indexWrite
+	w.bind = o.bind
+	if len(o.session) != 0 {
+		w.sid, _ = binary.Varint(o.session)
+		w.sessPart = base58.Encode(o.session)
+		w.holdsSessionBlob = len(session) > 0 || slices.ContainsFunc(existing, func(a Attr) bool {
+			return a.ID == AttrSession && a.Value.String() == w.sessPart
+		})
+	}
+	return w
+}
+
+// indexPutOps writes the match for every value in indexed, and the write's
+// session's marker beside it when that session holds a blob on the entity.
+func (s *EtcdStore) indexPutOps(entity *Entity, indexed map[Id][]Attr, w indexWrite) []clientv3.Op {
+	var ops putOps
+	for _, attrs := range indexed {
+		for _, attr := range attrs {
+			ops.add(s.addToCollectionOp(entity, attr.CAS(), plainIndexLease(w.bind, w.sid)))
+			if w.holdsSessionBlob {
+				ops.add(s.addToCollectionSessionOp(entity, attr.CAS(), w.sessPart, w.sid))
+			}
+		}
+	}
+	return ops.ops
+}
+
+// putOps collects index puts once per key. A value can appear more than once
+// on an entity, nested in two components, and etcd rejects a transaction that
+// puts the same key twice.
+type putOps struct {
+	ops  []clientv3.Op
+	seen map[string]bool
+}
+
+func (p *putOps) add(op clientv3.Op) {
+	key := string(op.KeyBytes())
+	if p.seen[key] {
+		return
+	}
+	if p.seen == nil {
+		p.seen = make(map[string]bool)
+	}
+	p.seen[key] = true
+	p.ops = append(p.ops, op)
 }
 
 // buildCollectionOps builds etcd operations for updating indexed attribute collections
-func (s *EtcdStore) buildCollectionOps(entity *Entity, originalIndexedAttrs, newIndexedAttrs map[Id][]Attr, sessPart string, sid int64, bind bool) []clientv3.Op {
+func (s *EtcdStore) buildCollectionOps(entity *Entity, original, updated map[Id][]Attr, w indexWrite) []clientv3.Op {
 	var ops []clientv3.Op
 
-	// Remove old indexed attributes that are no longer present or have changed
-	for attrID, oldAttrs := range originalIndexedAttrs {
-		newAttrs := newIndexedAttrs[attrID]
+	// A dropped value takes its match and every session's marker in one
+	// ranged delete, so nothing is left behind for the sweep.
+	ops = append(ops, s.deleteAllEntriesOps(entity, removedValues(original, updated))...)
+
+	return append(ops, s.indexPutOps(entity, updated, w)...)
+}
+
+// removedValues returns the values in original that updated no longer carries.
+func removedValues(original, updated map[Id][]Attr) []Attr {
+	var removed []Attr
+	for attrID, oldAttrs := range original {
+		newAttrs := updated[attrID]
 		for _, oldAttr := range oldAttrs {
-			found := slices.ContainsFunc(newAttrs, oldAttr.Equal)
-			if !found {
-				ops = append(ops, s.deleteFromCollectionOp(entity, oldAttr.CAS()))
+			if !slices.ContainsFunc(newAttrs, oldAttr.Equal) {
+				removed = append(removed, oldAttr)
 			}
 		}
 	}
-
-	// Add all new indexed attributes
-	for _, newAttrs := range newIndexedAttrs {
-		for _, newAttr := range newAttrs {
-			ops = append(ops, s.addToCollectionOp(entity, newAttr.CAS(), plainIndexLease(bind, sid)))
-			if sessPart != "" {
-				ops = append(ops, s.addToCollectionSessionOp(entity, newAttr.CAS(), sessPart, sid))
-			}
-		}
-	}
-
-	return ops
+	return removed
 }
 
 // buildUniqueUpdateOps compares the old and new unique-value attributes and
@@ -1178,7 +1234,7 @@ func (s *EtcdStore) ReplaceEntity(
 	// Must come from the stored entity, not the replacement: buildCollectionOps
 	// deletes the original indexed values the replacement no longer carries, and
 	// diffing repl against itself emits no deletes at all.
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, originalEntity.attrs)
+	originalIndexed, err := s.collectIndexedValues(ctx, originalEntity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -1194,19 +1250,12 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	// Separate primary and session attributes, collect new indexed attrs
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, repl.attrs)
+	primary, session, newIndexed, err := s.separateSessionAttributes(ctx, repl.attrs)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build collection update operations
-	var sid int64
-	var sessPart string
-	if len(o.session) != 0 {
-		sid, _ = binary.Varint(o.session)
-		sessPart = base58.Encode(o.session)
-	}
-	coltxopt := s.buildCollectionOps(repl, originalIndexedAttrs, newIndexedAttrs, sessPart, sid, o.bind)
+	coltxopt := s.buildCollectionOps(repl, originalIndexed, newIndexed, newIndexWrite(&o, session, originalEntity.attrs))
 
 	// Build unique-value update operations (release old, claim new)
 	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, repl.Id(), originalEntity, repl)
@@ -1292,7 +1341,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	// Keep track of original indexed attributes for removal
-	originalIndexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+	originalIndexed, err := s.collectIndexedValues(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -1335,7 +1384,7 @@ func (s *EtcdStore) PatchEntity(
 	}
 
 	// Separate primary and session attributes, collect new indexed attrs
-	primary, session, newIndexedAttrs, err := s.separateSessionAttributes(ctx, entity.attrs)
+	primary, session, newIndexed, err := s.separateSessionAttributes(ctx, entity.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -1356,14 +1405,7 @@ func (s *EtcdStore) PatchEntity(
 		}
 	}
 
-	// Build collection update operations
-	var sid int64
-	var sessPart string
-	if len(o.session) != 0 {
-		sid, _ = binary.Varint(o.session)
-		sessPart = base58.Encode(o.session)
-	}
-	coltxopt := s.buildCollectionOps(entity, originalIndexedAttrs, newIndexedAttrs, sessPart, sid, o.bind)
+	coltxopt := s.buildCollectionOps(entity, originalIndexed, newIndexed, newIndexWrite(&o, session, originalEntity.attrs))
 
 	// Build unique-value update operations (release old, claim new)
 	uniqueOps, uniqueConditions, err := s.buildUniqueUpdateOps(ctx, entity.Id(), originalEntity, entity)
@@ -1492,7 +1534,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		}
 
 		// Collect all indexed attributes including nested ones within components
-		indexedAttrs, err := s.collectIndexedAttributes(ctx, entity.attrs)
+		indexed, err := s.collectIndexedValues(ctx, entity.attrs)
 		if err != nil {
 			return err
 		}
@@ -1509,13 +1551,21 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 
 		// Build all delete operations: entity key + index entries + unique-value
 		// keys, so the whole delete commits (or fails) as one guarded txn.
-		ops := []clientv3.Op{clientv3.OpDelete(key)}
+		// The entity key and its session blobs go in one ranged op, so a
+		// delete needs no more transaction ops than the create did. Blobs
+		// would otherwise sit under their leases after the entity is gone,
+		// and a later create of the same id would read them back in. The
+		// range ends at "0" for the reason deleteAllEntriesOp gives.
+		ops := []clientv3.Op{clientv3.OpDelete(key, clientv3.WithRange(key+"0"))}
 
-		for _, attrs := range indexedAttrs {
-			for _, attr := range attrs {
-				ops = append(ops, s.deleteFromCollectionOp(entity, attr.CAS()))
-			}
+		// Every session's entry goes too, not just those of the sessions the
+		// read happened to see: the markers beside each durable value, and
+		// each session's entry for a session value.
+		var values []Attr
+		for _, attrs := range indexed {
+			values = append(values, attrs...)
 		}
+		ops = append(ops, s.deleteAllEntriesOps(entity, values)...)
 
 		uniqueAttrs, err := s.collectUniqueAttrs(ctx, entity)
 		if err != nil {
@@ -1594,12 +1644,44 @@ func (s *EtcdStore) GetAttributeSchema(ctx context.Context, id Id) (*AttributeSc
 }
 
 func (s *EtcdStore) addToCollectionSessionOp(entity *Entity, collection, suffix string, sid int64) clientv3.Op {
+	return clientv3.OpPut(s.collectionSessionKey(entity, collection, suffix), entity.Id().String(), clientv3.WithLease(clientv3.LeaseID(sid)))
+}
+
+// deleteAllEntriesOps deletes every key the entity holds for each of values,
+// once per collection: like puts, a value repeated across components is one
+// set of keys, and deleting it once per repeat could outgrow a transaction the
+// create fit in.
+func (s *EtcdStore) deleteAllEntriesOps(entity *Entity, values []Attr) []clientv3.Op {
+	var ops []clientv3.Op
+	seen := make(map[string]bool, len(values))
+	for _, attr := range values {
+		collection := attr.CAS()
+		if seen[collection] {
+			continue
+		}
+		seen[collection] = true
+		ops = append(ops, s.deleteAllEntriesOp(entity, collection))
+	}
+	return ops
+}
+
+// deleteAllEntriesOp deletes every key the entity holds under collection, its
+// plain entry and each session's, in one ranged op so a delete costs one etcd
+// transaction op per value however many shapes it clears. The range ends at
+// "0": base58 never uses a byte below "1", and "/" sorts below "0", so the
+// range holds exactly "{id}" and "{id}/..." and no other entity's keys.
+func (s *EtcdStore) deleteAllEntriesOp(entity *Entity, collection string) clientv3.Op {
+	key := fmt.Sprintf("%s/collections/%s/%s", s.prefix, tr.Replace(collection), base58.Encode([]byte(entity.Id())))
+	return clientv3.OpDelete(key, clientv3.WithRange(key+"0"))
+}
+
+// collectionSessionKey is the entity's entry under collection for the session
+// encoded as suffix.
+func (s *EtcdStore) collectionSessionKey(entity *Entity, collection, suffix string) string {
 	key := base58.Encode([]byte(entity.Id()))
 	colKey := tr.Replace(collection)
 
-	key = fmt.Sprintf("%s/collections/%s/%s/%s", s.prefix, colKey, key, suffix)
-
-	return clientv3.OpPut(key, entity.Id().String(), clientv3.WithLease(clientv3.LeaseID(sid)))
+	return fmt.Sprintf("%s/collections/%s/%s/%s", s.prefix, colKey, key, suffix)
 }
 
 // plainIndexLease returns the lease that an entity's plain (durable) index
@@ -1627,15 +1709,6 @@ func (s *EtcdStore) addToCollectionOp(entity *Entity, collection string, lease c
 		return clientv3.OpPut(key, entity.Id().String(), clientv3.WithLease(lease))
 	}
 	return clientv3.OpPut(key, entity.Id().String())
-}
-
-func (s *EtcdStore) deleteFromCollectionOp(entity *Entity, collection string) clientv3.Op {
-	key := base58.Encode([]byte(entity.Id()))
-	colKey := tr.Replace(collection)
-
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	return clientv3.OpDelete(key)
 }
 
 func (s *EtcdStore) ListIndex(ctx context.Context, attr Attr) ([]Id, error) {
@@ -1675,7 +1748,91 @@ func (s *EtcdStore) ListIndexRevision(ctx context.Context, attr Attr) ([]Id, int
 		return nil, 0, fmt.Errorf("attribute %s is not indexed", attr.ID)
 	}
 
-	return s.listCollectionRevision(ctx, attr.CAS())
+	prefix, err := s.CollectionPrefix(ctx, attr.CAS())
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.listCollectionRevision(ctx, attr.CAS(), indexMarkerFilter(prefix))
+}
+
+// indexMarkerFilter reports which keys under prefix, an index, are presence
+// markers rather than matches: the session-scoped ones. See the index layout
+// comment above indexWrite.
+func indexMarkerFilter(prefix string) func(key string) bool {
+	return func(key string) bool {
+		return strings.Contains(strings.TrimPrefix(key, prefix), "/")
+	}
+}
+
+// IndexMarkerFilter reports which keys a watch of attr's index (see WatchIndex)
+// delivers for presence markers rather than matches. A watcher has to tell
+// them apart: a put of one adds nothing to the match written beside it, and a
+// delete of one never means the entity left the index (see MatchesIndexAt).
+func (s *EtcdStore) IndexMarkerFilter(ctx context.Context, attr Attr) (func(key string) bool, error) {
+	if attr.ID == DBId {
+		return func(string) bool { return false }, nil
+	}
+	prefix, err := s.IndexPrefix(ctx, attr)
+	if err != nil {
+		return nil, err
+	}
+	return indexMarkerFilter(prefix), nil
+}
+
+// MatchesIndexAt reports whether the entity was a match in attr's index at
+// rev, which is whether its plain entry existed then.
+//
+// A watcher needs this for a marker's delete. The marker goes when a session
+// lapses on an entity that still matches, which is the entity changing, and
+// alongside the match when the entity leaves the index, which the match's own
+// delete already announces.
+func (s *EtcdStore) MatchesIndexAt(ctx context.Context, attr Attr, id Id, rev int64) (bool, error) {
+	prefix, err := s.IndexPrefix(ctx, attr)
+	if err != nil {
+		return false, err
+	}
+	opts := []clientv3.OpOption{clientv3.WithCountOnly()}
+	if rev > 0 {
+		opts = append(opts, clientv3.WithRev(rev))
+	}
+	resp, err := s.client.Get(ctx, prefix+base58.Encode([]byte(id)), opts...)
+	if err != nil {
+		return false, err
+	}
+	return resp.Count > 0, nil
+}
+
+// countIndexMatches counts the matches under prefix, read at revision (zero
+// for the latest), and returns the revision it read at. Where markers can
+// appear it has to look at keys rather than ask etcd for a count; that is a
+// keys-only read of the index, paid only on a listing's first page.
+func (s *EtcdStore) countIndexMatches(
+	ctx context.Context,
+	prefix string,
+	isMarker func(string) bool,
+	revision int64,
+) (int64, int64, error) {
+	var (
+		count int64
+		read  int64
+	)
+	opts := []scanOption{withKeysOnly(), withRevisionSink(&read)}
+	if revision > 0 {
+		opts = append(opts, withReadRevision(revision))
+	}
+	err := scanPagedFunc(ctx, s.client, prefix, func(kv *mvccpb.KeyValue) error {
+		if !isMarker(string(kv.Key)) {
+			count++
+		}
+		return nil
+	}, opts...)
+	if err != nil {
+		return 0, 0, err
+	}
+	if revision > 0 {
+		read = revision
+	}
+	return count, read, nil
 }
 
 // IndexPage is one bounded page of an index listing.
@@ -1692,8 +1849,8 @@ type IndexPage struct {
 
 	// Total counts the entries in the index and is filled only when the caller
 	// starts from the head, since that is the only point a total is meaningful.
-	// It counts index entries, which equals the entity count unless an entity
-	// somehow holds two entries in the same index.
+	// It counts index entries, which equals the entity count unless two
+	// sessions assert the same session value on one entity.
 	Total int64
 
 	// Revision is the store revision the page was read at.
@@ -1778,6 +1935,7 @@ func (s *EtcdStore) ListIndexPageAtRevision(
 	if err != nil {
 		return nil, err
 	}
+	isMarker := indexMarkerFilter(prefix)
 
 	page := &IndexPage{Revision: revision}
 
@@ -1786,18 +1944,9 @@ func (s *EtcdStore) ListIndexPageAtRevision(
 	// returns everything, so the total is just what came back; and past the
 	// first page the caller already has it.
 	if cursor == "" && limit > 0 {
-		countOpts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithCountOnly()}
-		if revision > 0 {
-			countOpts = append(countOpts, clientv3.WithRev(revision))
-		}
-		cr, err := s.client.Get(ctx, prefix, countOpts...)
+		page.Total, page.Revision, err = s.countIndexMatches(ctx, prefix, isMarker, revision)
 		if err != nil {
 			return nil, fmt.Errorf("failed to count index entries: %w", err)
-		}
-
-		page.Total = cr.Count
-		if page.Revision == 0 {
-			page.Revision = cr.Header.Revision
 		}
 	}
 
@@ -1809,10 +1958,16 @@ func (s *EtcdStore) ListIndexPageAtRevision(
 
 	seen := make(map[Id]struct{})
 
-	// resumeKey trails one behind: it is the key of the last id inside the
-	// page, captured only once we know something follows it. Setting a cursor
+	// resumeKey trails one behind: it is the last key the page consumed,
+	// captured only once we know something follows it. Setting a cursor
 	// merely because the scan hit the limit hands back a cursor to nothing
 	// whenever the index ends exactly on a page boundary.
+	//
+	// Presence markers are skipped before they count as consumed at all, so
+	// an entity's match is its only key here (see the index layout comment
+	// above indexWrite). A repeated id should not occur, but one that does
+	// still advances the cursor, so a resume cannot land between the two and
+	// list the entity again (MIR-1990).
 	resumeKey := ""
 	prevKey := ""
 
@@ -1825,8 +1980,14 @@ func (s *EtcdStore) ListIndexPageAtRevision(
 		scanOptions = append(scanOptions, withReadRevision(page.Revision))
 	}
 	scanErr := scanPagedFunc(ctx, s.client, prefix, func(kv *mvccpb.KeyValue) error {
+		// A marker is not a match, so it neither lists nor counts toward the
+		// page, and the cursor never rests on one.
+		if isMarker(string(kv.Key)) {
+			return nil
+		}
 		id := Id(kv.Value)
 		if _, dup := seen[id]; dup {
+			prevKey = string(kv.Key)
 			return nil
 		}
 
@@ -1965,12 +2126,17 @@ func (s *EtcdStore) WatchIndex(ctx context.Context, attr Attr, fromRev int64) (c
 
 var tr = strings.NewReplacer("/", "_", ":", "_")
 
+// ListCollection lists every id under a raw collection key. With no attribute
+// to consult it cannot tell matches from markers (see the index layout comment
+// above indexWrite), so it lists both; ListIndex is the reader for matches.
 func (s *EtcdStore) ListCollection(ctx context.Context, collection string) ([]Id, error) {
-	ids, _, err := s.listCollectionRevision(ctx, collection)
+	ids, _, err := s.listCollectionRevision(ctx, collection, nil)
 	return ids, err
 }
 
-func (s *EtcdStore) listCollectionRevision(ctx context.Context, collection string) ([]Id, int64, error) {
+// listCollectionRevision lists the ids under collection once each, skipping
+// any key isMarker reports when it is non-nil.
+func (s *EtcdStore) listCollectionRevision(ctx context.Context, collection string, isMarker func(string) bool) ([]Id, int64, error) {
 	colKey := tr.Replace(collection)
 
 	prefix := fmt.Sprintf("%s/collections/%s/", s.prefix, colKey)
@@ -1984,6 +2150,9 @@ func (s *EtcdStore) listCollectionRevision(ctx context.Context, collection strin
 
 	entities := make([]Id, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
+		if isMarker != nil && isMarker(string(kv.Key)) {
+			continue
+		}
 		id := Id(kv.Value)
 		if _, ok := seen[id]; ok {
 			continue
@@ -2062,17 +2231,28 @@ func (s *EtcdStore) GetOneIndex(ctx context.Context, attr Attr) (Id, error) {
 
 	colKey := tr.Replace(attr.CAS())
 	prefix := fmt.Sprintf("%s/collections/%s/", s.prefix, colKey)
+	isMarker := indexMarkerFilter(prefix)
 
-	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithLimit(1))
-	if err != nil {
+	// The first key can be a marker for an entity that no longer matches, so
+	// read on to the first match.
+	var found Id
+	errFound := errors.New("found")
+	err = scanPagedFunc(ctx, s.client, prefix, func(kv *mvccpb.KeyValue) error {
+		if isMarker(string(kv.Key)) {
+			return nil
+		}
+		found = Id(kv.Value)
+		return errFound
+	}, withPageSize(16))
+	if err != nil && !errors.Is(err, errFound) {
 		return "", fmt.Errorf("failed to query index: %w", err)
 	}
 
-	if len(resp.Kvs) == 0 {
+	if found == "" {
 		return "", cond.NotFound("entity", attr.Value.String())
 	}
 
-	return Id(resp.Kvs[0].Value), nil
+	return found, nil
 }
 
 func (s *EtcdStore) CreateSession(ctx context.Context, ttl int64) ([]byte, error) {

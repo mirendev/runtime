@@ -1,4 +1,4 @@
-FROM alpine:3.20
+FROM oci.miren.cloud/alpine:3.20
 # A deliberately slow build so a deploy holds the deployment lock long enough
 # for the blackbox suite to race a second deploy against it. On a cold cache
 # (CI, first run) this sleeps; the lock is what the test is actually asserting.

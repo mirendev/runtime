@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
@@ -54,6 +55,32 @@ func newTestServer(t *testing.T) (*testEnv, func()) {
 	client := runner_v1alpha.NewRunnerRegistrationClient(localClient)
 
 	return &testEnv{client: client, ec: es.Client, store: es.Store, server: regServer, ca: ca}, cleanup
+}
+
+func TestWorkloadIssuerInfoPublishesCoordinatorInternalIPWithoutIssuer(t *testing.T) {
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+	env.server.CoordinatorInternalIP = netip.MustParseAddr("10.8.42.1")
+
+	result, err := env.client.WorkloadIssuerInfo(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Enabled() || result.CoordinatorInternalIp() != "10.8.42.1" {
+		t.Fatalf("unexpected coordinator internal address: enabled=%t ip=%q", result.Enabled(), result.CoordinatorInternalIp())
+	}
+}
+
+func TestWorkloadIssuerInfoInternalAddressJSONField(t *testing.T) {
+	var result runner_v1alpha.RunnerRegistrationWorkloadIssuerInfoResults
+	result.SetCoordinatorInternalIp("10.8.42.1")
+	data, err := result.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"coordinator_internal_ip":"10.8.42.1"}` {
+		t.Fatalf("unexpected coordinator internal address field: %s", data)
+	}
 }
 
 // issueLeafCert issues a certificate from the given authority and returns the
@@ -1067,14 +1094,64 @@ func TestAuthorizeSystemWorkloadRequest(t *testing.T) {
 				callCtx = rpc.ContextWithIdentity(ctx, tt.identity)
 			}
 
-			err := env.server.authorizeSystemWorkloadRequest(callCtx, tt.workload)
+			gotRunner, err := env.server.authorizeSystemWorkloadRequest(callCtx, tt.workload)
 			if tt.wantErr && err == nil {
 				t.Errorf("expected authorization to fail, got nil")
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("expected authorization to succeed, got %v", err)
 			}
+			if !tt.wantErr && gotRunner != runnerID {
+				t.Errorf("expected verified runner %q, got %q", runnerID, gotRunner)
+			}
 		})
+	}
+}
+
+// TestIssueSystemWorkloadTokenStampsVerifiedRunner covers the whole mint: the
+// runner ID a token carries is the one in the caller's certificate, which is
+// what lets a receiving service attribute data to the runner that sent it.
+func TestIssueSystemWorkloadTokenStampsVerifiedRunner(t *testing.T) {
+	ctx := context.Background()
+	env, cleanup := newTestServer(t)
+	defer cleanup()
+
+	issuer, err := workloadidentity.NewIssuer(workloadidentity.IssuerConfig{DataPath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("creating issuer: %v", err)
+	}
+	env.server.WorkloadIssuer = issuer
+
+	secret := env.createInviteAndDecode(t, ctx)
+	joinResult, err := env.client.Join(ctx, secret, "", "10.0.0.1:8443", "test-version", nil, "test-runner")
+	if err != nil {
+		t.Fatalf("Join RPC failed: %v", err)
+	}
+	if joinResult.HasError() {
+		t.Fatalf("Join returned error: %s", joinResult.Error())
+	}
+	runnerID := joinResult.RunnerId()
+
+	callCtx := rpc.ContextWithIdentity(ctx, &rpc.Identity{
+		Subject: runnerCertName(runnerID),
+		Method:  rpc.AuthMethodCert,
+	})
+	res, err := env.client.IssueSystemWorkloadToken(callCtx,
+		string(workloadidentity.SystemWorkloadTelemetryWriter), []string{"miren-telemetry"}, 0)
+	if err != nil {
+		t.Fatalf("IssueSystemWorkloadToken RPC failed: %v", err)
+	}
+	if res.HasError() {
+		t.Fatalf("IssueSystemWorkloadToken returned error: %s", res.Error())
+	}
+
+	claims, err := issuer.VerifySystemWorkloadToken(res.Token(), "miren-telemetry",
+		workloadidentity.SystemWorkloadTelemetryWriter)
+	if err != nil {
+		t.Fatalf("verifying minted token: %v", err)
+	}
+	if claims.RunnerID != runnerID {
+		t.Errorf("expected runner_id %q, got %q", runnerID, claims.RunnerID)
 	}
 }
 
@@ -1092,11 +1169,15 @@ func TestAuthorizeSystemWorkloadRequestAnonymousKeepsAllowlist(t *testing.T) {
 		Method:  rpc.AuthMethodAnonymous,
 	})
 
-	if err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkloadSandboxController); err != nil {
+	runnerID, err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkloadSandboxController)
+	if err != nil {
 		t.Errorf("expected allowlisted system workload to be permitted, got %v", err)
 	}
+	if runnerID != "" {
+		t.Errorf("expected no runner ID without a caller to identify, got %q", runnerID)
+	}
 
-	if err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkload("coordinator")); err == nil {
+	if _, err := env.server.authorizeSystemWorkloadRequest(anon, workloadidentity.SystemWorkload("coordinator")); err == nil {
 		t.Error("expected a system workload off the allowlist to be refused")
 	}
 }

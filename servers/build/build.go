@@ -208,15 +208,13 @@ func mergeServiceEnvVars(existingEnvs []core_v1alpha.ConfigSpecServicesEnv, newE
 	return result
 }
 
-// errNoServices is returned when a build produces neither services nor tasks.
-// An app made entirely of tasks is valid — it just has nothing running between
-// invocations — so this only fires when there is no workload of any kind.
-var errNoServices = errors.New("no services or tasks defined: please define at least one service or task in a Procfile or .miren/app.toml")
+// errNoServices is returned when a build produces no service, task, or static
+// content. Static-only apps are valid and run no sandbox between requests.
+var errNoServices = errors.New("no services, tasks, or static.dir defined: please define at least one workload in a Procfile or .miren/app.toml")
 
-// validateWorkloadsExist checks that the app declares something to run: either
-// a long-running service or a task the platform can invoke.
+// validateWorkloadsExist checks that the app declares something to run or serve.
 func validateWorkloadsExist(spec core_v1alpha.ConfigSpec) error {
-	if len(spec.Services) == 0 && len(spec.Tasks) == 0 {
+	if len(spec.Services) == 0 && len(spec.Tasks) == 0 && spec.StaticDir == "" {
 		return errNoServices
 	}
 	return nil
@@ -243,7 +241,7 @@ should have a web service.
 // that. Nothing here is new-user-hostile, since the config shape it fires on
 // cannot exist before tasks.
 func validateWebIntent(ac *appconfig.AppConfig, procfileServices map[string]string) error {
-	if ac == nil || len(ac.Tasks) == 0 {
+	if ac == nil || len(ac.Tasks) == 0 || ac.StaticDirectory() != "" {
 		return nil
 	}
 	// A service declared anywhere — app.toml or Procfile — answers the question.
@@ -795,6 +793,12 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 
 	// Preserve existing variables for merging later
 	spec.Variables = inputs.ExistingConfig.Variables
+	if ac != nil {
+		spec.StaticDir = ac.StaticDirectory()
+		if ac.Static != nil {
+			spec.StaticErrorPage = ac.Static.ErrorPage
+		}
+	}
 
 	// Set entrypoint from stack build result
 	if res != nil && res.Entrypoint != "" {
@@ -828,7 +832,7 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 			"file", appconfig.AppConfigPath)
 	}
 
-	ensureWeb := res != nil && inputs.SourceKind != "image"
+	ensureWeb := res != nil && inputs.SourceKind != "image" && spec.StaticDir == ""
 	spec.Services = buildServicesConfig(ac, procfileServices, ensureWeb, webDefault)
 	if inputs.SourceKind == "image" {
 		inheritPrimaryImage(&spec, inputs.SourceValue)
@@ -1461,17 +1465,22 @@ func (b *Builder) pinSecrets(ctx context.Context, spec *core_v1alpha.ConfigSpec)
 // touches the resolver. A cluster with no secret backends fails the build rather
 // than silently building without the credential — matching pinSecrets.
 //
-// stack is the resolved build stack ("dockerfile" or "auto"). Only a Dockerfile
-// build has a place to consume a secret (its own --mount=type=secret step), so a
-// build secret declared for an auto-detected language stack is rejected rather
-// than resolved and silently ignored.
+// stack is the resolved build stack ("dockerfile" or "auto"). A Dockerfile build
+// consumes a secret in its own --mount=type=secret step. An auto-detected
+// language stack mounts it on its dependency install step at the secret's env or
+// file target, so a secret declared without one is rejected rather than resolved
+// and silently ignored.
 func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConfig, stack string) (map[string][]byte, error) {
 	if ac == nil || ac.Build == nil || len(ac.Build.Secrets) == 0 {
 		return nil, nil
 	}
 
 	if stack != "dockerfile" {
-		return nil, fmt.Errorf("build secret %q is set, but build secrets are only supported for Dockerfile builds; this app builds with an auto-detected language stack, so add a Dockerfile with a matching --mount=type=secret step or remove [[build.secrets]]", ac.Build.Secrets[0].ID)
+		for _, bs := range ac.Build.Secrets {
+			if bs.Env == "" && bs.File == "" {
+				return nil, fmt.Errorf("build secret %q has no env or file target; this app builds with an auto-detected language stack, which mounts each build secret on its dependency install step and needs to know where, so set env = \"NAME\" or file = \"~/path\" on it", bs.ID)
+			}
+		}
 	}
 
 	if b.Secrets == nil {
@@ -1491,6 +1500,20 @@ func (b *Builder) resolveBuildSecrets(ctx context.Context, ac *appconfig.AppConf
 		resolved[bs.ID] = sv.Bytes
 	}
 	return resolved, nil
+}
+
+// stackbuildSecrets returns where an auto-stack build mounts each declared
+// build secret. Only the targets: the values are resolved separately by
+// resolveBuildSecrets and reach BuildKit over the session.
+func stackbuildSecrets(ac *appconfig.AppConfig) []stackbuild.Secret {
+	if ac == nil || ac.Build == nil {
+		return nil
+	}
+	var secrets []stackbuild.Secret
+	for _, bs := range ac.Build.Secrets {
+		secrets = append(secrets, stackbuild.Secret{ID: bs.ID, Env: bs.Env, File: bs.File})
+	}
+	return secrets
 }
 
 // getAccessInfo queries routes to determine how the app can be accessed.
@@ -1745,6 +1768,9 @@ func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAn
 		detectedStack, _ = stackbuild.DetectStack(path, detectOpts)
 	case "image":
 		recordDirectImage(resolution.BuildStack.Input)
+	case "static":
+		stackName = "static"
+		buildResult.WorkingDir = "/app"
 	case "auto":
 		detectedStack = resolution.DetectedStack
 		if detectedStack == nil {

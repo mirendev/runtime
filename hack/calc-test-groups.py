@@ -36,7 +36,7 @@ def discover_test_packages():
     result = subprocess.run(
         ["go", "list", "-f",
          "{{.ImportPath}} {{len .TestGoFiles}} {{len .XTestGoFiles}}",
-         "./..."],
+         "./...", "miren.dev/runtime/x/..."],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -52,6 +52,8 @@ def discover_test_packages():
 
 def pure_test_time(pkg, overhead):
     """Estimate actual test time by subtracting harness overhead."""
+    if isinstance(pkg, str):
+        return 0.01
     return max(pkg["elapsed_s"] - overhead, 0.01)
 
 
@@ -77,12 +79,12 @@ def pack_lpt(packages, n_runners, overhead, new_packages=None):
         runners[i].append(pkg)
         runner_times[i] += t
 
-    # Distribute new packages across runners 2..N (indices 1+)
-    if new_packages and n_runners > 1:
+    # Distribute new packages across runners 2..N (or the sole runner).
+    if new_packages:
+        first = 1 if n_runners > 1 else 0
         for pkg in new_packages:
-            # Find least-loaded runner among indices 1..N-1
-            subset = runner_times[1:]
-            i = subset.index(min(subset)) + 1
+            subset = runner_times[first:]
+            i = subset.index(min(subset)) + first
             runners[i].append(pkg)
             runner_times[i] += pure_test_time(pkg, overhead)
 

@@ -7,6 +7,7 @@ import (
 
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/entitysync"
 )
 
 type entityMaintenanceBootOutput struct {
@@ -14,23 +15,26 @@ type entityMaintenanceBootOutput struct {
 }
 
 type entityMaintenanceBoot struct {
-	component *boot.Component
-	value     *coordinate.EntityMaintenance
-	output    boot.Output[entityMaintenanceBootOutput]
+	component   *boot.Component
+	value       *coordinate.EntityMaintenance
+	output      boot.Output[entityMaintenanceBootOutput]
+	diagnostics *entitysync.Diagnostics
 }
 
-func newEntityMaintenanceBoot(foundation boot.Output[foundationBootOutput], appData *boot.Component) *entityMaintenanceBoot {
-	b := &entityMaintenanceBoot{}
-	b.component, b.output = boot.Provide1(
-		"entity-maintenance", foundation, b.start,
+func newEntityMaintenanceBoot(foundation boot.Output[foundationBootOutput], deploymentAttempts boot.Output[deploymentAttemptMigrationBootOutput], appData *boot.Component, diagnostics *entitysync.Diagnostics) *entityMaintenanceBoot {
+	b := &entityMaintenanceBoot{diagnostics: diagnostics}
+	b.component, b.output = boot.Provide2(
+		"entity-maintenance", foundation, deploymentAttempts, b.start,
 		boot.DependsOn(appData),
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *entityMaintenanceBoot) start(ctx context.Context, foundation foundationBootOutput) (entityMaintenanceBootOutput, error) {
+func (b *entityMaintenanceBoot) start(ctx context.Context, foundation foundationBootOutput, deploymentAttempts deploymentAttemptMigrationBootOutput) (entityMaintenanceBootOutput, error) {
 	b.value = coordinate.NewEntityMaintenance(foundation.foundation)
+	b.value.DeploymentHistoryReady = deploymentAttempts.entitySyncReady
+	b.value.DeploymentExports = b.diagnostics
 	if err := b.value.Start(ctx); err != nil {
 		return entityMaintenanceBootOutput{}, err
 	}

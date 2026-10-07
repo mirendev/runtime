@@ -37,6 +37,7 @@ import (
 	"miren.dev/runtime/pkg/git"
 	"miren.dev/runtime/pkg/otelproxy"
 	"miren.dev/runtime/pkg/progress/upload"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/rpc/stream"
 	"miren.dev/runtime/pkg/tarx"
@@ -86,6 +87,9 @@ func reconcileDeploymentCancellation(
 type deployOpts struct {
 	AppCentric
 
+	Target        string `long:"target" description:"Deployment target from .miren/deploy.toml"`
+	targetCluster string
+
 	// Deploy carries its own format flags rather than the shared FormatOptions:
 	// it is the one command that also speaks jsonl, and the shared help text
 	// must not advertise that everywhere.
@@ -93,6 +97,7 @@ type deployOpts struct {
 	JSON   bool   `long:"json" description:"Shorthand for --format json"`
 
 	Version       string   `short:"V" long:"version" description:"Deploy an existing version (reuse its resolved image; skip image selection and build)"`
+	Message       string   `short:"m" long:"message" description:"Description of this deployment"`
 	Analyze       bool     `long:"analyze" description:"Analyze the app without building (show detected stack, services, etc.)"`
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" choice:"quiet" default:"auto"` //nolint
@@ -103,6 +108,92 @@ type deployOpts struct {
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
 	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
+}
+
+func (o *deployOpts) Validate(glbl *GlobalFlags) error {
+	if err := o.AppCentric.Validate(glbl); err != nil {
+		return err
+	}
+
+	if o.Target != "" && o.Cluster != "" {
+		return fmt.Errorf("--target cannot be combined with --cluster or MIREN_CLUSTER")
+	}
+	if o.Cluster != "" {
+		return nil
+	}
+
+	dc, err := appconfig.LoadDeployConfigUnder(o.ResolvedDir())
+	if err != nil {
+		return fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
+	}
+	if dc == nil {
+		if o.Target != "" {
+			return fmt.Errorf("--target requires %s", appconfig.DeployConfigPath)
+		}
+		return nil
+	}
+
+	target, err := dc.Target(o.Target)
+	if err != nil {
+		return err
+	}
+	o.targetCluster, err = o.clusterNameForTarget(target)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *deployOpts) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
+	if o.targetCluster == "" {
+		return o.AppCentric.LoadCluster()
+	}
+	config := o.ConfigCentric
+	config.Cluster = o.targetCluster
+	return config.LoadCluster()
+}
+
+func (o *deployOpts) RequestedCluster() string {
+	if o.targetCluster != "" {
+		return o.targetCluster
+	}
+	return o.Cluster
+}
+
+func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
+	cfg, err := o.LoadConfig()
+	if err != nil {
+		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
+			return "", fmt.Errorf("no client configuration available; run 'miren login' to authenticate and 'miren cluster add' to configure the cluster for deploy target %q", target.Name)
+		}
+		return "", err
+	}
+
+	if target.ClusterID == "" {
+		cluster, err := cfg.GetCluster(target.Cluster)
+		if err != nil || cluster == nil {
+			return "", fmt.Errorf("cluster %q for deploy target %q is not configured; run 'miren cluster add'", target.Cluster, target.Name)
+		}
+		return target.Cluster, nil
+	}
+
+	var match string
+	err = cfg.IterateClusters(func(name string, cluster *clientconfig.ClusterConfig) error {
+		if cluster.XID != target.ClusterID {
+			return nil
+		}
+		if name == target.Cluster || match == "" {
+			match = name
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if match == "" {
+		return "", fmt.Errorf("cluster id %q for deploy target %q is not configured; run 'miren cluster add'", target.ClusterID, target.Name)
+	}
+	return match, nil
 }
 
 // IsJSON reports whether one JSON document was requested (--json or
@@ -120,6 +211,13 @@ func (o *deployOpts) IsJSONL() bool {
 // output. Such a caller cannot answer prompts and must not get the build TUI.
 func (o *deployOpts) machineReadable() bool {
 	return o.IsJSON() || o.IsJSONL()
+}
+
+func requireDeploymentMessageSupport(ctx context.Context, cl *rpc.NetworkClient) error {
+	if !cl.HasMethodParam(ctx, "DeployVersion", "message") {
+		return fmt.Errorf("--message requires a newer server; upgrade the server")
+	}
+	return nil
 }
 
 // Deploy runs the deploy and, when asked for a machine-readable format, keeps
@@ -224,6 +322,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	// Normalize and validate ephemeral label
 	var ephemeralLabel, ephemeralTTL string
 	if opts.Ephemeral != "" {
+		if opts.Message != "" {
+			return fmt.Errorf("--message cannot be used with --ephemeral (ephemeral deploys have no deployment record)")
+		}
 		normalized, err := ephemeralx.NormalizeLabel(opts.Ephemeral)
 		if err != nil {
 			return fmt.Errorf("invalid ephemeral label: %w", err)
@@ -234,6 +335,12 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 			return fmt.Errorf("invalid TTL %q: %w", opts.TTL, err)
 		}
 		ephemeralTTL = opts.TTL
+	}
+	if opts.Message != "" && opts.Analyze {
+		return fmt.Errorf("--message cannot be used with --analyze (no deployment is created)")
+	}
+	if len(opts.Message) > deploylifecycle.MaxDeploymentMessageBytes {
+		return fmt.Errorf("--message must be at most %d bytes (got %d)", deploylifecycle.MaxDeploymentMessageBytes, len(opts.Message))
 	}
 
 	if ctx.ClientConfig == nil {
@@ -309,6 +416,11 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		if err != nil {
 			return fmt.Errorf("failed to connect to deployment service: %w", err)
 		}
+		if opts.Message != "" {
+			if err := requireDeploymentMessageSupport(ctx.Context, depCl); err != nil {
+				return err
+			}
+		}
 		depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
 		var envVars []*deployment_v1alpha.EnvironmentVariable
@@ -326,7 +438,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 			}
 		}
 
-		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars, ephemeralLabel, ephemeralTTL)
+		result, err := depClient.DeployVersion(ctx, name, ctx.ClusterName, opts.Version, false, envVars, ephemeralLabel, ephemeralTTL, opts.Message)
 		if err != nil {
 			return fmt.Errorf("failed to deploy version: %w", err)
 		}
@@ -510,6 +622,17 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if err != nil {
 		return fmt.Errorf("failed to connect to deployment service: %w", err)
 	}
+	// Build and deployment capabilities are served by the same coordinator.
+	// The deployment parameter predates messages, so it alone cannot prove an
+	// older server will retain DeployRequest.message.
+	if opts.Message != "" {
+		if !serverOwnsDeployment {
+			return fmt.Errorf("--message requires a server with deployment tracking support; upgrade the server")
+		}
+		if err := requireDeploymentMessageSupport(ctx.Context, depCl); err != nil {
+			return err
+		}
+	}
 	depClient := deployment_v1alpha.NewDeploymentClient(depCl)
 
 	// Convert git.Info to deployment GitInfo
@@ -539,6 +662,9 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	if serverOwnsDeployment {
 		deployReq = &build_v1alpha.DeployRequest{}
 		deployReq.SetClusterId(ctx.ClusterName)
+		if opts.Message != "" {
+			deployReq.SetMessage(opts.Message)
+		}
 		if gi := buildGitInfoFromGit(gitInfo); gi != nil {
 			deployReq.SetGitInfo(gi)
 		}

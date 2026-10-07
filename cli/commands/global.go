@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/logcount"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
 	"miren.dev/runtime/pkg/slogrus"
@@ -107,9 +108,11 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 	s.levelVar.Set(level)
 
-	s.Log = slog.New(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	// Counted at the root so every printed line, relayed child output
+	// included, feeds miren_log_messages_total.
+	s.Log = slog.New(logcount.NewHandler(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: &s.levelVar,
-	}))
+	}), logcount.Default))
 
 	// A separate logger for UI output, which is always at least debug level
 	s.UILog = slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -219,7 +222,10 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 				s.levelVar.Set(target)
 
-				s.Log.ErrorContext(sigCtx, "Log leveling changed", "level", target)
+				// Logged at Error so it prints whatever the new level is, but
+				// counted at Info: an operator turning up verbosity is not an
+				// error, and it would otherwise page any error-rate rule.
+				s.Log.ErrorContext(logcount.CountAt(sigCtx, slog.LevelInfo), "Log leveling changed", "level", target)
 			}
 		}
 	}()

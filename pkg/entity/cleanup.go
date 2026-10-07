@@ -60,9 +60,16 @@ type CleanupStats struct {
 
 // CleanupStaleCollectionEntries scans collection (index) entries and removes
 // every entry the backing entity does not justify. An entry is justified when
-// the entity still exists and still carries an indexed value hashing to the
-// entry's collection segment; anything else is drift. An orphan is the
+// the entity still exists and its key still carries an indexed value hashing
+// to the entry's collection segment; anything else is drift. An orphan is the
 // degenerate case, an entity with no justified values at all.
+//
+// That holds for a presence marker as for a match (see the index layout
+// comment above indexWrite). A marker is not tied back to its session's blob,
+// so one whose session holds nothing on the entity anymore is kept while the
+// value is; its lease still collects it with the session. What the sweep does
+// catch is a marker left for a value the entity has since dropped, which
+// writers before MIR-1991 leaked on every change of a session-written value.
 //
 // Safety rests on three things. Creates are atomic, so an entry whose entity is
 // absent is genuinely orphaned with no create-in-flight race. Entities are
@@ -72,8 +79,7 @@ type CleanupStats struct {
 // ABA guard to the mismatch verdict: any writer that re-justifies an entry has
 // to rewrite the key, so the compare fails and the entry survives.
 //
-// Session-scoped entries and entities whose attributes cannot be resolved are
-// left alone.
+// Entities whose attributes cannot be resolved are left alone.
 //
 // The pass is idempotent and bounded, so it is safe to run repeatedly as a
 // background sweep.
@@ -139,10 +145,9 @@ func (p *cleanupPass) scan(ctx context.Context, kv *mvccpb.KeyValue) error {
 
 	key := string(kv.Key)
 	p.page = append(p.page, collectionEntry{
-		key:           key,
-		modRev:        kv.ModRevision,
-		entityID:      Id(kv.Value),
-		sessionScoped: sessionScopedKey(key, p.collectionPrefix),
+		key:      key,
+		modRev:   kv.ModRevision,
+		entityID: Id(kv.Value),
 	})
 
 	if len(p.page) >= cleanupResolveBatchSize {
@@ -187,11 +192,6 @@ func (p *cleanupPass) judge(ctx context.Context, e collectionEntry, justified ma
 
 	switch {
 	case present && values[collection]:
-		return nil
-	case present && e.sessionScoped:
-		// Leased, so etcd collects it with the session. This only covers a live
-		// entity; a session-scoped entry whose entity is gone falls to the
-		// orphan case and is deleted like any other.
 		return nil
 	case present:
 		p.stats.MismatchedEntriesFound++
@@ -247,10 +247,9 @@ func (p *cleanupPass) flush(ctx context.Context) error {
 // collectionEntry carries everything the verdict needs, so judging never
 // re-parses the key.
 type collectionEntry struct {
-	key           string
-	modRev        int64
-	entityID      Id
-	sessionScoped bool
+	key      string
+	modRev   int64
+	entityID Id
 }
 
 // distinctEntityIDs returns the entities a page refers to, once each: an entity
@@ -281,7 +280,7 @@ func (s *EtcdStore) resolveJustified(
 	batch []collectionEntry,
 ) (justified map[Id]map[string]bool, unverifiable map[Id]bool, err error) {
 	ids := distinctEntityIDs(batch)
-	entities, undecodable, err := s.getEntities(ctx, ids, false, 0)
+	entities, undecodable, err := s.getEntities(ctx, ids, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cleanup: failed to resolve entities: %w", err)
 	}
@@ -313,7 +312,7 @@ func (s *EtcdStore) resolveJustified(
 // would drop the unreadable attribute, which here reads as "not justified" and
 // deletes a live entry.
 func (s *EtcdStore) justifiedCollections(ctx context.Context, ent *Entity) (map[string]bool, error) {
-	indexed, err := s.collectIndexedAttributes(ctx, ent.attrs)
+	indexed, err := s.collectIndexedValues(ctx, ent.attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +324,6 @@ func (s *EtcdStore) justifiedCollections(ctx context.Context, ent *Entity) (map[
 		}
 	}
 	return values, nil
-}
-
-// sessionScopedKey reports whether a collection entry is the session-scoped
-// variant. Plain entries are "{prefix}/collections/{colKey}/{base58 id}";
-// session entries carry a further "/{session}" segment and are leased.
-func sessionScopedKey(key, collectionPrefix string) bool {
-	return strings.Count(strings.TrimPrefix(key, collectionPrefix), "/") > 1
 }
 
 // errStopScan is a sentinel returned by the scan callback to halt scanning once
@@ -400,7 +392,7 @@ func (s *EtcdStore) deleteStaleBatch(ctx context.Context, log *slog.Logger, batc
 
 // collectionFromKey extracts the collection segment from a collection entry key.
 // Keys are "{prefix}/collections/{colKey}/{base58(id)}" and colKey has its own
-// slashes replaced (see addToCollectionDirect), so the collection is everything
+// slashes replaced (see addToCollectionOp), so the collection is everything
 // up to the first slash after the prefix.
 func collectionFromKey(key, collectionPrefix string) string {
 	rest := strings.TrimPrefix(key, collectionPrefix)

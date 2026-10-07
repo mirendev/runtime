@@ -27,6 +27,9 @@ const updateRetryLimit = 100
 const maxFailureSummaryBytes = 4 * 1024
 const failureSummaryEllipsis = "…"
 
+// MaxDeploymentMessageBytes is the record size limit shared by clients and RPC handlers.
+const MaxDeploymentMessageBytes = 1024
+
 // Tracker is the deployment lifecycle as a set of operations, and the surface
 // the build paths call. It exists so the record is a byproduct of the work
 // actually happening rather than something a client narrates.
@@ -75,10 +78,13 @@ type BeginParams struct {
 	AppVersion string
 
 	GitInfo        core_v1alpha.GitInfo
+	Message        string
 	DeployedBy     core_v1alpha.DeployedBy
 	Subject        string
 	AuthMethod     string
 	OrganizationID string
+	Email          string
+	Name           string
 
 	// ParentDeploymentID records the deployment this attempt was based on.
 	ParentDeploymentID string
@@ -95,6 +101,9 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	if params.AppName == "" {
 		return nil, cond.ValidationFailure("missing-field",
 			"app_name is required to begin a deployment")
+	}
+	if len(params.Message) > MaxDeploymentMessageBytes {
+		return nil, cond.ValidationFailure("invalid-message", fmt.Sprintf("deployment message must be at most %d bytes", MaxDeploymentMessageBytes))
 	}
 	if params.Operation == "" {
 		params.Operation = OperationBuild
@@ -134,16 +143,24 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	}
 
 	deployedBy := params.DeployedBy
-	if params.Subject == "" || params.AuthMethod == "" || params.OrganizationID == "" {
-		if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
-			if params.Subject == "" {
-				params.Subject = identity.Subject
-			}
-			if params.AuthMethod == "" {
-				params.AuthMethod = string(identity.Method)
-			}
-			if params.OrganizationID == "" && params.Subject == identity.Subject && params.AuthMethod == string(identity.Method) {
+	if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
+		if params.Subject == "" {
+			params.Subject = identity.Subject
+		}
+		if params.AuthMethod == "" {
+			params.AuthMethod = string(identity.Method)
+		}
+		// The remaining attributes describe the context identity, so they only
+		// apply when the recorded subject is that identity.
+		if params.Subject == identity.Subject && params.AuthMethod == string(identity.Method) {
+			if params.OrganizationID == "" {
 				params.OrganizationID, _ = identity.Metadata["organization_id"].(string)
+			}
+			if params.Email == "" {
+				params.Email, _ = identity.Metadata["email"].(string)
+			}
+			if params.Name == "" {
+				params.Name, _ = identity.Metadata["name"].(string)
 			}
 		}
 	}
@@ -155,6 +172,12 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 	}
 	if params.OrganizationID != "" {
 		deployedBy.OrganizationId = params.OrganizationID
+	}
+	if params.Email != "" {
+		deployedBy.Email = params.Email
+	}
+	if params.Name != "" {
+		deployedBy.Name = params.Name
 	}
 	if deployedBy.Timestamp == "" {
 		deployedBy.Timestamp = t.now.Now().Format(time.RFC3339)
@@ -174,6 +197,7 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		StartedAt:  startedAt,
 		DeployedBy: deployedBy,
 		GitInfo:    params.GitInfo,
+		Message:    params.Message,
 	}
 	pending := &Record{Deployment: dep}
 	pending.setInProgress()

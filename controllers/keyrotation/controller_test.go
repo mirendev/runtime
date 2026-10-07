@@ -2,7 +2,9 @@ package keyrotation
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -68,6 +70,120 @@ func drive(t *testing.T, c *Controller, ctx context.Context) {
 		}
 	}
 	t.Fatal("rotation did not finish")
+}
+
+type failRotationRecord struct {
+	rpc.Client
+	err         error
+	afterCommit bool
+}
+
+func (s *failRotationRecord) Call(ctx context.Context, method string, args, result any) error {
+	if method == "put" && s.err != nil {
+		if s.afterCommit {
+			if err := s.Client.Call(ctx, method, args, result); err != nil {
+				return err
+			}
+		}
+		err := s.err
+		s.err = nil
+		return err
+	}
+	return s.Client.Call(ctx, method, args, result)
+}
+
+func TestFailedRotationRecordLeavesLiveKeyUnchanged(t *testing.T) {
+	c, backend, ec, _ := newTestController(t)
+	ctx := t.Context()
+	oldKey := backend.Keyring().CurrentID()
+	_, _, err := backend.Put(ctx, "app/before", []byte("before rotation"))
+	require.NoError(t, err)
+
+	failure := errors.New("injected rotation record failure")
+	fault := &failRotationRecord{Client: ec.EAC().Client, err: failure}
+	c.EC = entityserver.NewClient(c.Log, esv1.NewEntityAccessClient(fault))
+
+	require.ErrorContains(t, c.Begin(ctx), "recording the rotation: "+failure.Error())
+	require.Nil(t, fault.err, "the record write must have reached the injected failure")
+	require.Equal(t, oldKey, backend.Keyring().CurrentID())
+	assert.Len(t, backend.Keyring().Keys(), 1)
+	active, err := c.activeRotation(ctx)
+	require.NoError(t, err)
+	require.Nil(t, active)
+
+	_, _, err = backend.Put(ctx, "app/after", []byte("after failure"))
+	require.NoError(t, err)
+	remaining, err := backend.CountOnKey(ctx, oldKey)
+	require.NoError(t, err)
+	assert.Equal(t, 2, remaining, "writes still seal under the old key after failure")
+
+	// Retrying must target the original key, not strand its versions.
+	require.NoError(t, c.Begin(ctx))
+	active, err = c.activeRotation(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, active)
+	assert.Equal(t, oldKey, active.FromKey)
+	assert.Equal(t, backend.Keyring().CurrentID(), active.ToKey)
+	drive(t, c, ctx)
+	assert.Len(t, backend.Keyring().Keys(), 1)
+	remaining, err = backend.CountOnKey(ctx, oldKey)
+	require.NoError(t, err)
+	assert.Zero(t, remaining)
+
+	for path, want := range map[string]string{
+		"app/before": "before rotation",
+		"app/after":  "after failure",
+	} {
+		got, err := backend.Resolve(ctx, path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(got.Bytes))
+	}
+}
+
+func TestRotationRecoversWhenRecordCommitsButResponseIsLost(t *testing.T) {
+	c, backend, ec, dataPath := newTestController(t)
+	ctx := t.Context()
+	oldRing := backend.Keyring()
+	oldKey := oldRing.CurrentID()
+	_, _, err := backend.Put(ctx, "app/secret", []byte("still readable"))
+	require.NoError(t, err)
+
+	fault := &failRotationRecord{
+		Client: ec.EAC().Client, err: errors.New("lost record response"), afterCommit: true,
+	}
+	c.EC = entityserver.NewClient(c.Log, esv1.NewEntityAccessClient(fault))
+	require.ErrorContains(t, c.Begin(ctx), "lost record response")
+	require.Nil(t, fault.err)
+	require.Equal(t, oldKey, backend.Keyring().CurrentID())
+	active, err := c.activeRotation(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, active, "the record committed despite the error")
+	require.ErrorContains(t, c.Begin(ctx), "already in progress")
+
+	persisted, err := keyring.Ensure(c.Log, dataPath)
+	require.NoError(t, err)
+	require.Equal(t, active.ToKey, persisted.CurrentID())
+
+	require.NoError(t, os.Remove(keyring.Path(dataPath)))
+	require.ErrorIs(t, c.advance(ctx, active), os.ErrNotExist)
+	assert.NoFileExists(t, keyring.Path(dataPath), "reconciliation must not generate replacement keys")
+	require.Equal(t, oldKey, backend.Keyring().CurrentID())
+
+	// A different persisted current key must not be adopted for this record.
+	require.NoError(t, keyring.Save(keyring.Path(dataPath), oldRing))
+	require.ErrorContains(t, c.advance(ctx, active), "does not match rotation target")
+	require.Equal(t, oldKey, backend.Keyring().CurrentID())
+	require.NoError(t, keyring.Save(keyring.Path(dataPath), persisted))
+
+	drive(t, c, ctx)
+	assert.Equal(t, active.ToKey, backend.Keyring().CurrentID())
+	assert.Len(t, backend.Keyring().Keys(), 1)
+	remaining, err := backend.CountOnKey(ctx, oldKey)
+	require.NoError(t, err)
+	assert.Zero(t, remaining)
+	got, err := backend.Resolve(ctx, "app/secret")
+	require.NoError(t, err)
+	assert.Equal(t, "still readable", string(got.Bytes))
 }
 
 func TestRotationRewrapsEveryVersionAndRetiresTheOldKey(t *testing.T) {

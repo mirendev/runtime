@@ -92,23 +92,61 @@ func TestExtractTarGzRejectsEscapingEntries(t *testing.T) {
 	}
 }
 
-func TestExtractTarGzFindsBinary(t *testing.T) {
+func TestExtractTarGzStagesWholeArchive(t *testing.T) {
 	target := t.TempDir()
 	archive := writeDownloadTar(t, []downloadTarEntry{
 		{header: tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0755}},
 		{header: tar.Header{Name: "bin", Typeflag: tar.TypeDir, Mode: 0755}},
 		{
-			header:  tar.Header{Name: "miren", Typeflag: tar.TypeReg, Mode: 0755},
+			header:  tar.Header{Name: "./containerd", Typeflag: tar.TypeReg, Mode: 0755},
+			content: []byte("containerd"),
+		},
+		{
+			header:  tar.Header{Name: "./miren", Typeflag: tar.TypeReg, Mode: 0755},
 			content: []byte("binary"),
+		},
+		{
+			header:  tar.Header{Name: "./runc", Typeflag: tar.TypeReg, Mode: 0755},
+			content: []byte("runc"),
+		},
+		{
+			header:  tar.Header{Name: "./link", Typeflag: tar.TypeSymlink, Linkname: "miren"},
+			content: nil,
 		},
 	})
 
 	d := &assetDownloader{}
-	path, err := d.extractTarGz(archive, target)
+	staged, err := d.extractTarGz(archive, target)
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(target, "miren.new"), path)
+	require.Equal(t, filepath.Join(staged.dir, "miren"), staged.miren)
+	require.Equal(t, target, filepath.Dir(staged.dir))
+	require.Equal(t, []string{"containerd", "runc"}, staged.bundled)
 
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(staged.miren)
 	require.NoError(t, err)
 	require.Equal(t, []byte("binary"), content)
+	content, err = os.ReadFile(filepath.Join(staged.dir, "containerd"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("containerd"), content)
+	_, err = os.Lstat(filepath.Join(staged.dir, "link"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestExtractTarGzRequiresMiren(t *testing.T) {
+	target := t.TempDir()
+	archive := writeDownloadTar(t, []downloadTarEntry{
+		{
+			header:  tar.Header{Name: "./containerd", Typeflag: tar.TypeReg, Mode: 0755},
+			content: []byte("containerd"),
+		},
+	})
+
+	d := &assetDownloader{}
+	_, err := d.extractTarGz(archive, target)
+	require.ErrorContains(t, err, "miren binary not found")
+
+	// Nothing staged survives a rejected archive.
+	entries, err := os.ReadDir(target)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }

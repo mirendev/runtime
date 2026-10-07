@@ -101,6 +101,10 @@ type GCController struct {
 	Storage Storage
 	Config  GCConfig
 
+	// Counts receives the stalled sweep's forced transitions. Nil means
+	// saga.DefaultCounts, which is what the metrics collector reads.
+	Counts *saga.Counts
+
 	cancel context.CancelFunc
 }
 
@@ -217,6 +221,16 @@ func (c *GCController) sweepStalled(ctx context.Context) {
 		StaleAfter: c.Config.StaleAfter,
 		MaxForces:  c.Config.MaxForcesPerSweep,
 	}, c.Log)
+
+	// Counted before the error check: a sweep cut short still forced what it
+	// forced, and those transitions are written.
+	counts := c.Counts
+	if counts == nil {
+		counts = saga.DefaultCounts
+	}
+	for def, n := range result.ForcedByDefinition {
+		counts.Add(def, saga.EventStrandedForced, uint64(n))
+	}
 	if err != nil {
 		c.logSweepError(err, "saga stalled sweep",
 			"scanned", result.Scanned, "forced", result.Forced)
@@ -228,12 +242,17 @@ func (c *GCController) sweepStalled(ctx context.Context) {
 			"forced", result.Forced,
 			"failed", result.Failed,
 			"skipped", result.Skipped,
+			"blocked", result.Blocked,
 			"recovered", result.Recovered,
 			"scanned", result.Scanned,
 			"capped", result.Capped)
 	} else {
+		// Blocked executions are deliberately not an Info trigger: the count
+		// would read the same every tick until an operator acts, and the
+		// refusal was already logged at Error when it happened.
 		c.Log.Debug("saga stalled sweep complete, nothing stranded",
-			"scanned", result.Scanned)
+			"scanned", result.Scanned,
+			"blocked", result.Blocked)
 	}
 }
 

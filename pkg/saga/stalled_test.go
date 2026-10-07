@@ -136,6 +136,42 @@ func TestRunStalledSweep_NeverTouchesTerminalExecutions(t *testing.T) {
 	}
 }
 
+// TestRunStalledSweep_LeavesBlockedExecutionsAlone covers an execution a
+// binary refused to resume. It is old and untouched, which is everything the
+// sweep looks for, but it is waiting on an operator rather than stranded, and
+// failing it would let its entity's next reconcile retry over work nobody
+// compensated. ForceFailed refuses it too, for a block recorded after the page
+// that listed it.
+func TestRunStalledSweep_LeavesBlockedExecutionsAlone(t *testing.T) {
+	for _, backend := range stalledBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			storage := backend.make(t)
+
+			saveAged(t, storage, "blocked-running", StatusRunning, 30*24*time.Hour)
+			exec, err := storage.Get(ctx, "blocked-running")
+			require.NoError(t, err)
+			exec.BlockedReason = "refusing to resume: recorded at v1"
+			require.NoError(t, storage.Save(ctx, exec))
+
+			saveAged(t, storage, "stranded-running", StatusRunning, 30*24*time.Hour)
+
+			result, err := RunStalledSweep(ctx, storage, weekStalled(), testutils.TestLogger(t))
+			require.NoError(t, err)
+
+			assert.Equal(t, 1, result.Forced)
+			assert.Equal(t, 1, result.Blocked)
+			assert.Equal(t, StatusRunning, statusOf(t, storage, "blocked-running"))
+			assert.Equal(t, StatusFailed, statusOf(t, storage, "stranded-running"))
+
+			forced, err := storage.ForceFailed(ctx, "blocked-running", time.Now(), StalledError)
+			require.NoError(t, err)
+			assert.False(t, forced)
+			assert.Equal(t, StatusRunning, statusOf(t, storage, "blocked-running"))
+		})
+	}
+}
+
 // saveStalledChild persists an in-flight child execution belonging to parentID.
 func saveStalledChild(t *testing.T, storage executionSaver, id, parentID string, age time.Duration) {
 	t.Helper()

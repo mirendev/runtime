@@ -70,6 +70,7 @@ import (
 	"github.com/google/uuid"
 
 	"miren.dev/runtime/pkg/workloadroles"
+	"miren.dev/runtime/x/workloadid"
 )
 
 type IssuerConfig struct {
@@ -126,11 +127,14 @@ var _ TokenIssuer = (*Issuer)(nil)
 // boundary itself: a token arriving from a caller decodes into whatever string
 // it contained, so verification still has to compare the value rather than
 // assume it is one of the constants below.
-type IdentityType string
+//
+// The type and its values are defined in x/workloadid, which verifiers outside
+// this repository import, so the claim cannot drift between issuer and verifier.
+type IdentityType = workloadid.IdentityType
 
 const (
-	IdentityTypeSandbox IdentityType = "sandbox"
-	IdentityTypeSystem  IdentityType = "system"
+	IdentityTypeSandbox = workloadid.IdentityTypeSandbox
+	IdentityTypeSystem  = workloadid.IdentityTypeSystem
 )
 
 type WorkloadClaims struct {
@@ -149,6 +153,15 @@ type WorkloadClaims struct {
 	// pkg/workloadroles). Resolved server-side from the app the sandbox belongs
 	// to; never supplied by the workload. Only sandbox tokens carry it.
 	Role string `json:"role,omitempty"`
+	// RunnerID names the distributed runner a system workload token was minted
+	// for, taken by the coordinator from the runner's verified certificate.
+	// Only tokens a coordinator mints on a runner's behalf carry it, so its
+	// absence means "the coordinator's own workload", not "unknown runner".
+	//
+	// It is a claim of its own rather than part of the subject, because the
+	// subject is what external verifiers federate on and every runner's
+	// telemetry writer is meant to share one principal there.
+	RunnerID string `json:"runner_id,omitempty"`
 }
 
 // LocalIssuerURL anchors a cluster that has no hostname to advertise.
@@ -341,6 +354,10 @@ type TokenOptions struct {
 	// (workloadroles.Default). An unknown role name is embedded as-is and is
 	// denied everything at authorize time, so a misconfiguration fails closed.
 	Role string
+	// RunnerID stamps the runner_id claim on a system workload token. Only a
+	// coordinator minting on a runner's behalf sets it, and only from the
+	// runner's verified certificate, never from anything the runner sent.
+	RunnerID string
 }
 
 func (iss *Issuer) IssueToken(app, sandboxID string) (string, error) {

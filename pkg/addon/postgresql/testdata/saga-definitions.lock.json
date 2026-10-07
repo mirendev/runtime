@@ -1,0 +1,1081 @@
+{
+  "clone-dedicated-postgresql": {
+    "version": 1,
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "databasename",
+          "password",
+          "servername",
+          "storage_ready",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "decode-dedicated-clone-source",
+          "generate-dedicated-clone-name",
+          "release-base-backup-sandbox"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-dedicated-clone-name"
+        ]
+      },
+      "create-postgres-server": {
+        "inputs": [
+          "password",
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-dedicated-clone-name"
+        ]
+      },
+      "decode-dedicated-clone-source": {
+        "inputs": [
+          "sourceentity"
+        ],
+        "outputs": [
+          "databasename",
+          "source_password",
+          "sourcedisksizegb",
+          "sourcehost",
+          "sourcepoolid",
+          "username"
+        ]
+      },
+      "enable-base-backup": {
+        "inputs": [
+          "sourcepoolid"
+        ],
+        "outputs": [
+          "replication_ready"
+        ],
+        "dependencies": [
+          "decode-dedicated-clone-source"
+        ]
+      },
+      "finish-base-backup-access": {
+        "inputs": [
+          "base_backup_done",
+          "sourcepoolid"
+        ],
+        "outputs": [
+          "disabled"
+        ],
+        "dependencies": [
+          "decode-dedicated-clone-source",
+          "run-base-backup"
+        ]
+      },
+      "generate-dedicated-clone-name": {
+        "inputs": [
+          "appname",
+          "targetassociationid"
+        ],
+        "outputs": [
+          "password",
+          "servername",
+          "servicename"
+        ]
+      },
+      "release-base-backup-sandbox": {
+        "inputs": [
+          "backupsandboxid",
+          "base_backup_done"
+        ],
+        "outputs": [
+          "storage_ready"
+        ],
+        "dependencies": [
+          "run-base-backup"
+        ]
+      },
+      "rotate-clone-credentials": {
+        "inputs": [
+          "databasename",
+          "password",
+          "ready",
+          "servicehost",
+          "source_password",
+          "username"
+        ],
+        "outputs": [
+          "clone_credentials_ready"
+        ],
+        "dependencies": [
+          "decode-dedicated-clone-source",
+          "generate-dedicated-clone-name",
+          "wait-for-dedicated-pool",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "run-base-backup": {
+        "inputs": [
+          "appname",
+          "replication_ready",
+          "servername",
+          "source_password",
+          "sourcedisksizegb",
+          "sourcehost",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "backupsandboxid",
+          "base_backup_done"
+        ],
+        "dependencies": [
+          "decode-dedicated-clone-source",
+          "enable-base-backup",
+          "generate-dedicated-clone-name"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "clone_credentials_ready",
+          "password",
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-postgres-server",
+          "generate-dedicated-clone-name",
+          "rotate-clone-credentials",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  },
+  "clone-dedicated-to-shared-postgresql": {
+    "version": 1,
+    "actions": {
+      "create-clone-shared-database": {
+        "inputs": [
+          "servicehost",
+          "shareddatabasename",
+          "sharedusername",
+          "superuserpassword",
+          "targetassociationid"
+        ],
+        "outputs": [
+          "database_created"
+        ],
+        "dependencies": [
+          "create-clone-shared-user",
+          "find-or-create-shared-server",
+          "generate-clone-credentials"
+        ]
+      },
+      "create-clone-shared-user": {
+        "inputs": [
+          "generatedsharedusername",
+          "servicehost",
+          "sharedpassword",
+          "superuserpassword"
+        ],
+        "outputs": [
+          "sharedusername"
+        ],
+        "dependencies": [
+          "find-or-create-shared-server",
+          "generate-clone-credentials"
+        ]
+      },
+      "decode-dedicated-clone-source": {
+        "inputs": [
+          "sourceentity"
+        ],
+        "outputs": [
+          "databasename",
+          "source_password",
+          "sourcedisksizegb",
+          "sourcehost",
+          "sourcepoolid",
+          "username"
+        ]
+      },
+      "find-or-create-shared-server": {
+        "inputs": [
+          "appname",
+          "variantconfig"
+        ],
+        "outputs": [
+          "serverid",
+          "servicehost",
+          "superuserpassword"
+        ]
+      },
+      "generate-clone-credentials": {
+        "inputs": [
+          "appname",
+          "targetassociationid"
+        ],
+        "outputs": [
+          "generatedsharedusername",
+          "shareddatabasename",
+          "sharedpassword"
+        ]
+      },
+      "increment-association-count": {
+        "inputs": [
+          "database_created",
+          "serverid"
+        ],
+        "outputs": [
+          "incremented"
+        ],
+        "dependencies": [
+          "create-clone-shared-database",
+          "find-or-create-shared-server"
+        ]
+      },
+      "release-restore-sandbox": {
+        "inputs": [
+          "restoresandboxid"
+        ],
+        "dependencies": [
+          "restore-shared-clone"
+        ]
+      },
+      "restore-shared-clone": {
+        "inputs": [
+          "appname",
+          "database_created",
+          "databasename",
+          "servicehost",
+          "shareddatabasename",
+          "sharedpassword",
+          "sharedusername",
+          "source_password",
+          "sourcehost",
+          "targetassociationid",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "restoresandboxid"
+        ],
+        "dependencies": [
+          "create-clone-shared-database",
+          "create-clone-shared-user",
+          "decode-dedicated-clone-source",
+          "find-or-create-shared-server",
+          "generate-clone-credentials"
+        ]
+      }
+    }
+  },
+  "clone-shared-postgresql": {
+    "version": 1,
+    "actions": {
+      "create-clone-shared-database": {
+        "inputs": [
+          "servicehost",
+          "shareddatabasename",
+          "sharedusername",
+          "superuserpassword",
+          "targetassociationid"
+        ],
+        "outputs": [
+          "database_created"
+        ],
+        "dependencies": [
+          "create-clone-shared-user",
+          "decode-shared-clone-source",
+          "generate-clone-credentials"
+        ]
+      },
+      "create-clone-shared-user": {
+        "inputs": [
+          "generatedsharedusername",
+          "servicehost",
+          "sharedpassword",
+          "superuserpassword"
+        ],
+        "outputs": [
+          "sharedusername"
+        ],
+        "dependencies": [
+          "decode-shared-clone-source",
+          "generate-clone-credentials"
+        ]
+      },
+      "decode-shared-clone-source": {
+        "inputs": [
+          "sourceentity"
+        ],
+        "outputs": [
+          "databasename",
+          "serverid",
+          "servicehost",
+          "source_password",
+          "sourcehost",
+          "superuserpassword",
+          "username"
+        ]
+      },
+      "generate-clone-credentials": {
+        "inputs": [
+          "appname",
+          "targetassociationid"
+        ],
+        "outputs": [
+          "generatedsharedusername",
+          "shareddatabasename",
+          "sharedpassword"
+        ]
+      },
+      "increment-association-count": {
+        "inputs": [
+          "database_created",
+          "serverid"
+        ],
+        "outputs": [
+          "incremented"
+        ],
+        "dependencies": [
+          "create-clone-shared-database",
+          "decode-shared-clone-source"
+        ]
+      },
+      "release-restore-sandbox": {
+        "inputs": [
+          "restoresandboxid"
+        ],
+        "dependencies": [
+          "restore-shared-clone"
+        ]
+      },
+      "restore-shared-clone": {
+        "inputs": [
+          "appname",
+          "database_created",
+          "databasename",
+          "servicehost",
+          "shareddatabasename",
+          "sharedpassword",
+          "sharedusername",
+          "source_password",
+          "sourcehost",
+          "targetassociationid",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "restoresandboxid"
+        ],
+        "dependencies": [
+          "create-clone-shared-database",
+          "create-clone-shared-user",
+          "decode-shared-clone-source",
+          "generate-clone-credentials"
+        ]
+      }
+    }
+  },
+  "deprovision-dedicated-postgresql": {
+    "version": 1,
+    "actions": {
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "delete-dedicated-pool": {
+        "inputs": [
+          "dedicatedpoolid"
+        ],
+        "outputs": [
+          "dedicated_pool_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-server-entity": {
+        "inputs": [
+          "dedicated_pool_deleted",
+          "dedicatedserverid",
+          "dedicatedservername"
+        ],
+        "outputs": [
+          "serverdeleted"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs",
+          "delete-dedicated-pool",
+          "lookup-dedicated-server"
+        ]
+      },
+      "delete-dedicated-service": {
+        "inputs": [
+          "dedicatedserviceid"
+        ],
+        "outputs": [
+          "dedicated_service_deleted"
+        ],
+        "dependencies": [
+          "lookup-dedicated-server"
+        ]
+      },
+      "lookup-dedicated-server": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedpoolid",
+          "dedicatedservername",
+          "dedicatedserviceid"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      }
+    }
+  },
+  "deprovision-shared-postgresql": {
+    "version": 1,
+    "actions": {
+      "cleanup-shared-server": {
+        "inputs": [
+          "remainingcount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedserverref",
+          "sharedserviceref"
+        ],
+        "outputs": [
+          "cleanedup"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "decrement-association-count",
+          "lookup-shared-server"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "decrement-association-count": {
+        "inputs": [
+          "databasedropped",
+          "sharedserverref",
+          "userdropped"
+        ],
+        "outputs": [
+          "remainingcount"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "drop-shared-database",
+          "drop-shared-user"
+        ]
+      },
+      "drop-shared-database": {
+        "inputs": [
+          "connectionsterminated",
+          "shareddbname",
+          "sharedservicehost",
+          "sharedsuperuserpassword"
+        ],
+        "outputs": [
+          "databasedropped"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server",
+          "terminate-connections"
+        ]
+      },
+      "drop-shared-user": {
+        "inputs": [
+          "connectionsterminated",
+          "sharedservicehost",
+          "sharedsuperuserpassword",
+          "sharedusername"
+        ],
+        "outputs": [
+          "userdropped"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server",
+          "terminate-connections"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedservicehost",
+          "sharedserviceref",
+          "sharedsuperuserpassword"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "terminate-connections": {
+        "inputs": [
+          "shareddbname",
+          "sharedservicehost",
+          "sharedsuperuserpassword"
+        ],
+        "outputs": [
+          "connectionsterminated"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      }
+    }
+  },
+  "ensure-shared-server": {
+    "version": 1,
+    "actions": {
+      "activate-shared-server": {
+        "inputs": [
+          "diskname",
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "superuserpassword"
+        ],
+        "outputs": [
+          "activated"
+        ],
+        "dependencies": [
+          "create-shared-pool",
+          "create-shared-server-entity",
+          "create-shared-service",
+          "wait-for-shared-service"
+        ]
+      },
+      "create-shared-pool": {
+        "inputs": [
+          "diskname",
+          "superuserpassword",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ]
+      },
+      "create-shared-server-entity": {
+        "inputs": [
+          "diskname",
+          "superuserpassword",
+          "variantconfig"
+        ],
+        "outputs": [
+          "serverid"
+        ]
+      },
+      "create-shared-service": {
+        "outputs": [
+          "serviceid"
+        ]
+      },
+      "wait-for-shared-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "poolready"
+        ],
+        "dependencies": [
+          "create-shared-pool"
+        ]
+      },
+      "wait-for-shared-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-shared-service"
+        ]
+      }
+    }
+  },
+  "provision-dedicated-postgresql": {
+    "version": 2,
+    "resumes_from": [
+      1
+    ],
+    "actions": {
+      "create-dedicated-pool": {
+        "inputs": [
+          "appname",
+          "databasename",
+          "password",
+          "servername",
+          "storage_ready",
+          "username",
+          "variantconfig"
+        ],
+        "outputs": [
+          "poolid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-dedicated-service": {
+        "inputs": [
+          "appname",
+          "servername",
+          "servicename"
+        ],
+        "outputs": [
+          "serviceid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "create-postgres-server": {
+        "inputs": [
+          "password",
+          "servername",
+          "variantname"
+        ],
+        "outputs": [
+          "serverid"
+        ],
+        "dependencies": [
+          "generate-credentials"
+        ]
+      },
+      "generate-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "databasename",
+          "password",
+          "servername",
+          "servicename",
+          "username"
+        ]
+      },
+      "update-dedicated-server": {
+        "inputs": [
+          "clone_credentials_ready",
+          "password",
+          "poolid",
+          "serverid",
+          "servicehost",
+          "serviceid",
+          "variantname"
+        ],
+        "outputs": [
+          "updated"
+        ],
+        "dependencies": [
+          "create-dedicated-pool",
+          "create-dedicated-service",
+          "create-postgres-server",
+          "generate-credentials",
+          "wait-for-dedicated-service"
+        ]
+      },
+      "wait-for-dedicated-pool": {
+        "inputs": [
+          "poolid"
+        ],
+        "outputs": [
+          "ready"
+        ],
+        "dependencies": [
+          "create-dedicated-pool"
+        ]
+      },
+      "wait-for-dedicated-service": {
+        "inputs": [
+          "serviceid"
+        ],
+        "outputs": [
+          "servicehost"
+        ],
+        "dependencies": [
+          "create-dedicated-service"
+        ]
+      }
+    }
+  },
+  "provision-shared-postgresql": {
+    "version": 2,
+    "resumes_from": [
+      1
+    ],
+    "actions": {
+      "create-shared-database": {
+        "inputs": [
+          "servicehost",
+          "shareddatabasename",
+          "sharedusername",
+          "superuserpassword"
+        ],
+        "outputs": [
+          "database_created"
+        ],
+        "dependencies": [
+          "create-shared-user",
+          "find-or-create-shared-server",
+          "generate-shared-credentials"
+        ]
+      },
+      "create-shared-user": {
+        "inputs": [
+          "generatedsharedusername",
+          "servicehost",
+          "sharedpassword",
+          "superuserpassword"
+        ],
+        "outputs": [
+          "sharedusername"
+        ],
+        "dependencies": [
+          "find-or-create-shared-server",
+          "generate-shared-credentials"
+        ]
+      },
+      "find-or-create-shared-server": {
+        "inputs": [
+          "appname",
+          "variantconfig"
+        ],
+        "outputs": [
+          "serverid",
+          "servicehost",
+          "superuserpassword"
+        ]
+      },
+      "generate-shared-credentials": {
+        "inputs": [
+          "appname"
+        ],
+        "outputs": [
+          "generatedsharedusername",
+          "shareddatabasename",
+          "sharedpassword"
+        ]
+      },
+      "increment-association-count": {
+        "inputs": [
+          "database_created",
+          "serverid"
+        ],
+        "outputs": [
+          "incremented"
+        ],
+        "dependencies": [
+          "create-shared-database",
+          "find-or-create-shared-server"
+        ]
+      }
+    }
+  },
+  "rotate-dedicated-postgresql": {
+    "version": 1,
+    "actions": {
+      "alter-dedicated-user-password": {
+        "inputs": [
+          "dedicateddatabase",
+          "dedicatednewpassword",
+          "dedicatedoldpassword",
+          "dedicatedservicehost",
+          "dedicateduser"
+        ],
+        "outputs": [
+          "dedicated_user_altered"
+        ],
+        "dependencies": [
+          "capture-dedicated-conn-info",
+          "load-dedicated-rotation-state"
+        ]
+      },
+      "build-dedicated-rotation-result": {
+        "inputs": [
+          "dedicateddatabase",
+          "dedicatednewpassword",
+          "dedicatedservicehost",
+          "dedicateduser"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "capture-dedicated-conn-info",
+          "load-dedicated-rotation-state"
+        ]
+      },
+      "capture-dedicated-conn-info": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicateddatabase",
+          "dedicateduser"
+        ]
+      },
+      "decode-dedicated-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "dedicatedserverid"
+        ]
+      },
+      "load-dedicated-rotation-state": {
+        "inputs": [
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedoldpassword",
+          "dedicatedservicehost"
+        ],
+        "dependencies": [
+          "decode-dedicated-attrs"
+        ]
+      },
+      "update-dedicated-entity": {
+        "inputs": [
+          "dedicated_user_altered",
+          "dedicatednewpassword",
+          "dedicatedoldpassword",
+          "dedicatedserverid"
+        ],
+        "outputs": [
+          "dedicatedrecorded"
+        ],
+        "dependencies": [
+          "alter-dedicated-user-password",
+          "decode-dedicated-attrs",
+          "load-dedicated-rotation-state"
+        ]
+      }
+    }
+  },
+  "rotate-shared-postgresql-superuser": {
+    "version": 1,
+    "actions": {
+      "alter-superuser-password": {
+        "inputs": [
+          "sharedservicehost",
+          "sharedsuperuserpassword",
+          "superuser_disk_ensured",
+          "superusernewpassword"
+        ],
+        "outputs": [
+          "superuser_altered"
+        ],
+        "dependencies": [
+          "backfill-superuser-disk-name",
+          "lookup-shared-server"
+        ]
+      },
+      "backfill-superuser-disk-name": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "superuser_disk_ensured"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "capture-superuser-result": {
+        "inputs": [
+          "superuser_altered"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "alter-superuser-password"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedservicehost",
+          "sharedserviceref",
+          "sharedsuperuserpassword"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      },
+      "update-superuser-entity": {
+        "inputs": [
+          "sharedserverref",
+          "sharedsuperuserpassword",
+          "superuser_altered",
+          "superusernewpassword"
+        ],
+        "outputs": [
+          "superuserrecorded"
+        ],
+        "dependencies": [
+          "alter-superuser-password",
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      }
+    }
+  },
+  "rotate-shared-postgresql-user": {
+    "version": 1,
+    "actions": {
+      "alter-shared-user-password": {
+        "inputs": [
+          "sharedservicehost",
+          "sharedsuperuserpassword",
+          "sharedusername",
+          "usernewpassword",
+          "useroldpassword"
+        ],
+        "outputs": [
+          "useraltered"
+        ],
+        "dependencies": [
+          "capture-old-user-password",
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      },
+      "build-user-rotation-result": {
+        "inputs": [
+          "shareddbname",
+          "sharedservicehost",
+          "sharedusername",
+          "usernewpassword"
+        ],
+        "outputs": [
+          "done"
+        ],
+        "dependencies": [
+          "decode-shared-attrs",
+          "lookup-shared-server"
+        ]
+      },
+      "capture-old-user-password": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "useroldpassword"
+        ]
+      },
+      "decode-shared-attrs": {
+        "inputs": [
+          "assocentity"
+        ],
+        "outputs": [
+          "shareddbname",
+          "sharedserverref",
+          "sharedusername"
+        ]
+      },
+      "lookup-shared-server": {
+        "inputs": [
+          "sharedserverref"
+        ],
+        "outputs": [
+          "sharedassoccount",
+          "shareddiskname",
+          "sharedpoolref",
+          "sharedservicehost",
+          "sharedserviceref",
+          "sharedsuperuserpassword"
+        ],
+        "dependencies": [
+          "decode-shared-attrs"
+        ]
+      }
+    }
+  }
+}

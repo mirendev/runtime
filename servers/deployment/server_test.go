@@ -73,6 +73,7 @@ func TestToDeploymentInfo(t *testing.T) {
 			name: "deployment with dirty git state",
 			deployment: &core_v1alpha.Deployment{
 				ID:         "test-deployment-1",
+				Message:    "deploy the hotfix",
 				AppName:    "test-app",
 				AppVersion: "v1.0.0",
 				ClusterId:  "test-cluster",
@@ -92,6 +93,9 @@ func TestToDeploymentInfo(t *testing.T) {
 				},
 			},
 			checkFunc: func(t *testing.T, info *deployment_v1alpha.DeploymentInfo) {
+				if info.Message() != "deploy the hotfix" {
+					t.Errorf("Expected deployment message, got %q", info.Message())
+				}
 				if !info.HasGitInfo() {
 					t.Fatal("Expected git info")
 				}
@@ -1034,28 +1038,42 @@ func TestDeployVersion(t *testing.T) {
 	}
 
 	t.Run("missing app_name returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "", "cluster1", "myapp-v1", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_name")
 		}
 	})
 
 	t.Run("missing cluster_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "myapp", "", "myapp-v1", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty cluster_id")
 		}
 	})
 
 	t.Run("missing app_version_id returns error", func(t *testing.T) {
-		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil, "", "")
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "", false, nil, "", "", "")
 		if err == nil {
 			t.Fatal("Expected error for empty app_version_id")
 		}
 	})
 
+	t.Run("ephemeral message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "preview", "", "reason")
+		if err == nil || !strings.Contains(err.Error(), "deployment message is not supported") {
+			t.Fatalf("expected early ephemeral message rejection: %v", err)
+		}
+	})
+
+	t.Run("oversized message rejected before version lookup", func(t *testing.T) {
+		_, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", strings.Repeat("x", deploylifecycle.MaxDeploymentMessageBytes+1))
+		if err == nil || !strings.Contains(err.Error(), "at most 1024 bytes") {
+			t.Fatalf("expected actionable message length error: %v", err)
+		}
+	})
+
 	t.Run("non-existent version returns error in results", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "myapp", "cluster1", "nonexistent-version", false, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -1087,6 +1105,7 @@ func TestDeployVersion(t *testing.T) {
 		// Create a prior deployment record for this version (to serve as source)
 		priorDep := &core_v1alpha.Deployment{
 			AppName:    "testapp",
+			Message:    "previous deployment",
 			ClusterId:  "cluster1",
 			AppVersion: "testapp-v1abc",
 			Status:     "succeeded",
@@ -1104,7 +1123,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Deploy the version
-		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "testapp", "cluster1", "testapp-v1abc", false, nil, "", "", "redeploy for maintenance")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1133,6 +1152,9 @@ func TestDeployVersion(t *testing.T) {
 		}
 		if dep.GitInfo().Sha() != "abc123" {
 			t.Errorf("Expected git SHA 'abc123', got %s", dep.GitInfo().Sha())
+		}
+		if dep.Message() != "redeploy for maintenance" {
+			t.Errorf("Expected new deployment message, got %q", dep.Message())
 		}
 	})
 
@@ -1186,7 +1208,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Roll back to v1
-		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", string(version1ID), true, nil, "", "")
+		result, err := client.DeployVersion(ctx, "rollback-app", "cluster1", string(version1ID), true, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion (rollback) failed: %v", err)
 		}
@@ -1246,7 +1268,7 @@ func TestDeployVersion(t *testing.T) {
 		}
 
 		// Try to deploy — should be blocked
-		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil, "", "")
+		result, err := client.DeployVersion(ctx, "locked-app", "cluster1", "locked-app-v1", false, nil, "", "", "")
 		if err != nil {
 			t.Fatalf("Unexpected RPC error: %v", err)
 		}
@@ -1298,7 +1320,7 @@ func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
 			envVar.SetKey("GREETING")
 			envVar.SetValue("preview")
 			result, err := client.DeployVersion(ctx, "policy-app", "cluster1", "source-version", false,
-				[]*deployment_v1alpha.EnvironmentVariable{envVar}, "preview", "1h")
+				[]*deployment_v1alpha.EnvironmentVariable{envVar}, "preview", "1h", "")
 			require.NoError(t, err)
 			require.Empty(t, result.Error())
 			versions, err := inmem.EAC.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, appID))
@@ -1375,7 +1397,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 	}
 
 	t.Run("ephemeral deploy sets label and TTL without activating", func(t *testing.T) {
-		result, err := client.DeployVersion(ctx, "ephapp", "cluster1", "ephapp-v1abc", false, nil, "feat-preview", "48h")
+		result, err := client.DeployVersion(ctx, "ephapp", "cluster1", "ephapp-v1abc", false, nil, "feat-preview", "48h", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1448,7 +1470,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Fatalf("Failed to create version: %v", err)
 		}
 
-		result, err := client.DeployVersion(ctx, "ephapp-bad", "cluster1", "ephapp-bad-v1", false, nil, "bad-ttl", "notaduration")
+		result, err := client.DeployVersion(ctx, "ephapp-bad", "cluster1", "ephapp-bad-v1", false, nil, "bad-ttl", "notaduration", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1474,7 +1496,7 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Fatalf("Failed to create version: %v", err)
 		}
 
-		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "")
+		result, err := client.DeployVersion(ctx, "ephapp-default", "cluster1", "ephapp-default-v1", false, nil, "default-ttl", "", "")
 		if err != nil {
 			t.Fatalf("DeployVersion failed: %v", err)
 		}
@@ -1493,4 +1515,62 @@ func TestDeployVersionEphemeral(t *testing.T) {
 			t.Errorf("Expected default TTL '24h', got %q", ephVersion.EphemeralTtl)
 		}
 	})
+}
+
+func TestCreateDerivedVersionPreservesConfigVersionSpec(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+	if err != nil {
+		t.Fatalf("create deployment server: %v", err)
+	}
+	configID, err := server.EC.Create(ctx, "static-app-v1-cfg", &core_v1alpha.ConfigVersion{
+		App: entity.Id("app/static-app"),
+		Spec: core_v1alpha.ConfigSpec{
+			StaticDir: "/app/site",
+			Variables: []core_v1alpha.ConfigSpecVariables{{Key: "EXISTING", Value: "kept"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create config version: %v", err)
+	}
+	env := &deployment_v1alpha.EnvironmentVariable{}
+	env.SetKey("ADDED")
+	env.SetValue("override")
+	env.SetSensitive(true)
+
+	derived, err := server.createDerivedVersion(ctx, &core_v1alpha.AppVersion{
+		App:            entity.Id("app/static-app"),
+		ConfigVersion:  configID,
+		StaticArtifact: "sha256:static",
+	}, []*deployment_v1alpha.EnvironmentVariable{env})
+	if err != nil {
+		t.Fatalf("create derived version: %v", err)
+	}
+	if derived.ConfigVersion == "" || derived.ConfigVersion == configID {
+		t.Fatalf("expected a new config version, got %q", derived.ConfigVersion)
+	}
+	if derived.StaticArtifact != "sha256:static" {
+		t.Fatalf("static artifact = %q, want sha256:static", derived.StaticArtifact)
+	}
+
+	var config core_v1alpha.ConfigVersion
+	if err := server.EC.GetById(ctx, derived.ConfigVersion, &config); err != nil {
+		t.Fatalf("get derived config version: %v", err)
+	}
+	if config.Spec.StaticDir != "/app/site" {
+		t.Fatalf("static dir = %q, want /app/site", config.Spec.StaticDir)
+	}
+	variables := make(map[string]core_v1alpha.ConfigSpecVariables)
+	for _, variable := range config.Spec.Variables {
+		variables[variable.Key] = variable
+	}
+	if variables["EXISTING"].Value != "kept" {
+		t.Fatalf("existing variable was not preserved: %#v", variables["EXISTING"])
+	}
+	if variables["ADDED"].Value != "override" || !variables["ADDED"].Sensitive || variables["ADDED"].Source != "manual" {
+		t.Fatalf("environment override was not persisted: %#v", variables["ADDED"])
+	}
 }

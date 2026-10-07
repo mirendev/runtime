@@ -1,3 +1,0 @@
-services:
-  docker-daemon:
-    command: sudo dockerd --group root

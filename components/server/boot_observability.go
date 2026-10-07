@@ -11,11 +11,16 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/entitysync"
+	"miren.dev/runtime/pkg/saga"
 )
 
 type observabilityBootInputs struct {
 	log     *slog.Logger
 	timeout time.Duration
+	// entitySync is the exporter's shared diagnostics; its state is published
+	// as an operational gauge alongside the control process's own health.
+	entitySync *entitysync.Diagnostics
 }
 
 type observabilityBootOutput struct {
@@ -26,7 +31,14 @@ type observabilityBootOutput struct {
 	// queues. It always reaches the embedded VictoriaMetrics; the app-metrics
 	// boot attaches the sink that ships the same series off the cluster once
 	// its vmagent is up.
-	operationalMetrics     *metrics.Fanout
+	operationalMetrics *metrics.Fanout
+	// processInfo is the collector behind process_start_time_seconds and
+	// miren_build_info. It is exposed so the app-metrics boot can re-emit
+	// the identity sample once the shipping sink is attached; see Emit.
+	processInfo *metrics.ProcessInfo
+	// sagaCounts is exposed for the same reason as processInfo: its zero
+	// baselines have to reach the shipping sink too.
+	sagaCounts             *saga.CountsMetrics
 	metricsReader          *metrics.VictoriaMetricsReader
 	cpu                    *metrics.CPUUsage
 	memory                 *metrics.MemoryUsage
@@ -48,10 +60,11 @@ type observabilityBoot struct {
 	output      boot.Output[observabilityBootOutput]
 }
 
-func observabilityInputs(options StartOptions) observabilityBootInputs {
+func observabilityInputs(options StartOptions, entitySync *entitysync.Diagnostics) observabilityBootInputs {
 	return observabilityBootInputs{
-		log:     options.Log,
-		timeout: 30 * time.Second,
+		log:        options.Log,
+		timeout:    30 * time.Second,
+		entitySync: entitySync,
 	}
 }
 
@@ -78,6 +91,12 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 
 	runtimeMemory := metrics.NewRuntimeMemory(log, operational)
 	go runtimeMemory.Monitor(ctx)
+	processInfo := metrics.NewProcessInfo(log, operational)
+	go processInfo.Monitor(ctx)
+	go entitysync.NewStateMetrics(log, operational, b.inputs.entitySync).Monitor(ctx)
+	go metrics.NewLogMessages(log, operational).Monitor(ctx)
+	sagaCounts := saga.NewCountsMetrics(log, operational)
+	go sagaCounts.Monitor(ctx)
 
 	sandboxMetrics := sandbox.NewMetrics()
 	sandboxMetrics.Log = log
@@ -88,6 +107,8 @@ func (b *observabilityBoot) start(ctx context.Context, victoriaLogs victoriaLogs
 		log:                    log,
 		metricsWriter:          writer,
 		operationalMetrics:     operational,
+		processInfo:            processInfo,
+		sagaCounts:             sagaCounts,
 		metricsReader:          reader,
 		cpu:                    cpu,
 		memory:                 memory,

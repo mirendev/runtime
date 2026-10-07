@@ -4,12 +4,12 @@ package server
 
 import (
 	"context"
+	"net"
 
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/network"
 	"miren.dev/runtime/pkg/boot"
 )
-
-const ociRegistryListenAddress = ":5000"
 
 type ociRegistryBootInputs struct {
 	dataPath string
@@ -26,26 +26,30 @@ func ociRegistryInputs(options StartOptions) ociRegistryBootInputs {
 	return ociRegistryBootInputs{dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newOCIRegistryBoot(inputs ociRegistryBootInputs, identity boot.Output[workloadIdentityBootOutput], entityAccess boot.Output[entityAccessBootOutput], hostMapping *boot.Component, observability boot.Output[observabilityBootOutput]) *ociRegistryBoot {
+func newOCIRegistryBoot(inputs ociRegistryBootInputs, identity boot.Output[workloadIdentityBootOutput], entityAccess boot.Output[entityAccessBootOutput], hostMapping boot.Output[registryHostMappingBootOutput], sandboxHost *boot.Component, observability boot.Output[observabilityBootOutput]) *ociRegistryBoot {
 	b := &ociRegistryBoot{inputs: inputs}
-	b.component, b.output = boot.Provide3("oci-registry", identity, entityAccess, observability, b.start,
-		boot.DependsOn(hostMapping),
+	b.component, b.output = boot.Provide4("oci-registry", identity, entityAccess, hostMapping, observability, b.start,
+		boot.DependsOn(sandboxHost),
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
 	return b
 }
 
-func (b *ociRegistryBoot) start(ctx context.Context, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, observability observabilityBootOutput) (struct{}, error) {
+func (b *ociRegistryBoot) start(ctx context.Context, identity workloadIdentityBootOutput, entityAccess entityAccessBootOutput, hostMapping registryHostMappingBootOutput, observability observabilityBootOutput) (struct{}, error) {
+	if err := network.AllowRegistryFromWireGuard(); err != nil {
+		return struct{}{}, err
+	}
+	listenAddress := net.JoinHostPort(hostMapping.registryIP.String(), "5000")
 	b.registry = ocireg.NewRegistry(
 		b.inputs.dataPath,
 		observability.log,
 		entityAccess.client,
 		identity.issuer,
 	)
-	if err := b.registry.Start(ctx, ociRegistryListenAddress); err != nil {
+	if err := b.registry.Start(ctx, listenAddress); err != nil {
 		return struct{}{}, err
 	}
-	observability.log.Info("OCI registry listening", "listen-address", ociRegistryListenAddress, "service-address", ocireg.Host)
+	observability.log.Info("OCI registry listening", "listen-address", listenAddress, "service-address", ocireg.Host)
 	return struct{}{}, nil
 }
 

@@ -2,15 +2,18 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
@@ -493,6 +496,9 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 		if err == nil {
 			continue // configured port bound — the normal case
 		}
+		if errors.Is(err, errProcessExited) {
+			return waitPortsOut{}, cond.Workload(err)
+		}
 		if ctx.Err() != nil {
 			// We're shutting down, not looking at a port mismatch — skip
 			// diagnosis so we don't emit misleading "listening elsewhere" events.
@@ -510,7 +516,7 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 				msg := fmt.Sprintf("more than one configured port came up on a different port; "+
 					"can't safely auto-route (latest was :%d)", alt)
 				deps.logSandboxEvent(ctx, in.SandboxID, msg)
-				return waitPortsOut{}, fmt.Errorf("port %d not reachable: %s", port, msg)
+				return waitPortsOut{}, cond.Workload(fmt.Errorf("port %d not reachable: %s", port, msg))
 			}
 			remapped = true
 			log.Warn("saga: app bound a port other than the configured one; routing to it",
@@ -525,7 +531,15 @@ func waitPorts(ctx context.Context, in waitPortsIn) (waitPortsOut, error) {
 
 		msg := describePortFailure(port, routable, loopback)
 		deps.logSandboxEvent(ctx, in.SandboxID, msg)
-		return waitPortsOut{}, fmt.Errorf("port %d not reachable: %s", port, msg)
+		portErr := fmt.Errorf("port %d not reachable: %s", port, msg)
+		if ok && !slices.Contains(routable, port) {
+			// The diagnosis read the app's sockets and the declared port isn't
+			// among them, so this is the app's configuration. If the sockets
+			// couldn't be read, or the port is there and the wait timed out
+			// anyway, the cause could be ours, so those stay errors.
+			portErr = cond.Workload(portErr)
+		}
+		return waitPortsOut{}, portErr
 	}
 
 	return waitPortsOut{ObservedPorts: observed}, nil
@@ -616,6 +630,7 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 		func() []entity.Attr {
 			attrs := []entity.Attr{
 				entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId),
+				entity.Ref(compute.SandboxStartupOutcomeId, compute.SandboxStartupOutcomeStartupRunningId),
 			}
 			for _, op := range in.ObservedPorts {
 				bp := compute.BoundPort{Port: int64(op.Port), Address: op.Address}

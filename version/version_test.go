@@ -34,3 +34,9 @@ func TestBranch(t *testing.T) {
 	Version = "v0.15.0"
 	require.Equal(t, "v0.15.0", Branch())
 }
+
+func TestKnownCommit(t *testing.T) {
+	require.Equal(t, "", Info{Commit: "unknown"}.KnownCommit())
+	require.Equal(t, "", Info{}.KnownCommit())
+	require.Equal(t, "abc123", Info{Commit: "abc123"}.KnownCommit())
+}

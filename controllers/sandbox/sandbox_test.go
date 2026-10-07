@@ -28,6 +28,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
+	entitytestutils "miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/saga"
@@ -1388,24 +1389,146 @@ func TestSandbox(t *testing.T) {
 		r.NoError(err)
 	})
 
-	t.Run("maps legacy port protocols correctly", func(t *testing.T) {
+	// A container that overruns its shutdown timeout is SIGKILLed. The app
+	// owner reads the app's logs, not the controller's, so the kill has to be
+	// reported there or the only evidence is the gap between STOPPED and DEAD.
+	t.Run("reports a SIGKILL at shutdown timeout in the sandbox logs", func(t *testing.T) {
 		r := require.New(t)
 
-		// Test legacy enum constants
-		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol(compute.TCP))
-		r.Equal(compute.SandboxSpecContainerPortUDP, mapLegacyProtocol(compute.UDP))
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
 
-		// Test raw string values (in case of direct string values in old data)
-		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol("tcp"))
-		r.Equal(compute.SandboxSpecContainerPortUDP, mapLegacyProtocol("udp"))
+		co, err := newSandboxController(testDeps)
+		r.NoError(err)
 
-		// Test unknown/empty defaults to TCP
-		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol(""))
-		r.Equal(compute.SandboxSpecContainerPortTCP, mapLegacyProtocol("unknown"))
+		r.NoError(co.Init(ctx))
+		defer co.Close()
 
-		// Verify the mapped values are the correct fully-qualified enum paths
-		r.Equal("component.sandbox_spec.container.port.protocol.tcp", string(mapLegacyProtocol(compute.TCP)))
-		r.Equal("component.sandbox_spec.container.port.protocol.udp", string(mapLegacyProtocol(compute.UDP)))
+		ctx = namespaces.WithNamespace(ctx, ns)
+
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+		sb.ID = id
+		sb.Labels = append(sb.Labels, "runtime.computer/app=slow-drain")
+		sb.Spec = compute.SandboxSpec{
+			LogAttribute: types.LabelSet("miren.service", "web"),
+			Container: []compute.SandboxSpecContainer{
+				{
+					Name:  "app",
+					Image: "docker.io/library/busybox:latest",
+					// As PID 1 with no handler installed, sleep ignores SIGTERM.
+					Command:         "exec sleep 3600",
+					ShutdownTimeout: "1s",
+				},
+			},
+		}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(id.String())
+		rpcE.SetAttrs(entity.New(
+			entity.DBId, id,
+			sb.Encode).Attrs())
+		_, err = co.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		result, err := co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		meta := &entity.Meta{
+			Entity:   result.Entity().Entity(),
+			Revision: result.Entity().Revision(),
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(entity.New(
+			entity.DBId, id,
+			sb.Encode))
+
+		r.NoError(co.Create(ctx, &tco, meta))
+
+		r.NoError(co.StopSandbox(ctx, id, &tco))
+
+		r.Eventually(func() bool {
+			logs, lerr := testDeps.Logs.Read(ctx, id.String(), observability.WithLimit(100))
+			if lerr != nil {
+				return false
+			}
+			for _, le := range logs {
+				if strings.HasPrefix(le.Body, "[miren] ") &&
+					strings.Contains(le.Body, `container "app" was still running 1s after SIGTERM and was killed`) &&
+					strings.Contains(le.Body, "services.web.concurrency.shutdown_timeout") {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond, "the forced kill should be reported in the sandbox's logs")
+	})
+
+	// Cancelling teardown mid-drain is not the app overrunning its timeout,
+	// so nothing may tell the app owner to raise it.
+	t.Run("does not report a kill when teardown is cancelled mid-drain", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+
+		co, err := newSandboxController(testDeps)
+		r.NoError(err)
+
+		r.NoError(co.Init(ctx))
+		defer co.Close()
+
+		ctx = namespaces.WithNamespace(ctx, ns)
+
+		id := entity.Id(sbName())
+
+		var sb compute.Sandbox
+		sb.ID = id
+		sb.Labels = append(sb.Labels, "runtime.computer/app=cancelled-drain")
+		sb.Spec = compute.SandboxSpec{
+			Container: []compute.SandboxSpecContainer{
+				{
+					Name:            "app",
+					Image:           "docker.io/library/busybox:latest",
+					Command:         "exec sleep 3600",
+					ShutdownTimeout: "3s",
+				},
+			},
+		}
+
+		var rpcE entityserver_v1alpha.Entity
+		rpcE.SetId(id.String())
+		rpcE.SetAttrs(entity.New(
+			entity.DBId, id,
+			sb.Encode).Attrs())
+		_, err = co.EAC.Put(ctx, &rpcE)
+		r.NoError(err)
+
+		result, err := co.EAC.Get(ctx, id.String())
+		r.NoError(err)
+
+		meta := &entity.Meta{
+			Entity:   result.Entity().Entity(),
+			Revision: result.Entity().Revision(),
+		}
+
+		var tco compute.Sandbox
+		tco.Decode(entity.New(
+			entity.DBId, id,
+			sb.Encode))
+
+		r.NoError(co.Create(ctx, &tco, meta))
+		defer func() {
+			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id, &tco))
+		}()
+
+		drainCtx, drainCancel := context.WithTimeout(ctx, time.Second)
+		defer drainCancel()
+
+		killed, err := co.destroySubContainers(drainCtx, id, &tco)
+		r.ErrorIs(err, errDrainHandedOff)
+		r.Empty(killed, "a cancelled teardown must not be reported as a shutdown_timeout kill")
 	})
 
 	t.Run("checkNetworkHealth returns true for sandboxes without ports", func(t *testing.T) {
@@ -1694,6 +1817,41 @@ func TestMonitorTaskExitIgnoresErrorStatus(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "sandbox should remain RUNNING when exit status has an error")
 }
 
+func TestRecordExitStartupOutcome(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	c := &SandboxController{EAC: server.EAC}
+
+	for _, tc := range []struct {
+		status compute.SandboxStatus
+		want   compute.SandboxStartupOutcome
+		final  compute.SandboxStatus
+	}{
+		{compute.PENDING, compute.STARTUP_FAILED, compute.STOPPED},
+		{compute.RUNNING, compute.STARTUP_RUNNING, compute.STOPPED},
+		{compute.DEAD, "", compute.DEAD},
+	} {
+		t.Run(string(tc.status), func(t *testing.T) {
+			id, err := server.Client.Create(ctx, string(tc.status), &compute.Sandbox{Status: tc.status})
+			require.NoError(t, err)
+			before, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			_, err = c.recordExit(ctx, id, compute.Exit{At: time.Now(), Container: "app"})
+			require.NoError(t, err)
+			resp, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			if tc.status == compute.DEAD {
+				require.Equal(t, before.Entity().Revision(), resp.Entity().Revision(), "late exit must not rewrite a DEAD sandbox")
+			}
+			var sb compute.Sandbox
+			sb.Decode(resp.Entity().Entity())
+			require.Equal(t, tc.final, sb.Status)
+			require.Equal(t, tc.want, sb.StartupOutcome)
+		})
+	}
+}
+
 // TestMonitorTaskExitHandlesValidExit verifies that monitorTaskExit correctly
 // marks a sandbox as STOPPED when receiving a valid exit status (no error).
 func TestMonitorTaskExitHandlesValidExit(t *testing.T) {
@@ -1941,6 +2099,52 @@ func TestDeadPatchPreservesRecordedExit(t *testing.T) {
 	r.Equal("app", got.Exit.Container)
 }
 
+func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	deps, cleanup := testutils.NewTestDeps()
+	defer cleanup()
+	c, err := newSandboxController(deps)
+	require.NoError(t, err)
+	defer c.Close()
+	require.NoError(t, c.Init(ctx))
+	id := entity.Id(idgen.GenNS("sb"))
+	stale := &compute.Sandbox{ID: id, Status: compute.PENDING}
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(id.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, id, stale.Encode).Attrs())
+	_, err = c.EAC.Put(ctx, &rpcE)
+	require.NoError(t, err)
+
+	// The cleanup caller still holds PENDING, but boot has already persisted RUNNING.
+	_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.NoError(t, c.StopSandbox(ctx, id, stale))
+	resp, err := c.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var got compute.Sandbox
+	got.Decode(resp.Entity().Entity())
+	require.Equal(t, compute.DEAD, got.Status)
+	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
+}
+
+func TestRetireSandboxDoesNotRewriteDead(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := entitytestutils.NewInMemEntityServer(t)
+	defer cleanup()
+	id, err := server.Client.Create(ctx, "dead", &compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_FAILED})
+	require.NoError(t, err)
+	before, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+
+	c := &SandboxController{EAC: server.EAC}
+	require.NoError(t, c.retireSandbox(ctx, id))
+	after, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	require.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "already-DEAD sandbox must retain its failure timestamp")
+}
+
 // A sandbox whose command must execute at most once is finished when its
 // containers vanish. Rebooting it would re-run the command -- for a migration,
 // not a recoverable mistake.
@@ -2052,4 +2256,18 @@ func TestSandboxMetricsIdentityIgnoresSpoofedIdentityAttributes(t *testing.T) {
 	r.Equal("sb_real", attrs["miren.sandbox"])
 	r.Equal("app_version/real", attrs["miren.version"])
 	r.Equal("app", attrs["miren.kind"])
+}
+
+func TestDescribeForcedKill(t *testing.T) {
+	kill := forcedKill{container: "app", timeout: 10 * time.Second}
+
+	sb := &compute.Sandbox{}
+	sb.Spec.LogAttribute = types.LabelSet("miren.stage", "app-run", "miren.service", "web")
+	require.Equal(t,
+		`container "app" was still running 10s after SIGTERM and was killed (services.web.concurrency.shutdown_timeout); raise it if your app needs longer to shut down`,
+		describeForcedKill(sb, kill))
+
+	// Without a service there is no full key to name, but the setting still
+	// has to be recognizable.
+	require.Contains(t, describeForcedKill(&compute.Sandbox{}, kill), "(concurrency.shutdown_timeout)")
 }

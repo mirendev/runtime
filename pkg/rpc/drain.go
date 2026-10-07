@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sort"
 	"strings"
@@ -40,6 +41,12 @@ import (
 // noticeably, long enough that the poll costs nothing over a real drain.
 const drainPollInterval = 25 * time.Millisecond
 
+// drainCensusDelay is how long a drain waits before naming the connections it
+// is waiting on. A drain that ends just inside its deadline reports no error,
+// so without this line a peer holding shutdown open leaves no trace at all.
+// Healthy drains finish well inside it, so it costs nothing on a clean stop.
+const drainCensusDelay = 5 * time.Second
+
 // WebTransport's raw HTTP/3 connections are not managed by http3.Shutdown.
 // Clients that understand /_rpc/drain retire themselves after reading their
 // responses. Older and plain HTTP/3 clients have only the deadline fallback.
@@ -48,12 +55,27 @@ func (s *State) drainWebTransport(ctx context.Context) error {
 	// Stabilize the census before observing zero: Accept may have returned a
 	// connection just before listener closure and not counted it yet.
 	<-s.acceptDone
+	return waitForIdle(ctx, s.log, "HTTP/3", s.li)
+}
+
+// waitForIdle polls until every connection ln accepted has closed or ctx ends.
+// If the wait outlasts drainCensusDelay it logs the connections still open,
+// once: a wait that ends just inside its deadline returns nil, and this line is
+// then the only record of which peer held the shutdown up.
+func waitForIdle(ctx context.Context, log *slog.Logger, surface string, ln *countingListener) error {
 	ticker := time.NewTicker(drainPollInterval)
 	defer ticker.Stop()
-	for !s.li.idle() {
+	census := time.NewTimer(drainCensusDelay)
+	defer census.Stop()
+	for !ln.idle() {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
+		case <-census.C:
+			log.Info("drain still waiting on open connections",
+				"surface", surface,
+				"waited", drainCensusDelay,
+				"connections", ln.describe())
 		case <-ticker.C:
 		}
 	}
@@ -70,9 +92,9 @@ type countingListener struct {
 	open     atomic.Int64
 
 	// peers is every accepted connection that has not closed yet, kept so a
-	// stalled drain can name who it is waiting on. The census counters above
-	// stay atomics because idle() polls them; this map is only read when the
-	// drain has already failed.
+	// slow or stalled drain can name who it is waiting on. The census counters
+	// above stay atomics because idle() polls them; this map is only read once
+	// a drain has been waiting long enough to report.
 	peersMu sync.Mutex
 	peers   map[*quic.Conn]time.Time
 }
@@ -149,12 +171,13 @@ func describePeer(conn *quic.Conn, since time.Time) string {
 // responds to the cancellation by closing the server, which is the same
 // teardown it would perform on its own, and we only do it once the listener
 // says there is nothing left to close. A drain that misses its deadline with
-// connections still open is still reported as the failure it is.
+// connections still open is still reported as the failure it is, and one that
+// waits long enough names what it is waiting on (see waitForIdle).
 //
 // It takes the server's Shutdown as a function rather than the server itself so
 // the policy can be exercised against a drain that stalls on demand, which a
 // real QUIC stack only does by losing a race.
-func drainQUIC(ctx context.Context, shutdown func(context.Context) error, ln *countingListener) error {
+func drainQUIC(ctx context.Context, log *slog.Logger, surface string, shutdown func(context.Context) error, ln *countingListener) error {
 	if ln == nil {
 		return shutdown(ctx)
 	}
@@ -168,18 +191,8 @@ func drainQUIC(ctx context.Context, shutdown func(context.Context) error, ln *co
 	// context and closes its listeners before it looks at the context, so the
 	// teardown happens in full and only the waiting is skipped.
 	go func() {
-		ticker := time.NewTicker(drainPollInterval)
-		defer ticker.Stop()
-		for {
-			if ln.idle() {
-				cancel()
-				return
-			}
-			select {
-			case <-drainCtx.Done():
-				return
-			case <-ticker.C:
-			}
+		if waitForIdle(drainCtx, log, surface, ln) == nil {
+			cancel()
 		}
 	}()
 

@@ -47,3 +47,9 @@ func Provide7[A, B, C, D, E, F, G, O any](name string, a Output[A], b Output[B],
 		return start(ctx, a.Value(), b.Value(), c.Value(), d.Value(), e.Value(), f.Value(), g.Value())
 	}, options)
 }
+
+func Provide8[A, B, C, D, E, F, G, H, O any](name string, a Output[A], b Output[B], c Output[C], d Output[D], e Output[E], f Output[F], g Output[G], h Output[H], start func(context.Context, A, B, C, D, E, F, G, H) (O, error), options ...Option) (*Component, Output[O]) {
+	return provide(name, []input{a, b, c, d, e, f, g, h}, func(ctx context.Context) (O, error) {
+		return start(ctx, a.Value(), b.Value(), c.Value(), d.Value(), e.Value(), f.Value(), g.Value(), h.Value())
+	}, options)
+}

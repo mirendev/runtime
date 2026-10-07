@@ -17,7 +17,7 @@ Running this on a route that is already serving succeeds and says so, rather tha
 ## Usage
 
 ```bash
-miren route up <host> [flags]
+miren route up [host] [flags]
 ```
 
 ## Arguments

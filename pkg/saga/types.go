@@ -1,9 +1,3 @@
-// Package saga implements the Saga pattern for distributed operations with
-// crash recovery. Each saga is a sequence of steps where each step has a
-// corresponding undo operation. The framework guarantees that either all
-// steps complete successfully or all completed steps are rolled back.
-//
-// See RFD-35 for detailed design documentation.
 package saga
 
 import (
@@ -49,6 +43,31 @@ type ActionResult struct {
 
 	// Error is set if the action failed during execution.
 	Error string `json:"error,omitempty"`
+
+	// UndoError is the most recent error from undoing this action. It stays
+	// after a later attempt succeeds, alongside UndoAttempts, so the record
+	// still shows that compensating this action took more than one try.
+	UndoError string `json:"undo_error,omitempty"`
+
+	// UndoAttempts counts the undo attempts that failed. Attempts cut short
+	// by a shutdown are not counted; they say nothing about the undo.
+	UndoAttempts int `json:"undo_attempts,omitempty"`
+
+	// UndoFailingSince is when the first counted undo attempt failed.
+	UndoFailingSince *time.Time `json:"undo_failing_since,omitempty"`
+
+	// UndoBlockedBuild is the build that gave up retrying this undo. That
+	// build leaves the execution blocked; any other build tries once more.
+	UndoBlockedBuild string `json:"undo_blocked_build,omitempty"`
+}
+
+// recordUndoFailure notes a failed attempt to undo this action.
+func (r *ActionResult) recordUndoFailure(err error, now time.Time) {
+	r.UndoError = err.Error()
+	r.UndoAttempts++
+	if r.UndoFailingSince == nil {
+		r.UndoFailingSince = &now
+	}
 }
 
 // Execution tracks the runtime state of a saga, persisted after each step.
@@ -85,6 +104,22 @@ type Execution struct {
 
 	// Error is set if the saga failed.
 	Error string `json:"error,omitempty"`
+
+	// BlockedReason is set when a binary refused to resume this execution
+	// because its definition could not vouch for the recorded one. It is a
+	// diagnostic, not a status: the execution keeps the status it had, and the
+	// next binary that can resume it clears this as it does.
+	BlockedReason string `json:"blocked_reason,omitempty"`
+
+	// BlockedOn names the nested execution whose refusal blocked this one.
+	// Before driving this execution again the executor re-checks that one,
+	// and while it still cannot be resumed nothing here runs: re-running the
+	// action that started it can do real damage on the way back to it.
+	BlockedOn string `json:"blocked_on,omitempty"`
+
+	// clearedBlock is the BlockedReason admit cleared in memory, for
+	// recordBlocked to recognize a repeat. Never persisted.
+	clearedBlock string
 
 	// CreatedAt is when the execution was created.
 	CreatedAt time.Time `json:"created_at"`
@@ -165,24 +200,40 @@ type TerminalPage struct {
 }
 
 // IncompleteSummary summarizes an execution that is still in flight: which one,
-// what it is doing, when it last changed, and whose child it is.
+// what it is doing, how old it is, when it last changed, and whose child it is.
 //
-// Separate from Execution because the stalled sweep walks the whole in-flight
-// set to ask one question about each. Materializing every action-output blob in
+// Separate from Execution because the stalled sweep and the health gauges walk
+// the whole in-flight set to ask one or two questions about each. Materializing every action-output blob in
 // a six-figure backlog to read a timestamp is the unbounded read MIR-1785
 // removed, reintroduced for a worse reason.
 type IncompleteSummary struct {
 	// ID identifies the execution.
 	ID string
 
+	// DefinitionName is the registered definition this execution runs.
+	DefinitionName string
+
 	// Status is the decoded status, not the index the entry came from.
 	Status Status
+
+	// CreatedAt is when the execution started, resolved by createdAt. It can
+	// be zero for a record too old to carry any creation time.
+	//
+	// Age is measured from here rather than from LastChanged because an
+	// execution retrying a failing undo saves on every attempt, so its
+	// LastChanged stays fresh however long it has been stuck.
+	CreatedAt time.Time
 
 	// LastChanged is when the execution last changed state, resolved by
 	// lastChanged. The fallback matters more here than it does for retention:
 	// v0.11.1's saga schema had no updated_at at all, so the records this sweep
 	// exists to drain would otherwise all read as infinitely old.
 	LastChanged time.Time
+
+	// Blocked reports that a binary refused to resume this execution. Such an
+	// execution is not stranded but waiting on an operator, and forcing it to
+	// failed would let a reconcile retry over the work it never compensated.
+	Blocked bool
 
 	// ParentID is set when this execution ran as a nested child, and matters
 	// for the same reason it does to retention: a live parent re-finds its

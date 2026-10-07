@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/docker/api/types/container"
@@ -18,7 +21,9 @@ import (
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
+	"github.com/moby/buildkit/session/secrets/secretsprovider"
 	"github.com/moby/buildkit/util/progress/progresswriter"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/pkg/imagerefs"
@@ -30,7 +35,28 @@ import (
 // helper function to execute LLB locally
 func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Reader)) {
 	t.Helper()
+	// A cache dir on the host carries layers between the throwaway buildkitd
+	// containers the Docker path starts, but parallel tests would race on its
+	// index, so it's opt-in for serial runs (go test -parallel 1).
+	solveLLB(t, startBuildkit(t), os.Getenv("STACKBUILD_TEST_CACHE"), dir, state, check...)
+}
+
+// startBuildkit returns a client for a running buildkitd, starting a throwaway
+// one in Docker when there isn't one already. Solving more than once against
+// the same client shares its cache, which is how a test checks what a rebuild
+// reuses.
+func startBuildkit(t *testing.T) *buildkit.Client {
+	t.Helper()
 	ctx := context.Background()
+
+	if addr := localBuildkitAddr(); addr != "" {
+		c, err := buildkit.New(ctx, addr)
+		require.NoError(t, err)
+		t.Cleanup(func() { c.Close() })
+		_, err = c.Info(ctx)
+		require.NoError(t, err)
+		return c
+	}
 
 	cl, err := client.NewClientWithOpts(client.FromEnv)
 	require.NoError(t, err)
@@ -62,7 +88,7 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 	)
 	require.NoError(t, err)
 
-	defer func() {
+	t.Cleanup(func() {
 		err := cl.ContainerKill(ctx, resp.ID, "KILL")
 		if err != nil {
 			t.Logf("failed to kill container: %v", err)
@@ -74,7 +100,7 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 		if err != nil {
 			t.Logf("failed to remove container: %v", err)
 		}
-	}()
+	})
 
 	var buf bytes.Buffer
 
@@ -88,7 +114,6 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 			t.Logf("failed to get container logs: %v", err)
 		}
 		defer r.Close()
-
 		io.Copy(&buf, r)
 	}()
 
@@ -97,16 +122,70 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 
 	c, err := buildkit.New(ctx, "docker-container://"+resp.ID)
 	require.NoError(t, err)
-	defer c.Close()
+	t.Cleanup(func() { c.Close() })
 
 	_, err = c.Info(ctx)
 	require.NoError(t, err)
+
+	return c
+}
+
+// solvedVertex is a step from a solve, with the output it logged.
+type solvedVertex struct {
+	*buildkit.Vertex
+	Log string
+}
+
+// solveLLB builds state on c, runs each check against the exported tar, and
+// returns the vertices the solve reported, so a caller can see which steps
+// came from cache. A non-empty cacheDir imports and exports a cache on the
+// host. Leave it empty to rely only on c's own cache, as the cluster builder
+// does; the export keeps only final image layers, so builder steps restored
+// from it are never stored locally and miss on the next solve.
+func solveLLB(t *testing.T, c *buildkit.Client, cacheDir, dir string, state *llb.State, check ...func(f io.Reader)) map[string]*solvedVertex {
+	t.Helper()
+	return solveLLBWithSecrets(t, c, cacheDir, dir, state, nil, check...)
+}
+
+// solveLLBWithSecrets is solveLLB with build secrets on the solve's session,
+// keyed by id, as the build server attaches an app's [[build.secrets]].
+func solveLLBWithSecrets(t *testing.T, c *buildkit.Client, cacheDir, dir string, state *llb.State, secrets map[string][]byte, check ...func(f io.Reader)) map[string]*solvedVertex {
+	t.Helper()
+	ctx := context.Background()
 
 	def, err := state.Marshal(ctx)
 	require.NoError(t, err)
 
 	pw, err := progresswriter.NewPrinter(ctx, os.Stdout, "plain")
 	require.NoError(t, err)
+
+	// Tee the status stream: the printer gets everything, and we keep the
+	// final state of each vertex by name, with its log.
+	vertices := map[string]*solvedVertex{}
+	byDigest := map[digest.Digest]*solvedVertex{}
+	status := make(chan *buildkit.SolveStatus)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(pw.Status())
+		for st := range status {
+			for _, v := range st.Vertexes {
+				sv := byDigest[v.Digest]
+				if sv == nil {
+					sv = &solvedVertex{}
+					byDigest[v.Digest] = sv
+				}
+				sv.Vertex = v
+				vertices[v.Name] = sv
+			}
+			for _, l := range st.Logs {
+				if sv := byDigest[l.Vertex]; sv != nil {
+					sv.Log += string(l.Data)
+				}
+			}
+			pw.Status() <- st
+		}
+	}()
 
 	f, err := os.CreateTemp(t.TempDir(), "buildkit-llb")
 	require.NoError(t, err)
@@ -118,7 +197,7 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 
 	da := authprovider.NewDockerAuthProvider(cfg, nil)
 
-	_, err = c.Solve(ctx, def, buildkit.SolveOpt{
+	solveOpt := buildkit.SolveOpt{
 		Session: []session.Attachable{
 			da,
 		},
@@ -133,23 +212,32 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 				},
 			},
 		},
-		CacheExports: []buildkit.CacheOptionsEntry{
+	}
+	if len(secrets) > 0 {
+		solveOpt.Session = append(solveOpt.Session, secretsprovider.FromMap(secrets))
+	}
+	if cacheDir != "" {
+		solveOpt.CacheExports = []buildkit.CacheOptionsEntry{
 			{
 				Type: "local",
 				Attrs: map[string]string{
-					"dest": "/tmp/test-cache",
+					"dest": cacheDir,
 				},
 			},
-		},
-		CacheImports: []buildkit.CacheOptionsEntry{
+		}
+		solveOpt.CacheImports = []buildkit.CacheOptionsEntry{
 			{
 				Type: "local",
 				Attrs: map[string]string{
-					"src": "/tmp/test-cache",
+					"src": cacheDir,
 				},
 			},
-		},
-	}, pw.Status())
+		}
+	}
+
+	_, err = c.Solve(ctx, def, solveOpt, status)
+	<-done
+	<-pw.Done()
 	require.NoError(t, err)
 
 	f, err = os.Open(f.Name())
@@ -160,7 +248,7 @@ func buildLLB(t *testing.T, dir string, state *llb.State, check ...func(f io.Rea
 		cf(f)
 	}
 
-	require.NoError(t, err)
+	return vertices
 }
 
 func setupTestDir(root string, t *testing.T) string {
@@ -178,15 +266,48 @@ func readFile(t *testing.T, path string) string {
 	return string(content)
 }
 
-func checkDocker() bool {
-	_, err := os.Stat("/var/run/docker.sock")
-	return err == nil
+// localBuildkitSocket is where the iso test container's buildkitd listens
+// (hack/common-setup.sh), which is how these tests run in CI.
+const localBuildkitSocket = "/run/buildkit/buildkitd.sock"
+
+// localBuildkitAddr returns the address of an already-running buildkitd, or ""
+// when the tests should start their own in Docker.
+func localBuildkitAddr() string {
+	if addr := os.Getenv("BUILDKIT_HOST"); addr != "" {
+		return addr
+	}
+	if _, err := os.Stat(localBuildkitSocket); err == nil {
+		return "unix://" + localBuildkitSocket
+	}
+	return ""
+}
+
+// runNonce returns a manifest comment unique to this test run, so the builds
+// that include it don't hit cache entries left by earlier runs.
+func runNonce(comment string) string {
+	return fmt.Sprintf("\n%s test run %d\n", comment, time.Now().UnixNano())
+}
+
+// requireBuildkit skips the test unless it can reach a buildkitd, either one
+// already running or one it can start in Docker. STACKBUILD_SKIP_BUILDKIT
+// skips regardless: CI's general test runners set it, since these tests pull
+// images and packages from upstream and get a job of their own.
+func requireBuildkit(t *testing.T) {
+	t.Helper()
+	if os.Getenv("STACKBUILD_SKIP_BUILDKIT") != "" {
+		t.Skip("STACKBUILD_SKIP_BUILDKIT is set")
+	}
+	if localBuildkitAddr() != "" {
+		return
+	}
+	if _, err := os.Stat("/var/run/docker.sock"); err != nil {
+		t.Skip("no buildkitd or Docker available")
+	}
 }
 
 func TestRails(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -216,19 +337,21 @@ func TestRails(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.2"})
+	opts := BuildOptions{Version: "3.2"}
+	stack.Init(opts)
+	state, err := stack.GenerateLLB(context.Background(), dir, opts)
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
 
-	img := stack.Image()
-	require.Equal(t, []string{"/bin/sh", "-c", "exec bundle exec rails server -b 0.0.0.0 -p $PORT"}, img.Config.Entrypoint)
+	// The start command reaches the app through its Procfile, not the image
+	// entrypoint, so check the stack's default for it.
+	require.Equal(t, "rails server -b 0.0.0.0 -p $PORT", stack.WebCommand())
 }
 
 func TestRuby(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -249,18 +372,21 @@ func TestRuby(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "3.2"})
+	opts := BuildOptions{Version: "3.2"}
+	stack.Init(opts)
+	state, err := stack.GenerateLLB(context.Background(), dir, opts)
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
-	img := stack.Image()
-	require.Equal(t, []string{"/bin/sh", "-c", "exec bundle exec puma -b tcp://0.0.0.0 -p $PORT"}, img.Config.Entrypoint)
+
+	// The start command reaches the app through its Procfile, not the image
+	// entrypoint, so check the stack's default for it.
+	require.Equal(t, "puma -b tcp://0.0.0.0 -p $PORT", stack.WebCommand())
 }
 
 func TestPython(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -304,9 +430,8 @@ func TestPython(t *testing.T) {
 }
 
 func TestPythonPoetry(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -332,9 +457,8 @@ func TestPythonPoetry(t *testing.T) {
 }
 
 func TestNode(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -512,9 +636,8 @@ func TestNodeNextjs(t *testing.T) {
 }
 
 func TestBun(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -667,9 +790,8 @@ func TestBunDetect(t *testing.T) {
 }
 
 func TestGo(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -689,7 +811,11 @@ func TestGo(t *testing.T) {
 			dir: dir,
 		},
 	}
-	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1.23"})
+	opts := BuildOptions{Version: "1.23"}
+	stack.Init(opts)
+	require.True(t, stack.splitDeps, "a plain module should compile its dependencies in their own layer")
+
+	state, err := stack.GenerateLLB(context.Background(), dir, opts)
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
@@ -725,14 +851,74 @@ func TestGo(t *testing.T) {
 	})
 }
 
+// TestGoDepsLayerSurvivesSourceEdits verifies that the compiled dependencies
+// are keyed on what the app imports rather than on its source: an edit that
+// keeps the imports reuses them, and a changed import set reruns the step.
+func TestGoDepsLayerSurvivesSourceEdits(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	mainGo := readFile(t, "go/main.go")
+	files := map[string]string{
+		// The nonce gives this run its own cache keys, so the first build is cold
+		// even on a buildkitd that outlives test runs, as iso's does.
+		"go.mod":  readFile(t, "go/go.mod") + runNonce("//"),
+		"go.sum":  readFile(t, "go/go.sum"),
+		"main.go": mainGo,
+	}
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	build := func(c *buildkit.Client) map[string]*solvedVertex {
+		stack := &GoStack{MetaStack: MetaStack{dir: dir}}
+		opts := BuildOptions{Version: "1.23"}
+		stack.Init(opts)
+		state, err := stack.GenerateLLB(context.Background(), dir, opts)
+		require.NoError(t, err)
+		return solveLLB(t, c, "", dir, state)
+	}
+
+	const (
+		compileDeps = "[phase] Compiling Go dependencies"
+		buildApp    = "[phase] Building Go application"
+	)
+
+	c := startBuildkit(t)
+
+	first := build(c)
+	require.Contains(t, first, compileDeps)
+	require.False(t, first[compileDeps].Cached, "first build has nothing to reuse")
+
+	// Same imports, different code.
+	edited := strings.Replace(mainGo, "Hello, World!", "Hello again!", 1)
+	require.NotEqual(t, mainGo, edited)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(edited), 0644))
+
+	second := build(c)
+	require.True(t, second[compileDeps].Cached, "a source edit that keeps the imports should reuse the compiled dependencies")
+	require.False(t, second[buildApp].Cached, "the application itself should rebuild")
+
+	// Dropping the only non-local import changes the list, so the dependency
+	// step reruns.
+	withoutImport := strings.Replace(edited, `_ "github.com/gorilla/mux"`, "", 1)
+	require.NotEqual(t, edited, withoutImport)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(withoutImport), 0644))
+
+	third := build(c)
+	require.False(t, third[compileDeps].Cached, "a changed import set should rerun the dependency step")
+}
+
 // TestGoRuntimeIncludesNonGoFiles verifies that a pure-Go app lands on the
 // distroless static runtime carrying its non-Go files (README, nested data
 // dirs) so it can read them at runtime, while the Go source and module/vendor
 // build inputs are left behind on the builder.
 func TestGoRuntimeIncludesNonGoFiles(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -784,9 +970,8 @@ func TestGoRuntimeIncludesNonGoFiles(t *testing.T) {
 }
 
 func TestGoCgo(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -832,10 +1017,117 @@ func TestGoCgo(t *testing.T) {
 	})
 }
 
-func TestGoWithVendor(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
+// TestGoWithJSAugmentation builds a Go app that ships a package.json for its
+// frontend, the case augmentations exist for. The JS install runs as the app
+// user, so the builder needs that user and an /app it can write to, even
+// though compileDeps creates /app first.
+func TestGoWithJSAugmentation(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	files := map[string]string{
+		"go.mod":            readFile(t, "go/go.mod") + runNonce("//"),
+		"go.sum":            readFile(t, "go/go.sum"),
+		"main.go":           readFile(t, "go/main.go"),
+		"package.json":      `{"name":"assets","version":"1.0.0","dependencies":{"is-plain-obj":"4.1.0"}}`,
+		"package-lock.json": "{}",
 	}
+	for name, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+	}
+
+	// DetectStack would pick Node for a package.json with dependencies, so
+	// build the Go stack the way it does for one without.
+	opts := BuildOptions{Version: "1.23"}
+	stack := &GoStack{MetaStack: MetaStack{dir: dir}}
+	stack.Init(opts)
+	attachAugmentations(stack, dir)
+	require.Equal(t, []Augmentation{AugNpm}, stack.Augmentations())
+	require.True(t, stack.splitDeps)
+
+	state, err := stack.GenerateLLB(context.Background(), dir, opts)
+	require.NoError(t, err)
+
+	solveLLB(t, startBuildkit(t), "", dir, state, func(f io.Reader) {
+		found := map[string]bool{}
+		tr := tar.NewReader(f)
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			found[hdr.Name] = true
+		}
+		// debian-slim's /bin is a symlink to /usr/bin.
+		require.True(t, found["usr/bin/app"], "Go binary missing")
+		require.True(t, found["app/node_modules/is-plain-obj/package.json"], "JS dependency missing")
+	})
+}
+
+func TestGoDepsSplitBlocker(t *testing.T) {
+	cases := []struct {
+		name    string
+		files   map[string]string
+		blocked string
+	}{
+		{
+			name:  "plain module",
+			files: map[string]string{"go.mod": "module example.com/app\n\ngo 1.23\n\nrequire github.com/gorilla/mux v1.8.1\n"},
+		},
+		{
+			name: "replace with another module version",
+			files: map[string]string{"go.mod": "module example.com/app\n\ngo 1.23\n\n" +
+				"replace github.com/gorilla/mux => github.com/example/mux v1.8.2\n"},
+		},
+		{
+			name: "replace with a local directory",
+			files: map[string]string{"go.mod": "module example.com/app\n\ngo 1.23\n\n" +
+				"replace example.com/lib => ./lib\n"},
+			blocked: "go.mod replaces example.com/lib with a local directory",
+		},
+		{
+			name: "workspace",
+			files: map[string]string{
+				"go.mod":  "module example.com/app\n\ngo 1.23\n",
+				"go.work": "go 1.23\n\nuse .\n",
+			},
+			blocked: "go.work workspace",
+		},
+		{
+			name: "vendored",
+			files: map[string]string{
+				"go.mod":             "module example.com/app\n\ngo 1.23\n",
+				"vendor/modules.txt": "",
+			},
+			blocked: "vendor directory",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tc.files {
+				path := filepath.Join(dir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+			}
+
+			stack := &GoStack{MetaStack: MetaStack{dir: dir}}
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.blocked, stack.depsSplitBlocker())
+			require.Equal(t, tc.blocked == "", stack.splitDeps)
+		})
+	}
+}
+
+func TestGoWithVendor(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -1030,9 +1322,8 @@ func TestRubyVersionDetection(t *testing.T) {
 }
 
 func TestRust(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
-	}
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -1057,22 +1348,193 @@ func TestRust(t *testing.T) {
 	}
 	require.True(t, stack.Detect())
 	stack.Init(BuildOptions{Version: "1"})
+	require.True(t, stack.splitDeps, "a single-package crate should compile its dependencies in their own layer")
 	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{Version: "1"})
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state, func(r io.Reader) {
 		m, err := tarx.TarToMap(r)
 		require.NoError(t, err)
-		data, ok := m["bin/app"]
-		require.True(t, ok)
-		require.NotEmpty(t, data)
+		// /bin is a symlink to usr/bin in the rust image.
+		require.NotEmpty(t, m["usr/bin/app"], "built binary should be present at /bin/app")
+		for name := range m {
+			require.False(t, strings.HasPrefix(name, "app/target/"),
+				"the compiled dependencies must stay on the builder, found %s", name)
+		}
 	})
 }
 
-func TestPythonUv(t *testing.T) {
-	if !checkDocker() {
-		t.Skip("Docker not available")
+// TestRustDepsLayerSurvivesSourceEdits verifies that the compiled dependencies
+// are keyed on Cargo.toml and Cargo.lock, and that a source edit still reaches
+// the binary despite the placeholder build that came before it.
+func TestRustDepsLayerSurvivesSourceEdits(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := setupTestDir(root, t)
+
+	mainRs := readFile(t, "rust-deps/src/main.rs")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src"), 0755))
+	for name, content := range map[string]string{
+		// See TestGoDepsLayerSurvivesSourceEdits for the nonce.
+		"Cargo.toml":  readFile(t, "rust-deps/Cargo.toml") + runNonce("#"),
+		"Cargo.lock":  readFile(t, "rust-deps/Cargo.lock"),
+		"src/main.rs": mainRs,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
 	}
+
+	binary := func(r io.Reader) []byte {
+		m, err := tarx.TarToMap(r)
+		require.NoError(t, err)
+		return m["usr/bin/app"]
+	}
+
+	var bin []byte
+	build := func(c *buildkit.Client) map[string]*solvedVertex {
+		stack := &RustStack{MetaStack: MetaStack{dir: dir}}
+		require.True(t, stack.Detect())
+		opts := BuildOptions{Version: "1"}
+		stack.Init(opts)
+		require.True(t, stack.splitDeps)
+		state, err := stack.GenerateLLB(context.Background(), dir, opts)
+		require.NoError(t, err)
+		return solveLLB(t, c, "", dir, state, func(r io.Reader) { bin = binary(r) })
+	}
+
+	const (
+		compileDeps = "[phase] Compiling Rust dependencies"
+		buildApp    = "[phase] Building Rust application"
+	)
+
+	c := startBuildkit(t)
+
+	first := build(c)
+	require.Contains(t, first, compileDeps)
+	require.False(t, first[compileDeps].Cached, "first build has nothing to reuse")
+	require.Contains(t, string(bin), "greeting number", "the first binary should be the app, not the placeholder")
+
+	edited := strings.Replace(mainRs, "greeting number", "salutation number", 1)
+	require.NotEqual(t, mainRs, edited)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src/main.rs"), []byte(edited), 0644))
+
+	second := build(c)
+	require.True(t, second[compileDeps].Cached, "a source edit should reuse the compiled dependencies")
+	require.False(t, second[buildApp].Cached, "the application itself should rebuild")
+	require.Contains(t, string(bin), "salutation number", "the rebuilt binary should carry the edit")
+	// A cached dependency step only helps if the app build can use it. Any
+	// drift between the two (flags, features, toolchain) would show up as
+	// cargo compiling the dependency again here.
+	require.Contains(t, second[buildApp].Log, "Compiling deps-app")
+	require.NotContains(t, second[buildApp].Log, "Compiling itoa",
+		"the application build should reuse the dependencies compiled in their own layer")
+}
+
+func TestRustDepsSplitBlocker(t *testing.T) {
+	const lock = "version = 4\n\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\n"
+	const pkg = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
+
+	cases := []struct {
+		name    string
+		files   map[string]string
+		blocked string
+	}{
+		{
+			name:  "single package",
+			files: map[string]string{"Cargo.toml": pkg, "Cargo.lock": lock, "src/main.rs": ""},
+		},
+		{
+			name:  "single package with a library",
+			files: map[string]string{"Cargo.toml": pkg, "Cargo.lock": lock, "src/main.rs": "", "src/lib.rs": ""},
+		},
+		{
+			name:    "virtual workspace",
+			files:   map[string]string{"Cargo.toml": "[workspace]\nmembers = [\"a\"]\n", "Cargo.lock": lock},
+			blocked: "cargo workspace",
+		},
+		{
+			name:    "package that is also a workspace root",
+			files:   map[string]string{"Cargo.toml": pkg + "\n[workspace]\n", "Cargo.lock": lock, "src/main.rs": ""},
+			blocked: "cargo workspace",
+		},
+		{
+			name:    "build script",
+			files:   map[string]string{"Cargo.toml": pkg, "Cargo.lock": lock, "src/main.rs": "", "build.rs": ""},
+			blocked: "build script",
+		},
+		{
+			name:    "explicit binary target",
+			files:   map[string]string{"Cargo.toml": pkg + "\n[[bin]]\nname = \"x\"\npath = \"bin/x.rs\"\n", "Cargo.lock": lock, "src/main.rs": ""},
+			blocked: "custom target layout",
+		},
+		{
+			name:    "declared bench target",
+			files:   map[string]string{"Cargo.toml": pkg + "\n[[bench]]\nname = \"x\"\nharness = false\n", "Cargo.lock": lock, "src/main.rs": ""},
+			blocked: "custom target layout",
+		},
+		{
+			name: "vendored through cargo config",
+			files: map[string]string{
+				"Cargo.toml":         pkg,
+				"Cargo.lock":         lock,
+				"src/main.rs":        "",
+				".cargo/config.toml": "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.vendored-sources]\ndirectory = \"vendor\"\n",
+			},
+			blocked: "vendored dependencies",
+		},
+		{
+			name: "cargo config naming a private registry",
+			files: map[string]string{
+				"Cargo.toml":         pkg,
+				"Cargo.lock":         lock,
+				"src/main.rs":        "",
+				".cargo/config.toml": "[registries.private]\nindex = \"sparse+https://cargo.example.com/index/\"\n",
+			},
+		},
+		{
+			name:    "binaries under src/bin",
+			files:   map[string]string{"Cargo.toml": pkg, "Cargo.lock": lock, "src/bin/x.rs": ""},
+			blocked: "custom target layout",
+		},
+		{
+			name:    "no lockfile",
+			files:   map[string]string{"Cargo.toml": pkg, "src/main.rs": ""},
+			blocked: "no Cargo.lock",
+		},
+		{
+			name: "path dependency",
+			files: map[string]string{
+				"Cargo.toml":  pkg,
+				"Cargo.lock":  lock + "\n[[package]]\nname = \"lib\"\nversion = \"0.1.0\"\n",
+				"src/main.rs": "",
+			},
+			blocked: "path dependencies",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range tc.files {
+				path := filepath.Join(dir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+			}
+
+			stack := &RustStack{MetaStack: MetaStack{dir: dir}}
+			require.True(t, stack.Detect())
+			stack.Init(BuildOptions{})
+
+			require.Equal(t, tc.blocked, stack.depsSplitBlocker(stack.parseCargoToml()))
+			require.Equal(t, tc.blocked == "", stack.splitDeps)
+		})
+	}
+}
+
+func TestPythonUv(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	dir := setupTestDir(root, t)
@@ -1099,6 +1561,36 @@ func TestPythonUv(t *testing.T) {
 	require.NoError(t, err)
 
 	buildLLB(t, dir, state)
+}
+
+func TestRubyDetectGem(t *testing.T) {
+	cases := []struct {
+		name    string
+		gemfile string
+		lock    string
+		want    bool
+	}{
+		{name: "declared and locked", gemfile: "gem 'rails'\n", lock: "GEM\n  specs:\n    rails (7.1.0)\n", want: true},
+		{name: "declared, double quotes, no lockfile", gemfile: "gem \"rails\", \"~> 7.1\"\n", want: true},
+		{name: "declared with parentheses", gemfile: "gem(\"rails\")\n", want: true},
+		{name: "only transitive in the lockfile", gemfile: "gem 'mylib'\n", lock: "GEM\n  specs:\n    mylib (1.0)\n      rails (>= 7)\n    rails (7.1.0)\n", want: true},
+		{name: "commented out", gemfile: "# gem \"rails\"\ngem \"sinatra\"\n", lock: "GEM\n  specs:\n    sinatra (4.1.0)\n"},
+		{name: "longer gem names", gemfile: "gem 'sprockets-rails'\n", lock: "GEM\n  specs:\n    rails-html-sanitizer (1.6.0)\n    sprockets-rails (3.4.2)\n"},
+		{name: "mentioned in a string", gemfile: "gem 'sinatra' # not rails\n"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "Gemfile"), []byte(tc.gemfile), 0644))
+			if tc.lock != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "Gemfile.lock"), []byte(tc.lock), 0644))
+			}
+
+			stack := &RubyStack{MetaStack: MetaStack{dir: dir}}
+			require.Equal(t, tc.want, stack.detectGem("rails"))
+		})
+	}
 }
 
 func TestRubyWebCommand(t *testing.T) {

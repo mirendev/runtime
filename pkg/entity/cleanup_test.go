@@ -175,34 +175,39 @@ func TestCleanup_LeavesUndecodableEntityAlone(t *testing.T) {
 }
 
 // TestCleanup_LeavesEntityWithUnreadableSessionAttrAlone is the session-scoped
-// half of the same hazard. An entity whose session blob will not decode comes
-// back missing those attributes, and judging it by what it carries then reads
-// the absence as "unjustified". No session attribute is indexed today, so this
-// pins the behaviour before that changes rather than after.
+// half of the same hazard. An entity whose session blob will not decode is not
+// an entity missing its values, so neither its match nor the session's marker
+// beside it may be judged unjustified.
 func TestCleanup_LeavesEntityWithUnreadableSessionAttrAlone(t *testing.T) {
 	store, client := setupReindexTestStore(t)
 	ctx := t.Context()
 
 	_, err := store.CreateEntity(ctx, New(
-		Ident, "test/session-kind",
-		Doc, "an indexed session-scoped attribute",
+		Ident, "test/kind",
+		Doc, "an indexed attribute",
+		Cardinality, CardinalityOne,
+		Type, TypeStr,
+		Index, true,
+	))
+	require.NoError(t, err)
+	_, err = store.CreateEntity(ctx, New(
+		Ident, "test/session-status",
+		Doc, "a session-scoped attribute",
 		Cardinality, CardinalityOne,
 		Type, TypeStr,
 		Session, true,
-		Index, true,
 	))
 	require.NoError(t, err)
 
 	sid, err := store.CreateSession(ctx, 30)
 	require.NoError(t, err)
 
-	indexed := String(Id("test/session-kind"), "widget")
-	live, err := store.CreateEntity(ctx, New([]Attr{indexed}), WithSession(sid))
+	indexed := String(Id("test/kind"), "widget")
+	live, err := store.CreateEntity(ctx, New(indexed, String(Id("test/session-status"), "ready")), WithSession(sid))
 	require.NoError(t, err)
 
-	ids, err := store.ListIndex(ctx, indexed)
+	entriesBefore, err := client.Get(ctx, store.Prefix()+"/collections/", clientv3.WithPrefix(), clientv3.WithCountOnly())
 	require.NoError(t, err)
-	require.Contains(t, ids, live.Id(), "the session attribute must be indexed to begin with")
 
 	// Corrupt the session blob, leaving the entity key itself intact.
 	sessionPrefix := store.Prefix() + "/entity/" + base58.Encode([]byte(live.Id())) + "/session/"
@@ -217,9 +222,13 @@ func TestCleanup_LeavesEntityWithUnreadableSessionAttrAlone(t *testing.T) {
 	assert.EqualValues(t, 0, stats.StaleEntriesFound,
 		"an entity whose session attributes will not decode is not an entity missing them")
 
-	ids, err = store.ListIndex(ctx, indexed)
+	entriesAfter, err := client.Get(ctx, store.Prefix()+"/collections/", clientv3.WithPrefix(), clientv3.WithCountOnly())
 	require.NoError(t, err)
-	assert.Contains(t, ids, live.Id(), "the index entry must survive")
+	assert.Equal(t, entriesBefore.Count, entriesAfter.Count, "the match and the marker must survive")
+
+	ids, err := store.ListIndex(ctx, indexed)
+	require.NoError(t, err)
+	assert.Contains(t, ids, live.Id())
 }
 
 // TestCleanup_LeavesAConsistentStoreAlone is the safety net for the mismatch

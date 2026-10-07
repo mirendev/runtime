@@ -507,6 +507,11 @@ func TestHTTPService(t *testing.T) {
 			wantErr: `app service "api" does not exist`,
 		},
 		{
+			name:    "static-only app accepts web route",
+			service: "web",
+			spec:    core_v1alpha.ConfigSpec{StaticDir: "/app/dist"},
+		},
+		{
 			name:    "non-web service without a port is not HTTP capable",
 			service: "worker",
 			spec:    core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "worker"}}},
@@ -621,4 +626,38 @@ func TestClientSetRouteStoresService(t *testing.T) {
 	route, err := client.Lookup(ctx, "api.example.com")
 	require.NoError(t, err)
 	require.Equal(t, "api", route.Service)
+}
+
+func TestValidateTLSCheckPath(t *testing.T) {
+	tests := []struct {
+		path    string
+		wantErr bool
+	}{
+		{"/tls-check", false},
+		{"/.well-known/tls-check", false},
+		{"/", false},
+		{"", true},
+		{"tls-check", true},
+		{"https://example.com/tls-check", true},
+		{"/tls-check?domain=x", true},
+		{"/tls-check#frag", true},
+		{"/tls check", true},
+		{"//tls-check", true},
+		{"//evil.com/tls-check", true},
+		{"/tls\u00a0check", true},
+		{"/tls\x0bcheck", true},
+		{"/tls%check", true},
+		{"/tls%2Dcheck", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			err := ValidateTLSCheckPath(tt.path)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

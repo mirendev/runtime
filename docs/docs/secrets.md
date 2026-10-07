@@ -88,13 +88,49 @@ Note the asymmetry: `backend` is optional on the command line but **required** i
 
 ## Using a secret at build time
 
-An `[[env]]` reference reaches your app at runtime, not during the build. A build sometimes needs a credential of its own — a private package-registry token for `npm ci` or `bundle install`, a license key needed to compile, a key to pull a private dependency. For those, declare a build secret.
+An `[[env]]` reference reaches your app at runtime, not during the build. A build sometimes needs a credential of its own: a token for a private package registry, or for a private Git repository your app depends on. For those, declare a build secret under `[build]` in `app.toml`.
 
-:::info[Dockerfile builds only]
-Build secrets reach Dockerfile builds only. You wire each one into a `RUN --mount=type=secret` step yourself, and Miren's automatic language builds have no such step — so declaring a build secret on an app that builds from an auto-detected stack is a build error, not a silent no-op.
-:::
+Each entry has an `id` and a `ref` naming the secret. `backend` names which store to resolve against and defaults to `cluster`, Miren's own built-in store (see [Backends](#backends) for registering others), so you set it only when the secret lives in a different backend. The `id` may contain letters, digits, and `_.-`.
 
-Declare the secrets under `[build]` in `app.toml`. Each entry has an `id` — the name your Dockerfile mounts it by — plus a `ref` naming the secret. `backend` names which store to resolve against and defaults to `cluster`, Miren's own built-in store (see [Backends](#backends) for registering others), so you set it only when the secret lives in a different backend. The `id` may contain letters, digits, and `_.-`:
+How the build uses the secret depends on how your app builds.
+
+### Automatic language builds
+
+When Miren builds your app from its detected language, it mounts each build secret on the step that installs your dependencies (`go mod download`, `bundle install`, `npm install`, `pip install`, `cargo build` of your dependencies, and so on). Say where the secret goes with `env` or `file`:
+
+```toml
+# A token your committed .npmrc reads as ${NPM_TOKEN}
+[[build.secrets]]
+id = "npm"
+ref = "registry/npm-token"
+env = "NPM_TOKEN"
+
+# A netrc for private Git repositories over https
+[[build.secrets]]
+id = "netrc"
+ref = "github/netrc"
+file = "~/.netrc"
+```
+
+`env` sets an environment variable for the install step. `file` mounts the secret as a file. A path starting with `~/` lands in the home directory of whichever user runs the install, so `~/.netrc` works whether that step runs as root or as the app user.
+
+A netrc covers the most ground for private Git dependencies. Go modules, Ruby gems with a `git:` source, npm packages from Git URLs, pip, Poetry, and uv Git requirements, Elixir Git deps, and Rust crates from Git all fetch through Git, and Git reads it. (Node, Bun, and Python builds install Git when your manifests or lockfiles name a Git dependency, since their images don't include it.) For GitHub, use a fine-grained personal access token with read access to the repositories you need:
+
+```text
+machine github.com login x-access-token password github_pat_...
+```
+
+For Go, list your private modules in `go.sum`. Go asks the public module proxy for each module first and fetches it directly when the proxy doesn't have it, so a private module's path (never its code) reaches `proxy.golang.org`, and a module missing from `go.sum` fails its checksum lookup.
+
+Builds have no SSH key, so Miren rewrites SSH URLs on GitHub, GitLab, and Bitbucket (`git@github.com:org/repo`, `ssh://git@github.com/...`) to https, where the netrc can authenticate them. You don't need to change a lockfile that pins SSH URLs.
+
+Package registries mostly read a token from the environment. A committed `.npmrc` (or `bunfig.toml` for Bun) with `//npm.example.com/:_authToken=${NPM_TOKEN}` picks up an `env = "NPM_TOKEN"` secret, and Bundler, pip, uv, Poetry, and Cargo each have their own environment variables for registry credentials.
+
+The secret is mounted only on the steps that fetch dependencies, and it is never written to a layer. Its value is not part of the build cache key either, so rotating it doesn't force a rebuild.
+
+### Dockerfile builds
+
+A Dockerfile build ignores `env` and `file`. You wire each secret into a `RUN --mount=type=secret` step yourself, using the `id`:
 
 ```toml
 [build]
@@ -102,24 +138,25 @@ dockerfile = "Dockerfile"
 
 [[build.secrets]]
 id = "npm_token"
-backend = "cluster"
 ref = "registry/npm-token"
 ```
 
-Then consume it in the Dockerfile with a secret mount. The value appears as a file under `/run/secrets/<id>` for the duration of that one `RUN`, and BuildKit places it nowhere else on its own — what your command does with it from there is the subject of the warning below:
+The value appears as a file under `/run/secrets/<id>` for the duration of that one `RUN`, and BuildKit places it nowhere else on its own. What your command does with it from there is the subject of the warning below:
 
 ```dockerfile
 RUN --mount=type=secret,id=npm_token \
     NPM_TOKEN="$(cat /run/secrets/npm_token)" npm ci
 ```
 
-The credential is resolved to plaintext only in the builder's memory, handed to BuildKit over the build session, and mounted into the single `RUN` that asks for it. It never becomes a build argument, and BuildKit never writes it to the build log or an image layer on its own — so it is not visible in `docker history` or to anyone who later pulls the image. This is the difference from an inline value passed with `-e` or `--sensitive`, which is masked in CLI output but does end up baked into the image.
+### How build secrets are kept out of the image
 
-:::warning[Read the mount, don't print it]
-BuildKit keeps the value out of layers and out of its own logs, but it cannot stop your own commands from leaking it. If you copy it into an `ENV`, write it to a file a later layer keeps, or print it to stdout or stderr — an `echo`, a `set -x`, a verbose tool — the value ends up in the image or the build log. Read it inside the `--mount=type=secret` `RUN`, use it there, and don't print it.
+The credential is resolved to plaintext only in the builder's memory, handed to BuildKit over the build session, and mounted into the steps that ask for it. It never becomes a build argument, and BuildKit never writes it to the build log or an image layer on its own, so it is not visible in `docker history` or to anyone who later pulls the image. This is the difference from an inline value passed with `-e` or `--sensitive`, which is masked in CLI output but does end up baked into the image.
+
+:::warning[Read the secret, don't print it]
+BuildKit keeps the value out of layers and out of its own logs, but it cannot stop a command from leaking it. If a Dockerfile copies it into an `ENV`, or anything writes it to a file a later layer keeps or prints it to the build log (an `echo`, a `set -x`, a verbose tool, an install script in one of your dependencies), the value ends up in the image or the log.
 :::
 
-A build secret must resolve at build time: if the `ref` cannot be found, or the cluster has no secret backend registered, the build fails rather than proceeding without the credential. Each `id` must be unique within the list and contain only letters, digits, and `_.-`, and the value is capped at 500 KB.
+A build secret must resolve at build time: if the `ref` cannot be found, or the cluster has no secret backend registered, the build fails rather than proceeding without the credential. An automatic language build also fails on a secret with neither `env` nor `file`, since it would have nowhere to put it. Each `id` must be unique within the list and contain only letters, digits, and `_.-`, and the value is capped at 500 KB.
 
 ## Pinning: which version a deploy used
 

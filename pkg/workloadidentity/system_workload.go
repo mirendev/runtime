@@ -61,6 +61,7 @@ func (iss *Issuer) IssueSystemWorkloadToken(workload SystemWorkload, opts TokenO
 	claims := iss.baseClaims(subject, opts)
 	claims.SystemWorkload = workload
 	claims.IdentityType = IdentityTypeSystem
+	claims.RunnerID = opts.RunnerID
 
 	return iss.sign(claims)
 }

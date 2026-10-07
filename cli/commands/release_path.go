@@ -32,6 +32,21 @@ func FindReleasePath() string {
 	return ""
 }
 
+// findBundledExecutable checks each release in order so a CLI-only user
+// release cannot shadow the system bundle under sudo.
+func findBundledExecutable(name string, releaseDirs ...string) (path, dir string) {
+	for _, releaseDir := range releaseDirs {
+		if releaseDir == "" {
+			continue
+		}
+		candidate := filepath.Join(releaseDir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, releaseDir
+		}
+	}
+	return "", ""
+}
+
 // getUserHomeDir returns the user's home directory, handling the case
 // where the command is run under sudo by checking SUDO_USER.
 func getUserHomeDir() (string, error) {

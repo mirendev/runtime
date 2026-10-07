@@ -64,7 +64,7 @@ var (
 	// appRead: read one app's own state.
 	appRead = perms{
 		"appstatus": set("appinfo"),
-		"logs":      set("applogs", "streamlogs", "streamlogchunks"),
+		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),
@@ -169,6 +169,14 @@ func clusterAdminPerms() perms {
 			"internalhttp": set("dorequest"),
 			"disks":        set("new", "delete"),
 			"addons":       set("createinstance", "deleteinstance"),
+			// Backup, restore and recovery read and rewrite a disk's contents
+			// wholesale, so they sit with the other disk mutations rather than
+			// with reads — listdeleted included, since what it lists is the
+			// data of disks somebody deleted.
+			// transferoffset only reports how far an interrupted transfer got,
+			// but it is part of doing a backup or a restore, so it is granted
+			// with them rather than to every reader.
+			"diskbackup": set("backup", "restore", "listbackups", "listdeleted", "undelete", "transferoffset"),
 		},
 	)
 }

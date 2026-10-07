@@ -323,6 +323,41 @@ func TestReconcileResumesAnInterruptedProvision(t *testing.T) {
 	assert.Equal(t, "active", staged.Status, "and run through to a settled status")
 }
 
+// A provisioning saga refused across an upgrade has to stay reconcilable:
+// the release that can resume it only gets to if something calls Execute
+// again, and an association parked in "error" never is.
+func TestProvisionKeepsRetryingARefusedSaga(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+	provider.provisionFn = func(ctx context.Context, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+		return nil, &saga.IncompatibleDefinitionError{
+			ExecutionID: "saga/sg-provision", Saga: "provision-shared-postgresql",
+			RecordedVersion: 1, CurrentVersion: 2,
+		}
+	}
+
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{Name: "miren-postgresql"})
+	require.NoError(t, err)
+	assocID, err := ec.Create(ctx, "test-assoc", &addon_v1alpha.AddonAssociation{
+		App:     appID,
+		Addon:   addonID,
+		Variant: "small",
+		Status:  "pending",
+	})
+	require.NoError(t, err)
+
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, assocID, &assoc)
+	require.NoError(t, err)
+
+	err = ctrl.Reconcile(ctx, &assoc, meta)
+	require.ErrorIs(t, err, saga.ErrIncompatibleDefinition, "returned so the controller retries")
+
+	var staged addon_v1alpha.AddonAssociation
+	staged.Decode(meta.Entity)
+	assert.Equal(t, "provisioning", staged.Status, "not parked in error, which nothing reconciles out of")
+}
+
 // TestProvisionSkipsWhenAssociationNoLongerPending verifies the pre-flight
 // re-read: if a stale Reconcile event routes through provision() but the
 // association has since moved to "deprovisioning" (e.g. on startup resync
@@ -446,8 +481,9 @@ func TestDeprovisionFailureRemainsRetryable(t *testing.T) {
 	meta, err := getMeta(ctx, ec, assocID, &assoc)
 	require.NoError(t, err)
 	require.ErrorContains(t, ctrl.Reconcile(ctx, &assoc, meta), "temporary cleanup failure")
-	require.NoError(t, ec.GetById(ctx, assocID, &assoc))
+	assoc.Decode(meta.Entity)
 	require.Equal(t, "deprovisioning", assoc.Status)
+	require.Equal(t, "deprovisioning: temporary cleanup failure", assoc.ErrorMessage)
 	provider.deprovisionErr = nil
 	meta, err = getMeta(ctx, ec, assocID, &assoc)
 	require.NoError(t, err)

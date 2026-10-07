@@ -11,7 +11,7 @@ Switch to a different cluster
 ## Usage
 
 ```bash
-miren cluster switch <cluster> [flags]
+miren cluster switch [cluster] [flags]
 ```
 
 ## Arguments

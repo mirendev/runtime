@@ -117,8 +117,8 @@ func (h *highlevelBuilder) installNpm(cur llb.State, distro string) llb.State {
 	default:
 		return cur.Run(
 			llb.Shlex("sh -c 'apt-get update && apt-get install -y nodejs npm'"),
-			h.CacheMount("/var/lib/apt/lists"),
-			h.CacheMount("/var/cache/apt/archives"),
+			h.lockedCacheMount("/var/lib/apt/lists"),
+			h.lockedCacheMount("/var/cache/apt/archives"),
 			llb.WithCustomName("[phase] Installing npm augmentation"),
 		).State
 	}
@@ -199,7 +199,7 @@ func (h *highlevelBuilder) runNpmInstall(cur, mnt llb.State) llb.State {
 	cur = h.ensureAppDir(cur)
 
 	cur = cur.File(llb.Copy(mnt, "/", "/app", &llb.CopyInfo{
-		IncludePatterns:    []string{"package.json", "package-lock.json"},
+		IncludePatterns:    []string{"package.json", "package-lock.json", ".npmrc"},
 		CreateDestPath:     true,
 		AllowWildcard:      true,
 		AllowEmptyWildcard: true,
@@ -208,6 +208,7 @@ func (h *highlevelBuilder) runNpmInstall(cur, mnt llb.State) llb.State {
 
 	return cur.Dir("/app").Run(
 		llb.Shlex("npm install"),
+		h.appDepAuth(),
 		llb.AddEnv("HOME", "/home/app"),
 		llb.User("app"),
 		llb.WithCustomName("[phase] Installing JS deps with npm augmentation"),
@@ -227,7 +228,7 @@ func (h *highlevelBuilder) runYarnInstall(cur, mnt llb.State) llb.State {
 	cur = cur.File(llb.Copy(mnt, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: []string{
 			"package.json", "yarn.lock",
-			".yarnrc", ".yarnrc.yml",
+			".yarnrc", ".yarnrc.yml", ".npmrc",
 			".yarn/releases/**", ".yarn/plugins/**", ".yarn/patches/**",
 		},
 		CreateDestPath:     true,
@@ -238,6 +239,7 @@ func (h *highlevelBuilder) runYarnInstall(cur, mnt llb.State) llb.State {
 
 	return cur.Dir("/app").Run(
 		llb.Shlex("yarn install"),
+		h.appDepAuth(),
 		llb.AddEnv("HOME", "/home/app"),
 		llb.AddEnv("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
 		llb.User("app"),
@@ -251,7 +253,7 @@ func (h *highlevelBuilder) runBunInstall(cur, mnt llb.State) llb.State {
 	cur = h.ensureAppDir(cur)
 
 	cur = cur.File(llb.Copy(mnt, "/", "/app", &llb.CopyInfo{
-		IncludePatterns:    []string{"package.json", "bun.lock", "bun.lockb"},
+		IncludePatterns:    []string{"package.json", "bun.lock", "bun.lockb", "bunfig.toml", ".npmrc"},
 		CreateDestPath:     true,
 		AllowWildcard:      true,
 		AllowEmptyWildcard: true,
@@ -260,6 +262,7 @@ func (h *highlevelBuilder) runBunInstall(cur, mnt llb.State) llb.State {
 
 	return cur.Dir("/app").Run(
 		llb.Shlex("bun install"),
+		h.appDepAuth(),
 		llb.AddEnv("HOME", "/home/app"),
 		llb.User("app"),
 		llb.WithCustomName("[phase] Installing JS deps with bun augmentation"),

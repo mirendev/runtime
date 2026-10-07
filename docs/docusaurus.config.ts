@@ -143,6 +143,9 @@ const config: Config = {
           // /languages was merged into the Language Guides index. Keep the old
           // URL alive for external links and search results.
           {from: '/languages', to: '/guides'},
+          // Cloud Updates went stale; Miren Cloud changes now ship in the
+          // runtime changelog alongside the release that enables them.
+          {from: '/miren-cloud/cloud-updates', to: '/changelog'},
         ],
       },
     ],

@@ -16,6 +16,8 @@ miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ```
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with `miren app history`.
 
+Use `-m "describe this deploy"` to attach a description to this deployment (including an existing-version deploy). It appears in `miren app history` and is separate from the Git commit message.
+
 ## Scripting and CI
 
 When stdout is not a terminal (a CI job, a pipe, a file), deploy prints plain text with no cursor-control escape codes, condenses the build to one summary line, and always ends with an explicit verdict and the full version ID on its own line:
@@ -49,9 +51,11 @@ miren deploy [flags]
 - `--force, -f` — Skip confirmation prompt
 - `--format` — Output format (text, json, jsonl) (default: `text`) (choices: `text`, `json`, `jsonl`)
 - `--json` — Shorthand for --format json
+- `--message, -m` — Description of this deployment
 - `--quiet, -q` — Suppress upload and build progress; print only phase summaries and the result
 - `--sensitive, -s` — Set sensitive environment variable (masked in output)
 - `--summary-json` — Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path
+- `--target` — Deployment target from .miren/deploy.toml
 - `--ttl` — TTL for ephemeral version (e.g. 48h) (default: `24h`)
 - `--version, -V` — Deploy an existing version (reuse its resolved image; skip image selection and build)
 
@@ -120,3 +124,4 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 ## Subcommands
 
 - [`miren deploy cancel`](./deploy-cancel.md) — Cancel an in-progress deployment
+- [`miren deploy target`](./deploy-target.md) — List deployment targets

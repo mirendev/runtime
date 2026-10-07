@@ -12,7 +12,14 @@ import (
 	"time"
 )
 
-const DefaultDir = "/var/lib/miren/server/lifecycle"
+// DefaultDir is the server's ledger; RunnerDir is the runner's. They are
+// separate ledgers with separate busy slots: a host that runs both daemons
+// (the coordinator in standalone mode does not, but nothing forbids it) can
+// have one operation on each.
+const (
+	DefaultDir = "/var/lib/miren/server/lifecycle"
+	RunnerDir  = "/var/lib/miren/runner/lifecycle"
+)
 
 var ErrNotFound = errors.New("lifecycle operation not found")
 

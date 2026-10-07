@@ -80,11 +80,13 @@ func SetupOTelSDK(ctx context.Context) (shutdown func(context.Context) error, er
 
 // SetupTracing configures OpenTelemetry tracing with an OTLP HTTP exporter.
 // The exporter reads standard OTel env vars (OTEL_EXPORTER_OTLP_ENDPOINT,
-// OTEL_EXPORTER_OTLP_HEADERS, etc.) so no explicit configuration is needed.
-// Extra resource attributes (e.g. cluster identity) can be passed in.
-// Returns a shutdown function that flushes pending spans.
-func SetupTracing(ctx context.Context, attrs ...attribute.KeyValue) (shutdown func(context.Context) error, err error) {
-	exporter, err := otlptracehttp.New(ctx)
+// OTEL_EXPORTER_OTLP_HEADERS, etc.); exporterOpts override them where the
+// caller knows better, such as an endpoint from server config or a client that
+// authenticates with workload identity. Extra resource attributes (e.g. cluster
+// identity) can be passed in. Returns a shutdown function that flushes pending
+// spans.
+func SetupTracing(ctx context.Context, exporterOpts []otlptracehttp.Option, attrs ...attribute.KeyValue) (shutdown func(context.Context) error, err error) {
+	exporter, err := otlptracehttp.New(ctx, exporterOpts...)
 	if err != nil {
 		return nil, err
 	}

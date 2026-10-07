@@ -1,14 +1,24 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/apphealth"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/entity/types"
 )
 
 func TestPoolHealthClassify(t *testing.T) {
@@ -20,10 +30,10 @@ func TestPoolHealthClassify(t *testing.T) {
 		{"in cooldown is crashed regardless of counts", poolHealth{ready: 1, desired: 1, inCooldown: true}, apphealth.Crashed},
 		{"autoscale at zero is idle", poolHealth{ready: 0, desired: 0, isAutoscale: true}, apphealth.Idle},
 		{"fixed at zero is starting, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: false}, apphealth.Starting},
-		// A task-only app has no pools by design; reporting it as idle would
-		// say it went to sleep rather than that it is doing what it was told.
-		{"task-only at zero is ready, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: true, isTaskOnly: true}, apphealth.Ready},
-		{"task-only wins over the autoscale reading", poolHealth{ready: 0, desired: 0, isAutoscale: false, isTaskOnly: true}, apphealth.Ready},
+		// An app that needs no service has no pools by design; reporting it as
+		// idle would say it went to sleep rather than that it is ready.
+		{"service-free app at zero is ready, not idle", poolHealth{ready: 0, desired: 0, isAutoscale: true, needsNoService: true}, apphealth.Ready},
+		{"service-free app wins over the autoscale reading", poolHealth{ready: 0, desired: 0, isAutoscale: false, needsNoService: true}, apphealth.Ready},
 		{"all ready is healthy", poolHealth{ready: 3, desired: 3}, apphealth.Healthy},
 		{"some ready is degraded", poolHealth{ready: 1, desired: 3}, apphealth.Degraded},
 		{"none ready is starting", poolHealth{ready: 0, desired: 2}, apphealth.Starting},
@@ -77,16 +87,91 @@ func TestPoolHealthAccumulate_ExpiredCooldownIgnored(t *testing.T) {
 	assert.Equal(t, apphealth.Healthy, h.classify())
 }
 
-func TestSpecIsTaskOnly(t *testing.T) {
-	assert.False(t, specIsTaskOnly(nil))
-	assert.False(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{}), "an app with neither is not task-only")
+func TestCollectServiceHealthUsesSharedCooldownAndLatestExit(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	r := &AppInfo{Log: slog.Default(), EC: ec}
+	now := time.Now().Truncate(time.Second)
+	pools := []compute_v1alpha.SandboxPool{
+		{ID: "pool-db", Service: "db", DesiredInstances: 1, ConsecutiveCrashCount: 7, CooldownUntil: now.Add(3 * time.Minute), LastCrashTime: now.Add(-12 * time.Minute)},
+		{ID: "pool-web", Service: "web", DesiredInstances: 1, ReadyInstances: 1},
+	}
+	failedID, err := ec.Create(ctx, "failed", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 17, At: now.Add(-12 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "success", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 0, At: now.Add(-11 * time.Minute)}}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "retired", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}, entityserver.WithLabels(types.LabelSet("pool", "pool-db")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "web", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, BoundPort: []compute_v1alpha.BoundPort{{Port: 8888, Address: "0.0.0.0"}}}, entityserver.WithLabels(types.LabelSet("pool", "pool-web")))
+	require.NoError(t, err)
+	_, err = ec.Create(ctx, "foreign", &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 99, At: now}}, entityserver.WithLabels(types.LabelSet("pool", "other")))
+	require.NoError(t, err)
 
-	assert.False(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{
+	got, ports, err := r.collectServiceHealth(ctx, pools, nil, now, true)
+	require.NoError(t, err)
+	require.Len(t, ports, 1)
+	assert.EqualValues(t, 8888, ports[0].Port())
+	require.Len(t, got, 2)
+	assert.Equal(t, "db", got[0].Service())
+	assert.Equal(t, apphealth.Crashed, got[0].Health(), "cooldown still active past the 10-minute failure window")
+	assert.EqualValues(t, 7, got[0].CrashCount())
+	assert.EqualValues(t, 3, got[0].Dead())
+	require.True(t, got[0].HasLastExitCode())
+	assert.Zero(t, got[0].LastExitCode(), "latest successful exit replaces the older code")
+	assert.Equal(t, failedID.String(), got[0].LastFailureSandbox())
+	assert.Equal(t, apphealth.Healthy, got[1].Health())
+	assert.EqualValues(t, 1, got[1].Running())
+	fixed, ports, err := r.collectServiceHealth(ctx,
+		[]compute_v1alpha.SandboxPool{{ID: "pool-fixed", Service: "fixed"}},
+		&core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "fixed", Concurrency: core_v1alpha.ConfigSpecServicesConcurrency{Mode: "fixed"}}}}, now, false)
+	require.NoError(t, err)
+	assert.Empty(t, ports)
+	require.Len(t, fixed, 1)
+	assert.Equal(t, apphealth.Starting, fixed[0].Health(), "fixed service at zero must not be classified as idle")
+}
+
+func TestCollectServiceHealthListFailure(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	inmem.Store.OnListIndex = func(context.Context, entity.Attr) ([]entity.Id, error) {
+		return nil, errors.New("sandbox index unavailable")
+	}
+	r := &AppInfo{Log: slog.Default(), EC: entityserver.NewClient(slog.Default(), inmem.EAC)}
+	services, ports, err := r.collectServiceHealth(context.Background(),
+		[]compute_v1alpha.SandboxPool{{ID: "pool-web", Service: "web", DesiredInstances: 1}}, nil, time.Now(), true)
+	require.ErrorContains(t, err, "sandbox index unavailable")
+	assert.Empty(t, services)
+	assert.Empty(t, ports)
+}
+
+func TestEmptyServiceHealthSurvivesRPCEncoding(t *testing.T) {
+	r := &AppInfo{}
+	services, ports, err := r.collectServiceHealth(context.Background(), nil, nil, time.Now(), false)
+	require.NoError(t, err)
+	assert.Empty(t, ports)
+	var status app_v1alpha.ApplicationStatus
+	status.SetServices(services)
+	data, err := cbor.Marshal(&status)
+	require.NoError(t, err)
+	var decoded app_v1alpha.ApplicationStatus
+	require.NoError(t, cbor.Unmarshal(data, &decoded))
+	assert.True(t, decoded.HasServices(), "empty services must differ from an unavailable sandbox scan")
+	assert.Empty(t, decoded.Services())
+}
+
+func TestSpecNeedsNoService(t *testing.T) {
+	assert.False(t, specNeedsNoService(nil))
+	assert.False(t, specNeedsNoService(&core_v1alpha.ConfigSpec{}), "an empty app has no valid workload")
+
+	assert.False(t, specNeedsNoService(&core_v1alpha.ConfigSpec{
 		Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}},
 		Tasks:    []core_v1alpha.ConfigSpecTasks{{Name: "migrate"}},
 	}), "an app with a service still has something long-running")
 
-	assert.True(t, specIsTaskOnly(&core_v1alpha.ConfigSpec{
+	assert.True(t, specNeedsNoService(&core_v1alpha.ConfigSpec{
 		Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "session"}},
 	}))
+	assert.True(t, specNeedsNoService(&core_v1alpha.ConfigSpec{StaticDir: "/site"}))
 }

@@ -37,6 +37,7 @@ const (
 	actionLoadSource      = "load-source"
 	actionGetNextVer      = "get-next-version"
 	actionBuildImage      = "build-image"
+	actionExtractStatic   = "extract-static"
 	actionPrepareConfig   = "prepare-config"
 	actionHandleEphemera  = "handle-ephemeral"
 	actionCreateConfigVer = "create-config-version"
@@ -160,6 +161,9 @@ func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
 	procfile, err := b.readProcFile(tr)
 	if err != nil {
 		return loadSourceOut{}, fmt.Errorf("reading procfile: %w", err)
+	}
+	if stack.Stack == "static" && len(procfile) != 0 {
+		return loadSourceOut{}, fmt.Errorf("static source apps cannot declare Procfile services without a runnable build source")
 	}
 
 	// Ask about web intent here rather than in prepareConfig. Everything it
@@ -458,6 +462,7 @@ type createVersionIn struct {
 	AppID              string `json:"app_id" saga:"app_id"`
 	VersionName        string `json:"version_name" saga:"version_name"`
 	FinalImageURL      string `json:"final_image_url" saga:"final_image_url"`
+	StaticArtifact     string `json:"static_artifact,omitempty" saga:"static_artifact,optional"`
 	ManifestDigest     string `json:"manifest_digest,omitempty" saga:"manifest_digest,optional"`
 	ArtifactID         string `json:"artifact_id" saga:"artifact_id,optional"`
 	AdminToken         string `json:"admin_token" saga:"admin_token"`
@@ -482,6 +487,7 @@ func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, e
 		App:            entity.Id(in.AppID),
 		Version:        in.VersionName,
 		ImageUrl:       in.FinalImageURL,
+		StaticArtifact: in.StaticArtifact,
 		ManifestDigest: in.ManifestDigest,
 		AdminToken:     in.AdminToken,
 		Artifact:       entity.Id(in.ArtifactID),
@@ -827,9 +833,12 @@ type beginDeploymentIn struct {
 	StreamID       string `json:"stream_id" saga:"stream_id"`
 	ClusterID      string `json:"deploy_cluster_id,omitempty" saga:"deploy_cluster_id,optional"`
 	GitInfo        string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
+	Message        string `json:"deploy_message,omitempty" saga:"deploy_message,optional"`
 	Subject        string `json:"deploy_subject,omitempty" saga:"deploy_subject,optional"`
 	AuthMethod     string `json:"deploy_auth_method,omitempty" saga:"deploy_auth_method,optional"`
 	OrganizationID string `json:"deploy_organization_id,omitempty" saga:"deploy_organization_id,optional"`
+	Email          string `json:"deploy_email,omitempty" saga:"deploy_email,optional"`
+	Name           string `json:"deploy_name,omitempty" saga:"deploy_name,optional"`
 	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 }
 
@@ -858,9 +867,12 @@ func beginDeployment(ctx context.Context, in beginDeploymentIn) (beginDeployment
 		ClusterID:      in.ClusterID,
 		Operation:      deploylifecycle.OperationBuild,
 		GitInfo:        gitInfo,
+		Message:        in.Message,
 		Subject:        in.Subject,
 		AuthMethod:     in.AuthMethod,
 		OrganizationID: in.OrganizationID,
+		Email:          in.Email,
+		Name:           in.Name,
 	})
 	if err != nil {
 		return beginDeploymentOut{}, fmt.Errorf("begin deployment for %s: %w", in.AppName, err)
@@ -1020,6 +1032,11 @@ func (b *Builder) resolveBuildSource(path string, ac *appconfig.AppConfig, name 
 		b.Log.Info("using service image as build source", "image", image, "app", name)
 		return buildSourceResolution{BuildStack: stack}, nil
 	}
+	if ac != nil && ac.StaticDirectory() != "" && len(ac.Services) == 0 && len(ac.Tasks) == 0 {
+		stack.Stack = "static"
+		b.Log.Info("using source directory as static build output", "directory", ac.StaticDirectory(), "app", name)
+		return buildSourceResolution{BuildStack: stack}, nil
+	}
 
 	return buildSourceResolution{BuildStack: stack, DetectionErr: detectErr}, nil
 }
@@ -1044,6 +1061,8 @@ func sourceFromBuildStack(stack BuildStack) (string, string) {
 		return "image", containerdx.NormalizeImageReference(stack.Input)
 	case "dockerfile":
 		return "dockerfile", ""
+	case "static":
+		return "static", ""
 	case "auto":
 		return "stack", stack.DetectedStack
 	default:
@@ -1115,12 +1134,14 @@ func registerBuildSaga(
 	}
 
 	return saga.Define(sagaBuildFromTar).
+		Version(2).ResumesFrom(1).
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).
 		Action(actionLoadSource, loadSource).Undo(undoLoadSource).
 		Action(actionGetNextVer, getNextVersion).Undo(undoGetNextVersion).
 		Action(actionBuildImage, buildImage).Undo(undoBuildImage).
+		Action(actionExtractStatic, extractStatic).Undo(undoExtractStatic).
 		Action(actionPrepareConfig, prepareConfig).Undo(undoPrepareConfig).
 		Action(actionHandleEphemera, handleEphemeral).Undo(undoHandleEphemeral).
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).

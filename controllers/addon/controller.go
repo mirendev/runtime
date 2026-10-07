@@ -152,6 +152,16 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		result, err = provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, variant)
 	}
 	if err != nil {
+		// A provisioning saga this binary refused to resume has run or undone
+		// nothing, and the remedy is a release that can resume it. That
+		// release only gets the chance if a reconcile calls Execute again, and
+		// "error" is a status nothing reconciles out of. So keep the
+		// association provisioning and return, the way deprovision does, and
+		// let the controller keep retrying until a release can drive it or an
+		// operator abandons it.
+		if errors.Is(err, saga.ErrIncompatibleDefinition) {
+			return fmt.Errorf("provisioning: %w", err)
+		}
 		if assoc.SourceAssociation != "" {
 			exec, loadErr := c.sagaStorage.Get(ctx, addon.CloneExecutionID(assoc.ID))
 			if loadErr == nil && exec.Status != saga.StatusFailed {
@@ -295,7 +305,13 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 	}
 	if err != nil {
 		// Keep deprovisioning retryable; terminal error would abandon resources.
-		return fmt.Errorf("deprovisioning: %w", err)
+		err = fmt.Errorf("deprovisioning: %w", err)
+		if assoc.ErrorMessage != err.Error() {
+			if updateErr := meta.Update((&addon_v1alpha.AddonAssociation{ErrorMessage: err.Error()}).Encode()); updateErr != nil {
+				return fmt.Errorf("recording teardown error: %w (original: %v)", updateErr, err)
+			}
+		}
+		return err
 	}
 
 	// Step 2: Delete the association entity.

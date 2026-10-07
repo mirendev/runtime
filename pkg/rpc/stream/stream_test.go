@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/cond"
 	rpc "miren.dev/runtime/pkg/rpc"
 )
 
@@ -284,5 +286,47 @@ func TestServeReader(t *testing.T) {
 
 		r.Empty(got)
 		r.Equal(0, chunks)
+	})
+}
+
+// truncatedCall is an rpc.Call whose args never decode, which is what a call
+// stream that ends between the header and the args frame looks like to a
+// callback: rpc.Call.Args leaves the target zeroed and reports nothing.
+type truncatedCall struct {
+	rpc.Call
+}
+
+func (truncatedCall) Args(any) {}
+
+func TestValuelessFrameIsRejectedBeforeTheCallback(t *testing.T) {
+	senders := map[string]func(func(*Thing) error) SendStream[*Thing]{
+		"Callback":   Callback[*Thing],
+		"StreamRecv": StreamRecv[*Thing],
+	}
+	for name, mk := range senders {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+
+			called := false
+			ss := mk(func(*Thing) error {
+				called = true
+				return nil
+			})
+
+			err := ss.Send(t.Context(), &SendStreamSend[*Thing]{Call: truncatedCall{}})
+			r.ErrorIs(err, cond.ErrClosed{})
+			r.False(called, "callback ran on a frame with no value")
+		})
+	}
+
+	t.Run("ServeWriter", func(t *testing.T) {
+		r := require.New(t)
+
+		var out bytes.Buffer
+		ss := ServeWriter(t.Context(), &out)
+
+		err := ss.Send(t.Context(), &SendStreamSend[[]byte]{Call: truncatedCall{}})
+		r.ErrorIs(err, cond.ErrClosed{})
+		r.Zero(out.Len(), "writer received a frame with no value")
 	})
 }

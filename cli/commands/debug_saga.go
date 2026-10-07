@@ -168,7 +168,7 @@ func DebugSagaList(ctx *Context, opts struct {
 		rows = append(rows, ui.Row{
 			ui.CleanEntityID(r.exec.ID),
 			r.exec.DefinitionName,
-			string(r.exec.Status),
+			sagaStatusLabel(r.exec),
 			fmt.Sprintf("%d", len(r.exec.ExecutionOrder)),
 			lastAction,
 			humanFriendlyTimestamp(r.createdAt),
@@ -248,12 +248,132 @@ func DebugSagaShow(ctx *Context, opts struct {
 	return nil
 }
 
+// DebugSagaAbandon gives up a saga execution the server refused to resume.
+// It is deliberately narrow: only a blocked execution qualifies, because
+// anything else is still going to be driven or compensated on its own.
+func DebugSagaAbandon(ctx *Context, opts struct {
+	ConfigCentric
+	Id    string `short:"i" long:"id" description:"Saga execution ID"`
+	Force bool   `short:"f" long:"force" description:"Skip confirmation prompt"`
+
+	Args []string `rest:"true"`
+}) error {
+	id := opts.Id
+	if id == "" {
+		if len(opts.Args) == 0 {
+			return fmt.Errorf("saga execution ID is required (pass as first positional arg or via --id)")
+		}
+		id = opts.Args[0]
+	}
+
+	eac, err := sagaClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	res, err := getSaga(ctx, eac, id)
+	if err != nil {
+		return err
+	}
+
+	record, err := decodeSagaRecord(res)
+	if err != nil {
+		return err
+	}
+	exec := record.exec
+	blockedBecause := exec.BlockedReason
+
+	// Same hoisting as show, for the same guardrail.
+	parentID := entity.Id(exec.ID)
+	children, err := listSagas(ctx, eac, []entity.Attr{
+		entity.Ref(saga_v1alpha.SagaParentExecutionIdId, parentID),
+	})
+	if err != nil {
+		return fmt.Errorf("listing child sagas: %w", err)
+	}
+	if err := sagaAbandonBlockers(children); err != nil {
+		return err
+	}
+
+	left, err := saga.Abandon(exec, time.Now())
+	if err != nil {
+		if errors.Is(err, saga.ErrNotBlocked) {
+			return fmt.Errorf("%w\n\nAbandon is only for blocked executions. "+
+				"This one will be finished or compensated by the server on its own", err)
+		}
+		return err
+	}
+
+	ctx.Printf("Saga %s (%s) is blocked:\n  %s\n\n", ui.CleanEntityID(exec.ID), exec.DefinitionName, blockedBecause)
+	if len(left) == 0 {
+		ctx.Printf("It has no completed work left to compensate.\n\n")
+	} else {
+		ctx.Printf("Abandoning it marks it failed WITHOUT undoing these actions, which may leave their work behind:\n")
+		for _, name := range left {
+			ctx.Printf("  - %s\n", name)
+		}
+		ctx.Printf("\nIf a release that can still resume this execution is available, running it instead lets the saga finish or compensate normally.\n\n")
+	}
+
+	if !opts.Force {
+		confirmed, err := ui.Confirm(
+			ui.WithMessage("Abandon this saga execution?"),
+			ui.WithDefault(false),
+		)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			ctx.Printf("Aborted\n")
+			return nil
+		}
+	}
+
+	// Conditional on the revision we read, so a server that resumed the
+	// execution while we were asking does not have its progress overwritten.
+	storage := saga.NewEACStorage(eac, nil)
+	if err := storage.SaveAtRevision(ctx, exec, res.Revision()); err != nil {
+		return fmt.Errorf("abandoning saga %s (it may have changed since it was read; check `miren debug saga show`): %w",
+			ui.CleanEntityID(exec.ID), err)
+	}
+
+	ctx.Printf("Abandoned saga %s.\n", ui.CleanEntityID(exec.ID))
+	return nil
+}
+
+// sagaAbandonBlockers refuses to abandon a parent while any of its children
+// is still in flight. A parent blocked by a nested refusal never recorded the
+// action that ran the child, so its own leftover list would miss everything
+// the child built, and the child would sit blocked with nothing left to ever
+// resolve it. Abandoning the child first shows what it leaves behind, and its
+// parent then unwinds on its own the next time it is driven.
+func sagaAbandonBlockers(children []*sagaRecord) error {
+	var inFlight []string
+	for _, c := range children {
+		// A completed child still holds its parent when it is blocked: its
+		// undo was refused, so its work is uncompensated.
+		finished := c.exec.Status == saga.StatusFailed ||
+			(c.exec.Status == saga.StatusCompleted && c.exec.BlockedReason == "")
+		if finished {
+			continue
+		}
+		inFlight = append(inFlight, fmt.Sprintf("%s (%s)", ui.CleanEntityID(c.exec.ID), sagaStatusLabel(c.exec)))
+	}
+	if len(inFlight) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this saga has child sagas still in flight or blocked: %s\n\n"+
+		"Abandon a blocked child first, which lists the work it leaves behind; "+
+		"this saga then unwinds on its own the next time it is driven",
+		strings.Join(inFlight, ", "))
+}
+
 func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full bool) {
 	exec := r.exec
 
 	ctx.Printf("ID:         %s\n", ui.CleanEntityID(exec.ID))
 	ctx.Printf("Definition: %s (v%d)\n", exec.DefinitionName, exec.DefinitionVersion)
-	ctx.Printf("Status:     %s\n", exec.Status)
+	ctx.Printf("Status:     %s\n", sagaStatusLabel(exec))
 	if exec.RecoveryScope != "" {
 		ctx.Printf("Scope:      %s\n", exec.RecoveryScope)
 	}
@@ -264,6 +384,23 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 	ctx.Printf("Updated:    %s\n", sagaTimestamp(r.updatedAt))
 	if exec.Error != "" {
 		ctx.Printf("Error:      %s\n", exec.Error)
+	}
+	if exec.BlockedReason != "" {
+		// Last in the header and set apart, because it changes what every
+		// other line means: nothing is driving this execution, and nothing
+		// will until someone acts.
+		if action, _ := saga.BlockedUndo(exec); action != "" {
+			ctx.Printf("\nBLOCKED: the undo of %s kept failing, and this release will not retry it.\n", action)
+		} else if childUndoBlocked(exec, children) {
+			ctx.Printf("\nBLOCKED: waiting on a child saga whose undo kept failing.\n")
+		} else {
+			ctx.Printf("\nBLOCKED: the server refused to resume this execution.\n")
+		}
+		ctx.Printf("  %s\n", exec.BlockedReason)
+		if exec.BlockedOn != "" {
+			ctx.Printf("  Waiting on child saga %s; nothing here runs until it can be resumed or is abandoned.\n",
+				ui.CleanEntityID(exec.BlockedOn))
+		}
 	}
 
 	if len(exec.InitialInputs) > 0 {
@@ -287,6 +424,10 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 			if result.Error != "" {
 				ctx.Printf("     error: %s\n", result.Error)
 			}
+			if result.UndoAttempts > 0 {
+				ctx.Printf("     undo error: %s\n", result.UndoError)
+				ctx.Printf("     %s\n", sagaUndoFailures(result))
+			}
 			if len(result.Output) > 0 {
 				ctx.Printf("     output: %s\n", formatSagaJSON(result.Output, full, 5))
 			}
@@ -296,9 +437,31 @@ func printSagaShow(ctx *Context, r *sagaRecord, children []*sagaRecord, full boo
 	if len(children) > 0 {
 		ctx.Printf("\nChild sagas (%d):\n", len(children))
 		for _, c := range children {
-			ctx.Printf("  %s  %s  %s\n", ui.CleanEntityID(c.exec.ID), c.exec.DefinitionName, c.exec.Status)
+			ctx.Printf("  %s  %s  %s\n", ui.CleanEntityID(c.exec.ID), c.exec.DefinitionName, sagaStatusLabel(c.exec))
 		}
 	}
+}
+
+// childUndoBlocked reports whether the child exec is blocked on is itself
+// blocked on a failing undo, rather than refused by a version check.
+func childUndoBlocked(exec *saga.Execution, children []*sagaRecord) bool {
+	for _, c := range children {
+		if c.exec.ID == exec.BlockedOn {
+			action, _ := saga.BlockedUndo(c.exec)
+			return action != ""
+		}
+	}
+	return false
+}
+
+// sagaStatusLabel is the status as a person should read it. A blocked
+// execution keeps its recorded status, so the status alone would make a saga
+// nothing will ever drive look like one that is in progress.
+func sagaStatusLabel(exec *saga.Execution) string {
+	if exec.BlockedReason != "" {
+		return string(exec.Status) + " (blocked)"
+	}
+	return string(exec.Status)
 }
 
 // sagaActionOrder returns the action names to display, in execution order. The
@@ -334,6 +497,22 @@ func sagaActionSummary(result *saga.ActionResult) string {
 	}
 
 	return summary
+}
+
+// sagaUndoFailures says how long an action's undo has been failing, or, once
+// it went through, how many tries that took.
+func sagaUndoFailures(result *saga.ActionResult) string {
+	attempts := "1 failed undo attempt"
+	if result.UndoAttempts != 1 {
+		attempts = fmt.Sprintf("%d failed undo attempts", result.UndoAttempts)
+	}
+	if result.UndoFailingSince != nil {
+		attempts += fmt.Sprintf(", the first %s", humanFriendlyTimestamp(*result.UndoFailingSince))
+	}
+	if result.UndoneAt != nil {
+		return "undone after " + attempts
+	}
+	return attempts
 }
 
 func sagaTimestamp(t time.Time) string {
@@ -421,6 +600,12 @@ func sagaStatusIndex(s saga.Status) (entity.Attr, error) {
 // resolve too. The unqualified form is also what sagas minted before IDs grew
 // their namespace look like, so it stays a valid thing to type.
 func sagaIDCandidates(id string) []string {
+	// Convergent executions are named after their entity, as in
+	// create-sandbox-sandbox/web-abc, so they carry no saga/ namespace. Adding
+	// one is the natural mistake, and the error would claim the saga is gone.
+	if rest, ok := strings.CutPrefix(id, sagaIDNamespace); ok && strings.Contains(rest, "/") {
+		return []string{id, rest}
+	}
 	if strings.Contains(id, "/") {
 		return []string{id}
 	}
@@ -513,6 +698,8 @@ type sagaListJSON struct {
 	ParentExecutionID string `json:"parent_execution_id,omitempty"`
 	RecoveryScope     string `json:"recovery_scope,omitempty"`
 	Error             string `json:"error,omitempty"`
+	BlockedReason     string `json:"blocked_reason,omitempty"`
+	BlockedOn         string `json:"blocked_on,omitempty"`
 	CreatedAt         string `json:"created_at"`
 	UpdatedAt         string `json:"updated_at"`
 }
@@ -531,6 +718,8 @@ func newSagaListJSON(r *sagaRecord) sagaListJSON {
 		ParentExecutionID: r.exec.ParentExecutionID,
 		RecoveryScope:     r.exec.RecoveryScope,
 		Error:             r.exec.Error,
+		BlockedReason:     r.exec.BlockedReason,
+		BlockedOn:         r.exec.BlockedOn,
 		CreatedAt:         sagaJSONTime(r.createdAt),
 		UpdatedAt:         sagaJSONTime(r.updatedAt),
 	}
@@ -543,12 +732,17 @@ type sagaActionJSON struct {
 	UndoneAt   string          `json:"undone_at,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	Output     json.RawMessage `json:"output,omitempty"`
+
+	UndoError        string `json:"undo_error,omitempty"`
+	UndoAttempts     int    `json:"undo_attempts,omitempty"`
+	UndoFailingSince string `json:"undo_failing_since,omitempty"`
 }
 
 type sagaChildJSON struct {
 	ID             string `json:"id"`
 	DefinitionName string `json:"definition_name"`
 	Status         string `json:"status"`
+	BlockedReason  string `json:"blocked_reason,omitempty"`
 }
 
 type sagaShowJSON struct {
@@ -579,6 +773,11 @@ func newSagaShowJSON(r *sagaRecord, children []*sagaRecord) sagaShowJSON {
 				action.UndoneAt = sagaJSONTime(*result.UndoneAt)
 			}
 			action.Error = result.Error
+			action.UndoError = result.UndoError
+			action.UndoAttempts = result.UndoAttempts
+			if result.UndoFailingSince != nil {
+				action.UndoFailingSince = sagaJSONTime(*result.UndoFailingSince)
+			}
 			if len(result.Output) > 0 {
 				action.Output = json.RawMessage(result.Output)
 			}
@@ -592,6 +791,7 @@ func newSagaShowJSON(r *sagaRecord, children []*sagaRecord) sagaShowJSON {
 			ID:             c.exec.ID,
 			DefinitionName: c.exec.DefinitionName,
 			Status:         string(c.exec.Status),
+			BlockedReason:  c.exec.BlockedReason,
 		})
 	}
 

@@ -18,6 +18,7 @@ package logfilter
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -208,26 +209,14 @@ func (f *Filter) ToLogsQL() string {
 		var part string
 		switch t.typ {
 		case termWord:
-			// LogsQL word filter - case insensitive by default
-			if t.negated {
-				part = "-" + t.value
-			} else {
-				part = t.value
-			}
+			part = "*:" + strconv.Quote(t.value)
 		case termPhrase:
-			// LogsQL phrase filter - quoted for exact match
-			if t.negated {
-				part = "-\"" + escapeLogsQLString(t.value) + "\""
-			} else {
-				part = "\"" + escapeLogsQLString(t.value) + "\""
-			}
+			part = "*:" + strconv.Quote(t.value)
 		case termRegex:
-			// LogsQL regex filter
-			if t.negated {
-				part = "-~\"" + escapeLogsQLString(t.value) + "\""
-			} else {
-				part = "~\"" + escapeLogsQLString(t.value) + "\""
-			}
+			part = "*:~" + strconv.Quote(t.value)
+		}
+		if t.negated {
+			part = "-(" + part + ")"
 		}
 		parts = append(parts, part)
 	}
@@ -258,10 +247,4 @@ func (f *Filter) String() string {
 		parts = append(parts, part)
 	}
 	return strings.Join(parts, " ")
-}
-
-func escapeLogsQLString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
 }

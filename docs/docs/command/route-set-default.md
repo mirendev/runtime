@@ -11,7 +11,7 @@ Set an app as the default route
 ## Usage
 
 ```bash
-miren route set-default <appname> [flags]
+miren route set-default [appname] [flags]
 ```
 
 ## Arguments

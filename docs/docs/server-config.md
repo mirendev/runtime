@@ -91,6 +91,94 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 |-------|------|---------|-------------|---------|----------|
 | `mode` | string | `tls-autoprovision` | Ingress mode: `tls-autoprovision`, `behind-proxy-http`, or `behind-proxy-https` | `MIREN_INGRESS_MODE` | `--ingress-mode` |
 | `address` | string | — | Optional bind override (full `host:port`). Replaces the mode's default bind entirely. Ignored under `tls-autoprovision`. | `MIREN_INGRESS_ADDRESS` | `--ingress-address` |
+| `trusted_proxy_hops` | int | `1` | Number of trusted proxies immediately in front of Miren. Used to select the visitor address from `X-Forwarded-For` under `behind-proxy-http`. | `MIREN_INGRESS_TRUSTED_PROXY_HOPS` | `--ingress-trusted-proxy-hops` |
+| `error_page` | string | — | Absolute path to a cluster-wide HTML error template. Loaded at server startup. | `MIREN_INGRESS_ERROR_PAGE` | — |
+
+### Custom error pages
+
+Set `error_page = "/etc/miren/error.html"` under `[ingress]` to replace the
+built-in HTML page for the cluster. The file must exist and be a valid Go
+`html/template` (up to 128 KiB), or ingress will fail to start. Restart the
+server after changing it. For an app-specific override, see
+[app.toml static error pages](./app-toml.md#static-error-pages).
+
+Templates receive `.Status` (HTTP status number), `.Title`, `.Description`,
+`.Site` (visitor hostname on maintenance pages), `.Reason`, `.BackAt`, and
+`.Maintenance` (boolean). `{{brandLogo}}` renders the built-in Miren logo.
+Use self-contained markup and inline CSS if the page must work when the app
+is unavailable. Only HTML responses use these templates: `Accept` negotiation
+still selects JSON or plain text for API clients. If the app's template is
+missing or cannot render, ingress falls back to the cluster template, then
+to the built-in page. Errors without a resolved app use the cluster template.
+
+For ordinary errors, `.Status`, `.Title`, and `.Description` are set; `.Site`,
+`.Reason`, and `.BackAt` are empty. During maintenance, `.Status` is 503,
+`.Maintenance` is true, `.Site` is the visitor's hostname, `.Reason` is the
+operator's message, and `.BackAt` is a formatted UTC time when provided.
+`.Title` and `.Description` are empty on maintenance pages. These are the only
+template data fields; app IDs, raw failure messages, and request details are
+not exposed. HTML escaping is automatic. Templates must be at most 128 KiB;
+rendered output is capped at 256 KiB and falls back if it exceeds that limit.
+App templates are also checked at deployment: they may use `if` and `with`,
+but not `define`, `block`, `template`, or `range` actions. Only `brandLogo`,
+`eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`, `not`, and `len` are available
+as functions. This prevents expressions from growing without writing output
+in the shared ingress process. Cluster templates may use the full Go template
+syntax.
+
+Copy this into `/etc/miren/error.html` for a cluster template, or into the
+app's `static.dir` output for an app template. Replace “Example” with your
+brand. It requires no external assets, so it still works during an outage:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Maintenance}}Maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Example</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #fdfaf2; color: #1b1f27;
+      font-family: system-ui, sans-serif; }
+    .page { min-height: 100vh; display: flex; flex-direction: column;
+      padding: 0 clamp(24px, 7vw, 112px); }
+    header, footer { padding: 28px 0; border-bottom: 1px solid #eadfd6; }
+    header { color: #0059ff; font-size: 24px; font-weight: 700; }
+    footer { border-top: 1px solid #eadfd6; border-bottom: 0; color: #656b76; }
+    main { flex: 1; display: flex; align-items: center; padding: 64px 0; }
+    .content { max-width: 760px; }
+    .label { color: #545868; font-size: 13px; font-weight: 700;
+      letter-spacing: .14em; text-transform: uppercase; }
+    h1 { font-size: clamp(40px, 6vw, 72px); line-height: 1.08;
+      letter-spacing: -.04em; overflow-wrap: anywhere; }
+    .detail { color: #545868; font-size: 20px; line-height: 1.6; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #151a23; color: #f4f5f5; }
+      header, footer { border-color: #393e48; }
+      .label, .detail, footer { color: #b6bac1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>Example</header>
+    <main><div class="content">
+      <div class="label">{{if .Maintenance}}Maintenance{{else}}Error {{.Status}}{{end}}</div>
+      {{if .Maintenance}}
+        <h1>{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}</h1>
+        {{if .Reason}}<p class="detail">{{.Reason}}</p>{{else}}<p class="detail">Please check back soon.</p>{{end}}
+        {{if .BackAt}}<p class="detail">Expected back at {{.BackAt}}.</p>{{end}}
+      {{else}}
+        <h1>{{.Title}}</h1>
+        <p class="detail">{{.Description}}</p>
+      {{end}}
+    </div></main>
+    <footer>Example</footer>
+  </div>
+</body>
+</html>
+```
 
 ### Modes
 
@@ -100,7 +188,13 @@ Selects the deployment shape for Miren's HTTP/HTTPS ingress. The mode determines
 | `behind-proxy-http` | `127.0.0.1:80` | no | n/a |
 | `behind-proxy-https` | `127.0.0.1:443` | yes | `[tls]` (self-signed or DNS-01 ACME) |
 
+Only `behind-proxy-http` trusts `X-Forwarded-Proto` / `Forwarded` from the peer; the proxy must set it. It also uses `X-Forwarded-For` for access logs, selecting the address immediately before the configured number of trusted proxy hops from the right. The other modes derive the scheme and visitor address from the connection itself.
+
 The `behind-proxy-*` modes default to localhost to keep accidental misconfigurations from quietly exposing an internal endpoint to the network. Set `ingress.address = "0.0.0.0:80"` (or similar) explicitly when the proxy is on a different host.
+
+:::warning[Widening `behind-proxy-http` off loopback]
+Under `behind-proxy-http`, Miren trusts `X-Forwarded-Proto` from *every* connection to the listener; it does not check the peer address. If you bind to `0.0.0.0`, `[::]`, or any non-loopback address, a firewall or security group must restrict that port to the proxy's addresses. Any other client that can reach it directly can send `X-Forwarded-Proto: http` and be issued auth cookies without the `Secure` flag.
+:::
 
 :::info[Unix socket addresses]
 `unix:/path` is reserved for a future release and rejected today with a clear error.
@@ -108,13 +202,13 @@ The `behind-proxy-*` modes default to localhost to keep accidental misconfigurat
 
 ## `[tls]` — TLS Settings {#tls}
 
-Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. See [TLS](./tls.md) for setup guides.
+Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provider`, and `self_signed` configure the ingress cert and only apply when Miren terminates TLS (`tls-autoprovision` or `behind-proxy-https`); they're rejected at startup under `behind-proxy-http`. `additional_names` and `additional_ips` are different: they extend the SANs on the API server and etcd certs, which exist regardless of ingress mode, so they're valid under any mode. Under `tls-autoprovision`, `additional_names` entries can also get ingress certs. See [TLS](./tls.md#tls-settings-reference) for how, and for setup guides.
 
 `additional_ips` does more than its name suggests. Alongside adding SANs, every address listed there is passed straight through to the addresses the server advertises to Miren Cloud, skipping the filtering that discovered addresses go through. That makes it the way to pin an address discovery gets wrong — a host behind a static NAT, or one where you want a specific interface used. See [Running Miren on a Tailnet](./tailscale.md) for a worked example, and run `miren debug advertise` on the host to see what discovery decided and why.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `additional_names` | string[] | `[]` | Extra DNS names for the server certificate | `MIREN_TLS_ADDITIONAL_NAMES` | `--dns-names` |
+| `additional_names` | string[] | `[]` | Extra DNS names for the server certificate, and for the ingress certificate under autoprovisioning | `MIREN_TLS_ADDITIONAL_NAMES` | `--dns-names` |
 | `additional_ips` | string[] | `[]` | Extra IPs for the server certificate, and forced into the advertised address list | `MIREN_TLS_ADDITIONAL_IPS` | `--ips` |
 | `acme_dns_provider` | string | — | DNS provider for ACME DNS-01 challenges (e.g. `cloudflare`, `route53`). Required under `behind-proxy-https` if not using `self_signed`. | `MIREN_TLS_ACME_DNS_PROVIDER` | `--acme-dns-provider` |
 | `acme_email` | string | — | Email for ACME account registration | `MIREN_TLS_ACME_EMAIL` | `--acme-email` |
@@ -179,6 +273,10 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 
 \* Defaults to `true` in standalone mode only.
 
+Miren snapshots embedded VictoriaLogs data before image upgrades. See
+[VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md) for backup
+retention and rollback details. External VictoriaLogs is not managed by Miren.
+
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 
 Controls the embedded VictoriaMetrics instance used for Miren's own runtime
@@ -194,22 +292,22 @@ destination and are not copied into this instance.
 
 \* Defaults to `true` in standalone mode only.
 
-## `[metrics.remote_write]` — Managed Application Metrics {#managed-app-metrics}
+## `[telemetry.metrics]` — Managed Application Metrics {#managed-app-metrics}
 
 Configures the Prometheus Remote Write destination for services that enable
 managed metrics in `app.toml`. When this section is absent, Miren does not start
 vmagent and does not scrape application endpoints.
 
 ```toml
-[metrics.remote_write]
-url = "https://metrics.example.com/api/v1/write"
+[telemetry.metrics]
+remote_write_url = "https://metrics.example.com/api/v1/write"
 workload_identity_audience = "metrics.example.com"
 ```
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `url` | string | — | Absolute HTTP or HTTPS remote-write endpoint | `MIREN_METRICS_REMOTE_WRITE_URL` | `--metrics-remote-write-url` |
-| `workload_identity_audience` | string | — | Audience for the short-lived `system:telemetrywriter` bearer token | `MIREN_METRICS_REMOTE_WRITE_AUDIENCE` | `--metrics-remote-write-audience` |
+| `remote_write_url` | string | — | Absolute HTTP or HTTPS remote-write endpoint | `MIREN_TELEMETRY_METRICS_REMOTE_WRITE_URL` | `--telemetry-metrics-remote-write-url` |
+| `workload_identity_audience` | string | — | Audience for the short-lived `system:telemetrywriter` bearer token | `MIREN_TELEMETRY_METRICS_AUDIENCE` | `--telemetry-metrics-audience` |
 
 :::warning[Remote-write requirements]
 Both fields must be set together. URLs containing credentials are rejected;
@@ -225,6 +323,48 @@ label. Other clusters use [`server.config_cluster_name`](#server), so set it to
 a stable name when several clusters write to the same destination.
 :::
 
+:::note[Moved from metrics.remote_write]
+Before this section existed, the same settings lived under
+`[metrics.remote_write]` as `url` and `workload_identity_audience`
+(`MIREN_METRICS_REMOTE_WRITE_URL`, `MIREN_METRICS_REMOTE_WRITE_AUDIENCE`). Those
+still work and log a deprecation warning at startup. If both the old and new
+key are set, they must agree.
+:::
+
+## `[telemetry.traces]` — Trace Export {#telemetry-traces}
+
+Configures where Miren sends its own [OpenTelemetry traces](./observability.md#configuring-mirens-own-export)
+and how it authenticates there.
+
+```toml
+[telemetry.traces]
+endpoint = "https://traces.example.com"
+workload_identity_audience = "traces.example.com"
+```
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `endpoint` | string | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base URL; Miren appends `/v1/traces` | `MIREN_TELEMETRY_TRACES_ENDPOINT` | `--telemetry-traces-endpoint` |
+| `workload_identity_audience` | string | — | Authenticate with a short-lived `system:telemetrywriter` bearer token for this audience | `MIREN_TELEMETRY_TRACES_AUDIENCE` | `--telemetry-traces-audience` |
+
+When `endpoint` is unset, Miren falls back to the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` environment variable. With neither, Miren exports
+no traces.
+
+Unlike metrics, identity is optional here. Without an audience, Miren sends
+whatever static headers `OTEL_EXPORTER_OTLP_HEADERS` holds, which suits hosted
+backends that take an API key. With an audience, the token replaces any
+`Authorization` header from the environment (Miren warns once at startup), and
+other headers still go through. The collector verifies the token with OIDC
+discovery against the cluster's issuer, so it needs no shared secret.
+
+:::warning[Trace export requirements]
+An audience needs an endpoint from one of the two sources. URLs containing
+credentials are rejected. With an audience set, Miren's exporter no longer
+reads `OTEL_EXPORTER_OTLP_CERTIFICATE`, so a collector behind a private CA is
+not supported in that mode.
+:::
+
 ## `[app_version]` — Version Retention {#app-version}
 
 Every deploy creates a new version of an app, and Miren keeps a bounded history of them rather than retaining every version forever. Pruning old versions frees the disk space their container images take up and keeps the server's per-app state from growing with every deploy.
@@ -237,6 +377,19 @@ On a frequently-deployed cluster this window can pin more image data than the di
 |-------|------|---------|-------------|---------|----------|
 | `retention_count` | int | `10` | Most-recent versions to keep per app, regardless of age | `MIREN_APP_VERSION_RETENTION_COUNT` | `--app-version-retention-count` |
 | `retention_period` | string | `30d` | Keep versions newer than this, regardless of count (e.g. `30d`, `2w`) | `MIREN_APP_VERSION_RETENTION_PERIOD` | `--app-version-retention-period` |
+
+## `[deployment]` — Deployment History Retention {#deployment}
+
+Every deploy, rollback, and config change writes a deployment record, and `miren app history` reads them back. Miren keeps a bounded window of these per app rather than every record forever. The records are small, but a cluster that runs for years accumulates thousands, and every history lookup and reconciliation pass pays to scan them.
+
+A record is retained if it is among the most recent `retention_count` for its app **or** newer than `retention_period` — whichever rule keeps it. A few records are always kept regardless of these limits: the deployment that made the app's current version active, any deployment still in progress or holding the app's deploy lock, and any older record whose status still reads `active`. Pruning a record does not touch the app version it produced; versions have their own [retention](#app-version).
+
+Clusters registered with Miren Cloud keep their full history there. Cloud stores deployments as an archive, so a record pruned here stays visible in cloud, and the runtime only prunes a record once cloud has confirmed it holds it. If the cluster cannot reach cloud, eligible records simply wait; nothing is lost while the link is down. On a cluster that runs without cloud, this window *is* the history, so size it to how far back you want `miren app history` to reach.
+
+| Field | Type | Default | Description | Env Var | CLI Flag |
+|-------|------|---------|-------------|---------|----------|
+| `retention_count` | int | `25` | Most-recent deployment records to keep per app, regardless of age | `MIREN_DEPLOYMENT_RETENTION_COUNT` | `--deployment-retention-count` |
+| `retention_period` | string | `30d` | Keep records newer than this, regardless of count (e.g. `30d`, `2w`). `0` keeps every record indefinitely | `MIREN_DEPLOYMENT_RETENTION_PERIOD` | `--deployment-retention-period` |
 
 ## `[saga]` — Saga Execution Retention {#saga}
 

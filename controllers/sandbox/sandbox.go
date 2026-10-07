@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,6 +45,8 @@ import (
 	"miren.dev/runtime/pkg/saga"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/servers/metricspush"
+	"miren.dev/runtime/x/workloadid"
 
 	computeapi "miren.dev/runtime/api/compute"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -71,8 +74,11 @@ func cleanupAttach() cio.Attach {
 }
 
 type containerPorts struct {
-	Ports []observability.BoundPort
+	Ports  []observability.BoundPort
+	exited bool
 }
+
+var errProcessExited = stderrors.New("sandbox process exited")
 
 // SandboxControllerDeps holds required dependencies for SandboxController.
 type SandboxControllerDeps struct {
@@ -121,6 +127,11 @@ type SandboxControllerDeps struct {
 	// SqliteDisks replicates sqlite-provider disks to the coordinator. Nil
 	// disables replication; the disks still mount.
 	SqliteDisks *sqlitedisk.Manager
+
+	// MetricsPusher delivers workload metric pushes to the coordinator. With
+	// it set, the token server also serves the metrics push relay and
+	// sandboxes are told where to find it. Nil leaves both out.
+	MetricsPusher metricspush.Pusher
 }
 
 type SandboxController struct {
@@ -150,6 +161,7 @@ type SandboxController struct {
 	WorkloadIssuer workloadidentity.TokenIssuer
 	ApiAddress     string
 	CACert         []byte
+	MetricsPusher  metricspush.Pusher
 
 	// Secrets materializes the secret references a sandbox spec carries, at the
 	// moment a container is created. Nil where no backend is reachable, in which
@@ -182,6 +194,10 @@ type SandboxController struct {
 	// writeTracker tracks entity write revisions to skip self-generated watch events
 	writeTracker controller.WriteTracker
 
+	// onTaskAttached, when set, runs as each subcontainer's task is attached
+	// during shutdown. Tests use it to land a cancellation mid-phase-1.
+	onTaskAttached func(containerID string)
+
 	// hubs holds the stdio fan-out for attachable containers on this node. The
 	// exec server reads from the same registry, which is why it is shared
 	// rather than owned outright.
@@ -195,7 +211,12 @@ type SandboxController struct {
 	// or unwinds on restart rather than stranding containers, addresses, and
 	// disk leases. ops adapts this controller to the domain interfaces the
 	// saga's actions are written against.
-	ops          *sandboxOps
+	ops interface {
+		SandboxEntityStore
+		SandboxNetworking
+		SandboxContainerRuntime
+		SandboxObservability
+	}
 	executor     *saga.Executor
 	sagaRegistry *saga.Registry
 	sagaStorage  saga.Storage
@@ -274,6 +295,7 @@ func NewSandboxController(cfg SandboxControllerDeps, sagaStorage saga.Storage) (
 		CACert:         cfg.CACert,
 		Secrets:        cfg.Secrets,
 		SqliteDisks:    cfg.SqliteDisks,
+		MetricsPusher:  cfg.MetricsPusher,
 
 		sagaStorage:  sagaStorage,
 		sagaRegistry: registry,
@@ -365,8 +387,8 @@ func (c *SandboxController) SetPortStatus(id string, port observability.BoundPor
 func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
-	// Create a channel to signal when port is ready
-	done := make(chan struct{})
+	// Signal either readiness or process exit.
+	done := make(chan error, 1)
 	cancelled := make(chan struct{})
 
 	go func() {
@@ -385,10 +407,14 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 				ports = &containerPorts{}
 				c.portMap[id] = ports
 			}
+			if ports.exited {
+				done <- fmt.Errorf("%w: %s while waiting for port %d", errProcessExited, id, port)
+				return
+			}
 
 			for _, p := range ports.Ports {
 				if p.Port == port {
-					close(done)
+					done <- nil
 					return
 				}
 			}
@@ -398,8 +424,8 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 	}()
 
 	select {
-	case <-done:
-		return nil
+	case err := <-done:
+		return err
 	case <-ctx.Done():
 		close(cancelled)
 		c.portCond.Broadcast() // Wake up the waiting goroutine
@@ -412,6 +438,12 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 		// return a spurious timeout even though the port is in fact bound.
 		c.portMu.Lock()
 		if ports, ok := c.portMap[id]; ok {
+			if ports.exited {
+				c.portMu.Unlock()
+				close(cancelled)
+				c.portCond.Broadcast()
+				return fmt.Errorf("%w: %s while waiting for port %d", errProcessExited, id, port)
+			}
 			for _, p := range ports.Ports {
 				if p.Port == port {
 					c.portMu.Unlock()
@@ -426,17 +458,16 @@ func (c *SandboxController) WaitForPort(ctx context.Context, id string, port int
 	}
 }
 
-// mapLegacyProtocol converts legacy PortProtocol values to SandboxSpecContainerPortProtocol
-func mapLegacyProtocol(legacy compute.PortProtocol) compute.SandboxSpecContainerPortProtocol {
-	switch legacy {
-	case compute.TCP, "tcp":
-		return compute.SandboxSpecContainerPortTCP
-	case compute.UDP, "udp":
-		return compute.SandboxSpecContainerPortUDP
-	default:
-		// Default to TCP for unknown protocols
-		return compute.SandboxSpecContainerPortTCP
+func (c *SandboxController) setProcessExited(id string) {
+	c.portMu.Lock()
+	defer c.portMu.Unlock()
+	ports := c.portMap[id]
+	if ports == nil {
+		ports = &containerPorts{}
+		c.portMap[id] = ports
 	}
+	ports.exited = true
+	c.portCond.Broadcast()
 }
 
 // reconcileSandboxesOnBoot checks all Running sandboxes and marks unhealthy ones as DEAD
@@ -849,11 +880,14 @@ func (c *SandboxController) Close() error {
 const (
 	sandboxVersionLabel = "runtime.computer/sandbox-version"
 	// SandboxEntityLabel is the container label key used to associate containers with sandbox entities.
-	SandboxEntityLabel     = "runtime.computer/entity-id"
-	sandboxEntityLabel     = SandboxEntityLabel
-	sandboxVerEntityLabel  = "runtime.computer/version-entity"
-	sandboxKindLabel       = "runtime.computer/container-kind"
-	shutdownTimeoutLabel   = "runtime.computer/shutdown-timeout"
+	SandboxEntityLabel    = "runtime.computer/entity-id"
+	sandboxEntityLabel    = SandboxEntityLabel
+	sandboxVerEntityLabel = "runtime.computer/version-entity"
+	sandboxKindLabel      = "runtime.computer/container-kind"
+	shutdownTimeoutLabel  = "runtime.computer/shutdown-timeout"
+	// stopRequestedLabel records when a subcontainer was first sent SIGTERM,
+	// so its drain deadline survives a server restart.
+	stopRequestedLabel     = "runtime.computer/stop-requested-at"
 	defaultShutdownTimeout = 10 * time.Second
 	shutdownPollInterval   = 100 * time.Millisecond
 )
@@ -1070,9 +1104,8 @@ func (c *SandboxController) checkNetworkHealth(ctx context.Context, sb *compute.
 	return false
 }
 
-// portIsTCP returns true for ports declared as TCP. Empty Protocol defaults
-// to TCP (matches mapLegacyProtocol), so ports without a protocol set are
-// treated as TCP as well.
+// portIsTCP returns true for ports declared as TCP. Ports without a protocol
+// also default to TCP.
 func portIsTCP(p compute.SandboxSpecContainerPort) bool {
 	return p.Protocol == "" || p.Protocol == compute.SandboxSpecContainerPortTCP
 }
@@ -1281,6 +1314,13 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	switch co.Status {
 	case compute.DEAD:
+		// A sandbox retired while draining (unhealthy or no-restart cleanup)
+		// whose drain was handed off at shutdown still has a task running.
+		// Nothing else will finish that teardown until the entity is deleted.
+		if c.drainInterrupted(ctx, co.ID) {
+			c.Log.Info("resuming interrupted teardown of dead sandbox", "id", co.ID)
+			return c.StopSandbox(ctx, co.ID, co)
+		}
 		return nil
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
@@ -1327,7 +1367,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 							"id", co.ID, "createdAt", createdAt, "age", age)
 						patchAttrs := entity.New(
 							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{Status: compute.RUNNING}).Encode,
+							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 						)
 						_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {
@@ -1356,7 +1396,7 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 					c.Log.Info("marking unhealthy sandbox as DEAD", "id", co.ID)
 					patchAttrs := entity.New(
 						entity.Ref(entity.DBId, co.ID),
-						(&compute.Sandbox{Status: compute.DEAD}).Encode,
+						(&compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 					)
 					_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), 0)
 					if err != nil {
@@ -1416,7 +1456,7 @@ func (c *SandboxController) markDeadNoRestart(ctx context.Context, co *compute.S
 	if co.Status != compute.DEAD {
 		patchAttrs := entity.New(
 			entity.Ref(entity.DBId, co.ID),
-			(&compute.Sandbox{Status: compute.DEAD}).Encode,
+			(&compute.Sandbox{Status: compute.DEAD, StartupOutcome: compute.STARTUP_RUNNING}).Encode,
 		)
 		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), 0)
 		if err != nil {
@@ -2061,6 +2101,23 @@ type WaitPort struct {
 	Port int
 }
 
+// tcpPortsToWait returns a container's TCP ports twice over: the plain list
+// PortMonitor watches, and the WaitPorts the create saga blocks on before
+// marking the sandbox healthy. UDP ports are left out of both. Each reader
+// parses /proc/net/tcp{,6}, which never lists UDP sockets, so a UDP port
+// would wait out the timeout and kill a sandbox that was bound the whole
+// time. checkNetworkHealth skips UDP for the same reason.
+func tcpPortsToWait(id string, spec []compute.SandboxSpecContainerPort) (ports []int, wait []WaitPort) {
+	for _, port := range spec {
+		if !portIsTCP(port) {
+			continue
+		}
+		ports = append(ports, int(port.Port))
+		wait = append(wait, WaitPort{ID: id, Port: int(port.Port)})
+	}
+	return ports, wait
+}
+
 const defaultPortWaitTimeout = 15 * time.Second
 
 // resolvePortWaitTimeout parses a user-supplied duration string from
@@ -2175,14 +2232,8 @@ func (c *SandboxController) BootContainers(
 
 		id := fmt.Sprintf("%s-%s", containerPrefix(sb.ID), container.Name)
 
-		var ports []int
-		for _, port := range container.Port {
-			ports = append(ports, int(port.Port))
-			ret = append(ret, WaitPort{
-				ID:   id,
-				Port: int(port.Port),
-			})
-		}
+		ports, waitPorts := tcpPortsToWait(id, container.Port)
+		ret = append(ret, waitPorts...)
 
 		c.Log.Info("creating container", "id", id)
 
@@ -2242,6 +2293,9 @@ func (c *SandboxController) BootContainers(
 		}
 
 		c.Log.Info("container started", "id", cc.ID())
+		c.portMu.Lock()
+		c.portMap[cc.ID()] = &containerPorts{}
+		c.portMu.Unlock()
 
 		if hub != nil {
 			hub.SetResizer(task)
@@ -2310,6 +2364,7 @@ func (c *SandboxController) monitorTaskExit(
 				"exit_code", exitStatus.ExitCode(),
 				"exit_time", exitStatus.ExitTime(),
 			)
+			c.setProcessExited(containerID)
 
 			// We don't delete the task here so that our destroySubContainers function
 			// has a consistent view of the state of containers and tasks.
@@ -2430,9 +2485,26 @@ func (c *SandboxController) recordExit(
 			return nil, err
 		}
 
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.DEAD {
+			// Do not advance UpdatedAt on an already-counted failure.
+			return nil, nil
+		}
+		stopped := &compute.Sandbox{Status: compute.STOPPED, Exit: exit}
+		if current.StartupOutcome == "" {
+			switch current.Status {
+			case compute.RUNNING:
+				stopped.StartupOutcome = compute.STARTUP_RUNNING
+			case compute.PENDING:
+				stopped.StartupOutcome = compute.STARTUP_FAILED
+			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
+				// No lifecycle conclusion from these states alone.
+			}
+		}
 		patchAttrs := entity.New(
 			entity.Ref(entity.DBId, id),
-			(&compute.Sandbox{Status: compute.STOPPED, Exit: exit}).Encode,
+			stopped.Encode,
 		)
 
 		result, err := c.EAC.Patch(ctx, patchAttrs.Attrs(), resp.Entity().Revision())
@@ -2722,9 +2794,9 @@ func (c *SandboxController) buildSubContainerSpec(
 
 	if c.WorkloadIssuer != nil {
 		envVars = append(envVars,
-			"MIREN_IDENTITY_TOKEN_PATH=/var/run/miren/identity-token",
+			workloadid.EnvTokenPath+"=/var/run/miren/identity-token",
 			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
-			fmt.Sprintf("MIREN_IDENTITY_TOKEN_URL=http://%s:%d/v1/token", c.Subnet.Router().Addr(), tokenServerPort),
+			fmt.Sprintf("%s=http://%s:%d/v1/token", workloadid.EnvTokenURL, c.Subnet.Router().Addr(), tokenServerPort),
 		)
 
 		// Point the client at the cluster API. MIREN_API_ADDRESS rather than
@@ -2744,7 +2816,28 @@ func (c *SandboxController) buildSubContainerSpec(
 				c.Log.Warn("failed to generate token request secret", "sandbox", sb.ID, "error", secretErr)
 			} else {
 				c.tokenSecrets.register(sb.ID.String(), secret)
-				envVars = append(envVars, fmt.Sprintf("MIREN_IDENTITY_TOKEN_SECRET=%s", secret))
+				envVars = append(envVars, workloadid.EnvTokenSecret+"="+secret)
+
+				// The relay authenticates with the secret above, so it is only
+				// advertised where that secret exists, and only on a cluster
+				// that accepts pushes, so an app finding these can rely on
+				// them. Each URL is a complete Pushgateway base: a client
+				// appends /metrics/job/<name>.
+				if c.metricsPushEnabled() && c.MetricsPusher.Available(ctx) {
+					relay := fmt.Sprintf("http://%s:%d%s", c.Subnet.Router().Addr(), tokenServerPort, metricspush.RelayBasePath)
+					envVars = append(envVars,
+						fmt.Sprintf("MIREN_METRICS_PUSH_URL=%s/%s", relay, metricspush.ScopeSandbox),
+						fmt.Sprintf("MIREN_METRICS_SHARED_PUSH_URL=%s/%s", relay, metricspush.ScopeApp),
+					)
+					// The image's own ENV is applied separately from these, so the
+					// OTLP check has to see it too. If it cannot be read, standing
+					// aside is the safe answer.
+					if imageSpec, specErr := img.Spec(ctx); specErr != nil {
+						c.Log.Warn("reading image config for OTLP env; leaving OTLP unset", "sandbox", sb.ID, "error", specErr)
+					} else {
+						envVars = append(envVars, otlpMetricsEnv(append(imageSpec.Config.Env, envVars...), relay, secret)...)
+					}
+				}
 
 				// Persist the secret host-side so it can be re-registered after a
 				// controller/token-server restart. Without this the running sandbox's
@@ -2847,71 +2940,132 @@ type containerShutdownInfo struct {
 	task      containerd.Task
 	timeout   time.Duration
 	id        string
+	name      string
+
+	// stopRequestedAt is when the first SIGTERM was sent, possibly by a
+	// previous server process. A non-zero value on discovery means this stop
+	// is resuming a drain rather than starting one.
+	stopRequestedAt time.Time
 }
 
-// getShutdownTimeout extracts shutdown timeout from container labels, falling back to default
-func getShutdownTimeout(ctx context.Context, cont containerd.Container) time.Duration {
+func (info *containerShutdownInfo) deadline() time.Time {
+	return info.stopRequestedAt.Add(info.timeout)
+}
+
+// errDrainHandedOff reports that DestroySubContainers stopped waiting because
+// the server is shutting down, leaving still-draining tasks running for the
+// next server process to pick up.
+var errDrainHandedOff = errors.New("server shutting down, drain handed off to next server")
+
+// forceKillTimeout bounds the SIGKILL and cleanup calls that run after the
+// caller's context is already done.
+const forceKillTimeout = 10 * time.Second
+
+// shutdownLabels extracts the shutdown timeout and any recorded stop request
+// from a container's labels.
+func shutdownLabels(ctx context.Context, cont containerd.Container) (time.Duration, time.Time) {
 	labels, err := cont.Labels(ctx)
 	if err != nil {
-		return defaultShutdownTimeout
+		return defaultShutdownTimeout, time.Time{}
 	}
 
-	timeoutStr := labels[shutdownTimeoutLabel]
-	if timeoutStr == "" {
-		return defaultShutdownTimeout
+	timeout := defaultShutdownTimeout
+	if timeoutStr := labels[shutdownTimeoutLabel]; timeoutStr != "" {
+		if parsed, err := time.ParseDuration(timeoutStr); err == nil {
+			timeout = parsed
+		}
 	}
 
-	timeout, err := time.ParseDuration(timeoutStr)
-	if err != nil {
-		return defaultShutdownTimeout
+	var stopRequestedAt time.Time
+	if ts := labels[stopRequestedLabel]; ts != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			stopRequestedAt = parsed
+		}
 	}
 
-	return timeout
+	return timeout, stopRequestedAt
+}
+
+// forcedKill records a container that was still running when its shutdown
+// timeout ran out and had to be SIGKILLed.
+type forcedKill struct {
+	container string
+	timeout   time.Duration
 }
 
 func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.Id) error {
+	_, err := c.destroySubContainers(ctx, id, nil)
+	return err
+}
+
+// destroySubContainers stops and deletes a sandbox's subcontainers, and
+// reports the ones it had to kill. Each one gets SIGTERM and its shutdown
+// timeout to exit before SIGKILL.
+//
+// The SIGTERM time is recorded on the container, so a drain interrupted by a
+// server restart resumes against its original deadline instead of starting
+// over, and the app never sees a second SIGTERM. If ctx is cancelled mid-drain
+// the tasks are left running and errDrainHandedOff is returned. sb, when
+// known, lets a resumed drain reattach log collection, which the previous
+// server process held.
+func (c *SandboxController) destroySubContainers(ctx context.Context, id entity.Id, sb *compute.Sandbox) ([]forcedKill, error) {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	// Discover subcontainers from containerd
 	containerList, err := c.CC.Containers(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
+		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
 	prefix := containerPrefix(id)
 	var containers []containerShutdownInfo
 	var maxTimeout time.Duration
+	resumed := 0
 
 	for _, cont := range containerList {
 		containerID := cont.ID()
 		if strings.HasPrefix(containerID, prefix+"-") {
-			timeout := getShutdownTimeout(ctx, cont)
+			timeout, stopRequestedAt := shutdownLabels(ctx, cont)
 			if timeout > maxTimeout {
 				maxTimeout = timeout
 			}
+			if !stopRequestedAt.IsZero() {
+				resumed++
+			}
 			containers = append(containers, containerShutdownInfo{
-				container: cont,
-				id:        containerID,
-				timeout:   timeout,
+				container:       cont,
+				id:              containerID,
+				name:            strings.TrimPrefix(containerID, prefix+"-"),
+				timeout:         timeout,
+				stopRequestedAt: stopRequestedAt,
 			})
 		}
 	}
 
 	if len(containers) == 0 {
 		c.Log.Debug("no subcontainers found to destroy", "id", id)
-		return nil
+		return nil, nil
 	}
 
-	// Set up timeout for the entire operation (max shutdown timeout + buffer)
+	// Set up timeout for the entire operation (max shutdown timeout + buffer).
+	// opCtx is ours; ctx going done instead means the server is leaving.
 	overallTimeout := maxTimeout + 30*time.Second
-	ctx, cancel := context.WithTimeout(ctx, overallTimeout)
+	opCtx, cancel := context.WithTimeout(ctx, overallTimeout)
 	defer cancel()
 
-	c.Log.Info("starting graceful shutdown of subcontainers",
-		"sandbox_id", id,
-		"containers", len(containers),
-		"max_shutdown_timeout", maxTimeout,
-		"overall_timeout", overallTimeout)
+	if resumed > 0 {
+		c.Log.Info("resuming graceful shutdown of subcontainers",
+			"sandbox_id", id,
+			"containers", len(containers),
+			"resumed", resumed,
+			"max_shutdown_timeout", maxTimeout)
+	} else {
+		c.Log.Info("starting graceful shutdown of subcontainers",
+			"sandbox_id", id,
+			"containers", len(containers),
+			"max_shutdown_timeout", maxTimeout,
+			"overall_timeout", overallTimeout)
+	}
 
 	// Stop port monitoring for all containers
 	for _, info := range containers {
@@ -2932,18 +3086,31 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 
 	// Track containers waiting for shutdown
 	tasksByID := make(map[string]*containerShutdownInfo)
+	var killed []forcedKill
+
+	// A resumed drain's output goes back to the sandbox's logs, tagged the same
+	// way it was before the restart.
+	var shortID string
+	if resumed > 0 && sb != nil {
+		if resp, err := c.EAC.Get(opCtx, id.String()); err == nil {
+			shortID = entityShortID(resp.Entity().Entity())
+		}
+	}
 
 	for i := range containers {
 		info := &containers[i]
-		task, err := info.container.Task(ctx, cleanupAttach())
+		task, err := info.container.Task(opCtx, c.shutdownAttach(sb, info, shortID))
 		if err != nil {
 			c.Log.Debug("no task found for container", "id", info.id)
 			continue
 		}
 		info.task = task
+		if c.onTaskAttached != nil {
+			c.onTaskAttached(info.id)
+		}
 
 		// Set up exit channel before sending SIGTERM
-		exitCh, err := task.Wait(ctx)
+		exitCh, err := task.Wait(opCtx)
 		if err != nil {
 			c.Log.Debug("failed to get wait channel, process may already be gone", "id", info.id, "err", err)
 			continue
@@ -2953,12 +3120,30 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 		go func(id string, ch <-chan containerd.ExitStatus) {
 			select {
 			case status := <-ch:
+				// A failed Wait (most often its context ending, which can
+				// beat opCtx.Err() being set) arrives as an exit with an
+				// unknown code. It says nothing about the task, and treating
+				// it as an exit sends a still-draining task to cleanup, which
+				// kills it. The deadline tick handles a task that really is
+				// gone.
+				if status.Error() != nil {
+					return
+				}
 				exitedChan <- exitEvent{id: id, status: status}
-			case <-ctx.Done():
+			case <-opCtx.Done():
 			}
 		}(info.id, exitCh)
 
-		if err := task.Kill(ctx, unix.SIGTERM); err != nil {
+		if !info.stopRequestedAt.IsZero() {
+			c.Log.Info("resuming drain without a second SIGTERM",
+				"id", info.id,
+				"stop_requested_at", info.stopRequestedAt,
+				"remaining", time.Until(info.deadline()).Round(time.Second))
+			tasksByID[info.id] = info
+			continue
+		}
+
+		if err := c.stampAndSignal(ctx, info); err != nil {
 			c.Log.Debug("failed to send SIGTERM", "id", info.id, "err", err)
 			continue
 		}
@@ -2967,14 +3152,28 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 		tasksByID[info.id] = info
 	}
 
-	// Phase 2: Wait for graceful exit, respecting per-container timeouts
+	// A cancellation that landed during phase 1 can leave tasks out of
+	// tasksByID without ever having been signalled. Cleanup would kill them, so
+	// hand off before reaching it.
+	if ctx.Err() != nil {
+		c.Log.Info("server shutting down mid-drain, leaving tasks for the next server",
+			"sandbox_id", id, "remaining", len(tasksByID))
+		return nil, errDrainHandedOff
+	}
+
+	// Phase 2: Wait for graceful exit, respecting per-container deadlines
 	ticker := time.NewTicker(shutdownPollInterval)
 	defer ticker.Stop()
 
 	for len(tasksByID) > 0 {
 		select {
-		case <-ctx.Done():
-			c.Log.Warn("context cancelled during graceful shutdown", "sandbox_id", id, "remaining", len(tasksByID))
+		case <-opCtx.Done():
+			if ctx.Err() != nil {
+				c.Log.Info("server shutting down mid-drain, leaving tasks for the next server",
+					"sandbox_id", id, "remaining", len(tasksByID))
+				return nil, errDrainHandedOff
+			}
+			c.Log.Warn("overall shutdown timeout expired", "sandbox_id", id, "remaining", len(tasksByID))
 			goto forceKill
 
 		case ev := <-exitedChan:
@@ -2983,27 +3182,30 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 				continue // Already processed
 			}
 			c.Log.Debug("task exited gracefully", "id", info.id, "exit_code", ev.status.ExitCode())
-			if _, err := info.task.Delete(ctx); err != nil {
+			if _, err := info.task.Delete(opCtx); err != nil {
 				c.Log.Debug("failed to delete exited task", "id", info.id, "err", err)
 			}
 			delete(tasksByID, ev.id)
 
 		case <-ticker.C:
-			// Check timeouts for remaining tasks
-			for id, info := range tasksByID {
-				if time.Since(startTime) >= info.timeout {
-					c.Log.Info("shutdown timeout expired, force killing",
-						"id", info.id,
-						"elapsed", time.Since(startTime),
-						"timeout", info.timeout)
-					if err := info.task.Kill(ctx, unix.SIGKILL); err != nil {
-						c.Log.Debug("failed to send SIGKILL", "id", info.id, "err", err)
-					}
-					if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil {
-						c.Log.Debug("failed to delete task after SIGKILL", "id", info.id, "err", err)
-					}
-					delete(tasksByID, id)
+			// Check deadlines for remaining tasks
+			now := time.Now()
+			for cid, info := range tasksByID {
+				if now.Before(info.deadline()) {
+					continue
 				}
+				c.Log.Warn("shutdown timeout expired, force killing",
+					"sandbox_id", id,
+					"id", info.id,
+					"elapsed", now.Sub(info.stopRequestedAt),
+					"timeout", info.timeout)
+				if c.forceKillTask(ctx, info) {
+					killed = append(killed, forcedKill{
+						container: info.name,
+						timeout:   info.timeout,
+					})
+				}
+				delete(tasksByID, cid)
 			}
 		}
 	}
@@ -3012,15 +3214,13 @@ func (c *SandboxController) DestroySubContainers(ctx context.Context, id entity.
 	goto cleanup
 
 forceKill:
-	// Force kill any remaining tasks
+	// Force kill any remaining tasks. Only the overall timeout gets us here,
+	// since the ticker kills each task at its own deadline well before it.
+	// What's left is stuck in containerd rather than overrunning
+	// shutdown_timeout, so it stays out of the app-facing report.
 	for _, info := range tasksByID {
-		c.Log.Info("force killing task", "id", info.id)
-		if err := info.task.Kill(ctx, unix.SIGKILL); err != nil {
-			c.Log.Debug("failed to send SIGKILL", "id", info.id, "err", err)
-		}
-		if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil {
-			c.Log.Debug("failed to delete task", "id", info.id, "err", err)
-		}
+		c.Log.Warn("force killing task", "sandbox_id", id, "id", info.id)
+		c.forceKillTask(ctx, info)
 	}
 
 cleanup:
@@ -3029,15 +3229,17 @@ cleanup:
 	// Tasks may still exist here if the process had already exited when we
 	// tried Kill(SIGTERM), since those containers were skipped in the
 	// graceful-shutdown loop above.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), forceKillTimeout)
+	defer cleanupCancel()
 	for _, info := range containers {
 		if info.task != nil {
-			if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil {
+			if _, err := info.task.Delete(cleanupCtx, containerd.WithProcessKill); err != nil {
 				if !errdefs.IsNotFound(err) {
 					c.Log.Debug("failed to delete task during cleanup", "id", info.id, "err", err)
 				}
 			}
 		}
-		if err := info.container.Delete(ctx, containerd.WithSnapshotCleanup); err != nil {
+		if err := info.container.Delete(cleanupCtx, containerd.WithSnapshotCleanup); err != nil {
 			if !errdefs.IsNotFound(err) {
 				c.Log.Debug("failed to delete container", "id", info.id, "err", err)
 			}
@@ -3047,7 +3249,79 @@ cleanup:
 	}
 
 	c.Log.Info("subcontainer destruction complete", "sandbox_id", id, "elapsed", time.Since(startTime))
-	return nil
+	return killed, nil
+}
+
+// drainInterrupted reports whether any of a sandbox's subcontainers was sent
+// SIGTERM and is still around, meaning a previous teardown stopped partway.
+func (c *SandboxController) drainInterrupted(ctx context.Context, id entity.Id) bool {
+	ctx = namespaces.WithNamespace(ctx, c.Namespace)
+	containerList, err := c.CC.Containers(ctx, fmt.Sprintf("labels.%q", stopRequestedLabel))
+	if err != nil {
+		c.Log.Warn("failed to check for interrupted drains", "id", id, "err", err)
+		return false
+	}
+	prefix := containerPrefix(id) + "-"
+	for _, cont := range containerList {
+		if strings.HasPrefix(cont.ID(), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// shutdownAttach picks how to attach to a task being shut down. A task that
+// is mid-drain from a previous server process has no log reader, so its output
+// is reattached to the sandbox's logs. Anything else either already has a
+// reader in this process or is about to be signalled and deleted.
+func (c *SandboxController) shutdownAttach(sb *compute.Sandbox, info *containerShutdownInfo, shortID string) cio.Attach {
+	if sb == nil || info.stopRequestedAt.IsZero() || c.LogWriter == nil {
+		return cleanupAttach()
+	}
+	sl := c.logConsumer(sb, info.name, shortID)
+	return cio.NewAttach(cio.WithStreams(nil, sl, sl.Stderr()))
+}
+
+// stampAndSignal records the stop request on the container and sends SIGTERM.
+// The pair runs on a short context detached from ctx's cancellation, so a
+// server shutdown can't land between them: a stamp without a SIGTERM would
+// have the next server wait out the window and SIGKILL an app that was never
+// warned.
+func (c *SandboxController) stampAndSignal(ctx context.Context, info *containerShutdownInfo) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forceKillTimeout)
+	defer cancel()
+
+	info.stopRequestedAt = time.Now()
+	if _, err := info.container.SetLabels(ctx, map[string]string{
+		stopRequestedLabel: info.stopRequestedAt.UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		c.Log.Warn("failed to record stop request, a server restart will restart the drain",
+			"id", info.id, "err", err)
+	}
+
+	return info.task.Kill(ctx, unix.SIGTERM)
+}
+
+// forceKillTask SIGKILLs and deletes a task, and reports whether the SIGKILL
+// was delivered. A process that exited just as its timeout fired makes Kill
+// fail, and wasn't killed by us. It detaches from ctx's cancellation, since
+// the usual reason to force kill is that the deadline carried by ctx has
+// already passed.
+func (c *SandboxController) forceKillTask(ctx context.Context, info *containerShutdownInfo) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), forceKillTimeout)
+	defer cancel()
+
+	delivered := true
+	if err := info.task.Kill(ctx, unix.SIGKILL); err != nil {
+		delivered = false
+		if !errdefs.IsNotFound(err) {
+			c.Log.Warn("failed to send SIGKILL", "id", info.id, "err", err)
+		}
+	}
+	if _, err := info.task.Delete(ctx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+		c.Log.Warn("failed to delete task after SIGKILL", "id", info.id, "err", err)
+	}
+	return delivered
 }
 
 func (c *SandboxController) Delete(ctx context.Context, id entity.Id, sb *compute.Sandbox) error {
@@ -3087,6 +3361,37 @@ func entityFallbackIPs(sb *compute.Sandbox) map[string]bool {
 	return ips
 }
 
+// reportForcedKills tells the app owner, in the app's own log stream, that a
+// container outlived its shutdown timeout. Without this the only trace is the
+// gap between the STOPPED and DEAD status changes.
+func (c *SandboxController) reportForcedKills(ctx context.Context, sb *compute.Sandbox, killed []forcedKill) {
+	// StopSandbox callers hand over the sandbox without its metadata, so look
+	// up the short ID here, where it is only paid for when there is something
+	// to report. The entity may already be gone; the line still lands without it.
+	var shortID string
+	if resp, err := c.EAC.Get(ctx, sb.ID.String()); err == nil {
+		shortID = entityShortID(resp.Entity().Entity())
+	}
+
+	for _, k := range killed {
+		c.EmitSandboxEvent(sb, shortID, describeForcedKill(sb, k))
+	}
+}
+
+func describeForcedKill(sb *compute.Sandbox, k forcedKill) string {
+	setting := "concurrency.shutdown_timeout"
+	for _, attr := range sb.Spec.LogAttribute {
+		if attr.Key == "miren.service" && attr.Value != "" {
+			setting = fmt.Sprintf("services.%s.concurrency.shutdown_timeout", attr.Value)
+			break
+		}
+	}
+
+	return fmt.Sprintf(
+		"container %q was still running %s after SIGTERM and was killed (%s); raise it if your app needs longer to shut down",
+		k.container, k.timeout, setting)
+}
+
 // StopSandbox tears down a sandbox and releases every resource it holds. sb is
 // optional: callers that already have the entity pass it so cleanup still works
 // once the entity has been deleted from the store, and it is fetched here
@@ -3102,11 +3407,6 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	// what "the run finished" should look like from a terminal.
 	c.hubs.RemoveAll(id)
 
-	// Release in-memory token state first. Container teardown below can be slow or
-	// fail partway, and a sandbox left registered keeps getting fresh tokens minted
-	// for a file that is about to disappear.
-	c.ReleaseTokenState(id)
-
 	if c.NetServ != nil {
 		// Drop the address claim here rather than leaving it to the watcher's delete
 		// event, so a recycled address is free the moment the sandbox holding it goes.
@@ -3114,13 +3414,10 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.NetServ.RemoveSandboxMapping(id.String())
 	}
 
-	// Best-effort removal of the persisted secret. The whole sandbox dir is wiped
-	// further down, but removing the sensitive secret up front ensures it doesn't
-	// linger if teardown errors out before reaching that cleanup.
-	secretPath := filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename)
-	if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
-		c.Log.Warn("failed to remove persisted token secret", "sandbox", id, "error", err)
-	}
+	// Revoke token state after withdrawing the address. ReleaseTokenState serializes
+	// persisted-secret removal with request-side repair, so an in-flight request cannot
+	// re-register this sandbox after teardown has revoked it.
+	c.ReleaseTokenState(id)
 
 	// Get LogEntity from pause container labels for metrics cleanup
 	var le string
@@ -3201,10 +3498,20 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 
 	// Destroy subcontainers - this will discover them from containerd
 	c.Log.Debug("destroying subcontainers", "id", id)
-	err = c.DestroySubContainers(ctx, id)
+	killed, err := c.destroySubContainers(ctx, id, sb)
+	if errors.Is(err, errDrainHandedOff) {
+		// The rest of teardown would cut the drain short (deleting the pause
+		// container kills the sandbox) or retire the sandbox so that nothing
+		// resumes it. The next server's reconcile of this STOPPED sandbox
+		// picks up from here.
+		return err
+	}
 	if err != nil {
 		c.Log.Error("failed to destroy subcontainers", "id", id, "err", err)
 		// Continue with cleanup even if this fails
+	}
+	if len(killed) > 0 && sb != nil {
+		c.reportForcedKills(ctx, sb, killed)
 	}
 
 	// Stop replicating sqlite disks only once the containers are gone. Doing it
@@ -3260,21 +3567,10 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	tmpDir := filepath.Join(c.Tempdir, "containerd", id.PathSafe())
 	_ = os.RemoveAll(tmpDir)
 
-	// Mark sandbox as DEAD in entity store
-	result, err := c.EAC.Patch(ctx, entity.New(
-		entity.Ref(entity.DBId, id),
-		(&compute.Sandbox{
-			Status: compute.DEAD,
-		}).Encode,
-	).Attrs(), 0)
-	if err != nil {
-		// We ignore if the entity is not found as we run this code path when detecting
-		// the sandbox entity has already been deleted.
-		if !errors.Is(err, cond.ErrNotFound{}) {
-			c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
-		}
-	} else if c.writeTracker != nil && result.HasRevision() {
-		c.writeTracker.RecordWrite(result.Revision())
+	// Use the current entity, not the cleanup snapshot: boot or an exit may
+	// have changed the lifecycle while resources were being torn down.
+	if err := c.retireSandbox(ctx, id); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+		c.Log.Error("failed to mark sandbox as DEAD", "id", id, "error", err)
 	}
 
 	c.Log.Info("sandbox retired", "id", id, "status", compute.DEAD)
@@ -3285,6 +3581,46 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.Log.Error("failed to delete endpoints for sandbox", "id", id, "error", err)
 	}
 
+	return nil
+}
+
+func (c *SandboxController) retireSandbox(ctx context.Context, id entity.Id) error {
+	for attempt := range 10 {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return err
+		}
+		var current compute.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status == compute.DEAD {
+			return nil
+		}
+		retired := &compute.Sandbox{Status: compute.DEAD}
+		if current.StartupOutcome == "" {
+			switch current.Status {
+			case compute.PENDING:
+				retired.StartupOutcome = compute.STARTUP_FAILED
+			case compute.RUNNING:
+				retired.StartupOutcome = compute.STARTUP_RUNNING
+			case compute.NOT_READY, compute.STOPPED, compute.DEAD:
+				// No lifecycle conclusion from these states alone.
+			}
+		}
+		result, err := c.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, id),
+			retired.Encode,
+		).Attrs(), resp.Entity().Revision())
+		if errors.Is(err, cond.ErrConflict{}) && attempt < 9 {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if c.writeTracker != nil && result.HasRevision() {
+			c.writeTracker.RecordWrite(result.Revision())
+		}
+		return nil
+	}
 	return nil
 }
 

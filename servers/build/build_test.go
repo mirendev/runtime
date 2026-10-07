@@ -2073,6 +2073,11 @@ func TestValidateWorkloadsExist(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "static-only app passes",
+			config:  core_v1alpha.ConfigSpec{StaticDir: "/app/dist"},
+			wantErr: false,
+		},
+		{
 			name: "multiple services passes",
 			config: core_v1alpha.ConfigSpec{
 				Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}, {Name: "worker"}},
@@ -2091,6 +2096,17 @@ func TestValidateWorkloadsExist(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildVersionConfigStaticOnlyDoesNotCreateWebService(t *testing.T) {
+	spec := buildVersionConfig(ConfigInputs{
+		BuildResult: &BuildResult{WorkingDir: "/app"},
+		AppConfig:   &appconfig.AppConfig{Static: &appconfig.StaticConfig{Dir: "/app/dist", ErrorPage: "errors/page.html"}},
+	})
+
+	assert.Equal(t, "/app/dist", spec.StaticDir)
+	assert.Equal(t, "errors/page.html", spec.StaticErrorPage)
+	assert.Empty(t, spec.Services)
 }
 
 func TestBuildVariablesFromAppConfig_NewFields(t *testing.T) {

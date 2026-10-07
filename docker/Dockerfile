@@ -13,6 +13,8 @@ WORKDIR /build
 
 # Copy go.mod and go.sum first for better layer caching
 COPY go.mod go.sum ./
+# The root module replaces miren.dev/runtime/x with ./x, so download needs its go.mod too.
+COPY x/go.mod x/go.sum ./x/
 
 # Download dependencies with cache mount
 RUN --mount=type=cache,target=/go/pkg/mod \

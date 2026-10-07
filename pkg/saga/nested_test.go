@@ -412,7 +412,7 @@ func TestRunNested_DeterministicChildID(t *testing.T) {
 	require.NotEmpty(t, childID1)
 
 	// Verify the child ID is deterministic (derived from parent exec ID + saga name + action name)
-	expectedID := deriveChildID("det-parent-1", "child-saga", "parent-step")
+	expectedID := NestedExecutionID("det-parent-1", "child-saga", "parent-step")
 	assert.Equal(t, expectedID, childID1)
 
 	// Run again with a different parent ID — child ID should differ
@@ -506,4 +506,191 @@ func TestNestedResult_Has(t *testing.T) {
 
 	assert.True(t, nr.Has("name"))
 	assert.False(t, nr.Has("missing"))
+}
+
+// resumeHarness runs a parent whose action looks for its own in-flight child
+// before starting one, the way an action that inspects shared state must.
+type resumeHarness struct {
+	registry *Registry
+	storage  Storage
+	ctrl     *nestedTestController
+	resumed  bool
+	fresh    bool
+}
+
+const resumeParentID = "resume-parent-1"
+
+func newResumeHarness(t *testing.T) *resumeHarness {
+	t.Helper()
+	h := &resumeHarness{ctrl: &nestedTestController{}}
+	h.registry, h.storage = setupNestedSagas(t, h.ctrl)
+
+	step := func(ctx context.Context, in ParentStepIn) (ParentStepOut, error) {
+		result, found, err := ResumeNested(ctx, "child-saga")
+		if found {
+			h.resumed = true
+		} else if err == nil {
+			h.fresh = true
+			result, err = RunNested(ctx, "child-saga", WithNestedInput("value", in.Value))
+		}
+		if err != nil {
+			return ParentStepOut{}, err
+		}
+		var doubled int
+		if err := result.Get("doubled", &doubled); err != nil {
+			return ParentStepOut{}, err
+		}
+		return ParentStepOut{ChildExecID: result.ExecutionID, Result: doubled}, nil
+	}
+	require.NoError(t, Define("resume-parent").
+		Using(h.ctrl).
+		Action("parent-step", step).Undo(UndoParentStep).
+		RegisterTo(h.registry))
+	return h
+}
+
+// seedChild stores a child record as a previous attempt of the parent's
+// action would have left it.
+func (h *resumeHarness) seedChild(t *testing.T, mutate func(*Execution)) *Execution {
+	t.Helper()
+	def, ok := h.registry.Get("child-saga")
+	require.True(t, ok)
+	child := &Execution{
+		ID:                NestedExecutionID(resumeParentID, "child-saga", "parent-step"),
+		DefinitionName:    "child-saga",
+		DefinitionVersion: def.Version,
+		ParentExecutionID: resumeParentID,
+		InitialInputs:     map[string]any{"value": float64(6)},
+		Status:            StatusRunning,
+		ExecutedActions:   map[string]*ActionResult{},
+		ExecutionOrder:    []string{},
+	}
+	if mutate != nil {
+		mutate(child)
+	}
+	require.NoError(t, h.storage.Save(context.Background(), child))
+	return child
+}
+
+func (h *resumeHarness) run() error {
+	return NewExecutor(h.storage, WithRegistry(h.registry)).
+		Start("resume-parent").
+		Input("value", 5).
+		WithID(resumeParentID).
+		Execute(context.Background())
+}
+
+func TestResumeNested_DrivesInFlightChildWithItsOwnInputs(t *testing.T) {
+	h := newResumeHarness(t)
+	child := h.seedChild(t, nil)
+
+	require.NoError(t, h.run())
+
+	assert.True(t, h.resumed)
+	assert.False(t, h.fresh, "an in-flight child must be resumed, not reached through the fresh path")
+	assert.Equal(t, 1, h.ctrl.childCalls)
+
+	got, err := h.storage.Get(context.Background(), child.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCompleted, got.Status)
+
+	// The child ran on the inputs it was created with (6), not the parent's
+	// current input (5).
+	out, err := NewExecutor(h.storage, WithRegistry(h.registry)).ExecutionOutputs(context.Background(), resumeParentID)
+	require.NoError(t, err)
+	var result int
+	require.NoError(t, out.Get("result", &result))
+	assert.Equal(t, 12, result)
+}
+
+func TestResumeNested_NoChildFallsThrough(t *testing.T) {
+	h := newResumeHarness(t)
+
+	require.NoError(t, h.run())
+
+	assert.False(t, h.resumed)
+	assert.True(t, h.fresh)
+	assert.Equal(t, 1, h.ctrl.childCalls)
+}
+
+func TestResumeNested_TerminalChildFallsThrough(t *testing.T) {
+	for _, status := range []Status{StatusCompleted, StatusFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			h := newResumeHarness(t)
+			h.seedChild(t, func(e *Execution) { e.Status = status })
+
+			_ = h.run()
+
+			assert.False(t, h.resumed, "a terminal child is not in flight")
+			assert.True(t, h.fresh)
+			assert.Equal(t, 0, h.ctrl.childCalls, "a terminal child must not be re-driven")
+		})
+	}
+}
+
+func TestResumeNested_BlockedChildReportsError(t *testing.T) {
+	h := newResumeHarness(t)
+	h.seedChild(t, func(e *Execution) { e.DefinitionVersion += 100 })
+
+	require.Error(t, h.run())
+
+	assert.True(t, h.resumed, "a refused child is still this action's own and must not fall through")
+	assert.False(t, h.fresh)
+	assert.Equal(t, 0, h.ctrl.childCalls)
+}
+
+func TestResumeNested_OutsideContext(t *testing.T) {
+	_, found, err := ResumeNested(context.Background(), "some-saga")
+	require.Error(t, err)
+	assert.False(t, found)
+	assert.Contains(t, err.Error(), "no executor in context")
+}
+
+// A child interrupted partway through compensating must finish compensating
+// when its parent comes back to it, not run forward past its recorded actions
+// and report itself completed.
+func TestRunNested_InterruptedRollbackFinishesCompensating(t *testing.T) {
+	doneStep := func(t *testing.T) *ActionResult {
+		b, err := json.Marshal(ChildStepOut{Doubled: 12})
+		require.NoError(t, err)
+		return &ActionResult{Output: b, ExecutedAt: time.Now()}
+	}
+	cases := map[string]struct {
+		mutate    func(*testing.T, *Execution)
+		wantUndos int
+	}{
+		"undoing": {
+			mutate: func(t *testing.T, e *Execution) {
+				e.Status = StatusUndoing
+				e.Error = "a later action failed"
+				e.ExecutedActions["child-step"] = doneStep(t)
+				e.ExecutionOrder = []string{"child-step"}
+			},
+			wantUndos: 1,
+		},
+		"running with a recorded failure": {
+			mutate: func(t *testing.T, e *Execution) {
+				e.Error = `action "child-step" failed: boom`
+				e.ExecutedActions["child-step"] = &ActionResult{ExecutedAt: time.Now(), Error: "boom"}
+				e.ExecutionOrder = []string{"child-step"}
+			},
+			wantUndos: 0,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newResumeHarness(t)
+			child := h.seedChild(t, func(e *Execution) { tc.mutate(t, e) })
+
+			require.Error(t, h.run())
+
+			assert.True(t, h.resumed)
+			assert.Equal(t, 0, h.ctrl.childCalls, "a failed child must not run forward")
+			assert.Equal(t, tc.wantUndos, h.ctrl.childUndoCalls)
+
+			got, err := h.storage.Get(context.Background(), child.ID)
+			require.NoError(t, err)
+			assert.Equal(t, StatusFailed, got.Status)
+		})
+	}
 }

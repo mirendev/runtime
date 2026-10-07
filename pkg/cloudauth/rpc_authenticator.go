@@ -18,8 +18,7 @@ const DefaultCloudURL = "https://api.miren.cloud"
 type RPCAuthenticator struct {
 	jwtValidator  *auth.JWTValidator
 	tokenCache    *auth.TokenCache
-	rbacEval      *rbac.Evaluator
-	policyFetcher *PolicyFetcher
+	authorization *AuthorizationState
 	logger        *slog.Logger
 
 	// Tags to use for RBAC evaluation
@@ -28,10 +27,9 @@ type RPCAuthenticator struct {
 
 // Config for RPCAuthenticator
 type Config struct {
-	CloudURL   string
-	AuthClient *AuthClient
-	Logger     *slog.Logger
-	Tags       map[string]any // Tags for this runtime/cluster
+	CloudURL string
+	Logger   *slog.Logger
+	Tags     map[string]any // Tags for this runtime/cluster
 }
 
 // Validate validates the configuration
@@ -87,21 +85,7 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	// Initialize JWT validation and RBAC (CloudURL always has a value now)
 	a.jwtValidator = auth.NewJWTValidator(config.CloudURL, config.Logger)
 	a.tokenCache = auth.NewTokenCache(ctx)
-
-	// Always initialize RBAC when using cloud authentication
-	// Create policy fetcher with the logger option
-	a.policyFetcher = NewPolicyFetcher(config.CloudURL, config.AuthClient, WithLogger(config.Logger))
-
-	// Start fetching policies
-	if err := a.policyFetcher.Start(context.Background()); err != nil {
-		a.logger.Warn("failed to start policy fetcher", "error", err)
-	}
-
-	// Create evaluator with the policy fetcher as provider
-	a.rbacEval = rbac.NewEvaluator(ctx, a.policyFetcher, config.Logger)
-
-	// Set the evaluator in the policy fetcher so it can clear the cache on refresh
-	a.policyFetcher.SetEvaluator(a.rbacEval)
+	a.authorization = NewAuthorizationState(ctx, config.Logger)
 
 	return a, nil
 }
@@ -167,10 +151,14 @@ func (a *RPCAuthenticator) authenticateJWT(ctx context.Context, authHeader strin
 
 	return &rpc.Identity{
 		Subject: claims.Subject,
-		Groups:  claims.GroupIDs,
-		Method:  rpc.AuthMethodJWT,
+		// Preserve token claims for authentication diagnostics only. Authorize
+		// resolves effective groups from the latest pushed snapshot instead.
+		Groups: claims.GroupIDs,
+		Method: rpc.AuthMethodJWT,
 		Metadata: map[string]any{
 			"organization_id": claims.OrganizationID,
+			"email":           claims.Email,
+			"name":            claims.Name,
 		},
 	}, nil
 }
@@ -186,33 +174,30 @@ func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity
 	// Build RBAC request using the provided resource and action
 	req := &rbac.Request{
 		Subject:  identity.Subject,
-		Groups:   identity.Groups,
 		Resource: resource,
 		Action:   action,
 		Tags:     a.tags,
 		Context:  map[string]any{},
 	}
 
-	// Add organization_id from metadata if present
 	if identity.Metadata != nil {
-		if orgID, ok := identity.Metadata["organization_id"]; ok {
-			req.Context["organization_id"] = orgID
-		}
+		req.Context["organization_id"] = identity.Metadata["organization_id"]
 	}
 
-	decision := a.rbacEval.Evaluate(req)
+	decision, reason := a.authorization.Evaluate(req)
 	if decision == rbac.DecisionDeny {
 		a.logger.Warn("authorization denied",
+			"reason", reason,
 			"subject", identity.Subject,
-			"groups", identity.Groups,
+			"groups", req.Groups,
 			"resource", resource,
 			"action", action,
 			"tags", a.tags,
 		)
 
-		// Trigger a refresh of RBAC rules (with 30-second cooldown)
-		a.policyFetcher.RefreshIfNeeded(ctx)
-
+		if reason == "not_synced" {
+			return fmt.Errorf("access denied: cloud authorization is not synchronized; check the cluster's cloud connection and initial snapshot")
+		}
 		return fmt.Errorf("access denied by RBAC policy")
 	}
 
@@ -221,16 +206,10 @@ func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity
 
 // Stop stops background tasks
 func (a *RPCAuthenticator) Stop() {
-	a.policyFetcher.Stop()
-	a.rbacEval.Stop()
+	a.authorization.evaluator.Stop()
 }
 
-// GetEvaluator returns the RBAC evaluator
-func (a *RPCAuthenticator) GetEvaluator() *rbac.Evaluator {
-	return a.rbacEval
-}
-
-// GetPolicyFetcher returns the policy fetcher
-func (a *RPCAuthenticator) GetPolicyFetcher() *PolicyFetcher {
-	return a.policyFetcher
+// RegisterAuthorization binds cloud authorization to the shared uplink.
+func (a *RPCAuthenticator) RegisterAuthorization(link AuthorizationLink) {
+	a.authorization.Register(link)
 }

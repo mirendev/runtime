@@ -54,6 +54,40 @@ func TestIssueSystemWorkloadToken_Claims(t *testing.T) {
 	assert.Empty(t, claims.SandboxID)
 }
 
+// A token minted on a runner's behalf names the runner in a claim of its own,
+// leaving the subject every runner's workload shares untouched, since that is
+// what external verifiers federate on.
+func TestIssueSystemWorkloadToken_RunnerID(t *testing.T) {
+	iss := testIssuer(t)
+
+	token, err := iss.IssueSystemWorkloadToken(SystemWorkloadTelemetryWriter, TokenOptions{
+		Audience: []string{"miren-telemetry"},
+		RunnerID: "runner-abc",
+	})
+	require.NoError(t, err)
+
+	claims, err := iss.VerifySystemWorkloadToken(token, "miren-telemetry", SystemWorkloadTelemetryWriter)
+	require.NoError(t, err)
+	assert.Equal(t, "runner-abc", claims.RunnerID)
+	assert.Equal(t, "org:org-123:cluster:cluster-456:system:telemetrywriter", claims.Subject)
+}
+
+// The coordinator's own workload tokens are the ones that leave the cluster,
+// so they must not grow a runner_id key, empty or otherwise.
+func TestIssueSystemWorkloadToken_OmitsRunnerIDWhenUnset(t *testing.T) {
+	iss := testIssuer(t)
+
+	token, err := iss.IssueSystemWorkloadToken(SystemWorkloadTelemetryWriter, TokenOptions{
+		Audience: []string{"vm.miren.garden"},
+	})
+	require.NoError(t, err)
+
+	raw := jwt.MapClaims{}
+	_, _, err = jwt.NewParser().ParseUnverified(token, raw)
+	require.NoError(t, err)
+	assert.NotContains(t, raw, "runner_id")
+}
+
 func TestIssueSystemWorkloadToken_SubjectOmitsUnsetClusterMetadata(t *testing.T) {
 	// A bare-metal cluster with no registration has neither an org nor a
 	// cluster id, and the subject should degrade to just the workload rather

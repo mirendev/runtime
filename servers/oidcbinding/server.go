@@ -93,7 +93,7 @@ func (s *Server) Add(ctx context.Context, state *oidcbinding_v1alpha.OidcBinding
 	if provider == "github" && len(claimConditions) == 0 {
 		claimConditions = append(claimConditions, core_v1alpha.ClaimConditions{
 			Key:     "event_name",
-			Pattern: "push,workflow_dispatch",
+			Pattern: "push,workflow_dispatch,pull_request",
 		})
 	}
 

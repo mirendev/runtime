@@ -27,12 +27,12 @@ func TestGeneratedExecutionIDShape(t *testing.T) {
 }
 
 func TestDerivedChildIDShape(t *testing.T) {
-	id := deriveChildID("saga/sg-Parent1", "child-saga", "parent-step")
+	id := NestedExecutionID("saga/sg-Parent1", "child-saga", "parent-step")
 
 	assert.True(t, strings.HasPrefix(id, "saga/sg-"), "derived id %q", id)
 
 	// Determinism is what makes nested-saga recovery idempotent, so the shape
 	// change must not have made it depend on anything but its inputs.
-	assert.Equal(t, id, deriveChildID("saga/sg-Parent1", "child-saga", "parent-step"))
-	assert.NotEqual(t, id, deriveChildID("saga/sg-Parent2", "child-saga", "parent-step"))
+	assert.Equal(t, id, NestedExecutionID("saga/sg-Parent1", "child-saga", "parent-step"))
+	assert.NotEqual(t, id, NestedExecutionID("saga/sg-Parent2", "child-saga", "parent-step"))
 }

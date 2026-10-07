@@ -83,10 +83,16 @@ func (a Artifact) GetChecksumURL() string {
 	return a.GetDownloadURL() + ".sha256"
 }
 
-// DownloadedArtifact represents a successfully downloaded artifact
+// DownloadedArtifact is an extracted archive, staged and ready to install.
 type DownloadedArtifact struct {
 	Artifact Artifact
-	Path     string
-	Checksum string
-	Size     int64
+	// Path is the staged miren binary.
+	Path string
+	// Bundled names the other files the archive carried (containerd, runc,
+	// the shim, ...) relative to the archive root; each is staged at the same
+	// relative path under BundleDir. Empty for a binary-only artifact.
+	BundleDir string
+	Bundled   []string
+	Checksum  string
+	Size      int64
 }

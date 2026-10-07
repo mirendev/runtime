@@ -20,7 +20,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 	NoAutoRollback bool   `long:"no-auto-rollback" description:"Disable automatic rollback on failure (also skips the pre-upgrade etcd snapshot)"`
 	HealthTimeout  int    `long:"health-timeout" default:"0" description:"Seconds to wait for the restarted server to report ready"`
 }) error {
-	ctx.Warn("'miren server upgrade' is deprecated; 'sudo miren upgrade' now upgrades the server and the CLI together.")
+	ctx.Warn("'miren server upgrade' is deprecated; 'miren upgrade' now upgrades the server and the CLI together.")
 
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("server upgrade requires root privileges (use sudo)")
@@ -32,9 +32,8 @@ func ServerUpgrade(ctx *Context, opts struct {
 	if err != nil {
 		return err
 	}
-	serverOpts := release.DefaultManagerOptions()
 	if opts.Check {
-		return checkServerUpgrade(ctx, version, serverOpts)
+		return checkDaemonUpgrade(ctx, serverDaemon, version, false)
 	}
 	if opts.SkipHealth {
 		ctx.Warn("--skip-health is ignored: the upgrade verifies the new server reports ready before finishing.")
@@ -51,7 +50,7 @@ func ServerUpgrade(ctx *Context, opts struct {
 		op.NoRollback = opts.NoAutoRollback
 		op.ReadyTimeoutSeconds = opts.HealthTimeout
 	}
-	return upgradeServerAndCLI(ctx, version, exe, opts.Force, serverOpts, customize)
+	return upgradeDaemonAndCLI(ctx, serverDaemon, version, false, exe, opts.Force, customize)
 }
 
 // ServerUpgradeRollback rolls back the server to the previous version

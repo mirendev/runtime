@@ -156,7 +156,9 @@ func TestNonReadyNodeGracePeriodExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	sbRunning := createScheduledSandbox(t, ctx, server, "sb-running", nodeID, compute_v1alpha.RUNNING)
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-6 * time.Minute) }
 	sbPending := createScheduledSandbox(t, ctx, server, "sb-pending", nodeID, compute_v1alpha.PENDING)
+	server.Store.NowFunc = nil
 
 	ctrl := NewController(testutils.TestLogger(t), server.EAC)
 	ctrl.gracePeriod = 5 * time.Minute
@@ -175,6 +177,19 @@ func TestNonReadyNodeGracePeriodExpired(t *testing.T) {
 		"RUNNING sandbox should be marked DEAD after grace period")
 	assert.Equal(t, compute_v1alpha.DEAD, getSandboxStatus(t, ctx, server, sbPending),
 		"PENDING sandbox should be marked DEAD after grace period")
+	for _, tc := range []struct {
+		id   entity.Id
+		want compute_v1alpha.SandboxStartupOutcome
+	}{
+		{sbRunning, compute_v1alpha.STARTUP_RUNNING},
+		{sbPending, compute_v1alpha.STARTUP_FAILED},
+	} {
+		resp, err := server.EAC.Get(ctx, tc.id.String())
+		require.NoError(t, err)
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(resp.Entity().Entity())
+		assert.Equal(t, tc.want, sb.StartupOutcome)
+	}
 }
 
 func TestNodeRecoversWithinGracePeriod(t *testing.T) {

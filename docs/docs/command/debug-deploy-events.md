@@ -15,7 +15,7 @@ Build step log lines are hidden unless `--build-logs` is set; `--timestamps` pre
 ## Usage
 
 ```bash
-miren debug deploy-events <file> [flags]
+miren debug deploy-events [file] [flags]
 ```
 
 ## Arguments

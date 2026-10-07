@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/components/runner"
+	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/boot"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/runnerconfig"
@@ -74,6 +75,7 @@ func TestTelemetryConfiguredAndMissing(t *testing.T) {
 			options := StartOptions{
 				Log: testLogger(),
 				Config: &runnerconfig.Config{
+					RunnerID:               "runner-test",
 					CoordinatorAddress:     "127.0.0.1:8443",
 					ClientCert:             string(cert.CertPEM),
 					ClientKey:              string(cert.KeyPEM),
@@ -96,12 +98,20 @@ func TestTelemetryConfiguredAndMissing(t *testing.T) {
 			require.Equal(t, tt.wantClient, telemetry.tokenSource != nil)
 			require.NotNil(t, telemetry.output.Value().sandboxMetrics)
 			require.NotNil(t, telemetry.output.Value().logWriter)
+			require.Equal(t, tt.wantMetrics, telemetry.operational != nil)
 			if tt.wantMetrics {
-				require.Equal(t, telemetry.metrics, telemetry.output.Value().metricsWriter)
+				// Operational series get a writer of their own, so the
+				// coordinator can tell them from sandbox usage, and every
+				// one of them names this runner.
+				require.NotSame(t, telemetry.metrics, telemetry.operational)
+				labeled, ok := telemetry.output.Value().operationalMetrics.(*metrics.Labeled)
+				require.True(t, ok, "operational series are labeled with the runner")
+				require.Same(t, telemetry.operational, labeled.Sink)
+				require.Equal(t, map[string]string{"miren_runner": "runner-test"}, labeled.Labels)
 			} else {
 				// A missing writer must be a true nil in the interface, not a
 				// typed nil pointer that consumers would mistake for a writer.
-				require.Nil(t, telemetry.output.Value().metricsWriter)
+				require.Nil(t, telemetry.output.Value().operationalMetrics)
 			}
 			if tt.wantClient {
 				token, tokenErr := telemetry.tokenSource.Token()

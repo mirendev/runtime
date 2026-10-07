@@ -18,6 +18,7 @@ miren server install [flags]
 
 - `--address, -a` — Server address to bind to (default: `0.0.0.0:8443`)
 - `--branch, -b` — Branch to download if release not found
+- `--disk-accelerator` — Build and load the lbd kernel module before starting the server
 - `--enroll-token` — Unattended enroll token from miren.cloud (registers without browser approval)
 - `--force, -f` — Overwrite existing service file
 - `--name, -n` — Cluster name for cloud registration
@@ -45,6 +46,12 @@ miren server install
 
 ```bash
 miren server install --without-cloud
+```
+
+**Install with accelerator mode from the first start:**
+
+```bash
+sudo miren server install --disk-accelerator
 ```
 
 **Install with an unattended enroll token:**

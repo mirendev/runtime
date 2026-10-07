@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,19 @@ type Graph struct {
 	running   bool
 	stopped   bool
 	cancel    context.CancelFunc
+
+	log *slog.Logger
+}
+
+// GraphOption configures a Graph.
+type GraphOption func(*Graph)
+
+// WithLogger gives the graph a logger for lifecycle diagnostics, such as a
+// component whose stop was slow. Without one the graph logs nothing.
+func WithLogger(log *slog.Logger) GraphOption {
+	return func(g *Graph) {
+		g.log = log
+	}
 }
 
 type node struct {
@@ -60,11 +74,15 @@ func (c *completion) wait(ctx context.Context) error {
 }
 
 // NewGraph creates an empty boot graph.
-func NewGraph() *Graph {
-	return &Graph{
+func NewGraph(options ...GraphOption) *Graph {
+	g := &Graph{
 		nodes: make(map[*Component]*node),
 		names: make(map[string]*Component),
 	}
+	for _, option := range options {
+		option(g)
+	}
+	return g
 }
 
 // Add registers a component with the graph. All components must be added

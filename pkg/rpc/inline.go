@@ -152,14 +152,56 @@ func (c *inlineClient) returnStream(conn *streamConn) {
 }
 
 func (c *inlineClient) Call(ctx context.Context, method string, args any, ret any) error {
+	// A ctx that is already done must not reach the peer at all. The pool
+	// hands out a stream without consulting ctx, and the watcher below only
+	// starts after that, so the request could be encoded and sent before
+	// CancelRead fails the write side, and the peer would run a call whose
+	// caller was told it never happened.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	conn, err := c.getStream(ctx)
 	if err != nil {
 		return err
 	}
 
+	// Bridge the caller's ctx to the stream for the life of this call. A
+	// blocked Read is only unblocked by transport teardown or CancelRead, so
+	// without this a cancelled caller parks in dec.Decode until the peer
+	// finally replies. Mirrors handleCallStream and msgOpTransport.roundTrip.
+	//
+	// The watcher must be fully retired before the stream can go back in the
+	// pool. Signalling it is not enough: if ctx fires in the same instant as
+	// cleanup, both cases are ready and select may still take ctx.Done after
+	// the stream has been handed to another caller. So cleanup waits on done,
+	// and a stream the watcher did cancel is closed rather than pooled, since
+	// a cancelled msgStream stays cancelled.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	fired := false
+	if ctx.Done() != nil {
+		go func() {
+			defer close(done)
+			select {
+			case <-ctx.Done():
+				fired = true
+				conn.stream.CancelRead(cancelReadCode)
+			case <-stop:
+			}
+		}()
+	} else {
+		close(done)
+	}
+
 	// Return stream to pool when done (unless there's an error)
 	shouldReturn := true
 	defer func() {
+		close(stop)
+		<-done
+		if fired {
+			shouldReturn = false
+		}
 		if shouldReturn {
 			c.returnStream(conn)
 		} else {
@@ -177,33 +219,32 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 	})
 	if err != nil {
 		shouldReturn = false
-		return err
+		return callErr(ctx, err)
 	}
 
 	err = conn.enc.Encode(args)
 	if err != nil {
 		shouldReturn = false
-		return err
+		return callErr(ctx, err)
 	}
 
 	var rr refResponse
 
-	// Read response without timeout loop - let QUIC handle flow control
-	if err := ctx.Err(); err != nil {
-		shouldReturn = false
-		return err
-	}
 	err = conn.dec.Decode(&rr)
 	if err != nil {
 		shouldReturn = false
-		return err
+		return callErr(ctx, err)
 	}
 
 	switch rr.Status {
 	case "error":
 		return cond.RemoteError(rr.Category, rr.Code, rr.Error)
 	case "ok":
-		return conn.dec.Decode(ret)
+		if err := conn.dec.Decode(ret); err != nil {
+			shouldReturn = false
+			return callErr(ctx, err)
+		}
+		return nil
 	default:
 		if err := ctx.Err(); err != nil {
 			return err
@@ -211,6 +252,18 @@ func (c *inlineClient) Call(ctx context.Context, method string, args any, ret an
 
 		return fmt.Errorf("unknown response status to %s/%s: %s", c.oid, method, rr.Status)
 	}
+}
+
+// callErr maps a failed Encode or Decode back to the caller's context error
+// when our own CancelRead is what aborted it, so callers see a context error
+// rather than a transport-specific stream-cancel error. Writes need it too:
+// on msgStream, CancelRead fails the write side as well, so a cancellation
+// that lands before the request is sent surfaces from Encode.
+func callErr(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	return err
 }
 
 func (c *inlineClient) derefOID(ctx context.Context, oid OID) error {

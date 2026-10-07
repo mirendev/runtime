@@ -142,9 +142,9 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	// Use WithJSONParsing() when containerd is configured with format="json"
 	// Use WithKeyValueParsing() when containerd uses default logrus format (key=value pairs)
 	stdout := slogout.NewWriter(c.log, slog.LevelInfo,
-		slogout.WithKeyValueParsing(), slogout.WithMaxLevel(slog.LevelInfo))
+		slogout.WithKeyValueParsing(), slogout.WithMaxLevel(slog.LevelInfo), slogout.WithSource("containerd"))
 	stderr := slogout.NewWriter(c.log, slog.LevelError, slogout.WithKeyValueParsing(),
-		slogout.WithMaxLevel(slog.LevelInfo))
+		slogout.WithMaxLevel(slog.LevelInfo), slogout.WithSource("containerd"))
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 

@@ -5,7 +5,7 @@
   "groups": [
     {
       "shard": 1,
-      "estimated_s": 257.02,
+      "estimated_s": 257.06,
       "tests": [
         "TestRunCarriesDeclaredTaskEnv",
         "TestMysqlAddonDeployWithAppToml",
@@ -27,8 +27,12 @@
         "TestAddonListAvailable",
         "TestDebugSagaShowUnknownID",
         "TestDistributedRunnerList",
+        "TestAddonRedeployReachesSteadyState",
         "TestConcurrentDeployBlockedByLock",
-        "TestServerUnregister"
+        "TestDeployImageInheritsMetadata",
+        "TestDeployScriptableOutput",
+        "TestDiskBackupRestoreOverRPC",
+        "TestRouteSetService"
       ]
     },
     {
@@ -53,7 +57,7 @@
     },
     {
       "shard": 3,
-      "estimated_s": 257.01,
+      "estimated_s": 257.06,
       "tests": [
         "TestRunPreservesArgumentBoundaries",
         "TestMemcacheAddonCreateListDestroy",
@@ -71,7 +75,12 @@
         "TestRunCancellation",
         "TestDiskUndelete",
         "TestDistributedRunnerCordon",
-        "TestRouteDownDefaultNeedsConfirmation"
+        "TestRouteDownDefaultNeedsConfirmation",
+        "TestDeployImageEntrypointWithArgs",
+        "TestDeployImageOnlyNoDockerfile",
+        "TestDiskBackupRejectsPinWithoutCloud",
+        "TestDistributedRunnerOperationalMetrics",
+        "TestSandboxSpecImageFromEntityDocument"
       ]
     },
     {

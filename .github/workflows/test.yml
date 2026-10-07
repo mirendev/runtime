@@ -48,6 +48,9 @@ jobs:
       run: bun run lint
       working-directory: docs
 
+    - name: Test CI grouping tools
+      run: python3 -B -m unittest discover -s hack -p 'test_calc_test_groups.py'
+
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
@@ -82,10 +85,20 @@ jobs:
       with:
         version: v2.12.2
 
+    # x/ is its own module, which ./... from the root does not reach.
+    - name: golangci-lint (x module)
+      uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+      with:
+        version: v2.12.2
+        working-directory: x
+
+    - name: Check the vendored lbd source matches go.mod
+      run: ./hack/sync-lbd-src.sh --check
+
     - name: Check go.mod tidiness
       run: |
         # Run go mod tidy and check if there are any changes
-        go mod tidy -diff
+        go mod tidy -diff && (cd x && go mod tidy -diff)
         if [ $? -ne 0 ]; then
           echo ""
           echo "Error: go.mod or go.sum is not tidy."
@@ -97,11 +110,19 @@ jobs:
     - name: Check go generate
       run: make generate-check
 
+    # Runs after generate-check, which guarantees the committed contract is
+    # what the schema produces. The token reads cloud's embedded contract.
+    - name: Check cloud export contract
+      run: make contract-check
+      env:
+        GH_TOKEN: ${{ secrets.CLOUD_REPO_TOKEN }}
+        FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
   # Which parts of the tree a PR touches, for jobs that are too expensive to
   # run on every PR but too important to leave to someone remembering a label.
   # Only consulted for pull_request; other events don't gate on it at all.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       distributed: ${{ steps.filter.outputs.distributed }}
     steps:
@@ -142,7 +163,7 @@ jobs:
         fi
 
   test-groups:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -195,6 +216,11 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
+    # Test fixtures intentionally emit compiler errors. testfmt reports real
+    # failures explicitly; the Go matcher would also annotate fixture output.
+    - name: Disable Go problem matcher for tests
+      run: echo '::remove-matcher owner=go::'
+
     - name: Resolve iso version
       id: iso-version
       run: |
@@ -236,14 +262,91 @@ jobs:
     - name: Test (runner ${{ matrix.group.runner }})
       run: |
         PACKAGES=$(echo '${{ toJson(matrix.group.packages) }}' | jq -r '.[]' | tr '\n' ' ')
-        ISO_CACHE_DIR=/tmp/iso-cache go run ./hack/cmd/testfmt DISABLE_NBD_TEST=1 $PACKAGES -count=1 -failfast
+        ISO_CACHE_DIR=/tmp/iso-cache go run ./hack/cmd/testfmt DISABLE_NBD_TEST=1 STACKBUILD_SKIP_BUILDKIT=1 $PACKAGES -count=1 -failfast
 
     - name: Save Docker image to cache
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
       run: docker save runtime-shell -o /tmp/iso-image.tar
 
+  # stackbuild's BuildKit tests build real images: base images come through
+  # oci.miren.cloud, and packages from upstream registries (the Go proxy,
+  # crates.io, rubygems, hex, npm, PyPI). A job of their own keeps that network
+  # exposure off the general runners, which skip these tests, and a failed test
+  # gets one rerun to ride out a registry blip. Reruns are listed in the step
+  # summary so a test that keeps needing one gets noticed.
+  #
+  # Deliberately not in the `test` gate yet. Once this job has shown a low
+  # flake rate, add it to that job's needs so it becomes required.
+  test-stackbuild:
+    runs-on: depot-ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: 'go.mod'
+        cache: true
+
+    - name: Resolve iso version
+      id: iso-version
+      run: |
+        ISO_VERSION=$(go list -m -f '{{.Version}}' miren.dev/iso@latest)
+        echo "version=$ISO_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Cache iso binary
+      id: iso-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/go/bin/iso
+        key: iso-binary-${{ steps.iso-version.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install iso
+      if: steps.iso-cache.outputs.cache-hit != 'true'
+      run: go install miren.dev/iso/cmd/iso@latest
+
+    - name: Add Go bin to PATH
+      run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+    - name: Restore iso cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /tmp/iso-cache
+        key: iso-cache-${{ hashFiles('go.sum') }}
+        restore-keys: iso-cache-
+
+    - name: Restore Docker image cache
+      id: docker-image-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /tmp/iso-image.tar
+        key: iso-image-${{ hashFiles('.iso/Dockerfile', '.iso/.bashrc', 'hack/containerd-config.toml') }}
+
+    - name: Load cached Docker image
+      if: steps.docker-image-cache.outputs.cache-hit == 'true'
+      run: docker load < /tmp/iso-image.tar
+
+    - name: Test stackbuild
+      run: |
+        ISO_CACHE_DIR=/tmp/iso-cache iso run TEST_RERUN_FAILS=1 TEST_RERUN_REPORT=/src/stackbuild-reruns.txt \
+          bash hack/test.sh ./pkg/stackbuild/ -count=1 -timeout=20m
+
+    - name: Report reruns
+      if: always()
+      run: |
+        if [ -s stackbuild-reruns.txt ]; then
+          {
+            echo "### stackbuild tests that needed a rerun"
+            echo '```'
+            cat stackbuild-reruns.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
   blackbox-groups:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -295,6 +398,9 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+
+    - name: Disable Go problem matcher for tests
+      run: echo '::remove-matcher owner=go::'
 
     - name: Resolve iso version
       id: iso-version
@@ -355,6 +461,8 @@ jobs:
       run: |
         echo "=== Miren server logs ==="
         ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+        echo "=== Previous miren server logs (before last restart) ==="
+        ./hack/dev-exec --root bash -c 'tail -100 /tmp/miren-server.log.prev 2>/dev/null' || true
 
     - name: Save Docker image to cache
       if: steps.docker-image-cache.outputs.cache-hit != 'true'
@@ -377,6 +485,9 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+
+    - name: Disable Go problem matcher for tests
+      run: echo '::remove-matcher owner=go::'
 
     - name: Resolve iso version
       id: iso-version
@@ -466,6 +577,8 @@ jobs:
       run: |
         echo "=== Miren server logs ==="
         ./hack/dev-exec --root cat /tmp/miren-server.log 2>&1 | tail -200 || true
+        echo "=== Previous miren server logs (before last restart) ==="
+        ./hack/dev-exec --root bash -c 'tail -100 /tmp/miren-server.log.prev 2>/dev/null' || true
         echo "=== Cloud server logs ==="
         ./hack/dev-exec --root bash -c 'cat /tmp/bb-bb-cloud-*.log 2>/dev/null | tail -100' || true
         echo "=== POP server logs ==="
@@ -502,7 +615,7 @@ jobs:
       github.event_name != 'pull_request' ||
       needs.changes.outputs.distributed == 'true' ||
       contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -561,6 +674,9 @@ jobs:
         go-version-file: 'go.mod'
         cache: true
 
+    - name: Disable Go problem matcher for tests
+      run: echo '::remove-matcher owner=go::'
+
     - name: Resolve iso version
       id: iso-version
       run: |
@@ -617,6 +733,9 @@ jobs:
         # early on is far from the end of the log by the time we get here. A
         # tail window reliably misses it (MIR-1469 was diagnosed twice from logs
         # that started five minutes after the failure), so dump the logs whole.
+        # Same session `make dev-distributed` brought the peers up in; a bare
+        # iso call would otherwise look in its shared "peers" session.
+        export ISO_SESSION="dev-$(basename "$PWD")"
         echo "=== Coordinator server logs ==="
         iso peers exec coordinator -- cat /tmp/miren-server.log 2>&1 || true
         echo "=== Runner logs ==="
@@ -635,7 +754,7 @@ jobs:
   test:
     if: always()
     needs: [changes, test-runner, blackbox-groups, test-blackbox, test-blackbox-pop, blackbox-groups-distributed, test-blackbox-distributed]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
     - name: Check results
       run: |

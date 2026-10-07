@@ -57,7 +57,8 @@ func NewVictoriaMetricsComponent(log *slog.Logger, cc *containerd.Client, namesp
 }
 
 func (c *VictoriaMetricsComponent) createTask(ctx context.Context, container containerd.Container) (containerd.Task, error) {
-	return container.NewTask(ctx, slogout.WithLogger(c.Log, "victoriametrics"))
+	return container.NewTask(ctx, slogout.WithLogger(c.Log, "victoriametrics",
+		slogout.WithVictoriaParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 }
 
 func (c *VictoriaMetricsComponent) getReadyPort() int {
@@ -181,7 +182,8 @@ func (c *VictoriaMetricsComponent) restartExistingContainer(ctx context.Context,
 	c.httpPort = config.HTTPPort
 	c.config = config
 
-	task, err := container.Task(ctx, nil)
+	task, err := container.Task(ctx, slogout.AttachLogger(c.Log, "victoriametrics",
+		slogout.WithVictoriaParsing(), slogout.WithMaxLevel(slog.LevelInfo)))
 	if err == nil {
 		status, err := task.Status(ctx)
 		if err != nil {
@@ -213,7 +215,7 @@ func (c *VictoriaMetricsComponent) restartExistingContainer(ctx context.Context,
 	}
 
 	c.Log.Info("creating new task for existing container")
-	task, err = c.createTask(ctx, container)
+	task, err = c.ReplaceTask(ctx, container, c.createTask)
 	if err != nil {
 		return fmt.Errorf("failed to create new task for existing container: %w", err)
 	}

@@ -38,7 +38,7 @@ When a request arrives for a hostname with a configured route, Miren provisions 
 Hostnames without a configured route are served with a self-signed fallback certificate (browsers will show a warning).
 :::
 
-For wildcard routes (e.g., `*.myapp.example.com`), TLS certificates are provisioned for each matching subdomain as requests arrive. See [Wildcard Routes](./traffic-routing.md#wildcard-routes) for details.
+A name one level under a route, such as `foo.myapp.example.com` under a wildcard route `*.myapp.example.com` or `pr-123.myapp.example.com` under `myapp.example.com`, gets a certificate on its first request only if something vouches for it: a live [ephemeral deploy](./pr-environments.md) with that label, or the route's app answering its TLS check. Otherwise it gets the fallback certificate. Wildcard DNS sends every name to your cluster, so without this check anyone could make Miren request a certificate for any name they liked. See [Certificates for wildcard subdomains](./traffic-routing.md#certificates-for-wildcard-subdomains).
 
 ## Challenge Types
 
@@ -143,6 +143,12 @@ Two other modes are available for deployments where Miren sits behind a TLS-term
 | `behind-proxy-http` | Plain HTTP at the configured address (default `127.0.0.1:80`); TLS lives at the proxy | n/a (proxy terminates TLS) |
 | `behind-proxy-https` | TLS terminated at the configured address (default `127.0.0.1:443`); no `:80` listener, so no HTTP-01 ACME | `[tls]` self-signed or DNS-01 ACME only |
 
+Under `behind-proxy-http`, Miren learns the visitor's original scheme from the proxy's `X-Forwarded-Proto` (or RFC 7239 `Forwarded`) header, and uses it to decide whether auth cookies are marked `Secure` and what `X-Forwarded-Proto` your app receives. It selects the visitor address for access logs from `X-Forwarded-For`, counting from the right past `ingress.trusted_proxy_hops` trusted proxies (one by default). In the other two modes Miren terminates TLS itself, so it ignores those headers on inbound requests and goes by the connection. Traffic arriving through a [Miren Anywhere](./miren-cloud/miren-anywhere.md) POP is always https, since the POP terminates TLS for visitors.
+
+:::warning[`behind-proxy-http` trusts the proxy, so lock it down]
+The proxy must set `X-Forwarded-Proto` and overwrite any value the client sent. If the listener is bound anywhere other than loopback, a firewall must limit it to the proxy's addresses; see [`[ingress]`](./server-config.md#ingress) for why.
+:::
+
 See [Server Configuration Reference → `[ingress]`](./server-config.md#ingress) for the full schema. The HTTP-01 ACME flow described above only applies under `tls-autoprovision`; under `behind-proxy-https`, certs must come from DNS-01 ACME or be self-signed because Miren doesn't bind `:80` in that mode (and the public DNS for the hostname points at the proxy anyway, not at Miren).
 
 ## TLS Settings Reference
@@ -159,8 +165,23 @@ Two additional `[tls]` settings apply to the API server and etcd certs rather th
 
 | Setting | CLI Flag | Description |
 |---------|----------|-------------|
-| `additional_names` | `--dns-names` | Extra DNS names appended to the API server and etcd cert SANs |
+| `additional_names` | `--dns-names` | Extra DNS names appended to the API server and etcd cert SANs. Under `tls-autoprovision`, these can also get an ingress cert (see below) |
 | `additional_ips` | `--ips` | Extra IPs appended to the API server and etcd cert SANs, and forced into the advertised address list |
+
+:::info[`additional_names` and the ingress cert]
+Under `tls-autoprovision` with HTTP-01 challenges, Miren treats each
+`additional_names` entry as a name the server answers to as itself. It gets an
+ACME certificate without needing a route, as soon as its DNS points at the
+cluster. That's what lets a self-hosted cluster serve its
+[workload identity](./workload-identity.md) issuer over valid TLS. IPs,
+single-label names, wildcards, and reserved suffixes like `.internal` and
+`.local` are skipped.
+
+With `acme_dns_provider` set, only the first entry gets an ingress cert, and
+only when it's the workload identity issuer. DNS-01 can issue for a name even
+when it doesn't point at the cluster, so the rest stay on the API and etcd
+certs rather than being sent to Let's Encrypt.
+:::
 
 :::tip[`additional_ips` also controls advertisement]
 Addresses in `additional_ips` bypass the filtering applied to auto-discovered
@@ -201,4 +222,4 @@ miren route
 ```
 </CliCommand>
 
-Miren only provisions ACME certificates for hostnames with explicitly configured routes. All other hostnames get the self-signed fallback.
+Miren provisions ACME certificates for hostnames with configured routes, names that something vouches for under those routes, and the server's own names (its Miren Cloud hostname and its `additional_names`, as described above). All other hostnames get the self-signed fallback.

@@ -23,6 +23,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("containerd: %w", err)
 	}
 
+	if err := c.Deployment.Validate(); err != nil {
+		return fmt.Errorf("deployment: %w", err)
+	}
+
 	if err := c.Etcd.Validate(); err != nil {
 		return fmt.Errorf("etcd: %w", err)
 	}
@@ -55,6 +59,10 @@ func (c *Config) Validate() error {
 
 	if err := c.Server.Validate(); err != nil {
 		return fmt.Errorf("server: %w", err)
+	}
+
+	if err := c.Telemetry.Validate(); err != nil {
+		return fmt.Errorf("telemetry: %w", err)
 	}
 
 	if err := c.TLS.Validate(); err != nil {
@@ -91,6 +99,14 @@ func (c *BuildkitConfig) Validate() error {
 func (c *ContainerdConfig) Validate() error {
 
 	// Check for port conflicts in ContainerdConfig
+
+	return nil
+}
+
+// Validate validates DeploymentConfig
+func (c *DeploymentConfig) Validate() error {
+
+	// Check for port conflicts in DeploymentConfig
 
 	return nil
 }
@@ -160,6 +176,11 @@ func (c *IngressConfig) Validate() error {
 		if !validMode[*c.Mode] {
 			return fmt.Errorf("invalid mode %q: must be one of [tls-autoprovision behind-proxy-http behind-proxy-https]", *c.Mode)
 		}
+	}
+
+	// Validate trusted_proxy_hops minimum
+	if c.TrustedProxyHops != nil && *c.TrustedProxyHops < 1 {
+		return fmt.Errorf("trusted_proxy_hops must be at least 1, got %d", *c.TrustedProxyHops)
 	}
 
 	// Check for port conflicts in IngressConfig
@@ -250,6 +271,30 @@ func (c *TLSConfig) Validate() error {
 	}
 
 	// Check for port conflicts in TLSConfig
+
+	return nil
+}
+
+// Validate validates TelemetryConfig
+func (c *TelemetryConfig) Validate() error {
+
+	// Check for port conflicts in TelemetryConfig
+
+	return nil
+}
+
+// Validate validates TelemetryMetricsConfig
+func (c *TelemetryMetricsConfig) Validate() error {
+
+	// Check for port conflicts in TelemetryMetricsConfig
+
+	return nil
+}
+
+// Validate validates TelemetryTracesConfig
+func (c *TelemetryTracesConfig) Validate() error {
+
+	// Check for port conflicts in TelemetryTracesConfig
 
 	return nil
 }

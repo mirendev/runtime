@@ -135,6 +135,7 @@ func (s *BunStack) Init(opts BuildOptions) {
 
 	// Parse package.json for scripts and dependencies
 	s.parsePackageJSON()
+	s.detectGitDeps()
 
 	if s.scripts != nil {
 		if _, ok := s.scripts["start"]; ok {
@@ -177,8 +178,13 @@ func (s *BunStack) GenerateLLB(ctx context.Context, dir string, opts BuildOption
 
 	base = s.addAppUser(base)
 
+	h := &highlevelBuilder{opts}
+	base = s.withGitIfNeeded(h, base)
+
 	// Copy package files first for better caching
-	pkgFiles := []string{"package.json", "bun.lock", "bun.lockb"}
+	// bunfig.toml and .npmrc carry registry settings, such as a private scope's
+	// URL and the ${TOKEN} that authenticates it, which the install needs.
+	pkgFiles := []string{"package.json", "bun.lock", "bun.lockb", "bunfig.toml", ".npmrc"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
 	}))
@@ -191,11 +197,10 @@ func (s *BunStack) GenerateLLB(ctx context.Context, dir string, opts BuildOption
 	// Install dependencies with cache
 	state := depState.Dir("/app").Run(
 		llb.Shlex("bun install"),
+		h.rootDepAuth(),
 		llb.AddMount("/root/.bun", bunCache, llb.AsPersistentCacheDir("bun", llb.CacheMountShared)),
 		llb.WithCustomName("[phase] Installing Bun dependencies"),
 	).Root()
-
-	h := &highlevelBuilder{opts}
 
 	// Copy the rest of the application code
 	state = h.copyApp(state, localCtx)

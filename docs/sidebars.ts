@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'disks',
+        'disk-accelerator',
         'addons',
         'managing-disk-space',
       ],
@@ -83,6 +84,11 @@ const sidebars: SidebarsConfig = {
         'miren-cloud/connectivity',
         {
           type: 'doc',
+          id: 'miren-cloud/upgrades',
+          label: 'Upgrades',
+        },
+        {
+          type: 'doc',
           id: 'miren-cloud/cloud-routed-clusters',
           label: 'Cloud-Routed Clusters',
         },
@@ -90,11 +96,6 @@ const sidebars: SidebarsConfig = {
           type: 'doc',
           id: 'miren-cloud/miren-anywhere',
           label: 'Miren Anywhere',
-        },
-        {
-          type: 'doc',
-          id: 'miren-cloud/cloud-updates',
-          label: 'Updates',
         },
       ],
     },
@@ -172,6 +173,7 @@ const sidebars: SidebarsConfig = {
         'system-requirements',
         'app-toml',
         'server-config',
+        'victorialogs-upgrade',
         {
           type: 'category',
           label: 'CLI',

@@ -91,7 +91,7 @@ func Rollback(ctx *Context, opts struct {
 	selectedVersion := selected.ID()
 
 	// Call DeployVersion with is_rollback=true
-	deployResult, err := depClient.DeployVersion(ctx, opts.App, ctx.ClusterName, selectedVersion, true, nil, "", "")
+	deployResult, err := depClient.DeployVersion(ctx, opts.App, ctx.ClusterName, selectedVersion, true, nil, "", "", "")
 	if err != nil {
 		return fmt.Errorf("failed to roll back: %w", err)
 	}

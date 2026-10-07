@@ -86,7 +86,9 @@ func TestBeginDeployCreatesExactlyOneRecord(t *testing.T) {
 	ctx := context.Background()
 	b := newDeployTestBuilder(t)
 
-	dt, err := b.beginDeploy(ctx, "web", deployRequest("prod"), nil, nil)
+	req := deployRequest("prod")
+	req.SetMessage("ship the new UI")
+	dt, err := b.beginDeploy(ctx, "web", req, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, dt)
 
@@ -96,6 +98,7 @@ func TestBeginDeployCreatesExactlyOneRecord(t *testing.T) {
 	assert.Equal(t, dt.deploymentID, string(all[0].Deployment.ID))
 	assert.Equal(t, deploylifecycle.StatusInProgress, all[0].Status())
 	assert.Equal(t, "prod", all[0].Deployment.ClusterId)
+	assert.Equal(t, "ship the new UI", all[0].Deployment.Message)
 }
 
 // A build blocked by another in-flight deploy must surface the lock error, and

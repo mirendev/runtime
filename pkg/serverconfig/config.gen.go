@@ -117,6 +117,7 @@ type Config struct {
 	AppVersion      AppVersionConfig      `toml:"app_version"`
 	Buildkit        BuildkitConfig        `toml:"buildkit"`
 	Containerd      ContainerdConfig      `toml:"containerd"`
+	Deployment      DeploymentConfig      `toml:"deployment"`
 	Etcd            EtcdConfig            `toml:"etcd"`
 	Ingress         IngressConfig         `toml:"ingress"`
 	Labs            []string              `toml:"labs" env:"MIREN_LABS"`
@@ -125,6 +126,7 @@ type Config struct {
 	Saga            SagaConfig            `toml:"saga"`
 	Secrets         SecretsConfig         `toml:"secrets"`
 	Server          ServerConfig          `toml:"server"`
+	Telemetry       TelemetryConfig       `toml:"telemetry"`
 	TLS             TLSConfig             `toml:"tls"`
 	Victorialogs    VictoriaLogsConfig    `toml:"victorialogs"`
 	Victoriametrics VictoriaMetricsConfig `toml:"victoriametrics"`
@@ -187,6 +189,38 @@ func (c *ContainerdConfig) GetStartEmbedded() bool {
 // SetStartEmbedded sets the value of StartEmbedded
 func (c *ContainerdConfig) SetStartEmbedded(v bool) {
 	c.StartEmbedded = &v
+}
+
+// DeploymentConfig Deployment record retention garbage collection
+type DeploymentConfig struct {
+	RetentionCount  *int    `toml:"retention_count" env:"MIREN_DEPLOYMENT_RETENTION_COUNT"`
+	RetentionPeriod *string `toml:"retention_period" env:"MIREN_DEPLOYMENT_RETENTION_PERIOD"`
+}
+
+// GetRetentionCount returns the value of RetentionCount or its zero value if nil
+func (c *DeploymentConfig) GetRetentionCount() int {
+	if c.RetentionCount != nil {
+		return *c.RetentionCount
+	}
+	return 0
+}
+
+// SetRetentionCount sets the value of RetentionCount
+func (c *DeploymentConfig) SetRetentionCount(v int) {
+	c.RetentionCount = &v
+}
+
+// GetRetentionPeriod returns the value of RetentionPeriod or its zero value if nil
+func (c *DeploymentConfig) GetRetentionPeriod() string {
+	if c.RetentionPeriod != nil {
+		return *c.RetentionPeriod
+	}
+	return ""
+}
+
+// SetRetentionPeriod sets the value of RetentionPeriod
+func (c *DeploymentConfig) SetRetentionPeriod(v string) {
+	c.RetentionPeriod = &v
 }
 
 // EtcdConfig Etcd configuration
@@ -280,8 +314,10 @@ func (c *EtcdConfig) SetStartEmbedded(v bool) {
 
 // IngressConfig HTTP/HTTPS ingress configuration. See RFD-84 for the mode-based design.
 type IngressConfig struct {
-	Address *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
-	Mode    *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+	Address          *string `toml:"address" env:"MIREN_INGRESS_ADDRESS"`
+	ErrorPage        *string `toml:"error_page" env:"MIREN_INGRESS_ERROR_PAGE"`
+	Mode             *string `toml:"mode" env:"MIREN_INGRESS_MODE"`
+	TrustedProxyHops *int    `toml:"trusted_proxy_hops" env:"MIREN_INGRESS_TRUSTED_PROXY_HOPS"`
 }
 
 // GetAddress returns the value of Address or its zero value if nil
@@ -297,6 +333,19 @@ func (c *IngressConfig) SetAddress(v string) {
 	c.Address = &v
 }
 
+// GetErrorPage returns the value of ErrorPage or its zero value if nil
+func (c *IngressConfig) GetErrorPage() string {
+	if c.ErrorPage != nil {
+		return *c.ErrorPage
+	}
+	return ""
+}
+
+// SetErrorPage sets the value of ErrorPage
+func (c *IngressConfig) SetErrorPage(v string) {
+	c.ErrorPage = &v
+}
+
 // GetMode returns the value of Mode or its zero value if nil
 func (c *IngressConfig) GetMode() string {
 	if c.Mode != nil {
@@ -310,12 +359,25 @@ func (c *IngressConfig) SetMode(v string) {
 	c.Mode = &v
 }
 
-// MetricsConfig Managed application metrics configuration
+// GetTrustedProxyHops returns the value of TrustedProxyHops or its zero value if nil
+func (c *IngressConfig) GetTrustedProxyHops() int {
+	if c.TrustedProxyHops != nil {
+		return *c.TrustedProxyHops
+	}
+	return 0
+}
+
+// SetTrustedProxyHops sets the value of TrustedProxyHops
+func (c *IngressConfig) SetTrustedProxyHops(v int) {
+	c.TrustedProxyHops = &v
+}
+
+// MetricsConfig Deprecated: superseded by [telemetry.metrics]
 type MetricsConfig struct {
 	RemoteWrite RemoteWriteConfig `toml:"remote_write"`
 }
 
-// RemoteWriteConfig Destination for managed application metrics
+// RemoteWriteConfig Deprecated: superseded by [telemetry.metrics]. Values set here still apply when the telemetry.metrics equivalents are unset.
 type RemoteWriteConfig struct {
 	URL                      *string `toml:"url" env:"MIREN_METRICS_REMOTE_WRITE_URL"`
 	WorkloadIdentityAudience *string `toml:"workload_identity_audience" env:"MIREN_METRICS_REMOTE_WRITE_AUDIENCE"`
@@ -587,6 +649,76 @@ func (c *TLSConfig) GetStandardTLS() bool {
 // SetStandardTLS sets the value of StandardTLS
 func (c *TLSConfig) SetStandardTLS(v bool) {
 	c.StandardTLS = &v
+}
+
+// TelemetryConfig Where the cluster ships its own telemetry
+type TelemetryConfig struct {
+	Metrics TelemetryMetricsConfig `toml:"metrics"`
+	Traces  TelemetryTracesConfig  `toml:"traces"`
+}
+
+// TelemetryMetricsConfig Destination for managed application metrics and the runtime's operational series
+type TelemetryMetricsConfig struct {
+	RemoteWriteURL           *string `toml:"remote_write_url" env:"MIREN_TELEMETRY_METRICS_REMOTE_WRITE_URL"`
+	WorkloadIdentityAudience *string `toml:"workload_identity_audience" env:"MIREN_TELEMETRY_METRICS_AUDIENCE"`
+}
+
+// GetRemoteWriteURL returns the value of RemoteWriteURL or its zero value if nil
+func (c *TelemetryMetricsConfig) GetRemoteWriteURL() string {
+	if c.RemoteWriteURL != nil {
+		return *c.RemoteWriteURL
+	}
+	return ""
+}
+
+// SetRemoteWriteURL sets the value of RemoteWriteURL
+func (c *TelemetryMetricsConfig) SetRemoteWriteURL(v string) {
+	c.RemoteWriteURL = &v
+}
+
+// GetWorkloadIdentityAudience returns the value of WorkloadIdentityAudience or its zero value if nil
+func (c *TelemetryMetricsConfig) GetWorkloadIdentityAudience() string {
+	if c.WorkloadIdentityAudience != nil {
+		return *c.WorkloadIdentityAudience
+	}
+	return ""
+}
+
+// SetWorkloadIdentityAudience sets the value of WorkloadIdentityAudience
+func (c *TelemetryMetricsConfig) SetWorkloadIdentityAudience(v string) {
+	c.WorkloadIdentityAudience = &v
+}
+
+// TelemetryTracesConfig OTLP destination for the runtime's own traces
+type TelemetryTracesConfig struct {
+	Endpoint                 *string `toml:"endpoint" env:"MIREN_TELEMETRY_TRACES_ENDPOINT"`
+	WorkloadIdentityAudience *string `toml:"workload_identity_audience" env:"MIREN_TELEMETRY_TRACES_AUDIENCE"`
+}
+
+// GetEndpoint returns the value of Endpoint or its zero value if nil
+func (c *TelemetryTracesConfig) GetEndpoint() string {
+	if c.Endpoint != nil {
+		return *c.Endpoint
+	}
+	return ""
+}
+
+// SetEndpoint sets the value of Endpoint
+func (c *TelemetryTracesConfig) SetEndpoint(v string) {
+	c.Endpoint = &v
+}
+
+// GetWorkloadIdentityAudience returns the value of WorkloadIdentityAudience or its zero value if nil
+func (c *TelemetryTracesConfig) GetWorkloadIdentityAudience() string {
+	if c.WorkloadIdentityAudience != nil {
+		return *c.WorkloadIdentityAudience
+	}
+	return ""
+}
+
+// SetWorkloadIdentityAudience sets the value of WorkloadIdentityAudience
+func (c *TelemetryTracesConfig) SetWorkloadIdentityAudience(v string) {
+	c.WorkloadIdentityAudience = &v
 }
 
 // VictoriaLogsConfig VictoriaLogs configuration

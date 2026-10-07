@@ -89,7 +89,13 @@ build_usage_line() {
     while [ $i -lt "$pos_count" ]; do
       local arg_name
       arg_name=$(echo "$pos_args" | jq -r ".[$i].name" | tr '[:upper:]' '[:lower:]')
-      line="$line <$arg_name>"
+      local required
+      required=$(echo "$pos_args" | jq -r ".[$i].required // false")
+      if [ "$required" = "true" ]; then
+        line="$line <$arg_name>"
+      else
+        line="$line [$arg_name]"
+      fi
       i=$((i + 1))
     done
   fi

@@ -45,6 +45,21 @@ type BuildOptions struct {
 	// (onBuild commands, asset precompilation). These are set on intermediate LLB
 	// states only and do not persist to the final image config.
 	EnvVars map[string]string
+
+	// Secrets are mounted on each stack's dependency install step, so an app can
+	// fetch private dependencies. Their values reach BuildKit through the solve's
+	// secrets session, keyed by ID, and never enter a layer or the cache key.
+	Secrets []Secret
+}
+
+// Secret is a build secret a dependency install step can read. ID names it in
+// the solve's secrets session. Exactly one of Env or File says where it lands:
+// an environment variable, or a file path, where a leading "~/" means the home
+// directory of the user the step runs as.
+type Secret struct {
+	ID   string
+	Env  string
+	File string
 }
 
 // DetectionEvent represents something detected during stack analysis
@@ -96,6 +111,9 @@ func DetectStack(dir string, opts BuildOptions) (Stack, error) {
 	stacks := []Stack{
 		&RubyStack{MetaStack: ms},
 		&PythonStack{MetaStack: ms},
+		// Ahead of Bun/Node: a Phoenix app may carry a package.json for its
+		// assets, which the npm augmentation handles.
+		&ElixirStack{MetaStack: ms},
 		&BunStack{MetaStack: ms},
 		&NodeStack{MetaStack: ms},
 		&GoStack{MetaStack: ms},
@@ -129,6 +147,7 @@ type MetaStack struct {
 	events        []DetectionEvent
 	augmentations []Augmentation
 	skipJSInstall bool
+	gitDeps       bool
 }
 
 // metaStack returns s itself, fulfilling the unexported Stack interface
@@ -389,15 +408,106 @@ func (h *highlevelBuilder) CacheMountFrom(path string, from llb.State) llb.RunOp
 	)
 }
 
+// lockedCacheMount is CacheMount for tools that can't share a cache directory
+// with a concurrent run of themselves: BuildKit hands it to one step at a time.
+func (h *highlevelBuilder) lockedCacheMount(path string) llb.RunOption {
+	return llb.AddMount(path, llb.Scratch(),
+		llb.AsPersistentCacheDir(h.CacheNS+"-"+path, llb.CacheMountLocked),
+	)
+}
+
+// runOptions applies several run options as one.
+type runOptions []llb.RunOption
+
+func (ro runOptions) SetRunOption(ei *llb.ExecInfo) {
+	for _, o := range ro {
+		o.SetRunOption(ei)
+	}
+}
+
+// forgeSSHRewrites turns SSH git URLs on the major forges into https ones. A
+// build has no SSH key, so an SSH URL in a lockfile (a Gemfile's git:
+// "git@github.com:org/x", a package.json's git+ssh://) could never fetch; over
+// https, the netrc or token the app declared can authenticate it.
+var forgeSSHRewrites = func() [][2]string {
+	var kv [][2]string
+	for _, host := range []string{"github.com", "gitlab.com", "bitbucket.org"} {
+		key := "url.https://" + host + "/.insteadOf"
+		kv = append(kv,
+			[2]string{key, "git@" + host + ":"},
+			[2]string{key, "ssh://git@" + host + "/"},
+		)
+	}
+	return kv
+}()
+
+// rootDepAuth gives a dependency install step running as root what it needs to
+// fetch private dependencies; see depAuth.
+func (h *highlevelBuilder) rootDepAuth() llb.RunOption {
+	return h.depAuth("/root", 0, 0)
+}
+
+// appDepAuth is rootDepAuth for a step running as the app user.
+func (h *highlevelBuilder) appDepAuth() llb.RunOption {
+	return h.depAuth("/home/app", 2010, 2011)
+}
+
+// depAuth mounts the app's build secrets on a dependency install step, the one
+// step keyed on the manifest alone, so the credential is there when packages
+// are fetched and never touches a layer that changes with source. A secret
+// mount is not written to the layer, and only its id and target (not its
+// value) enter the cache key.
+//
+// Alongside the secrets it rewrites forge SSH URLs to https and tells cargo and
+// Poetry to fetch git dependencies with the git CLI, since their built-in git
+// clients (libgit2, dulwich) read neither a netrc nor git's URL rewrites. A build that declares no secrets gets
+// none of this, so its cache keys stay as they were.
+func (h *highlevelBuilder) depAuth(home string, uid, gid int) llb.RunOption {
+	if len(h.Secrets) == 0 {
+		return runOptions(nil)
+	}
+
+	var opts runOptions
+	for _, sec := range h.Secrets {
+		switch {
+		case sec.Env != "":
+			opts = append(opts, llb.AddSecretWithDest(sec.ID, nil, llb.SecretAsEnvName(sec.Env)))
+		case sec.File != "":
+			target := sec.File
+			if rest, ok := strings.CutPrefix(target, "~/"); ok {
+				target = home + "/" + rest
+			}
+			opts = append(opts, llb.AddSecret(target, llb.SecretID(sec.ID), llb.SecretFileOpt(uid, gid, 0o400)))
+		}
+	}
+
+	opts = append(opts, llb.AddEnv("GIT_CONFIG_COUNT", fmt.Sprint(len(forgeSSHRewrites))))
+	for i, kv := range forgeSSHRewrites {
+		opts = append(opts,
+			llb.AddEnv(fmt.Sprintf("GIT_CONFIG_KEY_%d", i), kv[0]),
+			llb.AddEnv(fmt.Sprintf("GIT_CONFIG_VALUE_%d", i), kv[1]),
+		)
+	}
+	opts = append(opts,
+		llb.AddEnv("CARGO_NET_GIT_FETCH_WITH_CLI", "true"),
+		llb.AddEnv("POETRY_SYSTEM_GIT_CLIENT", "true"),
+	)
+
+	return opts
+}
+
 func (h *highlevelBuilder) Access(cur llb.State, path, into string) llb.RunOption {
 	return llb.AddMount(into, cur, llb.SourcePath(path), llb.Readonly)
 }
 
 func (h *highlevelBuilder) aptInstall(cur llb.State, pkgs ...string) llb.State {
+	// Locked, not shared: apt takes an exclusive lock on these directories, so
+	// two stages installing packages in parallel (a builder and its runtime
+	// image) would otherwise fail on each other's lock.
 	return cur.Run(
 		llb.Shlexf("sh -c 'apt-get update && apt-get install -y %s'", strings.Join(pkgs, " ")),
-		h.CacheMount("/var/lib/apt/lists"),
-		h.CacheMount("/var/cache/apt/archives"),
+		h.lockedCacheMount("/var/lib/apt/lists"),
+		h.lockedCacheMount("/var/cache/apt/archives"),
 		llb.WithCustomName("[phase] Installing OS packages"),
 	).State
 }
@@ -431,6 +541,7 @@ func (h *highlevelBuilder) bundleInstall(cur, mnt llb.State) llb.State {
 	return cur.Dir("/app").Run(
 		llb.Shlex("bundle install"),
 		llb.AddEnv("BUNDLE_SILENCE_ROOT_WARNING", "true"),
+		h.rootDepAuth(),
 		llb.WithCustomName("[phase] Installing Ruby Gem dependencies"),
 	).State
 }

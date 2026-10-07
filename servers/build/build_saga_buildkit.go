@@ -64,6 +64,9 @@ func buildImage(ctx context.Context, in buildImageIn) (buildImageOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
 	status := deps.statuses.SenderFor(in.StreamID)
+	if in.BuildStack.Stack == "static" {
+		return buildImageOut{BuildResult: &BuildResult{WorkingDir: "/app"}}, nil
+	}
 
 	if in.BuildStack.Stack == "image" {
 		image, res, err := b.resolveDirectImage(ctx, in.BuildStack.Input)
@@ -215,6 +218,7 @@ func (b *Builder) runBuildkitBuild(
 	// we don't mutate the saga input.
 	stack := in.BuildStack
 	stack.EnvVars = buildEnvVars
+	stack.Secrets = stackbuildSecrets(in.AppConfig)
 
 	tos = append(tos, WithPhaseUpdates(func(phase string) {
 		status.SendPhase(phase)

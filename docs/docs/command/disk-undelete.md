@@ -18,9 +18,8 @@ miren disk undelete [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--data-path` — Path to miren data directory (default: `/var/lib/miren`)
 - `--name, -n` — Disk name to undelete
-- `--volume-id, -V` — Volume ID to restore (when multiple deleted disks share a name)
+- `--volume-id, -V` — Volume ID to recover (when several deleted disks share a name)
 
 ## Global Options
 

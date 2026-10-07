@@ -23,7 +23,8 @@ import (
 
 const snapshotBatchSize = 100
 const maxLiveBatchesBetweenSnapshotBatches = 8
-const sessionRetryDelay = time.Second
+const defaultRetryDelay = time.Second
+const defaultMaxRetryDelay = time.Minute
 const defaultMinimumResnapshotInterval = time.Hour
 const defaultAckTimeout = 30 * time.Second
 const defaultSnapshotAckTimeout = 5 * time.Minute
@@ -49,6 +50,8 @@ type Exporter struct {
 	ackTimeout                time.Duration
 	snapshotAckTimeout        time.Duration
 	preparationLogInterval    time.Duration
+	retryDelay                time.Duration
+	maxRetryDelay             time.Duration
 	diagnostics               *Diagnostics
 
 	mu     sync.Mutex
@@ -62,6 +65,13 @@ type stream struct {
 
 	mu      sync.Mutex
 	waiters map[string]chan Ack
+
+	// nextRetry is how long the next retry waits. It doubles on every retry
+	// and falls back to the exporter's base delay once cloud commits a cursor
+	// past where the stream stood, so a rejection that can never succeed
+	// settles at the cap instead of filling the log at the base rate.
+	retryMu   sync.Mutex
+	nextRetry time.Duration
 }
 
 type Option func(*Exporter)
@@ -85,6 +95,8 @@ func NewExporter(log *slog.Logger, store entity.Store, contract *entityexport.Co
 		ackTimeout:                defaultAckTimeout,
 		snapshotAckTimeout:        defaultSnapshotAckTimeout,
 		preparationLogInterval:    defaultPreparationLogInterval,
+		retryDelay:                defaultRetryDelay,
+		maxRetryDelay:             defaultMaxRetryDelay,
 	}
 	for _, option := range options {
 		option(exporter)
@@ -150,6 +162,15 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		t.log.Warn("entity sync source epoch unavailable for selected session", "error", err)
 		return
 	}
+	// Record the epoch before validating it. If the store was restored under
+	// this process and cloud still selects the old epoch, every session ends
+	// here, and the landed watermark from the old store must not outlive it:
+	// a consumer gating deletion on that watermark would otherwise compare
+	// the restored store's revisions against a number that means nothing to
+	// them.
+	if t.diagnostics != nil {
+		t.diagnostics.setSource(sourceEpoch)
+	}
 	if config.SourceEpoch != sourceEpoch {
 		err := fmt.Errorf("cloud selected source epoch %s; local source epoch is %s", config.SourceEpoch, sourceEpoch)
 		t.fail("validate-session-config", err)
@@ -160,9 +181,6 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 	}
 
 	s := &stream{exporter: t, ctx: ctx, sourceEpoch: sourceEpoch, waiters: make(map[string]chan Ack)}
-	if t.diagnostics != nil {
-		t.diagnostics.setSource(sourceEpoch)
-	}
 	t.mu.Lock()
 	t.active = s
 	t.mu.Unlock()
@@ -207,6 +225,10 @@ func (t *Exporter) runSession(ctx context.Context, session uplink.Session, link 
 		} else {
 			t.setMode("watching", "")
 			if t.diagnostics != nil {
+				// Resuming here means cloud reported this cursor for a source
+				// epoch that matched and a head it does not exceed, so
+				// everything at or below it is already in cloud's custody.
+				t.diagnostics.setLanded(cursor)
 				t.diagnostics.setNextWatchRevision(cursor + 1)
 			}
 			watcher, err = t.store.WatchIndex(watchCtx, t.marker(), cursor+1)
@@ -301,12 +323,13 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 	if ctx.Err() != nil {
 		return false
 	}
+	delay := s.backoff()
 	if err != nil {
 		s.exporter.fail(message, err)
-		s.exporter.log.Warn(message, "error", err, "retry_in", sessionRetryDelay)
+		s.exporter.log.Warn(message, "error", err, "retry_in", delay)
 	}
 	s.exporter.setMode("retrying", message)
-	timer := time.NewTimer(sessionRetryDelay)
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -314,6 +337,25 @@ func (s *stream) retry(ctx context.Context, message string, err error) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// backoff returns the delay for this retry and doubles the next one, up to
+// the exporter's cap.
+func (s *stream) backoff() time.Duration {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	delay := s.nextRetry
+	if delay <= 0 {
+		delay = s.exporter.retryDelay
+	}
+	s.nextRetry = min(delay*2, s.exporter.maxRetryDelay)
+	return delay
+}
+
+func (s *stream) resetBackoff() {
+	s.retryMu.Lock()
+	s.nextRetry = 0
+	s.retryMu.Unlock()
 }
 
 func (t *Exporter) waitForStartGate(ctx context.Context) bool {
@@ -347,6 +389,26 @@ func (t *Exporter) readSourceEpoch(ctx context.Context) (string, error) {
 		return "", errors.New("entity store returned an empty source epoch")
 	}
 	return sourceEpoch, nil
+}
+
+// filter applies the contract to an entity found in the marker index. An
+// entity can carry the marker without a place in the contract: its domain
+// declared the export and its encoder stamps the marker, but the owning
+// contract was generated without merging that domain. Failing the stream on
+// one such entity would stop every other kind from syncing, so it is skipped
+// with a warning and the mismatch shows up in the logs instead. Any other
+// filter error is still the stream's to fail on.
+func (t *Exporter) filter(source *entity.Entity, what string) (*entity.Entity, bool, error) {
+	filtered, _, err := t.contract.Filter(source)
+	if err == nil {
+		return filtered, true, nil
+	}
+	if errors.Is(err, entityexport.ErrKindNotExported) {
+		t.log.Warn("skipping marked entity whose kind is not in the export contract",
+			"entity", source.Id(), "kind", entityKind(source), "during", what)
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("filter %s entity %s: %w", what, source.Id(), err)
 }
 
 func (t *Exporter) marker() entity.Attr {
@@ -415,9 +477,12 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 				}
 				return 0, nil, fmt.Errorf("read snapshot entity %s at revision %d: %w", id, head, err)
 			}
-			filtered, _, err := s.exporter.contract.Filter(source)
+			filtered, ok, err := s.exporter.filter(source, "snapshot")
 			if err != nil {
-				return 0, nil, fmt.Errorf("filter snapshot entity %s: %w", id, err)
+				return 0, nil, err
+			}
+			if !ok {
+				continue
 			}
 			entities = append(entities, filtered)
 		}
@@ -466,6 +531,7 @@ func (s *stream) snapshot(watchCtx context.Context, link Link) (int64, clientv3.
 	if ack.Cursor != tailCursor {
 		return 0, nil, fmt.Errorf("snapshot ack cursor %d does not match committed tail %d", ack.Cursor, tailCursor)
 	}
+	s.resetBackoff()
 	if s.exporter.diagnostics != nil {
 		s.exporter.diagnostics.finishSnapshot(ack.Cursor)
 	}
@@ -561,16 +627,41 @@ func (s *stream) sendWatchResponse(link Link, response clientv3.WatchResponse, c
 	if ack.Cursor != to {
 		return cursor, fmt.Errorf("change ack cursor %d does not match batch end %d", ack.Cursor, to)
 	}
+	// A batch drained mid-snapshot is accepted but not committed until the
+	// snapshot completes, so it is not progress: resetting on it would let a
+	// snapshot that cloud keeps refusing restart at the base rate.
+	if committed {
+		s.resetBackoff()
+	}
 	if s.exporter.diagnostics != nil {
 		s.exporter.diagnostics.setNextWatchRevision(to + 1)
 		if committed {
 			s.exporter.diagnostics.setCursor(to)
+			s.exporter.diagnostics.setLanded(to)
 		}
 	}
 	return to, nil
 }
 
+// changes turns marker-index watch events into export changes.
+//
+// The marker index holds more than one key per entity when a session stores
+// attributes on it: beside the durable index entry, the store adds a presence
+// marker leased to that session so etcd drops it with the lease (see the index
+// layout comment in pkg/entity). A node is the standing example, since a
+// runner registers itself and its status under its coordinator health session.
+// Markers mean an entity can produce several events at one revision, and can
+// produce a DELETE event while it lives on: the lease expiring is the runner
+// losing its session, and what changed is the entity (its session-scoped
+// status is gone), not its existence. So a DELETE is only a removal when the entity is absent at the
+// event's revision; otherwise it exports as a change like any other, and
+// events for the same entity and revision collapse into one.
 func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Change, error) {
+	type seenKey struct {
+		id       entity.Id
+		revision int64
+	}
+	seen := make(map[seenKey]struct{}, len(events))
 	changes := make([]Change, 0, len(events))
 	for _, event := range events {
 		revision := fallbackRevision
@@ -587,9 +678,30 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 		if id == "" {
 			return nil, errors.New("cloud export watch event has no entity id")
 		}
+		if _, duplicate := seen[seenKey{id, revision}]; duplicate {
+			continue
+		}
+		seen[seenKey{id, revision}] = struct{}{}
 
 		if event.Type == mvccpb.DELETE {
-			source, err := s.exporter.store.GetEntityAtRevision(s.ctx, id, revision-1)
+			source, err := s.exporter.store.GetEntityAtRevision(s.ctx, id, revision)
+			switch {
+			case err == nil:
+				filtered, ok, err := s.exporter.filter(source, "changed")
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					continue
+				}
+				changes = append(changes, putChange(id, revision, filtered))
+				continue
+			case errors.Is(err, rpctypes.ErrCompacted):
+				return nil, errCompacted
+			case !errors.Is(err, cond.ErrNotFound{}):
+				return nil, fmt.Errorf("read entity %s at index deletion revision %d: %w", id, revision, err)
+			}
+			source, err = s.exporter.store.GetEntityAtRevision(s.ctx, id, revision-1)
 			if err != nil {
 				if errors.Is(err, rpctypes.ErrCompacted) {
 					return nil, errCompacted
@@ -601,9 +713,12 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 				}
 				return nil, fmt.Errorf("read deleted entity %s: %w", id, err)
 			}
-			filtered, _, err := s.exporter.contract.Filter(source)
+			filtered, ok, err := s.exporter.filter(source, "deleted")
 			if err != nil {
-				return nil, fmt.Errorf("filter deleted entity %s: %w", id, err)
+				return nil, err
+			}
+			if !ok {
+				continue
 			}
 			changes = append(changes, Change{
 				Op: ChangeDelete, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
@@ -618,15 +733,29 @@ func (s *stream) changes(events []*clientv3.Event, fallbackRevision int64) ([]Ch
 			}
 			return nil, fmt.Errorf("read changed entity %s at revision %d: %w", id, revision, err)
 		}
-		filtered, _, err := s.exporter.contract.Filter(source)
+		filtered, ok, err := s.exporter.filter(source, "changed")
 		if err != nil {
-			return nil, fmt.Errorf("filter changed entity %s: %w", id, err)
+			return nil, err
 		}
-		changes = append(changes, Change{
-			Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered,
-		})
+		if !ok {
+			continue
+		}
+		changes = append(changes, putChange(id, revision, filtered))
 	}
 	return changes, nil
+}
+
+// putChange stamps the exported body with the revision of the index event
+// that produced it. The store reports an entity's revision as its primary
+// key's, and every save rewrites the primary key, but a session ending (its
+// lease lapsing or being revoked) removes the session keys and the leased
+// index entry without touching it.
+// Cloud lands a put at its body's revision and refuses one whose body and
+// envelope disagree, so a node whose session lapsed would otherwise reject
+// the whole batch on every retry.
+func putChange(id entity.Id, revision int64, filtered *entity.Entity) Change {
+	filtered.SetRevision(revision)
+	return Change{Op: ChangePut, Revision: revision, EntityID: id, Kind: entityKind(filtered), Entity: filtered}
 }
 
 func (s *stream) sendAndWait(link Link, messageType string, payload any, messageID string) (Ack, error) {

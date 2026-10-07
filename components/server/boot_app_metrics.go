@@ -4,10 +4,13 @@ package server
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"miren.dev/runtime/components/appmetrics"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/servers/metricspush"
 )
 
 type appMetricsBootInputs struct {
@@ -28,13 +31,16 @@ type appMetricsBoot struct {
 	shipping    *metrics.Labeled
 	shipWriter  *metrics.VictoriaMetricsWriter
 	operational *metrics.Fanout
+
+	// push is the coordinator's metrics push ingest, armed while vmagent runs.
+	push *metricspush.Ingest
 }
 
 func appMetricsInputs(options StartOptions) appMetricsBootInputs {
 	return appMetricsBootInputs{
 		config: appmetrics.Config{
-			RemoteWriteURL: options.Config.Metrics.RemoteWrite.GetURL(),
-			Audience:       options.Config.Metrics.RemoteWrite.GetWorkloadIdentityAudience(),
+			RemoteWriteURL: options.Config.Telemetry.Metrics.GetRemoteWriteURL(),
+			Audience:       options.Config.Telemetry.Metrics.GetWorkloadIdentityAudience(),
 		},
 		configuredClusterName: options.Config.Server.GetConfigClusterName(),
 		runnerID:              options.Config.Server.GetRunnerID(),
@@ -49,17 +55,19 @@ func newAppMetricsBoot(
 	identity boot.Output[workloadIdentityBootOutput],
 	entityAccess boot.Output[entityAccessBootOutput],
 	observability boot.Output[observabilityBootOutput],
+	foundation boot.Output[foundationBootOutput],
 ) *appMetricsBoot {
 	b := &appMetricsBoot{
 		inputs: inputs,
 	}
-	b.component = boot.Run5(
+	b.component = boot.Run6(
 		"app-metrics",
 		containerd,
 		registration,
 		identity,
 		entityAccess,
 		observability,
+		foundation,
 		b.start,
 		boot.WithStop(b.stop, componentStopTimeout),
 	)
@@ -73,6 +81,7 @@ func (b *appMetricsBoot) start(
 	identity workloadIdentityBootOutput,
 	entityAccess entityAccessBootOutput,
 	observability observabilityBootOutput,
+	foundation foundationBootOutput,
 ) error {
 	log := observability.log
 	eac := entityAccess.access
@@ -98,6 +107,10 @@ func (b *appMetricsBoot) start(
 		// scraper must be visible, but must not take the application control
 		// plane down with it.
 		log.Error("managed application metrics failed to start", "error", err)
+		// Push was advertised from config; stop, since nothing will arm it.
+		if push := foundation.foundation.MetricsPush(); push != nil {
+			push.Fail()
+		}
 		return nil
 	}
 	b.managed = managed
@@ -115,15 +128,57 @@ func (b *appMetricsBoot) start(
 	// A zero timeout takes the writer's 30s default; vmagent is on loopback.
 	b.shipWriter = metrics.NewVictoriaMetricsWriter(log, managed.ImportURL(), 0)
 	b.shipWriter.Start()
-	b.shipping = &metrics.Labeled{Sink: b.shipWriter, Labels: identityLabels}
-	b.operational = observability.operationalMetrics
-	b.operational.Attach(b.shipping)
+	b.attachShipping(ctx, log, observability, b.shipWriter, identityLabels)
 	log.Info("runtime operational metrics shipping through managed metrics",
 		"cluster", config.ClusterID, "runner", b.inputs.runnerID)
+
+	if push := foundation.foundation.MetricsPush(); push != nil {
+		push.Arm(metricspush.Backend{
+			ImportURL: managed.ImportURL(),
+			ClusterID: config.ClusterID,
+			Resolver:  metricspush.NewEntityResolver(eac),
+		})
+		b.push = push
+		log.Info("workload metrics push enabled", "cluster", config.ClusterID)
+	}
 	return nil
 }
 
+// attachShipping joins sink to the operational fanout, labeled with the
+// cluster identity, and then re-emits the process identity series through
+// it. The order matters: the identity sample the process pushed at boot only
+// reached the embedded store, since this sink did not exist yet, so the emit
+// has to come after Attach for a process that dies before its next tick to
+// record its start time and build where the restart and skew rules can see it.
+func (b *appMetricsBoot) attachShipping(
+	ctx context.Context,
+	log *slog.Logger,
+	observability observabilityBootOutput,
+	sink metrics.PointWriter,
+	identityLabels map[string]string,
+) {
+	b.shipping = &metrics.Labeled{Sink: sink, Labels: identityLabels}
+	b.operational = observability.operationalMetrics
+	b.operational.Attach(b.shipping)
+	if err := observability.processInfo.Emit(ctx); err != nil {
+		log.Warn("failed to ship control-process identity after attaching shipping sink", "error", err)
+	}
+	// Recovery at boot can count before this sink exists, and a counter whose
+	// first shipped sample is already nonzero gives increase() nothing to
+	// measure from.
+	if observability.sagaCounts != nil {
+		observability.sagaCounts.ResendBaselines()
+		if err := observability.sagaCounts.Emit(ctx, time.Now()); err != nil {
+			log.Warn("failed to ship saga count baselines after attaching shipping sink", "error", err)
+		}
+	}
+}
+
 func (b *appMetricsBoot) stop(ctx context.Context) error {
+	if b.push != nil {
+		b.push.Disarm()
+		b.push = nil
+	}
 	if b.disabledReporter != nil {
 		b.disabledReporter.Stop()
 		b.disabledReporter = nil

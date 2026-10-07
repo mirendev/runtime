@@ -352,6 +352,7 @@ func bridgeInputPorts(apiPort int) []bridgeInputPort {
 	ports := []bridgeInputPort{
 		{53, []string{"udp", "tcp"}, "container DNS resolution"},
 		{5000, []string{"tcp"}, "buildkit pushing images to the registry"},
+		{TokenServerPort, []string{"tcp"}, "workload identity tokens and metrics push"},
 	}
 
 	if apiPort > 0 {
@@ -391,6 +392,28 @@ func enableBridgeInputRules(br netlink.Link, apiPort int) error {
 		}
 	}
 
+	return nil
+}
+
+// AllowRegistryFromWireGuard restricts the coordinator's bridge-bound registry
+// to local traffic and overlay peers, even if a public interface receives a
+// packet addressed to the bridge gateway (Linux accepts local IPs on any link).
+func AllowRegistryFromWireGuard() error {
+	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
+	if err != nil {
+		return err
+	}
+	match := []string{"-d", "10.8.0.0/16", "-p", "tcp", "--dport", "5000"}
+	if err := ipt.InsertUnique("filter", "INPUT", 1,
+		append(append([]string{}, match...), "-j", "DROP")...); err != nil {
+		return err
+	}
+	for _, iface := range []string{"lo", "rt0", "flannel-wg"} {
+		if err := ipt.InsertUnique("filter", "INPUT", 1,
+			append(append([]string{"-i", iface}, match...), "-j", "ACCEPT")...); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

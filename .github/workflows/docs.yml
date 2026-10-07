@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
@@ -94,7 +94,7 @@ jobs:
   deploy:
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     environment:
       name: github-pages

@@ -60,7 +60,13 @@ func ServerConfigValidate(ctx *Context, opts struct {
 	if err != nil {
 		return fmt.Errorf("configuration is invalid: %w", err)
 	}
+	if err := cfg.ResolveDeprecatedConfig(); err != nil {
+		return fmt.Errorf("configuration is invalid: %w", err)
+	}
 	if err := cfg.ValidateIngressCoherence(); err != nil {
+		return fmt.Errorf("configuration is invalid: %w", err)
+	}
+	if err := cfg.ValidateTelemetryCoherence(); err != nil {
 		return fmt.Errorf("configuration is invalid: %w", err)
 	}
 	cfg.WarnDeprecatedConfig(ctx.Log)

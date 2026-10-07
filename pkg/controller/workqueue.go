@@ -31,6 +31,9 @@ type workSignal struct {
 	created   bool
 	tombstone *entity.Entity
 	queuedAt  time.Time
+	// rev is the store revision the signal was observed at, or 0 when the
+	// source has no revision to offer (a manual Enqueue from a bridge).
+	rev int64
 }
 
 type workItem struct {
@@ -56,6 +59,7 @@ type workEntry struct {
 	present   bool
 	created   bool
 	tombstone *entity.Entity
+	rev       int64
 	queuedAt  time.Time
 	dirtyAt   time.Time
 	attempts  int
@@ -115,6 +119,7 @@ func (q *dirtyQueue) Add(signal workSignal) enqueueResult {
 			present:   signal.present,
 			created:   signal.created,
 			tombstone: signal.tombstone,
+			rev:       signal.rev,
 			queuedAt:  now,
 		}
 		q.entries[signal.id] = entry
@@ -125,14 +130,29 @@ func (q *dirtyQueue) Add(signal workSignal) enqueueResult {
 
 	// Later observations replace the lifecycle hint but never replace a live
 	// entity snapshot, because the worker will read that from the store.
-	entry.present = signal.present
-	if signal.created {
-		entry.created = true
+	// "Later" is decided by revision when both sides have one, so a resync
+	// snapshot read before a delete can never erase that delete or its
+	// tombstone, however it is ordered on arrival. A repair with no revision
+	// (a List that reports none, such as a session index) cannot show it is
+	// newer than a revisioned signal and yields to one; if that is wrong, the
+	// watch's own create event corrects it, whereas a wrongly applied repair
+	// resurrects an entity with nothing to correct it. Unrevisioned urgent
+	// signals, a bridge's manual Enqueue, keep arrival order.
+	stale := entry.rev != 0 && (signal.rev != 0 && signal.rev < entry.rev ||
+		signal.rev == 0 && signal.priority == workRepair)
+	if !stale {
+		entry.present = signal.present
+		if signal.created {
+			entry.created = true
+		}
+		if signal.present {
+			entry.tombstone = nil
+		} else if signal.tombstone != nil {
+			entry.tombstone = signal.tombstone
+		}
 	}
-	if signal.present {
-		entry.tombstone = nil
-	} else if signal.tombstone != nil {
-		entry.tombstone = signal.tombstone
+	if signal.rev > entry.rev {
+		entry.rev = signal.rev
 	}
 
 	if entry.retrying && signal.priority == workUrgent {

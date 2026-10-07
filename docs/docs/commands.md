@@ -104,12 +104,21 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren deploy`](./command/deploy.md) | Deploy an application |
 | [`miren deploy cancel`](./command/deploy-cancel.md) | Cancel an in-progress deployment |
+| [`miren deploy target`](./command/deploy-target.md) | List deployment targets |
+| [`miren deploy target add`](./command/deploy-target-add.md) | Add a deployment target |
+| [`miren deploy target list`](./command/deploy-target-list.md) | List deployment targets |
+| [`miren deploy target remove`](./command/deploy-target-remove.md) | Remove a deployment target |
+| [`miren deploy target set-default`](./command/deploy-target-set-default.md) | Set the default deployment target |
 
 ## disk
 
 | Command | Description |
 |---------|-------------|
-| [`miren disk`](./command/disk.md) | Disk backup and recovery |
+| [`miren disk`](./command/disk.md) | Disk backup, recovery, and acceleration |
+| [`miren disk accelerator`](./command/disk-accelerator.md) | Faster block-device disks via the lbd kernel module |
+| [`miren disk accelerator install`](./command/disk-accelerator-install.md) | Build and load the lbd kernel module on a running node |
+| [`miren disk accelerator status`](./command/disk-accelerator-status.md) | Show whether accelerator mode can run on this host |
+| [`miren disk accelerator uninstall`](./command/disk-accelerator-uninstall.md) | Unload and remove the lbd kernel module |
 | [`miren disk backup`](./command/disk-backup.md) | Backup a disk to a snapshot file |
 | [`miren disk list-deleted`](./command/disk-list-deleted.md) | List deleted disks available for recovery |
 | [`miren disk restore`](./command/disk-restore.md) | Restore a disk from a snapshot file |
@@ -120,9 +129,6 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren doctor`](./command/doctor.md) | Diagnose miren environment and connectivity |
-| [`miren doctor auth`](./command/doctor-auth.md) | Check authentication and user information |
-| [`miren doctor config`](./command/doctor-config.md) | Check configuration files |
-| [`miren doctor server`](./command/doctor-server.md) | Check server health and connectivity |
 
 ## download
 
@@ -195,6 +201,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren route set-default`](./command/route-set-default.md) | Set an app as the default route |
 | [`miren route show`](./command/route-show.md) | Show details of an HTTP route |
 | [`miren route timeout`](./command/route-timeout.md) | Override the ingress request timeout for an HTTP route |
+| [`miren route tls-check`](./command/route-tls-check.md) | Ask an app before issuing certificates for names under its route |
 | [`miren route unprotect`](./command/route-unprotect.md) | Remove identity-provider protection from an HTTP route |
 | [`miren route unset-default`](./command/route-unset-default.md) | Remove the default route |
 | [`miren route up`](./command/route-up.md) | Bring an HTTP route out of maintenance |
@@ -210,6 +217,11 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner install`](./command/runner-install.md) | Install systemd service for miren runner |
 | [`miren runner join`](./command/runner-join.md) | Join this machine to a coordinator as a runner |
 | [`miren runner list`](./command/runner-list.md) | List all registered runners |
+| [`miren runner operations`](./command/runner-operations.md) | Durable runner restart and upgrade operations |
+| [`miren runner operations abandon`](./command/runner-operations-abandon.md) | Give up on an unfinished operation |
+| [`miren runner operations list`](./command/runner-operations-list.md) | List recorded restart and upgrade operations |
+| [`miren runner operations run`](./command/runner-operations-run.md) | Execute or resume an operation in the foreground (normally launched by miren upgrade) |
+| [`miren runner operations show`](./command/runner-operations-show.md) | Show one restart or upgrade operation |
 | [`miren runner reissue`](./command/runner-reissue.md) | Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity |
 | [`miren runner remove`](./command/runner-remove.md) | Remove a registered runner and clean up resources |
 | [`miren runner service-status`](./command/runner-service-status.md) | Show miren-runner systemd service status |
@@ -282,7 +294,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren server status`](./command/server-status.md) | Show miren service status |
 | [`miren server uninstall`](./command/server-uninstall.md) | Remove systemd service for miren server |
 | [`miren server unregister`](./command/server-unregister.md) | Detach this cluster from miren.cloud |
-| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'sudo miren upgrade') |
+| [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'miren upgrade') |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
 ## top
@@ -295,7 +307,7 @@ Complete reference for all `miren` CLI commands.
 
 | Command | Description |
 |---------|-------------|
-| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (server and CLI on a systemd server host, otherwise the CLI) |
+| [`miren upgrade`](./command/upgrade.md) | Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI) |
 
 ## version
 
@@ -329,6 +341,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug ctr nuke`](./command/debug-ctr-nuke.md) | Nuke a containerd namespace |
 | [`miren debug deploy-events`](./command/debug-deploy-events.md) | Render a 'miren deploy --format jsonl' stream as readable output |
 | [`miren debug disk`](./command/debug-disk.md) | Disk entity debug commands |
+| [`miren debug disk backup`](./command/debug-disk-backup.md) | Back up a disk by reading its image directly (break-glass) |
 | [`miren debug disk create`](./command/debug-disk-create.md) | Create a disk entity for testing |
 | [`miren debug disk delete`](./command/debug-disk-delete.md) | Delete a disk entity |
 | [`miren debug disk lease`](./command/debug-disk-lease.md) | Create a disk lease for testing |
@@ -337,8 +350,11 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug disk lease-release`](./command/debug-disk-lease-release.md) | Release a disk lease |
 | [`miren debug disk lease-status`](./command/debug-disk-lease-status.md) | Show detailed status of a disk lease |
 | [`miren debug disk list`](./command/debug-disk-list.md) | List all disk entities |
+| [`miren debug disk list-deleted`](./command/debug-disk-list-deleted.md) | Read the soft-delete holding area directly (break-glass) |
 | [`miren debug disk mounts`](./command/debug-disk-mounts.md) | List all mounted disks from /proc/mounts |
+| [`miren debug disk restore`](./command/debug-disk-restore.md) | Restore a disk by writing its image directly (break-glass) |
 | [`miren debug disk status`](./command/debug-disk-status.md) | Show status of a disk entity |
+| [`miren debug disk undelete`](./command/debug-disk-undelete.md) | Recover a deleted disk by moving its data directly (break-glass) |
 | [`miren debug entity`](./command/debug-entity.md) | Entity store debug commands |
 | [`miren debug entity create`](./command/debug-entity-create.md) | Create a new entity |
 | [`miren debug entity delete`](./command/debug-entity-delete.md) | Delete an entity |
@@ -358,6 +374,7 @@ These commands are intended for advanced debugging and troubleshooting. They may
 | [`miren debug rbac test`](./command/debug-rbac-test.md) | Test RBAC evaluation with fetched rules |
 | [`miren debug reindex`](./command/debug-reindex.md) | Rebuild all entity indexes from scratch |
 | [`miren debug saga`](./command/debug-saga.md) | Saga execution debug commands |
+| [`miren debug saga abandon`](./command/debug-saga-abandon.md) | Give up a blocked saga execution (break-glass) |
 | [`miren debug saga list`](./command/debug-saga-list.md) | List saga executions |
 | [`miren debug saga show`](./command/debug-saga-show.md) | Show a saga execution in detail |
 | [`miren debug test`](./command/debug-test.md) | Debug test commands |

@@ -11,7 +11,7 @@ Remove an HTTP route
 ## Usage
 
 ```bash
-miren route remove <host> [flags]
+miren route remove [host] [flags]
 ```
 
 ## Arguments

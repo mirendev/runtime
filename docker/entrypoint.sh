@@ -18,8 +18,11 @@ setupCgroup() {
 sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
 }
 
+# The image's binary only decides which binary to run: upgrades land in the
+# data volume's release directory, and container-boot execs that one.
 if [ "$1" = "server" ]; then
     setupCgroup
+    exec /usr/local/bin/miren internal container-boot -- "$@"
 fi
 
 exec /usr/local/bin/miren "$@"

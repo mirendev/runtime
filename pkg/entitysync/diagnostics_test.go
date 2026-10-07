@@ -42,6 +42,51 @@ func TestDiagnosticsTracksNegotiatedSessionAndExporterProgress(t *testing.T) {
 	require.Nil(t, status.Snapshot)
 }
 
+func TestDiagnosticsLandedRevisionHoldsUntilExportIsKnownDisabled(t *testing.T) {
+	diagnostics := NewDiagnostics("schema")
+
+	// Nothing is known yet: a consumer must hold rather than assume cloud
+	// does not apply. Only disabling export says it does not.
+	_, exporting := diagnostics.LandedRevision()
+	require.True(t, exporting, "unknown uplink state holds")
+
+	diagnostics.ObserveUplink(uplink.Status{State: "disconnected"})
+	_, exporting = diagnostics.LandedRevision()
+	require.True(t, exporting, "a registered cluster whose uplink is down still exports")
+
+	diagnostics.SetDisabled("cloud-auth-disabled")
+	_, exporting = diagnostics.LandedRevision()
+	require.False(t, exporting)
+}
+
+func TestDiagnosticsLandedRevisionIgnoresUnvalidatedCursor(t *testing.T) {
+	diagnostics := NewDiagnostics("schema")
+
+	// A cursor cloud reports at session start is not custody until the
+	// session validates, so it must not move the landed revision.
+	diagnostics.setCursor(40)
+	landed, exporting := diagnostics.LandedRevision()
+	require.Zero(t, landed)
+	require.True(t, exporting)
+
+	diagnostics.setLanded(40)
+	diagnostics.finishSnapshot(64)
+	diagnostics.setLanded(50)
+	landed, _ = diagnostics.LandedRevision()
+	require.Equal(t, int64(64), landed, "landed revision never moves backwards")
+
+	diagnostics.setSource("epoch-1")
+	landed, _ = diagnostics.LandedRevision()
+	require.Equal(t, int64(64), landed, "first epoch observation keeps progress")
+	diagnostics.setSource("epoch-2")
+	landed, _ = diagnostics.LandedRevision()
+	require.Zero(t, landed, "a new source epoch invalidates the old watermark")
+
+	diagnostics.SetDisabled("cloud-auth-disabled")
+	_, exporting = diagnostics.LandedRevision()
+	require.False(t, exporting)
+}
+
 func TestDiagnosticsFinishingQuietSnapshotAdvancesWatchRevision(t *testing.T) {
 	diagnostics := NewDiagnostics("schema")
 	diagnostics.setNextWatchRevision(1)

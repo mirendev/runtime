@@ -2,10 +2,13 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -13,6 +16,115 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/saga"
 )
+
+type sagaFailureOps struct {
+	SandboxEntityStore
+	SandboxNetworking
+	SandboxContainerRuntime
+	SandboxObservability
+}
+
+func TestSagaFailureMarksDeadWhenFinalFetchFails(t *testing.T) {
+	h := newTestHarness(t)
+	h.networking.allocateErr = errors.New("no IPs available")
+	h.entities.getSandboxFunc = func(_ context.Context, _ string) (*compute.Sandbox, *entity.Meta, error) {
+		if h.entities.getCalls > 1 {
+			return nil, nil, errors.New("transient fetch failure")
+		}
+		return h.entities.sandbox, h.entities.meta, nil
+	}
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+	err := c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false)
+	require.ErrorContains(t, err, "no IPs available")
+	require.Len(t, h.entities.patchCalls, 1)
+	patch := entity.New(h.entities.patchCalls[0])
+	status, ok := patch.Get(compute.SandboxStatusId)
+	require.True(t, ok)
+	assert.Equal(t, compute.SandboxStatusDeadId, status.Value.Id())
+	_, outcomeSet := patch.Get(compute.SandboxStartupOutcomeId)
+	assert.False(t, outcomeSet, "a failed fetch must not derive an outcome from the stale snapshot")
+}
+
+func TestSagaFailureDoesNotRewriteDead(t *testing.T) {
+	h := newTestHarness(t)
+	h.networking.allocateErr = errors.New("no IPs available")
+	h.entities.sandbox.Status = compute.DEAD
+	h.entities.sandbox.StartupOutcome = compute.STARTUP_FAILED
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+	err := c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false)
+	require.ErrorContains(t, err, "no IPs available")
+	require.Empty(t, h.entities.patchCalls, "already-DEAD sandbox must retain its failure timestamp")
+}
+
+// An app that exits before binding its port is its own failure. Once the
+// sandbox is DEAD the pool replaces it, so the controller reports success to
+// the reconcile loop instead of an error it would log again and retry.
+func TestSagaWorkloadFailureMarksDeadAndStops(t *testing.T) {
+	h := newTestHarness(t)
+	h.runtime.waitForPortErr = errProcessExited
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+
+	require.NoError(t, c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false))
+	require.NotEmpty(t, h.entities.patchCalls)
+	status, ok := entity.New(h.entities.patchCalls[len(h.entities.patchCalls)-1]).Get(compute.SandboxStatusId)
+	require.True(t, ok)
+	assert.Equal(t, compute.SandboxStatusDeadId, status.Value.Id())
+}
+
+func TestSagaWorkloadFailureRetriesWhenDeadPatchFails(t *testing.T) {
+	h := newTestHarness(t)
+	h.runtime.waitForPortErr = errProcessExited
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+	c := &SandboxController{
+		Log: slog.Default(), ops: deadPatchFails{sagaFailureOps{SandboxEntityStore: h.entities}},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+
+	err := c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false)
+	require.ErrorContains(t, err, "sandbox process exited",
+		"until DEAD is written the reconcile loop has to retry")
+}
+
+func TestSagaWorkloadFailureOnDeadSandboxStops(t *testing.T) {
+	h := newTestHarness(t)
+	h.runtime.waitForPortErr = errProcessExited
+	h.runtime.mockContainer.taskFn = func(ctx context.Context, attach cio.Attach) (containerd.Task, error) {
+		return h.runtime.mockTask, nil
+	}
+	h.entities.sandbox.Status = compute.DEAD
+	c := &SandboxController{
+		Log: slog.Default(), ops: sagaFailureOps{SandboxEntityStore: h.entities},
+		executor: h.executor, sagaStorage: h.storage,
+	}
+
+	require.NoError(t, c.createSandboxViaSaga(context.Background(), h.entities.sandbox, false))
+	for _, attrs := range h.entities.patchCalls {
+		_, setsStatus := entity.New(attrs).Get(compute.SandboxStatusId)
+		assert.False(t, setsStatus, "already-DEAD sandbox must retain its failure timestamp")
+	}
+}
+
+// deadPatchFails fails the controller's own patches, which is only the DEAD
+// marking; the saga's actions patch through the harness store directly.
+type deadPatchFails struct{ sagaFailureOps }
+
+func (deadPatchFails) PatchSandbox(context.Context, []entity.Attr, int64) (int64, error) {
+	return 0, errors.New("etcd unavailable")
+}
 
 // newSagaControllerForResume wires up only what sagaResumeNeeded reads
 // (storage + log), so no live containerd client is needed.

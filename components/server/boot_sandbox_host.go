@@ -58,16 +58,16 @@ func sandboxHostInputs(options StartOptions, resolver netresolve.Resolver, apiPo
 	}
 }
 
-func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput], storage boot.Output[*runner.NodeStorage], containerdOutput boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput]) *sandboxHostBoot {
+func newSandboxHostBoot(inputs sandboxHostBootInputs, access boot.Output[clusterAccessBootOutput], storage boot.Output[*runner.NodeStorage], containerdOutput boot.Output[containerdBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput], foundation boot.Output[foundationBootOutput]) *sandboxHostBoot {
 	b := &sandboxHostBoot{inputs: inputs}
-	b.component, b.output = boot.Provide5(
-		"sandbox-host", access, storage, containerdOutput, network, observability,
+	b.component, b.output = boot.Provide6(
+		"sandbox-host", access, storage, containerdOutput, network, observability, foundation,
 		b.start, boot.WithStop(b.stop, runnerComponentStopTimeout),
 	)
 	return b
 }
 
-func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOutput, storage *runner.NodeStorage, containerdOutput containerdBootOutput, network networkBootOutput, observability observabilityBootOutput) (*runner.SandboxHost, error) {
+func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOutput, storage *runner.NodeStorage, containerdOutput containerdBootOutput, network networkBootOutput, observability observabilityBootOutput, foundation foundationBootOutput) (*runner.SandboxHost, error) {
 	config := access.config
 
 	dependencies := runner.RunnerDeps{
@@ -88,6 +88,12 @@ func (b *sandboxHostBoot) start(ctx context.Context, access clusterAccessBootOut
 		IsCoordinator:   true,
 		ApiAddress:      net.JoinHostPort(network.routerAddress.String(), strconv.Itoa(b.inputs.apiPort)),
 		CACert:          access.caCert,
+	}
+	// The coordinator's relay hands pushes straight to the ingest in this
+	// process. A nil ingest has to stay a nil interface, or the relay would
+	// mount and then fail every push.
+	if push := foundation.foundation.MetricsPush(); push != nil {
+		dependencies.MetricsPusher = push
 	}
 
 	var err error

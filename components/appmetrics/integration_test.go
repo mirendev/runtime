@@ -1,6 +1,7 @@
 package appmetrics_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -15,6 +16,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/klauspost/compress/snappy"
 	"github.com/stretchr/testify/require"
+	colmetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	otlpmetrics "go.opentelemetry.io/proto/otlp/metrics/v1"
+	"google.golang.org/protobuf/proto"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -28,6 +32,7 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/testutils"
 	"miren.dev/runtime/pkg/workloadidentity"
+	"miren.dev/runtime/servers/metricspush"
 )
 
 func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
@@ -174,6 +179,138 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 		}
 		return false
 	}, 60*time.Second, 500*time.Millisecond, "a gauge pushed to vmagent's import endpoint should arrive labeled through the same remote write")
+
+	// Workload pushes take the relay and the ingest, and must come out the far
+	// side labeled from the sandbox's identity and nothing else.
+	find := func(match func(map[string]string) bool) (remotewrite.Sample, bool) {
+		receivedMu.Lock()
+		defer receivedMu.Unlock()
+		for _, sample := range received {
+			if match(sample.Labels) {
+				return sample, true
+			}
+		}
+		return remotewrite.Sample{}, false
+	}
+	exerciseWorkloadPush(t, ctx, component, issuer, entities, firstSandbox, secondSandbox, find)
+}
+
+// exerciseWorkloadPush drives pushes from two replicas of the seeded app through
+// the relay and ingest into vmagent. Each replica authenticates with its own
+// secret, standing in for the token server's source-address check.
+func exerciseWorkloadPush(
+	t *testing.T,
+	ctx context.Context,
+	component *appmetrics.Component,
+	issuer *workloadidentity.Issuer,
+	entities *entitytest.InMemEntityServer,
+	first, second entity.Id,
+	find func(func(map[string]string) bool) (remotewrite.Sample, bool),
+) {
+	t.Helper()
+
+	ingest := metricspush.NewIngest(entitytest.TestLogger(t), issuer, true)
+	ingest.Arm(metricspush.Backend{
+		ImportURL: component.ImportURL(),
+		ClusterID: "cluster-123",
+		Resolver:  metricspush.NewEntityResolver(entities.EAC),
+	})
+	auth := func(_, secret string) (string, string, bool) {
+		switch secret {
+		case "first":
+			return first.String(), "shop", true
+		case "second":
+			return second.String(), "shop", true
+		}
+		return "", "", false
+	}
+	mux := http.NewServeMux()
+	metricspush.NewRelay(entitytest.TestLogger(t), auth, issuer, ingest).Register(mux)
+	relay := httptest.NewServer(mux)
+	defer relay.Close()
+
+	push := func(secret, path, contentType string, body []byte) (int, string) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, relay.URL+path, bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("Content-Type", contentType)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		msg, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(msg)
+	}
+	const text = "text/plain; version=0.0.4"
+
+	// Sandbox scope: a worker's own counter, labeled exactly as a scrape would be.
+	status, msg := push("first", "/v1/metrics/sandbox/metrics/job/worker", text,
+		[]byte("# TYPE jobs_processed_total counter\njobs_processed_total 5\n"))
+	require.Equal(t, http.StatusOK, status, msg)
+
+	// App scope: both replicas push the same shared-state gauge.
+	for _, secret := range []string{"first", "second"} {
+		status, msg = push(secret, "/v1/metrics/app/metrics/job/worker", text,
+			[]byte("# TYPE shop_open_orders gauge\nshop_open_orders 17\n"))
+		require.Equal(t, http.StatusOK, status, msg)
+	}
+
+	// OTLP at app scope, with a dotted name vmagent should normalize.
+	otlpBody, err := proto.Marshal(&colmetrics.ExportMetricsServiceRequest{ResourceMetrics: []*otlpmetrics.ResourceMetrics{{
+		ScopeMetrics: []*otlpmetrics.ScopeMetrics{{Metrics: []*otlpmetrics.Metric{{
+			Name: "shop.backlog",
+			Data: &otlpmetrics.Metric_Gauge{Gauge: &otlpmetrics.Gauge{DataPoints: []*otlpmetrics.NumberDataPoint{{
+				TimeUnixNano: uint64(time.Now().UnixNano()),
+				Value:        &otlpmetrics.NumberDataPoint_AsInt{AsInt: 3},
+			}}}},
+		}}}},
+	}}})
+	require.NoError(t, err)
+	status, msg = push("second", "/v1/metrics/app/otlp/v1/metrics", "application/x-protobuf", otlpBody)
+	require.Equal(t, http.StatusOK, status, msg)
+
+	// A replica cannot file samples under another app, and nothing of the
+	// attempt reaches the destination.
+	status, msg = push("first", "/v1/metrics/sandbox/metrics/job/worker", text,
+		[]byte("forged_total{miren_app=\"bank\"} 1\n"))
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Contains(t, msg, "miren_app")
+
+	require.Eventually(t, func() bool {
+		_, ok := find(func(l map[string]string) bool {
+			return l["__name__"] == "jobs_processed_total" &&
+				l["job"] == "worker" &&
+				l["miren_app"] == "shop" &&
+				l["miren_app_version"] == "v7" &&
+				l["miren_service"] == "web" &&
+				l["miren_sandbox"] == first.String() &&
+				l["miren_runner"] == "runner-west" &&
+				l["miren_cluster"] == "cluster-123"
+		})
+		return ok
+	}, 60*time.Second, 500*time.Millisecond, "a sandbox-scoped push should carry the scrape path's labels")
+
+	appScoped := func(name string) func(map[string]string) bool {
+		return func(l map[string]string) bool {
+			return l["__name__"] == name &&
+				l["miren_app"] == "shop" &&
+				l["miren_service"] == "web" &&
+				l["miren_cluster"] == "cluster-123"
+		}
+	}
+	require.Eventually(t, func() bool {
+		_, gauge := find(appScoped("shop_open_orders"))
+		_, otlp := find(appScoped("shop_backlog"))
+		return gauge && otlp
+	}, 60*time.Second, 500*time.Millisecond, "app-scoped pushes should arrive")
+
+	for _, name := range []string{"shop_open_orders", "shop_backlog"} {
+		sample, _ := find(appScoped(name))
+		for _, label := range []string{"miren_sandbox", "miren_runner", "miren_app_version"} {
+			require.NotContains(t, sample.Labels, label, "%s is app-scoped and must not carry %s", name, label)
+		}
+	}
+	_, forged := find(func(l map[string]string) bool { return l["__name__"] == "forged_total" })
+	require.False(t, forged, "a refused push must not reach remote write")
 }
 
 func seedMetricsReplicas(t *testing.T, ctx context.Context, server *entitytest.InMemEntityServer, port int) (entity.Id, entity.Id) {

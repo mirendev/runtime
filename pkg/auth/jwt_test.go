@@ -13,6 +13,8 @@ import (
 	"time"
 
 	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestJWTValidatorWithEdDSA(t *testing.T) {
@@ -362,4 +364,41 @@ func TestInvalidTokens(t *testing.T) {
 			t.Error("expected error for missing kid header")
 		}
 	})
+}
+
+// Cloud stamps user tokens with the user's email and name, and may add more
+// claims later. The validator must pick up the ones it knows and ignore the
+// rest, so a runtime never rejects a token for carrying a claim it predates.
+func TestJWTValidatorProfileAndUnknownClaims(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(JWKS{Keys: []JWK{{
+			Kty: "OKP", Kid: "test-key-1", Use: "sig", Alg: "EdDSA", Crv: "Ed25519",
+			X: base64.RawURLEncoding.EncodeToString(publicKey),
+		}}})
+	}))
+	defer server.Close()
+
+	token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, jwt.MapClaims{
+		"sub":             "usr-ada",
+		"iss":             "miren.cloud",
+		"exp":             time.Now().Add(time.Hour).Unix(),
+		"iat":             time.Now().Unix(),
+		"group_ids":       []string{"grp-1"},
+		"email":           "ada@example.com",
+		"name":            "Ada Lovelace",
+		"some_future_bit": map[string]any{"nested": true},
+	})
+	token.Header["kid"] = "test-key-1"
+	tokenString, err := token.SignedString(privateKey)
+	require.NoError(t, err)
+
+	claims, err := NewJWTValidator(server.URL, slog.Default()).ValidateToken(context.Background(), tokenString)
+	require.NoError(t, err)
+	assert.Equal(t, "usr-ada", claims.Subject)
+	assert.Equal(t, "ada@example.com", claims.Email)
+	assert.Equal(t, "Ada Lovelace", claims.Name)
 }

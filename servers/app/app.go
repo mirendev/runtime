@@ -266,8 +266,8 @@ func (s *appHealthSource) healthOf(entry appEntry) apphealth.State {
 		// than a misleading idle. Both classifiers have to agree, or `m app
 		// list` and the deploy poller disagree about the same app.
 		ps := poolHealth{
-			isAutoscale: specAllowsScaleToZero(s.specs[entry.activeVersion.ID.String()]),
-			isTaskOnly:  specIsTaskOnly(s.specs[entry.activeVersion.ID.String()]),
+			isAutoscale:    specAllowsScaleToZero(s.specs[entry.activeVersion.ID.String()]),
+			needsNoService: specNeedsNoService(s.specs[entry.activeVersion.ID.String()]),
 		}
 		out.Health = ps.classify()
 		return out

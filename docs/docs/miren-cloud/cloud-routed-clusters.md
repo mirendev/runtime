@@ -78,6 +78,51 @@ inside them and is checked by the cluster.
 **Audit still names you.** Calls arriving this way are attributed to you, not to
 cloud.
 
+## How cloud authorization stays current
+
+For cloud-authenticated callers, the runtime validates your JWT to establish
+your identity, then authorizes locally using the rules and group
+memberships pushed over its cluster connection. Group claims in an older token
+do not grant access. Policy edits and membership changes are pushed without
+waiting for a polling interval or a new login.
+
+Each snapshot contains all current users in the cluster's organization, including
+users with no effective groups, and their explicit and implicit default group
+memberships. It also includes active same-organization service accounts (`svc-*`
+principals), including those with no groups, with their explicit same-organization
+groups only; user defaults do not apply to service accounts. Suspended, revoked,
+and deleted service accounts are omitted. Principals absent from the snapshot are
+denied. The authenticated cluster session scopes this map to its organization;
+JWT organization claims are not used for scope (user tokens omit them, and
+service-account tokens contain numeric database IDs rather than organization
+XIDs). Cloud sends the organization's rules with their tag selectors; the runtime still evaluates those
+selectors against its own cluster tags. Policy and memberships are replaced
+together, and cached grants are invalidated on every update.
+
+JWT authorization is denied before the first snapshot, while the cluster
+connection is disconnected, and after reconnect until a fresh snapshot arrives.
+This applies to direct connections as well as cloud-routed ones, preventing
+removed users or groups from retaining access during an outage. Local,
+CA-verified client certificate access remains available and bypasses cloud RBAC.
+
+:::warning[Upgrade cloud first]
+
+A cloud that does not negotiate authorization version 1 cannot authorize JWT
+callers on this runtime; update cloud before upgrading the runtime.
+
+:::
+
+After reconnecting, the cluster receives current permissions, including changes
+made while offline, before JWT access resumes.
+
+`miren debug rbac` and `miren debug rbac test` still perform an explicit, one-shot
+HTTP policy fetch for troubleshooting. They do not inspect the running cluster's
+snapshot or resolve a user's current groups.
+
+Authentication diagnostics may still display group claims from the token. Those
+claims describe when it was issued, not the effective groups used to authorize
+the current request.
+
 ## Limits worth knowing
 
 **A dropped link ends in-flight commands.** Sessions live on the cluster's
@@ -136,8 +181,14 @@ explicitly:
 uplink.
 
 **`access denied by RBAC policy`** — you reached the cluster and it refused the
-command. That is the cluster's own policy, not the relay. A permission granted a
-moment ago can take a short while to take effect.
+command. That is the cluster's own policy, not the relay. Check your current
+organization membership and permissions. A newly granted permission becomes
+usable when the corresponding push arrives.
+
+**`cloud authorization is not synchronized`** — the cluster has no current
+authorization snapshot, either because its cloud connection is down or because
+it is waiting for a fresh snapshot. Check the [Connectivity](./connectivity.md)
+panel and that cloud was upgraded first; JWT access resumes after synchronization.
 
 **`the cluster's link to the cloud dropped`** — the cluster disconnected while
 your command was running. Retry it.

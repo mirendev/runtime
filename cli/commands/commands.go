@@ -59,24 +59,6 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren doctor",
 		}),
 	))
-	d.Dispatch("doctor config", Infer("doctor config", "Check configuration files", DoctorConfig,
-		WithExample(mflags.Example{
-			Name: "Check config files",
-			Body: "miren doctor config",
-		}),
-	))
-	d.Dispatch("doctor server", Infer("doctor server", "Check server health and connectivity", DoctorServer,
-		WithExample(mflags.Example{
-			Name: "Check server connectivity",
-			Body: "miren doctor server",
-		}),
-	))
-	d.Dispatch("doctor auth", Infer("doctor auth", "Check authentication and user information", DoctorAuth,
-		WithExample(mflags.Example{
-			Name: "Check authentication",
-			Body: "miren doctor auth",
-		}),
-	))
 
 	// App lifecycle commands
 	d.Dispatch("init", Infer("init", "Initialize a new application", Init,
@@ -138,6 +120,21 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Name: "Cancel a specific deployment",
 			Body: "miren deploy cancel -d dep_abc123",
 		}),
+	))
+	d.Dispatch("deploy target", Infer("deploy target", "List deployment targets", DeployTargetList,
+		WithExample(mflags.Example{Name: "List deployment targets", Body: "miren deploy target"}),
+	))
+	d.Dispatch("deploy target list", Infer("deploy target list", "List deployment targets", DeployTargetList))
+	d.Dispatch("deploy target add", Infer("deploy target add", "Add a deployment target", DeployTargetAdd,
+		WithExample(mflags.Example{Name: "Select a configured cluster interactively", Body: "miren deploy target add staging"}),
+		WithExample(mflags.Example{Name: "Add a target non-interactively", Body: "miren deploy target add prod my-prod-cluster"}),
+		WithExample(mflags.Example{Name: "Add the default target", Body: "miren deploy target add staging my-staging-cluster --default"}),
+	))
+	d.Dispatch("deploy target remove", Infer("deploy target remove", "Remove a deployment target", DeployTargetRemove,
+		WithExample(mflags.Example{Name: "Remove a target", Body: "miren deploy target remove staging"}),
+	))
+	d.Dispatch("deploy target set-default", Infer("deploy target set-default", "Set the default deployment target", DeployTargetSetDefault,
+		WithExample(mflags.Example{Name: "Make production the default", Body: "miren deploy target set-default prod"}),
 	))
 	d.Dispatch("rollback", Infer("rollback", "Roll back to a previous version", Rollback,
 		WithGroup(GroupGettingStarted),
@@ -785,6 +782,21 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 
+	d.Dispatch("route tls-check", Infer("route tls-check", "Ask an app before issuing certificates for names under its route", RouteTLSCheck,
+		WithExample(mflags.Example{
+			Name: "Let a wildcard app vouch for its own subdomains",
+			Body: "miren route tls-check '*.example.com' /tls-check",
+		}),
+		WithExample(mflags.Example{
+			Name: "Show the current check for a route",
+			Body: "miren route tls-check '*.example.com'",
+		}),
+		WithExample(mflags.Example{
+			Name: "Remove the check",
+			Body: "miren route tls-check '*.example.com' --clear",
+		}),
+	))
+
 	d.Dispatch("route down", Infer("route down", "Put an HTTP route into maintenance", RouteDown,
 		WithDescription(routeDownDescription),
 		WithExample(mflags.Example{
@@ -1083,6 +1095,26 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren runner upgrade rollback",
 		}),
 	))
+	d.Dispatch("runner operations", Section("runner operations", "Durable runner restart and upgrade operations", ""))
+	d.Dispatch("runner operations list", Infer("runner operations list", "List recorded restart and upgrade operations", RunnerOperationsList,
+		WithExample(mflags.Example{
+			Name: "List operations",
+			Body: "miren runner operations list",
+		}),
+	))
+	d.Dispatch("runner operations show", Infer("runner operations show", "Show one restart or upgrade operation", RunnerOperationsShow,
+		WithExample(mflags.Example{
+			Name: "Show an operation",
+			Body: "miren runner operations show 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
+	d.Dispatch("runner operations run", Infer("runner operations run", "Execute or resume an operation in the foreground (normally launched by miren upgrade)", RunnerOperationsRun))
+	d.Dispatch("runner operations abandon", Infer("runner operations abandon", "Give up on an unfinished operation", RunnerOperationsAbandon,
+		WithExample(mflags.Example{
+			Name: "Abandon a stuck operation",
+			Body: "sudo miren runner operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
+		}),
+	))
 
 	// Server commands
 	d.Dispatch("server", Infer("server", "Start the miren server", Server,
@@ -1136,7 +1168,7 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "sudo miren server operations abandon 01J8X2M0QK4V6Z9W1N3RB5T7YC",
 		}),
 	))
-	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'sudo miren upgrade')", ServerUpgrade,
+	d.Dispatch("server upgrade", Infer("server upgrade", "Upgrade miren server (deprecated: use 'miren upgrade')", ServerUpgrade,
 		WithExample(mflags.Example{
 			Name: "Upgrade to the latest version",
 			Body: "sudo miren server upgrade",
@@ -1222,14 +1254,18 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren download release",
 		}),
 	))
-	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (server and CLI on a systemd server host, otherwise the CLI)", Upgrade,
+	d.Dispatch("upgrade", Infer("upgrade", "Upgrade miren (the server or runner and the CLI on a systemd host, otherwise the CLI)", Upgrade,
 		WithGroup(GroupClient),
 		WithExample(mflags.Example{
 			Name: "Upgrade the CLI on a client machine",
 			Body: "miren upgrade",
 		}),
 		WithExample(mflags.Example{
-			Name: "Upgrade the server and CLI on a server host",
+			Name: "Upgrade the server or runner and the CLI on the host that runs it (offers to re-run with sudo)",
+			Body: "miren upgrade",
+		}),
+		WithExample(mflags.Example{
+			Name: "The same from a script or other non-interactive shell, which gets no sudo prompt",
 			Body: "sudo miren upgrade",
 		}),
 		WithExample(mflags.Example{
@@ -1370,11 +1406,44 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug entity ensure", Infer("debug entity ensure", "Ensure an entity exists", EntityEnsure))
 
 	// Disk commands
-	d.Dispatch("disk", Section("disk", "Disk backup and recovery", "", WithSectionGroup(GroupServer)))
+	d.Dispatch("disk", Section("disk", "Disk backup, recovery, and acceleration", "", WithSectionGroup(GroupServer)))
 	d.Dispatch("disk backup", Infer("disk backup", "Backup a disk to a snapshot file", DiskBackup))
 	d.Dispatch("disk restore", Infer("disk restore", "Restore a disk from a snapshot file", DiskRestore))
 	d.Dispatch("disk undelete", Infer("disk undelete", "Restore a recently deleted disk", DiskUndelete))
 	d.Dispatch("disk list-deleted", Infer("disk list-deleted", "List deleted disks available for recovery", DiskListDeleted))
+
+	// Accelerator mode. These build and load the lbd kernel module, so they
+	// only do anything on Linux; the non-Linux builds register stubs that say
+	// so rather than leaving the command missing.
+	d.Dispatch("disk accelerator", Section("disk accelerator", "Faster block-device disks via the lbd kernel module", "",
+		WithSectionGroup(GroupServer),
+		WithSectionDescription(acceleratorSectionDescription)))
+	d.Dispatch("disk accelerator status", Infer("disk accelerator status", "Show whether accelerator mode can run on this host", DiskAcceleratorStatus,
+		WithExample(mflags.Example{
+			Name: "Check accelerator mode",
+			Body: "miren disk accelerator status",
+		}),
+	))
+	d.Dispatch("disk accelerator install", Infer("disk accelerator install", "Build and load the lbd kernel module on a running node", DiskAcceleratorInstall,
+		WithExample(mflags.Example{
+			Name: "Enable accelerator mode on this server or runner",
+			Body: "sudo miren disk accelerator install",
+		}),
+		WithExample(mflags.Example{
+			Name: "Enable accelerator mode on a runner",
+			Body: "miren disk accelerator install runner1",
+		}),
+		WithExample(mflags.Example{
+			Name: "Rebuild after a kernel upgrade",
+			Body: "miren disk accelerator install runner1 --force",
+		}),
+	))
+	d.Dispatch("disk accelerator uninstall", Infer("disk accelerator uninstall", "Unload and remove the lbd kernel module", DiskAcceleratorUninstall,
+		WithExample(mflags.Example{
+			Name: "Go back to loop devices",
+			Body: "sudo miren disk accelerator uninstall",
+		}),
+	))
 
 	// Debug disk commands
 	d.Dispatch("debug disk", Section("debug disk", "Disk entity debug commands", "", WithSectionDescription(diskSectionDescription)))
@@ -1392,6 +1461,13 @@ Warning: These commands are intended for advanced users and developers. They may
 	d.Dispatch("debug disk lease-delete", Infer("debug disk lease-delete", "Delete a disk lease entity", DebugDiskLeaseDelete))
 	d.Dispatch("debug disk lease-status", Infer("debug disk lease-status", "Show detailed status of a disk lease", DebugDiskLeaseStatus))
 	d.Dispatch("debug disk mounts", Infer("debug disk mounts", "List all mounted disks from /proc/mounts", DebugDiskMounts))
+	// Break-glass: `miren disk backup`/`restore` drive the server and are the
+	// supported commands. These touch the image directly, for a host whose RPC
+	// listener is down, and so must run on the server.
+	d.Dispatch("debug disk backup", Infer("debug disk backup", "Back up a disk by reading its image directly (break-glass)", DebugDiskBackup))
+	d.Dispatch("debug disk restore", Infer("debug disk restore", "Restore a disk by writing its image directly (break-glass)", DebugDiskRestore))
+	d.Dispatch("debug disk undelete", Infer("debug disk undelete", "Recover a deleted disk by moving its data directly (break-glass)", DebugDiskUndelete))
+	d.Dispatch("debug disk list-deleted", Infer("debug disk list-deleted", "Read the soft-delete holding area directly (break-glass)", DebugDiskListDeleted))
 
 	// Debug saga commands
 	d.Dispatch("debug saga", Section("debug saga", "Saga execution debug commands", "", WithSectionDescription(sagaSectionDescription)))
@@ -1400,6 +1476,9 @@ Warning: These commands are intended for advanced users and developers. They may
 	))
 	d.Dispatch("debug saga show", Infer("debug saga show", "Show a saga execution in detail", DebugSagaShow,
 		WithDescription(sagaShowDescription),
+	))
+	d.Dispatch("debug saga abandon", Infer("debug saga abandon", "Give up a blocked saga execution (break-glass)", DebugSagaAbandon,
+		WithDescription(sagaAbandonDescription),
 	))
 
 	// Debug netdb commands
@@ -1433,6 +1512,8 @@ To activate an existing version without selecting or building another image, pas
 miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
 ` + "```" + `
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with ` + "`" + `miren app history` + "`" + `.
+
+Use ` + "`" + `-m "describe this deploy"` + "`" + ` to attach a description to this deployment (including an existing-version deploy). It appears in ` + "`" + `miren app history` + "`" + ` and is separate from the Git commit message.
 
 ## Scripting and CI
 

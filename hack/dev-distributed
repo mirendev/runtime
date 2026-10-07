@@ -12,6 +12,15 @@
 
 set -e
 
+# Same session the Makefile and hack/dev-exec use, so `make dev-distributed`
+# and a direct `hack/dev-distributed shell` find the same peers. iso scopes
+# peer containers and networks by ISO_SESSION and falls back to one shared
+# "peers" session when it's unset, which every checkout on the machine would
+# otherwise land in. Anything that calls iso directly against this environment
+# (a bare `iso peers exec`, `BLACKBOX_MODE=peers go test`) needs the same
+# ISO_SESSION in its environment.
+export ISO_SESSION="${ISO_SESSION:-dev-$(basename "$(pwd)")}"
+
 COORDINATOR_LOGFILE="/tmp/miren-server.log"
 COORDINATOR_PIDFILE="/tmp/miren-server.pid"
 RUNNER_LOGFILE="/tmp/miren-runner.log"
@@ -34,7 +43,13 @@ bootstrap_peer() {
   # build VCS stamping fails the build. Unlike the standalone dev flow
   # (hack/dev.sh), which builds as the host user, this path builds as root, so
   # mark /src safe. Mirrors hack/package-release.sh.
-  peer_exec "$peer" git config --global --add safe.directory /src
+  #
+  # Run it from / rather than /src. In a git worktree /src/.git is a file
+  # pointing at the parent repo, which is not mounted in the peer, so git
+  # resolves the repo before writing global config and exits 128 on a path it
+  # cannot see. Writing global config needs no repo, so stepping outside the
+  # worktree sidesteps it.
+  peer_exec "$peer" bash -c "cd / && git config --global --add safe.directory /src"
   # Build binary
   peer_exec "$peer" make bin/miren
   # Symlinks
@@ -197,15 +212,15 @@ case "${1:-}" in
     echo ""
     echo "Distributed environment is up!"
     echo ""
-    echo "  Coordinator:     iso peers shell coordinator"
-    echo "  Runner:          iso peers shell runner1"
+    echo "  Coordinator:     hack/dev-distributed shell coordinator"
+    echo "  Runner:          hack/dev-distributed shell runner1"
     echo "  Coordinator logs: hack/dev-distributed logs"
     echo "  Runner logs:     hack/dev-distributed runner-logs"
     echo "  Status:          hack/dev-distributed status"
     echo "  Tear down:       hack/dev-distributed down"
     echo ""
-    echo "  VictoriaMetrics: http://localhost:8428 (query metrics)"
-    echo "  VictoriaLogs:    http://localhost:9428 (query logs)"
+    echo "  VictoriaMetrics: ISO_SESSION=$ISO_SESSION iso peers exec coordinator -- curl -s 'http://localhost:8428/api/v1/query?query=up'"
+    echo "  VictoriaLogs:    ISO_SESSION=$ISO_SESSION iso peers exec coordinator -- curl -s 'http://localhost:9428/select/logsql/query' -d 'query=*'"
     ;;
 
   down)

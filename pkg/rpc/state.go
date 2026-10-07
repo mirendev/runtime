@@ -808,7 +808,7 @@ func (s *State) Shutdown(ctx context.Context) error {
 	}
 	if s.localHS != nil {
 		shutdown("local HTTP/3", s.localLI, func(ctx context.Context) error {
-			return drainQUIC(ctx, s.localHS.Shutdown, s.localLI)
+			return drainQUIC(ctx, s.log, "local HTTP/3", s.localHS.Shutdown, s.localLI)
 		})
 	}
 	if s.httpSrv != nil {

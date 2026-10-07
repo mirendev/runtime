@@ -2,6 +2,7 @@ package clientconfig
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 	"testing"
 
@@ -93,4 +94,22 @@ func TestConfigPathResolution(t *testing.T) {
 	r.NoError(err)
 	r.Equal(filepath.Join(homeDir, DefaultConfigPath), path)
 	r.True(loadConfigD, "Should load clientconfig.d by default")
+}
+
+func TestConfigPathResolutionWithoutHomeEnvironment(t *testing.T) {
+	t.Setenv(EnvConfigPath, "")
+	t.Setenv("SUDO_USER", "")
+	t.Setenv("HOME", "")
+
+	current, err := user.Current()
+	require.NoError(t, err)
+
+	path, loadConfigD, err := getConfigPath()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(current.HomeDir, DefaultConfigPath), path)
+	require.True(t, loadConfigD)
+
+	dirPath, err := getConfigDirPath()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(current.HomeDir, ".config/miren/clientconfig.d"), dirPath)
 }

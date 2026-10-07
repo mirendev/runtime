@@ -130,6 +130,37 @@ func TestRecordCarriesFieldsTheSchemaDoesNotName(t *testing.T) {
 	require.Equal(t, lifecycle.ActionRestart, fallback.Action)
 }
 
+func TestStartRecordsWhoTheCloudCallerIs(t *testing.T) {
+	srv, store, _ := newTestServer(t)
+	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
+		Subject: "usr-rWSwsbXLp5oK",
+		Method:  rpc.AuthMethodJWT,
+		Metadata: map[string]any{
+			"organization_id": "org-miren",
+			"name":            "Paul Hinze",
+			"email":           "paul@miren.dev",
+		},
+	})
+
+	start := &server_v1alpha.ServerLifecycleStart{Call: noopCall{}}
+	setArgs(t, start.Args(), map[string]any{"action": "restart"})
+	require.NoError(t, srv.Start(ctx, start))
+
+	var started operationResult
+	readResults(t, start.Results(), &started)
+	stored, err := store.Get(started.Operation.Id())
+	require.NoError(t, err)
+	require.Equal(t, "usr-rWSwsbXLp5oK", stored.RequestedBy, "the subject stays, cloud resolves it")
+	require.Equal(t, "Paul Hinze", stored.RequestedByName)
+	require.Equal(t, "paul@miren.dev", stored.RequestedByEmail)
+
+	// The record is the transport, so the CLI sees the new fields without a
+	// typed one on the wire.
+	got := FromRPC(started.Operation)
+	require.Equal(t, "Paul Hinze", got.RequestedByName)
+	require.Equal(t, "paul@miren.dev", got.RequestedByEmail)
+}
+
 func TestStartRecordsCallerAndLaunches(t *testing.T) {
 	srv, store, launcher := newTestServer(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{Subject: "paul@example.com"})

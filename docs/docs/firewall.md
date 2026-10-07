@@ -26,6 +26,10 @@ Host-level rules are managed for you. The only thing to configure yourself is yo
 
 Also open any `node_port` values your apps declare for TCP/UDP services, and the [inter-node ports](#between-nodes-distributed-runners) if you run distributed runners.
 
+:::warning[Registry port 5000]
+Starting with the release that routes registry pulls over WireGuard, the OCI registry listens only on the coordinator's Miren bridge gateway; you never need to open 5000/tcp on public interfaces. On older releases, it listens on all interfaces. If you still run one, block untrusted access to 5000/tcp with a host firewall (and a cloud security group, if applicable); allow only trusted runner addresses if you use distributed runners.
+:::
+
 ## How Miren Configures Firewall Rules
 
 :::info[Both iptables and nftables are required]
@@ -50,7 +54,7 @@ The INPUT chain controls traffic destined for the host itself. Miren adds rules 
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 53   | UDP/TCP  | DNS resolution (containers query host DNS) |
-| 5000 | TCP      | Local container registry (buildkit pushes images here) |
+| 5000 | TCP      | Cluster-internal OCI registry (BuildKit pushes and runners pull images) |
 
 ## Rule Ordering
 
@@ -88,6 +92,8 @@ If you've grown the cluster with [distributed runners](./distributed-runners.md)
 | 51820 | UDP | Every node to every other node | WireGuard overlay carrying sandbox-to-sandbox traffic |
 
 **The overlay port is the one people miss.** Sandboxes on different machines send traffic directly to each other, so 51820/udp has to be open between every pair of nodes, not just from each runner back to the coordinator.
+
+Runners pull from the coordinator's internal bridge address over WireGuard. Keep 51820/udp available between nodes; you do not need to open 5000/tcp between their public interfaces.
 
 **Telemetry doesn't need its own ports.** VictoriaMetrics and VictoriaLogs stay bound to loopback on the coordinator and are never reachable from a runner. A runner ships its metrics and logs over the coordinator API on 8443 like everything else it sends.
 

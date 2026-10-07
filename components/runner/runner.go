@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/api/secret/secret_v1alpha"
 	"miren.dev/runtime/api/sqlitebackup/sqlitebackup_v1alpha"
@@ -44,6 +45,7 @@ import (
 	remotesecret "miren.dev/runtime/pkg/secret/remote"
 	"miren.dev/runtime/pkg/workloadidentity"
 	"miren.dev/runtime/servers/exec"
+	"miren.dev/runtime/servers/metricspush"
 	"miren.dev/runtime/version"
 )
 
@@ -54,9 +56,8 @@ type RunnerConfig struct {
 	Workers       int    `json:"workers" cbor:"workers" yaml:"workers"`
 	DataPath      string `json:"data_path" cbor:"data_path" yaml:"data_path"`
 
-	// Optional RPC configuration for advanced setups
-	// If not provided, a default insecure connection will be used
-	// to connect to the server address.
+	// RPC configuration supplies the cluster CA used to authenticate callers
+	// on the runner listener, as well as its outbound coordinator connection.
 	Config *clientconfig.Config `json:"config" cbor:"config" yaml:"config"`
 
 	// Optional cloud authentication configuration for disk replication
@@ -128,6 +129,11 @@ type RunnerDeps struct {
 	// CACert is the cluster CA in PEM form, mounted into sandboxes so they can
 	// verify the API certificate.
 	CACert []byte
+
+	// MetricsPusher delivers workload metric pushes to the coordinator: the
+	// coordinator's own ingest there, a network client on a distributed
+	// runner. Nil leaves the metrics push relay off.
+	MetricsPusher metricspush.Pusher
 
 	// Secrets materializes the secret references a sandbox spec carries, at
 	// container creation. On the coordinator this is the local backend
@@ -237,8 +243,9 @@ func NewRunner(log *slog.Logger, deps RunnerDeps, cfg RunnerConfig) (*Runner, er
 // runner. It has no container or host-network responsibilities.
 type ClusterAccess struct {
 	RunnerConfig
-	Log  *slog.Logger
-	deps RunnerDeps
+	Log                   *slog.Logger
+	deps                  RunnerDeps
+	coordinatorInternalIP netip.Addr
 
 	state       *rpc.State
 	eac         *es.EntityAccessClient
@@ -442,12 +449,8 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 		client *rpc.NetworkClient
 	)
 
-	r.Log.Info("establishing cluster access", "listen", r.ListenAddress, "distributed", r.Config != nil)
-	if r.Config == nil {
-		rs, err = rpc.NewState(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress), rpc.WithSkipVerify)
-	} else {
-		rs, err = r.Config.State(ctx, rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress))
-	}
+	r.Log.Info("establishing cluster access", "listen", r.ListenAddress)
+	rs, err = r.newRPCState(ctx)
 	if err != nil {
 		return err
 	}
@@ -462,11 +465,7 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 			r.state = nil
 		}
 	}()
-	if r.Config == nil {
-		client, err = rs.Connect("", "entities")
-	} else {
-		client, err = rs.Client("entities")
-	}
+	client, err = rs.Client("entities")
 	if err != nil {
 		return err
 	}
@@ -474,8 +473,8 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	r.state = rs
 	r.eac = es.NewEntityAccessClient(client)
 	r.entityBase = entityserver.NewClient(r.Log, r.eac)
-	if err := r.setupRemoteWorkloadIssuer(ctx, rs); err != nil {
-		r.Log.Warn("failed to set up workload identity issuer", "error", err)
+	if err := r.setupRemoteCoordinatorInfo(ctx, rs); err != nil {
+		return fmt.Errorf("setting up coordinator registry and workload identity: %w", err)
 	}
 	if err := r.setupRemoteSecrets(rs); err != nil {
 		return fmt.Errorf("setting up secret resolution: %w", err)
@@ -483,6 +482,38 @@ func (r *ClusterAccess) Start(ctx context.Context) (retErr error) {
 	r.setupSqliteDisks(rs)
 	r.Log.Info("cluster access ready")
 	return nil
+}
+
+// Server is the runner's RPC server, for services that are not part of the
+// sandbox host. It is nil until Start has returned.
+func (r *ClusterAccess) Server() *rpc.Server {
+	if r.state == nil {
+		return nil
+	}
+	return r.state.Server()
+}
+
+func (r *ClusterAccess) newRPCState(ctx context.Context) (*rpc.State, error) {
+	opts := []rpc.StateOption{
+		rpc.WithLogger(r.Log), rpc.WithBindAddr(r.ListenAddress),
+		rpc.WithAuthenticator(&rpc.LocalOnlyAuthenticator{}),
+	}
+	if r.Config == nil {
+		return nil, fmt.Errorf("runner cluster config is required to authenticate coordinator requests")
+	}
+
+	cluster, err := r.Config.GetActiveCluster()
+	if err != nil {
+		return nil, fmt.Errorf("runner cluster CA: %w", err)
+	}
+	if cluster.CACert == "" {
+		return nil, fmt.Errorf("runner cluster CA is required to authenticate coordinator requests")
+	}
+	// Config.State supplies the runner's own certificate for outbound calls.
+	// Apply the CA last so even an insecure outbound configuration cannot turn
+	// off verification of certificates presented to this listener.
+	opts = append(opts, rpc.WithCertificateVerification([]byte(cluster.CACert)))
+	return r.Config.State(ctx, opts...)
 }
 
 func (r *ClusterAccess) Close() error {
@@ -504,8 +535,8 @@ func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	r.Log.Info("starting sandbox host", "id", r.Id)
 
 	// Initialize Flannel/WireGuard network if distributed runner configuration is provided
-	if len(r.deps.EtcdEndpoints) > 0 {
-		if err := r.initializeNetwork(ctx, eg...); err != nil {
+	if len(r.deps.EtcdEndpoints) > 0 && r.deps.Subnet == nil {
+		if err := InitializeDistributedNetwork(ctx, r.Log, r.DataPath, &r.deps, eg...); err != nil {
 			return fmt.Errorf("failed to initialize network: %w", err)
 		}
 	}
@@ -530,6 +561,12 @@ func (r *SandboxHost) Start(ctx context.Context, eg ...*errgroup.Group) error {
 	r.access.state.Server().ExposeValue("dev.miren.runtime/exec", exec_v1alpha.AdaptSandboxExec(execServer))
 
 	r.Log.Info("Registered exec server")
+
+	r.access.state.Server().ExposeValue(rpc.ServiceNodeAdmin, nodeadmin_v1alpha.AdaptNodeAdmin(&nodeAdminServer{
+		log:  r.Log.With("module", "nodeadmin"),
+		deps: r.lbdDeps(),
+	}))
+	r.Log.Info("Registered node admin server")
 
 	return nil
 }
@@ -592,6 +629,9 @@ func (r *ClusterAccess) WorkloadIssuer() workloadidentity.TokenIssuer {
 	return r.deps.WorkloadIssuer
 }
 
+// CoordinatorInternalIP is the coordinator's current WireGuard-routed bridge gateway.
+func (r *ClusterAccess) CoordinatorInternalIP() netip.Addr { return r.coordinatorInternalIP }
+
 // setupSqliteDisks connects to the coordinator's SQLite backup service so
 // sqlite-provider disks are replicated as they are written.
 //
@@ -636,14 +676,10 @@ func (c sqliteDiskCloser) Close() error {
 	return c.m.Close(ctx)
 }
 
-// setupRemoteWorkloadIssuer wires a remote workload identity issuer for
-// distributed runners. Runners do not hold the cluster signing key, so they
-// mint tokens by calling the coordinator's RunnerRegistration service. When the
-// coordinator reports no issuer is configured, token issuance stays disabled
-// (deps.WorkloadIssuer remains nil). The coordinator's embedded runner
-// (r.Config == nil) keeps the concrete issuer it was constructed with.
-func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.State) error {
-	if r.Config == nil || r.deps.WorkloadIssuer != nil {
+// setupRemoteCoordinatorInfo obtains the internal registry address and optional
+// workload issuer from the coordinator. The embedded runner already has both.
+func (r *ClusterAccess) setupRemoteCoordinatorInfo(ctx context.Context, rs *rpc.State) error {
+	if r.Config == nil {
 		return nil
 	}
 
@@ -655,8 +691,8 @@ func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.S
 	regClient := runner_v1alpha.NewRunnerRegistrationClient(client)
 
 	// Retry transient failures: the entities connection was just established, so
-	// a failure here is usually a brief blip. Giving up immediately would leave
-	// the runner with no token issuance until it is restarted.
+	// a failure here is usually a brief blip. This result is required to set up
+	// registry routing, even when workload identity is disabled.
 	var info *runner_v1alpha.RunnerRegistrationClientWorkloadIssuerInfoResults
 	for attempt := 1; ; attempt++ {
 		info, err = queryWorkloadIssuerInfo(ctx, regClient)
@@ -674,7 +710,16 @@ func (r *ClusterAccess) setupRemoteWorkloadIssuer(ctx context.Context, rs *rpc.S
 		case <-time.After(issuerInfoRetryDelay):
 		}
 	}
+	if info.HasCoordinatorInternalIp() {
+		r.coordinatorInternalIP, err = netip.ParseAddr(info.CoordinatorInternalIp())
+		if err != nil || !r.coordinatorInternalIP.Is4() {
+			return fmt.Errorf("invalid coordinator internal IP %q", info.CoordinatorInternalIp())
+		}
+	}
 
+	if r.deps.WorkloadIssuer != nil {
+		return nil
+	}
 	if !info.Enabled() {
 		r.Log.Info("coordinator has no workload identity issuer; sandbox tokens disabled")
 		return nil
@@ -715,28 +760,28 @@ func (r *ClusterAccess) setupRemoteSecrets(rs *rpc.State) error {
 	return nil
 }
 
-// initializeNetwork sets up the Flannel network for distributed runners.
-// This is only called when EtcdEndpoints are configured (distributed runner mode).
-func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Group) error {
-	r.Log.Info("Initializing distributed runner network",
-		"etcd_endpoints", r.deps.EtcdEndpoints,
-		"etcd_prefix", r.deps.EtcdPrefix)
+// InitializeDistributedNetwork joins the mesh before storage tries to pull
+// the lbd builder image from the coordinator's WireGuard-routed registry.
+func InitializeDistributedNetwork(ctx context.Context, log *slog.Logger, dataPath string, deps *RunnerDeps, eg ...*errgroup.Group) error {
+	log.Info("Initializing distributed runner network",
+		"etcd_endpoints", deps.EtcdEndpoints,
+		"etcd_prefix", deps.EtcdPrefix)
 
 	grungeOpts := grunge.NetworkOptions{
-		EtcdEndpoints: r.deps.EtcdEndpoints,
-		EtcdPrefix:    r.deps.EtcdPrefix,
-		PrevIPv4:      r.deps.IPv4Routable,
+		EtcdEndpoints: deps.EtcdEndpoints,
+		EtcdPrefix:    deps.EtcdPrefix,
+		PrevIPv4:      deps.IPv4Routable,
 	}
 
 	// Add TLS config if provided
-	if r.deps.EtcdTLSCertFile != "" && r.deps.EtcdTLSKeyFile != "" && r.deps.EtcdTLSCAFile != "" {
-		r.Log.Info("Using etcd TLS", "cert", r.deps.EtcdTLSCertFile, "ca", r.deps.EtcdTLSCAFile)
-		grungeOpts.TLSCertFile = r.deps.EtcdTLSCertFile
-		grungeOpts.TLSKeyFile = r.deps.EtcdTLSKeyFile
-		grungeOpts.TLSCAFile = r.deps.EtcdTLSCAFile
+	if deps.EtcdTLSCertFile != "" && deps.EtcdTLSKeyFile != "" && deps.EtcdTLSCAFile != "" {
+		log.Info("Using etcd TLS", "cert", deps.EtcdTLSCertFile, "ca", deps.EtcdTLSCAFile)
+		grungeOpts.TLSCertFile = deps.EtcdTLSCertFile
+		grungeOpts.TLSKeyFile = deps.EtcdTLSKeyFile
+		grungeOpts.TLSCAFile = deps.EtcdTLSCAFile
 	}
 
-	gn, err := grunge.NewNetwork(r.Log, grungeOpts)
+	gn, err := grunge.NewNetwork(log, grungeOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create grunge network: %w", err)
 	}
@@ -760,18 +805,18 @@ func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Gro
 	if localGroup {
 		go func() {
 			if err := runGroup.Wait(); err != nil {
-				r.Log.Error("network errgroup failed", "error", err)
+				log.Error("network errgroup failed", "error", err)
 			}
 		}()
 	}
 
 	// Update deps with the leased IP and subnet
 	lease := gn.Lease()
-	r.deps.IPv4Routable = lease.IPv4()
+	deps.IPv4Routable = lease.IPv4()
 
 	// Initialize netdb subnet from the flannel lease so the sandbox
 	// controller can allocate IPs within this runner's subnet.
-	ndb, err := netdb.New(filepath.Join(r.DataPath, "net.db"))
+	ndb, err := netdb.New(filepath.Join(dataPath, "net.db"))
 	if err != nil {
 		return fmt.Errorf("failed to open netdb: %w", err)
 	}
@@ -779,9 +824,9 @@ func (r *SandboxHost) initializeNetwork(ctx context.Context, eg ...*errgroup.Gro
 	if err != nil {
 		return fmt.Errorf("failed to create subnet from lease: %w", err)
 	}
-	r.deps.Subnet = subnet
+	deps.Subnet = subnet
 
-	r.Log.Info("Joined Flannel network", "ipv4", lease.IPv4().String())
+	log.Info("Joined Flannel network", "ipv4", lease.IPv4().String())
 
 	return nil
 }
@@ -997,6 +1042,7 @@ func (r *SandboxHost) SetupControllers(
 		CACert:         r.deps.CACert,
 		Secrets:        r.deps.Secrets,
 		SqliteDisks:    r.access.sqliteDisks,
+		MetricsPusher:  r.deps.MetricsPusher,
 	}
 
 	sbc, err := sandbox.NewSandboxController(sbcDeps, saga.NewEACStorage(eas, r.Log))

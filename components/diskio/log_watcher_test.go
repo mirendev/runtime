@@ -1,6 +1,7 @@
 package diskio
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -304,4 +305,53 @@ func TestLogWatcherStopsAtTheFirstFailedSegment(t *testing.T) {
 	horizon, err = readLogHorizon(diskPath)
 	require.NoError(t, err)
 	assert.Equal(t, "40000000682f1a2c1dcd6501", horizon)
+}
+
+func TestLogWatcherCleansUpSegmentsAtOrBeforeHorizon(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "vol1")
+	logDir := filepath.Join(diskPath, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0755))
+
+	older := "disk.40000000682f1a2c1dcd6500.log"
+	first := "disk.40000000682f1a2c1dcd6501.log"
+	newer := "disk.40000000682f1a2c1dcd6502.log"
+	require.NoError(t, os.WriteFile(filepath.Join(logDir, first), []byte("data"), 0644))
+
+	state := NewState()
+	state.SetVolume("disk_volume/vol1", &VolumeState{
+		EntityId:      "disk_volume/vol1",
+		VolumeId:      "vol1",
+		CloudVolumeId: "cloud-vol1",
+		DiskPath:      diskPath,
+		Mode:          storage_v1alpha.VM_ACCELERATOR,
+	})
+	uploader := &mockUploader{}
+	var logs bytes.Buffer
+	watcher := NewLogWatcher(slog.New(slog.NewTextHandler(&logs, nil)), state, uploader, time.Second)
+	watcher.scanAndUpload(context.Background())
+	require.Len(t, uploader.uploaded, 1)
+
+	horizon, err := readLogHorizon(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, "40000000682f1a2c1dcd6501", horizon)
+
+	// A leftover segment at the horizon (or older) must not be claimed again.
+	// The uploader rejects both so a retry would block the newer segment.
+	for _, name := range []string{older, first, newer} {
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, name), []byte("data"), 0644))
+	}
+	uploader.failPaths = map[string]error{older: os.ErrExist, first: os.ErrExist}
+	watcher.scanAndUpload(context.Background())
+
+	require.Len(t, uploader.uploaded, 2)
+	assert.Equal(t, newer, filepath.Base(uploader.uploaded[1].segmentPath))
+	for _, name := range []string{older, first, newer} {
+		assert.NoFileExists(t, filepath.Join(logDir, name))
+	}
+	assert.Contains(t, logs.String(), "removed segment covered by log horizon without upload")
+	assert.Contains(t, logs.String(), older)
+	assert.Contains(t, logs.String(), first)
+	horizon, err = readLogHorizon(diskPath)
+	require.NoError(t, err)
+	assert.Equal(t, "40000000682f1a2c1dcd6502", horizon)
 }

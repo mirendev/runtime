@@ -49,7 +49,7 @@ Miren detects services in this order:
 
 1. **`.miren/app.toml`** — Services defined in the `[services.*]` sections
 2. **`Procfile`** — Services inferred from Procfile entries
-3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust), Miren synthesizes a `web` service from the start command it detects for your framework
+3. **Detected start command** — For an auto-detected language stack (Python, Node, Bun, Go, Ruby, Rust, Elixir), Miren synthesizes a `web` service from the start command it detects for your framework
 
 If none of these provide a service definition, Miren usually synthesizes a `web` service
 for a runnable container image. That service uses the image's `ENTRYPOINT` and `CMD`
@@ -239,7 +239,7 @@ Each service can configure:
 | `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](./scaling.md) |
-| `concurrency.shutdown_timeout` | Time to wait for graceful shutdown during redeploy | `10s` |
+| `concurrency.shutdown_timeout` | Time a stopping instance gets to exit after `SIGTERM` before it is killed (see [Graceful Shutdown](#graceful-shutdown)) | `10s` |
 | `disks` | Persistent disk attachments (experimental, see [Disks](./disks.md)) | (none) |
 
 With neither `command` nor `args`, the image's `ENTRYPOINT` and `CMD` run
@@ -383,6 +383,32 @@ Using a subdirectory (`pgdata`) under `/miren/data/local` is required because Po
 :::
 
 For cloud-synced storage that travels with your app, see [Miren Disks](./disks.md#miren-disks) (experimental).
+
+## Graceful Shutdown {#graceful-shutdown}
+
+Whenever Miren stops an instance, whether a redeploy is replacing it or autoscaling is removing it, it sends each container `SIGTERM` and waits for it to exit. If the container is still running when `concurrency.shutdown_timeout` runs out (10 seconds unless you set it), Miren kills it with `SIGKILL`. Apps that finish in-flight work on shutdown should set the timeout to cover their longest drain:
+
+```toml
+[services.worker.concurrency]
+mode = "fixed"
+num_instances = 1
+shutdown_timeout = "15m"
+```
+
+When an instance is killed this way, a line from Miren shows up in the app's own logs, so `miren logs` tells you it happened:
+
+```text
+[miren] container "app" was still running 10s after SIGTERM and was killed (services.worker.concurrency.shutdown_timeout); raise it if your app needs longer to shut down
+```
+
+:::warning[A new timeout applies from the next deploy]
+The timeout that applies is the one the instance being stopped was deployed with, not the one in the version replacing it. If an app is being killed mid-drain and you raise `shutdown_timeout` to fix it, the deploy that ships the change still stops the old instances with the old timeout. The new value protects the instances that deploy starts.
+:::
+
+During a redeploy, whether the old instance's shutdown holds up the new version depends on whether the service has disks:
+
+- **Services without disks** start the replacement first. The old instance only gets `SIGTERM` once a new one is running (or after a minute, if the new one is slow to start), so a long `shutdown_timeout` doesn't delay the deploy. `miren deploy` finishes as soon as the new version is serving, which can be well before the old instance has finished draining.
+- **Services with [disks](./disks.md)** need exclusive access to them, so the old instance has to exit before its replacement starts. Here a long `shutdown_timeout` does delay the new version, by up to the full timeout if the old instance uses all of it.
 
 ## Sandbox Pools
 

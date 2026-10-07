@@ -20,6 +20,7 @@ import (
 
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/secret"
+	"miren.dev/runtime/pkg/stackbuild"
 )
 
 // stubSecretResolver returns a fixed value per ref, or an error when the ref is
@@ -102,24 +103,50 @@ func TestResolveBuildSecretsDefaultsBackendToCluster(t *testing.T) {
 	r.Equal(secret.ClusterBackendName, resolver.backends["registry/npm-token"])
 }
 
-func TestResolveBuildSecretsRejectedForAutoStack(t *testing.T) {
+func TestResolveBuildSecretsWithoutTargetRejectedForAutoStack(t *testing.T) {
 	r := require.New(t)
 	resolver := &stubSecretResolver{values: map[string]string{
 		"registry/npm-token": "npm-secret",
+		"github/netrc":       "machine github.com",
 	}}
 	b := newTestBuilder(resolver)
 
 	ac := buildSecretConfig(
+		appconfig.BuildSecret{ID: "netrc", Ref: "github/netrc", File: "~/.netrc"},
 		appconfig.BuildSecret{ID: "npm_token", Backend: "cluster", Ref: "registry/npm-token"},
 	)
 
-	// An auto-detected language stack has no place to consume the secret, so it
-	// is rejected before the resolver is ever touched.
+	// An auto-detected language stack needs a target to know where to mount the
+	// secret, so one without is rejected before the resolver is ever touched.
 	_, err := b.resolveBuildSecrets(context.Background(), ac, "auto")
 	r.Error(err)
-	r.Contains(err.Error(), "only supported for Dockerfile builds")
-	r.Contains(err.Error(), "npm_token")
-	r.Zero(resolver.calls, "an auto-stack build must fail before resolving any secret")
+	r.Contains(err.Error(), `build secret "npm_token" has no env or file target`)
+	r.Zero(resolver.calls, "an untargeted secret must fail the build before resolving any secret")
+}
+
+func TestResolveBuildSecretsForAutoStack(t *testing.T) {
+	r := require.New(t)
+	resolver := &stubSecretResolver{values: map[string]string{
+		"registry/npm-token": "npm-secret",
+		"github/netrc":       "machine github.com",
+	}}
+	b := newTestBuilder(resolver)
+
+	ac := buildSecretConfig(
+		appconfig.BuildSecret{ID: "npm_token", Ref: "registry/npm-token", Env: "NPM_TOKEN"},
+		appconfig.BuildSecret{ID: "netrc", Ref: "github/netrc", File: "~/.netrc"},
+	)
+
+	got, err := b.resolveBuildSecrets(context.Background(), ac, "auto")
+	r.NoError(err)
+	r.Equal(map[string][]byte{
+		"npm_token": []byte("npm-secret"),
+		"netrc":     []byte("machine github.com"),
+	}, got)
+	r.Equal([]stackbuild.Secret{
+		{ID: "npm_token", Env: "NPM_TOKEN"},
+		{ID: "netrc", File: "~/.netrc"},
+	}, stackbuildSecrets(ac))
 }
 
 func TestResolveBuildSecretsNilWhenNoneDeclared(t *testing.T) {

@@ -100,6 +100,51 @@ func TestDistributedRunnerMetrics(t *testing.T) {
 	)
 }
 
+// A runner's own process series reach the coordinator's embedded store under
+// the runner entity, each naming its runner. This cannot tell the operational
+// fanout from the unread forwarding path, since both write to the same store
+// and the runner applies these labels before sending; the handler's branching
+// is pinned by the unit tests in servers/runnertelemetry, and this harness
+// never enables the managed-metrics sink the fanout ships through.
+func TestDistributedRunnerOperationalMetrics(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+
+	for _, name := range []string{"process_start_time_seconds", "miren_build_info", "go_goroutines"} {
+		query := name + `{entity="miren/runner"}`
+		harness.Poll(t, query, 90*time.Second, 5*time.Second,
+			func() (bool, string) {
+				r := m.PeerExec("coordinator", "curl", "-sf", "-G",
+					"http://localhost:8428/api/v1/query", "--data-urlencode", "query="+query)
+				if !r.Success() {
+					return false, "VictoriaMetrics query failed"
+				}
+
+				var resp struct {
+					Data struct {
+						Result []struct {
+							Metric map[string]string `json:"metric"`
+						} `json:"result"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(r.Stdout), &resp); err != nil {
+					return false, "failed to parse response"
+				}
+				if len(resp.Data.Result) == 0 {
+					return false, "no series yet"
+				}
+				for _, series := range resp.Data.Result {
+					if series.Metric["miren_runner"] == "" {
+						return false, fmt.Sprintf("series without miren_runner: %v", series.Metric)
+					}
+				}
+				return true, ""
+			},
+		)
+	}
+}
+
 func TestDistributedRunnerLogs(t *testing.T) {
 	c := harness.NewCluster(t)
 	skipIfNotDistributed(t, c)

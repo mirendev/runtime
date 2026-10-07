@@ -71,6 +71,7 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 		AppName:   "web",
 		ClusterID: "prod",
 		GitInfo:   core_v1alpha.GitInfo{Sha: "abc123", Branch: "main"},
+		Message:   "ship the new UI",
 	})
 	require.NoError(t, err)
 
@@ -80,6 +81,7 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, entity.Id("app/web"), rec.AppID())
 	assert.Equal(t, string(PhasePreparing), rec.Deployment.Phase)
 	assert.Equal(t, "abc123", rec.Deployment.GitInfo.Sha)
+	assert.Equal(t, "ship the new UI", rec.Deployment.Message)
 	assert.Equal(t, clock.Now().Format(time.RFC3339), rec.Deployment.DeployedBy.Timestamp)
 	assert.Empty(t, rec.AppVersion(), "a forward deploy has no version until the build makes one")
 
@@ -88,17 +90,41 @@ func TestBeginCreatesRecordAndTakesLock(t *testing.T) {
 	assert.Equal(t, string(rec.Deployment.ID), holder.DeploymentID)
 }
 
+func TestBeginRejectsOversizedDeploymentMessage(t *testing.T) {
+	ctx := context.Background()
+	tr, _ := newTestTracker(t)
+
+	// The limit is in bytes, not runes: 341 three-byte runes fit, 342 do not.
+	tooLong := strings.Repeat("界", 342)
+	_, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: tooLong})
+	require.ErrorContains(t, err, "at most 1024 bytes")
+	records, err := tr.Store().List(ctx, Query{AppName: "web"})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	lock, err := tr.Locks().Blocking(ctx, "web")
+	require.NoError(t, err)
+	require.Nil(t, lock)
+
+	message := strings.Repeat("界", 341) + "x"
+	require.Len(t, []byte(message), MaxDeploymentMessageBytes)
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Message: message})
+	require.NoError(t, err)
+	require.Equal(t, message, rec.Deployment.Message)
+}
+
 func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
-		Subject: "user-42", Method: rpc.AuthMethodOIDC,
-		Metadata: map[string]any{"organization_id": "org-42"},
+		Subject: "user-42", Method: rpc.AuthMethodJWT,
+		Metadata: map[string]any{"organization_id": "org-42", "email": "ada@example.com", "name": "Ada Lovelace"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
-	assert.Equal(t, "oidc", rec.Deployment.DeployedBy.AuthMethod)
+	assert.Equal(t, "jwt", rec.Deployment.DeployedBy.AuthMethod)
 	assert.Equal(t, "org-42", rec.Deployment.DeployedBy.OrganizationId)
+	assert.Equal(t, "ada@example.com", rec.Deployment.DeployedBy.Email)
+	assert.Equal(t, "Ada Lovelace", rec.Deployment.DeployedBy.Name)
 	stored, err := tr.Store().Get(ctx, rec.Deployment.ID.String())
 	require.NoError(t, err)
 	assert.Equal(t, rec.Deployment.DeployedBy, stored.Deployment.DeployedBy)
@@ -108,7 +134,7 @@ func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
 		Subject: "recovery-worker", Method: rpc.AuthMethodSystem,
-		Metadata: map[string]any{"organization_id": "org-worker"},
+		Metadata: map[string]any{"organization_id": "org-worker", "email": "worker@example.com", "name": "Worker"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{
 		AppName: "web", Subject: "original-user", AuthMethod: "jwt",
@@ -116,6 +142,8 @@ func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "original-user", rec.Deployment.DeployedBy.Subject)
 	assert.Empty(t, rec.Deployment.DeployedBy.OrganizationId)
+	assert.Empty(t, rec.Deployment.DeployedBy.Email)
+	assert.Empty(t, rec.Deployment.DeployedBy.Name)
 }
 
 func TestBeginDoesNotCaptureAnonymousOrganization(t *testing.T) {

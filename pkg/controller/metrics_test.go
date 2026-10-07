@@ -59,6 +59,7 @@ func TestReconcileControllerMetrics(t *testing.T) {
 	controller.counters.failures.Add(4)
 	controller.counters.writes.Add(5)
 	controller.counters.inFlight.Add(6)
+	controller.counters.resyncs.Add(7)
 
 	controller.writeMetrics(t.Context(), now)
 	writer.Flush()
@@ -80,6 +81,7 @@ func TestReconcileControllerMetrics(t *testing.T) {
 		"reconcile_controller_retries_total",
 		"reconcile_controller_failures_total",
 		"reconcile_controller_writes_total",
+		"reconcile_controller_resyncs_total",
 	} {
 		assert.Contains(t, body, name)
 	}
@@ -102,6 +104,7 @@ func TestReconcileControllerMetrics(t *testing.T) {
 		"reconcile_controller_retries_total":   "} 3 ",
 		"reconcile_controller_failures_total":  "} 4 ",
 		"reconcile_controller_writes_total":    "} 5 ",
+		"reconcile_controller_resyncs_total":   "} 7 ",
 	} {
 		assert.Contains(t, metricLine(name), value, name)
 	}

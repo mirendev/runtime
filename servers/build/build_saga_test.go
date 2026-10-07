@@ -82,6 +82,7 @@ func newSagaTestHarness(t *testing.T) *sagaTestHarness {
 		Action(actionLoadSource, loadSource).Undo(undoLoadSource).
 		Action(actionGetNextVer, getNextVersion).Undo(undoGetNextVersion).
 		Action(actionBuildImage, stubBuildImage).Undo(undoBuildImage).
+		Action(actionExtractStatic, stubExtractStatic).Undo(undoExtractStatic).
 		Action(actionPrepareConfig, prepareConfig).Undo(undoPrepareConfig).
 		Action(actionHandleEphemera, handleEphemeral).Undo(undoHandleEphemeral).
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).
@@ -126,7 +127,7 @@ func stubBuildImage(ctx context.Context, in buildImageIn) (buildImageOut, error)
 	// needs no BuildKit or Artifact fixture, which is precisely the contract
 	// image-only deploys rely on. Source builds continue through the deterministic
 	// stub below.
-	if in.BuildStack.Stack == "image" {
+	if in.BuildStack.Stack == "image" || in.BuildStack.Stack == "static" {
 		return buildImage(ctx, in)
 	}
 
@@ -159,6 +160,13 @@ func stubBuildImage(ctx context.Context, in buildImageIn) (buildImageOut, error)
 	}, nil
 }
 
+func stubExtractStatic(_ context.Context, in extractStaticIn) (extractStaticOut, error) {
+	if in.AppConfig == nil || in.AppConfig.StaticDirectory() == "" {
+		return extractStaticOut{}, nil
+	}
+	return extractStaticOut{StaticArtifact: "sha256:static"}, nil
+}
+
 // dockerfileTarball returns a tar containing the bare minimum to satisfy
 // every saga action up through getNextVersion: a .miren/app.toml at the
 // path appconfig.AppConfigPath expects, and a Dockerfile.miren so stack
@@ -170,6 +178,22 @@ func dockerfileTarball(t *testing.T) map[string]string {
 		".miren/app.toml":  "name = 'demo'\n",
 		"Dockerfile.miren": "FROM alpine\nCMD echo hi\n",
 		"Procfile":         "web: echo hi\n",
+	}
+}
+
+func staticDockerfileTarball(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{
+		".miren/app.toml":  "name = 'demo'\n[static]\ndir = '/app/dist'\n",
+		"Dockerfile.miren": "FROM alpine\nCOPY . /app/dist\n",
+	}
+}
+
+func staticSourceTarball(t *testing.T) map[string]string {
+	t.Helper()
+	return map[string]string{
+		".miren/app.toml":   "name = 'demo'\n[static]\ndir = '/app/public'\n",
+		"public/index.html": "static source",
 	}
 }
 
@@ -229,6 +253,58 @@ func TestBuildSaga_HappyPath_RunsFullPipeline(t *testing.T) {
 	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
 	assert.Equal(t, "dockerfile", version.Source.Kind)
 	assert.Empty(t, version.Source.Value)
+	assert.Empty(t, version.StaticArtifact)
+}
+
+func TestBuildSaga_StaticDirRecordsArtifact(t *testing.T) {
+	ctx := context.Background()
+
+	h := newSagaTestHarness(t)
+	h.streams.Register("stream-static", makeTar(t, staticDockerfileTarball(t)))
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-static").
+		WithID("test-static-artifact").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var application core_v1alpha.App
+	require.NoError(t, h.builder.ec.Get(ctx, "demo", &application))
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Equal(t, "sha256:static", version.StaticArtifact)
+
+	var configVersion core_v1alpha.ConfigVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, version.ConfigVersion, &configVersion))
+	assert.Equal(t, "/app/dist", configVersion.Spec.StaticDir)
+	assert.Empty(t, configVersion.Spec.Services)
+}
+
+func TestBuildSaga_StaticSourceNeedsNoImage(t *testing.T) {
+	ctx := context.Background()
+
+	h := newSagaTestHarness(t)
+	h.streams.Register("stream-static-source", makeTar(t, staticSourceTarball(t)))
+
+	err := h.executor.Start(sagaBuildFromTar).
+		Input("app_name", "demo").
+		Input("stream_id", "stream-static-source").
+		WithID("test-static-source").
+		Execute(ctx)
+	require.NoError(t, err)
+
+	var application core_v1alpha.App
+	require.NoError(t, h.builder.ec.Get(ctx, "demo", &application))
+
+	var version core_v1alpha.AppVersion
+	require.NoError(t, h.builder.ec.GetById(ctx, application.ActiveVersion, &version))
+	assert.Equal(t, "static", version.Source.Kind)
+	assert.Empty(t, version.ImageUrl)
+	assert.Empty(t, version.Artifact)
+	assert.Empty(t, version.ManifestDigest)
+	assert.Equal(t, "sha256:static", version.StaticArtifact)
 }
 
 func TestBuildSaga_MalformedGitInfoDoesNotBlockDeployment(t *testing.T) {
@@ -440,6 +516,20 @@ func TestDetectBuildStack_ImagePrecedence(t *testing.T) {
 		_, err := b.detectBuildStack(t.TempDir(), &appconfig.AppConfig{}, "demo", nil)
 		require.ErrorContains(t, err, "no supported stack detected for app demo")
 	})
+
+	t.Run("static_dir permits a source-only app", func(t *testing.T) {
+		stack, err := b.detectBuildStack(t.TempDir(), &appconfig.AppConfig{Static: &appconfig.StaticConfig{Dir: "/app"}}, "demo", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "static", stack.Stack)
+	})
+
+	t.Run("static_dir does not hide a missing runtime build source", func(t *testing.T) {
+		_, err := b.detectBuildStack(t.TempDir(), &appconfig.AppConfig{
+			Static:   &appconfig.StaticConfig{Dir: "/app/public"},
+			Services: map[string]*appconfig.ServiceConfig{"web": {}},
+		}, "demo", nil)
+		require.ErrorContains(t, err, "no supported stack detected for app demo")
+	})
 }
 
 func TestBuildSaga_ReceiveTar_EmitsStatusUpdates(t *testing.T) {
@@ -625,6 +715,7 @@ func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
 		Action(actionLoadSource, loadSource).Undo(undoLoadSource).
 		Action(actionGetNextVer, getNextVersion).Undo(undoGetNextVersion).
 		Action(actionBuildImage, stubBuildImage).Undo(undoBuildImage).
+		Action(actionExtractStatic, stubExtractStatic).Undo(undoExtractStatic).
 		Action(actionPrepareConfig, prepareConfig).Undo(undoPrepareConfig).
 		Action(actionHandleEphemera, handleEphemeral).Undo(undoHandleEphemeral).
 		Action(actionCreateConfigVer, createConfigVersion).Undo(undoCreateConfigVersion).

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"log/slog"
 	"net"
@@ -78,11 +79,22 @@ const (
 )
 
 type IngressConfig struct {
-	RequestTimeout time.Duration
-	DataPath       string
-	WorkloadIssuer *workloadidentity.Issuer
+	RequestTimeout    time.Duration
+	DataPath          string
+	ErrorPageTemplate *template.Template
+	WorkloadIssuer    *workloadidentity.Issuer
 	// Instance, when set, adds process identity and readiness to /health.
 	Instance *serverinfo.Source
+	// TrustProxyHeaders honors X-Forwarded-Proto and Forwarded from the peer
+	// when deciding a request's original scheme. Only set this when every
+	// connection comes from a proxy that overwrites those headers; a client
+	// that can reach the listener directly could otherwise downgrade its own
+	// auth cookies to non-Secure.
+	TrustProxyHeaders bool
+	// TrustedProxyHops is the number of trusted proxies in front of Miren,
+	// including its immediate peer. It defaults to one when proxy headers are
+	// trusted.
+	TrustedProxyHops int
 }
 
 type Server struct {
@@ -109,6 +121,7 @@ type Server struct {
 	// an active-version switch takes effect immediately, while the metrics
 	// privacy check does not add a ConfigVersion lookup to every request.
 	versionConfigs *lru.Cache[entity.Id, *cachedVersionConfig]
+	errorTemplates *lru.Cache[string, *template.Template]
 
 	httpMetrics *metrics.HTTPMetrics
 	logWriter   observability.LogWriter
@@ -116,9 +129,12 @@ type Server struct {
 	mu   sync.Mutex
 	apps map[string]*appUsage
 
-	oidcSessionManager *oidc.SessionManager
-	oidcMu             sync.RWMutex
-	oidcHandlers       map[string]*oidcHandler
+	// sessionManager holds the cookie encryption key shared by every
+	// cookie-based auth backend (OIDC, connector, password). Handlers get a
+	// per-scheme copy via sessionManagerFor rather than this instance.
+	sessionManager *oidc.SessionManager
+	oidcMu         sync.RWMutex
+	oidcHandlers   map[string]*oidcHandler
 
 	wafEngine       *waf.Engine
 	wafProfileMu    sync.RWMutex
@@ -131,6 +147,7 @@ type Server struct {
 	connectorHandlers map[string]*connectorHandler
 
 	workloadIssuer *workloadidentity.Issuer
+	staticFiles    staticFileServer
 }
 
 type appUsage struct {
@@ -165,27 +182,29 @@ func NewServer(
 	}
 
 	serv := &Server{
-		Log:                log.With("module", "httpingress"),
-		config:             config,
-		rpcClient:          rpcClient,
-		eac:                eac,
-		ingressClient:      ingress.NewClient(log, rpcClient),
-		appClient:          app.NewClient(log, rpcClient),
-		aa:                 aa,
-		transport:          newProxyTransport(config.RequestTimeout),
-		transports:         make(map[time.Duration]http.RoundTripper),
-		httpMetrics:        httpMetrics,
-		logWriter:          logWriter,
-		apps:               make(map[string]*appUsage),
-		oidcSessionManager: oidc.NewSessionManager(false, "", signingKey),
-		oidcHandlers:       make(map[string]*oidcHandler),
-		wafEngine:          waf.NewEngine(log.With("component", "waf")),
-		wafProfileCache:    make(map[entity.Id]*wafProfileEntry),
-		passwordHandlers:   make(map[string]*passwordHandler),
-		connectorHandlers:  make(map[string]*connectorHandler),
-		workloadIssuer:     config.WorkloadIssuer,
+		Log:               log.With("module", "httpingress"),
+		config:            config,
+		rpcClient:         rpcClient,
+		eac:               eac,
+		ingressClient:     ingress.NewClient(log, rpcClient),
+		appClient:         app.NewClient(log, rpcClient),
+		aa:                aa,
+		transport:         newProxyTransport(config.RequestTimeout),
+		transports:        make(map[time.Duration]http.RoundTripper),
+		httpMetrics:       httpMetrics,
+		logWriter:         logWriter,
+		apps:              make(map[string]*appUsage),
+		sessionManager:    oidc.NewSessionManager(false, "", signingKey),
+		oidcHandlers:      make(map[string]*oidcHandler),
+		wafEngine:         waf.NewEngine(log.With("component", "waf")),
+		wafProfileCache:   make(map[entity.Id]*wafProfileEntry),
+		passwordHandlers:  make(map[string]*passwordHandler),
+		connectorHandlers: make(map[string]*connectorHandler),
+		workloadIssuer:    config.WorkloadIssuer,
+		staticFiles:       newArchiveStaticFileServer(config.DataPath),
 	}
 	serv.versionConfigs, _ = lru.New[entity.Id, *cachedVersionConfig](256)
+	serv.errorTemplates, _ = lru.New[string, *template.Template](256)
 
 	if httpMetrics == nil {
 		serv.Log.Warn("HTTPMetrics is nil in httpingress")
@@ -607,7 +626,7 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	route, err := h.ingressClient.LookupWithWildcard(ctx, onlyHost)
 	if err != nil {
 		h.Log.Error("error looking up http route", "error", err, "host", onlyHost)
-		http.Error(w, fmt.Sprintf("error looking up http route: %s", onlyHost), http.StatusInternalServerError)
+		h.serveIngressError(w, req, fmt.Sprintf("error looking up http route: %s", onlyHost), http.StatusInternalServerError)
 		return
 	}
 
@@ -639,13 +658,13 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 		defaultRoute, err := h.ingressClient.LookupDefault(ctx)
 		if err != nil {
 			h.Log.Error("error looking up default route", "error", err)
-			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			h.serveIngressError(w, req, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
 		if defaultRoute == nil {
 			h.Log.Debug("no default route found", "host", onlyHost)
-			http.Error(w, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
+			h.serveIngressError(w, req, fmt.Sprintf("no http route found: %s", onlyHost), http.StatusNotFound)
 			return
 		}
 
@@ -659,22 +678,22 @@ func (h *Server) serveHTTPWithMetrics(w http.ResponseWriter, req *http.Request, 
 	requestTimeout := routeRequestTimeout(route)
 
 	var target *resolvedIngressTarget
-	prepare := func(w http.ResponseWriter, r *http.Request) bool {
+	prepare := func(w http.ResponseWriter, r *http.Request) *http.Request {
 		// A wildcard route also serves as a multi-tenant subdomain, so a failed
 		// ephemeral lookup should fall back to the active version rather than 404.
 		wildcardRoute := route != nil && ingress.IsWildcardHost(route.Host)
 		resolved, ok := h.resolveIngressTarget(w, r, targetAppId, ephemeralLabel, wildcardRoute)
 		if !ok {
-			return false
+			return nil
 		}
 		target = resolved
 		*appName = target.appMetadata.Name
 
 		if privateMetricsPath(target.config, service, r.URL.Path) {
 			http.NotFound(w, r)
-			return false
+			return nil
 		}
-		return true
+		return r.WithContext(context.WithValue(r.Context(), errorPageTargetKey{}, target))
 	}
 
 	handler := h.buildRouteHandler(route, appName, prepare, func(w http.ResponseWriter, r *http.Request) {
@@ -703,7 +722,7 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 	gr, err := h.eac.Get(ctx, appID.String())
 	if err != nil {
 		h.Log.Error("error looking up application", "error", err, "app", appID)
-		http.Error(w, fmt.Sprintf("error looking up application: %s", appID), http.StatusInternalServerError)
+		h.serveIngressError(w, req, fmt.Sprintf("error looking up application: %s", appID), http.StatusInternalServerError)
 		return nil, false
 	}
 
@@ -716,19 +735,19 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 		ephemeralVersion, err := ephemeralx.LookupByLabel(ctx, h.eac, appID, ephemeralLabel)
 		if err != nil {
 			h.Log.Error("error looking up ephemeral version", "error", err, "label", ephemeralLabel)
-			http.Error(w, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
+			h.serveIngressError(w, req, fmt.Sprintf("error looking up ephemeral version: %s", ephemeralLabel), http.StatusInternalServerError)
 			return nil, false
 		}
 		if ephemeralVersion == nil && strategy == resolveEphemeralStrict {
 			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", appID)
-			http.Error(w, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			h.serveIngressError(w, req, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
 			return nil, false
 		}
 		if ephemeralVersion != nil {
 			resolved, err := h.resolveVersionConfig(ctx, ephemeralVersion.ID, ephemeralVersion)
 			if err != nil {
 				h.Log.Error("error resolving ephemeral application configuration", "error", err, "version", ephemeralVersion.ID)
-				http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+				h.serveIngressError(w, req, "error resolving application configuration", http.StatusInternalServerError)
 				return nil, false
 			}
 			target.version = resolved.version
@@ -740,14 +759,14 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 
 	if target.app.ActiveVersion == "" {
 		h.Log.Debug("no active version for app", "app", appID)
-		http.Error(w, fmt.Sprintf("no active version for app: %s", appID), http.StatusNotFound)
+		h.serveIngressError(w, req, fmt.Sprintf("no active version for app: %s", appID), http.StatusNotFound)
 		return nil, false
 	}
 
 	resolved, err := h.resolveVersionConfig(ctx, target.app.ActiveVersion, nil)
 	if err != nil {
 		h.Log.Error("error resolving active application configuration", "error", err, "version", target.app.ActiveVersion)
-		http.Error(w, "error resolving application configuration", http.StatusInternalServerError)
+		h.serveIngressError(w, req, "error resolving application configuration", http.StatusInternalServerError)
 		return nil, false
 	}
 	target.version = resolved.version
@@ -815,7 +834,7 @@ func privateMetricsPath(config *core_v1alpha.ConfigSpec, service, requestPath st
 //
 // The order lives here, rather than inline, so it is something a test can hold
 // onto — see TestMiddlewareChainOrder.
-func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *string, prepare func(http.ResponseWriter, *http.Request) bool, serve http.HandlerFunc) http.HandlerFunc {
+func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *string, prepare func(http.ResponseWriter, *http.Request) *http.Request, serve http.HandlerFunc) http.HandlerFunc {
 	handler := serve
 
 	handler = h.authMiddleware(route, handler)
@@ -823,8 +842,8 @@ func (h *Server) buildRouteHandler(route *ingress_v1alpha.HttpRoute, appName *st
 	if prepare != nil {
 		next := handler
 		handler = func(w http.ResponseWriter, r *http.Request) {
-			if prepare(w, r) {
-				next(w, r)
+			if prepared := prepare(w, r); prepared != nil {
+				next(w, prepared)
 			}
 		}
 	}
@@ -872,7 +891,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 		resp, err := h.eac.Get(r.Context(), string(route.AuthProvider))
 		if err != nil {
 			h.Log.Error("failed to get auth provider entity", "error", err, "provider", route.AuthProvider)
-			http.Error(w, "Authentication service unavailable", http.StatusServiceUnavailable)
+			h.serveIngressError(w, r, "Authentication service unavailable", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -893,7 +912,7 @@ func (h *Server) authMiddleware(route *ingress_v1alpha.HttpRoute, next http.Hand
 			h.passwordMiddleware(route, ent, next)(w, r)
 		default:
 			h.Log.Error("unknown auth provider kind", "provider", route.AuthProvider)
-			http.Error(w, "Authentication service unavailable", http.StatusServiceUnavailable)
+			h.serveIngressError(w, r, "Authentication service unavailable", http.StatusServiceUnavailable)
 		}
 	}
 }
@@ -947,6 +966,35 @@ func leaseCacheKey(appID entity.Id, service string, versionID entity.Id, ephemer
 
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
+	req = req.WithContext(context.WithValue(req.Context(), errorPageTargetKey{}, target))
+	if target.config.StaticDir != "" && service == "web" {
+		start := time.Now()
+		staticResponse := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		if h.staticFiles == nil {
+			h.serveIngressError(staticResponse, req, "static file service unavailable", http.StatusServiceUnavailable)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		served, err := h.staticFiles.ServeFile(staticResponse, req, &target.version)
+		if err != nil {
+			h.Log.Error("failed to serve static file", "error", err, "app", targetAppId, "path", req.URL.Path)
+			if !served {
+				h.serveIngressError(staticResponse, req, "failed to serve static file", http.StatusInternalServerError)
+			}
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if served {
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+		if !configHasService(target.config, service) {
+			h.serveIngressError(staticResponse, req, "404 page not found", http.StatusNotFound)
+			h.logRequestFromStats(targetAppId.String(), *appName, h.responseStats(start, staticResponse, req))
+			return
+		}
+	}
+
 	ctx := req.Context()
 	ephemeralLabel := target.ephemeralLabel
 
@@ -974,7 +1022,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		curLease, err := h.useLease(ctx, leaseKey)
 		if err != nil {
 			h.Log.Error("error taking lease", "error", err, "app", targetAppId)
-			http.Error(w, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
+			h.serveIngressError(w, req, fmt.Sprintf("error taking lease: %s", targetAppId), http.StatusInternalServerError)
 			return
 		}
 
@@ -1030,17 +1078,17 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		if err != nil {
 			if errors.Is(err, activator.ErrSandboxDiedEarly) {
 				h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
-				http.Error(w, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
+				h.serveIngressError(w, req, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
 			} else {
 				h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
-				http.Error(w, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
+				h.serveIngressError(w, req, fmt.Sprintf("error acquiring lease: %s", targetAppId), http.StatusInternalServerError)
 			}
 			return
 		}
 
 		if actLease == nil {
 			h.Log.Debug("no lease available for app", "app", targetAppId)
-			http.Error(w, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
+			h.serveIngressError(w, req, fmt.Sprintf("no lease available for app: %s", targetAppId), http.StatusServiceUnavailable)
 			return
 		}
 
@@ -1060,6 +1108,47 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		}
 		return
 	}
+}
+
+func (h *Server) responseStats(start time.Time, response *responseWriter, req *http.Request) httputil.ProxyStats {
+	return httputil.ProxyStats{
+		StartTime:     start,
+		Duration:      time.Since(start),
+		StatusCode:    response.statusCode,
+		ResponseBytes: int64(response.bytesWritten),
+		RequestMethod: req.Method,
+		RequestPath:   req.URL.Path,
+		RequestQuery:  req.URL.RawQuery,
+		RequestHost:   req.Host,
+		RemoteAddr:    h.requestSourceIP(req),
+		ContentLength: max(0, req.ContentLength),
+	}
+}
+
+func (h *Server) requestSourceIP(req *http.Request) string {
+	remoteAddr := req.RemoteAddr
+	if h.config.TrustProxyHeaders {
+		hops := max(1, h.config.TrustedProxyHops)
+		forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+		if len(forwarded) >= hops {
+			if client := strings.TrimSpace(forwarded[len(forwarded)-hops]); client != "" {
+				remoteAddr = client
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
+func configHasService(config *core_v1alpha.ConfigSpec, name string) bool {
+	for _, service := range config.Services {
+		if service.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil.ProxyStats) {
@@ -1084,10 +1173,16 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 		Stream:    observability.UserOOB,
 		Body:      logMsg,
 		Attributes: map[string]string{
-			"source": "router",
-			"method": stats.RequestMethod,
-			"path":   stats.RequestPath,
-			"host":   stats.RequestHost,
+			"source":      "router",
+			"status":      fmt.Sprint(stats.StatusCode),
+			"method":      stats.RequestMethod,
+			"path":        stats.RequestPath,
+			"query":       stats.RequestQuery,
+			"duration_ms": fmt.Sprint(stats.Duration.Milliseconds()),
+			"response":    fmt.Sprint(stats.ResponseBytes),
+			"body":        fmt.Sprint(stats.ContentLength),
+			"host":        stats.RequestHost,
+			"source_ip":   stats.RemoteAddr,
 		},
 	})
 	if err != nil {
@@ -1107,7 +1202,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
 		h.Log.Error("failed to parse target URL", "error", err, "url", targetURL)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		h.serveIngressError(w, req, "Internal server error", http.StatusInternalServerError)
 		return nil // Not a connection error, don't invalidate
 	}
 
@@ -1120,13 +1215,13 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			outReq.URL.Scheme = targetParsed.Scheme
 			outReq.URL.Host = targetParsed.Host
 
-			// Set X-Forwarded-Proto to indicate the original protocol
-			if req.TLS == nil {
-				outReq.Header.Set("X-Forwarded-Proto", "http")
-			} else {
-				outReq.Header.Set("X-Forwarded-Proto", "https")
-			}
-
+			// Tell the app the original protocol. Same trust rules as auth:
+			// a front proxy's header counts only under behind-proxy-http.
+			// The Director path of the reverse proxy doesn't strip inbound
+			// forwarding headers, so drop the client's Forwarded ourselves;
+			// the X-Forwarded-* values below overwrite theirs.
+			outReq.Header.Del("Forwarded")
+			outReq.Header.Set("X-Forwarded-Proto", h.requestScheme(req))
 			outReq.Header.Set("X-Forwarded-Host", req.Host)
 
 			// Mark this as a public request (strip any client-provided value first)
@@ -1143,7 +1238,7 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			}
 			if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 				h.Log.Warn("request timeout", "url", targetURL, "app", appName)
-				http.Error(rw, timeoutMessage, http.StatusServiceUnavailable)
+				h.serveIngressError(rw, r, timeoutMessage, http.StatusServiceUnavailable)
 				return
 			}
 			if isProxyConnectionError(err) {
@@ -1151,9 +1246,10 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			} else {
 				h.Log.Error("proxy error", "error", err, "url", targetURL, "app", appName)
 			}
-			rw.WriteHeader(http.StatusBadGateway)
+			h.serveIngressError(rw, r, "", http.StatusBadGateway)
 		},
 		Callback: func(stats httputil.ProxyStats) {
+			stats.RemoteAddr = h.requestSourceIP(req)
 			h.logRequestFromStats(appEntityID, appName, stats)
 		},
 	}
@@ -1166,40 +1262,6 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 	}
 	return nil
 }
-
-/*
-func (h *LeaseHTTP) extractEndpoint(ctx context.Context, container containerd.Container) (discovery.Endpoint, error) {
-	labels, err := container.Labels(ctx)
-	if err == nil {
-		if host, ok := labels[httpHostLabel]; ok {
-			h.Log.Info("http endpoint found", "id", container.ID(), "host", host)
-			var ep discovery.Endpoint
-
-			if dir, ok := labels[staticDirLabel]; ok {
-				h.Log.Info("using local container endpoint for static_dir", "id", container.ID())
-				ep = &discovery.LocalContainerEndpoint{
-					Log: h.Log,
-					HTTP: discovery.HTTPEndpoint{
-						Host: "http://" + host,
-					},
-					Client:    h.CC,
-					Namespace: h.Namespace,
-					Dir:       dir,
-					Id:        container.ID(),
-				}
-			} else {
-				ep = &discovery.HTTPEndpoint{
-					Host: "http://" + host,
-				}
-			}
-
-			return ep, nil
-		}
-	}
-
-	return nil, fmt.Errorf("unable to derive endpoint")
-}
-*/
 
 // responseWriter wraps http.ResponseWriter to capture status code and response size
 type responseWriter struct {
@@ -1626,15 +1688,20 @@ func (h *Server) logInternalRequest(appEntityID, method, path string, statusCode
 	logMsg := fmt.Sprintf("status=%d method=%s path=\"%s\" access=internal duration_ms=%d response=%d",
 		statusCode, method, path, duration.Milliseconds(), responseBytes)
 
+	requestPath, query, _ := strings.Cut(path, "?")
 	err := h.logWriter.WriteEntry(appEntityID, observability.LogEntry{
 		Timestamp: time.Now(),
 		Stream:    observability.UserOOB,
 		Body:      logMsg,
 		Attributes: map[string]string{
-			"source": "router",
-			"access": "internal",
-			"method": method,
-			"path":   path,
+			"source":      "router",
+			"status":      fmt.Sprint(statusCode),
+			"method":      method,
+			"path":        requestPath,
+			"query":       query,
+			"access":      "internal",
+			"duration_ms": fmt.Sprint(duration.Milliseconds()),
+			"response":    fmt.Sprint(responseBytes),
 		},
 	})
 	if err != nil {

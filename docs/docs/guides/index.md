@@ -27,13 +27,13 @@ agent works from. See [Agent Skills](../agent-skills.md) for setup.
 | [Go](./go.md) | Yes | `go.mod` |
 | [Ruby](./ruby.md) | Yes | `Gemfile` |
 | [Rust](./rust.md) | Yes | `Cargo.toml` |
+| [Elixir](./elixir.md) | Yes | `mix.exs` |
 | [Java / JVM](./java.md) | No | `Dockerfile.miren` |
 | [PHP](./php.md) | No | `Dockerfile.miren` |
 | [.NET / C#](./dotnet.md) | No | `Dockerfile.miren` |
 | [C++](./cpp.md) | No | `Dockerfile.miren` |
 | [C](./c.md) | No | `Dockerfile.miren` |
 | [Deno](./deno.md) | No | `Dockerfile.miren` |
-| [Elixir](./elixir.md) | No | `Dockerfile.miren` |
 | [Kotlin](./kotlin.md) | No | `Dockerfile.miren` |
 | [Swift](./swift.md) | No | `Dockerfile.miren` |
 | [Dart](./dart.md) | No | `Dockerfile.miren` |
@@ -63,7 +63,7 @@ agent works from. See [Agent Skills](../agent-skills.md) for setup.
 
 ## Auto-detected vs. Dockerfile
 
-Six stacks are auto-detected. Miren reads your project files, picks the build stack, and
+Seven stacks are auto-detected. Miren reads your project files, picks the build stack, and
 builds a container image for you — **no Dockerfile required**. You run `miren init` once
 and `miren deploy`, and Miren figures out the rest.
 
@@ -75,20 +75,21 @@ and `miren deploy`, and Miren figures out the rest.
 | [Bun](./javascript.md) | `package.json` + `bun.lock` | 1 |
 | [Go](./go.md) | `go.mod` | Parsed from `go.mod`, else 1.23 |
 | [Rust](./rust.md) | `Cargo.toml` | 1.83 |
+| [Elixir](./elixir.md) | `mix.exs` | From `.tool-versions` or `mise.toml`, else 1.19 on OTP 28 |
 
 Each guide covers that stack's detection rules, build process, and start command in
 full. Override any default version with `[build] version` in
 [`.miren/app.toml`](../app-toml.md#build).
 
-Every other language here — from Elixir and Gleam to Kotlin, Swift, Julia, and even
+Every other language here — from Gleam and Erlang to Kotlin, Swift, Julia, and even
 COBOL — isn't auto-detected, so its guide shows you a `Dockerfile.miren` you
 can drop into your project. Miren builds from that Dockerfile instead of guessing. This
 is the same escape hatch available to every language when you need full control over the
 build.
 
 :::tip[Want native support?]
-Native builds cover the common stacks today (Python, Node, Bun, Go, Ruby, Rust). If you'd
-like Miren to detect and build another language first-class — no Dockerfile needed —
+Native builds cover the stacks in the table above. If you'd like Miren to detect and
+build another language first-class — no Dockerfile needed —
 [tell us what to build next](https://linear.miren.garden/suggest).
 :::
 

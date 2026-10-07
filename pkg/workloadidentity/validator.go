@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"miren.dev/runtime/x/workloadid"
 )
 
 // PeekSandboxClaims reads the app and role from a token WITHOUT verifying its
@@ -46,7 +47,7 @@ const clockSkewLeeway = 60 * time.Second
 // Tokens minted for external relying parties (AWS STS and friends) request an
 // explicit audience, so they never satisfy this check and cannot be replayed
 // against us.
-const APIAudience = "miren"
+const APIAudience = workloadid.APIAudience
 
 // ErrNoIssuer is returned when a Validator has no usable issuer to verify
 // against. It fails closed rather than accepting anything.

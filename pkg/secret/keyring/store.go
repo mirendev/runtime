@@ -45,6 +45,20 @@ func Path(dataPath string) string {
 	return filepath.Join(dataPath, "server", Filename)
 }
 
+// Load reads an existing keyring without generating or modifying key material.
+func Load(dataPath string) (*Keyring, error) {
+	path := Path(dataPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read secret keyring at %s: %w", path, err)
+	}
+	ring, err := decode(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load secret keyring at %s: %w", path, err)
+	}
+	return ring, nil
+}
+
 // Ensure loads the cluster's keyring from the data directory, generating one on
 // first use.
 //
@@ -55,22 +69,18 @@ func Path(dataPath string) string {
 func Ensure(log *slog.Logger, dataPath string) (*Keyring, error) {
 	path := Path(dataPath)
 
-	data, err := os.ReadFile(path)
+	ring, err := Load(dataPath)
 	switch {
 	case err == nil:
 		log.Info("loading existing secret keyring", "path", path)
-		ring, err := decode(data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load secret keyring at %s: %w", path, err)
-		}
 		return ring, nil
 	case !errors.Is(err, os.ErrNotExist):
-		return nil, fmt.Errorf("failed to read secret keyring at %s: %w", path, err)
+		return nil, err
 	}
 
 	log.Info("generating new secret keyring", "path", path)
 
-	ring, err := Generate()
+	ring, err = Generate()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate secret keyring: %w", err)
 	}

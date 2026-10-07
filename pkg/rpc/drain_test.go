@@ -1,11 +1,14 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -31,7 +34,7 @@ func TestDrainQUICStopsOnceListenerIsIdle(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := drainQUIC(ctx, blockingShutdown, ln)
+	err := drainQUIC(ctx, slog.Default(), "test", blockingShutdown, ln)
 	took := time.Since(start)
 
 	if err != nil {
@@ -52,7 +55,7 @@ func TestDrainQUICReportsStallWhileConnectionsRemain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := drainQUIC(ctx, blockingShutdown, ln)
+	err := drainQUIC(ctx, slog.Default(), "test", blockingShutdown, ln)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a drain that stalled with a connection open returned %v, want DeadlineExceeded", err)
 	}
@@ -62,7 +65,7 @@ func TestDrainQUICPassesThroughAnOrdinaryDrain(t *testing.T) {
 	ln := &countingListener{}
 	want := errors.New("listener exploded")
 
-	err := drainQUIC(context.Background(), func(context.Context) error { return want }, ln)
+	err := drainQUIC(context.Background(), slog.Default(), "test", func(context.Context) error { return want }, ln)
 	if !errors.Is(err, want) {
 		t.Fatalf("drain returned %v, want the underlying error", err)
 	}
@@ -175,4 +178,74 @@ func TestOnlyATimedOutDrainSpendsTheStackDump(t *testing.T) {
 	if r.dumps != 1 {
 		t.Fatalf("a second stall dumped again (%d)", r.dumps)
 	}
+}
+
+func TestWaitForIdleNamesConnectionsItWaitsOn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logs, nil))
+		ln := &countingListener{}
+		ln.accepted.Store(3)
+		ln.open.Store(1)
+
+		// The peer lets go shortly after the census and well inside the
+		// deadline, so the wait returns nil and the census is its only trace.
+		go func() {
+			time.Sleep(drainCensusDelay + time.Second)
+			ln.open.Store(0)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := waitForIdle(ctx, log, "HTTP/3", ln); err != nil {
+			t.Fatalf("wait that finished inside its deadline returned %v", err)
+		}
+		if got := strings.Count(logs.String(), `msg="drain still waiting on open connections" surface=HTTP/3`); got != 1 {
+			t.Fatalf("census logged %d times, want once:\n%s", got, logs.String())
+		}
+		if !strings.Contains(logs.String(), `connections="3 accepted, 1 still open"`) {
+			t.Fatalf("census did not name the open connections:\n%s", logs.String())
+		}
+	})
+}
+
+func TestWaitForIdleStaysQuietOnAPromptDrain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		ln := &countingListener{}
+		ln.open.Store(1)
+		go func() {
+			time.Sleep(time.Second)
+			ln.open.Store(0)
+		}()
+
+		if err := waitForIdle(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)), "HTTP/3", ln); err != nil {
+			t.Fatalf("prompt drain returned %v", err)
+		}
+		if logs.Len() != 0 {
+			t.Fatalf("prompt drain logged:\n%s", logs.String())
+		}
+	})
+}
+
+func TestDrainQUICNamesConnectionsItWaitsOn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		ln := &countingListener{}
+		ln.accepted.Store(2)
+		ln.open.Store(1)
+		go func() {
+			time.Sleep(drainCensusDelay + time.Second)
+			ln.open.Store(0)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := drainQUIC(ctx, slog.New(slog.NewTextHandler(&logs, nil)), "local HTTP/3", blockingShutdown, ln); err != nil {
+			t.Fatalf("drain that finished inside its deadline returned %v", err)
+		}
+		if !strings.Contains(logs.String(), `msg="drain still waiting on open connections" surface="local HTTP/3" waited=5s connections="2 accepted, 1 still open"`) {
+			t.Fatalf("local drain did not name the open connections:\n%s", logs.String())
+		}
+	})
 }

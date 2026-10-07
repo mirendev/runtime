@@ -1,6 +1,7 @@
 package build
 
 import (
+	"archive/tar"
 	"context"
 	"io"
 	"log/slog"
@@ -348,6 +349,60 @@ RUN echo "test" > /custom/workdir/test.txt
 	require.NotEmpty(t, res.ManifestDigest, "ManifestDigest should be set")
 	assert.Equal(t, "/custom/workdir", res.WorkingDir, "WorkingDir should match the WORKDIR in Dockerfile")
 	assert.Equal(t, []string{"4000/tcp"}, res.ExposedPorts, "ExposedPorts should match EXPOSE in Dockerfile")
+}
+
+func TestExportStatic(t *testing.T) {
+	if !checkDocker() {
+		t.Skip("Docker not available")
+	}
+
+	ctx := context.Background()
+	infra := setupTestInfra(t)
+	registry := infra.setupLocalRegistry(t, ctx)
+	bkc := infra.setupBuildkitContainer(t, ctx, registry.network)
+
+	testDir := t.TempDir()
+	dockerfile := `FROM alpine:latest
+RUN mkdir -p /app/dist/docs && printf asset >/app/dist/asset.txt && printf index >/app/dist/docs/index.html
+`
+	require.NoError(t, os.WriteFile(filepath.Join(testDir, "Dockerfile.miren"), []byte(dockerfile), 0644))
+	dfs, err := fsutil.NewFS(testDir)
+	require.NoError(t, err)
+
+	bk := &Buildkit{Client: bkc, Log: slog.Default()}
+	imageURL := registry.network + "/test-static:latest"
+	_, err = bk.BuildImage(ctx, dfs, BuildStack{
+		Stack:   "dockerfile",
+		CodeDir: testDir,
+		Input:   "Dockerfile.miren",
+	}, "test-app", imageURL)
+	require.NoError(t, err)
+
+	archivePath := filepath.Join(t.TempDir(), "static.tar")
+	require.NoError(t, bk.ExportStatic(ctx, imageURL, "/app/dist", archivePath))
+	archive, err := os.Open(archivePath)
+	require.NoError(t, err)
+	defer archive.Close()
+
+	files := make(map[string]string)
+	reader := tar.NewReader(archive)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		contents, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		files[strings.TrimPrefix(header.Name, "./")] = string(contents)
+	}
+	assert.Equal(t, map[string]string{
+		"asset.txt":       "asset",
+		"docs/index.html": "index",
+	}, files)
 }
 
 func TestBuildImageWorkingDirRoot(t *testing.T) {

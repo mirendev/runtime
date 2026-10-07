@@ -76,6 +76,22 @@ The wildcard `*` must be the first label — patterns like `foo.*.example.com` a
 
 For [Pull Request Environments](./pr-environments.md), you don't need a wildcard route — any subdomain of an existing route automatically resolves to its ephemeral label. You only need wildcard *DNS* pointing at your cluster.
 
+#### Certificates for wildcard subdomains
+
+A wildcard route serves every subdomain, but Miren won't request a Let's Encrypt certificate for a subdomain until your app says the name is real. Without that check, anyone could make your cluster request a certificate for any name under your domain. Scanners do this constantly, trying `admin`, `mail`, `database`, and thousands of other guesses. Each guess would cost you rate limit and add a public Certificate Transparency entry for a name you don't run.
+
+To let your app vouch for its own subdomains, give the route a TLS check path:
+
+<CliCommand context="client">
+```miren
+miren route tls-check '*.myapp.example.com' /tls-check
+```
+</CliCommand>
+
+Before issuing a certificate for a new name, Miren sends `GET /tls-check?domain=<name>` to your app. A `200` means go ahead. Any other answer, or no answer within a few seconds, means the name gets the fallback certificate. The request skips the route's authentication, so the endpoint has to be publicly reachable. Miren remembers a yes for a few minutes and a no for about 30 seconds, so a handshake doesn't wait on your app every time and a preview that comes up just after its name was probed isn't stuck for long. A `5xx` or a timeout isn't remembered, so an app still waking up from zero gets asked again on the next connection.
+
+Without a TLS check, subdomains under a wildcard route get the fallback certificate, except for live ephemeral deploys, which always get a real one. If you only have a handful of real subdomains, you can skip the check and add an exact route for each one instead.
+
 ### Custom Domains
 
 To put your own domain in front of an app on Miren, point DNS at your cluster and set a route. TLS provisions automatically.

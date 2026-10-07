@@ -17,7 +17,10 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/uplink"
 )
@@ -386,6 +389,43 @@ func TestSessionValidatesEpochAfterSourcePreparation(t *testing.T) {
 	require.Empty(t, link.sent(), "the restored source must not be sent under the negotiated old epoch")
 }
 
+func TestSessionEpochMismatchResetsLandedRevision(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var logs lockedBuffer
+	store := &mutableEpochStore{MockStore: entity.NewMockStore(), epoch: "epoch-before-restore"}
+	diagnostics := NewDiagnostics(core_v1alpha.CloudExportContract.Digest())
+	exporter := NewExporter(
+		slog.New(slog.NewTextHandler(&logs, nil)),
+		store,
+		core_v1alpha.CloudExportContract,
+		WithDiagnostics(diagnostics),
+	)
+	// Cloud landed the old store up to revision 64 while it was current.
+	diagnostics.setSource("epoch-before-restore")
+	diagnostics.setLanded(64)
+
+	// The store is restored under the running process; cloud still selects
+	// the epoch it negotiated before.
+	store.setEpoch("epoch-after-restore", nil)
+	config, err := json.Marshal(Config{
+		ExportSchema: core_v1alpha.CloudExportContract.Digest(),
+		SourceEpoch:  "epoch-before-restore",
+	})
+	require.NoError(t, err)
+
+	go exporter.runSession(ctx, uplink.Session{Capabilities: []uplink.CapabilitySelection{{
+		Name: uplink.CapabilityEntitySync, Version: Version1, Config: config,
+	}}}, newFakeLink())
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "cloud selected an unexpected entity source epoch")
+	}, time.Second, time.Millisecond)
+
+	landed, exporting := diagnostics.LandedRevision()
+	require.Zero(t, landed, "the old store's watermark must not vouch for the restored store")
+	require.True(t, exporting, "export still applies; nothing is landed yet")
+}
+
 func TestSnapshotFiltersEntities(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -443,6 +483,67 @@ func TestSnapshotFiltersEntities(t *testing.T) {
 	require.NotContains(t, string(raw), "project/secret")
 	require.NotContains(t, string(raw), "super-secret")
 	require.NotContains(t, string(raw), string(marker))
+}
+
+// No explicit marker on the route: Encode stamps it, which is how every
+// ingress write path ends up in the export.
+func TestSnapshotExportsOnlyRoutingFactsOfARoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store := entity.NewMockStore()
+
+	route := entity.New(
+		entity.Ref(entity.DBId, "www.example.com"),
+		(&ingress_v1alpha.HttpRoute{
+			ID:             "www.example.com",
+			Host:           "www.example.com",
+			App:            "app/blog",
+			Service:        "web",
+			RequestTimeout: "90s",
+			TlsCheck:       "/tls-check",
+			WafProfile:     "waf/strict",
+			AuthProvider:   "oidc/staff",
+			ClaimMappings:  []ingress_v1alpha.ClaimMappings{{Claim: "email", Header: "X-User-Email"}},
+			Maintenance:    ingress_v1alpha.Maintenance{Reason: "migrating", StartedBy: "operator@example.com"},
+		}).Encode(),
+	)
+	stampExportMetadata(route, 3)
+	store.AddEntity(route.Id(), route)
+
+	tenant := testExporter(store)
+	s := &stream{exporter: tenant, ctx: ctx, sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
+	tenant.active = s
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeSnapshotComplete {
+			return
+		}
+		complete := payload.(SnapshotComplete)
+		s.deliver(Ack{MessageID: complete.MessageID, Cursor: complete.SourceHead})
+	}
+
+	_, _, err := s.snapshot(ctx, link)
+	require.NoError(t, err)
+
+	messages := link.sent()
+	require.Equal(t, TypeSnapshotBatch, messages[1].typ)
+	batch := messages[1].payload.(SnapshotBatch)
+	require.Len(t, batch.Entities, 1)
+	sent := batch.Entities[0]
+
+	var got ingress_v1alpha.HttpRoute
+	got.Decode(sent)
+	require.Equal(t, ingress_v1alpha.HttpRoute{ID: "www.example.com", Host: "www.example.com", App: "app/blog"}, got)
+	defaultAttr, ok := sent.Get(ingress_v1alpha.HttpRouteDefaultId)
+	require.True(t, ok, "default is always encoded, so cloud can tell a host route from the catch-all")
+	require.False(t, defaultAttr.Value.Bool())
+
+	raw, err := json.Marshal(batch.Entities)
+	require.NoError(t, err)
+	for _, secret := range []string{"oidc/staff", "waf/strict", "X-User-Email", "operator@example.com", "migrating", "/tls-check", "90s"} {
+		require.NotContains(t, string(raw), secret)
+	}
+	require.NotContains(t, string(raw), string(core_v1alpha.CloudExportContract.MarkerID()))
 }
 
 func TestSnapshotReadsAndSendsOnePinnedPageAtATime(t *testing.T) {
@@ -564,6 +665,8 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(8), cursor)
 	require.Equal(t, int64(8), tenant.diagnostics.SnapshotStatus().CloudCursor)
+	landed, _ := tenant.diagnostics.LandedRevision()
+	require.Equal(t, int64(8), landed)
 	messages := link.sent()
 	require.Equal(t, []string{
 		TypeSnapshotBegin, TypeSnapshotBatch, TypeChangeBatch, TypeSnapshotComplete,
@@ -574,8 +677,24 @@ func TestLiveChangePreemptsArchiveSnapshot(t *testing.T) {
 	require.Equal(t, "succeeded", entity.MustGet(change.Changes[0].Entity, core_v1alpha.DeploymentOutcomeId).Value.String())
 }
 
+// deletedAtStore answers GetEntityAtRevision the way etcd does around a
+// deletion: the entity is readable at revisions before deletedAt and gone
+// from it on. The plain MockStore ignores the revision, which cannot tell
+// "the index key went away" from "the entity went away".
+type deletedAtStore struct {
+	*entity.MockStore
+	deletedAt int64
+}
+
+func (s *deletedAtStore) GetEntityAtRevision(ctx context.Context, id entity.Id, revision int64) (*entity.Entity, error) {
+	if revision >= s.deletedAt {
+		return nil, cond.NotFound("entity", id)
+	}
+	return s.MockStore.GetEntityAtRevision(ctx, id, revision)
+}
+
 func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
-	store := entity.NewMockStore()
+	store := &deletedAtStore{MockStore: entity.NewMockStore(), deletedAt: 5}
 	marker := core_v1alpha.CloudExportContract.MarkerID()
 	app := entity.New(
 		entity.Ref(entity.DBId, "app/web"),
@@ -604,6 +723,102 @@ func TestDeleteCarriesFilteredLastEntityState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "project/secret")
 	require.NotContains(t, string(raw), string(marker))
+}
+
+// A node is written under the runner's coordinator session, so its marker
+// index carries a leased entry that etcd drops when the session lapses. That
+// DELETE is not the node leaving: the entity is still there, and what cloud
+// must hear is the entity as the store holds it at that revision. (That the
+// store's pinned read drops the session's attributes along with the session
+// is EtcdStore's contract, pinned in its own tests.)
+func TestSessionIndexExpiryExportsTheLiveEntityNotADeletion(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	node := entity.New(
+		entity.Ref(entity.DBId, "node/r1"),
+		(&compute_v1alpha.Node{ID: "node/r1", RunnerId: "runner-1", Name: "r1", Version: "v0.14.0"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(node, 7)
+	store.AddEntity(node.Id(), node)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{{
+		Type: mvccpb.DELETE,
+		Kv:   &mvccpb.KeyValue{ModRevision: 8},
+		PrevKv: &mvccpb.KeyValue{
+			Value: []byte(node.Id()), ModRevision: 7,
+		},
+	}}, 8)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, ChangePut, changes[0].Op)
+	require.Equal(t, int64(8), changes[0].Revision)
+	require.Equal(t, entity.Id("node/r1"), changes[0].EntityID)
+	require.Equal(t, compute_v1alpha.KindNode, changes[0].Kind)
+	// The primary key did not move at 8, so the store still reads the node at
+	// 7. Cloud lands a put at its body's revision and refuses one that
+	// disagrees with the envelope, so the body has to say 8 as well.
+	require.Equal(t, int64(8), changes[0].Entity.GetRevision())
+	version, ok := changes[0].Entity.Get(compute_v1alpha.NodeVersionId)
+	require.True(t, ok)
+	require.Equal(t, "v0.14.0", version.Value.String())
+}
+
+// An entity can carry the marker without a place in the contract when its
+// domain declared the export but the owner's contract was generated without
+// merging it. That is a build mistake, not a reason to stop every other kind
+// from syncing, so the entity is skipped rather than failing the stream.
+func TestMarkedEntityOfUnexportedKindIsSkippedNotFatal(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	stray := entity.New(
+		entity.Ref(entity.DBId, "stray/1"),
+		entity.Ref(entity.EntityKind, entity.Id("dev.miren.example/kind.stray")),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(stray, 3)
+	store.AddEntity(stray.Id(), stray)
+	app := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		(&core_v1alpha.App{ID: "app/web"}).Encode(),
+		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(app, 4)
+	store.AddEntity(app.Id(), app)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(stray.Id()), ModRevision: 3}},
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(app.Id()), ModRevision: 4}},
+	}, 4)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, entity.Id("app/web"), changes[0].EntityID)
+}
+
+// A session-written entity has two index keys, so one save is two events at
+// one revision. Cloud should hear about it once.
+func TestDuplicateIndexEventsAtOneRevisionCollapse(t *testing.T) {
+	store := entity.NewMockStore()
+	marker := core_v1alpha.CloudExportContract.MarkerID()
+	node := entity.New(
+		entity.Ref(entity.DBId, "node/r1"),
+		(&compute_v1alpha.Node{ID: "node/r1", RunnerId: "runner-1", Name: "r1"}).Encode(),
+		entity.Bool(marker, true),
+	)
+	stampExportMetadata(node, 9)
+	store.AddEntity(node.Id(), node)
+	s := &stream{exporter: testExporter(store), ctx: t.Context()}
+
+	changes, err := s.changes([]*clientv3.Event{
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(node.Id()), ModRevision: 9}},
+		{Type: mvccpb.PUT, Kv: &mvccpb.KeyValue{Value: []byte(node.Id()), ModRevision: 9}},
+	}, 9)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, ChangePut, changes[0].Op)
 }
 
 func TestDeleteSkipsStaleIndexEntryWithoutPriorEntityState(t *testing.T) {
@@ -1078,4 +1293,99 @@ func TestRetryDoesNotWarnAfterSessionCancellation(t *testing.T) {
 
 	require.False(t, stream.retry(ctx, "start entity sync session", context.Canceled))
 	require.NotContains(t, logs.String(), "start entity sync session")
+}
+
+// A batch cloud refuses is rebuilt identically on every retry, so a rejection
+// that can never succeed has to slow down instead of warning once a second
+// forever. Only a committed cursor puts the stream back on the fast path: a
+// batch accepted mid-snapshot, or an ack for the wrong cursor, is not
+// progress, and resetting on either would let a snapshot cloud keeps refusing
+// restart once a second.
+func TestRetryBacksOffUntilCloudCommitsProgress(t *testing.T) {
+	exporter := testExporter(entity.NewMockStore())
+	exporter.retryDelay = time.Millisecond
+	exporter.maxRetryDelay = 4 * time.Millisecond
+	exporter.ackTimeout = time.Hour
+	stream := &stream{exporter: exporter, ctx: t.Context(), waiters: make(map[string]chan Ack)}
+
+	var delays []time.Duration
+	for range 5 {
+		delays = append(delays, stream.backoff())
+	}
+	require.Equal(t, []time.Duration{
+		time.Millisecond, 2 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond, 4 * time.Millisecond,
+	}, delays)
+
+	ackCursor := int64(0)
+	link := newFakeLink()
+	link.onSend = func(_ string, payload any) {
+		batch := payload.(ChangeBatch)
+		stream.deliver(Ack{MessageID: batch.MessageID, Cursor: ackCursor})
+	}
+	progress := func(revision int64) clientv3.WatchResponse {
+		return clientv3.WatchResponse{Header: etcdserverpb.ResponseHeader{Revision: revision}}
+	}
+
+	ackCursor = 5
+	_, err := stream.sendWatchResponse(link, progress(5), 4, false)
+	require.NoError(t, err)
+	require.Equal(t, 4*time.Millisecond, stream.backoff(), "a batch drained mid-snapshot is not committed")
+
+	ackCursor = 3
+	_, err = stream.sendWatchResponse(link, progress(6), 5, true)
+	require.ErrorContains(t, err, "does not match batch end")
+	require.Equal(t, 4*time.Millisecond, stream.backoff(), "an ack for the wrong cursor is not progress")
+
+	ackCursor = 6
+	_, err = stream.sendWatchResponse(link, progress(6), 5, true)
+	require.NoError(t, err)
+	require.Equal(t, time.Millisecond, stream.backoff())
+}
+
+// A completed snapshot is progress too: once cloud acknowledges the snapshot
+// at the tail it committed, the stream is back on the fast path. An ack for any
+// other cursor fails the snapshot and must leave the backoff where it was.
+func TestSnapshotCompletionResetsBackoff(t *testing.T) {
+	store := entity.NewMockStore()
+	app := entity.New(
+		entity.Ref(entity.DBId, "app/web"),
+		(&core_v1alpha.App{ID: "app/web"}).Encode(),
+		(&core_v1alpha.Metadata{Name: "web"}).Encode(),
+		entity.Bool(core_v1alpha.CloudExportContract.MarkerID(), true),
+	)
+	stampExportMetadata(app, 4)
+	store.AddEntity(app.Id(), app)
+
+	exporter := testExporter(store)
+	exporter.retryDelay = time.Millisecond
+	exporter.maxRetryDelay = 4 * time.Millisecond
+	s := &stream{exporter: exporter, ctx: t.Context(), sourceEpoch: "mock-source-epoch", waiters: make(map[string]chan Ack)}
+	exporter.active = s
+
+	ackOffset := int64(0)
+	link := newFakeLink()
+	link.onSend = func(typ string, payload any) {
+		if typ != TypeSnapshotComplete {
+			return
+		}
+		complete := payload.(SnapshotComplete)
+		s.deliver(Ack{MessageID: complete.MessageID, Cursor: complete.SourceHead + ackOffset})
+	}
+	backedOff := func() {
+		for range 3 {
+			s.backoff()
+		}
+	}
+
+	backedOff()
+	ackOffset = 1
+	_, _, err := s.snapshot(t.Context(), link)
+	require.ErrorContains(t, err, "does not match committed tail")
+	require.Equal(t, 4*time.Millisecond, s.backoff(), "an ack for the wrong cursor is not progress")
+
+	backedOff()
+	ackOffset = 0
+	_, _, err = s.snapshot(t.Context(), link)
+	require.NoError(t, err)
+	require.Equal(t, time.Millisecond, s.backoff())
 }

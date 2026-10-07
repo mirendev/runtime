@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/x/workloadid"
 )
 
 // Environment injected into every sandbox by the sandbox controller. See
@@ -21,7 +22,7 @@ const (
 	EnvAPIAddress = "MIREN_API_ADDRESS"
 
 	// EnvIdentityTokenPath is the sandbox's workload identity token.
-	EnvIdentityTokenPath = "MIREN_IDENTITY_TOKEN_PATH"
+	EnvIdentityTokenPath = workloadid.EnvTokenPath
 
 	// EnvCACertPath is the cluster CA, for verifying the API certificate.
 	EnvCACertPath = "MIREN_CA_CERT_PATH"

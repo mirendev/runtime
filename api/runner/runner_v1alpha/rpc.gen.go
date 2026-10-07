@@ -967,8 +967,9 @@ func (v *RunnerRegistrationWorkloadIssuerInfoArgs) UnmarshalJSON(data []byte) er
 }
 
 type runnerRegistrationWorkloadIssuerInfoResultsData struct {
-	Enabled   *bool   `cbor:"0,keyasint,omitempty" json:"enabled,omitempty"`
-	IssuerUrl *string `cbor:"1,keyasint,omitempty" json:"issuer_url,omitempty"`
+	Enabled               *bool   `cbor:"0,keyasint,omitempty" json:"enabled,omitempty"`
+	IssuerUrl             *string `cbor:"1,keyasint,omitempty" json:"issuer_url,omitempty"`
+	CoordinatorInternalIp *string `cbor:"2,keyasint,omitempty" json:"coordinator_internal_ip,omitempty"`
 }
 
 type RunnerRegistrationWorkloadIssuerInfoResults struct {
@@ -982,6 +983,10 @@ func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetEnabled(enabled bool) {
 
 func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetIssuerUrl(issuer_url string) {
 	v.data.IssuerUrl = &issuer_url
+}
+
+func (v *RunnerRegistrationWorkloadIssuerInfoResults) SetCoordinatorInternalIp(coordinator_internal_ip string) {
+	v.data.CoordinatorInternalIp = &coordinator_internal_ip
 }
 
 func (v *RunnerRegistrationWorkloadIssuerInfoResults) MarshalCBOR() ([]byte, error) {
@@ -1542,6 +1547,98 @@ func (v *RunnerRegistrationIssueSystemWorkloadTokenResults) UnmarshalJSON(data [
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationInstallDiskAcceleratorArgsData struct {
+	Query *string `cbor:"0,keyasint,omitempty" json:"query,omitempty"`
+	Force *bool   `cbor:"1,keyasint,omitempty" json:"force,omitempty"`
+}
+
+type RunnerRegistrationInstallDiskAcceleratorArgs struct {
+	call rpc.Call
+	data runnerRegistrationInstallDiskAcceleratorArgsData
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) HasQuery() bool {
+	return v.data.Query != nil
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) Query() string {
+	if v.data.Query == nil {
+		return ""
+	}
+	return *v.data.Query
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) HasForce() bool {
+	return v.data.Force != nil
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) Force() bool {
+	if v.data.Force == nil {
+		return false
+	}
+	return *v.data.Force
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationInstallDiskAcceleratorResultsData struct {
+	Name          *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	KernelRelease *string `cbor:"1,keyasint,omitempty" json:"kernel_release,omitempty"`
+	LbdVersion    *string `cbor:"2,keyasint,omitempty" json:"lbd_version,omitempty"`
+	Error         *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationInstallDiskAcceleratorResults struct {
+	call rpc.Call
+	data runnerRegistrationInstallDiskAcceleratorResultsData
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) SetKernelRelease(kernel_release string) {
+	v.data.KernelRelease = &kernel_release
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) SetLbdVersion(lbd_version string) {
+	v.data.LbdVersion = &lbd_version
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationInstallDiskAcceleratorResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -1880,6 +1977,32 @@ func (t *RunnerRegistrationIssueSystemWorkloadToken) Results() *RunnerRegistrati
 	return results
 }
 
+type RunnerRegistrationInstallDiskAccelerator struct {
+	rpc.Call
+	args    RunnerRegistrationInstallDiskAcceleratorArgs
+	results RunnerRegistrationInstallDiskAcceleratorResults
+}
+
+func (t *RunnerRegistrationInstallDiskAccelerator) Args() *RunnerRegistrationInstallDiskAcceleratorArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationInstallDiskAccelerator) Results() *RunnerRegistrationInstallDiskAcceleratorResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -1894,6 +2017,7 @@ type RunnerRegistration interface {
 	UncordonRunner(ctx context.Context, state *RunnerRegistrationUncordonRunner) error
 	DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error
 	IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error
+	InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error
 }
 
 type reexportRunnerRegistration struct {
@@ -1949,6 +2073,10 @@ func (reexportRunnerRegistration) DrainRunner(ctx context.Context, state *Runner
 }
 
 func (reexportRunnerRegistration) IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error {
 	panic("not implemented")
 }
 
@@ -2086,6 +2214,16 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"system_workload", "audience", "ttl_seconds"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.IssueSystemWorkloadToken(ctx, &RunnerRegistrationIssueSystemWorkloadToken{Call: call})
+			},
+		},
+		{
+			Name:          "InstallDiskAccelerator",
+			InterfaceName: "RunnerRegistration",
+			Index:         13,
+			Public:        false,
+			Params:        []string{"query", "force"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.InstallDiskAccelerator(ctx, &RunnerRegistrationInstallDiskAccelerator{Call: call})
 			},
 		},
 	}
@@ -2485,6 +2623,17 @@ func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) IssuerUrl() string {
 	return *v.data.IssuerUrl
 }
 
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) HasCoordinatorInternalIp() bool {
+	return v.data.CoordinatorInternalIp != nil
+}
+
+func (v *RunnerRegistrationClientWorkloadIssuerInfoResults) CoordinatorInternalIp() string {
+	if v.data.CoordinatorInternalIp == nil {
+		return ""
+	}
+	return *v.data.CoordinatorInternalIp
+}
+
 func (v RunnerRegistrationClient) WorkloadIssuerInfo(ctx context.Context) (*RunnerRegistrationClientWorkloadIssuerInfoResults, error) {
 	args := RunnerRegistrationWorkloadIssuerInfoArgs{}
 
@@ -2828,4 +2977,68 @@ func (v RunnerRegistrationClient) IssueSystemWorkloadToken(ctx context.Context, 
 	}
 
 	return &RunnerRegistrationClientIssueSystemWorkloadTokenResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientInstallDiskAcceleratorResults struct {
+	client rpc.Client
+	data   runnerRegistrationInstallDiskAcceleratorResultsData
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) HasKernelRelease() bool {
+	return v.data.KernelRelease != nil
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) KernelRelease() string {
+	if v.data.KernelRelease == nil {
+		return ""
+	}
+	return *v.data.KernelRelease
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) HasLbdVersion() bool {
+	return v.data.LbdVersion != nil
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) LbdVersion() string {
+	if v.data.LbdVersion == nil {
+		return ""
+	}
+	return *v.data.LbdVersion
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientInstallDiskAcceleratorResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) InstallDiskAccelerator(ctx context.Context, query string, force bool) (*RunnerRegistrationClientInstallDiskAcceleratorResults, error) {
+	args := RunnerRegistrationInstallDiskAcceleratorArgs{}
+	args.data.Query = &query
+	args.data.Force = &force
+
+	var ret runnerRegistrationInstallDiskAcceleratorResultsData
+
+	err := v.Call(ctx, "InstallDiskAccelerator", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientInstallDiskAcceleratorResults{client: v.Client, data: ret}, nil
 }

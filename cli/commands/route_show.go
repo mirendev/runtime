@@ -113,6 +113,7 @@ func RouteShow(ctx *Context, opts struct {
 			ClaimMappings   []map[string]string `json:"claim_mappings,omitempty"`
 			WafLevel        int                 `json:"waf_level"`
 			RequestTimeout  string              `json:"request_timeout,omitempty"`
+			TLSCheck        string              `json:"tls_check,omitempty"`
 
 			Maintenance          bool   `json:"maintenance"`
 			MaintenanceReason    string `json:"maintenance_reason,omitempty"`
@@ -135,6 +136,7 @@ func RouteShow(ctx *Context, opts struct {
 			ProtectionType: protectionType,
 			WafLevel:       wafLevel,
 			RequestTimeout: route.RequestTimeout,
+			TLSCheck:       route.TlsCheck,
 
 			Maintenance:          !route.Maintenance.Empty(),
 			MaintenanceReason:    route.Maintenance.Reason,
@@ -178,6 +180,9 @@ func RouteShow(ctx *Context, opts struct {
 	}
 	if route.RequestTimeout != "" {
 		ctx.Printf("  Timeout:   %s\n", route.RequestTimeout)
+	}
+	if route.TlsCheck != "" {
+		ctx.Printf("  TLS Check: %s\n", route.TlsCheck)
 	}
 
 	switch protectionType {

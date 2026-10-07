@@ -942,6 +942,93 @@ func TestAutoModeDrainedPoolOnlyRevivesForNewVersion(t *testing.T) {
 	assert.Contains(t, pools[0].ReferencedByVersions, v2.ID)
 }
 
+// TestCrashBackoffOnlyResetsForNewVersion guards the same resync-versus-deploy
+// distinction for crash backoff. The minutely resync of an unchanged version
+// must leave the pool's crash streak and cooldown alone, or a crash-looping app
+// never backs off past the first step. A new version reusing the pool is a
+// deploy, and that clears them so stale backoff doesn't hold the new build.
+func TestCrashBackoffOnlyResetsForNewVersion(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	newVersion := func(name string) *core_v1alpha.AppVersion {
+		t.Helper()
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: "web:latest",
+			Config: core_v1alpha.Config{
+				Port: 8080,
+				Services: []core_v1alpha.Services{
+					{
+						Name: "web",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{
+							Mode:                "auto",
+							RequestsPerInstance: 10,
+							ScaleDownDelay:      "15m",
+						},
+					},
+				},
+			},
+		}
+		verID, createErr := server.Client.Create(ctx, name, ver)
+		require.NoError(t, createErr)
+		ver.ID = verID
+		return ver
+	}
+
+	v1 := newVersion("v1")
+	app.ActiveVersion = v1.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+
+	launcher := newTestLauncher(log, server.EAC)
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	poolID := pools[0].ID
+
+	// Simulate the pool manager recording a crash streak and its cooldown.
+	cooldownUntil := time.Now().Add(10 * time.Minute).Truncate(time.Second)
+	_, err = server.EAC.Patch(ctx, []entity.Attr{
+		entity.Ref(entity.DBId, poolID),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, 7),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, cooldownUntil),
+	}, 0)
+	require.NoError(t, err)
+
+	// A resync of the same active version must keep the streak growing.
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(7), pools[0].ConsecutiveCrashCount,
+		"steady-state resync must not reset the crash streak")
+	assert.True(t, pools[0].CooldownUntil.Equal(cooldownUntil),
+		"steady-state resync must not clear the cooldown")
+
+	// A real deploy reusing the pool starts the new version with a clean slate.
+	v2 := newVersion("v2")
+	app.ActiveVersion = v2.ID
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, launcher.Reconcile(ctx, app, nil))
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1, "same spec should reuse the pool")
+	assert.Equal(t, poolID, pools[0].ID)
+	assert.Equal(t, int64(0), pools[0].ConsecutiveCrashCount,
+		"new version should reset the crash streak")
+	assert.True(t, pools[0].CooldownUntil.IsZero(),
+		"new version should clear the cooldown")
+}
+
 // Helper functions
 
 func listAllPools(t *testing.T, ctx context.Context, server *testutils.InMemEntityServer) []compute_v1alpha.SandboxPool {

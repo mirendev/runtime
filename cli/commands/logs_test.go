@@ -336,7 +336,7 @@ func TestRouterLineRendering(t *testing.T) {
 		e.SetTimestamp(standard.ToTimestamp(ts))
 		e.SetStream("user-oob")
 		e.SetSource("router")
-		e.SetLine(`status=200 method=GET path="/api/v1/self" duration_ms=36 response=392 host=miren.cloud`)
+		e.SetLine(`status=200 method=GET path="/api/v1/self?full=1" duration_ms=36 response=392 body=17 host=miren.cloud source_ip=192.0.2.15`)
 		e.SetAttributes(attrs)
 		return e
 	}
@@ -344,19 +344,45 @@ func TestRouterLineRendering(t *testing.T) {
 	t.Run("does not double-print body fields from attributes", func(t *testing.T) {
 		var buf bytes.Buffer
 		ctx := &Context{Context: context.Background(), Stdout: &buf}
-		// These attributes duplicate what the logfmt body already carries.
-		printLogEntry(ctx, mkRouter(map[string]string{
-			"source": "router", "method": "GET", "path": "/api/v1/self", "host": "miren.cloud",
-		}))
+		attrs := map[string]string{
+			"status": "200", "method": "GET", "path": "/api/v1/self", "query": "full=1",
+			"duration_ms": "36", "response": "392", "body": "17",
+			"host": "miren.cloud", "source_ip": "192.0.2.15", "app.user": "usr-123",
+		}
+		entry := mkRouter(attrs)
+		printLogEntry(ctx, entry)
 		got := buf.String()
-		if n := strings.Count(got, "method=GET"); n != 1 {
-			t.Errorf("method=GET should appear exactly once (body only), got %d in: %s", n, got)
+		for _, field := range []string{
+			"status=200", "method=GET", `path="/api/v1/self?full=1"`,
+			"duration_ms=36", "response=392", "body=17", "host=miren.cloud", "source_ip=192.0.2.15",
+		} {
+			if n := strings.Count(got, field); n != 1 {
+				t.Errorf("%s should appear once (body only), got %d in: %s", field, n, got)
+			}
 		}
-		if n := strings.Count(got, "host=miren.cloud"); n != 1 {
-			t.Errorf("host=miren.cloud should appear exactly once, got %d in: %s", n, got)
+		if !strings.Contains(got, "app.user=usr-123") {
+			t.Errorf("promoted app.user should still render, got: %s", got)
 		}
-		if !strings.Contains(got, "router") {
-			t.Errorf("expected router prefix, got: %s", got)
+		if strings.Contains(got, "query=") {
+			t.Errorf("query should appear only as part of the body path, got: %s", got)
+		}
+
+		buf.Reset()
+		printLogEntryJSON(ctx, entry)
+		var jsonEntry logEntryJSON
+		if err := json.Unmarshal(buf.Bytes(), &jsonEntry); err != nil {
+			t.Fatalf("invalid JSON output: %v", err)
+		}
+		if jsonEntry.Source != "router" || jsonEntry.Message != entry.Line() {
+			t.Errorf("router JSON source/message changed: %+v", jsonEntry)
+		}
+		if len(jsonEntry.Attributes) != len(attrs) {
+			t.Errorf("router JSON attributes = %v, want %v", jsonEntry.Attributes, attrs)
+		}
+		for key, want := range attrs {
+			if got := jsonEntry.Attributes[key]; got != want {
+				t.Errorf("router JSON attribute %s = %q, want %q", key, got, want)
+			}
 		}
 	})
 
@@ -385,14 +411,19 @@ func TestRouterLineRendering(t *testing.T) {
 		e.SetTimestamp(standard.ToTimestamp(ts))
 		e.SetStream("user-oob")
 		e.SetSource("router")
-		e.SetLine(`status=200 method=GET path="/internal" access=internal duration_ms=2 response=10`)
-		// The router emits access in both the body and attributes.
+		e.SetLine(`status=200 method=GET path="/internal?deep=1" access=internal duration_ms=2 response=10`)
 		e.SetAttributes(map[string]string{
-			"source": "router", "access": "internal", "method": "GET", "path": "/internal",
+			"access": "internal", "method": "GET", "path": "/internal", "query": "deep=1",
+			"status": "200", "duration_ms": "2", "response": "10",
 		})
 		printLogEntry(ctx, e)
-		if n := strings.Count(buf.String(), "access=internal"); n != 1 {
-			t.Errorf("access=internal should appear once (body only), got %d in: %s", n, buf.String())
+		for _, field := range []string{"status=200", "method=GET", `path="/internal?deep=1"`, "access=internal", "duration_ms=2", "response=10"} {
+			if n := strings.Count(buf.String(), field); n != 1 {
+				t.Errorf("%s should appear once (body only), got %d in: %s", field, n, buf.String())
+			}
+		}
+		if strings.Contains(buf.String(), "query=") {
+			t.Errorf("query should appear only as part of the body path, got: %s", buf.String())
 		}
 	})
 

@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/idgen"
+	"miren.dev/runtime/version"
 )
 
 // ErrExecutionNotFound is returned by Storage.Get when no execution exists for the given ID.
@@ -118,6 +120,13 @@ type Executor struct {
 	registry      *Registry
 	log           *slog.Logger
 	recoveryScope string
+	counts        *Counts
+
+	// build identifies the binary this executor runs in, as buildIdentity
+	// describes. An undo that keeps
+	// failing is blocked on the build that gave up on it, and only a different
+	// build tries it again. See undo_block.go.
+	build string
 
 	// inFlight names the executions this Executor is currently driving. A
 	// caller that names its execution after the entity it belongs to will
@@ -164,12 +173,31 @@ func WithRecoveryScope(scope string) ExecutorOption {
 	}
 }
 
+// WithCounts sets where the executor counts what its executions do. Tests use
+// it to read their own counts; everything else shares DefaultCounts.
+func WithCounts(c *Counts) ExecutorOption {
+	return func(e *Executor) {
+		e.counts = c
+	}
+}
+
+// WithBuild sets the build identity an executor blocks failing undos under.
+// It defaults to the stamped version and commit (see buildIdentity); tests use
+// it to stand in for an upgrade.
+func WithBuild(build string) ExecutorOption {
+	return func(e *Executor) {
+		e.build = build
+	}
+}
+
 // NewExecutor creates an executor with the given storage and options.
 func NewExecutor(storage Storage, opts ...ExecutorOption) *Executor {
 	e := &Executor{
 		storage:  storage,
 		registry: globalRegistry,
 		log:      slog.Default(),
+		counts:   DefaultCounts,
+		build:    buildIdentity(version.GetInfo()),
 		inFlight: make(map[string]struct{}),
 	}
 	for _, opt := range opts {
@@ -351,6 +379,7 @@ func (e *Executor) execute(ctx, actionCtx context.Context, defName string, input
 	if err := e.storage.Save(ctx, exec); err != nil {
 		return fmt.Errorf("persisting initial state: %w", err)
 	}
+	e.counts.Add(defName, EventStarted, 1)
 
 	return e.runExecution(ctx, actionCtx, def, exec)
 }
@@ -436,11 +465,26 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 		now := time.Now()
 
 		if err != nil {
+			// A nested saga this action started refused to be resumed. Treating
+			// that as an action failure would compensate the actions before it,
+			// and skip this one's undo because it carries an error, so the
+			// child's work would be left behind under a parent that reads as
+			// compensated. Stop and block this execution instead, as runUndo
+			// does when it meets the same refusal.
+			if errors.Is(err, ErrIncompatibleDefinition) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("action %q reached a nested saga that cannot be resumed: %w", actionName, err))
+			}
+
 			actionErr := currentActionCtx.Err()
 			if hasDedicatedActionContext(currentActionCtx) && actionErr != nil && errors.Is(err, actionErr) {
 				log.Info("action cancelled, starting compensation", "action", actionName, "error", err)
 			} else {
-				log.Error("action failed", "action", actionName, "error", err)
+				if cond.IsWorkload(err) {
+					log.Warn("action failed", "action", actionName, "error", err)
+				} else {
+					log.Error("action failed", "action", actionName, "error", err)
+				}
 			}
 
 			// Record the failure
@@ -463,7 +507,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, err)
 		}
 
 		// Serialize output
@@ -479,9 +523,9 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("undo failed after serialization error", "action", actionName, "error", undoErr)
 				// Record the action even though undo failed, so runUndo can retry.
 				// Output is nil since serialization failed.
-				exec.ExecutedActions[actionName] = &ActionResult{
-					ExecutedAt: now,
-				}
+				result := &ActionResult{ExecutedAt: now}
+				result.recordUndoFailure(undoErr, time.Now())
+				exec.ExecutedActions[actionName] = result
 				exec.ExecutionOrder = append(exec.ExecutionOrder, actionName)
 			} else {
 				// Record as executed and undone so runUndo skips it
@@ -504,7 +548,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 
 		// Record success
@@ -528,7 +572,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
 
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 
 		// An action may ignore cancellation and still return success after mutating
@@ -544,7 +588,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 				if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
 					log.Error("failed to persist undoing state", "error", saveErr)
 				}
-				return e.runUndo(ctx, def, exec)
+				return e.runUndo(ctx, def, exec, nil)
 			}
 		}
 
@@ -568,7 +612,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 			if saveErr := e.storage.Save(ctx, exec); saveErr != nil {
 				log.Error("failed to persist undoing state", "error", saveErr)
 			}
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 	}
 
@@ -579,6 +623,7 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 		return fmt.Errorf("persisting completed state: %w", err)
 	}
 
+	e.counts.Add(def.Name, EventCompleted, 1)
 	log.Info("saga completed successfully")
 	return nil
 }
@@ -605,6 +650,13 @@ func (e *Executor) Compensate(ctx context.Context, id string) error {
 	if exec.Status == StatusFailed {
 		return nil
 	}
+	if err := checkResumable(def, exec); err != nil {
+		e.recordBlocked(ctx, exec, err)
+		return err
+	}
+	if err := e.checkNestedBlock(ctx, exec); err != nil {
+		return err
+	}
 	if exec.Status == StatusPending || exec.Status == StatusRunning {
 		_ = e.resumeWithActionContext(ctx, ctx, def, exec)
 		// Reload to distinguish a fully compensated failure from interrupted work.
@@ -619,7 +671,7 @@ func (e *Executor) Compensate(ctx context.Context, id string) error {
 	if exec.Status != StatusCompleted && exec.Status != StatusUndoing {
 		return fmt.Errorf("execution %q is not ready for compensation: %s", id, exec.Status)
 	}
-	undoErr := e.runUndo(ctx, def, exec)
+	undoErr := e.runUndo(ctx, def, exec, nil)
 	persisted, err := e.storage.Get(ctx, id)
 	if err != nil {
 		return err
@@ -630,9 +682,15 @@ func (e *Executor) Compensate(ctx context.Context, id string) error {
 	return undoErr
 }
 
-// runUndo rolls back completed actions in reverse order.
-func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution) error {
+// runUndo rolls back completed actions in reverse order. cause is the action
+// error that started the rollback, when this process saw it; the returned
+// error unwraps to it so callers can tell what kind of failure it was.
+func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution, cause error) error {
 	log := e.log.With("saga", def.Name, "execution", exec.ID)
+
+	if err := e.holdUndoBlock(ctx, exec); err != nil {
+		return err
+	}
 
 	// Update status to undoing
 	exec.Status = StatusUndoing
@@ -646,12 +704,13 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	ctx = context.WithValue(ctx, executorCtxKey{}, e)
 	ctx = context.WithValue(ctx, executionIDCtxKey{}, exec.ID)
 
-	// Build outputs map from executed actions
+	// Undone actions' outputs are included on purpose. An undo gets the inputs
+	// its action ran with, and a failed undo is retried after the pass has gone
+	// on to undo the actions before it, which are often the ones that produced
+	// those inputs. Leaving them out makes the retry fail on a missing input,
+	// every time, so the execution could never finish compensating.
 	outputs := make(map[string]json.RawMessage)
 	for actionName, result := range exec.ExecutedActions {
-		if result.UndoneAt != nil {
-			continue
-		}
 		node := def.Actions[actionName]
 		if node == nil {
 			continue
@@ -699,6 +758,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			if err := json.Unmarshal(result.Output, &output); err != nil {
 				log.Warn("failed to deserialize output for undo", "action", actionName, "error", err)
 				undoErrors = append(undoErrors, fmt.Errorf("deserialize output for undo %q: %w", actionName, err))
+				result.recordUndoFailure(err, time.Now())
 				continue
 			}
 		}
@@ -708,8 +768,28 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		// Execute undo
 		actionCtx := context.WithValue(ctx, actionNameCtxKey{}, actionName)
 		if err := node.Action.Undo(actionCtx, actionInputs, output); err != nil {
+			// A nested saga this action started refused to be undone. That is
+			// not a failure to retry around: the earlier actions may be what
+			// the child's remaining work stands on, so compensating them now
+			// could strand it further. Stop, and block this execution too, so
+			// it is visible and out of the stalled sweep's reach until the
+			// child can be resumed.
+			if errors.Is(err, ErrIncompatibleDefinition) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("undo %q reached a nested saga that cannot be resumed: %w", actionName, err))
+			}
+			// A nested saga whose own undo is blocked. Its parent stops for
+			// the same reason as above, rather than counting a failure and
+			// unwinding the actions the child's work may stand on.
+			if errors.Is(err, ErrUndoBlocked) {
+				return e.blockOnNested(ctx, exec, err,
+					fmt.Errorf("undo %q reached a nested saga whose undo is blocked: %w", actionName, err))
+			}
 			log.Error("undo failed", "action", actionName, "error", err)
 			undoErrors = append(undoErrors, fmt.Errorf("undo %q: %w", actionName, err))
+			if ctx.Err() == nil {
+				result.recordUndoFailure(err, time.Now())
+			}
 			// Earlier actions may own resources this undo still needs (credentials,
 			// servers, or disks). Keep those dependencies until cleanup succeeds.
 			break
@@ -718,6 +798,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		// Record successful undo
 		now := time.Now()
 		result.UndoneAt = &now
+		result.UndoBlockedBuild = ""
 		exec.UpdatedAt = now
 
 		if err := e.storage.Save(ctx, exec); err != nil {
@@ -728,10 +809,33 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	}
 
 	if len(undoErrors) > 0 {
-		// Keep StatusUndoing so recovery can retry failed undos
+		// A shutdown that lands during the last undo leaves that undo's error
+		// here with no later iteration to notice the cancellation. It is the
+		// same interruption the loop returns for, recovery will resume it, and
+		// counting it as a failed compensation would raise an alert on every
+		// such shutdown. Only checked when something failed: a cancellation
+		// after every undo succeeded still goes on to record the rollback.
+		if err := ctx.Err(); err != nil {
+			log.Info("context cancelled during undo, stopping", "error", err)
+			return fmt.Errorf("saga undo interrupted: %w", err)
+		}
+
+		// Keep StatusUndoing so recovery can retry failed undos, unless one
+		// has failed for long enough that this build should stop trying.
 		exec.UpdatedAt = time.Now()
+		blocked := e.blockFailingUndo(exec, exec.UpdatedAt)
 		if err := e.storage.Save(ctx, exec); err != nil {
 			log.Error("failed to persist undoing state", "error", err)
+		}
+		e.counts.Add(def.Name, EventCompensationFailed, 1)
+		if blocked != nil {
+			log.Error("blocking saga execution: an undo keeps failing, and only a new build will retry it",
+				"action", blocked.Action,
+				"attempts", blocked.Attempts,
+				"failing_since", blocked.Since,
+				"build", blocked.Build,
+				"error", blocked.Err)
+			return blocked
 		}
 		log.Info("saga undo incomplete, will retry on recovery", "undo_errors", len(undoErrors))
 		return fmt.Errorf("saga failed: %s; %d undo errors: %v", exec.Error, len(undoErrors), undoErrors)
@@ -742,10 +846,14 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 	exec.UpdatedAt = time.Now()
 	if err := e.storage.Save(ctx, exec); err != nil {
 		log.Error("failed to persist failed state", "error", err)
+	} else {
+		// Only once it is durable: the record still says undoing otherwise,
+		// and recovery will undo it again.
+		e.counts.Add(def.Name, EventRolledBack, 1)
 	}
 
 	log.Info("saga failed and rolled back")
-	return fmt.Errorf("saga failed: %s", exec.Error)
+	return &rolledBackError{msg: "saga failed: " + exec.Error, cause: cause}
 }
 
 // Recover finds and resumes incomplete sagas after a restart.
@@ -792,7 +900,10 @@ func (e *Executor) Recover(ctx context.Context) error {
 	}
 
 	if len(recoverErrors) > 0 {
-		return fmt.Errorf("recovery completed with %d errors", len(recoverErrors))
+		// Joined rather than counted: the callers log this at Error, and a
+		// refusal is only actionable if the operator can read which execution
+		// and why.
+		return fmt.Errorf("recovery completed with %d errors: %w", len(recoverErrors), errors.Join(recoverErrors...))
 	}
 	return nil
 }
@@ -868,9 +979,34 @@ func (e *Executor) recoverPage(
 		if err != nil {
 			*recoverErrors = append(*recoverErrors, err)
 		}
+		e.countRecovery(ctx, exec)
 	}
 
 	return nil
+}
+
+// countRecovery records whether a recovery attempt converged. The error resume
+// returns can't say: a saga that rolled back cleanly returns its failure as an
+// error, which for recovery is a success. What matters is whether the execution
+// is still in flight, and that holds for every way of not finishing, including a
+// refusal to resume at all.
+//
+// The stored record decides, not the one in hand. The executor sets a terminal
+// status before saving it, so a save that failed leaves the copy here claiming
+// a finish the store never saw. A record that can't be read back counts as not
+// finished, since nothing confirms it was.
+//
+// An attempt cut short by shutdown is neither. The execution will be picked up
+// again, and counting it would put a failure on every restart.
+func (e *Executor) countRecovery(ctx context.Context, exec *Execution) {
+	if ctx.Err() != nil {
+		return
+	}
+	ev := EventRecoveryFailed
+	if stored, err := e.storage.Get(ctx, exec.ID); err == nil && isTerminal(stored.Status) {
+		ev = EventRecovered
+	}
+	e.counts.Add(exec.DefinitionName, ev, 1)
 }
 
 // resume continues an execution from wherever it stopped. Both Recover and a
@@ -889,18 +1025,38 @@ func (e *Executor) resumeWithActionContext(ctx, actionCtx context.Context, def *
 	// A name that means one saga to the caller and another to the record is an
 	// id collision, and resuming across it would run this definition's actions
 	// against the other's recorded outputs. Naming executions after entities
-	// makes collisions the thing worth guarding, so this is an error rather
-	// than the warning a version skew gets.
+	// makes collisions the thing worth guarding.
 	if def.Name != exec.DefinitionName {
 		return fmt.Errorf("execution %q belongs to saga %q, not %q",
 			exec.ID, exec.DefinitionName, def.Name)
 	}
 
-	if def.Version != exec.DefinitionVersion {
-		e.log.Warn("saga definition version mismatch",
-			"saga", exec.DefinitionName,
-			"execution_version", exec.DefinitionVersion,
-			"current_version", def.Version)
+	// A copy that says blocked may be stale in the one way that matters: an
+	// operator can abandon a blocked execution while a release that can resume
+	// it is starting up with that copy in hand from a recovery page. Driving
+	// the copy would overwrite the abandonment and run or undo actions after
+	// the operator was told they would not. Saves here are not conditional, so
+	// re-reading narrows that window to the moment before the first write
+	// rather than closing it.
+	if exec.BlockedReason != "" {
+		fresh, err := e.storage.Get(ctx, exec.ID)
+		if err != nil {
+			return fmt.Errorf("re-reading blocked execution %q: %w", exec.ID, err)
+		}
+		*exec = *fresh
+	}
+
+	// Terminal executions run nothing, so the definition they were recorded
+	// under no longer matters. Everything else has to clear the check before
+	// runExecution or runUndo writes a status, let alone touches an action.
+	if exec.Status != StatusCompleted && exec.Status != StatusFailed {
+		if err := checkResumable(def, exec); err != nil {
+			e.recordBlocked(ctx, exec, err)
+			return err
+		}
+		if err := e.checkNestedBlock(ctx, exec); err != nil {
+			return err
+		}
 	}
 
 	switch exec.Status {
@@ -910,11 +1066,11 @@ func (e *Executor) resumeWithActionContext(ctx, actionCtx context.Context, def *
 		if exec.Error != "" {
 			e.log.Info("found failed action, starting undo",
 				"saga", exec.DefinitionName, "error", exec.Error)
-			return e.runUndo(ctx, def, exec)
+			return e.runUndo(ctx, def, exec, nil)
 		}
 		return e.runExecution(ctx, actionCtx, def, exec)
 	case StatusUndoing:
-		return e.runUndo(ctx, def, exec)
+		return e.runUndo(ctx, def, exec, nil)
 	case StatusCompleted:
 		return nil
 	case StatusFailed:
@@ -1016,3 +1172,16 @@ const (
 func generateID() string {
 	return sagaIDKind + "/" + idgen.GenNS(sagaIDName)
 }
+
+// rolledBackError is what a saga that failed and rolled back returns. Its
+// message is the recorded failure. It unwraps to the action error behind it
+// when this process saw that error happen; a saga resumed by recovery only
+// has the recorded string, and unwraps to nothing.
+type rolledBackError struct {
+	msg   string
+	cause error
+}
+
+func (e *rolledBackError) Error() string { return e.msg }
+
+func (e *rolledBackError) Unwrap() error { return e.cause }

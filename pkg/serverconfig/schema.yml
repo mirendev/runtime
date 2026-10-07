@@ -67,6 +67,11 @@ configs:
         toml: metrics
         nested: true
 
+      telemetry:
+        type: TelemetryConfig
+        toml: telemetry
+        nested: true
+
       containerd:
         type: ContainerdConfig
         toml: containerd
@@ -80,6 +85,11 @@ configs:
       app_version:
         type: AppVersionConfig
         toml: app_version
+        nested: true
+
+      deployment:
+        type: DeploymentConfig
+        toml: deployment
         nested: true
 
       saga:
@@ -219,6 +229,24 @@ configs:
           description: "Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported."
         env: MIREN_INGRESS_ADDRESS
         toml: address
+
+      error_page:
+        type: string
+        default: ""
+        description: "Path to the cluster-wide HTML error page template"
+        env: MIREN_INGRESS_ERROR_PAGE
+        toml: error_page
+
+      trusted_proxy_hops:
+        type: int
+        default: 1
+        cli:
+          long: ingress-trusted-proxy-hops
+          description: "Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For."
+        env: MIREN_INGRESS_TRUSTED_PROXY_HOPS
+        toml: trusted_proxy_hops
+        validation:
+          min: 1
 
   TLSConfig:
     description: TLS certificate settings. Consulted only when ingress.mode is tls-autoprovision or behind-proxy-https.
@@ -452,7 +480,7 @@ configs:
           format: host:port
 
   MetricsConfig:
-    description: Managed application metrics configuration
+    description: "Deprecated: superseded by [telemetry.metrics]"
     fields:
       remote_write:
         type: RemoteWriteConfig
@@ -460,24 +488,79 @@ configs:
         nested: true
 
   RemoteWriteConfig:
-    description: Destination for managed application metrics
+    description: "Deprecated: superseded by [telemetry.metrics]. Values set here still apply when the telemetry.metrics equivalents are unset."
     fields:
       url:
         type: string
-        default: ""
         cli:
           long: metrics-remote-write-url
-          description: Prometheus Remote Write destination for managed application metrics
+          description: "Deprecated: use --telemetry-metrics-remote-write-url"
+          hidden: true
         env: MIREN_METRICS_REMOTE_WRITE_URL
         toml: url
 
       workload_identity_audience:
         type: string
-        default: ""
         cli:
           long: metrics-remote-write-audience
-          description: Workload identity audience for the managed metrics destination
+          description: "Deprecated: use --telemetry-metrics-audience"
+          hidden: true
         env: MIREN_METRICS_REMOTE_WRITE_AUDIENCE
+        toml: workload_identity_audience
+
+  TelemetryConfig:
+    description: Where the cluster ships its own telemetry
+    fields:
+      metrics:
+        type: TelemetryMetricsConfig
+        toml: metrics
+        nested: true
+
+      traces:
+        type: TelemetryTracesConfig
+        toml: traces
+        nested: true
+
+  TelemetryMetricsConfig:
+    description: Destination for managed application metrics and the runtime's operational series
+    fields:
+      remote_write_url:
+        type: string
+        default: ""
+        cli:
+          long: telemetry-metrics-remote-write-url
+          description: Prometheus Remote Write destination for managed application metrics
+        env: MIREN_TELEMETRY_METRICS_REMOTE_WRITE_URL
+        toml: remote_write_url
+
+      workload_identity_audience:
+        type: string
+        default: ""
+        cli:
+          long: telemetry-metrics-audience
+          description: Workload identity audience for the metrics destination
+        env: MIREN_TELEMETRY_METRICS_AUDIENCE
+        toml: workload_identity_audience
+
+  TelemetryTracesConfig:
+    description: OTLP destination for the runtime's own traces
+    fields:
+      endpoint:
+        type: string
+        default: ""
+        cli:
+          long: telemetry-traces-endpoint
+          description: OTLP/HTTP base URL for traces (defaults to OTEL_EXPORTER_OTLP_ENDPOINT)
+        env: MIREN_TELEMETRY_TRACES_ENDPOINT
+        toml: endpoint
+
+      workload_identity_audience:
+        type: string
+        default: ""
+        cli:
+          long: telemetry-traces-audience
+          description: Authenticate trace export with a workload identity token for this audience
+        env: MIREN_TELEMETRY_TRACES_AUDIENCE
         toml: workload_identity_audience
 
   ContainerdConfig:
@@ -579,6 +662,27 @@ configs:
           long: app-version-retention-period
           description: Retain versions newer than this duration regardless of count (e.g. 30d, 2w)
         env: MIREN_APP_VERSION_RETENTION_PERIOD
+        toml: retention_period
+
+  DeploymentConfig:
+    description: Deployment record retention garbage collection
+    fields:
+      retention_count:
+        type: int
+        default: 25
+        cli:
+          long: deployment-retention-count
+          description: Number of most-recent deployment records to retain per app regardless of age
+        env: MIREN_DEPLOYMENT_RETENTION_COUNT
+        toml: retention_count
+
+      retention_period:
+        type: string
+        default: "30d"
+        cli:
+          long: deployment-retention-period
+          description: Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely.
+        env: MIREN_DEPLOYMENT_RETENTION_PERIOD
         toml: retention_period
 
   SecretsConfig:

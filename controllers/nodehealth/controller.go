@@ -242,12 +242,21 @@ func (c *Controller) markNodeSandboxesDead(ctx context.Context, nodeID entity.Id
 			"node", nodeID,
 			"previous_status", sb.Status)
 
+		dead := &compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD}
+		if sb.StartupOutcome == "" {
+			switch sb.Status {
+			case compute_v1alpha.PENDING, compute_v1alpha.NOT_READY:
+				dead.StartupOutcome = compute_v1alpha.STARTUP_FAILED
+			case compute_v1alpha.RUNNING:
+				dead.StartupOutcome = compute_v1alpha.STARTUP_RUNNING
+			case compute_v1alpha.STOPPED, compute_v1alpha.DEAD:
+				// STOPPED may be an intentional retirement; DEAD was skipped above.
+			}
+		}
 		_, err := c.eac.Patch(ctx, entity.New(
 			entity.DBId, sb.ID,
-			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.DEAD,
-			}).Encode,
-		).Attrs(), 0)
+			dead.Encode,
+		).Attrs(), e.Revision())
 		if err != nil {
 			c.log.Error("failed to mark sandbox dead", "sandbox", sb.ID, "error", err)
 			patchErr = errors.Join(patchErr, err)

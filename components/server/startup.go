@@ -94,18 +94,20 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	ipDiscovery := newIPDiscoveryBoot(ipDiscoveryInputs(options))
 	registration := newRegistrationBoot(registrationInputs(options))
 	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
-	tracing := newTracingBoot(tracingInputs(options), registration.output)
-	containerd := containerdcomp.NewBoot("containerd", containerdBootConfig(options))
+	tracing := newTracingBoot(tracingInputs(options), registration.output, workloadIdentity.output)
+	containerdConfig := containerdBootConfig(options)
+	containerdConfig.ReportVersion = instance.SetComponent
+	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
-	observability := newObservabilityBoot(observabilityInputs(options), tracing.component, victoriaLogs.output, victoriaMetrics.output)
+	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), tracing.component, victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
 	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	dataRestore := newDataRestoreBoot(dataRestoreInputsFrom(options), containerd.Output, observability.output)
 	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output, dataRestore.component)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
-	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output)
+	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output, tracing.output)
 	foundation := newFoundationBoot(
 		foundationConfig(options, resolver, secretRegistry, address),
 		ipDiscovery.output,
@@ -113,7 +115,9 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		etcd.output,
 		buildkit.output,
+		registryHostMapping.output,
 		observability.output,
+		tracing.output,
 	)
 	appData := newAppDataBoot(foundation.output)
 	secretStore := newSecretStoreBoot(foundation.output)
@@ -128,6 +132,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		workloadIdentity.output,
 		entityAccess.output,
 		observability.output,
+		foundation.output,
 	)
 	clusterAccess := newClusterAccessBoot(
 		clusterAccessBootInputs{config: options.Config.Server},
@@ -137,7 +142,7 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		observability.output,
 		runnerEndpoints.component,
 	)
-	nodeStorage := newNodeStorageBoot(clusterAccess.output, registration.output, observability.output)
+	nodeStorage := newNodeStorageBoot(resolver, registryHostMapping.component, clusterAccess.output, registration.output, observability.output, containerd.Output)
 	sandboxHost := newSandboxHostBoot(
 		sandboxHostInputs(options, resolver, serverPort(options.Log, address)),
 		clusterAccess.output,
@@ -145,20 +150,21 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 		containerd.Output,
 		network.output,
 		observability.output,
+		foundation.output,
 	)
 	storageAgent := runnercomp.NewStorageAgentBoot(nodeStorage.output, sandboxHost.component, componentStopTimeout)
 	applicationManagement := newApplicationManagementBoot(foundation.output, secretStore.output, appData.component, entitySyncDiagnostics)
 	workloadControl := newWorkloadControlBoot(foundation.output, applicationManagement.output, sandboxHost.component)
 	sandboxAgent := runnercomp.NewSandboxAgentBoot(sandboxHost.output, componentStopTimeout, workloadControl.component)
 	nodePresence := runnercomp.NewNodePresenceBoot(sandboxHost.output, storageAgent.Component, sandboxAgent.Component, componentStopTimeout)
-	maintenance := newEntityMaintenanceBoot(foundation.output, appData.component)
+	maintenance := newEntityMaintenanceBoot(foundation.output, deploymentAttempts.output, appData.component, entitySyncDiagnostics)
 	cloudControl := newCloudControlBoot(foundation.output, applicationManagement.output, maintenance.component, workloadControl.component, entitySyncDiagnostics, instance)
 	ingress := newIngressBoot(ingressInputs(options, instance), workloadControl.output, nodePresence.Component, workloadIdentity.output, entityAccess.output, observability.output)
 	adminAPI := newAdminBoot(foundation.output, entityAccess.output, ingress.output, observability.output)
 	serverInfo := newServerInfoBoot(instance, foundation.output)
-	serverLifecycle := newServerLifecycleBoot(instance, foundation.output)
+	serverLifecycle := newServerLifecycleBoot(serverLifecycleInputsFrom(options), instance, foundation.output)
 	cloudUplink := newCloudUplinkBoot(cloudControl.output, deploymentAttempts.output, ingress.output, serverLifecycle.output)
-	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.component, observability.output)
+	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.output, sandboxHost.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
 		buildSagaRecoveryInputs(options),

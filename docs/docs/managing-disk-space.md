@@ -40,6 +40,7 @@ Each consumer has its own janitor running on its own schedule. Nothing here need
 | Build cache | BuildKit | Cap at `gc_keep_storage` (10GB), evict entries older than `gc_keep_duration` (7d) | [`[buildkit]`](./server-config.md#buildkit) |
 | Logs | VictoriaLogs | Keep `retention_period` (30d) | [`[victorialogs]`](./server-config.md#victorialogs) |
 | Metrics | VictoriaMetrics | Keep `retention_period` (1 month) | [`[victoriametrics]`](./server-config.md#victoriametrics) |
+| Deployment history | Deployment retention GC (hourly) | Keep the active and in-progress deployments, the most-recent `retention_count` (25), and anything younger than `retention_period` (30d); on a cloud-registered cluster, prune only what cloud has already stored | [`[deployment]`](./server-config.md#deployment) |
 | Preview versions | Ephemeral GC (every 5 min) | Delete past their TTL (default 24h), cap 10 per app | `--ttl` at deploy |
 | Deleted persistent disks | Deleted-volume GC (hourly) | Purge 7 days after deletion | see [Persistent Storage](./disks.md) |
 

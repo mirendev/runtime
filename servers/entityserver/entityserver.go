@@ -16,6 +16,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/mr-tron/base58"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -456,6 +457,50 @@ func (e *EntityServer) Delete(ctx context.Context, req *entityserver_v1alpha.Ent
 	return e.Store.DeleteEntity(ctx, entity.Id(args.Id()))
 }
 
+// markerStore is implemented by stores whose index keyspace carries presence
+// markers beside matches (see the index layout comment in pkg/entity). A store
+// without markers, like the mock, needs neither method.
+type markerStore interface {
+	IndexMarkerFilter(context.Context, entity.Attr) (func(string) bool, error)
+	MatchesIndexAt(ctx context.Context, attr entity.Attr, id entity.Id, rev int64) (bool, error)
+}
+
+// indexMarkerFilter returns the store's rule for which keys in attr's index
+// are presence markers rather than matches.
+func (e *EntityServer) indexMarkerFilter(ctx context.Context, attr entity.Attr) (func(string) bool, error) {
+	if ms, ok := e.Store.(markerStore); ok {
+		return ms.IndexMarkerFilter(ctx, attr)
+	}
+	return func(string) bool { return false }, nil
+}
+
+// matchesIndexAt asks the store whether id matched attr's index at rev,
+// retrying a transient failure briefly. If compaction has taken rev since the
+// watch buffered the event, membership now is the best answer left, and
+// whatever changed since follows on the same watch.
+func (e *EntityServer) matchesIndexAt(ctx context.Context, ms markerStore, attr entity.Attr, id entity.Id, rev int64) (bool, error) {
+	var err error
+	for attempt := range 3 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 100 * time.Millisecond):
+			}
+		}
+		var matches bool
+		matches, err = ms.MatchesIndexAt(ctx, attr, id, rev)
+		if errors.Is(err, rpctypes.ErrCompacted) {
+			rev = 0
+			matches, err = ms.MatchesIndexAt(ctx, attr, id, rev)
+		}
+		if err == nil {
+			return matches, nil
+		}
+	}
+	return false, err
+}
+
 func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha.EntityAccessWatchIndex) error {
 	args := req.Args()
 
@@ -475,6 +520,17 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 	// forward them to it — preserving backward-compatible behavior for callers
 	// that aren't revision-aware (e.g. the legacy activator/controller watches).
 	fromRev := args.FromRevision()
+
+	isMarker, err := e.indexMarkerFilter(ctx, args.Index())
+	if err != nil {
+		return fmt.Errorf("failed to watch index: %w", err)
+	}
+	// A db/id watch is synthesized from the entity key and has no index keys
+	// to reason about.
+	ms, _ := e.Store.(markerStore)
+	if args.Index().ID == entity.DBId {
+		ms = nil
+	}
 
 	ch, err := e.Store.WatchIndex(ctx, args.Index(), fromRev)
 	if err != nil {
@@ -534,13 +590,55 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 				continue
 			}
 
-			for _, event := range watchevent.Events {
+			// Settle membership for every delete in the response before any of
+			// its ops go out. etcd delivers a revision's events together, so if
+			// a check fails, ending the watch here sends nothing from the
+			// revision, and a resuming client reads all of it again. Failing
+			// partway through would leave its cursor on the revision with the
+			// rest unsent.
+			matchesAfter := make([]bool, len(watchevent.Events))
+			for i, event := range watchevent.Events {
+				if ms == nil || event.Type != clientv3.EventTypeDelete || event.PrevKv == nil {
+					continue
+				}
+				id := entity.Id(event.PrevKv.Value)
+				matches, err := e.matchesIndexAt(ctx, ms, args.Index(), id, event.Kv.ModRevision)
+				if err != nil {
+					return fmt.Errorf("check index membership for delete of %s: %w", id, err)
+				}
+				matchesAfter[i] = matches
+			}
+
+			for i, event := range watchevent.Events {
 				var (
 					eventType int
 					read      bool
+					readID    = entity.Id(event.Kv.Value)
 				)
 
+				nonMatch := isMarker(string(event.Kv.Key))
+
 				switch {
+				case event.Type == clientv3.EventTypeDelete && ms != nil && event.PrevKv != nil:
+					// A deleted key does not by itself mean the entity left the
+					// index: a marker goes when its session lapses. If the entity
+					// still matches at this revision it changed, so it goes out as
+					// an update. If it left, the deleted match says so, and a
+					// marker deleted beside it adds nothing.
+					readID = entity.Id(event.PrevKv.Value)
+					switch {
+					case matchesAfter[i]:
+						eventType = 2
+						read = true
+					case nonMatch:
+						continue
+					default:
+						eventType = 3
+					}
+				case nonMatch:
+					// Its put rides along with the match's own put at the same
+					// revision, which already announces the write.
+					continue
 				case event.IsCreate():
 					eventType = 1
 					read = true
@@ -560,10 +658,10 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 				op.SetRevision(event.Kv.ModRevision)
 
 				if read {
-					op.SetEntityId(string(event.Kv.Value))
-					en, err := e.Store.GetEntity(ctx, entity.Id(event.Kv.Value))
+					op.SetEntityId(string(readID))
+					en, err := e.Store.GetEntity(ctx, readID)
 					if err != nil {
-						e.Log.Error("failed to get entity for event", "error", err, "id", event.Kv.Value)
+						e.Log.Error("failed to get entity for event", "error", err, "id", readID)
 						continue
 					}
 
@@ -585,19 +683,21 @@ func (e *EntityServer) WatchIndex(ctx context.Context, req *entityserver_v1alpha
 					op.SetPrevious(event.PrevKv.ModRevision)
 
 					// Try to fetch the entity data for the delete event. When only
-					// an index entry is dropped (e.g. a session lease expiring) the
-					// entity itself may still exist, so try a current read first.
+					// an index entry is dropped (e.g. a session value's entry when
+					// its session lapses) the entity itself may still exist, so try
+					// a current read first.
 					// When the entity was deleted via DeleteEntity, the index entry
 					// and the entity key are removed together in one atomic txn, so
 					// the entity is already gone at this event's revision; read it at
 					// the prior revision to recover what was deleted.
-					en, err := e.Store.GetEntity(ctx, entityId)
-					if err != nil {
-						en, err = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
+					en, currentErr := e.Store.GetEntity(ctx, entityId)
+					readErr := currentErr
+					if currentErr != nil {
+						en, readErr = e.Store.GetEntityAtRevision(ctx, entityId, event.Kv.ModRevision-1)
 					}
-					if err != nil {
-						e.Log.Error("failed to get entity for delete event", "error", err, "id", entityId)
-					} else {
+					if readErr != nil && (!isNotFound(currentErr) || !isNotFound(readErr)) {
+						e.Log.Error("failed to get entity for delete event", "error", readErr, "id", entityId)
+					} else if readErr == nil {
 						var rpcEntity entityserver_v1alpha.Entity
 						rpcEntity.SetId(en.Id().String())
 						rpcEntity.SetCreatedAt(en.GetCreatedAt().UnixMilli())
@@ -670,9 +770,8 @@ func (e *EntityServer) List(ctx context.Context, req *entityserver_v1alpha.Entit
 	var ret []*entityserver_v1alpha.Entity
 	for i, entity := range entities {
 		if entity == nil {
-			e.Log.Error("entity in index but not in store, skipping",
-				"id", ids[i],
-				"index", index)
+			e.Log.Debug("entity in index but not in store, skipping",
+				"id", ids[i], "index", index)
 			continue
 		}
 
@@ -817,12 +916,9 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 		}
 
 	case entity.TypeEnum:
-		value = entity.RefValue(id)
-
-		// Look up the enum value in the schema
-		if !slices.ContainsFunc(schema.EnumValues, func(v entity.Value) bool {
-			return v.Equal(value)
-		}) {
+		var ok bool
+		value, ok = enumRefFromString(schema.EnumValues, args.Value())
+		if !ok {
 			return fmt.Errorf("invalid enum value: %s", args.Value())
 		}
 
@@ -833,6 +929,28 @@ func (e *EntityServer) MakeAttr(ctx context.Context, req *entityserver_v1alpha.E
 	req.Results().SetAttr(&entity.Attr{ID: id, Value: value})
 
 	return nil
+}
+
+func enumRefFromString(values []entity.Value, input string) (entity.Value, bool) {
+	// Ref-backed enum values accept their short member names as input.
+	for _, value := range values {
+		if value.Kind() == entity.KindId && string(value.Id()) == input {
+			return value, true
+		}
+	}
+
+	var match entity.Value
+	matches := 0
+	for _, value := range values {
+		if value.Kind() == entity.KindId && strings.HasSuffix(string(value.Id()), "."+input) {
+			match = value
+			matches++
+		}
+	}
+	if matches == 1 {
+		return match, true
+	}
+	return entity.Value{}, false
 }
 
 func (e *EntityServer) LookupKind(ctx context.Context, req *entityserver_v1alpha.EntityAccessLookupKind) error {
@@ -1086,7 +1204,7 @@ func (e *EntityServer) resolve(
 			e.Log.Error("entity in index cannot be decoded, skipping",
 				"id", ids[i], "index", index)
 		} else {
-			e.Log.Error("entity in index but not in store, skipping",
+			e.Log.Debug("entity in index but not in store, skipping",
 				"id", ids[i], "index", index)
 		}
 

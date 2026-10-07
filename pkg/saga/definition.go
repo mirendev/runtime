@@ -19,6 +19,11 @@ type Definition struct {
 	// Version is incremented for breaking changes. Defaults to 1.
 	Version int
 
+	// ResumesFrom lists the older versions whose executions this definition
+	// has been declared safe to resume. Anything else recorded at another
+	// version is refused rather than driven against a graph it never ran.
+	ResumesFrom []int
+
 	// Actions in this saga, keyed by action name.
 	Actions map[string]*ActionNode
 
@@ -57,6 +62,8 @@ type ActionNode struct {
 type Builder struct {
 	name         string
 	version      int
+	resumesFrom  []int
+	resumesSet   bool
 	actions      []*pendingAction
 	dependencies []any
 	err          error
@@ -78,9 +85,24 @@ func Define(name string) *Builder {
 	}
 }
 
-// Version sets the definition version (defaults to 1).
+// Version sets the definition version (defaults to 1). Any version above 1
+// must also say which older versions it can resume, via ResumesFrom.
 func (b *Builder) Version(v int) *Builder {
 	b.version = v
+	return b
+}
+
+// ResumesFrom declares which older versions' executions this definition can
+// safely resume. Calling it with no arguments is the explicit way to say none:
+// executions recorded at an older version will be refused, not resumed.
+//
+// Listing a version is a claim that every in-flight execution recorded at it,
+// whether still running forward or partway through undo, behaves correctly
+// against this definition's current action graph. See the package docs for
+// which changes keep that claim true.
+func (b *Builder) ResumesFrom(versions ...int) *Builder {
+	b.resumesFrom = versions
+	b.resumesSet = true
 	return b
 }
 
@@ -241,9 +263,15 @@ func (b *Builder) Build() (*Definition, error) {
 		return nil, b.err
 	}
 
+	resumesFrom, err := b.validateVersioning()
+	if err != nil {
+		return nil, err
+	}
+
 	def := &Definition{
 		Name:         b.name,
 		Version:      b.version,
+		ResumesFrom:  resumesFrom,
 		Actions:      make(map[string]*ActionNode),
 		dependencies: b.dependencies,
 	}
@@ -365,6 +393,38 @@ func topologicalSort(actions map[string]*ActionNode) ([]string, error) {
 	return order, nil
 }
 
+// validateVersioning makes a version bump carry an explicit compatibility
+// decision. Without it, bumping the version would silently mean "refuse every
+// older execution", which is a fine answer but not one to reach by omission.
+func (b *Builder) validateVersioning() ([]int, error) {
+	if b.version < 1 {
+		return nil, fmt.Errorf("saga %q: version must be at least 1, got %d", b.name, b.version)
+	}
+	if b.version > 1 && !b.resumesSet {
+		return nil, fmt.Errorf("saga %q: version %d must declare which older versions it can resume "+
+			"(ResumesFrom(), with no arguments, refuses them all)", b.name, b.version)
+	}
+
+	var out []int
+	for _, v := range b.resumesFrom {
+		if v < 1 || v >= b.version {
+			return nil, fmt.Errorf("saga %q: ResumesFrom(%d) must name a version below the current version %d",
+				b.name, v, b.version)
+		}
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// CanResume reports whether an execution recorded at version v may be driven
+// by this definition.
+func (d *Definition) CanResume(v int) bool {
+	return v == d.Version || slices.Contains(d.ResumesFrom, v)
+}
+
 // Registry holds registered saga definitions.
 type Registry struct {
 	mu          sync.RWMutex
@@ -402,6 +462,19 @@ func (r *Registry) Get(name string) (*Definition, bool) {
 
 	def, ok := r.definitions[name]
 	return def, ok
+}
+
+// Definitions returns every registered definition, sorted by name.
+func (r *Registry) Definitions() []*Definition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	defs := make([]*Definition, 0, len(r.definitions))
+	for _, def := range r.definitions {
+		defs = append(defs, def)
+	}
+	slices.SortFunc(defs, func(a, b *Definition) int { return strings.Compare(a.Name, b.Name) })
+	return defs
 }
 
 // GetDefinition retrieves a saga definition from the global registry.

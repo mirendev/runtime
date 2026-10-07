@@ -84,10 +84,11 @@ tail = "logs app -f"
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
 | `name` | string | Application name | Inferred from directory name |
+| `static` | table | Static files exported from the app build output and served directly by HTTP ingress | — |
 | `include` | string[] | Extra files or directories to include in the build context | — |
 | `concurrency` | int | **Legacy.** Global concurrency target. Use `[services.<name>.concurrency]` instead. | — |
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](./in-cluster-api.md). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
-| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for a task-only app with no services, where leaving it unset is an error |
+| `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for static-only apps and task-only apps with no services |
 
 ### `web` and the synthesized web service {#web}
 
@@ -102,6 +103,60 @@ the validation note below.
 `web = false` opts out. It's how an app that only declares tasks says it has no
 long-running process at all — no web service, no route, and nothing running (or
 billed for compute) between invocations.
+
+Setting `static.dir` also opts out of the synthesized web service. The build
+server exports that directory into a dedicated artifact during deployment, and
+HTTP ingress serves it without mounting the image or starting a sandbox. For
+example:
+
+```toml
+[static]
+dir = "/app/dist"
+```
+
+This serves a frontend build written to `/app/dist`. If the app also declares a
+service, requests for files that do not exist fall through to that service; a
+static-only app returns 404 instead.
+
+### Static error pages {#static-error-pages}
+
+An app can override the cluster's HTML error page using a template in its
+versioned static artifact:
+
+```toml
+[static]
+dir = "/app/public"
+error_page = "errors/error.html"
+```
+
+`error_page` is relative to `static.dir` and must name a file in the build
+output (up to 128 KiB). Deployment fails if that file is missing, too large,
+or not a valid app error template. App templates may use `if` and `with`, but
+not `define`, `block`, `template`, or `range` actions. The only permitted
+functions are `brandLogo`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `and`, `or`, `not`,
+and `len`; this prevents expressions from growing without writing output in
+the shared ingress process. Cluster templates are not subject to this restriction.
+The file is published as a static file, so do not put
+secrets in it. The page is rendered by ingress even when the app sandbox cannot
+start. If your app needs a web process, explicitly declare `[services.web]`:
+setting `static.dir` disables the automatically synthesized web service.
+An app-specific page wins over the cluster page when an app version is resolved;
+the active version's page is also used for a maintenance window. For missing
+routes or failures before version resolution, ingress uses the cluster page.
+See [custom error pages](./server-config.md#custom-error-pages) for template
+variables, fallback behavior, and content negotiation.
+
+When no Dockerfile, image, or supported stack is detected, Miren treats the
+uploaded source tree as `/app` and archives `static.dir` directly. Thus
+`dir = "/app/public"` serves a repository's `public/` directory without building
+an OCI image. Miren excludes its `.miren` configuration directory from a source
+artifact.
+
+:::danger[Review a source-root static directory]
+`static.dir = "/app"` publishes every file uploaded from the source tree except
+`.miren`. The upload honors `.gitignore`, but files such as `.env` are public if
+they are not ignored. Prefer a dedicated directory such as `/app/public`.
+:::
 
 It opts out of the *synthesized* service, not of a web service you asked for. A
 `web` declared in `app.toml` or named by a `web:` line in your `Procfile` is an
@@ -171,19 +226,24 @@ alpine_image = "alpine:3.19"
 
 ### `[[build.secrets]]` — Build-time secrets {#build-secrets}
 
-Exposes an encrypted [secret](./secrets.md) to a Dockerfile build. BuildKit keeps the value out of image layers and its own logs; your `RUN` command must not print it. Each entry is mounted by its `id`, which your Dockerfile reads with `RUN --mount=type=secret,id=<id>`. Supported for Dockerfile builds only — declaring one on an auto-detected language stack is an error. See [Using a secret at build time](./secrets.md#using-a-secret-at-build-time) for the full contract.
+Exposes an encrypted [secret](./secrets.md) to the build, so it can fetch private dependencies. An automatic language build mounts each secret on its dependency install step, at the `env` or `file` target you give it. A Dockerfile build reads it with `RUN --mount=type=secret,id=<id>` and ignores the target. BuildKit keeps the value out of image layers and its own logs. See [Using a secret at build time](./secrets.md#using-a-secret-at-build-time) for the full contract.
 
 ```toml
 [[build.secrets]]
-id = "npm_token"
-ref = "registry/npm-token"
+id = "netrc"
+ref = "github/netrc"
+file = "~/.netrc"
 ```
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `id` | string | Mount identifier used in `--mount=type=secret,id=<id>`. Letters, digits, and `_.-` only; unique within the list | Required |
+| `id` | string | Identifier the build mounts the secret by, and the one a Dockerfile uses in `--mount=type=secret,id=<id>`. Letters, digits, and `_.-` only; unique within the list | Required |
 | `backend` | string | [Secret](./secrets.md) backend to resolve against | `cluster` (built-in store) |
 | `ref` | string | Reference naming the secret within the backend | Required |
+| `env` | string | Environment variable the dependency install step reads the secret from. Automatic language builds only | — |
+| `file` | string | Absolute path, or one starting with `~/`, where the dependency install step finds the secret as a file. Automatic language builds only | — |
+
+An automatic language build needs exactly one of `env` or `file` on each secret.
 
 ## `[services.<name>]` — Service Configuration {#services}
 
@@ -290,7 +350,7 @@ shutdown_timeout = "10s"
 | `requests_per_instance` | int | Target concurrent requests per instance (auto mode only) | `10` |
 | `scale_down_delay` | duration | Time to wait before removing idle instances (auto mode only) | `"15m"` |
 | `num_instances` | int | Exact number of instances to run (fixed mode only) | `1` |
-| `shutdown_timeout` | duration | Time to wait for graceful shutdown during redeploy | `"10s"` |
+| `shutdown_timeout` | duration | Time a stopping instance gets to exit after `SIGTERM` before it is killed. A new value takes effect from the next deploy; see [Graceful Shutdown](./services.md#graceful-shutdown) | `"10s"` |
 
 :::note[Validation]
 - `mode` must be `"auto"` or `"fixed"`.

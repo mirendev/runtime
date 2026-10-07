@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   init:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       # The human-readable name of what we're building, used for version
       # strings and the stable-release conditions further down.
@@ -722,7 +722,7 @@ jobs:
 
   update-homebrew-tap:
     needs: [init, upload-to-miren]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Only update homebrew tap for stable version tags (not prereleases, not branch builds)
     # For workflow_dispatch, require explicit opt-in via update_latest flag
     if: |
@@ -754,7 +754,7 @@ jobs:
 
   republish-docs:
     needs: [init, upload-to-miren]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # A release changes which docs miren.md should serve, but the tag itself
     # never touches docs/, so the docs workflow's own push trigger doesn't fire
     # for it. Without this the site keeps serving the previous version until
@@ -783,7 +783,7 @@ jobs:
   notify:
     needs: [init, test, package, build-binaries, upload-to-miren, build-and-push-docker, update-homebrew-tap, republish-docs]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Send Slack notification on failure
         if: contains(needs.*.result, 'failure')

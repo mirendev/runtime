@@ -28,10 +28,16 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
+	if err := cfg.ResolveDeprecatedConfig(); err != nil {
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
 	if err := cfg.ValidateIngressCoherence(); err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
-	if err := cfg.ValidateMetricsCoherence(); err != nil {
+	if err := cfg.ValidateTelemetryCoherence(); err != nil {
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+	if err := cfg.ValidateTelemetryEnvironment(); err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 	cfg.WarnDeprecatedConfig(ctx.Log)
@@ -46,6 +52,8 @@ func Server(ctx *Context, opts serverconfig.CLIFlags) error {
 	// durable report happens later, once observability is up — but a server
 	// stuck in a memory crashloop never reaches that point.
 	reportPreviousExitEarly(cfg.Server.GetDataPath(), ctx.UILog)
+
+	healPathSymlinkAtBoot(ctx)
 
 	if err := prepareServerConfig(ctx, cfg); err != nil {
 		return err

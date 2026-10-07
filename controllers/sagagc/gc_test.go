@@ -76,6 +76,24 @@ func TestSweep_RunsBothPolicies(t *testing.T) {
 		"neither sweep touches an execution that is genuinely in progress")
 }
 
+// TestSweep_CountsStrandedForces pins that a forced transition reaches the
+// counter an operator alerts on. On a current cluster the expected count is
+// zero, so this is the signal the sweep's Info line used to be the only form of.
+func TestSweep_CountsStrandedForces(t *testing.T) {
+	c, storage := newTestController(t, DefaultGCConfig())
+	counts := &saga.Counts{}
+	c.Counts = counts
+
+	save(t, storage, "stranded-1", saga.StatusPending, 30*24*time.Hour)
+	save(t, storage, "stranded-2", saga.StatusUndoing, 30*24*time.Hour)
+	save(t, storage, "working", saga.StatusRunning, time.Hour)
+
+	c.sweep(context.Background())
+
+	got := counts.Snapshot()["create-sandbox"]
+	assert.Equal(t, uint64(2), got.Events[saga.EventStrandedForced])
+}
+
 // TestSweep_EachWindowDisablesOnlyItsOwnPolicy pins that the two windows are
 // actually separate switches. An operator reaches both through one config
 // field, so in production they go dark together, but the controller must not

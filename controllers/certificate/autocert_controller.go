@@ -9,12 +9,16 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/sync/singleflight"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/autotls"
@@ -38,7 +42,36 @@ const (
 	// but much shorter than the Manager's internal 5-minute timeout so we don't
 	// wedge the controller or prevent graceful shutdown.
 	reconcileGetCertTimeout = 30 * time.Second
+
+	// Bounds on remembered HostChecker answers. Every TLS handshake for a name
+	// that isn't itself a route consults the checker, and scanners send a
+	// steady stream of junk SNI, so answers are cached. The caches are keyed
+	// by client-supplied names and so must stay bounded. A refusal is kept
+	// briefly because it can go stale in a way users see: a preview deploy
+	// that comes up after something probed its name. A stale approval costs
+	// nothing, since the certificate already exists.
+	hostDecisionCacheSize = 4096
+	hostAllowTTL          = 5 * time.Minute
+	hostDenyTTL           = 30 * time.Second
+
+	// Max HostChecker calls in flight at once. Each one can make a route's app
+	// do work (and wake it from zero), so a scan of random names must not be
+	// able to fan out without limit. Names over the cap are refused for now
+	// and not remembered.
+	maxConcurrentHostChecks = 16
+
+	// Max time a handshake waits on the HostChecker before treating the name
+	// as not allowed. The checker may take longer (asking a cold app can wait
+	// on a sandbox boot), in which case its answer still lands in the cache
+	// for the next handshake.
+	defaultHostCheckTimeout = 6 * time.Second
 )
+
+// HostChecker decides whether a name that is not itself a route, but sits one
+// label under one, should get an on-demand certificate. It is supplied by the
+// ingress, which knows about ephemeral deploys and can ask the route's app. A
+// non-nil error means the answer is unknown.
+type HostChecker func(ctx context.Context, host string) (bool, error)
 
 // AutocertController provisions TLS certificates eagerly using HTTP-01 ACME challenges
 // via autocert.Manager. It watches http_route entities and triggers cert provisioning
@@ -55,6 +88,23 @@ type AutocertController struct {
 	publicIPs        func() []net.IP
 	failures         sync.Map // domain -> acmeFailure
 	clusterHostnames map[string]struct{}
+
+	hostChecker      atomic.Pointer[HostChecker]
+	hostAllowed      *expirable.LRU[string, struct{}]
+	hostDenied       *expirable.LRU[string, struct{}]
+	hostChecks       singleflight.Group
+	hostCheckSlots   chan struct{}
+	hostCheckTimeout time.Duration
+
+	// routeChecks remembers each route's host and tls_check so Reconcile can
+	// tell a real change from a periodic resync.
+	routeChecks sync.Map // entity.Id -> routeCheck
+
+	// hostGen counts invalidations of the answer caches. A check records its answer
+	// only if no invalidation happened while it was in flight, so an answer
+	// computed against a route's old tls_check can't outlive the purge.
+	hostGenMu sync.Mutex
+	hostGen   uint64
 }
 
 // acmeFailure records when an ACME attempt failed and how long to wait before
@@ -96,7 +146,34 @@ func NewAutocertController(opts AutocertControllerOpts) *AutocertController {
 		ready:            make(chan struct{}),
 		publicIPs:        opts.PublicIPs,
 		clusterHostnames: pinned,
+		hostAllowed:      expirable.NewLRU[string, struct{}](hostDecisionCacheSize, nil, hostAllowTTL),
+		hostDenied:       expirable.NewLRU[string, struct{}](hostDecisionCacheSize, nil, hostDenyTTL),
+		hostCheckSlots:   make(chan struct{}, maxConcurrentHostChecks),
+		hostCheckTimeout: defaultHostCheckTimeout,
 	}
+}
+
+// SetHostChecker installs the function that vouches for names under a route.
+// Until one is set, such names get the fallback certificate.
+func (c *AutocertController) SetHostChecker(fn HostChecker) {
+	c.hostChecker.Store(&fn)
+	c.forgetHostDecisions()
+}
+
+// forgetHostDecisions drops every remembered HostChecker answer and any answer
+// still in flight.
+func (c *AutocertController) forgetHostDecisions() {
+	c.hostGenMu.Lock()
+	defer c.hostGenMu.Unlock()
+	c.hostGen++
+	c.hostAllowed.Purge()
+	c.hostDenied.Purge()
+}
+
+// routeCheck is the part of a route that decides answers about names under it.
+type routeCheck struct {
+	host     string
+	tlsCheck string
 }
 
 // Init implements ReconcileControllerI — creates the autocert.Manager and loads the fallback cert.
@@ -115,7 +192,7 @@ func (c *AutocertController) Init(ctx context.Context) error {
 		Cache:  autocert.DirCache(certsDir),
 		Email:  c.email,
 		HostPolicy: func(ctx context.Context, host string) error {
-			if c.isAllowedHost(strings.ToLower(host)) {
+			if c.isAllowedHost(ctx, strings.ToLower(host)) {
 				return nil
 			}
 			return fmt.Errorf("host %q not in allowed set", host)
@@ -183,13 +260,20 @@ func (c *AutocertController) Reconcile(ctx context.Context, route *ingress_v1alp
 
 	c.allowedHosts.Store(domain, struct{}{})
 
+	// A new route, or one whose host or tls_check changed, invalidates earlier
+	// answers about names under it. A resync of an unchanged route doesn't.
+	current := routeCheck{host: domain, tlsCheck: route.TlsCheck}
+	if prev, ok := c.routeChecks.Swap(routeID, current); !ok || prev.(routeCheck) != current {
+		c.forgetHostDecisions()
+	}
+
 	log := c.log.With("domain", domain, "route", routeID)
 
 	// Wildcard routes (*.example.com) can't be eagerly provisioned — HTTP-01 can't
 	// issue wildcard certs and we don't know which subdomains will be requested.
-	// Just add the pattern to allowedHosts so HostPolicy accepts subdomains inline.
+	// Subdomains provision inline, but only once the HostChecker vouches for them.
 	if strings.HasPrefix(domain, "*.") {
-		log.Info("wildcard route: subdomains will provision certs inline on first request")
+		log.Info("wildcard route: subdomains will provision certs inline when the route's tls_check or an ephemeral deploy vouches for them")
 		return nil
 	}
 
@@ -343,6 +427,8 @@ func (c *AutocertController) Delete(ctx context.Context, id entity.Id) error {
 		}
 		return true
 	})
+	c.routeChecks.Delete(id)
+	c.forgetHostDecisions()
 	return nil
 }
 
@@ -351,7 +437,7 @@ func (c *AutocertController) Delete(ctx context.Context, id entity.Id) error {
 func (c *AutocertController) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	host := strings.ToLower(hello.ServerName)
 
-	if !c.isAllowedHost(host) {
+	if !c.isAllowedHost(hello.Context(), host) {
 		return &c.fallbackCert, nil
 	}
 
@@ -421,14 +507,16 @@ func (c *AutocertController) dnsPointsToUs(domain string) bool {
 	return false
 }
 
-// isAllowedHost checks whether host is covered by the allowed set, including
-// wildcard entries and ephemeral subdomains. For example, if "*.example.com"
-// is in the set, "foo.example.com" is allowed but "example.com" is not — the
-// wildcard matches exactly one DNS label. Additionally, if "example.com" is
-// in the set as a normal (non-wildcard) route, "label.example.com" is allowed
-// to support ephemeral deploys, which prepend a label to the route's hostname
-// (see httpingress.lookupEphemeralRoute for the matching request-routing logic).
-func (c *AutocertController) isAllowedHost(host string) bool {
+// isAllowedHost reports whether host should get a certificate. A name that a
+// route (or a cluster hostname) names exactly is always allowed. A name one
+// label under a route, through a wildcard ("foo.example.com" under
+// "*.example.com") or as an ephemeral subdomain ("pr-33.app.example.com" under
+// "app.example.com"), is allowed only if the HostChecker vouches for it.
+//
+// The shape of a name is not enough on its own: wildcard DNS resolves every
+// label to the cluster, so a scanner that sends arbitrary SNI would otherwise
+// get a real certificate for each label it tries (MIR-1919).
+func (c *AutocertController) isAllowedHost(ctx context.Context, host string) bool {
 	if _, ok := c.allowedHosts.Load(host); ok {
 		return true
 	}
@@ -437,15 +525,84 @@ func (c *AutocertController) isAllowedHost(host string) bool {
 		return false
 	}
 	parent := host[idx+1:]
-	// Wildcard route covers this subdomain: foo.example.com → *.example.com
-	if _, ok := c.allowedHosts.Load("*." + parent); ok {
+	_, underWildcard := c.allowedHosts.Load("*." + parent)
+	_, underRoute := c.allowedHosts.Load(parent)
+	if !underWildcard && !underRoute {
+		return false
+	}
+	return c.checkHost(ctx, host)
+}
+
+// checkHost asks the HostChecker about host, remembering the answer for a
+// while and collapsing concurrent handshakes for the same name into one ask.
+func (c *AutocertController) checkHost(ctx context.Context, host string) bool {
+	if _, ok := c.hostAllowed.Get(host); ok {
 		return true
 	}
-	// Ephemeral subdomain of a normal route: pr-33.app.example.com → app.example.com
-	if _, ok := c.allowedHosts.Load(parent); ok {
-		return true
+	if _, ok := c.hostDenied.Get(host); ok {
+		return false
 	}
-	return false
+
+	fn := c.hostChecker.Load()
+	if fn == nil {
+		return false
+	}
+
+	c.hostGenMu.Lock()
+	gen := c.hostGen
+	c.hostGenMu.Unlock()
+
+	// The generation is part of the key so a handshake arriving after an
+	// invalidation starts a fresh check instead of joining a stale one.
+	key := strconv.FormatUint(gen, 10) + "/" + host
+	ch := c.hostChecks.DoChan(key, func() (any, error) {
+		select {
+		case c.hostCheckSlots <- struct{}{}:
+			defer func() { <-c.hostCheckSlots }()
+		default:
+			c.log.Debug("too many host checks in flight; serving fallback", "host", host)
+			return false, nil
+		}
+
+		// Detached from any one handshake's context: other handshakes may be
+		// waiting on this same answer.
+		checkCtx, cancel := context.WithTimeout(context.Background(), c.hostCheckTimeout)
+		defer cancel()
+
+		allowed, err := c.callHostChecker(checkCtx, *fn, host)
+		if err != nil {
+			c.log.Warn("could not decide whether to issue a certificate; serving fallback", "host", host, "error", err)
+			return false, nil
+		}
+
+		c.hostGenMu.Lock()
+		if c.hostGen == gen {
+			if allowed {
+				c.hostAllowed.Add(host, struct{}{})
+			} else {
+				c.hostDenied.Add(host, struct{}{})
+			}
+		}
+		c.hostGenMu.Unlock()
+
+		c.log.Debug("host check decided", "host", host, "allowed", allowed)
+		return allowed, nil
+	})
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// The checker may not honor its deadline, so the handshake enforces its own.
+	timer := time.NewTimer(c.hostCheckTimeout)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res.Val.(bool)
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // recordFailure stores a cooldown entry for a domain. If the error is an ACME
@@ -473,6 +630,20 @@ func (c *AutocertController) inCooldown(domain string) bool {
 	}
 	c.failures.Delete(domain)
 	return false
+}
+
+// callHostChecker runs fn, turning a panic into an error. The checker drives
+// the ingress's proxy path from a singleflight goroutine, with no http.Server
+// above it to recover, and singleflight re-panics where nothing can catch it,
+// so an unrecovered panic here (ReverseProxy panics with http.ErrAbortHandler
+// on a broken copy) would take down the whole process.
+func (c *AutocertController) callHostChecker(ctx context.Context, fn HostChecker, host string) (allowed bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			allowed, err = false, fmt.Errorf("host checker panicked: %v", r)
+		}
+	}()
+	return fn(ctx, host)
 }
 
 // SetReady signals that the port-80 ACME challenge server is up and accepting connections.

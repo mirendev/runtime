@@ -5,12 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/mr-tron/base58"
 	"go.etcd.io/etcd/api/v3/mvccpb"
-	"miren.dev/runtime/pkg/cond"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -227,61 +228,98 @@ func entityIDFromKey(log *slog.Logger, entityPrefix, key string) (Id, bool) {
 // stats.EntitiesFailed so the caller can tell a genuinely complete pass from
 // one that merely reached the end of the keyspace. An entity that has since
 // been deleted is not a failure; there is simply nothing left to index.
+//
+// It rebuilds matches only, each under the entity key's own lease so a bound
+// entity's matches still go with its session (MIR-1320). Presence markers are
+// left to their sessions' writes: writing one here would attach a session's
+// lease from a read that may be stale by the time it lands. See the index
+// layout comment above indexWrite.
 func (s *EtcdStore) reindexEntity(ctx context.Context, log *slog.Logger, id Id, opts ReindexOptions, stats *ReindexStats) {
-	ent, err := s.GetEntity(ctx, id)
-	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
+	for range reindexEntityAttempts {
+		if s.reindexEntityOnce(ctx, log, id, opts, stats) {
 			return
 		}
+	}
+	// Counted as a failure rather than skipped: a pass that reports none may
+	// be taken as proof every entity is indexed (see ReindexStats).
+	log.Warn("reindex: entity kept changing under the pass, leaving it for the next one", "id", id)
+	stats.EntitiesFailed++
+}
+
+// reindexEntityAttempts bounds how often reindexEntity rereads an entity that
+// changed between its read and its write.
+const reindexEntityAttempts = 3
+
+// reindexEntityRaceHook is a test seam. When non-nil, reindexEntity invokes it
+// after reading the entity but before committing its guarded write, so a
+// white-box test can land a concurrent write in that window. It is always nil
+// in production.
+var reindexEntityRaceHook func(Id)
+
+// reindexEntityOnce makes one attempt at reindexEntity. It reports false when
+// the entity changed between the read and the write and should be read again.
+func (s *EtcdStore) reindexEntityOnce(ctx context.Context, log *slog.Logger, id Id, opts ReindexOptions, stats *ReindexStats) bool {
+	key := s.buildKey(id)
+	resp, err := s.client.Get(ctx, key)
+	if err != nil {
 		log.Warn("reindex: failed to get entity", "id", id, "error", err)
 		stats.EntitiesFailed++
-		return
+		return true
+	}
+	if len(resp.Kvs) == 0 {
+		return true
+	}
+	kv := resp.Kvs[0]
+
+	var ent Entity
+	if err := decoder.Unmarshal(kv.Value, &ent); err != nil {
+		log.Warn("reindex: failed to decode entity", "id", id, "error", err)
+		stats.EntitiesFailed++
+		return true
 	}
 
-	if opts.DryRun {
-		return
-	}
-
-	indexedAttrs := collectIndexedAttributesTolerant(ctx, s, ent.Attrs())
-	for _, attrs := range indexedAttrs {
+	// The entity key holds no session attributes, so every indexed value in
+	// it is one to index.
+	indexed, _ := indexedValues(ctx, s, ent.attrs, true)
+	var puts putOps
+	for _, attrs := range indexed {
 		for _, attr := range attrs {
-			if err := s.addToCollectionDirect(ctx, ent, attr.CAS()); err != nil {
-				log.Warn("reindex: failed to add to collection", "id", id, "attr", attr.ID, "error", err)
-				stats.EntitiesFailed++
-				continue
-			}
-			stats.IndexesRebuilt++
+			puts.add(s.addToCollectionOp(&ent, attr.CAS(), clientv3.LeaseID(kv.Lease)))
 		}
 	}
-}
 
-// collectIndexedAttributesTolerant is like EtcdStore.collectIndexedAttributes but
-// skips attributes whose schema cannot be looked up, rather than returning an error.
-// This is appropriate for reindex where some attribute schemas may be missing.
-func collectIndexedAttributesTolerant(ctx context.Context, store Store, attrs []Attr) map[Id][]Attr {
-	indexedAttrs := make(map[Id][]Attr)
-	allAttrs := enumerateAllAttrs(attrs)
-	for _, attr := range allAttrs {
-		schema, err := store.GetAttributeSchema(ctx, attr.ID)
+	if opts.DryRun || len(puts.ops) == 0 {
+		return true
+	}
+
+	if reindexEntityRaceHook != nil {
+		reindexEntityRaceHook(id)
+	}
+
+	// The matches carry the lease read above, so they only stand if the entity
+	// key has not moved: a write that binds or unbinds it has indexed the
+	// entity itself, and the older lease would undo that. They go in bounded
+	// chunks, since a schema change can newly index more values than any one
+	// write ever put, and every chunk carries the guard, so chunks that landed
+	// before a change are ones that change's own write supersedes.
+	for chunk := range slices.Chunk(puts.ops, reindexTxnOps) {
+		txn, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.ModRevision(key), "=", kv.ModRevision)).
+			Then(chunk...).
+			Commit()
 		if err != nil {
-			continue
+			log.Warn("reindex: failed to write index entries", "id", id, "error", err)
+			stats.EntitiesFailed++
+			return true
 		}
-		if schema.Index {
-			indexedAttrs[attr.ID] = append(indexedAttrs[attr.ID], attr)
+		if !txn.Succeeded {
+			return false
 		}
+		stats.IndexesRebuilt += int64(len(chunk))
 	}
-	return indexedAttrs
+	return true
 }
 
-var colReplacer = strings.NewReplacer("/", "_", ":", "_")
-
-// addToCollectionDirect writes a single collection entry for the given entity and collection key.
-func (s *EtcdStore) addToCollectionDirect(ctx context.Context, ent *Entity, collection string) error {
-	key := base58.Encode([]byte(ent.Id()))
-	colKey := colReplacer.Replace(collection)
-
-	key = fmt.Sprintf("%s/collections/%s/%s", s.prefix, colKey, key)
-
-	_, err := s.client.Put(ctx, key, ent.Id().String())
-	return err
-}
+// reindexTxnOps bounds the puts in one reindex transaction, comfortably under
+// etcd's default limit of 128 ops.
+const reindexTxnOps = 64

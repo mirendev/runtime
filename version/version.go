@@ -38,6 +38,17 @@ func GetInfo() Info {
 	return info
 }
 
+// KnownCommit returns the commit this binary was built from, or "" when the
+// build did not stamp one. Commit's zero value is the literal "unknown", which
+// is fine to print but must not travel anywhere a missing commit means
+// something.
+func (i Info) KnownCommit() string {
+	if i.Commit == "unknown" {
+		return ""
+	}
+	return i.Commit
+}
+
 // Branch returns the release channel this binary was built from: the tag name
 // for tagged releases (e.g. "v0.2.0"), the branch name for branch builds
 // (e.g. "main" for "main:abc123"), and empty for unknown versions. See BranchOf.
@@ -71,8 +82,8 @@ func (i Info) String() string {
 	}
 
 	s := fmt.Sprintf("Version: %s", i.Version)
-	if i.Commit != "unknown" && i.Commit != "" {
-		s += fmt.Sprintf("\nCommit:  %s", i.Commit)
+	if c := i.KnownCommit(); c != "" {
+		s += fmt.Sprintf("\nCommit:  %s", c)
 	}
 	if !i.BuildDate.IsZero() {
 		s += fmt.Sprintf("\nBuilt:   %s", i.BuildDate.Format("2006-01-02 15:04:05 UTC"))

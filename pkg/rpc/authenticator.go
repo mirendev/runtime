@@ -45,6 +45,12 @@ const (
 	AuthMethodSigned    AuthMethod = "signed"    // ed25519-signed request over a message transport
 )
 
+// CoordinatorCertSubject is the common name on the certificate the coordinator
+// dials with. A runner uses it to tell the coordinator apart from anything else
+// that can reach its API. The listener accepts certless connections but
+// authenticates non-public calls with a verified client certificate.
+const CoordinatorCertSubject = "miren-api"
+
 // Identity represents an authenticated caller
 type Identity struct {
 	// Subject is the primary identifier (cert CN, JWT subject, etc.)

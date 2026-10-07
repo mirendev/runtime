@@ -11,7 +11,7 @@ Remove identity-provider protection from an HTTP route
 ## Usage
 
 ```bash
-miren route unprotect <host> [flags]
+miren route unprotect [host] [flags]
 ```
 
 ## Arguments

@@ -1,5 +1,13 @@
 domain: dev.miren.core
 version: v1alpha
+enums:
+  port_protocol:
+    member-prefix: protocol
+    values: [tcp, udp]
+  disk_provider:
+    member-prefix: provider
+    values: [miren, local, sqlite]
+
 exports:
   cloud:
     marker: dev.miren.meta/cloud.export
@@ -35,6 +43,7 @@ exports:
           - dev.miren.core/deployment.phase
           - dev.miren.core/deployment.started_at
           - dev.miren.core/deployment.completed_at
+          - dev.miren.core/deployment.message
           - dev.miren.core/deployed_by.subject
           - dev.miren.core/deployed_by.auth_method
           - dev.miren.core/deployed_by.organization_id
@@ -143,7 +152,7 @@ kinds:
       attrs:
         kind:
           type: string
-          doc: Build source kind (image, dockerfile, or stack)
+          doc: Build source kind (image, dockerfile, stack, or static)
         value:
           type: string
           doc: Normalized image reference or auto-detected stack name, depending on kind
@@ -164,6 +173,10 @@ kinds:
     artifact:
       type: ref
       doc: The artifact to deploy for the version
+
+    static_artifact:
+      type: string
+      doc: Content digest of the tar archive containing files exported from static.dir
 
     manifest:
       type: string
@@ -211,7 +224,8 @@ kinds:
                   required: true
                 protocol:
                   type: enum
-                  choices: [tcp, udp]
+                  enum: port_protocol
+                  legacy-choices: true
                 type:
                   type: string
                 node_port:
@@ -274,7 +288,8 @@ kinds:
                   doc: The name of the disk
                 provider:
                   type: enum
-                  choices: [miren, local, sqlite]
+                  enum: disk_provider
+                  legacy-choices: true
                   doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
                 mount_path:
                   type: string
@@ -411,6 +426,10 @@ kinds:
       type: string
       doc: RFC3339 time when the attempt reached a terminal outcome
 
+    message:
+      type: string
+      doc: User-supplied description of this deployment
+
     app_name:
       type: string
       doc: "[DEPRECATED] Denormalized app name retained for downgrade compatibility; canonical identity is app"
@@ -455,6 +474,12 @@ kinds:
         organization_id:
           type: string
           doc: Organization from the initiating authenticated identity; not the cluster's ownership
+        email:
+          type: string
+          doc: Email from the initiating identity's verified cloud token, as of the deploy
+        name:
+          type: string
+          doc: Display name from the initiating identity's verified cloud token, as of the deploy
 
     error_message:
       type: string
@@ -632,6 +657,12 @@ components:
         variant:
           type: string
           doc: Variant used by the clone instead of the primary association
+    static_dir:
+      type: string
+      doc: Absolute path exported from the application build output and served directly by HTTP ingress
+    static_error_page:
+      type: string
+      doc: Relative path to the HTML error template in the static artifact
     variables:
       type: component
       doc: Environment variables and configuration values
@@ -717,7 +748,8 @@ components:
               required: true
             protocol:
               type: enum
-              choices: [tcp, udp]
+              enum: port_protocol
+              legacy-choices: true
             type:
               type: string
             node_port:
@@ -780,7 +812,8 @@ components:
               doc: The name of the disk
             provider:
               type: enum
-              choices: [miren, local, sqlite]
+              enum: disk_provider
+              legacy-choices: true
               doc: "Disk provider: 'miren' (default) for network disks, 'local' for node-local persistent storage, 'sqlite' for a node-local SQLite database replicated to the coordinator"
             mount_path:
               type: string

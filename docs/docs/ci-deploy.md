@@ -98,7 +98,7 @@ miren auth ci add -a myapp --github acme/web-app
 This creates a binding with:
 - **Issuer:** `https://token.actions.githubusercontent.com`
 - **Repository:** `acme/web-app`, owned by `acme` (matches all branches)
-- **Allowed events:** `push,workflow_dispatch` (by default)
+- **Allowed events:** `push,workflow_dispatch,pull_request` (by default)
 
 You can restrict further — see [Restricting Access](#restricting-access) below.
 
@@ -183,14 +183,20 @@ Older servers require a subject pattern and will reject a binding created by a n
 
 ### Allowed Events
 
-By default, only `push` and `workflow_dispatch` events are permitted. To also allow `pull_request` events:
+By default, `push`, `workflow_dispatch`, and `pull_request` events are permitted. To restrict deployments to pushes and manual runs:
 
 <CliCommand context="client">
 ```miren
 miren auth ci add -a myapp --github acme/web-app \
-  --allowed-events push,workflow_dispatch,pull_request
+  --allowed-events push,workflow_dispatch
 ```
 </CliCommand>
+
+An explicit `--allowed-events` replaces the default set. Existing bindings keep their configured events; recreate a binding to use the new defaults.
+
+:::warning[Restrict production deployments]
+Pull request workflows can contain code controlled by the PR author. For production apps, use `--allowed-events push,workflow_dispatch` or restrict the binding to your production branch with `--allowed-refs refs/heads/main`. Keep PR preview deployments on a staging app.
+:::
 
 ### Allowed Refs
 
@@ -289,7 +295,7 @@ Example output:
 
 ```
 ID         PROVIDER   ISSUER                                        SUBJECT                   CONDITIONS
-abc123     github     https://token.actions.githubusercontent.com                             repository=acme/web-app; repository_owner=acme; event_name=push,workflow_dispatch
+abc123     github     https://token.actions.githubusercontent.com                             repository=acme/web-app; repository_owner=acme; event_name=push,workflow_dispatch,pull_request
 def456     generic    https://gitlab.com                            project_path:acme/web-*
 ```
 
@@ -313,7 +319,7 @@ Create an OIDC binding for an application.
 | `--github OWNER/REPO` | GitHub shorthand — sets issuer, provider, and repository claim conditions automatically |
 | `--issuer URL` | OIDC issuer URL (required if `--github` is not used) |
 | `--subject PATTERN` | Glob pattern for the token subject claim |
-| `--allowed-events EVENTS` | Comma-separated event names to allow (default with `--github`: `push,workflow_dispatch`) |
+| `--allowed-events EVENTS` | Comma-separated event names to allow (default with `--github`: `push,workflow_dispatch,pull_request`) |
 | `--allowed-refs PATTERN` | Glob pattern for allowed git refs |
 | `--description TEXT` | Human-readable description of this binding |
 

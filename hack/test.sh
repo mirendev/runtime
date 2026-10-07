@@ -34,8 +34,12 @@ normalize_args() {
   for arg in "$@"; do
     # Check if this looks like a package path (not a flag starting with -)
     if [[ ! "$arg" =~ ^- ]] && [[ "$arg" =~ / ]]; then
+      # x/ is its own module, which a ./ path from the root cannot reach,
+      # so its packages keep their import path.
+      if [[ "$arg" =~ ^miren\.dev/runtime/x(/|$) ]]; then
+        :
       # If it starts with the module path, convert to relative
-      if [[ "$arg" =~ ^miren\.dev/runtime/ ]]; then
+      elif [[ "$arg" =~ ^miren\.dev/runtime/ ]]; then
         arg="./${arg#miren.dev/runtime/}"
       # If it doesn't start with ./ and is an actual directory path (or pattern), add ./
       elif [[ ! "$arg" =~ ^\. ]]; then
@@ -62,6 +66,24 @@ else
   normalized_args=($(normalize_args "$@"))
   if [ -n "${TESTFMT_JSON:-}" ]; then
     go test -json "${normalized_args[@]}"
+  elif [ -n "${TEST_RERUN_FAILS:-}" ]; then
+    # Rerun failed tests up to TEST_RERUN_FAILS times, for suites that depend on
+    # upstream registries. gotestsum takes the packages apart from the go test
+    # flags here, so flags must use the -flag=value form. Reruns are listed in
+    # TEST_RERUN_REPORT when it's set.
+    pkgs=()
+    flags=()
+    for arg in "${normalized_args[@]}"; do
+      if [[ "$arg" =~ ^- ]]; then
+        flags+=("$arg")
+      else
+        pkgs+=("$arg")
+      fi
+    done
+    gotestsum --format testname \
+      --rerun-fails="$TEST_RERUN_FAILS" \
+      ${TEST_RERUN_REPORT:+--rerun-fails-report="$TEST_RERUN_REPORT"} \
+      --packages="${pkgs[*]}" -- "${flags[@]}"
   else
     gotestsum --format testname -- "${normalized_args[@]}"
   fi

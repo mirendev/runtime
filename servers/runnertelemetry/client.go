@@ -6,31 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
-
-const (
-	// tokenTTL is requested explicitly rather than taking the issuer's default,
-	// so the runner knows when its own token dies without having to decode it.
-	tokenTTL = time.Hour
-
-	// tokenRefreshLeeway renews this far ahead of expiry, leaving room for a
-	// slow mint and for clock skew against the coordinator.
-	tokenRefreshLeeway = 5 * time.Minute
-)
-
-// ErrIssuerUnavailable means telemetry cannot be shipped because no workload
-// issuer has been wired up yet, or the coordinator has none.
-var ErrIssuerUnavailable = errors.New("workload identity issuer unavailable")
-
-// TokenSource supplies the system workload token a telemetry request carries.
-type TokenSource interface {
-	Token() (string, error)
-}
 
 // MetricsURL and LogsURL are what a runner points its writers at. Each writer
 // appends its own backend-native suffix.
@@ -42,67 +22,11 @@ func LogsURL(coordinatorAddress string) string {
 	return "https://" + coordinatorAddress + LogsBasePath
 }
 
-// IssuerTokenSource mints telemetry tokens through a workload issuer, holding
-// each one until shortly before it expires.
-//
-// Its issuer arrives late on purpose. A runner's telemetry writers are built
-// before the runner connects to the coordinator, but the issuer is a remote one
-// that only exists once that connection is up, so the writers are handed this
-// and the issuer is set behind them. Until that happens Token fails rather than
-// returning something unusable, which surfaces as a telemetry send failure
-// instead of a silent gap.
-type IssuerTokenSource struct {
-	mu      sync.Mutex
-	issuer  workloadidentity.TokenIssuer
-	token   string
-	renewAt time.Time
-
-	// now is swappable for tests.
-	now func() time.Time
-}
-
-func NewIssuerTokenSource() *IssuerTokenSource {
-	return &IssuerTokenSource{now: time.Now}
-}
-
-// SetIssuer supplies the issuer once the runner has one. Passing nil leaves the
-// source unarmed, which is the honest state when the coordinator reports it has
-// no issuer configured.
-func (s *IssuerTokenSource) SetIssuer(issuer workloadidentity.TokenIssuer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.issuer = issuer
-	s.token = ""
-	s.renewAt = time.Time{}
-}
-
-func (s *IssuerTokenSource) Token() (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.issuer == nil {
-		return "", ErrIssuerUnavailable
-	}
-
-	now := s.now()
-	if s.token != "" && now.Before(s.renewAt) {
-		return s.token, nil
-	}
-
-	token, err := s.issuer.IssueSystemWorkloadToken(
-		workloadidentity.SystemWorkloadTelemetryWriter,
-		workloadidentity.TokenOptions{
-			Audience: []string{Audience},
-			TTL:      tokenTTL,
-		})
-	if err != nil {
-		return "", fmt.Errorf("minting telemetry token: %w", err)
-	}
-
-	s.token = token
-	s.renewAt = now.Add(tokenTTL - tokenRefreshLeeway)
-
-	return token, nil
+// NewTokenSource returns the source a runner's telemetry client mints through:
+// telemetry writer tokens scoped to the coordinator's ingest. Its issuer is set
+// once the runner has connected.
+func NewTokenSource() *workloadidentity.SystemTokenSource {
+	return workloadidentity.NewSystemTokenSource(workloadidentity.SystemWorkloadTelemetryWriter, Audience)
 }
 
 // tokenRoundTripper attaches the workload token to every telemetry request.
@@ -112,7 +36,7 @@ func (s *IssuerTokenSource) Token() (string, error) {
 // request they always did and the credential is applied underneath.
 type tokenRoundTripper struct {
 	base   http.RoundTripper
-	source TokenSource
+	source workloadidentity.TokenSource
 }
 
 func (t *tokenRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -142,7 +66,7 @@ type ClientConfig struct {
 	CACertPEM []byte
 
 	// TokenSource supplies the system workload token.
-	TokenSource TokenSource
+	TokenSource workloadidentity.TokenSource
 
 	// Timeout bounds a single telemetry request.
 	Timeout time.Duration
@@ -159,6 +83,28 @@ type Client struct {
 	HTTP *http.Client
 
 	transport *http3.Transport
+}
+
+// Operational returns a client for the runner's operational metrics writer.
+// It shares this client's transport and credential and marks every request
+// with StreamOperational, so the coordinator can tell those batches from the
+// per-sandbox series sent through HTTP.
+func (c *Client) Operational() *http.Client {
+	return &http.Client{
+		Transport: &streamRoundTripper{base: c.HTTP.Transport, stream: StreamOperational},
+		Timeout:   c.HTTP.Timeout,
+	}
+}
+
+type streamRoundTripper struct {
+	base   http.RoundTripper
+	stream string
+}
+
+func (t *streamRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	clone.Header.Set(StreamHeader, t.stream)
+	return t.base.RoundTrip(clone)
 }
 
 // Close tears down the underlying QUIC connections.

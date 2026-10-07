@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/etcdtest"
 )
 
@@ -408,7 +409,10 @@ func TestEtcdStore_UpdateEntity(t *testing.T) {
 			r.Len(x.Events, 1)
 			r.Equal(x.Events[0].Type, mvccpb.DELETE)
 			r.Equal(x.Events[0].PrevKv.Value, []byte(entity.Id()))
-			// This delete should be for the session-based index, not the main entity one
+			// This delete should be for the session-based index, not the main
+			// entity one: the presence marker the session's write left beside
+			// the durable entry. The entityserver delivers it to watchers as an
+			// update, since the entity lives on (see the index layout comment).
 			r.Contains(string(x.Events[0].PrevKv.Key), base58.Encode(sid))
 		}
 
@@ -916,6 +920,85 @@ func TestListIndexPageAtRevisionPinsContinuationPages(t *testing.T) {
 		require.Contains(t, got, id, "the pinned scan must retain entries deleted after its head")
 	}
 	require.NotContains(t, got, createdAfterHead.Id(), "the pinned scan must exclude entries created after its head")
+}
+
+// TestListIndexPageAtRevisionSessionEntityOnPageBoundary covers an entity that
+// holds more than one key in one index: its match, and a presence marker for
+// each session holding attributes on it. Whatever page size puts the match
+// last on a page, the continuation must not return the entity again from a
+// marker (MIR-1990), and the total counts matches only.
+func TestListIndexPageAtRevisionSessionEntityOnPageBoundary(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setupTestEtcdStore(t)
+
+	durable, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-session-page"),
+		Ref(Type, TypeStr),
+		Bool(Index, true),
+	))
+	require.NoError(t, err)
+	sessionAttr, err := store.CreateEntity(ctx, New(
+		String(Ident, "test-session-page-state"),
+		Ref(Type, TypeStr),
+		Bool(Session, true),
+	))
+	require.NoError(t, err)
+
+	index := String(durable.Id(), "value")
+	state := String(sessionAttr.Id(), "ready")
+
+	var want []Id
+	for i := range 4 {
+		created, err := store.CreateEntity(ctx, New(
+			index,
+			String(Ident, fmt.Sprintf("session-page-%d", i)),
+		))
+		require.NoError(t, err)
+		want = append(want, created.Id())
+	}
+
+	first, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), first) })
+	second, err := store.CreateSession(ctx, 30)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), second) })
+
+	// Storing a session attribute is what gives the entity a presence marker
+	// beside its durable match.
+	marked, err := store.CreateEntity(ctx, New(
+		index,
+		state,
+		String(Ident, "session-page-marked"),
+	), WithSession(first))
+	require.NoError(t, err)
+	want = append(want, marked.Id())
+	_, err = store.UpdateEntity(ctx, marked.Id(), New(state), WithSession(second))
+	require.NoError(t, err)
+
+	walk := func(t *testing.T, attr Attr, limit int64) (int64, []Id) {
+		t.Helper()
+		page, err := store.ListIndexPageAtRevision(ctx, attr, "", limit, 0)
+		require.NoError(t, err)
+		total := page.Total
+		got := append([]Id(nil), page.Ids...)
+		for page.Cursor != "" {
+			page, err = store.ListIndexPageAtRevision(ctx, attr, page.Cursor, limit, page.Revision)
+			require.NoError(t, err)
+			got = append(got, page.Ids...)
+		}
+		return total, got
+	}
+
+	// Every page size from 1 to the entity count, so one of them lands the
+	// marked entity's match on a boundary wherever it sorts.
+	for limit := int64(1); limit <= int64(len(want)); limit++ {
+		t.Run(fmt.Sprintf("durable limit %d", limit), func(t *testing.T) {
+			total, got := walk(t, index, limit)
+			require.Equal(t, int64(len(want)), total, "a presence marker is not a match")
+			require.ElementsMatch(t, want, got, "each entity should be listed exactly once across pages")
+		})
+	}
 }
 
 // TestWatchIndexFromRevision verifies that starting a watch at a prior revision
@@ -3042,6 +3125,66 @@ func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
 // revision, an entity written between them comes back carrying a value the
 // index has not caught up to, which is indistinguishable from the stale-index
 // bug MIR-1735 fixed and would send a caller hunting the wrong defect.
+// A pinned single read has to carry the entity's session attributes too, and
+// pinned at the same revision. The entity sync exporter reads every exported
+// entity this way, so a primary-key-only read would export a node without its
+// status for as long as the runner held its session.
+func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
+	store, _ := setupTestEtcdStore(t)
+	ctx := t.Context()
+
+	_, err := store.CreateEntity(ctx, New(
+		Ref(DBId, "test/session-status"),
+		String(Ident, "test/session-status"),
+		Ref(Type, TypeStr),
+		Bool(Session, true),
+	))
+	require.NoError(t, err)
+
+	session, err := store.CreateSession(ctx, 60)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.RevokeSession(context.Background(), session) })
+
+	created, err := store.CreateEntity(ctx, New(
+		Ref(DBId, "node/pinned"),
+		String(Ident, "node/pinned"),
+		String("test/session-status", "ready"),
+	), WithSession(session))
+	require.NoError(t, err)
+	withStatus := created.GetRevision()
+
+	pinned, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), withStatus)
+	require.NoError(t, err)
+	status, ok := pinned.Get("test/session-status")
+	require.True(t, ok, "the session attribute is part of the entity at that revision")
+	assert.Equal(t, "ready", status.Value.String())
+
+	// Once the session is gone the attribute is gone with it, and a read at
+	// that later revision says so, while the earlier revision still has it.
+	require.NoError(t, store.RevokeSession(ctx, session))
+	require.Eventually(t, func() bool {
+		current, err := store.GetEntity(ctx, Id("node/pinned"))
+		if err != nil {
+			return false
+		}
+		_, still := current.Get("test/session-status")
+		return !still
+	}, 5*time.Second, 50*time.Millisecond)
+	current, err := store.GetEntity(ctx, Id("node/pinned"))
+	require.NoError(t, err)
+	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.GetRevision()+1)
+	require.NoError(t, err)
+	_, still := later.Get("test/session-status")
+	require.False(t, still)
+	pinned, err = store.GetEntityAtRevision(ctx, Id("node/pinned"), withStatus)
+	require.NoError(t, err)
+	_, ok = pinned.Get("test/session-status")
+	require.True(t, ok)
+
+	_, err = store.GetEntityAtRevision(ctx, Id("node/missing"), withStatus)
+	require.ErrorIs(t, err, cond.ErrNotFound{})
+}
+
 func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 	t.Run("reads the value the entity carried at that revision", func(t *testing.T) {
 		store, _ := setupTestEtcdStore(t)
@@ -3064,7 +3207,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 
 		ids := []Id{Id(created.Id())}
 
-		pinned, undecodable, err := store.getEntities(t.Context(), ids, false, before)
+		pinned, undecodable, err := store.getEntities(t.Context(), ids, before)
 		require.NoError(t, err)
 		require.Len(t, pinned, 1)
 		require.NotNil(t, pinned[0], "the entity existed at that revision")
@@ -3074,7 +3217,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		assert.Equal(t, "before", doc.Value.String(),
 			"a pinned read must see the entity as it was, not as it is")
 
-		current, _, err := store.getEntities(t.Context(), ids, false, 0)
+		current, _, err := store.getEntities(t.Context(), ids, 0)
 		require.NoError(t, err)
 		require.Len(t, current, 1)
 		require.NotNil(t, current[0])
@@ -3098,7 +3241,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		// slice and silently shift every entity after it onto the wrong id.
 		ids := []Id{"missing-before", Id(created.Id()), "missing-after"}
 
-		entities, undecodable, err := store.getEntities(t.Context(), ids, false, 0)
+		entities, undecodable, err := store.getEntities(t.Context(), ids, 0)
 		require.NoError(t, err)
 		require.Len(t, entities, 3)
 		assert.Nil(t, entities[0])
@@ -3122,7 +3265,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 		require.NoError(t, err)
 
 		entities, _, err := store.getEntities(t.Context(),
-			[]Id{Id(first.Id()), Id(later.Id())}, false, first.GetRevision())
+			[]Id{Id(first.Id()), Id(later.Id())}, first.GetRevision())
 		require.NoError(t, err)
 		require.Len(t, entities, 2)
 		assert.NotNil(t, entities[0])
@@ -3132,7 +3275,7 @@ func TestEtcdStore_getEntitiesAtRevision(t *testing.T) {
 	t.Run("returns an indexable map for an empty request", func(t *testing.T) {
 		store, _ := setupTestEtcdStore(t)
 
-		entities, undecodable, err := store.getEntities(t.Context(), nil, false, 0)
+		entities, undecodable, err := store.getEntities(t.Context(), nil, 0)
 		require.NoError(t, err)
 		assert.Empty(t, entities)
 

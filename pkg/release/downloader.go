@@ -94,17 +94,18 @@ func (d *assetDownloader) Download(ctx context.Context, artifact Artifact, opts 
 		}
 	}
 
-	// Extract the binary
-	binaryPath, err := d.extractTarGz(archivePath, opts.TargetDir)
+	staged, err := d.extractTarGz(archivePath, opts.TargetDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract binary: %w", err)
+		return nil, fmt.Errorf("failed to extract archive: %w", err)
 	}
 
 	return &DownloadedArtifact{
-		Artifact: artifact,
-		Path:     binaryPath,
-		Checksum: expectedChecksum,
-		Size:     size,
+		Artifact:  artifact,
+		Path:      staged.miren,
+		BundleDir: staged.dir,
+		Bundled:   staged.bundled,
+		Checksum:  expectedChecksum,
+		Size:      size,
 	}, nil
 }
 
@@ -271,37 +272,52 @@ func (d *assetDownloader) verifyChecksum(filePath, expectedChecksum string) erro
 	return nil
 }
 
-// extractTarGz extracts the miren binary from a tar.gz archive
-func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error) {
+// stagedArchive is an archive extracted under dir, ready for the installer.
+type stagedArchive struct {
+	dir     string
+	miren   string
+	bundled []string
+}
+
+// extractTarGz stages every regular file in the archive under a fresh
+// directory in targetDir. The base package carries containerd, runc and the
+// shim beside miren, and an upgrade that kept only miren would leave the
+// host on the containerd it was first installed with. Symlinks and hard
+// links are dropped, and the archive must contain a miren binary.
+func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (*stagedArchive, error) {
 	file, err := os.Open(tarPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer file.Close()
 
 	gzReader, err := gzip.NewReader(file)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer gzReader.Close()
 
 	tarReader := tar.NewReader(gzReader)
 
-	// Create temp extraction directory
-	extractDir, err := os.MkdirTemp(targetDir, "extract-*")
+	stageDir, err := os.MkdirTemp(targetDir, "miren-stage-*")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer os.RemoveAll(extractDir)
+	staged := &stagedArchive{dir: stageDir}
+	defer func() {
+		if staged.miren == "" {
+			os.RemoveAll(stageDir)
+		}
+	}()
 
-	// Extract all files
+	var mirenPath string
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
 		// Entries naming the extraction root itself carry nothing to write.
@@ -309,47 +325,41 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 			continue
 		}
 
-		targetPath, err := tarx.SafeWritePath(extractDir, header.Name)
+		targetPath, err := tarx.SafeWritePath(stageDir, header.Name)
 		if err != nil {
-			return "", fmt.Errorf("invalid tar entry %q: %w", header.Name, err)
+			return nil, fmt.Errorf("invalid tar entry %q: %w", header.Name, err)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(targetPath, 0755); err != nil {
-				return "", err
+				return nil, err
 			}
 		case tar.TypeReg:
-			// Create directory if needed
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return "", err
+				return nil, err
 			}
-
 			outFile, err := os.Create(targetPath)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
-
 			if _, err := io.Copy(outFile, tarReader); err != nil {
 				outFile.Close()
-				return "", err
+				return nil, err
 			}
 			outFile.Close()
-
-			// Set permissions
 			if err := os.Chmod(targetPath, os.FileMode(header.Mode)); err != nil {
-				return "", err
+				return nil, err
 			}
 
-			// If this is the miren binary, remember its path
-			if filepath.Base(targetPath) == "miren" {
-				// Move to final location
-				finalPath := filepath.Join(targetDir, "miren.new")
-				if err := os.Rename(targetPath, finalPath); err != nil {
-					return "", err
-				}
-				// Permissions already set from tar header.Mode above
-				return finalPath, nil
+			rel, err := filepath.Rel(stageDir, targetPath)
+			if err != nil {
+				return nil, err
+			}
+			if rel == "miren" {
+				mirenPath = targetPath
+			} else {
+				staged.bundled = append(staged.bundled, rel)
 			}
 		case tar.TypeSymlink, tar.TypeLink:
 			// Skip symlinks and hard links for security
@@ -357,5 +367,9 @@ func (d *assetDownloader) extractTarGz(tarPath, targetDir string) (string, error
 		}
 	}
 
-	return "", fmt.Errorf("miren binary not found in archive")
+	if mirenPath == "" {
+		return nil, fmt.Errorf("miren binary not found in archive")
+	}
+	staged.miren = mirenPath
+	return staged, nil
 }

@@ -640,13 +640,11 @@ func (env *CloudEnv) restartServerWithRegistration(t *testing.T) {
 	t.Helper()
 	t.Log("restarting miren server to pick up registration...")
 
-	// Stop current server
+	// `dev-server start` rotates the previous server's log aside, so the
+	// "Miren server started" line `wait-ready` looks for can only come from
+	// the new process, and the old server's shutdown stays readable at
+	// /tmp/miren-server.log.prev if the restart goes wrong.
 	env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server stop")
-
-	// Truncate the log file so `dev-server wait-ready` doesn't match the
-	// old "Miren server started" line from the previous startup.
-	env.m.RunCmdAsRoot("bash", "-c", ": > /tmp/miren-server.log")
-
 	env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server start")
 
 	// Wait for server to be ready
@@ -669,7 +667,6 @@ func (env *CloudEnv) restartServerWithRegistration(t *testing.T) {
 	t.Cleanup(func() {
 		// Restart server after registration files are removed to restore original state
 		env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server stop")
-		env.m.RunCmdAsRoot("bash", "-c", ": > /tmp/miren-server.log")
 		env.m.RunCmdAsRoot("bash", "-c", "hack/dev-server start")
 		env.m.RunCmdAsRoot("hack/dev-server", "wait-ready", "30")
 	})

@@ -148,6 +148,7 @@ func (s *PythonStack) Detect() bool {
 
 func (s *PythonStack) Init(opts BuildOptions) {
 	s.SetCwd("/app")
+	s.detectGitDeps()
 
 	// Detect frameworks and libraries, store state for later use
 	s.hasDjango = s.detectPackage("django")
@@ -258,6 +259,7 @@ func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 	base = s.addAppUser(base)
 
 	h := &highlevelBuilder{opts}
+	base = s.withGitIfNeeded(h, base)
 	base = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
 
 	// Create pip cache mount
@@ -282,6 +284,7 @@ func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 		// Install dependencies with cache
 		state = pipState.Dir("/app").Run(
 			llb.Shlex("pip install -r requirements.txt"),
+			h.rootDepAuth(),
 			llb.AddMount("/root/.cache/pip", pipCache, llb.AsPersistentCacheDir("pip", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Python dependencies with pip"),
 		).Root()
@@ -303,6 +306,7 @@ func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 		// Install pipenv and dependencies with cache
 		state = state.Dir("/app").Run(
 			llb.Shlex("pipenv install --deploy"),
+			h.appDepAuth(),
 			llb.AddMount("/home/app/.cache/pip", userPipCache, llb.AsPersistentCacheDir("user-pip", llb.CacheMountShared)),
 			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with pipenv"),
@@ -325,6 +329,7 @@ func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 		// Install poetry and dependencies with cache
 		state = state.Dir("/app").Run(
 			llb.Shlex("poetry install --no-root"),
+			h.appDepAuth(),
 			llb.AddMount("/home/app/.cache/pip", userPipCache, llb.AsPersistentCacheDir("user-pip", llb.CacheMountShared)),
 			llb.User("app"),
 			llb.WithCustomName("[phase] Installing Python dependencies with poetry"),
@@ -346,6 +351,7 @@ func (s *PythonStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 		// Install dependencies with uv sync
 		state = s.chownApp(state).Dir("/app").Run(
 			llb.Shlex("uv sync --no-dev"),
+			h.appDepAuth(),
 			llb.AddMount("/home/app/.cache", llb.Scratch().File(
 				llb.Mkdir("/uv", 0777, llb.WithParents(true)),
 			), llb.AsPersistentCacheDir("user-uv", llb.CacheMountShared)),

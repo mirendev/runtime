@@ -71,6 +71,11 @@ type RustStack struct {
 	// Cached Cargo.toml for dependency detection
 	cargoTomlContent []byte
 
+	// splitDeps is true when the dependencies can be compiled from Cargo.toml
+	// and Cargo.lock alone, against placeholder sources. Set in Init().
+	splitDeps bool
+	hasLib    bool
+
 	// Detected environment variable requirements
 	requiredEnvVars []EnvVarRequirement
 }
@@ -116,6 +121,13 @@ func (s *RustStack) Init(opts BuildOptions) {
 		s.Event("file", "Cargo.lock", "Found Cargo.lock")
 	}
 
+	s.hasLib = s.hasFile("src/lib.rs")
+	if reason := s.depsSplitBlocker(cargo); reason != "" {
+		s.Event("config", "rust-deps", "Compiling dependencies with the application ("+reason+")")
+	} else {
+		s.splitDeps = true
+	}
+
 	// Detect required environment variables
 	s.requiredEnvVars = s.detectEnvVars()
 	for _, ev := range s.requiredEnvVars {
@@ -128,7 +140,104 @@ type cargoToml struct {
 	Package struct {
 		Name    string `toml:"name"`
 		Edition string `toml:"edition"`
+		Build   any    `toml:"build"`
 	} `toml:"package"`
+
+	// Pointers to empty structs so a table that's present but empty, like a
+	// bare [workspace], still decodes as non-nil.
+	Workspace *struct{} `toml:"workspace"`
+	Lib       *struct{} `toml:"lib"`
+	Bin       []any     `toml:"bin"`
+	Bench     []any     `toml:"bench"`
+	Test      []any     `toml:"test"`
+	Example   []any     `toml:"example"`
+}
+
+// cargoLock is the slice of Cargo.lock that depsSplitBlocker reads.
+type cargoLock struct {
+	Package []struct {
+		Name   string `toml:"name"`
+		Source string `toml:"source"`
+	} `toml:"package"`
+}
+
+// cargoConfig is the slice of .cargo/config.toml that localCargoSource reads.
+type cargoConfig struct {
+	Source map[string]struct {
+		Directory     string `toml:"directory"`
+		LocalRegistry string `toml:"local-registry"`
+	} `toml:"source"`
+}
+
+// localCargoSource reports a cargo config that replaces a registry with files
+// from the tree, as `cargo vendor` sets up, or "" when there is none. The
+// config reaches the dependency step but the vendored files don't, so cargo
+// would fail there.
+func (s *RustStack) localCargoSource() string {
+	for _, name := range []string{".cargo/config.toml", ".cargo/config"} {
+		content, err := s.readFile(name)
+		if err != nil {
+			continue
+		}
+		var cfg cargoConfig
+		if err := toml.Unmarshal(content, &cfg); err != nil {
+			return name + " did not parse"
+		}
+		for _, src := range cfg.Source {
+			if src.Directory != "" || src.LocalRegistry != "" {
+				return "vendored dependencies"
+			}
+		}
+	}
+	return ""
+}
+
+// depsSplitBlocker reports why the dependencies can't be compiled against
+// placeholder sources, or "" when they can. The placeholder build only stands
+// in for a single package with cargo's default src/main.rs (and optional
+// src/lib.rs) layout; anything else needs the real tree for cargo to resolve
+// the manifest.
+func (s *RustStack) depsSplitBlocker(cargo *cargoToml) string {
+	if cargo == nil {
+		return "Cargo.toml did not parse"
+	}
+	if cargo.Workspace != nil || s.packageName == "" {
+		return "cargo workspace"
+	}
+	if cargo.Package.Build != nil || s.hasFile("build.rs") {
+		return "build script"
+	}
+	// Cargo checks that every declared target's source exists when it loads
+	// the manifest, so even a name-only [[bench]] would fail the stub build.
+	if cargo.Lib != nil || len(cargo.Bin) > 0 || len(cargo.Bench) > 0 ||
+		len(cargo.Test) > 0 || len(cargo.Example) > 0 || !s.hasFile("src/main.rs") {
+		return "custom target layout"
+	}
+
+	if reason := s.localCargoSource(); reason != "" {
+		return reason
+	}
+
+	content, err := s.readFile("Cargo.lock")
+	if err != nil {
+		return "no Cargo.lock"
+	}
+	var lock cargoLock
+	if err := toml.Unmarshal(content, &lock); err != nil {
+		return "Cargo.lock did not parse"
+	}
+	// Registry and git packages carry a source; the app itself doesn't. A
+	// second sourceless package is a path dependency, which lives in the tree.
+	local := 0
+	for _, p := range lock.Package {
+		if p.Source == "" {
+			local++
+		}
+	}
+	if local > 1 {
+		return "path dependencies"
+	}
+	return ""
 }
 
 func (s *RustStack) parseCargoToml() *cargoToml {
@@ -167,11 +276,6 @@ func (s *RustStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 
 	h := &highlevelBuilder{opts}
 
-	base = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
-
-	// Copy the application code
-	state := h.copyApp(base, localCtx)
-
 	// Determine the binary name
 	binaryName := s.packageName
 	if binaryName == "" {
@@ -184,7 +288,7 @@ func (s *RustStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 	// Cargo converts hyphens to underscores in binary names (e.g. my-app -> my_app)
 	normalizedName := strings.ReplaceAll(binaryName, "-", "_")
 
-	// Build the application and copy it out of the cache dir.
+	// Build the application and copy it out of the target dir.
 	// Try the normalized name first (with underscores), then fall back to the original name.
 	var cpCmd string
 	if normalizedName != binaryName {
@@ -193,19 +297,77 @@ func (s *RustStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 		cpCmd = fmt.Sprintf("cp target/release/%s /bin/app", binaryName)
 	}
 
-	state = state.Dir("/app").Run(
-		llb.Args([]string{"/bin/sh", "-c",
-			fmt.Sprintf("%s && %s", s.buildCommand(), cpCmd)}),
-		h.CacheMount("/usr/local/cargo/registry"),
-		h.CacheMount("/app/target"),
-		llb.WithCustomName("[phase] Building Rust application"),
-	).Root()
+	var state llb.State
+	if s.splitDeps {
+		// The compiled dependencies live in the builder's target dir, which is
+		// far too big to ship, so only the binary crosses over to an image laid
+		// out like the single-step build's.
+		builder := s.compileDeps(h, base, localCtx)
+		builder = h.copyApp(builder, localCtx)
+		builder = builder.Dir("/app").Run(
+			llb.Args([]string{"/bin/sh", "-c",
+				fmt.Sprintf("%s && %s", s.buildCommand(), cpCmd)}),
+			llb.WithCustomName("[phase] Building Rust application"),
+		).Root()
+
+		state = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
+		state = h.copyApp(state, localCtx)
+		state = state.File(llb.Copy(builder, "/bin/app", "/bin/app", &llb.CopyInfo{}),
+			llb.WithCustomName("[phase] Copying Rust binary"))
+	} else {
+		state = h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
+		state = h.copyApp(state, localCtx)
+		state = state.Dir("/app").Run(
+			llb.Args([]string{"/bin/sh", "-c",
+				fmt.Sprintf("%s && %s", s.buildCommand(), cpCmd)}),
+			h.CacheMount("/usr/local/cargo/registry"),
+			h.CacheMount("/app/target"),
+			// No separate dependency step on this path, so the build fetches.
+			h.rootDepAuth(),
+			llb.WithCustomName("[phase] Building Rust application"),
+		).Root()
+	}
 
 	state = state.AddEnv("APP", "/bin/app")
 
 	state = s.applyOnBuild(state, opts)
 
 	return &state, nil
+}
+
+// compileDeps builds the dependencies against placeholder sources, in layers
+// keyed on Cargo.toml and Cargo.lock alone, so a source edit reuses them.
+// Layers rather than cache mounts because the builder drops cache mounts after
+// 48 hours untouched; layers stay until the shared size cap evicts them.
+//
+// The placeholders are newer than the real sources copyApp brings in later
+// (it pins their mtime to 2021), so cargo would take the stub build as current.
+// buildCommand's clean of the app's own package is what forces the rebuild.
+func (s *RustStack) compileDeps(h *highlevelBuilder, cur, localCtx llb.State) llb.State {
+	cur = cur.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
+		// Cargo config and toolchain pins change how the dependencies build
+		// (registries, rustflags, the rustc itself), so they key this layer
+		// too. Without them the real build would recompile every dependency.
+		IncludePatterns: []string{
+			"Cargo.toml", "Cargo.lock",
+			".cargo/config.toml", ".cargo/config",
+			"rust-toolchain.toml", "rust-toolchain",
+		},
+		CreateDestPath: true,
+	}), llb.WithCustomName("[phase] Copying Cargo manifest, config, and toolchain"))
+
+	stubs := llb.Mkdir("/app/src", 0o755, llb.WithParents(true))
+	stubs = stubs.Mkfile("/app/src/main.rs", 0o644, []byte("fn main() {}\n"))
+	if s.hasLib {
+		stubs = stubs.Mkfile("/app/src/lib.rs", 0o644, nil)
+	}
+	cur = cur.File(stubs, llb.WithCustomName("[phase] Writing placeholder Rust sources"))
+
+	return cur.Dir("/app").Run(
+		llb.Shlex("cargo build --release"),
+		h.rootDepAuth(),
+		llb.WithCustomName("[phase] Compiling Rust dependencies"),
+	).Root()
 }
 
 // buildCommand force-rebuilds the workspace crate to dodge the buildkit-mtime / cargo-fingerprint staleness bug (MIR-1027).

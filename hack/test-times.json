@@ -1,669 +1,1090 @@
 {
   "summary": {
-    "harness_overhead_s": 2.98,
-    "total_test_time_s": 845.34,
-    "package_count": 112,
-    "passed": 112,
-    "failed": 0
+    "harness_overhead_s": 0,
+    "total_test_time_s": 802.6,
+    "package_count": 180,
+    "passed": 180,
+    "failed": 0,
+    "source": "CI run 36931700728 (green); package/test elapsed time, excluding harness startup"
   },
   "packages": [
     {
-      "package": "miren.dev/runtime/controllers/service",
-      "elapsed_s": 73.05,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
       "package": "miren.dev/runtime/controllers/sandbox",
-      "elapsed_s": 64.59,
+      "elapsed_s": 107.0,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/controllers/integration",
-      "elapsed_s": 40.69,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/victoriametrics",
-      "elapsed_s": 35.07,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/observability",
-      "elapsed_s": 32.06,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/deployment",
-      "elapsed_s": 31.25,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/addon/postgresql",
-      "elapsed_s": 29.77,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/sandbox/watchdogtest",
-      "elapsed_s": 28.53,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/etcd",
-      "elapsed_s": 25.07,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/buildkit",
-      "elapsed_s": 23.01,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/victorialogs",
-      "elapsed_s": 21.64,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/outboard",
-      "elapsed_s": 18.54,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/metrics",
-      "elapsed_s": 17.96,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/runner",
-      "elapsed_s": 13.77,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/activator",
-      "elapsed_s": 11.96,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/discovery",
-      "elapsed_s": 7.85,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/coordinate",
-      "elapsed_s": 7.54,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/rpc",
-      "elapsed_s": 7.02,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/cli/commands",
-      "elapsed_s": 6.93,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/containerd",
-      "elapsed_s": 6.63,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/controller",
-      "elapsed_s": 6.42,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/clientconfig",
-      "elapsed_s": 6.09,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity",
-      "elapsed_s": 5.63,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/certificate",
-      "elapsed_s": 5.11,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/addon",
-      "elapsed_s": 5.11,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/cli",
-      "elapsed_s": 5.06,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/anywhere",
-      "elapsed_s": 4.79,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/oidcauth",
-      "elapsed_s": 4.69,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/logs",
-      "elapsed_s": 4.62,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/cloudauth",
-      "elapsed_s": 4.31,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/hey/requester",
-      "elapsed_s": 4.28,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/build",
-      "elapsed_s": 4.21,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity/testutils",
-      "elapsed_s": 4.16,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/rpc/stream",
-      "elapsed_s": 4.15,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/buildkit",
-      "elapsed_s": 4.12,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/exec_proxy",
-      "elapsed_s": 4.12,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/entityserver",
-      "elapsed_s": 4.08,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/httpingress",
-      "elapsed_s": 4.08,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/dns",
-      "elapsed_s": 4.06,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/workloadidentity",
-      "elapsed_s": 3.99,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/diskio",
-      "elapsed_s": 3.92,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/network",
-      "elapsed_s": 3.89,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/runner",
-      "elapsed_s": 3.86,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/deployment",
-      "elapsed_s": 3.85,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/sandboxpool",
-      "elapsed_s": 3.79,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/scheduler",
-      "elapsed_s": 3.78,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/admin",
-      "elapsed_s": 3.77,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/app",
-      "elapsed_s": 3.77,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/servers/exec",
-      "elapsed_s": 3.76,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/api/ingress",
-      "elapsed_s": 3.75,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/disk",
-      "elapsed_s": 3.71,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/ephemeral",
-      "elapsed_s": 3.71,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/nodehealth",
-      "elapsed_s": 3.71,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/addon/memcache",
-      "elapsed_s": 3.69,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity/indexwatch",
-      "elapsed_s": 3.69,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/saga",
-      "elapsed_s": 3.69,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/ocireg",
-      "elapsed_s": 3.67,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/addon",
-      "elapsed_s": 3.67,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/stackbuild",
-      "elapsed_s": 3.66,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/api/core/core_v1alpha",
-      "elapsed_s": 3.65,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/netdb",
-      "elapsed_s": 3.65,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/addon/rabbitmq",
-      "elapsed_s": 3.64,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/ipalloc",
-      "elapsed_s": 3.63,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/version",
-      "elapsed_s": 3.63,
+      "package": "miren.dev/runtime/controllers/service",
+      "elapsed_s": 73.6,
       "status": "pass",
       "returncode": 0
     },
     {
       "package": "miren.dev/runtime/pkg/addon/mysql",
-      "elapsed_s": 3.63,
+      "elapsed_s": 55.0,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/model",
-      "elapsed_s": 3.62,
+      "package": "miren.dev/runtime/components/victorialogs",
+      "elapsed_s": 50.2,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/addon/valkey",
+      "package": "miren.dev/runtime/pkg/addon/postgresql",
+      "elapsed_s": 44.8,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/integration",
+      "elapsed_s": 43.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/observability",
+      "elapsed_s": 40.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/etcd",
+      "elapsed_s": 38.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/deployment",
+      "elapsed_s": 38.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/appmetrics",
+      "elapsed_s": 32.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/victoriametrics",
+      "elapsed_s": 30.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/rabbitmq",
+      "elapsed_s": 25.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/buildkit",
+      "elapsed_s": 24.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/sandbox/watchdogtest",
+      "elapsed_s": 22.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/keyrotation",
+      "elapsed_s": 16.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/metrics",
+      "elapsed_s": 14.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/cli/commands",
+      "elapsed_s": 10.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/coordinate",
+      "elapsed_s": 10.3,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/rpc",
+      "elapsed_s": 10.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/build",
+      "elapsed_s": 8.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/activator",
+      "elapsed_s": 8.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/x/workloadid",
+      "elapsed_s": 7.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/outboard",
+      "elapsed_s": 6.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/runner",
+      "elapsed_s": 5.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/stackbuild",
+      "elapsed_s": 4.3,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entitysync",
+      "elapsed_s": 4.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/runnerlifecycle",
+      "elapsed_s": 4.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/secret",
+      "elapsed_s": 3.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/secret/cluster",
       "elapsed_s": 3.6,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/concurrency",
-      "elapsed_s": 3.59,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/ephemeral",
-      "elapsed_s": 3.59,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/api/entityserver",
-      "elapsed_s": 3.53,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/controllers/artifact",
-      "elapsed_s": 3.53,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity/enttest",
-      "elapsed_s": 3.51,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity/cmd/schemagen",
-      "elapsed_s": 3.5,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/ui",
-      "elapsed_s": 3.5,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/api/compute",
-      "elapsed_s": 3.49,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/api/core",
-      "elapsed_s": 3.48,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/ipdiscovery",
-      "elapsed_s": 3.45,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/containerdx",
-      "elapsed_s": 3.44,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/entity/schema",
-      "elapsed_s": 3.43,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/progress/progressui",
-      "elapsed_s": 3.42,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/waf",
-      "elapsed_s": 3.42,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/rpc/io",
-      "elapsed_s": 3.41,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/auth",
+      "package": "miren.dev/runtime/pkg/saga",
       "elapsed_s": 3.4,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/oidc",
-      "elapsed_s": 3.38,
+      "package": "miren.dev/runtime/pkg/entity",
+      "elapsed_s": 3.3,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/appconfig",
-      "elapsed_s": 3.29,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/cel",
-      "elapsed_s": 3.29,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/deploygating",
-      "elapsed_s": 3.29,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/tarx",
-      "elapsed_s": 3.28,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/connectors",
-      "elapsed_s": 3.26,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/progress",
-      "elapsed_s": 3.25,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/caauth",
-      "elapsed_s": 3.22,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/components/autotls",
-      "elapsed_s": 3.21,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/labs",
-      "elapsed_s": 3.21,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/rbac",
-      "elapsed_s": 3.21,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/slogout",
-      "elapsed_s": 3.21,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/snapshot",
+      "package": "miren.dev/runtime/pkg/workloadidentity",
       "elapsed_s": 3.2,
       "status": "pass",
       "returncode": 0
     },
     {
-      "package": "miren.dev/runtime/pkg/imagerefs",
-      "elapsed_s": 3.19,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/enrolltoken",
-      "elapsed_s": 3.18,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/logfilter",
-      "elapsed_s": 3.18,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/serverconfig",
-      "elapsed_s": 3.18,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/netutil",
-      "elapsed_s": 3.17,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/urlx",
-      "elapsed_s": 3.17,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/release",
-      "elapsed_s": 3.15,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/cel/mutation/common",
-      "elapsed_s": 3.13,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/tasks",
-      "elapsed_s": 3.13,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/joincode",
-      "elapsed_s": 3.12,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/slogrus",
-      "elapsed_s": 3.12,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/color",
-      "elapsed_s": 3.11,
-      "status": "pass",
-      "returncode": 0
-    },
-    {
-      "package": "miren.dev/runtime/pkg/shellwords",
+      "package": "miren.dev/runtime/components/containerd",
       "elapsed_s": 3.1,
       "status": "pass",
       "returncode": 0
     },
     {
+      "package": "miren.dev/runtime/controllers/run",
+      "elapsed_s": 2.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/clientconfig",
+      "elapsed_s": 2.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/discovery",
+      "elapsed_s": 2.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/app",
+      "elapsed_s": 2.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/serverlifecycle",
+      "elapsed_s": 1.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/deploylifecycle",
+      "elapsed_s": 1.8,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/diskio",
+      "elapsed_s": 1.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/entityserver",
+      "elapsed_s": 1.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/guardrails",
+      "elapsed_s": 1.3,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/cloudrpc",
+      "elapsed_s": 1.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/dns",
+      "elapsed_s": 1.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/uplink",
+      "elapsed_s": 1.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/certificate",
+      "elapsed_s": 1.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/httpingress",
+      "elapsed_s": 1.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/logs",
+      "elapsed_s": 1.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/hey/requester",
+      "elapsed_s": 1.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/oidcauth",
+      "elapsed_s": 1.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/rpc/stream",
+      "elapsed_s": 1.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/deployment",
+      "elapsed_s": 1.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/runner",
+      "elapsed_s": 1.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/scheduler",
+      "elapsed_s": 0.9,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/disk",
+      "elapsed_s": 0.8,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/buildkit",
+      "elapsed_s": 0.8,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/controller",
+      "elapsed_s": 0.8,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/cloudauth",
+      "elapsed_s": 0.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/netdb",
+      "elapsed_s": 0.7,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/ocireg",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/server",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/sandboxpool",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/version",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/testutils",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/admin",
+      "elapsed_s": 0.6,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/core",
+      "elapsed_s": 0.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/schemareindex",
+      "elapsed_s": 0.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/diskresolve",
+      "elapsed_s": 0.5,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/addon",
+      "elapsed_s": 0.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/deploymentattempts",
+      "elapsed_s": 0.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon",
+      "elapsed_s": 0.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/disk",
+      "elapsed_s": 0.4,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/model",
+      "elapsed_s": 0.3,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/routes",
+      "elapsed_s": 0.3,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/deploymentgc",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/ephemeral",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/nodehealth",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/network",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/containerboot",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/git",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/lifecyclesync",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/waf",
+      "elapsed_s": 0.2,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/app",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/ingress",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/sqlitedisk",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/artifact",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/indexgc",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/valkey",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/cmd/schemagen",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/export",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/indexwatch",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/ephemeral",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/oidc",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/otlpexport",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/progress",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/tarx",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/sandbox",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/sqlitebackup",
+      "elapsed_s": 0.1,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/compute",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/compute/compute_v1alpha",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/core/core_v1alpha",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/entityserver",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/api/run",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/appconfig",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/cli",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/autotls",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/base",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/distributedrunner",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/components/ipalloc",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/ingress",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/controllers/sagagc",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/hack/cmd/remote-write-dump",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/hack/cmd/testfmt",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/internal/remotewrite",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/addon/memcache",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/anywhere",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/apphealthsync",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/appspec",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/auth",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/boot",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/caauth",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/cel",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/cel/mutation/common",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/cloudapi",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/clusternetwork",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/clusterresources",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/color",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/concurrency",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/connectors",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/containerdx",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/containerenv",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/deployevents",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/deploygating",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/enrolltoken",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/enttest",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/entity/schema",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/exitrecord",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/grunge",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/idgen",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/imagerefs",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/ipdiscovery",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/joincode",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/labs",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/lbdmod",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/lbdmod/ctrbuild",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/logcount",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/logfilter",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/netutil",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/oncalendar",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/progress/progressui",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/rbac",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/registration",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/release",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/rpc/io",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/runnerconfig",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/secret",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/secret/keyring",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/serverconfig",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/serverinfo",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/servicelimits",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/shellwords",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/slogout",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/slogrus",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/snapshot",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/tasks",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/testutils",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
       "package": "miren.dev/runtime/pkg/theme",
-      "elapsed_s": 3.09,
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/ui",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/urlx",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/pkg/workloadroles",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/debug",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/exec",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/exec_proxy",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/metricspush",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/oidcbinding",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/runnertelemetry",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/serverinfo",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/serverlifecycle",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/servers/usage",
+      "elapsed_s": 0.0,
+      "status": "pass",
+      "returncode": 0
+    },
+    {
+      "package": "miren.dev/runtime/version",
+      "elapsed_s": 0.0,
       "status": "pass",
       "returncode": 0
     }

@@ -20,3 +20,35 @@ func TestSourceReadyFlipsOnce(t *testing.T) {
 func TestNewMintsDistinctInstances(t *testing.T) {
 	require.NotEqual(t, New().InstanceID(), New().InstanceID())
 }
+
+func TestSourceReportsComponents(t *testing.T) {
+	s := New()
+	require.Nil(t, s.Info().Components)
+
+	s.SetComponent("containerd", "v2.0.4")
+	s.SetComponent("runc", "")
+	s.SetComponent("", "x")
+	require.Equal(t, map[string]string{"containerd": "v2.0.4"}, s.Info().Components)
+
+	// Info hands out a copy; a caller editing it does not reach the source.
+	s.Info().Components["runc"] = "1.2.2"
+	require.Equal(t, map[string]string{"containerd": "v2.0.4"}, s.Info().Components)
+}
+
+func TestDetectInstallKind(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "")
+	t.Setenv(ContainerBootEnv, "")
+	if got := DetectInstallKind(); got != InstallKindUnknown {
+		t.Fatalf("with neither marker: got %q, want %q", got, InstallKindUnknown)
+	}
+	t.Setenv(ContainerBootEnv, "1")
+	if got := DetectInstallKind(); got != InstallKindContainer {
+		t.Fatalf("under container-boot: got %q, want %q", got, InstallKindContainer)
+	}
+	// systemd wins even inside a container: a systemd-in-docker test host
+	// restarts through systemctl.
+	t.Setenv("INVOCATION_ID", "abc")
+	if got := DetectInstallKind(); got != InstallKindSystemd {
+		t.Fatalf("under systemd: got %q, want %q", got, InstallKindSystemd)
+	}
+}

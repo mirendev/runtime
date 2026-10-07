@@ -65,9 +65,14 @@ func TestProbeAddress(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("adds default port if missing", func(t *testing.T) {
-		// This will fail to connect but tests port addition
-		err := probeAddress(ctx, "example.com")
-		assert.Error(t, err) // Expected to fail, just testing it doesn't panic
+		// TEST-NET-1 is reserved and never routed, so this can't connect, and
+		// the short timeout keeps the test fast. A real host made the test
+		// depend on that host not answering on 8443, which example.com
+		// eventually started doing.
+		ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer cancel()
+		err := probeAddress(ctx, "192.0.2.1")
+		assert.Error(t, err)
 	})
 
 	t.Run("handles invalid address", func(t *testing.T) {

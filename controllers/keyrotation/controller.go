@@ -191,9 +191,10 @@ func (c *Controller) rotationDue() (bool, error) {
 //
 // The order here is the load-bearing part. The ring reaches disk before it
 // reaches the backend, so no value is ever sealed with a key that would vanish
-// on a crash. The entity is written last, so the worst a crash leaves behind is
-// a ring with an unused extra key — harmless, and the next tick starts a
-// rotation that adopts it.
+// on a crash. The rotation is recorded before switching the live ring, so a
+// record-write failure leaves live writes on the old key and a retry can still
+// rewrap its versions. A crash between saving the ring and recording the
+// rotation can still leave an unrecorded rotation on disk.
 func (c *Controller) begin(ctx context.Context) error {
 	old := c.Backend.Keyring()
 	oldID := old.CurrentID()
@@ -207,8 +208,6 @@ func (c *Controller) begin(ctx context.Context) error {
 		return fmt.Errorf("persisting the rotated keyring: %w", err)
 	}
 
-	c.Backend.UseKeyring(rotated)
-
 	rec := &core_v1alpha.KeyRotation{
 		FromKey: oldID,
 		ToKey:   newKey.ID,
@@ -217,6 +216,8 @@ func (c *Controller) begin(ctx context.Context) error {
 	if _, err := c.EC.Create(ctx, idgen.GenNS("keyrot"), rec); err != nil {
 		return fmt.Errorf("recording the rotation: %w", err)
 	}
+
+	c.Backend.UseKeyring(rotated)
 
 	c.Log.Info("began cluster key rotation", "from_key", oldID, "to_key", newKey.ID)
 	return nil
@@ -239,6 +240,20 @@ func (c *Controller) advance(ctx context.Context, rec *core_v1alpha.KeyRotation)
 
 // rewrap moves a batch of versions off the retiring key.
 func (c *Controller) rewrap(ctx context.Context, rec *core_v1alpha.KeyRotation) error {
+	// The record may have committed even though Begin received an error and
+	// never switched the live ring. Resume from the ring saved before the write.
+	if c.Backend.Keyring().CurrentID() == rec.FromKey {
+		ring, err := keyring.Load(c.DataPath)
+		if err != nil {
+			return fmt.Errorf("loading the rotated keyring: %w", err)
+		}
+		if ring.CurrentID() != rec.ToKey {
+			return fmt.Errorf("persisted current key %s does not match rotation target %s", ring.CurrentID(), rec.ToKey)
+		}
+		c.Backend.UseKeyring(ring)
+		c.Log.Info("resumed cluster key rotation", "from_key", rec.FromKey, "to_key", rec.ToKey)
+	}
+
 	moved, err := c.Backend.RewrapBatch(ctx, rec.FromKey, rewrapBatch)
 	if moved > 0 {
 		rec.Rewrapped += int64(moved)

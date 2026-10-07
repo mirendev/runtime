@@ -123,6 +123,7 @@ func (s *NodeStack) Init(opts BuildOptions) {
 
 	// Parse package.json once for scripts and dependencies
 	s.parsePackageJSON()
+	s.detectGitDeps()
 
 	if s.scripts != nil {
 		if _, ok := s.scripts["start"]; ok {
@@ -176,9 +177,12 @@ func (s *NodeStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 	base = s.addAppUser(base)
 
 	h := &highlevelBuilder{opts}
+	base = s.withGitIfNeeded(h, base)
 
 	// Copy package files first for better caching
-	pkgFiles := []string{"package.json", "package-lock.json", "yarn.lock"}
+	// .npmrc carries registry settings, such as a private scope's URL and the
+	// ${NPM_TOKEN} that authenticates it, which the install needs.
+	pkgFiles := []string{"package.json", "package-lock.json", "yarn.lock", ".npmrc"}
 	depState := base.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
 		IncludePatterns: pkgFiles,
 	}), llb.WithCustomName("copy package files"))
@@ -193,6 +197,7 @@ func (s *NodeStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 
 		state = depState.Dir("/app").Run(
 			llb.Shlex("yarn install"),
+			h.rootDepAuth(),
 			llb.AddMount("/usr/local/share/.cache/yarn", yarnCache, llb.AsPersistentCacheDir("yarn", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Node.js dependencies with yarn"),
 		).Root()
@@ -207,6 +212,7 @@ func (s *NodeStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptio
 
 		state = depState.Dir("/app").Run(
 			llb.Shlex("npm install"),
+			h.rootDepAuth(),
 			llb.AddMount("/root/.npm", npmCache, llb.AsPersistentCacheDir("npm", llb.CacheMountShared)),
 			llb.WithCustomName("[phase] Installing Node.js dependencies with npm"),
 		).Root()

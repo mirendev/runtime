@@ -213,6 +213,7 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("provision-dedicated-postgresql").
+		Version(2).ResumesFrom(1).
 		Using(fw).
 		Using(cfg).
 		Action(GenerateCredentials).Undo(UndoGenerateCredentials).

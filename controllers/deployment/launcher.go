@@ -508,7 +508,10 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 
 		// A deploy is an explicit operator action — reset crash cooldown so
 		// stale backoff from a previous version doesn't block the new one.
-		if poolWithEntity.Pool.ConsecutiveCrashCount > 0 || !poolWithEntity.Pool.CooldownUntil.IsZero() {
+		// Only a deploy, though: the minutely resync of the same version also
+		// lands here, and resetting on it wipes the streak before it can grow,
+		// leaving a crash-looping app retrying about once a minute forever.
+		if versionChanged && (poolWithEntity.Pool.ConsecutiveCrashCount > 0 || !poolWithEntity.Pool.CooldownUntil.IsZero()) {
 			l.Log.Info("resetting crash cooldown on pool reuse",
 				"pool", poolWithEntity.Pool.ID,
 				"previous_crash_count", poolWithEntity.Pool.ConsecutiveCrashCount)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/otlpexport"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
@@ -27,14 +29,15 @@ type EtcdTLSConfig struct {
 }
 
 type CoordinatorConfig struct {
-	Address         string              `json:"address" yaml:"address"`
-	EtcdEndpoints   []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
-	Prefix          string              `json:"prefix" yaml:"prefix"`
-	Resolver        netresolve.Resolver `json:"resolver" yaml:"resolver"`
-	TempDir         string              `json:"temp_dir" yaml:"temp_dir"`
-	DataPath        string              `json:"data_path" yaml:"data_path"`
-	AdditionalNames []string            `json:"additional_names" yaml:"additional_names"`
-	IPs             *IPSet              `json:"ips" yaml:"ips"`
+	Address               string              `json:"address" yaml:"address"`
+	CoordinatorInternalIP netip.Addr          `json:"-" yaml:"-"`
+	EtcdEndpoints         []string            `json:"etcd_endpoints" yaml:"etcd_endpoints"`
+	Prefix                string              `json:"prefix" yaml:"prefix"`
+	Resolver              netresolve.Resolver `json:"resolver" yaml:"resolver"`
+	TempDir               string              `json:"temp_dir" yaml:"temp_dir"`
+	DataPath              string              `json:"data_path" yaml:"data_path"`
+	AdditionalNames       []string            `json:"additional_names" yaml:"additional_names"`
+	IPs                   *IPSet              `json:"ips" yaml:"ips"`
 
 	// ACME certificate configuration
 	AcmeEmail       string `json:"acme_email" yaml:"acme_email"`
@@ -67,6 +70,10 @@ type CoordinatorConfig struct {
 	VictoriametricsAddress string
 	VictorialogsAddress    string
 
+	// ManagedMetricsEnabled is whether the cluster has a remote-write
+	// destination, and so whether workloads may push metrics.
+	ManagedMetricsEnabled bool
+
 	// BuildKit is the persistent BuildKit component for container image builds
 	BuildKit *buildkit.Component
 
@@ -87,6 +94,18 @@ type CoordinatorConfig struct {
 	// wants saga history frozen during an investigation. A negative value
 	// falls back to the controller default.
 	SagaRetentionPeriod time.Duration
+
+	// DeploymentRetentionCount and DeploymentRetentionPeriod tune the
+	// deployment record retention GC. The count follows the app-version
+	// convention (<= 0 means the controller default); the period follows the
+	// saga one, where zero keeps records indefinitely and a negative value
+	// falls back to the default.
+	DeploymentRetentionCount  int
+	DeploymentRetentionPeriod time.Duration
+
+	// TracesDestination is where spans reported by CLI commands are relayed.
+	// Nil when the cluster exports no traces.
+	TracesDestination *otlpexport.Destination
 
 	// WorkloadIssuer signs workload identity tokens for sandbox containers
 	WorkloadIssuer *workloadidentity.Issuer

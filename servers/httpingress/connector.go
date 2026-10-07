@@ -14,7 +14,7 @@ import (
 )
 
 // connDataCookieName carries the opaque per-flow blob returned by a
-// connector's LoginURL. Encrypted by the shared oidcSessionManager.
+// connector's LoginURL. Encrypted by the shared sessionManager.
 const connDataCookieName = "miren_oidc_conn"
 
 // connectorHandler manages route protection backed by a connectors.Connector
@@ -271,7 +271,7 @@ func (s *Server) getOrCreateConnectorHandler(route *ingress_v1alpha.HttpRoute, b
 		return h, nil
 	}
 
-	handler, err := newConnectorHandler(route, &provider, s.oidcSessionManager, baseURL, s.Log)
+	handler, err := newConnectorHandler(route, &provider, s.sessionManagerFor(baseURL), baseURL, s.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -282,10 +282,8 @@ func (s *Server) getOrCreateConnectorHandler(route *ingress_v1alpha.HttpRoute, b
 
 func (s *Server) connectorMiddleware(route *ingress_v1alpha.HttpRoute, providerEntity entity.AttrGetter, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		scheme := requestScheme(r)
+		scheme := s.requestScheme(r)
 		baseURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-
-		s.oidcSessionManager.SetSecure(scheme == "https")
 
 		handler, err := s.getOrCreateConnectorHandler(route, baseURL, providerEntity)
 		if err != nil {

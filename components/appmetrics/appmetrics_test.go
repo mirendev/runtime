@@ -187,4 +187,5 @@ func TestScrapeSafetyLimits(t *testing.T) {
 	assert.Contains(t, scrapeConfig, "label_limit: 64")
 	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-promscrape.fileSDCheckInterval=5s")
 	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-remoteWrite.forcePromProto")
+	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-opentelemetry.usePrometheusNaming")
 }

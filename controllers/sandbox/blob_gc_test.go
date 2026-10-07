@@ -47,6 +47,23 @@ func createArtifact(t *testing.T, eac *entityserver_v1alpha.EntityAccessClient, 
 	return artID
 }
 
+func createAppVersion(t *testing.T, eac *entityserver_v1alpha.EntityAccessClient, staticArtifact string) entity.Id {
+	t.Helper()
+	name := idgen.GenNS("v")
+	versionID := entity.Id("app_version/" + name)
+	version := &core_v1alpha.AppVersion{
+		ID:             versionID,
+		Version:        name,
+		StaticArtifact: staticArtifact,
+	}
+	var rpcE entityserver_v1alpha.Entity
+	rpcE.SetId(versionID.String())
+	rpcE.SetAttrs(entity.New(entity.DBId, versionID, version.Encode).Attrs())
+	_, err := eac.Put(context.Background(), &rpcE)
+	require.NoError(t, err)
+	return versionID
+}
+
 func createBlobFile(t *testing.T, blobsDir, digest string, modTime time.Time) {
 	t.Helper()
 	path := filepath.Join(blobsDir, digest)
@@ -110,6 +127,36 @@ func TestRunBlobGC(t *testing.T) {
 		r.NoError(err)
 		r.Equal([]string{"sha256:orphan"}, result.DeletedBlobs)
 		r.Equal(3, result.RetainedBlobs)
+	})
+
+	t.Run("keeps static artifacts referenced by app versions", func(t *testing.T) {
+		r := require.New(t)
+		tmpDir := t.TempDir()
+		blobsDir := filepath.Join(tmpDir, "registry", "blobs")
+		r.NoError(os.MkdirAll(blobsDir, 0755))
+
+		staticDigest := "sha256:static"
+		versionID := createAppVersion(t, eac, staticDigest)
+		createBlobFile(t, blobsDir, staticDigest, oldTime)
+		createBlobFile(t, blobsDir, "sha256:orphan-static", oldTime)
+
+		watchdog := &ImageWatchdog{
+			Log:      log,
+			EAC:      eac,
+			DataPath: tmpDir,
+			Config:   DefaultImageGCConfig(),
+		}
+
+		result, err := watchdog.RunBlobGC(context.Background())
+		r.NoError(err)
+		r.Equal([]string{"sha256:orphan-static"}, result.DeletedBlobs)
+		r.Equal(1, result.RetainedBlobs)
+
+		_, err = eac.Delete(context.Background(), versionID.String())
+		r.NoError(err)
+		result, err = watchdog.RunBlobGC(context.Background())
+		r.NoError(err)
+		r.Equal([]string{staticDigest}, result.DeletedBlobs)
 	})
 
 	t.Run("keeps blobs referenced by legacy (empty status) artifacts", func(t *testing.T) {

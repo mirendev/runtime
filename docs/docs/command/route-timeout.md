@@ -11,7 +11,7 @@ Override the ingress request timeout for an HTTP route
 ## Usage
 
 ```bash
-miren route timeout <host> <timeout> [flags]
+miren route timeout [host] [timeout] [flags]
 ```
 
 ## Arguments

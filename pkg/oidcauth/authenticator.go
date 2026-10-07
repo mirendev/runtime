@@ -2,8 +2,6 @@ package oidcauth
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -13,6 +11,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/x/workloadid"
 )
 
 // OIDCAuthenticator validates external OIDC bearer tokens against configured
@@ -52,7 +51,7 @@ func (a *OIDCAuthenticator) Authenticate(ctx context.Context, creds *rpc.Credent
 	}
 
 	// Peek at the token's issuer claim without verifying signature
-	issuer, err := peekIssuer(tokenString)
+	issuer, err := workloadid.PeekIssuer(tokenString)
 	if err != nil {
 		return nil, nil // Not a valid JWT, let other authenticators try
 	}
@@ -161,32 +160,6 @@ func (e *BindingMismatchError) Error() string {
 		msg += " repository=" + e.Repository
 	}
 	return msg + ")"
-}
-
-// peekIssuer extracts the issuer claim from a JWT without verifying the signature.
-func peekIssuer(tokenString string) (string, error) {
-	parts := strings.Split(tokenString, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("not a valid JWT")
-	}
-
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", fmt.Errorf("failed to decode JWT payload: %w", err)
-	}
-
-	var claims struct {
-		Issuer string `json:"iss"`
-	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("failed to parse JWT claims: %w", err)
-	}
-
-	if claims.Issuer == "" {
-		return "", fmt.Errorf("JWT missing issuer claim")
-	}
-
-	return claims.Issuer, nil
 }
 
 func (a *OIDCAuthenticator) listBindingsByIssuer(ctx context.Context, issuer string) ([]core_v1alpha.OidcBinding, error) {

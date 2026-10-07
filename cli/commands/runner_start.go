@@ -8,10 +8,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"syscall"
 	"time"
@@ -41,6 +39,8 @@ func RunnerStart(ctx *Context, opts struct {
 		"coordinator", cfg.CoordinatorAddress,
 		"etcd_endpoints", cfg.EtcdEndpoints)
 
+	healPathSymlinkAtBoot(ctx)
+
 	// Determine listen address. If no explicit address is given, discover the
 	// machine's outbound IP (the one that would route to the coordinator) and
 	// advertise that so the coordinator knows how to reach this runner.
@@ -63,6 +63,14 @@ func RunnerStart(ctx *Context, opts struct {
 	// start; the cert baked into the serving stack below is the reconciled one.
 	if err := reconcileRunnerCertificate(ctx, cfg, opts.ConfigPath, listenAddr); err != nil {
 		return err
+	}
+	if cfg.ListenAddress != listenAddr {
+		// Not fatal: the runner serves either way. Only the lifecycle
+		// executor reads this, and it says so when it is missing.
+		cfg.ListenAddress = listenAddr
+		if err := cfg.Save(opts.ConfigPath); err != nil {
+			ctx.Log.Warn("could not record listen address in runner config", "path", opts.ConfigPath, "error", err)
+		}
 	}
 
 	// Create clientconfig from saved certs for RPC authentication
@@ -126,11 +134,8 @@ func resolveRunnerContainerd(externalSocket string) (binaryPath, binDir string, 
 	if externalSocket != "" {
 		return "", "", nil
 	}
-	if releasePath := FindReleasePath(); releasePath != "" {
-		candidate := filepath.Join(releasePath, "containerd")
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			return candidate, releasePath, nil
-		}
+	if candidate, releasePath := findBundledExecutable("containerd", FindReleasePath(), systemReleasePath); candidate != "" {
+		return candidate, releasePath, nil
 	}
 	binaryPath, err = exec.LookPath("containerd")
 	if err != nil {

@@ -37,6 +37,46 @@ func TestCompensatePreservesDependenciesUntilCleanupSucceeds(t *testing.T) {
 	require.Equal(t, []AddNumbersOut{{Sum: 7}}, ctrl.undoAddCalls)
 }
 
+func TestCompensateRefusesIncompatibleCompletedExecution(t *testing.T) {
+	ctrl := &testController{}
+	oldRegistry := NewRegistry()
+	require.NoError(t, Define("changed").Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).RegisterTo(oldRegistry))
+	storage := NewMemoryStorage()
+	ctx := t.Context()
+	require.NoError(t, NewExecutor(storage, WithRegistry(oldRegistry)).Start("changed").
+		WithID("preview").Input("a", 2).Input("b", 5).Execute(ctx))
+
+	newRegistry := NewRegistry()
+	require.NoError(t, Define("changed").Version(2).ResumesFrom().Using(ctrl).
+		Action("add", AddNumbers).Undo(UndoAddNumbers).RegisterTo(newRegistry))
+	err := NewExecutor(storage, WithRegistry(newRegistry)).Compensate(ctx, "preview")
+	require.ErrorIs(t, err, ErrIncompatibleDefinition)
+	require.Empty(t, ctrl.undoAddCalls)
+	exec, err := storage.Get(ctx, "preview")
+	require.NoError(t, err)
+	require.Equal(t, StatusCompleted, exec.Status)
+	require.NotEmpty(t, exec.BlockedReason)
+}
+
+func TestCompensateHonorsUndoBlock(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctrl := &stuckUndoController{fail: true}
+	registry := stuckRegistry(t, ctrl)
+	saveUndoing(t, storage, "preview", undoBlockAttempts-1, 2*undoBlockAfter)
+	executor := NewExecutor(storage, WithRegistry(registry), WithBuild("old"))
+	require.ErrorIs(t, executor.Compensate(t.Context(), "preview"), ErrUndoBlocked)
+	require.Equal(t, 1, ctrl.calls)
+	require.ErrorIs(t, executor.Compensate(t.Context(), "preview"), ErrUndoBlocked)
+	require.Equal(t, 1, ctrl.calls, "the same build must not retry a blocked undo")
+	ctrl.fail = false
+	require.NoError(t, NewExecutor(storage, WithRegistry(registry), WithBuild("new")).Compensate(t.Context(), "preview"))
+	require.Equal(t, 2, ctrl.calls)
+	exec, err := storage.Get(t.Context(), "preview")
+	require.NoError(t, err)
+	require.Equal(t, StatusFailed, exec.Status)
+}
+
 func TestCompensateRecoversInterruptedAction(t *testing.T) {
 	registry := NewRegistry()
 	ctrl := &testController{}

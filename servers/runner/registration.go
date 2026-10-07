@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -36,12 +37,13 @@ const (
 )
 
 type RegistrationServerConfig struct {
-	Log             *slog.Logger
-	Authority       *caauth.Authority
-	EAC             *entityserver_v1alpha.EntityAccessClient
-	CoordinatorAddr string
-	EtcdEndpoints   []string
-	EtcdPrefix      string
+	Log                   *slog.Logger
+	Authority             *caauth.Authority
+	EAC                   *entityserver_v1alpha.EntityAccessClient
+	CoordinatorAddr       string
+	CoordinatorInternalIP netip.Addr
+	EtcdEndpoints         []string
+	EtcdPrefix            string
 
 	// Observability endpoints provided to runners at join time
 	VictoriametricsAddress string
@@ -51,6 +53,16 @@ type RegistrationServerConfig struct {
 	// do not hold the cluster signing key, request tokens from the coordinator
 	// through this server. May be nil when no issuer is configured.
 	WorkloadIssuer *workloadidentity.Issuer
+
+	// LbdBuilder builds the lbd toolchain image into the cluster registry, so
+	// a node has something to pull before it compiles the kernel module. Nil
+	// on a cluster with no BuildKit, where accelerator mode is unavailable.
+	LbdBuilder LbdBuilderImageEnsurer
+
+	// RPC is how the coordinator reaches a specific runner. Installing the
+	// kernel module has to happen on the node itself, so unlike the rest of
+	// this server it is not enough to write an entity and wait.
+	RPC *rpc.State
 }
 
 type RegistrationServer struct {
@@ -960,12 +972,13 @@ func (s *RegistrationServer) DrainRunner(ctx context.Context, req *runner_v1alph
 	return nil
 }
 
-// WorkloadIssuerInfo reports whether the coordinator has a workload identity
-// issuer configured and, if so, its issuer URL. Distributed runners call this
-// once at startup to decide whether to mint workload identity tokens via the
-// coordinator.
+// WorkloadIssuerInfo reports the issuer and current coordinator internal address.
+// Distributed runners read both at startup, including when identity is disabled.
 func (s *RegistrationServer) WorkloadIssuerInfo(ctx context.Context, req *runner_v1alpha.RunnerRegistrationWorkloadIssuerInfo) error {
 	results := req.Results()
+	if s.CoordinatorInternalIP.IsValid() {
+		results.SetCoordinatorInternalIp(s.CoordinatorInternalIP.String())
+	}
 
 	if s.WorkloadIssuer == nil {
 		results.SetEnabled(false)
@@ -1071,7 +1084,8 @@ func (s *RegistrationServer) IssueSystemWorkloadToken(ctx context.Context, req *
 		return nil
 	}
 
-	if err := s.authorizeSystemWorkloadRequest(ctx, workload); err != nil {
+	runnerID, err := s.authorizeSystemWorkloadRequest(ctx, workload)
+	if err != nil {
 		s.Log.Warn("system workload token request denied", "system_workload", workload, "error", err)
 		results.SetError("not authorized to issue a token for this system workload")
 		return nil
@@ -1081,7 +1095,11 @@ func (s *RegistrationServer) IssueSystemWorkloadToken(ctx context.Context, req *
 	// caller-selected rather than coupled to the workload here. The receiving
 	// service verifies both the audience and expected workload before granting
 	// access.
-	opts := workloadidentity.TokenOptions{}
+	//
+	// The runner ID comes from the caller's certificate, not the request, so a
+	// service receiving the token can attribute what it carries to the runner
+	// that actually holds it.
+	opts := workloadidentity.TokenOptions{RunnerID: runnerID}
 	if args.HasAudience() {
 		opts.Audience = args.Audience()
 	}
@@ -1106,33 +1124,36 @@ func (s *RegistrationServer) IssueSystemWorkloadToken(ctx context.Context, req *
 // still registered. The registration check bounds a decommissioned runner's
 // access, since caauth has no revocation and its certificate stays valid until
 // it expires.
-func (s *RegistrationServer) authorizeSystemWorkloadRequest(ctx context.Context, workload workloadidentity.SystemWorkload) error {
+//
+// It returns the verified runner ID, which is empty only when authentication
+// is disabled and there is no caller to identify.
+func (s *RegistrationServer) authorizeSystemWorkloadRequest(ctx context.Context, workload workloadidentity.SystemWorkload) (string, error) {
 	if !slices.Contains(runnerSystemWorkloads, workload) {
-		return fmt.Errorf("system workload %q is not one a runner may request", workload)
+		return "", fmt.Errorf("system workload %q is not one a runner may request", workload)
 	}
 
 	identity, err := requireRunnerCertIdentity(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if identity == nil {
-		return nil
+		return "", nil
 	}
 
 	runnerID, ok := strings.CutPrefix(identity.Subject, "runner-")
 	if !ok || runnerID == "" {
-		return fmt.Errorf("caller %q is not a runner certificate", identity.Subject)
+		return "", fmt.Errorf("caller %q is not a runner certificate", identity.Subject)
 	}
 
 	registered, err := s.runnerIDRegistered(ctx, runnerID)
 	if err != nil {
-		return fmt.Errorf("verifying registration of runner %s: %w", runnerID, err)
+		return "", fmt.Errorf("verifying registration of runner %s: %w", runnerID, err)
 	}
 	if !registered {
-		return fmt.Errorf("runner %s is not registered", runnerID)
+		return "", fmt.Errorf("runner %s is not registered", runnerID)
 	}
 
-	return nil
+	return runnerID, nil
 }
 
 // runnerCertName is the client-certificate CommonName issued to a runner during

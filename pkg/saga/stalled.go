@@ -53,6 +53,10 @@ type StalledResult struct {
 	// Forced is how many were past the stall window and transitioned to failed.
 	Forced int
 
+	// ForcedByDefinition splits Forced by the definition each execution ran,
+	// which is the first thing to know when something is still stranding them.
+	ForcedByDefinition map[string]int
+
 	// Failed is how many transitions errored. A sweep does not abort on one bad
 	// write; the next pass retries it.
 	Failed int
@@ -61,6 +65,11 @@ type StalledResult struct {
 	// children of a saga still in flight. They become forceable as soon as
 	// their parent stops being live.
 	Skipped int
+
+	// Blocked is how many were held back because a binary refused to resume
+	// them. They are waiting on an operator rather than stranded: failing one
+	// would let its entity's next reconcile retry over work nobody undid.
+	Blocked int
 
 	// Recovered is how many refused the transition because they had moved on
 	// between the page that named them and the write. Not an error; a lot of
@@ -127,6 +136,11 @@ func RunStalledSweep(ctx context.Context, storage StalledStorage, cfg StalledCon
 				continue
 			}
 
+			if summary.Blocked {
+				result.Blocked++
+				continue
+			}
+
 			// A stalled child whose parent is still in flight has to stay: the
 			// parent re-finds its children by ID rather than re-running them,
 			// so failing one under a live parent fails the parent for a reason
@@ -161,6 +175,10 @@ func RunStalledSweep(ctx context.Context, storage StalledStorage, cfg StalledCon
 				"id", summary.ID, "status", summary.Status,
 				"last_changed", summary.LastChanged)
 			result.Forced++
+			if result.ForcedByDefinition == nil {
+				result.ForcedByDefinition = make(map[string]int)
+			}
+			result.ForcedByDefinition[summary.DefinitionName]++
 
 			if cfg.MaxForces > 0 && result.Forced >= cfg.MaxForces {
 				capped, err := stoppedEarlyStalled(ctx, storage, page, summary.ID)

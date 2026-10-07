@@ -923,9 +923,12 @@ func getIdentityUserInfo(ctx *Context, config *clientconfig.Config, identityName
 		return ""
 	}
 
-	// Prefer UserName (display name), fall back to UserID
-	if claims.UserName != "" {
-		return claims.UserName
+	switch {
+	case claims.Email != "":
+		return claims.Email
+	case claims.Name != "":
+		return claims.Name
+	default:
+		return claims.Subject
 	}
-	return claims.UserID
 }

@@ -51,6 +51,7 @@ func TestReleaseTokenState_ClearsBothRegistries(t *testing.T) {
 
 	id := entity.Id(testSandboxID)
 	c.tokenRefresher.register(testSandboxID, "/tmp/identity-token", "myapp", "")
+	persistTestTokenSecret(t, c, testSandboxID, testSecret)
 	require.Len(t, c.tokenRefresher.snapshot(), 1)
 	require.True(t, c.tokenSecrets.verify(testSandboxID, testSecret))
 
@@ -58,6 +59,8 @@ func TestReleaseTokenState_ClearsBothRegistries(t *testing.T) {
 
 	assert.Empty(t, c.tokenRefresher.snapshot())
 	assert.False(t, c.tokenSecrets.verify(testSandboxID, testSecret))
+	_, err := os.Stat(filepath.Join(c.Tempdir, "containerd", id.PathSafe(), tokenSecretFilename))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestReleaseTokenState_NilRegistries(t *testing.T) {

@@ -88,7 +88,7 @@ Error codes follow JSON-RPC conventions:
 ## Usage
 
 ```bash
-miren admin <method> [args...] [flags]
+miren admin [method] [args...] [flags]
 ```
 
 ## Arguments

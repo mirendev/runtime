@@ -11,7 +11,7 @@ Delete an application and all its resources
 ## Usage
 
 ```bash
-miren app delete <appname> [flags]
+miren app delete [appname] [flags]
 ```
 
 ## Arguments

@@ -18,7 +18,6 @@ miren disk list-deleted [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--data-path` — Path to miren data directory (default: `/var/lib/miren`)
 - `--format` — Output format (text, json) (default: `text`)
 - `--json` — Shorthand for --format json
 

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // ResourceUsage represents resource utilization metrics
@@ -19,21 +18,22 @@ type ResourceUsage struct {
 	StoragePercent float64 `json:"storage_percent,omitempty"`
 }
 
-// StatusReport represents the cluster status to report
+// StatusReport is the legacy cluster status poll's payload.
+//
+// Everything it carries has a home on the negotiated uplink session now:
+// liveness and version come from the session itself, the network fields ride
+// the cluster-network capability, resource usage rides cluster-resources, and
+// nodes are exported as entities. A runtime keeps sending this only to a cloud
+// that did not select those capabilities. Fields cloud never read (instance
+// id, workload count, health checks, RBAC sync) and the node count this
+// runtime only ever hardcoded to 1 are gone.
 type StatusReport struct {
-	ClusterID string `json:"cluster_id"`
-	Version   string `json:"version,omitempty"`
-	// InstanceID changes on every restart while Version may not.
-	InstanceID        string            `json:"runtime_instance_id,omitempty"`
-	State             string            `json:"state"` // required: active, degraded, inactive, unknown
-	NodeCount         int               `json:"node_count,omitempty"`
-	WorkloadCount     int               `json:"workload_count,omitempty"`
-	ResourceUsage     ResourceUsage     `json:"resource_usage"`
-	HealthChecks      map[string]string `json:"health_checks,omitempty"`
-	RBACRulesVersion  string            `json:"rbac_rules_version,omitempty"`
-	LastRBACSync      *time.Time        `json:"last_rbac_sync,omitempty"`
-	APIAddresses      []string          `json:"api_addresses,omitempty"`
-	CACertFingerprint string            `json:"ca_cert_fingerprint,omitempty"`
+	ClusterID         string        `json:"cluster_id"`
+	Version           string        `json:"version,omitempty"`
+	State             string        `json:"state"` // required: active, degraded, inactive, unknown
+	ResourceUsage     ResourceUsage `json:"resource_usage"`
+	APIAddresses      []string      `json:"api_addresses,omitempty"`
+	CACertFingerprint string        `json:"ca_cert_fingerprint,omitempty"`
 	// Reachability, when non-nil, carries the agent's verdict on whether the
 	// cluster's public address is reachable from the internet and, if not,
 	// which ports failed. Omitted (nil) when netcheck never produced a usable

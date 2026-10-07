@@ -135,10 +135,13 @@ func (m *MemoryStorage) ListIncompleteSummaryPage(ctx context.Context, q Incompl
 			continue
 		}
 		result = append(result, IncompleteSummary{
-			ID:          exec.ID,
-			Status:      exec.Status,
-			LastChanged: exec.UpdatedAt,
-			ParentID:    exec.ParentExecutionID,
+			ID:             exec.ID,
+			DefinitionName: exec.DefinitionName,
+			Status:         exec.Status,
+			CreatedAt:      exec.CreatedAt,
+			LastChanged:    exec.UpdatedAt,
+			ParentID:       exec.ParentExecutionID,
+			Blocked:        exec.BlockedReason != "",
 		})
 	}
 
@@ -218,7 +221,7 @@ func (m *MemoryStorage) ForceFailed(ctx context.Context, id string, cutoff time.
 	if !ok {
 		return false, nil
 	}
-	if isTerminal(exec.Status) {
+	if isTerminal(exec.Status) || exec.BlockedReason != "" {
 		return false, nil
 	}
 	if exec.UpdatedAt.IsZero() || exec.UpdatedAt.After(cutoff) {

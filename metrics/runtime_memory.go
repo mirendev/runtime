@@ -14,7 +14,9 @@ import (
 // coordinator's own heap/RSS growth — these series are that visibility.
 //
 // All series carry entity="miren/control" so they sit alongside the per-app
-// memory_usage_bytes{entity="app/..."} series and can be compared directly.
+// memory_usage_bytes{entity="app/..."} series and can be compared directly. A
+// distributed runner runs the same collector as EntityRunner, so its process
+// is never mistaken for the coordinator's.
 // The key diagnostic is the gap between process_resident_memory_bytes (the
 // whole control process, including off-heap: cgo, mmap'd bbolt/etcd, the
 // buildkit content store) and go_mem_heap_inuse_bytes (Go-managed heap only):
@@ -27,6 +29,15 @@ type RuntimeMemory struct {
 	// Entity is the value of the "entity" label on every emitted series.
 	Entity string
 }
+
+// EntityControl and EntityRunner are the entity labels the runtime's process
+// collectors report under: the coordinator's control process, and a
+// distributed runner's process. Runners are told apart from each other by
+// their miren_runner label, not by entity.
+const (
+	EntityControl = "miren/control"
+	EntityRunner  = "miren/runner"
+)
 
 const defaultRuntimeMemoryInterval = 10 * time.Second
 
@@ -55,7 +66,7 @@ func NewRuntimeMemory(log *slog.Logger, writer PointWriter) *RuntimeMemory {
 	return &RuntimeMemory{
 		Log:    log,
 		Writer: writer,
-		Entity: "miren/control",
+		Entity: EntityControl,
 	}
 }
 
@@ -67,7 +78,7 @@ func (r *RuntimeMemory) Monitor(ctx context.Context) {
 		return
 	}
 
-	r.Log.Info("control-process runtime memory metrics started",
+	r.Log.Info("process runtime memory metrics started",
 		"entity", r.Entity, "interval", defaultRuntimeMemoryInterval)
 
 	ticker := time.NewTicker(defaultRuntimeMemoryInterval)
@@ -77,7 +88,7 @@ func (r *RuntimeMemory) Monitor(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			if err := r.collect(ctx); err != nil {
-				r.Log.Error("failed to record control-process runtime memory", "err", err)
+				r.Log.Error("failed to record process runtime memory", "entity", r.Entity, "err", err)
 			}
 		case <-ctx.Done():
 			return

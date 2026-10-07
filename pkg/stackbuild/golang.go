@@ -10,6 +10,7 @@ import (
 
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/client/llb/imagemetaresolver"
+	"golang.org/x/mod/modfile"
 	"miren.dev/runtime/pkg/imagerefs"
 )
 
@@ -78,6 +79,10 @@ type GoStack struct {
 	// binary (CGO_ENABLED=0) bound for the distroless runtime. Set in Init().
 	cgoEnabled bool
 
+	// splitDeps is true when the dependencies can be compiled in a layer of
+	// their own, ahead of the source. Set in Init().
+	splitDeps bool
+
 	// Detected environment variable requirements
 	requiredEnvVars []EnvVarRequirement
 }
@@ -141,11 +146,39 @@ func (s *GoStack) Init(opts BuildOptions) {
 		s.Event("config", "cgo", "Building with cgo enabled (CGO_ENABLED=1)")
 	}
 
+	if reason := s.depsSplitBlocker(); reason != "" {
+		s.Event("config", "go-deps", "Compiling dependencies with the application ("+reason+")")
+	} else {
+		s.splitDeps = true
+	}
+
 	// Detect required environment variables
 	s.requiredEnvVars = s.detectEnvVars()
 	for _, ev := range s.requiredEnvVars {
 		s.Event("env_var", ev.Name, ev.Reason)
 	}
+}
+
+// depsSplitBlocker reports why the dependencies can't be compiled from go.mod
+// and go.sum alone, or "" when they can. Each case needs files from the rest of
+// the source tree before the module graph resolves.
+func (s *GoStack) depsSplitBlocker() string {
+	if s.hasVendor {
+		return "vendor directory"
+	}
+	if s.hasFile("go.work") {
+		return "go.work workspace"
+	}
+	mf, err := modfile.Parse("go.mod", s.goModContent, nil)
+	if err != nil {
+		return "go.mod did not parse"
+	}
+	for _, r := range mf.Replace {
+		if modfile.IsDirectoryPath(r.New.Path) {
+			return "go.mod replaces " + r.Old.Path + " with a local directory"
+		}
+	}
+	return ""
 }
 
 func (s *GoStack) commandDir(opts BuildOptions) string {
@@ -211,30 +244,7 @@ func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions
 	}
 	base := llb.Image(imagerefs.GetGolangImage(version), llb.WithMetaResolver(mr))
 
-	// At some later time, we should convert this to use persistent cache mounts
-	// but ONLY when we can actually make them persistent. For now, cache
-	// within the layers.
-
 	h := &highlevelBuilder{opts}
-
-	// golang:bookworm already ships git and ca-certificates, and provides the C
-	// toolchain that makes cgo work, so no extra package install is needed on
-	// the builder before fetching private deps or compiling.
-	builder := h.applyAugmentations(base, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
-
-	// Copy the application code (owned by the app user, uid 2010)
-	builder = h.copyApp(builder, localCtx)
-
-	// Use the pre-computed cmdDir from Init()
-	buildDir := s.cmdDir
-
-	// Build command - skip go mod download if vendor directory exists
-	var buildCmd string
-	if s.hasVendor {
-		buildCmd = fmt.Sprintf("go build -mod=vendor -o /bin/app ./%s", buildDir)
-	} else {
-		buildCmd = fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)
-	}
 
 	// Set CGO_ENABLED explicitly: bookworm ships gcc, so Go would otherwise
 	// default cgo on. Off (the default) keeps the binary static and bound for
@@ -244,16 +254,57 @@ func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions
 		cgoEnabled = "1"
 	}
 
-	// Build with cache
-	builder = builder.Dir("/app").Run(
-		llb.Shlex(buildCmd),
-		llb.AddEnv("CGO_ENABLED", cgoEnabled),
+	// golang:bookworm already ships git and ca-certificates, and provides the C
+	// toolchain that makes cgo work, so no extra package install is needed on
+	// the builder before fetching private deps or compiling.
+	builder := base
+	if s.splitDeps {
+		builder = s.compileDeps(h, builder, localCtx, cgoEnabled)
+	}
+	if len(s.Augmentations()) > 0 {
+		// The JS installs run as the app user, which the golang image doesn't
+		// have, and need /app to be theirs. compileDeps has already created
+		// /app as root, and ensureAppDir leaves an existing directory alone.
+		builder = s.addAppUser(builder)
+		builder = builder.Run(
+			llb.Shlex("sh -c 'mkdir -p /app && chown 2010:2011 /app'"),
+			llb.WithCustomName("[phase] Handing /app to the app user"),
+		).Root()
+	}
+	builder = h.applyAugmentations(builder, localCtx, s.BaseDistro(), s.Augmentations(), s.SkipJSInstall())
 
-		// This basically is just a scratch mount until we add the ability to
-		// properly export and import the cache dirs.
-		h.CacheMount("/root/.cache/go-build"),
-		llb.WithCustomName("[phase] Building Go application"),
-	).Root()
+	// Copy the application code (owned by the app user, uid 2010)
+	builder = h.copyApp(builder, localCtx)
+
+	buildDir := s.cmdDir
+
+	if s.splitDeps {
+		// No cache mount here: it would hide the build cache compileDeps left
+		// in the layer below.
+		builder = builder.Dir("/app").Run(
+			llb.Shlexf("go build -o /bin/app ./%s", buildDir),
+			llb.AddEnv("CGO_ENABLED", cgoEnabled),
+			llb.WithCustomName("[phase] Building Go application"),
+		).Root()
+	} else {
+		var buildCmd string
+		if s.hasVendor {
+			buildCmd = fmt.Sprintf("go build -mod=vendor -o /bin/app ./%s", buildDir)
+		} else {
+			buildCmd = fmt.Sprintf("sh -c 'go mod download -json && go build -o /bin/app ./%s'", buildDir)
+		}
+
+		builder = builder.Dir("/app").Run(
+			llb.Shlex(buildCmd),
+			llb.AddEnv("CGO_ENABLED", cgoEnabled),
+			h.rootDepAuth(),
+
+			// This basically is just a scratch mount until we add the ability to
+			// properly export and import the cache dirs.
+			h.CacheMount("/root/.cache/go-build"),
+			llb.WithCustomName("[phase] Building Go application"),
+		).Root()
+	}
 
 	// Make the built binary path available to onBuild commands, which run on
 	// the builder where the toolchain and full /app tree still exist.
@@ -263,6 +314,61 @@ func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions
 	runtime := s.assembleRuntime(ctx, h, builder, opts)
 
 	return &runtime, nil
+}
+
+// goDepsListFormat selects the packages compileDeps prebuilds: everything the
+// app imports, directly or not, that comes from a module other than its own.
+const goDepsListFormat = `{{if and (not .Standard) .Module (not .Module.Main)}}{{.ImportPath}}{{end}}`
+
+// compileDeps downloads the app's modules and compiles the packages it imports
+// from them into Go's build cache, in layers keyed on go.mod/go.sum and on the
+// list of imported packages rather than on the whole source tree. An edit that
+// leaves the imports alone reuses the compiled dependencies, which are nearly
+// all of a cold build.
+//
+// These are layers rather than a cache mount on purpose. The builder drops
+// cache mounts after 48 hours untouched, which a lightly deployed app outlives
+// routinely. Layers stay until the builder's shared size cap evicts them, least
+// recently used first.
+func (s *GoStack) compileDeps(h *highlevelBuilder, cur, localCtx llb.State, cgoEnabled string) llb.State {
+	mods := cur.File(llb.Copy(localCtx, "/", "/app", &llb.CopyInfo{
+		IncludePatterns: []string{"go.mod", "go.sum"},
+		CreateDestPath:  true,
+	}), llb.WithCustomName("[phase] Copying go.mod and go.sum"))
+
+	mods = mods.Dir("/app").Run(
+		llb.Shlex("go mod download"),
+		h.rootDepAuth(),
+		llb.WithCustomName("[phase] Downloading Go modules"),
+	).Root()
+
+	// Listing reruns on every source change, but it takes seconds, and the copy
+	// below is keyed on the list's content, so the compile after it stays cached
+	// until the set of imported packages changes. go list prints in import
+	// order, which can shift while the set stays the same, hence the sort. The import set has to come
+	// from the source: go.mod lists modules, not the packages used from them.
+	list := mods.Dir("/src").Run(
+		llb.Args([]string{"sh", "-c", fmt.Sprintf(
+			"go list -deps -f '%s' ./%s > /tmp/deps.txt && sort -u /tmp/deps.txt > /out/deps.txt",
+			goDepsListFormat, s.cmdDir)}),
+		llb.AddEnv("CGO_ENABLED", cgoEnabled),
+		llb.AddMount("/src", localCtx, llb.Readonly),
+		// go.mod may name a module its go.sum doesn't cover, which go list
+		// fetches.
+		h.rootDepAuth(),
+		llb.WithCustomName("[phase] Listing Go dependencies"),
+	).AddMount("/out", llb.Scratch())
+
+	// CGO_ENABLED must match the application build's, since it's part of every
+	// build cache key.
+	return mods.File(
+		llb.Copy(list, "/deps.txt", "/tmp/go-deps.txt"),
+		llb.WithCustomName("[phase] Copying Go dependency list"),
+	).Dir("/app").Run(
+		llb.Shlex("sh -c 'xargs -r go build < /tmp/go-deps.txt'"),
+		llb.AddEnv("CGO_ENABLED", cgoEnabled),
+		llb.WithCustomName("[phase] Compiling Go dependencies"),
+	).Root()
 }
 
 // assembleRuntime copies the build output onto a minimal runtime base, leaving

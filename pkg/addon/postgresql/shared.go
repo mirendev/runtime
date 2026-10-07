@@ -281,9 +281,21 @@ func cleanupStaleSharedServer(fw *addon.ProviderFramework, ctx context.Context, 
 func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn) (FindOrCreateSharedServerOut, error) {
 	fw := saga.Get[*addon.ProviderFramework](ctx)
 
+	// A previous attempt of this action may have left its own child partway
+	// through building the server. Resume it before looking at the server:
+	// to the checks below, that half-built server is indistinguishable from
+	// someone else's provisioning, so they would back off from it or delete it.
+	result, resumed, err := saga.ResumeNested(ctx, "ensure-shared-server")
+	if err != nil {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("resuming shared server provisioning: %w", err)
+	}
+	if resumed {
+		return sharedServerFromNested(ctx, fw, result)
+	}
+
 	// Try to find an existing shared server
 	var server addon_v1alpha.PostgresServer
-	err := fw.EC.Get(ctx, sharedServerName, &server)
+	err = fw.EC.Get(ctx, sharedServerName, &server)
 	if err == nil {
 		switch server.Status {
 		case "active":
@@ -356,7 +368,7 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 	superuserPassword := idgen.Gen("su")
 	diskName := newSharedDiskName()
 
-	result, err := saga.RunNested(ctx, "ensure-shared-server",
+	result, err = saga.RunNested(ctx, "ensure-shared-server",
 		saga.WithNestedInput("superuserpassword", superuserPassword),
 		saga.WithNestedInput("diskname", diskName),
 		saga.WithNestedInput("variantconfig", in.VariantConfig),
@@ -365,6 +377,14 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 		return FindOrCreateSharedServerOut{}, fmt.Errorf("ensuring shared server: %w", err)
 	}
 
+	return sharedServerFromNested(ctx, fw, result)
+}
+
+// sharedServerFromNested reports the server an ensure-shared-server child
+// built. The password comes from the server entity rather than from this
+// attempt's inputs: a child that already existed keeps the inputs it was
+// created with, so a freshly generated password would not be the server's.
+func sharedServerFromNested(ctx context.Context, fw *addon.ProviderFramework, result *saga.NestedResult) (FindOrCreateSharedServerOut, error) {
 	var serverID entity.Id
 	if err := result.Get("serverid", &serverID); err != nil {
 		return FindOrCreateSharedServerOut{}, fmt.Errorf("reading server ID from nested result: %w", err)
@@ -375,9 +395,14 @@ func FindOrCreateSharedServer(ctx context.Context, in FindOrCreateSharedServerIn
 		return FindOrCreateSharedServerOut{}, fmt.Errorf("reading service host from nested result: %w", err)
 	}
 
+	var server addon_v1alpha.PostgresServer
+	if err := fw.EC.GetById(ctx, serverID, &server); err != nil {
+		return FindOrCreateSharedServerOut{}, fmt.Errorf("reading shared server %s: %w", serverID, err)
+	}
+
 	return FindOrCreateSharedServerOut{
 		ServerID:          serverID,
-		SuperuserPassword: superuserPassword,
+		SuperuserPassword: server.SuperuserPassword,
 		ServiceHost:       serviceHost,
 	}, nil
 }
@@ -508,6 +533,7 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) er
 
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	b := saga.Define("provision-shared-postgresql").
+		Version(2).ResumesFrom(1).
 		Using(fw).
 		Using(cfg)
 	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})

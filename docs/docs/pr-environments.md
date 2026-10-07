@@ -202,14 +202,13 @@ Ephemeral deploys don't appear in `miren app history` — that command shows onl
 
 To deploy a preview per pull request from GitHub Actions, pair this with [CI/CD Deployment with OIDC](./ci-deploy.md) so no secrets land in your repo. The example below targets a staging app — see [Using a Staging App](#using-a-staging-app) for why that's the recommended setup.
 
-**Step 1: Allow `pull_request` events on the OIDC binding.**
+**Step 1: Create the OIDC binding.**
 
-`miren auth ci add --github` permits `push` and `workflow_dispatch` by default. Add `pull_request`:
+`miren auth ci add --github` permits `push`, `workflow_dispatch`, and `pull_request` by default:
 
 <CliCommand context="client">
 ```miren
-miren auth ci add -a myapp-staging --github acme/web-app \
-  --allowed-events push,workflow_dispatch,pull_request
+miren auth ci add -a myapp-staging --github acme/web-app
 ```
 </CliCommand>
 

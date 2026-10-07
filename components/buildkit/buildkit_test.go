@@ -191,6 +191,18 @@ func buildkitTaskPID(ctx context.Context, cc *containerd.Client) (uint32, error)
 	return task.Pid(), nil
 }
 
+func buildkitContainerInfo(ctx context.Context, t *testing.T, cc *containerd.Client) (time.Time, []string) {
+	t.Helper()
+	ctx = namespaces.WithNamespace(ctx, testNamespace)
+	container, err := cc.LoadContainer(ctx, "miren-buildkit")
+	require.NoError(t, err)
+	info, err := container.Info(ctx)
+	require.NoError(t, err)
+	spec, err := container.Spec(ctx)
+	require.NoError(t, err)
+	return info.CreatedAt, spec.Process.Env
+}
+
 // TestBuildkitRestart covers the miren-restart scenario (MIR-1303): a fresh
 // Component that finds an already-running buildkit container must evict the
 // stale task and bind a new one, and the exit monitor must reflect an
@@ -286,6 +298,53 @@ func TestBuildkitRestart(t *testing.T) {
 
 		_, err = cc.LoadContainer(nsctx, "miren-buildkit")
 		r.Error(err, "Stop should delete the container even after an unexpected death")
+	})
+
+	// A container reused across restarts keeps the env it was created with, so
+	// a changed trace destination (or a credential the operator removed) has to
+	// force a new container, while unchanged settings keep reusing it.
+	t.Run("restart recreates the container when trace export changes", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		cc := newClient(t)
+		dataDir := t.TempDir()
+		config := buildkit.Config{
+			SocketDir:    t.TempDir(),
+			RegistryHost: "cluster.local:5000",
+			Traces:       buildkit.TracesExport{Endpoint: "https://collector.example"},
+		}
+
+		first := buildkit.NewComponent(logger, cc, testNamespace, dataDir)
+		r.NoError(first.Start(ctx, config))
+		createdFirst, env := buildkitContainerInfo(ctx, t, cc)
+		r.Contains(env, "OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example")
+
+		same := buildkit.NewComponent(logger, cc, testNamespace, dataDir)
+		r.NoError(same.Start(ctx, config))
+		createdSame, _ := buildkitContainerInfo(ctx, t, cc)
+		r.Equal(createdFirst, createdSame, "unchanged trace settings must reuse the container")
+
+		config.Traces = buildkit.TracesExport{Endpoint: "http://127.0.0.1:14318", Relayed: true}
+		relayed := buildkit.NewComponent(logger, cc, testNamespace, dataDir)
+		r.NoError(relayed.Start(ctx, config))
+		r.True(relayed.IsRunning())
+		createdRelayed, env := buildkitContainerInfo(ctx, t, cc)
+		r.NotEqual(createdFirst, createdRelayed, "changed trace settings must recreate the container")
+		r.Contains(env, "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:14318")
+		r.NotContains(env, "OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example")
+
+		client, err := relayed.Client(ctx)
+		r.NoError(err)
+		_, err = client.Info(ctx)
+		r.NoError(err)
+		client.Close()
+
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer stopCancel()
+		r.NoError(relayed.Stop(stopCtx))
 	})
 
 	t.Run("Stop removes the task and container", func(t *testing.T) {
