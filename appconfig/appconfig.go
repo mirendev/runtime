@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -181,8 +182,10 @@ type ServiceConfig struct {
 
 // AddonConfig represents configuration for an addon in app.toml.
 type AddonConfig struct {
-	Variant string `toml:"variant"`
-	Version string `toml:"version"`
+	Variant      string `toml:"variant"`
+	Version      string `toml:"version"`
+	Clone        bool   `toml:"clone,omitempty"`
+	CloneVariant string `toml:"clone_variant,omitempty"`
 
 	// Services names the services an addon's storage attaches to. Empty means
 	// every service, matching how addon variables reach every service.
@@ -315,6 +318,20 @@ type AppConfig struct {
 	// synthesizing a web service from the image entrypoint, while `web = false`
 	// is how a task-only app opts out.
 	Web *bool `toml:"web,omitempty"`
+}
+
+// CloneAddons returns the names of addons opted into cloning for previews.
+func (ac *AppConfig) CloneAddons() []string {
+	var names []string
+	if ac != nil {
+		for name, cfg := range ac.Addons {
+			if cfg != nil && cfg.Clone {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // WantsWeb reports whether a web service may be synthesized for this app, and

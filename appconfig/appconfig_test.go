@@ -9,6 +9,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneAddonsConfig(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   []string
+	}{
+		{`name = "test"`, nil},
+		{"[addons.miren-postgresql]\nclone = false", nil},
+		{"[addons.miren-postgresql]\nclone_variant = \"shared\"", nil},
+		{"[addons.miren-postgresql]\nclone = true\n[addons.miren-valkey]\nvariant = \"small\"", []string{"miren-postgresql"}},
+	} {
+		cfg, err := Parse([]byte(tc.config))
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, cfg.CloneAddons())
+	}
+	_, err := Parse([]byte("[addons.miren-postgresql]\nclone = \"true\""))
+	require.Error(t, err)
+	cfg, err := Parse([]byte("[addons.miren-postgresql]\nvariant = \"small\"\nclone = true\nclone_variant = \"shared\""))
+	require.NoError(t, err)
+	assert.Equal(t, "small", cfg.Addons["miren-postgresql"].Variant)
+	assert.Equal(t, "shared", cfg.Addons["miren-postgresql"].CloneVariant)
+	_, err = Parse([]byte("[addons.miren-postgresql]\nclone_variant = true"))
+	require.Error(t, err)
+}
+
 func TestAppConfigValidation(t *testing.T) {
 	tests := []struct {
 		name    string

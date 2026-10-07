@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -26,8 +28,10 @@ type decodeSharedCloneSourceIn struct {
 
 type decodeSharedCloneSourceOut struct {
 	ServerID          entity.Id
-	SourceDbName      string
-	SourceUsername    string
+	SourceHost        string
+	DatabaseName      string
+	Username          string
+	Password          string
 	ServiceHost       string
 	SuperuserPassword string
 }
@@ -48,7 +52,8 @@ func decodeSharedCloneSource(ctx context.Context, in decodeSharedCloneSourceIn) 
 		return decodeSharedCloneSourceOut{}, err
 	}
 	return decodeSharedCloneSourceOut{
-		ServerID: data.PostgresServer, SourceDbName: data.DatabaseName, SourceUsername: data.Username,
+		ServerID: data.PostgresServer, SourceHost: host, DatabaseName: data.DatabaseName,
+		Username: defaultPostgresUser, Password: server.SuperuserPassword,
 		ServiceHost: host, SuperuserPassword: server.SuperuserPassword,
 	}, nil
 }
@@ -88,73 +93,92 @@ func undoGenerateCloneCredentials(context.Context, generateCloneCredentialsIn, g
 	return nil
 }
 
-type cloneSharedDatabaseIn struct {
-	ServiceHost        string
-	SuperuserPassword  string
-	SourceDbName       string
-	SourceUsername     string
-	SharedDatabaseName string
-	SharedUsername     string
+type createCloneSharedUserIn struct {
+	ServiceHost             string
+	SuperuserPassword       string
+	GeneratedSharedUsername string
+	SharedPassword          string
 }
 
-type cloneSharedDatabaseOut struct {
+type createCloneSharedUserOut struct {
+	SharedUsername string
+}
+
+func createCloneSharedUser(ctx context.Context, in createCloneSharedUserIn) (createCloneSharedUserOut, error) {
+	conn, err := connectAsSuperuser(ctx, in.ServiceHost, in.SuperuserPassword)
+	if err != nil {
+		return createCloneSharedUserOut{}, fmt.Errorf("connecting to shared server: %w", err)
+	}
+	defer conn.Close(ctx)
+	var exists bool
+	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", in.GeneratedSharedUsername).Scan(&exists); err != nil {
+		return createCloneSharedUserOut{}, fmt.Errorf("checking clone user %s: %w", in.GeneratedSharedUsername, err)
+	}
+	if exists {
+		err = alterPostgresUserPassword(ctx, conn, in.GeneratedSharedUsername, in.SharedPassword)
+	} else {
+		err = createPostgresUser(ctx, conn, in.GeneratedSharedUsername, in.SharedPassword)
+	}
+	if err != nil {
+		return createCloneSharedUserOut{}, err
+	}
+	return createCloneSharedUserOut{SharedUsername: in.GeneratedSharedUsername}, nil
+}
+
+func undoCreateCloneSharedUser(ctx context.Context, in createCloneSharedUserIn, out createCloneSharedUserOut) error {
+	return UndoCreateSharedUser(ctx, CreateSharedUserIn{
+		ServiceHost: in.ServiceHost, SuperuserPassword: in.SuperuserPassword,
+		GeneratedSharedUsername: in.GeneratedSharedUsername,
+	}, CreateSharedUserOut(out))
+}
+
+type createCloneSharedDatabaseIn struct {
+	ServiceHost         string
+	SuperuserPassword   string
+	SharedDatabaseName  string
+	SharedUsername      string
+	TargetAssociationID string
+}
+
+type createCloneSharedDatabaseOut struct {
 	DatabaseCreated bool `saga:"database_created"`
 }
 
-func cloneSharedDatabase(ctx context.Context, in cloneSharedDatabaseIn) (cloneSharedDatabaseOut, error) {
+func createCloneSharedDatabase(ctx context.Context, in createCloneSharedDatabaseIn) (createCloneSharedDatabaseOut, error) {
 	conn, err := connectAsSuperuser(ctx, in.ServiceHost, in.SuperuserPassword)
 	if err != nil {
-		return cloneSharedDatabaseOut{}, err
+		return createCloneSharedDatabaseOut{}, fmt.Errorf("connecting to shared server: %w", err)
 	}
 	defer conn.Close(ctx)
-	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s ALLOW_CONNECTIONS false", quoteIdentifier(in.SourceDbName))); err != nil {
-		return cloneSharedDatabaseOut{}, fmt.Errorf("pausing connections to %s: %w", in.SourceDbName, err)
-	}
-	paused := true
-	defer func() {
-		if paused {
-			cleanupCtx := context.WithoutCancel(ctx)
-			_, _ = conn.Exec(cleanupCtx, fmt.Sprintf("ALTER DATABASE %s ALLOW_CONNECTIONS true", quoteIdentifier(in.SourceDbName)))
+	var owner string
+	err = conn.QueryRow(ctx, `SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = $1`, in.SharedDatabaseName).Scan(&owner)
+	if err == nil {
+		if owner != in.SharedUsername {
+			return createCloneSharedDatabaseOut{}, fmt.Errorf("clone database %s already exists with owner %s, expected %s", in.SharedDatabaseName, owner, in.SharedUsername)
 		}
-	}()
-	if err := terminatePostgresConnections(ctx, conn, in.SourceDbName); err != nil {
-		return cloneSharedDatabaseOut{}, err
+		return createCloneSharedDatabaseOut{DatabaseCreated: true}, nil
 	}
-	query := fmt.Sprintf("CREATE DATABASE %s WITH TEMPLATE %s OWNER %s",
-		quoteIdentifier(in.SharedDatabaseName), quoteIdentifier(in.SourceDbName), quoteIdentifier(in.SharedUsername))
-	if _, err := conn.Exec(ctx, query); err != nil {
-		return cloneSharedDatabaseOut{}, fmt.Errorf("cloning database %s: %w", in.SourceDbName, err)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return createCloneSharedDatabaseOut{}, fmt.Errorf("checking clone database %s: %w", in.SharedDatabaseName, err)
 	}
-	targetConn, err := connectPostgres(ctx, in.ServiceHost, postgresPort, defaultPostgresUser, in.SuperuserPassword, in.SharedDatabaseName)
-	if err != nil {
-		_ = dropPostgresDatabase(context.WithoutCancel(ctx), conn, in.SharedDatabaseName)
-		return cloneSharedDatabaseOut{}, fmt.Errorf("connecting to cloned database: %w", err)
+	if err := createPostgresDatabase(ctx, conn, in.SharedDatabaseName, in.SharedUsername); err != nil {
+		return createCloneSharedDatabaseOut{}, err
 	}
-	if _, err := targetConn.Exec(ctx, fmt.Sprintf("REASSIGN OWNED BY %s TO %s",
-		quoteIdentifier(in.SourceUsername), quoteIdentifier(in.SharedUsername))); err != nil {
-		targetConn.Close(context.WithoutCancel(ctx))
-		_ = dropPostgresDatabase(context.WithoutCancel(ctx), conn, in.SharedDatabaseName)
-		return cloneSharedDatabaseOut{}, fmt.Errorf("transferring cloned database ownership: %w", err)
-	}
-	targetConn.Close(context.WithoutCancel(ctx))
-	if _, err := conn.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s ALLOW_CONNECTIONS true", quoteIdentifier(in.SourceDbName))); err != nil {
-		_ = dropPostgresDatabase(context.WithoutCancel(ctx), conn, in.SharedDatabaseName)
-		return cloneSharedDatabaseOut{}, fmt.Errorf("resuming connections to %s: %w", in.SourceDbName, err)
-	}
-	paused = false
-	return cloneSharedDatabaseOut{DatabaseCreated: true}, nil
+	return createCloneSharedDatabaseOut{DatabaseCreated: true}, nil
 }
 
-func undoCloneSharedDatabase(ctx context.Context, in cloneSharedDatabaseIn, out cloneSharedDatabaseOut) error {
-	if !out.DatabaseCreated {
-		return nil
-	}
-	conn, err := connectAsSuperuser(ctx, in.ServiceHost, in.SuperuserPassword)
-	if err != nil {
+func undoCreateCloneSharedDatabase(ctx context.Context, in createCloneSharedDatabaseIn, out createCloneSharedDatabaseOut) error {
+	// A failed restore may not have checkpointed its sandbox ID. Release that
+	// deterministic resource before trying to drop the database it connects to.
+	id := "sandbox/pg-" + strings.TrimPrefix(in.TargetAssociationID, "addon_association/") + "-restore"
+	_, err := saga.Get[*addon.ProviderFramework](ctx).EAC.Delete(ctx, id)
+	if err != nil && !errors.Is(err, cond.ErrNotFound{}) {
 		return err
 	}
-	defer conn.Close(ctx)
-	return dropPostgresDatabase(ctx, conn, in.SharedDatabaseName)
+	return UndoCreateSharedDatabase(ctx, CreateSharedDatabaseIn{
+		ServiceHost: in.ServiceHost, SuperuserPassword: in.SuperuserPassword,
+		SharedDatabaseName: in.SharedDatabaseName, SharedUsername: in.SharedUsername,
+	}, CreateSharedDatabaseOut(out))
 }
 
 func registerCloneSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
@@ -163,8 +187,10 @@ func registerCloneSharedSaga(registry *saga.Registry, fw *addon.ProviderFramewor
 	return b.
 		Action(decodeSharedCloneSource).Undo(undoDecodeSharedCloneSource).
 		Action(generateCloneCredentials).Undo(undoGenerateCloneCredentials).
-		Action(CreateSharedUser).Undo(UndoCreateSharedUser).
-		Action(cloneSharedDatabase).Undo(undoCloneSharedDatabase).
+		Action(createCloneSharedUser).Undo(undoCreateCloneSharedUser).
+		Action(createCloneSharedDatabase).Undo(undoCreateCloneSharedDatabase).
+		Action(restoreSharedClone).Undo(undoRestoreSharedClone).
+		Action(releaseRestoreSandbox).Undo(undoReleaseRestoreSandbox).
 		Action(dbsaga.IncrementAssociationCount).Undo(dbsaga.UndoIncrementAssociationCount).
 		RegisterTo(registry)
 }
@@ -258,11 +284,147 @@ func undoDecodeDedicatedCloneSource(context.Context, decodeDedicatedCloneSourceI
 	return nil
 }
 
+type restoreSharedCloneIn struct {
+	SourceHost          string
+	DatabaseName        string
+	Username            string
+	Password            string
+	ServiceHost         string
+	SharedUsername      string
+	SharedPassword      string
+	SharedDatabaseName  string
+	VariantConfig       map[string]string `saga:"variantconfig,optional"`
+	TargetAssociationID string
+	AppName             string
+	DatabaseCreated     bool `saga:"database_created"`
+}
+
+type restoreSharedCloneOut struct {
+	RestoreSandboxID entity.Id
+}
+
+func restoreSharedClone(ctx context.Context, in restoreSharedCloneIn) (restoreSharedCloneOut, error) {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+	// Dump to a file before restoring, so a failed pg_dump cannot look like a
+	// successful partial restore. Omitting owners and ACLs makes the preview
+	// role own its objects without importing production roles into the cluster.
+	command := `set -eu
+PGPASSWORD="$SOURCE_PASSWORD" pg_dump -h "$SOURCE_HOST" -U "$SOURCE_USERNAME" -d "$SOURCE_DATABASE" --format=custom --no-owner --no-acl -f /tmp/clone.dump
+PGPASSWORD="$TARGET_PASSWORD" pg_restore -h "$TARGET_HOST" -U "$TARGET_USERNAME" -d "$TARGET_DATABASE" --no-owner --no-acl --exit-on-error --single-transaction /tmp/clone.dump`
+	image := restoreCloneImage(in.VariantConfig)
+	id, err := fw.RunOneShotSandbox(ctx, addon.OneShotSandboxSpec{
+		Name:  "pg-" + strings.TrimPrefix(in.TargetAssociationID, "addon_association/") + "-restore",
+		Image: image, Command: command,
+		Env: []string{
+			"SOURCE_HOST=" + in.SourceHost, "SOURCE_PASSWORD=" + in.Password, "SOURCE_DATABASE=" + in.DatabaseName,
+			"SOURCE_USERNAME=" + in.Username,
+			"TARGET_HOST=" + in.ServiceHost, "TARGET_USERNAME=" + in.SharedUsername,
+			"TARGET_PASSWORD=" + in.SharedPassword, "TARGET_DATABASE=" + in.SharedDatabaseName,
+		},
+		Labels: types.LabelSet("addon", AddonName, "app", in.AppName, "operation", "clone-restore"),
+	}, poolReadyTimeout)
+	if err != nil {
+		if id != "" {
+			_, cleanupErr := fw.EAC.Delete(context.WithoutCancel(ctx), id.String())
+			if cleanupErr != nil && !errors.Is(cleanupErr, cond.ErrNotFound{}) {
+				return restoreSharedCloneOut{}, errors.Join(err, cleanupErr)
+			}
+		}
+		return restoreSharedCloneOut{}, fmt.Errorf("dumping and restoring PostgreSQL clone: %w", err)
+	}
+	return restoreSharedCloneOut{RestoreSandboxID: id}, nil
+}
+
+func restoreCloneImage(variantConfig map[string]string) string {
+	image := variantConfig[addon.ConfigImage]
+	if image == "" {
+		image = BaseImage + ":" + DefaultVersion
+	}
+	return image
+}
+
+func undoRestoreSharedClone(ctx context.Context, _ restoreSharedCloneIn, out restoreSharedCloneOut) error {
+	_, err := saga.Get[*addon.ProviderFramework](ctx).EAC.Delete(ctx, out.RestoreSandboxID.String())
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return nil
+	}
+	return err
+}
+
+type releaseRestoreSandboxIn struct {
+	RestoreSandboxID entity.Id
+}
+type releaseRestoreSandboxOut struct{}
+
+func releaseRestoreSandbox(ctx context.Context, in releaseRestoreSandboxIn) (releaseRestoreSandboxOut, error) {
+	return releaseRestoreSandboxOut{}, undoRestoreSharedClone(ctx, restoreSharedCloneIn{}, restoreSharedCloneOut(in))
+}
+
+func undoReleaseRestoreSandbox(context.Context, releaseRestoreSandboxIn, releaseRestoreSandboxOut) error {
+	return nil
+}
+
+func registerCloneDedicatedToSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
+	if err := RegisterEnsureSharedServerSaga(registry, fw); err != nil {
+		return err
+	}
+	b := saga.Define("clone-dedicated-to-shared-postgresql").Using(fw)
+	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})
+	return b.
+		Action(decodeDedicatedCloneSource).Undo(undoDecodeDedicatedCloneSource).
+		Action(FindOrCreateSharedServer).Undo(UndoFindOrCreateSharedServer).
+		Action(generateCloneCredentials).Undo(undoGenerateCloneCredentials).
+		Action(createCloneSharedUser).Undo(undoCreateCloneSharedUser).
+		Action(createCloneSharedDatabase).Undo(undoCreateCloneSharedDatabase).
+		Action(restoreSharedClone).Undo(undoRestoreSharedClone).
+		Action(releaseRestoreSandbox).Undo(undoReleaseRestoreSandbox).
+		Action(dbsaga.IncrementAssociationCount).Undo(dbsaga.UndoIncrementAssociationCount).
+		RegisterTo(registry)
+}
+
+func (p *Provider) cloneDedicatedToShared(ctx context.Context, source, target addon.AddonAssociation, app addon.App, variant addon.Variant) (*addon.ProvisionResult, error) {
+	registry := saga.NewRegistry()
+	if err := registerCloneDedicatedToSharedSaga(registry, p.Fw); err != nil {
+		return nil, err
+	}
+	executor := saga.NewExecutor(p.Fw.Storage, saga.WithRegistry(registry), saga.WithLogger(p.Log))
+	execID := addon.CloneExecutionID(target.ID)
+	if err := executor.Start("clone-dedicated-to-shared-postgresql").WithID(execID).
+		Input("sourceentity", source.Entity).Input("appname", app.Name).
+		Input("targetassociationid", target.ID.String()).Input("variantconfig", variant.Config).
+		Execute(ctx); err != nil {
+		return nil, err
+	}
+	out, err := executor.ExecutionOutputs(ctx, execID)
+	if err != nil {
+		return nil, err
+	}
+	var host, username, password, dbName string
+	var serverID entity.Id
+	for key, target := range map[string]any{
+		"servicehost": &host, "sharedusername": &username,
+		"sharedpassword": &password, "shareddatabasename": &dbName, "serverid": &serverID,
+	} {
+		if err := out.Get(key, target); err != nil {
+			return nil, fmt.Errorf("reading %s from clone outputs: %w", key, err)
+		}
+	}
+	return &addon.ProvisionResult{
+		EnvVars: buildEnvVars(host, postgresPort, username, password, dbName),
+		Attrs: (&addon_v1alpha.PostgresqlSharedData{
+			PostgresServer: serverID, DatabaseName: dbName, Username: username,
+		}).Encode(),
+	}, nil
+}
+
 type generateDedicatedCloneNameIn struct {
 	AppName             string
 	TargetAssociationID string
 }
-type generateDedicatedCloneNameOut struct{ ServerName string }
+type generateDedicatedCloneNameOut struct {
+	ServerName  string
+	ServiceName string
+}
 
 func generateDedicatedCloneName(_ context.Context, in generateDedicatedCloneNameIn) (generateDedicatedCloneNameOut, error) {
 	suffix := in.TargetAssociationID
@@ -272,10 +434,18 @@ func generateDedicatedCloneName(_ context.Context, in generateDedicatedCloneName
 	if len(suffix) > 12 {
 		suffix = suffix[len(suffix)-12:]
 	}
-	return generateDedicatedCloneNameOut{ServerName: fmt.Sprintf("pg-%s-%s", in.AppName, suffix)}, nil
+	return generateDedicatedCloneNameOut{
+		ServerName:  fmt.Sprintf("pg-%s-%s", in.AppName, suffix),
+		ServiceName: fmt.Sprintf("%s-postgresql-%s", in.AppName, suffix),
+	}, nil
 }
-func undoGenerateDedicatedCloneName(context.Context, generateDedicatedCloneNameIn, generateDedicatedCloneNameOut) error {
-	return nil
+func undoGenerateDedicatedCloneName(ctx context.Context, _ generateDedicatedCloneNameIn, out generateDedicatedCloneNameOut) error {
+	fw := saga.Get[*addon.ProviderFramework](ctx)
+	_, err := fw.EAC.Delete(ctx, "sandbox/"+out.ServerName+"-basebackup")
+	if err != nil && !errors.Is(err, cond.ErrNotFound{}) {
+		return err
+	}
+	return fw.DeleteDiskByName(ctx, "pg-"+out.ServerName+"-data")
 }
 
 const (

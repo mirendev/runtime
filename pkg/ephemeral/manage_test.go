@@ -129,9 +129,18 @@ func TestReplaceExisting(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, found)
 
-		// Replace it
-		err = ReplaceExisting(ctx, inmem.EAC, appID, "feat-x", log)
+		// Simulate asynchronous addon teardown while replacement waits.
+		done := make(chan error, 1)
+		go func() { done <- ReplaceExisting(ctx, inmem.EAC, appID, "feat-x", log) }()
+		require.Eventually(t, func() bool {
+			var clone addon_v1alpha.AddonAssociation
+			return inmem.Client.GetById(ctx, cloneID, &clone) == nil && clone.Status == "deprovisioning"
+		}, 5*time.Second, 10*time.Millisecond)
+		found, err = LookupByLabel(ctx, inmem.EAC, appID, "feat-x")
 		require.NoError(t, err)
+		require.NotNil(t, found, "retain the owner until addon teardown completes")
+		require.NoError(t, inmem.Client.Delete(ctx, cloneID))
+		require.NoError(t, <-done)
 
 		// Verify it's gone
 		found, err = LookupByLabel(ctx, inmem.EAC, appID, "feat-x")
@@ -139,8 +148,7 @@ func TestReplaceExisting(t *testing.T) {
 		require.Nil(t, found)
 
 		var clone addon_v1alpha.AddonAssociation
-		require.NoError(t, inmem.Client.GetById(ctx, cloneID, &clone))
-		require.Equal(t, "deprovisioning", clone.Status)
+		require.Error(t, inmem.Client.GetById(ctx, cloneID, &clone))
 	})
 
 	t.Run("no-op when label does not exist", func(t *testing.T) {

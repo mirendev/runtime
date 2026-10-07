@@ -2,6 +2,7 @@ package addon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -151,6 +152,15 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		result, err = provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, variant)
 	}
 	if err != nil {
+		if assoc.SourceAssociation != "" {
+			exec, loadErr := c.sagaStorage.Get(ctx, addon.CloneExecutionID(assoc.ID))
+			if loadErr == nil && exec.Status != saga.StatusFailed {
+				return fmt.Errorf("clone provisioning incomplete: %w", err)
+			}
+			if loadErr != nil && !errors.Is(loadErr, saga.ErrExecutionNotFound) {
+				return fmt.Errorf("reading clone execution: %w", loadErr)
+			}
+		}
 		return c.setError(meta, fmt.Errorf("provisioning: %w", err))
 	}
 
@@ -278,15 +288,13 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 	}
 
 	// Step 1: Call provider.Deprovision
-	err := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
+	var err error
+	_, supportsCloning := provider.(addon.AddonCloner)
+	if assoc.SourceAssociation == "" || supportsCloning {
+		err = provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
+	}
 	if err != nil {
-		// Try to set error status, but don't fail if the update is rejected
-		// (e.g., the app was deleted and the entity server rejects the patch
-		// due to a dangling app reference). The entity stays at "deprovisioning"
-		// so the controller will retry.
-		if setErr := c.setError(meta, fmt.Errorf("deprovisioning: %w", err)); setErr != nil {
-			c.log.Warn("failed to set error status during deprovision", "error", setErr)
-		}
+		// Keep deprovisioning retryable; terminal error would abandon resources.
 		return fmt.Errorf("deprovisioning: %w", err)
 	}
 

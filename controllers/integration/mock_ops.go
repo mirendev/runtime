@@ -46,11 +46,6 @@ func (m *mockDiskVolumeOps) CreateDiskImage(path string, _ int64) error {
 	return nil
 }
 
-func (m *mockDiskVolumeOps) CloneDiskImage(_, dst string) error {
-	m.existingPaths[dst] = true
-	return nil
-}
-
 // Verify interface compliance
 var _ diskio.DiskVolumeOps = (*mockDiskVolumeOps)(nil)
 

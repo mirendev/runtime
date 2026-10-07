@@ -350,12 +350,6 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 			"entity_id", entityId,
 			"image_path", imagePath,
 		)
-	} else if volume.CloneSourceImagePath != "" {
-		if err := c.ops.CloneDiskImage(volume.CloneSourceImagePath, imagePath); err != nil {
-			c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to clone disk image: %v", err))
-			return fmt.Errorf("failed to clone disk image: %w", err)
-		}
-		c.log.Info("cloned disk image", "entity_id", entityId, "source", volume.CloneSourceImagePath)
 	} else if err := c.ops.CreateDiskImage(imagePath, sizeBytes); err != nil {
 		c.setVolumeError(ctx, volume.ID, fmt.Sprintf("failed to create disk image: %v", err))
 		return fmt.Errorf("failed to create disk image: %w", err)

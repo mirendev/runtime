@@ -583,6 +583,53 @@ func (e *Executor) runExecution(ctx, actionCtx context.Context, def *Definition,
 	return nil
 }
 
+// Compensate resumes an interrupted execution before rolling back its durable
+// actions. Replaying the interrupted action first recovers side effects that
+// may have happened before its output checkpoint was saved.
+func (e *Executor) Compensate(ctx context.Context, id string) error {
+	exec, err := e.storage.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if _, err := e.scopeForExisting(exec); err != nil {
+		return err
+	}
+	def, ok := e.registry.Get(exec.DefinitionName)
+	if !ok {
+		return fmt.Errorf("unknown saga %q", exec.DefinitionName)
+	}
+	if !e.claim(id) {
+		return ErrExecutionInProgress
+	}
+	defer e.release(id)
+	if exec.Status == StatusFailed {
+		return nil
+	}
+	if exec.Status == StatusPending || exec.Status == StatusRunning {
+		_ = e.resumeWithActionContext(ctx, ctx, def, exec)
+		// Reload to distinguish a fully compensated failure from interrupted work.
+		exec, err = e.storage.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+	}
+	if exec.Status == StatusFailed {
+		return nil
+	}
+	if exec.Status != StatusCompleted && exec.Status != StatusUndoing {
+		return fmt.Errorf("execution %q is not ready for compensation: %s", id, exec.Status)
+	}
+	undoErr := e.runUndo(ctx, def, exec)
+	persisted, err := e.storage.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if persisted.Status == StatusFailed {
+		return nil
+	}
+	return undoErr
+}
+
 // runUndo rolls back completed actions in reverse order.
 func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution) error {
 	log := e.log.With("saga", def.Name, "execution", exec.ID)
@@ -663,9 +710,9 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 		if err := node.Action.Undo(actionCtx, actionInputs, output); err != nil {
 			log.Error("undo failed", "action", actionName, "error", err)
 			undoErrors = append(undoErrors, fmt.Errorf("undo %q: %w", actionName, err))
-			// Continue with other undos even on failure
-			// Don't mark as undone - recovery should retry this action
-			continue
+			// Earlier actions may own resources this undo still needs (credentials,
+			// servers, or disks). Keep those dependencies until cleanup succeeds.
+			break
 		}
 
 		// Record successful undo
@@ -687,7 +734,7 @@ func (e *Executor) runUndo(ctx context.Context, def *Definition, exec *Execution
 			log.Error("failed to persist undoing state", "error", err)
 		}
 		log.Info("saga undo incomplete, will retry on recovery", "undo_errors", len(undoErrors))
-		return fmt.Errorf("saga failed with %d undo errors: %v", len(undoErrors), undoErrors)
+		return fmt.Errorf("saga failed: %s; %d undo errors: %v", exec.Error, len(undoErrors), undoErrors)
 	}
 
 	// All undos succeeded - mark as failed (terminal state)

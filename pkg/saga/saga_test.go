@@ -911,6 +911,7 @@ func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
 	// Saga should return an error (with undo errors)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "undo errors")
+	assert.Contains(t, err.Error(), "multiply failed", "cleanup failure must not hide the original failure")
 
 	// Add executed, multiply was attempted
 	assert.Len(t, ctrl.addCalls, 1)

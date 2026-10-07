@@ -221,6 +221,58 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		assert.Equal(t, "second_app", secondEnvMap["PGDATABASE"], "second app should have its own database")
 	})
 
+	t.Run("CloneSharedPostgreSQLKeepsPrimaryAvailable", func(t *testing.T) {
+		provider := postgresql.NewProvider(fw)
+		app := addon.App{Name: "clone-source-app"}
+		variant := addon.Variant{Name: "shared"}
+		source := addon.AddonAssociation{ID: "assoc-clone-source", Variant: "shared"}
+		provisioned, err := provider.Provision(ctx, source, app, variant)
+		require.NoError(t, err)
+		source.Entity = entity.New(entity.DBId, source.ID, provisioned.Attrs)
+		t.Cleanup(func() { assert.NoError(t, provider.Deprovision(ctx, source)) })
+		sourceEnv := make(map[string]string)
+		for _, v := range provisioned.EnvVars {
+			sourceEnv[v.Key] = v.Value
+		}
+		conn, err := pgx.Connect(ctx, sourceEnv["DATABASE_URL"])
+		require.NoError(t, err)
+		_, err = conn.Exec(ctx, "CREATE TABLE clone_values (id BIGSERIAL PRIMARY KEY, value INTEGER NOT NULL); INSERT INTO clone_values (value) VALUES (17)")
+		require.NoError(t, err)
+
+		target := addon.AddonAssociation{ID: "assoc-clone-target", Variant: "shared", SourceAssociation: source.ID}
+		cloned, err := provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err)
+		target.Entity = entity.New(entity.DBId, target.ID, cloned.Attrs)
+		cloneEnv := make(map[string]string)
+		for _, v := range cloned.EnvVars {
+			cloneEnv[v.Key] = v.Value
+		}
+		cloneConn, err := pgx.Connect(ctx, cloneEnv["DATABASE_URL"])
+		require.NoError(t, err)
+		_, err = cloneConn.Exec(ctx, "INSERT INTO clone_values (value) VALUES (29)")
+		require.NoError(t, err, "cloned tables and sequences must be writable by the clone role")
+		var total int
+		require.NoError(t, cloneConn.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 46, total)
+		require.NoError(t, cloneConn.Close(ctx))
+
+		defer conn.Close(ctx)
+		var owner string
+		require.NoError(t, conn.QueryRow(ctx, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()").Scan(&owner))
+		require.Equal(t, sourceEnv["PGUSER"], owner, "cloning must not transfer or disconnect the primary database")
+		require.NoError(t, conn.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 17, total)
+
+		_, err = provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err, "replaying a completed clone must not repeat the restore")
+		// Simulate a crash after saga completion but before saving association attrs.
+		target.Entity = entity.New(entity.DBId, target.ID)
+		require.NoError(t, provider.Deprovision(ctx, target), "clone cleanup must recover resource ownership from the saga")
+		var roleCount int
+		require.NoError(t, conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_roles WHERE rolname = $1", cloneEnv["PGUSER"]).Scan(&roleCount))
+		require.Zero(t, roleCount)
+	})
+
 	// Provisions a dedicated server and rotates its single role live, proving the
 	// rotation at the wire: the new password authenticates, the old one is
 	// rejected, the entity records the new secret, and the pool is never

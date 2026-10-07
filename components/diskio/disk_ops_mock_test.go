@@ -18,13 +18,11 @@ type mockDiskVolumeOps struct {
 	movedDirs     []mockDirMove
 	existingPaths map[string]bool
 	createdImages []mockDiskImage
-	clonedImages  []mockDirMove
 
 	createDirErr   error
 	removeDirErr   error
 	moveDirErr     error
 	createImageErr error
-	cloneImageErr  error
 }
 
 type mockDiskImage struct {
@@ -76,15 +74,6 @@ func (m *mockDiskVolumeOps) CreateDiskImage(path string, sizeBytes int64) error 
 	}
 	m.createdImages = append(m.createdImages, mockDiskImage{path: path, sizeBytes: sizeBytes})
 	m.existingPaths[path] = true
-	return nil
-}
-
-func (m *mockDiskVolumeOps) CloneDiskImage(src, dst string) error {
-	if m.cloneImageErr != nil {
-		return m.cloneImageErr
-	}
-	m.clonedImages = append(m.clonedImages, mockDirMove{src: src, dst: dst})
-	m.existingPaths[dst] = true
 	return nil
 }
 

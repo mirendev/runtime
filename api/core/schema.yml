@@ -617,6 +617,21 @@ kinds:
 
 components:
   config_spec:
+    clone_addons:
+      type: string
+      many: true
+      doc: Names of addons ephemeral versions clone instead of sharing primary associations.
+    clone_addon_variants:
+      type: component
+      many: true
+      doc: Variant overrides for opted-in ephemeral addon clones.
+      attrs:
+        name:
+          type: string
+          doc: Addon name
+        variant:
+          type: string
+          doc: Variant used by the clone instead of the primary association
     variables:
       type: component
       doc: Environment variables and configuration values

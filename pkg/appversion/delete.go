@@ -17,6 +17,8 @@ import (
 	"miren.dev/runtime/pkg/entity"
 )
 
+var ErrAddonCleanupPending = errors.New("addon clones are still deprovisioning")
+
 // Delete hard-deletes an AppVersion and its 1:1 ConfigVersion.
 //
 // It deliberately does NOT touch sandbox pools. The sandbox pool Manager owns
@@ -29,6 +31,9 @@ import (
 // ConfigVersion cleanup is best-effort: an orphaned ConfigVersion holds no
 // blobs, so a failure there is logged but does not block deleting the version.
 func Delete(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
+	if err := cleanupAddonClones(ctx, eac, version.ID); err != nil {
+		return err
+	}
 	// Delete the version first. If we cleaned up the ConfigVersion first and
 	// then the version delete failed, the surviving version would point at a
 	// missing config; ordering it this way means the best-effort cleanup only
@@ -78,12 +83,6 @@ func cleanupAddonClones(ctx context.Context, eac *entityserver_v1alpha.EntityAcc
 	for _, ent := range resp.Values() {
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
-		if assoc.Status == "error" {
-			if _, err := eac.Delete(ctx, assoc.ID.String()); err != nil {
-				return fmt.Errorf("deleting failed addon clone %s: %w", assoc.ID, err)
-			}
-			continue
-		}
 		if assoc.Status != "deprovisioning" {
 			if _, err := eac.Patch(ctx, []entity.Attr{
 				entity.Ref(entity.DBId, assoc.ID),
@@ -93,7 +92,7 @@ func cleanupAddonClones(ctx context.Context, eac *entityserver_v1alpha.EntityAcc
 			}
 		}
 	}
-	return nil
+	return fmt.Errorf("%w for app version %s; retaining version for retry", ErrAddonCleanupPending, versionID)
 }
 
 // cleanupSandboxPools removes the sandbox pools that reference the given

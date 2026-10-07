@@ -158,6 +158,8 @@
       "properties": {
         "variant": {"type": "string"},
         "version": {"type": "string"},
+        "clone": {"type": "boolean", "description": "Clone this addon for ephemeral previews instead of sharing it. The provider must support cloning.", "default": false},
+        "clone_variant": {"type": "string", "description": "Variant to use for this addon's preview clones. Requires clone = true; omitted means the primary variant. Does not change the addon version."},
         "services": {"type": "array", "description": "Services this addon's storage attaches to. Empty or omitted means every service.", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
       }
     }

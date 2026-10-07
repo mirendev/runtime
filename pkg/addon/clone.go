@@ -4,16 +4,22 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 )
 
-// RequestClones creates one version-scoped association for each active primary
+// RequestClones creates one version-scoped association for each selected primary
 // association on an app. It is idempotent so a resumed deploy does not create
 // a second clone of the same addon.
-func RequestClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, appID, versionID entity.Id) error {
+func RequestClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, appID, versionID entity.Id, spec core_v1alpha.ConfigSpec) error {
+	names := spec.CloneAddons
+	if len(names) == 0 {
+		return nil
+	}
 	existing, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, versionID))
 	if err != nil {
 		return fmt.Errorf("listing existing addon clones: %w", err)
@@ -32,7 +38,7 @@ func RequestClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCl
 	for _, ent := range sources.Values() {
 		var source addon_v1alpha.AddonAssociation
 		source.Decode(ent.Entity())
-		if source.AppVersion != "" {
+		if source.AppVersion != "" || !slices.Contains(names, NameFromRef(source.Addon)) {
 			continue
 		}
 		if source.Status != "active" {
@@ -50,6 +56,12 @@ func RequestClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessCl
 			Version:           source.Version,
 			Services:          source.Services,
 			Status:            "pending",
+		}
+		for _, override := range spec.CloneAddonVariants {
+			if override.Name == NameFromRef(source.Addon) && override.Variant != "" {
+				assoc.Variant = override.Variant
+				break
+			}
 		}
 		sum := sha256.Sum256([]byte(source.ID + "\x00" + versionID))
 		id := entity.Id(fmt.Sprintf("addon_association/clone-%x", sum[:12]))

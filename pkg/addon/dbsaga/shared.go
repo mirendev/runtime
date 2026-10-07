@@ -2,10 +2,12 @@ package dbsaga
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/saga"
@@ -18,6 +20,32 @@ import (
 type ServerCounter interface {
 	GetAssociationCount(ctx context.Context, serverID entity.Id) (count int64, revision int64, err error)
 	PatchAssociationCount(ctx context.Context, serverID entity.Id, revision int64, newCount int64) error
+}
+
+func changeAssociationCount(ctx context.Context, sc ServerCounter, serverID entity.Id, delta int64) (int64, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		count, rev, err := sc.GetAssociationCount(ctx, serverID)
+		if err != nil {
+			return 0, fmt.Errorf("getting server: %w", err)
+		}
+		next := max(count+delta, 0)
+		if next == count {
+			return next, nil
+		}
+		err = sc.PatchAssociationCount(ctx, serverID, rev, next)
+		if errors.Is(err, cond.ErrConflict{}) {
+			// Clone creation can overlap replacement cleanup on the same server.
+			// Recompute from the current count rather than retrying a stale value.
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("updating association count: %w", err)
+		}
+		return next, nil
+	}
 }
 
 // --- Shared Shared-Server Saga Actions ---
@@ -120,13 +148,8 @@ type IncrementAssociationCountOut struct {
 func IncrementAssociationCount(ctx context.Context, in IncrementAssociationCountIn) (IncrementAssociationCountOut, error) {
 	sc := saga.Get[ServerCounter](ctx)
 
-	count, rev, err := sc.GetAssociationCount(ctx, in.ServerID)
-	if err != nil {
-		return IncrementAssociationCountOut{}, fmt.Errorf("getting server for count increment: %w", err)
-	}
-
-	if err := sc.PatchAssociationCount(ctx, in.ServerID, rev, count+1); err != nil {
-		return IncrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
+	if _, err := changeAssociationCount(ctx, sc, in.ServerID, 1); err != nil {
+		return IncrementAssociationCountOut{}, err
 	}
 
 	return IncrementAssociationCountOut{Incremented: true}, nil
@@ -139,13 +162,8 @@ func UndoIncrementAssociationCount(ctx context.Context, in IncrementAssociationC
 
 	sc := saga.Get[ServerCounter](ctx)
 
-	count, rev, err := sc.GetAssociationCount(ctx, in.ServerID)
-	if err != nil {
-		return err
-	}
-
-	newCount := max(count-1, 0)
-	return sc.PatchAssociationCount(ctx, in.ServerID, rev, newCount)
+	_, err := changeAssociationCount(ctx, sc, in.ServerID, -1)
+	return err
 }
 
 // DecrementAssociationCount decreases the association count on a shared server.
@@ -163,18 +181,9 @@ type DecrementAssociationCountOut struct {
 func DecrementAssociationCount(ctx context.Context, in DecrementAssociationCountIn) (DecrementAssociationCountOut, error) {
 	sc := saga.Get[ServerCounter](ctx)
 
-	count, rev, err := sc.GetAssociationCount(ctx, in.SharedServerRef)
+	newCount, err := changeAssociationCount(ctx, sc, in.SharedServerRef, -1)
 	if err != nil {
-		return DecrementAssociationCountOut{}, fmt.Errorf("getting server: %w", err)
-	}
-
-	if count <= 0 {
-		return DecrementAssociationCountOut{RemainingCount: 0}, nil
-	}
-
-	newCount := count - 1
-	if err := sc.PatchAssociationCount(ctx, in.SharedServerRef, rev, newCount); err != nil {
-		return DecrementAssociationCountOut{}, fmt.Errorf("updating association count: %w", err)
+		return DecrementAssociationCountOut{}, err
 	}
 
 	return DecrementAssociationCountOut{RemainingCount: newCount}, nil

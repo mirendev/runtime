@@ -786,6 +786,12 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	res := inputs.BuildResult
 	ac := inputs.AppConfig
 	procfileServices := inputs.ProcfileServices
+	spec.CloneAddons = ac.CloneAddons()
+	for _, name := range spec.CloneAddons {
+		if variant := ac.Addons[name].CloneVariant; variant != "" {
+			spec.CloneAddonVariants = append(spec.CloneAddonVariants, core_v1alpha.ConfigSpecCloneAddonVariants{Name: name, Variant: variant})
+		}
+	}
 
 	// Preserve existing variables for merging later
 	spec.Variables = inputs.ExistingConfig.Variables

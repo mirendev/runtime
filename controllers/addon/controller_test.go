@@ -431,3 +431,51 @@ func TestDeprovisionCompletesWhenAppDeleted(t *testing.T) {
 	err = ec.GetById(ctx, assocID, &gone)
 	require.Error(t, err, "association should be deleted after successful deprovision")
 }
+
+func TestDeprovisionFailureRemainsRetryable(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{Name: "miren-postgresql"})
+	require.NoError(t, err)
+	assocID, err := ec.Create(ctx, "cleanup", &addon_v1alpha.AddonAssociation{
+		App: appID, Addon: addonID, Variant: "small", Status: "deprovisioning",
+	})
+	require.NoError(t, err)
+	provider.deprovisionErr = errors.New("temporary cleanup failure")
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, assocID, &assoc)
+	require.NoError(t, err)
+	require.ErrorContains(t, ctrl.Reconcile(ctx, &assoc, meta), "temporary cleanup failure")
+	require.NoError(t, ec.GetById(ctx, assocID, &assoc))
+	require.Equal(t, "deprovisioning", assoc.Status)
+	provider.deprovisionErr = nil
+	meta, err = getMeta(ctx, ec, assocID, &assoc)
+	require.NoError(t, err)
+	require.NoError(t, ctrl.Reconcile(ctx, &assoc, meta))
+	require.Error(t, ec.GetById(ctx, assocID, &assoc))
+}
+
+func TestCloneIncompleteCompensationRemainsRetryable(t *testing.T) {
+	ctx, ctrl, ec, provider := setupControllerTest(t)
+	appID := createAppWithVars(t, ctx, ec, "myapp", nil)
+	addonID, err := ec.Create(ctx, "miren-postgresql", &addon_v1alpha.Addon{Name: "miren-postgresql"})
+	require.NoError(t, err)
+	sourceID, err := ec.Create(ctx, "source", &addon_v1alpha.AddonAssociation{
+		App: appID, Addon: addonID, Variant: "small", Status: "active",
+	})
+	require.NoError(t, err)
+	targetID, err := ec.Create(ctx, "preview", &addon_v1alpha.AddonAssociation{
+		App: appID, Addon: addonID, SourceAssociation: sourceID, Variant: "small", Status: "pending",
+	})
+	require.NoError(t, err)
+	provider.cloneFn = func(context.Context, addon.AddonAssociation, addon.AddonAssociation, addon.App, addon.Variant) (*addon.ProvisionResult, error) {
+		return nil, errors.New("compensation still incomplete")
+	}
+	require.NoError(t, ctrl.sagaStorage.Save(ctx, &saga.Execution{ID: addon.CloneExecutionID(targetID), Status: saga.StatusUndoing}))
+	var assoc addon_v1alpha.AddonAssociation
+	meta, err := getMeta(ctx, ec, targetID, &assoc)
+	require.NoError(t, err)
+	require.ErrorContains(t, ctrl.Reconcile(ctx, &assoc, meta), "clone provisioning incomplete")
+	assoc.Decode(meta.Entity)
+	require.Equal(t, "provisioning", assoc.Status)
+}

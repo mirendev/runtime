@@ -68,20 +68,39 @@ Workers, background jobs, scheduled tasks, and any other services defined in `.m
 :::
 
 :::warning[Most configuration is shared with the active version]
-Env vars, secrets, and build config come from the app's current settings. There's no per-ephemeral override for those values:
+Previews inherit app configuration, so a separate hostname alone does not isolate backing services:
 
 - Manually configured database, queue, and external-service URLs still point at the same services as production.
-- You can't change `RAILS_ENV`, feature flags, or service URLs just for the preview.
-- Updates to app config via `miren config set` affect both active and ephemeral versions.
+- Use `miren deploy --ephemeral pr-123 -e RAILS_ENV=staging` to override variables just for the preview.
+- Attached addons are shared unless you explicitly enable cloning below.
 :::
 
-Miren clones attached PostgreSQL addons when it creates an ephemeral version. The preview receives a separate endpoint and a database seeded from the addon's current data. Shared PostgreSQL uses PostgreSQL's database-template operation; dedicated PostgreSQL uses an online `pg_basebackup`, so the source remains available while PostgreSQL streams a consistent copy and the required WAL into the preview's disk.
+### Opt-in addon cloning
 
-Addon providers opt into cloning. Creating an ephemeral version fails rather than silently sharing an addon whose provider does not support a safe clone. If you need isolation for manually configured services or another addon type, run ephemeral deploys against a separate staging app.
+By default, previews **share the app's attached addons**, including their data. Opt individual addons into cloning in `.miren/app.toml`:
+
+```toml
+[addons.miren-postgresql]
+variant = "small"
+clone = true
+clone_variant = "shared" # Isolated preview databases on the per-cluster server.
+
+[addons.miren-valkey]
+variant = "small"
+clone = false # Shared with the active version; false is the default.
+```
+
+Only addons with `clone = true` are cloned. Omitted or false means that addon is shared, including addons attached manually but not listed in the file. Normal deploys always use the primary addons, regardless of these settings. Source-based previews read the settings from the source being built; previews created with `miren deploy --version <version> --ephemeral <label>` inherit the settings stored with that version, not your local file.
+
+`clone_variant` overrides the variant only for this addon's preview clones. Omit it to retain the primary variant. It does not enable cloning by itself or change the addon version. With PostgreSQL, a dedicated `small` primary can use `clone_variant = "shared"`: each preview gets its own database and credentials on the per-cluster shared server, populated using an online logical dump/restore without disconnecting primary clients. The shared server must run the primary's PostgreSQL version; a version mismatch fails the preview explicitly. Shared-to-dedicated PostgreSQL cloning is not currently supported.
+
+PostgreSQL currently supports cloning: the preview receives a separate endpoint and a database seeded from the addon's current data. Shared PostgreSQL uses an online logical dump/restore without disconnecting source clients; dedicated PostgreSQL uses an online `pg_basebackup`, so the source remains available while PostgreSQL streams a consistent copy and the required WAL into the preview's disk. Replacing or expiring a preview removes its clones, not the shared addons.
+
+Selecting `clone = true` for an unsupported provider fails the preview rather than silently sharing that addon. Unsupported providers can still be used in a preview when left shared. Manually configured service URLs are not cloned, and manually set variables override addon bindings. If you need isolation for those services or another addon type, run ephemeral deploys against a separate staging app.
 
 ## Using a Staging App
 
-Ephemeral versions clone PostgreSQL addons, but still share manually configured service URLs and other app configuration. Use a staging app when a preview must be isolated from queues, object stores, external services, or a provider that does not support cloning.
+Ephemeral versions share each addon unless its configuration sets `clone = true`, and still share manually configured service URLs and other app configuration. Use a staging app when a preview must be isolated from queues, object stores, external services, or a provider that does not support cloning.
 
 Set up a second app — typically `myapp-staging` — that points at a staging database and any other backing services you want isolated, then run all PR previews against that app instead of production.
 
@@ -115,7 +134,7 @@ miren deploy -a myapp-staging --ephemeral pr-123 --ttl 48h
 ```
 </CliCommand>
 
-The preview is reachable at `pr-123.staging.myapp.example.com`, isolated from production data. Redeploy the staging app's active version periodically (or on every push to `main`) to keep its baseline fresh — ephemeral previews inherit the staging app's current config and clone its addons, not production's.
+The preview is reachable at `pr-123.staging.myapp.example.com`, isolated from production data. Redeploy the staging app's active version periodically (or on every push to `main`) to keep its baseline fresh — previews use the staging app's addons, cloning them only when opted in, not production's.
 
 In CI, set `MIREN_APP=myapp-staging` (or pass `app: myapp-staging` to the deploy action) so PR workflows always target staging.
 
@@ -243,7 +262,7 @@ The deploy action exposes the preview URL as a step output, so a follow-up step 
 ## Limitations
 
 - **`web` service only** — workers and other services from your app config don't start (see [What Runs in an Ephemeral Version](#what-runs-in-an-ephemeral-version)).
-- **Shared configuration** — env vars, secrets, and addons all come from the app. No per-preview overrides.
+- **Shared backing services by default** — addons are shared unless cloning is enabled; manually configured service URLs are never cloned. Per-preview `-e` overrides are supported.
 - **No deployment history** — `miren app history`, `miren rollback`, and the deployment lock all ignore ephemeral deploys.
 - **10 per app** — older versions are evicted by expiry as new ones arrive.
 - **DNS must cover the subdomains** — without a wildcard CNAME (or per-label records) pointing at your cluster, the URL won't resolve.

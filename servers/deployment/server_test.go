@@ -2,16 +2,22 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	appclient "miren.dev/runtime/api/app"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -1254,6 +1260,86 @@ func TestDeployVersion(t *testing.T) {
 			t.Error("Expected lock info in response")
 		}
 	})
+}
+
+func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cloning=%t", enabled), func(t *testing.T) {
+			ctx := context.Background()
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+			require.NoError(t, err)
+			client := &deployment_v1alpha.DeploymentClient{Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server))}
+			appID, err := inmem.Client.Create(ctx, "policy-app", &core_v1alpha.App{})
+			require.NoError(t, err)
+			var cloneAddons []string
+			if enabled {
+				cloneAddons = []string{"miren-postgresql"}
+			}
+			cvID, err := inmem.Client.Create(ctx, "source-config", &core_v1alpha.ConfigVersion{
+				App: appID, Spec: core_v1alpha.ConfigSpec{
+					CloneAddons:        cloneAddons,
+					CloneAddonVariants: []core_v1alpha.ConfigSpecCloneAddonVariants{{Name: "miren-postgresql", Variant: "shared"}},
+					Services:           []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}},
+					Variables:          []core_v1alpha.ConfigSpecVariables{{Key: "GREETING", Value: "original", Source: "config"}},
+				},
+			})
+			require.NoError(t, err)
+			_, err = inmem.Client.Create(ctx, "source-version", &core_v1alpha.AppVersion{
+				App: appID, Version: "source-version", ConfigVersion: cvID,
+			})
+			require.NoError(t, err)
+			_, err = inmem.Client.Create(ctx, "primary", &addon_v1alpha.AddonAssociation{
+				App: appID, Addon: "addon/miren-postgresql", Status: "active",
+			})
+			require.NoError(t, err)
+			envVar := &deployment_v1alpha.EnvironmentVariable{}
+			envVar.SetKey("GREETING")
+			envVar.SetValue("preview")
+			result, err := client.DeployVersion(ctx, "policy-app", "cluster1", "source-version", false,
+				[]*deployment_v1alpha.EnvironmentVariable{envVar}, "preview", "1h")
+			require.NoError(t, err)
+			require.Empty(t, result.Error())
+			versions, err := inmem.EAC.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, appID))
+			require.NoError(t, err)
+			var preview core_v1alpha.AppVersion
+			for _, ent := range versions.Values() {
+				var ver core_v1alpha.AppVersion
+				ver.Decode(ent.Entity())
+				if ver.EphemeralLabel == "preview" {
+					preview = ver
+				}
+			}
+			require.NotEmpty(t, preview.ID)
+			spec, err := coreutil.ResolveConfig(ctx, inmem.EAC, &preview)
+			require.NoError(t, err)
+			require.Equal(t, cloneAddons, spec.CloneAddons)
+			require.Equal(t, []core_v1alpha.ConfigSpecCloneAddonVariants{{Name: "miren-postgresql", Variant: "shared"}}, spec.CloneAddonVariants)
+			require.Equal(t, []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}}, spec.Services)
+			require.Equal(t, []core_v1alpha.ConfigSpecVariables{{Key: "GREETING", Value: "preview", Source: "manual"}}, spec.Variables)
+			clones, err := inmem.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, preview.ID))
+			require.NoError(t, err)
+			want := 0
+			if enabled {
+				want = 1
+			}
+			require.Len(t, clones.Values(), want)
+			if enabled {
+				var clone addon_v1alpha.AddonAssociation
+				clone.Decode(clones.Values()[0].Entity())
+				require.Equal(t, "shared", clone.Variant)
+				require.ErrorContains(t, appversion.DeleteWithPools(ctx, inmem.EAC, &preview, slog.Default()), "retaining version")
+				require.NoError(t, server.EC.GetById(ctx, clone.ID, &clone))
+				require.Equal(t, "deprovisioning", clone.Status)
+				// Simulate the addon controller completing asynchronous teardown.
+				require.NoError(t, server.EC.Delete(ctx, clone.ID))
+			}
+			require.NoError(t, appversion.DeleteWithPools(ctx, inmem.EAC, &preview, slog.Default()))
+			_, err = inmem.EAC.Get(ctx, cvID.String())
+			require.NoError(t, err, "preview cleanup must preserve the source version's config")
+		})
+	}
 }
 
 func TestDeployVersionEphemeral(t *testing.T) {
