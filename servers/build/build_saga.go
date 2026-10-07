@@ -14,7 +14,6 @@ import (
 
 	"github.com/tonistiigi/fsutil"
 
-	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
@@ -608,45 +607,22 @@ type waitAddonsOut struct {
 }
 
 func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
+	expected := expectedAddons(in.AppConfig)
+	var versionID entity.Id
 	if in.EphemeralLabel != "" {
-		if len(in.AppConfig.CloneAddons()) == 0 {
-			return waitAddonsOut{}, nil
-		}
-		deps := saga.Get[*buildSagaDeps](ctx)
-		deadline := time.NewTicker(250 * time.Millisecond)
-		defer deadline.Stop()
-		for {
-			resp, err := deps.builder.EAS.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, entity.Id(in.AppVersionID)))
-			if err != nil {
-				return waitAddonsOut{}, fmt.Errorf("listing addon clones: %w", err)
-			}
-			ready := true
-			for _, ent := range resp.Values() {
-				var assoc addon_v1alpha.AddonAssociation
-				assoc.Decode(ent.Entity())
-				if assoc.Status == "error" {
-					return waitAddonsOut{}, fmt.Errorf("addon clone %s failed: %s", addon.NameFromRef(assoc.Addon), assoc.ErrorMessage)
-				}
-				ready = ready && assoc.Status == "active"
-			}
-			if ready {
-				return waitAddonsOut{}, nil
-			}
-			select {
-			case <-ctx.Done():
-				return waitAddonsOut{}, ctx.Err()
-			case <-deadline.C:
-			}
+		expected = nil
+		versionID = entity.Id(in.AppVersionID)
+		for _, name := range in.AppConfig.CloneAddons() {
+			expected = append(expected, expectedAddon{Name: name})
 		}
 	}
-	expected := expectedAddons(in.AppConfig)
 	if len(expected) == 0 {
 		return waitAddonsOut{}, nil
 	}
 
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
-	if b.addonsClient == nil {
+	if in.EphemeralLabel == "" && b.addonsClient == nil {
 		return waitAddonsOut{}, nil
 	}
 
@@ -655,7 +631,7 @@ func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
 		return waitAddonsOut{}, fmt.Errorf("reading app: %w", err)
 	}
 
-	if err := b.awaitAddons(ctx, in.AppName, appRec.ID, expected, deps.statuses.SenderFor(in.StreamID)); err != nil {
+	if err := b.awaitAddons(ctx, in.AppName, appRec.ID, versionID, expected, deps.statuses.SenderFor(in.StreamID)); err != nil {
 		return waitAddonsOut{}, err
 	}
 	return waitAddonsOut{}, nil

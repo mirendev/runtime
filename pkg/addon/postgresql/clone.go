@@ -31,7 +31,7 @@ type decodeSharedCloneSourceOut struct {
 	SourceHost        string
 	DatabaseName      string
 	Username          string
-	Password          string
+	SourcePassword    string `saga:"source_password"`
 	ServiceHost       string
 	SuperuserPassword string
 }
@@ -53,7 +53,7 @@ func decodeSharedCloneSource(ctx context.Context, in decodeSharedCloneSourceIn) 
 	}
 	return decodeSharedCloneSourceOut{
 		ServerID: data.PostgresServer, SourceHost: host, DatabaseName: data.DatabaseName,
-		Username: defaultPostgresUser, Password: server.SuperuserPassword,
+		Username: defaultPostgresUser, SourcePassword: server.SuperuserPassword,
 		ServiceHost: host, SuperuserPassword: server.SuperuserPassword,
 	}, nil
 }
@@ -242,7 +242,7 @@ type decodeDedicatedCloneSourceOut struct {
 	SourceDiskSizeGb int64
 	DatabaseName     string
 	Username         string
-	Password         string
+	SourcePassword   string `saga:"source_password"`
 }
 
 func decodeDedicatedCloneSource(ctx context.Context, in decodeDedicatedCloneSourceIn) (decodeDedicatedCloneSourceOut, error) {
@@ -276,7 +276,7 @@ func decodeDedicatedCloneSource(ctx context.Context, in decodeDedicatedCloneSour
 	disk.Decode(disks.Values()[0].Entity())
 	return decodeDedicatedCloneSourceOut{
 		SourcePoolID: server.SandboxPool, SourceHost: host, SourceDiskSizeGb: disk.SizeGb,
-		DatabaseName: data.DatabaseName, Username: data.Username, Password: server.SuperuserPassword,
+		DatabaseName: data.DatabaseName, Username: data.Username, SourcePassword: server.SuperuserPassword,
 	}, nil
 }
 
@@ -288,7 +288,7 @@ type restoreSharedCloneIn struct {
 	SourceHost          string
 	DatabaseName        string
 	Username            string
-	Password            string
+	SourcePassword      string `saga:"source_password"`
 	ServiceHost         string
 	SharedUsername      string
 	SharedPassword      string
@@ -316,7 +316,7 @@ PGPASSWORD="$TARGET_PASSWORD" pg_restore -h "$TARGET_HOST" -U "$TARGET_USERNAME"
 		Name:  "pg-" + strings.TrimPrefix(in.TargetAssociationID, "addon_association/") + "-restore",
 		Image: image, Command: command,
 		Env: []string{
-			"SOURCE_HOST=" + in.SourceHost, "SOURCE_PASSWORD=" + in.Password, "SOURCE_DATABASE=" + in.DatabaseName,
+			"SOURCE_HOST=" + in.SourceHost, "SOURCE_PASSWORD=" + in.SourcePassword, "SOURCE_DATABASE=" + in.DatabaseName,
 			"SOURCE_USERNAME=" + in.Username,
 			"TARGET_HOST=" + in.ServiceHost, "TARGET_USERNAME=" + in.SharedUsername,
 			"TARGET_PASSWORD=" + in.SharedPassword, "TARGET_DATABASE=" + in.SharedDatabaseName,
@@ -424,6 +424,7 @@ type generateDedicatedCloneNameIn struct {
 type generateDedicatedCloneNameOut struct {
 	ServerName  string
 	ServiceName string
+	Password    string
 }
 
 func generateDedicatedCloneName(_ context.Context, in generateDedicatedCloneNameIn) (generateDedicatedCloneNameOut, error) {
@@ -437,6 +438,7 @@ func generateDedicatedCloneName(_ context.Context, in generateDedicatedCloneName
 	return generateDedicatedCloneNameOut{
 		ServerName:  fmt.Sprintf("pg-%s-%s", in.AppName, suffix),
 		ServiceName: fmt.Sprintf("%s-postgresql-%s", in.AppName, suffix),
+		Password:    idgen.Gen("pw"),
 	}, nil
 }
 func undoGenerateDedicatedCloneName(ctx context.Context, _ generateDedicatedCloneNameIn, out generateDedicatedCloneNameOut) error {
@@ -493,7 +495,7 @@ type runBaseBackupIn struct {
 	SourceHost       string
 	SourceDiskSizeGb int64
 	Username         string
-	Password         string
+	SourcePassword   string `saga:"source_password"`
 	VariantConfig    map[string]string
 	ReplicationReady saga.Edge `saga:"replication_ready"`
 }
@@ -532,7 +534,7 @@ func runBaseBackup(ctx context.Context, in runBaseBackupIn) (runBaseBackupOut, e
 			"PGDATA=/var/lib/postgresql/data/pgdata",
 			"SOURCE_HOST=" + in.SourceHost,
 			"SOURCE_USER=" + in.Username,
-			"SOURCE_PASSWORD=" + in.Password,
+			"SOURCE_PASSWORD=" + in.SourcePassword,
 		},
 		Labels: labels,
 		Mounts: []compute_v1alpha.SandboxSpecContainerMount{
@@ -600,6 +602,37 @@ func undoReleaseBaseBackupSandbox(context.Context, releaseBaseBackupSandboxIn, r
 	return nil
 }
 
+type rotateCloneCredentialsIn struct {
+	ServiceHost    string
+	Username       string
+	DatabaseName   string
+	Password       string
+	SourcePassword string `saga:"source_password"`
+	Ready          bool
+}
+
+type rotateCloneCredentialsOut struct {
+	CloneCredentialsReady saga.Edge `saga:"clone_credentials_ready"`
+}
+
+func rotateCloneCredentials(ctx context.Context, in rotateCloneCredentialsIn) (rotateCloneCredentialsOut, error) {
+	// ALTER may have committed before its action checkpoint. Try the preview
+	// password first so replay never depends on the old credential still working.
+	conn, err := connectTrying(ctx, in.ServiceHost, postgresPort, in.Username, in.DatabaseName, in.Password, in.SourcePassword)
+	if err != nil {
+		return rotateCloneCredentialsOut{}, fmt.Errorf("connecting to PostgreSQL clone: %w", err)
+	}
+	defer conn.Close(ctx)
+	if err := alterPostgresUserPassword(ctx, conn, in.Username, in.Password); err != nil {
+		return rotateCloneCredentialsOut{}, err
+	}
+	return rotateCloneCredentialsOut{}, nil
+}
+
+func undoRotateCloneCredentials(context.Context, rotateCloneCredentialsIn, rotateCloneCredentialsOut) error {
+	return nil
+}
+
 func registerCloneDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("clone-dedicated-postgresql").Using(fw).Using(cfg).
@@ -614,6 +647,7 @@ func registerCloneDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFrame
 		Action(dbsaga.WaitForDedicatedPool).Undo(dbsaga.UndoWaitForDedicatedPool).
 		Action(dbsaga.CreateDedicatedService).Undo(dbsaga.UndoCreateDedicatedService).
 		Action(dbsaga.WaitForDedicatedService).Undo(dbsaga.UndoWaitForDedicatedService).
+		Action(rotateCloneCredentials).Undo(undoRotateCloneCredentials).
 		Action(UpdateDedicatedServer).Undo(UndoUpdateDedicatedServer).
 		RegisterTo(registry)
 }

@@ -24,6 +24,49 @@ func TestCloneSagaGraphs(t *testing.T) {
 	require.NoError(t, registerCloneDedicatedToSharedSaga(saga.NewRegistry(), fw))
 }
 
+func TestDedicatedCloneCredentialOrdering(t *testing.T) {
+	registry := saga.NewRegistry()
+	require.NoError(t, registerCloneDedicatedSaga(registry, &addon.ProviderFramework{}))
+	def, ok := registry.Get("clone-dedicated-postgresql")
+	require.True(t, ok)
+	order := def.ExecutionOrder()
+	for _, pair := range [][2]string{
+		{"generate-dedicated-clone-name", "create-postgres-server"},
+		{"generate-dedicated-clone-name", "create-dedicated-pool"},
+		{"decode-dedicated-clone-source", "run-base-backup"},
+		{"wait-for-dedicated-service", "rotate-clone-credentials"},
+		{"wait-for-dedicated-pool", "rotate-clone-credentials"},
+		{"rotate-clone-credentials", "update-dedicated-server"},
+	} {
+		first, second := slices.Index(order, pair[0]), slices.Index(order, pair[1])
+		require.NotEqual(t, -1, first)
+		require.Greater(t, second, first)
+	}
+}
+
+func TestDedicatedClonePasswordCheckpoint(t *testing.T) {
+	registry := saga.NewRegistry()
+	require.NoError(t, saga.Define("clone-password").Action(generateDedicatedCloneName).
+		Undo(func(context.Context, generateDedicatedCloneNameIn, generateDedicatedCloneNameOut) error { return nil }).RegisterTo(registry))
+	storage := saga.NewMemoryStorage()
+	execute := func() string {
+		executor := saga.NewExecutor(storage, saga.WithRegistry(registry))
+		require.NoError(t, executor.Start("clone-password").WithID("preview").
+			Input("appname", "app").Input("targetassociationid", "preview").Execute(t.Context()))
+		out, err := executor.ExecutionOutputs(t.Context(), "preview")
+		require.NoError(t, err)
+		var password string
+		require.NoError(t, out.Get("password", &password))
+		return password
+	}
+	password := execute()
+	require.NotEmpty(t, password)
+	require.Equal(t, password, execute(), "a new executor must recover the checkpointed password")
+	other, err := generateDedicatedCloneName(t.Context(), generateDedicatedCloneNameIn{AppName: "app", TargetAssociationID: "other"})
+	require.NoError(t, err)
+	require.NotEqual(t, password, other.Password)
+}
+
 func TestRestoreCloneImage(t *testing.T) {
 	require.Equal(t, BaseImage+":"+DefaultVersion, restoreCloneImage(nil))
 	require.Equal(t, "postgres:custom", restoreCloneImage(map[string]string{addon.ConfigImage: "postgres:custom"}))
@@ -83,7 +126,7 @@ func TestLogicalCloneRetainedSandboxCleanup(t *testing.T) {
 			executor := saga.NewExecutor(storage, saga.WithRegistry(registry))
 			start := executor.Start("restore-test").WithID("restore-test")
 			for key, value := range map[string]any{
-				"sourcehost": "source", "databasename": "source-db", "username": "primary-user", "password": "source-password",
+				"sourcehost": "source", "databasename": "source-db", "username": "primary-user", "source_password": "source-password",
 				"servicehost": "target", "sharedusername": "preview", "sharedpassword": "preview-password",
 				"shareddatabasename": "preview-db", "variantconfig": map[string]string{addon.ConfigImage: "postgres:18"},
 				"targetassociationid": "addon_association/clone-test", "appname": "test", "database_created": true,

@@ -171,12 +171,13 @@ func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out 
 }
 
 type UpdateDedicatedServerIn struct {
-	ServerID    entity.Id
-	PoolID      entity.Id
-	ServiceID   entity.Id
-	ServiceHost string
-	VariantName string
-	Password    string
+	ServerID              entity.Id
+	PoolID                entity.Id
+	ServiceID             entity.Id
+	ServiceHost           string
+	VariantName           string
+	Password              string
+	CloneCredentialsReady saga.Edge `saga:"clone_credentials_ready,optional"`
 }
 
 type UpdateDedicatedServerOut struct {

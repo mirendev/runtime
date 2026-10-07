@@ -76,6 +76,7 @@ func (b *Builder) awaitAddons(
 	ctx context.Context,
 	appName string,
 	appID entity.Id,
+	versionID entity.Id,
 	expected []expectedAddon,
 	status StatusSender,
 ) error {
@@ -86,7 +87,11 @@ func (b *Builder) awaitAddons(
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	w := indexwatch.New(b.EAS, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID), indexwatch.Options{
+	index := entity.Ref(addon_v1alpha.AddonAssociationAppId, appID)
+	if versionID != "" {
+		index = entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, versionID)
+	}
+	w := indexwatch.New(b.EAS, index, indexwatch.Options{
 		Logger:     b.Log.With("component", "addon-wait", "app", appName),
 		BufferSize: 16,
 	})
@@ -98,7 +103,7 @@ func (b *Builder) awaitAddons(
 	deadline := time.NewTimer(addonWaitCeiling)
 	defer deadline.Stop()
 
-	state := newAddonWaitState(appName, expected, status)
+	state := newAddonWaitState(appName, versionID, expected, status)
 
 	for {
 		select {
@@ -135,9 +140,10 @@ func (b *Builder) awaitAddons(
 // from watch events. Associations for addons the deploy did not declare are
 // ignored.
 type addonWaitState struct {
-	appName  string
-	status   StatusSender
-	expected []expectedAddon
+	appName   string
+	versionID entity.Id
+	status    StatusSender
+	expected  []expectedAddon
 
 	// current is the latest association seen per expected addon name. An
 	// expected addon absent from this map has no visible record yet.
@@ -150,9 +156,10 @@ type addonWaitState struct {
 	ready map[string]bool
 }
 
-func newAddonWaitState(appName string, expected []expectedAddon, status StatusSender) *addonWaitState {
+func newAddonWaitState(appName string, versionID entity.Id, expected []expectedAddon, status StatusSender) *addonWaitState {
 	return &addonWaitState{
 		appName:   appName,
+		versionID: versionID,
 		status:    status,
 		expected:  expected,
 		current:   make(map[string]*addon_v1alpha.AddonAssociation, len(expected)),
@@ -189,7 +196,7 @@ func (s *addonWaitState) observe(en *entity.Entity) {
 	}
 	var assoc addon_v1alpha.AddonAssociation
 	assoc.Decode(en)
-	if assoc.AppVersion != "" {
+	if assoc.AppVersion != s.versionID {
 		return
 	}
 	name := addon.NameFromRef(assoc.Addon)

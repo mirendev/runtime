@@ -62,7 +62,7 @@ func (f *addonWaitFixture) setStatus(t *testing.T, id entity.Id, status string) 
 }
 
 func (f *addonWaitFixture) await(expected []expectedAddon, sender StatusSender) error {
-	return f.b.awaitAddons(context.Background(), "demo", f.appID, expected, sender)
+	return f.b.awaitAddons(context.Background(), "demo", f.appID, "", expected, sender)
 }
 
 // The wait has to release once the addon controller flips the association,
@@ -201,7 +201,7 @@ func TestAwaitAddonsHonorsCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := f.b.awaitAddons(ctx, "demo", f.appID, expectPostgres, &recordingSender{})
+	err := f.b.awaitAddons(ctx, "demo", f.appID, "", expectPostgres, &recordingSender{})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -224,4 +224,32 @@ func TestExpectedAddonsFromConfig(t *testing.T) {
 		{Name: "miren-rabbitmq", Variant: "small"},
 		{Name: "miren-valkey", Variant: ""},
 	}, got)
+}
+
+func TestAwaitAddonClonesRequiresEverySelectedAddon(t *testing.T) {
+	f := newAddonWaitFixture(t, 30*time.Millisecond)
+	versionID := entity.Id("app_version/preview")
+	f.association(t, "primary", &addon_v1alpha.AddonAssociation{Status: "active"})
+	f.association(t, "other-preview", &addon_v1alpha.AddonAssociation{AppVersion: "app_version/other", Status: "active"})
+	err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{})
+	require.ErrorContains(t, err, "did not become ready")
+	f.association(t, "preview-pg", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: "active"})
+	expected := []expectedAddon{{Name: "miren-postgresql"}, {Name: "miren-valkey"}}
+	err = f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expected, &recordingSender{})
+	require.ErrorContains(t, err, "miren-valkey")
+	f.association(t, "preview-cache", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Addon: "addon/miren-valkey", Status: "active"})
+	require.NoError(t, f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expected, &recordingSender{}))
+}
+
+func TestAwaitAddonClonesFailsOnTeardownAndStalledProvisioning(t *testing.T) {
+	for _, status := range []string{"provisioning", "deprovisioning", "error"} {
+		t.Run(status, func(t *testing.T) {
+			f := newAddonWaitFixture(t, 30*time.Millisecond)
+			versionID := entity.Id("app_version/preview")
+			f.association(t, "preview", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: status, ErrorMessage: "copy failed"})
+			err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{})
+			want := map[string]string{"provisioning": "did not become ready", "deprovisioning": "being removed", "error": "copy failed"}[status]
+			require.ErrorContains(t, err, want)
+		})
+	}
 }
