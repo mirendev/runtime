@@ -220,8 +220,13 @@ belongs in your alert rules. Some starting points:
 # Something is still stranding sagas. Expected to be zero.
 increase(saga_stranded_forced_total[1h]) > 0
 
-# Compensation is failing, so resources may be leaking.
-increase(saga_compensation_failures_total[1h]) > 0
+# Compensation keeps failing, so resources may be leaking. A server restart
+# fails whatever undo is in flight and the retry cleans up, so only alert
+# while something is still undoing, held for longer than the gauge's
+# five-minute refresh (e.g. `for: 10m`).
+(sum by (definition) (increase(saga_compensation_failures_total[1h])) > 0)
+  and on (definition)
+(max by (definition) (saga_incomplete_executions{status="undoing"}) > 0)
 
 # Recovery after a restart left executions in flight.
 increase(saga_recoveries_total{outcome="failed"}[1h]) > 0
