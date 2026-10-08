@@ -102,6 +102,82 @@ func TestHostQuery(t *testing.T) {
 	})
 }
 
+func TestHostQueryAdmission(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		server := &nodeAdminServer{log: slog.Default(), queryEngine: query.Engine{Sources: map[string]query.CustomSource{
+			"hold": {Snapshots: func(ctx context.Context, _ query.MonitorRequest) (query.Snapshot, error) {
+				close(started)
+				<-ctx.Done()
+				return query.Snapshot{}, ctx.Err()
+			}},
+		}}}
+		client := nodeadmin_v1alpha.NewNodeAdminClient(rpc.LocalClient(nodeadmin_v1alpha.AdaptNodeAdmin(server)))
+		ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})
+		firstCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan string, 1)
+		go func() {
+			res, err := client.Query(firstCtx, "hold")
+			if err != nil {
+				done <- err.Error()
+				return
+			}
+			done <- res.Error()
+		}()
+		<-started
+		res, err := client.Query(ctx, "memory")
+		require.NoError(t, err)
+		require.Equal(t, "runner already has a query in progress", res.Error())
+		require.False(t, res.HasData())
+		unauthorized := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodCert, Subject: "runner-other"})
+		res, err = client.Query(unauthorized, "memory")
+		require.NoError(t, err)
+		require.Contains(t, res.Error(), "only the coordinator")
+		cancel()
+		require.Contains(t, <-done, "context canceled")
+		res, err = client.Query(ctx, "invalid")
+		require.NoError(t, err)
+		require.NotEmpty(t, res.Error())
+		require.NotContains(t, res.Error(), "in progress")
+		res, err = client.Query(ctx, "memory")
+		require.NoError(t, err)
+		require.Empty(t, res.Error())
+		require.True(t, res.HasData())
+	})
+}
+
+func TestCoordinatorQueryAdmission(t *testing.T) {
+	client := runner_v1alpha.NewRunnerRegistrationClient(rpc.LocalClient(
+		runner_v1alpha.AdaptRunnerRegistration(&runnerserver.RegistrationServer{})))
+	for _, tc := range []struct {
+		identity *rpc.Identity
+		allowed  bool
+	}{
+		{nil, false},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "runner-target"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "miren-runner"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "miren-services"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "custom-name"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodWorkload, Subject: "miren-user"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodOIDC, Subject: "miren-user"}, false},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "miren-user"}, true},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: "miren-server"}, true},
+		{&rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject}, true},
+		{&rpc.Identity{Method: rpc.AuthMethodJWT, Subject: "cloud-user"}, true},
+		{&rpc.Identity{Method: rpc.AuthMethodAnonymous}, true},
+	} {
+		res, err := client.Query(rpc.ContextWithIdentity(t.Context(), tc.identity), "target", "memory")
+		require.NoError(t, err)
+		if tc.allowed {
+			require.Equal(t, "no rpc state to reach the runner with", res.Error())
+		} else {
+			require.Equal(t, "host queries require an operator identity", res.Error())
+		}
+		require.False(t, res.HasData())
+	}
+}
+
 func TestHostQueryMaximumDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client := nodeadmin_v1alpha.NewNodeAdminClient(rpc.LocalClient(
@@ -219,7 +295,7 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 		runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
 			Log: slog.Default(), EAC: es.EAC, RPC: coordinator,
 		})))
-	user := newState("operator")
+	user := newState("miren-user")
 	cl, err := user.Connect(coordinator.ListenAddr(), rpc.ServiceRunner)
 	require.NoError(t, err)
 	defer cl.Close()
@@ -251,6 +327,7 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, custom.Error())
 	require.Equal(t, "target", custom.Name())
+	require.Equal(t, "inventory", <-queries)
 	var inventory struct {
 		Source string `json:"source"`
 		Data   struct {
@@ -273,8 +350,25 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 		require.Contains(t, res.Error(), tc.errorText)
 		require.False(t, res.HasData())
 	}
+	require.Equal(t, "SELECT * FROM memory", <-queries)
 
-	// A different CA-issued runner certificate cannot execute host queries.
+	for _, subject := range []string{"runner-other", "miren-runner", "miren-services", "custom-name"} {
+		other := newState(subject)
+		otherClient, err := other.Connect(coordinator.ListenAddr(), rpc.ServiceRunner)
+		require.NoError(t, err)
+		res, err := runner_v1alpha.NewRunnerRegistrationClient(otherClient).Query(t.Context(), "target", "memory")
+		require.NoError(t, err)
+		require.Equal(t, "host queries require an operator identity", res.Error())
+		require.False(t, res.HasData())
+		require.NoError(t, otherClient.Close())
+	}
+	select {
+	case expression := <-queries:
+		t.Fatalf("denied caller reached the runner: %s", expression)
+	default:
+	}
+
+	// Even an operator certificate cannot bypass coordinator forwarding.
 	cl, err = user.Connect(runner.ListenAddr(), rpc.ServiceNodeAdmin)
 	require.NoError(t, err)
 	defer cl.Close()

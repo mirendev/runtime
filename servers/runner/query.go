@@ -13,6 +13,13 @@ import (
 func (s *RegistrationServer) Query(ctx context.Context, req *runner_v1alpha.RunnerRegistrationQuery) error {
 	args := req.Args()
 	res := req.Results()
+	identity := rpc.IdentityFromContext(ctx)
+	operator := identity != nil && (identity.Method == rpc.AuthMethodJWT || identity.Method == rpc.AuthMethodAnonymous ||
+		identity.Method == rpc.AuthMethodCert && (identity.Subject == "miren-user" || identity.Subject == "miren-server" || identity.Subject == rpc.CoordinatorCertSubject))
+	if !operator {
+		res.SetError("host queries require an operator identity")
+		return nil
+	}
 	target := strings.TrimSpace(args.Runner())
 	if target == "" {
 		res.SetError("runner name or ID is required")

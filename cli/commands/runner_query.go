@@ -23,10 +23,15 @@ RUNNER is a name, runner ID, entity ID, or short ID. Quote the whole expression
 for the shell. Queries observe the runner host with daemon privileges, not an
 app's isolated environment. The coordinator authenticates and authorizes the
 caller; the runner accepts queries only from the coordinator certificate.
+Cloud JWT operators need runnerregistration/query permission. Local certificate
+callers must use miren-user, miren-server, or miren-api; runner/service certs and
+custom certificate names are refused. Explicit auth-disabled mode remains open.
 Output is JSON. Errors exit nonzero without a result on stdout.
 
 Only finite snapshots and aggregates are exposed. Execution and CLI waiting
 have a one-minute deadline; choose windows shorter than 1m to leave setup time.
+Only one query can execute per runner at a time. Concurrent calls fail immediately
+with "runner already has a query in progress"; they are not queued.
 Streaming/registered monitors, capabilities queries, Portal's client-side jq
 suffix and folded-output flags are NOT exposed. Pipe CLI stdout to external jq
 instead: miren runner query runner1 memory | jq '.memory.used'

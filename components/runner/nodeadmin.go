@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/components/diskio"
@@ -22,6 +23,7 @@ type nodeAdminServer struct {
 	log         *slog.Logger
 	deps        lbdDeps
 	queryEngine query.Engine
+	queryMu     sync.Mutex
 }
 
 // InstallDiskAccelerator builds and loads the lbd kernel module on this node.

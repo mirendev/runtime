@@ -16,6 +16,12 @@ func (s *nodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1alpha.Node
 		return nil
 	}
 
+	if !s.queryMu.TryLock() {
+		res.SetError("runner already has a query in progress")
+		return nil
+	}
+	defer s.queryMu.Unlock()
+
 	request, err := s.queryEngine.ParseMonitorQuery(req.Args().Expression())
 	if err != nil {
 		res.SetError(err.Error())

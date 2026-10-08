@@ -288,9 +288,12 @@ cgroups fail rather than double-counting I/O. Choose disjoint workload cgroups.
 :::warning[Queries inspect the runner host]
 Queries run with the runner daemon's host visibility and privileges, not inside
 an app sandbox. The coordinator applies its normal RPC authentication and
-authorization; the runner accepts host queries only from the coordinator's
-cluster certificate. eBPF-backed sources require kernel support and appropriate
-host privileges.
+authorization. Cloud JWT operators need `runnerregistration/query` permission.
+Local certificate callers must use `miren-user`, `miren-server`, or `miren-api`;
+runner/service certificates and custom certificate names cannot use this RPC.
+Explicit auth-disabled mode remains open. The runner accepts host queries only
+from the coordinator's cluster certificate. eBPF-backed sources require kernel
+support and appropriate host privileges.
 :::
 
 Using the generated Go client with an authenticated coordinator connection:
@@ -312,8 +315,11 @@ if result.Error() != "" {
 // result.Data() contains Portal's JSON snapshot or aggregate.
 ```
 
-Execution has a one-minute deadline and also respects caller
-cancellation. This is a single-runner, request/response API, not a streaming or
+Execution has a one-minute deadline and also respects caller cancellation.
+Each runner executes at most one query at a time. Concurrent calls fail with
+`runner already has a query in progress` rather than queueing. Admission is
+released on success, error, or cancellation.
+This is a single-runner, request/response API, not a streaming or
 cluster-wide query service. Both coordinator and runner must support this RPC.
 
 :::warning[Upgrading to the internal-only registry]

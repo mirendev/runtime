@@ -74,6 +74,7 @@ func TestBinarySymbolsHaveLinkAddressesAndFileOffsets(t *testing.T) {
 	}
 	if found == nil {
 		t.Skip("test executable has no Go ELF symbol table")
+		return
 	}
 	if found.fileOffset == nil {
 		t.Fatal("function in a load segment has no file offset")
@@ -253,6 +254,7 @@ int main(void) {
 	}
 	if mapping == nil {
 		t.Fatal("fixture function has no process mapping")
+		return
 	}
 	wantOffset := mapping.offset + address - mapping.start
 	result, err := InspectSymbols(ctx, SymbolRequest{Target: "process", PID: pid, Addresses: []uint64{address}})
