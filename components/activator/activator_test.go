@@ -19,6 +19,50 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
+func TestActivatorRejectsDiskBackedPreviewActivation(t *testing.T) {
+	for _, mode := range []string{"configured", "legacy-volume", "diskless"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			ver := &core_v1alpha.AppVersion{ID: "preview", App: "app", EphemeralLabel: "pr-2", Config: core_v1alpha.Config{Services: []core_v1alpha.Services{{Name: "web"}}}}
+			if mode == "configured" {
+				ver.Config.Services[0].Disks = []core_v1alpha.Disks{{Name: "data", Provider: core_v1alpha.DiskProviderLocal, MountPath: "/data"}}
+			}
+			pool := &compute_v1alpha.SandboxPool{Service: "web", SandboxSpec: compute_v1alpha.SandboxSpec{Version: ver.ID}, ReferencedByVersions: []entity.Id{ver.ID}}
+			if mode == "legacy-volume" {
+				pool.SandboxSpec.Volume = []compute_v1alpha.SandboxSpecVolume{{Name: "data", Provider: "local", MountPath: "/data"}}
+			}
+			poolID, err := server.Client.Create(ctx, "pool", pool)
+			require.NoError(t, err)
+			pool.ID = poolID
+			before, err := server.EAC.Get(ctx, poolID.String())
+			require.NoError(t, err)
+			strategy := concurrency.NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{})
+			key := verKey{ver.ID.String(), "web"}
+			a := &localActivator{
+				log: testutils.TestLogger(t), eac: server.EAC,
+				versions:      map[verKey]*versionPoolRef{key: {ver: ver, poolID: poolID, service: "web", strategy: strategy}},
+				pools:         map[verKey]*poolState{key: {pool: pool, revision: before.Entity().Revision()}},
+				poolSandboxes: map[entity.Id]*poolSandboxes{poolID: {pool: pool, service: "web", strategy: strategy, sandboxes: []*sandbox{{sandbox: &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec}, url: "http://preview", tracker: strategy.InitializeTracker(), ent: entity.Blank()}}}},
+			}
+			lease, err := a.AcquireLease(ctx, ver, "web")
+			if mode == "diskless" {
+				require.NoError(t, err)
+				require.NotNil(t, lease)
+			} else {
+				require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+				require.Nil(t, lease)
+				_, err = a.requestPoolCapacity(ctx, ver, "web")
+				require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+				after, err := server.EAC.Get(ctx, poolID.String())
+				require.NoError(t, err)
+				require.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "rejection must not scale the pool")
+			}
+		})
+	}
+}
+
 // Test lease operations
 func TestActivatorLeaseOperations(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

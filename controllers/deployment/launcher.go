@@ -32,6 +32,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -121,7 +122,13 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve runtime config for version %s: %w", ver.Version, err)
 	}
-	l.injectAutoMountLocalDisks(spec, &app)
+	if ver.EphemeralLabel != "" {
+		if err := ephemeralx.ValidateConfig(spec); err != nil {
+			return "", err
+		}
+	} else {
+		l.injectAutoMountLocalDisks(spec, &app)
+	}
 
 	poolID, err := l.ensurePoolForService(ctx, &app, ver, spec, service)
 	if err != nil {

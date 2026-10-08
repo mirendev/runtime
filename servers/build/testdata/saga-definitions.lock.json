@@ -1,9 +1,6 @@
 {
   "build-from-tar": {
-    "version": 2,
-    "resumes_from": [
-      1
-    ],
+    "version": 3,
     "actions": {
       "activate-deployment": {
         "inputs": [
@@ -162,6 +159,7 @@
         "inputs": [
           "app_id",
           "app_name",
+          "config_spec_json",
           "ephemeral_label",
           "ephemeral_ttl",
           "stream_id"
@@ -170,7 +168,8 @@
           "ephemeral_expires_at"
         ],
         "dependencies": [
-          "get-next-version"
+          "get-next-version",
+          "prepare-config"
         ]
       },
       "load-source": {
@@ -197,6 +196,7 @@
           "app_name",
           "build_result",
           "cli_env_vars",
+          "ephemeral_label",
           "existing_config_json",
           "procfile_services",
           "source_kind",

@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/secret"
 )
 
@@ -115,6 +116,11 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 	ver := opts.Version
 	cfgSpec := opts.Config
 	serviceName := opts.Service
+	if ver.EphemeralLabel != "" && !opts.SkipDisks {
+		if err := ephemeralx.ValidateConfig(cfgSpec); err != nil {
+			return nil, err
+		}
+	}
 
 	logAttrs := opts.LogAttrs
 	if logAttrs == nil {

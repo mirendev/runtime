@@ -357,6 +357,21 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 
 // createSandbox creates a new sandbox from the pool's SandboxSpec template
 func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.SandboxPool, instanceNum int) error {
+	if len(pool.SandboxSpec.Volume) > 0 {
+		ephemeral := pool.Ephemeral
+		if !ephemeral && pool.SandboxSpec.Version != "" {
+			resp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
+			if err != nil {
+				return err
+			}
+			var ver core_v1alpha.AppVersion
+			ver.Decode(resp.Entity().Entity())
+			ephemeral = ver.EphemeralLabel != ""
+		}
+		if ephemeral {
+			return fmt.Errorf("ephemeral deployments do not support disks")
+		}
+	}
 	// Generate sandbox name using pool's prefix, fallback to "sb" if not set
 	prefix := pool.SandboxPrefix
 	if prefix == "" {

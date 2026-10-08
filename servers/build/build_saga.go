@@ -15,6 +15,7 @@ import (
 	"github.com/tonistiigi/fsutil"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/pkg/addon"
@@ -265,6 +266,7 @@ type prepareConfigIn struct {
 	CLIEnvVars       []*build_v1alpha.EnvironmentVariable `json:"cli_env_vars,omitempty" saga:"cli_env_vars,optional"`
 	SourceKind       string                               `json:"source_kind,omitempty" saga:"source_kind,optional"`
 	SourceValue      string                               `json:"source_value,omitempty" saga:"source_value,optional"`
+	EphemeralLabel   string                               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 }
 
 type prepareConfigOut struct {
@@ -311,6 +313,12 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		status.SendError("Deploy failed: %v", err)
 		return prepareConfigOut{}, err
 	}
+	if in.EphemeralLabel != "" {
+		if err := ephemeralx.ValidateConfig(&spec); err != nil {
+			status.SendError("%s", err)
+			return prepareConfigOut{}, err
+		}
+	}
 	if err := validateDiskConfigs(ctx, b.ec.EAC(), spec); err != nil {
 		status.SendError("Deploy failed: %v", err)
 		return prepareConfigOut{}, err
@@ -342,6 +350,7 @@ type handleEphemeralIn struct {
 	AppName        string `json:"app_name" saga:"app_name"`
 	StreamID       string `json:"stream_id" saga:"stream_id"`
 	AppID          string `json:"app_id" saga:"app_id"`
+	ConfigSpec     string `json:"config_spec_json" saga:"config_spec_json"`
 	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	EphemeralTTL   string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
 }
@@ -376,6 +385,19 @@ func handleEphemeral(ctx context.Context, in handleEphemeralIn) (handleEphemeral
 	if ttlDuration <= 0 {
 		status.SendError("invalid ephemeral TTL %q: must be greater than 0", ttl)
 		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ttl)
+	}
+
+	spec, err := unmarshalConfigSpec(in.ConfigSpec)
+	if err != nil {
+		return handleEphemeralOut{}, err
+	}
+	runtimeSpec, err := coreutil.ResolveAddonConfig(ctx, b.ec.EAC(), &core_v1alpha.AppVersion{App: entity.Id(in.AppID)}, &spec)
+	if err != nil {
+		return handleEphemeralOut{}, err
+	}
+	if err := ephemeralx.ValidateConfig(runtimeSpec); err != nil {
+		status.SendError("%s", err)
+		return handleEphemeralOut{}, err
 	}
 
 	if err := ephemeralx.ReplaceExisting(ctx, b.ec.EAC(), entity.Id(in.AppID), in.EphemeralLabel, b.Log); err != nil {
@@ -1133,8 +1155,10 @@ func registerBuildSaga(
 		statuses: statuses,
 	}
 
+	// v1/v2 may have replaced a preview before preparing config, leaving no
+	// config_spec_json for the new handle-ephemeral input during compensation.
 	return saga.Define(sagaBuildFromTar).
-		Version(2).ResumesFrom(1).
+		Version(3).ResumesFrom().
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).

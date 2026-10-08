@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -217,6 +218,36 @@ func autoStackTarball(t *testing.T) map[string]string {
 		"go.mod":          "module example.com/demo\n\ngo 1.26\n",
 		"main.go":         "package main\n\nfunc main() {}\n",
 		"Procfile":        "web: ./demo\n",
+	}
+}
+
+func TestBuildSagaRejectsPreviewDisksBeforeReplacement(t *testing.T) {
+	for _, addon := range []bool{false, true} {
+		t.Run(fmt.Sprintf("addon-%t", addon), func(t *testing.T) {
+			ctx := context.Background()
+			h := newSagaTestHarness(t)
+			app, err := h.builder.appClient.Create(ctx, "demo")
+			require.NoError(t, err)
+			oldID, err := h.inmem.Client.Create(ctx, "old-preview", &core_v1alpha.AppVersion{App: app.ID, EphemeralLabel: "pr-2", EphemeralExpiresAt: time.Now().Add(time.Hour)})
+			require.NoError(t, err)
+			files := dockerfileTarball(t)
+			if addon {
+				_, err = h.inmem.Client.Create(ctx, "addon", &addon_v1alpha.AddonAssociation{App: app.ID, Status: "active", Disks: []addon_v1alpha.Disks{{Name: "database", Provider: "sqlite", MountPath: "/data"}}})
+				require.NoError(t, err)
+			} else {
+				files[".miren/app.toml"] += "\n[[services.web.disks]]\nname = 'data'\nprovider = 'local'\nmount_path = '/data'\n"
+			}
+			h.streams.Register("preview", makeTar(t, files))
+			before, err := h.inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			err = h.executor.Start(sagaBuildFromTar).
+				Input("app_name", "demo").Input("stream_id", "preview").Input("ephemeral_label", "pr-2").
+				WithID("disk-preview").Execute(ctx)
+			require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+			after, err := h.inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			require.Equal(t, before.Entity().Revision(), after.Entity().Revision())
+		})
 	}
 }
 
@@ -888,6 +919,7 @@ func TestBuildSaga_DeployTasksGateSitsBetweenAddonsAndActivation(t *testing.T) {
 	wait := pos(actionWaitAddons)
 	tasks := pos(actionRunDeployTasks)
 	activate := pos(actionSetActiveVer)
+	require.Less(t, pos(actionPrepareConfig), pos(actionHandleEphemera), "disk validation must precede destructive preview replacement")
 
 	if addons >= wait {
 		t.Errorf("the addon wait must follow provisioning, or there is nothing to wait on; order: %v", order)

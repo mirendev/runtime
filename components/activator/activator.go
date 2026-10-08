@@ -50,6 +50,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -237,6 +238,15 @@ func (a *localActivator) SetPoolCreator(pc PoolCreator) {
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
+	if ver.EphemeralLabel != "" {
+		spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, ver)
+		if err != nil {
+			return nil, err
+		}
+		if err := ephemeralx.ValidateConfig(spec); err != nil {
+			return nil, err
+		}
+	}
 	key := verKey{ver.ID.String(), service}
 
 	// Try to find an available sandbox with capacity (read lock for scanning)
@@ -254,6 +264,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			start := rand.Int() % len(ps.sandboxes)
 			for i := 0; i < len(ps.sandboxes); i++ {
 				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
+				if ver.EphemeralLabel != "" && len(s.sandbox.Spec.Volume) > 0 {
+					a.mu.RUnlock()
+					return nil, fmt.Errorf("ephemeral deployments do not support disks")
+				}
 				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 					candidateSandbox = s
 					break
@@ -610,6 +624,11 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve config: %w", err)
 	}
+	if ver.EphemeralLabel != "" {
+		if err := ephemeralx.ValidateConfig(spec); err != nil {
+			return nil, err
+		}
+	}
 	svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
@@ -646,6 +665,10 @@ poolLoop:
 				// Creation succeeded, loop back to re-check the pool state
 				// (it might already have capacity, or another racer might have incremented)
 				continue
+			}
+
+			if ver.EphemeralLabel != "" && len(state.pool.SandboxSpec.Volume) > 0 {
+				return nil, fmt.Errorf("ephemeral deployments do not support disks")
 			}
 
 			// state.pool is now a real (non-sentinel) cached pool. Ensure the

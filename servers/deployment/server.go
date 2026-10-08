@@ -657,6 +657,18 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	}
 	isEphemeral := args.HasEphemeralLabel() && args.EphemeralLabel() != ""
 
+	if isEphemeral {
+		spec, err := coreutil.ResolveRuntimeConfig(ctx, d.EAC, &appVersion)
+		if err != nil {
+			results.SetError(fmt.Sprintf("failed to resolve preview config: %v", err))
+			return nil
+		}
+		if err := ephemeralx.ValidateConfig(spec); err != nil {
+			results.SetError(err.Error())
+			return nil
+		}
+	}
+
 	// Ephemeral versions do not participate in deployment attempts, so their
 	// optional derivation remains wholly inside the ephemeral path.
 	if isEphemeral && args.HasEnvVars() && len(args.EnvVars()) > 0 {

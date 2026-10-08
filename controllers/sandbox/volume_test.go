@@ -7,10 +7,28 @@ import (
 
 	"github.com/stretchr/testify/require"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
+
+func TestPreviewCannotConfigureVolumes(t *testing.T) {
+	ctx := context.Background()
+	es, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	verID, err := es.Client.Create(ctx, "preview", &core_v1alpha.AppVersion{EphemeralLabel: "pr-2"})
+	require.NoError(t, err)
+	c := &SandboxController{EAC: es.EAC, DataPath: t.TempDir()}
+	for _, provider := range []string{"miren", "local", "sqlite", "host"} {
+		t.Run(provider, func(t *testing.T) {
+			sb := &compute.Sandbox{Spec: compute.SandboxSpec{Version: verID, Volume: []compute.SandboxSpecVolume{{Name: "production", Provider: provider, MountPath: "/data"}}}}
+			mounts, err := c.ConfigureVolumes(ctx, sb, nil)
+			require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+			require.Nil(t, mounts, "reject before touching directories or disk leases")
+		})
+	}
+}
 
 func TestAcquireDiskLease(t *testing.T) {
 	t.Run("creates new lease when none exists", func(t *testing.T) {

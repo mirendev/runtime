@@ -17,6 +17,24 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
+func TestManagerRejectsDiskBackedPreviewPool(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marked-%t", marked), func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			verID, err := server.Client.Create(ctx, "preview", &core_v1alpha.AppVersion{EphemeralLabel: "pr-2"})
+			require.NoError(t, err)
+			pool := &compute_v1alpha.SandboxPool{Ephemeral: marked, Service: "web", SandboxSpec: compute_v1alpha.SandboxSpec{Version: verID, Volume: []compute_v1alpha.SandboxSpecVolume{{Name: "production", Provider: "miren"}}}}
+			manager := NewManager(testutils.TestLogger(t), server.EAC)
+			require.ErrorContains(t, manager.createSandbox(ctx, pool, 0), "ephemeral deployments do not support disks")
+			resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+			require.NoError(t, err)
+			require.Empty(t, resp.Values())
+		})
+	}
+}
+
 // TestManagerScaleUpFromZero tests that the manager creates sandboxes
 // when the pool has DesiredInstances > 0 and no existing sandboxes
 func TestManagerScaleUpFromZero(t *testing.T) {

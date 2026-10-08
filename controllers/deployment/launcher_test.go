@@ -3906,6 +3906,34 @@ func TestRuntimeEnvNamesDoNotCollideWithClientEnv(t *testing.T) {
 	}
 }
 
+func TestPreviewPoolDoesNotAttachProductionStorage(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	appID, err := server.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+	launcher.DataPath = t.TempDir()
+	localDir := filepath.Join(launcher.DataPath, "data", "local", appID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "production.db"), []byte("production"), 0644))
+	ver := &core_v1alpha.AppVersion{App: appID, EphemeralLabel: "pr-2", ImageUrl: "test:latest", Config: core_v1alpha.Config{Services: []core_v1alpha.Services{{Name: "web"}}}}
+	ver.ID, err = server.Client.Create(ctx, "preview", ver)
+	require.NoError(t, err)
+	_, err = launcher.CreatePoolForVersion(ctx, ver, "web")
+	require.NoError(t, err)
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	require.Empty(t, pools[0].SandboxSpec.Volume, "diskless preview must not inherit production's legacy auto-mount")
+	ver.Config.Services[0].Disks = []core_v1alpha.Disks{{Name: "data", Provider: core_v1alpha.DiskProviderLocal, MountPath: "/data"}}
+	_, err = launcher.CreatePoolForVersion(ctx, ver, "web")
+	require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+	require.Len(t, listAllPools(t, ctx, server), 1, "rejection must not create another pool")
+	data, err := os.ReadFile(filepath.Join(localDir, "production.db"))
+	require.NoError(t, err)
+	require.Equal(t, "production", string(data))
+}
+
 // TestCreatePoolForVersionEphemeral verifies that the web pool of an ephemeral
 // AppVersion is seeded at DesiredInstances=1 even when the user's web config
 // asks for a higher fixed count. EphemeralStrategy handles the cap at runtime.
