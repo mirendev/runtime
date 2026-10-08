@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/internal/runnerquery"
 	query "miren.dev/runtime/pkg/portalquery"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -125,8 +126,10 @@ func TestRunnerQueryReferenceExamplesParse(t *testing.T) {
 		},
 	}}
 
+	reference, err := runnerquery.Reference()
+	require.NoError(t, err)
 	examples := 0
-	for _, block := range strings.Split(runnerQueryReference, "\n\n") {
+	for _, block := range strings.Split(reference, "\n\n") {
 		if !strings.HasPrefix(block, "Example query:\n") {
 			continue
 		}

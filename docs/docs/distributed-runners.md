@@ -240,9 +240,61 @@ treat a missing revision as unknown, not as a match.
 The offline `--reference` starts with the CLI's engine revision. CLI query errors
 include the runner's revision when available and explicitly flag differences.
 If revisions differ, a syntax error may indicate version skew rather than a
-mistake against the offline reference: use a CLI matching the runner or update
-the runner. The expression stays a string on the wire so unsupported syntax
-fails loudly instead of silently dropping newer request fields.
+mistake against the offline reference: fetch the target runner's reference using
+`RunnerRegistration.QueryInfo(runner)`. The expression stays a string on the wire
+so unsupported syntax fails loudly instead of silently dropping newer request fields.
+
+### Query reference and validation RPCs
+
+The same coordinator service exposes two non-executing APIs:
+
+- `RunnerRegistration.QueryInfo(runner)` returns `name`, `engine_revision`, and
+  the complete, self-contained syntax guide in `reference`. It comes from the
+  **target runner**, not the coordinator, and includes the same guide available
+  offline through `miren runner query --reference` on a matching CLI version.
+- `RunnerRegistration.ValidateQuery(runner, expression)` returns `name`,
+  `engine_revision`, `valid`, and `error`. It parses and checks the expression
+  against the runner's registered sources, including custom source fields,
+  aggregates, selector/action blocks, and inventory correlation. Symbolic syscall
+  names are resolved against that runner's native architecture.
+
+Validation does **not** run collectors, attach probes, read sandbox inventory,
+or reserve one of the ten execution slots. It does not check runtime prerequisites
+such as kernel probe support, permissions, existing processes/cgroups, inventory
+ownership conflicts, or whether the query completes within Miren's one-minute
+execution deadline. `valid = true` means the expression is accepted by the
+runner's language, not that executing it will succeed.
+
+Both APIs use the same runner lookup and operator identity restrictions as
+`Query`. Cloud JWT authorization requires `runnerregistration/queryinfo` or
+`runnerregistration/validatequery`, respectively. Check both transport errors
+and the returned `error`; lookup, forwarding, or authorization failure is not a
+syntax diagnosis. Older runners/coordinators may not implement these methods;
+a missing engine revision is unknown, not a match.
+
+```go
+client := runner_v1alpha.NewRunnerRegistrationClient(cl)
+info, err := client.QueryInfo(ctx, "runner1")
+if err != nil {
+    return err
+}
+if info.Error() != "" {
+    return fmt.Errorf("query reference failed: %s", info.Error())
+}
+fmt.Print(info.Reference()) // Full guide, suitable for an agent to read directly.
+
+validation, err := client.ValidateQuery(ctx, "runner1", "memory avg(used) over 10s every 1s")
+if err != nil {
+    return err
+}
+if validation.Error() != "" {
+    return fmt.Errorf("query validation failed: %s", validation.Error())
+}
+if !validation.Valid() {
+    return fmt.Errorf("runner did not accept the query")
+}
+// No query has executed. Use client.Query to collect its results.
+```
 
 Expressions use the live query DSL, not SQL. Use
 `miren runner query --reference` for the complete syntax. For example:

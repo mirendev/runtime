@@ -3,8 +3,10 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/internal/runnerquery"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -32,6 +35,98 @@ func (s *observedNodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1al
 	err := s.nodeAdminServer.Query(ctx, req)
 	req.Results().SetEngineRevision(s.engineRevision)
 	return err
+}
+
+func (s *observedNodeAdminServer) QueryInfo(ctx context.Context, req *nodeadmin_v1alpha.NodeAdminQueryInfo) error {
+	if err := s.nodeAdminServer.QueryInfo(ctx, req); err != nil {
+		return err
+	}
+	reference, err := runnerquery.Reference()
+	if err != nil {
+		return err
+	}
+	req.Results().SetEngineRevision(s.engineRevision)
+	req.Results().SetReference("runner-only reference\n" + reference)
+	return nil
+}
+
+func (s *observedNodeAdminServer) ValidateQuery(ctx context.Context, req *nodeadmin_v1alpha.NodeAdminValidateQuery) error {
+	err := s.nodeAdminServer.ValidateQuery(ctx, req)
+	req.Results().SetEngineRevision(s.engineRevision)
+	return err
+}
+
+func TestHostQueryInspection(t *testing.T) {
+	snapshots := func(context.Context, query.MonitorRequest) (query.Snapshot, error) {
+		t.Error("validation must not collect snapshots")
+		return query.Snapshot{}, errors.New("unexpected collection")
+	}
+	events := func(context.Context, query.MonitorRequest, func(query.Event) error) error {
+		t.Error("validation must not collect events")
+		return errors.New("unexpected collection")
+	}
+	client := nodeadmin_v1alpha.NewNodeAdminClient(rpc.LocalClient(nodeadmin_v1alpha.AdaptNodeAdmin(&nodeAdminServer{
+		queryEngine: query.Engine{Snapshots: snapshots, Events: events, Sources: map[string]query.CustomSource{
+			"sandboxes": {Fields: []string{"app", "cgroup"}, Snapshots: snapshots},
+			"jobs":      {Fields: []string{"queue", "bytes"}, NumericFields: []string{"bytes"}, Events: events},
+		}},
+	})))
+	ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})
+	info, err := client.QueryInfo(ctx)
+	require.NoError(t, err)
+	require.Empty(t, info.Error())
+	require.Equal(t, query.Revision, info.EngineRevision())
+	reference, err := runnerquery.Reference()
+	require.NoError(t, err)
+	require.Equal(t, reference, info.Reference())
+
+	for _, tc := range []struct {
+		expression string
+		errorText  string
+	}{
+		{"memory", ""},
+		{"memory avg(total) over 2m every 1s", ""},
+		{"jobs where bytes > 3 sum(bytes) over 1s by queue", ""},
+		{"jobs { @jobs[queue] = sum(bytes) } after 1s { emit @jobs }", ""},
+		{`cgroups using (sandboxes where app = "my-app") on path = cgroup rate(io.write_bytes), rate(io.write_ios) over 10s every 1s by inventory.app`, ""},
+		{"syscalls where syscall = :fsync count over 1s", ""},
+		{"", "query"},
+		{"SELECT * FROM memory", "query"},
+		{"unknown_source", "source"},
+		{"jobs sum(missing) over 1s", "missing"},
+		{"syscalls where syscall = :nonexistent_miren_syscall count over 1s", "unknown syscall"},
+		{"syscalls where syscall = :nonexistent_miren_syscall { @calls[] = count() } after 1s { emit @calls }", "unknown syscall"},
+		{strings.Repeat("x", 4097), "4096"},
+	} {
+		t.Run(tc.expression[:min(len(tc.expression), 100)], func(t *testing.T) {
+			res, err := client.ValidateQuery(ctx, tc.expression)
+			require.NoError(t, err)
+			require.Equal(t, query.Revision, res.EngineRevision())
+			require.Equal(t, tc.errorText == "", res.Valid())
+			if tc.errorText == "" {
+				require.Empty(t, res.Error())
+			} else {
+				require.Contains(t, res.Error(), tc.errorText)
+			}
+		})
+	}
+	for _, identity := range []*rpc.Identity{
+		nil,
+		{Method: rpc.AuthMethodCert, Subject: "runner-other"},
+		{Method: rpc.AuthMethodJWT, Subject: rpc.CoordinatorCertSubject},
+	} {
+		deniedCtx := rpc.ContextWithIdentity(t.Context(), identity)
+		info, err := client.QueryInfo(deniedCtx)
+		require.NoError(t, err)
+		require.NotEmpty(t, info.Error())
+		require.False(t, info.HasEngineRevision())
+		require.False(t, info.HasReference())
+		validation, err := client.ValidateQuery(deniedCtx, "invalid")
+		require.NoError(t, err)
+		require.Equal(t, info.Error(), validation.Error())
+		require.False(t, validation.HasEngineRevision())
+		require.False(t, validation.Valid())
+	}
 }
 
 func TestHostQuery(t *testing.T) {
@@ -143,6 +238,14 @@ func TestHostQueryAdmission(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "runner already has 10 queries in progress", res.Error())
 		require.False(t, res.HasData())
+		info, err := client.QueryInfo(ctx)
+		require.NoError(t, err)
+		require.Empty(t, info.Error())
+		require.NotEmpty(t, info.Reference())
+		validation, err := client.ValidateQuery(ctx, "hold")
+		require.NoError(t, err)
+		require.Empty(t, validation.Error())
+		require.True(t, validation.Valid())
 		unauthorized := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodCert, Subject: "runner-other"})
 		res, err = client.Query(unauthorized, "memory")
 		require.NoError(t, err)
@@ -188,7 +291,8 @@ func TestCoordinatorQueryAdmission(t *testing.T) {
 		{&rpc.Identity{Method: rpc.AuthMethodJWT, Subject: "cloud-user"}, true},
 		{&rpc.Identity{Method: rpc.AuthMethodAnonymous}, true},
 	} {
-		res, err := client.Query(rpc.ContextWithIdentity(t.Context(), tc.identity), "target", "memory")
+		ctx := rpc.ContextWithIdentity(t.Context(), tc.identity)
+		res, err := client.Query(ctx, "target", "memory")
 		require.NoError(t, err)
 		if tc.allowed {
 			require.Equal(t, "no rpc state to reach the runner with", res.Error())
@@ -196,6 +300,14 @@ func TestCoordinatorQueryAdmission(t *testing.T) {
 			require.Equal(t, "host queries require an operator identity", res.Error())
 		}
 		require.False(t, res.HasData())
+		info, err := client.QueryInfo(ctx, "target")
+		require.NoError(t, err)
+		require.Equal(t, res.Error(), info.Error())
+		require.False(t, info.HasReference())
+		validation, err := client.ValidateQuery(ctx, "target", "memory")
+		require.NoError(t, err)
+		require.Equal(t, res.Error(), validation.Error())
+		require.False(t, validation.Valid())
 	}
 }
 
@@ -321,6 +433,49 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 	require.NoError(t, err)
 	defer cl.Close()
 	client := runner_v1alpha.NewRunnerRegistrationClient(cl)
+
+	reference, err := runnerquery.Reference()
+	require.NoError(t, err)
+	for _, target := range []string{"target", "target-id", "node/target-id"} {
+		info, err := client.QueryInfo(t.Context(), target)
+		require.NoError(t, err)
+		require.Empty(t, info.Error())
+		require.Equal(t, "target", info.Name())
+		require.Equal(t, "different-runner-engine", info.EngineRevision())
+		require.Equal(t, "runner-only reference\n"+reference, info.Reference())
+		for _, expression := range []string{"inventory", "unknown_source"} {
+			validation, err := client.ValidateQuery(t.Context(), target, expression)
+			require.NoError(t, err)
+			require.Equal(t, "target", validation.Name())
+			require.Equal(t, "different-runner-engine", validation.EngineRevision())
+			require.Equal(t, expression == "inventory", validation.Valid())
+			if validation.Valid() {
+				require.Empty(t, validation.Error())
+			} else {
+				require.Contains(t, validation.Error(), "source")
+			}
+		}
+	}
+	select {
+	case expression := <-queries:
+		t.Fatalf("query inspection executed a query: %s", expression)
+	default:
+	}
+	for _, tc := range []struct{ target, errorText string }{
+		{" ", "runner name or ID is required"},
+		{"missing", "not found"},
+		{"offline", "no address"},
+	} {
+		info, err := client.QueryInfo(t.Context(), tc.target)
+		require.NoError(t, err)
+		require.Contains(t, info.Error(), tc.errorText)
+		require.False(t, info.HasEngineRevision())
+		validation, err := client.ValidateQuery(t.Context(), tc.target, "memory")
+		require.NoError(t, err)
+		require.Equal(t, info.Error(), validation.Error())
+		require.False(t, validation.Valid())
+		require.False(t, validation.HasEngineRevision())
+	}
 
 	for _, target := range []string{"target", "target-id", "node/target-id"} {
 		res, err := client.Query(t.Context(), target, "network where name = lo")
