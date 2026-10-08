@@ -316,8 +316,8 @@ if result.Error() != "" {
 ```
 
 Execution has a one-minute deadline and also respects caller cancellation.
-Each runner executes at most one query at a time. Concurrent calls fail with
-`runner already has a query in progress` rather than queueing. Admission is
+Each runner executes at most 10 queries at a time. Additional calls fail with
+`runner already has 10 queries in progress` rather than queueing. Admission is
 released on success, error, or cancellation.
 This is a single-runner, request/response API, not a streaming or
 cluster-wide query service. Both coordinator and runner must support this RPC.

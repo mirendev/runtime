@@ -104,46 +104,60 @@ func TestHostQuery(t *testing.T) {
 
 func TestHostQueryAdmission(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		started := make(chan struct{})
+		started := make(chan struct{}, 10)
 		server := &nodeAdminServer{log: slog.Default(), queryEngine: query.Engine{Sources: map[string]query.CustomSource{
 			"hold": {Snapshots: func(ctx context.Context, _ query.MonitorRequest) (query.Snapshot, error) {
-				close(started)
+				started <- struct{}{}
 				<-ctx.Done()
 				return query.Snapshot{}, ctx.Err()
 			}},
 		}}}
 		client := nodeadmin_v1alpha.NewNodeAdminClient(rpc.LocalClient(nodeadmin_v1alpha.AdaptNodeAdmin(server)))
 		ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{Method: rpc.AuthMethodCert, Subject: rpc.CoordinatorCertSubject})
-		firstCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		done := make(chan string, 1)
-		go func() {
-			res, err := client.Query(firstCtx, "hold")
-			if err != nil {
-				done <- err.Error()
-				return
-			}
-			done <- res.Error()
-		}()
-		<-started
+		cancels := make([]context.CancelFunc, 10)
+		done := make(chan string, 10)
+		for i := range 10 {
+			queryCtx, cancel := context.WithCancel(ctx)
+			cancels[i] = cancel
+			defer cancel()
+			go func() {
+				res, err := client.Query(queryCtx, "hold")
+				if err != nil {
+					done <- err.Error()
+					return
+				}
+				done <- res.Error()
+			}()
+		}
+		for range 10 {
+			<-started
+		}
 		res, err := client.Query(ctx, "memory")
 		require.NoError(t, err)
-		require.Equal(t, "runner already has a query in progress", res.Error())
+		require.Equal(t, "runner already has 10 queries in progress", res.Error())
 		require.False(t, res.HasData())
 		unauthorized := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodCert, Subject: "runner-other"})
 		res, err = client.Query(unauthorized, "memory")
 		require.NoError(t, err)
 		require.Contains(t, res.Error(), "only the coordinator")
-		cancel()
+		cancels[0]()
 		require.Contains(t, <-done, "context canceled")
 		res, err = client.Query(ctx, "invalid")
 		require.NoError(t, err)
 		require.NotEmpty(t, res.Error())
 		require.NotContains(t, res.Error(), "in progress")
-		res, err = client.Query(ctx, "memory")
-		require.NoError(t, err)
-		require.Empty(t, res.Error())
-		require.True(t, res.HasData())
+		for range 2 {
+			res, err = client.Query(ctx, "memory")
+			require.NoError(t, err)
+			require.Empty(t, res.Error())
+			require.True(t, res.HasData())
+		}
+		for _, cancel := range cancels[1:] {
+			cancel()
+		}
+		for range 9 {
+			require.Contains(t, <-done, "context canceled")
+		}
 	})
 }
 

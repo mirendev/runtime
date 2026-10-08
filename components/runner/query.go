@@ -16,11 +16,19 @@ func (s *nodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1alpha.Node
 		return nil
 	}
 
-	if !s.queryMu.TryLock() {
-		res.SetError("runner already has a query in progress")
+	s.queryMu.Lock()
+	if s.activeQueries >= 10 {
+		s.queryMu.Unlock()
+		res.SetError("runner already has 10 queries in progress")
 		return nil
 	}
-	defer s.queryMu.Unlock()
+	s.activeQueries++
+	s.queryMu.Unlock()
+	defer func() {
+		s.queryMu.Lock()
+		s.activeQueries--
+		s.queryMu.Unlock()
+	}()
 
 	request, err := s.queryEngine.ParseMonitorQuery(req.Args().Expression())
 	if err != nil {

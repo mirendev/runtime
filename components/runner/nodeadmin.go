@@ -20,10 +20,11 @@ import (
 // this host: a kernel module has to be compiled against the kernel actually
 // running here, and loaded into it.
 type nodeAdminServer struct {
-	log         *slog.Logger
-	deps        lbdDeps
-	queryEngine query.Engine
-	queryMu     sync.Mutex
+	log           *slog.Logger
+	deps          lbdDeps
+	queryEngine   query.Engine
+	queryMu       sync.Mutex
+	activeQueries int
 }
 
 // InstallDiskAccelerator builds and loads the lbd kernel module on this node.
