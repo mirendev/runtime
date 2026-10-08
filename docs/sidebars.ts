@@ -79,6 +79,11 @@ const sidebars: SidebarsConfig = {
           id: 'miren-cloud/overview',
           label: 'Overview',
         },
+        {
+          type: 'doc',
+          id: 'miren-cloud/accounts',
+          label: 'Accounts and Sign-In',
+        },
         'miren-cloud/subdomains',
         'miren-cloud/connectivity',
         {
