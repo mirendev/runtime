@@ -2,9 +2,9 @@
 // cloud's ephemeral cache, over the negotiated uplink session.
 //
 // This is measured state with no entity behind it, so it rides a purpose-built
-// capability rather than entity sync, at the cadence cloud asks for. It is the
-// resource half of the legacy status report; when cloud selects this
-// capability the poll has nothing left to say about resources.
+// capability rather than entity sync, at the cadence cloud asks for. It
+// replaced the resource half of the legacy status poll, which this runtime no
+// longer sends.
 package clusterresources
 
 import (
@@ -55,10 +55,10 @@ func (r *Reporter) Register(_ context.Context, link Link) error {
 		if !ok {
 			return
 		}
-		// Selection is what suppresses the status poll, so a session that
-		// selected this capability must report on it even when the cadence
+		// This capability is cloud's only source of resource readings, so a
+		// session that selected it must report on it even when the cadence
 		// cloud sent cannot be read: the default stands in, with a warning,
-		// rather than leaving cloud with neither source.
+		// rather than leaving cloud with nothing.
 		interval := defaultInterval
 		if len(selection.Config) > 0 {
 			var config Config

@@ -82,9 +82,8 @@ type SessionWelcome struct {
 	ServerTransmitTime time.Time             `json:"server_transmit_time"`
 	Capabilities       []CapabilitySelection `json:"capabilities"`
 	// IdentityIssuerURL is where cloud anchors this cluster's workload
-	// identity. The status poll's response carried it on every report so a
-	// cluster registered before anchors existed could learn its own; the
-	// welcome carries it on every session for the same reason. Empty when
+	// identity, carried on every session so a cluster registered before
+	// anchors existed can learn its own without re-registering. Empty when
 	// cloud is not serving discovery, or from a cloud that predates it.
 	IdentityIssuerURL string `json:"identity_issuer_url,omitempty"`
 }

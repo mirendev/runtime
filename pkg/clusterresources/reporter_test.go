@@ -133,7 +133,7 @@ func TestSilentWhenNotSelectedAndStopsWithSession(t *testing.T) {
 }
 
 // A malformed config falls back to the default cadence rather than going
-// silent: selecting the capability is what turns the status poll off, so a
+// silent: the capability is cloud's only source of resource readings, so a
 // selected session has to report on it.
 func TestMalformedConfigFallsBackToDefault(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
