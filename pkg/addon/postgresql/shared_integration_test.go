@@ -3,6 +3,7 @@ package postgresql_test
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,7 +229,7 @@ func TestPostgreSQL_Integration(t *testing.T) {
 
 	t.Run("CloneSharedPostgreSQLKeepsPrimaryAvailable", func(t *testing.T) {
 		provider := postgresql.NewProvider(fw)
-		app := addon.App{Name: "clone-source-app"}
+		app := addon.App{Name: strings.Repeat("a", 63)}
 		variant := addon.Variant{Name: "shared"}
 		source := addon.AddonAssociation{ID: "assoc-clone-source", Variant: "shared"}
 		provisioned, err := provider.Provision(ctx, source, app, variant)
@@ -270,12 +271,56 @@ func TestPostgreSQL_Integration(t *testing.T) {
 
 		_, err = provider.Clone(ctx, source, target, app, variant)
 		require.NoError(t, err, "replaying a completed clone must not repeat the restore")
+		// Lose the role action's checkpoint, leaving its committed SQL behind.
+		exec, err := fw.Storage.Get(ctx, addon.CloneExecutionID(target.ID))
+		require.NoError(t, err)
+		delete(exec.ExecutedActions, "create-clone-shared-user")
+		exec.Status = saga.StatusRunning
+		require.NoError(t, fw.Storage.Save(ctx, exec))
+		_, err = provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err, "a role owned by this clone must replay after a lost checkpoint")
+		second := addon.AddonAssociation{ID: "assoc-clone-targex", Variant: "shared", SourceAssociation: source.ID}
+		secondResult, err := provider.Clone(ctx, source, second, app, variant)
+		require.NoError(t, err, "two previews of a long app name must not share resources")
+		second.Entity = entity.New(entity.DBId, second.ID, secondResult.Attrs)
+		var secondData addon_v1alpha.PostgresqlSharedData
+		secondData.Decode(second.Entity)
+		require.NotEqual(t, cloneEnv["PGDATABASE"], secondData.DatabaseName)
+		require.NoError(t, provider.Deprovision(ctx, second))
+
+		var sourceData addon_v1alpha.PostgresqlSharedData
+		sourceData.Decode(source.Entity)
+		var server addon_v1alpha.PostgresServer
+		require.NoError(t, ec.GetById(ctx, sourceData.PostgresServer, &server))
+		admin, err := pgx.Connect(ctx, fmt.Sprintf("postgres://postgres:%s@%s:5432/postgres", server.SuperuserPassword, sourceEnv["PGHOST"]))
+		require.NoError(t, err)
+		defer admin.Close(ctx)
+		foreignRole := strings.Repeat("a", 50) + "_abcdefabcdef"
+		_, err = admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{foreignRole}.Sanitize()+" LOGIN PASSWORD 'foreign-test-password'")
+		require.NoError(t, err)
+		defer func() {
+			_, err := admin.Exec(ctx, "DROP ROLE "+pgx.Identifier{foreignRole}.Sanitize())
+			assert.NoError(t, err)
+		}()
+		var originalHash, currentHash string
+		require.NoError(t, admin.QueryRow(ctx, "SELECT rolpassword FROM pg_authid WHERE rolname = $1", foreignRole).Scan(&originalHash))
+		_, err = provider.Clone(ctx, source, addon.AddonAssociation{
+			ID: "addon_association/clone-abcdefabcdef", Variant: "shared", SourceAssociation: source.ID,
+		}, app, variant)
+		require.ErrorContains(t, err, "not owned by this clone")
+		require.NoError(t, admin.QueryRow(ctx, "SELECT rolpassword FROM pg_authid WHERE rolname = $1", foreignRole).Scan(&currentHash))
+		require.True(t, originalHash == currentHash, "rejecting an unrelated role must not rotate its password")
 		// Simulate a crash after saga completion but before saving association attrs.
 		target.Entity = entity.New(entity.DBId, target.ID)
 		require.NoError(t, provider.Deprovision(ctx, target), "clone cleanup must recover resource ownership from the saga")
 		var roleCount int
 		require.NoError(t, conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_roles WHERE rolname = $1", cloneEnv["PGUSER"]).Scan(&roleCount))
 		require.Zero(t, roleCount)
+		freshPrimary, err := pgx.Connect(ctx, sourceEnv["DATABASE_URL"])
+		require.NoError(t, err, "primary credentials must still authenticate after preview cleanup")
+		defer freshPrimary.Close(ctx)
+		require.NoError(t, freshPrimary.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 17, total)
 	})
 
 	t.Run("CloneDedicatedCredentials", func(t *testing.T) {

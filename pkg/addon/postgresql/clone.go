@@ -64,6 +64,7 @@ func undoDecodeSharedCloneSource(context.Context, decodeSharedCloneSourceIn, dec
 type generateCloneCredentialsIn struct {
 	AppName             string
 	TargetAssociationID string
+	SourceEntity        *entity.Entity `saga:"sourceentity"`
 }
 
 type generateCloneCredentialsOut struct {
@@ -80,7 +81,13 @@ func generateCloneCredentials(_ context.Context, in generateCloneCredentialsIn) 
 	if len(suffix) > 12 {
 		suffix = suffix[len(suffix)-12:]
 	}
-	name := sanitizeIdentifier(in.AppName + "_" + suffix)
+	suffix = sanitizeIdentifier(suffix)
+	name := addon.SanitizeIdentifier(in.AppName, maxPgIdentLen-len(suffix)-1) + "_" + suffix
+	var source addon_v1alpha.PostgresqlSharedData
+	source.Decode(in.SourceEntity)
+	if name == source.DatabaseName || name == source.Username {
+		return generateCloneCredentialsOut{}, fmt.Errorf("refusing to clone into the source PostgreSQL database or role %q", name)
+	}
 	return generateCloneCredentialsOut{
 		SharedPassword:          idgen.Gen("pw"),
 		SharedDatabaseName:      name,
@@ -97,6 +104,7 @@ type createCloneSharedUserIn struct {
 	SuperuserPassword       string
 	GeneratedSharedUsername string
 	SharedPassword          string
+	TargetAssociationID     string
 }
 
 type createCloneSharedUserOut struct {
@@ -109,16 +117,32 @@ func createCloneSharedUser(ctx context.Context, in createCloneSharedUserIn) (cre
 		return createCloneSharedUserOut{}, fmt.Errorf("connecting to shared server: %w", err)
 	}
 	defer conn.Close(ctx)
-	var exists bool
-	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", in.GeneratedSharedUsername).Scan(&exists); err != nil {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return createCloneSharedUserOut{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	marker := "miren-addon-clone:" + in.TargetAssociationID
+	var owner string
+	err = tx.QueryRow(ctx, "SELECT COALESCE(shobj_description(oid, 'pg_authid'), '') FROM pg_roles WHERE rolname = $1", in.GeneratedSharedUsername).Scan(&owner)
+	if err == nil {
+		if owner != marker {
+			return createCloneSharedUserOut{}, fmt.Errorf("clone role %s already exists and is not owned by this clone", in.GeneratedSharedUsername)
+		}
+		return createCloneSharedUserOut{SharedUsername: in.GeneratedSharedUsername}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return createCloneSharedUserOut{}, fmt.Errorf("checking clone user %s: %w", in.GeneratedSharedUsername, err)
 	}
-	if exists {
-		err = alterPostgresUserPassword(ctx, conn, in.GeneratedSharedUsername, in.SharedPassword)
-	} else {
-		err = createPostgresUser(ctx, conn, in.GeneratedSharedUsername, in.SharedPassword)
+	if _, err := tx.Exec(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD %s", quoteIdentifier(in.GeneratedSharedUsername), quoteLiteral(in.SharedPassword))); err != nil {
+		return createCloneSharedUserOut{}, fmt.Errorf("creating clone user %s: %w", in.GeneratedSharedUsername, err)
 	}
-	if err != nil {
+	// Commit ownership with the role so a lost action checkpoint can replay
+	// without adopting an unrelated role or rotating its password.
+	if _, err := tx.Exec(ctx, fmt.Sprintf("COMMENT ON ROLE %s IS %s", quoteIdentifier(in.GeneratedSharedUsername), quoteLiteral(marker))); err != nil {
+		return createCloneSharedUserOut{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return createCloneSharedUserOut{}, err
 	}
 	return createCloneSharedUserOut{SharedUsername: in.GeneratedSharedUsername}, nil
@@ -181,7 +205,8 @@ func undoCreateCloneSharedDatabase(ctx context.Context, in createCloneSharedData
 }
 
 func registerCloneSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
-	b := saga.Define("clone-shared-postgresql").Using(fw)
+	// Old executions may have checkpointed names that collide with production.
+	b := saga.Define("clone-shared-postgresql").Version(2).ResumesFrom().Using(fw)
 	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})
 	return b.
 		Action(decodeSharedCloneSource).Undo(undoDecodeSharedCloneSource).
@@ -367,7 +392,7 @@ func registerCloneDedicatedToSharedSaga(registry *saga.Registry, fw *addon.Provi
 	if err := RegisterEnsureSharedServerSaga(registry, fw); err != nil {
 		return err
 	}
-	b := saga.Define("clone-dedicated-to-shared-postgresql").Using(fw)
+	b := saga.Define("clone-dedicated-to-shared-postgresql").Version(2).ResumesFrom().Using(fw)
 	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})
 	return b.
 		Action(decodeDedicatedCloneSource).Undo(undoDecodeDedicatedCloneSource).

@@ -194,7 +194,7 @@
     }
   },
   "clone-dedicated-to-shared-postgresql": {
-    "version": 1,
+    "version": 2,
     "actions": {
       "create-clone-shared-database": {
         "inputs": [
@@ -218,7 +218,8 @@
           "generatedsharedusername",
           "servicehost",
           "sharedpassword",
-          "superuserpassword"
+          "superuserpassword",
+          "targetassociationid"
         ],
         "outputs": [
           "sharedusername"
@@ -255,6 +256,7 @@
       "generate-clone-credentials": {
         "inputs": [
           "appname",
+          "sourceentity",
           "targetassociationid"
         ],
         "outputs": [
@@ -313,7 +315,7 @@
     }
   },
   "clone-shared-postgresql": {
-    "version": 1,
+    "version": 2,
     "actions": {
       "create-clone-shared-database": {
         "inputs": [
@@ -337,7 +339,8 @@
           "generatedsharedusername",
           "servicehost",
           "sharedpassword",
-          "superuserpassword"
+          "superuserpassword",
+          "targetassociationid"
         ],
         "outputs": [
           "sharedusername"
@@ -364,6 +367,7 @@
       "generate-clone-credentials": {
         "inputs": [
           "appname",
+          "sourceentity",
           "targetassociationid"
         ],
         "outputs": [

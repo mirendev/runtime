@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/addon"
@@ -16,6 +18,41 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/saga"
 )
+
+func TestCloneCredentialsPreserveSuffixForLongAppNames(t *testing.T) {
+	for _, length := range []int{50, 58, 62, 63, 80} {
+		appName := strings.Repeat("a", length)
+		source := entity.New(entity.DBId, entity.Id("addon_association/source"), (&addon_v1alpha.PostgresqlSharedData{
+			DatabaseName: sanitizeIdentifier(appName), Username: sanitizeIdentifier(appName),
+		}).Encode())
+		first, err := generateCloneCredentials(t.Context(), generateCloneCredentialsIn{
+			AppName: appName, TargetAssociationID: "addon_association/clone-abcdefabcdef", SourceEntity: source,
+		})
+		require.NoError(t, err)
+		second, err := generateCloneCredentials(t.Context(), generateCloneCredentialsIn{
+			AppName: appName, TargetAssociationID: "addon_association/clone-abcdefabcdea", SourceEntity: source,
+		})
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(first.SharedDatabaseName), 63)
+		require.True(t, strings.HasSuffix(first.SharedDatabaseName, "_abcdefabcdef"))
+		require.NotEqual(t, sanitizeIdentifier(appName), first.SharedDatabaseName)
+		require.NotEqual(t, first.SharedDatabaseName, second.SharedDatabaseName)
+		require.Equal(t, first.SharedDatabaseName, first.GeneratedSharedUsername)
+	}
+}
+
+func TestCloneCredentialsRejectSourceDatabaseAndRole(t *testing.T) {
+	for _, source := range []addon_v1alpha.PostgresqlSharedData{
+		{DatabaseName: "demo_abcdefabcdef", Username: "other"},
+		{DatabaseName: "other", Username: "demo_abcdefabcdef"},
+	} {
+		_, err := generateCloneCredentials(t.Context(), generateCloneCredentialsIn{
+			AppName: "demo", TargetAssociationID: "addon_association/clone-abcdefabcdef",
+			SourceEntity: entity.New(entity.DBId, entity.Id("addon_association/source"), source.Encode()),
+		})
+		require.ErrorContains(t, err, "refusing to clone into the source")
+	}
+}
 
 func TestCloneWaitBudgetsCoverProviderAndRecovery(t *testing.T) {
 	// Dedicated copies also run two bounded execs and two readiness waits.
