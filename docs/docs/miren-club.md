@@ -16,7 +16,7 @@ If you'd rather run Miren on your own machine, that's the [Getting Started](./ge
 
 Access is granted through our [Discord](https://miren.dev/discord). Here's the flow:
 
-1. Sign in to [Miren Cloud](https://miren.cloud) with your GitHub or Google account.
+1. Sign in to [Miren Cloud](https://miren.cloud) with your GitHub or Google account. If you already have a Miren account, sign in the way you set it up, or [connect another sign-in method](./miren-cloud/accounts.md) to it first.
 2. Post in the **#miren-club** channel asking for access, with a sentence about what you'd like to deploy.
 3. One of us will DM you an invite link.
 

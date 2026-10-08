@@ -30,7 +30,7 @@ A standalone cluster reaches the network however you've wired it, and none of th
 
 ## Getting connected
 
-When you run `miren server install`, Miren registers the cluster with Miren Cloud and walks you through creating your account. To connect a server you installed standalone, register it after the fact:
+When you run `miren server install`, Miren registers the cluster with Miren Cloud and walks you through creating your account. You sign in with GitHub or Google, and you can connect both to the same account (see [Accounts and sign-in](./accounts.md)). To connect a server you installed standalone, register it after the fact:
 
 ```bash
 miren server register -n my-cluster
