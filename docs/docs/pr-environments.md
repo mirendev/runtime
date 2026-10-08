@@ -276,7 +276,7 @@ The deploy action exposes the preview URL as a step output, so a follow-up step 
 
 ## Limitations
 
-- **No disk attachments** — ephemeral deploys reject configurations with disks, including storage supplied by an active addon. This prevents previews from taking production's disk leases or mounting its local or SQLite data. Diskless previews do not inherit legacy local-data auto-mounts. Existing disk-backed preview versions cannot acquire new request leases or restart with disk attachments; already-running instances must be explicitly deleted to release their storage.
+- **No disk attachments** — ephemeral deploys reject configurations with disks, including storage supplied by an active addon. This prevents previews from taking production's disk leases or mounting its local or SQLite data. Diskless previews do not inherit legacy local-data auto-mounts. Existing previews with disk attachments cannot acquire new request leases or restart. This includes old previews that declared no disks but inherited a legacy local-data auto-mount. Delete affected previews or replace them with a diskless redeploy; already-running instances retain their storage until their preview is deleted or replaced.
 - **`web` service only** — workers and other services from your app config don't start (see [What Runs in an Ephemeral Version](#what-runs-in-an-ephemeral-version)).
 - **Shared backing services by default** — addons are shared unless you set `clone = true`, and only PostgreSQL can be cloned. Service URLs you set by hand are always shared; override them per preview with `-e`.
 - **No deployment history** — `miren app history`, `miren rollback`, and the deployment lock all ignore ephemeral deploys.
