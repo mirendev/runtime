@@ -4682,3 +4682,57 @@ func TestConcurrentCreateAndReconcileNoDeadlock(t *testing.T) {
 	pools := listAllPools(t, ctx, server)
 	assert.Len(t, pools, 1, "concurrent create + reconcile must converge on one pool")
 }
+
+// TestDisabledAppStaysAtZero verifies that the launcher holds every service
+// of a disabled app at zero: the resync doesn't restore a fixed count and a
+// deploy doesn't boot an instance for verification.
+func TestDisabledAppStaysAtZero(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	app := &core_v1alpha.App{Project: entity.Id("project-1")}
+	appID, err := server.Client.Create(ctx, "test-app", app)
+	require.NoError(t, err)
+	app.ID = appID
+
+	newVersion := func(name string) *core_v1alpha.AppVersion {
+		t.Helper()
+		ver := &core_v1alpha.AppVersion{
+			App:      app.ID,
+			Version:  name,
+			ImageUrl: "worker:latest",
+			Config: core_v1alpha.Config{
+				Services: []core_v1alpha.Services{
+					{
+						Name:               "worker",
+						ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "fixed", NumInstances: 2},
+					},
+				},
+			},
+		}
+		verID, createErr := server.Client.Create(ctx, name, ver)
+		require.NoError(t, createErr)
+		ver.ID = verID
+		return ver
+	}
+
+	app.ActiveVersion = newVersion("v1").ID
+	app.DisabledAt = time.Now()
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, newTestLauncher(log, server.EAC).Reconcile(ctx, app, nil))
+
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(0), pools[0].DesiredInstances, "a disabled app's fixed service must not be restored")
+
+	app.ActiveVersion = newVersion("v2").ID
+	require.NoError(t, server.Client.Update(ctx, app))
+	require.NoError(t, newTestLauncher(log, server.EAC).Reconcile(ctx, app, nil))
+
+	pools = listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	assert.Equal(t, int64(0), pools[0].DesiredInstances, "a deploy to a disabled app must not boot for verification")
+}

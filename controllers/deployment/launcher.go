@@ -446,6 +446,13 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		desiredInstances = min
 	}
 
+	// A disabled app's pools are held at zero: they exist so the version is
+	// complete, but nothing boots, not even for deploy verification.
+	disabled := !app.DisabledAt.IsZero()
+	if disabled {
+		desiredInstances = 0
+	}
+
 	// Ephemeral versions always get an isolated pool. Sharing a pool with a
 	// non-ephemeral version (or another ephemeral with a different label) would
 	// mean the pool's scaling behavior depends on which version is making the
@@ -491,12 +498,13 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 			needsUpdate = true
 		}
 
-		// Fixed-mode strategies enforce their configured minimum.
-		if min := int64(strategy.MinInstances()); min > 0 && poolWithEntity.Pool.DesiredInstances != min {
-			poolWithEntity.Pool.DesiredInstances = min
+		// Fixed-mode strategies enforce their configured minimum; a disabled
+		// app is held at zero instead.
+		if min := int64(strategy.MinInstances()); (min > 0 || disabled) && poolWithEntity.Pool.DesiredInstances != desiredInstances {
+			poolWithEntity.Pool.DesiredInstances = desiredInstances
 			l.Log.Info("strategy-enforced minimum, updating desired instances",
 				"service", serviceName,
-				"desired_instances", min)
+				"desired_instances", desiredInstances)
 			needsUpdate = true
 		}
 
@@ -506,7 +514,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		// the minutely resync repeatedly cold-starts every idle app and blocks the
 		// launcher's worker while it waits for readiness.
 		bootForVerification := false
-		if versionChanged && poolWithEntity.Pool.DesiredInstances < 1 {
+		if versionChanged && !disabled && poolWithEntity.Pool.DesiredInstances < 1 {
 			poolWithEntity.Pool.DesiredInstances = 1
 			l.Log.Info("flooring drained pool to one instance for deploy verification",
 				"service", serviceName,
@@ -584,6 +592,11 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		"pr-id", pr.Id(),
 		"service", serviceName,
 		"desired_instances", desiredInstances)
+
+	// A disabled app's pool has nothing to boot, so there's nothing to wait for.
+	if disabled {
+		return "", nil
+	}
 
 	// Return the new pool ID — caller should wait for it to become ready
 	return id, nil

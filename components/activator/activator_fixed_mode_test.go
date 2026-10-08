@@ -277,3 +277,53 @@ func TestActivatorFixedModeNoSlotExhaustion(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+// TestActivatorDisabledAppFailsFast verifies that a lease request for any
+// service of a disabled app returns ErrAppDisabled at once.
+func TestActivatorDisabledAppFailsFast(t *testing.T) {
+	ctx := context.Background()
+	log := testutils.TestLogger(t)
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	appID, err := server.Client.Create(ctx, "test-disabled-app", &core_v1alpha.App{DisabledAt: time.Now()})
+	require.NoError(t, err)
+
+	appVer := &core_v1alpha.AppVersion{
+		App:      appID,
+		Version:  "v1",
+		ImageUrl: "test:latest",
+		Config: core_v1alpha.Config{
+			Port: 3000,
+			Services: []core_v1alpha.Services{
+				{
+					Name:               "web",
+					ServiceConcurrency: core_v1alpha.ServiceConcurrency{Mode: "auto", RequestsPerInstance: 10},
+				},
+			},
+		},
+	}
+	verID, err := server.Client.Create(ctx, "test-disabled-v1", appVer)
+	require.NoError(t, err)
+	appVer.ID = verID
+
+	activator := &localActivator{
+		log:             log,
+		eac:             server.EAC,
+		versions:        make(map[verKey]*versionPoolRef),
+		poolSandboxes:   make(map[entity.Id]*poolSandboxes),
+		pools:           make(map[verKey]*poolState),
+		newSandboxChans: make(map[verKey][]chan struct{}),
+		invalidationCh:  make(chan SandboxInvalidation, 1),
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	lease, err := activator.AcquireLease(reqCtx, appVer, "web")
+	assert.Nil(t, lease)
+	require.ErrorIs(t, err, ErrAppDisabled)
+	assert.Less(t, time.Since(start), time.Second, "a disabled app should fail fast")
+}

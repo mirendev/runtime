@@ -105,6 +105,17 @@ kinds:
       type: ref
       doc: Reference to the initial ConfigVersion entity created before the first deploy
 
+    disabled_at:
+      type: time
+      doc: >-
+        When the app was disabled with `miren app disable`. While set, every
+        service is held at zero instances, nothing boots for a deploy, and
+        requests get a 503. The zero time means the app is not disabled.
+
+    disabled_reason:
+      type: string
+      doc: Why the app was disabled, as given to `miren app disable`
+
     workload_role:
       type: string
       doc: >-

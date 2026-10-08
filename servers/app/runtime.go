@@ -239,6 +239,12 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 				}
 			}
 			rai.SetHealth(health.classify())
+			if !appRec.DisabledAt.IsZero() {
+				rai.SetHealth(apphealth.Disabled)
+				for _, svc := range services {
+					svc.SetHealth(apphealth.Disabled)
+				}
+			}
 			rai.SetReadyInstances(int32(health.ready))
 			rai.SetDesiredInstances(int32(health.desired))
 			if health.inCooldown {

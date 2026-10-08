@@ -226,6 +226,40 @@ func TestSchedulerIgnoresAppsWithoutAnActiveVersion(t *testing.T) {
 	assert.Empty(t, h.runs(ctx))
 }
 
+// A disabled app's schedule pauses, and enabling it doesn't replay the ticks
+// it missed. On a fallback copy left disabled on an old cluster, either one
+// would run a job twice against state the two clusters share.
+func TestSchedulerPausesWhileTheAppIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	h := newSchedHarness(t, "*-*-* *:00/30:00")
+	appID := entity.Id("app/demo")
+
+	setDisabled := func(at time.Time) {
+		t.Helper()
+		_, err := h.inm.EAC.Patch(ctx, entity.New(
+			entity.Ref(entity.DBId, appID),
+			entity.Time(core_v1alpha.AppDisabledAtId, at),
+		).Attrs(), 0)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:00:00Z")))
+
+	setDisabled(atUTC("2026-08-04T12:10:00Z"))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T12:30:01Z")))
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T14:00:01Z")))
+	assert.Empty(t, h.runs(ctx), "no tick fires while the app is disabled")
+
+	setDisabled(time.Time{})
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T14:10:00Z")))
+	assert.Empty(t, h.runs(ctx), "ticks missed while disabled are not backfilled on enable")
+
+	require.NoError(t, h.s.Sweep(ctx, atUTC("2026-08-04T14:30:01Z")))
+	runs := h.runs(ctx)
+	require.Len(t, runs, 1, "the schedule resumes from the moment of enable")
+	assert.Equal(t, "2026-08-04T14:30:00Z", runs[0].Tick)
+}
+
 // Manual and deploy tasks are not on a schedule and must never be fired by it.
 func TestSchedulerIgnoresUnscheduledTasks(t *testing.T) {
 	ctx := context.Background()

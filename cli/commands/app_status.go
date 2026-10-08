@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/theme"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -99,9 +100,20 @@ func AppStatus(ctx *Context, opts struct {
 		ctx.Printf("%s %s\n", labelStyle.Render("Workload Role:"), role)
 	}
 
-	if down := appResult.MaintenanceRoutes(); len(down) > 0 {
-		ctx.Printf("%s %s\n", labelStyle.Render("Maintenance:"),
-			yellowStyle.Render(fmt.Sprintf("%s serving a holding page", maintenanceRouteList(down))))
+	var disabledAt *time.Time
+	if appResult.HasDisabledAt() {
+		at := standard.FromTimestamp(appResult.DisabledAt())
+		disabledAt = &at
+	}
+	if label, lines := notServingLines(disabledAt, appResult.DisabledReason(), appResult.MaintenanceRoutes()); label != "" {
+		indent := strings.Repeat(" ", lipgloss.Width(label)+1)
+		for i, line := range lines {
+			lead := indent
+			if i == 0 {
+				lead = labelStyle.Render(label) + " "
+			}
+			ctx.Printf("%s%s\n", lead, yellowStyle.Render(line))
+		}
 	}
 
 	// Configuration
@@ -385,6 +397,8 @@ func printAppStatusJSON(
 		Source            *sourceJSON      `json:"source,omitempty"`
 		WorkloadRole      string           `json:"workload_role,omitempty"`
 		MaintenanceRoutes []string         `json:"maintenance_routes,omitempty"`
+		DisabledAt        *time.Time       `json:"disabled_at,omitempty"`
+		DisabledReason    string           `json:"disabled_reason,omitempty"`
 		Configuration     *configuration   `json:"configuration,omitempty"`
 		ActiveDeployment  *deploymentJSON  `json:"active_deployment,omitempty"`
 		RecentDeployments []deploymentJSON `json:"recent_deployments,omitempty"`
@@ -395,7 +409,12 @@ func printAppStatusJSON(
 		Cluster:           cluster,
 		WorkloadRole:      appResult.WorkloadRole(),
 		MaintenanceRoutes: appResult.MaintenanceRoutes(),
+		DisabledReason:    appResult.DisabledReason(),
 		Services:          health,
+	}
+	if appResult.HasDisabledAt() {
+		at := standard.FromTimestamp(appResult.DisabledAt())
+		output.DisabledAt = &at
 	}
 	if healthErr != nil {
 		output.HealthError = healthErr.Error()
@@ -450,4 +469,27 @@ func maintenanceRouteList(hosts []string) string {
 	}
 
 	return strings.Join(named, ", ")
+}
+
+// notServingLines explains why an app, or some of its routes, isn't serving.
+// A disabled app and a route in maintenance read as one section: the app is
+// off, and those routes show their maintenance page instead of the disabled
+// one.
+func notServingLines(disabledAt *time.Time, reason string, maintenanceRoutes []string) (string, []string) {
+	if disabledAt == nil {
+		if len(maintenanceRoutes) == 0 {
+			return "", nil
+		}
+		return "Maintenance:", []string{fmt.Sprintf("%s serving a holding page", maintenanceRouteList(maintenanceRoutes))}
+	}
+
+	line := fmt.Sprintf("disabled since %s", disabledAt.Local().Format(time.RFC1123))
+	if reason != "" {
+		line += " — " + reason
+	}
+	lines := []string{line}
+	if len(maintenanceRoutes) > 0 {
+		lines = append(lines, fmt.Sprintf("in maintenance instead: %s", maintenanceRouteList(maintenanceRoutes)))
+	}
+	return "Not serving:", lines
 }

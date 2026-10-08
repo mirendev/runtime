@@ -114,7 +114,11 @@ type errorPageData struct {
 	Site        string
 	Reason      string
 	BackAt      string
+	// Maintenance is true on every holding page; Disabled narrows it to an
+	// app turned off with `miren app disable`, so a template written for
+	// maintenance still renders a sensible page for a disabled app.
 	Maintenance bool
+	Disabled    bool
 }
 
 // A bundled copy of docs/static/img/logo-light.svg keeps the real wordmark
@@ -228,7 +232,7 @@ var errorPage = template.Must(template.New("ingress-error").Funcs(template.FuncM
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .Maintenance}}Down for maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Miren</title>
+<title>{{if .Disabled}}Unavailable{{else if .Maintenance}}Down for maintenance{{else}}{{.Status}} · {{.Title}}{{end}} — Miren</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -275,9 +279,11 @@ var errorPage = template.Must(template.New("ingress-error").Funcs(template.FuncM
 <div class="shell">
   <header><div class="brand" role="img" aria-label="Miren">{{brandLogo}}</div></header>
   <main><div class="content{{if .Maintenance}} maintenance{{end}}">
-    <div class="eyebrow">{{if .Maintenance}}Scheduled maintenance{{else}}Error {{.Status}}{{end}}</div>
-    <h1>{{if .Maintenance}}{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}{{else}}{{.Title}}{{end}}</h1>
-    {{if .Maintenance}}
+    <div class="eyebrow">{{if .Disabled}}Unavailable{{else if .Maintenance}}Scheduled maintenance{{else}}Error {{.Status}}{{end}}</div>
+    <h1>{{if .Disabled}}{{if .Site}}{{.Site}} is unavailable{{else}}Unavailable{{end}}{{else if .Maintenance}}{{if .Site}}{{.Site}} is down for maintenance{{else}}Down for maintenance{{end}}{{else}}{{.Title}}{{end}}</h1>
+    {{if .Disabled}}
+      <p>This site isn't available right now.</p>
+    {{else if .Maintenance}}
       {{if .Reason}}<p class="reason">{{.Reason}}</p>{{else}}<p>This site is taking a short break for maintenance.</p>{{end}}
       {{if .BackAt}}<p>Expected back at {{.BackAt}}.</p>{{else}}<p>Please check back shortly.</p>{{end}}
     {{else}}<p>{{.Description}}</p>{{end}}

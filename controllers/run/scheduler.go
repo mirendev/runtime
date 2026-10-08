@@ -137,12 +137,34 @@ func (s *Scheduler) Sweep(ctx context.Context, now time.Time) error {
 			continue
 		}
 
+		// A disabled app's schedule is paused, not queued up. Forgetting its
+		// frontier means the first sweep after enable starts at that moment,
+		// the same as after an outage, rather than firing every tick missed
+		// while the app was off. Manual runs aren't affected.
+		if !app.DisabledAt.IsZero() {
+			s.forgetApp(app.ID)
+			continue
+		}
+
 		if err := s.sweepApp(ctx, &app, now); err != nil {
 			s.Log.Warn("failed to sweep app for scheduled tasks", "app", app.ID, "error", err)
 		}
 	}
 
 	return nil
+}
+
+// forgetApp drops the frontier of every task belonging to the app.
+func (s *Scheduler) forgetApp(appID entity.Id) {
+	prefix := appID.String() + "/"
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.frontier {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.frontier, key)
+		}
+	}
 }
 
 func (s *Scheduler) sweepApp(ctx context.Context, app *core_v1alpha.App, now time.Time) error {

@@ -320,6 +320,11 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
+// ErrAppDisabled means the app was disabled with `miren app disable`. No
+// capacity will arrive until it is enabled, so callers fail fast instead of
+// waiting out the pool timeout.
+var ErrAppDisabled = fmt.Errorf("app is disabled")
+
 // waitForSandbox waits for a sandbox with capacity to become available.
 // If incrementPool is true, it will ensure the pool exists and increment DesiredInstances.
 // If incrementPool is false, it assumes PENDING sandboxes exist and just waits for them.
@@ -594,6 +599,21 @@ func (a *localActivator) registerVersionPoolLocked(
 	}
 }
 
+// appDisabled reports whether the app is disabled. A lookup failure reads as
+// not disabled, leaving the request to the normal capacity path.
+func (a *localActivator) appDisabled(ctx context.Context, appID entity.Id) bool {
+	if appID == "" {
+		return false
+	}
+	resp, err := a.eac.Get(ctx, appID.String())
+	if err != nil {
+		return false
+	}
+	var app core_v1alpha.App
+	app.Decode(resp.Entity().Entity())
+	return !app.DisabledAt.IsZero()
+}
+
 // requestPoolCapacity finds the SandboxPool created by DeploymentLauncher and increments DesiredInstances.
 // It uses retry logic with exponential backoff to handle the race where Activator receives
 // a request before DeploymentLauncher has finished creating the pool.
@@ -617,6 +637,9 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 	sc := core_v1alpha.ServiceConcurrency(svcConcurrency)
 	strategy := concurrency.NewStrategyForVersion(ver, service, &sc)
 	maxInstances := int64(strategy.MaxInstances())
+	if a.appDisabled(ctx, ver.App) {
+		return nil, ErrAppDisabled
+	}
 
 	// poolLoop is labeled so the pool-creation retry path below can break all
 	// the way back out to re-read the cache. The outer loop re-acquires a.mu

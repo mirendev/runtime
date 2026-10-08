@@ -149,6 +149,8 @@ func AppList(ctx *Context, opts struct {
 				} else {
 					status = infoYellow.Render("⚠️ 0 (fixed)")
 				}
+			case "disabled":
+				status = infoYellow.Render("⏸ disabled")
 			case "healthy":
 				status = infoGreen.Render(fmt.Sprintf("%d%s", a.ReadyInstances(), modeSuffix))
 			case "degraded", "starting":

@@ -2650,13 +2650,15 @@ func (v *CrudGetConfigurationArgs) UnmarshalJSON(data []byte) error {
 }
 
 type crudGetConfigurationResultsData struct {
-	Configuration     *Configuration `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
-	VersionId         *string        `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
-	VersionShortId    *string        `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
-	WorkloadRole      *string        `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
-	MaintenanceRoutes *[]string      `cbor:"4,keyasint,omitempty" json:"maintenanceRoutes,omitempty"`
-	SourceKind        *string        `cbor:"5,keyasint,omitempty" json:"sourceKind,omitempty"`
-	SourceValue       *string        `cbor:"6,keyasint,omitempty" json:"sourceValue,omitempty"`
+	Configuration     *Configuration      `cbor:"0,keyasint,omitempty" json:"configuration,omitempty"`
+	VersionId         *string             `cbor:"1,keyasint,omitempty" json:"versionId,omitempty"`
+	VersionShortId    *string             `cbor:"2,keyasint,omitempty" json:"versionShortId,omitempty"`
+	WorkloadRole      *string             `cbor:"3,keyasint,omitempty" json:"workloadRole,omitempty"`
+	MaintenanceRoutes *[]string           `cbor:"4,keyasint,omitempty" json:"maintenanceRoutes,omitempty"`
+	SourceKind        *string             `cbor:"5,keyasint,omitempty" json:"sourceKind,omitempty"`
+	SourceValue       *string             `cbor:"6,keyasint,omitempty" json:"sourceValue,omitempty"`
+	DisabledAt        *standard.Timestamp `cbor:"7,keyasint,omitempty" json:"disabledAt,omitempty"`
+	DisabledReason    *string             `cbor:"8,keyasint,omitempty" json:"disabledReason,omitempty"`
 }
 
 type CrudGetConfigurationResults struct {
@@ -2691,6 +2693,14 @@ func (v *CrudGetConfigurationResults) SetSourceKind(sourceKind string) {
 
 func (v *CrudGetConfigurationResults) SetSourceValue(sourceValue string) {
 	v.data.SourceValue = &sourceValue
+}
+
+func (v *CrudGetConfigurationResults) SetDisabledAt(disabledAt *standard.Timestamp) {
+	v.data.DisabledAt = disabledAt
+}
+
+func (v *CrudGetConfigurationResults) SetDisabledReason(disabledReason string) {
+	v.data.DisabledReason = &disabledReason
 }
 
 func (v *CrudGetConfigurationResults) MarshalCBOR() ([]byte, error) {
@@ -3445,6 +3455,148 @@ func (v *CrudRestartResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudDisableArgsData struct {
+	App    *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Reason *string `cbor:"1,keyasint,omitempty" json:"reason,omitempty"`
+}
+
+type CrudDisableArgs struct {
+	call rpc.Call
+	data crudDisableArgsData
+}
+
+func (v *CrudDisableArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudDisableArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudDisableArgs) HasReason() bool {
+	return v.data.Reason != nil
+}
+
+func (v *CrudDisableArgs) Reason() string {
+	if v.data.Reason == nil {
+		return ""
+	}
+	return *v.data.Reason
+}
+
+func (v *CrudDisableArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDisableArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDisableArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDisableArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudDisableResultsData struct {
+	ScaledPools *int32 `cbor:"0,keyasint,omitempty" json:"scaled_pools,omitempty"`
+}
+
+type CrudDisableResults struct {
+	call rpc.Call
+	data crudDisableResultsData
+}
+
+func (v *CrudDisableResults) SetScaledPools(scaled_pools int32) {
+	v.data.ScaledPools = &scaled_pools
+}
+
+func (v *CrudDisableResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudDisableResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudDisableResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudDisableResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudEnableArgsData struct {
+	App *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+}
+
+type CrudEnableArgs struct {
+	call rpc.Call
+	data crudEnableArgsData
+}
+
+func (v *CrudEnableArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudEnableArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudEnableArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudEnableArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudEnableArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudEnableArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudEnableResultsData struct {
+	RestoredPools *int32 `cbor:"0,keyasint,omitempty" json:"restored_pools,omitempty"`
+}
+
+type CrudEnableResults struct {
+	call rpc.Call
+	data crudEnableResultsData
+}
+
+func (v *CrudEnableResults) SetRestoredPools(restored_pools int32) {
+	v.data.RestoredPools = &restored_pools
+}
+
+func (v *CrudEnableResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudEnableResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudEnableResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudEnableResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	rpc.Call
 	args    CrudNewArgs
@@ -3757,6 +3909,58 @@ func (t *CrudRestart) Results() *CrudRestartResults {
 	return results
 }
 
+type CrudDisable struct {
+	rpc.Call
+	args    CrudDisableArgs
+	results CrudDisableResults
+}
+
+func (t *CrudDisable) Args() *CrudDisableArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudDisable) Results() *CrudDisableResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type CrudEnable struct {
+	rpc.Call
+	args    CrudEnableArgs
+	results CrudEnableResults
+}
+
+func (t *CrudEnable) Args() *CrudEnableArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudEnable) Results() *CrudEnableResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
@@ -3770,6 +3974,8 @@ type Crud interface {
 	SetInitialEnvVars(ctx context.Context, state *CrudSetInitialEnvVars) error
 	DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) error
 	Restart(ctx context.Context, state *CrudRestart) error
+	Disable(ctx context.Context, state *CrudDisable) error
+	Enable(ctx context.Context, state *CrudEnable) error
 }
 
 type reexportCrud struct {
@@ -3821,6 +4027,14 @@ func (reexportCrud) DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) e
 }
 
 func (reexportCrud) Restart(ctx context.Context, state *CrudRestart) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) Disable(ctx context.Context, state *CrudDisable) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) Enable(ctx context.Context, state *CrudEnable) error {
 	panic("not implemented")
 }
 
@@ -4019,6 +4233,38 @@ func AdaptCrud(t Crud) *rpc.Interface {
 				return t.Restart(ctx, &CrudRestart{Call: call})
 			},
 		},
+		{
+			Name:          "disable",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "reason"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/disable",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Disable(ctx, &CrudDisable{Call: call})
+			},
+		},
+		{
+			Name:          "enable",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/enable",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Enable(ctx, &CrudEnable{Call: call})
+			},
+		},
 	}
 
 	return rpc.NewInterface(methods, t)
@@ -4185,6 +4431,25 @@ func (v *CrudClientGetConfigurationResults) SourceValue() string {
 		return ""
 	}
 	return *v.data.SourceValue
+}
+
+func (v *CrudClientGetConfigurationResults) HasDisabledAt() bool {
+	return v.data.DisabledAt != nil
+}
+
+func (v *CrudClientGetConfigurationResults) DisabledAt() *standard.Timestamp {
+	return v.data.DisabledAt
+}
+
+func (v *CrudClientGetConfigurationResults) HasDisabledReason() bool {
+	return v.data.DisabledReason != nil
+}
+
+func (v *CrudClientGetConfigurationResults) DisabledReason() string {
+	if v.data.DisabledReason == nil {
+		return ""
+	}
+	return *v.data.DisabledReason
 }
 
 func (v CrudClient) GetConfiguration(ctx context.Context, app string) (*CrudClientGetConfigurationResults, error) {
@@ -4505,6 +4770,67 @@ func (v CrudClient) Restart(ctx context.Context, app string, service string) (*C
 	}
 
 	return &CrudClientRestartResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientDisableResults struct {
+	client rpc.Client
+	data   crudDisableResultsData
+}
+
+func (v *CrudClientDisableResults) HasScaledPools() bool {
+	return v.data.ScaledPools != nil
+}
+
+func (v *CrudClientDisableResults) ScaledPools() int32 {
+	if v.data.ScaledPools == nil {
+		return 0
+	}
+	return *v.data.ScaledPools
+}
+
+func (v CrudClient) Disable(ctx context.Context, app string, reason string) (*CrudClientDisableResults, error) {
+	args := CrudDisableArgs{}
+	args.data.App = &app
+	args.data.Reason = &reason
+
+	var ret crudDisableResultsData
+
+	err := v.Call(ctx, "disable", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientDisableResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientEnableResults struct {
+	client rpc.Client
+	data   crudEnableResultsData
+}
+
+func (v *CrudClientEnableResults) HasRestoredPools() bool {
+	return v.data.RestoredPools != nil
+}
+
+func (v *CrudClientEnableResults) RestoredPools() int32 {
+	if v.data.RestoredPools == nil {
+		return 0
+	}
+	return *v.data.RestoredPools
+}
+
+func (v CrudClient) Enable(ctx context.Context, app string) (*CrudClientEnableResults, error) {
+	args := CrudEnableArgs{}
+	args.data.App = &app
+
+	var ret crudEnableResultsData
+
+	err := v.Call(ctx, "enable", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientEnableResults{client: v.Client, data: ret}, nil
 }
 
 type userQueryWhoAmIArgsData struct{}

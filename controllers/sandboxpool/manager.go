@@ -85,8 +85,19 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 
 	// Skip crash detection for decommissioned pools (desired=0, no references).
 	// Sandbox deaths during intentional scale-down are expected, not crashes.
-	if pool.DesiredInstances > 0 || len(pool.ReferencedByVersions) > 0 {
-		newCrashes, latestCrash := m.countStartupFailures(sandboxes, pool)
+	//
+	// The same holds for a disabled app's pools: they are held at zero on
+	// purpose, so sandboxes dying on the way down are not crashes, and cooldown
+	// must not hand a referenced pool a replacement. The app lookup only runs
+	// when there is crash state to clear, keeping it off the steady-state path.
+	newCrashes, latestCrash := m.countStartupFailures(sandboxes, pool)
+	hasCrashState := newCrashes > 0 || pool.ConsecutiveCrashCount > 0 || !pool.CooldownUntil.IsZero()
+	if pool.DesiredInstances == 0 && len(pool.ReferencedByVersions) > 0 && hasCrashState && m.appDisabled(ctx, pool) {
+		m.log.Info("clearing crash state on disabled app", "pool", pool.ID, "service", pool.Service)
+		pool.LastCrashTime = latestCrash
+		pool.ConsecutiveCrashCount = 0
+		pool.CooldownUntil = time.Time{}
+	} else if pool.DesiredInstances > 0 || len(pool.ReferencedByVersions) > 0 {
 		if newCrashes > 0 {
 			pool.ConsecutiveCrashCount += int64(newCrashes)
 			pool.LastCrashTime = latestCrash
@@ -526,10 +537,14 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 	} else {
 		meta.Update(pool.Encode())
 	}
-	// Explicitly set status fields to ensure 0 values are persisted
+	// Explicitly set status fields to ensure 0 values are persisted. The crash
+	// fields need the same treatment: clearing them sets zero values that
+	// Encode() would drop.
 	meta.Update([]entity.Attr{
 		entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, current),
 		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, ready),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, pool.ConsecutiveCrashCount),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil),
 	})
 
 	return nil
@@ -837,6 +852,21 @@ func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compu
 		}
 	}
 	return count, latest
+}
+
+// appDisabled reports whether the pool's app is disabled. A lookup failure
+// reads as not disabled, which keeps the existing crash handling.
+func (m *Manager) appDisabled(ctx context.Context, pool *compute_v1alpha.SandboxPool) bool {
+	if pool.App == "" {
+		return false
+	}
+	resp, err := m.eac.Get(ctx, pool.App.String())
+	if err != nil {
+		return false
+	}
+	var app core_v1alpha.App
+	app.Decode(resp.Entity().Entity())
+	return !app.DisabledAt.IsZero()
 }
 
 // backoffDuration calculates the exponential backoff duration based on consecutive crash count
