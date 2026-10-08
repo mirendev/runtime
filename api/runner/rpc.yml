@@ -365,24 +365,27 @@ interfaces:
 
       - name: Query
         index: 14
-        doc: Run a Portal monitoring query on one runner, bounded to one minute.
+        doc: Query a runner's live host activity during a window of up to one minute, never historical data.
         parameters:
           - name: runner
             type: string
             doc: Runner name, ID, or short ID
           - name: expression
             type: string
-            doc: Portal query DSL (not SQL), such as memory or process where name = worker*
+            doc: Live query expression (not SQL), such as memory or process where name = worker*
         results:
           - name: name
             type: string
             doc: Name of the queried runner
           - name: data
             type: bytes
-            doc: JSON-encoded Portal snapshot or aggregate
+            doc: JSON-encoded live snapshot or aggregate
           - name: error
             type: string
             doc: Error message if lookup, parsing, or execution failed
+          - name: engine_revision
+            type: string
+            doc: Target runner's query language revision, including on parse or execution errors; absent on older runners or before reaching the runner
 
 types:
   - type: InviteInfo

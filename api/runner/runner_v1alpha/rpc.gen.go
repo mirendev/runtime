@@ -1688,9 +1688,10 @@ func (v *RunnerRegistrationQueryArgs) UnmarshalJSON(data []byte) error {
 }
 
 type runnerRegistrationQueryResultsData struct {
-	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
-	Data  *[]byte `cbor:"1,keyasint,omitempty" json:"data,omitempty"`
-	Error *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+	Name           *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Data           *[]byte `cbor:"1,keyasint,omitempty" json:"data,omitempty"`
+	Error          *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+	EngineRevision *string `cbor:"3,keyasint,omitempty" json:"engine_revision,omitempty"`
 }
 
 type RunnerRegistrationQueryResults struct {
@@ -1709,6 +1710,10 @@ func (v *RunnerRegistrationQueryResults) SetData(data []byte) {
 
 func (v *RunnerRegistrationQueryResults) SetError(error string) {
 	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
 }
 
 func (v *RunnerRegistrationQueryResults) MarshalCBOR() ([]byte, error) {
@@ -3208,6 +3213,17 @@ func (v *RunnerRegistrationClientQueryResults) Error() string {
 		return ""
 	}
 	return *v.data.Error
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
 }
 
 func (v RunnerRegistrationClient) Query(ctx context.Context, runner string, expression string) (*RunnerRegistrationClientQueryResults, error) {

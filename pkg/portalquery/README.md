@@ -10,6 +10,12 @@ without Portal's transport, authentication, or CLI. The package name remains
 import query "miren.dev/runtime/pkg/portalquery"
 ```
 
+`query.Revision` identifies this vendored language revision and its Miren
+adaptations. Update the upstream hash when re-vendoring and bump the Miren suffix
+for local changes to syntax, available fields, or query semantics. Runner query
+RPCs return this revision even on parse/execution errors, so clients can detect
+version skew with their local reference.
+
 Local adaptations: external-package test imports and symbol-test function names
 use the Miren import path. The documented rollup example and its parser test use
 the local README and Miren CLI. The kernel loss-counter test filters its pinned

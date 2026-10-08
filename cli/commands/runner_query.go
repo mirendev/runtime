@@ -15,7 +15,7 @@ import (
 
 // Keep language semantics aligned with the vendored Portal engine. The field
 // appendix below is taken from that engine's metadata rather than duplicated.
-const runnerQueryReference = `Miren runner query reference — Portal monitoring DSL, not SQL
+const runnerQueryReference = `Miren runner query reference — live host queries, not SQL
 
 INVOCATION AND SCOPE
   miren runner query RUNNER 'QUERY'
@@ -27,12 +27,23 @@ Cloud JWT operators need runnerregistration/query permission. Local certificate
 callers must use miren-user, miren-server, or miren-api; runner/service certs and
 custom certificate names are refused. Explicit auth-disabled mode remains open.
 Output is JSON. Errors exit nonzero without a result on stdout.
+Queries inspect what is happening now or during their observation window,
+never historical data.
+
+VERSION SKEW
+This offline reference describes the CLI's query engine revision, printed above.
+The runner parses the expression, not the CLI or coordinator. RPC results expose
+the target runner's engine_revision even on parse/execution errors; CLI errors
+include it and identify a mismatch with this reference. An absent revision means
+the runner is older or was not reached, NOT that its grammar matches this CLI.
+When revisions differ, do not assume a syntax error means the expression is wrong
+for this reference; use a CLI matching the runner or update the runner.
 
 Only finite snapshots and aggregates are exposed. Execution and CLI waiting
 have a one-minute deadline; choose windows shorter than 1m to leave setup time.
 Up to 10 queries can execute per runner at a time. Additional calls fail immediately
 with "runner already has 10 queries in progress"; they are not queued.
-Streaming/registered monitors, capabilities queries, Portal's client-side jq
+Streaming/registered monitors, capabilities queries, engine-side jq
 suffix and folded-output flags are NOT exposed. Pipe CLI stdout to external jq
 instead: miren runner query runner1 memory | jq '.memory.used'
 
@@ -434,11 +445,12 @@ func RunnerQuery(ctx *Context, opts struct {
 	ConfigCentric
 
 	Node       string `position:"0" usage:"Runner to query (name, ID, or short ID)"`
-	Expression string `position:"1" usage:"Portal monitoring query expression (not SQL); quote expressions containing spaces"`
+	Expression string `position:"1" usage:"Live host query expression (not SQL); quote expressions containing spaces"`
 	Reference  bool   `long:"reference" description:"Print the offline query syntax and source reference"`
 }) error {
 	if opts.Reference {
 		var reference strings.Builder
+		fmt.Fprintf(&reference, "Query engine revision (this CLI): %s\n\n", query.Revision)
 		reference.WriteString(runnerQueryReference)
 		for _, selection := range []string{
 			"cpu", "memory", "network", "kernel", "sensors", "gpu", "containers", "cgroups", "process",
@@ -492,9 +504,15 @@ func RunnerQuery(ctx *Context, opts struct {
 		return err
 	}
 	if res.Error() != "" {
+		if res.EngineRevision() != "" {
+			if res.EngineRevision() != query.Revision {
+				return fmt.Errorf("%s (runner query engine %s; CLI reference %s — revisions differ)", res.Error(), res.EngineRevision(), query.Revision)
+			}
+			return fmt.Errorf("%s (runner query engine %s)", res.Error(), res.EngineRevision())
+		}
 		return fmt.Errorf("%s", res.Error())
 	}
 
-	// Keep Portal's full-width integers intact rather than decoding through float64.
+	// Keep full-width integers intact rather than decoding through float64.
 	return PrintJSONTo(ctx.Stdout, json.RawMessage(res.Data()))
 }

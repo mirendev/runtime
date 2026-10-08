@@ -997,8 +997,8 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren runner status",
 		}),
 	))
-	d.Dispatch("runner query", Infer("runner query", "Run a Portal monitoring query on a runner and print the JSON result", RunnerQuery,
-		WithDescription("Use --reference to print query syntax and Miren source fields without connecting to a cluster."),
+	d.Dispatch("runner query", Infer("runner query", "Query a runner's live host activity and print the JSON result", RunnerQuery,
+		WithDescription("Observe what is happening right now or during the query window, never historical data. Use --reference to print query syntax and Miren source fields without connecting to a cluster."),
 		WithExample(mflags.Example{
 			Name: "Show the offline query reference",
 			Body: "miren runner query --reference",

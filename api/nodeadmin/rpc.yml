@@ -39,15 +39,18 @@ interfaces:
 
       - name: query
         index: 1
-        doc: Run a Portal monitoring query on this host, bounded to one minute.
+        doc: Query live host activity during a window of up to one minute, never historical data.
         parameters:
           - name: expression
             type: string
-            doc: Portal query DSL (not SQL)
+            doc: Live query expression (not SQL)
         results:
           - name: data
             type: bytes
-            doc: JSON-encoded Portal snapshot or aggregate
+            doc: JSON-encoded live snapshot or aggregate
           - name: error
             type: string
             doc: Error message if parsing or execution failed
+          - name: engine_revision
+            type: string
+            doc: This host's query language revision, including on parse or execution errors; absent on older runners

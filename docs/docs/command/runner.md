@@ -22,7 +22,7 @@ miren runner [flags]
 - [`miren runner join`](./runner-join.md) — Join this machine to a coordinator as a runner
 - [`miren runner list`](./runner-list.md) — List all registered runners
 - [`miren runner operations`](./runner-operations.md) — Durable runner restart and upgrade operations
-- [`miren runner query`](./runner-query.md) — Run a Portal monitoring query on a runner and print the JSON result
+- [`miren runner query`](./runner-query.md) — Query a runner's live host activity and print the JSON result
 - [`miren runner reissue`](./runner-reissue.md) — Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity
 - [`miren runner remove`](./runner-remove.md) — Remove a registered runner and clean up resources
 - [`miren runner service-status`](./runner-service-status.md) — Show miren-runner systemd service status

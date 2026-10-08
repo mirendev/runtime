@@ -3,10 +3,15 @@ package commands
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/runner/runner_v1alpha"
 	query "miren.dev/runtime/pkg/portalquery"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 func TestRunnerQueryReferenceIsOffline(t *testing.T) {
@@ -16,7 +21,7 @@ func TestRunnerQueryReferenceIsOffline(t *testing.T) {
 	err := RunnerQuery(ctx, struct {
 		ConfigCentric
 		Node       string `position:"0" usage:"Runner to query (name, ID, or short ID)"`
-		Expression string `position:"1" usage:"Portal monitoring query expression (not SQL); quote expressions containing spaces"`
+		Expression string `position:"1" usage:"Live host query expression (not SQL); quote expressions containing spaces"`
 		Reference  bool   `long:"reference" description:"Print the offline query syntax and source reference"`
 	}{
 		ConfigCentric: ConfigCentric{Config: "/does/not/exist"},
@@ -34,6 +39,7 @@ func TestRunnerQueryReferenceIsOffline(t *testing.T) {
 		"file.path", "return_value", "NOT exposed", "ONE-MINUTE DEADLINE",
 		"INVENTORY-DRIVEN SNAPSHOT CORRELATION", "on path = cgroup", "inventory.app",
 		"frozen once per selector", "Parent/child cgroup selections fail",
+		query.Revision, "VERSION SKEW", "engine_revision", "never historical data",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("reference does not contain %q", want)
@@ -50,11 +56,58 @@ func TestRunnerQueryRequiresRunnerAndExpression(t *testing.T) {
 	err := RunnerQuery(ctx, struct {
 		ConfigCentric
 		Node       string `position:"0" usage:"Runner to query (name, ID, or short ID)"`
-		Expression string `position:"1" usage:"Portal monitoring query expression (not SQL); quote expressions containing spaces"`
+		Expression string `position:"1" usage:"Live host query expression (not SQL); quote expressions containing spaces"`
 		Reference  bool   `long:"reference" description:"Print the offline query syntax and source reference"`
 	}{})
 	if err == nil || !strings.Contains(err.Error(), "runner and query expression are required") {
 		t.Fatalf("missing arguments returned %v", err)
+	}
+}
+
+type queryRevisionServer struct {
+	runner_v1alpha.RunnerRegistration
+	revision string
+}
+
+func (s *queryRevisionServer) Query(_ context.Context, req *runner_v1alpha.RunnerRegistrationQuery) error {
+	if s.revision != "" {
+		req.Results().SetEngineRevision(s.revision)
+	}
+	req.Results().SetError("unsupported query syntax")
+	return nil
+}
+
+func TestRunnerQueryRevisionErrors(t *testing.T) {
+	for _, revision := range []string{query.Revision, "older-runner-engine", ""} {
+		t.Run(revision, func(t *testing.T) {
+			server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, server.Close()) })
+			server.Server().ExposeValue(rpc.ServiceRunner,
+				runner_v1alpha.AdaptRunnerRegistration(&queryRevisionServer{revision: revision}))
+			var stdout bytes.Buffer
+			ctx := &Context{Context: t.Context(), Log: slog.Default(), Stdout: &stdout, Stderr: io.Discard}
+			ctx.Config.ServerAddress = server.ListenAddr()
+			err = RunnerQuery(ctx, struct {
+				ConfigCentric
+				Node       string `position:"0" usage:"Runner to query (name, ID, or short ID)"`
+				Expression string `position:"1" usage:"Live host query expression (not SQL); quote expressions containing spaces"`
+				Reference  bool   `long:"reference" description:"Print the offline query syntax and source reference"`
+			}{Node: "runner1", Expression: "new syntax"})
+			require.ErrorContains(t, err, "unsupported query syntax")
+			require.Empty(t, stdout.String())
+			switch revision {
+			case "":
+				require.EqualError(t, err, "unsupported query syntax")
+			case query.Revision:
+				require.ErrorContains(t, err, "runner query engine "+revision)
+				require.NotContains(t, err.Error(), "revisions differ")
+			default:
+				require.ErrorContains(t, err, "runner query engine older-runner-engine")
+				require.ErrorContains(t, err, "CLI reference "+query.Revision)
+				require.ErrorContains(t, err, "revisions differ")
+			}
+		})
 	}
 }
 

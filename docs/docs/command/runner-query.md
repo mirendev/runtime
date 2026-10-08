@@ -1,14 +1,14 @@
 ---
 title: "miren runner query"
 sidebar_label: "runner query"
-description: "Run a Portal monitoring query on a runner and print the JSON result"
+description: "Query a runner's live host activity and print the JSON result"
 ---
 
 # miren runner query
 
-Run a Portal monitoring query on a runner and print the JSON result
+Query a runner's live host activity and print the JSON result
 
-Use --reference to print query syntax and Miren source fields without connecting to a cluster.
+Observe what is happening right now or during the query window, never historical data. Use --reference to print query syntax and Miren source fields without connecting to a cluster.
 
 ## Usage
 
@@ -19,7 +19,7 @@ miren runner query [node] [expression] [flags]
 ## Arguments
 
 - `node` — Runner to query (name, ID, or short ID)
-- `expression` — Portal monitoring query expression (not SQL); quote expressions containing spaces
+- `expression` — Live host query expression (not SQL); quote expressions containing spaces
 
 ## Flags
 

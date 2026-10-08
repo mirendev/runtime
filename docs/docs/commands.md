@@ -222,7 +222,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren runner operations list`](./command/runner-operations-list.md) | List recorded restart and upgrade operations |
 | [`miren runner operations run`](./command/runner-operations-run.md) | Execute or resume an operation in the foreground (normally launched by miren upgrade) |
 | [`miren runner operations show`](./command/runner-operations-show.md) | Show one restart or upgrade operation |
-| [`miren runner query`](./command/runner-query.md) | Run a Portal monitoring query on a runner and print the JSON result |
+| [`miren runner query`](./command/runner-query.md) | Query a runner's live host activity and print the JSON result |
 | [`miren runner reissue`](./command/runner-reissue.md) | Rotate this runner's certificate in place (requires a still-valid cert), keeping its identity |
 | [`miren runner remove`](./command/runner-remove.md) | Remove a registered runner and clean up resources |
 | [`miren runner service-status`](./command/runner-service-status.md) | Show miren-runner systemd service status |

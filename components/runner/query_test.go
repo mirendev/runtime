@@ -23,12 +23,15 @@ import (
 
 type observedNodeAdminServer struct {
 	*nodeAdminServer
-	queries chan string
+	queries        chan string
+	engineRevision string
 }
 
 func (s *observedNodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1alpha.NodeAdminQuery) error {
 	s.queries <- req.Args().Expression()
-	return s.nodeAdminServer.Query(ctx, req)
+	err := s.nodeAdminServer.Query(ctx, req)
+	req.Results().SetEngineRevision(s.engineRevision)
+	return err
 }
 
 func TestHostQuery(t *testing.T) {
@@ -42,6 +45,7 @@ func TestHostQuery(t *testing.T) {
 		res, err := client.Query(ctx, "memory")
 		require.NoError(t, err)
 		require.Empty(t, res.Error())
+		require.Equal(t, query.Revision, res.EngineRevision())
 		var snapshot struct {
 			Source string `json:"source"`
 			Memory struct {
@@ -73,6 +77,7 @@ func TestHostQuery(t *testing.T) {
 		res, err := client.Query(ctx, "SELECT * FROM memory")
 		require.NoError(t, err)
 		require.NotEmpty(t, res.Error())
+		require.Equal(t, query.Revision, res.EngineRevision())
 		require.False(t, res.HasData())
 	})
 
@@ -82,6 +87,7 @@ func TestHostQuery(t *testing.T) {
 		res, err := client.Query(bounded, "memory avg(used) over 10s every 100ms")
 		require.NoError(t, err)
 		require.Contains(t, res.Error(), "context deadline exceeded")
+		require.Equal(t, query.Revision, res.EngineRevision())
 		require.False(t, res.HasData())
 	})
 
@@ -97,6 +103,7 @@ func TestHostQuery(t *testing.T) {
 			res, err := client.Query(rpc.ContextWithIdentity(t.Context(), tc.identity), "invalid")
 			require.NoError(t, err)
 			require.Contains(t, res.Error(), tc.errorText)
+			require.False(t, res.HasEngineRevision())
 			require.False(t, res.HasData())
 		}
 	})
@@ -291,7 +298,7 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 						},
 					},
 				}},
-			}, queries: queries,
+			}, queries: queries, engineRevision: "different-runner-engine",
 		}))
 	coordinator := newState(rpc.CoordinatorCertSubject)
 	es, cleanup := testutils.NewInMemEntityServer(t)
@@ -320,6 +327,7 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, res.Error())
 		require.Equal(t, "target", res.Name())
+		require.Equal(t, "different-runner-engine", res.EngineRevision())
 		select {
 		case expression := <-queries:
 			require.Equal(t, "network where name = lo", expression)
@@ -363,6 +371,11 @@ func TestCoordinatorQueryOverWire(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, res.Error(), tc.errorText)
 		require.False(t, res.HasData())
+		if tc.expression == "SELECT * FROM memory" {
+			require.Equal(t, "different-runner-engine", res.EngineRevision())
+		} else {
+			require.False(t, res.HasEngineRevision())
+		}
 	}
 	require.Equal(t, "SELECT * FROM memory", <-queries)
 

@@ -202,7 +202,8 @@ A typical maintenance window looks like: drain the node, do your work, then unco
 ### Experimental host queries
 
 Use [`runner query`](./command/runner-query.md) to send a query through the
-coordinator to a runner by name, ID, or short ID:
+coordinator to a runner by name, ID, or short ID. It observes live host activity
+right now or during the query window, never historical data:
 
 <CliCommand context="client">
 ```miren
@@ -219,7 +220,7 @@ rollups, computed columns, stacks, JSON result shapes, limits, and validated
 examples. Built-in field names, types, units, and counter/gauge semantics come
 directly from the vendored engine's metadata. No external reference is needed.
 
-The command prints the Portal snapshot or aggregate as JSON, suitable for piping
+The command prints the live snapshot or aggregate as JSON, suitable for piping
 to `jq`. Query failures print an error and exit nonzero without a result on
 stdout. Quote expressions containing spaces so the shell passes them as one
 argument.
@@ -227,10 +228,23 @@ argument.
 The coordinator's `dev.miren.runtime/runner` RPC service exposes
 `RunnerRegistration.Query(runner, expression)`. It resolves a runner by name,
 runner ID, entity ID, or short ID, forwards the expression to that runner, and
-returns its name and a JSON-encoded Portal result in `data` (bytes). Failures
+returns its name and a JSON-encoded result in `data` (bytes). Failures
 are reported in `error`; transport failures can also fail the RPC call.
 
-Expressions use Portal's monitoring DSL, not SQL. Use
+Results also expose `engine_revision`, identifying the **target runner's**
+query language, including when parsing or execution fails. The coordinator
+forwards it unchanged, not its own revision. Older runners omit this field;
+lookup and connection failures have no runner revision either. Clients must
+treat a missing revision as unknown, not as a match.
+
+The offline `--reference` starts with the CLI's engine revision. CLI query errors
+include the runner's revision when available and explicitly flag differences.
+If revisions differ, a syntax error may indicate version skew rather than a
+mistake against the offline reference: use a CLI matching the runner or update
+the runner. The expression stays a string on the wire so unsupported syntax
+fails loudly instead of silently dropping newer request fields.
+
+Expressions use the live query DSL, not SQL. Use
 `miren runner query --reference` for the complete syntax. For example:
 
 ```text
@@ -312,7 +326,7 @@ if err != nil {
 if result.Error() != "" {
     return fmt.Errorf("host query failed: %s", result.Error())
 }
-// result.Data() contains Portal's JSON snapshot or aggregate.
+// result.Data() contains the live JSON snapshot or aggregate.
 ```
 
 Execution has a one-minute deadline and also respects caller cancellation.

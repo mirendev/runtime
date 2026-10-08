@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/nodeadmin/nodeadmin_v1alpha"
+	query "miren.dev/runtime/pkg/portalquery"
 )
 
 func (s *nodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1alpha.NodeAdminQuery) error {
@@ -15,6 +16,7 @@ func (s *nodeAdminServer) Query(ctx context.Context, req *nodeadmin_v1alpha.Node
 		res.SetError(err.Error())
 		return nil
 	}
+	res.SetEngineRevision(query.Revision)
 
 	s.queryMu.Lock()
 	if s.activeQueries >= 10 {

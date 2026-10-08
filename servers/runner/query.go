@@ -59,6 +59,9 @@ func (s *RegistrationServer) Query(ctx context.Context, req *runner_v1alpha.Runn
 		res.SetError(fmt.Sprintf("querying runner %q: %v", target, err))
 		return nil
 	}
+	if result.HasEngineRevision() {
+		res.SetEngineRevision(result.EngineRevision())
+	}
 	if result.Error() != "" {
 		res.SetError(result.Error())
 		return nil

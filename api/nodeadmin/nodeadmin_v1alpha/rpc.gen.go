@@ -133,8 +133,9 @@ func (v *NodeAdminQueryArgs) UnmarshalJSON(data []byte) error {
 }
 
 type nodeAdminQueryResultsData struct {
-	Data  *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
-	Error *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+	Data           *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+	Error          *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+	EngineRevision *string `cbor:"2,keyasint,omitempty" json:"engine_revision,omitempty"`
 }
 
 type NodeAdminQueryResults struct {
@@ -149,6 +150,10 @@ func (v *NodeAdminQueryResults) SetData(data []byte) {
 
 func (v *NodeAdminQueryResults) SetError(error string) {
 	v.data.Error = &error
+}
+
+func (v *NodeAdminQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
 }
 
 func (v *NodeAdminQueryResults) MarshalCBOR() ([]byte, error) {
@@ -357,6 +362,17 @@ func (v *NodeAdminClientQueryResults) Error() string {
 		return ""
 	}
 	return *v.data.Error
+}
+
+func (v *NodeAdminClientQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *NodeAdminClientQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
 }
 
 func (v NodeAdminClient) Query(ctx context.Context, expression string) (*NodeAdminClientQueryResults, error) {
