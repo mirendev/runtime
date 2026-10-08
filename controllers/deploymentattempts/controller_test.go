@@ -468,6 +468,44 @@ func TestMigrationLeavesRunningAttemptWithoutOutcome(t *testing.T) {
 	assert.Equal(t, app.ID, migrated.App)
 }
 
+// The store stamps a missing creation time on any write, so a migration write
+// that lands before the repair would fix the deployment's creation time at the
+// moment of migration rather than when it started.
+func TestDeploymentMigrationRepairsCreationTimeBeforeEvictingBuildLogs(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+
+	_, err := inmem.Store.CreateEntity(ctx, entity.New(
+		entity.Ident, types.Keyword(legacyDeploymentBuildLogs),
+		entity.Doc, "legacy embedded build output",
+		entity.Cardinality, entity.CardinalityOne,
+		entity.Type, entity.TypeStr,
+	), entity.WithOverwrite)
+	require.NoError(t, err)
+
+	started := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	dep := &core_v1alpha.Deployment{
+		ID: "deployment/legacy-with-logs", AppName: "web", Status: "failed",
+		Outcome: "failed", StartedAt: started,
+	}
+	attrs := append(dep.Encode(), entity.String(legacyDeploymentBuildLogs, "build output"))
+	raw := entity.New(entity.Ref(entity.DBId, dep.ID), attrs)
+	raw.SetRevision(12)
+	raw.SetUpdatedAt(started.Add(time.Hour))
+	raw.Remove(entity.CreatedAt)
+	inmem.Store.AddEntity(dep.ID, raw)
+
+	controller := New(slog.New(slog.NewTextHandler(io.Discard, nil)), inmem.Store, inmem.EAC)
+	require.NoError(t, controller.Step(ctx))
+
+	repaired, err := inmem.Store.GetEntity(ctx, dep.ID)
+	require.NoError(t, err)
+	_, found := repaired.Get(legacyDeploymentBuildLogs)
+	assert.False(t, found)
+	assert.Equal(t, started, repaired.GetCreatedAt())
+}
+
 func TestDeploymentMigrationEvictsEmbeddedBuildLogsFromCanonicalRecord(t *testing.T) {
 	ctx := context.Background()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)

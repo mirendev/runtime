@@ -466,6 +466,13 @@ func (m *MockStore) UpdateEntity(ctx context.Context, id Id, entity *Entity, opt
 	if !e.GetCreatedAt().IsZero() {
 		updated.SetCreatedAt(e.GetCreatedAt())
 	}
+	if updated.GetCreatedAt().IsZero() {
+		createdAt := e.GetUpdatedAt()
+		if createdAt.IsZero() {
+			createdAt = m.Now()
+		}
+		updated.SetCreatedAt(createdAt)
+	}
 
 	// Update the entity in the store
 	m.Entities[id] = updated
@@ -520,6 +527,13 @@ func (m *MockStore) ReplaceEntity(ctx context.Context, entity *Entity, opts ...E
 	// Preserve CreatedAt from existing entity
 	if !existing.GetCreatedAt().IsZero() {
 		entity.SetCreatedAt(existing.GetCreatedAt())
+	}
+	if entity.GetCreatedAt().IsZero() {
+		createdAt := existing.GetUpdatedAt()
+		if createdAt.IsZero() {
+			createdAt = m.Now()
+		}
+		entity.SetCreatedAt(createdAt)
 	}
 
 	// A replace rewrites the entity key and at most its own session's blob,

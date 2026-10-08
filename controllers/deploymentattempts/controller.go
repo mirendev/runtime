@@ -212,17 +212,29 @@ func (c *Controller) phaseWork(phase string) (entity.Id, func(context.Context, *
 }
 
 func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) error {
+	var dep core_v1alpha.Deployment
+	dep.Decode(ent)
+	// Repair timestamps before any other write. The store stamps a missing
+	// CreatedAt on every save and keeps it from then on, and started_at is a
+	// better creation time than the last update the store would fall back to.
+	preferredCreatedAt := dep.StartedAt
+	if preferredCreatedAt.IsZero() {
+		preferredCreatedAt, _ = time.Parse(time.RFC3339, dep.DeployedBy.Timestamp)
+	}
+	ent, err := c.repairExportTimestamps(ctx, ent, preferredCreatedAt)
+	if err != nil {
+		return err
+	}
+
 	if _, ok := ent.Get(legacyDeploymentBuildLogs); ok {
 		clean := ent.Clone()
 		clean.Remove(legacyDeploymentBuildLogs)
-		var err error
 		ent, err = c.Store.ReplaceEntity(ctx, clean, entity.WithFromRevision(ent.GetRevision()))
 		if err != nil {
 			return fmt.Errorf("removing embedded build logs: %w", err)
 		}
 	}
 
-	var dep core_v1alpha.Deployment
 	dep.Decode(ent)
 	// Old clients stored their raw remote URL. Clean it before these attempts
 	// become visible to the cloud exporter, including already-canonical rows.
@@ -230,22 +242,11 @@ func (c *Controller) migrateDeployment(ctx context.Context, ent *entity.Entity) 
 		dep.GitInfo.Repository = repository
 		clean := ent.Clone()
 		clean.Set(entity.Component(core_v1alpha.DeploymentGitInfoId, dep.GitInfo.Encode()))
-		var err error
 		ent, err = c.Store.ReplaceEntity(ctx, clean, entity.WithFromRevision(ent.GetRevision()))
 		if err != nil {
 			return fmt.Errorf("sanitizing deployment repository: %w", err)
 		}
 	}
-	preferredCreatedAt := dep.StartedAt
-	if preferredCreatedAt.IsZero() {
-		preferredCreatedAt, _ = time.Parse(time.RFC3339, dep.DeployedBy.Timestamp)
-	}
-	var err error
-	ent, err = c.repairExportTimestamps(ctx, ent, preferredCreatedAt)
-	if err != nil {
-		return err
-	}
-	dep.Decode(ent)
 	rec := &deploylifecycle.Record{Deployment: &dep}
 	if rec.Canonical() {
 		return nil
@@ -407,26 +408,16 @@ func (c *Controller) migrateApp(ctx context.Context, ent *entity.Entity) error {
 // repairExportTimestamps closes holes left by historical write paths that
 // persisted records without store-managed timestamps. The export contract does
 // not permit that. A deployment's started_at is the best surviving creation
-// boundary; otherwise the earliest timestamp we still know is its last update.
+// boundary. Without one, the patch alone is enough: the store stamps a missing
+// CreatedAt from the last update, or now, on every save.
 func (c *Controller) repairExportTimestamps(ctx context.Context, ent *entity.Entity, preferredCreatedAt time.Time) (*entity.Entity, error) {
-	createdAt := ent.GetCreatedAt()
-	updatedAt := ent.GetUpdatedAt()
-	if !createdAt.IsZero() && !updatedAt.IsZero() {
+	if !ent.GetCreatedAt().IsZero() && !ent.GetUpdatedAt().IsZero() {
 		return ent, nil
-	}
-	if createdAt.IsZero() {
-		createdAt = preferredCreatedAt
-		if createdAt.IsZero() {
-			createdAt = updatedAt
-		}
-		if createdAt.IsZero() {
-			return nil, errors.New("entity has no timestamp from which to repair db/entity.created")
-		}
 	}
 
 	patch := entity.New(entity.Ref(entity.DBId, ent.Id()))
-	if ent.GetCreatedAt().IsZero() {
-		patch.SetCreatedAt(createdAt)
+	if ent.GetCreatedAt().IsZero() && !preferredCreatedAt.IsZero() {
+		patch.SetCreatedAt(preferredCreatedAt)
 	}
 	repaired, err := c.Store.PatchEntity(ctx, patch, entity.WithFromRevision(ent.GetRevision()))
 	if err != nil {
