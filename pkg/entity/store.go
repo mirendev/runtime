@@ -1145,7 +1145,18 @@ func (s *EtcdStore) buildEntitySaveOps(entity *Entity, key string, primary, sess
 	var ops []clientv3.Op
 
 	entity.attrs = slices.Clone(primary)
-	// Store manages UpdatedAt - set it on every save
+	// Store manages CreatedAt and UpdatedAt. Stamping a missing CreatedAt here,
+	// as CreateEntity does, heals entities migrated from the pre-attribute
+	// format without one, which cloud export refuses. CreatedAt is preserved
+	// forever once set, so prefer the last update we still know, read before
+	// it is overwritten below, over now.
+	if entity.GetCreatedAt().IsZero() {
+		createdAt := entity.GetUpdatedAt()
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+		entity.SetCreatedAt(createdAt)
+	}
 	entity.SetUpdatedAt(time.Now())
 
 	data, err := encoder.Marshal(entity)
@@ -1220,6 +1231,10 @@ func (s *EtcdStore) ReplaceEntity(
 	// as deployment lock-owner publication does, without erasing its origin.
 	if createdAt := originalEntity.GetCreatedAt(); !createdAt.IsZero() {
 		repl.SetCreatedAt(createdAt)
+	} else if updatedAt := originalEntity.GetUpdatedAt(); repl.GetCreatedAt().IsZero() && !updatedAt.IsZero() {
+		// The replacement need not carry the stored UpdatedAt that
+		// buildEntitySaveOps would otherwise heal a missing CreatedAt from.
+		repl.SetCreatedAt(updatedAt)
 	}
 
 	if repl.GetRevision() == 0 {

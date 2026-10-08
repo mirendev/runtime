@@ -1455,3 +1455,83 @@ func TestStoreConformance_WriteUnderRevokedSessionFails(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// TestStoreConformance_WritesHealMissingCreatedAt covers entities migrated from
+// the pre-attribute format with no creation time. Cloud export refuses them, so
+// any write must stamp one, from the last update when there is one since the
+// stamp is kept forever.
+func TestStoreConformance_WritesHealMissingCreatedAt(t *testing.T) {
+	lastUpdated := time.Date(2025, 3, 14, 15, 9, 26, 0, time.UTC)
+
+	writes := []struct {
+		name  string
+		write func(ctx context.Context, store Store, id Id) (*Entity, error)
+	}{
+		{"update", func(ctx context.Context, store Store, id Id) (*Entity, error) {
+			return store.UpdateEntity(ctx, id, New(Any(Doc, "after")))
+		}},
+		{"patch", func(ctx context.Context, store Store, id Id) (*Entity, error) {
+			return store.PatchEntity(ctx, New(Ref(DBId, id), Any(Doc, "after")))
+		}},
+		{"replace", func(ctx context.Context, store Store, id Id) (*Entity, error) {
+			return store.ReplaceEntity(ctx, New(Ref(DBId, id), Any(Doc, "after")))
+		}},
+	}
+
+	for _, w := range writes {
+		t.Run(w.name, func(t *testing.T) {
+			runStoreConformance(t, func(t *testing.T, store Store) {
+				ctx := t.Context()
+				id := Id("conf-legacy-" + w.name)
+
+				legacy := New(Ref(DBId, id), Any(Doc, "before"))
+				legacy.SetUpdatedAt(lastUpdated)
+				seedRawEntity(t, store, legacy)
+
+				before, err := store.GetEntity(ctx, id)
+				require.NoError(t, err)
+				require.True(t, before.GetCreatedAt().IsZero(), "fixture must start without a creation time")
+
+				_, err = w.write(ctx, store, id)
+				require.NoError(t, err)
+
+				got, err := store.GetEntity(ctx, id)
+				require.NoError(t, err)
+				assert.True(t, lastUpdated.Equal(got.GetCreatedAt()),
+					"write must stamp the last update as creation time: got %s", got.GetCreatedAt())
+			})
+		})
+	}
+
+	t.Run("no update time falls back to now", func(t *testing.T) {
+		runStoreConformance(t, func(t *testing.T, store Store) {
+			ctx := t.Context()
+			id := Id("conf-legacy-untimed")
+
+			seedRawEntity(t, store, New(Ref(DBId, id), Any(Doc, "before")))
+
+			before := time.Now()
+			_, err := store.PatchEntity(ctx, New(Ref(DBId, id), Any(Doc, "after")))
+			require.NoError(t, err)
+
+			got, err := store.GetEntity(ctx, id)
+			require.NoError(t, err)
+			assert.False(t, got.GetCreatedAt().Before(before.Add(-time.Second)),
+				"write must stamp now when there is no update time: got %s", got.GetCreatedAt())
+		})
+	})
+}
+
+// seedRawEntity stores e exactly as given, bypassing the store-managed
+// timestamps every public write path stamps, to stand in for legacy data.
+func seedRawEntity(t *testing.T, store Store, e *Entity) {
+	t.Helper()
+	switch s := store.(type) {
+	case *MockStore:
+		s.AddEntity(e.Id(), e)
+	case *EtcdStore:
+		require.NoError(t, s.basicSave(t.Context(), e))
+	default:
+		t.Fatalf("no raw seed for %T", store)
+	}
+}
