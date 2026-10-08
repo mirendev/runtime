@@ -526,10 +526,14 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 	} else {
 		meta.Update(pool.Encode())
 	}
-	// Explicitly set status fields to ensure 0 values are persisted
+	// Explicitly set status fields to ensure 0 values are persisted. The crash
+	// fields need the same treatment: clearing them sets zero values that
+	// Encode() would drop.
 	meta.Update([]entity.Attr{
 		entity.Int64(compute_v1alpha.SandboxPoolCurrentInstancesId, current),
 		entity.Int64(compute_v1alpha.SandboxPoolReadyInstancesId, ready),
+		entity.Int64(compute_v1alpha.SandboxPoolConsecutiveCrashCountId, pool.ConsecutiveCrashCount),
+		entity.Time(compute_v1alpha.SandboxPoolCooldownUntilId, pool.CooldownUntil),
 	})
 
 	return nil

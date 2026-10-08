@@ -1706,3 +1706,38 @@ func TestManagerLongStartupFailureBackoff(t *testing.T) {
 	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
 	assert.False(t, updated.LastCrashTime.IsZero())
 }
+
+// TestManagerHealthySandboxResetPersists verifies that clearing the crash
+// streak after a sandbox proves healthy reaches the entity store. The cleared
+// fields are zero values, which Encode() drops, so they must be written
+// explicitly or the pool keeps its old streak.
+func TestManagerHealthySandboxResetPersists(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 1,
+		ReferencedByVersions:  []entity.Id{"ver-1"},
+		ConsecutiveCrashCount: 2,
+		CooldownUntil:         time.Now().Add(-time.Second),
+		SandboxSpec:           compute_v1alpha.SandboxSpec{Version: "ver-1"},
+	}
+	id, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = id
+
+	// Running long enough to count as healthy.
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-5 * time.Minute) }
+	_, err = server.Client.Create(ctx, "healthy",
+		&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", id.String())))
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+
+	reconcilePool(t, ctx, server, NewManager(testutils.TestLogger(t), server.EAC), pool)
+
+	updated := getPool(t, ctx, server, id)
+	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
+	assert.True(t, updated.CooldownUntil.IsZero())
+}
