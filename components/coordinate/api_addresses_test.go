@@ -300,7 +300,7 @@ func TestApiAddresses(t *testing.T) {
 				netcheckResult: tt.netcheckResult,
 			}, nil)
 
-			got := c.apiAddresses()
+			got := HostPorts(c.apiAddresses())
 
 			for _, nr := range nonRoutable {
 				assert.NotContains(t, got, nr, "non-routable address %q must never be advertised", nr)

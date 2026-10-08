@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/clusternetwork"
+	"miren.dev/runtime/pkg/ipdiscovery"
 )
 
 // SourcedIP is an IP address tagged with how it was obtained. Explicit IPs
@@ -22,6 +24,12 @@ type SourcedIP struct {
 	// Used to tell a host's real NICs apart from the container bridges
 	// Miren and Docker create, which are never reachable from a client.
 	Interface string
+
+	// LinkType and PointToPoint describe the link, when discovery could
+	// tell (see ipdiscovery.Address). They are what separates an overlay
+	// address from a LAN one in the same range.
+	LinkType     string
+	PointToPoint bool
 }
 
 // IPSet is an ordered, de-duplicated collection of SourcedIP entries.
@@ -56,6 +64,8 @@ func (s *IPSet) Add(sip SourcedIP) {
 		// own, and losing the name would hide it from bridge filtering.
 		if s.entries[i].Interface == "" && sip.Interface != "" {
 			s.entries[i].Interface = sip.Interface
+			s.entries[i].LinkType = sip.LinkType
+			s.entries[i].PointToPoint = sip.PointToPoint
 		}
 		return
 	}
@@ -72,6 +82,23 @@ func (s *IPSet) AddDiscovered(ip net.IP) {
 // found on, so bridge filtering can tell a real NIC from a container bridge.
 func (s *IPSet) AddDiscoveredFrom(ip net.IP, iface string) {
 	s.Add(SourcedIP{IP: ip, Explicit: false, Interface: iface})
+}
+
+// AddDiscoveredAddress records an address from ipdiscovery with everything
+// discovery learned about its link. Addresses netcheck observed carry a
+// placeholder interface name, which is dropped rather than passed off as
+// a real link. Reports whether the address was usable.
+func (s *IPSet) AddDiscoveredAddress(a ipdiscovery.Address) bool {
+	ip := net.ParseIP(a.IP)
+	if ip == nil {
+		return false
+	}
+	sip := SourcedIP{IP: ip, Interface: a.Interface, LinkType: a.LinkType, PointToPoint: a.PointToPoint}
+	if a.Interface == ipdiscovery.NetcheckInterface {
+		sip.Interface = ""
+	}
+	s.Add(sip)
+	return true
 }
 
 // AddExplicit is a convenience for Add(SourcedIP{IP: ip, Explicit: true}).
@@ -140,19 +167,80 @@ type AdvertiseInput struct {
 // both production (building the final list) and debug tooling (explaining
 // the decision for every IP).
 type AdvertiseCandidate struct {
-	Source         string // "listen", "explicit", "discovered", "netcheck"
-	HostPort       string
-	IP             net.IP
-	Interface      string // discovering interface, when known
-	Classification string // tailnet / container-bridge / loopback / link-local / private / global-unicast / other
-	Included       bool
-	Reason         string
+	Source    string // clusternetwork.Source*
+	HostPort  string
+	IP        net.IP
+	Interface string // discovering interface, when known
+	Range     string // clusternetwork.Range*, or loopback / link-local / unspecified / multicast
+	Class     string // clusternetwork.Class*; empty for addresses never advertised
+	Label     string // vendor hint, never a decision input
+	Included  bool
+	Reason    string
+}
+
+// Wire renders an advertised candidate as it goes to cloud.
+func (c AdvertiseCandidate) Wire() clusternetwork.AdvertisedAddress {
+	return clusternetwork.AdvertisedAddress{
+		Transport: clusternetwork.TransportIP,
+		Address:   c.HostPort,
+		Class:     c.Class,
+		Range:     c.Range,
+		Interface: c.Interface,
+		Source:    c.Source,
+		Label:     c.Label,
+	}
+}
+
+// WireDetails renders advertised candidates as the report's
+// api_address_details. The result is never nil, so advertising nothing
+// goes out as [] rather than null (see clusternetwork.Report).
+func WireDetails(cands []AdvertiseCandidate) []clusternetwork.AdvertisedAddress {
+	out := make([]clusternetwork.AdvertisedAddress, len(cands))
+	for i, c := range cands {
+		out[i] = c.Wire()
+	}
+	return out
+}
+
+// HostPorts extracts the flat address list from advertised candidates.
+func HostPorts(cands []AdvertiseCandidate) []string {
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.HostPort)
+	}
+	return out
+}
+
+// linkFor returns the entry in ips for ip, so a candidate known by another
+// route (the listen address, a netcheck observation) can carry the link
+// facts discovery found for it. The zero value when no entry matches.
+func linkFor(ips []SourcedIP, ip net.IP) SourcedIP {
+	for _, sip := range ips {
+		if sip.IP.Equal(ip) {
+			return sip
+		}
+	}
+	return SourcedIP{}
+}
+
+// newCandidate fills in everything about ip that doesn't depend on the
+// filtering decision.
+func newCandidate(source, hostPort string, ip net.IP, sip SourcedIP) AdvertiseCandidate {
+	return AdvertiseCandidate{
+		Source:    source,
+		HostPort:  hostPort,
+		IP:        ip,
+		Interface: sip.Interface,
+		Range:     addressRange(ip),
+		Class:     classOf(ip, sip.Interface, sip.LinkType, sip.PointToPoint),
+		Label:     labelOf(ip, sip.Interface),
+	}
 }
 
 // ComputeAdvertise is the single source of truth for computing the addresses
 // the server advertises. It returns the ordered list of candidates (including
-// rejected ones, so callers can explain why) and the final list of advertised
-// host:port strings.
+// rejected ones, so callers can explain why) and the advertised subset, in
+// order and de-duplicated by host:port.
 //
 // The returned list is intended for clusternetwork.Report.APIAddresses, i.e. the
 // addresses miren.cloud hands out to clients that want to reach this
@@ -173,16 +261,18 @@ type AdvertiseCandidate struct {
 //     a. Loopback and unspecified are dropped.
 //     b. Addresses on a container bridge (docker0, flannel.1, rt0, …) are
 //     dropped — they exist only for workloads on this host.
-//     c. Addresses the internet can't route to (LAN, CGNAT, ULA, and so any
+//     c. IANA special-purpose addresses (198.18/15, 240/4, NAT64, …) are
+//     dropped — no other host can reach them.
+//     d. Addresses the internet can't route to (LAN, CGNAT, ULA, and so any
 //     overlay network) are kept, since they may be how this client
 //     reaches us.
-//     d. Internet-routable IPs are dropped if netcheck ran for that address
+//     e. Internet-routable IPs are dropped if netcheck ran for that address
 //     family and proved the family unreachable or found reachable
 //     addresses (replaced by netcheck-confirmed ones).
-//     e. Otherwise kept as a fallback.
+//     f. Otherwise kept as a fallback.
 //
 //  4. Netcheck public addresses: included when reachable on at least one port.
-func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
+func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []AdvertiseCandidate) {
 	port := in.Port
 	if port == 0 {
 		port = 8443
@@ -190,7 +280,7 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 	portStr := strconv.Itoa(port)
 
 	var cands []AdvertiseCandidate
-	var final []string
+	var final []AdvertiseCandidate
 	seen := make(map[string]struct{})
 
 	add := func(c AdvertiseCandidate) {
@@ -202,7 +292,7 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 			return
 		}
 		seen[c.HostPort] = struct{}{}
-		final = append(final, c.HostPort)
+		final = append(final, c)
 	}
 
 	// 1. Listen address.
@@ -212,38 +302,26 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		switch {
 		case err != nil || ip == nil:
 			add(AdvertiseCandidate{
-				Source:   "listen",
+				Source:   clusternetwork.SourceListen,
 				HostPort: in.ListenAddr,
 				Included: false,
 				Reason:   "not a literal IP host",
 			})
-		case ip.IsUnspecified():
-			add(AdvertiseCandidate{
-				Source:         "listen",
-				HostPort:       in.ListenAddr,
-				IP:             ip,
-				Classification: "unspecified",
-				Included:       false,
-				Reason:         "unspecified address (0.0.0.0 / ::) is not routable",
-			})
-		case ip.IsLoopback():
-			add(AdvertiseCandidate{
-				Source:         "listen",
-				HostPort:       in.ListenAddr,
-				IP:             ip,
-				Classification: "loopback",
-				Included:       false,
-				Reason:         "loopback is not reachable from remote clients",
-			})
 		default:
-			add(AdvertiseCandidate{
-				Source:         "listen",
-				HostPort:       in.ListenAddr,
-				IP:             ip,
-				Classification: classify(ip),
-				Included:       true,
-				Reason:         "server listen address",
-			})
+			// The listen address is usually also on an interface; borrow
+			// what discovery knows about that link, so an overlay listen
+			// address isn't mistaken for a LAN one.
+			cand := newCandidate(clusternetwork.SourceListen, in.ListenAddr, ip, linkFor(in.IPs, ip))
+			switch {
+			case ip.IsUnspecified():
+				cand.Reason = "unspecified address (0.0.0.0 / ::) is not routable"
+			case ip.IsLoopback():
+				cand.Reason = "loopback is not reachable from remote clients"
+			default:
+				cand.Included = true
+				cand.Reason = "server listen address"
+			}
+			add(cand)
 		}
 	}
 
@@ -259,18 +337,12 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		}
 		hp := net.JoinHostPort(ip.String(), portStr)
 
-		source := "discovered"
+		source := clusternetwork.SourceDiscovered
 		if sip.Explicit {
-			source = "explicit"
+			source = clusternetwork.SourceExplicit
 		}
 
-		cand := AdvertiseCandidate{
-			Source:         source,
-			HostPort:       hp,
-			IP:             ip,
-			Interface:      sip.Interface,
-			Classification: classifyOn(ip, sip.Interface),
-		}
+		cand := newCandidate(source, hp, ip, sip)
 
 		// Loopback / unspecified always rejected regardless of source.
 		if ip.IsUnspecified() {
@@ -302,6 +374,16 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 		if isContainerBridge(sip.Interface) {
 			cand.Included = false
 			cand.Reason = fmt.Sprintf("container bridge %q is local to this host", sip.Interface)
+			add(cand)
+			continue
+		}
+
+		// Special-purpose space is reachable from nowhere, not even the
+		// LAN: a VPN client's 198.18/15 "fake IP" on its tun device, say.
+		// Advertising it would only hand clients a timeout.
+		if cand.Range == clusternetwork.RangeSpecial {
+			cand.Included = false
+			cand.Reason = "special-purpose address is not reachable from other hosts"
 			add(cand)
 			continue
 		}
@@ -348,14 +430,14 @@ func ComputeAdvertise(in AdvertiseInput) ([]AdvertiseCandidate, []string) {
 	for _, hp := range publicAddressesFromNetcheck(in.Netcheck) {
 		host, _, _ := net.SplitHostPort(hp)
 		ip := net.ParseIP(host)
-		add(AdvertiseCandidate{
-			Source:         "netcheck",
-			HostPort:       hp,
-			IP:             ip,
-			Classification: classify(ip),
-			Included:       true,
-			Reason:         "netcheck confirmed reachable",
-		})
+		// On a host with its public address assigned directly to a NIC,
+		// netcheck's observation is that same address, and the link it
+		// sits on is still worth reporting. Behind NAT nothing matches
+		// and the interface stays empty.
+		cand := newCandidate(clusternetwork.SourceNetcheck, hp, ip, linkFor(in.IPs, ip))
+		cand.Included = true
+		cand.Reason = "netcheck confirmed reachable"
+		add(cand)
 	}
 
 	return cands, final
@@ -438,14 +520,82 @@ func publicAddressesFromNetcheck(result *cloudauth.NetcheckDualStackResult) []st
 	return addrs
 }
 
+// Ranges that only matter to the advertise logic itself. Addresses in them
+// are never advertised, so they have no wire constant.
+const (
+	rangeLoopback    = "loopback"
+	rangeLinkLocal   = "link-local"
+	rangeUnspecified = "unspecified"
+	rangeMulticast   = "multicast"
+)
+
+var (
+	cgnatNet = mustCIDR("100.64.0.0/10") // RFC 6598
+	ulaNet   = mustCIDR("fc00::/7")      // RFC 4193
+
+	// specialNets is the slice of the IANA special-purpose registries that
+	// Go's net.IP predicates don't already cover and that no client could
+	// reach us at. 198.18.0.0/15 earns its place in practice: VPN clients
+	// with a "fake IP" mode hand it out on a local tun device. Documentation
+	// ranges (TEST-NET, 2001:db8::/32) are deliberately absent; they never
+	// appear on a real host, and our own tests use them as stand-ins for
+	// public addresses.
+	specialNets = []*net.IPNet{
+		mustCIDR("0.0.0.0/8"),      // "this network"
+		mustCIDR("192.0.0.0/24"),   // IETF protocol assignments
+		mustCIDR("198.18.0.0/15"),  // benchmarking
+		mustCIDR("240.0.0.0/4"),    // reserved, and limited broadcast
+		mustCIDR("64:ff9b::/96"),   // NAT64 well-known prefix
+		mustCIDR("64:ff9b:1::/48"), // NAT64 local-use
+		mustCIDR("100::/64"),       // discard-only
+	}
+
+	// tailscaleULA is the /48 Tailscale assigns its IPv6 node addresses from.
+	tailscaleULA = mustCIDR("fd7a:115c:a1e0::/48")
+)
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 // isCGNAT reports whether ip falls in the 100.64.0.0/10 Carrier-Grade NAT
 // range (RFC 6598).
 func isCGNAT(ip net.IP) bool {
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return false
+	return cgnatNet.Contains(ip)
+}
+
+// addressRange places ip in the IANA registries. It is a pure function of the
+// address and makes no guess about what network the address belongs to;
+// that judgment is classOf's.
+func addressRange(ip net.IP) string {
+	switch {
+	case ip == nil:
+		return ""
+	case ip.IsUnspecified():
+		return rangeUnspecified
+	case ip.IsLoopback():
+		return rangeLoopback
+	case ip.IsLinkLocalUnicast():
+		return rangeLinkLocal
+	case ip.IsMulticast():
+		return rangeMulticast
+	case isCGNAT(ip):
+		return clusternetwork.RangeShared
+	case ulaNet.Contains(ip):
+		return clusternetwork.RangeULA
+	case ip.IsPrivate():
+		return clusternetwork.RangePrivate
 	}
-	return ip4[0] == 100 && ip4[1]&0xc0 == 0x40
+	for _, n := range specialNets {
+		if n.Contains(ip) {
+			return clusternetwork.RangeSpecial
+		}
+	}
+	return clusternetwork.RangePublic
 }
 
 // isPubliclyRoutable reports whether the public internet can reach ip. It is
@@ -454,30 +604,77 @@ func isCGNAT(ip net.IP) bool {
 // in non-routable space to be overlays, so Tailscale, iroh, Nebula and the
 // rest are all covered without naming any of them.
 func isPubliclyRoutable(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() ||
-		ip.IsPrivate() {
-		return false
-	}
-	return !isCGNAT(ip)
+	return addressRange(ip) == clusternetwork.RangePublic
 }
 
-// looksLikeTailnet is a display-only hint for `miren debug advertise`, so an
-// operator reading the table sees why two addresses on different families got
-// the same treatment. It never gates a decision, so a guess that ages badly
-// costs nothing but a label. fd7a:115c:a1e0::/48 is Tailscale's ULA prefix.
-func looksLikeTailnet(ip net.IP, iface string) bool {
+// classOf judges what network a client has to be on to reach ip. The range
+// decides public versus not; for the rest, the link the address sits on
+// tells an overlay or container bridge apart from the LAN.
+//
+// The range alone is never enough to call something an overlay. CGNAT
+// space on an ordinary NIC is an ISP's or Starlink's NAT, and a ULA on one
+// is a home or cloud LAN; Tailscale's own code drops such addresses as its
+// own and then needs a pile of exceptions to undo the damage.
+//
+// Returns "" for addresses that are never advertised (loopback and the like).
+func classOf(ip net.IP, iface, linkType string, pointToPoint bool) string {
+	r := addressRange(ip)
+	switch r {
+	case "", rangeLoopback, rangeLinkLocal, rangeUnspecified, rangeMulticast:
+		return ""
+	}
+	if isContainerBridge(iface) {
+		return clusternetwork.ClassContainerBridge
+	}
+	if r == clusternetwork.RangePublic {
+		return clusternetwork.ClassPublic
+	}
+	if isOverlayLink(iface, linkType, pointToPoint) {
+		return clusternetwork.ClassOverlay
+	}
+	return clusternetwork.ClassLAN
+}
+
+// isOverlayLink reports whether a link is a tunnel into some network other
+// than the one the host is plugged into. The kernel's link type is the
+// evidence. The point-to-point flag stands in only when the type is unknown,
+// because PPPoE and raw-IP cellular links set it too, and an ISP's CGNAT
+// address arriving over ppp0 is a LAN address, not an overlay. The name is
+// only trusted for the one overlay whose interface is reliably named for it,
+// so a host without netlink (or a test) still recognizes tailscale0.
+//
+// A bridge is not an overlay, and is deliberately not treated as a container
+// bridge either: Proxmox and plenty of bonded setups put the host's own LAN
+// address on one (vmbr0, br0). Container bridges are recognized by name.
+func isOverlayLink(iface, linkType string, pointToPoint bool) bool {
 	if strings.HasPrefix(iface, "tailscale") {
 		return true
 	}
-	if isCGNAT(ip) {
+	switch linkType {
+	case "tuntap", "tun", "wireguard":
 		return true
+	case "":
+		return pointToPoint
 	}
-	b := ip.To16()
-	return ip.To4() == nil && b != nil &&
-		b[0] == 0xfd && b[1] == 0x7a && b[2] == 0x11 &&
-		b[3] == 0x5c && b[4] == 0xa1 && b[5] == 0xe0
+	return false
+}
+
+// labelOf names the vendor or technology behind an address when it is
+// recognizable. It never feeds a decision, so a guess that ages badly costs
+// nothing but a label. CGNAT space alone earns no label: on eth0 it is an
+// ISP's, not Tailscale's.
+func labelOf(ip net.IP, iface string) string {
+	switch {
+	case strings.HasPrefix(iface, "tailscale"), tailscaleULA.Contains(ip):
+		return "tailscale"
+	case strings.HasPrefix(iface, "zt"):
+		return "zerotier"
+	case strings.HasPrefix(iface, "wt"):
+		return "netbird"
+	case strings.HasPrefix(iface, "wg"):
+		return "wireguard"
+	}
+	return ""
 }
 
 // containerBridgeNames are interfaces whose addresses serve workloads on this
@@ -509,37 +706,4 @@ func isContainerBridge(iface string) bool {
 		}
 	}
 	return false
-}
-
-// classifyOn is classify with the discovering interface in hand, which lets
-// it name the two cases the plain address can't reveal: an overlay address
-// (indistinguishable from CGNAT or a ULA) and a container bridge.
-func classifyOn(ip net.IP, iface string) string {
-	if looksLikeTailnet(ip, iface) {
-		return "tailnet"
-	}
-	if isContainerBridge(iface) {
-		return "container-bridge"
-	}
-	return classify(ip)
-}
-
-// classify returns a short string describing the kind of address, for
-// diagnostic output.
-func classify(ip net.IP) string {
-	if ip == nil {
-		return "unknown"
-	}
-	switch {
-	case ip.IsLoopback():
-		return "loopback"
-	case ip.IsLinkLocalUnicast():
-		return "link-local"
-	case ip.IsPrivate():
-		return "private"
-	case ip.IsGlobalUnicast():
-		return "global-unicast"
-	default:
-		return "other"
-	}
 }
