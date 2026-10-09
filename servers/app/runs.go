@@ -87,10 +87,10 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 		return rpc.AppAccessError(ctx, a.App())
 	}
 	if a.RequestId() == "" || a.Version() == "" || len(a.Command()) == 0 {
-		return fmt.Errorf("request_id, version and command are required")
+		return cond.ValidationFailure("missing-field", "request_id, version and command are required")
 	}
 	if a.Task() == "" || a.Task() == ConsoleTask {
-		return fmt.Errorf("an explicit non-console task is required for orchestrator submission")
+		return cond.ValidationFailure("invalid-field", "an explicit non-console task is required for orchestrator submission")
 	}
 	var app core_v1alpha.App
 	if err := r.EC.Get(ctx, a.App(), &app); err != nil {
@@ -101,7 +101,7 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 		return err
 	}
 	if ver.App != app.ID {
-		return fmt.Errorf("version does not belong to app")
+		return cond.ValidationFailure("invalid-field", "version does not belong to app")
 	}
 	taskName := a.Task()
 	command := resolveCommand(nil, a.Command())
@@ -117,7 +117,7 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 			return err
 		}
 		if existing.App != app.ID || existing.Version != ver.ID || existing.Task != taskName || existing.Command != command {
-			return fmt.Errorf("request_id already used for different work")
+			return cond.Conflict("request_id", "request_id already used for different work")
 		}
 		state.Results().SetId(id.String())
 		return nil
@@ -135,13 +135,9 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 	}
 	task := findTask(cfg, taskName)
 	if task == nil {
-		return fmt.Errorf("app declares no task named %q", taskName)
+		return cond.ValidationFailure("invalid-field", fmt.Sprintf("app declares no task named %q", taskName))
 	}
-	run := &run_v1alpha.Run{
-		App: app.ID, Version: ver.ID, Task: taskName, Command: command,
-		Trigger: run_v1alpha.MANUAL, Status: run_v1alpha.PENDING, MaxAttempts: 1,
-		Timeout: task.Timeout,
-	}
+	run := newManualRun(app.ID, ver.ID, taskName, command, false, task)
 	// Create, not Put: a concurrent retry must never reset a running or
 	// terminal entity back to pending. The store arbitrates the absent-ID CAS.
 	_, err = r.EC.EAC().Create(ctx, entity.New(
@@ -153,6 +149,7 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 		}
 		return err
 	}
+	r.Log.Info("created run", "run", id, "app", a.App(), "task", taskName, "trigger", "manual")
 	state.Results().SetId(id.String())
 	return nil
 }
@@ -235,29 +232,8 @@ func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, com
 
 	resolvedCommand := resolveCommand(task, command)
 
-	timeout := ""
-	if task != nil {
-		timeout = task.Timeout
-	}
-
-	// One attempt, whatever the task declares. Retries exist for triggers
-	// nobody is watching; a manual run that fails just fails and the caller
-	// decides. The controller enforces this too, so setting it here keeps the
-	// stored run honest rather than carrying a budget that is never spent.
-	const manualMaxAttempts = 1
-
 	name := fmt.Sprintf("%s-%s-%s", appName, taskName, idgen.Gen(""))
-	run := &run_v1alpha.Run{
-		App:         appRec.ID,
-		Version:     appRec.ActiveVersion,
-		Task:        taskName,
-		Trigger:     run_v1alpha.MANUAL,
-		Command:     resolvedCommand,
-		Tty:         tty,
-		Status:      run_v1alpha.PENDING,
-		Timeout:     timeout,
-		MaxAttempts: manualMaxAttempts,
-	}
+	run := newManualRun(appRec.ID, appRec.ActiveVersion, taskName, resolvedCommand, tty, task)
 
 	id, err := r.EC.Create(ctx, name, run)
 	if err != nil {
@@ -268,6 +244,19 @@ func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, com
 		"run", id, "app", appName, "task", taskName, "trigger", "manual")
 
 	return id, runapi.SandboxName(id, 1).String(), nil
+}
+
+func newManualRun(app, version entity.Id, taskName, command string, tty bool, task *core_v1alpha.ConfigSpecTasks) *run_v1alpha.Run {
+	// The caller owns retries for both interactive and orchestrated work,
+	// regardless of the task's retry policy for unattended triggers.
+	run := &run_v1alpha.Run{
+		App: app, Version: version, Task: taskName, Command: command, Tty: tty,
+		Trigger: run_v1alpha.MANUAL, Status: run_v1alpha.PENDING, MaxAttempts: 1,
+	}
+	if task != nil {
+		run.Timeout = task.Timeout
+	}
+	return run
 }
 
 func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns) error {

@@ -1,10 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +94,43 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	for _, task := range []string{"", "console", "undeclared"} {
 		_, err = client.SubmitRun(ctx, "dagster", task, command, ver.String(), "invalid-task")
 		require.Error(t, err)
+	}
+	mux := http.NewServeMux()
+	rpc.RegisterREST(mux, app_v1alpha.AdaptRuns(r))
+	for _, tc := range []struct {
+		name, field string
+		value       any
+		status      int
+		code        string
+	}{
+		{"missing request ID", "request_id", "", http.StatusBadRequest, "validation-failure"},
+		{"missing version", "version", "", http.StatusBadRequest, "validation-failure"},
+		{"missing command", "command", []string{}, http.StatusBadRequest, "validation-failure"},
+		{"missing task", "task", "", http.StatusBadRequest, "validation-failure"},
+		{"console task", "task", "console", http.StatusBadRequest, "validation-failure"},
+		{"undeclared task", "task", "undeclared", http.StatusBadRequest, "validation-failure"},
+		{"foreign version", "version", foreign.String(), http.StatusBadRequest, "validation-failure"},
+		{"changed command", "command", []string{"different"}, http.StatusConflict, "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"task": "dagster", "command": command, "version": ver.String(), "request_id": "new-request"}
+			if tc.status == http.StatusConflict {
+				payload["request_id"] = "request-1"
+			}
+			payload[tc.field] = tc.value
+			body, err := json.Marshal(payload)
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/dagster/runs/submit", bytes.NewReader(body))
+			req = req.WithContext(rpc.ContextWithIdentity(req.Context(), &rpc.Identity{Method: rpc.AuthMethodCert}))
+			resp := httptest.NewRecorder()
+			mux.ServeHTTP(resp, req)
+			require.Equal(t, tc.status, resp.Code, resp.Body.String())
+			var out struct {
+				Code string `json:"code"`
+			}
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+			assert.Equal(t, tc.code, out.Code)
+		})
 	}
 	// Exercise the submitted identity, not a separately implemented encoding.
 	// Base64url used to produce leading or adjacent separators for some keys.
