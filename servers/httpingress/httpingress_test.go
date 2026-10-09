@@ -612,14 +612,13 @@ func TestLeaseCacheKey(t *testing.T) {
 		t.Errorf("unresolved labels should share the base key %q, got tenant1=%q tenant2=%q", labelFree, tenant1, tenant2)
 	}
 
-	// A resolved ephemeral version stays scoped per label and never collides
-	// with the base key or another label.
-	resolved := leaseCacheKey(app, "web", "feat-x", true)
+	// Replacing the same label with a new version must not reuse its old lease.
+	resolved := leaseCacheKey(app, "web", "app_version/feat-x-v1", true)
 	if resolved == labelFree {
 		t.Errorf("resolved ephemeral key %q must differ from the base key %q", resolved, labelFree)
 	}
-	if other := leaseCacheKey(app, "web", "feat-y", true); other == resolved {
-		t.Errorf("distinct ephemeral labels must not share a key, both were %q", resolved)
+	if replacement := leaseCacheKey(app, "web", "app_version/feat-x-v2", true); replacement == resolved {
+		t.Errorf("replacement versions must not share a key, both were %q", resolved)
 	}
 
 	api := leaseCacheKey(app, "api", "", false)

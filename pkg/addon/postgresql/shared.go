@@ -489,7 +489,7 @@ type CreateSharedDatabaseIn struct {
 }
 
 type CreateSharedDatabaseOut struct {
-	DatabaseCreated bool
+	DatabaseCreated bool `saga:"database_created"`
 }
 
 func CreateSharedDatabase(ctx context.Context, in CreateSharedDatabaseIn) (CreateSharedDatabaseOut, error) {
@@ -533,6 +533,7 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) er
 
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	b := saga.Define("provision-shared-postgresql").
+		Version(2).ResumesFrom(1).
 		Using(fw).
 		Using(cfg)
 	saga.UsingAs[dbsaga.ServerCounter](b, pgServerCounter{})

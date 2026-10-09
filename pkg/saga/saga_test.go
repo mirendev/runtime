@@ -911,6 +911,7 @@ func TestExecutor_FailedUndoNotMarkedAsUndone(t *testing.T) {
 	// Saga should return an error (with undo errors)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "undo errors")
+	assert.Contains(t, err.Error(), "multiply failed", "cleanup failure must not hide the original failure")
 
 	// Add executed, multiply was attempted
 	assert.Len(t, ctrl.addCalls, 1)
@@ -983,12 +984,10 @@ func undoHandoffFail(ctx context.Context, _ handoffFailIn, _ struct{}) error {
 	return nil
 }
 
-// TestExecutor_RetriedUndoSeesOutputsOfUndoneActions is MIR-2007. A failed
-// undo does not stop the pass, so the actions that ran before it are undone
-// in the same pass. When recovery retries the failed undo, the action that
-// produced its inputs is already undone, and those outputs are still what the
-// action ran with. Dropping them left a create-sandbox undo on toys failing
-// with "missing required input" on every restart for four weeks.
+// TestExecutor_RetriedUndoSeesOutputsOfUndoneActions is MIR-2007. Older binaries
+// continued past a failed undo, leaving its input producer already undone.
+// Recovery must retain those outputs even though new undo passes preserve
+// dependencies on failure.
 func TestExecutor_RetriedUndoSeesOutputsOfUndoneActions(t *testing.T) {
 	registry := NewRegistry()
 	ctrl := &handoffController{undoFailures: 1}
@@ -1009,8 +1008,11 @@ func TestExecutor_RetriedUndoSeesOutputsOfUndoneActions(t *testing.T) {
 	exec, err := storage.Get(context.Background(), "handoff-exec")
 	require.NoError(t, err)
 	require.Equal(t, StatusUndoing, exec.Status)
-	require.NotNil(t, exec.ExecutedActions["produce"].UndoneAt,
-		"the first pass carries on past the failed undo and undoes produce")
+	require.Nil(t, exec.ExecutedActions["produce"].UndoneAt,
+		"new undo passes preserve the failed undo's dependencies")
+	now := time.Now()
+	exec.ExecutedActions["produce"].UndoneAt = &now
+	require.NoError(t, storage.Save(context.Background(), exec), "seed a legacy rollback that continued after failure")
 	consume := exec.ExecutedActions["consume"]
 	require.Nil(t, consume.UndoneAt)
 	assert.Equal(t, "transient undo failure", consume.UndoError,

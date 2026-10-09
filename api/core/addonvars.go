@@ -3,11 +3,13 @@ package compute
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -52,7 +54,7 @@ func ResolveRuntimeConfig(
 		return spec, nil
 	}
 
-	bindings, err := addonBindings(ctx, eac, ver.App)
+	bindings, err := addonBindings(ctx, eac, ver, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +232,12 @@ type addonBinding struct {
 func addonBindings(
 	ctx context.Context,
 	eac *entityserver_v1alpha.EntityAccessClient,
-	appID entity.Id,
+	ver *core_v1alpha.AppVersion,
+	spec *core_v1alpha.ConfigSpec,
 ) ([]addonBinding, error) {
-	results, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
+	results, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, ver.App))
 	if err != nil {
-		return nil, fmt.Errorf("listing addon associations for %s: %w", appID, err)
+		return nil, fmt.Errorf("listing addon associations for %s: %w", ver.App, err)
 	}
 
 	var found []addonBinding
@@ -242,7 +245,7 @@ func addonBindings(
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
 
-		if assoc.Status != "active" {
+		if assoc.Status != "active" || assoc.AppVersion != associationVersion(ver, spec, assoc.Addon) {
 			continue
 		}
 		found = append(found, addonBinding{
@@ -260,4 +263,11 @@ func addonBindings(
 	sort.Slice(found, func(i, j int) bool { return found[i].assoc < found[j].assoc })
 
 	return found, nil
+}
+
+func associationVersion(ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec, addonID entity.Id) entity.Id {
+	if ver.EphemeralLabel != "" && slices.Contains(spec.CloneAddons, addon.NameFromRef(addonID)) {
+		return ver.ID
+	}
+	return ""
 }

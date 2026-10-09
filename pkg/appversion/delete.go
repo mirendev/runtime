@@ -9,12 +9,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity"
 )
+
+var ErrAddonCleanupPending = errors.New("addon clones are still deprovisioning")
 
 // Delete hard-deletes an AppVersion and its 1:1 ConfigVersion.
 //
@@ -28,6 +33,9 @@ import (
 // ConfigVersion cleanup is best-effort: an orphaned ConfigVersion holds no
 // blobs, so a failure there is logged but does not block deleting the version.
 func Delete(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
+	if err := cleanupAddonClones(ctx, eac, version.ID); err != nil {
+		return err
+	}
 	// Delete the version first. If we cleaned up the ConfigVersion first and
 	// then the version delete failed, the surviving version would point at a
 	// missing config; ordering it this way means the best-effort cleanup only
@@ -57,10 +65,54 @@ func Delete(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, v
 // pass can retry — otherwise we would leak pools that can no longer be traced
 // back to any version.
 func DeleteWithPools(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
+	if err := cleanupAddonClones(ctx, eac, version.ID); err != nil {
+		return err
+	}
 	if err := cleanupSandboxPools(ctx, eac, version.ID, log); err != nil {
 		return err
 	}
 	return Delete(ctx, eac, version, log)
+}
+
+// DeleteWithPoolsAndWait waits for asynchronous addon teardown during interactive
+// deletion or compensation. GC uses DeleteWithPools and retries on its next sweep.
+func DeleteWithPoolsAndWait(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, version *core_v1alpha.AppVersion, log *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(ctx, addon.CloneCleanupWaitCeiling)
+	defer cancel()
+	for {
+		err := DeleteWithPools(ctx, eac, version, log)
+		if !errors.Is(err, ErrAddonCleanupPending) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func cleanupAddonClones(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, versionID entity.Id) error {
+	resp, err := eac.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppVersionId, versionID))
+	if err != nil {
+		return fmt.Errorf("failed to list addon clones for app version %s: %w", versionID, err)
+	}
+	if len(resp.Values()) == 0 {
+		return nil
+	}
+	for _, ent := range resp.Values() {
+		var assoc addon_v1alpha.AddonAssociation
+		assoc.Decode(ent.Entity())
+		if assoc.Status != "deprovisioning" {
+			if _, err := eac.Patch(ctx, []entity.Attr{
+				entity.Ref(entity.DBId, assoc.ID),
+				entity.String(addon_v1alpha.AddonAssociationStatusId, "deprovisioning"),
+			}, 0); err != nil {
+				return fmt.Errorf("requesting teardown of addon clone %s: %w", assoc.ID, err)
+			}
+		}
+	}
+	return fmt.Errorf("%w for app version %s; retaining version for retry", ErrAddonCleanupPending, versionID)
 }
 
 // cleanupSandboxPools removes the sandbox pools that reference the given

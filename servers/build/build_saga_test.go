@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	digest "github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -680,7 +682,8 @@ func containsInOrder(got, want []string) bool {
 // leaving the entity store free of orphaned ConfigVersion / AppVersion
 // rows.
 func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -703,7 +706,37 @@ func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
 	// Swap setActiveVersion with a deterministic failure. Same signature,
 	// same input/output keys — the framework can't tell the difference,
 	// but the saga compensates everything after createConfigVersion.
+	var cloneID entity.Id
+	controllerDone := make(chan error, 1)
 	failingSetActive := func(ctx context.Context, in setActiveVersionIn) (setActiveVersionOut, error) {
+		var err error
+		cloneID, err = builder.ec.Create(ctx, "failed-clone", &addon_v1alpha.AddonAssociation{
+			AppVersion: entity.Id(in.AppVersionID), Status: "error",
+		})
+		if err != nil {
+			return setActiveVersionOut{}, err
+		}
+		go func() {
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				var clone addon_v1alpha.AddonAssociation
+				if err := builder.ec.GetById(ctx, cloneID, &clone); err != nil {
+					controllerDone <- err
+					return
+				}
+				if clone.Status == "deprovisioning" {
+					controllerDone <- builder.ec.Delete(ctx, cloneID)
+					return
+				}
+				select {
+				case <-ctx.Done():
+					controllerDone <- ctx.Err()
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 		return setActiveVersionOut{}, errSimulatedActivate
 	}
 
@@ -739,11 +772,16 @@ func TestBuildSaga_FailedActivate_CompensatesEntities(t *testing.T) {
 	err := executor.Start(sagaBuildFromTar).
 		Input("app_name", "demo").
 		Input("stream_id", "stream-fail").
+		Input("ephemeral_label", "failed-preview").
 		WithID("test-failed-activate").
 		Execute(ctx)
 	if err == nil {
 		t.Fatal("saga should have failed when set-active-version errors")
 	}
+	require.NotEmpty(t, cloneID)
+	require.NoError(t, <-controllerDone)
+	var clone addon_v1alpha.AddonAssociation
+	require.Error(t, builder.ec.GetById(ctx, cloneID, &clone))
 
 	// Pull the saga execution back and verify both create-config-version
 	// and create-version recorded UndoneAt timestamps. Then pull the

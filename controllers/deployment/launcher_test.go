@@ -3966,9 +3966,8 @@ func TestCreatePoolForVersionEphemeral(t *testing.T) {
 }
 
 // TestCreatePoolForVersionDefersWhileAddonsPending guards the on-demand path
-// with the same gate Reconcile has. An ephemeral version shares the app's
-// addons and skips provisioning, so a request arriving while the addon is
-// still coming up used to build a pool whose config had no DATABASE_URL.
+// with the same gate Reconcile has. An ephemeral version must wait for its
+// version-scoped clone rather than falling back to the app's primary addon.
 func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 	ctx := context.Background()
 	log := testutils.TestLogger(t)
@@ -3981,8 +3980,17 @@ func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 	require.NoError(t, err)
 	app.ID = appID
 
+	cvID, err := server.Client.Create(ctx, "preview-config", &core_v1alpha.ConfigVersion{
+		App: appID,
+		Spec: core_v1alpha.ConfigSpec{
+			CloneAddons: []string{"miren-postgresql"},
+			Services:    []core_v1alpha.ConfigSpecServices{{Name: "web", Port: 3000}},
+		},
+	})
+	require.NoError(t, err)
 	version := &core_v1alpha.AppVersion{
 		App:            app.ID,
+		ConfigVersion:  cvID,
 		Version:        "v1",
 		ImageUrl:       "test:latest",
 		EphemeralLabel: "feat-x",
@@ -3996,6 +4004,10 @@ func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 	require.NoError(t, err)
 	version.ID = verID
 
+	sharedID, err := server.Client.Create(ctx, "assoc-shared-valkey", &addon_v1alpha.AddonAssociation{
+		App: app.ID, Addon: "addon/miren-valkey", Status: "active",
+	})
+	require.NoError(t, err)
 	assocID, err := server.Client.Create(ctx, "assoc-pg", &addon_v1alpha.AddonAssociation{
 		App:    app.ID,
 		Addon:  entity.Id("addon/miren-postgresql"),
@@ -4012,11 +4024,72 @@ func TestCreatePoolForVersionDefersWhileAddonsPending(t *testing.T) {
 
 	require.NoError(t, server.Client.Patch(ctx, assocID, 0,
 		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
+	cloneID, err := server.Client.Create(ctx, "assoc-pg-clone", &addon_v1alpha.AddonAssociation{
+		App:               app.ID,
+		AppVersion:        version.ID,
+		SourceAssociation: assocID,
+		Addon:             entity.Id("addon/miren-postgresql"),
+		Status:            "error",
+		ErrorMessage:      "copy failed",
+	})
+	require.NoError(t, err)
+	_, err = launcher.CreatePoolForVersion(ctx, version, "web")
+	require.Error(t, err, "a failed clone must never let the preview use the primary addon")
+	assert.Empty(t, listAllPools(t, ctx, server))
+
+	require.NoError(t, server.Client.Patch(ctx, cloneID, 0,
+		entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
 
 	poolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
 	require.NoError(t, err)
 	assert.NotEmpty(t, poolID)
 	assert.Len(t, listAllPools(t, ctx, server), 1)
+	require.NoError(t, server.Client.Patch(ctx, sharedID, 0,
+		entity.String(addon_v1alpha.AddonAssociationStatusId, "pending")))
+	_, err = launcher.CreatePoolForVersion(ctx, version, "web")
+	require.Error(t, err, "a ready selected clone must not bypass an unready shared addon")
+}
+
+func TestCreatePoolForRegularVersionWithActiveAddon(t *testing.T) {
+	for _, label := range []string{"", "preview"} {
+		t.Run("label="+label, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+
+			appID, err := server.Client.Create(ctx, "test-app", &core_v1alpha.App{Project: entity.Id("project-1")})
+			require.NoError(t, err)
+			version := &core_v1alpha.AppVersion{
+				App:            appID,
+				Version:        "v1",
+				ImageUrl:       "test:latest",
+				EphemeralLabel: label,
+				Config: core_v1alpha.Config{
+					Port:     3000,
+					Services: []core_v1alpha.Services{{Name: "web"}},
+				},
+			}
+			version.ID, err = server.Client.Create(ctx, "test-ver", version)
+			require.NoError(t, err)
+			assocID, err := server.Client.Create(ctx, "assoc-pg", &addon_v1alpha.AddonAssociation{
+				App:    appID,
+				Addon:  entity.Id("addon/miren-postgresql"),
+				Status: "pending",
+			})
+			require.NoError(t, err)
+
+			launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+			_, err = launcher.CreatePoolForVersion(ctx, version, "web")
+			require.Error(t, err, "versions without cloning must still wait for the primary addon")
+			assert.Empty(t, listAllPools(t, ctx, server))
+			require.NoError(t, server.Client.Patch(ctx, assocID, 0,
+				entity.String(addon_v1alpha.AddonAssociationStatusId, "active")))
+
+			poolID, err := launcher.CreatePoolForVersion(ctx, version, "web")
+			require.NoError(t, err, "without opt-in, versions use the primary addon and must not require a clone")
+			assert.NotEmpty(t, poolID)
+		})
+	}
 }
 
 // TestNonEphemeralPoolUnaffected guards against the ephemeral changes leaking

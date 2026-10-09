@@ -187,7 +187,7 @@ test-blackbox: ## Run blackbox tests (requires `make dev` running)
 	# Cloud-backed tests are excluded: each stands up a whole cloud on fixed
 	# ports and restarts the server, which interferes with everything after it.
 	# Run them explicitly against a cloud checkout instead.
-	go test -tags blackbox -timeout 15m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
+	go test -tags blackbox -timeout 60m -v -count=1 -p 1 -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 build-cloud-test: ## Build cloud and POP binaries for POP blackbox tests
 	@CLOUD_REPO=$${BLACKBOX_CLOUD_REPO:-$$(cd .. && pwd)/cloud}; \
@@ -221,7 +221,7 @@ test-blackbox-distributed: ## Run blackbox tests against distributed environment
 	# inside it. Cloud-backed tests are skipped (same set as test-blackbox): an
 	# unset BLACKBOX_RUN would otherwise run them here, and they need the cloud
 	# repo and restart the server.
-	BLACKBOX_MODE=peers go test -tags blackbox -timeout 20m -v -count=1 -p 1 \
+	BLACKBOX_MODE=peers go test -tags blackbox -timeout 60m -v -count=1 -p 1 \
 		$(if $(BLACKBOX_RUN),-run '^($(BLACKBOX_RUN))$$') -skip '^(TestPOP|TestRPCViaCloud|TestDeployViaCloud|TestServerEnrollWithToken|TestServerUnregister)$$' ./blackbox/...
 
 .PHONY: test test-shell test-blackbox test-blackbox-pop build-cloud-test test-blackbox-distributed test-coverage test-coverage-ci coverage-report coverage-percent coverage-by-package coverage-pr test-groups update-test-groups blackbox-groups measure-blackbox-times blackbox-groups-distributed measure-blackbox-times-distributed

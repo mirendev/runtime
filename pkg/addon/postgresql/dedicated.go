@@ -96,6 +96,7 @@ type CreateDedicatedPoolIn struct {
 	Username      string
 	Password      string
 	VariantConfig map[string]string
+	StorageReady  saga.Edge `saga:"storage_ready,optional"`
 }
 
 type CreateDedicatedPoolOut struct {
@@ -170,12 +171,13 @@ func UndoCreateDedicatedPool(ctx context.Context, in CreateDedicatedPoolIn, out 
 }
 
 type UpdateDedicatedServerIn struct {
-	ServerID    entity.Id
-	PoolID      entity.Id
-	ServiceID   entity.Id
-	ServiceHost string
-	VariantName string
-	Password    string
+	ServerID              entity.Id
+	PoolID                entity.Id
+	ServiceID             entity.Id
+	ServiceHost           string
+	VariantName           string
+	Password              string
+	CloneCredentialsReady saga.Edge `saga:"clone_credentials_ready,optional"`
 }
 
 type UpdateDedicatedServerOut struct {
@@ -211,6 +213,7 @@ func UndoUpdateDedicatedServer(ctx context.Context, in UpdateDedicatedServerIn, 
 func RegisterDedicatedSaga(registry *saga.Registry, fw *addon.ProviderFramework) error {
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, Port: postgresPort, ReadyTimeout: poolReadyTimeout}
 	return saga.Define("provision-dedicated-postgresql").
+		Version(2).ResumesFrom(1).
 		Using(fw).
 		Using(cfg).
 		Action(GenerateCredentials).Undo(UndoGenerateCredentials).

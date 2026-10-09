@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 )
@@ -33,8 +35,13 @@ func newAddonWaitFixture(t *testing.T, ceiling time.Duration) *addonWaitFixture 
 	t.Cleanup(cleanup)
 
 	origCeiling := addonWaitCeiling
+	origCloneCeiling := cloneWaitCeiling
 	addonWaitCeiling = ceiling
-	t.Cleanup(func() { addonWaitCeiling = origCeiling })
+	cloneWaitCeiling = ceiling
+	t.Cleanup(func() {
+		addonWaitCeiling = origCeiling
+		cloneWaitCeiling = origCloneCeiling
+	})
 
 	return &addonWaitFixture{
 		b:     &Builder{Log: testutils.TestLogger(t), EAS: inmem.EAC},
@@ -62,7 +69,7 @@ func (f *addonWaitFixture) setStatus(t *testing.T, id entity.Id, status string) 
 }
 
 func (f *addonWaitFixture) await(expected []expectedAddon, sender StatusSender) error {
-	return f.b.awaitAddons(context.Background(), "demo", f.appID, expected, sender)
+	return f.b.awaitAddons(context.Background(), "demo", f.appID, "", expected, sender)
 }
 
 // The wait has to release once the addon controller flips the association,
@@ -201,7 +208,7 @@ func TestAwaitAddonsHonorsCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := f.b.awaitAddons(ctx, "demo", f.appID, expectPostgres, &recordingSender{})
+	err := f.b.awaitAddons(ctx, "demo", f.appID, "", expectPostgres, &recordingSender{})
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -224,4 +231,76 @@ func TestExpectedAddonsFromConfig(t *testing.T) {
 		{Name: "miren-rabbitmq", Variant: "small"},
 		{Name: "miren-valkey", Variant: ""},
 	}, got)
+}
+
+func TestAwaitAddonClonesRequiresEverySelectedAddon(t *testing.T) {
+	f := newAddonWaitFixture(t, 30*time.Millisecond)
+	versionID := entity.Id("app_version/preview")
+	f.association(t, "primary", &addon_v1alpha.AddonAssociation{Status: "active"})
+	f.association(t, "other-preview", &addon_v1alpha.AddonAssociation{AppVersion: "app_version/other", Status: "active"})
+	err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{})
+	require.ErrorContains(t, err, "did not become ready")
+	f.association(t, "preview-pg", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: "active"})
+	expected := []expectedAddon{{Name: "miren-postgresql"}, {Name: "miren-valkey"}}
+	err = f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expected, &recordingSender{})
+	require.ErrorContains(t, err, "miren-valkey")
+	f.association(t, "preview-cache", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Addon: "addon/miren-valkey", Status: "active"})
+	require.NoError(t, f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expected, &recordingSender{}))
+}
+
+func TestAwaitAddonClonesFailsOnTeardownAndStalledProvisioning(t *testing.T) {
+	for _, status := range []string{"provisioning", "deprovisioning", "error"} {
+		t.Run(status, func(t *testing.T) {
+			f := newAddonWaitFixture(t, 30*time.Millisecond)
+			versionID := entity.Id("app_version/preview")
+			f.association(t, "preview", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: status, ErrorMessage: "copy failed"})
+			sender := &recordingSender{}
+			err := f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, sender)
+			want := map[string]string{"provisioning": "did not become ready", "deprovisioning": "being removed", "error": "copy failed"}[status]
+			require.ErrorContains(t, err, want)
+			require.NotContains(t, err.Error(), "addon destroy")
+			if status != "provisioning" {
+				require.Contains(t, err.Error(), "this preview")
+				require.Equal(t, []string{err.Error()}, sender.Errors)
+				require.NotContains(t, sender.Errors[0], "addon destroy")
+			}
+		})
+	}
+}
+
+func TestAwaitAddonClonesUsesLongerPreviewBudget(t *testing.T) {
+	f := newAddonWaitFixture(t, 20*time.Millisecond)
+	cloneWaitCeiling = time.Second
+	versionID := entity.Id("app_version/slow-preview")
+	id := f.association(t, "slow-clone", &addon_v1alpha.AddonAssociation{AppVersion: versionID, Status: "provisioning"})
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		f.setStatus(t, id, "active")
+	}()
+	require.NoError(t, f.b.awaitAddons(t.Context(), "demo", f.appID, versionID, expectPostgres, &recordingSender{}))
+}
+
+func TestAwaitAddonClonesTimeoutAllowsInflightCleanup(t *testing.T) {
+	f := newAddonWaitFixture(t, 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	configID, err := f.inmem.Client.Create(ctx, "slow-config", &core_v1alpha.ConfigVersion{})
+	require.NoError(t, err)
+	version := &core_v1alpha.AppVersion{ConfigVersion: configID, EphemeralLabel: "slow-preview"}
+	version.ID, err = f.inmem.Client.Create(ctx, "slow-preview", version)
+	require.NoError(t, err)
+	id := f.association(t, "slow-clone", &addon_v1alpha.AddonAssociation{AppVersion: version.ID, Status: "provisioning"})
+	require.ErrorContains(t, f.b.awaitAddons(ctx, "demo", f.appID, version.ID, expectPostgres, &recordingSender{}), "did not become ready")
+	controllerDone := make(chan error, 1)
+	go func() {
+		// The controller is still copying after the deploy has timed out.
+		time.Sleep(60 * time.Millisecond)
+		controllerDone <- f.inmem.Client.Delete(ctx, id)
+	}()
+	require.NoError(t, appversion.DeleteWithPoolsAndWait(ctx, f.inmem.EAC, version, testutils.TestLogger(t)))
+	require.NoError(t, <-controllerDone)
+	_, err = f.inmem.EAC.Get(ctx, version.ID.String())
+	require.Error(t, err)
+	_, err = f.inmem.EAC.Get(ctx, configID.String())
+	require.Error(t, err)
 }

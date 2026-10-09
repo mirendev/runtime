@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -784,10 +785,18 @@ func buildVersionConfig(inputs ConfigInputs) core_v1alpha.ConfigSpec {
 	res := inputs.BuildResult
 	ac := inputs.AppConfig
 	procfileServices := inputs.ProcfileServices
+	spec.CloneAddons = ac.CloneAddons()
 
 	// Preserve existing variables for merging later
 	spec.Variables = inputs.ExistingConfig.Variables
 	if ac != nil {
+		for _, key := range slices.Sorted(maps.Keys(ac.Addons)) {
+			cfg := ac.Addons[key]
+			if cfg != nil && cfg.Clone && cfg.CloneVariant != "" {
+				name, _, _ := strings.Cut(key, ":")
+				spec.CloneAddonVariants = append(spec.CloneAddonVariants, core_v1alpha.ConfigSpecCloneAddonVariants{Name: name, Variant: cfg.CloneVariant})
+			}
+		}
 		spec.StaticDir = ac.StaticDirectory()
 		if ac.Static != nil {
 			spec.StaticErrorPage = ac.Static.ErrorPage

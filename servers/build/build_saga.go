@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,9 @@ import (
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/appversion"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -442,7 +446,7 @@ func undoCreateConfigVersion(ctx context.Context, _ createConfigVersionIn, out c
 		return nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
-	if err := deps.builder.ec.Delete(ctx, entity.Id(out.ConfigVersionID)); err != nil {
+	if err := deps.builder.ec.Delete(ctx, entity.Id(out.ConfigVersionID)); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
 		return fmt.Errorf("deleting config version %s: %w", out.ConfigVersionID, err)
 	}
 	return nil
@@ -523,16 +527,20 @@ func undoCreateVersion(ctx context.Context, _ createVersionIn, out createVersion
 		return nil
 	}
 	deps := saga.Get[*buildSagaDeps](ctx)
-	if err := deps.builder.ec.Delete(ctx, entity.Id(out.AppVersionID)); err != nil {
-		return fmt.Errorf("deleting app version %s: %w", out.AppVersionID, err)
+	var version core_v1alpha.AppVersion
+	if err := deps.builder.ec.GetById(ctx, entity.Id(out.AppVersionID), &version); err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return nil
+		}
+		return err
 	}
-	return nil
+	return appversion.DeleteWithPoolsAndWait(ctx, deps.builder.EAS, &version, deps.builder.Log)
 }
 
-// provisionAddons calls into the addons client to materialize the
-// addons declared in app.toml. Skipped for ephemeral deploys (which
-// don't get addons) and when there's no app config at all. The undo
-// is a no-op: provisionAddons handles "already attached" gracefully
+// provisionAddons calls into the addons client to materialize the addons
+// declared in app.toml. Ephemeral deploys share existing addons unless
+// an addon's clone setting requests a version-scoped clone. The undo is a no-op:
+// provisionAddons handles "already attached" gracefully
 // on retry, and removing addons created during a build would surprise
 // users running concurrent ops against the same app.
 
@@ -540,9 +548,7 @@ type provisionAddonsIn struct {
 	AppName        string               `json:"app_name" saga:"app_name"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
-	// AppVersionID is consumed only to anchor this action after
-	// createVersion in the saga DAG; addons are scoped to the app,
-	// not the version, so we don't actually need the ID at runtime.
+	// AppVersionID orders this action after createVersion and scopes opt-in clones.
 	AppVersionID string `json:"app_version_id" saga:"app_version_id"`
 }
 
@@ -551,10 +557,24 @@ type provisionAddonsOut struct {
 }
 
 func provisionAddons(ctx context.Context, in provisionAddonsIn) (provisionAddonsOut, error) {
-	if in.EphemeralLabel != "" || in.AppConfig == nil {
+	deps := saga.Get[*buildSagaDeps](ctx)
+	if in.EphemeralLabel != "" {
+		if len(in.AppConfig.CloneAddons()) == 0 {
+			return provisionAddonsOut{}, nil
+		}
+		appRec, err := deps.builder.appClient.GetByName(ctx, in.AppName)
+		if err != nil {
+			return provisionAddonsOut{}, fmt.Errorf("reading app for addon clones: %w", err)
+		}
+		spec := buildVersionConfig(ConfigInputs{AppConfig: in.AppConfig})
+		if err := addon.RequestClones(ctx, deps.builder.EAS, appRec.ID, entity.Id(in.AppVersionID), spec); err != nil {
+			return provisionAddonsOut{}, fmt.Errorf("requesting addon clones: %w", err)
+		}
 		return provisionAddonsOut{}, nil
 	}
-	deps := saga.Get[*buildSagaDeps](ctx)
+	if in.AppConfig == nil {
+		return provisionAddonsOut{}, nil
+	}
 	if deps.builder.addonsClient == nil {
 		return provisionAddonsOut{}, nil
 	}
@@ -584,6 +604,7 @@ type waitAddonsIn struct {
 	StreamID       string               `json:"stream_id" saga:"stream_id"`
 	AppConfig      *appconfig.AppConfig `json:"app_config,omitempty" saga:"app_config,optional"`
 	EphemeralLabel string               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	AppVersionID   string               `json:"app_version_id" saga:"app_version_id"`
 	Provisioned    saga.Edge            `saga:"addons_provisioned"`
 }
 
@@ -592,19 +613,22 @@ type waitAddonsOut struct {
 }
 
 func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
-	// An ephemeral preview shares the app's addons and is not gated on them;
-	// the launcher holds its pools back the same way it does the app's.
-	if in.EphemeralLabel != "" {
-		return waitAddonsOut{}, nil
-	}
 	expected := expectedAddons(in.AppConfig)
+	var versionID entity.Id
+	if in.EphemeralLabel != "" {
+		expected = nil
+		versionID = entity.Id(in.AppVersionID)
+		for _, name := range in.AppConfig.CloneAddons() {
+			expected = append(expected, expectedAddon{Name: name})
+		}
+	}
 	if len(expected) == 0 {
 		return waitAddonsOut{}, nil
 	}
 
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
-	if b.addonsClient == nil {
+	if in.EphemeralLabel == "" && b.addonsClient == nil {
 		return waitAddonsOut{}, nil
 	}
 
@@ -613,7 +637,7 @@ func waitAddons(ctx context.Context, in waitAddonsIn) (waitAddonsOut, error) {
 		return waitAddonsOut{}, fmt.Errorf("reading app: %w", err)
 	}
 
-	if err := b.awaitAddons(ctx, in.AppName, appRec.ID, expected, deps.statuses.SenderFor(in.StreamID)); err != nil {
+	if err := b.awaitAddons(ctx, in.AppName, appRec.ID, versionID, expected, deps.statuses.SenderFor(in.StreamID)); err != nil {
 		return waitAddonsOut{}, err
 	}
 	return waitAddonsOut{}, nil
@@ -1110,6 +1134,7 @@ func registerBuildSaga(
 	}
 
 	return saga.Define(sagaBuildFromTar).
+		Version(2).ResumesFrom(1).
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).

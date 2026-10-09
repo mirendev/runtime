@@ -486,6 +486,7 @@ func RegisterSharedSaga(registry *saga.Registry, fw *addon.ProviderFramework) er
 
 	cfg := &dbsaga.AddonConfig{AddonName: AddonName, SharedServerName: sharedServerName, Port: mysqlPort, ReadyTimeout: poolReadyTimeout}
 	b := saga.Define("provision-shared-mysql").
+		Version(2).ResumesFrom(1).
 		Using(fw).
 		Using(cfg)
 	saga.UsingAs[dbsaga.ServerCounter](b, mysqlServerCounter{})

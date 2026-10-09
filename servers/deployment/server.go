@@ -9,12 +9,14 @@ import (
 	"time"
 
 	appclient "miren.dev/runtime/api/app"
-	compute "miren.dev/runtime/api/core"
+	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	deployment_v1alpha "miren.dev/runtime/api/deployment/deployment_v1alpha"
 	aes "miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
+	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/appversion"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -44,6 +46,8 @@ type DeploymentServer struct {
 }
 
 var _ deployment_v1alpha.Deployment = (*DeploymentServer)(nil)
+
+var addonWaitCeiling = addon.CloneWaitCeiling
 
 func NewDeploymentServer(log *slog.Logger, eac *entityserver_v1alpha.EntityAccessClient, ec *aes.Client, appClient *appclient.Client, dnsHostname string, secrets secret.Resolver) (*DeploymentServer, error) {
 	return &DeploymentServer{
@@ -716,14 +720,50 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 		ephVersion.EphemeralTtl = ephTTL
 		ephVersion.EphemeralExpiresAt = time.Now().Add(ttlDuration)
 
+		spec, err := coreutil.ResolveConfig(ctx, d.EAC, &ephVersion)
+		if err != nil {
+			results.SetError(fmt.Sprintf("failed to resolve preview config: %v", err))
+			return nil
+		}
+
 		ephName := appName + "-eph-" + idgen.Gen("v")
 		ephVersion.Version = ephName
 
+		// ConfigVersion is owned by one version and deleted with it. Sharing
+		// the source's reference would let preview expiry delete source config.
+		cvID, err := d.EC.Create(ctx, ephName+"-config", &core_v1alpha.ConfigVersion{
+			App: appEntity.ID, Spec: *spec,
+		})
+		if err != nil {
+			results.SetError(fmt.Sprintf("failed to create preview config: %v", err))
+			return nil
+		}
+		ephVersion.ConfigVersion = cvID
+
 		ephID, createErr := d.EC.Create(ctx, ephName, &ephVersion)
 		if createErr != nil {
+			_ = d.EC.Delete(ctx, cvID)
 			d.Log.Error("Failed to create ephemeral version entity", "error", createErr)
 			results.SetError(fmt.Sprintf("failed to create ephemeral version: %v", createErr))
 			return nil
+		}
+		if len(spec.CloneAddons) > 0 {
+			err := addon.RequestClones(ctx, d.EAC, appEntity.ID, ephID, *spec)
+			if err == nil {
+				expected := make([]addon.ExpectedAddon, 0, len(spec.CloneAddons))
+				for _, name := range spec.CloneAddons {
+					expected = append(expected, addon.ExpectedAddon{Name: name})
+				}
+				err = addon.WaitForAssociations(ctx, d.EAC, d.Log, appName, appEntity.ID, ephID, expected, addonWaitCeiling, nil)
+			}
+			if err != nil {
+				ephVersion.ID = ephID
+				if cleanupErr := appversion.DeleteWithPoolsAndWait(context.WithoutCancel(ctx), d.EAC, &ephVersion, d.Log); cleanupErr != nil {
+					d.Log.Warn("retaining failed preview for cleanup retry", "version", ephID, "error", cleanupErr)
+				}
+				results.SetError(fmt.Sprintf("failed to clone addons: %v", err))
+				return nil
+			}
 		}
 
 		d.Log.Info("Created ephemeral version",
@@ -1427,56 +1467,42 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 		Source:         base.Source,
 	}
 
-	if base.ConfigVersion != "" {
-		spec, err := compute.ResolveConfig(ctx, d.EAC, base)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve base config: %w", err)
-		}
-		varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
-		for _, v := range spec.Variables {
-			varMap[v.Key] = v
-		}
-		for _, ev := range envVars {
-			varMap[ev.Key()] = core_v1alpha.ConfigSpecVariables{
-				Key:       ev.Key(),
-				Value:     ev.Value(),
-				Sensitive: ev.Sensitive(),
-				Source:    "manual",
-			}
-		}
-		spec.Variables = make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
-		for _, v := range varMap {
-			spec.Variables = append(spec.Variables, v)
-		}
-
-		configVersion := &core_v1alpha.ConfigVersion{App: base.App, Spec: *spec}
-		configVersionID, err := d.EC.Create(ctx, newVersionName+"-cfg", configVersion)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create derived config version: %w", err)
-		}
-		derived.ConfigVersion = configVersionID
-		derived.Config = core_v1alpha.Config{}
-	} else {
-		varMap := make(map[string]core_v1alpha.Variable)
-		for _, v := range derived.Config.Variable {
-			varMap[v.Key] = v
-		}
-		for _, ev := range envVars {
-			varMap[ev.Key()] = core_v1alpha.Variable{
-				Key:       ev.Key(),
-				Value:     ev.Value(),
-				Sensitive: ev.Sensitive(),
-				Source:    "manual",
-			}
-		}
-		derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(varMap))
-		for _, v := range varMap {
-			derived.Config.Variable = append(derived.Config.Variable, v)
+	spec, err := coreutil.ResolveConfig(ctx, d.EAC, base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve base version config: %w", err)
+	}
+	varMap := make(map[string]core_v1alpha.ConfigSpecVariables)
+	for _, v := range spec.Variables {
+		varMap[v.Key] = v
+	}
+	for _, ev := range envVars {
+		varMap[ev.Key()] = core_v1alpha.ConfigSpecVariables{
+			Key:       ev.Key(),
+			Value:     ev.Value(),
+			Sensitive: ev.Sensitive(),
+			Source:    "manual",
 		}
 	}
+	spec.Variables = make([]core_v1alpha.ConfigSpecVariables, 0, len(varMap))
+	for _, v := range varMap {
+		spec.Variables = append(spec.Variables, v)
+	}
+	// Keep the legacy inline variables in step for older readers.
+	derived.Config.Variable = make([]core_v1alpha.Variable, 0, len(spec.Variables))
+	for _, v := range spec.Variables {
+		derived.Config.Variable = append(derived.Config.Variable, core_v1alpha.Variable(v))
+	}
+	cvID, err := d.EC.Create(ctx, newVersionName+"-config", &core_v1alpha.ConfigVersion{
+		App: base.App, Spec: *spec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create derived config: %w", err)
+	}
+	derived.ConfigVersion = cvID
 
 	id, err := d.EC.Create(ctx, newVersionName, derived)
 	if err != nil {
+		_ = d.EC.Delete(ctx, cvID)
 		return nil, fmt.Errorf("failed to create derived version entity: %w", err)
 	}
 	derived.ID = id

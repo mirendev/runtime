@@ -3,6 +3,7 @@ package addon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/idgen"
@@ -75,6 +77,75 @@ type CreateSandboxPoolSpec struct {
 	// check budget. Parsed via time.ParseDuration (e.g. "60s"). Empty means
 	// use the default (15s). Addons with slow cold-init should set this.
 	PortWaitTimeout string
+}
+
+// OneShotSandboxSpec describes a command that runs once with addon-managed
+// storage attached. The sandbox is retained after exit so a resumed saga can
+// observe the original result instead of executing the command twice.
+type OneShotSandboxSpec struct {
+	Name    string
+	Image   string
+	Command string
+	Env     []string
+	Labels  types.Labels
+	Mounts  []compute_v1alpha.SandboxSpecContainerMount
+	Volumes []compute_v1alpha.SandboxSpecVolume
+}
+
+// RunOneShotSandbox creates an at-most-once sandbox and waits for its command
+// to exit. The caller owns deleting the returned sandbox after durably recording
+// the result.
+func (fw *ProviderFramework) RunOneShotSandbox(ctx context.Context, spec OneShotSandboxSpec, timeout time.Duration) (entity.Id, error) {
+	id := entity.Id("sandbox/" + spec.Name)
+	if _, err := fw.EAC.Get(ctx, id.String()); err != nil {
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			return "", fmt.Errorf("checking one-shot sandbox %s: %w", id, err)
+		}
+		sandbox := &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.PENDING,
+			Spec: compute_v1alpha.SandboxSpec{
+				RestartPolicy: compute_v1alpha.SandboxSpecNEVER,
+				LogAttribute:  metricLabels(spec.Labels),
+				Container: []compute_v1alpha.SandboxSpecContainer{{
+					Name: "addon", Image: spec.Image, Command: spec.Command,
+					Env: spec.Env, Mount: spec.Mounts,
+				}},
+				Volume: spec.Volumes,
+			},
+		}
+		if _, err := fw.EAC.Create(ctx, entity.New(
+			(&core_v1alpha.Metadata{Name: spec.Name, Labels: spec.Labels}).Encode,
+			entity.DBId, id,
+			sandbox.Encode,
+		).Attrs()); err != nil {
+			return "", fmt.Errorf("creating one-shot sandbox %s: %w", id, err)
+		}
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		resp, err := fw.EAC.Get(waitCtx, id.String())
+		if err != nil {
+			return id, fmt.Errorf("reading one-shot sandbox %s: %w", id, err)
+		}
+		var sandbox compute_v1alpha.Sandbox
+		sandbox.Decode(resp.Entity().Entity())
+		if !sandbox.Exit.Empty() {
+			if sandbox.Exit.Code != 0 {
+				return id, fmt.Errorf("one-shot sandbox %s exited with code %d", id, sandbox.Exit.Code)
+			}
+			return id, nil
+		}
+		if sandbox.Status == compute_v1alpha.DEAD || sandbox.Status == compute_v1alpha.STOPPED {
+			return id, fmt.Errorf("one-shot sandbox %s stopped without an exit code", id)
+		}
+		select {
+		case <-waitCtx.Done():
+			return id, fmt.Errorf("timed out waiting for one-shot sandbox %s: %w", id, waitCtx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // CreateSandboxPool creates a fixed-mode SandboxPool entity.

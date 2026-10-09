@@ -102,6 +102,57 @@ func TestResolveRuntimeConfigSuppliesBindingToVersionThatPredatesAddon(t *testin
 		"ResolveConfig feeds the write paths and must not carry the overlay")
 }
 
+func TestResolveRuntimeConfigUsesEphemeralAddonClone(t *testing.T) {
+	f := newOverlayFixture(t)
+	ver := f.version(t, "myapp-preview")
+	ver.EphemeralLabel = "preview"
+	require.NoError(t, f.ec.Patch(f.ctx, ver.ConfigVersion, 0,
+		entity.Component(core_v1alpha.ConfigVersionSpecId, (&core_v1alpha.ConfigSpec{CloneAddons: []string{"miren-postgresql"}}).Encode())))
+	require.NoError(t, f.ec.Update(f.ctx, ver))
+
+	primaryID, err := f.ec.Create(f.ctx, "pg-primary", &addon_v1alpha.AddonAssociation{
+		App: f.appID, Addon: "addon/miren-postgresql", Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "DATABASE_URL", Value: "postgres://primary"}},
+	})
+	require.NoError(t, err)
+	_, err = f.ec.Create(f.ctx, "pg-preview", &addon_v1alpha.AddonAssociation{
+		App: f.appID, Addon: "addon/miren-postgresql", AppVersion: ver.ID, SourceAssociation: primaryID, Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "DATABASE_URL", Value: "postgres://preview"}},
+	})
+	require.NoError(t, err)
+
+	_, err = f.ec.Create(f.ctx, "valkey-primary", &addon_v1alpha.AddonAssociation{
+		App: f.appID, Addon: "addon/miren-valkey", Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "REDIS_URL", Value: "redis://primary"}},
+	})
+	require.NoError(t, err)
+	_, err = f.ec.Create(f.ctx, "valkey-preview", &addon_v1alpha.AddonAssociation{
+		App: f.appID, Addon: "addon/miren-valkey", AppVersion: ver.ID, Status: "active",
+		Variables: []addon_v1alpha.Variables{{Key: "REDIS_URL", Value: "redis://unselected-clone"}},
+	})
+	require.NoError(t, err)
+
+	spec, err := ResolveRuntimeConfig(f.ctx, f.inmem.EAC, ver)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://preview", varsByKey(spec)["DATABASE_URL"].Value)
+	assert.Equal(t, "redis://primary", varsByKey(spec)["REDIS_URL"].Value)
+
+	// Turning cloning off must ignore even an existing version-scoped clone.
+	require.NoError(t, f.ec.Patch(f.ctx, ver.ConfigVersion, 0,
+		entity.Component(core_v1alpha.ConfigVersionSpecId, (&core_v1alpha.ConfigSpec{}).Encode())))
+	spec, err = ResolveRuntimeConfig(f.ctx, f.inmem.EAC, ver)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://primary", varsByKey(spec)["DATABASE_URL"].Value)
+
+	// Normal versions always use the primary, even with the opt-in enabled.
+	require.NoError(t, f.ec.Patch(f.ctx, ver.ConfigVersion, 0,
+		entity.Component(core_v1alpha.ConfigVersionSpecId, (&core_v1alpha.ConfigSpec{CloneAddons: []string{"miren-postgresql"}}).Encode())))
+	ver.EphemeralLabel = ""
+	spec, err = ResolveRuntimeConfig(f.ctx, f.inmem.EAC, ver)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://primary", varsByKey(spec)["DATABASE_URL"].Value)
+}
+
 // TestResolveRuntimeConfigPrefersAssociationOverStoredCopy covers a version that
 // still carries a copy from when provisioning wrote one. The association is the
 // record that gets updated, so it wins.

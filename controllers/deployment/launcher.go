@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/network/network_v1alpha"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
@@ -94,12 +95,21 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	app.Decode(appResp.Entity().Entity())
 	app.ID = ver.App
 
+	spec, err := coreutil.ResolveConfig(ctx, l.EAC, ver)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve config for version %s: %w", ver.Version, err)
+	}
+
 	// Same gate as Reconcile. A pool built now would resolve a config with no
 	// addon variables in it, and every instance would boot without its
 	// database. The activator treats this as a failed on-demand creation and
 	// tries again on the next request; the normal reconcile creates the pool
 	// once the association flips to active.
-	ready, err := l.addonsReady(ctx, ver.App)
+	var addonVersionID entity.Id
+	if ver.EphemeralLabel != "" {
+		addonVersionID = ver.ID
+	}
+	ready, err := l.addonsReady(ctx, ver.App, addonVersionID, spec.CloneAddons)
 	if err != nil {
 		return "", fmt.Errorf("checking addon readiness for app %s: %w", ver.App, err)
 	}
@@ -107,10 +117,9 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 		return "", fmt.Errorf("addons for app %s are still provisioning", ver.App)
 	}
 
-	// Resolve config
-	spec, err := coreutil.ResolveRuntimeConfig(ctx, l.EAC, ver)
+	spec, err = coreutil.ResolveRuntimeConfig(ctx, l.EAC, ver)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve config for version %s: %w", ver.Version, err)
+		return "", fmt.Errorf("failed to resolve runtime config for version %s: %w", ver.Version, err)
 	}
 	l.injectAutoMountLocalDisks(spec, &app)
 
@@ -163,7 +172,7 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 
 	span.SetAttributes(attribute.String("miren.app.active_version", current.ActiveVersion.String()))
 
-	ready, err := l.addonsReady(ctx, current.ID)
+	ready, err := l.addonsReady(ctx, current.ID, "", nil)
 	if err != nil {
 		l.Log.Error("failed to check addon readiness", "app", current.ID, "error", err)
 	} else if !ready {
@@ -182,19 +191,40 @@ func (l *Launcher) Reconcile(ctx context.Context, app *core_v1alpha.App, meta *e
 // addonsReady returns true if the app has no pending or provisioning addon associations.
 // Apps without any addons are always considered ready.
 //
-// An association in error does not hold the app. Error is terminal in the
+// Selected clones must be active; missing or failed clones never fall back to
+// the primary. A shared association in error does not hold the app. Error is terminal in the
 // addon controller, so blocking on it would turn every later env change or
 // rollback on that app into a silent no-op. The deploy path fails loudly on
 // error before the version is ever activated; here it is only worth a warning.
-func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, error) {
+func (l *Launcher) addonsReady(ctx context.Context, appID, versionID entity.Id, cloneAddons []string) (bool, error) {
 	results, err := l.EAC.List(ctx, entity.Ref(addon_v1alpha.AddonAssociationAppId, appID))
 	if err != nil {
 		return false, fmt.Errorf("listing addon associations: %w", err)
 	}
 
+	clones := make(map[entity.Id]addon_v1alpha.AddonAssociation)
+	if versionID != "" {
+		for _, ent := range results.Values() {
+			var assoc addon_v1alpha.AddonAssociation
+			assoc.Decode(ent.Entity())
+			if assoc.AppVersion == versionID {
+				clones[assoc.SourceAssociation] = assoc
+			}
+		}
+	}
 	for _, ent := range results.Values() {
 		var assoc addon_v1alpha.AddonAssociation
 		assoc.Decode(ent.Entity())
+		if assoc.AppVersion != "" {
+			continue
+		}
+		if versionID != "" && slices.Contains(cloneAddons, addon.NameFromRef(assoc.Addon)) {
+			clone, ok := clones[assoc.ID]
+			if assoc.Status != "active" || !ok || clone.Status != "active" {
+				return false, nil
+			}
+			continue
+		}
 
 		switch assoc.Status {
 		case "pending", "provisioning":
@@ -205,7 +235,6 @@ func (l *Launcher) addonsReady(ctx context.Context, appID entity.Id) (bool, erro
 				"association", assoc.ID, "app", appID, "error", assoc.ErrorMessage)
 		}
 	}
-
 	return true, nil
 }
 

@@ -123,15 +123,34 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		return c.setError(meta, fmt.Errorf("resolving app name: %w", err))
 	}
 
-	// Step 2: Call provider.Provision
+	// Step 2: Call provider.Provision, or let the provider coordinate an
+	// ephemeral clone from its primary association.
 	app := addon.App{
 		ID:   assoc.App,
 		Name: appName,
 	}
-	result, err := provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, addon.Variant{
+	variant := addon.Variant{
 		Name:   assoc.Variant,
 		Config: variantConfig,
-	})
+	}
+	var result *addon.ProvisionResult
+	if assoc.SourceAssociation != "" {
+		cloner, ok := provider.(addon.AddonCloner)
+		if !ok {
+			return c.setError(meta, fmt.Errorf("addon %q does not support cloning", addonName))
+		}
+		sourceResp, sourceErr := c.eac.Get(ctx, assoc.SourceAssociation.String())
+		if sourceErr != nil {
+			return c.setError(meta, fmt.Errorf("reading clone source association: %w", sourceErr))
+		}
+		var source addon_v1alpha.AddonAssociation
+		source.Decode(sourceResp.Entity().Entity())
+		result, err = cloner.Clone(ctx,
+			addon.AssociationFrom(&source, sourceResp.Entity().Entity()),
+			addon.AssociationFrom(assoc, meta.Entity), app, variant)
+	} else {
+		result, err = provider.Provision(ctx, addon.AssociationFrom(assoc, meta.Entity), app, variant)
+	}
 	if err != nil {
 		// A provisioning saga this binary refused to resume has run or undone
 		// nothing, and the remedy is a release that can resume it. That
@@ -142,6 +161,15 @@ func (c *Controller) provision(ctx context.Context, assoc *addon_v1alpha.AddonAs
 		// operator abandons it.
 		if errors.Is(err, saga.ErrIncompatibleDefinition) {
 			return fmt.Errorf("provisioning: %w", err)
+		}
+		if assoc.SourceAssociation != "" {
+			exec, loadErr := c.sagaStorage.Get(ctx, addon.CloneExecutionID(assoc.ID))
+			if loadErr == nil && exec.Status != saga.StatusFailed {
+				return fmt.Errorf("clone provisioning incomplete: %w", err)
+			}
+			if loadErr != nil && !errors.Is(loadErr, saga.ErrExecutionNotFound) {
+				return fmt.Errorf("reading clone execution: %w", loadErr)
+			}
 		}
 		return c.setError(meta, fmt.Errorf("provisioning: %w", err))
 	}
@@ -270,16 +298,20 @@ func (c *Controller) deprovision(ctx context.Context, assoc *addon_v1alpha.Addon
 	}
 
 	// Step 1: Call provider.Deprovision
-	err := provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
+	var err error
+	_, supportsCloning := provider.(addon.AddonCloner)
+	if assoc.SourceAssociation == "" || supportsCloning {
+		err = provider.Deprovision(ctx, addon.AssociationFrom(assoc, meta.Entity))
+	}
 	if err != nil {
-		// Try to set error status, but don't fail if the update is rejected
-		// (e.g., the app was deleted and the entity server rejects the patch
-		// due to a dangling app reference). The entity stays at "deprovisioning"
-		// so the controller will retry.
-		if setErr := c.setError(meta, fmt.Errorf("deprovisioning: %w", err)); setErr != nil {
-			c.log.Warn("failed to set error status during deprovision", "error", setErr)
+		// Keep deprovisioning retryable; terminal error would abandon resources.
+		err = fmt.Errorf("deprovisioning: %w", err)
+		if assoc.ErrorMessage != err.Error() {
+			if updateErr := meta.Update((&addon_v1alpha.AddonAssociation{ErrorMessage: err.Error()}).Encode()); updateErr != nil {
+				return fmt.Errorf("recording teardown error: %w (original: %v)", updateErr, err)
+			}
 		}
-		return fmt.Errorf("deprovisioning: %w", err)
+		return err
 	}
 
 	// Step 2: Delete the association entity.

@@ -22,6 +22,36 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
+func TestBuildVersionConfigCloneAddons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config *appconfig.AppConfig
+		want   []string
+	}{
+		{"missing config", nil, nil},
+		{"omitted", &appconfig.AppConfig{}, nil},
+		{"mixed", &appconfig.AppConfig{Addons: map[string]*appconfig.AddonConfig{
+			"miren-postgresql": {Clone: true, CloneVariant: "shared"}, "miren-valkey": {Clone: false, CloneVariant: "small"},
+		}}, []string{"miren-postgresql"}},
+		{"variant suffix", &appconfig.AppConfig{Addons: map[string]*appconfig.AddonConfig{
+			"miren-postgresql:small": {Clone: true, CloneVariant: "shared"}, "miren-valkey:small": {Clone: false},
+		}}, []string{"miren-postgresql"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := buildVersionConfig(ConfigInputs{
+				AppConfig:      tc.config,
+				ExistingConfig: core_v1alpha.ConfigSpec{CloneAddons: []string{"miren-valkey"}},
+			})
+			assert.Equal(t, tc.want, spec.CloneAddons)
+			if len(tc.want) > 0 {
+				assert.Equal(t, []core_v1alpha.ConfigSpecCloneAddonVariants{{Name: "miren-postgresql", Variant: "shared"}}, spec.CloneAddonVariants)
+			} else {
+				assert.Empty(t, spec.CloneAddonVariants)
+			}
+		})
+	}
+}
+
 func TestBuildVariablesFromAppConfig(t *testing.T) {
 	tests := []struct {
 		name          string

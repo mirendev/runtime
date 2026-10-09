@@ -20,6 +20,15 @@ func TestSagaDefinitionsLocked(t *testing.T) {
 	require.NoError(t, RegisterRotateSharedUserSaga(registry, nil, nil))
 	require.NoError(t, RegisterRotateSharedSuperuserSaga(registry, nil, nil))
 	require.NoError(t, RegisterRotateDedicatedSaga(registry, nil, nil))
+	require.NoError(t, registerCloneSharedSaga(registry, nil))
+	require.NoError(t, registerCloneDedicatedSaga(registry, nil))
+	cloneRegistry := saga.NewRegistry()
+	require.NoError(t, registerCloneDedicatedToSharedSaga(cloneRegistry, nil))
+	for _, def := range cloneRegistry.Definitions() {
+		if _, exists := registry.Get(def.Name); !exists {
+			require.NoError(t, registry.Register(def))
+		}
+	}
 
 	sagalock.Check(t, registry)
 }

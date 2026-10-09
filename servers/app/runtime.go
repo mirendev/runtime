@@ -260,6 +260,9 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		for addonResults.Next() {
 			var assoc addon_v1alpha.AddonAssociation
 			addonResults.Read(&assoc)
+			if assoc.AppVersion != "" {
+				continue
+			}
 
 			instance := &app_v1alpha.AddonInstance{}
 			instance.SetId(string(assoc.ID))

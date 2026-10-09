@@ -1,6 +1,9 @@
 {
   "build-from-tar": {
-    "version": 1,
+    "version": 2,
+    "resumes_from": [
+      1
+    ],
     "actions": {
       "activate-deployment": {
         "inputs": [
@@ -291,6 +294,7 @@
           "addons_provisioned",
           "app_config",
           "app_name",
+          "app_version_id",
           "ephemeral_label",
           "stream_id"
         ],
@@ -298,6 +302,7 @@
           "addons_ready"
         ],
         "dependencies": [
+          "create-version",
           "load-source",
           "provision-addons"
         ]

@@ -951,15 +951,15 @@ func routeService(route *ingress_v1alpha.HttpRoute) string {
 }
 
 // leaseCacheKey returns the lease cache key for a request. A request that
-// resolved an ephemeral version is scoped per label so it never shares a lease
-// with the active version or another label. Everything else, including a
+// resolved an ephemeral version is scoped by version ID so replacing a label
+// cannot reuse the old preview's lease. Everything else, including a
 // wildcard subdomain that fell back to the active version, shares the app-service
 // base key so those requests reuse one active-version lease pool instead of
 // fragmenting into a per-tenant entry. Every key includes the selected service.
-func leaseCacheKey(appID entity.Id, service, ephemeralLabel string, ephemeralResolved bool) string {
+func leaseCacheKey(appID entity.Id, service string, versionID entity.Id, ephemeralResolved bool) string {
 	key := appID.String() + ":service:" + service
 	if ephemeralResolved {
-		return key + ":eph:" + ephemeralLabel
+		return key + ":eph:" + versionID.String()
 	}
 	return key
 }
@@ -1008,11 +1008,11 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 	// Resolve the version identity up front so the lease cache key reflects
 	// the version actually served. A resolved ephemeral version scopes the key
-	// per-label; an unresolved label on a wildcard route falls back to the
+	// per-version; an unresolved label on a wildcard route falls back to the
 	// active version and shares its lease pool rather than fragmenting into a
 	// per-tenant entry. Label-free requests skip the lookup and stay on the
 	// fast active path.
-	leaseKey := leaseCacheKey(targetAppId, service, ephemeralLabel, target.ephemeralResolved)
+	leaseKey := leaseCacheKey(targetAppId, service, target.version.ID, target.ephemeralResolved)
 
 	// Retry loop: if a cached lease fails with a connection error (stale sandbox),
 	// invalidate all cached leases and retry once to acquire a fresh lease.

@@ -37,6 +37,13 @@ kinds:
       type: ref
       indexed: true
       tags: [dev.miren.app_ref]
+    app_version:
+      type: ref
+      indexed: true
+      doc: Ephemeral app version this cloned association belongs to; empty for the app's primary association
+    source_association:
+      type: ref
+      doc: Primary association this association was cloned from
     addon:
       type: ref
       indexed: true

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	testutils "miren.dev/runtime/pkg/entity/testutils"
 )
@@ -116,7 +117,11 @@ func TestReplaceExisting(t *testing.T) {
 			EphemeralLabel: "feat-x",
 			EphemeralTtl:   "24h",
 		}
-		_, err := inmem.Client.Create(ctx, "myapp-eph1", v)
+		versionID, err := inmem.Client.Create(ctx, "myapp-eph1", v)
+		require.NoError(t, err)
+		cloneID, err := inmem.Client.Create(ctx, "myapp-eph1-postgresql", &addon_v1alpha.AddonAssociation{
+			App: appID, AppVersion: versionID, Addon: "addon/miren-postgresql", Status: "active",
+		})
 		require.NoError(t, err)
 
 		// Verify it exists
@@ -124,14 +129,26 @@ func TestReplaceExisting(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, found)
 
-		// Replace it
-		err = ReplaceExisting(ctx, inmem.EAC, appID, "feat-x", log)
+		// Simulate asynchronous addon teardown while replacement waits.
+		done := make(chan error, 1)
+		go func() { done <- ReplaceExisting(ctx, inmem.EAC, appID, "feat-x", log) }()
+		require.Eventually(t, func() bool {
+			var clone addon_v1alpha.AddonAssociation
+			return inmem.Client.GetById(ctx, cloneID, &clone) == nil && clone.Status == "deprovisioning"
+		}, 5*time.Second, 10*time.Millisecond)
+		found, err = LookupByLabel(ctx, inmem.EAC, appID, "feat-x")
 		require.NoError(t, err)
+		require.NotNil(t, found, "retain the owner until addon teardown completes")
+		require.NoError(t, inmem.Client.Delete(ctx, cloneID))
+		require.NoError(t, <-done)
 
 		// Verify it's gone
 		found, err = LookupByLabel(ctx, inmem.EAC, appID, "feat-x")
 		require.NoError(t, err)
 		require.Nil(t, found)
+
+		var clone addon_v1alpha.AddonAssociation
+		require.Error(t, inmem.Client.GetById(ctx, cloneID, &clone))
 	})
 
 	t.Run("no-op when label does not exist", func(t *testing.T) {

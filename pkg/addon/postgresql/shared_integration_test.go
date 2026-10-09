@@ -3,6 +3,7 @@ package postgresql_test
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,9 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/postgresql"
@@ -61,6 +64,9 @@ func TestPostgreSQL_Integration(t *testing.T) {
 	eac := entityserver_v1alpha.NewEntityAccessClient(client)
 	ec := entityserver.NewClient(log, eac)
 	fw := addon.NewProviderFramework(log, ec, eac, saga.NewMemoryStorage())
+	execConn, err := rs.Connect("localhost:8443", "dev.miren.runtime/exec")
+	require.NoError(t, err)
+	fw.Exec = exec_v1alpha.NewSandboxExecClient(execConn)
 
 	newEnv := func() *integrationEnv {
 		registry := saga.NewRegistry()
@@ -219,6 +225,187 @@ func TestPostgreSQL_Integration(t *testing.T) {
 		}
 		assert.Contains(t, secondEnvMap, "DATABASE_URL")
 		assert.Equal(t, "second_app", secondEnvMap["PGDATABASE"], "second app should have its own database")
+	})
+
+	t.Run("CloneSharedPostgreSQLKeepsPrimaryAvailable", func(t *testing.T) {
+		provider := postgresql.NewProvider(fw)
+		app := addon.App{Name: strings.Repeat("a", 63)}
+		variant := addon.Variant{Name: "shared"}
+		source := addon.AddonAssociation{ID: "assoc-clone-source", Variant: "shared"}
+		provisioned, err := provider.Provision(ctx, source, app, variant)
+		require.NoError(t, err)
+		source.Entity = entity.New(entity.DBId, source.ID, provisioned.Attrs)
+		t.Cleanup(func() { assert.NoError(t, provider.Deprovision(ctx, source)) })
+		sourceEnv := make(map[string]string)
+		for _, v := range provisioned.EnvVars {
+			sourceEnv[v.Key] = v.Value
+		}
+		conn, err := pgx.Connect(ctx, sourceEnv["DATABASE_URL"])
+		require.NoError(t, err)
+		_, err = conn.Exec(ctx, "CREATE TABLE clone_values (id BIGSERIAL PRIMARY KEY, value INTEGER NOT NULL); INSERT INTO clone_values (value) VALUES (17)")
+		require.NoError(t, err)
+
+		target := addon.AddonAssociation{ID: "assoc-clone-target", Variant: "shared", SourceAssociation: source.ID}
+		cloned, err := provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err)
+		target.Entity = entity.New(entity.DBId, target.ID, cloned.Attrs)
+		cloneEnv := make(map[string]string)
+		for _, v := range cloned.EnvVars {
+			cloneEnv[v.Key] = v.Value
+		}
+		cloneConn, err := pgx.Connect(ctx, cloneEnv["DATABASE_URL"])
+		require.NoError(t, err)
+		_, err = cloneConn.Exec(ctx, "INSERT INTO clone_values (value) VALUES (29)")
+		require.NoError(t, err, "cloned tables and sequences must be writable by the clone role")
+		var total int
+		require.NoError(t, cloneConn.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 46, total)
+		require.NoError(t, cloneConn.Close(ctx))
+
+		defer conn.Close(ctx)
+		var owner string
+		require.NoError(t, conn.QueryRow(ctx, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()").Scan(&owner))
+		require.Equal(t, sourceEnv["PGUSER"], owner, "cloning must not transfer or disconnect the primary database")
+		require.NoError(t, conn.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 17, total)
+
+		_, err = provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err, "replaying a completed clone must not repeat the restore")
+		// Lose the role action's checkpoint, leaving its committed SQL behind.
+		exec, err := fw.Storage.Get(ctx, addon.CloneExecutionID(target.ID))
+		require.NoError(t, err)
+		delete(exec.ExecutedActions, "create-clone-shared-user")
+		exec.Status = saga.StatusRunning
+		require.NoError(t, fw.Storage.Save(ctx, exec))
+		_, err = provider.Clone(ctx, source, target, app, variant)
+		require.NoError(t, err, "a role owned by this clone must replay after a lost checkpoint")
+		second := addon.AddonAssociation{ID: "assoc-clone-targex", Variant: "shared", SourceAssociation: source.ID}
+		secondResult, err := provider.Clone(ctx, source, second, app, variant)
+		require.NoError(t, err, "two previews of a long app name must not share resources")
+		second.Entity = entity.New(entity.DBId, second.ID, secondResult.Attrs)
+		var secondData addon_v1alpha.PostgresqlSharedData
+		secondData.Decode(second.Entity)
+		require.NotEqual(t, cloneEnv["PGDATABASE"], secondData.DatabaseName)
+		require.NoError(t, provider.Deprovision(ctx, second))
+
+		var sourceData addon_v1alpha.PostgresqlSharedData
+		sourceData.Decode(source.Entity)
+		var server addon_v1alpha.PostgresServer
+		require.NoError(t, ec.GetById(ctx, sourceData.PostgresServer, &server))
+		admin, err := pgx.Connect(ctx, fmt.Sprintf("postgres://postgres:%s@%s:5432/postgres", server.SuperuserPassword, sourceEnv["PGHOST"]))
+		require.NoError(t, err)
+		defer admin.Close(ctx)
+		foreignRole := strings.Repeat("a", 50) + "_abcdefabcdef"
+		_, err = admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{foreignRole}.Sanitize()+" LOGIN PASSWORD 'foreign-test-password'")
+		require.NoError(t, err)
+		defer func() {
+			_, err := admin.Exec(ctx, "DROP ROLE "+pgx.Identifier{foreignRole}.Sanitize())
+			assert.NoError(t, err)
+		}()
+		var originalHash, currentHash string
+		require.NoError(t, admin.QueryRow(ctx, "SELECT rolpassword FROM pg_authid WHERE rolname = $1", foreignRole).Scan(&originalHash))
+		_, err = provider.Clone(ctx, source, addon.AddonAssociation{
+			ID: "addon_association/clone-abcdefabcdef", Variant: "shared", SourceAssociation: source.ID,
+		}, app, variant)
+		require.ErrorContains(t, err, "not owned by this clone")
+		require.NoError(t, admin.QueryRow(ctx, "SELECT rolpassword FROM pg_authid WHERE rolname = $1", foreignRole).Scan(&currentHash))
+		require.True(t, originalHash == currentHash, "rejecting an unrelated role must not rotate its password")
+		// Simulate a crash after saga completion but before saving association attrs.
+		target.Entity = entity.New(entity.DBId, target.ID)
+		require.NoError(t, provider.Deprovision(ctx, target), "clone cleanup must recover resource ownership from the saga")
+		var roleCount int
+		require.NoError(t, conn.QueryRow(ctx, "SELECT COUNT(*) FROM pg_roles WHERE rolname = $1", cloneEnv["PGUSER"]).Scan(&roleCount))
+		require.Zero(t, roleCount)
+		freshPrimary, err := pgx.Connect(ctx, sourceEnv["DATABASE_URL"])
+		require.NoError(t, err, "primary credentials must still authenticate after preview cleanup")
+		defer freshPrimary.Close(ctx)
+		require.NoError(t, freshPrimary.QueryRow(ctx, "SELECT SUM(value) FROM clone_values").Scan(&total))
+		require.Equal(t, 17, total)
+	})
+
+	t.Run("CloneDedicatedCredentials", func(t *testing.T) {
+		provider := postgresql.NewProvider(fw)
+		app := addon.App{Name: "clone-dedicated"}
+		variant := addon.Variant{Name: "small"}
+		source := addon.AddonAssociation{ID: "addon_association/clone-dedicated-source", Variant: "small"}
+		provisioned, err := provider.Provision(ctx, source, app, variant)
+		require.NoError(t, err)
+		source.Entity = entity.New(entity.DBId, source.ID, provisioned.Attrs)
+		t.Cleanup(func() { assert.NoError(t, provider.Deprovision(ctx, source)) })
+		var primaryConfig *pgx.ConnConfig
+		for _, v := range provisioned.EnvVars {
+			if v.Key == "DATABASE_URL" {
+				primaryConfig, err = pgx.ParseConfig(v.Value)
+			}
+		}
+		require.NoError(t, err)
+		require.NotNil(t, primaryConfig)
+		primary, err := pgx.ConnectConfig(ctx, primaryConfig)
+		require.NoError(t, err)
+		defer primary.Close(ctx)
+		_, err = primary.Exec(ctx, "CREATE TABLE clone_proof (value integer); INSERT INTO clone_proof VALUES (17)")
+		require.NoError(t, err)
+		for _, targetVariant := range []string{"small", "shared"} {
+			t.Run(targetVariant, func(t *testing.T) {
+				target := addon.AddonAssociation{ID: entity.Id("addon_association/clone-credential-" + targetVariant), Variant: targetVariant, SourceAssociation: source.ID}
+				cloned, err := provider.Clone(ctx, source, target, app, addon.Variant{Name: targetVariant})
+				require.NoError(t, err)
+				target.Entity = entity.New(entity.DBId, target.ID, cloned.Attrs)
+				t.Cleanup(func() { assert.NoError(t, provider.Deprovision(ctx, target)) })
+				var cloneConfig *pgx.ConnConfig
+				for _, v := range cloned.EnvVars {
+					if v.Key == "DATABASE_URL" {
+						cloneConfig, err = pgx.ParseConfig(v.Value)
+						require.NoError(t, err)
+					}
+				}
+				require.NotNil(t, cloneConfig)
+				require.NotEqual(t, primaryConfig.Password, cloneConfig.Password)
+				clone, err := pgx.ConnectConfig(ctx, cloneConfig)
+				require.NoError(t, err)
+				var value int
+				require.NoError(t, clone.QueryRow(ctx, "SELECT value FROM clone_proof").Scan(&value))
+				require.Equal(t, 17, value)
+				require.NoError(t, clone.Close(ctx))
+				badPrimary := primaryConfig.Copy()
+				badPrimary.Password = cloneConfig.Password
+				conn, err := pgx.ConnectConfig(ctx, badPrimary)
+				if conn != nil {
+					conn.Close(ctx)
+				}
+				require.ErrorContains(t, err, "password authentication failed")
+				badClone := cloneConfig.Copy()
+				badClone.Password = primaryConfig.Password
+				conn, err = pgx.ConnectConfig(ctx, badClone)
+				if conn != nil {
+					conn.Close(ctx)
+				}
+				require.ErrorContains(t, err, "password authentication failed")
+				if targetVariant == "small" {
+					var data addon_v1alpha.PostgresqlDedicatedData
+					data.Decode(target.Entity)
+					var server addon_v1alpha.PostgresServer
+					require.NoError(t, ec.GetById(ctx, data.PostgresServer, &server))
+					require.Equal(t, cloneConfig.Password, server.SuperuserPassword)
+					var pool compute_v1alpha.SandboxPool
+					require.NoError(t, ec.GetById(ctx, server.SandboxPool, &pool))
+					for _, container := range pool.SandboxSpec.Container {
+						require.Contains(t, container.Env, "POSTGRES_PASSWORD="+cloneConfig.Password)
+						require.NotContains(t, container.Env, "POSTGRES_PASSWORD="+primaryConfig.Password)
+					}
+					// Lose the ALTER checkpoint, not its committed database change.
+					execution, err := fw.Storage.Get(ctx, addon.CloneExecutionID(target.ID))
+					require.NoError(t, err)
+					delete(execution.ExecutedActions, "rotate-clone-credentials")
+					delete(execution.ExecutedActions, "update-dedicated-server")
+					execution.Status = saga.StatusRunning
+					require.NoError(t, fw.Storage.Save(ctx, execution))
+				}
+				replayed, err := provider.Clone(ctx, source, target, app, addon.Variant{Name: targetVariant})
+				require.NoError(t, err)
+				require.Equal(t, cloned.EnvVars, replayed.EnvVars)
+			})
+		}
 	})
 
 	// Provisions a dedicated server and rotates its single role live, proving the
