@@ -54,7 +54,7 @@ func (b *ipDiscoveryBoot) start(context.Context) (ipDiscoveryBootOutput, error) 
 		for _, addr := range discovery.Addresses {
 			ip := net.ParseIP(addr.IP)
 			if ip != nil && !ip.IsLinkLocalUnicast() {
-				result.ipSet.AddDiscoveredFrom(ip, addr.Interface)
+				result.ipSet.AddDiscoveredAddress(addr)
 			}
 		}
 		b.inputs.log.Info("discovered IPs", "addresses", len(discovery.Addresses))

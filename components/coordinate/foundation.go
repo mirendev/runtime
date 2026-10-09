@@ -23,6 +23,7 @@ import (
 	deploymentattemptsctrl "miren.dev/runtime/controllers/deploymentattempts"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/clusternetwork"
 	"miren.dev/runtime/pkg/entity"
 	entityexport "miren.dev/runtime/pkg/entity/export"
 	"miren.dev/runtime/pkg/entity/schema"
@@ -787,8 +788,8 @@ func (c *Foundation) PrepareAppData(ctx context.Context) error {
 // same filtering rules as the advertised API addresses. Routes through
 // ComputeAdvertise so the AutocertController's DNS sanity check honors
 // per-family netcheck state (no leaking the source IP when its family has
-// zero reachable ports) and the CGNAT filter (no advertising tailnet
-// addresses as "public").
+// zero reachable ports) and its classification (an overlay or CGNAT address
+// is never "public").
 func (c *Foundation) PublicIPs() []net.IP {
 	c.netcheckMu.RLock()
 	netcheck := c.netcheckResult
@@ -805,7 +806,7 @@ func (c *Foundation) PublicIPs() []net.IP {
 		if !cand.Included || cand.IP == nil {
 			continue
 		}
-		if cand.Classification != "global-unicast" {
+		if cand.Class != clusternetwork.ClassPublic {
 			continue
 		}
 		s := cand.IP.String()

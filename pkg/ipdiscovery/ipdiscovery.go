@@ -15,12 +15,24 @@ type Discovery struct {
 	Addresses []Address `json:"addresses"`
 }
 
+// NetcheckInterface is the Interface recorded on addresses netcheck observed
+// rather than read off a local link. It names no real interface.
+const NetcheckInterface = "netcheck"
+
 // Address represents an IP address associated with a network interface
 type Address struct {
 	Interface string `json:"interface"`
 	IP        string `json:"ip"`
 	Network   string `json:"network"`
 	IsIPv6    bool   `json:"is_ipv6"`
+
+	// LinkType is the kernel's name for the kind of link the address sits
+	// on ("device", "tuntap", "wireguard", "bridge", …), empty where the
+	// platform can't say. Tun and tap devices both report "tuntap".
+	LinkType string `json:"link_type,omitempty"`
+	// PointToPoint is set for links with no broadcast domain, which is how
+	// tunnels (tun devices, WireGuard) present themselves.
+	PointToPoint bool `json:"point_to_point,omitempty"`
 }
 
 // Options configures IP discovery behavior.
@@ -49,6 +61,8 @@ func Discover(ctx context.Context, log *slog.Logger, opts Options) (*Discovery, 
 		if err != nil {
 			continue
 		}
+		linkType := linkTypeOf(iface.Name)
+		p2p := iface.Flags&net.FlagPointToPoint != 0
 
 		for _, addr := range addrs {
 			var ip net.IP
@@ -74,6 +88,9 @@ func Discover(ctx context.Context, log *slog.Logger, opts Options) (*Discovery, 
 				IP:        ip.String(),
 				Network:   network,
 				IsIPv6:    ip.To4() == nil,
+
+				LinkType:     linkType,
+				PointToPoint: p2p,
 			}
 
 			discovery.Addresses = append(discovery.Addresses, address)
@@ -94,7 +111,7 @@ func Discover(ctx context.Context, log *slog.Logger, opts Options) (*Discovery, 
 				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
 					log.Info("discovered public IP via netcheck", "ip", ip)
 					discovery.Addresses = append(discovery.Addresses, Address{
-						Interface: "netcheck",
+						Interface: NetcheckInterface,
 						IP:        ip.String(),
 						IsIPv6:    ip.To4() == nil,
 					})

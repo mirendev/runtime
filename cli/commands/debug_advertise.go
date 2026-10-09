@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"time"
 
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/pkg/cloudauth"
+	"miren.dev/runtime/pkg/clusternetwork"
 	"miren.dev/runtime/pkg/ipdiscovery"
 )
 
@@ -73,8 +75,15 @@ func DebugAdvertise(ctx *Context, opts struct {
 			humanInfo("  %-15s %-40s [skipped: link-local]", a.Interface, a.IP)
 			continue
 		}
-		humanInfo("  %-15s %-40s (discovered)", a.Interface, a.IP)
-		ipSet.AddDiscoveredFrom(ip, a.Interface)
+		link := a.LinkType
+		if link == "" {
+			link = "-"
+		}
+		if a.PointToPoint {
+			link += ",p2p"
+		}
+		humanInfo("  %-15s %-40s %-14s (discovered)", a.Interface, a.IP, link)
+		ipSet.AddDiscoveredAddress(a)
 	}
 
 	for _, s := range opts.AdditionalIPs {
@@ -108,7 +117,7 @@ func DebugAdvertise(ctx *Context, opts struct {
 	}
 	humanInfo("")
 
-	candidates, final := coordinate.ComputeAdvertise(coordinate.AdvertiseInput{
+	candidates, advertised := coordinate.ComputeAdvertise(coordinate.AdvertiseInput{
 		ListenAddr: listenAddr,
 		IPs:        ipSet.All(),
 		Netcheck:   netcheckResult,
@@ -116,30 +125,38 @@ func DebugAdvertise(ctx *Context, opts struct {
 
 	if opts.IsJSON() {
 		type candidateJSON struct {
-			Source         string `json:"source"`
-			HostPort       string `json:"host_port"`
-			IP             string `json:"ip,omitempty"`
-			Interface      string `json:"interface,omitempty"`
-			Classification string `json:"classification,omitempty"`
-			Included       bool   `json:"included"`
-			Reason         string `json:"reason"`
+			Source    string `json:"source"`
+			HostPort  string `json:"host_port"`
+			IP        string `json:"ip,omitempty"`
+			Interface string `json:"interface,omitempty"`
+			Range     string `json:"range,omitempty"`
+			Class     string `json:"class,omitempty"`
+			Label     string `json:"label,omitempty"`
+			Included  bool   `json:"included"`
+			Reason    string `json:"reason"`
 		}
 		type output struct {
 			Candidates []candidateJSON `json:"candidates"`
 			Advertised []string        `json:"advertised"`
+			// AdvertisedDetails is exactly what the cluster-network report
+			// sends as api_address_details.
+			AdvertisedDetails []clusternetwork.AdvertisedAddress `json:"advertised_details"`
 		}
 		out := output{
-			Candidates: make([]candidateJSON, len(candidates)),
-			Advertised: final,
+			Candidates:        make([]candidateJSON, len(candidates)),
+			Advertised:        coordinate.HostPorts(advertised),
+			AdvertisedDetails: coordinate.WireDetails(advertised),
 		}
 		for i, c := range candidates {
 			out.Candidates[i] = candidateJSON{
-				Source:         c.Source,
-				HostPort:       c.HostPort,
-				Interface:      c.Interface,
-				Classification: c.Classification,
-				Included:       c.Included,
-				Reason:         c.Reason,
+				Source:    c.Source,
+				HostPort:  c.HostPort,
+				Interface: c.Interface,
+				Range:     c.Range,
+				Class:     c.Class,
+				Label:     c.Label,
+				Included:  c.Included,
+				Reason:    c.Reason,
 			}
 			if c.IP != nil {
 				out.Candidates[i].IP = c.IP.String()
@@ -150,25 +167,22 @@ func DebugAdvertise(ctx *Context, opts struct {
 
 	ctx.Info("Step 3: per-candidate classification and inclusion decision")
 	ctx.Info("")
-	ctx.Info("  %-12s %-40s %-12s %-16s %-10s %s", "SOURCE", "IP:PORT", "IFACE", "CLASS", "DECISION", "REASON")
-	ctx.Info("  %s", "-------------------------------------------------------------------------------------------------------------------------")
+	ctx.Info("  %-12s %-40s %-12s %-12s %-16s %-10s %-10s %s", "SOURCE", "IP:PORT", "IFACE", "RANGE", "CLASS", "LABEL", "DECISION", "REASON")
+	ctx.Info("  %s", strings.Repeat("-", 150))
 	for _, c := range candidates {
 		decision := "SKIPPED"
 		if c.Included {
 			decision = "ADVERTISED"
 		}
-		iface := c.Interface
-		if iface == "" {
-			iface = "-"
-		}
-		ctx.Info("  %-12s %-40s %-12s %-16s %-10s %s",
-			c.Source, c.HostPort, iface, c.Classification, decision, c.Reason)
+		ctx.Info("  %-12s %-40s %-12s %-12s %-16s %-10s %-10s %s",
+			c.Source, c.HostPort, dashIfEmpty(c.Interface), dashIfEmpty(c.Range),
+			dashIfEmpty(c.Class), dashIfEmpty(c.Label), decision, c.Reason)
 	}
 
 	ctx.Info("")
-	ctx.Info("Final advertised list (%d entries):", len(final))
-	for _, a := range final {
-		ctx.Info("  %s", a)
+	ctx.Info("Final advertised list (%d entries):", len(advertised))
+	for _, a := range advertised {
+		ctx.Info("  %-40s %s", a.HostPort, a.Class)
 	}
 
 	return nil
@@ -193,6 +207,13 @@ func printNetcheckResponse(ctx *Context, family string, resp *cloudauth.Netcheck
 	sort.Strings(unreachable)
 	ctx.Info("  %s source=%s reachable=%v unreachable=%v duration=%dms",
 		family, resp.SourceAddress, reachable, unreachable, resp.DurationMs)
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func boolWord(b bool, yes, no string) string {

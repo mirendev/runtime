@@ -303,7 +303,7 @@ func (c *CloudControl) runNetcheck(ctx context.Context) {
 // apiAddresses builds the list of API addresses the server should advertise.
 // The heavy lifting lives in ComputeAdvertise so the same rules can be
 // exercised by the 'miren debug advertise' command.
-func (c *CloudControl) apiAddresses() []string {
+func (c *CloudControl) apiAddresses() []AdvertiseCandidate {
 	c.netcheckMu.RLock()
 	netcheck := c.netcheckResult
 	c.netcheckMu.RUnlock()
@@ -323,7 +323,7 @@ func (c *CloudControl) apiAddresses() []string {
 				discovered = append(discovered, sip.IP.String())
 			}
 		}
-		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", explicit, "discovered", discovered, "result", final)
+		c.Log.Info("reporting API addresses", "listen", c.Address, "configured", explicit, "discovered", discovered, "result", HostPorts(final))
 	})
 
 	return final
@@ -357,8 +357,10 @@ func (c *CloudControl) NetworkFacts(ctx context.Context) clusternetwork.Report {
 	if stale {
 		c.runNetcheck(ctx)
 	}
+	advertised := c.apiAddresses()
 	return clusternetwork.Report{
-		APIAddresses:      c.apiAddresses(),
+		APIAddresses:      HostPorts(advertised),
+		APIAddressDetails: WireDetails(advertised),
 		CACertFingerprint: c.caCertFingerprint(),
 		Reachability:      c.reachabilityVerdict(),
 		Containerized:     containerenv.InContainer(),
