@@ -3,6 +3,7 @@ package nodeadmin_v1alpha
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/fxamacker/cbor/v2"
 	rpc "miren.dev/runtime/pkg/rpc"
@@ -95,6 +96,219 @@ func (v *NodeAdminInstallDiskAcceleratorResults) UnmarshalJSON(data []byte) erro
 	return json.Unmarshal(data, &v.data)
 }
 
+type nodeAdminQueryArgsData struct {
+	Expression *string `cbor:"0,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type NodeAdminQueryArgs struct {
+	call rpc.Call
+	data nodeAdminQueryArgsData
+}
+
+func (v *NodeAdminQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *NodeAdminQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *NodeAdminQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminQueryResultsData struct {
+	Data           *[]byte `cbor:"0,keyasint,omitempty" json:"data,omitempty"`
+	Error          *string `cbor:"1,keyasint,omitempty" json:"error,omitempty"`
+	EngineRevision *string `cbor:"2,keyasint,omitempty" json:"engine_revision,omitempty"`
+}
+
+type NodeAdminQueryResults struct {
+	call rpc.Call
+	data nodeAdminQueryResultsData
+}
+
+func (v *NodeAdminQueryResults) SetData(data []byte) {
+	x := slices.Clone(data)
+	v.data.Data = &x
+}
+
+func (v *NodeAdminQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *NodeAdminQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *NodeAdminQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminQueryInfoArgsData struct{}
+
+type NodeAdminQueryInfoArgs struct {
+	call rpc.Call
+	data nodeAdminQueryInfoArgsData
+}
+
+func (v *NodeAdminQueryInfoArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryInfoArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryInfoArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryInfoArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminQueryInfoResultsData struct {
+	EngineRevision *string `cbor:"0,keyasint,omitempty" json:"engine_revision,omitempty"`
+	Reference      *string `cbor:"1,keyasint,omitempty" json:"reference,omitempty"`
+	Error          *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type NodeAdminQueryInfoResults struct {
+	call rpc.Call
+	data nodeAdminQueryInfoResultsData
+}
+
+func (v *NodeAdminQueryInfoResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *NodeAdminQueryInfoResults) SetReference(reference string) {
+	v.data.Reference = &reference
+}
+
+func (v *NodeAdminQueryInfoResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *NodeAdminQueryInfoResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryInfoResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminQueryInfoResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminQueryInfoResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminValidateQueryArgsData struct {
+	Expression *string `cbor:"0,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type NodeAdminValidateQueryArgs struct {
+	call rpc.Call
+	data nodeAdminValidateQueryArgsData
+}
+
+func (v *NodeAdminValidateQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *NodeAdminValidateQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *NodeAdminValidateQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminValidateQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminValidateQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminValidateQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type nodeAdminValidateQueryResultsData struct {
+	EngineRevision *string `cbor:"0,keyasint,omitempty" json:"engine_revision,omitempty"`
+	Valid          *bool   `cbor:"1,keyasint,omitempty" json:"valid,omitempty"`
+	Error          *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type NodeAdminValidateQueryResults struct {
+	call rpc.Call
+	data nodeAdminValidateQueryResultsData
+}
+
+func (v *NodeAdminValidateQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *NodeAdminValidateQueryResults) SetValid(valid bool) {
+	v.data.Valid = &valid
+}
+
+func (v *NodeAdminValidateQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *NodeAdminValidateQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *NodeAdminValidateQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *NodeAdminValidateQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *NodeAdminValidateQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type NodeAdminInstallDiskAccelerator struct {
 	rpc.Call
 	args    NodeAdminInstallDiskAcceleratorArgs
@@ -121,8 +335,89 @@ func (t *NodeAdminInstallDiskAccelerator) Results() *NodeAdminInstallDiskAcceler
 	return results
 }
 
+type NodeAdminQuery struct {
+	rpc.Call
+	args    NodeAdminQueryArgs
+	results NodeAdminQueryResults
+}
+
+func (t *NodeAdminQuery) Args() *NodeAdminQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *NodeAdminQuery) Results() *NodeAdminQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type NodeAdminQueryInfo struct {
+	rpc.Call
+	args    NodeAdminQueryInfoArgs
+	results NodeAdminQueryInfoResults
+}
+
+func (t *NodeAdminQueryInfo) Args() *NodeAdminQueryInfoArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *NodeAdminQueryInfo) Results() *NodeAdminQueryInfoResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type NodeAdminValidateQuery struct {
+	rpc.Call
+	args    NodeAdminValidateQueryArgs
+	results NodeAdminValidateQueryResults
+}
+
+func (t *NodeAdminValidateQuery) Args() *NodeAdminValidateQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *NodeAdminValidateQuery) Results() *NodeAdminValidateQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type NodeAdmin interface {
 	InstallDiskAccelerator(ctx context.Context, state *NodeAdminInstallDiskAccelerator) error
+	Query(ctx context.Context, state *NodeAdminQuery) error
+	QueryInfo(ctx context.Context, state *NodeAdminQueryInfo) error
+	ValidateQuery(ctx context.Context, state *NodeAdminValidateQuery) error
 }
 
 type reexportNodeAdmin struct {
@@ -130,6 +425,18 @@ type reexportNodeAdmin struct {
 }
 
 func (reexportNodeAdmin) InstallDiskAccelerator(ctx context.Context, state *NodeAdminInstallDiskAccelerator) error {
+	panic("not implemented")
+}
+
+func (reexportNodeAdmin) Query(ctx context.Context, state *NodeAdminQuery) error {
+	panic("not implemented")
+}
+
+func (reexportNodeAdmin) QueryInfo(ctx context.Context, state *NodeAdminQueryInfo) error {
+	panic("not implemented")
+}
+
+func (reexportNodeAdmin) ValidateQuery(ctx context.Context, state *NodeAdminValidateQuery) error {
 	panic("not implemented")
 }
 
@@ -147,6 +454,36 @@ func AdaptNodeAdmin(t NodeAdmin) *rpc.Interface {
 			Params:        []string{"image", "force"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.InstallDiskAccelerator(ctx, &NodeAdminInstallDiskAccelerator{Call: call})
+			},
+		},
+		{
+			Name:          "query",
+			InterfaceName: "NodeAdmin",
+			Index:         1,
+			Public:        false,
+			Params:        []string{"expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Query(ctx, &NodeAdminQuery{Call: call})
+			},
+		},
+		{
+			Name:          "query_info",
+			InterfaceName: "NodeAdmin",
+			Index:         2,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.QueryInfo(ctx, &NodeAdminQueryInfo{Call: call})
+			},
+		},
+		{
+			Name:          "validate_query",
+			InterfaceName: "NodeAdmin",
+			Index:         3,
+			Public:        false,
+			Params:        []string{"expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ValidateQuery(ctx, &NodeAdminValidateQuery{Call: call})
 			},
 		},
 	}
@@ -217,4 +554,159 @@ func (v NodeAdminClient) InstallDiskAccelerator(ctx context.Context, image strin
 	}
 
 	return &NodeAdminClientInstallDiskAcceleratorResults{client: v.Client, data: ret}, nil
+}
+
+type NodeAdminClientQueryResults struct {
+	client rpc.Client
+	data   nodeAdminQueryResultsData
+}
+
+func (v *NodeAdminClientQueryResults) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *NodeAdminClientQueryResults) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v *NodeAdminClientQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *NodeAdminClientQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v *NodeAdminClientQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *NodeAdminClientQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v NodeAdminClient) Query(ctx context.Context, expression string) (*NodeAdminClientQueryResults, error) {
+	args := NodeAdminQueryArgs{}
+	args.data.Expression = &expression
+
+	var ret nodeAdminQueryResultsData
+
+	err := v.Call(ctx, "query", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeAdminClientQueryResults{client: v.Client, data: ret}, nil
+}
+
+type NodeAdminClientQueryInfoResults struct {
+	client rpc.Client
+	data   nodeAdminQueryInfoResultsData
+}
+
+func (v *NodeAdminClientQueryInfoResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *NodeAdminClientQueryInfoResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v *NodeAdminClientQueryInfoResults) HasReference() bool {
+	return v.data.Reference != nil
+}
+
+func (v *NodeAdminClientQueryInfoResults) Reference() string {
+	if v.data.Reference == nil {
+		return ""
+	}
+	return *v.data.Reference
+}
+
+func (v *NodeAdminClientQueryInfoResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *NodeAdminClientQueryInfoResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v NodeAdminClient) QueryInfo(ctx context.Context) (*NodeAdminClientQueryInfoResults, error) {
+	args := NodeAdminQueryInfoArgs{}
+
+	var ret nodeAdminQueryInfoResultsData
+
+	err := v.Call(ctx, "query_info", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeAdminClientQueryInfoResults{client: v.Client, data: ret}, nil
+}
+
+type NodeAdminClientValidateQueryResults struct {
+	client rpc.Client
+	data   nodeAdminValidateQueryResultsData
+}
+
+func (v *NodeAdminClientValidateQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *NodeAdminClientValidateQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v *NodeAdminClientValidateQueryResults) HasValid() bool {
+	return v.data.Valid != nil
+}
+
+func (v *NodeAdminClientValidateQueryResults) Valid() bool {
+	if v.data.Valid == nil {
+		return false
+	}
+	return *v.data.Valid
+}
+
+func (v *NodeAdminClientValidateQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *NodeAdminClientValidateQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v NodeAdminClient) ValidateQuery(ctx context.Context, expression string) (*NodeAdminClientValidateQueryResults, error) {
+	args := NodeAdminValidateQueryArgs{}
+	args.data.Expression = &expression
+
+	var ret nodeAdminValidateQueryResultsData
+
+	err := v.Call(ctx, "validate_query", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NodeAdminClientValidateQueryResults{client: v.Client, data: ret}, nil
 }

@@ -10,6 +10,7 @@ ISO_VERSION="v0.0.0-20260903233145-c01782a6b7e3"
 GOIMPORTS_VERSION="v0.50.0"
 MOCKGEN_VERSION="v0.6.0"
 GOLANGCI_LINT_VERSION="2.12.2"
+YQ_VERSION="v4.47.2"
 
 step "Installing system dependencies"
 missing_packages=()
@@ -75,6 +76,7 @@ step "Installing Go development tools"
 install_go_tool iso miren.dev/iso miren.dev/iso/cmd/iso "$ISO_VERSION"
 install_go_tool goimports golang.org/x/tools golang.org/x/tools/cmd/goimports "$GOIMPORTS_VERSION"
 install_go_tool mockgen go.uber.org/mock go.uber.org/mock/mockgen "$MOCKGEN_VERSION"
+install_go_tool yq github.com/mikefarah/yq/v4 github.com/mikefarah/yq/v4 "$YQ_VERSION"
 
 if ! golangci-lint version 2>/dev/null | grep -Fq "$GOLANGCI_LINT_VERSION"; then
 	case "$(uname -m)" in

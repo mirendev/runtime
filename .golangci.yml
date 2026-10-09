@@ -34,6 +34,21 @@ linters:
       - ".*\\.gen\\.go$"
 
     rules:
+      # Preserve the vendored Portal implementation; these upstream findings
+      # are style suggestions, a deliberate reflect.Kind fallback, and the
+      # existing gopsutil CPU-total helper. Other checks still apply.
+      - path: "pkg/portalquery/"
+        linters:
+          - staticcheck
+        text: "(QF1001|QF1003|S1021):"
+      - path: "pkg/portalquery/capabilities\\.go$"
+        linters:
+          - exhaustive
+      - path: "pkg/portalquery/state\\.go$"
+        linters:
+          - staticcheck
+        text: "SA1019: t.Total is deprecated"
+
       # Ignore unused test functions (disabled tests)
       - path: "_test\\.go$"
         linters:

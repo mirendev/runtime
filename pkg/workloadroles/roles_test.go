@@ -88,7 +88,8 @@ func TestCarveOutsAbsentFromAllRoles(t *testing.T) {
 	forbidden := map[string][]string{
 		"entityaccess":       {"get", "put", "create", "replace", "patch", "delete", "list", "reindex"},
 		"stream":             {"recv"},
-		"runnerregistration": {"issueworkloadtoken", "createinvite", "join", "revokeinvite", "removerunner", "cordonrunner", "uncordonrunner", "drainrunner", "refreshcertificate"},
+		"runnerregistration": {"issueworkloadtoken", "createinvite", "join", "revokeinvite", "removerunner", "cordonrunner", "uncordonrunner", "drainrunner", "refreshcertificate", "query"},
+		"nodeadmin":          {"query"},
 		"netdb":              {"releaseip", "releasesubnet", "releaseall", "gc"},
 		"outboardcontrol":    {"checkversion"},
 		"oidcbindings":       {"add", "remove", "list"},

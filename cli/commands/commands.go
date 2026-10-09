@@ -997,6 +997,21 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 			Body: "miren runner status",
 		}),
 	))
+	d.Dispatch("runner query", Infer("runner query", "Query a runner's live host activity and print the JSON result", RunnerQuery,
+		WithDescription("Observe what is happening right now or during the query window, never historical data. Use --reference to print query syntax and Miren source fields without connecting to a cluster."),
+		WithExample(mflags.Example{
+			Name: "Show the offline query reference",
+			Body: "miren runner query --reference",
+		}),
+		WithExample(mflags.Example{
+			Name: "Inspect runner memory",
+			Body: "miren runner query my-runner memory",
+		}),
+		WithExample(mflags.Example{
+			Name: "Sample memory usage over ten seconds",
+			Body: "miren runner query my-runner \"memory avg(used) over 10s every 1s\"",
+		}),
+	))
 	d.Dispatch("runner token revoke", Infer("runner token revoke", "Revoke a join token", RunnerTokenRevoke,
 		WithExample(mflags.Example{
 			Name: "Revoke a token",

@@ -363,6 +363,75 @@ interfaces:
             type: string
             doc: Error message if the install failed
 
+      - name: Query
+        index: 14
+        doc: Query a runner's live host activity during a window of up to one minute, never historical data.
+        parameters:
+          - name: runner
+            type: string
+            doc: Runner name, ID, or short ID
+          - name: expression
+            type: string
+            doc: Live query expression (not SQL), such as memory or process where name = worker*
+        results:
+          - name: name
+            type: string
+            doc: Name of the queried runner
+          - name: data
+            type: bytes
+            doc: JSON-encoded live snapshot or aggregate
+          - name: error
+            type: string
+            doc: Error message if lookup, parsing, or execution failed
+          - name: engine_revision
+            type: string
+            doc: Target runner's query language revision, including on parse or execution errors; absent on older runners or before reaching the runner
+
+      - name: QueryInfo
+        index: 15
+        doc: Get the target runner's complete live query syntax and source reference without collecting data.
+        parameters:
+          - name: runner
+            type: string
+            doc: Runner name, ID, or short ID
+        results:
+          - name: name
+            type: string
+            doc: Name of the target runner
+          - name: engine_revision
+            type: string
+            doc: Target runner's query language revision, never the coordinator's
+          - name: reference
+            type: string
+            doc: Target runner's self-contained query syntax, source fields, examples, semantics, and limits
+          - name: error
+            type: string
+            doc: Lookup, forwarding, authorization, or reference error; older runners may not support this RPC
+
+      - name: ValidateQuery
+        index: 16
+        doc: Validate a live query using the target runner's grammar and sources without collecting data or attaching probes; does not check runtime prerequisites.
+        parameters:
+          - name: runner
+            type: string
+            doc: Runner name, ID, or short ID
+          - name: expression
+            type: string
+            doc: Live query expression to validate
+        results:
+          - name: name
+            type: string
+            doc: Name of the target runner
+          - name: engine_revision
+            type: string
+            doc: Target runner's query language revision, including on validation errors
+          - name: valid
+            type: bool
+            doc: True if parsing, semantic validation, and native syscall-name resolution succeeded on the runner
+          - name: error
+            type: string
+            doc: Lookup, forwarding, authorization, or validation error; older runners may not support this RPC
+
 types:
   - type: InviteInfo
     doc: Information about a runner invite

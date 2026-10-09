@@ -238,6 +238,278 @@ func runnerEntry(t *testing.T, m *harness.Miren, runnerID string) runnerListEntr
 	return runnerListEntry{}
 }
 
+func TestDistributedRunnerQuery(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+	runnerID := findRunnerNode(t, m)
+	runnerName := runnerEntry(t, m, runnerID).Name
+
+	var nonce [4]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	iface := "pq" + hex.EncodeToString(nonce[:])
+	// Only the runner has this interface: executing on the coordinator would
+	// return an empty result even though both peers share the same kernel.
+	m.PeerExec("runner1", "ip", "link", "add", iface, "type", "dummy").RequireSuccess(t)
+	t.Cleanup(func() {
+		m.PeerExec("runner1", "ip", "link", "delete", iface).RequireSuccess(t)
+	})
+	m.PeerExec("runner1", "ip", "link", "set", iface, "mtu", "1379").RequireSuccess(t)
+	if m.PeerExec("coordinator", "ip", "link", "show", iface).Success() {
+		t.Fatal("query fixture interface unexpectedly exists on the coordinator")
+	}
+
+	query := func(target, expression string) []byte {
+		t.Helper()
+		r := m.Run("runner", "query", target, expression)
+		r.RequireSuccess(t)
+		return []byte(r.Stdout)
+	}
+
+	expression := "network where name = " + iface
+	data := query(runnerID, expression)
+	var snapshot struct {
+		Source  string `json:"source"`
+		Network []struct {
+			Name string `json:"name"`
+			MTU  int    `json:"mtu"`
+		} `json:"network"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Source != "network" || len(snapshot.Network) != 1 ||
+		snapshot.Network[0].Name != iface || snapshot.Network[0].MTU != 1379 {
+		t.Fatalf("unexpected runner snapshot: %s", data)
+	}
+
+	data = query(runnerName, expression+" avg(mtu) over 300ms every 100ms")
+	var aggregate struct {
+		Source      string `json:"source"`
+		Aggregation struct {
+			Values []struct {
+				Value float64 `json:"value"`
+			} `json:"values"`
+		} `json:"aggregation"`
+	}
+	if err := json.Unmarshal(data, &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Source != "network" || len(aggregate.Aggregation.Values) != 1 ||
+		aggregate.Aggregation.Values[0].Value != 1379 {
+		t.Fatalf("unexpected runner aggregate: %s", data)
+	}
+
+	r := m.Run("runner", "query", runnerID, "SELECT * FROM network")
+	if r.Success() || strings.TrimSpace(r.Stdout) != "" {
+		t.Fatalf("invalid query returned exit=%d stdout=%q stderr=%q", r.ExitCode, r.Stdout, r.Stderr)
+	}
+	r.RequireContains(t, "invalid query syntax")
+
+	r = m.Run("runner", "query", "missing-"+iface, "memory")
+	if r.Success() {
+		t.Fatal("querying a missing runner succeeded")
+	}
+	r.RequireContains(t, "not found")
+}
+
+func TestDistributedRunnerSandboxQuery(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+	runnerID := findRunnerNode(t, m)
+	id := fmt.Sprintf("portal-query-%d", time.Now().UnixNano())
+	sandboxID := "sandbox/" + id
+	ctr := func(args ...string) *harness.Result {
+		t.Helper()
+		return m.PeerExec("runner1", append([]string{"ctr", "--address", "/var/lib/miren/runner/containerd/containerd.sock", "--namespace", "miren"}, args...)...)
+	}
+	image := "docker.io/library/busybox:1.37"
+	ctr("images", "pull", image).RequireSuccess(t)
+	// This disposable task exits with a distinctive status without deploying an app.
+	ctr("containers", "create", "--read-only", "--net-host",
+		"--label", "runtime.computer/entity-id="+sandboxID,
+		"--env", "QUERY_TEST_SECRET=must-not-appear", image, id,
+		"/bin/sh", "-c", "sleep 1; exit 19").RequireSuccess(t)
+	t.Cleanup(func() {
+		ctr("tasks", "delete", "--force", id)
+		ctr("containers", "delete", id).RequireSuccess(t)
+	})
+	ctr("containers", "create", "--label", "runtime.computer/entity-id="+sandboxID,
+		image, id+"-other", "/bin/true").RequireSuccess(t)
+	t.Cleanup(func() {
+		ctr("containers", "delete", id+"-other").RequireSuccess(t)
+	})
+	r := m.Run("runner", "query", runnerID, "sandboxes where container_id = "+id)
+	r.RequireSuccess(t)
+	var snapshot struct {
+		Data []struct {
+			SandboxID   string `json:"sandbox_id"`
+			ContainerID string `json:"container_id"`
+			State       string `json:"state"`
+			PID         int    `json:"pid"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Data) != 1 || snapshot.Data[0].SandboxID != sandboxID ||
+		snapshot.Data[0].ContainerID != id || snapshot.Data[0].State != "no_task" || snapshot.Data[0].PID != 0 {
+		t.Fatalf("unexpected inventory: %s", r.Stdout)
+	}
+	if strings.Contains(r.Stdout, "must-not-appear") || strings.Contains(r.Stdout, "QUERY_TEST_SECRET") {
+		t.Fatal("inventory exposed container environment")
+	}
+	coordinatorID := ""
+	for _, node := range listRunners(t, m) {
+		if isCoordinator(node) {
+			coordinatorID = node.RunnerID
+			break
+		}
+	}
+	if coordinatorID == "" {
+		t.Fatal("coordinator node not found")
+	}
+	other := m.Run("runner", "query", coordinatorID, "sandboxes where container_id = "+id)
+	other.RequireSuccess(t)
+	if err := json.Unmarshal([]byte(other.Stdout), &snapshot); err != nil || len(snapshot.Data) != 0 {
+		t.Fatalf("runner fixture appeared on coordinator: %s", other.Stdout)
+	}
+
+	result := make(chan *harness.Result, 1)
+	go func() {
+		result <- m.Run("runner", "query", runnerID,
+			fmt.Sprintf("sandbox_events where container_id = %q and action = exit { @exits[] = sum(exit_status) } after 5s { emit @exits }", id))
+	}()
+	// Give the RPC time to subscribe before starting the already-inventoried task.
+	time.Sleep(time.Second)
+	ctr("tasks", "start", "--detach", id).RequireSuccess(t)
+	r = <-result
+	r.RequireSuccess(t)
+	var aggregate struct {
+		Aggregation struct {
+			Rows []struct {
+				Values map[string]int `json:"values"`
+			} `json:"rows"`
+		} `json:"aggregation"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if len(aggregate.Aggregation.Rows) != 1 || aggregate.Aggregation.Rows[0].Values["value"] != 19 {
+		t.Fatalf("unexpected task exit aggregate: %s", r.Stdout)
+	}
+}
+
+func TestDistributedRunnerAppDiskIOQuery(t *testing.T) {
+	c := harness.NewCluster(t)
+	skipIfNotDistributed(t, c)
+	m := harness.NewMiren(t, c)
+	runnerID := findRunnerNode(t, m)
+	app := harness.DeployApp(t, m, harness.AppOptions{Testdata: "image-only"})
+
+	// Independently check the workload's actual cgroup membership, so an OCI
+	// path naming assumption or attribution to the pause container cannot pass.
+	membership := m.MustRun("sandbox", "exec", "-a", app, "--", "cat", "/proc/self/cgroup")
+	actualCgroup := strings.TrimSpace(membership.Stdout)
+	if !strings.HasPrefix(actualCgroup, "0::/") {
+		t.Fatalf("expected unified cgroup membership, got %q", actualCgroup)
+	}
+	actualCgroup = strings.TrimPrefix(actualCgroup, "0::")
+	selection := fmt.Sprintf("cgroups using (sandboxes where app = %q and state = running) on path = cgroup", app)
+	readIO := func() (bytes, ios uint64, identity string) {
+		t.Helper()
+		r := m.MustRun("runner", "query", runnerID, selection)
+		var snapshot struct {
+			Data []struct {
+				Path        string  `json:"path"`
+				ID          string  `json:"id"`
+				App         string  `json:"inventory.app"`
+				Version     string  `json:"inventory.version"`
+				SandboxID   string  `json:"inventory.sandbox_id"`
+				ContainerID string  `json:"inventory.container_id"`
+				PID         uint32  `json:"inventory.pid"`
+				WriteBytes  *uint64 `json:"io.write_bytes"`
+				WriteIOS    *uint64 `json:"io.write_ios"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(r.Stdout), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range snapshot.Data {
+			if row.App != app || !strings.HasPrefix(row.Version, "app_version/") || row.SandboxID == "" || row.ContainerID == "" || row.PID == 0 {
+				t.Fatalf("invalid correlated inventory row: %+v", row)
+			}
+			if row.Path == actualCgroup {
+				if row.ID == "" || row.WriteBytes == nil || row.WriteIOS == nil {
+					t.Fatalf("app cgroup has no disk I/O accounting: %s", r.Stdout)
+				}
+				return *row.WriteBytes, *row.WriteIOS, row.ID
+			}
+		}
+		t.Fatalf("no correlated workload row matching %s in %s", actualCgroup, r.Stdout)
+		return 0, 0, ""
+	}
+	beforeBytes, beforeIOS, identity := readIO()
+	// This single request discovers the cgroups and computes app-wide rates.
+	// There is no client-side cgroup lookup or dynamically constructed path filter.
+	result := make(chan *harness.Result, 1)
+	go func() {
+		result <- m.Run("runner", "query", runnerID, selection+
+			" where result.format = rows rate(io.write_bytes), rate(io.write_ios) over 6s every 250ms by inventory.app")
+	}()
+	time.Sleep(time.Second)
+	const writtenBytes = 16 * 1024 * 1024
+	m.MustRun("sandbox", "exec", "-a", app, "--", "sh", "-c",
+		"for i in 1 2 3 4; do dd if=/dev/zero of=/tmp/portal-query-io-$i bs=1048576 count=4 && sync || exit 1; sleep 0.3; done")
+	r := <-result
+	r.RequireSuccess(t)
+	var aggregate struct {
+		Aggregation struct {
+			Columns []struct {
+				Function string `json:"function"`
+				Field    string `json:"field"`
+			} `json:"columns"`
+			Rows []struct {
+				Group  map[string]string `json:"group"`
+				Values []json.RawMessage `json:"values"`
+			} `json:"rows"`
+		} `json:"aggregation"`
+	}
+	if err := json.Unmarshal([]byte(r.Stdout), &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	a := aggregate.Aggregation
+	if len(a.Rows) != 1 || a.Rows[0].Group["inventory.app"] != app || len(a.Rows[0].Group) != 1 || len(a.Rows[0].Values) != 2 ||
+		len(a.Columns) != 2 || a.Columns[0].Function != "rate" || a.Columns[0].Field != "io.write_bytes" ||
+		a.Columns[1].Function != "rate" || a.Columns[1].Field != "io.write_ios" {
+		t.Fatalf("unexpected app-rate result: %s", r.Stdout)
+	}
+	for _, value := range a.Rows[0].Values {
+		rate, err := strconv.ParseFloat(string(value), 64)
+		if err != nil || rate <= 0 {
+			t.Fatalf("expected a positive measured rate, got %s", value)
+		}
+	}
+	t.Logf("single-query app disk I/O: %s bytes/s, %s operations/s", a.Rows[0].Values[0], a.Rows[0].Values[1])
+	harness.Poll(t, "app-attributed disk write counters", 15*time.Second, time.Second,
+		func() (bool, string) {
+			bytes, ios, currentID := readIO()
+			if currentID != identity || bytes < beforeBytes || ios < beforeIOS {
+				t.Fatal("app cgroup changed identity or its disk counters reset")
+			}
+			deltaBytes, deltaIOS := bytes-beforeBytes, ios-beforeIOS
+			if deltaBytes >= writtenBytes && deltaIOS > 0 {
+				t.Logf("app=%s runner=%s cgroup=%s disk writes: %d bytes, %d operations", app, runnerID, actualCgroup, deltaBytes, deltaIOS)
+				return true, ""
+			}
+			return false, fmt.Sprintf("got %d bytes and %d operations, want at least %d bytes and positive operations", deltaBytes, deltaIOS, writtenBytes)
+		},
+	)
+}
+
 // TestDistributedRunnerCordon verifies cordon/uncordon toggle a distributed
 // runner's schedulability from the coordinator without going through SIGUSR2.
 func TestDistributedRunnerCordon(t *testing.T) {

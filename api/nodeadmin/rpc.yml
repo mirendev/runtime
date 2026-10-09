@@ -36,3 +36,53 @@ interfaces:
           - name: error
             type: string
             doc: Error message if the install failed
+
+      - name: query
+        index: 1
+        doc: Query live host activity during a window of up to one minute, never historical data.
+        parameters:
+          - name: expression
+            type: string
+            doc: Live query expression (not SQL)
+        results:
+          - name: data
+            type: bytes
+            doc: JSON-encoded live snapshot or aggregate
+          - name: error
+            type: string
+            doc: Error message if parsing or execution failed
+          - name: engine_revision
+            type: string
+            doc: This host's query language revision, including on parse or execution errors; absent on older runners
+
+      - name: query_info
+        index: 2
+        doc: Get this host's complete live query syntax and source reference without collecting data.
+        results:
+          - name: engine_revision
+            type: string
+            doc: This host's query language revision
+          - name: reference
+            type: string
+            doc: Self-contained query syntax, source fields, examples, semantics, and limits
+          - name: error
+            type: string
+            doc: Error message if the reference could not be returned
+
+      - name: validate_query
+        index: 3
+        doc: Parse and validate a live query on this host without collecting data or attaching probes; does not check runtime prerequisites.
+        parameters:
+          - name: expression
+            type: string
+            doc: Live query expression to validate against this host's grammar and sources
+        results:
+          - name: engine_revision
+            type: string
+            doc: This host's query language revision, including on validation errors
+          - name: valid
+            type: bool
+            doc: True if parsing, semantic validation, and native syscall-name resolution succeeded
+          - name: error
+            type: string
+            doc: Validation or authorization error; empty for a valid query

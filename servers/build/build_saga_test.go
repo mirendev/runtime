@@ -640,6 +640,7 @@ mount_path = "/data"
 			}
 			if warning == nil {
 				t.Fatalf("missing warning %q in logs: %v", tt.warningText, rec.Logs)
+				return
 			}
 			if warning.Level != "warn" {
 				t.Errorf("warning level = %q, want warn", warning.Level)

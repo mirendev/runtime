@@ -1639,6 +1639,271 @@ func (v *RunnerRegistrationInstallDiskAcceleratorResults) UnmarshalJSON(data []b
 	return json.Unmarshal(data, &v.data)
 }
 
+type runnerRegistrationQueryArgsData struct {
+	Runner     *string `cbor:"0,keyasint,omitempty" json:"runner,omitempty"`
+	Expression *string `cbor:"1,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type RunnerRegistrationQueryArgs struct {
+	call rpc.Call
+	data runnerRegistrationQueryArgsData
+}
+
+func (v *RunnerRegistrationQueryArgs) HasRunner() bool {
+	return v.data.Runner != nil
+}
+
+func (v *RunnerRegistrationQueryArgs) Runner() string {
+	if v.data.Runner == nil {
+		return ""
+	}
+	return *v.data.Runner
+}
+
+func (v *RunnerRegistrationQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *RunnerRegistrationQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *RunnerRegistrationQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationQueryResultsData struct {
+	Name           *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Data           *[]byte `cbor:"1,keyasint,omitempty" json:"data,omitempty"`
+	Error          *string `cbor:"2,keyasint,omitempty" json:"error,omitempty"`
+	EngineRevision *string `cbor:"3,keyasint,omitempty" json:"engine_revision,omitempty"`
+}
+
+type RunnerRegistrationQueryResults struct {
+	call rpc.Call
+	data runnerRegistrationQueryResultsData
+}
+
+func (v *RunnerRegistrationQueryResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationQueryResults) SetData(data []byte) {
+	x := slices.Clone(data)
+	v.data.Data = &x
+}
+
+func (v *RunnerRegistrationQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *RunnerRegistrationQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationQueryInfoArgsData struct {
+	Runner *string `cbor:"0,keyasint,omitempty" json:"runner,omitempty"`
+}
+
+type RunnerRegistrationQueryInfoArgs struct {
+	call rpc.Call
+	data runnerRegistrationQueryInfoArgsData
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) HasRunner() bool {
+	return v.data.Runner != nil
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) Runner() string {
+	if v.data.Runner == nil {
+		return ""
+	}
+	return *v.data.Runner
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationQueryInfoResultsData struct {
+	Name           *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	EngineRevision *string `cbor:"1,keyasint,omitempty" json:"engine_revision,omitempty"`
+	Reference      *string `cbor:"2,keyasint,omitempty" json:"reference,omitempty"`
+	Error          *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationQueryInfoResults struct {
+	call rpc.Call
+	data runnerRegistrationQueryInfoResultsData
+}
+
+func (v *RunnerRegistrationQueryInfoResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationQueryInfoResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *RunnerRegistrationQueryInfoResults) SetReference(reference string) {
+	v.data.Reference = &reference
+}
+
+func (v *RunnerRegistrationQueryInfoResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationQueryInfoResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationQueryInfoResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationValidateQueryArgsData struct {
+	Runner     *string `cbor:"0,keyasint,omitempty" json:"runner,omitempty"`
+	Expression *string `cbor:"1,keyasint,omitempty" json:"expression,omitempty"`
+}
+
+type RunnerRegistrationValidateQueryArgs struct {
+	call rpc.Call
+	data runnerRegistrationValidateQueryArgsData
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) HasRunner() bool {
+	return v.data.Runner != nil
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) Runner() string {
+	if v.data.Runner == nil {
+		return ""
+	}
+	return *v.data.Runner
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) HasExpression() bool {
+	return v.data.Expression != nil
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) Expression() string {
+	if v.data.Expression == nil {
+		return ""
+	}
+	return *v.data.Expression
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runnerRegistrationValidateQueryResultsData struct {
+	Name           *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	EngineRevision *string `cbor:"1,keyasint,omitempty" json:"engine_revision,omitempty"`
+	Valid          *bool   `cbor:"2,keyasint,omitempty" json:"valid,omitempty"`
+	Error          *string `cbor:"3,keyasint,omitempty" json:"error,omitempty"`
+}
+
+type RunnerRegistrationValidateQueryResults struct {
+	call rpc.Call
+	data runnerRegistrationValidateQueryResultsData
+}
+
+func (v *RunnerRegistrationValidateQueryResults) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *RunnerRegistrationValidateQueryResults) SetEngineRevision(engine_revision string) {
+	v.data.EngineRevision = &engine_revision
+}
+
+func (v *RunnerRegistrationValidateQueryResults) SetValid(valid bool) {
+	v.data.Valid = &valid
+}
+
+func (v *RunnerRegistrationValidateQueryResults) SetError(error string) {
+	v.data.Error = &error
+}
+
+func (v *RunnerRegistrationValidateQueryResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunnerRegistrationValidateQueryResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type RunnerRegistrationCreateInvite struct {
 	rpc.Call
 	args    RunnerRegistrationCreateInviteArgs
@@ -2003,6 +2268,84 @@ func (t *RunnerRegistrationInstallDiskAccelerator) Results() *RunnerRegistration
 	return results
 }
 
+type RunnerRegistrationQuery struct {
+	rpc.Call
+	args    RunnerRegistrationQueryArgs
+	results RunnerRegistrationQueryResults
+}
+
+func (t *RunnerRegistrationQuery) Args() *RunnerRegistrationQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationQuery) Results() *RunnerRegistrationQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationQueryInfo struct {
+	rpc.Call
+	args    RunnerRegistrationQueryInfoArgs
+	results RunnerRegistrationQueryInfoResults
+}
+
+func (t *RunnerRegistrationQueryInfo) Args() *RunnerRegistrationQueryInfoArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationQueryInfo) Results() *RunnerRegistrationQueryInfoResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type RunnerRegistrationValidateQuery struct {
+	rpc.Call
+	args    RunnerRegistrationValidateQueryArgs
+	results RunnerRegistrationValidateQueryResults
+}
+
+func (t *RunnerRegistrationValidateQuery) Args() *RunnerRegistrationValidateQueryArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunnerRegistrationValidateQuery) Results() *RunnerRegistrationValidateQueryResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunnerRegistration interface {
 	CreateInvite(ctx context.Context, state *RunnerRegistrationCreateInvite) error
 	Join(ctx context.Context, state *RunnerRegistrationJoin) error
@@ -2018,6 +2361,9 @@ type RunnerRegistration interface {
 	DrainRunner(ctx context.Context, state *RunnerRegistrationDrainRunner) error
 	IssueSystemWorkloadToken(ctx context.Context, state *RunnerRegistrationIssueSystemWorkloadToken) error
 	InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error
+	Query(ctx context.Context, state *RunnerRegistrationQuery) error
+	QueryInfo(ctx context.Context, state *RunnerRegistrationQueryInfo) error
+	ValidateQuery(ctx context.Context, state *RunnerRegistrationValidateQuery) error
 }
 
 type reexportRunnerRegistration struct {
@@ -2077,6 +2423,18 @@ func (reexportRunnerRegistration) IssueSystemWorkloadToken(ctx context.Context, 
 }
 
 func (reexportRunnerRegistration) InstallDiskAccelerator(ctx context.Context, state *RunnerRegistrationInstallDiskAccelerator) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) Query(ctx context.Context, state *RunnerRegistrationQuery) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) QueryInfo(ctx context.Context, state *RunnerRegistrationQueryInfo) error {
+	panic("not implemented")
+}
+
+func (reexportRunnerRegistration) ValidateQuery(ctx context.Context, state *RunnerRegistrationValidateQuery) error {
 	panic("not implemented")
 }
 
@@ -2224,6 +2582,36 @@ func AdaptRunnerRegistration(t RunnerRegistration) *rpc.Interface {
 			Params:        []string{"query", "force"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.InstallDiskAccelerator(ctx, &RunnerRegistrationInstallDiskAccelerator{Call: call})
+			},
+		},
+		{
+			Name:          "Query",
+			InterfaceName: "RunnerRegistration",
+			Index:         14,
+			Public:        false,
+			Params:        []string{"runner", "expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Query(ctx, &RunnerRegistrationQuery{Call: call})
+			},
+		},
+		{
+			Name:          "QueryInfo",
+			InterfaceName: "RunnerRegistration",
+			Index:         15,
+			Public:        false,
+			Params:        []string{"runner"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.QueryInfo(ctx, &RunnerRegistrationQueryInfo{Call: call})
+			},
+		},
+		{
+			Name:          "ValidateQuery",
+			InterfaceName: "RunnerRegistration",
+			Index:         16,
+			Public:        false,
+			Params:        []string{"runner", "expression"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ValidateQuery(ctx, &RunnerRegistrationValidateQuery{Call: call})
 			},
 		},
 	}
@@ -3041,4 +3429,195 @@ func (v RunnerRegistrationClient) InstallDiskAccelerator(ctx context.Context, qu
 	}
 
 	return &RunnerRegistrationClientInstallDiskAcceleratorResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientQueryResults struct {
+	client rpc.Client
+	data   runnerRegistrationQueryResultsData
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasData() bool {
+	return v.data.Data != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Data() []byte {
+	if v.data.Data == nil {
+		return nil
+	}
+	return *v.data.Data
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v *RunnerRegistrationClientQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *RunnerRegistrationClientQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v RunnerRegistrationClient) Query(ctx context.Context, runner string, expression string) (*RunnerRegistrationClientQueryResults, error) {
+	args := RunnerRegistrationQueryArgs{}
+	args.data.Runner = &runner
+	args.data.Expression = &expression
+
+	var ret runnerRegistrationQueryResultsData
+
+	err := v.Call(ctx, "Query", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientQueryResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientQueryInfoResults struct {
+	client rpc.Client
+	data   runnerRegistrationQueryInfoResultsData
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) HasReference() bool {
+	return v.data.Reference != nil
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) Reference() string {
+	if v.data.Reference == nil {
+		return ""
+	}
+	return *v.data.Reference
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientQueryInfoResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) QueryInfo(ctx context.Context, runner string) (*RunnerRegistrationClientQueryInfoResults, error) {
+	args := RunnerRegistrationQueryInfoArgs{}
+	args.data.Runner = &runner
+
+	var ret runnerRegistrationQueryInfoResultsData
+
+	err := v.Call(ctx, "QueryInfo", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientQueryInfoResults{client: v.Client, data: ret}, nil
+}
+
+type RunnerRegistrationClientValidateQueryResults struct {
+	client rpc.Client
+	data   runnerRegistrationValidateQueryResultsData
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) HasEngineRevision() bool {
+	return v.data.EngineRevision != nil
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) EngineRevision() string {
+	if v.data.EngineRevision == nil {
+		return ""
+	}
+	return *v.data.EngineRevision
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) HasValid() bool {
+	return v.data.Valid != nil
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) Valid() bool {
+	if v.data.Valid == nil {
+		return false
+	}
+	return *v.data.Valid
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) HasError() bool {
+	return v.data.Error != nil
+}
+
+func (v *RunnerRegistrationClientValidateQueryResults) Error() string {
+	if v.data.Error == nil {
+		return ""
+	}
+	return *v.data.Error
+}
+
+func (v RunnerRegistrationClient) ValidateQuery(ctx context.Context, runner string, expression string) (*RunnerRegistrationClientValidateQueryResults, error) {
+	args := RunnerRegistrationValidateQueryArgs{}
+	args.data.Runner = &runner
+	args.data.Expression = &expression
+
+	var ret runnerRegistrationValidateQueryResultsData
+
+	err := v.Call(ctx, "ValidateQuery", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunnerRegistrationClientValidateQueryResults{client: v.Client, data: ret}, nil
 }
