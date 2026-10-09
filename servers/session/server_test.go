@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/x/sessions"
 )
 
 func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
@@ -125,6 +126,53 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 		s.Decode(stored.Entity().Entity())
 		require.Equal(t, timeout, s.IdleTimeoutSeconds, "explicit zero must not become the default timeout")
 	}
+	t.Run("SDK lifecycle", func(t *testing.T) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			boundApp := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			identity := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": boundApp}}
+			mux.ServeHTTP(w, r.WithContext(rpc.ContextWithIdentity(r.Context(), identity)))
+		}))
+		defer server.Close()
+		client, err := sessions.NewClient(sessions.Config{URL: server.URL, App: "workers", Token: "workers", HTTPClient: server.Client()})
+		require.NoError(t, err)
+		zero := int64(0)
+		created, err := client.Create(t.Context(), sessions.CreateOptions{Name: "sdk-task?#", Service: "web", Group: "sdk-group", MaxSessionsPerSandbox: 4, IdleTimeoutSeconds: &zero})
+		require.NoError(t, err)
+		require.Equal(t, "session/workers/sdk-task?#", created.ID)
+		require.Equal(t, int64(0), created.IdleTimeoutSeconds)
+		require.Equal(t, int64(4), created.MaxSessionsPerSandbox)
+		require.Equal(t, "sdk-group", created.Group)
+		require.Equal(t, sessions.Running, created.DesiredState)
+		_, err = client.Create(t.Context(), sessions.CreateOptions{Name: "sdk-task?#"})
+		require.ErrorIs(t, err, sessions.ErrConflict)
+		got, err := client.Get(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.Equal(t, *created, *got)
+		listed, err := client.List(t.Context())
+		require.NoError(t, err)
+		require.Contains(t, listed, *created)
+		suspended, err := client.Suspend(t.Context(), created.ID)
+		require.NoError(t, err)
+		require.Equal(t, sessions.Suspended, suspended.DesiredState)
+		resumed, err := client.Resume(t.Context(), "sdk-task?#")
+		require.NoError(t, err)
+		require.Equal(t, sessions.Running, resumed.DesiredState)
+		require.NoError(t, client.Delete(t.Context(), resumed.ID))
+		_, err = client.Get(t.Context(), resumed.ID)
+		require.ErrorIs(t, err, sessions.ErrNotFound)
+		defaults, err := client.Create(t.Context(), sessions.CreateOptions{})
+		require.NoError(t, err)
+		require.NotEmpty(t, defaults.ID)
+		require.Equal(t, "web", defaults.Service)
+		require.Equal(t, int64(1), defaults.MaxSessionsPerSandbox)
+		require.Equal(t, int64(300), defaults.IdleTimeoutSeconds)
+		other, err := sessions.NewClient(sessions.Config{URL: server.URL, App: "workers", Token: "other", HTTPClient: server.Client()})
+		require.NoError(t, err)
+		_, err = other.Get(t.Context(), defaults.ID)
+		var apiErr *sessions.HTTPError
+		require.ErrorAs(t, err, &apiErr)
+		require.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	})
 }
 
 func TestSessionsRPCAppScope(t *testing.T) {
