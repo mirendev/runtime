@@ -499,8 +499,8 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 		if _, err := m.eac.Patch(ctx, entity.New(
 			entity.DBId, sb.ID,
 			(&compute_v1alpha.Sandbox{
-				Status:     compute_v1alpha.STOPPED,
-				StopReason: compute_v1alpha.RETIRED,
+				Status:          compute_v1alpha.STOPPED,
+				StopRequestedAt: time.Now(),
 			}).Encode,
 		).Attrs(), resp.Entity().Revision()); err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
@@ -861,7 +861,7 @@ func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compu
 			continue
 		}
 
-		if sbm.sandbox.StopReason == compute_v1alpha.RETIRED {
+		if !sbm.sandbox.StopRequestedAt.IsZero() {
 			continue
 		}
 

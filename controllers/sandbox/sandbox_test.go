@@ -2129,21 +2129,22 @@ func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
 	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
 }
 
-func TestRetirementReasonSurvivesExitAndTeardown(t *testing.T) {
+func TestStopRequestSurvivesExitAndTeardown(t *testing.T) {
+	requestedAt := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
 	for _, tc := range []struct {
 		name   string
 		sb     compute.Sandbox
-		want   compute.SandboxStopReason
+		want   bool
 		noExit bool
 	}{
-		{"intentional", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING, StopReason: compute.RETIRED}, compute.RETIRED, false},
-		{"external-stop", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING}, compute.RETIRED, false},
-		{"cancelled-boot", compute.Sandbox{Status: compute.STOPPED}, compute.RETIRED, false},
-		{"unexpected", compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}, compute.EXITED, false},
-		{"failed-boot", compute.Sandbox{Status: compute.PENDING}, compute.EXITED, false},
-		{"timed-out-boot", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, compute.EXITED, false},
-		{"retired-without-exit", compute.Sandbox{Status: compute.STOPPED}, compute.RETIRED, true},
-		{"timeout-without-exit", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, "", true},
+		{"intentional", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING, StopRequestedAt: requestedAt}, true, false},
+		{"external-stop", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING}, true, false},
+		{"cancelled-boot", compute.Sandbox{Status: compute.STOPPED}, true, false},
+		{"unexpected", compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}, false, false},
+		{"failed-boot", compute.Sandbox{Status: compute.PENDING}, false, false},
+		{"timed-out-boot", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, false, false},
+		{"stopped-without-exit", compute.Sandbox{Status: compute.STOPPED}, true, true},
+		{"timeout-without-exit", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -2163,7 +2164,10 @@ func TestRetirementReasonSurvivesExitAndTeardown(t *testing.T) {
 			var got compute.Sandbox
 			got.Decode(resp.Entity().Entity())
 			require.Equal(t, compute.DEAD, got.Status)
-			require.Equal(t, tc.want, got.StopReason)
+			require.Equal(t, tc.want, !got.StopRequestedAt.IsZero())
+			if !tc.sb.StopRequestedAt.IsZero() {
+				require.Equal(t, requestedAt, got.StopRequestedAt, "exit and teardown must preserve the original request timestamp")
+			}
 			if !tc.noExit {
 				require.Equal(t, int64(2), got.Exit.Code)
 			}

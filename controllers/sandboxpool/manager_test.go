@@ -1552,7 +1552,7 @@ func TestRetiredSandboxDoesNotPoisonReusedPool(t *testing.T) {
 	require.NoError(t, err)
 	var stopped compute_v1alpha.Sandbox
 	stopped.Decode(resp.Entity().Entity())
-	require.Equal(t, compute_v1alpha.RETIRED, stopped.StopReason)
+	require.False(t, stopped.StopRequestedAt.IsZero())
 	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
 		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 2, At: time.Now()}}).Encode).Attrs(), 0)
 	require.NoError(t, err)
@@ -1581,7 +1581,7 @@ func TestScaleDownDoesNotHideConcurrentExit(t *testing.T) {
 	require.NoError(t, err)
 	sb.ID = id
 	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
-		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.STOPPED, StopReason: compute_v1alpha.EXITED}).Encode).Attrs(), 0)
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.STOPPED, Exit: compute_v1alpha.Exit{Code: 2, At: time.Now()}}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	manager := NewManager(testutils.TestLogger(t), server.EAC)
 	require.NoError(t, manager.scaleDown(ctx, &compute_v1alpha.SandboxPool{}, []*sandboxWithMeta{{sandbox: sb}}, 1))
@@ -1589,7 +1589,8 @@ func TestScaleDownDoesNotHideConcurrentExit(t *testing.T) {
 	require.NoError(t, err)
 	var got compute_v1alpha.Sandbox
 	got.Decode(resp.Entity().Entity())
-	assert.Equal(t, compute_v1alpha.EXITED, got.StopReason)
+	assert.True(t, got.StopRequestedAt.IsZero())
+	assert.Equal(t, int64(2), got.Exit.Code)
 }
 
 func TestCountStartupFailures(t *testing.T) {
@@ -1602,9 +1603,9 @@ func TestCountStartupFailures(t *testing.T) {
 		{sandbox: &compute_v1alpha.Sandbox{ID: "legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-25 * time.Second), updatedAt: now.Add(-15 * time.Second)},
 		{sandbox: &compute_v1alpha.Sandbox{ID: "old-legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-time.Minute)},
 		{sandbox: &compute_v1alpha.Sandbox{ID: "old-failure", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-10 * time.Minute), updatedAt: now.Add(-2 * time.Minute)},
-		{sandbox: &compute_v1alpha.Sandbox{ID: "retired", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, StopReason: compute_v1alpha.RETIRED, Exit: compute_v1alpha.Exit{Code: 2, At: now}}, createdAt: now.Add(-57 * time.Second), updatedAt: now},
-		{sandbox: &compute_v1alpha.Sandbox{ID: "zero-exit", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, StopReason: compute_v1alpha.EXITED, Exit: compute_v1alpha.Exit{Code: 0, At: now}}, createdAt: now.Add(-59 * time.Second), updatedAt: now.Add(-5 * time.Second)},
-		{sandbox: &compute_v1alpha.Sandbox{ID: "boundary", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, StopReason: compute_v1alpha.EXITED}, createdAt: now.Add(-61 * time.Second), updatedAt: now.Add(-time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "stopped", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, StopRequestedAt: now.Add(time.Hour), Exit: compute_v1alpha.Exit{Code: 2, At: now}}, createdAt: now.Add(-57 * time.Second), updatedAt: now},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "zero-exit", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, Exit: compute_v1alpha.Exit{Code: 0, At: now}}, createdAt: now.Add(-59 * time.Second), updatedAt: now.Add(-5 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "boundary", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-61 * time.Second), updatedAt: now.Add(-time.Second)},
 	}
 	pool := &compute_v1alpha.SandboxPool{LastCrashTime: now.Add(-90 * time.Second)}
 	count, latest := manager.countStartupFailures(sandboxes, pool)
