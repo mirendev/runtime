@@ -231,12 +231,12 @@ func (b *Builder) runBuildkitBuild(
 			digestStr := v.Digest.String()
 			if v.Started != nil && !vertexStarted[digestStr] {
 				vertexStarted[digestStr] = true
-				buildLog.write(fmt.Sprintf("[buildkit] %s", v.Name))
+				buildLog.write(v.Name)
 			}
 			if v.Completed != nil && !vertexCompleted[digestStr] {
 				vertexCompleted[digestStr] = true
 				if v.Cached {
-					buildLog.write(fmt.Sprintf("[buildkit] %s CACHED", v.Name))
+					buildLog.write(v.Name + " CACHED")
 				}
 			}
 		}

@@ -2,10 +2,14 @@ package build
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,10 +21,58 @@ import (
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/appconfig"
+	"miren.dev/runtime/observability"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 )
+
+func TestDeploymentLog(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	appID, err := inmem.Client.Create(t.Context(), "codeagent", &core_v1alpha.App{})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name, artifact, image, field, value string
+	}{
+		{"source build", "codeagent-a123", "cluster.local:5000/codeagent:codeagent-a123", "artifact", "codeagent-a123"},
+		{"direct image", "", "docker.io/library/nginx@sha256:abc", "image", "docker.io/library/nginx@sha256:abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := make(chan map[string]string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var got map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Error(err)
+				}
+				entries <- got
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			b := &Builder{Log: testutils.TestLogger(t), ec: inmem.Client,
+				LogWriter: observability.NewPersistentLogWriter(srv.URL, time.Second)}
+			b.logDeployment(t.Context(), "codeagent", "codeagent-v123", tc.artifact, tc.image)
+			var got map[string]string
+			select {
+			case got = <-entries:
+			case <-time.After(time.Second):
+				t.Fatal("deployment log was not written")
+			}
+			t.Logf("deployment log: %v", got)
+			assert.Equal(t, "status=deployed", got["_msg"])
+			assert.Equal(t, string(appID), got["entity"])
+			assert.Equal(t, "build", got["source"])
+			assert.Equal(t, "codeagent-v123", got["version"])
+			assert.Equal(t, tc.value, got[tc.field])
+			if tc.artifact == "" {
+				assert.NotContains(t, got, "artifact")
+			} else {
+				assert.NotContains(t, got, "image")
+			}
+		})
+	}
+}
 
 func TestBuildVersionConfigCloneAddons(t *testing.T) {
 	for _, tc := range []struct {
