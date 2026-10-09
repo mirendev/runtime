@@ -237,6 +237,14 @@ components:
           doc: Time to wait for graceful shutdown before force-killing (e.g. 10s, 30s)
 
 kinds:
+  sandbox_teardown:
+    sandbox:
+      type: string
+      doc: Sandbox ID whose containers the runner verified absent after teardown
+    session:
+      type: string
+      doc: Owning Session ID, retained even if the Session is deleted
+
   sandbox:
     # Runtime fields
     status:
@@ -257,6 +265,28 @@ kinds:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)
 
+    session_info:
+      type: component
+      doc: Dedicated Session ownership or shared Session host admission state
+      attrs:
+        owner:
+          type: ref
+          indexed: true
+          doc: Durable Session owning this sandbox incarnation, if any
+        group:
+          type: string
+          indexed: true
+          doc: Opaque matching group of Session-managed shared sandboxes
+        capacity:
+          type: int
+          doc: Maximum number of Sessions admitted to this shared sandbox
+        closing_at:
+          type: time
+          doc: Set before retiring an empty shared host; prevents new admissions
+        epoch:
+          type: int
+          doc: Revision-checked admission counter that arbitrates with retirement
+
     activity:
       type: component
       doc: Latest authenticated self-report; absent or expired means unknown (treated as active)
@@ -268,6 +298,10 @@ kinds:
         reported_at:
           type: time
           required: true
+
+    shutdown_at:
+      type: time
+      doc: Session-initiated drain deadline; workloads should stop accepting work before this time
 
     # Written once, in the same patch as the STOPPED transition, so any watcher
     # that sees the sandbox stop also sees why.

@@ -3853,3 +3853,42 @@ func TestRoutePort(t *testing.T) {
 	// A zero observed port is ignored (defensive): keep the configured port.
 	assert.Equal(t, int64(3000), routePort([]compute_v1alpha.BoundPort{{Port: 0}}, 3000))
 }
+
+func TestOrphanMigrationPreservesSessionOwnership(t *testing.T) {
+	ctx := t.Context()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	pool := &compute_v1alpha.SandboxPool{
+		ID: "sandbox_pool/web", Service: "web",
+		SandboxSpec: compute_v1alpha.SandboxSpec{Version: "app_version/v1"},
+	}
+	for _, tc := range []struct {
+		name string
+		info compute_v1alpha.SessionInfo
+	}{
+		{"legacy-orphan", compute_v1alpha.SessionInfo{}},
+		{"dedicated-session", compute_v1alpha.SessionInfo{Owner: "session/one"}},
+		{"shared-session", compute_v1alpha.SessionInfo{Group: "agents", Capacity: 3}},
+	} {
+		id := entity.Id("sandbox/" + tc.name)
+		_, err := server.EAC.Create(ctx, entity.New(entity.DBId, id,
+			(&core_v1alpha.Metadata{Name: tc.name, Labels: types.LabelSet("service", "web")}).Encode,
+			(&compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING,
+				Spec: pool.SandboxSpec, SessionInfo: tc.info}).Encode).Attrs())
+		require.NoError(t, err)
+	}
+	a := &localActivator{log: testutils.TestLogger(t), eac: server.EAC}
+	require.NoError(t, a.migrateOrphanedSandboxes(ctx, pool))
+	for _, name := range []string{"legacy-orphan", "dedicated-session", "shared-session"} {
+		resp, err := server.EAC.Get(ctx, "sandbox/"+name)
+		require.NoError(t, err)
+		var md core_v1alpha.Metadata
+		md.Decode(resp.Entity().Entity())
+		label, _ := md.Labels.Get("pool")
+		if name == "legacy-orphan" {
+			require.Equal(t, pool.ID.String(), label)
+		} else {
+			require.Empty(t, label, "Session sandbox %s must not be adopted by an app pool", name)
+		}
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/api/session/session_v1alpha"
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/components/autotls"
 	addonctrl "miren.dev/runtime/controllers/addon"
@@ -27,6 +28,7 @@ import (
 	runctrl "miren.dev/runtime/controllers/run"
 	"miren.dev/runtime/controllers/sandboxpool"
 	schedulerctrl "miren.dev/runtime/controllers/scheduler"
+	sessionctrl "miren.dev/runtime/controllers/session"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	execproxy "miren.dev/runtime/servers/exec_proxy"
@@ -185,6 +187,34 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		1,
 	)
 	cm.AddController(runSandboxReconciler)
+
+	sessionController := sessionctrl.NewController(c.Log, eac)
+	if err := sessionController.Init(ctx); err != nil {
+		return fmt.Errorf("initializing session controller: %w", err)
+	}
+	sessionReconciler := controller.NewReconcileController(
+		"session", c.Log,
+		entity.Ref(entity.EntityKind, session_v1alpha.KindSession), eac,
+		controller.AdaptReconcileController[session_v1alpha.Session](sessionController), time.Minute, 4,
+	)
+	sessionReconciler.SetPeriodic(time.Minute, sessionController.SweepOrphans)
+	cm.AddController(sessionReconciler)
+	cm.AddController(controller.NewReconcileController(
+		"session-app-watch", c.Log,
+		entity.Ref(entity.EntityKind, core_v1alpha.KindApp), eac,
+		controller.AdaptController(&sessionctrl.AppWatchController{Sessions: sessionController}), time.Minute, 1,
+	))
+	sessionSandboxWatch := sessionctrl.NewSandboxWatchController(sessionReconciler, eac)
+	cm.AddController(controller.NewReconcileController(
+		"session-sandbox-watch", c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox), eac,
+		controller.AdaptController(sessionSandboxWatch), 0, 1,
+	))
+	cm.AddController(controller.NewReconcileController(
+		"session-teardown-watch", c.Log,
+		entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxTeardown), eac,
+		controller.AdaptController(&sessionctrl.TeardownWatchController{SandboxWatchController: *sessionSandboxWatch}), 0, 1,
+	))
 
 	cm.AddController(controller.NewReconcileController(
 		"deploymentlauncher", c.Log,

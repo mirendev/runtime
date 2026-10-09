@@ -1,0 +1,103 @@
+apiVersion: miren.dev/rpc/v1
+kind: IDL
+
+types:
+  - type: SessionInfo
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: app
+        type: string
+        index: 1
+      - name: version
+        type: string
+        index: 2
+      - name: service
+        type: string
+        index: 3
+      - name: group
+        type: string
+        index: 4
+      - name: max_sessions_per_sandbox
+        type: int64
+        index: 5
+      - name: desired_state
+        type: string
+        index: 6
+      - name: phase
+        type: string
+        index: 7
+      - name: sandbox
+        type: string
+        index: 8
+      - name: failure
+        type: string
+        index: 9
+
+interfaces:
+  - name: Sessions
+    http:
+      prefix: /api/v1
+    methods:
+      - name: create
+        http:
+          post: /apps/{app}/sessions
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string
+          - name: service
+            type: string
+          - name: group
+            type: string
+          - name: max_sessions_per_sandbox
+            type: int64
+        results:
+          - name: session
+            type: SessionInfo
+      - name: list
+        http:
+          get: /apps/{app}/sessions
+        parameters:
+          - name: app
+            type: string
+        results:
+          - name: sessions
+            type: list
+            element: SessionInfo
+      - name: get
+        http:
+          get: /apps/{app}/sessions/{name}
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string
+        results:
+          - name: session
+            type: SessionInfo
+      - name: setDesiredState
+        http:
+          put: /apps/{app}/sessions/{name}/desired-state
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string
+          - name: desired_state
+            type: string
+        results:
+          - name: session
+            type: SessionInfo
+      - name: delete
+        http:
+          delete: /apps/{app}/sessions/{name}
+        parameters:
+          - name: app
+            type: string
+          - name: name
+            type: string
