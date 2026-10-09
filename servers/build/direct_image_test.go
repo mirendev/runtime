@@ -5,9 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/moby/buildkit/util/contentutil"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
@@ -82,6 +88,56 @@ func TestResolveDirectImageFailsClosed(t *testing.T) {
 		_, _, err := b.resolveDirectImage(t.Context(), "busybox:latest")
 		require.ErrorContains(t, err, "reading config")
 	})
+}
+
+func TestResolveDirectImageRecoversMissingConfigBlob(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{"WorkingDir":"/srv/recovered","ExposedPorts":{"4321/tcp":{}}}}`)
+	configDigest := digest.FromBytes(config)
+	manifest, err := json.Marshal(ocispecs.Manifest{
+		Versioned: specs.Versioned{SchemaVersion: 2},
+		MediaType: ocispecs.MediaTypeImageManifest,
+		Config: ocispecs.Descriptor{
+			MediaType: ocispecs.MediaTypeImageConfig,
+			Digest:    configDigest,
+			Size:      int64(len(config)),
+		},
+	})
+	require.NoError(t, err)
+	manifestDigest := digest.FromBytes(manifest)
+	var configMissing atomic.Bool
+	configMissing.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, mediaType := manifest, ocispecs.MediaTypeImageManifest
+		if strings.Contains(r.URL.Path, "/blobs/") {
+			if configMissing.Swap(false) {
+				http.NotFound(w, r)
+				return
+			}
+			data, mediaType = config, ocispecs.MediaTypeImageConfig
+		}
+		w.Header().Set("Content-Type", mediaType)
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		w.Header().Set("Docker-Content-Digest", digest.FromBytes(data).String())
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(data)
+		}
+	}))
+	defer server.Close()
+	host := strings.TrimPrefix(server.URL, "http://")
+	b := &Builder{imageMetadataResolver: registryImageMetadataResolver{
+		resolver: docker.NewResolver(docker.ResolverOptions{Hosts: func(string) ([]docker.RegistryHost, error) {
+			return []docker.RegistryHost{{
+				Host: host, Scheme: "http", Path: "/v2", Client: server.Client(),
+				Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
+			}}, nil
+		}}),
+	}}
+
+	image, result, err := b.resolveDirectImage(t.Context(), host+"/app:latest")
+	require.NoError(t, err)
+	assert.Equal(t, host+"/app@"+manifestDigest.String(), image)
+	assert.Equal(t, "/srv/recovered", result.WorkingDir)
+	assert.Equal(t, []string{"4321/tcp"}, result.ExposedPorts)
 }
 
 func TestSelectedManifestDigest(t *testing.T) {

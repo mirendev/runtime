@@ -20,6 +20,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.etcd.io/etcd/client/v3/snapshot"
 	"go.uber.org/zap"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/slogout"
 )
 
@@ -205,7 +206,7 @@ func restoreArgs(config EtcdConfig) []string {
 
 // runRestore runs etcdutl once in a throwaway container and waits for it.
 func (e *EtcdComponent) runRestore(ctx context.Context, snapshotPath, staging string, config EtcdConfig) error {
-	image, err := e.CC.Pull(ctx, etcdImage, containerd.WithPullUnpack)
+	image, err := containerdx.PullImage(ctx, e.Log, e.CC, etcdImage, containerd.WithPullUnpack)
 	if err != nil {
 		return fmt.Errorf("pull etcd image for restore: %w", err)
 	}

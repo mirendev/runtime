@@ -20,6 +20,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"miren.dev/runtime/components/base"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -246,7 +247,7 @@ func (e *EtcdComponent) Start(ctx context.Context, config EtcdConfig) error {
 
 	// Pull etcd image
 	e.Log.Info("pulling etcd image", "image", etcdImage)
-	image, err := e.CC.Pull(ctx, etcdImage, containerd.WithPullUnpack)
+	image, err := containerdx.PullImage(ctx, e.Log, e.CC, etcdImage, containerd.WithPullUnpack)
 	if err != nil {
 		return fmt.Errorf("failed to pull etcd image: %w", err)
 	}

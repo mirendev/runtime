@@ -12,6 +12,7 @@ import (
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/pkg/containerdx"
 )
 
 // ensureImage returns the image for ref, pulling it if containerd does not
@@ -34,7 +35,7 @@ func (c *SandboxController) ensureImage(ctx context.Context, sb *compute.Sandbox
 		return nil, fmt.Errorf("failed to get image %s: %w", ref, err)
 	}
 
-	_, err = c.CC.Pull(ctx, ref, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
+	_, err = containerdx.PullImage(ctx, c.Log, c.CC, ref, containerd.WithPullUnpack, containerd.WithResolver(c.resolver()))
 	if err != nil {
 		// A cancelled context means we were superseded or are shutting down,
 		// not that the pull failed. Skip the event so the app's logs don't

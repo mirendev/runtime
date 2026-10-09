@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
+
+const statusSendTimeout = 5 * time.Second
 
 // StatusSender lets saga actions emit progress, log lines, and errors
 // back to the client that started the build without holding a direct
@@ -27,7 +30,7 @@ type StatusSender interface {
 
 	// SendPhase translates a buildkit phase name into a user-facing
 	// progress message, matching the mapping the pre-saga path used.
-	SendPhase(phase string)
+	SendPhase(ctx context.Context, phase string)
 
 	// SendImage announces that the deploy will use this normalized upstream
 	// image directly, without a Miren build or registry push.
@@ -35,7 +38,7 @@ type StatusSender interface {
 
 	// SendBuildkit emits the raw buildkit JSON status payload so the
 	// CLI can render live vertex/log output.
-	SendBuildkit(payload []byte)
+	SendBuildkit(ctx context.Context, payload []byte)
 
 	// SendError emits a user-facing error message. Returning the error
 	// from the action is what surfaces failure through the saga; this
@@ -57,9 +60,9 @@ type StatusSender interface {
 type noopStatusSender struct{}
 
 func (noopStatusSender) SendMessage(string)                                 {}
-func (noopStatusSender) SendPhase(string)                                   {}
+func (noopStatusSender) SendPhase(context.Context, string)                  {}
 func (noopStatusSender) SendImage(string)                                   {}
-func (noopStatusSender) SendBuildkit([]byte)                                {}
+func (noopStatusSender) SendBuildkit(context.Context, []byte)               {}
 func (noopStatusSender) SendError(string, ...any)                           {}
 func (noopStatusSender) SendLog(string, string, ...*build_v1alpha.LogField) {}
 func (noopStatusSender) SendDeployment(string, string)                      {}
@@ -86,8 +89,12 @@ func NewRPCStatusSender(s *stream.SendStreamClient[*build_v1alpha.Status], log *
 	return &rpcStatusSender{stream: s, log: log}
 }
 
-func (r *rpcStatusSender) send(so *build_v1alpha.Status) {
-	if _, err := r.stream.Send(context.Background(), so); err != nil {
+func (r *rpcStatusSender) send(ctx context.Context, so *build_v1alpha.Status) {
+	// Progress is best effort: a connected but stalled client must not hold a
+	// build open indefinitely, even when its operation has no deadline.
+	ctx, cancel := context.WithTimeout(ctx, statusSendTimeout)
+	defer cancel()
+	if _, err := r.stream.Send(ctx, so); err != nil {
 		r.log.Warn("status send", "error", err)
 	}
 }
@@ -95,10 +102,10 @@ func (r *rpcStatusSender) send(so *build_v1alpha.Status) {
 func (r *rpcStatusSender) SendMessage(msg string) {
 	so := new(build_v1alpha.Status)
 	so.Update().SetMessage(msg)
-	r.send(so)
+	r.send(context.Background(), so)
 }
 
-func (r *rpcStatusSender) SendPhase(phase string) {
+func (r *rpcStatusSender) SendPhase(ctx context.Context, phase string) {
 	// Mapping matches the pre-saga path's WithPhaseUpdates callback so
 	// the CLI's progress display behaves identically on both code paths.
 	var msg string
@@ -112,25 +119,27 @@ func (r *rpcStatusSender) SendPhase(phase string) {
 	default:
 		msg = phase
 	}
-	r.SendMessage(msg)
+	so := new(build_v1alpha.Status)
+	so.Update().SetMessage(msg)
+	r.send(ctx, so)
 }
 
 func (r *rpcStatusSender) SendImage(image string) {
 	so := new(build_v1alpha.Status)
 	so.Update().SetImage(image)
-	r.send(so)
+	r.send(context.Background(), so)
 }
 
-func (r *rpcStatusSender) SendBuildkit(payload []byte) {
+func (r *rpcStatusSender) SendBuildkit(ctx context.Context, payload []byte) {
 	so := new(build_v1alpha.Status)
 	so.Update().SetBuildkit(payload)
-	r.send(so)
+	r.send(ctx, so)
 }
 
 func (r *rpcStatusSender) SendError(format string, args ...any) {
 	so := new(build_v1alpha.Status)
 	so.Update().SetError(fmt.Sprintf(format, args...))
-	r.send(so)
+	r.send(context.Background(), so)
 }
 
 func (r *rpcStatusSender) SendDeployment(deploymentID, phase string) {
@@ -140,7 +149,7 @@ func (r *rpcStatusSender) SendDeployment(deploymentID, phase string) {
 
 	so := new(build_v1alpha.Status)
 	so.Update().SetDeployment(progress)
-	r.send(so)
+	r.send(context.Background(), so)
 }
 
 func (r *rpcStatusSender) SendLog(level, text string, fields ...*build_v1alpha.LogField) {
@@ -152,7 +161,7 @@ func (r *rpcStatusSender) SendLog(level, text string, fields ...*build_v1alpha.L
 		entry.SetFields(fields)
 	}
 	so.Update().SetLog(entry)
-	r.send(so)
+	r.send(context.Background(), so)
 }
 
 // StatusRegistry maps stream IDs (the same handles StreamRegistry uses)

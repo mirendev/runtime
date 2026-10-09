@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -38,7 +39,13 @@ type registryImageMetadataResolver struct {
 
 func (r registryImageMetadataResolver) Resolve(ctx context.Context, ref string, platform ocispecs.Platform) (digest.Digest, []byte, error) {
 	buffer := contentutil.NewBuffer()
-	topLevelDigest, config, err := imageutil.Config(ctx, ref, r.resolver, buffer, nil, &platform)
+	var topLevelDigest digest.Digest
+	config, err := containerdx.RetryBlobFetch(ctx, slog.Default(), func() ([]byte, error) {
+		var config []byte
+		var err error
+		topLevelDigest, config, err = imageutil.Config(ctx, ref, r.resolver, buffer, nil, &platform)
+		return config, err
+	})
 	if err != nil {
 		return "", nil, err
 	}

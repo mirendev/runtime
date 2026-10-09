@@ -220,13 +220,13 @@ func (b *Builder) runBuildkitBuild(
 	stack.EnvVars = buildEnvVars
 	stack.Secrets = stackbuildSecrets(in.AppConfig)
 
-	tos = append(tos, WithPhaseUpdates(func(phase string) {
-		status.SendPhase(phase)
+	tos = append(tos, WithPhaseUpdates(func(ctx context.Context, phase string) {
+		status.SendPhase(ctx, phase)
 	}))
 
 	vertexStarted := map[string]bool{}
 	vertexCompleted := map[string]bool{}
-	tos = append(tos, WithStatusUpdates(func(ss *client.SolveStatus, sj []byte) {
+	tos = append(tos, WithStatusUpdates(func(ctx context.Context, ss *client.SolveStatus, sj []byte) {
 		for _, v := range ss.Vertexes {
 			digestStr := v.Digest.String()
 			if v.Started != nil && !vertexStarted[digestStr] {
@@ -251,7 +251,7 @@ func (b *Builder) runBuildkitBuild(
 				}
 			}
 		}
-		status.SendBuildkit(sj)
+		status.SendBuildkit(ctx, sj)
 	}))
 
 	status.SendMessage("Calculating build")

@@ -21,6 +21,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/lbdmod"
 )
 
@@ -178,7 +179,7 @@ func (b *Builder) resolveImage(ctx context.Context, ref string) (containerd.Imag
 		pullOpts = append(pullOpts, containerd.WithResolver(b.registry.resolver()))
 	}
 
-	img, err := b.cc.Pull(ctx, ref, pullOpts...)
+	img, err := containerdx.PullImage(ctx, b.log, b.cc, ref, pullOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("pulling %s: %w", ref, err)
 	}
