@@ -18,6 +18,7 @@ func TestMakeTar(t *testing.T) {
 		name         string
 		files        map[string]string // filename -> content
 		dockerignore string
+		includes     []string
 		expected     []string // files that should be in the tar
 	}{
 		{
@@ -138,13 +139,27 @@ func TestMakeTar(t *testing.T) {
 		{
 			name: "deny all retains build inputs and a nested exception",
 			files: map[string]string{
-				"Dockerfile":    "FROM scratch\nCOPY dir/keep.txt /keep.txt\n",
-				"secret.txt":    "ignored",
-				"dir/keep.txt":  "kept",
-				"dir/other.txt": "ignored",
+				"Dockerfile":       "FROM scratch\nCOPY dir/keep.txt /keep.txt\n",
+				"Dockerfile.miren": "FROM scratch\n",
+				"Procfile":         "web: ./server\n",
+				".miren/app.toml":  "name = 'test'\n",
+				".miren/local.key": "ignored",
+				"secret.txt":       "ignored",
+				"dir/keep.txt":     "kept",
+				"dir/other.txt":    "ignored",
 			},
 			dockerignore: "*\n!dir/keep.txt\n",
-			expected:     []string{"Dockerfile", "dir", "dir/keep.txt"},
+			expected:     []string{"Dockerfile", "Dockerfile.miren", "Procfile", ".miren", ".miren/app.toml", "dir", "dir/keep.txt"},
+		},
+		{
+			name: "dotfile rule retains app config but not other miren files",
+			files: map[string]string{
+				".miren/app.toml":  "name = 'test'\n",
+				".miren/local.key": "ignored",
+				".env":             "ignored",
+			},
+			dockerignore: ".*\n",
+			expected:     []string{".miren", ".miren/app.toml"},
 		},
 		{
 			name:         "gitignore and nested dockerignore do not filter uploads",
@@ -171,6 +186,17 @@ func TestMakeTar(t *testing.T) {
 			},
 			expected: []string{"web", "web/app.js", "api", "api/style.css"},
 		},
+		{
+			name: "unrelated include does not activate rules inside ignored directories",
+			files: map[string]string{
+				".gitignore":              "node_modules\nkeep.txt\n",
+				"keep.txt":                "explicitly included",
+				"node_modules/.gitignore": "!secret.txt\n",
+				"node_modules/secret.txt": "must stay excluded",
+			},
+			includes: []string{"keep.txt"},
+			expected: []string{"keep.txt"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -195,14 +221,14 @@ func TestMakeTar(t *testing.T) {
 			}
 
 			// Create tar
-			reader, err := MakeTar(tmpDir, nil, nil)
+			reader, err := MakeTar(tmpDir, tt.includes, nil)
 			require.NoError(t, err)
 
 			// Extract and verify contents
 			entries := extractTarEntries(t, reader)
 
 			require.ElementsMatch(t, expected, entries, "tar entries should match expected files")
-			manifest, err := ComputeManifest(tmpDir, nil)
+			manifest, err := ComputeManifest(tmpDir, tt.includes)
 			require.NoError(t, err)
 			var expectedFiles, manifestFiles []string
 			for _, path := range expected {
@@ -839,10 +865,12 @@ func TestBuildContextPolicy(t *testing.T) {
 		includes            []string
 		config              bool
 		secret              bool
+		localConfig         bool
 	}{
 		{name: "absent dockerignore preserves gitignore filtering"},
 		{name: "empty dockerignore overrides gitignore", dockerignorePresent: true, config: true, secret: true},
-		{name: "fallback include overrides gitignore", includes: []string{"config/rubygems.yml", ".git/**", ".jj/**"}, config: true},
+		{name: "fallback leaf include does not bypass an ignored parent", includes: []string{"config/rubygems.yml"}},
+		{name: "fallback directory include overrides gitignore", includes: []string{"config", ".git/**", ".jj/**"}, config: true, localConfig: true},
 		{name: "dockerignore excludes tracked files too", dockerignore: "config\n.env\n"},
 		{name: "include reaches a file under an ignored directory", dockerignore: "config\n.env\n", includes: []string{"config/rubygems.yml", ".git/**", ".jj/**"}, config: true},
 		{name: "negation reaches a file under an ignored directory", dockerignore: "config\n!config/rubygems.yml\n.env\n", config: true},
@@ -878,7 +906,10 @@ func TestBuildContextPolicy(t *testing.T) {
 				expected = append(expected, "config/rubygems.yml")
 			}
 			if tt.secret {
-				expected = append(expected, ".env", "config/local.yml")
+				expected = append(expected, ".env")
+			}
+			if tt.secret || tt.localConfig {
+				expected = append(expected, "config/local.yml")
 			}
 
 			manifest, err := ComputeManifest(dir, tt.includes)

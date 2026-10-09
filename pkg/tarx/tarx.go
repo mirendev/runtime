@@ -65,7 +65,7 @@ func contextFilter(dir string, includePatterns []string) (func(string, bool) (bo
 			if vcs.Match(segs, isDir) || filepath.Base(rp) == ".gitignore" {
 				return false, nil
 			}
-			included := includes.Match(segs, isDir) || (isDir && len(includePatterns) > 0)
+			included := includes.Match(segs, isDir)
 			if !included && ignored.Match(segs, isDir) {
 				return false, nil
 			}
@@ -97,22 +97,55 @@ func contextFilter(dir string, includePatterns []string) (func(string, bool) (bo
 		if vcs.Match(segs, isDir) {
 			return false, nil
 		}
-		// Docker still needs these inputs when its ignore rules exclude them
-		// from COPY (for example, a deny-all context with selected negations).
-		if !isDir && (rp == ".dockerignore" || rp == "Dockerfile") {
+		// The server reads these inputs independently of Dockerfile COPY.
+		if rp == ".miren" && isDir {
 			return true, nil
 		}
-		// A negation or explicit include can retain a descendant of an
-		// excluded directory, so do not prune those directories prematurely.
-		if isDir && (ignored.Exclusions() || len(includePatterns) > 0) {
+		if !isDir && (rp == ".dockerignore" || rp == "Dockerfile" || rp == "Dockerfile.miren" || rp == "Procfile" || rp == ".miren/app.toml") {
 			return true, nil
 		}
 		if includes.Match(segs, isDir) {
 			return true, nil
 		}
 		excluded, err := ignored.MatchesOrParentMatches(filepath.ToSlash(rp))
+		if err != nil {
+			return false, err
+		}
+		if isDir && excluded {
+			for _, pattern := range ignored.Patterns() {
+				if pattern.Exclusion() && couldMatchDescendant(rp, pattern.String()) {
+					return true, nil
+				}
+			}
+			for _, pattern := range includePatterns {
+				// Gitignore basename patterns can match at any depth.
+				if !strings.Contains(strings.Trim(pattern, "/"), "/") || couldMatchDescendant(rp, pattern) {
+					return true, nil
+				}
+			}
+		}
 		return !excluded, err
 	}, nil
+}
+
+// couldMatchDescendant conservatively compares a rooted pattern's prefix with
+// a directory. A globstar may consume multiple path segments, so keep walking
+// once one is encountered rather than pruning a potentially retained file.
+func couldMatchDescendant(dir, pattern string) bool {
+	parts := strings.Split(strings.TrimPrefix(pattern, "/"), "/")
+	for i, segment := range pathSegments(dir) {
+		if i >= len(parts) || strings.Contains(parts[i], "**") {
+			return true
+		}
+		matches, err := filepath.Match(parts[i], segment)
+		if err != nil {
+			return true
+		}
+		if !matches {
+			return false
+		}
+	}
+	return true
 }
 
 func parseGitignoreFile(path string, domain []string) ([]gitignore.Pattern, error) {

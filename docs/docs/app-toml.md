@@ -103,17 +103,24 @@ nested `.gitignore` files filter uploads, including files tracked by Git, and
 the `.gitignore` files themselves are omitted. If neither ignore file exists,
 all source files are uploaded except `.git` and `.jj` metadata.
 
-When root `.dockerignore` exists, the root `Dockerfile` and `.dockerignore` are
-always uploaded so BuildKit can read them, even when a pattern such as `*`
-excludes them from `COPY`. If you use a custom Dockerfile path, keep it
-available with a negation or `include`.
+When root `.dockerignore` exists, Miren always uploads its build inputs:
+`.dockerignore`, `Dockerfile`, `Dockerfile.miren`, `Procfile`, and
+`.miren/app.toml`. This keeps build and service configuration available even
+when a pattern such as `*` or `.*` excludes it from Dockerfile `COPY`.
+Other files inside `.miren` still follow the ignore rules. If you use another
+custom Dockerfile path, keep it available with a negation or `include`.
 
-`include` uses gitignore-style patterns to override upload exclusions. It can
-include a file inside an excluded directory without including its siblings:
+`include` uses gitignore-style patterns to override upload exclusions. In
+`.dockerignore` mode, it can include a file inside an excluded directory
+without including its siblings:
 
 ```toml
 include = ["config/rubygems.yml"]
 ```
+
+In the `.gitignore` fallback, an excluded directory is skipped unless the
+directory itself matches `include`; a file-only include does not reopen its
+excluded parent directory.
 
 VCS metadata is never uploaded, even with `include`. For Dockerfile builds,
 BuildKit also applies its own ignore rules to the uploaded context; `include`
