@@ -26,6 +26,7 @@ import (
 	"miren.dev/runtime/components/activator"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -751,9 +752,12 @@ const notFoundBody = "404 page not found\n"
 // path (past prepare) rather than vanishing into a 404. It never returns a
 // lease, so a request that proceeds past the guard fails with a 5xx —
 // distinctly not the guard's 404.
-type stubActivator struct{}
+type stubActivator struct{ err error }
 
-func (stubActivator) AcquireLease(context.Context, *core_v1alpha.AppVersion, string) (*activator.Lease, error) {
+func (s stubActivator) AcquireLease(context.Context, *core_v1alpha.AppVersion, string) (*activator.Lease, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	return nil, errors.New("test stub: no sandbox wired")
 }
 func (stubActivator) ReleaseLease(context.Context, *activator.Lease) error { return nil }
@@ -764,6 +768,43 @@ func (stubActivator) Invalidations() <-chan activator.SandboxInvalidation {
 	return make(chan activator.SandboxInvalidation)
 }
 func (stubActivator) SetPoolCreator(activator.PoolCreator) {}
+
+func TestDiskBackedPreviewIngressDenial(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	appID, err := inmem.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	cvID, err := inmem.Client.Create(ctx, "cfg", &core_v1alpha.ConfigVersion{
+		App: appID, Spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web", Ports: []core_v1alpha.ConfigSpecServicesPorts{{Port: 8080, Type: "http"}}}}},
+	})
+	require.NoError(t, err)
+	verID, err := inmem.Client.Create(ctx, "preview", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cvID, EphemeralLabel: "pr-2"})
+	require.NoError(t, err)
+	require.NoError(t, inmem.Client.Update(ctx, &core_v1alpha.App{ID: appID, ActiveVersion: verID}))
+	_, err = inmem.Client.Create(ctx, "route", &ingress_v1alpha.HttpRoute{Host: "preview.example.com", App: appID, Service: "web"})
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	s := &Server{Log: log, eac: inmem.EAC,
+		ingressClient: ingress.NewClient(log, rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server))),
+		aa:            stubActivator{err: fmt.Errorf("wrapped: %w", ephemeralx.ErrDisksUnsupported)},
+	}
+	for _, accept := range []string{"text/html", "application/json", "text/plain"} {
+		t.Run(accept, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "http://preview.example.com/", nil)
+			r.Header.Set("Accept", accept)
+			w := httptest.NewRecorder()
+			var appName string
+			s.serveHTTPWithMetrics(w, r, &appName)
+			require.Equal(t, http.StatusLocked, w.Code)
+			require.Contains(t, w.Body.String(), "Remove disk attachments and redeploy the preview.")
+			require.NotContains(t, w.Body.String(), "Try again")
+		})
+	}
+	require.Contains(t, logs.String(), "level=WARN")
+	require.NotContains(t, logs.String(), "level=ERROR")
+}
 
 // TestPrivateMetricsPathE2E drives the public ingress end-to-end through
 // serveHTTPWithMetrics — the real prepare closure, resolveIngressTarget, and

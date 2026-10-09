@@ -238,15 +238,6 @@ func (a *localActivator) SetPoolCreator(pc PoolCreator) {
 }
 
 func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.AppVersion, service string) (*Lease, error) {
-	if ver.EphemeralLabel != "" {
-		spec, err := coreutil.ResolveRuntimeConfig(ctx, a.eac, ver)
-		if err != nil {
-			return nil, err
-		}
-		if err := ephemeralx.ValidateConfig(spec); err != nil {
-			return nil, err
-		}
-	}
 	key := verKey{ver.ID.String(), service}
 
 	// Try to find an available sandbox with capacity (read lock for scanning)
@@ -266,7 +257,7 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
 				if ver.EphemeralLabel != "" && len(s.sandbox.Spec.Volume) > 0 {
 					a.mu.RUnlock()
-					return nil, fmt.Errorf("ephemeral deployments do not support disks")
+					return nil, ephemeralx.ErrDisksUnsupported
 				}
 				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 					candidateSandbox = s
@@ -624,11 +615,6 @@ func (a *localActivator) requestPoolCapacity(ctx context.Context, ver *core_v1al
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve config: %w", err)
 	}
-	if ver.EphemeralLabel != "" {
-		if err := ephemeralx.ValidateConfig(spec); err != nil {
-			return nil, err
-		}
-	}
 	svcConcurrency, err := coreutil.GetServiceConcurrency(spec, service)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service concurrency: %w", err)
@@ -668,7 +654,7 @@ poolLoop:
 			}
 
 			if ver.EphemeralLabel != "" && len(state.pool.SandboxSpec.Volume) > 0 {
-				return nil, fmt.Errorf("ephemeral deployments do not support disks")
+				return nil, ephemeralx.ErrDisksUnsupported
 			}
 
 			// state.pool is now a real (non-sentinel) cached pool. Ensure the
@@ -942,6 +928,10 @@ poolLoop:
 			foundPool := foundPoolWithRev.pool
 			currentRevision := foundPoolWithRev.revision
 			poolID := foundPool.ID
+			if ver.EphemeralLabel != "" && len(foundPool.SandboxSpec.Volume) > 0 {
+				a.mu.Unlock()
+				return nil, ephemeralx.ErrDisksUnsupported
+			}
 
 			// Cache the pool state and register strategy before doing anything
 			// else: even when we're at cap and won't patch, the caller needs

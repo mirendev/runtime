@@ -885,6 +885,41 @@ func TestBuildSaga_FailsWhenStreamUnavailable(t *testing.T) {
 
 }
 
+func TestBuildSaga_RecoversLegacyEphemeralCompensation(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h := newSagaTestHarness(t)
+			registry := saga.NewRegistry()
+			require.NoError(t, registerBuildSaga(registry, h.builder, h.streams, h.statuses, h.builder.Log))
+			ctx := context.Background()
+			staged := filepath.Join(t.TempDir(), "staged")
+			require.NoError(t, os.Mkdir(staged, 0755))
+			h.streams.MarkStaged("legacy-stream", staged)
+			at := time.Now().Add(-time.Hour)
+			storage := saga.NewMemoryStorage()
+			require.NoError(t, storage.Save(ctx, &saga.Execution{
+				ID: "legacy", DefinitionName: sagaBuildFromTar, DefinitionVersion: version,
+				InitialInputs: map[string]any{"app_name": "demo", "stream_id": "legacy-stream", "app_id": "app", "ephemeral_label": "pr-2"},
+				Status:        saga.StatusUndoing,
+				ExecutedActions: map[string]*saga.ActionResult{
+					actionReceiveTar:     {Output: []byte(fmt.Sprintf(`{"source_dir":%q}`, staged)), ExecutedAt: at},
+					actionHandleEphemera: {Output: []byte(`{}`), ExecutedAt: at},
+				},
+				ExecutionOrder: []string{actionReceiveTar, actionHandleEphemera}, CreatedAt: at, UpdatedAt: at,
+			}))
+			_ = saga.NewExecutor(storage, saga.WithRegistry(registry)).Recover(ctx)
+			after, err := storage.Get(ctx, "legacy")
+			require.NoError(t, err)
+			require.Equal(t, saga.StatusFailed, after.Status)
+			require.Empty(t, after.BlockedReason)
+			_, err = os.Stat(staged)
+			require.True(t, os.IsNotExist(err), "compensation must reach source cleanup without prepared config")
+		})
+	}
+	_, err := handleEphemeral(context.Background(), handleEphemeralIn{EphemeralLabel: "pr-2"})
+	require.ErrorContains(t, err, "requires prepared config")
+}
+
 // The saga orders actions by data dependency, not by registration order, so the
 // gate's position has to be asserted rather than assumed. Everything about
 // deploy tasks depends on landing in exactly one place: after addons exist,

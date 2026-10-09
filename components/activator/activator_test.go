@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -17,10 +18,11 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 )
 
 func TestActivatorRejectsDiskBackedPreviewActivation(t *testing.T) {
-	for _, mode := range []string{"configured", "legacy-volume", "diskless"} {
+	for _, mode := range []string{"configured", "addon-added", "legacy-volume", "diskless"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			server, cleanup := testutils.NewInMemEntityServer(t)
@@ -38,6 +40,12 @@ func TestActivatorRejectsDiskBackedPreviewActivation(t *testing.T) {
 			pool.ID = poolID
 			before, err := server.EAC.Get(ctx, poolID.String())
 			require.NoError(t, err)
+			if mode == "addon-added" {
+				_, err = server.Client.Create(ctx, "sqlite", &addon_v1alpha.AddonAssociation{
+					App: ver.App, Status: "active", Disks: []addon_v1alpha.Disks{{Name: "sqlite", Provider: "local", MountPath: "/data"}},
+				})
+				require.NoError(t, err)
+			}
 			strategy := concurrency.NewStrategyForVersion(ver, "web", &core_v1alpha.ServiceConcurrency{})
 			key := verKey{ver.ID.String(), "web"}
 			a := &localActivator{
@@ -47,14 +55,19 @@ func TestActivatorRejectsDiskBackedPreviewActivation(t *testing.T) {
 				poolSandboxes: map[entity.Id]*poolSandboxes{poolID: {pool: pool, service: "web", strategy: strategy, sandboxes: []*sandbox{{sandbox: &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec}, url: "http://preview", tracker: strategy.InitializeTracker(), ent: entity.Blank()}}}},
 			}
 			lease, err := a.AcquireLease(ctx, ver, "web")
-			if mode == "diskless" {
+			if mode != "legacy-volume" {
 				require.NoError(t, err)
 				require.NotNil(t, lease)
+				_, err = a.requestPoolCapacity(ctx, ver, "web")
+				require.NoError(t, err, "existing diskless pool must wake regardless of current config disks")
 			} else {
-				require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+				require.ErrorIs(t, err, ephemeralx.ErrDisksUnsupported)
 				require.Nil(t, lease)
 				_, err = a.requestPoolCapacity(ctx, ver, "web")
-				require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+				require.ErrorIs(t, err, ephemeralx.ErrDisksUnsupported)
+				delete(a.pools, key)
+				_, err = a.requestPoolCapacity(ctx, ver, "web")
+				require.ErrorIs(t, err, ephemeralx.ErrDisksUnsupported, "store-discovered pools must also reject volumes")
 				after, err := server.EAC.Get(ctx, poolID.String())
 				require.NoError(t, err)
 				require.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "rejection must not scale the pool")

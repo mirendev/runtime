@@ -1,6 +1,10 @@
 {
   "build-from-tar": {
     "version": 3,
+    "resumes_from": [
+      1,
+      2
+    ],
     "actions": {
       "activate-deployment": {
         "inputs": [

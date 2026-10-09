@@ -141,6 +141,9 @@ func serveIngressErrorWithTemplate(w http.ResponseWriter, r *http.Request, messa
 	case http.StatusRequestTimeout:
 		data.Title = "This app couldn't start."
 		data.Description = "If this is your app, check its logs with miren logs to find out why. Otherwise, please check back later."
+	case http.StatusLocked:
+		data.Title = "This preview uses unsupported storage."
+		data.Description = "Preview deployments cannot use disks shared with production. Remove disk attachments and redeploy the preview."
 	case http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusGatewayTimeout:
 		data.Title = "This app is temporarily unavailable."
 		data.Description = "The app couldn't respond right now. Please try again in a few moments."
@@ -281,7 +284,7 @@ var errorPage = template.Must(template.New("ingress-error").Funcs(template.FuncM
       {{if .Reason}}<p class="reason">{{.Reason}}</p>{{else}}<p>This site is taking a short break for maintenance.</p>{{end}}
       {{if .BackAt}}<p>Expected back at {{.BackAt}}.</p>{{else}}<p>Please check back shortly.</p>{{end}}
     {{else}}<p>{{.Description}}</p>{{end}}
-    {{if not (or .Maintenance (eq .Status 404) (eq .Status 408))}}<a class="action" href="">Try again &rarr;</a>{{end}}
+    {{if not (or .Maintenance (eq .Status 404) (eq .Status 408) (eq .Status 423))}}<a class="action" href="">Try again &rarr;</a>{{end}}
   </div></main>
   <footer>Powered by Miren</footer>
 </div>

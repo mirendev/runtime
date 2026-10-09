@@ -350,7 +350,7 @@ type handleEphemeralIn struct {
 	AppName        string `json:"app_name" saga:"app_name"`
 	StreamID       string `json:"stream_id" saga:"stream_id"`
 	AppID          string `json:"app_id" saga:"app_id"`
-	ConfigSpec     string `json:"config_spec_json" saga:"config_spec_json"`
+	ConfigSpec     string `json:"config_spec_json" saga:"config_spec_json,optional"`
 	EphemeralLabel string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	EphemeralTTL   string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
 }
@@ -362,6 +362,9 @@ type handleEphemeralOut struct {
 func handleEphemeral(ctx context.Context, in handleEphemeralIn) (handleEphemeralOut, error) {
 	if in.EphemeralLabel == "" {
 		return handleEphemeralOut{}, nil
+	}
+	if in.ConfigSpec == "" {
+		return handleEphemeralOut{}, fmt.Errorf("ephemeral deployment requires prepared config")
 	}
 
 	deps := saga.Get[*buildSagaDeps](ctx)
@@ -1155,10 +1158,10 @@ func registerBuildSaga(
 		statuses: statuses,
 	}
 
-	// v1/v2 may have replaced a preview before preparing config, leaving no
-	// config_spec_json for the new handle-ephemeral input during compensation.
+	// The optional config input allows v1/v2 compensation before prepare-config
+	// ran; forward execution still requires config before replacing previews.
 	return saga.Define(sagaBuildFromTar).
-		Version(3).ResumesFrom().
+		Version(3).ResumesFrom(1, 2).
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).
