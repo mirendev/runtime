@@ -85,10 +85,13 @@ func TestPacketFilterKernel(t *testing.T) {
 			found := false
 			for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); {
 				if _, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, 20); err != nil {
+					if errors.Is(err, unix.EINTR) {
+						continue
+					}
 					t.Fatal(err)
 				}
 				n, _, err := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
-				if errors.Is(err, unix.EAGAIN) {
+				if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
 					continue
 				}
 				if err != nil {
