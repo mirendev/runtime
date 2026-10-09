@@ -76,7 +76,7 @@ func (c *VictoriaMetricsComponent) Start(ctx context.Context, config VictoriaMet
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Info("pulling victoriametrics image", "image", victoriaMetricsImage)
-	image, err := c.CC.Pull(ctx, victoriaMetricsImage, containerd.WithPullUnpack)
+	image, err := containerdx.PullImage(ctx, c.Log, c.CC, victoriaMetricsImage, containerd.WithPullUnpack)
 	if err != nil {
 		return fmt.Errorf("failed to pull victoriametrics image: %w", err)
 	}

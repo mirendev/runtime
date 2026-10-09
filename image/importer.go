@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"io"
+	"log/slog"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	tarchive "github.com/containerd/containerd/v2/core/transfer/archive"
@@ -10,6 +11,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/platforms"
 	_ "github.com/moby/buildkit/client/connhelper/dockercontainer"
+	"miren.dev/runtime/pkg/containerdx"
 )
 
 type ImageImporter struct {
@@ -51,7 +53,7 @@ func (i *ImageImporter) PullImage(ctx context.Context, ref string) (containerd.I
 
 	img, err := i.CC.GetImage(ctx, ref)
 	if err != nil {
-		return i.CC.Pull(ctx, ref, containerd.WithPullUnpack)
+		return containerdx.PullImage(ctx, slog.Default(), i.CC, ref, containerd.WithPullUnpack)
 	}
 
 	return img, nil

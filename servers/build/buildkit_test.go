@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,50 @@ const (
 func checkDocker() bool {
 	_, err := os.Stat("/var/run/docker.sock")
 	return err == nil
+}
+
+func TestBuildImageCancellationWithStalledStatusReceiver(t *testing.T) {
+	if _, err := os.Stat("/run/buildkit/buildkitd.sock"); err != nil {
+		t.Skip("BuildKit daemon not available")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	client, err := buildkit.New(ctx, "unix:///run/buildkit/buildkitd.sock")
+	require.NoError(t, err)
+	t.Cleanup(func() { client.Close() })
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY marker /marker\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("progress cancellation"), 0644))
+	dfs, err := fsutil.NewFS(dir)
+	require.NoError(t, err)
+	sender, received := stalledStatusReceiver(t)
+	bk := &Buildkit{Client: client, Log: slog.Default()}
+	var active atomic.Int32
+	finished := make(chan error, 1)
+	go func() {
+		_, err := bk.BuildImage(ctx, dfs, BuildStack{Stack: "dockerfile", CodeDir: dir, Input: "Dockerfile"}, "stalled-status", "127.0.0.1:1/stalled-status:latest",
+			WithStatusUpdates(func(ctx context.Context, _ *buildkit.SolveStatus, payload []byte) {
+				active.Add(1)
+				defer active.Add(-1)
+				sender.SendBuildkit(ctx, payload)
+			}))
+		finished <- err
+	}()
+	select {
+	case <-received:
+	case err := <-finished:
+		t.Fatalf("build returned before exercising the stalled receiver: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("build never delivered progress")
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		require.Error(t, err)
+		require.Zero(t, active.Load(), "a completed attempt must not leave its callback running into the next attempt")
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not release the build from a stalled status callback")
+	}
 }
 
 func TestAddRegistryAuthProvidesBuildKitToken(t *testing.T) {

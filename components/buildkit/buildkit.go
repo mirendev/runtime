@@ -25,6 +25,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/components/base"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/imagerefs"
 	"miren.dev/runtime/pkg/slogout"
 )
@@ -138,7 +139,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
 
 	c.Log.Info("pulling buildkit image", "image", buildkitImage)
-	image, err := c.CC.Pull(ctx, buildkitImage, containerd.WithPullUnpack)
+	image, err := containerdx.PullImage(ctx, c.Log, c.CC, buildkitImage, containerd.WithPullUnpack)
 	if err != nil {
 		return fmt.Errorf("failed to pull buildkit image: %w", err)
 	}

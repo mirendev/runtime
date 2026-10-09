@@ -21,6 +21,7 @@ import (
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/session/secrets/secretsprovider"
 	"miren.dev/runtime/components/ocireg"
+	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/stackbuild"
 	"miren.dev/runtime/pkg/workloadidentity"
@@ -83,8 +84,8 @@ func (t *tarOutput) Close() error {
 }
 
 type transformOpt struct {
-	statusUpdates func(ss *client.SolveStatus, sj []byte)
-	phaseUpdates  func(phase string)
+	statusUpdates func(ctx context.Context, ss *client.SolveStatus, sj []byte)
+	phaseUpdates  func(ctx context.Context, phase string)
 	cacheDir      string
 	frontendAttrs map[string]string
 	// buildSecrets maps a BuildKit secret id to its resolved plaintext. When
@@ -97,13 +98,13 @@ type transformOpt struct {
 
 type TransformOptions func(*transformOpt)
 
-func WithStatusUpdates(fn func(ss *client.SolveStatus, sj []byte)) TransformOptions {
+func WithStatusUpdates(fn func(ctx context.Context, ss *client.SolveStatus, sj []byte)) TransformOptions {
 	return func(o *transformOpt) {
 		o.statusUpdates = fn
 	}
 }
 
-func WithPhaseUpdates(fn func(phase string)) TransformOptions {
+func WithPhaseUpdates(fn func(ctx context.Context, phase string)) TransformOptions {
 	return func(o *transformOpt) {
 		o.phaseUpdates = fn
 	}
@@ -252,27 +253,22 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 		ssProgress := make(chan *client.SolveStatus, 1)
 
 		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case ss, ok := <-ssProgress:
-					if !ok {
-						b.Log.Info("status channel closed", "ref", ref)
-						return
-					}
-					if data, err := json.Marshal(ss); err == nil {
-						if opts.statusUpdates != nil {
-							opts.statusUpdates(ss, data)
-						}
+			for ss := range ssProgress {
+				if ctx.Err() != nil {
+					continue
+				}
+				if data, err := json.Marshal(ss); err == nil {
+					if opts.statusUpdates != nil {
+						opts.statusUpdates(ctx, ss, data)
 					}
 				}
 			}
+			b.Log.Info("status channel closed", "ref", ref)
 		}()
 
 		_, err = b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 			if opts.phaseUpdates != nil {
-				opts.phaseUpdates("solving")
+				opts.phaseUpdates(ctx, "solving")
 			}
 
 			b.Log.Info("solving", "ref", ref)
@@ -283,7 +279,7 @@ func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...Transfor
 			}
 
 			if opts.phaseUpdates != nil {
-				opts.phaseUpdates("solved")
+				opts.phaseUpdates(ctx, "solved")
 			}
 
 			b.Log.Info("solved", "ref", ref)
@@ -370,6 +366,18 @@ func applyImageConfig(res *BuildResult, data []byte) error {
 }
 
 func (b *Buildkit) BuildImage(
+	ctx context.Context,
+	dfs fsutil.FS,
+	bs BuildStack,
+	app, imageURL string,
+	tos ...TransformOptions,
+) (*BuildResult, error) {
+	return containerdx.RetryBlobFetch(ctx, b.Log, func() (*BuildResult, error) {
+		return b.buildImage(ctx, dfs, bs, app, imageURL, tos...)
+	})
+}
+
+func (b *Buildkit) buildImage(
 	ctx context.Context,
 	dfs fsutil.FS,
 	bs BuildStack,
@@ -506,50 +514,52 @@ func (b *Buildkit) BuildImage(
 	b.Log.Info("building from fs walker", "ref", ref)
 
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	ssProgress := make(chan *client.SolveStatus, 1)
+	progressDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-progressDone
+	}()
 
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ss, ok := <-ssProgress:
-				if !ok {
-					b.Log.Info("status channel closed", "ref", ref)
-					return
-				}
-				if data, err := json.Marshal(ss); err == nil {
-					if opts.phaseUpdates != nil {
-						for _, s := range ss.Vertexes {
-							if s.Started == nil || s.Completed != nil {
-								continue
-							}
+		defer close(progressDone)
+		// BuildKit's producer uses non-cancellable channel sends. Keep draining
+		// until it closes the channel, but stop notifying the canceled client.
+		for ss := range ssProgress {
+			if ctx.Err() != nil {
+				continue
+			}
+			if data, err := json.Marshal(ss); err == nil {
+				if opts.phaseUpdates != nil {
+					for _, s := range ss.Vertexes {
+						if s.Started == nil || s.Completed != nil {
+							continue
+						}
 
-							if after, ok0 := strings.CutPrefix(s.Name, "[phase] "); ok0 {
-								phase := after
-								b.Log.Debug("phase update", "phase", phase)
-								opts.phaseUpdates(phase)
-							}
+						if after, ok0 := strings.CutPrefix(s.Name, "[phase] "); ok0 {
+							phase := after
+							b.Log.Debug("phase update", "phase", phase)
+							opts.phaseUpdates(ctx, phase)
 						}
 					}
+				}
 
-					if opts.statusUpdates != nil {
-						opts.statusUpdates(ss, data)
-					}
+				if opts.statusUpdates != nil {
+					opts.statusUpdates(ctx, ss, data)
 				}
 			}
 		}
+		b.Log.Info("status channel closed", "ref", ref)
 	}()
 
 	if def != nil {
 		if opts.phaseUpdates != nil {
-			opts.phaseUpdates("solving")
+			opts.phaseUpdates(ctx, "solving")
 		}
 		solveResp, err := b.Client.Solve(ctx, def, solveOpt, ssProgress)
 		if opts.phaseUpdates != nil {
-			opts.phaseUpdates("solved")
+			opts.phaseUpdates(ctx, "solved")
 		}
 		if err == nil && solveResp != nil && solveResp.ExporterResponse != nil {
 			if digest, ok := solveResp.ExporterResponse["containerimage.digest"]; ok {
@@ -568,7 +578,7 @@ func (b *Buildkit) BuildImage(
 
 	buildResp, err := b.Client.Build(ctx, solveOpt, "runtime", func(ctx context.Context, c gateway.Client) (*gateway.Result, error) {
 		if opts.phaseUpdates != nil {
-			opts.phaseUpdates("solving")
+			opts.phaseUpdates(ctx, "solving")
 		}
 
 		b.Log.Info("solving", "ref", ref)
@@ -579,7 +589,7 @@ func (b *Buildkit) BuildImage(
 		}
 
 		if opts.phaseUpdates != nil {
-			opts.phaseUpdates("solved")
+			opts.phaseUpdates(ctx, "solved")
 		}
 
 		b.Log.Info("solved", "ref", ref)

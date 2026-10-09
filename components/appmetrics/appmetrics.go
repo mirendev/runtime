@@ -132,7 +132,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 		imageRef = imagerefs.VMagent
 	}
 	c.Log.Info("pulling vmagent image", "image", imageRef)
-	image, err := c.CC.Pull(ctx, imageRef, containerd.WithPullUnpack)
+	image, err := containerdx.PullImage(ctx, c.Log, c.CC, imageRef, containerd.WithPullUnpack)
 	if err != nil {
 		c.stopBackground()
 		return fmt.Errorf("pulling vmagent image: %w", err)
