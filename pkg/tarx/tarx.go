@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	"github.com/moby/patternmatcher"
+	"github.com/moby/patternmatcher/ignorefile"
 	"github.com/tonistiigi/fsutil"
 )
 
@@ -41,11 +43,78 @@ func vcsIgnorePatterns() []gitignore.Pattern {
 	return patterns
 }
 
-// parseGitignoreFile reads a .gitignore file and returns its parsed patterns
-// scoped to the given domain (path components from the walk root). A missing
-// file is not an error and returns (nil, nil); other read failures (e.g.
-// permission denied) propagate up so we don't silently treat them as "no
-// patterns" and ship a tar that should have been filtered.
+// contextFilter prefers the root .dockerignore, falling back to root and
+// nested .gitignore files when absent. Includes never override VCS exclusions.
+func contextFilter(dir string, includePatterns []string) (func(string, bool) (bool, error), error) {
+	includes := gitignore.NewMatcher(parseStringPatterns(includePatterns))
+	vcs := gitignore.NewMatcher(vcsIgnorePatterns())
+	path := filepath.Join(dir, ".dockerignore")
+	f, err := os.Open(path)
+	var patterns []string
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		gitPatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+		if err != nil {
+			return nil, err
+		}
+		ignored := gitignore.NewMatcher(gitPatterns)
+		return func(rp string, isDir bool) (bool, error) {
+			segs := pathSegments(rp)
+			if vcs.Match(segs, isDir) || filepath.Base(rp) == ".gitignore" {
+				return false, nil
+			}
+			included := includes.Match(segs, isDir) || (isDir && len(includePatterns) > 0)
+			if !included && ignored.Match(segs, isDir) {
+				return false, nil
+			}
+			if isDir {
+				more, err := parseGitignoreFile(filepath.Join(dir, rp, ".gitignore"), segs)
+				if err != nil {
+					return false, err
+				}
+				if len(more) > 0 {
+					gitPatterns = append(gitPatterns, more...)
+					ignored = gitignore.NewMatcher(gitPatterns)
+				}
+			}
+			return true, nil
+		}, nil
+	} else {
+		defer f.Close()
+		patterns, err = ignorefile.ReadAll(f)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+	}
+	ignored, err := patternmatcher.New(patterns)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return func(rp string, isDir bool) (bool, error) {
+		segs := pathSegments(rp)
+		if vcs.Match(segs, isDir) {
+			return false, nil
+		}
+		// Docker still needs these inputs when its ignore rules exclude them
+		// from COPY (for example, a deny-all context with selected negations).
+		if !isDir && (rp == ".dockerignore" || rp == "Dockerfile") {
+			return true, nil
+		}
+		// A negation or explicit include can retain a descendant of an
+		// excluded directory, so do not prune those directories prematurely.
+		if isDir && (ignored.Exclusions() || len(includePatterns) > 0) {
+			return true, nil
+		}
+		if includes.Match(segs, isDir) {
+			return true, nil
+		}
+		excluded, err := ignored.MatchesOrParentMatches(filepath.ToSlash(rp))
+		return !excluded, err
+	}, nil
+}
+
 func parseGitignoreFile(path string, domain []string) ([]gitignore.Pattern, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -137,18 +206,13 @@ func TarToMap(r io.Reader) (map[string][]byte, error) {
 	return m, nil
 }
 
-// ComputeManifest walks a directory using the same gitignore/include logic as MakeTar
+// ComputeManifest walks a directory using the same ignore/include logic as MakeTar
 // and returns a manifest of all regular files with their SHA-256 hashes.
 func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, error) {
-	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	filter, err := contextFilter(dir, includePatterns)
 	if err != nil {
 		return nil, err
 	}
-	ignorePatterns = append(ignorePatterns, vcsIgnorePatterns()...)
-	includes := parseStringPatterns(includePatterns)
-
-	includesMatcher := gitignore.NewMatcher(includes)
-	ignoreMatcher := gitignore.NewMatcher(ignorePatterns)
 
 	var manifest []FileManifest
 
@@ -163,37 +227,18 @@ func ComputeManifest(dir string, includePatterns []string) ([]FileManifest, erro
 
 		rp, _ := filepath.Rel(dir, path)
 
-		if filepath.Base(rp) == ".gitignore" {
-			return nil
+		included, err := filter(rp, info.IsDir())
+		if err != nil {
+			return err
 		}
-
-		segs := pathSegments(rp)
-
-		isIncluded := len(includes) > 0 && includesMatcher.Match(segs, info.IsDir())
-
-		if !isIncluded {
-			if ignoreMatcher.Match(segs, info.IsDir()) {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-
 		if info.IsDir() {
-			nestedGitignore := filepath.Join(path, ".gitignore")
-			more, err := parseGitignoreFile(nestedGitignore, segs)
-			if err != nil {
-				return err
-			}
-			if more != nil {
-				ignorePatterns = append(ignorePatterns, more...)
-				ignoreMatcher = gitignore.NewMatcher(ignorePatterns)
+			if !included {
+				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if !info.Mode().IsRegular() {
+		if !included || !info.Mode().IsRegular() {
 			return nil
 		}
 
@@ -250,19 +295,14 @@ func MakeFilteredTar(dir string, includePatterns []string, onlyPaths map[string]
 	return makeTarWithFilter(dir, includePatterns, func(rp string) bool { return onlyPaths[rp] }, uncompressedBytes)
 }
 
-// makeTarWithFilter creates a gzipped tar of dir, applying gitignore/include logic,
+// makeTarWithFilter creates a gzipped tar of dir, applying ignore/include logic,
 // and only including regular files for which accept returns true. Directory entries
 // are emitted lazily as needed to contain accepted files.
 func makeTarWithFilter(dir string, includePatterns []string, accept func(string) bool, uncompressedBytes *atomic.Int64) (io.ReadCloser, error) {
-	ignorePatterns, err := parseGitignoreFile(filepath.Join(dir, ".gitignore"), nil)
+	filter, err := contextFilter(dir, includePatterns)
 	if err != nil {
 		return nil, err
 	}
-	ignorePatterns = append(ignorePatterns, vcsIgnorePatterns()...)
-	includes := parseStringPatterns(includePatterns)
-
-	includesMatcher := gitignore.NewMatcher(includes)
-	ignoreMatcher := gitignore.NewMatcher(ignorePatterns)
 
 	// io.Pipe (rather than os.Pipe) lets us surface walk errors to the
 	// reader via CloseWithError instead of silently EOF-ing.
@@ -284,37 +324,18 @@ func makeTarWithFilter(dir string, includePatterns []string, accept func(string)
 
 			rp, _ := filepath.Rel(dir, path)
 
-			if filepath.Base(rp) == ".gitignore" {
-				return nil
+			included, err := filter(rp, info.IsDir())
+			if err != nil {
+				return err
 			}
-
-			segs := pathSegments(rp)
-
-			isIncluded := len(includes) > 0 && includesMatcher.Match(segs, info.IsDir())
-
-			if !isIncluded {
-				if ignoreMatcher.Match(segs, info.IsDir()) {
-					if info.IsDir() {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-			}
-
 			if info.IsDir() {
-				nestedGitignore := filepath.Join(path, ".gitignore")
-				more, err := parseGitignoreFile(nestedGitignore, segs)
-				if err != nil {
-					return err
-				}
-				if more != nil {
-					ignorePatterns = append(ignorePatterns, more...)
-					ignoreMatcher = gitignore.NewMatcher(ignorePatterns)
+				if !included {
+					return filepath.SkipDir
 				}
 				return nil
 			}
 
-			if !accept(rp) {
+			if !included || !accept(rp) {
 				return nil
 			}
 

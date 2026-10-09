@@ -90,6 +90,43 @@ tail = "logs app -f"
 | `workload_role` | string | Role for this app's sandbox [in-cluster API access](./in-cluster-api.md). Only app-scoped roles may be set here; cluster-scoped roles require an operator. | `app-readonly` |
 | `web` | bool | Whether the app has a long-running web process. Set `web = false` for an app made entirely of [tasks](#tasks). | Unset — a web service is synthesized if nothing declares one, except for static-only apps and task-only apps with no services |
 
+### Build context and `include` {#build-context}
+
+Miren filters source uploads using the `.dockerignore` at the upload root,
+with Docker pattern syntax, including `**` and `!` negations. Nested
+`.dockerignore` files do not add rules. When root `.dockerignore` exists,
+even if it is empty, `.gitignore` does not filter uploads. Tracked and
+untracked files are treated alike.
+
+Without root `.dockerignore`, Miren preserves its existing behavior: root and
+nested `.gitignore` files filter uploads, including files tracked by Git, and
+the `.gitignore` files themselves are omitted. If neither ignore file exists,
+all source files are uploaded except `.git` and `.jj` metadata.
+
+When root `.dockerignore` exists, the root `Dockerfile` and `.dockerignore` are
+always uploaded so BuildKit can read them, even when a pattern such as `*`
+excludes them from `COPY`. If you use a custom Dockerfile path, keep it
+available with a negation or `include`.
+
+`include` uses gitignore-style patterns to override upload exclusions. It can
+include a file inside an excluded directory without including its siblings:
+
+```toml
+include = ["config/rubygems.yml"]
+```
+
+VCS metadata is never uploaded, even with `include`. For Dockerfile builds,
+BuildKit also applies its own ignore rules to the uploaded context; `include`
+does not override that filtering. Use a `.dockerignore` negation when a file
+must also be available to Dockerfile `COPY` instructions.
+
+:::danger[Review .dockerignore before deploying]
+When root `.dockerignore` exists, files excluded only by `.gitignore`, including
+local `.env` files, are uploaded. Ensure `.dockerignore` excludes secrets,
+dependency directories, and local build output. Check `include` for overrides
+that would upload a secret anyway.
+:::
+
 ### `web` and the synthesized web service {#web}
 
 If neither `app.toml` nor your `Procfile` declares a `web` service, Miren
@@ -154,8 +191,9 @@ artifact.
 
 :::danger[Review a source-root static directory]
 `static.dir = "/app"` publishes every file uploaded from the source tree except
-`.miren`. The upload honors `.gitignore`, but files such as `.env` are public if
-they are not ignored. Prefer a dedicated directory such as `/app/public`.
+`.miren`. The upload honors root `.dockerignore` when present, otherwise
+`.gitignore`, so files such as `.env` are public unless excluded from the
+upload. Prefer a dedicated directory such as `/app/public`.
 :::
 
 It opts out of the *synthesized* service, not of a web service you asked for. A

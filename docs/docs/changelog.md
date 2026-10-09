@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Breaking Changes**
+- **Source uploads prefer `.dockerignore` over `.gitignore`** - Full and delta deploys now use the root `.dockerignore` with Docker pattern syntax when it exists, so `.gitignore` no longer drops tracked files from those builds. Without root `.dockerignore`, existing root and nested `.gitignore` filtering is preserved. If you have a `.dockerignore`, ensure it excludes local secrets and other files previously excluded only by `.gitignore`; even an empty `.dockerignore` takes precedence. Explicit `include` patterns override upload exclusions, but never `.git` or `.jj` metadata. See [build context](./app-toml.md#build-context).
+
 ---
 
 ## v0.16.2
