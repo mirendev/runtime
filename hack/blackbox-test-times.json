@@ -1,17 +1,101 @@
 {
   "summary": {
     "standalone": {
-      "total_test_time_s": 1003.46,
-      "test_count": 70,
-      "source": "CI run 36931700728 (green); package/test elapsed time, excluding harness startup"
+      "total_test_time_s": 2578.15,
+      "test_count": 77,
+      "source": "CI run 36931700728 (green); ephemeral addon tests from CI run 37979310282 job 114001010013 (green), clone subtest timings mapped to split top-level tests; package/test elapsed time, excluding harness startup"
     },
     "peers": {
-      "total_test_time_s": 1028.3,
-      "test_count": 67,
-      "source": "CI run 32993856200 job 98265119043 (green, mir-1580 branch)"
+      "total_test_time_s": 2602.99,
+      "test_count": 74,
+      "source": "CI run 32993856200 job 98265119043 (green, mir-1580 branch); ephemeral addon timings estimated from standalone CI run 37979310282 job 114001010013 pending peers measurements"
     }
   },
   "tests": [
+    {
+      "name": "TestEphemeralPostgresqlCloneShared",
+      "environment": "peers",
+      "elapsed_s": 264.25,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneVersioned",
+      "environment": "peers",
+      "elapsed_s": 301.96,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneDedicatedToShared",
+      "environment": "peers",
+      "elapsed_s": 597.11,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneDedicatedToNewShared",
+      "environment": "peers",
+      "elapsed_s": 299.40,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneVariantMismatch",
+      "environment": "peers",
+      "elapsed_s": 41.08,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralAddonsSharedByDefault",
+      "environment": "peers",
+      "elapsed_s": 31.97,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralUnsupportedAddonFailsClosed",
+      "environment": "peers",
+      "elapsed_s": 38.92,
+      "status": "estimated"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneShared",
+      "environment": "standalone",
+      "elapsed_s": 264.25,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneVersioned",
+      "environment": "standalone",
+      "elapsed_s": 301.96,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneDedicatedToShared",
+      "environment": "standalone",
+      "elapsed_s": 597.11,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneDedicatedToNewShared",
+      "environment": "standalone",
+      "elapsed_s": 299.40,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralPostgresqlCloneVariantMismatch",
+      "environment": "standalone",
+      "elapsed_s": 41.08,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralAddonsSharedByDefault",
+      "environment": "standalone",
+      "elapsed_s": 31.97,
+      "status": "pass"
+    },
+    {
+      "name": "TestEphemeralUnsupportedAddonFailsClosed",
+      "environment": "standalone",
+      "elapsed_s": 38.92,
+      "status": "pass"
+    },
     {
       "name": "TestRunCarriesDeclaredTaskEnv",
       "environment": "peers",
