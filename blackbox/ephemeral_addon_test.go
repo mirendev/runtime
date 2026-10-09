@@ -43,7 +43,6 @@ func TestEphemeralPostgresqlCloneDedicatedToNewShared(t *testing.T) {
 
 // Keep each fixture independently shardable: expiry and GC wait on real time.
 func testEphemeralPostgresqlClone(t *testing.T, fixture string) {
-	t.Helper()
 	c := harness.NewCluster(t)
 	m := harness.NewMiren(t, c)
 	var name, dir string
