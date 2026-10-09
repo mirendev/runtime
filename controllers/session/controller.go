@@ -126,19 +126,10 @@ func (c *Controller) run(ctx context.Context, s *sessionapi.Session) error {
 			if sb.Status == compute.RUNNING {
 				phase = sessionapi.READY
 			}
-			activity := sessionapi.UNKNOWN
-			switch sb.SelfReportedActivity(time.Now()) {
-			case compute.ACTIVE:
-				activity = sessionapi.ACTIVE
-			case compute.IDLE:
-				activity = sessionapi.IDLE
-			case compute.ActivityUnknown:
-				// Keep the conservative default.
-			}
-			if s.Phase == phase && s.Activity == activity && s.ActivityAt.Equal(sb.Activity.ReportedAt) {
+			if s.Phase == phase {
 				return nil
 			}
-			update := &sessionapi.Session{Phase: phase, Activity: activity, ActivityAt: sb.Activity.ReportedAt}
+			update := &sessionapi.Session{Phase: phase}
 			if s.Phase != phase {
 				update.LastTransition = time.Now()
 			}
@@ -385,6 +376,8 @@ func (c *Controller) settleSuspended(ctx context.Context, s *sessionapi.Session,
 	e.Remove(sessionapi.SessionSandboxId)
 	e.Remove(sessionapi.SessionPhaseId)
 	e.Remove(sessionapi.SessionActivityId)
+	e.Remove(sessionapi.SessionActivityAtId)
+	e.Remove(sessionapi.SessionIdleSinceId)
 	e.Remove(sessionapi.SessionGenerationId)
 	e.Remove(sessionapi.SessionLastTransitionId)
 	e.Remove(sessionapi.SessionIncarnationId)
@@ -421,6 +414,11 @@ func (c *Controller) Delete(ctx context.Context, id entity.Id) error {
 // SweepOrphans repairs deletion cleanup when a coordinator misses a tombstone
 // during restart or watch compaction. It never touches standalone sandboxes.
 func (c *Controller) SweepOrphans(ctx context.Context) error {
+	c.sharedAdmission.Lock()
+	defer c.sharedAdmission.Unlock()
+	if err := c.parkIdleSessions(ctx, time.Now()); err != nil {
+		return err
+	}
 	if err := c.sweepDeletedBindings(ctx); err != nil {
 		return err
 	}
@@ -574,6 +572,25 @@ func (c *Controller) teardownDone(ctx context.Context, id entity.Id) (bool, erro
 }
 
 func (c *Controller) patch(ctx context.Context, id entity.Id, update *sessionapi.Session) error {
+	if update.Sandbox != "" {
+		resp, err := c.EAC.Get(ctx, id.String())
+		if err != nil {
+			return err
+		}
+		var current sessionapi.Session
+		current.Decode(resp.Entity().Entity())
+		e := entity.New(resp.Entity().Attrs())
+		if current.Sandbox != update.Sandbox {
+			e.Remove(sessionapi.SessionActivityAtId)
+			e.Remove(sessionapi.SessionIdleSinceId)
+			update.Activity = sessionapi.UNKNOWN
+		}
+		for _, attr := range update.Encode() {
+			e.Set(attr)
+		}
+		_, err = c.EAC.Replace(ctx, e.Attrs(), resp.Entity().Revision())
+		return err
+	}
 	_, err := c.EAC.Patch(ctx, entity.New(entity.Ref(entity.DBId, id), update.Encode).Attrs(), 0)
 	return err
 }

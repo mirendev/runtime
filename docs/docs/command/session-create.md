@@ -17,6 +17,7 @@ miren session create [flags]
 ## Flags
 
 - `--group` — Optional opaque sharing key within the app and service
+- `--idle-timeout` — Park after continuously idle for this duration; 0 disables (default: `5m`)
 - `--max-sessions-per-sandbox` — Shared host capacity (greater than one enables sharing) (default: `1`)
 - `--name` — Stable name for the Session; generated if omitted
 - `--service, -s` — Service to run (default: `web`)

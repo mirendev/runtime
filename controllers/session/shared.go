@@ -45,6 +45,9 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 	var binding sessionapi.Binding
 	if err == nil {
 		binding.Decode(resp.Entity().Entity())
+		if !binding.DetachedAt.IsZero() {
+			return nil // Resume waits for cleanup and reservation release.
+		}
 		if binding.Session != s.ID.String() || !binding.DeletedAt.IsZero() {
 			return c.fail(ctx, s.ID, fmt.Errorf("session %s cannot reuse a shared sandbox binding", s.ID))
 		}
@@ -192,11 +195,11 @@ func (c *Controller) runShared(ctx context.Context, s *sessionapi.Session) error
 	if terminal(host.Status) {
 		phase = sessionapi.FAILED
 	}
-	if s.Sandbox == host.ID && s.Phase == phase && s.Activity == sessionapi.UNKNOWN {
+	if s.Sandbox == host.ID && s.Phase == phase {
 		return nil
 	}
 	return c.patch(ctx, s.ID, &sessionapi.Session{
-		Sandbox: host.ID, Phase: phase, Activity: sessionapi.UNKNOWN, LastTransition: time.Now(),
+		Sandbox: host.ID, Phase: phase, LastTransition: time.Now(),
 	})
 }
 
@@ -394,8 +397,24 @@ func (c *Controller) ensureSharedHost(ctx context.Context, s *sessionapi.Session
 }
 
 func (c *Controller) suspendShared(ctx context.Context, s *sessionapi.Session) error {
+	current, err := c.EAC.Get(ctx, s.ID.String())
+	if err != nil {
+		return err
+	}
+	var latest sessionapi.Session
+	latest.Decode(current.Entity().Entity())
+	if latest.DesiredState != sessionapi.SUSPENDED {
+		return nil // A resume won before withdrawal started.
+	}
 	resp, err := c.EAC.Get(ctx, shared.BindingID(s.ID).String())
 	if err == nil {
+		if latest.Phase != sessionapi.SUSPENDING {
+			_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, s.ID,
+				(&sessionapi.Session{Phase: sessionapi.SUSPENDING}).Encode).Attrs(), current.Entity().Revision())
+			if err != nil {
+				return err
+			}
+		}
 		var binding sessionapi.Binding
 		binding.Decode(resp.Entity().Entity())
 		host, err := c.getSandbox(ctx, entity.Id(binding.Sandbox))
@@ -406,24 +425,47 @@ func (c *Controller) suspendShared(ctx context.Context, s *sessionapi.Session) e
 		} else if !errors.Is(err, cond.ErrNotFound{}) {
 			return err
 		}
+		if binding.DetachedAt.IsZero() {
+			_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, binding.ID,
+				(&sessionapi.Binding{DetachedAt: time.Now()}).Encode).Attrs(), resp.Entity().Revision())
+			if err != nil {
+				return err
+			}
+		}
+		return c.transition(ctx, s, sessionapi.SUSPENDING)
 	} else if !errors.Is(err, cond.ErrNotFound{}) {
 		return err
 	}
-	if s.Sandbox == "" {
-		return c.transition(ctx, s, sessionapi.INACTIVE)
+	return c.clearSharedAssignment(ctx, s.ID)
+}
+
+func (c *Controller) clearSharedAssignment(ctx context.Context, id entity.Id) error {
+	resp, err := c.EAC.Get(ctx, id.String())
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return nil
 	}
-	resp, err = c.EAC.Get(ctx, s.ID.String())
 	if err != nil {
 		return err
+	}
+	var s sessionapi.Session
+	s.Decode(resp.Entity().Entity())
+	phase := sessionapi.INACTIVE
+	if s.DesiredState == sessionapi.RUNNING {
+		phase = sessionapi.PENDING
+	}
+	if s.Sandbox == "" && s.Phase == phase && s.Activity == sessionapi.UNKNOWN &&
+		s.ActivityAt.IsZero() && s.IdleSince.IsZero() {
+		return nil
 	}
 	e := entity.New(resp.Entity().Attrs())
 	e.Remove(sessionapi.SessionSandboxId)
 	e.Remove(sessionapi.SessionPhaseId)
 	e.Remove(sessionapi.SessionActivityId)
 	e.Remove(sessionapi.SessionActivityAtId)
+	e.Remove(sessionapi.SessionIdleSinceId)
 	e.Remove(sessionapi.SessionLastTransitionId)
 	attrs := e.Attrs()
-	for _, attr := range (&sessionapi.Session{Phase: sessionapi.INACTIVE, Activity: sessionapi.UNKNOWN,
+	for _, attr := range (&sessionapi.Session{Phase: phase, Activity: sessionapi.UNKNOWN,
 		LastTransition: time.Now()}).Encode() {
 		if attr.ID == sessionapi.SessionPhaseId || attr.ID == sessionapi.SessionActivityId || attr.ID == sessionapi.SessionLastTransitionId {
 			attrs = append(attrs, attr)
@@ -459,7 +501,7 @@ func (c *Controller) sweepDeletedBindings(ctx context.Context) error {
 	for _, e := range resp.Values() {
 		var binding sessionapi.Binding
 		binding.Decode(e.Entity())
-		if !binding.DeletedAt.IsZero() {
+		if !binding.DeletedAt.IsZero() || !binding.DetachedAt.IsZero() {
 			if binding.AcknowledgedAt.IsZero() {
 				done, err := c.teardownDone(ctx, entity.Id(binding.Sandbox))
 				if err != nil {
@@ -479,6 +521,11 @@ func (c *Controller) sweepDeletedBindings(ctx context.Context) error {
 			}
 			if len(slots.Values()) != 0 {
 				continue // The reservation still protects the workload's cleanup.
+			}
+			if !binding.DetachedAt.IsZero() {
+				if err := c.clearSharedAssignment(ctx, entity.Id(binding.Session)); err != nil {
+					return err
+				}
 			}
 			if _, err := c.EAC.Delete(ctx, binding.ID.String()); err != nil && !errors.Is(err, cond.ErrNotFound{}) {
 				return err

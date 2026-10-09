@@ -131,11 +131,22 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, ids[0],
 		(&sessionapi.Session{DesiredState: sessionapi.SUSPENDED}).Encode).Attrs(), 0)
 	require.NoError(t, err)
-	require.Equal(t, sessionapi.INACTIVE, reconcile(ids[0]).Phase)
+	require.Equal(t, sessionapi.SUSPENDING, reconcile(ids[0]).Phase)
 	require.Equal(t, host, reconcile(ids[1]).Sandbox)
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, ids[0],
 		(&sessionapi.Session{DesiredState: sessionapi.RUNNING}).Encode).Attrs(), 0)
 	require.NoError(t, err)
+	require.Equal(t, sessionapi.SUSPENDING, reconcile(ids[0]).Phase, "resume waits for withdrawn assignment cleanup")
+	resp, err = inm.EAC.Get(ctx, shared.BindingID(ids[0]).String())
+	require.NoError(t, err)
+	var detachment sessionapi.Binding
+	detachment.Decode(resp.Entity().Entity())
+	require.False(t, detachment.DetachedAt.IsZero())
+	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, detachment.ID,
+		(&sessionapi.Binding{AcknowledgedAt: time.Now()}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.NoError(t, c.SweepOrphans(ctx))
+	require.NoError(t, c.SweepOrphans(ctx))
 	require.Equal(t, host, reconcile(ids[0]).Sandbox)
 
 	_, err = inm.EAC.Delete(ctx, ids[0].String())

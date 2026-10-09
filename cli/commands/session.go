@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	session "miren.dev/runtime/api/session/session_v1alpha"
@@ -16,13 +17,18 @@ func SessionCreate(ctx *Context, opts struct {
 	Service     string `short:"s" long:"service" description:"Service to run" default:"web"`
 	Group       string `long:"group" description:"Optional opaque sharing key within the app and service"`
 	MaxSessions int64  `long:"max-sessions-per-sandbox" description:"Shared host capacity (greater than one enables sharing)" default:"1"`
+	IdleTimeout string `long:"idle-timeout" description:"Park after continuously idle for this duration; 0 disables" default:"5m"`
 }) error {
+	idleTimeout, err := time.ParseDuration(opts.IdleTimeout)
+	if err != nil || idleTimeout < 0 || idleTimeout%time.Second != 0 {
+		return fmt.Errorf("idle-timeout must be a nonnegative duration in whole seconds")
+	}
 	client, err := ctx.RPCClient("dev.miren.runtime/sessions")
 	if err != nil {
 		return err
 	}
 	resp, err := session.NewSessionsClient(client).Create(ctx, opts.App, opts.Name, opts.Service, opts.Group,
-		opts.MaxSessions)
+		opts.MaxSessions, int64(idleTimeout/time.Second))
 	if err != nil {
 		return err
 	}
@@ -41,6 +47,8 @@ type sessionInfo struct {
 	Phase        string `json:"phase"`
 	Sandbox      string `json:"sandbox,omitempty"`
 	Failure      string `json:"failure,omitempty"`
+	IdleTimeout  int64  `json:"idle_timeout_seconds"`
+	Activity     string `json:"activity"`
 }
 
 func sessionSummary(s *session.Session) sessionInfo {
@@ -49,6 +57,7 @@ func sessionSummary(s *session.Session) sessionInfo {
 		Service: s.Service, Group: s.Group, MaxSessions: s.MaxSessionsPerSandbox,
 		DesiredState: strings.TrimPrefix(string(s.DesiredState), "desired_state."),
 		Phase:        strings.TrimPrefix(string(s.Phase), "phase."), Sandbox: s.Sandbox.String(), Failure: s.Failure,
+		IdleTimeout: s.IdleTimeoutSeconds, Activity: strings.TrimPrefix(string(s.SelfReportedActivity(time.Now())), "activity."),
 	}
 }
 

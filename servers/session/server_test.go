@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,10 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 		`{"name":"bad/name","max_sessions_per_sandbox":2}`).Code)
 	require.Equal(t, http.StatusBadRequest, request("workers", http.MethodPost, path,
 		`{"name":"invalid","max_sessions_per_sandbox":0}`).Code)
+	for _, timeout := range []int64{-1, 86400*365 + 1} {
+		require.Equal(t, http.StatusBadRequest, request("workers", http.MethodPost, path,
+			fmt.Sprintf(`{"name":"invalid-idle","idle_timeout_seconds":%d}`, timeout)).Code)
+	}
 	created := request("workers", http.MethodPost, path,
 		`{"name":"queue-1","service":"web","group":"priority","max_sessions_per_sandbox":2}`)
 	require.Equal(t, http.StatusOK, created.Code, created.Body.String())
@@ -81,6 +86,8 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 	var session sessionapi.Session
 	session.Decode(stored.Entity().Entity())
 	require.Equal(t, "priority", session.Group)
+	require.Equal(t, int64(300), session.IdleTimeoutSeconds, "omitted timeout defaults to five minutes")
+	require.Contains(t, created.Body.String(), `"activity":"unknown"`)
 	require.Equal(t, "docker.io/library/example:service", session.Spec.Container[0].Image)
 	require.Equal(t, http.StatusConflict, request("workers", http.MethodPost, path,
 		`{"name":"queue-1","max_sessions_per_sandbox":2}`).Code)
@@ -108,6 +115,16 @@ func TestSessionsRESTLifecycleAndAppScope(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(request("workers", http.MethodGet, path, "").Body.Bytes(), &after))
 	require.Empty(t, after.Sessions)
+	for _, timeout := range []int64{0, 47} {
+		created := request("workers", http.MethodPost, path,
+			fmt.Sprintf(`{"name":"custom-idle-%d","idle_timeout_seconds":%d}`, timeout, timeout))
+		require.Equal(t, http.StatusOK, created.Code, created.Body.String())
+		stored, err := inmem.EAC.Get(ctx, fmt.Sprintf("session/workers/custom-idle-%d", timeout))
+		require.NoError(t, err)
+		var s sessionapi.Session
+		s.Decode(stored.Entity().Entity())
+		require.Equal(t, timeout, s.IdleTimeoutSeconds, "explicit zero must not become the default timeout")
+	}
 }
 
 func TestSessionsRPCAppScope(t *testing.T) {
@@ -117,7 +134,7 @@ func TestSessionsRPCAppScope(t *testing.T) {
 	ctx := rpc.ContextWithIdentity(context.Background(), &rpc.Identity{
 		Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "one"},
 	})
-	_, err := client.Create(ctx, "two", "job", "web", "", 1)
+	_, err := client.Create(ctx, "two", "job", "web", "", 1, 300)
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)
 	_, err = client.List(ctx, "two")
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)

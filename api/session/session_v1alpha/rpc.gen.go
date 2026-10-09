@@ -20,6 +20,8 @@ type sessionInfoData struct {
 	Phase                 *string `cbor:"7,keyasint,omitempty" json:"phase,omitempty"`
 	Sandbox               *string `cbor:"8,keyasint,omitempty" json:"sandbox,omitempty"`
 	Failure               *string `cbor:"9,keyasint,omitempty" json:"failure,omitempty"`
+	IdleTimeoutSeconds    *int64  `cbor:"10,keyasint,omitempty" json:"idle_timeout_seconds,omitempty"`
+	Activity              *string `cbor:"11,keyasint,omitempty" json:"activity,omitempty"`
 }
 
 type SessionInfo struct {
@@ -176,6 +178,36 @@ func (v *SessionInfo) SetFailure(failure string) {
 	v.data.Failure = &failure
 }
 
+func (v *SessionInfo) HasIdleTimeoutSeconds() bool {
+	return v.data.IdleTimeoutSeconds != nil
+}
+
+func (v *SessionInfo) IdleTimeoutSeconds() int64 {
+	if v.data.IdleTimeoutSeconds == nil {
+		return 0
+	}
+	return *v.data.IdleTimeoutSeconds
+}
+
+func (v *SessionInfo) SetIdleTimeoutSeconds(idle_timeout_seconds int64) {
+	v.data.IdleTimeoutSeconds = &idle_timeout_seconds
+}
+
+func (v *SessionInfo) HasActivity() bool {
+	return v.data.Activity != nil
+}
+
+func (v *SessionInfo) Activity() string {
+	if v.data.Activity == nil {
+		return ""
+	}
+	return *v.data.Activity
+}
+
+func (v *SessionInfo) SetActivity(activity string) {
+	v.data.Activity = &activity
+}
+
 func (v *SessionInfo) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(v.data)
 }
@@ -198,6 +230,7 @@ type sessionsCreateArgsData struct {
 	Service               *string `cbor:"2,keyasint,omitempty" json:"service,omitempty"`
 	Group                 *string `cbor:"3,keyasint,omitempty" json:"group,omitempty"`
 	MaxSessionsPerSandbox *int64  `cbor:"4,keyasint,omitempty" json:"max_sessions_per_sandbox,omitempty"`
+	IdleTimeoutSeconds    *int64  `cbor:"5,keyasint,omitempty" json:"idle_timeout_seconds,omitempty"`
 }
 
 type SessionsCreateArgs struct {
@@ -258,6 +291,17 @@ func (v *SessionsCreateArgs) MaxSessionsPerSandbox() int64 {
 		return 0
 	}
 	return *v.data.MaxSessionsPerSandbox
+}
+
+func (v *SessionsCreateArgs) HasIdleTimeoutSeconds() bool {
+	return v.data.IdleTimeoutSeconds != nil
+}
+
+func (v *SessionsCreateArgs) IdleTimeoutSeconds() int64 {
+	if v.data.IdleTimeoutSeconds == nil {
+		return 0
+	}
+	return *v.data.IdleTimeoutSeconds
 }
 
 func (v *SessionsCreateArgs) MarshalCBOR() ([]byte, error) {
@@ -781,7 +825,7 @@ func AdaptSessions(t Sessions) *rpc.Interface {
 			InterfaceName: "Sessions",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"app", "name", "service", "group", "max_sessions_per_sandbox"},
+			Params:        []string{"app", "name", "service", "group", "max_sessions_per_sandbox", "idle_timeout_seconds"},
 			HTTP: &rpc.HTTPBinding{
 				Verb:       "POST",
 				Path:       "/api/v1/apps/{app}/sessions",
@@ -886,13 +930,14 @@ func (v *SessionsClientCreateResults) Session() *SessionInfo {
 	return v.data.Session
 }
 
-func (v SessionsClient) Create(ctx context.Context, app string, name string, service string, group string, max_sessions_per_sandbox int64) (*SessionsClientCreateResults, error) {
+func (v SessionsClient) Create(ctx context.Context, app string, name string, service string, group string, max_sessions_per_sandbox int64, idle_timeout_seconds int64) (*SessionsClientCreateResults, error) {
 	args := SessionsCreateArgs{}
 	args.data.App = &app
 	args.data.Name = &name
 	args.data.Service = &service
 	args.data.Group = &group
 	args.data.MaxSessionsPerSandbox = &max_sessions_per_sandbox
+	args.data.IdleTimeoutSeconds = &idle_timeout_seconds
 
 	var ret sessionsCreateResultsData
 

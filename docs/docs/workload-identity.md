@@ -68,7 +68,7 @@ Both are wired up through environment variables that Miren injects into every sa
 | `MIREN_IDENTITY_TOKEN_SECRET` | same as `MIREN_METADATA_SECRET` | Existing token endpoint credential, retained for compatibility |
 | `MIREN_ACTIVITY_URL` | e.g. `http://10.x.x.1:7123/v1/activity` | Report this sandbox's active or idle state |
 
-The metadata API serves `GET /token`, `GET`/`POST /activity`, `GET /sessions`, and `POST /sessions/deletions/ack` at `MIREN_METADATA_URL`. All endpoints use the same sandbox-bound credential. The individual URLs and legacy token secret remain available; prefer the injected variables over hardcoding the internal address or port.
+The metadata API serves `GET /token`, `GET`/`POST /activity`, `GET /sessions`, `POST /sessions/activity`, `POST /sessions/deletions/ack`, and `POST /sessions/detachments/ack` at `MIREN_METADATA_URL`. All endpoints use the same sandbox-bound credential. The individual URLs and legacy token secret remain available; prefer the injected variables over hardcoding the internal address or port.
 
 ## Reporting sandbox activity
 
@@ -110,13 +110,30 @@ miren session resume session/myapp/customer-1
 miren session delete session/myapp/customer-1
 ```
 
-By default, a Session owns a dedicated sandbox. To opt into controller-managed sharing, set `max_sessions_per_sandbox` greater than one. Shared Sessions with the same app, service, and optional group key use the same host pool up to its capacity, even when their resolved specs differ. The first Session to boot a host supplies its execution spec, so that group's workload must handle all Sessions assigned to it. Existing hosts reject a different capacity within the group. Deploying a new app version drains and replaces hosts that run the old version. The Session controller reserves a durable capacity slot, creates a host sandbox when needed, and starts another host when existing ones are full. Callers do not provide a sandbox ID. The slot and host assignment survive coordinator restarts; a slot remains reserved until its Session is deleted and the workload acknowledges cleanup or the host is torn down. A suspended Session no longer appears in the active list, but retains its assignment for resumption. Once all slots have been released, the controller stops the host and waits for runner teardown before it can be deleted. The CLI does not attach the service's disks; per-Session disk mounts are not supported in shared mode. A Session cannot switch between dedicated and shared modes after it has been bound.
+By default, a Session owns a dedicated sandbox. To opt into controller-managed sharing, set `max_sessions_per_sandbox` greater than one. Shared Sessions with the same app, service, and optional group key use the same host pool up to its capacity, even when their resolved specs differ. The first Session to boot a host supplies its execution spec, so that group's workload must handle all Sessions assigned to it. Existing hosts reject a different capacity within the group. Deploying a new app version drains and replaces hosts that run the old version. The Session controller reserves a durable capacity slot, creates a host sandbox when needed, and starts another host when existing ones are full. Callers do not provide a sandbox ID. The slot and host assignment survive coordinator restarts. Deletion or suspension withdraws a shared assignment, but its slot remains reserved until the workload acknowledges cleanup or the runner confirms teardown. Resumption then acquires available capacity, which may be on a different host. Once all slots have been released, the controller stops the host and waits for runner teardown before it can be deleted. The CLI does not attach the service's disks; per-Session disk mounts are not supported in shared mode. A Session cannot switch between dedicated and shared modes after it has been bound.
+
+### Parking idle Sessions
+
+Report each Session's activity separately from aggregate sandbox activity:
+
+```bash
+curl -X POST "$MIREN_METADATA_URL/sessions/activity" \
+  -H "Authorization: Bearer $MIREN_METADATA_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"session/myapp/customer-1","state":"idle"}'
+```
+
+Reports are sandbox-bound and must be refreshed at least once per minute; they expire after two minutes. Missing, stale, or future-dated reports never authorize parking. An `active` report resets the continuous idle timer. New Sessions default to a five-minute idle timeout; configure it with `miren session create --idle-timeout 5m` or `idle_timeout_seconds` in the create API. Zero disables automatic parking. The controller checks approximately every ten seconds and suspends a ready Session once its continuously reported idle period exceeds its timeout.
+
+Before accepting work, synchronously report `active`. Activity admission and idle parking compete on the same Session revision. If parking wins, the activity endpoint returns `409` and the workload must not accept the job. An assignment that is not ready returns `503`; reporting for another sandbox returns `403`. Aggregate sandbox activity alone does not mark individual Sessions active.
+
+Parking keeps the durable Session ID and app configuration. A shared Session's loop is withdrawn and cleaned up without interrupting its neighbours; its capacity is released only after acknowledgment. A dedicated Session follows the sandbox shutdown-notice and runner-teardown path. To run it again, explicitly resume it with `miren session resume SESSION_ID` or the coordinator resume API. Queue schedulers should resume the Session before delivering work. The `x/workload` SDK handles both levels of activity, admission, detachment, and cleanup acknowledgments automatically.
 
 The workload fetches an initial snapshot from the authenticated metadata API:
 
 ```bash
 curl "$MIREN_METADATA_URL/sessions" -H "Authorization: Bearer $MIREN_METADATA_SECRET"
-# {"sessions":["session/one"],"session_details":{"session/one":{"app":"app/myapp","version":"app_version/myapp-v1","service":"web","spec":{"container":[{"image":"example:v1"}]}}},"deleted":["session/old"],"version":"..."}
+# {"sessions":["session/one"],"session_details":{"session/one":{"app":"app/myapp","version":"app_version/myapp-v1","service":"web","spec":{"container":[{"image":"example:v1"}]}}},"deleted":["session/old"],"detached":{"session/parked":"2026-10-07T12:00:00Z"},"version":"..."}
 ```
 
 Then send the returned `version` as `wait` to hold the next request open until the snapshot changes. A changed response is a new `200` snapshot and version; after 20 seconds without a change, the endpoint returns `304` with no body. Reissue the request with the same version after `304`, or use the new version after `200`. If the workload reconnects with a stale version, it receives the current snapshot immediately. Changes are detected by the server within roughly one second; no local comparison or callback URL is needed. Cancel a waiting request when shutting down.
@@ -135,7 +152,18 @@ curl -X POST "$MIREN_METADATA_URL/sessions/deletions/ack" \
   -H 'Content-Type: application/json' -d '{"session":"session/old"}'
 ```
 
-Acknowledgment returns `204` and may be repeated. Deletion notices are durable and reappear in snapshots until acknowledged; the runner also detects a missing Session if the coordinator missed its deletion event. Only the sandbox assigned to a Session can see or acknowledge its binding. Acknowledging before deletion returns `409`. Long polling delivers changes over the waiting request; suspension is not a deletion notification. Activity reports and shutdown notices remain sandbox-wide; a shared host's activity does not independently suspend its individual Sessions.
+Acknowledgment returns `204` and may be repeated. Deletion notices are durable and reappear in snapshots until acknowledged; the runner also detects a missing Session if the coordinator missed its deletion event. Only the sandbox assigned to a Session can see or acknowledge its binding. Acknowledging before deletion returns `409`.
+
+Suspension produces a separate durable `detached` notice, mapping Session IDs to detachment timestamps. After canceling the loop and completing cleanup, acknowledge the exact notice:
+
+```bash
+curl -X POST "$MIREN_METADATA_URL/sessions/detachments/ack" \
+  -H "Authorization: Bearer $MIREN_METADATA_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"session":"session/parked","detached_at":"2026-10-07T12:00:00Z"}'
+```
+
+Use the timestamp from the snapshot, not the current time. A retry for an obsolete timestamp is a harmless `204` and cannot acknowledge a newer detachment. Until cleanup is acknowledged, the shared capacity remains reserved, including if the Session is resumed early. Both notice types wake long polls. Sandbox shutdown notices remain sandbox-wide.
 
 :::warning[Session details lead host replacement]
 During a deploy, `session_details` can show the new desired app version before the old host stops. The old process still runs its original image and environment; use the shutdown notice to drain it, and only assume the new image is running after host replacement.

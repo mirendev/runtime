@@ -131,9 +131,7 @@ func TestSessionLifecycleAndRestart(t *testing.T) {
 	require.Equal(t, second.Sandbox, get().Sandbox)
 
 	patchSandbox(second.Sandbox, compute.RUNNING)
-	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, second.Sandbox,
-		(&compute.Sandbox{Activity: compute.Activity{State: compute.IDLE, ReportedAt: time.Now()}}).Encode).Attrs(), 0)
-	require.NoError(t, err)
+	patchSession(&sessionapi.Session{Activity: sessionapi.IDLE, ActivityAt: time.Now()})
 	reconcile()
 	require.Equal(t, sessionapi.IDLE, get().Activity)
 	require.Equal(t, sessionapi.IDLE, get().SelfReportedActivity(time.Now()))

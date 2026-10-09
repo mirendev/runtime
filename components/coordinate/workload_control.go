@@ -197,7 +197,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		entity.Ref(entity.EntityKind, session_v1alpha.KindSession), eac,
 		controller.AdaptReconcileController[session_v1alpha.Session](sessionController), time.Minute, 4,
 	)
-	sessionReconciler.SetPeriodic(time.Minute, sessionController.SweepOrphans)
+	sessionReconciler.SetPeriodic(10*time.Second, sessionController.SweepOrphans)
 	cm.AddController(sessionReconciler)
 	cm.AddController(controller.NewReconcileController(
 		"session-app-watch", c.Log,

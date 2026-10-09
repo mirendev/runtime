@@ -24,6 +24,7 @@ type sessionsResponse struct {
 	Sessions       []string                  `json:"sessions"`
 	SessionDetails map[string]sessionDetails `json:"session_details"`
 	Deleted        []string                  `json:"deleted"`
+	Detached       map[string]time.Time      `json:"detached"`
 	Version        string                    `json:"version"`
 }
 
@@ -73,7 +74,7 @@ func (c *SandboxController) handleSessionsRequest(w http.ResponseWriter, r *http
 }
 
 func (c *SandboxController) sessionsSnapshot(ctx context.Context, sandboxID string) (sessionsResponse, error) {
-	result := sessionsResponse{Sessions: []string{}, SessionDetails: map[string]sessionDetails{}, Deleted: []string{}}
+	result := sessionsResponse{Sessions: []string{}, SessionDetails: map[string]sessionDetails{}, Deleted: []string{}, Detached: map[string]time.Time{}}
 	sandboxResp, err := c.EAC.Get(ctx, sandboxID)
 	if err == nil {
 		var sb compute.Sandbox
@@ -107,6 +108,12 @@ func (c *SandboxController) sessionsSnapshot(ctx context.Context, sandboxID stri
 		if !binding.DeletedAt.IsZero() {
 			if binding.AcknowledgedAt.IsZero() {
 				result.Deleted = append(result.Deleted, binding.Session)
+			}
+			continue
+		}
+		if !binding.DetachedAt.IsZero() {
+			if binding.AcknowledgedAt.IsZero() {
+				result.Detached[binding.Session] = binding.DetachedAt
 			}
 			continue
 		}
@@ -156,10 +163,16 @@ func (c *SandboxController) handleSessionAcknowledgment(w http.ResponseWriter, r
 		return
 	}
 	var request struct {
-		Session string `json:"session"`
+		Session    string    `json:"session"`
+		DetachedAt time.Time `json:"detached_at"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&request); err != nil || request.Session == "" {
 		writeMetadataError(w, http.StatusBadRequest, "session is required")
+		return
+	}
+	detachment := r.URL.Path == "/v1/sessions/detachments/ack"
+	if detachment && request.DetachedAt.IsZero() {
+		writeMetadataError(w, http.StatusBadRequest, "detached_at is required")
 		return
 	}
 	resp, err := c.EAC.Get(r.Context(), shared.BindingID(entity.Id(request.Session)).String())
@@ -173,11 +186,17 @@ func (c *SandboxController) handleSessionAcknowledgment(w http.ResponseWriter, r
 	}
 	var binding sessionapi.Binding
 	binding.Decode(resp.Entity().Entity())
+	if detachment && !binding.DetachedAt.Equal(request.DetachedAt) {
+		// A lost response may be retried after this Session was reassigned.
+		// Never acknowledge cleanup of a newer assignment using an old notice.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if binding.Session != request.Session || binding.Sandbox != sandboxID {
 		writeMetadataError(w, http.StatusForbidden, "session belongs to another sandbox")
 		return
 	}
-	if binding.DeletedAt.IsZero() {
+	if !detachment && binding.DeletedAt.IsZero() {
 		writeMetadataError(w, http.StatusConflict, "session has not been deleted")
 		return
 	}

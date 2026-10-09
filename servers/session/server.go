@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	coreutil "miren.dev/runtime/api/core"
 	core "miren.dev/runtime/api/core/core_v1alpha"
@@ -93,6 +94,8 @@ func info(current *sessionapi.Session) *sessionapi.SessionInfo {
 	result.SetPhase(strings.TrimPrefix(string(current.Phase), "phase."))
 	result.SetSandbox(current.Sandbox.String())
 	result.SetFailure(current.Failure)
+	result.SetIdleTimeoutSeconds(current.IdleTimeoutSeconds)
+	result.SetActivity(strings.TrimPrefix(string(current.SelfReportedActivity(time.Now())), "activity."))
 	return result
 }
 
@@ -108,6 +111,13 @@ func (s *Server) Create(ctx context.Context, state *sessionapi.SessionsCreate) e
 	}
 	if capacity < 1 {
 		return invalid("max_sessions_per_sandbox must be greater than zero")
+	}
+	idleTimeout := int64(300)
+	if args.HasIdleTimeoutSeconds() {
+		idleTimeout = args.IdleTimeoutSeconds()
+	}
+	if idleTimeout < 0 || idleTimeout > 86400*365 {
+		return invalid("idle_timeout_seconds must be between zero and one year")
 	}
 	name := args.Name()
 	if name == "" {
@@ -177,7 +187,7 @@ func (s *Server) Create(ctx context.Context, state *sessionapi.SessionsCreate) e
 		return err
 	}
 	current := &sessionapi.Session{ID: id, App: app.ID, Version: version.ID, Service: service, Group: args.Group(),
-		Spec: sessionSpec, MaxSessionsPerSandbox: capacity,
+		Spec: sessionSpec, MaxSessionsPerSandbox: capacity, IdleTimeoutSeconds: idleTimeout,
 		DesiredState: sessionapi.RUNNING}
 	if _, err := s.EAC.Create(ctx, entity.New(entity.DBId, id, current.Encode).Attrs()); err != nil {
 		return err

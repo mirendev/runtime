@@ -218,9 +218,13 @@ kinds:
       type: time
       doc: When the Session was deleted
 
+    detached_at:
+      type: time
+      doc: When this assignment was withdrawn; retained until workload cleanup is acknowledged
+
     acknowledged_at:
       type: time
-      doc: When the sandbox acknowledged the deletion
+      doc: When the sandbox acknowledged deletion or detachment cleanup
 
   session:
     spec:
@@ -262,6 +266,10 @@ kinds:
       type: int
       doc: Capacity of a controller-managed shared sandbox; values greater than one opt into sharing
 
+    idle_timeout_seconds:
+      type: int
+      doc: Automatically suspend after this many continuously idle seconds; zero disables idle parking
+
     phase:
       type: enum
       choices: [pending, activating, ready, suspending, inactive, failed]
@@ -283,11 +291,15 @@ kinds:
     activity:
       type: enum
       choices: [unknown, active, idle]
-      doc: Most recent sandbox self-reported activity state
+      doc: Most recent workload-reported activity for this Session
 
     activity_at:
       type: time
-      doc: When the sandbox reported its activity state
+      doc: When the workload reported this Session's activity state
+
+    idle_since:
+      type: time
+      doc: Start of the continuously idle period; cleared by an active report or reassignment
 
     incarnation:
       type: component

@@ -30,7 +30,9 @@ func (c *SandboxController) metadataHandler() http.Handler {
 		metricspush.NewRelay(c.Log, c.relayAuthenticator, c.WorkloadIssuer, c.MetricsPusher).Register(mux)
 	}
 	mux.HandleFunc("/v1/sessions", c.handleSessionsRequest)
+	mux.HandleFunc("/v1/sessions/activity", c.handleSessionActivity)
 	mux.HandleFunc("/v1/sessions/deletions/ack", c.handleSessionAcknowledgment)
+	mux.HandleFunc("/v1/sessions/detachments/ack", c.handleSessionAcknowledgment)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeMetadataError(w, http.StatusNotFound, "not found")
 	})
