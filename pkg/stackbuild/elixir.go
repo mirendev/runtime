@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -65,14 +66,14 @@ type ElixirStack struct {
 	releaseName string
 	// namedRelease is set when mix.exs has a releases: block; only then does
 	// mix release accept the name as an argument.
-	namedRelease bool
-	umbrella     bool
-	hasPhoenix   bool
-	hasAssets    bool
-	dnsCluster   bool
-	// assetsNpm is set when assets/package.json exists: Phoenix keeps npm
-	// dependencies there, out of reach of the root-level npm augmentation.
-	assetsNpm bool
+	namedRelease    bool
+	umbrella        bool
+	hasPhoenix      bool
+	dnsCluster      bool
+	assetDeployDirs []string
+	// Phoenix keeps npm dependencies under assets/, out of reach of the
+	// root-level npm augmentation.
+	assetNpmDirs []string
 	// pin is an Elixir version the app pins for its version manager, if any.
 	pin *elixirPin
 
@@ -127,19 +128,28 @@ func (s *ElixirStack) Init(opts BuildOptions) {
 	if s.hasLockedDep("phoenix", lock) {
 		s.hasPhoenix = true
 		s.Event("framework", "phoenix", "Detected Phoenix")
-		if s.umbrella {
-			s.Event("config", "umbrella-assets", "Umbrella Phoenix app: assets under apps/ aren't built automatically; add their mix assets.deploy to [build] onbuild")
+	}
+
+	projectDirs := []string{"."}
+	if s.umbrella {
+		apps, _ := os.ReadDir(filepath.Join(s.dir, "apps"))
+		for _, app := range apps {
+			if app.IsDir() && s.hasFile(filepath.Join("apps", app.Name(), "mix.exs")) {
+				projectDirs = append(projectDirs, filepath.Join("apps", app.Name()))
+			}
 		}
 	}
-
-	if bytes.Contains(s.mixExs, []byte(`"assets.deploy"`)) {
-		s.hasAssets = true
-		s.Event("config", "assets.deploy", "Will build assets with mix assets.deploy")
-	}
-
-	if s.hasFile("assets/package.json") {
-		s.assetsNpm = true
-		s.Event("augmentation", "npm", "Found assets/package.json, installing npm")
+	for _, dir := range projectDirs {
+		mixExs, _ := s.readFile(filepath.Join(dir, "mix.exs"))
+		if bytes.Contains(mixExs, []byte(`"assets.deploy"`)) {
+			s.assetDeployDirs = append(s.assetDeployDirs, dir)
+			s.Event("config", "assets.deploy", "Will build assets with mix assets.deploy in "+dir)
+		}
+		assets := filepath.Join(dir, "assets")
+		if s.hasFile(filepath.Join(assets, "package.json")) {
+			s.assetNpmDirs = append(s.assetNpmDirs, assets)
+			s.Event("augmentation", "npm", "Found "+filepath.Join(assets, "package.json")+", installing npm")
+		}
 	}
 
 	if s.hasFile("mix.lock") {
@@ -188,10 +198,10 @@ func (s *ElixirStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 	localCtx := llb.Local("context",
 		llb.SharedKeyHint(dir),
 		// Local build output would clobber the build's own deps and _build, and
-		// assets/node_modules is always installed fresh below, since a copy
+		// asset node_modules are always installed fresh below, since a copy
 		// from a laptop can carry the wrong platform's native modules. A root
 		// node_modules is left alone: the JS augmentations treat it as vendored.
-		llb.ExcludePatterns(contextExcludes("_build", "deps", ".elixir_ls", "assets/node_modules")),
+		llb.ExcludePatterns(contextExcludes("_build", "deps", ".elixir_ls", "assets/node_modules", "apps/*/assets/node_modules")),
 		llb.FollowPaths([]string{"."}),
 		llb.WithCustomName("application code"),
 	)
@@ -207,7 +217,7 @@ func (s *ElixirStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 	// need respectively.
 	builder = h.aptInstall(builder, "build-essential", "git", "ca-certificates")
 	augs := s.Augmentations()
-	if s.assetsNpm && !slices.Contains(augs, AugNpm) && !slices.Contains(augs, AugYarn) {
+	if len(s.assetNpmDirs) > 0 && !slices.Contains(augs, AugNpm) && !slices.Contains(augs, AugYarn) {
 		builder = h.installNpm(builder, s.BaseDistro())
 	}
 	// The JS augmentations install packages as the app user.
@@ -258,24 +268,24 @@ func (s *ElixirStack) GenerateLLB(ctx context.Context, dir string, opts BuildOpt
 		llb.WithCustomName("[phase] Compiling Elixir application"),
 	).Root()
 
-	if s.assetsNpm {
+	for _, dir := range s.assetNpmDirs {
 		npmCmd := "npm install"
-		if s.hasFile("assets/package-lock.json") {
+		if s.hasFile(filepath.Join(dir, "package-lock.json")) {
 			npmCmd = "npm ci"
 		}
-		builder = builder.Dir("/app/assets").Run(
+		builder = builder.Dir(filepath.Join("/app", dir)).Run(
 			llb.Shlex(npmCmd),
 			h.CacheMount("/root/.npm"),
 			h.rootDepAuth(),
-			llb.WithCustomName("[phase] Installing asset JS deps with npm"),
+			llb.WithCustomName("[phase] Installing asset JS deps with npm in "+dir),
 		).Root().Dir("/app")
 	}
 
-	if s.hasAssets {
-		builder = builder.Run(
+	for _, dir := range s.assetDeployDirs {
+		builder = builder.Dir(filepath.Join("/app", dir)).Run(
 			llb.Shlex("mix assets.deploy"),
-			llb.WithCustomName("[phase] Building assets"),
-		).Root()
+			llb.WithCustomName("[phase] Building assets in "+dir),
+		).Root().Dir("/app")
 	}
 
 	builder = s.applyOnBuild(builder, opts)
