@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -29,6 +30,66 @@ import (
 	"miren.dev/runtime/pkg/httputil"
 	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestRequestStartHeader(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, value := range r.Header.Values("X-Request-Start") {
+			w.Header().Add("X-Request-Start", value)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	ctx := context.Background()
+	appID, err := inmem.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	cvID, err := inmem.Client.Create(ctx, "cfg", &core_v1alpha.ConfigVersion{
+		App: appID,
+		Spec: core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{
+			Name: "web",
+		}}},
+	})
+	require.NoError(t, err)
+	verID, err := inmem.Client.Create(ctx, "ver", &core_v1alpha.AppVersion{App: appID, ConfigVersion: cvID})
+	require.NoError(t, err)
+	require.NoError(t, inmem.Client.Update(ctx, &core_v1alpha.App{ID: appID, ActiveVersion: verID}))
+	_, err = inmem.Client.Create(ctx, "route", &ingress_v1alpha.HttpRoute{Host: "app.example.com", App: appID})
+	require.NoError(t, err)
+
+	h := newTimeoutTestServer(time.Second)
+	h.eac = inmem.EAC
+	h.ingressClient = ingress.NewClient(h.Log, rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server)))
+	h.apps = make(map[string]*appUsage)
+	h.retainLease(ctx, leaseCacheKey(appID, "web", "", false), &activator.Lease{URL: backend.URL, Size: 10})
+
+	for _, trustProxy := range []bool{false, true} {
+		for _, spoof := range []bool{false, true} {
+			t.Run(fmt.Sprintf("trust_proxy=%t/spoof=%t", trustProxy, spoof), func(t *testing.T) {
+				h.config.TrustProxyHeaders = trustProxy
+				req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+				if spoof {
+					req.Header.Add("X-Request-Start", "123")
+					req.Header.Add("X-Request-Start", "t=456.789")
+				}
+				rec := httptest.NewRecorder()
+				before := time.Now().UnixMilli()
+				h.ServeHTTP(rec, req)
+				after := time.Now().UnixMilli()
+
+				require.Equal(t, http.StatusOK, rec.Code)
+				values := rec.Header().Values("X-Request-Start")
+				require.Len(t, values, 1, "the backend must receive exactly one ingress timestamp")
+				require.Regexp(t, `^[0-9]+$`, values[0])
+				millis, err := strconv.ParseInt(values[0], 10, 64)
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, millis, before)
+				require.LessOrEqual(t, millis, after)
+			})
+		}
+	}
+}
 
 func TestHandleRequestPanic(t *testing.T) {
 	tests := []struct {
