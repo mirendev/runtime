@@ -10,6 +10,18 @@ Miren can scrape a Prometheus-compatible metrics endpoint from every running
 replica of an application service. It also instruments the request lifecycle
 with [OpenTelemetry](https://opentelemetry.io/) distributed tracing.
 
+## Request start time
+
+Public HTTP ingress adds an `X-Request-Start` request header before forwarding
+to your app. Its value is the time Miren received the request, expressed as
+decimal Unix epoch milliseconds (for example, `1791514800123`), with no `t=`
+prefix. Your app can compare it with its current time to measure time spent in
+ingress, including routing and waiting for a sandbox to start.
+
+Miren always overwrites incoming `X-Request-Start` values, even when configured
+to trust proxy headers. The timestamp represents arrival at Miren, not at a
+front proxy. Miren does not add it as a response header.
+
 ## Managed application metrics
 
 First, configure a remote-write destination for your cluster in

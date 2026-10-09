@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -500,6 +501,11 @@ func (h *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	// Always overwrite client/proxy values: this measures arrival at Miren,
+	// including routing and sandbox acquisition, not an upstream's timestamp.
+	req.Header.Set("X-Request-Start", strconv.FormatInt(start.UnixMilli(), 10))
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			h.handleRequestPanic(req, recovered)
@@ -536,8 +542,6 @@ func (h *Server) handleRequest(w http.ResponseWriter, req *http.Request) {
 		h.handleJWKS(w, req)
 		return
 	}
-
-	start := time.Now()
 
 	var appName string
 	var statusCode int
