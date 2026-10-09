@@ -512,7 +512,11 @@ types:
       - name: worker_status
         type: string
         index: 13
-        doc: Observed sandbox state; pending is not confirmation of startup, none means terminal without a sandbox
+        doc: |
+          State of the run's sandbox, separate from the run's own status.
+          pending: no sandbox has started yet. none: the run ended without
+          ever getting one. missing: the sandbox record is gone. Otherwise
+          the sandbox's status (pending, not_ready, running, stopped, dead).
 
 interfaces:
   - name: Crud
@@ -919,7 +923,12 @@ interfaces:
       prefix: /api/v1
     methods:
       - name: submitRun
-        doc: Idempotent while Run history is retained (default at least 7 days after termination); request_id is app-scoped and must not be reused for different work
+        doc: |
+          Queue a finite run of a declared task against a specific app version.
+          Built for external orchestrators: submitting again with the same
+          request_id returns the existing run instead of starting another, as
+          long as that run is still in history (by default, at least 7 days
+          after it finishes).
         http:
           post: /apps/{app}/runs/submit
           body: "*"
@@ -928,15 +937,22 @@ interfaces:
             type: string
           - name: task
             type: string
-            doc: Required declared non-console task, avoiding the shorter console history retention
+            doc: Name of a task declared in the app's config. Required; console is not accepted.
           - name: command
             type: list
             element: string
+            doc: Command to execute, as argv. Required; the task's declared command is not used as a default.
           - name: version
             type: string
-            doc: Required immutable app_version entity ID belonging to this app
+            doc: |
+              App version to run (app_version_id in `miren app history --format json`).
+              Must belong to this app. The run uses this version even if a newer one is deployed.
           - name: request_id
             type: string
+            doc: |
+              Key you choose to identify this unit of work within the app. Retry
+              with the same key after a lost response. Reusing a key with a
+              different task, version, or command is an error.
         results:
           - name: id
             type: string
