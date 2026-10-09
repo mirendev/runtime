@@ -1,0 +1,99 @@
+# Workload SDK
+
+Import `miren.dev/runtime/x/workload` from the lightweight `miren.dev/runtime/x`
+module. It uses only the Go standard library. The API has the same experimental,
+pin-your-version contract as the rest of `x/`.
+
+## Hosting Session loops
+
+Create one `Host` per sandbox. Dedicated and shared hosts use the same code:
+
+```go
+host, err := workload.NewHost(workload.ConfigFromEnv())
+if err != nil {
+    return err
+}
+return host.Run(ctx, func(loopCtx context.Context, s workload.Session) (workload.StopFunc, error) {
+    // Application-owned: construct an agent, queue consumer, or other loop.
+    agent, err := startAgent(loopCtx, s.ID, s.Spec)
+    if err != nil {
+        return nil, err
+    }
+    return agent.Close, nil // func(context.Context) error; waits for cleanup
+})
+```
+
+`startAgent` above represents your application code. The callback must return
+promptly after starting its loop. Its context lives for the assignment and is
+canceled when that Session is removed or the host shuts down. The cleanup
+function must honor its context, tolerate retries, and return only after resources
+close. Cleanup attempts have a 30-second timeout. Failure keeps deletion
+or detachment unacknowledged and admission closed for that Session; cleanup is retried.
+
+`Session` contains the ID, app, app version, service, optional group, and resolved
+service spec. `Spec` is `json.RawMessage` so the SDK does not depend on generated
+runtime types. Decode the fields your application needs. It may contain secrets;
+do not log the full Session or its spec. Details are supplied when the loop starts;
+this is not an application-state persistence layer.
+
+## Accepting work
+
+Before taking a job from an external queue or accepting a task:
+
+```go
+release, err := host.Begin(ctx, sessionID)
+if err != nil {
+    // Do not accept/claim the job. ErrDraining means shutdown is pending;
+    // ErrUnavailable means this Session is not currently accepting work.
+    return err
+}
+defer release()
+return processJob(ctx)
+```
+
+For asynchronous work, pass `release` with the task and call it when processing
+finishes or the task is discarded. Count queued work, not just running work.
+Do not tie asynchronous processing to an HTTP request's context; use the
+assignment context supplied to your start callback.
+
+`Begin` reports active synchronously before granting admission. If that response
+advertises shutdown, it refuses the task. Reports are serialized so an earlier
+idle heartbeat cannot arrive after a newer admission report. Release is
+idempotent. Each Session reports active while it has outstanding work; aggregate
+sandbox activity remains active while any Session has outstanding work.
+
+The host renews activity every ten seconds and reports promptly on release. Failed
+admission reports refuse work rather than assuming the runtime received them.
+Transport errors, HTTP 429, and server errors are retried by the background loops;
+permanent HTTP errors and start failures are returned from `Run` after cleanup.
+
+## Shutdown and deletion
+
+`host.Draining()` closes when shutdown is advertised, and `host.ShutdownAt()`
+returns its deadline. Admission never reopens after a notice. Use the signal to
+stop producers and let accepted work finish before the deadline. The runtime
+still owns termination; the SDK does not extend the deadline or persist work.
+
+Sessions created through the API or CLI default to parking after five minutes of
+continuously reported idle (`miren session create --idle-timeout 5m`). Set
+`--idle-timeout 0` to disable automatic parking. The controller retains the
+Session identity and app configuration but releases its sandbox capacity after
+cleanup. Resume with `miren session resume SESSION_ID`, or the coordinator's
+Session resume API. Work arrival does not implicitly resume a parked Session:
+your scheduler must resume it before offering work.
+
+On removal, the host cancels the assignment context and calls its cleanup
+function. It acknowledges shared Session deletion or detachment only after
+successful cleanup, retrying without restarting neighbouring agents. Detachment
+acknowledgments include the notice timestamp, so a late retry cannot release a
+new assignment of the same Session. On process
+shutdown, cancel `Run` and wait for it to return before exiting. All assignment
+contexts are canceled before shutdown cleanup starts.
+
+The lower-level `Client` exposes `Sessions`, `AcknowledgeDeletion`,
+`AcknowledgeDetachment`, `ReportSessionActivity`, and `ReportActivity` if you need
+to implement a different lifecycle. It never follows
+redirects, and HTTP errors omit response bodies to avoid accidental secret logs.
+
+See [`testdata/session-carmen`](../../testdata/session-carmen) for a real Carmen
+agent workload, including concurrent loops, task admission, and cancellation.

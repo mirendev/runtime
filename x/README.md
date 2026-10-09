@@ -6,6 +6,7 @@ Miren's own services use these, and you're welcome to as well. They live under `
 
 ## Packages
 
+- [`workload`](./workload): host independent Session loops in dedicated or shared sandboxes, with assignment watching, cleanup acknowledgments, activity reporting, and shutdown admission.
 - [`workloadid`](./workloadid): mint and verify Miren workload identity tokens. Code running in a Miren sandbox can get a short-lived OIDC token for any audience, and whoever receives it can check that a cluster they trust minted it.
 
 ## Importing
