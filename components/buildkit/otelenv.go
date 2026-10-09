@@ -1,6 +1,10 @@
 package buildkit
 
-import "slices"
+import (
+	"slices"
+
+	"miren.dev/runtime/pkg/otlpexport"
+)
 
 // otelEnvForBuildkitd builds the OTEL_* environment handed to buildkitd so the
 // daemon can export its internal spans to the same collector the runtime uses.
@@ -79,9 +83,13 @@ type TracesExport struct {
 
 	// Relayed means Endpoint is the server's loopback relay, which holds the
 	// credentials. buildkitd lives far longer than a workload identity token
-	// and has no way to refresh one, so it gets no credentials at all and
-	// speaks the only protocol the relay does.
+	// and has no way to refresh one, so it gets no collector credentials at
+	// all, only RelaySecret, and speaks the only protocol the relay does.
 	Relayed bool
+
+	// RelaySecret is what the relay requires of its callers. It is stable
+	// across server restarts, so it doesn't make buildkitd's container churn.
+	RelaySecret string
 
 	// Disabled keeps buildkitd from exporting traces. It is what traces get
 	// when they need a token and the relay isn't there to supply one: better
@@ -108,6 +116,9 @@ func (t TracesExport) overlay(getenv func(string) string) func(string) string {
 			// The signal-specific protocol beats a generic one the operator
 			// may have set for metrics.
 			"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+			// Signal-specific too, so the relay secret never goes along with
+			// buildkitd's metrics export to an operator's collector.
+			"OTEL_EXPORTER_OTLP_TRACES_HEADERS": otlpexport.RelayHeaders(t.RelaySecret),
 		}
 	case t.Endpoint != "":
 		return func(k string) string {

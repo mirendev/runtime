@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,13 +19,14 @@ import (
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
-func tracingTestInputs(endpoint, audience, relayAddr string) tracingBootInputs {
+func tracingTestInputs(t *testing.T, endpoint, audience, relayAddr string) tracingBootInputs {
 	return tracingBootInputs{
 		log:             slog.Default(),
 		endpoint:        endpoint,
 		configEndpoint:  true,
 		audience:        audience,
 		relayAddr:       relayAddr,
+		relaySecretPath: filepath.Join(t.TempDir(), "otlp-relay", "secret"),
 		shutdownTimeout: 5 * time.Second,
 	}
 }
@@ -39,7 +42,7 @@ func tracingTestIssuer(t *testing.T) *workloadidentity.Issuer {
 }
 
 func TestTracingBootWithoutEndpointExportsNothing(t *testing.T) {
-	b := &tracingBoot{inputs: tracingTestInputs("", "traces.example", "127.0.0.1:0")}
+	b := &tracingBoot{inputs: tracingTestInputs(t, "", "traces.example", "127.0.0.1:0")}
 
 	out, err := b.start(t.Context(), registrationBootOutput{}, workloadIdentityBootOutput{})
 	require.NoError(t, err)
@@ -50,7 +53,7 @@ func TestTracingBootWithoutEndpointExportsNothing(t *testing.T) {
 
 func TestTracingBootStaticAuthRunsNoRelay(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
-	b := &tracingBoot{inputs: tracingTestInputs("https://collector.invalid", "", "127.0.0.1:0")}
+	b := &tracingBoot{inputs: tracingTestInputs(t, "https://collector.invalid", "", "127.0.0.1:0")}
 
 	out, err := b.start(t.Context(), registrationBootOutput{}, workloadIdentityBootOutput{})
 	require.NoError(t, err)
@@ -79,13 +82,23 @@ func TestTracingBootIdentityRunsRelay(t *testing.T) {
 	t.Cleanup(collector.Close)
 	iss := tracingTestIssuer(t)
 
-	b := &tracingBoot{inputs: tracingTestInputs(collector.URL, "traces.example", "127.0.0.1:0")}
+	b := &tracingBoot{inputs: tracingTestInputs(t, collector.URL, "traces.example", "127.0.0.1:0")}
 	out, err := b.start(t.Context(), registrationBootOutput{}, workloadIdentityBootOutput{issuer: iss})
 	require.NoError(t, err)
 	require.NotNil(t, out.destination.Token)
 	require.NotEmpty(t, out.relayURL)
+	require.NotEmpty(t, out.relaySecret)
 
 	resp, err := http.Post(out.relayURL+"/v1/traces", "application/x-protobuf", strings.NewReader("spans"))
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "a local caller without the relay secret is refused")
+
+	req, err := http.NewRequest(http.MethodPost, out.relayURL+"/v1/traces", strings.NewReader("spans"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Authorization", "Bearer "+out.relaySecret)
+	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -108,7 +121,26 @@ func TestTracingBootRelayBindFailureDisablesBuildkitTraces(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { taken.Close() })
 
-	b := &tracingBoot{inputs: tracingTestInputs("https://collector.invalid", "traces.example", taken.Addr().String())}
+	b := &tracingBoot{inputs: tracingTestInputs(t, "https://collector.invalid", "traces.example", taken.Addr().String())}
+	out, err := b.start(t.Context(), registrationBootOutput{}, workloadIdentityBootOutput{issuer: tracingTestIssuer(t)})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, b.stop(context.Background())) })
+
+	require.Empty(t, out.relayURL)
+	require.Equal(t, buildkit.TracesExport{Disabled: true}, buildkitTraces(out))
+}
+
+// Without its secret the relay would have to take spans from any local
+// process, so buildkitd goes without traces instead.
+func TestTracingBootRelayWithoutSecretDisablesBuildkitTraces(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "")
+	inputs := tracingTestInputs(t, "https://collector.invalid", "traces.example", "127.0.0.1:0")
+	// A regular file where the secret's directory should be.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0600))
+	inputs.relaySecretPath = filepath.Join(blocker, "secret")
+
+	b := &tracingBoot{inputs: inputs}
 	out, err := b.start(t.Context(), registrationBootOutput{}, workloadIdentityBootOutput{issuer: tracingTestIssuer(t)})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, b.stop(context.Background())) })

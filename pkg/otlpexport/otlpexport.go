@@ -193,15 +193,12 @@ const maxRelayBody = 16 << 20
 // and response body pass straight back, which keeps the sender's own retry
 // logic working.
 //
-// The relay does not authenticate its callers. Anything that can reach the
-// host's loopback can post spans that arrive as the cluster's telemetry
-// writer and read the collector's reply to that post, but never the token.
-// Only the body and its content headers are forwarded, so a caller can't
-// steer the export with headers the collector routes on, such as a tenant.
-// Build steps can't reach the relay: no solve grants the network.host
-// entitlement. That is the same boundary vmagent's loopback import already
-// has for metrics, and the two should be hardened together (MIR-1985).
-func NewRelay(log *slog.Logger, d Destination) http.Handler {
+// Loopback is reachable by every process on the host, so a caller has to
+// present secret as a bearer token; see LoadRelaySecret. Only the body and
+// its content headers are forwarded, which strips that secret and keeps a
+// caller from steering the export with headers the collector routes on, such
+// as a tenant.
+func NewRelay(log *slog.Logger, d Destination, secret string) http.Handler {
 	target, err := url.Parse(d.TracesURL())
 	if err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -228,6 +225,11 @@ func NewRelay(log *slog.Logger, d Destination) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/traces" {
 			http.NotFound(w, r)
+			return
+		}
+		if !relayAuthorized(r, secret) {
+			log.Warn("OTLP relay refused an export without the relay secret", "remote", r.RemoteAddr)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxRelayBody)

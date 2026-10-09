@@ -4,9 +4,11 @@ package appmetrics
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +30,10 @@ import (
 const (
 	containerName = "miren-app-metrics"
 	readyPort     = 8429
+
+	// importUsername pairs with the component's import password. vmagent's
+	// basic auth needs a username; the password is what's secret.
+	importUsername = "miren"
 
 	tokenTTL           = time.Hour
 	tokenRefreshLeeway = 5 * time.Minute
@@ -67,6 +73,13 @@ type Component struct {
 	wg        sync.WaitGroup
 	discovery *targetDiscovery
 	httpPort  int
+
+	// importPassword guards every vmagent HTTP endpoint, the import ones
+	// most of all, which would otherwise let any process on the host write
+	// samples as the cluster's telemetry writer. It is minted on the first
+	// Start and kept for the component's life, so a sender handed
+	// ImportTransport stays valid even if vmagent is started again.
+	importPassword string
 }
 
 func New(log *slog.Logger, cc *containerd.Client, namespace, dataPath string, eac *entityserver_v1alpha.EntityAccessClient, issuer *workloadidentity.Issuer) *Component {
@@ -108,6 +121,14 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	configPath := filepath.Join(dataPath, "scrape.yml")
 	targetsPath := filepath.Join(dataPath, "targets.json")
 	tokenPath := filepath.Join(dataPath, "remote-write.token")
+	if c.importPassword == "" {
+		c.importPassword = rand.Text()
+	}
+	// vmagent reads it from the file so it never shows up in the process's
+	// command line, which every user on the host can read.
+	if err := writeFileAtomic(filepath.Join(dataPath, "import.password"), []byte(c.importPassword), 0600); err != nil {
+		return fmt.Errorf("writing vmagent import password: %w", err)
+	}
 	if err := writeFileAtomic(configPath, []byte(scrapeConfig), 0644); err != nil {
 		return fmt.Errorf("writing vmagent scrape config: %w", err)
 	}
@@ -205,8 +226,29 @@ func (c *Component) Stop(ctx context.Context) error {
 // ride the same remote-write destination, identity token, on-disk queue and
 // retry as the scraped application metrics. Unlike the scrape path, nothing
 // relabels a pushed sample, so the pusher owns its own cluster identity labels.
+// A request there needs ImportTransport to be accepted.
 func (c *Component) ImportURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", c.httpPort)
+}
+
+// ImportTransport wraps base (http.DefaultTransport when nil) with the
+// credential vmagent requires at ImportURL. Call it after Start.
+func (c *Component) ImportTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return &basicAuthTransport{username: importUsername, password: c.importPassword, base: base}
+}
+
+type basicAuthTransport struct {
+	username, password string
+	base               http.RoundTripper
+}
+
+func (t *basicAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.SetBasicAuth(t.username, t.password)
+	return t.base.RoundTrip(r)
 }
 
 func (c *Component) stopBackground() {
@@ -294,6 +336,12 @@ func vmagentArgs(remoteWriteURL string, httpPort int) []string {
 		"-remoteWrite.bearerTokenFile=/vmagent-data/remote-write.token",
 		"-remoteWrite.tmpDataPath=/vmagent-data/queue",
 		fmt.Sprintf("-httpListenAddr=127.0.0.1:%d", httpPort),
+		// Loopback is open to every process on the host, and anything pushed
+		// here is forwarded as the cluster's telemetry writer. vmagent never
+		// passes a request's headers on to remote write, so the credential
+		// stops here.
+		"-httpAuth.username=" + importUsername,
+		"-httpAuth.password=file:///vmagent-data/import.password",
 		"-enableTCP6",
 		// Pushed OTLP metrics arrive with dotted names like queue.depth, which
 		// every PromQL query would otherwise have to quote. Converting them to

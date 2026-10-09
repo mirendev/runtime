@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"miren.dev/runtime/components/appmetrics"
@@ -125,8 +126,8 @@ func (b *appMetricsBoot) start(
 	if b.inputs.runnerID != "" {
 		identityLabels["miren_runner"] = b.inputs.runnerID
 	}
-	// A zero timeout takes the writer's 30s default; vmagent is on loopback.
-	b.shipWriter = metrics.NewVictoriaMetricsWriter(log, managed.ImportURL(), 0)
+	b.shipWriter = metrics.NewVictoriaMetricsWriter(log, managed.ImportURL(), 0,
+		metrics.WithHTTPClient(&http.Client{Timeout: 30 * time.Second, Transport: managed.ImportTransport(nil)}))
 	b.shipWriter.Start()
 	b.attachShipping(ctx, log, observability, b.shipWriter, identityLabels)
 	log.Info("runtime operational metrics shipping through managed metrics",
@@ -135,6 +136,7 @@ func (b *appMetricsBoot) start(
 	if push := foundation.foundation.MetricsPush(); push != nil {
 		push.Arm(metricspush.Backend{
 			ImportURL: managed.ImportURL(),
+			Transport: managed.ImportTransport(nil),
 			ClusterID: config.ClusterID,
 			Resolver:  metricspush.NewEntityResolver(eac),
 		})

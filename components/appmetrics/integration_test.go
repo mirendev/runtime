@@ -150,7 +150,20 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 	// process writes them to vmagent's import endpoint, stamped with the same
 	// identity labels the scrape path derives from targets.json, and they must
 	// come out of the same authenticated remote write.
-	pushed := metrics.NewVictoriaMetricsWriter(entitytest.TestLogger(t), component.ImportURL(), 10*time.Second)
+	//
+	// Any other process on the host is refused, so it can't write as the
+	// cluster's telemetry writer.
+	for _, transport := range []http.RoundTripper{http.DefaultTransport, wrongPassword{}} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			component.ImportURL()+"/api/v1/import/prometheus", strings.NewReader("intruder_total 1\n"))
+		require.NoError(t, err)
+		resp, err := transport.RoundTrip(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	}
+	pushed := metrics.NewVictoriaMetricsWriter(entitytest.TestLogger(t), component.ImportURL(), 10*time.Second,
+		metrics.WithHTTPClient(&http.Client{Timeout: 10 * time.Second, Transport: component.ImportTransport(nil)}))
 	shipping := &metrics.Labeled{
 		Sink:   pushed,
 		Labels: map[string]string{"miren_cluster": "cluster-123", "miren_runner": "coordinator"},
@@ -192,6 +205,8 @@ func TestManagedMetricsRemoteWriteIntegration(t *testing.T) {
 		}
 		return remotewrite.Sample{}, false
 	}
+	_, intruded := find(func(l map[string]string) bool { return l["__name__"] == "intruder_total" })
+	require.False(t, intruded, "an unauthenticated import must not reach remote write")
 	exerciseWorkloadPush(t, ctx, component, issuer, entities, firstSandbox, secondSandbox, find)
 }
 
@@ -212,6 +227,7 @@ func exerciseWorkloadPush(
 	ingest := metricspush.NewIngest(entitytest.TestLogger(t), issuer, true)
 	ingest.Arm(metricspush.Backend{
 		ImportURL: component.ImportURL(),
+		Transport: component.ImportTransport(nil),
 		ClusterID: "cluster-123",
 		Resolver:  metricspush.NewEntityResolver(entities.EAC),
 	})
@@ -353,4 +369,13 @@ func seedMetricsReplicas(t *testing.T, ctx context.Context, server *entitytest.I
 		return id
 	}
 	return create("replica-1", "127.0.0.2/8"), create("replica-2", "127.0.0.3/8")
+}
+
+// wrongPassword is a sender that knows the username but not the secret.
+type wrongPassword struct{}
+
+func (wrongPassword) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.SetBasicAuth("miren", "guess")
+	return http.DefaultTransport.RoundTrip(r)
 }

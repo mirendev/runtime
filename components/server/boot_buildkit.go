@@ -115,7 +115,7 @@ func buildkitTraces(tracing tracingBootOutput) buildkit.TracesExport {
 	case tracing.destination.Token == nil:
 		return buildkit.TracesExport{Endpoint: tracing.destination.Endpoint}
 	case tracing.relayURL != "":
-		return buildkit.TracesExport{Endpoint: tracing.relayURL, Relayed: true}
+		return buildkit.TracesExport{Endpoint: tracing.relayURL, Relayed: true, RelaySecret: tracing.relaySecret}
 	default:
 		return buildkit.TracesExport{Disabled: true}
 	}
