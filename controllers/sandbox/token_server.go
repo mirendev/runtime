@@ -61,7 +61,14 @@ func (c *SandboxController) relayAuthenticator(remoteHost, secret string) (strin
 	return sandboxID, appName, err == nil
 }
 
-// otlpMetricsEnv leaves an application's own OTLP configuration untouched.
+// otlpMetricsEnv points an OpenTelemetry SDK's metrics exporter at the relay,
+// so an app already instrumented with OTel exports metrics with no setup.
+//
+// It stands aside entirely when the app sets any OTEL_EXPORTER_OTLP_ variable,
+// in its config or in its image, so env has to include both.
+// An app configuring OTLP at all has somewhere in mind for it, and the
+// metrics-specific variables set here would outrank a general endpoint it set,
+// quietly taking its metrics away from its own collector.
 func otlpMetricsEnv(env []string, relayBase, secret string) []string {
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "OTEL_EXPORTER_OTLP_") {
@@ -71,6 +78,7 @@ func otlpMetricsEnv(env []string, relayBase, secret string) []string {
 	return []string{
 		fmt.Sprintf("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=%s/%s/otlp/v1/metrics", relayBase, metricspush.ScopeSandbox),
 		"OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=http/protobuf",
+		// Header values are percent-encoded in this variable, per the OTel spec.
 		"OTEL_EXPORTER_OTLP_METRICS_HEADERS=Authorization=Bearer%20" + secret,
 	}
 }
