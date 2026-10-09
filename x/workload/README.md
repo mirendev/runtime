@@ -82,6 +82,8 @@ permanent HTTP errors and start failures are returned from `Run` after cleanup.
 returns its deadline. Admission never reopens after a notice. Use the signal to
 stop producers and let accepted work finish before the deadline. The runtime
 still owns termination; the SDK does not extend the deadline or persist work.
+Resuming a dedicated Session after a shutdown notice waits for that sandbox's
+drain and teardown, then starts a replacement with fresh admission and activity.
 
 Sessions created through the API or CLI default to parking after five minutes of
 continuously reported idle (`miren session create --idle-timeout 5m`). Set
@@ -112,6 +114,14 @@ acknowledgments include the notice timestamp, so a late retry cannot release a
 new assignment of the same Session. On process
 shutdown, cancel `Run` and wait for it to return before exiting. All assignment
 contexts are canceled before shutdown cleanup starts.
+
+Only shared Sessions receive explicit deletion notices and `StopDeleted`.
+Deleting a dedicated Session requests sandbox shutdown directly, without a
+cleanup acknowledgment or guaranteed drain grace. If the metadata poll observes
+its disappearance before the process stops, cleanup receives `StopRemoved`;
+otherwise process shutdown may invoke `StopShutdown`, or abrupt termination may
+prevent a callback entirely. The example's `deleteWorkspace` callback therefore
+does not replace external deletion reconciliation for dedicated Sessions.
 
 Stop reasons apply to assignments this host still tracks. Deleting a previously
 parked Session does not recreate an agent just to invoke its cleanup callback.

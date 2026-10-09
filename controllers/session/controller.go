@@ -120,7 +120,7 @@ func (c *Controller) run(ctx context.Context, s *sessionapi.Session) error {
 				return c.drainOrStop(ctx, sb.ID)
 			}
 			if !sb.ShutdownAt.IsZero() {
-				return c.clearShutdown(ctx, sb.ID)
+				return c.drainOrStop(ctx, sb.ID)
 			}
 			phase := sessionapi.ACTIVATING
 			if sb.Status == compute.RUNNING {
@@ -217,7 +217,7 @@ func (c *Controller) run(ctx context.Context, s *sessionapi.Session) error {
 	} else if terminal(existing.Status) {
 		return nil // The runner acknowledgment will wake this Session.
 	} else if !existing.ShutdownAt.IsZero() {
-		return c.clearShutdown(ctx, id)
+		return c.drainOrStop(ctx, id)
 	}
 
 	now := time.Now()
@@ -320,17 +320,6 @@ func (c *Controller) drainOrStop(ctx context.Context, id entity.Id) error {
 	}
 	_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
 		(&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), resp.Entity().Revision())
-	return err
-}
-
-func (c *Controller) clearShutdown(ctx context.Context, id entity.Id) error {
-	resp, err := c.EAC.Get(ctx, id.String())
-	if err != nil {
-		return err
-	}
-	e := entity.New(resp.Entity().Attrs())
-	e.Remove(compute.SandboxShutdownAtId)
-	_, err = c.EAC.Replace(ctx, e.Attrs(), resp.Entity().Revision())
 	return err
 }
 

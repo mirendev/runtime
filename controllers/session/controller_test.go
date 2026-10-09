@@ -143,11 +143,12 @@ func TestSessionLifecycleAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, compute.RUNNING, stopped.Status)
 	require.False(t, stopped.ShutdownAt.IsZero(), "drain notice precedes STOPPED")
+	deadline := stopped.ShutdownAt
 	patchSession(&sessionapi.Session{DesiredState: sessionapi.RUNNING})
 	reconcile()
 	stopped, err = ctrl.getSandbox(ctx, second.Sandbox)
 	require.NoError(t, err)
-	require.True(t, stopped.ShutdownAt.IsZero(), "cancelled suspension removes the notice")
+	require.Equal(t, deadline, stopped.ShutdownAt, "resume must not reopen a workload that has latched drain")
 	patchSession(&sessionapi.Session{DesiredState: sessionapi.SUSPENDED})
 	reconcile()
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, second.Sandbox,
