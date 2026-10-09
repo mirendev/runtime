@@ -289,7 +289,7 @@ func TestSessionDrainWaitsForPostNoticeActivityToBecomeIdle(t *testing.T) {
 	ctrl := NewController(slog.New(slog.NewTextHandler(io.Discard, nil)), inm.EAC)
 	id := entity.Id("sandbox/session-drain-1")
 	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id,
-		(&compute.Sandbox{Status: compute.RUNNING, SessionInfo: compute.SessionInfo{Owner: "session/drain"},
+		(&compute.Sandbox{Status: compute.RUNNING, HostNetwork: true, SessionInfo: compute.SessionInfo{Owner: "session/drain"},
 			Activity: compute.Activity{State: compute.IDLE, ReportedAt: time.Now()}}).Encode).Attrs())
 	require.NoError(t, err)
 	require.NoError(t, ctrl.drainOrStop(ctx, id))
@@ -297,9 +297,10 @@ func TestSessionDrainWaitsForPostNoticeActivityToBecomeIdle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, compute.RUNNING, sb.Status)
 	require.False(t, sb.ShutdownAt.IsZero())
+	require.True(t, sb.HostNetwork, "a shutdown notice must preserve unrelated sandbox fields")
 	// A report after the notice wins even if the original idle state was fresh.
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, id,
-		(&compute.Sandbox{Activity: compute.Activity{State: compute.ACTIVE, ReportedAt: time.Now()},
+		(&compute.Sandbox{HostNetwork: true, Activity: compute.Activity{State: compute.ACTIVE, ReportedAt: time.Now()},
 			ShutdownAt: time.Now().Add(-time.Second)}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	require.NoError(t, ctrl.drainOrStop(ctx, id))
@@ -307,12 +308,13 @@ func TestSessionDrainWaitsForPostNoticeActivityToBecomeIdle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, compute.RUNNING, sb.Status)
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, id,
-		(&compute.Sandbox{Activity: compute.Activity{State: compute.IDLE, ReportedAt: time.Now()}}).Encode).Attrs(), 0)
+		(&compute.Sandbox{HostNetwork: true, Activity: compute.Activity{State: compute.IDLE, ReportedAt: time.Now()}}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	require.NoError(t, ctrl.drainOrStop(ctx, id))
 	sb, err = ctrl.getSandbox(ctx, id)
 	require.NoError(t, err)
 	require.Equal(t, compute.STOPPED, sb.Status)
+	require.True(t, sb.HostNetwork, "a stop request must preserve unrelated sandbox fields")
 	// A lost workload must not keep the Session in SUSPENDING forever.
 	other := entity.Id("sandbox/session-drain-2")
 	_, err = inm.EAC.Create(ctx, entity.New(entity.DBId, other,

@@ -216,7 +216,7 @@ func (c *Controller) retireOutdatedHost(ctx context.Context, s *sessionapi.Sessi
 		latest.Decode(current.Entity().Entity())
 		latest.SessionInfo.ClosingAt = time.Now()
 		_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, host.ID,
-			(&compute.Sandbox{SessionInfo: latest.SessionInfo}).Encode).Attrs(), current.Entity().Revision())
+			entity.Component(compute.SandboxSessionInfoId, latest.SessionInfo.Encode())).Attrs(), current.Entity().Revision())
 		return true, err // Close admission before issuing a shutdown notice.
 	}
 	return true, c.drainOrStop(ctx, host.ID)
@@ -349,7 +349,7 @@ func (c *Controller) trySharedSlot(ctx context.Context, s *sessionapi.Session, g
 				}
 				latest.SessionInfo.Epoch++
 				_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, host,
-					(&compute.Sandbox{SessionInfo: latest.SessionInfo}).Encode).Attrs(), current.Entity().Revision())
+					entity.Component(compute.SandboxSessionInfoId, latest.SessionInfo.Encode())).Attrs(), current.Entity().Revision())
 				if errors.Is(err, cond.ErrConflict{}) {
 					if _, err := c.EAC.Delete(ctx, slotID.String()); err != nil {
 						return false, false, err

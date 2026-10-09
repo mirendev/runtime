@@ -310,7 +310,7 @@ func (c *Controller) drainOrStop(ctx context.Context, id entity.Id) error {
 		now := time.Now()
 		if sb.ShutdownAt.IsZero() {
 			_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
-				(&compute.Sandbox{ShutdownAt: now.Add(shutdownGrace)}).Encode).Attrs(), resp.Entity().Revision())
+				entity.Time(compute.SandboxShutdownAtId, now.Add(shutdownGrace))).Attrs(), resp.Entity().Revision())
 			return err
 		}
 		if now.Before(sb.ShutdownAt) ||
@@ -319,7 +319,7 @@ func (c *Controller) drainOrStop(ctx context.Context, id entity.Id) error {
 		}
 	}
 	_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, id,
-		(&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), resp.Entity().Revision())
+		entity.Ref(compute.SandboxStatusId, compute.SandboxStatusStoppedId)).Attrs(), resp.Entity().Revision())
 	return err
 }
 
@@ -439,7 +439,7 @@ func (c *Controller) SweepOrphans(ctx context.Context) error {
 				if host.SessionInfo.ClosingAt.IsZero() {
 					host.SessionInfo.ClosingAt = time.Now()
 					_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, sb.ID,
-						(&compute.Sandbox{SessionInfo: host.SessionInfo}).Encode).Attrs(), current.Entity().Revision())
+						entity.Component(compute.SandboxSessionInfoId, host.SessionInfo.Encode())).Attrs(), current.Entity().Revision())
 					if errors.Is(err, cond.ErrConflict{}) {
 						continue // An admission won the host revision.
 					}
@@ -457,7 +457,7 @@ func (c *Controller) SweepOrphans(ctx context.Context) error {
 				}
 				if len(slots.Values()) == 0 {
 					_, err = c.EAC.Patch(ctx, entity.New(entity.DBId, sb.ID,
-						(&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), current.Entity().Revision())
+						entity.Ref(compute.SandboxStatusId, compute.SandboxStatusStoppedId)).Attrs(), current.Entity().Revision())
 					if err != nil && !errors.Is(err, cond.ErrConflict{}) {
 						return err
 					}
@@ -481,7 +481,7 @@ func (c *Controller) SweepOrphans(ctx context.Context) error {
 }
 
 func (c *Controller) stopSandbox(ctx context.Context, id entity.Id) error {
-	_, err := c.EAC.Patch(ctx, entity.New(entity.Ref(entity.DBId, id), (&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), 0)
+	_, err := c.EAC.Patch(ctx, entity.New(entity.Ref(entity.DBId, id), entity.Ref(compute.SandboxStatusId, compute.SandboxStatusStoppedId)).Attrs(), 0)
 	if errors.Is(err, cond.ErrNotFound{}) {
 		return nil
 	}

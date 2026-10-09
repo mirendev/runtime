@@ -65,7 +65,7 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	formerDedicated.Generation = 1
 	require.ErrorContains(t, c.Reconcile(ctx, &formerDedicated, &entity.Meta{}), "cannot enter shared mode")
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, host,
-		(&compute.Sandbox{Status: compute.RUNNING}).Encode).Attrs(), 0)
+		(&compute.Sandbox{Status: compute.RUNNING, HostNetwork: true}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	require.Equal(t, sessionapi.READY, reconcile(ids[0]).Phase)
 	require.Equal(t, host, reconcile(ids[1]).Sandbox)
@@ -74,6 +74,7 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	require.Equal(t, sharedGroup(&first), sb.SessionInfo.Group)
 	require.Equal(t, int64(2), sb.SessionInfo.Capacity)
 	require.Equal(t, int64(1), sb.SessionInfo.Epoch, "admission must preserve the host's group and capacity")
+	require.True(t, sb.HostNetwork, "admission must preserve unrelated sandbox fields")
 	third := reconcile(ids[2])
 	require.NotEqual(t, host, third.Sandbox, "a third Session must boot a second host")
 	require.Equal(t, sessionapi.ACTIVATING, third.Phase)
@@ -191,6 +192,7 @@ func TestSharedSessionsManagedCapacityAndDeletion(t *testing.T) {
 	sb, err = c.getSandbox(ctx, host)
 	require.NoError(t, err)
 	require.Equal(t, compute.STOPPED, sb.Status)
+	require.True(t, sb.HostNetwork, "closing an empty host must preserve unrelated sandbox fields")
 }
 
 func TestSharedDeletionReleasesBindingAfterHostTeardown(t *testing.T) {
