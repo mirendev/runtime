@@ -2255,18 +2255,19 @@ func (v *AddonInstance) UnmarshalJSON(data []byte) error {
 }
 
 type runInfoData struct {
-	Id        *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
-	Task      *string `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
-	Trigger   *string `cbor:"2,keyasint,omitempty" json:"trigger,omitempty"`
-	Status    *string `cbor:"3,keyasint,omitempty" json:"status,omitempty"`
-	Command   *string `cbor:"4,keyasint,omitempty" json:"command,omitempty"`
-	ExitCode  *int32  `cbor:"5,keyasint,omitempty" json:"exit_code,omitempty"`
-	Attempt   *int32  `cbor:"7,keyasint,omitempty" json:"attempt,omitempty"`
-	StartedAt *int64  `cbor:"8,keyasint,omitempty" json:"started_at,omitempty"`
-	EndedAt   *int64  `cbor:"9,keyasint,omitempty" json:"ended_at,omitempty"`
-	Sandbox   *string `cbor:"10,keyasint,omitempty" json:"sandbox,omitempty"`
-	Version   *string `cbor:"11,keyasint,omitempty" json:"version,omitempty"`
-	ShortId   *string `cbor:"12,keyasint,omitempty" json:"short_id,omitempty"`
+	Id           *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Task         *string `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
+	Trigger      *string `cbor:"2,keyasint,omitempty" json:"trigger,omitempty"`
+	Status       *string `cbor:"3,keyasint,omitempty" json:"status,omitempty"`
+	Command      *string `cbor:"4,keyasint,omitempty" json:"command,omitempty"`
+	ExitCode     *int32  `cbor:"5,keyasint,omitempty" json:"exit_code,omitempty"`
+	Attempt      *int32  `cbor:"7,keyasint,omitempty" json:"attempt,omitempty"`
+	StartedAt    *int64  `cbor:"8,keyasint,omitempty" json:"started_at,omitempty"`
+	EndedAt      *int64  `cbor:"9,keyasint,omitempty" json:"ended_at,omitempty"`
+	Sandbox      *string `cbor:"10,keyasint,omitempty" json:"sandbox,omitempty"`
+	Version      *string `cbor:"11,keyasint,omitempty" json:"version,omitempty"`
+	ShortId      *string `cbor:"12,keyasint,omitempty" json:"short_id,omitempty"`
+	WorkerStatus *string `cbor:"13,keyasint,omitempty" json:"worker_status,omitempty"`
 }
 
 type RunInfo struct {
@@ -2451,6 +2452,21 @@ func (v *RunInfo) ShortId() string {
 
 func (v *RunInfo) SetShortId(short_id string) {
 	v.data.ShortId = &short_id
+}
+
+func (v *RunInfo) HasWorkerStatus() bool {
+	return v.data.WorkerStatus != nil
+}
+
+func (v *RunInfo) WorkerStatus() string {
+	if v.data.WorkerStatus == nil {
+		return ""
+	}
+	return *v.data.WorkerStatus
+}
+
+func (v *RunInfo) SetWorkerStatus(worker_status string) {
+	v.data.WorkerStatus = &worker_status
 }
 
 func (v *RunInfo) MarshalCBOR() ([]byte, error) {
@@ -7129,6 +7145,119 @@ func (v AddonsClient) DeleteInstance(ctx context.Context, app string, name strin
 	return &AddonsClientDeleteInstanceResults{client: v.Client, data: ret}, nil
 }
 
+type runsSubmitRunArgsData struct {
+	App       *string   `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Task      *string   `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
+	Command   *[]string `cbor:"2,keyasint,omitempty" json:"command,omitempty"`
+	Version   *string   `cbor:"3,keyasint,omitempty" json:"version,omitempty"`
+	RequestId *string   `cbor:"4,keyasint,omitempty" json:"request_id,omitempty"`
+}
+
+type RunsSubmitRunArgs struct {
+	call rpc.Call
+	data runsSubmitRunArgsData
+}
+
+func (v *RunsSubmitRunArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *RunsSubmitRunArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *RunsSubmitRunArgs) HasTask() bool {
+	return v.data.Task != nil
+}
+
+func (v *RunsSubmitRunArgs) Task() string {
+	if v.data.Task == nil {
+		return ""
+	}
+	return *v.data.Task
+}
+
+func (v *RunsSubmitRunArgs) HasCommand() bool {
+	return v.data.Command != nil
+}
+
+func (v *RunsSubmitRunArgs) Command() []string {
+	if v.data.Command == nil {
+		return nil
+	}
+	return *v.data.Command
+}
+
+func (v *RunsSubmitRunArgs) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *RunsSubmitRunArgs) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *RunsSubmitRunArgs) HasRequestId() bool {
+	return v.data.RequestId != nil
+}
+
+func (v *RunsSubmitRunArgs) RequestId() string {
+	if v.data.RequestId == nil {
+		return ""
+	}
+	return *v.data.RequestId
+}
+
+func (v *RunsSubmitRunArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsSubmitRunArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsSubmitRunArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsSubmitRunArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type runsSubmitRunResultsData struct {
+	Id *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+}
+
+type RunsSubmitRunResults struct {
+	call rpc.Call
+	data runsSubmitRunResultsData
+}
+
+func (v *RunsSubmitRunResults) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *RunsSubmitRunResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *RunsSubmitRunResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *RunsSubmitRunResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *RunsSubmitRunResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type runsCreateRunArgsData struct {
 	App     *string   `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Task    *string   `cbor:"1,keyasint,omitempty" json:"task,omitempty"`
@@ -7455,6 +7584,32 @@ func (v *RunsCancelRunResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type RunsSubmitRun struct {
+	rpc.Call
+	args    RunsSubmitRunArgs
+	results RunsSubmitRunResults
+}
+
+func (t *RunsSubmitRun) Args() *RunsSubmitRunArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *RunsSubmitRun) Results() *RunsSubmitRunResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type RunsCreateRun struct {
 	rpc.Call
 	args    RunsCreateRunArgs
@@ -7560,6 +7715,7 @@ func (t *RunsCancelRun) Results() *RunsCancelRunResults {
 }
 
 type Runs interface {
+	SubmitRun(ctx context.Context, state *RunsSubmitRun) error
 	CreateRun(ctx context.Context, state *RunsCreateRun) error
 	ListRuns(ctx context.Context, state *RunsListRuns) error
 	GetRun(ctx context.Context, state *RunsGetRun) error
@@ -7568,6 +7724,10 @@ type Runs interface {
 
 type reexportRuns struct {
 	client rpc.Client
+}
+
+func (reexportRuns) SubmitRun(ctx context.Context, state *RunsSubmitRun) error {
+	panic("not implemented")
 }
 
 func (reexportRuns) CreateRun(ctx context.Context, state *RunsCreateRun) error {
@@ -7593,6 +7753,22 @@ func (t reexportRuns) CapabilityClient() rpc.Client {
 func AdaptRuns(t Runs) *rpc.Interface {
 	methods := []rpc.Method{
 		{
+			Name:          "submitRun",
+			InterfaceName: "Runs",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "task", "command", "version", "request_id"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/apps/{app}/runs/submit",
+				Body:       "*",
+				PathParams: []string{"app"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.SubmitRun(ctx, &RunsSubmitRun{Call: call})
+			},
+		},
+		{
 			Name:          "createRun",
 			InterfaceName: "Runs",
 			Index:         0,
@@ -7608,6 +7784,16 @@ func AdaptRuns(t Runs) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"app", "task", "limit"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{app}/runs",
+				Body:       "",
+				PathParams: []string{"app"},
+				Query: []rpc.HTTPParam{
+					{Name: "task", Kind: "string"},
+					{Name: "limit", Kind: "int"},
+				},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.ListRuns(ctx, &RunsListRuns{Call: call})
 			},
@@ -7618,6 +7804,12 @@ func AdaptRuns(t Runs) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"id"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/runs/{id}",
+				Body:       "",
+				PathParams: []string{"id"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetRun(ctx, &RunsGetRun{Call: call})
 			},
@@ -7628,6 +7820,12 @@ func AdaptRuns(t Runs) *rpc.Interface {
 			Index:         0,
 			Public:        false,
 			Params:        []string{"id"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "POST",
+				Path:       "/api/v1/runs/{id}/cancel",
+				Body:       "*",
+				PathParams: []string{"id"},
+			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.CancelRun(ctx, &RunsCancelRun{Call: call})
 			},
@@ -7647,6 +7845,41 @@ func NewRunsClient(client rpc.Client) *RunsClient {
 
 func (c RunsClient) Export() Runs {
 	return reexportRuns{client: c.Client}
+}
+
+type RunsClientSubmitRunResults struct {
+	client rpc.Client
+	data   runsSubmitRunResultsData
+}
+
+func (v *RunsClientSubmitRunResults) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *RunsClientSubmitRunResults) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v RunsClient) SubmitRun(ctx context.Context, app string, task string, command []string, version string, request_id string) (*RunsClientSubmitRunResults, error) {
+	args := RunsSubmitRunArgs{}
+	args.data.App = &app
+	args.data.Task = &task
+	x := slices.Clone(command)
+	args.data.Command = &x
+	args.data.Version = &version
+	args.data.RequestId = &request_id
+
+	var ret runsSubmitRunResultsData
+
+	err := v.Call(ctx, "submitRun", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RunsClientSubmitRunResults{client: v.Client, data: ret}, nil
 }
 
 type RunsClientCreateRunResults struct {

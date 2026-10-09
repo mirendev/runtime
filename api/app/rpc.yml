@@ -509,6 +509,14 @@ types:
         type: string
         index: 12
         doc: Short, human-typeable form of the run id; empty for runs recorded before short-ids
+      - name: worker_status
+        type: string
+        index: 13
+        doc: |
+          State of the run's sandbox, separate from the run's own status.
+          pending: no sandbox has started yet. none: the run ended without
+          ever getting one. missing: the sandbox record is gone. Otherwise
+          the sandbox's status (pending, not_ready, running, stopped, dead).
 
 interfaces:
   - name: Crud
@@ -911,7 +919,43 @@ interfaces:
   # one returns immediately with an id: the run controller does the admitting
   # and the launching, so a caller never blocks on capacity.
   - name: Runs
+    http:
+      prefix: /api/v1
     methods:
+      - name: submitRun
+        doc: |
+          Queue a finite run of a declared task against a specific app version.
+          Built for external orchestrators: submitting again with the same
+          request_id returns the existing run instead of starting another, as
+          long as that run is still in history (by default, at least 7 days
+          after it finishes).
+        http:
+          post: /apps/{app}/runs/submit
+          body: "*"
+        parameters:
+          - name: app
+            type: string
+          - name: task
+            type: string
+            doc: Name of a task declared in the app's config. Required; console is not accepted.
+          - name: command
+            type: list
+            element: string
+            doc: Command to execute, as argv. Required; the task's declared command is not used as a default.
+          - name: version
+            type: string
+            doc: |
+              App version to run (app_version_id in `miren app history --format json`).
+              Must belong to this app. The run uses this version even if a newer one is deployed.
+          - name: request_id
+            type: string
+            doc: |
+              Key you choose to identify this unit of work within the app. Retry
+              with the same key after a lost response. Reusing a key with a
+              different task, version, or command is an error.
+        results:
+          - name: id
+            type: string
       - name: createRun
         parameters:
           - name: app
@@ -937,6 +981,8 @@ interfaces:
             doc: Deterministic name of the sandbox the run will use, for attaching
 
       - name: listRuns
+        http:
+          get: /apps/{app}/runs
         parameters:
           - name: app
             type: string
@@ -951,6 +997,8 @@ interfaces:
             element: RunInfo
 
       - name: getRun
+        http:
+          get: /runs/{id}
         parameters:
           - name: id
             type: string
@@ -959,6 +1007,8 @@ interfaces:
             type: RunInfo
 
       - name: cancelRun
+        http:
+          post: /runs/{id}/cancel
         parameters:
           - name: id
             type: string

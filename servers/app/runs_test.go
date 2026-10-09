@@ -1,15 +1,153 @@
 package app
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/containerd/containerd/v2/pkg/identifiers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"miren.dev/runtime/api/app/app_v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	runapi "miren.dev/runtime/api/run"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
+	ctx := context.Background()
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	app, err := inm.Client.Create(ctx, "dagster", &core_v1alpha.App{})
+	require.NoError(t, err)
+	cfg, err := inm.Client.Create(ctx, "worker-config", &core_v1alpha.ConfigVersion{App: app,
+		Spec: core_v1alpha.ConfigSpec{Tasks: []core_v1alpha.ConfigSpecTasks{{Name: "dagster"}}}})
+	require.NoError(t, err)
+	ver, err := inm.Client.Create(ctx, "pinned", &core_v1alpha.AppVersion{App: app, ConfigVersion: cfg})
+	require.NoError(t, err)
+	r := &AppInfo{Log: slog.Default(), EC: inm.Client}
+	client := &app_v1alpha.RunsClient{Client: rpc.LocalClient(app_v1alpha.AdaptRuns(r))}
+	command := []string{"python", "-m", "dagster", "argument with ' quotes"}
+	// All callers see one identity, even with a simultaneous absent-ID race.
+	var wg sync.WaitGroup
+	ids := make(chan string, 8)
+	for range 8 {
+		wg.Go(func() {
+			ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), "request-1")
+			assert.NoError(t, err)
+			if err == nil {
+				ids <- ret.Id()
+			}
+		})
+	}
+	wg.Wait()
+	close(ids)
+	var id string
+	for other := range ids {
+		if id == "" {
+			id = other
+		}
+		require.Equal(t, id, other)
+	}
+	require.NotEmpty(t, id)
+	sb, err := inm.Client.Create(ctx, "worker", &compute.Sandbox{Status: compute.PENDING})
+	require.NoError(t, err)
+	require.NoError(t, inm.Client.Patch(ctx, entity.Id(id), 0,
+		entity.Ref(run_v1alpha.RunStatusId, run_v1alpha.RunStatusRunningId),
+		entity.Ref(run_v1alpha.RunSandboxId, sb)))
+	ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), "request-1")
+	require.NoError(t, err)
+	require.Equal(t, id, ret.Id())
+	info, err := client.GetRun(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", info.Run().Status(), "retry must not reset state")
+	assert.Equal(t, "pending", info.Run().WorkerStatus(), "admission is not startup")
+	require.NoError(t, inm.Client.Patch(ctx, sb, 0, entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId)))
+	info, err = client.GetRun(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "running", info.Run().WorkerStatus())
+	_, err = client.SubmitRun(ctx, "dagster", "dagster", []string{"different"}, ver.String(), "request-1")
+	require.ErrorContains(t, err, "different work")
+	otherApp, err := inm.Client.Create(ctx, "other", &core_v1alpha.App{})
+	require.NoError(t, err)
+	foreign, err := inm.Client.Create(ctx, "foreign", &core_v1alpha.AppVersion{App: otherApp})
+	require.NoError(t, err)
+	_, err = client.SubmitRun(ctx, "dagster", "dagster", command, foreign.String(), "request-2")
+	require.ErrorContains(t, err, "does not belong")
+	denied := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "other"}})
+	_, err = client.SubmitRun(denied, "dagster", "dagster", command, ver.String(), "request-1")
+	require.Error(t, err, "deduplication must not bypass app authorization")
+	for _, task := range []string{"", "console", "undeclared"} {
+		_, err = client.SubmitRun(ctx, "dagster", task, command, ver.String(), "invalid-task")
+		require.Error(t, err)
+	}
+	mux := http.NewServeMux()
+	rpc.RegisterREST(mux, app_v1alpha.AdaptRuns(r))
+	for _, tc := range []struct {
+		name, field string
+		value       any
+		status      int
+		code        string
+	}{
+		{"missing request ID", "request_id", "", http.StatusBadRequest, "validation-failure"},
+		{"missing version", "version", "", http.StatusBadRequest, "validation-failure"},
+		{"missing command", "command", []string{}, http.StatusBadRequest, "validation-failure"},
+		{"missing task", "task", "", http.StatusBadRequest, "validation-failure"},
+		{"console task", "task", "console", http.StatusBadRequest, "validation-failure"},
+		{"undeclared task", "task", "undeclared", http.StatusBadRequest, "validation-failure"},
+		{"foreign version", "version", foreign.String(), http.StatusBadRequest, "validation-failure"},
+		{"changed command", "command", []string{"different"}, http.StatusConflict, "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"task": "dagster", "command": command, "version": ver.String(), "request_id": "new-request"}
+			if tc.status == http.StatusConflict {
+				payload["request_id"] = "request-1"
+			}
+			payload[tc.field] = tc.value
+			body, err := json.Marshal(payload)
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/dagster/runs/submit", bytes.NewReader(body))
+			req = req.WithContext(rpc.ContextWithIdentity(req.Context(), &rpc.Identity{Method: rpc.AuthMethodCert}))
+			resp := httptest.NewRecorder()
+			mux.ServeHTTP(resp, req)
+			require.Equal(t, tc.status, resp.Code, resp.Body.String())
+			var out struct {
+				Code string `json:"code"`
+			}
+			require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+			assert.Equal(t, tc.code, out.Code)
+		})
+	}
+	// Exercise the submitted identity, not a separately implemented encoding.
+	// Base64url used to produce leading or adjacent separators for some keys.
+	for i := range 256 {
+		ret, err := client.SubmitRun(ctx, "dagster", "dagster", command, ver.String(), fmt.Sprintf("key-%d", i))
+		require.NoError(t, err)
+		sandbox := runapi.SandboxName(entity.Id(ret.Id()), 1)
+		prefix := "sandbox." + strings.TrimPrefix(sandbox.String(), "sandbox/")
+		require.NoError(t, identifiers.Validate(prefix+"_pause"))
+		require.NoError(t, identifiers.Validate(prefix+"-dagster"))
+	}
+	terminal, err := inm.Client.Create(ctx, "never-started", &run_v1alpha.Run{App: app, Status: run_v1alpha.CANCELED})
+	require.NoError(t, err)
+	info, err = client.GetRun(ctx, terminal.String())
+	require.NoError(t, err)
+	assert.Equal(t, "none", info.Run().WorkerStatus())
+}
 
 // A canceled or timed-out run does produce an observed exit code -- the
 // platform killed the process and the kernel reported something -- but that is

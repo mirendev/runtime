@@ -3,6 +3,7 @@ package app
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -10,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mr-tron/base58"
+
 	"miren.dev/runtime/api/app/app_v1alpha"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	runapi "miren.dev/runtime/api/run"
@@ -73,6 +77,82 @@ func (r *AppInfo) refuseIfAtLimit(ctx context.Context, appID entity.Id, taskName
 }
 
 var _ app_v1alpha.Runs = &AppInfo{}
+
+// SubmitRun queues finite work using a stable, app-scoped execution identity.
+// Unlike interactive invocations, orchestrators can safely retry after a lost
+// response, including after the controller has changed the run's state.
+func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRun) error {
+	a := state.Args()
+	if !rpc.AllowApp(ctx, a.App()) {
+		return rpc.AppAccessError(ctx, a.App())
+	}
+	if a.RequestId() == "" || a.Version() == "" || len(a.Command()) == 0 {
+		return cond.ValidationFailure("missing-field", "request_id, version and command are required")
+	}
+	if a.Task() == "" || a.Task() == ConsoleTask {
+		return cond.ValidationFailure("invalid-field", "an explicit non-console task is required for orchestrator submission")
+	}
+	var app core_v1alpha.App
+	if err := r.EC.Get(ctx, a.App(), &app); err != nil {
+		return err
+	}
+	var ver core_v1alpha.AppVersion
+	if err := r.EC.GetById(ctx, entity.Id(a.Version()), &ver); err != nil {
+		return err
+	}
+	if ver.App != app.ID {
+		return cond.ValidationFailure("invalid-field", "version does not belong to app")
+	}
+	taskName := a.Task()
+	command := resolveCommand(nil, a.Command())
+	// Keep the full digest while leaving room for the sandbox/attempt and
+	// container suffixes under containerd's 76-character identifier limit.
+	// Base58 avoids adjacent separators rejected by containerd.
+	digest := sha256.Sum256([]byte(app.ID.String() + "\x00" + a.RequestId()))
+	name := "s-" + base58.Encode(digest[:])
+	id := entity.Id("run/" + name)
+	match := func() error {
+		var existing run_v1alpha.Run
+		if err := r.EC.GetById(ctx, id, &existing); err != nil {
+			return err
+		}
+		if existing.App != app.ID || existing.Version != ver.ID || existing.Task != taskName || existing.Command != command {
+			return cond.Conflict("request_id", "request_id already used for different work")
+		}
+		state.Results().SetId(id.String())
+		return nil
+	}
+	// Read before config resolution: an accepted request remains retrievable
+	// even if the app has been redeployed or capacity is currently exhausted.
+	if err := match(); err == nil {
+		return nil
+	} else if !errors.Is(err, cond.ErrNotFound{}) {
+		return err
+	}
+	cfg, err := r.resolveActiveConfig(ctx, ver.ID)
+	if err != nil {
+		return err
+	}
+	task := findTask(cfg, taskName)
+	if task == nil {
+		return cond.ValidationFailure("invalid-field", fmt.Sprintf("app declares no task named %q", taskName))
+	}
+	run := newManualRun(app.ID, ver.ID, taskName, command, false, task)
+	// Create, not Put: a concurrent retry must never reset a running or
+	// terminal entity back to pending. The store arbitrates the absent-ID CAS.
+	_, err = r.EC.EAC().Create(ctx, entity.New(
+		entity.DBId, id, (&core_v1alpha.Metadata{Name: name}).Encode, run.Encode,
+	).Attrs())
+	if err != nil {
+		if readErr := match(); readErr == nil {
+			return nil
+		}
+		return err
+	}
+	r.Log.Info("created run", "run", id, "app", a.App(), "task", taskName, "trigger", "manual")
+	state.Results().SetId(id.String())
+	return nil
+}
 
 // CreateRun records a run and returns immediately.
 //
@@ -152,29 +232,8 @@ func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, com
 
 	resolvedCommand := resolveCommand(task, command)
 
-	timeout := ""
-	if task != nil {
-		timeout = task.Timeout
-	}
-
-	// One attempt, whatever the task declares. Retries exist for triggers
-	// nobody is watching; a manual run that fails just fails and the caller
-	// decides. The controller enforces this too, so setting it here keeps the
-	// stored run honest rather than carrying a budget that is never spent.
-	const manualMaxAttempts = 1
-
 	name := fmt.Sprintf("%s-%s-%s", appName, taskName, idgen.Gen(""))
-	run := &run_v1alpha.Run{
-		App:         appRec.ID,
-		Version:     appRec.ActiveVersion,
-		Task:        taskName,
-		Trigger:     run_v1alpha.MANUAL,
-		Command:     resolvedCommand,
-		Tty:         tty,
-		Status:      run_v1alpha.PENDING,
-		Timeout:     timeout,
-		MaxAttempts: manualMaxAttempts,
-	}
+	run := newManualRun(appRec.ID, appRec.ActiveVersion, taskName, resolvedCommand, tty, task)
 
 	id, err := r.EC.Create(ctx, name, run)
 	if err != nil {
@@ -185,6 +244,19 @@ func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, com
 		"run", id, "app", appName, "task", taskName, "trigger", "manual")
 
 	return id, runapi.SandboxName(id, 1).String(), nil
+}
+
+func newManualRun(app, version entity.Id, taskName, command string, tty bool, task *core_v1alpha.ConfigSpecTasks) *run_v1alpha.Run {
+	// The caller owns retries for both interactive and orchestrated work,
+	// regardless of the task's retry policy for unattended triggers.
+	run := &run_v1alpha.Run{
+		App: app, Version: version, Task: taskName, Command: command, Tty: tty,
+		Trigger: run_v1alpha.MANUAL, Status: run_v1alpha.PENDING, MaxAttempts: 1,
+	}
+	if task != nil {
+		run.Timeout = task.Timeout
+	}
+	return run
 }
 
 func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns) error {
@@ -244,7 +316,23 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 		return err
 	}
 
-	state.Results().SetRun(runInfo(run, shortId))
+	info := runInfo(run, shortId)
+	info.SetWorkerStatus("pending")
+	if isRunTerminal(run.Status) {
+		info.SetWorkerStatus("none")
+	}
+	if run.Sandbox != "" {
+		var sb compute.Sandbox
+		if err := r.EC.GetById(ctx, run.Sandbox, &sb); err != nil {
+			if !errors.Is(err, cond.ErrNotFound{}) {
+				return err
+			}
+			info.SetWorkerStatus("missing")
+		} else {
+			info.SetWorkerStatus(strings.TrimPrefix(string(sb.Status), "status."))
+		}
+	}
+	state.Results().SetRun(info)
 	return nil
 }
 
