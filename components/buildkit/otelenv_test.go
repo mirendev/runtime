@@ -116,9 +116,10 @@ func TestOTELEnvForBuildkitd(t *testing.T) {
 			"buildkitd would prefer a stale signal-specific endpoint over the configured one")
 	})
 
-	// Relayed, buildkitd must carry no credential of its own and must not be
-	// able to bypass the relay through a signal-specific endpoint. The
-	// metrics-side settings are none of the relay's business and survive.
+	// Relayed, buildkitd must carry no collector credential of its own, only
+	// the relay's secret, and must not be able to bypass the relay through a
+	// signal-specific endpoint. The metrics-side settings are none of the
+	// relay's business and survive.
 	t.Run("relayed export strips credentials and pins the relay", func(t *testing.T) {
 		env := otelEnvForBuildkitd(getenv(map[string]string{
 			"OTEL_EXPORTER_OTLP_ENDPOINT":         "https://tempo.example",
@@ -128,10 +129,11 @@ func TestOTELEnvForBuildkitd(t *testing.T) {
 			"OTEL_EXPORTER_OTLP_PROTOCOL":         "grpc",
 			"OTEL_EXPORTER_OTLP_METRICS_HEADERS":  "X-Metrics=1",
 			"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://127.0.0.1:8429/opentelemetry/v1/metrics",
-		}), TracesExport{Endpoint: "http://127.0.0.1:14318", Relayed: true})
+		}), TracesExport{Endpoint: "http://127.0.0.1:14318", Relayed: true, RelaySecret: "RELAYSECRET"})
 		require.ElementsMatch(t, []string{
 			"OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:14318",
 			"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf",
+			"OTEL_EXPORTER_OTLP_TRACES_HEADERS=Authorization=Bearer%20RELAYSECRET",
 			"OTEL_EXPORTER_OTLP_PROTOCOL=grpc",
 			"OTEL_EXPORTER_OTLP_METRICS_HEADERS=X-Metrics=1",
 			"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:8429/opentelemetry/v1/metrics",

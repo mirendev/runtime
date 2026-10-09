@@ -34,10 +34,11 @@ func TestBuildkitTraces(t *testing.T) {
 		buildkitTraces(tracingBootOutput{destination: &otlpexport.Destination{Endpoint: "https://c.example"}}))
 
 	require.Equal(t,
-		buildkit.TracesExport{Endpoint: "http://127.0.0.1:14318", Relayed: true},
+		buildkit.TracesExport{Endpoint: "http://127.0.0.1:14318", Relayed: true, RelaySecret: "RELAYSECRET"},
 		buildkitTraces(tracingBootOutput{
 			destination: &otlpexport.Destination{Endpoint: "https://c.example", Token: token},
 			relayURL:    "http://127.0.0.1:14318",
+			relaySecret: "RELAYSECRET",
 		}))
 
 	require.Equal(t,

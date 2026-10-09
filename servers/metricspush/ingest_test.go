@@ -61,6 +61,7 @@ type vmagent struct {
 	path   string
 	labels []string
 	ctype  string
+	auth   string
 	body   []byte
 	status int
 	reply  string
@@ -75,6 +76,7 @@ func newVMAgent(t *testing.T) *vmagent {
 		v.labels = r.URL.Query()["extra_label"]
 		sort.Strings(v.labels)
 		v.ctype = r.Header.Get("Content-Type")
+		v.auth = r.Header.Get("Authorization")
 		v.body, _ = io.ReadAll(r.Body)
 		w.WriteHeader(v.status)
 		_, _ = io.WriteString(w, v.reply)
@@ -131,6 +133,31 @@ func requireStatus(t *testing.T, err error, status int) {
 	pe, ok := errors.AsType[*Error](err)
 	require.True(t, ok, "expected a push error, got %v", err)
 	require.Equal(t, status, pe.Status, pe.Message)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// vmagent refuses imports without its credential, so forwards go through the
+// transport the backend was armed with.
+func TestForwardUsesBackendTransport(t *testing.T) {
+	vm := newVMAgent(t)
+	ingest := NewIngest(testLogger(), &stubVerifier{claims: sandboxClaims("cloud", bgtask.ID)}, true)
+	ingest.Arm(Backend{
+		ImportURL: vm.srv.URL,
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r = r.Clone(r.Context())
+			r.SetBasicAuth("miren", "vmagent-password")
+			return http.DefaultTransport.RoundTrip(r)
+		}),
+		ClusterID: "cluster-1",
+		Resolver:  stubResolver{bgtask.ID: bgtask},
+	})
+
+	require.NoError(t, ingest.Push(t.Context(), promPush(ScopeSandbox, "jobs_total 1\n")))
+	require.Equal(t, 1, vm.calls)
+	require.Equal(t, "Basic bWlyZW46dm1hZ2VudC1wYXNzd29yZA==", vm.auth)
 }
 
 func TestSandboxScopeCarriesScrapeLabels(t *testing.T) {

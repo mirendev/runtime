@@ -39,7 +39,6 @@ type Verifier interface {
 type Ingest struct {
 	log      *slog.Logger
 	verifier Verifier
-	client   *http.Client
 
 	// enabled is whether the cluster has a remote-write destination at all.
 	// It comes from configuration rather than from vmagent being up, so it
@@ -58,19 +57,24 @@ type Backend struct {
 	// ImportURL is the managed-metrics vmagent, normally on loopback.
 	ImportURL string
 
+	// Transport carries the credential vmagent requires at ImportURL. Nil
+	// uses http.DefaultTransport.
+	Transport http.RoundTripper
+
 	// ClusterID is stamped as miren_cluster, the same value the scrape path
 	// uses.
 	ClusterID string
 
 	// Resolver looks up the sandbox a token names.
 	Resolver SandboxResolver
+
+	client *http.Client
 }
 
 func NewIngest(log *slog.Logger, verifier Verifier, enabled bool) *Ingest {
 	i := &Ingest{
 		log:      log.With("module", "metricspush"),
 		verifier: verifier,
-		client:   &http.Client{Timeout: forwardTimeout},
 	}
 	i.enabled.Store(enabled)
 	return i
@@ -95,6 +99,7 @@ func (i *Ingest) Fail() {
 // unavailable rather than dropped.
 func (i *Ingest) Arm(backend Backend) {
 	backend.ImportURL = strings.TrimRight(backend.ImportURL, "/")
+	backend.client = &http.Client{Timeout: forwardTimeout, Transport: backend.Transport}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.backend = backend
@@ -190,17 +195,17 @@ func (i *Ingest) Push(ctx context.Context, p Push) error {
 	}
 
 	query := url.Values{"extra_label": labels}
-	return i.forward(ctx, backend.ImportURL+path+"?"+query.Encode(), contentType, body, claims.SandboxID)
+	return i.forward(ctx, backend.client, backend.ImportURL+path+"?"+query.Encode(), contentType, body, claims.SandboxID)
 }
 
-func (i *Ingest) forward(ctx context.Context, target, contentType string, body []byte, sandboxID string) error {
+func (i *Ingest) forward(ctx context.Context, client *http.Client, target, contentType string, body []byte, sandboxID string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building forward request: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
 
-	resp, err := i.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		i.log.Warn("forwarding pushed metrics to vmagent", "sandbox", sandboxID, "error", err)
 		return errorf(http.StatusBadGateway, "managed metrics is unavailable")

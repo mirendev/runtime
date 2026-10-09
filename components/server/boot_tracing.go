@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -27,6 +28,7 @@ type tracingBootInputs struct {
 	configEndpoint  bool
 	audience        string
 	relayAddr       string
+	relaySecretPath string
 	clusterName     string
 	additionalNames []string
 	shutdownTimeout time.Duration
@@ -39,6 +41,8 @@ type tracingBootOutput struct {
 	// through. Empty unless traces authenticate with workload identity and the
 	// relay is listening.
 	relayURL string
+	// relaySecret is the bearer token the relay requires. Set with relayURL.
+	relaySecret string
 }
 
 type tracingBoot struct {
@@ -57,6 +61,7 @@ func tracingInputs(options StartOptions) tracingBootInputs {
 		configEndpoint:  traces.GetEndpoint() != "",
 		audience:        traces.GetWorkloadIdentityAudience(),
 		relayAddr:       otlpexport.RelayAddr,
+		relaySecretPath: filepath.Join(options.Config.Server.GetDataPath(), "otlp-relay", "secret"),
 		clusterName:     options.Config.Server.GetConfigClusterName(),
 		additionalNames: append([]string(nil), options.Config.TLS.AdditionalNames...),
 		shutdownTimeout: 5 * time.Second,
@@ -126,7 +131,7 @@ func (b *tracingBoot) start(ctx context.Context, registrationOutput registration
 
 	out := tracingBootOutput{destination: &destination}
 	if token != nil {
-		out.relayURL = b.startRelay(destination)
+		out.relayURL, out.relaySecret = b.startRelay(destination)
 	}
 	return out, nil
 }
@@ -134,17 +139,24 @@ func (b *tracingBoot) start(ctx context.Context, registrationOutput registration
 // startRelay listens for trace exports from processes that cannot refresh a
 // token themselves. A relay that cannot bind is not fatal: the server's own
 // spans still export, and buildkitd is left without a destination rather than
-// with a credential that would expire under it.
-func (b *tracingBoot) startRelay(destination otlpexport.Destination) string {
+// with a credential that would expire under it. The same goes for a relay
+// without its secret, since it would have to take spans from anyone.
+func (b *tracingBoot) startRelay(destination otlpexport.Destination) (string, string) {
 	log := b.inputs.log
+	secret, err := otlpexport.LoadRelaySecret(b.inputs.relaySecretPath)
+	if err != nil {
+		log.Warn("OTLP relay for buildkit traces has no secret; build spans will not be exported",
+			"path", b.inputs.relaySecretPath, "error", err)
+		return "", ""
+	}
 	listener, err := net.Listen("tcp", b.inputs.relayAddr)
 	if err != nil {
 		log.Warn("OTLP relay for buildkit traces could not listen; build spans will not be exported",
 			"addr", b.inputs.relayAddr, "error", err)
-		return ""
+		return "", ""
 	}
 	b.relay = &http.Server{
-		Handler:           otlpexport.NewRelay(log, destination),
+		Handler:           otlpexport.NewRelay(log, destination, secret),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -154,7 +166,7 @@ func (b *tracingBoot) startRelay(destination otlpexport.Destination) string {
 	}()
 	relayURL := "http://" + listener.Addr().String()
 	log.Info("OTLP relay listening for local trace exporters", "url", relayURL)
-	return relayURL
+	return relayURL, secret
 }
 
 func (b *tracingBoot) stop(ctx context.Context) error {

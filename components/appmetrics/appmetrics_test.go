@@ -3,6 +3,8 @@ package appmetrics
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,4 +190,34 @@ func TestScrapeSafetyLimits(t *testing.T) {
 	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-promscrape.fileSDCheckInterval=5s")
 	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-remoteWrite.forcePromProto")
 	assert.Contains(t, vmagentArgs("https://metrics.example.com/write", 8429), "-opentelemetry.usePrometheusNaming")
+}
+
+// The import password reaches vmagent only through a file, never argv, which
+// any user on the host can read from /proc.
+func TestVMagentImportRequiresPasswordFromFile(t *testing.T) {
+	args := vmagentArgs("https://metrics.example.com/write", 8429)
+	assert.Contains(t, args, "-httpAuth.username=miren")
+	assert.Contains(t, args, "-httpAuth.password=file:///vmagent-data/import.password")
+}
+
+func TestImportTransportAppliesPassword(t *testing.T) {
+	var user, pass string
+	var ok bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok = r.BasicAuth()
+	}))
+	t.Cleanup(srv.Close)
+
+	component := &Component{importPassword: "s3cret"}
+	client := &http.Client{Transport: component.ImportTransport(nil)}
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	require.True(t, ok)
+	assert.Equal(t, "miren", user)
+	assert.Equal(t, "s3cret", pass)
+	assert.Empty(t, req.Header.Get("Authorization"), "the caller's request must not be mutated")
 }

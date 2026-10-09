@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,14 +134,14 @@ func TestRelayForwardsWithTokenAndPassesStatusBack(t *testing.T) {
 
 	src := workloadidentity.NewSystemTokenSource(workloadidentity.SystemWorkloadTelemetryWriter, "traces.example")
 	src.SetIssuer(iss)
-	relay := httptest.NewServer(NewRelay(slog.Default(), Resolve(slog.Default(), c.server.URL, src)))
+	relay := httptest.NewServer(NewRelay(slog.Default(), Resolve(slog.Default(), c.server.URL, src), testRelaySecret))
 	t.Cleanup(relay.Close)
 
 	req, err := http.NewRequest(http.MethodPost, relay.URL+"/v1/traces", bytes.NewReader([]byte("build spans")))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Content-Encoding", "gzip")
-	req.Header.Set("Authorization", "Basic c2VuZGVyLWNyZWQ=")
+	req.Header.Set("Authorization", "Bearer "+testRelaySecret)
 	req.Header.Set("X-Scope-OrgID", "someone-else")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -163,7 +165,7 @@ func TestRelayForwardsWithTokenAndPassesStatusBack(t *testing.T) {
 
 func TestRelayRejectsOtherPaths(t *testing.T) {
 	c := newCollector(t)
-	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL}))
+	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL}, testRelaySecret))
 	t.Cleanup(relay.Close)
 
 	resp, err := http.Post(relay.URL+"/v1/metrics", "application/x-protobuf", strings.NewReader("m"))
@@ -179,14 +181,95 @@ func TestRelayRejectsOtherPaths(t *testing.T) {
 	require.Empty(t, c.requests)
 }
 
+const testRelaySecret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func postRelay(base, authorization string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPost, base+"/v1/traces", strings.NewReader("spans"))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	return http.DefaultClient.Do(req)
+}
+
+// Loopback is open to every process on the host, so only a caller holding the
+// relay secret gets to export as the cluster's telemetry writer.
+func TestRelayRequiresSecret(t *testing.T) {
+	c := newCollector(t)
+	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL}, testRelaySecret))
+	t.Cleanup(relay.Close)
+
+	for _, auth := range []string{"", "Bearer wrong", "Basic " + testRelaySecret, testRelaySecret} {
+		resp, err := postRelay(relay.URL, auth)
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode, "Authorization %q", auth)
+	}
+	require.Empty(t, c.requests)
+
+	resp, err := postRelay(relay.URL, "Bearer "+testRelaySecret)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, c.requests, 1)
+	require.Empty(t, c.requests[0].Header.Get("Authorization"), "the relay secret must not reach the collector")
+}
+
+// With no secret to check against, the relay takes nothing.
+func TestRelayWithoutSecretFailsClosed(t *testing.T) {
+	c := newCollector(t)
+	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL}, ""))
+	t.Cleanup(relay.Close)
+
+	for _, auth := range []string{"", "Bearer "} {
+		resp, err := postRelay(relay.URL, auth)
+		require.NoError(t, err)
+		resp.Body.Close()
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	}
+	require.Empty(t, c.requests)
+}
+
+func TestLoadRelaySecretIsStableAndPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "otlp-relay", "secret")
+
+	first, err := LoadRelaySecret(path)
+	require.NoError(t, err)
+	require.True(t, validRelaySecret(first))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	again, err := LoadRelaySecret(path)
+	require.NoError(t, err)
+	require.Equal(t, first, again, "buildkitd's env, and so its container, must survive a restart")
+}
+
+// A file the relay can't use, such as one cut short by a crash or carrying
+// characters that would split the OTel headers list, is replaced.
+func TestLoadRelaySecretReplacesUnusableFile(t *testing.T) {
+	for _, content := range []string{"", "SHORT", "abcdefghijklmnopqrstuvwxyz0123", "ABCDEFGHIJKLMNOPQRSTUVWXYZ,X=1"} {
+		path := filepath.Join(t.TempDir(), "secret")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+		secret, err := LoadRelaySecret(path)
+		require.NoError(t, err)
+		require.True(t, validRelaySecret(secret))
+		require.NotEqual(t, content, secret)
+	}
+}
+
 // A relay that cannot get a token must not reach the collector at all.
 func TestRelayWithoutIssuerFailsClosed(t *testing.T) {
 	c := newCollector(t)
 	src := workloadidentity.NewSystemTokenSource(workloadidentity.SystemWorkloadTelemetryWriter, "traces.example")
-	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL, Token: src}))
+	relay := httptest.NewServer(NewRelay(slog.Default(), Destination{Endpoint: c.server.URL, Token: src}, testRelaySecret))
 	t.Cleanup(relay.Close)
 
-	resp, err := http.Post(relay.URL+"/v1/traces", "application/x-protobuf", strings.NewReader("s"))
+	resp, err := postRelay(relay.URL, "Bearer "+testRelaySecret)
 	require.NoError(t, err)
 	resp.Body.Close()
 	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
