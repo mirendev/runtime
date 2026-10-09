@@ -17,6 +17,24 @@ import (
 	"miren.dev/runtime/pkg/entity/types"
 )
 
+func TestManagerRejectsDiskBackedPreviewPool(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marked-%t", marked), func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			verID, err := server.Client.Create(ctx, "preview", &core_v1alpha.AppVersion{EphemeralLabel: "pr-2"})
+			require.NoError(t, err)
+			pool := &compute_v1alpha.SandboxPool{Ephemeral: marked, Service: "web", SandboxSpec: compute_v1alpha.SandboxSpec{Version: verID, Volume: []compute_v1alpha.SandboxSpecVolume{{Name: "production", Provider: "miren"}}}}
+			manager := NewManager(testutils.TestLogger(t), server.EAC)
+			require.ErrorContains(t, manager.createSandbox(ctx, pool, 0), "ephemeral deployments do not support disks")
+			resp, err := server.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+			require.NoError(t, err)
+			require.Empty(t, resp.Values())
+		})
+	}
+}
+
 // TestManagerScaleUpFromZero tests that the manager creates sandboxes
 // when the pool has DesiredInstances > 0 and no existing sandboxes
 func TestManagerScaleUpFromZero(t *testing.T) {
@@ -1509,6 +1527,72 @@ func TestManagerCrashResetDoesNotRecount(t *testing.T) {
 		"pool should not re-enter cooldown from old dead sandboxes")
 }
 
+func TestRetiredSandboxDoesNotPoisonReusedPool(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	pool := &compute_v1alpha.SandboxPool{
+		Service: "web", DesiredInstances: 0,
+		SandboxSpec: compute_v1alpha.SandboxSpec{Version: "preview"},
+	}
+	poolID, err := server.Client.Create(ctx, "pool", pool)
+	require.NoError(t, err)
+	pool.ID = poolID
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	created := time.Now().Add(-57 * time.Second)
+	server.Store.NowFunc = func() time.Time { return created }
+	sb := &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, Spec: pool.SandboxSpec}
+	id, err := server.Client.Create(ctx, "preview", sb,
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", pool.ID.String())))
+	require.NoError(t, err)
+	sb.ID = id
+	server.Store.NowFunc = nil
+	require.NoError(t, manager.scaleDown(ctx, pool, []*sandboxWithMeta{{sandbox: sb}}, 1))
+	resp, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var stopped compute_v1alpha.Sandbox
+	stopped.Decode(resp.Entity().Entity())
+	require.False(t, stopped.StopRequestedAt.IsZero())
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.DEAD, Exit: compute_v1alpha.Exit{Code: 2, At: time.Now()}}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+
+	// Even if the pool is immediately reused, the retired preview is not a crash.
+	pool.SandboxSpec.Version = "production"
+	pool.DesiredInstances = 1
+	pool.ReferencedByVersions = []entity.Id{"production"}
+	require.NoError(t, server.Client.Update(ctx, pool))
+	_, err = server.Client.Create(ctx, "production", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec},
+		entityserver.WithLabels(types.LabelSet("service", "web", "pool", pool.ID.String())))
+	require.NoError(t, err)
+	reconcilePool(t, ctx, server, manager, pool)
+	updated := getPool(t, ctx, server, pool.ID)
+	assert.Zero(t, updated.ConsecutiveCrashCount)
+	assert.True(t, updated.CooldownUntil.IsZero())
+	assert.Equal(t, int64(1), updated.ReadyInstances)
+}
+
+func TestScaleDownDoesNotHideConcurrentExit(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	sb := &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}
+	id, err := server.Client.Create(ctx, "sandbox", sb)
+	require.NoError(t, err)
+	sb.ID = id
+	_, err = server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.Sandbox{Status: compute_v1alpha.STOPPED, Exit: compute_v1alpha.Exit{Code: 2, At: time.Now()}}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	manager := NewManager(testutils.TestLogger(t), server.EAC)
+	require.NoError(t, manager.scaleDown(ctx, &compute_v1alpha.SandboxPool{}, []*sandboxWithMeta{{sandbox: sb}}, 1))
+	resp, err := server.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var got compute_v1alpha.Sandbox
+	got.Decode(resp.Entity().Entity())
+	assert.True(t, got.StopRequestedAt.IsZero())
+	assert.Equal(t, int64(2), got.Exit.Code)
+}
+
 func TestCountStartupFailures(t *testing.T) {
 	now := time.Now()
 	manager := &Manager{}
@@ -1519,12 +1603,15 @@ func TestCountStartupFailures(t *testing.T) {
 		{sandbox: &compute_v1alpha.Sandbox{ID: "legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-25 * time.Second), updatedAt: now.Add(-15 * time.Second)},
 		{sandbox: &compute_v1alpha.Sandbox{ID: "old-legacy", Status: compute_v1alpha.DEAD}, createdAt: now.Add(-6 * time.Minute), updatedAt: now.Add(-time.Minute)},
 		{sandbox: &compute_v1alpha.Sandbox{ID: "old-failure", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_FAILED}, createdAt: now.Add(-10 * time.Minute), updatedAt: now.Add(-2 * time.Minute)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "stopped", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, StopRequestedAt: now.Add(time.Hour), Exit: compute_v1alpha.Exit{Code: 2, At: now}}, createdAt: now.Add(-57 * time.Second), updatedAt: now},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "zero-exit", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING, Exit: compute_v1alpha.Exit{Code: 0, At: now}}, createdAt: now.Add(-59 * time.Second), updatedAt: now.Add(-5 * time.Second)},
+		{sandbox: &compute_v1alpha.Sandbox{ID: "boundary", Status: compute_v1alpha.DEAD, StartupOutcome: compute_v1alpha.STARTUP_RUNNING}, createdAt: now.Add(-61 * time.Second), updatedAt: now.Add(-time.Second)},
 	}
 	pool := &compute_v1alpha.SandboxPool{LastCrashTime: now.Add(-90 * time.Second)}
 	count, latest := manager.countStartupFailures(sandboxes, pool)
-	assert.Equal(t, int64(3), count,
+	assert.Equal(t, int64(4), count,
 		"long pre-running failure and quick crashes count, but long-running and previously counted failures do not")
-	assert.Equal(t, now.Add(-10*time.Second), latest, "use the newest counted update, not time.Now or the newest healthy exit")
+	assert.Equal(t, now.Add(-5*time.Second), latest, "use the newest counted update, not time.Now or the newest retired exit")
 	pool.LastCrashTime = latest
 	count, _ = manager.countStartupFailures(sandboxes, pool)
 	assert.Zero(t, count, "reconciliation must not count the same DEAD sandboxes again")

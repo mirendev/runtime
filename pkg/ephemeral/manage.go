@@ -2,6 +2,7 @@ package ephemeral
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -14,6 +15,18 @@ import (
 )
 
 const DefaultMaxEphemeral = 10
+
+var ErrDisksUnsupported = errors.New("ephemeral deployments do not support disks")
+
+// ValidateConfig keeps previews from attaching storage shared with production.
+func ValidateConfig(spec *core_v1alpha.ConfigSpec) error {
+	for _, svc := range spec.Services {
+		if len(svc.Disks) > 0 {
+			return fmt.Errorf("%w (service %q); remove disk attachments to deploy a preview", ErrDisksUnsupported, svc.Name)
+		}
+	}
+	return nil
+}
 
 // ReplaceExisting finds and deletes an existing ephemeral version with the same
 // label for the given app. This ensures deploying with an existing label replaces

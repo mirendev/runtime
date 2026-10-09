@@ -50,6 +50,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/netutil"
 	"miren.dev/runtime/pkg/rpc/stream"
 )
@@ -254,6 +255,10 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 			start := rand.Int() % len(ps.sandboxes)
 			for i := 0; i < len(ps.sandboxes); i++ {
 				s := ps.sandboxes[(start+i)%len(ps.sandboxes)]
+				if ver.EphemeralLabel != "" && len(s.sandbox.Spec.Volume) > 0 {
+					a.mu.RUnlock()
+					return nil, ephemeralx.ErrDisksUnsupported
+				}
 				if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
 					candidateSandbox = s
 					break
@@ -648,6 +653,10 @@ poolLoop:
 				continue
 			}
 
+			if ver.EphemeralLabel != "" && len(state.pool.SandboxSpec.Volume) > 0 {
+				return nil, ephemeralx.ErrDisksUnsupported
+			}
+
 			// state.pool is now a real (non-sentinel) cached pool. Ensure the
 			// version->pool mapping exists before we increment and return: a pool
 			// created on-demand seeds a.pools but not a.versions, so without this
@@ -919,6 +928,10 @@ poolLoop:
 			foundPool := foundPoolWithRev.pool
 			currentRevision := foundPoolWithRev.revision
 			poolID := foundPool.ID
+			if ver.EphemeralLabel != "" && len(foundPool.SandboxSpec.Volume) > 0 {
+				a.mu.Unlock()
+				return nil, ephemeralx.ErrDisksUnsupported
+			}
 
 			// Cache the pool state and register strategy before doing anything
 			// else: even when we're at cap and won't patch, the caller needs

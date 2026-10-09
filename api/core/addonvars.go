@@ -50,6 +50,12 @@ func ResolveRuntimeConfig(
 		return nil, err
 	}
 
+	return ResolveAddonConfig(ctx, eac, ver, spec)
+}
+
+// ResolveAddonConfig applies live app bindings to a newly assembled config.
+// Like ResolveRuntimeConfig, its result is runtime-only and must not be stored.
+func ResolveAddonConfig(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec) (*core_v1alpha.ConfigSpec, error) {
 	if ver.App == "" {
 		return spec, nil
 	}

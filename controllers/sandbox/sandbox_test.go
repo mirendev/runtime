@@ -2129,6 +2129,52 @@ func TestRetireSandboxUsesCurrentLifecycle(t *testing.T) {
 	require.Equal(t, compute.STARTUP_RUNNING, got.StartupOutcome)
 }
 
+func TestStopRequestSurvivesExitAndTeardown(t *testing.T) {
+	requestedAt := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name   string
+		sb     compute.Sandbox
+		want   bool
+		noExit bool
+	}{
+		{"intentional", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING, StopRequestedAt: requestedAt}, true, false},
+		{"external-stop", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_RUNNING}, true, false},
+		{"cancelled-boot", compute.Sandbox{Status: compute.STOPPED}, true, false},
+		{"unexpected", compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING}, false, false},
+		{"failed-boot", compute.Sandbox{Status: compute.PENDING}, false, false},
+		{"timed-out-boot", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, false, false},
+		{"stopped-without-exit", compute.Sandbox{Status: compute.STOPPED}, true, true},
+		{"timeout-without-exit", compute.Sandbox{Status: compute.STOPPED, StartupOutcome: compute.STARTUP_FAILED}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := entitytestutils.NewInMemEntityServer(t)
+			defer cleanup()
+			c := &SandboxController{EAC: server.EAC}
+			id, err := server.Client.Create(ctx, "sandbox", &tc.sb)
+			require.NoError(t, err)
+			if !tc.noExit {
+				exit := compute.Exit{Code: 2, At: time.Now(), Container: "app"}
+				_, err = c.recordExit(ctx, id, exit)
+				require.NoError(t, err)
+			}
+			require.NoError(t, c.retireSandbox(ctx, id))
+			resp, err := server.EAC.Get(ctx, id.String())
+			require.NoError(t, err)
+			var got compute.Sandbox
+			got.Decode(resp.Entity().Entity())
+			require.Equal(t, compute.DEAD, got.Status)
+			require.Equal(t, tc.want, !got.StopRequestedAt.IsZero())
+			if !tc.sb.StopRequestedAt.IsZero() {
+				require.Equal(t, requestedAt, got.StopRequestedAt, "exit and teardown must preserve the original request timestamp")
+			}
+			if !tc.noExit {
+				require.Equal(t, int64(2), got.Exit.Code)
+			}
+		})
+	}
+}
+
 func TestRetireSandboxDoesNotRewriteDead(t *testing.T) {
 	ctx := context.Background()
 	server, cleanup := entitytestutils.NewInMemEntityServer(t)

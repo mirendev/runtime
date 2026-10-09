@@ -1441,6 +1441,45 @@ func TestDeployVersionEphemeralClonePolicy(t *testing.T) {
 	}
 }
 
+func TestDeployVersionRejectsPreviewDisksBeforeReplacement(t *testing.T) {
+	for _, provider := range []string{"miren", "local", "sqlite", "addon"} {
+		t.Run(provider, func(t *testing.T) {
+			ctx := context.Background()
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			server, err := newTestDeploymentServer(t, slog.Default(), inmem)
+			require.NoError(t, err)
+			client := &deployment_v1alpha.DeploymentClient{Client: rpc.LocalClient(deployment_v1alpha.AdaptDeployment(server))}
+			appID, err := inmem.Client.Create(ctx, "app", &core_v1alpha.App{ActiveVersion: "production"})
+			require.NoError(t, err)
+			oldID, err := inmem.Client.Create(ctx, "old-preview", &core_v1alpha.AppVersion{App: appID, EphemeralLabel: "pr-2", EphemeralExpiresAt: time.Now().Add(time.Hour)})
+			require.NoError(t, err)
+			spec := core_v1alpha.ConfigSpec{Services: []core_v1alpha.ConfigSpecServices{{Name: "web"}, {Name: "db"}}}
+			if provider == "addon" {
+				_, err = inmem.Client.Create(ctx, "sqlite-addon", &addon_v1alpha.AddonAssociation{App: appID, Status: "active", Services: []string{"db"}, Disks: []addon_v1alpha.Disks{{Name: "data", Provider: "sqlite", MountPath: "/data"}}})
+			} else {
+				spec.Services[1].Disks = []core_v1alpha.ConfigSpecServicesDisks{{Name: "data", Provider: core_v1alpha.ConfigSpecServicesDisksProvider(provider), MountPath: "/data"}}
+			}
+			require.NoError(t, err)
+			configID, err := inmem.Client.Create(ctx, "config", &core_v1alpha.ConfigVersion{Spec: spec})
+			require.NoError(t, err)
+			verID, err := inmem.Client.Create(ctx, "source", &core_v1alpha.AppVersion{App: appID, Version: "source", ConfigVersion: configID})
+			require.NoError(t, err)
+			before, err := inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			result, err := client.DeployVersion(ctx, "app", "cluster", verID.String(), false, nil, "pr-2", "24h", "")
+			require.NoError(t, err)
+			require.Contains(t, result.Error(), "ephemeral deployments do not support disks")
+			after, err := inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			require.Equal(t, before.Entity().Revision(), after.Entity().Revision())
+			var app core_v1alpha.App
+			require.NoError(t, inmem.Client.GetById(ctx, appID, &app))
+			require.Equal(t, entity.Id("production"), app.ActiveVersion)
+		})
+	}
+}
+
 func TestDeployVersionEphemeral(t *testing.T) {
 	ctx := context.Background()
 

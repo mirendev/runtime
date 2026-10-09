@@ -32,6 +32,7 @@ import (
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
 )
 
@@ -121,7 +122,13 @@ func (l *Launcher) CreatePoolForVersion(ctx context.Context, ver *core_v1alpha.A
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve runtime config for version %s: %w", ver.Version, err)
 	}
-	l.injectAutoMountLocalDisks(spec, &app)
+	if ver.EphemeralLabel != "" {
+		if err := ephemeralx.ValidateConfig(spec); err != nil {
+			return "", err
+		}
+	} else {
+		l.injectAutoMountLocalDisks(spec, &app)
+	}
 
 	poolID, err := l.ensurePoolForService(ctx, &app, ver, spec, service)
 	if err != nil {
@@ -582,6 +589,7 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		SandboxSpec:          *sbSpec,
 		DesiredInstances:     desiredInstances,
 		ReferencedByVersions: []entity.Id{ver.ID},
+		Ephemeral:            ver.EphemeralLabel != "",
 		SandboxLabels: types.LabelSet(
 			"app", appMD.Name,
 		),
@@ -774,6 +782,14 @@ func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, servic
 			continue
 		}
 
+		ephemeral, err := l.isEphemeralPool(ctx, &pool)
+		if err != nil {
+			return nil, err
+		}
+		if ephemeral {
+			continue
+		}
+
 		// Check if specs match
 		reason, matches := specsMatch(&pool.SandboxSpec, desiredSpec)
 		if matches {
@@ -786,6 +802,27 @@ func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, servic
 	}
 
 	return nil, nil
+}
+
+// Older preview pools did not persist Ephemeral. The template version survives
+// removal of version references, so drained previews can still be identified.
+func (l *Launcher) isEphemeralPool(ctx context.Context, pool *compute_v1alpha.SandboxPool) (bool, error) {
+	if pool.Ephemeral {
+		return true, nil
+	}
+	if pool.SandboxSpec.Version == "" {
+		return false, nil
+	}
+	resp, err := l.EAC.Get(ctx, pool.SandboxSpec.Version.String())
+	if errors.Is(err, cond.ErrNotFound{}) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get pool version: %w", err)
+	}
+	var ver core_v1alpha.AppVersion
+	ver.Decode(resp.Entity().Entity())
+	return ver.EphemeralLabel != "", nil
 }
 
 // specsMatch compares two SandboxSpecs, ignoring the version field
@@ -1198,6 +1235,14 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 			continue
 		}
 
+		ephemeral, err := l.isEphemeralPool(ctx, &pool)
+		if err != nil {
+			return cleaned, err
+		}
+		if ephemeral {
+			continue
+		}
+
 		// Check if this pool is being used by the current version
 		isUsedByCurrentVersion := containsRef(pool.ReferencedByVersions, currentVersionID)
 
@@ -1239,7 +1284,7 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 			Pool:   &pool,
 			Entity: *ent.Entity(),
 		}
-		err := l.updatePool(ctx, poolWithEntity)
+		err = l.updatePool(ctx, poolWithEntity)
 		if err != nil {
 			l.Log.Error("failed to update pool", "error", err, "pool", pool.ID)
 			continue
@@ -1664,6 +1709,14 @@ func (l *Launcher) findStalePoolsForService(
 
 		appLabel, _ := poolMeta.Labels.Get("app")
 		if appLabel != appID.String() {
+			continue
+		}
+
+		ephemeral, err := l.isEphemeralPool(ctx, &pool)
+		if err != nil {
+			return nil, err
+		}
+		if ephemeral {
 			continue
 		}
 

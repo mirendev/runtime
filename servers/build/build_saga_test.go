@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -217,6 +218,36 @@ func autoStackTarball(t *testing.T) map[string]string {
 		"go.mod":          "module example.com/demo\n\ngo 1.26\n",
 		"main.go":         "package main\n\nfunc main() {}\n",
 		"Procfile":        "web: ./demo\n",
+	}
+}
+
+func TestBuildSagaRejectsPreviewDisksBeforeReplacement(t *testing.T) {
+	for _, addon := range []bool{false, true} {
+		t.Run(fmt.Sprintf("addon-%t", addon), func(t *testing.T) {
+			ctx := context.Background()
+			h := newSagaTestHarness(t)
+			app, err := h.builder.appClient.Create(ctx, "demo")
+			require.NoError(t, err)
+			oldID, err := h.inmem.Client.Create(ctx, "old-preview", &core_v1alpha.AppVersion{App: app.ID, EphemeralLabel: "pr-2", EphemeralExpiresAt: time.Now().Add(time.Hour)})
+			require.NoError(t, err)
+			files := dockerfileTarball(t)
+			if addon {
+				_, err = h.inmem.Client.Create(ctx, "addon", &addon_v1alpha.AddonAssociation{App: app.ID, Status: "active", Disks: []addon_v1alpha.Disks{{Name: "database", Provider: "sqlite", MountPath: "/data"}}})
+				require.NoError(t, err)
+			} else {
+				files[".miren/app.toml"] += "\n[[services.web.disks]]\nname = 'data'\nprovider = 'local'\nmount_path = '/data'\n"
+			}
+			h.streams.Register("preview", makeTar(t, files))
+			before, err := h.inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			err = h.executor.Start(sagaBuildFromTar).
+				Input("app_name", "demo").Input("stream_id", "preview").Input("ephemeral_label", "pr-2").
+				WithID("disk-preview").Execute(ctx)
+			require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+			after, err := h.inmem.EAC.Get(ctx, oldID.String())
+			require.NoError(t, err)
+			require.Equal(t, before.Entity().Revision(), after.Entity().Revision())
+		})
 	}
 }
 
@@ -854,6 +885,41 @@ func TestBuildSaga_FailsWhenStreamUnavailable(t *testing.T) {
 
 }
 
+func TestBuildSaga_RecoversLegacyEphemeralCompensation(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h := newSagaTestHarness(t)
+			registry := saga.NewRegistry()
+			require.NoError(t, registerBuildSaga(registry, h.builder, h.streams, h.statuses, h.builder.Log))
+			ctx := context.Background()
+			staged := filepath.Join(t.TempDir(), "staged")
+			require.NoError(t, os.Mkdir(staged, 0755))
+			h.streams.MarkStaged("legacy-stream", staged)
+			at := time.Now().Add(-time.Hour)
+			storage := saga.NewMemoryStorage()
+			require.NoError(t, storage.Save(ctx, &saga.Execution{
+				ID: "legacy", DefinitionName: sagaBuildFromTar, DefinitionVersion: version,
+				InitialInputs: map[string]any{"app_name": "demo", "stream_id": "legacy-stream", "app_id": "app", "ephemeral_label": "pr-2"},
+				Status:        saga.StatusUndoing,
+				ExecutedActions: map[string]*saga.ActionResult{
+					actionReceiveTar:     {Output: []byte(fmt.Sprintf(`{"source_dir":%q}`, staged)), ExecutedAt: at},
+					actionHandleEphemera: {Output: []byte(`{}`), ExecutedAt: at},
+				},
+				ExecutionOrder: []string{actionReceiveTar, actionHandleEphemera}, CreatedAt: at, UpdatedAt: at,
+			}))
+			_ = saga.NewExecutor(storage, saga.WithRegistry(registry)).Recover(ctx)
+			after, err := storage.Get(ctx, "legacy")
+			require.NoError(t, err)
+			require.Equal(t, saga.StatusFailed, after.Status)
+			require.Empty(t, after.BlockedReason)
+			_, err = os.Stat(staged)
+			require.True(t, os.IsNotExist(err), "compensation must reach source cleanup without prepared config")
+		})
+	}
+	_, err := handleEphemeral(context.Background(), handleEphemeralIn{EphemeralLabel: "pr-2"})
+	require.ErrorContains(t, err, "requires prepared config")
+}
+
 // The saga orders actions by data dependency, not by registration order, so the
 // gate's position has to be asserted rather than assumed. Everything about
 // deploy tasks depends on landing in exactly one place: after addons exist,
@@ -888,6 +954,7 @@ func TestBuildSaga_DeployTasksGateSitsBetweenAddonsAndActivation(t *testing.T) {
 	wait := pos(actionWaitAddons)
 	tasks := pos(actionRunDeployTasks)
 	activate := pos(actionSetActiveVer)
+	require.Less(t, pos(actionPrepareConfig), pos(actionHandleEphemera), "disk validation must precede destructive preview replacement")
 
 	if addons >= wait {
 		t.Errorf("the addon wait must follow provisioning, or there is nothing to wait on; order: %v", order)

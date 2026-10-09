@@ -357,6 +357,21 @@ func (m *Manager) listSandboxes(ctx context.Context, pool *compute_v1alpha.Sandb
 
 // createSandbox creates a new sandbox from the pool's SandboxSpec template
 func (m *Manager) createSandbox(ctx context.Context, pool *compute_v1alpha.SandboxPool, instanceNum int) error {
+	if len(pool.SandboxSpec.Volume) > 0 {
+		ephemeral := pool.Ephemeral
+		if !ephemeral && pool.SandboxSpec.Version != "" {
+			resp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
+			if err != nil {
+				return err
+			}
+			var ver core_v1alpha.AppVersion
+			ver.Decode(resp.Entity().Entity())
+			ephemeral = ver.EphemeralLabel != ""
+		}
+		if ephemeral {
+			return fmt.Errorf("ephemeral deployments do not support disks")
+		}
+	}
 	// Generate sandbox name using pool's prefix, fallback to "sb" if not set
 	prefix := pool.SandboxPrefix
 	if prefix == "" {
@@ -467,17 +482,33 @@ func (m *Manager) scaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPo
 			"sandbox", sb.ID,
 			"last_activity", candidates[i].lastActivity)
 
-		// Mark sandbox as STOPPED
+		// Guard against an exit recorded since the candidate scan. Retirement
+		// must not overwrite an unexpected exit and hide a real crash.
+		resp, err := m.eac.Get(ctx, sb.ID.String())
+		if errors.Is(err, cond.ErrNotFound{}) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var current compute_v1alpha.Sandbox
+		current.Decode(resp.Entity().Entity())
+		if current.Status != compute_v1alpha.RUNNING {
+			continue
+		}
 		if _, err := m.eac.Patch(ctx, entity.New(
 			entity.DBId, sb.ID,
 			(&compute_v1alpha.Sandbox{
-				Status: compute_v1alpha.STOPPED,
+				Status:          compute_v1alpha.STOPPED,
+				StopRequestedAt: time.Now(),
 			}).Encode,
-		).Attrs(), 0); err != nil {
+		).Attrs(), resp.Entity().Revision()); err != nil {
 			if errors.Is(err, cond.ErrNotFound{}) {
 				m.log.Warn("sandbox already deleted during scale-down",
 					"pool", pool.ID,
 					"sandbox", sb.ID)
+			} else if errors.Is(err, cond.ErrConflict{}) {
+				m.log.Debug("sandbox changed during scale-down", "sandbox", sb.ID)
 			} else {
 				m.log.Error("failed to stop sandbox",
 					"pool", pool.ID,
@@ -827,6 +858,10 @@ func (m *Manager) countStartupFailures(sandboxes []*sandboxWithMeta, pool *compu
 	latest := pool.LastCrashTime
 	for _, sbm := range sandboxes {
 		if sbm.sandbox.Status != compute_v1alpha.DEAD || !sbm.updatedAt.After(pool.LastCrashTime) {
+			continue
+		}
+
+		if !sbm.sandbox.StopRequestedAt.IsZero() {
 			continue
 		}
 

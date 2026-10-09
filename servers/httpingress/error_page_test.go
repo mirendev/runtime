@@ -202,6 +202,8 @@ func TestServeIngressError(t *testing.T) {
 	}{
 		{"browser missing route", "text/html,application/xhtml+xml", 404, "This page could not be found.", "text/html"},
 		{"browser boot failure", "text/html", 408, "check its logs with miren logs", "text/html"},
+		{"browser unsupported preview storage", "text/html", 423, "Remove disk attachments and redeploy the preview.", "text/html"},
+		{"API unsupported preview storage", "application/json", 423, `"error":"locked"`, "application/json"},
 		{"browser proxy error", "text/html", 502, "This app is temporarily unavailable.", "text/html"},
 		{"browser internal error", "text/html", 500, "Something went wrong.", "text/html"},
 		{"API client", "application/json", 503, `"error":"service_unavailable"`, "application/json"},
@@ -235,7 +237,7 @@ func TestServeIngressError(t *testing.T) {
 				assert.Contains(t, w.Body.String(), "Powered by Miren")
 				assert.Contains(t, w.Body.String(), `viewBox="0 0 230 54"`)
 				assert.Contains(t, w.Body.String(), `fill="currentColor"`)
-				assert.Equal(t, tt.status != 404 && tt.status != 408, strings.Contains(w.Body.String(), "Try again"))
+				assert.Equal(t, tt.status != 404 && tt.status != 408 && tt.status != 423, strings.Contains(w.Body.String(), "Try again"))
 			case "application/json":
 				assert.NotContains(t, w.Body.String(), "private-app-id")
 				var body struct {
@@ -243,8 +245,13 @@ func TestServeIngressError(t *testing.T) {
 					Message string `json:"message"`
 				}
 				assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-				assert.Equal(t, "service_unavailable", body.Error)
-				assert.Equal(t, "The app couldn't respond right now. Please try again in a few moments.", body.Message)
+				if tt.status == http.StatusLocked {
+					assert.Equal(t, "locked", body.Error)
+					assert.Equal(t, "Preview deployments cannot use disks shared with production. Remove disk attachments and redeploy the preview.", body.Message)
+				} else {
+					assert.Equal(t, "service_unavailable", body.Error)
+					assert.Equal(t, "The app couldn't respond right now. Please try again in a few moments.", body.Message)
+				}
 			}
 		})
 	}

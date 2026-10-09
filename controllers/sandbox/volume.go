@@ -20,6 +20,17 @@ import (
 
 // ConfigureVolumes prepares volumes and returns a map of volume name to actual mount path
 func (c *SandboxController) ConfigureVolumes(ctx context.Context, sb *compute.Sandbox, meta *entity.Meta) (map[string]string, error) {
+	if len(sb.Spec.Volume) > 0 && sb.Spec.Version != "" {
+		resp, err := c.EAC.Get(ctx, sb.Spec.Version.String())
+		if err != nil {
+			return nil, err
+		}
+		var ver core_v1alpha.AppVersion
+		ver.Decode(resp.Entity().Entity())
+		if ver.EphemeralLabel != "" {
+			return nil, fmt.Errorf("ephemeral deployments do not support disks")
+		}
+	}
 	volumeMounts := make(map[string]string)
 
 	for _, volume := range sb.Spec.Volume {

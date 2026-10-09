@@ -249,6 +249,10 @@ kinds:
       choices: [startup_running, startup_failed]
       doc: Durable distinction between a sandbox that reached RUNNING and one that failed before then
 
+    stop_requested_at:
+      type: time
+      doc: Records intentional stop requests, surviving teardown to DEAD; presence distinguishes requested stops from unexpected exits
+
     last_activity:
       type: time
       doc: Last lease activity (throttled updates, ~30s granularity for scale-down)

@@ -3906,6 +3906,34 @@ func TestRuntimeEnvNamesDoNotCollideWithClientEnv(t *testing.T) {
 	}
 }
 
+func TestPreviewPoolDoesNotAttachProductionStorage(t *testing.T) {
+	ctx := context.Background()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+	appID, err := server.Client.Create(ctx, "app", &core_v1alpha.App{})
+	require.NoError(t, err)
+	launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+	launcher.DataPath = t.TempDir()
+	localDir := filepath.Join(launcher.DataPath, "data", "local", appID.String())
+	require.NoError(t, os.MkdirAll(localDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "production.db"), []byte("production"), 0644))
+	ver := &core_v1alpha.AppVersion{App: appID, EphemeralLabel: "pr-2", ImageUrl: "test:latest", Config: core_v1alpha.Config{Services: []core_v1alpha.Services{{Name: "web"}}}}
+	ver.ID, err = server.Client.Create(ctx, "preview", ver)
+	require.NoError(t, err)
+	_, err = launcher.CreatePoolForVersion(ctx, ver, "web")
+	require.NoError(t, err)
+	pools := listAllPools(t, ctx, server)
+	require.Len(t, pools, 1)
+	require.Empty(t, pools[0].SandboxSpec.Volume, "diskless preview must not inherit production's legacy auto-mount")
+	ver.Config.Services[0].Disks = []core_v1alpha.Disks{{Name: "data", Provider: core_v1alpha.DiskProviderLocal, MountPath: "/data"}}
+	_, err = launcher.CreatePoolForVersion(ctx, ver, "web")
+	require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+	require.Len(t, listAllPools(t, ctx, server), 1, "rejection must not create another pool")
+	data, err := os.ReadFile(filepath.Join(localDir, "production.db"))
+	require.NoError(t, err)
+	require.Equal(t, "production", string(data))
+}
+
 // TestCreatePoolForVersionEphemeral verifies that the web pool of an ephemeral
 // AppVersion is seeded at DesiredInstances=1 even when the user's web config
 // asks for a higher fixed count. EphemeralStrategy handles the cap at runtime.
@@ -4309,6 +4337,83 @@ func TestEphemeralVersionDoesNotReuseExistingPool(t *testing.T) {
 	}
 	require.NotNil(t, ephPool, "ephemeral version should have its own pool")
 	require.NotNil(t, normalPool, "normal version's pool should remain unshared")
+}
+
+func TestProductionDeployPreservesPreviewPools(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		legacy  bool
+		drained bool
+		image   string
+	}{
+		{"matching-live", false, false, "test:shared"},
+		{"stale-live", false, false, "test:preview"},
+		{"matching-drained", false, true, "test:shared"},
+		{"legacy-live", true, false, "test:preview"},
+		{"legacy-drained", true, true, "test:shared"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			server, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			app := &core_v1alpha.App{}
+			appID, err := server.Client.Create(ctx, "app", app)
+			require.NoError(t, err)
+			app.ID = appID
+			cfg := core_v1alpha.Config{Port: 3000, Services: []core_v1alpha.Services{{Name: "web"}}}
+			preview := &core_v1alpha.AppVersion{App: appID, ImageUrl: tc.image, EphemeralLabel: "pr-2", Config: cfg}
+			preview.ID, err = server.Client.Create(ctx, "preview", preview)
+			require.NoError(t, err)
+			launcher := newTestLauncher(testutils.TestLogger(t), server.EAC)
+			previewPoolID, err := launcher.CreatePoolForVersion(ctx, preview, "web")
+			require.NoError(t, err)
+			pools := listAllPools(t, ctx, server)
+			require.Len(t, pools, 1)
+			previewPool := pools[0]
+			require.True(t, previewPool.Ephemeral)
+			if tc.legacy {
+				previewPool.Ephemeral = false
+			}
+			if tc.drained {
+				previewPool.DesiredInstances = 0
+				previewPool.ReferencedByVersions = nil
+			}
+			require.NoError(t, server.Client.Update(ctx, &previewPool))
+			before, err := server.EAC.Get(ctx, previewPoolID.String())
+			require.NoError(t, err)
+
+			prod := &core_v1alpha.AppVersion{App: appID, ImageUrl: "test:shared", Config: cfg}
+			prod.ID, err = server.Client.Create(ctx, "production", prod)
+			require.NoError(t, err)
+			prodPoolID, err := launcher.CreatePoolForVersion(ctx, prod, "web")
+			require.NoError(t, err)
+			require.NotEqual(t, previewPoolID, prodPoolID)
+			spec, err := coreutil.ResolveRuntimeConfig(ctx, server.EAC, prod)
+			require.NoError(t, err)
+			reaped, err := launcher.reapStaleStatelessPools(ctx, app, prod, spec, map[string]bool{"web": true})
+			require.NoError(t, err)
+			assert.Zero(t, reaped)
+			cleaned, err := launcher.cleanupOldVersionPools(ctx, app, prod.ID)
+			require.NoError(t, err)
+			assert.Zero(t, cleaned)
+			after, err := server.EAC.Get(ctx, previewPoolID.String())
+			require.NoError(t, err)
+			assert.Equal(t, before.Entity().Revision(), after.Entity().Revision(), "production must not modify the preview")
+
+			// Another normal version still reuses production's pool.
+			prod.ID, err = server.Client.Create(ctx, "production-next", &core_v1alpha.AppVersion{App: appID, ImageUrl: prod.ImageUrl, Config: cfg})
+			require.NoError(t, err)
+			_, err = launcher.CreatePoolForVersion(ctx, prod, "web")
+			require.NoError(t, err)
+			pools = listAllPools(t, ctx, server)
+			require.Len(t, pools, 2)
+			for _, pool := range pools {
+				if pool.ID == prodPoolID {
+					assert.Contains(t, pool.ReferencedByVersions, prod.ID)
+				}
+			}
+		})
+	}
 }
 
 // TestStaleStatelessPoolReapedOnSameVersionSpecChange reproduces MIR-1432: a

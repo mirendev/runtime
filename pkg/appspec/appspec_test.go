@@ -49,6 +49,21 @@ func envMap(t *testing.T, spec *compute_v1alpha.SandboxSpec) map[string]string {
 	return out
 }
 
+func TestBuildRejectsPreviewDisks(t *testing.T) {
+	for _, provider := range []core_v1alpha.ConfigSpecServicesDisksProvider{core_v1alpha.ConfigSpecServicesDisksMIREN, core_v1alpha.ConfigSpecServicesDisksLOCAL, core_v1alpha.ConfigSpecServicesDisksSQLITE} {
+		t.Run(string(provider), func(t *testing.T) {
+			opts := baseOptions()
+			opts.Config.Services[0].Disks = []core_v1alpha.ConfigSpecServicesDisks{{Name: "data", Provider: provider, MountPath: "/data"}}
+			opts.Version.EphemeralLabel = "pr-2"
+			_, err := Build(nil, opts)
+			require.ErrorContains(t, err, "ephemeral deployments do not support disks")
+			opts.Version.EphemeralLabel = ""
+			_, err = Build(nil, opts)
+			require.NoError(t, err, "production disk configuration remains supported")
+		})
+	}
+}
+
 func TestBuildRequiresVersionAndConfig(t *testing.T) {
 	opts := baseOptions()
 	opts.Version = nil
