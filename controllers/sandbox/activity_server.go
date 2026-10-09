@@ -104,8 +104,8 @@ func (c *SandboxController) recordSandboxActivity(ctx context.Context, sandboxID
 			return nil
 		}
 		result, err := c.EAC.Patch(ctx, entity.New(
-			entity.DBId, entity.Id(sandboxID),
-			(&compute.Sandbox{Activity: compute.Activity{State: state, ReportedAt: now}}).Encode,
+			entity.Ref(entity.DBId, entity.Id(sandboxID)),
+			entity.Component(compute.SandboxActivityId, (&compute.Activity{State: state, ReportedAt: now}).Encode()),
 		).Attrs(), resp.Entity().Revision())
 		if err == nil {
 			if c.writeTracker != nil && result.HasRevision() {

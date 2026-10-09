@@ -262,7 +262,7 @@ func TestActivityServer_TransitionsAndTeardown(t *testing.T) {
 	id := entity.Id(testSandboxID)
 	var e entityserver_v1alpha.Entity
 	e.SetId(id.String())
-	e.SetAttrs(entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.RUNNING}).Encode).Attrs())
+	e.SetAttrs(entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.RUNNING, HostNetwork: true}).Encode).Attrs())
 	_, err := inm.EAC.Put(ctx, &e)
 	require.NoError(t, err)
 
@@ -285,6 +285,7 @@ func TestActivityServer_TransitionsAndTeardown(t *testing.T) {
 			want = compute.ACTIVE
 		}
 		assert.Equal(t, want, sb.SelfReportedActivity(time.Now()))
+		assert.True(t, sb.HostNetwork, "activity reports must preserve unrelated sandbox fields")
 	}
 	// A delayed earlier request cannot overwrite a newer state.
 	before, err := inm.EAC.Get(ctx, id.String())
@@ -307,6 +308,7 @@ func TestActivityServer_TransitionsAndTeardown(t *testing.T) {
 	unchanged = compute.Sandbox{}
 	unchanged.Decode(after.Entity().Entity())
 	assert.Equal(t, compute.ACTIVE, unchanged.Activity.State)
+	assert.True(t, unchanged.HostNetwork)
 	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, id, (&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), 0)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusConflict, report("idle"))
