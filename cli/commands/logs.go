@@ -593,6 +593,13 @@ func logPrefix(l *app_v1alpha.LogEntry) (plain, styled string) {
 	if l.HasSource() && l.Source() == "router" {
 		return "router", logRouterTag.Render("router")
 	}
+	if l.HasSource() && l.Source() == "build" {
+		hue := laneStyle(theme.Lane("build"))
+		if version := attrsOf(l)["version"]; version != "" {
+			return "build." + version, hue.Render("build") + logIDStyle.Render("."+version)
+		}
+		return "build", hue.Render("build")
+	}
 
 	var service, shortID string
 	if l.HasAttributes() {
@@ -699,6 +706,8 @@ func renderLogEntry(l *app_v1alpha.LogEntry) (display, signature string) {
 	var hide map[string]bool
 	if isRouter {
 		hide = routerBodyHidden
+	} else if l.HasSource() && l.Source() == "build" {
+		hide = map[string]bool{"version": true}
 	}
 	attrsPlain, attrsStyled := renderAttrs(attrsOf(l), hide)
 

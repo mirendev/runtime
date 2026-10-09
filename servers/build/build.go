@@ -1641,10 +1641,9 @@ func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact,
 		return
 	}
 
-	// Format in Heroku logfmt style. Source builds name their stored artifact;
+	// Source builds name their stored artifact;
 	// direct-image deploys have no Artifact entity, so record the upstream image
 	// rather than emitting a misleading empty artifact field.
-	logMsg := fmt.Sprintf("version=%s artifact=%s status=deployed", version, artifact)
 	attrs := map[string]string{
 		"source":  "build",
 		"version": version,
@@ -1652,14 +1651,13 @@ func (b *Builder) logDeployment(ctx context.Context, appName, version, artifact,
 	if artifact != "" {
 		attrs["artifact"] = artifact
 	} else {
-		logMsg = fmt.Sprintf("version=%s image=%s status=deployed", version, image)
 		attrs["image"] = image
 	}
 
 	err = b.LogWriter.WriteEntry(appRec.ID.String(), observability.LogEntry{
 		Timestamp:  time.Now(),
 		Stream:     observability.UserOOB,
-		Body:       logMsg,
+		Body:       "status=deployed",
 		Attributes: attrs,
 	})
 	if err != nil {

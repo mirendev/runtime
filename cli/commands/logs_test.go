@@ -221,6 +221,51 @@ func TestPrintLogEntryJSON(t *testing.T) {
 func TestPrintLogEntry(t *testing.T) {
 	ts := time.Date(2026, 3, 13, 16, 30, 0, 0, time.UTC)
 
+	t.Run("build version is a lane rather than a trailing attribute", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := &Context{Context: context.Background(), Stdout: &buf}
+		entry := &app_v1alpha.LogEntry{}
+		entry.SetTimestamp(standard.ToTimestamp(ts))
+		entry.SetStream("user-oob")
+		entry.SetSource("build")
+		entry.SetLine("status=deployed")
+		entry.SetAttributes(map[string]string{
+			"version":  "codeagent-vCbik6WQ84h7bCLDnDhoyP",
+			"artifact": "codeagent-aCbik6WQ84r2yS356gEvcv",
+		})
+		printLogEntry(ctx, entry)
+		t.Log(strings.TrimSpace(buf.String()))
+		want := "build.codeagent-vCbik6WQ84h7bCLDnDhoyP status=deployed artifact=codeagent-aCbik6WQ84r2yS356gEvcv"
+		if !strings.Contains(buf.String(), want) || strings.Contains(buf.String(), "version=") {
+			t.Errorf("expected build version before message without duplicate attributes, got: %s", buf.String())
+		}
+		buf.Reset()
+		printLogEntryJSON(ctx, entry)
+		var got logEntryJSON
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Attributes["version"] != entry.Attributes()["version"] || got.Attributes["artifact"] != entry.Attributes()["artifact"] {
+			t.Errorf("JSON must retain full build metadata: %+v", got)
+		}
+		buf.Reset()
+		entry.SetLine("[builder 2/7] RUN apk add --no-cache git CACHED")
+		entry.SetAttributes(map[string]string{"version": "codeagent-vCbik6WQ84h7bCLDnDhoyP"})
+		printLogEntry(ctx, entry)
+		t.Log(strings.TrimSpace(buf.String()))
+		if !strings.Contains(buf.String(), "build.codeagent-vCbik6WQ84h7bCLDnDhoyP [builder 2/7] RUN apk add --no-cache git CACHED") {
+			t.Errorf("build step lost its version or message: %s", buf.String())
+		}
+		buf.Reset()
+		entry.SetLine("status=deployed")
+		entry.SetAttributes(map[string]string{"version": "codeagent-v123", "image": "docker.io/library/nginx@sha256:abc"})
+		printLogEntry(ctx, entry)
+		t.Log(strings.TrimSpace(buf.String()))
+		if !strings.Contains(buf.String(), "build.codeagent-v123 status=deployed image=docker.io/library/nginx@sha256:abc") {
+			t.Errorf("direct-image deployment lost its identity: %s", buf.String())
+		}
+	})
+
 	t.Run("uses service.id as prefix", func(t *testing.T) {
 		var buf bytes.Buffer
 		ctx := &Context{Context: context.Background(), Stdout: &buf}
