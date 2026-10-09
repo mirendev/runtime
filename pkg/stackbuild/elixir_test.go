@@ -61,7 +61,7 @@ func TestElixirDetect(t *testing.T) {
 		s := initElixir(t, dir)
 		assert.Equal(t, "hello", s.releaseName)
 		assert.False(t, s.hasPhoenix)
-		assert.False(t, s.hasAssets)
+		assert.Empty(t, s.assetDeployDirs)
 		assert.Equal(t, "/app/bin/hello start", s.WebCommand())
 	})
 
@@ -70,7 +70,7 @@ func TestElixirDetect(t *testing.T) {
 		s := initElixir(t, dir)
 		assert.Equal(t, "hopwatch", s.releaseName)
 		assert.True(t, s.hasPhoenix)
-		assert.True(t, s.hasAssets)
+		assert.Equal(t, []string{"."}, s.assetDeployDirs)
 		assert.Equal(t, `RELEASE_DISTRIBUTION=${RELEASE_DISTRIBUTION:-name} RELEASE_NODE=${RELEASE_NODE:-hopwatch@$(hostname -i)} exec /app/bin/hopwatch start`, s.WebCommand())
 	})
 
@@ -283,7 +283,7 @@ func TestElixirWithNpm(t *testing.T) {
 	stack, err := DetectStack(dir, BuildOptions{})
 	require.NoError(t, err)
 	require.Equal(t, "elixir", stack.Name())
-	require.True(t, stack.(*ElixirStack).assetsNpm)
+	require.Equal(t, []string{"assets"}, stack.(*ElixirStack).assetNpmDirs)
 
 	state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{})
 	require.NoError(t, err)
@@ -462,9 +462,11 @@ end
 `,
 		"apps/shop_web/mix.exs": `defmodule ShopWeb.MixProject do
   use Mix.Project
-  def project, do: [app: :shop_web, deps: [{:phoenix, "~> 1.8"}]]
+  def project, do: [app: :shop_web, deps: [{:phoenix, "~> 1.8"}], aliases: ["assets.deploy": []]]
 end
 `,
+		"apps/admin_web/mix.exs":             `def project, do: [app: :admin_web]`,
+		"apps/admin_web/assets/package.json": `{}`,
 	}
 	for name, content := range files {
 		path := filepath.Join(dir, name)
@@ -478,10 +480,33 @@ end
 	assert.Equal(t, "shop", s.releaseName)
 	assert.Equal(t, "/app/bin/shop start", s.WebCommand())
 	assert.Equal(t, "required", envByName(s.RequiredEnvVars())["SECRET_KEY_BASE"].Confidence)
+	assert.Equal(t, []string{"apps/shop_web"}, s.assetDeployDirs)
+	assert.Equal(t, []string{"apps/admin_web/assets"}, s.assetNpmDirs)
 
-	var warned bool
 	for _, ev := range s.Events() {
-		warned = warned || ev.Name == "umbrella-assets"
+		assert.NotEqual(t, "umbrella-assets", ev.Name)
 	}
-	assert.True(t, warned, "umbrella Phoenix apps should be told assets aren't built")
+}
+
+func TestElixirUmbrellaAssets(t *testing.T) {
+	requireBuildkit(t)
+	t.Parallel()
+
+	dir := copyFixture(t, "elixir-umbrella")
+	// A laptop's node_modules must not leak into the build, even for apps
+	// using npm install rather than npm ci (which removes it itself).
+	stale := filepath.Join(dir, "apps", "shop_web", "assets", "node_modules")
+	require.NoError(t, os.MkdirAll(stale, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stale, "stale"), []byte("from laptop"), 0o644))
+
+	s := initElixir(t, dir)
+	state, err := s.GenerateLLB(context.Background(), dir, BuildOptions{})
+	require.NoError(t, err)
+	buildLLB(t, dir, state, func(r io.Reader) {
+		m, err := tarx.TarToMap(r)
+		require.NoError(t, err)
+		require.Contains(t, m, "app/bin/shop")
+		assert.Equal(t, "shop:install", string(m["app/lib/shop_web-0.1.0/priv/static/app.js"]))
+		assert.Equal(t, "admin:ci", string(m["app/lib/admin_web-0.1.0/priv/static/app.js"]))
+	})
 }
