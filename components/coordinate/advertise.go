@@ -154,7 +154,7 @@ type AdvertiseCandidate struct {
 // rejected ones, so callers can explain why) and the final list of advertised
 // host:port strings.
 //
-// The returned list is intended for StatusReport.APIAddresses, i.e. the
+// The returned list is intended for clusternetwork.Report.APIAddresses, i.e. the
 // addresses miren.cloud hands out to clients that want to reach this
 // cluster. Loopback and unspecified (0.0.0.0, ::) addresses are never
 // included — a client coming in through miren.cloud is by definition not

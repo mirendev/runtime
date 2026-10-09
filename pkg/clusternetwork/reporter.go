@@ -4,9 +4,8 @@
 // The facts are measured on the box (advertised addresses, the CA the API
 // presents, netcheck's verdict, whether the server runs in a container) and
 // describe the link rather than any stored entity, which is why they ride a
-// purpose-built capability instead of entity sync. They are the same facts
-// the legacy status poll carries; when cloud selects this capability the
-// poll has nothing left to say about the network.
+// purpose-built capability instead of entity sync. They replaced the network
+// half of the legacy status poll, which this runtime no longer sends.
 package clusternetwork
 
 import (
