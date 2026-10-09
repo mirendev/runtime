@@ -13,9 +13,20 @@ var (
 	ErrUnavailable = errors.New("workload: Session is not accepting work")
 )
 
-// StopFunc returns only once all resources have closed. Failure prevents deletion
-// acknowledgment and is retried. It must tolerate repeated calls.
-type StopFunc func(context.Context) error
+// StopReason distinguishes releasing an assignment from deleting its Session.
+type StopReason string
+
+const (
+	StopDetached StopReason = "detached" // Parked or reassigned; preserve durable resources.
+	StopDeleted  StopReason = "deleted"  // Explicit Session deletion notice.
+	StopRemoved  StopReason = "removed"  // Assignment disappeared without a lifecycle notice.
+	StopShutdown StopReason = "shutdown" // Host exiting, including cancellation or a fatal error.
+)
+
+// StopFunc quiesces the assignment's work before returning. Durable resources
+// need not be destroyed unless reason is StopDeleted. Failure prevents deletion
+// or detachment acknowledgment and is retried. It must tolerate repeated calls.
+type StopFunc func(context.Context, StopReason) error
 
 // StartFunc starts an independent loop. Its context is canceled on removal or
 // shutdown. The returned StopFunc waits for cleanup, including any in-flight work.
@@ -25,6 +36,7 @@ type assignment struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	stop      StopFunc
+	reason    StopReason
 	work      int
 	accepting bool
 }
@@ -174,12 +186,18 @@ func pause(ctx context.Context) bool {
 	}
 }
 
-func (h *Host) remove(ctx context.Context, id string) error {
+func (h *Host) remove(ctx context.Context, id string, reason StopReason) error {
 	h.mu.Lock()
 	a := h.assignments[id]
 	if a != nil {
 		a.accepting = false
 		a.cancel()
+		// Keep the known lifecycle reason across retries and host shutdown.
+		// An explicit deletion may supersede a pending detachment/removal.
+		if a.reason == "" || reason == StopDeleted || (a.reason == StopRemoved && reason == StopDetached) {
+			a.reason = reason
+		}
+		reason = a.reason
 	}
 	h.mu.Unlock()
 	if a == nil {
@@ -187,7 +205,7 @@ func (h *Host) remove(ctx context.Context, id string) error {
 	}
 	cleanup, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := a.stop(cleanup); err != nil {
+	if err := a.stop(cleanup, reason); err != nil {
 		return fmt.Errorf("workload: Session cleanup failed: %w", err)
 	}
 	h.mu.Lock()
@@ -254,7 +272,7 @@ func (h *Host) Run(ctx context.Context, start StartFunc) (result error) {
 		}
 		h.mu.Unlock()
 		for _, id := range ids {
-			result = errors.Join(result, h.remove(context.Background(), id))
+			result = errors.Join(result, h.remove(context.Background(), id, StopShutdown))
 		}
 	}()
 	version := ""
@@ -304,6 +322,13 @@ func (h *Host) Run(ctx context.Context, start StartFunc) (result error) {
 			h.mu.Unlock()
 			h.wakeReporter()
 		}
+		notified := make(map[string]bool)
+		for id := range snapshot.Detached {
+			notified[id] = true
+		}
+		for _, id := range snapshot.Deleted {
+			notified[id] = true
+		}
 		h.mu.Lock()
 		var removed []string
 		for id, a := range h.assignments {
@@ -316,12 +341,15 @@ func (h *Host) Run(ctx context.Context, start StartFunc) (result error) {
 		h.mu.Unlock()
 		complete := true
 		for _, id := range removed {
-			if err := h.remove(ctx, id); err != nil {
+			if notified[id] {
+				continue // The notice-specific loops below clean up and acknowledge.
+			}
+			if err := h.remove(ctx, id, StopRemoved); err != nil {
 				complete = false
 			}
 		}
 		for _, id := range snapshot.Deleted {
-			if err := h.remove(ctx, id); err != nil {
+			if err := h.remove(ctx, id, StopDeleted); err != nil {
 				complete = false
 				continue
 			}
@@ -333,7 +361,7 @@ func (h *Host) Run(ctx context.Context, start StartFunc) (result error) {
 			}
 		}
 		for id, detachedAt := range snapshot.Detached {
-			if err := h.remove(ctx, id); err != nil {
+			if err := h.remove(ctx, id, StopDetached); err != nil {
 				complete = false
 				continue
 			}

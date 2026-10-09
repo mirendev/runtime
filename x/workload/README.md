@@ -19,16 +19,25 @@ return host.Run(ctx, func(loopCtx context.Context, s workload.Session) (workload
     if err != nil {
         return nil, err
     }
-    return agent.Close, nil // func(context.Context) error; waits for cleanup
+    return func(cleanup context.Context, reason workload.StopReason) error {
+        if err := agent.Close(cleanup); err != nil {
+            return err
+        }
+        if reason == workload.StopDeleted {
+            return deleteWorkspace(cleanup, s.ID)
+        }
+        return nil // Preserve the workspace for another assignment.
+    }, nil
 })
 ```
 
-`startAgent` above represents your application code. The callback must return
-promptly after starting its loop. Its context lives for the assignment and is
+`startAgent` and `deleteWorkspace` above represent your application code. The
+callback must return promptly after starting its loop. Its context lives for the assignment and is
 canceled when that Session is removed or the host shuts down. The cleanup
 function must honor its context, tolerate retries, and return only after resources
-close. Cleanup attempts have a 30-second timeout. Failure keeps deletion
-or detachment unacknowledged and admission closed for that Session; cleanup is retried.
+used by in-flight work are quiesced; durable resources may be retained. Cleanup
+attempts have a 30-second timeout. Failure keeps deletion or detachment
+unacknowledged and admission closed for that Session; cleanup is retried.
 
 `Session` contains the ID, app, app version, service, optional group, and resolved
 service spec. `Spec` is `json.RawMessage` so the SDK does not depend on generated
@@ -83,17 +92,35 @@ Session resume API. Work arrival does not implicitly resume a parked Session:
 your scheduler must resume it before offering work.
 
 On removal, the host cancels the assignment context and calls its cleanup
-function. It acknowledges shared Session deletion or detachment only after
+function with a `StopReason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `StopDetached` | The Session is parked or reassigned. Preserve its durable resources. |
+| `StopDeleted` | An explicit Session deletion notice was received. Final resource cleanup may run. |
+| `StopRemoved` | The assignment disappeared without a deletion/detachment notice. Do not infer deletion. |
+| `StopShutdown` | The host is exiting, including cancellation or a fatal error. Preserve durable resources. |
+
+A failed cleanup retains its known reason on retries, including during host
+shutdown. A later explicit deletion can supersede a pending detachment/removal.
+The reason describes lifecycle intent, not proof that remote commands stopped;
+your callback must quiesce or fence them before releasing ownership.
+
+The SDK acknowledges shared Session deletion or detachment only after
 successful cleanup, retrying without restarting neighbouring agents. Detachment
 acknowledgments include the notice timestamp, so a late retry cannot release a
 new assignment of the same Session. On process
 shutdown, cancel `Run` and wait for it to return before exiting. All assignment
 contexts are canceled before shutdown cleanup starts.
 
+Stop reasons apply to assignments this host still tracks. Deleting a previously
+parked Session does not recreate an agent just to invoke its cleanup callback.
+An application retaining external workspaces still needs durable ownership and
+deletion reconciliation for parked Sessions, host crashes, and missed notices.
+The SDK supplies lifecycle intent; it does not implement provider retention or
+garbage collection.
+
 The lower-level `Client` exposes `Sessions`, `AcknowledgeDeletion`,
 `AcknowledgeDetachment`, `ReportSessionActivity`, and `ReportActivity` if you need
 to implement a different lifecycle. It never follows
 redirects, and HTTP errors omit response bodies to avoid accidental secret logs.
-
-See [`testdata/session-carmen`](../../testdata/session-carmen) for a real Carmen
-agent workload, including concurrent loops, task admission, and cancellation.

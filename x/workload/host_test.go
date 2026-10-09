@@ -166,11 +166,14 @@ func TestHostCleanupPrecedesAckAndRetriesWithoutRestartingNeighbours(t *testing.
 		contextsMu.Lock()
 		contexts[s.ID] = ctx
 		contextsMu.Unlock()
-		return func(context.Context) error {
+		return func(_ context.Context, reason StopReason) error {
 			if ctx.Err() == nil {
 				t.Error("cleanup must be preceded by cancellation")
 			}
 			if s.ID == "session/a" {
+				if reason != StopDeleted {
+					t.Errorf("deletion cleanup reason: %s", reason)
+				}
 				if !allowCleanup.Load() {
 					failures.Add(1)
 					return errors.New("still closing")
@@ -204,7 +207,7 @@ func TestHostCleanupPrecedesAckAndRetriesWithoutRestartingNeighbours(t *testing.
 func TestHostAggregatesQueuedWorkAndLatchesDrainBeforeAdmission(t *testing.T) {
 	f := fixture("session/a", "session/b")
 	h := startHost(t, f, func(context.Context, Session) (StopFunc, error) {
-		return func(context.Context) error { return nil }, nil
+		return func(context.Context, StopReason) error { return nil }, nil
 	})
 	releaseA, err := h.Begin(t.Context(), "session/a")
 	if err != nil {
@@ -399,7 +402,7 @@ func TestHostIndividualActivityAndParkedAdmission(t *testing.T) {
 		return http.StatusNoContent
 	}
 	h := startHost(t, f, func(context.Context, Session) (StopFunc, error) {
-		return func(context.Context) error { return nil }, nil
+		return func(context.Context, StopReason) error { return nil }, nil
 	})
 	release, err := h.Begin(t.Context(), "session/a")
 	if err != nil {
@@ -439,7 +442,10 @@ func TestHostDetachmentCleanupAndReassignment(t *testing.T) {
 	}
 	h := startHost(t, f, func(_ context.Context, s Session) (StopFunc, error) {
 		starts.Add(1)
-		return func(context.Context) error {
+		return func(_ context.Context, reason StopReason) error {
+			if reason != StopShutdown && reason != StopDetached {
+				t.Errorf("detachment cleanup reason: %s", reason)
+			}
 			if s.ID == "session/a" {
 				attempts.Add(1)
 				if !allow.Load() {
@@ -468,4 +474,110 @@ func TestHostDetachmentCleanupAndReassignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
+}
+
+func TestHostStopReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason StopReason
+		next   StopReason
+	}{
+		{"detachment", StopDetached, ""},
+		{"deletion", StopDeleted, ""},
+		{"unexplained removal", StopRemoved, ""},
+		{"shutdown", StopShutdown, ""},
+		{"shutdown during deletion cleanup", StopDeleted, StopShutdown},
+		{"shutdown during detachment cleanup", StopDetached, StopShutdown},
+		{"deletion during detachment cleanup", StopDetached, StopDeleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := fixture("session/a")
+			f.ack = func(string) int { return http.StatusNoContent }
+			f.detachAck = func(string, time.Time) int { return http.StatusNoContent }
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
+			t.Cleanup(server.Close)
+			h, err := NewHost(Config{URL: server.URL + "/v1", Secret: "fixture-secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			started := make(chan struct{})
+			reasons := make(chan StopReason, 4)
+			proceed := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- h.Run(ctx, func(loopCtx context.Context, _ Session) (StopFunc, error) {
+					close(started)
+					attempts := 0
+					return func(cleanup context.Context, reason StopReason) error {
+						if loopCtx.Err() == nil {
+							t.Error("cleanup preceded cancellation")
+						}
+						attempts++
+						reasons <- reason
+						if tc.next != "" && attempts == 1 {
+							select {
+							case <-cleanup.Done():
+								return cleanup.Err()
+							case <-proceed:
+								return errors.New("cleanup pending")
+							}
+						}
+						return nil
+					}, nil
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Error(err)
+					}
+				case <-time.After(4 * time.Second):
+					t.Error("host did not stop")
+				}
+			})
+			select {
+			case <-started:
+			case <-time.After(4 * time.Second):
+				t.Fatal("assignment did not start")
+			}
+			if tc.reason == StopShutdown {
+				cancel()
+			} else {
+				snapshot := Snapshot{Version: "removed"}
+				switch tc.reason {
+				case StopDeleted:
+					snapshot.Deleted = []string{"session/a"}
+				case StopDetached:
+					snapshot.Detached = map[string]time.Time{"session/a": time.Now()}
+				case StopRemoved, StopShutdown:
+				}
+				f.update(snapshot)
+			}
+			for attempt := 0; attempt < 1 || (tc.next != "" && attempt < 2); attempt++ {
+				want := tc.reason
+				if attempt > 0 && tc.next == StopDeleted {
+					want = StopDeleted
+				}
+				select {
+				case reason := <-reasons:
+					if reason != want {
+						t.Fatalf("stop reason = %s, want %s", reason, want)
+					}
+				case <-time.After(4 * time.Second):
+					t.Fatal("cleanup was not called")
+				}
+				if attempt == 0 && tc.next != "" {
+					if tc.next == StopShutdown {
+						cancel()
+					} else {
+						f.update(Snapshot{Deleted: []string{"session/a"}, Version: "deleted"})
+					}
+					close(proceed)
+				}
+			}
+		})
+	}
 }
