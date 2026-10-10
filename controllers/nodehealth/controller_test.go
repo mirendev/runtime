@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	computeapi "miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/controller"
@@ -289,6 +290,29 @@ func TestSweepOrphanedSandboxes(t *testing.T) {
 	assert.Error(t, err, "old DEAD sandbox on a missing node should be deleted")
 	assert.Equal(t, compute_v1alpha.STOPPED, getSandboxStatus(t, ctx, server, ownedStopped),
 		"terminal sandbox on an existing node should be left for its owner")
+}
+
+func TestSweepOrphanedSessionSandboxRecordsTeardown(t *testing.T) {
+	ctx := t.Context()
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	node := createReadyNode(t, ctx, server.Client, "lost-session-node", &compute_v1alpha.Node{Status: compute_v1alpha.READY})
+	server.Store.NowFunc = func() time.Time { return time.Now().Add(-10 * time.Minute) }
+	id := createScheduledSandbox(t, ctx, server, "lost-session", node, compute_v1alpha.DEAD)
+	_, err := server.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute_v1alpha.Sandbox{SessionInfo: compute_v1alpha.SessionInfo{Owner: "session/one"}}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	server.Store.NowFunc = nil
+	_, err = server.EAC.Delete(ctx, node.String())
+	require.NoError(t, err)
+	require.NoError(t, NewController(testutils.TestLogger(t), server.EAC).SweepOrphanedSandboxes(ctx))
+	_, err = server.EAC.Get(ctx, id.String())
+	require.Error(t, err)
+	ack, err := server.EAC.Get(ctx, computeapi.TeardownID(id).String())
+	require.NoError(t, err)
+	var record compute_v1alpha.SandboxTeardown
+	record.Decode(ack.Entity().Entity())
+	require.Equal(t, id.String(), record.Sandbox)
 }
 
 func TestSweepOrphanedSandboxesHonorsGracePeriod(t *testing.T) {

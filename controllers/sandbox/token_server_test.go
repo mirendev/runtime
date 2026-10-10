@@ -336,6 +336,49 @@ func TestActivityServer_StartingSandboxIsRetryable(t *testing.T) {
 	require.True(t, sb.Activity.ReportedAt.IsZero())
 }
 
+func TestActivityServer_ShutdownNoticeAndActiveHeartbeat(t *testing.T) {
+	ctx := t.Context()
+	c := newTestTokenController(t)
+	inm, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	c.EAC = inm.EAC
+	id := entity.Id(testSandboxID)
+	before := time.Now().Add(-time.Second)
+	deadline := time.Now().Add(time.Minute)
+	_, err := inm.EAC.Create(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.RUNNING, ShutdownAt: deadline,
+			Activity: compute.Activity{State: compute.ACTIVE, ReportedAt: before}}).Encode).Attrs())
+	require.NoError(t, err)
+	request := func(method, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/v1/activity", strings.NewReader(body))
+		r.RemoteAddr = testSandboxIP + ":12345"
+		r.Header.Set("Authorization", "Bearer "+testSecret)
+		w := httptest.NewRecorder()
+		c.handleActivityRequest(w, r)
+		return w
+	}
+	w := request("GET", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var notice struct {
+		ShutdownAt *time.Time `json:"shutdown_at"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &notice))
+	require.NotNil(t, notice.ShutdownAt)
+	require.WithinDuration(t, deadline, *notice.ShutdownAt, time.Millisecond)
+	post := request("POST", `{"state":"active"}`)
+	require.Equal(t, http.StatusNoContent, post.Code)
+	require.Equal(t, deadline.Format(time.RFC3339Nano), post.Header().Get("Miren-Shutdown-At"))
+	resp, err := inm.EAC.Get(ctx, id.String())
+	require.NoError(t, err)
+	var sb compute.Sandbox
+	sb.Decode(resp.Entity().Entity())
+	require.True(t, sb.Activity.ReportedAt.After(before), "an active heartbeat after notice must not be coalesced")
+	_, err = inm.EAC.Patch(ctx, entity.New(entity.DBId, id,
+		(&compute.Sandbox{Status: compute.STOPPED}).Encode).Attrs(), 0)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusConflict, request("GET", "").Code)
+}
+
 func TestActivityServer_CoalescedNewerReportDoesNotExposeOlderIdle(t *testing.T) {
 	ctx := t.Context()
 	c := newTestTokenController(t)

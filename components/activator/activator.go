@@ -1844,6 +1844,11 @@ func (a *localActivator) migrateOrphanedSandboxes(ctx context.Context, pool *com
 			continue
 		}
 
+		// Session hosts are managed independently, not legacy pool replicas.
+		if sb.SessionInfo.Owner != "" || sb.SessionInfo.Group != "" {
+			continue
+		}
+
 		// Check labels
 		var md core_v1alpha.Metadata
 		md.Decode(ent.Entity())
