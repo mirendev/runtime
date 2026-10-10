@@ -172,6 +172,8 @@ type SandboxController struct {
 	tokenRefresher *tokenRefresher
 	tokenSecrets   *tokenSecretRegistry
 	lookupRefresh  refreshLimiter
+	activityMu     sync.Mutex
+	activity       map[string]*activityOrder
 
 	topCtx context.Context
 	cancel func()
@@ -624,9 +626,9 @@ func (c *SandboxController) reconcileSandboxesOnBoot(ctx context.Context) error 
 				}
 			}
 
-			// Re-register the token-request secret so the still-running sandbox keeps
-			// authenticating to the token server. The in-memory registry starts empty
-			// after a restart; without this the sandbox's token requests 403 forever
+			// Re-register the metadata secret so the still-running sandbox keeps
+			// authenticating to the metadata server. The in-memory registry starts empty
+			// after a restart; without this the sandbox's metadata requests 403 forever
 			// until it is restarted (MIR-1235).
 			if c.tokenSecrets != nil {
 				secretPath := c.sandboxPath(&sb, tokenSecretFilename)
@@ -810,11 +812,11 @@ func (c *SandboxController) Init(ctx context.Context) error {
 		c.ipReconciler.Start(c.topCtx)
 	}
 
-	// Start workload identity token refresh loop and token request server
+	// Start workload identity token refresh loop and workload metadata server
 	// (tokenRefresher and tokenSecrets were created earlier, before reconcile)
 	if c.WorkloadIssuer != nil {
 		go c.runTokenRefresh(c.topCtx)
-		go c.startTokenServer(c.topCtx)
+		go c.startMetadataServer(c.topCtx)
 	}
 
 	if err := registerCreateSandboxSaga(c.sagaRegistry, c.ops, c.ops, c.ops, c.ops, c.NodeId.String(), c.Log); err != nil {
@@ -2794,12 +2796,14 @@ func (c *SandboxController) buildSubContainerSpec(
 		envVars = append(instanceEnv, envVars...)
 		c.Log.Debug("injected instance number into container env", "sandbox_id", sb.ID, "container", co.Name, "instance", instanceStr)
 	}
-
 	if c.WorkloadIssuer != nil {
+		metadataURL := fmt.Sprintf("http://%s:%d/v1", c.Subnet.Router().Addr(), metadataServerPort)
 		envVars = append(envVars,
 			workloadid.EnvTokenPath+"=/var/run/miren/identity-token",
 			fmt.Sprintf("MIREN_OIDC_ISSUER_URL=%s", c.WorkloadIssuer.IssuerURL()),
-			fmt.Sprintf("%s=http://%s:%d/v1/token", workloadid.EnvTokenURL, c.Subnet.Router().Addr(), tokenServerPort),
+			"MIREN_METADATA_URL="+metadataURL,
+			workloadid.EnvTokenURL+"="+metadataURL+"/token",
+			"MIREN_ACTIVITY_URL="+metadataURL+"/activity",
 		)
 
 		// Point the client at the cluster API. MIREN_API_ADDRESS rather than
@@ -2816,10 +2820,10 @@ func (c *SandboxController) buildSubContainerSpec(
 		if c.tokenSecrets != nil && len(ep.Addresses) > 0 {
 			secret, secretErr := generateTokenSecret()
 			if secretErr != nil {
-				c.Log.Warn("failed to generate token request secret", "sandbox", sb.ID, "error", secretErr)
+				c.Log.Warn("failed to generate metadata secret", "sandbox", sb.ID, "error", secretErr)
 			} else {
 				c.tokenSecrets.register(sb.ID.String(), secret)
-				envVars = append(envVars, workloadid.EnvTokenSecret+"="+secret)
+				envVars = append(envVars, "MIREN_METADATA_SECRET="+secret, workloadid.EnvTokenSecret+"="+secret)
 
 				// The relay authenticates with the secret above, so it is only
 				// advertised where that secret exists, and only on a cluster
@@ -2827,7 +2831,7 @@ func (c *SandboxController) buildSubContainerSpec(
 				// them. Each URL is a complete Pushgateway base: a client
 				// appends /metrics/job/<name>.
 				if c.metricsPushEnabled() && c.MetricsPusher.Available(ctx) {
-					relay := fmt.Sprintf("http://%s:%d%s", c.Subnet.Router().Addr(), tokenServerPort, metricspush.RelayBasePath)
+					relay := fmt.Sprintf("http://%s:%d%s", c.Subnet.Router().Addr(), metadataServerPort, metricspush.RelayBasePath)
 					envVars = append(envVars,
 						fmt.Sprintf("MIREN_METRICS_PUSH_URL=%s/%s", relay, metricspush.ScopeSandbox),
 						fmt.Sprintf("MIREN_METRICS_SHARED_PUSH_URL=%s/%s", relay, metricspush.ScopeApp),
@@ -2843,11 +2847,11 @@ func (c *SandboxController) buildSubContainerSpec(
 				}
 
 				// Persist the secret host-side so it can be re-registered after a
-				// controller/token-server restart. Without this the running sandbox's
-				// token requests 403 forever once the in-memory registry is lost.
+				// runner restart. Without this the running sandbox's metadata
+				// requests 403 forever once the in-memory registry is lost.
 				secretPath := c.sandboxPath(sb, tokenSecretFilename)
 				if writeErr := writeTokenSecret(secretPath, secret); writeErr != nil {
-					c.Log.Warn("failed to persist token request secret", "sandbox", sb.ID, "error", writeErr)
+					c.Log.Warn("failed to persist metadata secret", "sandbox", sb.ID, "error", writeErr)
 				}
 			}
 		}
