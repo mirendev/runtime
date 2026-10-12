@@ -10,7 +10,7 @@ Debug with Workbench and read-only local source tools
 
 Ask the same cluster-scoped Workbench available in Miren Cloud. Requires a Cloud-registered cluster, a Cloud login, and Workbench enabled for the cluster's organization. Cluster selection follows the usual --cluster, MIREN_CLUSTER, per-app state, and active-cluster rules.
 
-With no question, starts an interactive conversation; piped input is treated as one question. Pass -a to focus on an application. Responses stream as plain text, and Ctrl-C cancels the active response.
+With no question, starts an interactive conversation; piped input is treated as one question. Pass -a to focus on an application. Responses stream as plain text. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
 
 Detective enables read-only tools for listing, reading and searching source in the current directory (or -d). Workbench enables the same tools only with --local-tools. Requested file content is sent to Miren Cloud. There is no local shell execution or editing. Symlinks, gitignored files, most hidden paths, and common credential files are excluded; .miren/app.toml is eligible unless gitignored. These exclusions are not secret detection: choose a source-only directory and keep sensitive files out of it.
 
