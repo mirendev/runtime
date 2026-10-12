@@ -59,6 +59,17 @@ func sourceExcluded(path string) bool {
 	return false
 }
 
+func sourceIgnorePatterns(data []byte, domain []string) []gitignore.Pattern {
+	var patterns []gitignore.Pattern
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line != "" && !strings.HasPrefix(line, "#") {
+			patterns = append(patterns, gitignore.ParsePattern(line, domain))
+		}
+	}
+	return patterns
+}
+
 // Only ignore metadata is read outside the selected source root.
 func (s *workbenchSource) inheritedIgnores() ([]gitignore.Pattern, []string, error) {
 	dir, err := filepath.Abs(s.root.Name())
@@ -101,9 +112,7 @@ func (s *workbenchSource) inheritedIgnores() ([]gitignore.Pattern, []string, err
 				if err != nil || len(data) > localFileLimit {
 					return nil, nil, fmt.Errorf("cannot read bounded ancestor gitignore file")
 				}
-				for line := range strings.SplitSeq(string(data), "\n") {
-					patterns = append(patterns, gitignore.ParsePattern(line, prefix[:i]))
-				}
+				patterns = append(patterns, sourceIgnorePatterns(data, prefix[:i])...)
 				if gitignore.NewMatcher(patterns).Match(prefix[:i+1], true) {
 					return nil, nil, fmt.Errorf("source root is gitignored")
 				}
@@ -151,11 +160,7 @@ func (s *workbenchSource) path(name string) (string, error) {
 			if err != nil || len(data) > localFileLimit {
 				return "", fmt.Errorf("cannot read bounded gitignore file")
 			}
-			for line := range strings.SplitSeq(string(data), "\n") {
-				if line != "" && !strings.HasPrefix(line, "#") {
-					patterns = append(patterns, gitignore.ParsePattern(line, fullPath[:len(prefix)+i]))
-				}
-			}
+			patterns = append(patterns, sourceIgnorePatterns(data, fullPath[:len(prefix)+i])...)
 		} else if err != nil && !os.IsNotExist(err) {
 			return "", err
 		}

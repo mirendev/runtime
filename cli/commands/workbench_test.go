@@ -180,28 +180,38 @@ func TestDetectiveLocalSourceTools(t *testing.T) {
 }
 
 func TestDetectiveNestedSourceRoot(t *testing.T) {
-	repo := t.TempDir()
-	dir := filepath.Join(repo, "services", "app")
-	require.NoError(t, os.MkdirAll(dir, 0700))
-	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0700))
-	for name, data := range map[string]string{
-		".gitignore":                          "services/app/config.production.json\nservices/app/*.go\n",
-		"services/.gitignore":                 "app/intermediate.json\n!app/main.go\n",
-		"services/app/config.production.json": "PRIVATE_MARKER",
-		"services/app/intermediate.json":      "PRIVATE_MARKER",
-		"services/app/main.go":                "public MARKER",
-	} {
-		require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(data), 0600))
+	for _, ending := range []string{"\n", "\r\n"} {
+		t.Run(fmt.Sprintf("ending-%q", ending), func(t *testing.T) {
+			repo := t.TempDir()
+			dir := filepath.Join(repo, "services", "app")
+			require.NoError(t, os.MkdirAll(dir, 0700))
+			require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0700))
+			for name, data := range map[string]string{
+				".gitignore":                          "# ancestor comment\n\nservices/app/config.production.json\nservices/app/*.go\n",
+				"services/.gitignore":                 "app/intermediate.json\n!app/main.go\n",
+				"services/app/.gitignore":             "local.json\n",
+				"services/app/config.production.json": "PRIVATE_MARKER",
+				"services/app/intermediate.json":      "PRIVATE_MARKER",
+				"services/app/local.json":             "PRIVATE_MARKER",
+				"services/app/main.go":                "public MARKER",
+			} {
+				if filepath.Base(name) == ".gitignore" {
+					data = strings.ReplaceAll(data, "\n", ending)
+				}
+				require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(data), 0600))
+			}
+			calls := []workbenchTestCall{
+				{Name: "local_list", Arguments: `{}`, Output: ".gitignore\nmain.go\n"},
+				{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "main.go:1: public MARKER\n"},
+				{Name: "local_read", Arguments: `{"path":"config.production.json"}`, Error: true},
+				{Name: "local_read", Arguments: `{"path":"intermediate.json"}`, Error: true},
+				{Name: "local_read", Arguments: `{"path":"local.json"}`, Error: true},
+				{Name: "local_read", Arguments: `{"path":"main.go"}`, Output: "1: public MARKER\n"},
+			}
+			ctx, _, _ := workbenchTestContext(t, calls)
+			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
+		})
 	}
-	calls := []workbenchTestCall{
-		{Name: "local_list", Arguments: `{}`, Output: "main.go\n"},
-		{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "main.go:1: public MARKER\n"},
-		{Name: "local_read", Arguments: `{"path":"config.production.json"}`, Error: true},
-		{Name: "local_read", Arguments: `{"path":"intermediate.json"}`, Error: true},
-		{Name: "local_read", Arguments: `{"path":"main.go"}`, Output: "1: public MARKER\n"},
-	}
-	ctx, _, _ := workbenchTestContext(t, calls)
-	require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
 }
 
 func TestDetectiveGitignoreDoesNotExcludeSourceRoot(t *testing.T) {
