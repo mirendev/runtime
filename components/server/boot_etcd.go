@@ -141,8 +141,9 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 		return etcdBootOutput{}, err
 	}
 	if !bytes.Equal(ca.GetCACertificate(), tls.ClientTLS.CACert) {
+		err := b.server.Stop(ctx)
 		b.cancel()
-		if err := b.server.Stop(ctx); err != nil {
+		if err != nil {
 			return etcdBootOutput{}, err
 		}
 		tls, err = coordinate.SetupEtcdTLS(log, b.inputs.dataPath, b.inputs.tls.AdditionalNames, ipDiscovery.ipSet.RawIPs())
@@ -161,7 +162,7 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 
 func (b *etcdBoot) stop(ctx context.Context) error {
 	if b.cancel != nil {
-		b.cancel()
+		defer b.cancel()
 	}
 	if b.server == nil {
 		return nil
