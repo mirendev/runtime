@@ -22,6 +22,7 @@ type SharedStore struct {
 	key, dataPath string
 	aead          cipher.AEAD
 	gate          chan struct{}
+	ring          *Keyring
 }
 
 func NewSharedStore(client *clientv3.Client, prefix, dataPath string, authorityKey []byte) (*SharedStore, error) {
@@ -55,6 +56,9 @@ func (s *SharedStore) Lock(ctx context.Context) (*Keyring, func(), error) {
 }
 
 func (s *SharedStore) load(ctx context.Context) (*Keyring, error) {
+	if s.ring != nil {
+		return s.ring, nil
+	}
 	response, err := s.client.Get(ctx, s.key)
 	if err != nil {
 		return nil, err
@@ -85,11 +89,14 @@ func (s *SharedStore) load(ctx context.Context) (*Keyring, error) {
 	if err := Save(Path(s.dataPath), ring); err != nil {
 		return nil, err
 	}
+	s.ring = ring
 	return ring, nil
 }
 
 // Save must be called under Lock, before exposing the ring to new writes.
 func (s *SharedStore) Save(ctx context.Context, ring *Keyring) error {
+	// An uncertain commit must be read back before the next writer proceeds.
+	s.ring = nil
 	plain, err := encode(ring)
 	if err != nil {
 		return err
@@ -102,5 +109,9 @@ func (s *SharedStore) Save(ctx context.Context, ring *Keyring) error {
 	if _, err := s.client.Put(ctx, s.key, string(sealed)); err != nil {
 		return err
 	}
-	return Save(Path(s.dataPath), ring)
+	if err := Save(Path(s.dataPath), ring); err != nil {
+		return err
+	}
+	s.ring = ring
+	return nil
 }

@@ -256,6 +256,19 @@ and cannot read or modify coordinator credentials. Existing runner identities
 are provisioned on startup. Direct administrative etcd clients must use the
 coordinator certificate and key under `<data-path>/etcd-certs`.
 
+Before upgrading an existing coordinator, check that every runner certificate's
+CommonName is `runner-<runner_id>`. Re-provision runners with a different name
+using `miren runner remove` and `miren runner join` with the same runner ID before
+the coordinator upgrade; otherwise their etcd networking may stop when auth is
+enabled. Certificate refresh also provisions a verified legacy CommonName when
+it can still be mapped to a registered node, but this does not repair workload
+token authorization or guarantee uninterrupted networking during the upgrade.
+
+For a downgrade to a binary predating etcd authorization, restore its
+pre-upgrade etcd snapshot using the managed rollback path. An in-place binary
+downgrade leaves authorization enabled: older maintenance clients and newly
+joined runners do not have the required etcd identities.
+
 This automatic authorization setup applies to embedded mTLS etcd. If you use
 external etcd, you are responsible for isolating and protecting that server;
 its contents include the cluster's private credentials.

@@ -498,6 +498,11 @@ func (s *RegistrationServer) reissueRunnerCertificate(ctx context.Context, peer 
 			"subject", peer.Subject.String())
 		return nil, fmt.Errorf("runner is not registered")
 	}
+	if s.EtcdClient != nil {
+		if err := etcdaccess.Runner(ctx, s.EtcdClient, commonName); err != nil {
+			return nil, fmt.Errorf("provisioning runner network access: %w", err)
+		}
+	}
 
 	ips, dnsNames := buildRunnerSANs(listenAddr)
 

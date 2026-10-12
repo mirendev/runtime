@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
@@ -44,9 +45,10 @@ type Backend struct {
 	// ring is swapped wholesale when the cluster key rotates, so it is read
 	// through an atomic pointer rather than as a plain field. A Keyring is
 	// immutable, so a reader either sees the ring before the rotation or the
-	// one after — never a half-applied ring — and both can open anything
-	// sealed so far, because a rotation only ever adds a key.
+	// one after — never a half-applied ring. Readers hold ringMu so publication
+	// cannot retire a key between reading its version and decrypting it.
 	ring          atomic.Pointer[keyring.Keyring]
+	ringMu        sync.RWMutex
 	SharedKeyring *keyring.SharedStore
 }
 
@@ -69,7 +71,11 @@ func (b *Backend) Keyring() *keyring.Keyring { return b.ring.Load() }
 // The caller must have persisted the ring before calling this. Sealing with a
 // key that is not yet persisted means a crash leaves rows naming a key the
 // cluster no longer has, and there is nothing to recover them from.
-func (b *Backend) UseKeyring(ring *keyring.Keyring) { b.ring.Store(ring) }
+func (b *Backend) UseKeyring(ring *keyring.Keyring) {
+	b.ringMu.Lock()
+	defer b.ringMu.Unlock()
+	b.ring.Store(ring)
+}
 
 // LockKeyring refreshes the replicated ring and serializes writes with rotation.
 // Backends without a shared store retain their in-memory, file-backed behavior.
@@ -81,7 +87,9 @@ func (b *Backend) LockKeyring(ctx context.Context) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	b.UseKeyring(ring)
+	if ring != b.Keyring() {
+		b.UseKeyring(ring)
+	}
 	return release, nil
 }
 
@@ -98,11 +106,8 @@ func (b *Backend) Name() string { return secret.ClusterBackendName }
 // version, so a ConfigVersion that records it sees identical bytes on every
 // later resolve.
 func (b *Backend) Resolve(ctx context.Context, ref string) (secret.SecretValue, error) {
-	release, err := b.LockKeyring(ctx)
-	if err != nil {
-		return secret.SecretValue{}, err
-	}
-	defer release()
+	b.ringMu.RLock()
+	defer b.ringMu.RUnlock()
 	path, version, err := secret.ParseRef(ref)
 	if err != nil {
 		return secret.SecretValue{}, err

@@ -13,13 +13,18 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	esv1 "miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	rv1 "miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/schema"
 	"miren.dev/runtime/pkg/etcdaccess"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/testutils"
+	entitysrv "miren.dev/runtime/servers/entityserver"
+	runnersrv "miren.dev/runtime/servers/runner"
 )
 
 func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
@@ -81,6 +86,29 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	lease, err := runner.Get(ctx, "/miren/sub/flannel/subnets/test")
 	require.NoError(t, err)
 	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
+
+	// Legacy certificates can name a registered runner by its node name rather
+	// than its RunnerId. Refresh must provision the actual verified peer CN.
+	legacy := connect("runner-existing-runner")
+	_, err = legacy.Get(ctx, "/miren/sub/flannel/subnets/test")
+	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
+	cc, err := ca.IssueCertificate(caauth.Options{CommonName: "runner-existing-runner", Organization: "miren", ValidFor: time.Hour})
+	require.NoError(t, err)
+	cert, err := tls.X509KeyPair(cc.CertPEM, cc.KeyPEM)
+	require.NoError(t, err)
+	peer, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	eac := esv1.NewEntityAccessClient(rpc.LocalClient(esv1.AdaptEntityAccess(&entitysrv.EntityServer{Log: log, Store: store})))
+	registration := runnersrv.NewRegistrationServer(runnersrv.RegistrationServerConfig{Log: log, Authority: ca, EAC: eac, EtcdClient: admin})
+	registrationClient := rv1.NewRunnerRegistrationClient(rpc.LocalClient(rv1.AdaptRunnerRegistration(registration)))
+	response, err := registrationClient.RefreshCertificate(rpc.ContextWithConnectionInfo(ctx, &rpc.CurrentConnectionInfo{PeerCertificate: peer}), "localhost:8444")
+	require.NoError(t, err)
+	require.False(t, response.HasError())
+	lease, err = legacy.Get(ctx, "/miren/sub/flannel/subnets/test")
+	require.NoError(t, err)
+	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
+	_, err = legacy.Get(ctx, "/miren/cluster-state/authority")
+	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 
 	// Provisioning is idempotent when authentication is already enabled.
 	require.NoError(t, etcdaccess.Ensure(ctx, admin, "/miren"))

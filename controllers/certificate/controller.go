@@ -503,15 +503,17 @@ func (c *Controller) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 		return nil, fmt.Errorf("no SNI provided")
 	}
 
-	if c.shared != nil {
-		if bundle, err := c.shared.Get(hello.Context(), "acme/certificates/"+domain); err == nil {
+	cached := c.getCachedCert(domain)
+	if cached == nil && c.shared != nil {
+		ctx, cancel := context.WithTimeout(hello.Context(), 2*time.Second)
+		defer cancel()
+		if bundle, err := c.shared.Get(ctx, "acme/certificates/"+domain); err == nil {
 			var value certificateBundle
 			if json.Unmarshal(bundle, &value) == nil {
-				_, _ = c.loadCertIntoCache(domain, value.Certificate, value.PrivateKey)
+				cached, _ = c.loadCertIntoCache(domain, value.Certificate, value.PrivateKey)
 			}
 		}
 	}
-	cached := c.getCachedCert(domain)
 	if cached == nil {
 		return nil, fmt.Errorf("no certificate available for %s", domain)
 	}

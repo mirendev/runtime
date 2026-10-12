@@ -2,6 +2,7 @@ package coordinate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -308,6 +309,13 @@ func TestFleetCheckpointStaleHandoffCannotReplayFinishedWalk(t *testing.T) {
 	op := handedOff(t, store)
 	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
 	require.NoError(t, u.drive(t.Context(), op.ID))
+	active, err := u.fleetOperations(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, active, "completed history must not grow the active checkpoint")
+	// Completion committed, but a crash left the older active entry behind.
+	stale, err := json.Marshal(map[string]*serverlifecycle.Operation{op.ID: op})
+	require.NoError(t, err)
+	require.NoError(t, state.Put(t.Context(), fleetCheckpoint, stale))
 	// A restored disk can lag the authoritative etcd checkpoint.
 	require.NoError(t, store.Update(op))
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
@@ -320,6 +328,19 @@ func TestFleetCheckpointStaleHandoffCannotReplayFinishedWalk(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, local.Succeeded(), "authoritative completion must release the local busy slot")
 	require.Equal(t, []string{"v2.0.0"}, fleet.requests)
+	// The old monolithic format migrates without losing completion or replaying
+	// an older local handoff, including after an empty-directory restore.
+	legacy, err := json.Marshal(map[string]*serverlifecycle.Operation{got.ID: got})
+	require.NoError(t, err)
+	require.NoError(t, state.Put(t.Context(), fleetCheckpoint, legacy))
+	require.NoError(t, state.Delete(t.Context(), fleetCheckpoint+"/completed/"+op.ID))
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	active, err = u.fleetOperations(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, active)
+	got, err = u.operation(t.Context(), op.ID)
+	require.NoError(t, err)
+	require.True(t, got.Succeeded())
 }
 
 func TestFleetCheckpointHonorsAbandonmentAndExcludesActiveAbandon(t *testing.T) {

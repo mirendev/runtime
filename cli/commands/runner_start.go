@@ -319,7 +319,7 @@ func warnIfCertCommonNameDrifted(ctx *Context, cfg *runnerconfig.Config) {
 	// Mirrors the coordinator's runnerCertName scheme (runner-<full runner_id>).
 	want := "runner-" + cfg.RunnerID
 	if cn != want {
-		ctx.Log.Warn("runner certificate CommonName does not match runner_id; workload identity tokens will be denied. Re-provision this runner ('miren runner remove' then 'miren runner join' reusing its runner_id) to mint a cert with the current naming scheme.",
+		ctx.Log.Warn("runner certificate CommonName does not match runner_id; workload identity tokens will be denied and etcd networking may be denied after a coordinator upgrade. Re-provision this runner ('miren runner remove' then 'miren runner join' reusing its runner_id) before upgrading the coordinator to mint a cert with the current naming scheme.",
 			"cert_common_name", cn,
 			"expected_common_name", want,
 			"runner_id", cfg.RunnerID)

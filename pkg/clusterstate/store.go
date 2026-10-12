@@ -68,7 +68,7 @@ func (s *Store) seal(key string, value []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	result := make([]byte, 1+4, 1+4+len(nonce)+len(value)+s.aead.Overhead())
+	result := make([]byte, 1+4)
 	result[0] = formatVersion
 	binary.BigEndian.PutUint32(result[1:], uint32(len(nonce)))
 	result = append(result, nonce...)

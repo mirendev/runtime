@@ -136,6 +136,21 @@ func (u *RunnerUpgrader) fleetOperations(ctx context.Context) (map[string]*serve
 	return ops, nil
 }
 
+func (u *RunnerUpgrader) completedOperation(ctx context.Context, id string) (*serverlifecycle.Operation, error) {
+	data, err := u.fleet.Get(ctx, fleetCheckpoint+"/completed/"+id)
+	if errors.Is(err, clusterstate.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var op serverlifecycle.Operation
+	if err := json.Unmarshal(data, &op); err != nil {
+		return nil, err
+	}
+	return &op, nil
+}
+
 // importHandoffs is create-only: stale files must never replace restored state.
 func (u *RunnerUpgrader) importHandoffs(ctx context.Context, local []*serverlifecycle.Operation) error {
 	u.fleetMu.Lock()
@@ -148,8 +163,45 @@ func (u *RunnerUpgrader) importHandoffs(ctx context.Context, local []*serverlife
 		return err
 	}
 	changed := false
+	// Migrate completed entries out of the old monolithic checkpoint. Keeping
+	// their individual records prevents a stale handoff from being replayed.
+	for id, op := range ops {
+		if !op.Done() {
+			continue
+		}
+		data, err := json.Marshal(op)
+		if err != nil {
+			return err
+		}
+		if _, err := u.fleet.Ensure(ctx, fleetCheckpoint+"/completed/"+id, data); err != nil {
+			return err
+		}
+		delete(ops, id)
+		changed = true
+	}
 	for _, op := range local {
-		if (op.HandedOff() || op.Nodes != nil) && ops[op.ID] == nil {
+		if !op.HandedOff() && op.Nodes == nil {
+			continue
+		}
+		completed, err := u.completedOperation(ctx, op.ID)
+		if err != nil {
+			return err
+		}
+		if completed != nil {
+			localState, fleetState := *op, *completed
+			localState.UpdatedAt, fleetState.UpdatedAt = time.Time{}, time.Time{}
+			if !reflect.DeepEqual(localState, fleetState) {
+				if err := u.store.Update(completed); err != nil {
+					u.log.Warn("could not mirror completed fleet checkpoint", "operation", op.ID, "error", err)
+				}
+			}
+			if ops[op.ID] != nil {
+				delete(ops, op.ID)
+				changed = true
+			}
+			continue
+		}
+		if ops[op.ID] == nil && !op.Done() {
 			ops[op.ID] = op
 			changed = true
 		}
@@ -167,6 +219,10 @@ func (u *RunnerUpgrader) importHandoffs(ctx context.Context, local []*serverlife
 func (u *RunnerUpgrader) operation(ctx context.Context, id string) (*serverlifecycle.Operation, error) {
 	if u.fleet == nil {
 		return u.store.Get(id)
+	}
+	completed, err := u.completedOperation(ctx, id)
+	if err != nil || completed != nil {
+		return completed, err
 	}
 	ops, err := u.fleetOperations(ctx)
 	if err != nil {
@@ -206,7 +262,20 @@ func (u *RunnerUpgrader) checkpoint(ctx context.Context, op *serverlifecycle.Ope
 		now := op.UpdatedAt
 		op.FinishedAt = &now
 	}
-	ops[op.ID] = op
+	if op.Done() {
+		data, err := json.Marshal(op)
+		if err != nil {
+			return err
+		}
+		// Publish completion before removing the active entry. A crash between
+		// these writes still makes the terminal record win over a stale handoff.
+		if err := u.fleet.Put(ctx, fleetCheckpoint+"/completed/"+op.ID, data); err != nil {
+			return err
+		}
+		delete(ops, op.ID)
+	} else {
+		ops[op.ID] = op
+	}
 	data, err := json.Marshal(ops)
 	if err != nil {
 		return err
@@ -238,9 +307,13 @@ func (u *RunnerUpgrader) Run(ctx context.Context) error {
 	defer u.wg.Wait()
 
 	if u.fleet != nil {
-		scan := func() error {
+		scan := func(importLocal bool) error {
 			// Disk is only a source of new executor handoffs, never resume state.
-			if local, err := u.store.List(); err == nil {
+			if importLocal {
+				local, err := u.store.List()
+				if err != nil {
+					return err
+				}
 				if err := u.importHandoffs(ctx, local); err != nil {
 					return err
 				}
@@ -250,27 +323,19 @@ func (u *RunnerUpgrader) Run(ctx context.Context) error {
 				return err
 			}
 			for _, op := range ops {
-				// Completed etcd records also settle stale local busy slots.
-				if op.Done() {
-					if local, err := u.store.Get(op.ID); err == nil {
-						localState, fleetState := *local, *op
-						localState.UpdatedAt, fleetState.UpdatedAt = time.Time{}, time.Time{}
-						if !reflect.DeepEqual(localState, fleetState) {
-							if err := u.store.Update(op); err != nil {
-								u.log.Warn("could not mirror completed fleet checkpoint", "operation", op.ID, "error", err)
-							}
-						}
-					}
-				}
 				u.adopt(ctx, op)
 			}
 			return nil
 		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
+		importLocal := true
 		for {
-			if err := scan(); err != nil && ctx.Err() == nil {
+			if err := scan(importLocal); err != nil && ctx.Err() == nil {
 				u.log.Warn("could not scan fleet upgrade checkpoints", "error", err)
+				importLocal = true
+			} else {
+				importLocal = false
 			}
 			select {
 			case <-ctx.Done():
@@ -278,6 +343,7 @@ func (u *RunnerUpgrader) Run(ctx context.Context) error {
 			case <-ticker.C:
 			case <-sub.Wake():
 				sub.Drain()
+				importLocal = true
 			}
 		}
 	}
