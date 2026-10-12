@@ -389,7 +389,7 @@ This is a single-runner, request/response API, not a streaming or
 cluster-wide query service. Both coordinator and runner must support this RPC.
 
 :::warning[Upgrading to the internal-only registry]
-When upgrading from a release that serves the registry on the coordinator's public address to one that serves it only over WireGuard, image pulls can briefly fail. Miren Cloud-managed upgrades update the coordinator first, then restart runners one at a time; each runner resumes pulling images after its upgrade. For manual upgrades, upgrade runner binaries first while the old coordinator still serves the registry, then upgrade the coordinator and restart the runners again so they learn its internal address.
+Starting with v0.17.0, the coordinator serves its image registry only over WireGuard. Upgrade the coordinator first, then each runner, the same order Miren Cloud uses for its upgrades. A runner still on an older release can't pull images from the upgraded coordinator, so pulls on that runner fail until it's upgraded too. This applies whether you upgrade by hand or from Cloud.
 :::
 
 ## Things to know
