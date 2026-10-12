@@ -166,24 +166,14 @@ func EtcdCertsDir(dataPath string) string {
 }
 
 func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, extraIPs []net.IP) (*EtcdTLSSetupResult, error) {
-	certPath := filepath.Join(dataPath, "server", "ca.crt")
-	keyPath := filepath.Join(dataPath, "server", "ca.key")
-
-	data, err := os.ReadFile(certPath)
-	if err != nil {
-		return nil, fmt.Errorf("CA certificate not found at %s: %w (CA must be created before setting up etcd TLS)", certPath, err)
+	if _, err := os.Stat(filepath.Join(dataPath, "server", "ca.bundle")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(dataPath, "server", "ca.crt")); err != nil {
+			return nil, fmt.Errorf("CA must be created before setting up etcd TLS: %w", err)
+		}
 	}
-
-	log.Info("loading existing CA for etcd TLS", "path", certPath)
-
-	key, err := os.ReadFile(keyPath)
+	ca, err := EnsureCA(log, dataPath)
 	if err != nil {
-		return nil, fmt.Errorf("missing key for CA: %w", err)
-	}
-
-	ca, err := caauth.LoadFromPEM(data, key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load CA: %w", err)
+		return nil, err
 	}
 
 	// Create etcd certs directory

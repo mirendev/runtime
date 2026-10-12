@@ -37,7 +37,6 @@ func TestObservabilityWaitsForVictoriaEndpoints(t *testing.T) {
 
 	observability := newObservabilityBoot(
 		observabilityBootInputs{log: log, timeout: time.Second},
-		tracingComponent,
 		logsOutput,
 		metricsOutput,
 	)

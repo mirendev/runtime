@@ -45,6 +45,16 @@ func (s *Store) Dir() string {
 	return s.dir
 }
 
+// AbandonRequested is an explicit operator command, separate from the local
+// read-side operation mirror. Fleet restore must not replay arbitrary mirrors.
+func (s *Store) AbandonRequested(id string) (bool, error) {
+	_, err := os.Stat(filepath.Join(s.dir, id+".abandoned"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (s *Store) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }

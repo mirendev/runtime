@@ -69,6 +69,8 @@ On startup, the coordinator imports existing small metadata into etcd. This incl
 
 Etcd is authoritative after migration. Local credential files are recoverable caches. Registration commands and manual workload-key changes still take effect on the next coordinator start; the coordinator fingerprints its caches to distinguish deliberate changes from unchanged files or an empty restore directory.
 
+Registration and workload identity are restored before their boot consumers run, including telemetry and cloud storage clients. Credential caches are published atomically; the CA's private `ca.bundle` keeps its certificate and key in one bootstrap generation, with separate PEM files retained for compatibility.
+
 An etcd snapshot is not a full data-path backup. Server configuration, node-local executor state, SQLite databases, OCI images, application disks, staged disk transfers, build data, logs, and metrics remain outside etcd and need their own backup strategy. Keep the same server configuration when restoring, including the etcd prefix and workload identity hostname settings.
 
 :::warning[Snapshots contain cluster credentials]
@@ -246,6 +248,17 @@ Miren uses etcd as its entity store. In standalone mode, an embedded etcd server
 mTLS. `peer_port` and `http_client_port` bind to `127.0.0.1`. etcd's JSON
 gateway is disabled outright; its health and metrics endpoints are
 unaffected.
+
+Before importing coordinator credentials, Miren enables etcd certificate-identity
+authorization. The coordinator's `etcd-client-coordinator` certificate has
+administrative access; enrolled runners are restricted to `<prefix>/sub/flannel/`
+and cannot read or modify coordinator credentials. Existing runner identities
+are provisioned on startup. Direct administrative etcd clients must use the
+coordinator certificate and key under `<data-path>/etcd-certs`.
+
+This automatic authorization setup applies to embedded mTLS etcd. If you use
+external etcd, you are responsible for isolating and protecting that server;
+its contents include the cluster's private credentials.
 :::
 
 ## `[containerd]` — Containerd Settings {#containerd}

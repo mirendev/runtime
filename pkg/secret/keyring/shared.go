@@ -8,20 +8,20 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 // SharedStore keeps the authoritative ring in replicated etcd, encrypted with
 // cluster authority material. The local file remains a recoverable backup.
-// Writers and rotation share its lock so retirement cannot race a write using
-// an old key on another server.
+// Writers and rotation on the standalone coordinator share a non-expiring
+// process lock. This is not a multi-coordinator store: server joins are outside
+// the metadata backup/restore contract.
 type SharedStore struct {
 	client        *clientv3.Client
 	key, dataPath string
 	aead          cipher.AEAD
+	gate          chan struct{}
 }
 
 func NewSharedStore(client *clientv3.Client, prefix, dataPath string, authorityKey []byte) (*SharedStore, error) {
@@ -34,27 +34,18 @@ func NewSharedStore(client *clientv3.Client, prefix, dataPath string, authorityK
 	if err != nil {
 		return nil, err
 	}
-	return &SharedStore{client: client, key: prefix + "/secret-keyring", dataPath: dataPath, aead: aead}, nil
+	return &SharedStore{client: client, key: prefix + "/secret-keyring", dataPath: dataPath, aead: aead, gate: make(chan struct{}, 1)}, nil
 }
 
-// Lock loads the latest ring while holding the cluster-wide secret lock.
+// Lock loads the latest ring while holding the coordinator's secret lock.
 // Callers must release it after finishing all ring-dependent writes.
 func (s *SharedStore) Lock(ctx context.Context) (*Keyring, func(), error) {
-	session, err := concurrency.NewSession(s.client, concurrency.WithContext(ctx), concurrency.WithTTL(30))
-	if err != nil {
-		return nil, nil, err
+	select {
+	case s.gate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
 	}
-	mutex := concurrency.NewMutex(session, s.key+"/lock")
-	if err := mutex.Lock(ctx); err != nil {
-		_ = session.Close()
-		return nil, nil, err
-	}
-	release := func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = mutex.Unlock(cleanup)
-		_ = session.Close()
-	}
+	release := func() { <-s.gate }
 	ring, err := s.load(ctx)
 	if err != nil {
 		release()

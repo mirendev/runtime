@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"miren.dev/runtime/pkg/atomicfile"
 	"miren.dev/runtime/pkg/cloudauth"
 )
 
@@ -339,13 +340,13 @@ func SaveRegistration(dir string, reg *StoredRegistration) error {
 		return fmt.Errorf("failed to marshal registration: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := atomicfile.Write(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write registration file: %w", err)
 	}
 
 	// Also save the private key separately for easier access
 	keyPath := filepath.Join(dir, "service-account.key")
-	if err := os.WriteFile(keyPath, []byte(reg.PrivateKey), 0600); err != nil {
+	if err := atomicfile.Write(keyPath, []byte(reg.PrivateKey), 0600); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 

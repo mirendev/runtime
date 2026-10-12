@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -160,6 +161,23 @@ func EnsureCA(log *slog.Logger, dataPath string) (*caauth.Authority, error) {
 	cert := filepath.Join(dataPath, "server", "ca.crt")
 	keyPath := filepath.Join(dataPath, "server", "ca.key")
 
+	if data, err := os.ReadFile(filepath.Join(dataPath, "server", "ca.bundle")); err == nil {
+		var pair credentialPair
+		if err := json.Unmarshal(data, &pair); err != nil {
+			return nil, fmt.Errorf("loading CA generation: %w", err)
+		}
+		ca, err := caauth.LoadFromPEM(pair.Cert, pair.Key)
+		if err != nil {
+			return nil, err
+		}
+		if err := writeCredentialPair(dataPath, "ca", pair); err != nil {
+			return nil, err
+		}
+		return ca, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
 	data, err := os.ReadFile(cert)
 	switch {
 	case err == nil:
@@ -175,6 +193,9 @@ func EnsureCA(log *slog.Logger, dataPath string) (*caauth.Authority, error) {
 			return nil, fmt.Errorf("failed to load CA: %w", err)
 		}
 
+		if err := writeCredentialPair(dataPath, "ca", credentialPair{Cert: data, Key: key}); err != nil {
+			return nil, err
+		}
 		return ca, nil
 	case !errors.Is(err, os.ErrNotExist):
 		// The CA cert exists but couldn't be read (permissions, transient IO,
@@ -203,12 +224,8 @@ func EnsureCA(log *slog.Logger, dataPath string) (*caauth.Authority, error) {
 		return nil, fmt.Errorf("failed to export CA: %w", err)
 	}
 
-	if err := os.WriteFile(cert, cd, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write CA cert: %w", err)
-	}
-
-	if err := os.WriteFile(keyPath, kd, 0600); err != nil {
-		return nil, fmt.Errorf("failed to write CA key: %w", err)
+	if err := writeCredentialPair(dataPath, "ca", credentialPair{Cert: cd, Key: kd}); err != nil {
+		return nil, fmt.Errorf("failed to write CA generation: %w", err)
 	}
 
 	return ca, nil
@@ -522,15 +539,7 @@ func (c *Foundation) workloadAuthenticator() rpc.Authenticator {
 func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	c.Log.Info("starting cluster foundation", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
-	etcdConfig := clientv3.Config{Endpoints: c.EtcdEndpoints, AutoSyncInterval: time.Minute}
-	if c.EtcdTLS != nil {
-		tlsConfig, err := c.buildEtcdTLSConfig()
-		if err != nil {
-			return err
-		}
-		etcdConfig.TLS = tlsConfig
-	}
-	client, err := clientv3.New(etcdConfig)
+	client, err := c.connectEtcd()
 	if err != nil {
 		return err
 	}
@@ -742,6 +751,9 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	}
 
 	ec := aes.NewClient(c.Log, eac)
+	if err := c.prepareRunnerEtcdAccess(ctx, ec); err != nil {
+		return fmt.Errorf("provisioning runner etcd access: %w", err)
+	}
 
 	defaultProject := &core_v1alpha.Project{
 		ID:    entity.Id("default"),

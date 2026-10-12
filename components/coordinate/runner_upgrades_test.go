@@ -282,6 +282,8 @@ func TestFleetCheckpointRunRestoresWithoutLocalLedger(t *testing.T) {
 	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
 	// The restored coordinator has etcd but none of the original host's files.
 	require.NoError(t, os.RemoveAll(store.Dir()))
+	u.store, err = serverlifecycle.NewStore(store.Dir())
+	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- u.Run(ctx) }()
@@ -318,6 +320,50 @@ func TestFleetCheckpointStaleHandoffCannotReplayFinishedWalk(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, local.Succeeded(), "authoritative completion must release the local busy slot")
 	require.Equal(t, []string{"v2.0.0"}, fleet.requests)
+}
+
+func TestFleetCheckpointHonorsAbandonmentAndExcludesActiveAbandon(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	state, err := clusterstate.New(client, prefix, []byte("test-authority"))
+	require.NoError(t, err)
+	fleet := newFakeFleet()
+	fleet.add("a-runner", "runner", "v1.0.0", compute_v1alpha.READY)
+	u, store := newTestUpgrader(t, fleet)
+	u.WithFleetStore(state)
+	op := handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	_, err = serverlifecycle.Abandon(store, op.ID)
+	require.NoError(t, err)
+	// The walker must consume the operator command, not replay the old handoff.
+	require.NoError(t, u.drive(t.Context(), op.ID))
+	got, err := u.operation(t.Context(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, serverlifecycle.PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "abandoned by operator")
+	require.Empty(t, fleet.requests)
+
+	op = handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	dialing := make(chan struct{})
+	resume := make(chan struct{})
+	u.dial = func(ctx context.Context, address string) (RunnerLifecycleClient, error) {
+		close(dialing)
+		select {
+		case <-resume:
+			return fleet.dial(ctx, address)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- u.drive(ctx, op.ID) }()
+	<-dialing
+	_, err = serverlifecycle.Abandon(store, op.ID)
+	require.ErrorIs(t, err, serverlifecycle.ErrLocked)
+	close(resume)
+	require.NoError(t, <-done)
 }
 
 func TestWalkUpgradesEveryRunnerInOrder(t *testing.T) {

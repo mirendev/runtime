@@ -173,6 +173,17 @@ func (u *RunnerUpgrader) operation(ctx context.Context, id string) (*serverlifec
 		return nil, err
 	}
 	if op := ops[id]; op != nil {
+		abandoned, err := u.store.AbandonRequested(id)
+		if err != nil {
+			return nil, err
+		}
+		if abandoned && !op.Done() {
+			op.Phase = serverlifecycle.PhaseFailed
+			op.Error = "abandoned by operator"
+			if err := u.checkpoint(ctx, op); err != nil {
+				return nil, err
+			}
+		}
 		return op, nil
 	}
 	return nil, serverlifecycle.ErrNotFound
@@ -367,24 +378,14 @@ func (u *RunnerUpgrader) settleStranded(ctx context.Context, id string, cause er
 // while the record is still handed off: another server may have finished
 // it in the meantime.
 func (u *RunnerUpgrader) failStranded(id string, cause error) error {
-	if u.fleet != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		op, err := u.operation(ctx, id)
-		if err != nil {
-			return err
-		}
-		if !op.HandedOff() {
-			return nil
-		}
-		return u.finish(op, fmt.Errorf("gave up walking the runners after %s of errors: %w", u.opts.RetryFor, cause))
-	}
 	unlock, err := u.store.LockOperation(id)
 	if err != nil {
 		return fmt.Errorf("%w (and could not lock the record to fail it: %v)", cause, err)
 	}
 	defer unlock()
-	op, err := u.store.Get(id)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	op, err := u.operation(ctx, id)
 	if err != nil {
 		return fmt.Errorf("%w (and could not read the record to fail it: %v)", cause, err)
 	}
@@ -415,13 +416,11 @@ func (u *RunnerUpgrader) lockOperation(ctx context.Context, id string) (func(), 
 }
 
 func (u *RunnerUpgrader) drive(ctx context.Context, id string) error {
-	if u.fleet == nil {
-		unlock, err := u.lockOperation(ctx, id)
-		if err != nil {
-			return err
-		}
-		defer unlock()
+	unlock, err := u.lockOperation(ctx, id)
+	if err != nil {
+		return err
 	}
+	defer unlock()
 	op, err := u.operation(ctx, id)
 	if err != nil {
 		return err
