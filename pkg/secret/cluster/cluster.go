@@ -77,18 +77,16 @@ func (b *Backend) UseKeyring(ring *keyring.Keyring) {
 	b.ring.Store(ring)
 }
 
-// LockKeyring refreshes the replicated ring and serializes writes with rotation.
+// LockKeyring serializes writes with rotation. Only the rotation controller
+// publishes a new live ring, after recording the rotation successfully.
 // Backends without a shared store retain their in-memory, file-backed behavior.
 func (b *Backend) LockKeyring(ctx context.Context) (func(), error) {
 	if b.SharedKeyring == nil {
 		return func() {}, nil
 	}
-	ring, release, err := b.SharedKeyring.Lock(ctx)
+	_, release, err := b.SharedKeyring.Lock(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if ring != b.Keyring() {
-		b.UseKeyring(ring)
 	}
 	return release, nil
 }

@@ -42,6 +42,7 @@ type Controller struct {
 	initOnce   sync.Once
 	initErr    error
 	certCache  map[string]*cachedCert
+	certMisses map[string]time.Time
 	cacheMutex sync.RWMutex
 	failures   sync.Map // domain -> time.Time
 	shared     *clusterstate.Store
@@ -485,6 +486,7 @@ func (c *Controller) loadCertIntoCache(domain string, certPEM, keyPEM []byte) (*
 
 	c.cacheMutex.Lock()
 	c.certCache[domain] = cached
+	delete(c.certMisses, domain)
 	c.cacheMutex.Unlock()
 
 	return cached, nil
@@ -504,7 +506,10 @@ func (c *Controller) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 	}
 
 	cached := c.getCachedCert(domain)
-	if cached == nil && c.shared != nil {
+	c.cacheMutex.RLock()
+	lastMiss := c.certMisses[domain]
+	c.cacheMutex.RUnlock()
+	if cached == nil && c.shared != nil && time.Since(lastMiss) >= time.Minute {
 		ctx, cancel := context.WithTimeout(hello.Context(), 2*time.Second)
 		defer cancel()
 		if bundle, err := c.shared.Get(ctx, "acme/certificates/"+domain); err == nil {
@@ -512,6 +517,21 @@ func (c *Controller) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 			if json.Unmarshal(bundle, &value) == nil {
 				cached, _ = c.loadCertIntoCache(domain, value.Certificate, value.PrivateKey)
 			}
+		} else if errors.Is(err, clusterstate.ErrNotFound) {
+			c.cacheMutex.Lock()
+			if c.certMisses == nil {
+				c.certMisses = make(map[string]time.Time)
+			}
+			// SNI is attacker-controlled: bound both retention and cache size.
+			for name, missedAt := range c.certMisses {
+				if time.Since(missedAt) >= time.Minute {
+					delete(c.certMisses, name)
+				}
+			}
+			if len(c.certMisses) < 256 {
+				c.certMisses[domain] = time.Now()
+			}
+			c.cacheMutex.Unlock()
 		}
 	}
 	if cached == nil {

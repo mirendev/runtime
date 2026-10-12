@@ -33,6 +33,7 @@ type etcdBoot struct {
 	inputs        etcdBootInputs
 	observability observabilityBootOutput
 	server        *etcd.EtcdComponent
+	cancel        context.CancelFunc
 	result        etcdBootOutput
 	output        boot.Output[etcdBootOutput]
 }
@@ -123,7 +124,9 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 	b.result.tls = tls
 	config.TLS = &etcd.TLSConfig{CertsDir: tls.CertsDir}
 
-	if err := b.server.Start(ctx, config); err != nil {
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	b.cancel = cancel
+	if err := b.server.Start(runtimeCtx, config); err != nil {
 		return etcdBootOutput{}, err
 	}
 	b.result.endpoints = []string{b.server.ClientEndpoint()}
@@ -138,6 +141,7 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 		return etcdBootOutput{}, err
 	}
 	if !bytes.Equal(ca.GetCACertificate(), tls.ClientTLS.CACert) {
+		b.cancel()
 		if err := b.server.Stop(ctx); err != nil {
 			return etcdBootOutput{}, err
 		}
@@ -146,7 +150,8 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 			return etcdBootOutput{}, err
 		}
 		b.result.tls = tls
-		if err := b.server.Start(ctx, config); err != nil {
+		runtimeCtx, b.cancel = context.WithCancel(ctx)
+		if err := b.server.Start(runtimeCtx, config); err != nil {
 			return etcdBootOutput{}, err
 		}
 	}
@@ -155,6 +160,9 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 }
 
 func (b *etcdBoot) stop(ctx context.Context) error {
+	if b.cancel != nil {
+		b.cancel()
+	}
 	if b.server == nil {
 		return nil
 	}
