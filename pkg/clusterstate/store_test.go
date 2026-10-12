@@ -1,0 +1,80 @@
+package clusterstate
+
+import (
+	"bytes"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/client/v3/concurrency"
+	"miren.dev/runtime/pkg/etcdtest"
+)
+
+func TestEncryptedAndWrongKey(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := New(client, prefix, []byte("authority-one"))
+	require.NoError(t, err)
+	require.NoError(t, store.Put(t.Context(), "secret", []byte("plaintext-secret")))
+	raw, err := client.Get(t.Context(), prefix+"/cluster-state/records/secret")
+	require.NoError(t, err)
+	require.Len(t, raw.Kvs, 1)
+	require.False(t, bytes.Contains(raw.Kvs[0].Value, []byte("plaintext-secret")))
+
+	wrong, err := New(client, prefix, []byte("authority-two"))
+	require.NoError(t, err)
+	_, err = wrong.Get(t.Context(), "secret")
+	require.ErrorContains(t, err, "decrypting cluster state")
+}
+
+func TestEnsureInitialRace(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := New(client, prefix, []byte("authority"))
+	require.NoError(t, err)
+	const contenders = 16
+	values := make(chan string, contenders)
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func(value byte) {
+			defer wg.Done()
+			got, err := store.Ensure(t.Context(), "initial", []byte{value})
+			require.NoError(t, err)
+			values <- string(got)
+		}(byte(i))
+	}
+	wg.Wait()
+	close(values)
+	var authoritative string
+	for value := range values {
+		if authoritative == "" {
+			authoritative = value
+		}
+		require.Equal(t, authoritative, value)
+	}
+}
+
+func TestStaleLockCannotWriteOrDelete(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := New(client, prefix, []byte("authority"))
+	require.NoError(t, err)
+	stale, err := store.lock(t.Context(), "mutation", 1)
+	require.NoError(t, err)
+	require.NoError(t, stale.Put(t.Context(), "value", []byte("old")))
+	require.NoError(t, stale.session.Close())
+	select {
+	case <-stale.session.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("session did not expire")
+	}
+
+	fresh, err := store.Lock(t.Context(), "mutation")
+	require.NoError(t, err)
+	defer fresh.Unlock()
+	require.NoError(t, fresh.Put(t.Context(), "value", []byte("new")))
+	require.ErrorIs(t, stale.Put(t.Context(), "value", []byte("stale")), concurrency.ErrSessionExpired)
+	require.ErrorIs(t, stale.Delete(t.Context(), "value"), concurrency.ErrSessionExpired)
+	got, err := store.Get(t.Context(), "value")
+	require.NoError(t, err)
+	require.Equal(t, "new", string(got))
+}
