@@ -7,15 +7,19 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/acme/autocert"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/etcdtest"
 )
 
 func newTestAutocertController(t *testing.T) *AutocertController {
@@ -46,6 +50,53 @@ func TestAutocertController_Init(t *testing.T) {
 	if c.mgr == nil {
 		t.Fatal("expected autocert.Manager to be initialized")
 	}
+}
+
+func TestAutocertController_SharedCacheMigrationAndRestore(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	store, err := clusterstate.New(client, prefix, []byte("authority"))
+	require.NoError(t, err)
+	ctx := t.Context()
+	dataPath := t.TempDir()
+	certsDir := filepath.Join(dataPath, "certs")
+	require.NoError(t, os.MkdirAll(certsDir, 0700))
+	legacy := autocert.DirCache(certsDir)
+	require.NoError(t, legacy.Put(ctx, "acme_account+key", []byte("account key")))
+	require.NoError(t, legacy.Put(ctx, "example.com", []byte("stale certificate")))
+	require.NoError(t, store.Put(ctx, "autocert/example.com", []byte("authoritative certificate")))
+	require.NoError(t, os.Mkdir(filepath.Join(certsDir, "ignored-directory"), 0700))
+
+	newController := func(path string, shared *clusterstate.Store) *AutocertController {
+		c := NewAutocertController(AutocertControllerOpts{Log: slog.Default(), DataPath: path})
+		c.SetSharedStore(shared)
+		require.NoError(t, c.Init(ctx))
+		return c
+	}
+	c := newController(dataPath, store)
+	account, err := c.mgr.Cache.Get(ctx, "acme_account+key")
+	require.NoError(t, err)
+	require.Equal(t, []byte("account key"), account)
+	cert, err := c.mgr.Cache.Get(ctx, "example.com")
+	require.NoError(t, err)
+	require.Equal(t, []byte("authoritative certificate"), cert)
+	require.NoError(t, c.mgr.Cache.Put(ctx, "example.com", []byte("renewed certificate")))
+
+	// A rebuilt coordinator has the same restored etcd and authority, but no local cache.
+	restoredStore, err := clusterstate.New(client, prefix, []byte("authority"))
+	require.NoError(t, err)
+	restored := newController(t.TempDir(), restoredStore)
+	account, err = restored.mgr.Cache.Get(ctx, "acme_account+key")
+	require.NoError(t, err)
+	require.Equal(t, []byte("account key"), account)
+	cert, err = restored.mgr.Cache.Get(ctx, "example.com")
+	require.NoError(t, err)
+	require.Equal(t, []byte("renewed certificate"), cert)
+	require.NoError(t, restored.mgr.Cache.Delete(ctx, "example.com"))
+	_, err = c.mgr.Cache.Get(ctx, "example.com")
+	require.ErrorIs(t, err, autocert.ErrCacheMiss)
+	require.NoError(t, restored.mgr.Cache.Delete(ctx, "missing"))
+	_, err = restored.mgr.Cache.Get(ctx, "missing")
+	require.ErrorIs(t, err, autocert.ErrCacheMiss)
 }
 
 func TestAutocertController_Reconcile_AddsAllowedHost(t *testing.T) {

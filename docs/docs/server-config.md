@@ -63,6 +63,18 @@ Miren has two operating modes:
 
 In standalone mode, embedded services start automatically unless explicitly disabled.
 
+## Coordinator metadata
+
+On startup, the coordinator imports existing small metadata into etcd. This includes the cluster CA and API credentials, cloud registration, workload identity keys and anchor history, OIDC session signing key, ACME accounts and certificates, secret keyring, and runner-fleet upgrade checkpoints. Ordinary standalone servers use this storage; redundancy is not required.
+
+Etcd is authoritative after migration. Local credential files are recoverable caches. Registration commands and manual workload-key changes still take effect on the next coordinator start; the coordinator fingerprints its caches to distinguish deliberate changes from unchanged files or an empty restore directory.
+
+An etcd snapshot is not a full data-path backup. Server configuration, node-local executor state, SQLite databases, OCI images, application disks, staged disk transfers, build data, logs, and metrics remain outside etcd and need their own backup strategy. Keep the same server configuration when restoring, including the etcd prefix and workload identity hostname settings.
+
+:::warning[Snapshots contain cluster credentials]
+The cluster CA private key is included so encrypted metadata can be recovered without the original data directory. Protect etcd snapshots with encryption and restricted access. Migration completes only after a successful coordinator startup; retain existing filesystem backups until then.
+:::
+
 ## Top-Level Fields
 
 | Field | Type | Default | Env Var | CLI Flag |

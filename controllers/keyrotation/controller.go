@@ -146,6 +146,12 @@ func (c *Controller) tickHasWork(ctx context.Context) bool {
 // tick advances whatever rotation is in flight, or starts one if the current
 // key has aged out.
 func (c *Controller) tick(ctx context.Context) {
+	release, err := c.Backend.LockKeyring(ctx)
+	if err != nil {
+		c.Log.Warn("cannot refresh secret keyring", "error", err)
+		return
+	}
+	defer release()
 	active, err := c.activeRotation(ctx)
 	if err != nil {
 		c.Log.Error("failed to look for an in-flight key rotation", "error", err)
@@ -204,7 +210,7 @@ func (c *Controller) begin(ctx context.Context) error {
 		return fmt.Errorf("minting a new cluster key: %w", err)
 	}
 
-	if err := keyring.Save(keyring.Path(c.DataPath), rotated); err != nil {
+	if err := c.saveKeyring(ctx, rotated); err != nil {
 		return fmt.Errorf("persisting the rotated keyring: %w", err)
 	}
 
@@ -323,7 +329,7 @@ func (c *Controller) retire(ctx context.Context, rec *core_v1alpha.KeyRotation) 
 		return c.finish(ctx, rec)
 	}
 
-	if err := keyring.Save(keyring.Path(c.DataPath), retired); err != nil {
+	if err := c.saveKeyring(ctx, retired); err != nil {
 		return fmt.Errorf("persisting the retired keyring: %w", err)
 	}
 	c.Backend.UseKeyring(retired)
@@ -367,6 +373,11 @@ func (c *Controller) activeRotation(ctx context.Context) (*core_v1alpha.KeyRotat
 // It refuses while one is in flight rather than stacking, since two rotations
 // would each be trying to retire a key the other still needs.
 func (c *Controller) Begin(ctx context.Context) error {
+	release, err := c.Backend.LockKeyring(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	active, err := c.activeRotation(ctx)
 	if err != nil {
 		return err
@@ -388,4 +399,11 @@ func (c *Controller) Begin(ctx context.Context) error {
 	default:
 	}
 	return nil
+}
+
+func (c *Controller) saveKeyring(ctx context.Context, ring *keyring.Keyring) error {
+	if c.Backend.SharedKeyring != nil {
+		return c.Backend.SharedKeyring.Save(ctx, ring)
+	}
+	return keyring.Save(keyring.Path(c.DataPath), ring)
 }

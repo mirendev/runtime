@@ -207,9 +207,19 @@ func SetupEtcdTLS(log *slog.Logger, dataPath string, extraDNSNames []string, ext
 
 	// Check if existing certs are still valid
 	if existing, err := loadX509Cert(serverCertFile); err == nil {
+		caCert, err := caauth.LoadCertificate(ca.GetCACertificate())
+		if err != nil {
+			return nil, err
+		}
+		if err := existing.CheckSignatureFrom(caCert); err != nil {
+			goto regenerate
+		}
 		if err := validateAPICertificate(existing, dnsNames, ips); err == nil {
 			// Also check client cert exists and isn't expired
 			if clientExisting, err := loadX509Cert(clientCertFile); err == nil {
+				if err := clientExisting.CheckSignatureFrom(caCert); err != nil {
+					goto regenerate
+				}
 				horizon := time.Now().Add(48 * time.Hour)
 				if clientExisting.NotAfter.After(horizon) {
 					log.Info("etcd TLS certificates valid, reusing", "certs_dir", certsDir,

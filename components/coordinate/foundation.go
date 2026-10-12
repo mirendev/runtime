@@ -24,6 +24,7 @@ import (
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/clusternetwork"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 	entityexport "miren.dev/runtime/pkg/entity/export"
 	"miren.dev/runtime/pkg/entity/schema"
@@ -52,11 +53,13 @@ type Foundation struct {
 
 	Log *slog.Logger
 
-	state      *rpc.State
-	etcdClient *clientv3.Client
-	eac        *esv1.EntityAccessClient // Entity access client for querying entities
-	store      entity.Store
-	etcdStore  *entity.EtcdStore
+	state          *rpc.State
+	etcdClient     *clientv3.Client
+	clusterState   *clusterstate.Store
+	oidcSigningKey []byte
+	eac            *esv1.EntityAccessClient // Entity access client for querying entities
+	store          entity.Store
+	etcdStore      *entity.EtcdStore
 
 	authority *caauth.Authority
 
@@ -112,6 +115,7 @@ func (c *Foundation) Stop(ctx context.Context) error {
 	}
 	c.state = nil
 	c.etcdClient = nil
+	c.clusterState = nil
 	c.store = nil
 	c.etcdStore = nil
 	c.eac = nil
@@ -260,6 +264,13 @@ func (c *Foundation) LoadAPICert(ctx context.Context) error {
 
 		x509Cert, err := caauth.LoadCertificate(data)
 		if err == nil {
+			ca, err := caauth.LoadCertificate(c.authority.GetCACertificate())
+			if err != nil {
+				return err
+			}
+			if err := x509Cert.CheckSignatureFrom(ca); err != nil {
+				goto regen
+			}
 			if err := validateAPICertificate(x509Cert, names, ips); err != nil {
 				c.Log.Info("API cert validation failed", "error", err)
 				goto regen
@@ -511,16 +522,28 @@ func (c *Foundation) workloadAuthenticator() rpc.Authenticator {
 func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	c.Log.Info("starting cluster foundation", "address", c.Address, "etcd_endpoints", c.EtcdEndpoints, "prefix", c.Prefix)
 
-	err := c.LoadCA(ctx)
+	etcdConfig := clientv3.Config{Endpoints: c.EtcdEndpoints, AutoSyncInterval: time.Minute}
+	if c.EtcdTLS != nil {
+		tlsConfig, err := c.buildEtcdTLSConfig()
+		if err != nil {
+			return err
+		}
+		etcdConfig.TLS = tlsConfig
+	}
+	client, err := clientv3.New(etcdConfig)
 	if err != nil {
-		c.Log.Error("failed to load CA", "error", err)
 		return err
 	}
-
-	err = c.LoadAPICert(ctx)
-	if err != nil {
-		c.Log.Error("failed to load API cert", "error", err)
-		return err
+	c.etcdClient = client
+	defer func() {
+		if retErr != nil {
+			_ = client.Close()
+			c.etcdClient = nil
+			c.clusterState = nil
+		}
+	}()
+	if err := c.initializeCoordinatorState(ctx); err != nil {
+		return fmt.Errorf("initializing coordinator state: %w", err)
 	}
 
 	// Prepare RPC options
@@ -644,37 +667,6 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 	}()
 
 	server := rs.Server()
-
-	// Build etcd client config
-	etcdConfig := clientv3.Config{
-		Endpoints:        c.EtcdEndpoints,
-		AutoSyncInterval: time.Minute,
-	}
-
-	// Add TLS config if configured
-	if c.EtcdTLS != nil {
-		tlsConfig, err := c.buildEtcdTLSConfig()
-		if err != nil {
-			c.Log.Error("failed to build etcd TLS config", "error", err)
-			return err
-		}
-		etcdConfig.TLS = tlsConfig
-		c.Log.Info("etcd client using mTLS")
-	}
-
-	client, err := clientv3.New(etcdConfig)
-	if err != nil {
-		c.Log.Error("failed to create etcd client", "error", err)
-		return err
-	}
-	c.etcdClient = client
-	defer func() {
-		if retErr == nil {
-			return
-		}
-		_ = client.Close()
-		c.etcdClient = nil
-	}()
 
 	etcdStore, err := entity.NewEtcdStore(ctx, c.Log, client, c.Prefix)
 	if err != nil {

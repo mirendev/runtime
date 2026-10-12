@@ -21,9 +21,9 @@ const (
 	oidcCallbackPath = "/.well-known/miren/oidc/callback"
 )
 
-// loadOrGenerateSigningKey reads the OIDC cookie signing key from disk,
+// LoadOrGenerateSigningKey reads the OIDC cookie signing key from disk,
 // or generates and persists a new 32-byte random key if none exists.
-func loadOrGenerateSigningKey(dataPath string) ([]byte, error) {
+func LoadOrGenerateSigningKey(dataPath string) ([]byte, error) {
 	keyPath := filepath.Join(dataPath, "server", "oidc-signing.key")
 
 	data, err := os.ReadFile(keyPath)

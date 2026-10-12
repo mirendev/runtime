@@ -2,9 +2,11 @@ package coordinate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/server/server_v1alpha"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/lifecyclesync"
@@ -101,10 +104,110 @@ type RunnerUpgrader struct {
 	nodes      NodeInventory
 	dial       RunnerDialer
 	opts       RunnerUpgradeOptions
+	fleet      *clusterstate.Store
+	fleetMu    sync.Mutex
 
 	mu      sync.Mutex
 	driving map[string]bool
 	wg      sync.WaitGroup
+}
+
+const fleetCheckpoint = "server-lifecycle/fleet"
+
+// WithFleetStore moves fleet checkpoints to cluster state. The local ledger
+// remains the executor's handoff channel and a best-effort read-side mirror.
+func (u *RunnerUpgrader) WithFleetStore(store *clusterstate.Store) *RunnerUpgrader {
+	u.fleet = store
+	return u
+}
+
+func (u *RunnerUpgrader) fleetOperations(ctx context.Context) (map[string]*serverlifecycle.Operation, error) {
+	data, err := u.fleet.Get(ctx, fleetCheckpoint)
+	if err != nil {
+		return nil, err
+	}
+	var ops map[string]*serverlifecycle.Operation
+	if err := json.Unmarshal(data, &ops); err != nil {
+		return nil, err
+	}
+	if ops == nil {
+		ops = make(map[string]*serverlifecycle.Operation)
+	}
+	return ops, nil
+}
+
+// importHandoffs is create-only: stale files must never replace restored state.
+func (u *RunnerUpgrader) importHandoffs(ctx context.Context, local []*serverlifecycle.Operation) error {
+	u.fleetMu.Lock()
+	defer u.fleetMu.Unlock()
+	if _, err := u.fleet.Ensure(ctx, fleetCheckpoint, []byte("{}")); err != nil {
+		return err
+	}
+	ops, err := u.fleetOperations(ctx)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, op := range local {
+		if (op.HandedOff() || op.Nodes != nil) && ops[op.ID] == nil {
+			ops[op.ID] = op
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	data, err := json.Marshal(ops)
+	if err != nil {
+		return err
+	}
+	return u.fleet.Put(ctx, fleetCheckpoint, data)
+}
+
+func (u *RunnerUpgrader) operation(ctx context.Context, id string) (*serverlifecycle.Operation, error) {
+	if u.fleet == nil {
+		return u.store.Get(id)
+	}
+	ops, err := u.fleetOperations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if op := ops[id]; op != nil {
+		return op, nil
+	}
+	return nil, serverlifecycle.ErrNotFound
+}
+
+func (u *RunnerUpgrader) checkpoint(ctx context.Context, op *serverlifecycle.Operation) error {
+	if u.fleet == nil {
+		return u.store.Update(op)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	u.fleetMu.Lock()
+	defer u.fleetMu.Unlock()
+	ops, err := u.fleetOperations(ctx)
+	if err != nil {
+		return err
+	}
+	op.UpdatedAt = time.Now().UTC()
+	if op.Done() && op.FinishedAt == nil {
+		now := op.UpdatedAt
+		op.FinishedAt = &now
+	}
+	ops[op.ID] = op
+	data, err := json.Marshal(ops)
+	if err != nil {
+		return err
+	}
+	if err := u.fleet.Put(ctx, fleetCheckpoint, data); err != nil {
+		return err
+	}
+	// A missing or unwritable mirror cannot block snapshot-restored walks.
+	if err := u.store.Update(op); err != nil {
+		u.log.Warn("could not mirror fleet checkpoint to lifecycle ledger", "operation", op.ID, "error", err)
+	}
+	return nil
 }
 
 func NewRunnerUpgrader(log *slog.Logger, store *serverlifecycle.Store, watcher *lifecyclesync.Watcher, instanceID string, nodes NodeInventory, dial RunnerDialer, opts RunnerUpgradeOptions) *RunnerUpgrader {
@@ -123,6 +226,50 @@ func (u *RunnerUpgrader) Run(ctx context.Context) error {
 	defer stop()
 	defer u.wg.Wait()
 
+	if u.fleet != nil {
+		scan := func() error {
+			// Disk is only a source of new executor handoffs, never resume state.
+			if local, err := u.store.List(); err == nil {
+				if err := u.importHandoffs(ctx, local); err != nil {
+					return err
+				}
+			}
+			ops, err := u.fleetOperations(ctx)
+			if err != nil {
+				return err
+			}
+			for _, op := range ops {
+				// Completed etcd records also settle stale local busy slots.
+				if op.Done() {
+					if local, err := u.store.Get(op.ID); err == nil {
+						localState, fleetState := *local, *op
+						localState.UpdatedAt, fleetState.UpdatedAt = time.Time{}, time.Time{}
+						if !reflect.DeepEqual(localState, fleetState) {
+							if err := u.store.Update(op); err != nil {
+								u.log.Warn("could not mirror completed fleet checkpoint", "operation", op.ID, "error", err)
+							}
+						}
+					}
+				}
+				u.adopt(ctx, op)
+			}
+			return nil
+		}
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			if err := scan(); err != nil && ctx.Err() == nil {
+				u.log.Warn("could not scan fleet upgrade checkpoints", "error", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+			case <-sub.Wake():
+				sub.Drain()
+			}
+		}
+	}
 	if ops, err := u.store.List(); err != nil {
 		u.log.Warn("could not scan lifecycle ledger for handed-off upgrades", "error", err)
 	} else {
@@ -220,6 +367,18 @@ func (u *RunnerUpgrader) settleStranded(ctx context.Context, id string, cause er
 // while the record is still handed off: another server may have finished
 // it in the meantime.
 func (u *RunnerUpgrader) failStranded(id string, cause error) error {
+	if u.fleet != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		op, err := u.operation(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !op.HandedOff() {
+			return nil
+		}
+		return u.finish(op, fmt.Errorf("gave up walking the runners after %s of errors: %w", u.opts.RetryFor, cause))
+	}
 	unlock, err := u.store.LockOperation(id)
 	if err != nil {
 		return fmt.Errorf("%w (and could not lock the record to fail it: %v)", cause, err)
@@ -256,12 +415,14 @@ func (u *RunnerUpgrader) lockOperation(ctx context.Context, id string) (func(), 
 }
 
 func (u *RunnerUpgrader) drive(ctx context.Context, id string) error {
-	unlock, err := u.lockOperation(ctx, id)
-	if err != nil {
-		return err
+	if u.fleet == nil {
+		unlock, err := u.lockOperation(ctx, id)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
-	defer unlock()
-	op, err := u.store.Get(id)
+	op, err := u.operation(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -290,7 +451,7 @@ func (u *RunnerUpgrader) drive(ctx context.Context, id string) error {
 		}
 		log.Info("upgrading runners", "runners", len(op.Nodes), "target", op.NewVersion)
 	}
-	if err := u.store.Update(op); err != nil {
+	if err := u.checkpoint(ctx, op); err != nil {
 		return err
 	}
 	u.watcher.Kick()
@@ -306,7 +467,9 @@ func (u *RunnerUpgrader) drive(ctx context.Context, id string) error {
 	for i, step := range op.Nodes {
 		if !step.Done() {
 			if len(failed) > 0 && succeeded == 0 {
-				u.setStep(op, step, serverlifecycle.StepSkipped, "not attempted: "+failed[0].Name+" failed before any runner was upgraded")
+				if err := u.setStep(op, step, serverlifecycle.StepSkipped, "not attempted: "+failed[0].Name+" failed before any runner was upgraded"); err != nil {
+					return err
+				}
 				continue
 			}
 			op.Progress = fmt.Sprintf("runner %d/%d: %s", i+1, len(op.Nodes), step.Name)
@@ -348,13 +511,13 @@ func (u *RunnerUpgrader) finish(op *serverlifecycle.Operation, cause error) erro
 		op.Phase = serverlifecycle.PhaseSucceeded
 		u.log.Info("upgrade finished across the cluster", "operation", op.ID, "version", op.NewVersion, "runners", len(op.Nodes))
 	}
-	err := u.store.Update(op)
+	err := u.checkpoint(context.Background(), op)
 	u.watcher.Kick()
 	return err
 }
 
 // setStep records a step outcome or progress and persists the operation.
-func (u *RunnerUpgrader) setStep(op *serverlifecycle.Operation, step *serverlifecycle.NodeStep, phase serverlifecycle.Phase, detail string) {
+func (u *RunnerUpgrader) setStep(op *serverlifecycle.Operation, step *serverlifecycle.NodeStep, phase serverlifecycle.Phase, detail string) error {
 	now := time.Now().UTC()
 	if step.StartedAt == nil {
 		step.StartedAt = &now
@@ -369,10 +532,12 @@ func (u *RunnerUpgrader) setStep(op *serverlifecycle.Operation, step *serverlife
 	if step.Done() && step.FinishedAt == nil {
 		step.FinishedAt = &now
 	}
-	if err := u.store.Update(op); err != nil {
+	if err := u.checkpoint(context.Background(), op); err != nil {
 		u.log.Warn("could not record runner upgrade step", "operation", op.ID, "runner", step.Name, "error", err)
+		return err
 	}
 	u.watcher.Kick()
+	return nil
 }
 
 func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Operation, step *serverlifecycle.NodeStep) error {
@@ -388,8 +553,7 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 		return err
 	}
 	if node == nil {
-		u.setStep(op, step, serverlifecycle.StepSkipped, "runner is no longer registered")
-		return nil
+		return u.setStep(op, step, serverlifecycle.StepSkipped, "runner is no longer registered")
 	}
 	// Whatever happens from here, a cordon of ours comes off. Registered
 	// before any early return so a resumed step settles the cordon its
@@ -403,7 +567,7 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 			return
 		}
 		step.Cordoned = false
-		if err := u.store.Update(op); err != nil {
+		if err := u.checkpoint(context.WithoutCancel(ctx), op); err != nil {
 			log.Warn("could not record uncordon", "error", err)
 		}
 	}()
@@ -411,12 +575,10 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 	if !resumed {
 		switch {
 		case node.Status != compute_v1alpha.READY:
-			u.setStep(op, step, serverlifecycle.StepSkipped, "runner is not ready ("+nodeStatus(node)+"); upgrade it once it is back")
-			return nil
+			return u.setStep(op, step, serverlifecycle.StepSkipped, "runner is not ready ("+nodeStatus(node)+"); upgrade it once it is back")
 		case op.NewVersion != "" && node.Version == op.NewVersion:
 			step.NewVersion = node.Version
-			u.setStep(op, step, serverlifecycle.PhaseSucceeded, "already running "+node.Version)
-			return nil
+			return u.setStep(op, step, serverlifecycle.PhaseSucceeded, "already running "+node.Version)
 		}
 		// Any other version is walked to the coordinator's, a runner that got
 		// ahead of it included: the fleet converges on the coordinator's
@@ -427,11 +589,9 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrRunnerUnmanaged):
-			u.setStep(op, step, serverlifecycle.StepSkipped, "runner predates managed upgrades; run 'sudo miren upgrade' on its host once")
-			return nil
+			return u.setStep(op, step, serverlifecycle.StepSkipped, "runner predates managed upgrades; run 'sudo miren upgrade' on its host once")
 		case !resumed:
-			u.setStep(op, step, serverlifecycle.PhaseFailed, "cannot reach runner at "+node.ApiAddress+": "+err.Error())
-			return nil
+			return u.setStep(op, step, serverlifecycle.PhaseFailed, "cannot reach runner at "+node.ApiAddress+": "+err.Error())
 		}
 		// A resumed runner may be restarting under the operation we gave
 		// it; the follow keeps dialing.
@@ -451,7 +611,12 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 		}
 	}
 	if !resumed {
-		u.setStep(op, step, serverlifecycle.PhasePending, "asking runner to upgrade")
+		if err := u.setStep(op, step, serverlifecycle.PhasePending, "asking runner to upgrade"); err != nil {
+			if client != nil {
+				client.Close()
+			}
+			return err
+		}
 	}
 
 	req := &serverlifecycle.Operation{
@@ -468,10 +633,11 @@ func (u *RunnerUpgrader) driveStep(ctx context.Context, op *serverlifecycle.Oper
 	}
 	u.mirror(step, remote)
 	if !remote.Succeeded() {
-		u.setStep(op, step, remote.Phase, remote.Error)
-		return nil
+		return u.setStep(op, step, remote.Phase, remote.Error)
 	}
-	u.setStep(op, step, serverlifecycle.PhaseVerifying, "waiting for the runner to rejoin on "+op.NewVersion)
+	if err := u.setStep(op, step, serverlifecycle.PhaseVerifying, "waiting for the runner to rejoin on "+op.NewVersion); err != nil {
+		return err
+	}
 	return u.awaitReady(ctx, op, step, op.NewVersion)
 }
 
@@ -519,8 +685,7 @@ func (u *RunnerUpgrader) followRunner(ctx context.Context, op *serverlifecycle.O
 				if lastErr != nil {
 					detail += " (" + lastErr.Error() + ")"
 				}
-				u.setStep(op, step, serverlifecycle.PhaseFailed, detail)
-				return nil, nil
+				return nil, u.setStep(op, step, serverlifecycle.PhaseFailed, detail)
 			}
 			select {
 			case <-ctx.Done():
@@ -544,8 +709,7 @@ func (u *RunnerUpgrader) followRunner(ctx context.Context, op *serverlifecycle.O
 			// that. Our own operation never reads as busy, since a repeated
 			// id returns the record.
 			if strings.Contains(err.Error(), serverlifecycle.ErrBusy.Error()) {
-				u.setStep(op, step, serverlifecycle.PhaseFailed, "runner has another operation in progress: "+err.Error())
-				return nil, nil
+				return nil, u.setStep(op, step, serverlifecycle.PhaseFailed, "runner has another operation in progress: "+err.Error())
 			}
 			lastErr = err
 			client.Close()
@@ -559,7 +723,9 @@ func (u *RunnerUpgrader) followRunner(ctx context.Context, op *serverlifecycle.O
 		}
 		if latest.Phase != remote.Phase || latest.Progress != remote.Progress {
 			u.mirror(step, latest)
-			u.setStep(op, step, latest.Phase, latest.Progress)
+			if err := u.setStep(op, step, latest.Phase, latest.Progress); err != nil {
+				return nil, err
+			}
 		}
 		remote = latest
 	}
@@ -588,7 +754,9 @@ func (u *RunnerUpgrader) readyRunner(ctx context.Context, op *serverlifecycle.Op
 		}
 		if !waiting {
 			waiting = true
-			u.setStep(op, step, serverlifecycle.PhasePending, "waiting for the runner to be ready ("+nodeStatus(node)+")")
+			if err := u.setStep(op, step, serverlifecycle.PhasePending, "waiting for the runner to be ready ("+nodeStatus(node)+")"); err != nil {
+				return nil, err
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -610,16 +778,14 @@ func (u *RunnerUpgrader) awaitReady(ctx context.Context, op *serverlifecycle.Ope
 		}
 		if node != nil && node.Status == compute_v1alpha.READY && (version == "" || node.Version == version) {
 			step.NewVersion = node.Version
-			u.setStep(op, step, serverlifecycle.PhaseSucceeded, "")
-			return nil
+			return u.setStep(op, step, serverlifecycle.PhaseSucceeded, "")
 		}
 		if time.Now().After(deadline) {
 			state := "gone from the inventory"
 			if node != nil {
 				state = fmt.Sprintf("%s on %s", nodeStatus(node), node.Version)
 			}
-			u.setStep(op, step, serverlifecycle.PhaseFailed, fmt.Sprintf("runner upgraded to %s but is %s after %s", version, state, u.opts.ReadyTimeout))
-			return nil
+			return u.setStep(op, step, serverlifecycle.PhaseFailed, fmt.Sprintf("runner upgraded to %s but is %s after %s", version, state, u.opts.ReadyTimeout))
 		}
 		select {
 		case <-ctx.Done():
