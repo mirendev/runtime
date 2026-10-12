@@ -204,6 +204,23 @@ func TestDetectiveNestedSourceRoot(t *testing.T) {
 	require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
 }
 
+func TestDetectiveGitignoreDoesNotExcludeSourceRoot(t *testing.T) {
+	for _, pattern := range []string{".*\n", "*\n!main.go\n"} {
+		t.Run(strings.TrimSpace(pattern), func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(pattern), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("public MARKER"), 0600))
+			calls := []workbenchTestCall{
+				{Name: "local_list", Arguments: `{}`, Output: "main.go\n"},
+				{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "main.go:1: public MARKER\n"},
+				{Name: "local_read", Arguments: `{"path":".gitignore"}`, Error: true},
+			}
+			ctx, _, _ := workbenchTestContext(t, calls)
+			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
+		})
+	}
+}
+
 func TestWorkbenchRequiresSelectedCloudCluster(t *testing.T) {
 	ctx := &Context{Context: context.Background(), Stdout: io.Discard, Stderr: io.Discard}
 	require.ErrorContains(t, Workbench(ctx, workbenchOptions{}), "selected cluster")

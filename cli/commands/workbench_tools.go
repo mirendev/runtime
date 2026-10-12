@@ -131,6 +131,9 @@ func (s *workbenchSource) path(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if name == "." {
+		return name, nil
+	}
 	fullPath := append(prefix, parts...)
 	for i := range parts {
 		parent := filepath.Join(parts[:i]...)
