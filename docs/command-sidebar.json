@@ -184,6 +184,7 @@
       "command/deploy-target-set-default"
     ]
   },
+  "command/detective",
   {
     "type": "category",
     "label": "disk",
@@ -395,5 +396,6 @@
   "command/top",
   "command/upgrade",
   "command/version",
-  "command/whoami"
+  "command/whoami",
+  "command/workbench"
 ]

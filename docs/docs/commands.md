@@ -110,6 +110,12 @@ Complete reference for all `miren` CLI commands.
 | [`miren deploy target remove`](./command/deploy-target-remove.md) | Remove a deployment target |
 | [`miren deploy target set-default`](./command/deploy-target-set-default.md) | Set the default deployment target |
 
+## detective
+
+| Command | Description |
+|---------|-------------|
+| [`miren detective`](./command/detective.md) | Debug with Workbench and read-only local source tools |
+
 ## disk
 
 | Command | Description |
@@ -321,6 +327,12 @@ Complete reference for all `miren` CLI commands.
 | Command | Description |
 |---------|-------------|
 | [`miren whoami`](./command/whoami.md) | Display information about the current authenticated user |
+
+## workbench
+
+| Command | Description |
+|---------|-------------|
+| [`miren workbench`](./command/workbench.md) | Ask Workbench about a cluster |
 
 ---
 
