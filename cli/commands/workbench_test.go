@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -185,7 +186,8 @@ func TestDetectiveNestedSourceRoot(t *testing.T) {
 			repo := t.TempDir()
 			dir := filepath.Join(repo, "services", "app")
 			require.NoError(t, os.MkdirAll(dir, 0700))
-			require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0700))
+			output, err := exec.Command("git", "init", repo).CombinedOutput()
+			require.NoError(t, err, string(output))
 			for name, data := range map[string]string{
 				".gitignore":                          "# ancestor comment\n\nservices/app/config.production.json\nservices/app/*.go\n",
 				"services/.gitignore":                 "app/intermediate.json\n!app/main.go\n",
@@ -224,6 +226,68 @@ func TestDetectiveGitignoreDoesNotExcludeSourceRoot(t *testing.T) {
 				{Name: "local_list", Arguments: `{}`, Output: "main.go\n"},
 				{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "main.go:1: public MARKER\n"},
 				{Name: "local_read", Arguments: `{"path":".gitignore"}`, Error: true},
+			}
+			ctx, _, _ := workbenchTestContext(t, calls)
+			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
+		})
+	}
+}
+
+func TestDetectiveGitExclusionSources(t *testing.T) {
+	for _, layout := range []string{"root-xdg", "nested-included-config", "linked-worktree", "git-unavailable"} {
+		t.Run(layout, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			repo := t.TempDir()
+			runGit := func(args ...string) {
+				output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+				require.NoError(t, err, string(output))
+			}
+			runGit("init")
+			dir := repo
+			switch layout {
+			case "nested-included-config":
+				dir = filepath.Join(repo, "services", "app")
+				require.NoError(t, os.MkdirAll(dir, 0700))
+			case "linked-worktree":
+				runGit("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial")
+				dir = filepath.Join(t.TempDir(), "worktree")
+				runGit("worktree", "add", "--detach", dir)
+			}
+			global := filepath.Join(home, "xdg", "git", "ignore")
+			require.NoError(t, os.MkdirAll(filepath.Dir(global), 0700))
+			if layout == "nested-included-config" || layout == "linked-worktree" {
+				global = filepath.Join(home, "custom-ignore")
+				included := filepath.Join(home, "included-config")
+				require.NoError(t, os.WriteFile(included, []byte("[core]\nexcludesFile = ~/custom-ignore\n"), 0600))
+				runGit("config", "include.path", included)
+			}
+			require.NoError(t, os.WriteFile(global, []byte("global.go\r\noverride.go\r\ninfo-override.go\r\n"), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "info", "exclude"), []byte("info.go\r\noverride.go\r\n!info-override.go\r\n"), 0600))
+			for name, data := range map[string]string{
+				".gitignore":       "!override.go\n",
+				"global.go":        "PRIVATE_MARKER",
+				"info.go":          "PRIVATE_MARKER",
+				"override.go":      "public MARKER",
+				"info-override.go": "allowed MARKER",
+			} {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(data), 0600))
+			}
+			calls := []workbenchTestCall{
+				{Name: "local_list", Arguments: `{}`, Output: ".gitignore\ninfo-override.go\noverride.go\n"},
+				{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "info-override.go:1: allowed MARKER\noverride.go:1: public MARKER\n"},
+				{Name: "local_read", Arguments: `{"path":"info.go"}`, Error: true},
+				{Name: "local_read", Arguments: `{"path":"global.go"}`, Error: true},
+				{Name: "local_read", Arguments: `{"path":"override.go"}`, Output: "1: public MARKER\n"},
+			}
+			if layout == "git-unavailable" {
+				t.Setenv("PATH", t.TempDir())
+				for i := range calls {
+					calls[i].Error = true
+					calls[i].Output = ""
+				}
 			}
 			ctx, _, _ := workbenchTestContext(t, calls)
 			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))

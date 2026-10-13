@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -20,7 +21,11 @@ const localOutputLimit = 64 << 10
 
 // The root stays open for the conversation: os.Root also confines opens when
 // the working tree changes between validating a path and reading it.
-type workbenchSource struct{ root *os.Root }
+type workbenchSource struct {
+	root     *os.Root
+	patterns []gitignore.Pattern
+	prefix   []string
+}
 
 func (s *workbenchSource) tools() []cloudapi.ClientTool {
 	return []cloudapi.ClientTool{
@@ -70,8 +75,60 @@ func sourceIgnorePatterns(data []byte, domain []string) []gitignore.Pattern {
 	return patterns
 }
 
+func sourceRepositoryIgnores(ctx context.Context, repo string) ([]gitignore.Pattern, error) {
+	// Git resolves config includes, worktree common directories and path expansion.
+	// These fixed metadata commands never execute model-provided commands or a shell.
+	exclude, err := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").Output()
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve Git exclusions (Git must be installed): %w", err)
+	}
+	global, err := exec.CommandContext(ctx, "git", "-C", repo, "config", "--null", "--path", "--get", "core.excludesFile").Output()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+			return nil, fmt.Errorf("cannot resolve Git global exclusions: %w", err)
+		}
+		configHome := os.Getenv("XDG_CONFIG_HOME")
+		if configHome == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			configHome = filepath.Join(home, ".config")
+		}
+		global = []byte(filepath.Join(configHome, "git", "ignore"))
+	}
+	var patterns []gitignore.Pattern
+	for _, path := range []string{strings.TrimSuffix(string(global), "\x00"), strings.TrimSuffix(string(exclude), "\n")} {
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(repo, path)
+		}
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("cannot open Git exclusions: %w", err)
+		}
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > localFileLimit {
+			f.Close()
+			return nil, fmt.Errorf("cannot read bounded Git exclusions")
+		}
+		data, err := io.ReadAll(io.LimitReader(f, localFileLimit+1))
+		f.Close()
+		if err != nil || len(data) > localFileLimit {
+			return nil, fmt.Errorf("cannot read bounded Git exclusions")
+		}
+		patterns = append(patterns, sourceIgnorePatterns(data, nil)...)
+	}
+	return patterns, nil
+}
+
 // Only ignore metadata is read outside the selected source root.
-func (s *workbenchSource) inheritedIgnores() ([]gitignore.Pattern, []string, error) {
+func (s *workbenchSource) inheritedIgnores(ctx context.Context) ([]gitignore.Pattern, []string, error) {
 	dir, err := filepath.Abs(s.root.Name())
 	if err != nil {
 		return nil, nil, err
@@ -82,12 +139,15 @@ func (s *workbenchSource) inheritedIgnores() ([]gitignore.Pattern, []string, err
 	}
 	for repo := dir; ; repo = filepath.Dir(repo) {
 		if _, err := os.Lstat(filepath.Join(repo, ".git")); err == nil {
-			rel, err := filepath.Rel(repo, dir)
-			if err != nil || rel == "." {
+			patterns, err := sourceRepositoryIgnores(ctx, repo)
+			if err != nil {
 				return nil, nil, err
 			}
+			rel, err := filepath.Rel(repo, dir)
+			if err != nil || rel == "." {
+				return patterns, nil, err
+			}
 			prefix := strings.Split(rel, string(filepath.Separator))
-			var patterns []gitignore.Pattern
 			for i := range prefix {
 				path := filepath.Join(repo, filepath.Join(prefix[:i]...), ".gitignore")
 				info, err := os.Lstat(path)
@@ -136,10 +196,7 @@ func (s *workbenchSource) path(name string) (string, error) {
 		return "", fmt.Errorf("path is outside the source root or excluded")
 	}
 	parts := strings.Split(name, string(filepath.Separator))
-	patterns, prefix, err := s.inheritedIgnores()
-	if err != nil {
-		return "", err
-	}
+	patterns, prefix := s.patterns, s.prefix
 	if name == "." {
 		return name, nil
 	}
@@ -222,6 +279,14 @@ func (s *workbenchSource) execute(ctx context.Context, name string, input json.R
 	if err := json.Unmarshal(input, &args); err != nil {
 		return "", err
 	}
+	// Each concurrent request gets its own fresh metadata snapshot.
+	snapshot := *s
+	patterns, prefix, err := s.inheritedIgnores(ctx)
+	if err != nil {
+		return "", err
+	}
+	snapshot.patterns, snapshot.prefix = patterns, prefix
+	s = &snapshot
 	path, err := s.path(args.Path)
 	if err != nil {
 		return "", err
