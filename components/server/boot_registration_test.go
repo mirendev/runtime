@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/pkg/boot"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/serverconfig"
@@ -62,10 +63,14 @@ func TestRegistrationBootRestoresBeforeIdentityAndCloudConsumers(t *testing.T) {
 	require.NoError(t, err)
 	foundation := coordinate.NewFoundation(testLogger(), coordinate.CoordinatorConfig{DataPath: dir, Prefix: prefix, EtcdEndpoints: client.Endpoints()})
 	require.NoError(t, foundation.PrepareMetadata(t.Context()))
+	sealingKey, err := os.ReadFile(clusterstate.SealingKeyPath(dir))
+	require.NoError(t, err)
 
 	for _, interrupted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "empty-directory", true: "interrupted-hydration"}[interrupted], func(t *testing.T) {
 			restoredDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(restoredDir, "server"), 0700))
+			require.NoError(t, os.WriteFile(clusterstate.SealingKeyPath(restoredDir), sealingKey, 0600))
 			if interrupted {
 				restoredDir = dir
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "server", "workload-identity.etcd-hydrating"), nil, 0600))

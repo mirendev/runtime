@@ -80,28 +80,31 @@ func (c *Foundation) prepareRunnerEtcdAccess(ctx context.Context, ec *aes.Client
 	return nil
 }
 
-// The authority is the bootstrap record: encrypting it with its own key would
-// make an etcd-only restore impossible. Snapshots therefore contain signing and
-// decryption material and must be protected accordingly.
+// The authority is sealed with a host-only key, just like the other metadata.
+// A restore needs that key separately; an etcd snapshot alone cannot mint
+// identities or decrypt the cluster's secrets.
 func (c *Foundation) initializeAuthority(ctx context.Context) error {
 	if c.EtcdTLS != nil {
 		if err := etcdaccess.Ensure(ctx, c.etcdClient, c.Prefix); err != nil {
 			return fmt.Errorf("securing coordinator metadata: %w", err)
 		}
 	}
-	key := strings.TrimRight(c.Prefix, "/") + "/cluster-state/authority"
-	res, err := c.etcdClient.Get(ctx, key)
+	key, err := clusterstate.EnsureSealingKey(ctx, c.etcdClient, c.Prefix, c.DataPath)
 	if err != nil {
 		return err
 	}
-	var data []byte
-	if len(res.Kvs) != 0 {
-		data = res.Kvs[0].Value
-	} else {
+	c.sealingKey = key
+	c.clusterState, err = clusterstate.New(c.etcdClient, c.Prefix, key)
+	if err != nil {
+		return err
+	}
+	data, err := c.clusterState.Get(ctx, "authority")
+	if errors.Is(err, clusterstate.ErrNotFound) {
 		if err := c.LoadCA(ctx); err != nil {
 			return err
 		}
-		cert, privateKey, err := c.authority.ExportPEM()
+		var cert, privateKey []byte
+		cert, privateKey, err = c.authority.ExportPEM()
 		if err != nil {
 			return err
 		}
@@ -109,13 +112,10 @@ func (c *Foundation) initializeAuthority(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		txn, err := c.etcdClient.Txn(ctx).If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).Then(clientv3.OpPut(key, string(data))).Else(clientv3.OpGet(key)).Commit()
-		if err != nil {
-			return err
-		}
-		if !txn.Succeeded {
-			data = txn.Responses[0].GetResponseRange().Kvs[0].Value
-		}
+		data, err = c.clusterState.Ensure(ctx, "authority", data)
+	}
+	if err != nil {
+		return err
 	}
 	var authority credentialPair
 	if err := json.Unmarshal(data, &authority); err != nil {
@@ -125,11 +125,7 @@ func (c *Foundation) initializeAuthority(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := writeCredentialPair(c.DataPath, "ca", authority); err != nil {
-		return err
-	}
-	c.clusterState, err = clusterstate.New(c.etcdClient, c.Prefix, authority.Key)
-	return err
+	return writeCredentialPair(c.DataPath, "ca", authority)
 }
 
 func (c *Foundation) initializeCoordinatorState(ctx context.Context) error {
@@ -210,7 +206,13 @@ func writeCredentialPair(dataPath, name string, pair credentialPair) error {
 func (c *Foundation) syncMetadata(ctx context.Context, name string, local []byte) ([]byte, error) {
 	pending := filepath.Join(c.DataPath, "server", name+".etcd-hydrating")
 	if _, err := os.Stat(pending); err == nil {
-		return c.clusterState.Get(ctx, name)
+		data, err := c.clusterState.Get(ctx, name)
+		if errors.Is(err, clusterstate.ErrNotFound) {
+			// Managed rollback may restore pre-migration etcd while leaving
+			// the marker on disk. Retry the import, not a local edit.
+			return c.clusterState.Ensure(ctx, name, local)
+		}
+		return data, err
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}

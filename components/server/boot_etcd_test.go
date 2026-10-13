@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/etcdaccess"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/serverconfig"
@@ -73,6 +75,10 @@ func TestEmbeddedEtcdBootRestoresCredentialsAndTransportOnFirstStart(t *testing.
 	require.NoError(t, first.stop(t.Context()))
 
 	restoredDir := t.TempDir()
+	sealingKey, err := os.ReadFile(clusterstate.SealingKeyPath(dir))
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(restoredDir, "server"), 0700))
+	require.NoError(t, os.WriteFile(clusterstate.SealingKeyPath(restoredDir), sealingKey, 0600))
 	namespace := deps.Namespace + "-restored"
 	defer testutils.NukeNamespace(deps.CC, namespace)
 	restorer := etcd.NewEtcdComponent(log, deps.CC, namespace, restoredDir)
@@ -88,7 +94,7 @@ func TestEmbeddedEtcdBootRestoresCredentialsAndTransportOnFirstStart(t *testing.
 	lease, err := runnerClient.Get(ctx, config.GetPrefix()+"/sub/flannel/subnets/test")
 	require.NoError(t, err)
 	require.Equal(t, "restored-lease", string(lease.Kvs[0].Value))
-	_, err = runnerClient.Get(ctx, config.GetPrefix()+"/cluster-state/authority")
+	_, err = runnerClient.Get(ctx, config.GetPrefix()+"/cluster-state/records/authority")
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 	registered := &registrationBoot{inputs: registrationBootInputs{log: log, dataPath: restoredDir}}
 	registrationOutput, err := registered.start(t.Context())

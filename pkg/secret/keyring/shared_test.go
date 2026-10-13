@@ -3,6 +3,7 @@ package keyring
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -12,16 +13,20 @@ import (
 
 func TestSharedRingRotationAndLock(t *testing.T) {
 	client, prefix := etcdtest.TestEtcdClient(t)
-	a, err := NewSharedStore(client, prefix, t.TempDir(), []byte("cluster authority"))
+	dir := t.TempDir()
+	local, err := Ensure(slog.New(slog.DiscardHandler), dir)
 	require.NoError(t, err)
-	b, err := NewSharedStore(client, prefix, t.TempDir(), []byte("cluster authority"))
+	sealed, err := local.Seal([]byte("survives failover"))
+	require.NoError(t, err)
+	a, err := NewSharedStore(client, prefix+"/", dir, []byte("cluster sealing key"))
+	require.NoError(t, err)
+	b, err := NewSharedStore(client, prefix, t.TempDir(), []byte("cluster sealing key"))
 	require.NoError(t, err)
 	writer, stopWriter := context.WithCancel(t.Context())
 	defer stopWriter()
 	ring, unlock, err := a.Lock(writer)
 	require.NoError(t, err)
-	sealed, err := ring.Seal([]byte("survives failover"))
-	require.NoError(t, err)
+	require.Equal(t, local.CurrentID(), ring.CurrentID(), "migration must preserve the existing local ring")
 	rotated, next, err := ring.Rotate()
 	require.NoError(t, err)
 	require.NoError(t, a.Save(t.Context(), rotated))

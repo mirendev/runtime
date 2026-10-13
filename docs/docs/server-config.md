@@ -67,14 +67,20 @@ In standalone mode, embedded services start automatically unless explicitly disa
 
 On startup, the coordinator imports existing small metadata into etcd. This includes the cluster CA and API credentials, cloud registration, workload identity keys and anchor history, OIDC session signing key, ACME accounts and certificates, secret keyring, and runner-fleet upgrade checkpoints. Ordinary standalone servers use this storage; redundancy is not required.
 
-Etcd is authoritative after migration. Local credential files are recoverable caches. Registration commands and manual workload-key changes still take effect on the next coordinator start; the coordinator fingerprints its caches to distinguish deliberate changes from unchanged files or an empty restore directory.
+Etcd is authoritative after migration. Local credential files are recoverable caches, except for the cluster sealing key described below. Registration commands and manual workload-key changes still take effect on the next coordinator start; the coordinator fingerprints its caches to distinguish deliberate changes from unchanged files or a restore directory.
 
 Registration and workload identity are restored before their boot consumers run, including telemetry and cloud storage clients. Credential caches are published atomically; the CA's private `ca.bundle` keeps its certificate and key in one bootstrap generation, with separate PEM files retained for compatibility.
 
 An etcd snapshot is not a full data-path backup. Server configuration, node-local executor state, SQLite databases, OCI images, application disks, staged disk transfers, build data, logs, and metrics remain outside etcd and need their own backup strategy. Keep the same server configuration when restoring, including the etcd prefix and workload identity hostname settings.
 
-:::warning[Snapshots contain cluster credentials]
-The cluster CA private key is included so encrypted metadata can be recovered without the original data directory. Protect etcd snapshots with encryption and restricted access. Migration completes only after a successful coordinator startup; retain existing filesystem backups until then.
+:::warning[Back up the cluster sealing key separately]
+On first migration, Miren generates a random 32-byte key at `<data-path>/server/cluster-sealing.key`, with permissions `0600`. This host-only key seals the CA, the secret keyring, and all other coordinator metadata in etcd. It is never stored in etcd or sent to Miren Cloud. An etcd snapshot alone cannot decrypt this metadata or mint cluster identities.
+
+Back up this key to a separate, restricted location, not alongside snapshots uploaded to Cloud. Losing both the host key and its backup makes encrypted metadata and secrets unrecoverable. Miren does not regenerate a missing key when metadata already exists; there is no automatic sealing-key rotation or KMS recovery yet.
+
+To restore on another host, restore the etcd snapshot and place the **original** key at `<data-path>/server/cluster-sealing.key` with permissions `0600` **before starting the coordinator**. No other original metadata files are required. Keep the same server configuration and etcd prefix. A wrong or missing key fails startup instead of overwriting the restored metadata.
+
+Protect snapshots with restricted access as well: application/entity data is not all encrypted. Migration completes only after a successful coordinator startup; retain existing filesystem backups until then. The sealing key remains required for every later backup and restore.
 :::
 
 ## Top-Level Fields

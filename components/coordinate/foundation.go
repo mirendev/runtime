@@ -57,6 +57,7 @@ type Foundation struct {
 	state          *rpc.State
 	etcdClient     *clientv3.Client
 	clusterState   *clusterstate.Store
+	sealingKey     []byte
 	oidcSigningKey []byte
 	eac            *esv1.EntityAccessClient // Entity access client for querying entities
 	store          entity.Store

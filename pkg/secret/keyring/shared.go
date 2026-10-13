@@ -8,12 +8,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"path"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // SharedStore keeps the authoritative ring in replicated etcd, encrypted with
-// cluster authority material. The local file remains a recoverable backup.
+// the host-only sealing key. The local ring file remains a recoverable cache.
 // Writers and rotation on the standalone coordinator share a non-expiring
 // process lock. This is not a multi-coordinator store: server joins are outside
 // the metadata backup/restore contract.
@@ -25,8 +26,8 @@ type SharedStore struct {
 	ring          *Keyring
 }
 
-func NewSharedStore(client *clientv3.Client, prefix, dataPath string, authorityKey []byte) (*SharedStore, error) {
-	key := sha256.Sum256(authorityKey)
+func NewSharedStore(client *clientv3.Client, prefix, dataPath string, sealingKey []byte) (*SharedStore, error) {
+	key := sha256.Sum256(append([]byte("miren secret keyring v1\x00"), sealingKey...))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func NewSharedStore(client *clientv3.Client, prefix, dataPath string, authorityK
 	if err != nil {
 		return nil, err
 	}
-	return &SharedStore{client: client, key: prefix + "/secret-keyring", dataPath: dataPath, aead: aead, gate: make(chan struct{}, 1)}, nil
+	return &SharedStore{client: client, key: path.Join(prefix, "secret-keyring"), dataPath: dataPath, aead: aead, gate: make(chan struct{}, 1)}, nil
 }
 
 // Lock loads the latest ring while holding the coordinator's secret lock.

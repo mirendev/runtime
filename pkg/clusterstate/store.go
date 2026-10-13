@@ -23,8 +23,7 @@ const formatVersion byte = 1
 var ErrNotFound = errors.New("cluster state not found")
 
 // Store encrypts records before placing them in replicated etcd. The key is
-// derived from cluster authority material. The coordinator also backs up that
-// authority in etcd, so snapshots must be protected as credential-bearing data.
+// derived from a host-only sealing key, which must be backed up separately.
 type Store struct {
 	client *clientv3.Client
 	prefix string
@@ -40,11 +39,11 @@ type Lock struct {
 	mutex   *concurrency.Mutex
 }
 
-func New(client *clientv3.Client, prefix string, authorityKey []byte) (*Store, error) {
+func New(client *clientv3.Client, prefix string, sealingKey []byte) (*Store, error) {
 	if client == nil {
 		return nil, errors.New("nil etcd client")
 	}
-	key := sha256.Sum256(append([]byte("miren cluster state v1\x00"), authorityKey...))
+	key := sha256.Sum256(append([]byte("miren cluster state v1\x00"), sealingKey...))
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return nil, err

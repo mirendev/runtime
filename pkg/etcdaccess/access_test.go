@@ -62,18 +62,20 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	before, err := runner.Get(ctx, "/miren/secret-keyring")
 	require.NoError(t, err)
 	require.Len(t, before.Kvs, 1)
-	store, err := entity.NewEtcdStore(ctx, log, admin, "/miren")
+	_, err = admin.Delete(ctx, "/miren/secret-keyring")
+	require.NoError(t, err)
+	store, err := entity.NewEtcdStore(ctx, log, admin, "/miren/")
 	require.NoError(t, err)
 	require.NoError(t, schema.Apply(ctx, store))
 	node := &compute_v1alpha.Node{RunnerId: "enrolled", Name: "existing-runner"}
 	_, err = store.CreateEntity(ctx, entity.New(node.Encode()))
 	require.NoError(t, err)
 
-	foundation := coordinate.NewFoundation(log, coordinate.CoordinatorConfig{DataPath: dir, Address: "localhost:0", NoAuth: true, Prefix: "/miren", EtcdEndpoints: admin.Endpoints(), EtcdTLS: transport.ClientTLS})
+	foundation := coordinate.NewFoundation(log, coordinate.CoordinatorConfig{DataPath: dir, Address: "localhost:0", NoAuth: true, Prefix: "/miren/", EtcdEndpoints: admin.Endpoints(), EtcdTLS: transport.ClientTLS})
 	require.NoError(t, foundation.PrepareMetadata(ctx))
 	require.NoError(t, foundation.Start(ctx))
 	defer func() { require.NoError(t, foundation.Stop(context.Background())) }()
-	for _, key := range []string{"/miren/cluster-state/authority", "/miren/secret-keyring", "/miren/sub/flannel-other/config"} {
+	for _, key := range []string{"/miren/cluster-state/records/authority", "/miren/secret-keyring", "/miren/sub/flannel-other/config"} {
 		_, err := runner.Get(ctx, key)
 		require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 		_, err = runner.Put(ctx, key, "overwritten")
@@ -107,13 +109,13 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	lease, err = legacy.Get(ctx, "/miren/sub/flannel/subnets/test")
 	require.NoError(t, err)
 	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
-	_, err = legacy.Get(ctx, "/miren/cluster-state/authority")
+	_, err = legacy.Get(ctx, "/miren/cluster-state/records/authority")
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 
 	// Provisioning is idempotent when authentication is already enabled.
 	require.NoError(t, etcdaccess.Ensure(ctx, admin, "/miren"))
 	require.NoError(t, etcdaccess.Runner(ctx, admin, "runner-enrolled"))
-	authority, err := admin.Get(ctx, "/miren/cluster-state/authority")
+	authority, err := admin.Get(ctx, "/miren/cluster-state/records/authority")
 	require.NoError(t, err)
 	require.Len(t, authority.Kvs, 1)
 }

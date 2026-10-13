@@ -46,11 +46,7 @@ func (c *SecretStore) Start(ctx context.Context) error {
 	if registry == nil {
 		registry = secret.NewRegistry()
 	}
-	_, authorityKey, err := c.authority.ExportPEM()
-	if err != nil {
-		return err
-	}
-	shared, err := keyring.NewSharedStore(c.etcdClient, c.Prefix, c.DataPath, authorityKey)
+	shared, err := keyring.NewSharedStore(c.etcdClient, c.Prefix, c.DataPath, c.sealingKey)
 	if err != nil {
 		return err
 	}

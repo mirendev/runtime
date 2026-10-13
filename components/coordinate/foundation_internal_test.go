@@ -1,6 +1,7 @@
 package coordinate
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -9,11 +10,14 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/pkg/caauth"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/registration"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/secret"
+	"miren.dev/runtime/pkg/secret/keyring"
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
@@ -64,9 +68,55 @@ func TestFoundationRestoresMetadataWithoutOriginalDataDirectory(t *testing.T) {
 	version, _, err := backend.Put(ctx, "test/restore", []byte("recoverable-secret"))
 	require.NoError(t, err)
 	stop(first, secrets)
+	sealingKey, err := os.ReadFile(clusterstate.SealingKeyPath(dir))
+	require.NoError(t, err)
+	_, caKey, err := first.authority.ExportPEM()
+	require.NoError(t, err)
+	metadata, err := client.Get(ctx, prefix+"/cluster-state/", clientv3.WithPrefix())
+	require.NoError(t, err)
+	for _, kv := range metadata.Kvs {
+		require.False(t, bytes.Contains(kv.Value, sealingKey))
+		require.False(t, bytes.Contains(kv.Value, caKey))
+		require.False(t, bytes.Contains(kv.Value, []byte(reg.PrivateKey)))
+	}
+	legacyAuthority, err := client.Get(ctx, prefix+"/cluster-state/authority")
+	require.NoError(t, err)
+	require.Empty(t, legacyAuthority.Kvs, "authority must not be stored unsealed")
+	caOnly, err := clusterstate.New(client, prefix, caKey)
+	require.NoError(t, err)
+	_, err = caOnly.Get(ctx, "authority")
+	require.ErrorContains(t, err, "decrypting cluster state")
+	caOnlyRing, err := keyring.NewSharedStore(client, prefix, t.TempDir(), caKey)
+	require.NoError(t, err)
+	_, _, err = caOnlyRing.Lock(ctx)
+	require.ErrorContains(t, err, "decrypting replicated secret keyring")
+	restoreDir := func() string {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "server"), 0700))
+		require.NoError(t, os.WriteFile(clusterstate.SealingKeyPath(dir), sealingKey, 0600))
+		return dir
+	}
+	for _, missing := range []bool{true, false} {
+		dir := t.TempDir()
+		if !missing {
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "server"), 0700))
+			require.NoError(t, os.WriteFile(clusterstate.SealingKeyPath(dir), bytes.Repeat([]byte{42}, 32), 0600))
+		}
+		foundation := NewFoundation(log, CoordinatorConfig{DataPath: dir, EtcdEndpoints: client.Endpoints(), Prefix: prefix})
+		err := foundation.PrepareMetadata(ctx)
+		if missing {
+			require.ErrorContains(t, err, "restore the original key")
+			require.NoFileExists(t, clusterstate.SealingKeyPath(dir))
+		} else {
+			require.ErrorContains(t, err, "decrypting cluster state")
+		}
+		after, err := client.Get(ctx, prefix+"/cluster-state/", clientv3.WithPrefix())
+		require.NoError(t, err)
+		require.Equal(t, metadata.Kvs, after.Kvs, "failed restore must not change authoritative metadata")
+	}
 	require.NoError(t, os.RemoveAll(dir))
 
-	restoredDir := t.TempDir()
+	restoredDir := restoreDir()
 	// Embedded etcd can provision a temporary transport CA before foundation
 	// reads restored state. Neither it nor its TLS cache may replace the root.
 	_, err = EnsureCA(log, restoredDir)
@@ -105,7 +155,7 @@ func TestFoundationRestoresMetadataWithoutOriginalDataDirectory(t *testing.T) {
 	stop(restarted, restartedSecrets)
 	edited, editedSecrets := start(restoredDir)
 	stop(edited, editedSecrets)
-	final, finalSecrets := start(t.TempDir())
+	final, finalSecrets := start(restoreDir())
 	gotReg, err = registration.LoadRegistration(filepath.Join(final.DataPath, "server"))
 	require.NoError(t, err)
 	require.Equal(t, "edited-locally", gotReg.ClusterName)
@@ -120,7 +170,7 @@ func TestFoundationRestoresMetadataWithoutOriginalDataDirectory(t *testing.T) {
 	rotatedToken, err := rotated.WorkloadIssuer.IssueToken("app", "sandbox")
 	require.NoError(t, err)
 	stop(rotated, rotatedSecrets)
-	afterRotation, afterRotationSecrets := start(t.TempDir())
+	afterRotation, afterRotationSecrets := start(restoreDir())
 	defer stop(afterRotation, afterRotationSecrets)
 	for _, token := range []string{token, rotatedToken} {
 		_, err = afterRotation.WorkloadIssuer.VerifyToken(token, workloadidentity.DefaultAudience)
@@ -129,4 +179,25 @@ func TestFoundationRestoresMetadataWithoutOriginalDataDirectory(t *testing.T) {
 	gotReg, err = registration.LoadRegistration(filepath.Join(afterRotation.DataPath, "server"))
 	require.NoError(t, err)
 	require.Nil(t, gotReg)
+}
+
+func TestMetadataMigrationRetriesAfterRollbackWithHydrationMarker(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	dir := t.TempDir()
+	serverDir := filepath.Join(dir, "server")
+	reg := &registration.StoredRegistration{Status: "pending", ClusterName: "retry-migration", PrivateKey: "original-local-key"}
+	require.NoError(t, registration.SaveRegistration(serverDir, reg))
+	foundation := NewFoundation(slog.New(slog.DiscardHandler), CoordinatorConfig{DataPath: dir, EtcdEndpoints: client.Endpoints(), Prefix: prefix})
+	require.NoError(t, foundation.PrepareMetadata(t.Context()))
+	// An interrupted hydration leaves its marker on the host, while rollback
+	// restores the pre-migration snapshot with no metadata records.
+	require.NoError(t, os.WriteFile(filepath.Join(serverDir, "registration.etcd-hydrating"), nil, 0600))
+	_, err := client.Delete(t.Context(), prefix+"/cluster-state/", clientv3.WithPrefix())
+	require.NoError(t, err)
+	require.NoError(t, foundation.PrepareMetadata(t.Context()))
+	require.NoFileExists(t, filepath.Join(serverDir, "registration.etcd-hydrating"))
+	got, err := registration.LoadRegistration(serverDir)
+	require.NoError(t, err)
+	require.Equal(t, reg, got)
+	require.NoError(t, foundation.PrepareMetadata(t.Context()))
 }
