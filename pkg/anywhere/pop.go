@@ -365,7 +365,7 @@ func (m *POPManager) newWSTunnelHandler(popXID string) http.Handler {
 		ctx := r.Context()
 
 		// Resolve hostname → sandbox URL via the ingress routing/lease system.
-		tunnel, err := m.ingress.AcquireTunnel(ctx, wsHostname, wsPath)
+		tunnel, err := m.ingress.AcquireTunnel(ctx, wsHostname, target.Path)
 		if err != nil {
 			m.log.Error("failed to acquire tunnel",
 				"hostname", wsHostname, "error", err)
