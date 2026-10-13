@@ -24,14 +24,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
-        echo "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-arm64.tar.gz" > /tmp/containerd_url; \
+        echo "https://github.com/containerd/containerd/releases/download/v2.0.13/containerd-2.0.13-linux-arm64.tar.gz" > /tmp/containerd_url; \
         echo "https://github.com/moby/buildkit/releases/download/v0.34.0/buildkit-v0.34.0.linux-arm64.tar.gz" > /tmp/buildkit_url; \
-        echo "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.arm64" > /tmp/runc_url; \
+        echo "https://github.com/opencontainers/runc/releases/download/v1.5.2/runc.arm64" > /tmp/runc_url; \
         echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz" > /tmp/nerdctl_url; \
     else \
-        echo "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-2.0.4-linux-amd64.tar.gz" > /tmp/containerd_url; \
+        echo "https://github.com/containerd/containerd/releases/download/v2.0.13/containerd-2.0.13-linux-amd64.tar.gz" > /tmp/containerd_url; \
         echo "https://github.com/moby/buildkit/releases/download/v0.34.0/buildkit-v0.34.0.linux-amd64.tar.gz" > /tmp/buildkit_url; \
-        echo "https://github.com/opencontainers/runc/releases/download/v1.2.2/runc.amd64" > /tmp/runc_url; \
+        echo "https://github.com/opencontainers/runc/releases/download/v1.5.2/runc.amd64" > /tmp/runc_url; \
         echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz" > /tmp/nerdctl_url; \
     fi && \
     mkdir -p /upstream && \
