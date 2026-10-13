@@ -328,6 +328,10 @@ If a legacy backing file was already renamed or unlinked without that proof,
 cleanup remains blocked rather than guessing from a reused device name or a
 `deleted-volumes` pathname. Preserve local state and escalate for ownership
 reconciliation; deleting state or force-releasing the lease is not safe recovery.
+An intact legacy file can also remain blocked if its old loop number was reused
+by an owner Miren does not track, such as another host service: without independent
+proof of the current owner's backing file, the runtime cannot safely disown the
+stale device claim.
 Device/inode identity is not an ownership epoch across filesystem recreation or
 device reuse, and does not authorize forced cleanup of an unknown owner's lease.
 
