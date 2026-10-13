@@ -196,11 +196,23 @@ func TestLegacyLoopDeletionRecovery(t *testing.T) {
 					otherDir := filepath.Join(dir, "volumes", "other")
 					require.NoError(t, os.MkdirAll(otherDir, 0755))
 					require.NoError(t, volumeOps.CreateDiskImage(filepath.Join(otherDir, "disk.img"), 8*1024*1024))
-					otherDevice, current, err := ops.LoopAttach(filepath.Join(otherDir, "disk.img"))
+					// Free-device allocation need not reuse this number, especially
+					// when other CI packages attach loops on the same kernel.
+					loop, err := os.OpenFile(device, os.O_RDWR, 0)
 					require.NoError(t, err)
-					otherIdentity = current
-					t.Cleanup(func() { require.NoError(t, ops.LoopDetach(otherDevice)) })
-					require.Equal(t, device, otherDevice, "the original device number is now owned by another volume")
+					defer loop.Close()
+					backing, err := os.OpenFile(filepath.Join(otherDir, "disk.img"), os.O_RDWR, 0)
+					require.NoError(t, err)
+					defer backing.Close()
+					require.NoError(t, unix.IoctlLoopConfigure(int(loop.Fd()), &unix.LoopConfig{
+						Fd: uint32(backing.Fd()), Size: 4096, Info: unix.LoopInfo64{Flags: unix.LO_FLAGS_DIRECT_IO},
+					}))
+					t.Cleanup(func() { require.NoError(t, ops.LoopDetach(device)) })
+					otherIdentity, err = ops.FileIdentity(filepath.Join(otherDir, "disk.img"))
+					require.NoError(t, err)
+					current, err := ops.LoopIdentity(device)
+					require.NoError(t, err)
+					require.Equal(t, otherIdentity, current, "the original device number is now owned by another volume")
 					state.SetVolume("other", &VolumeState{EntityId: "other", DiskPath: otherDir})
 				}
 				require.NoError(t, state.Save())

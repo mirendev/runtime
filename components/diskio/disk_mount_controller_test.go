@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 
@@ -1267,6 +1268,81 @@ func TestDiskMountTransitionsWaitForCloudUpload(t *testing.T) {
 				cloud.acquireLeaseErr = syscall.EIO
 				require.ErrorContains(t, controller.Reconcile(t.Context(), mount, nil), "failed to acquire")
 				require.Len(t, cloud.acquireLeaseCalls, 1)
+			}
+		})
+	}
+}
+
+// Signal entry to the cancelable lock wait without timing-dependent sleeps.
+type cloudLockWaitContext struct {
+	context.Context
+	waiting chan struct{}
+}
+
+func (c cloudLockWaitContext) Done() <-chan struct{} {
+	select {
+	case c.waiting <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
+func TestDiskMountAttachRevalidatesVolumeAfterWait(t *testing.T) {
+	for _, change := range []string{"deleted", "cloud-id", "disk-path"} {
+		t.Run(change, func(t *testing.T) {
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			volume := &VolumeState{EntityId: "volume", CloudVolumeId: "cloud", DiskPath: filepath.Join(dir, "original"), Mode: storage_v1alpha.VM_ACCELERATOR}
+			require.NoError(t, os.MkdirAll(volume.DiskPath, 0755))
+			require.NoError(t, state.SetVolumeAndSave("volume", volume))
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, newMockDiskMountOps())
+			controller.SetCloudClient(&mockCloudDiskClient{acquireLeaseNonce: "nonce", segmentsErr: syscall.EIO})
+			unlock, err := state.LockCloudVolume(t.Context(), "cloud")
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			waiting := make(chan struct{}, 1)
+			result := make(chan error, 1)
+			go func() {
+				result <- controller.Reconcile(cloudLockWaitContext{Context: ctx, waiting: waiting}, &storage_v1alpha.DiskMount{
+					ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING,
+				}, nil)
+			}()
+			select {
+			case <-waiting:
+			case <-ctx.Done():
+				unlock()
+				t.Fatal("attach never reached lock wait")
+			}
+			// Deletion/replacement finishes under the same lock while attach
+			// is waiting with its original volume snapshot.
+			if change == "deleted" {
+				require.NoError(t, os.Rename(volume.DiskPath, filepath.Join(dir, "deleted")))
+				state.DeleteVolume("volume")
+			} else {
+				if change == "cloud-id" {
+					volume.CloudVolumeId = "replacement-cloud"
+				} else {
+					volume.DiskPath = filepath.Join(dir, "replacement")
+				}
+				state.SetVolume("volume", volume)
+			}
+			require.NoError(t, state.Save())
+			unlock()
+			var reconcileErr error
+			select {
+			case reconcileErr = <-result:
+			case <-ctx.Done():
+				t.Fatal("attach did not finish")
+			}
+			state, err = LoadState(dir)
+			require.NoError(t, err)
+			require.Nil(t, state.GetMount("mount"), "deleted/replaced volumes cannot leave a durable lease acquisition intent")
+			if change == "deleted" {
+				require.ErrorContains(t, reconcileErr, "not found in state")
+			} else {
+				require.ErrorContains(t, reconcileErr, "changed while waiting")
 			}
 		})
 	}

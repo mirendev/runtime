@@ -292,6 +292,14 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		return err
 	}
 	defer unlock()
+	current := c.state.GetVolume(volumeId)
+	if current == nil {
+		return fmt.Errorf("volume %s not found in state", volumeId)
+	}
+	if current.CloudVolumeId != volState.CloudVolumeId || current.DiskPath != volState.DiskPath {
+		return fmt.Errorf("volume %s changed while waiting for cloud lock", volumeId)
+	}
+	volState = current
 	if c.state.HasPendingCloudUpload(volState.CloudVolumeId) {
 		return fmt.Errorf("volume %s has a pending cloud upload", volumeId)
 	}
