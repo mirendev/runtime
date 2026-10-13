@@ -139,3 +139,55 @@ func TestNewRejectsAnUnusableClient(t *testing.T) {
 	_, err = cloudapi.New("https://cloud.example", nil)
 	require.Error(t, err, "a client with no way to authenticate is not usable")
 }
+
+func TestRequestSuccessAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{http.StatusCreated, `{"id":"new"}`, ""},
+		{http.StatusNoContent, "", ""},
+		{http.StatusBadRequest, `{"error":"invalid registration"}`, "invalid registration"},
+		{http.StatusBadGateway, "cluster unavailable", "cluster unavailable"},
+		{http.StatusOK, "not json", "failed to parse response"},
+	} {
+		t.Run(http.StatusText(tc.status)+tc.want, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			client, err := cloudapi.New(srv.URL, staticToken("t"))
+			require.NoError(t, err)
+			var out map[string]string
+			err = client.Request(context.Background(), http.MethodPost, "/api/v1/example", nil, map[string]string{"name": "new"}, &out)
+			if tc.want != "" {
+				require.ErrorContains(t, err, tc.want)
+			} else {
+				require.NoError(t, err)
+				if tc.status == http.StatusCreated {
+					require.Equal(t, "new", out["id"])
+				}
+			}
+		})
+	}
+}
+
+func TestRequestDoesNotReplayRedirectedApproval(t *testing.T) {
+	replayed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/approval" {
+			http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		replayed = true
+	}))
+	defer srv.Close()
+	client, err := cloudapi.New(srv.URL, staticToken("t"))
+	require.NoError(t, err)
+	var out any
+	err = client.Request(context.Background(), http.MethodPost, "/approval", nil, map[string]string{"registration_token": "secret"}, &out)
+	require.ErrorContains(t, err, "307")
+	require.False(t, replayed)
+}
