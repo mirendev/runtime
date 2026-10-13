@@ -306,6 +306,7 @@ type CloudAppOptions struct {
 const cloudAppPath = "/api/v1/organizations/{organization}/apps/{cluster}/{app}"
 
 func registerCloudCommands(d *mflags.Dispatcher) {
+	registerCloudResourceCommands(d)
 	d.Dispatch("cloud", Section("cloud", "Miren Cloud HTTP API commands", "", WithSectionGroup(GroupClient)))
 	d.Dispatch("cloud org", Section("cloud org", "Cloud organization commands", ""))
 	d.Dispatch("cloud cluster", Section("cloud cluster", "Cloud cluster commands", ""))
