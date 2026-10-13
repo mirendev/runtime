@@ -88,6 +88,7 @@ type mockDiskMountOps struct {
 	unmounts      []string
 	mountedPaths  map[string]bool
 	mountDevices  map[string]string // mount path → device, for FindMounts
+	lbdBackings   map[string]string
 	formattedDevs map[string]string
 	formatCalls   []diskMockFormat
 	// deletedBacking marks image paths whose loop device holds an unlinked
@@ -149,6 +150,7 @@ func newMockDiskMountOps() *mockDiskMountOps {
 	return &mockDiskMountOps{
 		mountedPaths:   make(map[string]bool),
 		mountDevices:   make(map[string]string),
+		lbdBackings:    make(map[string]string),
 		formattedDevs:  make(map[string]string),
 		nextLoopDevice: "/dev/loop0",
 		nextLbdDevice:  "/dev/lbd0",
@@ -220,6 +222,7 @@ func (m *mockDiskMountOps) LbdAttach(_ context.Context, imagePath, logDir string
 		return "", m.lbdAttachErr
 	}
 	m.attachedLbds = append(m.attachedLbds, mockLbdAttach{imagePath: imagePath, logDir: logDir})
+	m.lbdBackings[m.nextLbdDevice] = imagePath
 	return m.nextLbdDevice, nil
 }
 
@@ -228,6 +231,7 @@ func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error
 		return m.lbdDetachErr
 	}
 	m.detachedLbds = append(m.detachedLbds, devicePath)
+	delete(m.lbdBackings, devicePath)
 	return nil
 }
 
@@ -242,6 +246,7 @@ func (m *mockDiskMountOps) Mount(device, mountPath, filesystem string, readOnly 
 		readOnly:   readOnly,
 	})
 	m.mountedPaths[mountPath] = true
+	m.mountDevices[mountPath] = device
 	return nil
 }
 
@@ -257,6 +262,27 @@ func (m *mockDiskMountOps) Unmount(path string) error {
 
 func (m *mockDiskMountOps) IsMounted(path string) bool {
 	return m.mountedPaths[path]
+}
+
+func (m *mockDiskMountOps) MountDevice(path string) (string, error) {
+	if m.isDeviceMountedErr != nil {
+		return "", m.isDeviceMountedErr
+	}
+	if !m.mountedPaths[path] {
+		return "", nil
+	}
+	return m.mountDevices[path], nil
+}
+
+func (m *mockDiskMountOps) DeviceBacking(device string) (string, error) {
+	if m.findLoopErr != nil {
+		return "", m.findLoopErr
+	}
+	if path := m.lbdBackings[device]; path != "" {
+		return path, nil
+	}
+	backings, err := m.FindAllLoopBackings()
+	return backings[device].Path, err
 }
 
 func (m *mockDiskMountOps) IsDeviceMounted(device string) (bool, error) {

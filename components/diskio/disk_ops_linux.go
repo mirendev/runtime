@@ -437,21 +437,59 @@ func (r *realDiskMountOps) Unmount(path string) error {
 	return nil
 }
 
-func (r *realDiskMountOps) IsMounted(path string) bool {
+func (r *realDiskMountOps) DeviceBacking(device string) (string, error) {
+	name := filepath.Base(device)
+	path := filepath.Join("/sys/block", name)
+	if strings.HasPrefix(name, "loop") {
+		path = filepath.Join(path, "loop", "backing_file")
+	} else if strings.HasPrefix(name, "lbd") {
+		path = filepath.Join(path, "backing_path")
+	} else {
+		return "", fmt.Errorf("unsupported attachment device %s", device)
+	}
+	// Glob silently ignores filesystem errors; cleanup must inspect the exact
+	// device and distinguish a missing/unbound device from failed inspection.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Stat(filepath.Dir(path)); errors.Is(statErr, os.ErrNotExist) {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("inspect backing of %s: %w", device, err)
+	}
+	backing := strings.TrimSpace(string(data))
+	if backing == "" {
+		return "", fmt.Errorf("empty backing identity for %s", device)
+	}
+	return backing, nil
+}
+
+func (r *realDiskMountOps) MountDevice(path string) (string, error) {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
-		return false
+		return "", err
 	}
 	defer f.Close()
 
+	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	var device string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) >= 2 && fields[1] == path {
-			return true
+		if len(fields) >= 2 && unescape.Replace(fields[1]) == path {
+			if device != "" {
+				return device, fmt.Errorf("multiple mounts at %s", path)
+			}
+			device = unescape.Replace(fields[0])
 		}
 	}
-	return false
+	return device, scanner.Err()
+}
+
+func (r *realDiskMountOps) IsMounted(path string) bool {
+	device, _ := r.MountDevice(path)
+	return device != ""
 }
 
 func (r *realDiskMountOps) IsDeviceMounted(device string) (bool, error) {

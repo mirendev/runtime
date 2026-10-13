@@ -84,6 +84,14 @@ func (s *stubDiskMountOps) IsMounted(_ string) bool {
 	return false
 }
 
+func (s *stubDiskMountOps) MountDevice(_ string) (string, error) {
+	return "", fmt.Errorf("mount inspection not supported on darwin")
+}
+
+func (s *stubDiskMountOps) DeviceBacking(_ string) (string, error) {
+	return "", fmt.Errorf("device inspection not supported on darwin")
+}
+
 func (s *stubDiskMountOps) IsDeviceMounted(_ string) (bool, error) {
 	return false, nil
 }

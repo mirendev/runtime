@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ type LogSegmentInfo struct {
 // for volume lease management and log segment retrieval.
 type CloudDiskClient interface {
 	AcquireLease(ctx context.Context, volumeID string) (nonce string, err error)
+	AcquireLeaseWithIdentity(ctx context.Context, volumeID, acquisitionID string) (nonce string, err error)
 	ReleaseLease(ctx context.Context, volumeID string, nonce string) error
 	// ListLogSegments returns the volume's log segments whose TAI64N label
 	// sorts after `after`. Passing the caller's replay horizon keeps the server
@@ -64,22 +66,43 @@ func NewCloudDiskClientWithUpdates(log *slog.Logger, baseURL string, authClient 
 }
 
 type acquireLeaseRequest struct {
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	AcquisitionID string         `json:"acquisition_id,omitempty"`
 }
 
 type leaseResponse struct {
-	LeaseID  string `json:"lease_id"`
-	VolumeID string `json:"volume_id"`
-	Nonce    string `json:"nonce"`
+	LeaseID       string `json:"lease_id"`
+	VolumeID      string `json:"volume_id"`
+	Nonce         string `json:"nonce"`
+	AcquisitionID string `json:"acquisition_id,omitempty"`
 }
 
+var ErrLeaseAcquisitionEnded = errors.New("lease acquisition ended")
+
 func (c *cloudDiskClient) AcquireLease(ctx context.Context, volumeID string) (string, error) {
-	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/volumes", volumeID, "lease")
+	return c.acquireLease(ctx, volumeID, "")
+}
+
+func (c *cloudDiskClient) AcquireLeaseWithIdentity(ctx context.Context, volumeID, acquisitionID string) (string, error) {
+	if acquisitionID == "" {
+		return "", fmt.Errorf("lease acquisition identity is required")
+	}
+	return c.acquireLease(ctx, volumeID, acquisitionID)
+}
+
+func (c *cloudDiskClient) acquireLease(ctx context.Context, volumeID, acquisitionID string) (string, error) {
+	endpoint := "lease"
+	if acquisitionID != "" {
+		// A separate route fails closed on old clouds rather than silently
+		// granting a non-idempotent lease after ignoring an unknown field.
+		endpoint = "lease/acquire"
+	}
+	apiURL, err := url.JoinPath(c.baseURL, "api/v1/disk/volumes", volumeID, endpoint)
 	if err != nil {
 		return "", fmt.Errorf("failed to construct lease URL: %w", err)
 	}
 
-	reqBody, err := json.Marshal(acquireLeaseRequest{})
+	reqBody, err := json.Marshal(acquireLeaseRequest{AcquisitionID: acquisitionID})
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal lease request: %w", err)
 	}
@@ -105,6 +128,15 @@ func (c *cloudDiskClient) AcquireLease(ctx context.Context, volumeID string) (st
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusConflict {
+		var result struct {
+			Code          string `json:"code"`
+			VolumeID      string `json:"volume_id"`
+			AcquisitionID string `json:"acquisition_id"`
+		}
+		if acquisitionID != "" && json.Unmarshal(body, &result) == nil &&
+			result.Code == "lease_acquisition_ended" && result.VolumeID == volumeID && result.AcquisitionID == acquisitionID {
+			return "", ErrLeaseAcquisitionEnded
+		}
 		return "", fmt.Errorf("volume %s already has an active lease", volumeID)
 	}
 
@@ -115,6 +147,9 @@ func (c *cloudDiskClient) AcquireLease(ctx context.Context, volumeID string) (st
 	var leaseResp leaseResponse
 	if err := json.Unmarshal(body, &leaseResp); err != nil {
 		return "", fmt.Errorf("failed to decode lease response: %w", err)
+	}
+	if acquisitionID != "" && (leaseResp.AcquisitionID != acquisitionID || leaseResp.VolumeID != volumeID || leaseResp.Nonce == "") {
+		return "", fmt.Errorf("lease response does not match acquisition intent")
 	}
 
 	c.log.Info("acquired volume lease", "volume_id", volumeID, "lease_id", leaseResp.LeaseID)
@@ -147,6 +182,16 @@ func (c *cloudDiskClient) ReleaseLease(ctx context.Context, volumeID string, non
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		// Only the authenticated conditional-delete response proves this nonce
+		// is no longer an owner. Generic authorization errors prove nothing.
+		var result struct {
+			Code     string `json:"code"`
+			VolumeID string `json:"volume_id"`
+		}
+		if resp.StatusCode == http.StatusForbidden && json.Unmarshal(body, &result) == nil &&
+			result.Code == "lease_not_owner" && result.VolumeID == volumeID {
+			return nil
+		}
 		return fmt.Errorf("release lease failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

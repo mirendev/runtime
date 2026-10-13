@@ -3,6 +3,8 @@ package diskio
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
@@ -16,6 +18,7 @@ import (
 )
 
 func newTestDiskMountController(log *slog.Logger, dataPath, nodeId string, eac *entityserver_v1alpha.EntityAccessClient, state *State, ops DiskMountOps) *DiskMountController {
+	state.SetPath(dataPath)
 	mc := NewDiskMountController(log, dataPath, compute.NewNodeId(nodeId), state, ops)
 	mc.SetEAC(eac)
 	return mc
@@ -187,14 +190,17 @@ func TestDiskMountControllerReconcileMountUnmounted(t *testing.T) {
 
 	// Pre-populate state with existing mount
 	state.SetMount("disk_mount/mnt-456", &MountState{
-		EntityId:   "disk_mount/mnt-456",
-		VolumeId:   "disk_volume/vol-456",
-		DevicePath: "/dev/loop5",
-		MountPath:  "/mnt/data",
-		Mounted:    true,
-		ReadOnly:   false,
+		EntityId:    "disk_mount/mnt-456",
+		VolumeId:    "disk_volume/vol-456",
+		DevicePath:  "/dev/loop5",
+		BackingPath: "/data/vol-456/disk.img",
+		MountPath:   "/mnt/data",
+		Mounted:     true,
+		ReadOnly:    false,
 	})
 	ops.mountedPaths["/mnt/data"] = true
+	ops.mountDevices["/mnt/data"] = "/dev/loop5"
+	ops.loopBacking = map[string]string{"/data/vol-456/disk.img": "/dev/loop5"}
 
 	mc := newTestDiskMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
@@ -522,14 +528,17 @@ func TestDiskMountControllerReconcileCleansUpOrphanedMounts(t *testing.T) {
 	ops := newMockDiskMountOps()
 
 	state.SetMount("disk_mount/mnt-orphan", &MountState{
-		EntityId:   "disk_mount/mnt-orphan",
-		VolumeId:   "disk_volume/vol-orphan",
-		DevicePath: "/dev/loop7",
-		MountPath:  "/mnt/orphan",
-		Mounted:    true,
-		ReadOnly:   false,
+		EntityId:    "disk_mount/mnt-orphan",
+		VolumeId:    "disk_volume/vol-orphan",
+		DevicePath:  "/dev/loop7",
+		BackingPath: "/data/vol-orphan/disk.img",
+		MountPath:   "/mnt/orphan",
+		Mounted:     true,
+		ReadOnly:    false,
 	})
 	ops.mountedPaths["/mnt/orphan"] = true
+	ops.mountDevices["/mnt/orphan"] = "/dev/loop7"
+	ops.loopBacking = map[string]string{"/data/vol-orphan/disk.img": "/dev/loop7"}
 
 	mc := newTestDiskMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
@@ -572,14 +581,17 @@ func TestDiskMountControllerReconcileKeepsNonOrphanedMounts(t *testing.T) {
 	ops.mountedPaths["/mnt/keep"] = true
 
 	state.SetMount("disk_mount/mnt-orphan2", &MountState{
-		EntityId:   "disk_mount/mnt-orphan2",
-		VolumeId:   "disk_volume/vol-orphan2",
-		DevicePath: "/dev/loop9",
-		MountPath:  "/mnt/orphan2",
-		Mounted:    true,
-		ReadOnly:   false,
+		EntityId:    "disk_mount/mnt-orphan2",
+		VolumeId:    "disk_volume/vol-orphan2",
+		DevicePath:  "/dev/loop9",
+		BackingPath: "/data/vol-orphan2/disk.img",
+		MountPath:   "/mnt/orphan2",
+		Mounted:     true,
+		ReadOnly:    false,
 	})
 	ops.mountedPaths["/mnt/orphan2"] = true
+	ops.mountDevices["/mnt/orphan2"] = "/dev/loop9"
+	ops.loopBacking = map[string]string{"/data/vol-orphan2/disk.img": "/dev/loop9"}
 
 	mc := newTestDiskMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
@@ -881,6 +893,174 @@ func TestDiskMountControllerTeardownReleasesWithCloudId(t *testing.T) {
 	require.Len(t, cloud.releaseLeaseCalls, 1)
 	assert.Equal(t, "vol-cloud-acc", cloud.releaseLeaseCalls[0].volumeID)
 	assert.Equal(t, "nonce-acc", cloud.releaseLeaseCalls[0].nonce)
+}
+
+func TestDiskMountCleanupPartialProgress(t *testing.T) {
+	for _, failed := range []string{"detach", "release"} {
+		t.Run(failed, func(t *testing.T) {
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			state.SetMount("mount", &MountState{
+				EntityId: "mount", CloudVolumeId: "cloud", DevicePath: "/dev/lbd0",
+				BackingPath: filepath.Join(dir, "disk.img"),
+				MountPath:   "/mnt/volume", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR,
+				LeaseNonce: "nonce", LeaseOwned: true,
+			})
+			require.NoError(t, state.Save())
+			ops := newMockDiskMountOps()
+			ops.lbdBackings["/dev/lbd0"] = filepath.Join(dir, "disk.img")
+			require.NoError(t, ops.Mount("/dev/lbd0", "/mnt/volume", "ext4", false))
+			cloud := &mockCloudDiskClient{}
+			if failed == "detach" {
+				ops.lbdDetachErr = syscall.EBUSY
+			} else {
+				cloud.releaseLeaseErr = syscall.EIO
+			}
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+			controller.SetCloudClient(cloud)
+			mount := &storage_v1alpha.DiskMount{ID: "mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED, ActualState: storage_v1alpha.DM_MOUNTED}
+			require.Error(t, controller.Reconcile(t.Context(), mount, nil))
+			state, err = LoadState(dir)
+			require.NoError(t, err)
+			partial := state.GetMount("mount")
+			require.NotNil(t, partial)
+			if failed == "detach" {
+				require.Empty(t, partial.LeaseNonce)
+				require.False(t, partial.LeaseOwned)
+				require.Equal(t, "/dev/lbd0", partial.DevicePath)
+			} else {
+				require.Empty(t, partial.DevicePath)
+				require.Equal(t, "nonce", state.LeaseNonceForCloudVolume("cloud"))
+			}
+			require.False(t, partial.Mounted)
+			ops.lbdDetachErr, cloud.releaseLeaseErr = nil, nil
+			controller = newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+			controller.SetCloudClient(cloud)
+			mount.ActualState = storage_v1alpha.DM_DETACHING
+			require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
+			require.Nil(t, state.GetMount("mount"))
+			require.Len(t, ops.unmounts, 1)
+			require.Len(t, ops.detachedLbds, 1)
+			if failed == "detach" {
+				require.Len(t, cloud.releaseLeaseCalls, 1, "released nonce must not be retried")
+			} else {
+				require.Len(t, cloud.releaseLeaseCalls, 2)
+			}
+		})
+	}
+}
+
+func TestDiskMountStaleCleanupProtectsReusedDevice(t *testing.T) {
+	state := NewState()
+	ops := newMockDiskMountOps()
+	state.SetMount("old", &MountState{EntityId: "old", DevicePath: "/dev/lbd0", BackingPath: "/old/disk.img", MountPath: "/mnt/shared", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR})
+	state.SetMount("live", &MountState{EntityId: "live", DevicePath: "/dev/lbd0", MountPath: "/mnt/live", Mounted: true, LeaseNonce: "current", CloudVolumeId: "cloud"})
+	ops.lbdBackings["/dev/lbd0"] = "/live/disk.img"
+	ops.mountedPaths["/mnt/live"] = true
+	ops.mountDevices["/mnt/live"] = "/dev/lbd0"
+	controller := newTestDiskMountController(slog.Default(), t.TempDir(), "node", nil, state, ops)
+	require.NoError(t, controller.Reconcile(t.Context(), &storage_v1alpha.DiskMount{ID: "old", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}, nil))
+	require.Empty(t, ops.unmounts)
+	require.Empty(t, ops.detachedLbds)
+	require.True(t, state.GetMount("live").Mounted)
+	require.Equal(t, "current", state.LeaseNonceForCloudVolume("cloud"))
+}
+
+func TestDiskMountCleanupKernelReality(t *testing.T) {
+	for _, scenario := range []string{"reboot", "current-first", "lease-only", "inspection-error", "unknown-backing", "ambiguous"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			state.SetVolume("volume", &VolumeState{EntityId: "volume", DiskPath: dir, Filesystem: "ext4", Mode: storage_v1alpha.VM_ACCELERATOR})
+			ops := newMockDiskMountOps()
+			state.SetMount("current", &MountState{EntityId: "current", VolumeId: "volume", DevicePath: "/dev/lbd0", MountPath: "/mnt/current", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR})
+			mount := &storage_v1alpha.DiskMount{ID: "current", VolumeId: "volume", MountPath: "/mnt/current", ActualState: storage_v1alpha.DM_MOUNTED, DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}
+			if scenario == "reboot" {
+				mount.DesiredState = storage_v1alpha.DM_WANT_MOUNTED
+				ops.unmountErr = syscall.EINVAL
+				ops.lbdDetachErr = syscall.ENODEV
+			} else {
+				_, err := ops.LbdAttach(t.Context(), filepath.Join(dir, "disk.img"), filepath.Join(dir, "logs"))
+				require.NoError(t, err)
+				require.NoError(t, ops.Mount("/dev/lbd0", "/mnt/current", "ext4", false))
+				state.SetMount("stale", &MountState{EntityId: "stale", DevicePath: "/dev/lbd0", MountPath: "/mnt/old", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR})
+				if scenario == "lease-only" {
+					state.SetMount("stale", &MountState{EntityId: "stale", MountPath: "/mnt/current", LeaseOwned: true, LeaseNonce: "old"})
+				}
+				if scenario == "inspection-error" {
+					ops.findLoopErr = syscall.EIO
+				}
+				if scenario == "unknown-backing" {
+					state.DeleteVolume("volume")
+				}
+				if scenario == "ambiguous" {
+					state.SetMount("stale", &MountState{EntityId: "stale", VolumeId: "volume", DevicePath: "/dev/lbd0", MountPath: "/mnt/current", Mounted: true})
+				}
+			}
+			require.NoError(t, state.Save())
+			state, err = LoadState(dir)
+			require.NoError(t, err)
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+			if scenario == "inspection-error" || scenario == "unknown-backing" || scenario == "ambiguous" {
+				require.Error(t, controller.Reconcile(t.Context(), mount, nil))
+				require.True(t, ops.IsMounted("/mnt/current"))
+				require.True(t, state.GetMount("current").Mounted)
+				require.Empty(t, ops.detachedLbds)
+				return
+			}
+			require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
+			if scenario == "reboot" {
+				require.True(t, state.GetMount("current").Mounted)
+				require.Len(t, ops.attachedLbds, 1)
+			} else {
+				require.False(t, ops.IsMounted("/mnt/current"), "current owner must actually be unmounted")
+				require.Len(t, ops.detachedLbds, 1)
+			}
+		})
+	}
+}
+
+func TestDiskMountTransitionsWaitForCloudUpload(t *testing.T) {
+	for _, transition := range []string{"acquire", "release"} {
+		t.Run(transition, func(t *testing.T) {
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			state.SetVolume("volume", &VolumeState{EntityId: "volume", CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR})
+			mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+			if transition == "release" {
+				state.SetMount("mount", &MountState{EntityId: "mount", CloudVolumeId: "cloud", LeaseNonce: "current", LeaseOwned: true})
+				mount.DesiredState = storage_v1alpha.DM_WANT_UNMOUNTED
+			}
+			cloud := &mockCloudDiskClient{}
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, newMockDiskMountOps())
+			controller.SetCloudClient(cloud)
+			unlock, err := state.LockCloudVolume(t.Context(), "cloud")
+			require.NoError(t, err)
+			require.NoError(t, state.SetPendingCloudUpload("cloud", "begin-succeeded"))
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			require.ErrorIs(t, controller.Reconcile(ctx, mount, nil), context.Canceled)
+			unlock()
+			state, err = LoadState(dir)
+			require.NoError(t, err)
+			controller.state = state
+			require.ErrorContains(t, controller.Reconcile(t.Context(), mount, nil), "pending cloud upload")
+			require.Empty(t, cloud.acquireLeaseCalls)
+			require.Empty(t, cloud.releaseLeaseCalls)
+			require.NoError(t, state.SetPendingCloudUpload("cloud", ""))
+			if transition == "release" {
+				require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
+				require.Len(t, cloud.releaseLeaseCalls, 1)
+			} else {
+				cloud.acquireLeaseErr = syscall.EIO
+				require.ErrorContains(t, controller.Reconcile(t.Context(), mount, nil), "failed to acquire")
+				require.Len(t, cloud.acquireLeaseCalls, 1)
+			}
+		})
+	}
 }
 
 // TestDiskMountControllerTeardownReleasesAfterVolumeGone is the robustness win

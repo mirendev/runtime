@@ -58,6 +58,10 @@ type DiskMountOps interface {
 	Mount(device, mountPath, filesystem string, readOnly bool) error
 	Unmount(path string) error
 	IsMounted(path string) bool
+	// MountDevice and DeviceBacking return empty only for confirmed absence.
+	// Inspection errors must fence destructive attachment cleanup.
+	MountDevice(path string) (string, error)
+	DeviceBacking(device string) (string, error)
 	// IsDeviceMounted reports whether device is currently mounted at any
 	// path in the kernel mount table. Used as a safety check before
 	// running fsck, which must never run against a live filesystem.

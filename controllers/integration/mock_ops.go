@@ -51,7 +51,7 @@ var _ diskio.DiskVolumeOps = (*mockDiskVolumeOps)(nil)
 
 // mockDiskMountOps implements diskio.DiskMountOps for testing.
 type mockDiskMountOps struct {
-	existingMounts map[string]bool
+	existingMounts map[string]string // mountPath -> devicePath
 	formattedDisks map[string]string // device -> filesystem
 	loopDevices    map[string]string // imagePath -> devicePath
 	nextLoopIndex  int
@@ -59,7 +59,7 @@ type mockDiskMountOps struct {
 
 func newMockDiskMountOps() *mockDiskMountOps {
 	return &mockDiskMountOps{
-		existingMounts: make(map[string]bool),
+		existingMounts: make(map[string]string),
 		formattedDisks: make(map[string]string),
 		loopDevices:    make(map[string]string),
 		nextLoopIndex:  1,
@@ -119,8 +119,8 @@ func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error
 	return nil
 }
 
-func (m *mockDiskMountOps) Mount(_, mountPath, _ string, _ bool) error {
-	m.existingMounts[mountPath] = true
+func (m *mockDiskMountOps) Mount(device, mountPath, _ string, _ bool) error {
+	m.existingMounts[mountPath] = device
 	return nil
 }
 
@@ -130,10 +130,28 @@ func (m *mockDiskMountOps) Unmount(path string) error {
 }
 
 func (m *mockDiskMountOps) IsMounted(path string) bool {
-	return m.existingMounts[path]
+	return m.existingMounts[path] != ""
 }
 
-func (m *mockDiskMountOps) IsDeviceMounted(_ string) (bool, error) {
+func (m *mockDiskMountOps) MountDevice(path string) (string, error) {
+	return m.existingMounts[path], nil
+}
+
+func (m *mockDiskMountOps) DeviceBacking(device string) (string, error) {
+	for image, attached := range m.loopDevices {
+		if attached == device {
+			return image, nil
+		}
+	}
+	return "", nil
+}
+
+func (m *mockDiskMountOps) IsDeviceMounted(device string) (bool, error) {
+	for _, mounted := range m.existingMounts {
+		if mounted == device {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 

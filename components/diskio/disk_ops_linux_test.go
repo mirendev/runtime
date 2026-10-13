@@ -1,10 +1,55 @@
 package diskio
 
 import (
+	"errors"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestDeviceBackingInspection(t *testing.T) {
+	if root := os.Getenv("MIREN_BACKING_INSPECTION_ROOT"); root != "" {
+		if err := syscall.Chroot(root); errors.Is(err, syscall.EPERM) {
+			t.Skip("chroot capability unavailable")
+		} else {
+			require.NoError(t, err)
+		}
+		require.NoError(t, os.Chdir("/"))
+		ops := NewRealDiskMountOps(slog.Default())
+		_, err := ops.DeviceBacking("/dev/loop0")
+		require.ErrorIs(t, err, syscall.ELOOP)
+		for _, device := range []string{"/dev/loop1", "/dev/lbd9"} {
+			backing, err := ops.DeviceBacking(device)
+			require.NoError(t, err)
+			require.Empty(t, backing)
+		}
+		backing, err := ops.DeviceBacking("/dev/loop2")
+		require.NoError(t, err)
+		require.Equal(t, "/vol/current/disk.img", backing)
+		_, err = ops.DeviceBacking("/dev/lbd0")
+		require.Error(t, err, "present device without backing identity is not confirmed absence")
+		return
+	}
+
+	root := t.TempDir()
+	for _, dir := range []string{"loop0", "loop1", "loop2/loop", "lbd0"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/block", dir), 0755))
+	}
+	require.NoError(t, os.Symlink("loop", filepath.Join(root, "sys/block/loop0/loop")))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "sys/block/loop2/loop/backing_file"), []byte("/vol/current/disk.img\n"), 0600))
+	// Isolate the synthetic sysfs in a child; never replace the host's sysfs.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDeviceBackingInspection$", "-test.v")
+	cmd.Env = append(os.Environ(), "MIREN_BACKING_INSPECTION_ROOT="+root)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	t.Log(string(output))
+}
 
 func TestParseLoopBacking(t *testing.T) {
 	cases := []struct {

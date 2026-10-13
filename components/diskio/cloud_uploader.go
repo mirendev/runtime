@@ -165,6 +165,9 @@ func (u *CloudSegmentUploader) withCloudUpload(ctx context.Context, volumeID str
 	// an earlier intent whose remote work has not been reconciled.
 	if hasWork {
 		if u.state != nil {
+			// Transient failures resume the original claims on the next scan.
+			// Persistent conflicts or lease rejection require reconciliation;
+			// clearing this gate would permit a transition with unresolved writes.
 			if err := u.state.SetPendingCloudUpload(volumeID, "uploading"); err != nil {
 				return err
 			}
