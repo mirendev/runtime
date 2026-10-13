@@ -42,6 +42,9 @@ func NewNodeStorage(access *ClusterAccess, deps RunnerDeps, config RunnerConfig)
 	if access == nil {
 		return nil, fmt.Errorf("cluster access is required")
 	}
+	if deps.Namespace == "" {
+		return nil, fmt.Errorf("containerd namespace is required")
+	}
 	return &NodeStorage{access: access, deps: deps, config: config}, nil
 }
 

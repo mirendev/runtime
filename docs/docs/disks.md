@@ -316,6 +316,16 @@ We're building toward cloud-connected storage for Miren Disks. Here's what's pla
 
 We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
 
+:::warning[Cloud outages can block accelerator restarts]
+For cloud-connected accelerator disks, even a replacement on the same node
+waits for the old app's shutdown, final log upload, and lease release before
+attaching. A failed final upload retains the lease and blocks both replacement
+and disk deletion until recovery. If this outlasts `lease_timeout` (five minutes
+by default), the replacement fails to boot. It does not inherit the old lease or
+pending upload batch. Preserve the image, logs, and local state; do not force a
+lease release or delete retained data to unblock the restart.
+:::
+
 ### Legacy Loop Attachment Recovery
 
 Loop-backed attachment cleanup records the backing file's filesystem device and

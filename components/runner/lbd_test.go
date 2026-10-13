@@ -12,8 +12,10 @@ func TestNodeStorageLbdDeps(t *testing.T) {
 	client := &containerd.Client{}
 	resolver, _ := netresolve.NewLocalResolver()
 	dataPath := t.TempDir()
+	_, err := NewNodeStorage(&ClusterAccess{}, RunnerDeps{CC: client}, RunnerConfig{DataPath: dataPath})
+	require.ErrorContains(t, err, "containerd namespace is required")
 	storage, err := NewNodeStorage(&ClusterAccess{}, RunnerDeps{
-		CC: client, Resolver: resolver,
+		CC: client, Namespace: "test-storage", Resolver: resolver,
 	}, RunnerConfig{DataPath: dataPath})
 	require.NoError(t, err)
 
