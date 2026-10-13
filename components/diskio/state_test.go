@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,18 @@ func TestStateNewState(t *testing.T) {
 	assert.NotNil(t, state.Mounts)
 	assert.Empty(t, state.Volumes)
 	assert.Empty(t, state.Mounts)
+}
+
+func TestStateLocalVolumesDoNotShareCloudLock(t *testing.T) {
+	state := NewState()
+	first, err := state.LockCloudVolume(t.Context(), "")
+	require.NoError(t, err)
+	defer first()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	second, err := state.LockCloudVolume(ctx, "")
+	require.NoError(t, err)
+	second()
 }
 
 func TestStateLoadNonExistent(t *testing.T) {

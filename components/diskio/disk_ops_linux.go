@@ -439,11 +439,12 @@ func (r *realDiskMountOps) Unmount(path string) error {
 
 func (r *realDiskMountOps) DeviceBacking(device string) (string, error) {
 	name := filepath.Base(device)
-	path := filepath.Join("/sys/block", name)
+	deviceDir := filepath.Join("/sys/block", name)
+	path := deviceDir
 	if strings.HasPrefix(name, "loop") {
 		path = filepath.Join(path, "loop", "backing_file")
 	} else if strings.HasPrefix(name, "lbd") {
-		path = filepath.Join(path, "backing_path")
+		path = filepath.Join(path, "lbd", "backing_path")
 	} else {
 		return "", fmt.Errorf("unsupported attachment device %s", device)
 	}
@@ -452,7 +453,11 @@ func (r *realDiskMountOps) DeviceBacking(device string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if _, statErr := os.Stat(filepath.Dir(path)); errors.Is(statErr, os.ErrNotExist) {
+			inspectDir := filepath.Dir(path)
+			if strings.HasPrefix(name, "lbd") {
+				inspectDir = deviceDir
+			}
+			if _, statErr := os.Stat(inspectDir); errors.Is(statErr, os.ErrNotExist) {
 				return "", nil
 			}
 		}

@@ -611,7 +611,17 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 	}
 	cloudID := c.cloudVolumeIdFor(mountState)
 	if c.state.HasPendingCloudUpload(cloudID) {
-		return fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+		// A failed final drain must be resumable even if the volume entity
+		// vanished and the periodic watcher no longer enumerates it.
+		if mountState.DevicePath != "" || mountState.Mounted || !mountState.LeaseOwned {
+			return fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+		}
+		if err := c.drainMountLogs(ctx, mountState); err != nil {
+			return err
+		}
+		if c.state.HasPendingCloudUpload(cloudID) {
+			return fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+		}
 	}
 	if mountState.LeaseNonce == "" && mountState.LeaseAcquisitionID != "" {
 		if err := c.recoverMountLease(ctx, mountState); err != nil && !errors.Is(err, ErrLeaseAcquisitionEnded) {
@@ -640,21 +650,20 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				expected = filepath.Join(volume.DiskPath, "disk.img")
 			}
 		}
+		// lbdctl canonicalizes the add path before the kernel stores it.
+		if backing != expected && expected != "" {
+			if canonical, err := filepath.EvalSymlinks(expected); err == nil {
+				if canonical, err := filepath.Abs(canonical); err == nil {
+					expected = canonical
+				}
+			}
+		}
 		if backing != "" && expected == "" {
 			return fmt.Errorf("cannot establish backing ownership for %s", entityId)
 		}
 		if backing != "" && backing == expected {
 			for _, other := range c.state.ListMounts() {
 				if other.EntityId == entityId || other.DevicePath != mountState.DevicePath || other.MountPath == "" {
-					continue
-				}
-				otherBacking := other.BackingPath
-				if otherBacking == "" {
-					if volume := c.state.GetVolume(other.VolumeId); volume != nil {
-						otherBacking = filepath.Join(volume.DiskPath, "disk.img")
-					}
-				}
-				if otherBacking != "" && otherBacking != backing {
 					continue
 				}
 				otherDevice, err := c.ops.MountDevice(other.MountPath)
@@ -667,8 +676,8 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			}
 		}
 		if backing == "" || backing != expected {
-			if backing == "" && mountedDevice == mountState.DevicePath {
-				return fmt.Errorf("mounted device %s has no inspectable backing", mountedDevice)
+			if mountedDevice == mountState.DevicePath {
+				return fmt.Errorf("mounted device %s backing %q does not match %q", mountedDevice, backing, expected)
 			}
 			mountState.DevicePath = ""
 			mountState.Mounted = false
@@ -694,8 +703,10 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 			return fmt.Errorf("failed to unmount: %w", err)
 		}
 		mountState.Mounted = false
-		mountState.LeaseOwned = mountState.LeaseNonce != ""
 	}
+	// Unmount does not end the lease, including recovery after a crash between
+	// the syscall and this checkpoint. Keep the original nonce for tail drain.
+	mountState.LeaseOwned = mountState.LeaseNonce != ""
 	if err := c.state.SetMountAndSave(entityId, mountState); err != nil {
 		return err
 	}
@@ -727,6 +738,13 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		}
 	}
 
+	if detachErr != nil {
+		return detachErr
+	}
+	if err := c.drainMountLogs(ctx, mountState); err != nil {
+		return err
+	}
+
 	// Release cloud lease if one was acquired
 	var leaseErr error
 	if mountState.LeaseNonce != "" && c.cloudClient != nil {
@@ -745,24 +763,31 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		}
 	}
 
-	// If detach or lease release failed, report error and keep state for retry
-	if detachErr != nil || leaseErr != nil {
-		errMsg := ""
-		if detachErr != nil {
-			errMsg = detachErr.Error()
-		}
-		if leaseErr != nil {
-			if errMsg != "" {
-				errMsg += "; "
-			}
-			errMsg += leaseErr.Error()
-		}
-		return fmt.Errorf("detach/release failed: %s", errMsg)
+	if leaseErr != nil {
+		return leaseErr
 	}
 	if mountState.LeaseNonce != "" {
 		return fmt.Errorf("cannot release lease for %s without cloud client and volume id", entityId)
 	}
 	return c.state.DeleteMountAndSave(entityId)
+}
+
+func (c *DiskMountController) drainMountLogs(ctx context.Context, mount *MountState) error {
+	if mount.Mode != storage_v1alpha.VM_ACCELERATOR || mount.LeaseNonce == "" || c.cloudClient == nil {
+		return nil
+	}
+	diskPath := ""
+	if volume := c.state.GetVolume(mount.VolumeId); volume != nil {
+		diskPath = volume.DiskPath
+	}
+	if diskPath == "" && mount.BackingPath != "" {
+		diskPath = filepath.Dir(mount.BackingPath)
+	}
+	if diskPath == "" {
+		return fmt.Errorf("cannot establish log directory for lease release of %s", mount.EntityId)
+	}
+	uploader := NewCloudSegmentUploaderWithClient(c.log, c.updatesClient, c.state)
+	return uploader.drainSegmentsLocked(ctx, c.cloudVolumeIdFor(mount), diskPath)
 }
 
 // recoverMountLease resolves a durable acquisition intent. A terminal response

@@ -84,6 +84,7 @@ type mockDiskMountOps struct {
 	detachedLoops []string
 	attachedLbds  []mockLbdAttach
 	detachedLbds  []string
+	onLbdDetach   func()
 	mounts        []diskMockMount
 	unmounts      []string
 	mountedPaths  map[string]bool
@@ -229,6 +230,9 @@ func (m *mockDiskMountOps) LbdAttach(_ context.Context, imagePath, logDir string
 func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error {
 	if m.lbdDetachErr != nil {
 		return m.lbdDetachErr
+	}
+	if m.onLbdDetach != nil {
+		m.onLbdDetach()
 	}
 	m.detachedLbds = append(m.detachedLbds, devicePath)
 	delete(m.lbdBackings, devicePath)

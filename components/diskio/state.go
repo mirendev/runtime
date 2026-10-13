@@ -263,6 +263,9 @@ func (s *State) LockCloudVolume(ctx context.Context, cloudID string) (func(), er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if cloudID == "" {
+		return func() {}, nil
+	}
 	s.mu.Lock()
 	if s.cloudLocks == nil {
 		s.cloudLocks = make(map[string]chan struct{})
@@ -308,7 +311,7 @@ func (s *State) SetPendingCloudUpload(cloudID, marker string) error {
 func (s *State) HasPendingCloudUpload(cloudID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.PendingCloudUploads[cloudID] != ""
+	return cloudID != "" && s.PendingCloudUploads[cloudID] != ""
 }
 
 // GetVolume returns a copy of a volume state by entity ID

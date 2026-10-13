@@ -32,17 +32,25 @@ func TestDeviceBackingInspection(t *testing.T) {
 		backing, err := ops.DeviceBacking("/dev/loop2")
 		require.NoError(t, err)
 		require.Equal(t, "/vol/current/disk.img", backing)
+		backing, err = ops.DeviceBacking("/dev/lbd1")
+		require.NoError(t, err)
+		require.Equal(t, "/vol/lbd/disk.img", backing)
 		_, err = ops.DeviceBacking("/dev/lbd0")
 		require.Error(t, err, "present device without backing identity is not confirmed absence")
 		return
 	}
 
 	root := t.TempDir()
-	for _, dir := range []string{"loop0", "loop1", "loop2/loop", "lbd0"} {
+	for _, dir := range []string{"loop0", "loop1", "loop2/loop", "lbd0", "lbd1/lbd"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, "sys/block", dir), 0755))
 	}
 	require.NoError(t, os.Symlink("loop", filepath.Join(root, "sys/block/loop0/loop")))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "sys/block/loop2/loop/backing_file"), []byte("/vol/current/disk.img\n"), 0600))
+	// The pinned module attaches its attributes in the named "lbd" group.
+	// A decoy at the old path makes a wrong-path implementation fail distinctly.
+	for path, value := range map[string]string{"lbd1/lbd/backing_path": "/vol/lbd/disk.img\n", "lbd1/backing_path": "/wrong/disk.img\n"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, "sys/block", path), []byte(value), 0600))
+	}
 	// Isolate the synthetic sysfs in a child; never replace the host's sysfs.
 	cmd := exec.Command(os.Args[0], "-test.run=^TestDeviceBackingInspection$", "-test.v")
 	cmd.Env = append(os.Environ(), "MIREN_BACKING_INSPECTION_ROOT="+root)

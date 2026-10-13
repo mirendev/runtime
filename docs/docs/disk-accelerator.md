@@ -175,6 +175,16 @@ completion of **every** original segment confirms the batch before the runtime
 clears the gate. It retains the volume lock through durable horizon updates and
 local file retirement.
 
+Normal unmount closes the final LBD segment and drains the retained logs under
+the original lease before releasing it. A failed detach or drain keeps the
+lease and local recovery state; restart retries the same originals. This avoids
+depending on nonce-less tail uploads after another runner takes ownership.
+
+Orphan lease cleanup also requires the owning runner to confirm its containers
+are gone. An unreachable runner or a legacy lease with no recorded owner is
+not proof of absence and is not automatically released. Preserve that fencing
+until ownership can be established, or escalate for protocol-level recovery.
+
 If payload mismatch or lease-nonce rejection persists:
 
 - Stop app writes through normal sandbox shutdown; preserve the disk image,

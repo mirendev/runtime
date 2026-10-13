@@ -2,7 +2,9 @@ package diskio
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -872,6 +874,7 @@ func TestDiskMountControllerTeardownReleasesWithCloudId(t *testing.T) {
 	state.SetVolume("disk_volume/vol-acc", &VolumeState{
 		EntityId:      "disk_volume/vol-acc",
 		VolumeId:      "vol-acc",
+		DiskPath:      t.TempDir(),
 		CloudVolumeId: "vol-cloud-acc",
 		Mode:          storage_v1alpha.VM_ACCELERATOR,
 	})
@@ -926,8 +929,9 @@ func TestDiskMountCleanupPartialProgress(t *testing.T) {
 			partial := state.GetMount("mount")
 			require.NotNil(t, partial)
 			if failed == "detach" {
-				require.Empty(t, partial.LeaseNonce)
-				require.False(t, partial.LeaseOwned)
+				require.Equal(t, "nonce", partial.LeaseNonce)
+				require.True(t, partial.LeaseOwned)
+				require.Empty(t, cloud.releaseLeaseCalls)
 				require.Equal(t, "/dev/lbd0", partial.DevicePath)
 			} else {
 				require.Empty(t, partial.DevicePath)
@@ -965,6 +969,48 @@ func TestDiskMountStaleCleanupProtectsReusedDevice(t *testing.T) {
 	require.Empty(t, ops.detachedLbds)
 	require.True(t, state.GetMount("live").Mounted)
 	require.Equal(t, "current", state.LeaseNonceForCloudVolume("cloud"))
+}
+
+func TestDiskMountCleanupMountedBackingIdentity(t *testing.T) {
+	for _, mismatch := range []bool{true, false} {
+		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
+			dir := t.TempDir()
+			realPath := filepath.Join(dir, "disk.img")
+			require.NoError(t, os.WriteFile(realPath, nil, 0600))
+			alias := filepath.Join(dir, "alias.img")
+			require.NoError(t, os.Symlink(realPath, alias))
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			state.SetMount("mount", &MountState{
+				EntityId: "mount", CloudVolumeId: "cloud", DevicePath: "/dev/lbd0",
+				BackingPath: alias, MountPath: "/mnt/volume", Mounted: true,
+				Mode: storage_v1alpha.VM_ACCELERATOR, LeaseNonce: "nonce", LeaseOwned: true,
+			})
+			require.NoError(t, state.Save())
+			ops := newMockDiskMountOps()
+			ops.lbdBackings["/dev/lbd0"] = realPath
+			if mismatch {
+				ops.lbdBackings["/dev/lbd0"] = filepath.Join(dir, "different.img")
+			}
+			require.NoError(t, ops.Mount("/dev/lbd0", "/mnt/volume", "ext4", false))
+			cloud := &mockCloudDiskClient{}
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+			controller.SetCloudClient(cloud)
+			err = controller.Reconcile(t.Context(), &storage_v1alpha.DiskMount{ID: "mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}, nil)
+			if mismatch {
+				require.Error(t, err)
+				require.True(t, ops.IsMounted("/mnt/volume"))
+				require.Empty(t, cloud.releaseLeaseCalls)
+				reloaded, err := LoadState(dir)
+				require.NoError(t, err)
+				require.Equal(t, "nonce", reloaded.LeaseNonceForCloudVolume("cloud"))
+			} else {
+				require.NoError(t, err)
+				require.False(t, ops.IsMounted("/mnt/volume"))
+				require.Len(t, cloud.releaseLeaseCalls, 1)
+			}
+		})
+	}
 }
 
 func TestDiskMountCleanupKernelReality(t *testing.T) {
@@ -1079,6 +1125,7 @@ func TestDiskMountControllerTeardownReleasesAfterVolumeGone(t *testing.T) {
 		EntityId:      "disk_mount/mnt-acc",
 		VolumeId:      "disk_volume/vol-acc",
 		CloudVolumeId: "vol-cloud-acc",
+		BackingPath:   filepath.Join(t.TempDir(), "disk.img"),
 		DevicePath:    "/dev/loop3",
 		Mode:          storage_v1alpha.VM_ACCELERATOR,
 		LeaseNonce:    "nonce-acc",

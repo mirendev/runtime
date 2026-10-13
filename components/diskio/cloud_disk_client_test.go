@@ -177,7 +177,8 @@ func TestLeaseCleanupRecoversCrashAfterCloudDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, state.SetMountAndSave("old-mount", &MountState{
 		EntityId: "old-mount", CloudVolumeId: "cloud", LeaseNonce: "old",
-		DevicePath: "/dev/lbd0", Mode: storage_v1alpha.VM_ACCELERATOR,
+		BackingPath: filepath.Join(dir, "disk.img"),
+		DevicePath:  "/dev/lbd0", Mode: storage_v1alpha.VM_ACCELERATOR,
 	}))
 	client := NewCloudDiskClient(slog.Default(), ts.URL, auth)
 	require.NoError(t, client.ReleaseLease(t.Context(), "cloud", "old"))

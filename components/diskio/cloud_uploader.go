@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"miren.dev/lbd"
@@ -61,6 +62,17 @@ const uploadConcurrency = 8
 // Thus a crash or partial publication leaves the original batch available to
 // resume by checksum-bound ordering key, including a lost begin response.
 func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
+	if u.state != nil {
+		unlock, err := u.state.LockCloudVolume(ctx, volumeID)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	return u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, committed)
+}
+
+func (u *CloudSegmentUploader) uploadSegmentsLocked(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
 	if len(paths) == 0 || len(paths) > uploadConcurrency {
 		return fmt.Errorf("upload batch must contain 1..%d segments", uploadConcurrency)
 	}
@@ -73,7 +85,7 @@ func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, dis
 		previous = label
 	}
 	selected := paths
-	return u.withCloudUpload(ctx, volumeID, func() (bool, error) {
+	return u.withCloudUploadLocked(volumeID, func() (bool, error) {
 		// Mount replay may have advanced the horizon while this batch waited
 		// for the volume lock. Never publish writes now covered by replay.
 		horizon, err := readLogHorizon(diskPath)
@@ -153,6 +165,10 @@ func (u *CloudSegmentUploader) withCloudUpload(ctx context.Context, volumeID str
 		}
 		defer unlock()
 	}
+	return u.withCloudUploadLocked(volumeID, preflight, upload, retire)
+}
+
+func (u *CloudSegmentUploader) withCloudUploadLocked(volumeID string, preflight func() (bool, error), upload func() error, retire func() error) error {
 	hasWork := true
 	if preflight != nil {
 		var err error
@@ -188,6 +204,48 @@ func (u *CloudSegmentUploader) withCloudUpload(ctx context.Context, volumeID str
 		return retire()
 	}
 	return nil
+}
+
+// drainSegmentsLocked runs after detach has closed the final segment, while
+// the caller retains the lease and cloud-volume lock through publication.
+func (u *CloudSegmentUploader) drainSegmentsLocked(ctx context.Context, volumeID, diskPath string) error {
+	if _, err := os.Stat(diskPath); err != nil {
+		return fmt.Errorf("inspect log backing directory: %w", err)
+	}
+	for {
+		names, err := oldestSegments(ctx, filepath.Join(diskPath, "logs"))
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			return nil
+		}
+		if u.updates == nil {
+			return fmt.Errorf("cannot drain cloud logs without an updates client")
+		}
+		for len(names) > 0 {
+			n := min(uploadConcurrency, len(names))
+			paths := make([]string, n)
+			for i, name := range names[:n] {
+				paths[i] = filepath.Join(diskPath, "logs", name)
+			}
+			if err := u.uploadSegmentsLocked(ctx, volumeID, diskPath, paths, func(path string) error {
+				if err := updateLogHorizonFromPath(diskPath, path); err != nil {
+					return err
+				}
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			names = names[n:]
+		}
+	}
 }
 
 func (u *CloudSegmentUploader) uploadSegment(ctx context.Context, volumeID, segmentPath string) (string, error) {

@@ -239,6 +239,7 @@ type protocolUpdate struct {
 	size                int64
 	data                []byte
 	prepared, active    bool
+	accepted            bool
 }
 
 func (s *uploadProtocolServer) fail(stage, key string) bool {
@@ -289,6 +290,12 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		} else if row.kind != body.Kind || row.md5 != body.MD5 || row.crc != body.CRC || row.size != body.Size {
 			http.Error(w, "payload conflict", http.StatusConflict)
 			return
+		}
+		if row.accepted && !row.active {
+			// Model accepted work publishing after the waiter timed out, before
+			// the next begin. This is not a real PG/bgtask worker fixture.
+			row.active = true
+			s.order = append(s.order, body.Key)
 		}
 		if s.fail("begin", body.Key) {
 			http.Error(w, "lost begin response", 500)
@@ -351,6 +358,11 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		row.prepared = true
+		if !body.Prepare && s.fail("accepted", key) {
+			row.accepted = true
+			http.Error(w, "accepted work still running after wait timeout", http.StatusInternalServerError)
+			return
+		}
 		if !body.Prepare && !row.active {
 			row.active = true
 			s.order = append(s.order, key)
@@ -381,7 +393,7 @@ func (s *uploadProtocolServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
-	for _, stage := range []string{"begin", "put", "prepare", "complete", "lost"} {
+	for _, stage := range []string{"begin", "put", "prepare", "complete", "lost", "accepted"} {
 		t.Run(stage, func(t *testing.T) {
 			ts, h, auth := newTestUploaderServer(t)
 			remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}, prepareLatency: time.Millisecond}
@@ -446,6 +458,95 @@ func TestUploadPipelineFailureRecoveryAndReplay(t *testing.T) {
 			require.Equal(t, expected, actual)
 		})
 	}
+}
+
+func TestDiskMountReleaseDrainsFinalSegmentBeforeLease(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	remote := &uploadProtocolServer{url: ts.URL, rows: map[string]*protocolUpdate{}, failures: map[string]int{}}
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "logs")
+	require.NoError(t, os.Mkdir(logDir, 0755))
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	require.NoError(t, state.SetVolumeAndSave("volume", &VolumeState{EntityId: "volume", DiskPath: dir, CloudVolumeId: "vol-test", Mode: storage_v1alpha.VM_ACCELERATOR}))
+	require.NoError(t, state.SetMountAndSave("mount", &MountState{
+		EntityId: "mount", VolumeId: "volume", CloudVolumeId: "vol-test", BackingPath: filepath.Join(dir, "disk.img"),
+		DevicePath: "/dev/lbd0", MountPath: "/mnt/volume", Mounted: true, Mode: storage_v1alpha.VM_ACCELERATOR,
+		LeaseNonce: "nonce",
+	}))
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			var request struct {
+				Nonce string `json:"lease_nonce"`
+			}
+			if err := json.Unmarshal(data, &request); err != nil || request.Nonce != "nonce" || state.LeaseNonceForCloudVolume("vol-test") != "nonce" {
+				http.Error(w, "lease lost before tail publication", http.StatusForbidden)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(data))
+		}
+		remote.ServeHTTP(w, r)
+	}
+	var keys []string
+	expected := make([]byte, 4096)
+	const count = logScanWindow + 1
+	write := func(i int) {
+		key := fmt.Sprintf("4000000000000001%08x", i+1)
+		keys = append(keys, key)
+		data := bytes.Repeat([]byte{byte(i + 1)}, 4096)
+		copy(expected, data)
+		segment := buildSegmentData(t, 4096, key, []lbd.Entry{{Op: "W", Block: 0, Length: 4096, Checksum: crc32.ChecksumIEEE(data), Data: data}})
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, "disk."+key+".log"), segment, 0600))
+	}
+	for i := 0; i < count-1; i++ {
+		write(i)
+	}
+	ops := newMockDiskMountOps()
+	ops.lbdBackings["/dev/lbd0"] = filepath.Join(dir, "disk.img")
+	// Kernel unmount succeeded before the process could persist LeaseOwned.
+	ops.onLbdDetach = func() { write(count - 1) }
+	remote.failures["complete:"+keys[1]] = 1
+	cloud := &mockCloudDiskClient{}
+	client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
+	controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+	controller.SetCloudClient(cloud)
+	controller.SetUpdatesClient(client)
+	mount := &storage_v1alpha.DiskMount{ID: "mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}
+	require.Error(t, controller.Reconcile(t.Context(), mount, nil))
+	require.Empty(t, cloud.releaseLeaseCalls)
+	require.Len(t, keys, count, "detach closes the final segment before drain")
+	for _, key := range keys {
+		require.FileExists(t, filepath.Join(logDir, "disk."+key+".log"))
+	}
+	state, err = LoadState(dir)
+	require.NoError(t, err)
+	require.True(t, state.HasPendingCloudUpload("vol-test"))
+	require.Equal(t, "nonce", state.LeaseNonceForCloudVolume("vol-test"))
+	state.DeleteVolume("volume") // orphan retry must use persisted backing and intent
+	controller = newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+	controller.SetCloudClient(cloud)
+	controller.SetUpdatesClient(client)
+	require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
+	require.Len(t, cloud.releaseLeaseCalls, 1)
+	require.Nil(t, state.GetMount("mount"))
+	require.False(t, state.HasPendingCloudUpload("vol-test"))
+	entries, err := os.ReadDir(logDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	require.Equal(t, keys, remote.order)
+	restore := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(restore, "disk.img"), make([]byte, 4096), 0600))
+	controller = NewDiskMountController(slog.Default(), restore, compute.NewNodeId("replay"), NewState(), newMockDiskMountOps())
+	controller.SetCloudClient(NewCloudDiskClient(slog.Default(), ts.URL, auth))
+	require.NoError(t, controller.replayMissingSegments(t.Context(), &VolumeState{DiskPath: restore, CloudVolumeId: "vol-test"}))
+	actual, err := os.ReadFile(filepath.Join(restore, "disk.img"))
+	require.NoError(t, err)
+	require.Equal(t, expected, actual)
 }
 
 func TestUploadPipelineRechecksReplayHorizon(t *testing.T) {
