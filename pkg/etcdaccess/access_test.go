@@ -70,12 +70,14 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	node := &compute_v1alpha.Node{RunnerId: "enrolled", Name: "existing-runner"}
 	_, err = store.CreateEntity(ctx, entity.New(node.Encode()))
 	require.NoError(t, err)
+	_, err = admin.Put(ctx, "/miren//sub/flannel/subnets/test", "pre-upgrade-lease")
+	require.NoError(t, err)
 
 	foundation := coordinate.NewFoundation(log, coordinate.CoordinatorConfig{DataPath: dir, Address: "localhost:0", NoAuth: true, Prefix: "/miren/", EtcdEndpoints: admin.Endpoints(), EtcdTLS: transport.ClientTLS})
 	require.NoError(t, foundation.PrepareMetadata(ctx))
 	require.NoError(t, foundation.Start(ctx))
 	defer func() { require.NoError(t, foundation.Stop(context.Background())) }()
-	for _, key := range []string{"/miren/cluster-state/records/authority", "/miren/secret-keyring", "/miren/sub/flannel-other/config"} {
+	for _, key := range []string{"/miren/cluster-state/records/authority", "/miren/secret-keyring", "/miren//sub/flannel-other/config", "/miren/sub/flannel/subnets/test"} {
 		_, err := runner.Get(ctx, key)
 		require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 		_, err = runner.Put(ctx, key, "overwritten")
@@ -83,16 +85,26 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	}
 	_, err = runner.Get(ctx, "/miren", clientv3.WithPrefix())
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
-	_, err = runner.Put(ctx, "/miren/sub/flannel/subnets/test", "network-lease")
+	lease, err := runner.Get(ctx, "/miren//sub/flannel/subnets/test")
 	require.NoError(t, err)
-	lease, err := runner.Get(ctx, "/miren/sub/flannel/subnets/test")
+	require.Len(t, lease.Kvs, 1)
+	require.Equal(t, "pre-upgrade-lease", string(lease.Kvs[0].Value))
+	watch := runner.Watch(ctx, "/miren//sub/flannel/subnets/", clientv3.WithPrefix(), clientv3.WithRev(lease.Header.Revision+1))
+	_, err = runner.Put(ctx, "/miren//sub/flannel/subnets/test", "network-lease")
 	require.NoError(t, err)
-	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
+	select {
+	case response := <-watch:
+		require.NoError(t, response.Err())
+		require.Len(t, response.Events, 1)
+		require.Equal(t, "network-lease", string(response.Events[0].Kv.Value))
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not receive the lease update")
+	}
 
 	// Legacy certificates can name a registered runner by its node name rather
 	// than its RunnerId. Refresh must provision the actual verified peer CN.
 	legacy := connect("runner-existing-runner")
-	_, err = legacy.Get(ctx, "/miren/sub/flannel/subnets/test")
+	_, err = legacy.Get(ctx, "/miren//sub/flannel/subnets/test")
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 	cc, err := ca.IssueCertificate(caauth.Options{CommonName: "runner-existing-runner", Organization: "miren", ValidFor: time.Hour})
 	require.NoError(t, err)
@@ -106,14 +118,14 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	response, err := registrationClient.RefreshCertificate(rpc.ContextWithConnectionInfo(ctx, &rpc.CurrentConnectionInfo{PeerCertificate: peer}), "localhost:8444")
 	require.NoError(t, err)
 	require.False(t, response.HasError())
-	lease, err = legacy.Get(ctx, "/miren/sub/flannel/subnets/test")
+	lease, err = legacy.Get(ctx, "/miren//sub/flannel/subnets/test")
 	require.NoError(t, err)
 	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
 	_, err = legacy.Get(ctx, "/miren/cluster-state/records/authority")
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 
 	// Provisioning is idempotent when authentication is already enabled.
-	require.NoError(t, etcdaccess.Ensure(ctx, admin, "/miren"))
+	require.NoError(t, etcdaccess.Ensure(ctx, admin, "/miren/"))
 	require.NoError(t, etcdaccess.Runner(ctx, admin, "runner-enrolled"))
 	authority, err := admin.Get(ctx, "/miren/cluster-state/records/authority")
 	require.NoError(t, err)

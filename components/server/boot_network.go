@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/sync/errgroup"
 	"miren.dev/runtime/pkg/boot"
@@ -39,7 +38,7 @@ type networkBoot struct {
 func networkInputs(options StartOptions) networkBootInputs {
 	return networkBootInputs{
 		dataPath:   options.Config.Server.GetDataPath(),
-		etcdPrefix: strings.TrimRight(options.Config.Etcd.GetPrefix(), "/") + "/sub/flannel",
+		etcdPrefix: options.Config.Etcd.GetPrefix() + "/sub/flannel",
 		group:      options.Group,
 	}
 }

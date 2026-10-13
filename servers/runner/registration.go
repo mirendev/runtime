@@ -379,7 +379,7 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 		results.SetEtcdEndpoints(s.EtcdEndpoints)
 	}
 	if s.EtcdPrefix != "" {
-		results.SetEtcdPrefix(strings.TrimRight(s.EtcdPrefix, "/") + "/sub/flannel")
+		results.SetEtcdPrefix(s.EtcdPrefix + "/sub/flannel")
 	}
 	// Keep sending this field for older runner binaries, which persist the
 	// backend selected by the coordinator at join time.
