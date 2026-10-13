@@ -6,9 +6,16 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/flannel-io/flannel/pkg/ip"
+	"github.com/flannel-io/flannel/pkg/lease"
+	"github.com/flannel-io/flannel/pkg/subnet"
+	fetcd "github.com/flannel-io/flannel/pkg/subnet/etcd"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -70,14 +77,65 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	node := &compute_v1alpha.Node{RunnerId: "enrolled", Name: "existing-runner"}
 	_, err = store.CreateEntity(ctx, entity.New(node.Encode()))
 	require.NoError(t, err)
-	_, err = admin.Put(ctx, "/miren//sub/flannel/subnets/test", "pre-upgrade-lease")
+	runnerPrefix := "/miren//sub/flannel"
+	newManager := func(name string) subnet.Manager {
+		cc, err := ca.IssueCertificate(caauth.Options{CommonName: name, ValidFor: time.Hour})
+		require.NoError(t, err)
+		dir := t.TempDir()
+		certFile, keyFile, caFile := filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key"), filepath.Join(dir, "ca.crt")
+		require.NoError(t, os.WriteFile(certFile, cc.CertPEM, 0600))
+		require.NoError(t, os.WriteFile(keyFile, cc.KeyPEM, 0600))
+		require.NoError(t, os.WriteFile(caFile, cc.CACert, 0600))
+		manager, err := fetcd.NewLocalManager(ctx, &fetcd.EtcdConfig{Endpoints: admin.Endpoints(), Prefix: runnerPrefix, Certfile: certFile, Keyfile: keyFile, CAFile: caFile}, ip.IP4Net{}, ip.IP6Net{}, 60)
+		require.NoError(t, err)
+		return manager
+	}
+	_, err = admin.Put(ctx, path.Join(runnerPrefix, "config"), `{"Network":"10.42.0.0/16","Backend":{"Type":"wireguard"}}`)
 	require.NoError(t, err)
+	attrs := &lease.LeaseAttrs{PublicIP: ip.MustParseIP4("192.0.2.8"), BackendType: "wireguard"}
+	beforeUpgrade, err := newManager(etcdaccess.Coordinator).AcquireLease(ctx, attrs)
+	require.NoError(t, err)
+	leaseKey := path.Join(runnerPrefix, "subnets", subnet.MakeSubnetKey(beforeUpgrade.Subnet, beforeUpgrade.IPv6Subnet))
 
 	foundation := coordinate.NewFoundation(log, coordinate.CoordinatorConfig{DataPath: dir, Address: "localhost:0", NoAuth: true, Prefix: "/miren/", EtcdEndpoints: admin.Endpoints(), EtcdTLS: transport.ClientTLS})
 	require.NoError(t, foundation.PrepareMetadata(ctx))
 	require.NoError(t, foundation.Start(ctx))
 	defer func() { require.NoError(t, foundation.Stop(context.Background())) }()
-	for _, key := range []string{"/miren/cluster-state/records/authority", "/miren/secret-keyring", "/miren//sub/flannel-other/config", "/miren/sub/flannel/subnets/test"} {
+	manager := newManager("runner-enrolled")
+	networkConfig, err := manager.GetNetworkConfig(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "10.42.0.0/16", networkConfig.Network.String())
+	afterUpgrade, err := manager.AcquireLease(ctx, attrs)
+	require.NoError(t, err)
+	require.Equal(t, beforeUpgrade.Subnet, afterUpgrade.Subnet, "existing runners must retain their leased subnet")
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	updates := make(chan []lease.LeaseWatchResult, 1)
+	watchDone := make(chan error, 1)
+	go func() { watchDone <- manager.WatchLeases(watchCtx, updates) }()
+	select {
+	case snapshot := <-updates:
+		require.Len(t, snapshot, 1)
+		require.Len(t, snapshot[0].Snapshot, 1)
+		require.Equal(t, beforeUpgrade.Subnet, snapshot[0].Snapshot[0].Subnet)
+	case err := <-watchDone:
+		t.Fatalf("flannel lease watch failed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("flannel did not read the existing lease snapshot")
+	}
+	require.NoError(t, manager.RenewLease(ctx, afterUpgrade))
+	select {
+	case update := <-updates:
+		require.Len(t, update, 1)
+		require.Len(t, update[0].Events, 1)
+		require.Equal(t, lease.EventAdded, update[0].Events[0].Type)
+		require.Equal(t, beforeUpgrade.Subnet, update[0].Events[0].Lease.Subnet)
+	case err := <-watchDone:
+		t.Fatalf("flannel lease watch failed: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("flannel did not receive the lease renewal")
+	}
+	for _, key := range []string{"/miren/cluster-state/records/authority", "/miren/secret-keyring", "/miren/sub/flannel-other/config", "/miren//sub/flannel/subnets/test"} {
 		_, err := runner.Get(ctx, key)
 		require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 		_, err = runner.Put(ctx, key, "overwritten")
@@ -85,26 +143,11 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	}
 	_, err = runner.Get(ctx, "/miren", clientv3.WithPrefix())
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
-	lease, err := runner.Get(ctx, "/miren//sub/flannel/subnets/test")
-	require.NoError(t, err)
-	require.Len(t, lease.Kvs, 1)
-	require.Equal(t, "pre-upgrade-lease", string(lease.Kvs[0].Value))
-	watch := runner.Watch(ctx, "/miren//sub/flannel/subnets/", clientv3.WithPrefix(), clientv3.WithRev(lease.Header.Revision+1))
-	_, err = runner.Put(ctx, "/miren//sub/flannel/subnets/test", "network-lease")
-	require.NoError(t, err)
-	select {
-	case response := <-watch:
-		require.NoError(t, response.Err())
-		require.Len(t, response.Events, 1)
-		require.Equal(t, "network-lease", string(response.Events[0].Kv.Value))
-	case <-time.After(5 * time.Second):
-		t.Fatal("runner did not receive the lease update")
-	}
 
 	// Legacy certificates can name a registered runner by its node name rather
 	// than its RunnerId. Refresh must provision the actual verified peer CN.
 	legacy := connect("runner-existing-runner")
-	_, err = legacy.Get(ctx, "/miren//sub/flannel/subnets/test")
+	_, err = legacy.Get(ctx, leaseKey)
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 	cc, err := ca.IssueCertificate(caauth.Options{CommonName: "runner-existing-runner", Organization: "miren", ValidFor: time.Hour})
 	require.NoError(t, err)
@@ -118,9 +161,9 @@ func TestRunnerCertificatesCannotAccessCoordinatorCredentials(t *testing.T) {
 	response, err := registrationClient.RefreshCertificate(rpc.ContextWithConnectionInfo(ctx, &rpc.CurrentConnectionInfo{PeerCertificate: peer}), "localhost:8444")
 	require.NoError(t, err)
 	require.False(t, response.HasError())
-	lease, err = legacy.Get(ctx, "/miren//sub/flannel/subnets/test")
+	storedLease, err := legacy.Get(ctx, leaseKey)
 	require.NoError(t, err)
-	require.Equal(t, "network-lease", string(lease.Kvs[0].Value))
+	require.Len(t, storedLease.Kvs, 1)
 	_, err = legacy.Get(ctx, "/miren/cluster-state/records/authority")
 	require.ErrorIs(t, err, rpctypes.ErrPermissionDenied)
 

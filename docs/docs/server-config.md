@@ -73,7 +73,7 @@ Registration and workload identity are restored before their boot consumers run,
 
 An etcd snapshot is not a full data-path backup. Server configuration, node-local executor state, SQLite databases, OCI images, application disks, staged disk transfers, build data, logs, and metrics remain outside etcd and need their own backup strategy. Keep the same server configuration when restoring, including the etcd prefix and workload identity hostname settings.
 
-The flannel namespace preserves the configured etcd prefix literally. For example, `/miren/` uses `/miren//sub/flannel`, matching the prefix already saved by existing runners. Migration does not rename that namespace or require those runners to rejoin; its RBAC permission covers the same range. Do not remove a trailing slash from an existing cluster's prefix as part of the upgrade.
+Flannel cleans its etcd registry keys with `path.Join`. For example, runners may have `/miren//sub/flannel` saved in their configuration, but their actual leases and network config remain under `/miren/sub/flannel/`. RBAC covers that cleaned key range; existing runners do not need to rejoin. Keep the configured etcd prefix unchanged during the upgrade because other stores also depend on it.
 
 :::warning[Back up the cluster sealing key separately]
 On first migration, Miren generates a random 32-byte key at `<data-path>/server/cluster-sealing.key`, with permissions `0600`. This host-only key seals the CA, the secret keyring, and all other coordinator metadata in etcd. It is never stored in etcd or sent to Miren Cloud. An etcd snapshot alone cannot decrypt this metadata or mint cluster identities.

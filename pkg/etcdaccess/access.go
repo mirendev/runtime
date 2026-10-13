@@ -4,6 +4,7 @@ package etcdaccess
 import (
 	"context"
 	"errors"
+	"path"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -26,9 +27,9 @@ func Ensure(ctx context.Context, client *clientv3.Client, prefix string) error {
 	if _, err := client.RoleAdd(ctx, runnerRole); err != nil && !errors.Is(err, rpctypes.ErrRoleAlreadyExist) {
 		return err
 	}
-	// Preserve the namespace saved by existing runners at join time. Cleaning
-	// a trailing slash would move the coordinator away from their leases.
-	key := prefix + "/sub/flannel/"
+	// Flannel builds its registry keys with path.Join, including for the raw
+	// prefix persisted by older runners. Grant the actual etcd key range.
+	key := path.Join(prefix, "sub", "flannel") + "/"
 	if _, err := client.RoleGrantPermission(ctx, runnerRole, key, clientv3.GetPrefixRangeEnd(key), clientv3.PermissionType(clientv3.PermReadWrite)); err != nil {
 		return err
 	}
