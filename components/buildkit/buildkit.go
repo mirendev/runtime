@@ -193,7 +193,7 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 	// Check if container already exists
 	existingContainer, err := c.CC.LoadContainer(ctx, buildkitContainerName)
 	if err == nil {
-		retired, err := c.retireIfOTelEnvChanged(ctx, existingContainer)
+		retired, err := c.retireIfStale(ctx, existingContainer, image)
 		if err != nil {
 			return err
 		}
@@ -517,16 +517,22 @@ func (c *Component) createContainer(ctx context.Context, image containerd.Image,
 	return container, nil
 }
 
-// retireIfOTelEnvChanged deletes an existing container whose OTel env differs
-// from what buildkitd should run with now, reporting whether it did.
+// retireIfStale deletes an existing container that no longer matches what
+// buildkitd should run as now, reporting whether it did.
 //
-// A restart otherwise reuses the container, and its env is part of the spec.
-// Without this, whatever OTEL_EXPORTER_OTLP_HEADERS the server had when the
-// container was first created would ride along indefinitely, which is exactly
-// the static credential an operator removes when moving traces to workload
-// identity. The build cache lives on the bind-mounted data path, so a
-// recreated container keeps it.
-func (c *Component) retireIfOTelEnvChanged(ctx context.Context, container containerd.Container) (bool, error) {
+// A restart otherwise reuses the container, and both its image and its env
+// are fixed when it's created. Without this, bumping imagerefs.BuildKit would
+// only reach fresh installs: an upgraded server would keep running the old
+// daemon from the old image's snapshot indefinitely. The same goes for the
+// OTEL_EXPORTER_OTLP_HEADERS the server had when the container was first
+// created, which is exactly the static credential an operator removes when
+// moving traces to workload identity. The build cache lives on the
+// bind-mounted data path, so a recreated container keeps it.
+func (c *Component) retireIfStale(ctx context.Context, container containerd.Container, image containerd.Image) (bool, error) {
+	info, err := container.Info(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reading existing buildkit container info: %w", err)
+	}
 	spec, err := container.Spec(ctx)
 	if err != nil {
 		return false, fmt.Errorf("reading existing buildkit container spec: %w", err)
@@ -535,17 +541,28 @@ func (c *Component) retireIfOTelEnvChanged(ctx context.Context, container contai
 	if spec.Process != nil {
 		current = otelOnly(spec.Process.Env)
 	}
-	if slices.Equal(current, otelOnly(c.otelEnv)) {
+
+	switch {
+	case info.Image != image.Name():
+		c.Log.Info("buildkit image changed, recreating its container",
+			"container_id", container.ID(), "from", info.Image, "to", image.Name())
+	case !slices.Equal(current, otelOnly(c.otelEnv)):
+		c.Log.Info("buildkit trace export settings changed, recreating its container", "container_id", container.ID())
+	default:
 		return false, nil
 	}
 
-	c.Log.Info("buildkit trace export settings changed, recreating its container", "container_id", container.ID())
 	if task, err := container.Task(ctx, nil); err == nil {
 		if err := c.stopTask(ctx, task); err != nil {
 			return false, fmt.Errorf("stopping buildkit task before recreating its container: %w", err)
 		}
 	} else if !errdefs.IsNotFound(err) {
 		return false, fmt.Errorf("loading buildkit task before recreating its container: %w", err)
+	} else if err := base.ReapLeakedTask(ctx, c.CC, container.ID()); err != nil {
+		// NotFound can also be a task record leaked by an interrupted delete,
+		// which would make NewTask on the recreated container (same ID) fail
+		// with AlreadyExists. See base.ReplaceTask.
+		return false, fmt.Errorf("reaping leaked buildkit task before recreating its container: %w", err)
 	}
 	c.container = container
 	c.deleteContainerWithRetry(ctx)
