@@ -663,16 +663,18 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				if mountState.BackingIdentity == nil {
 					// Legacy ownership must be established while the known file
 					// still exists, not from sysfs path text after rename/unlink.
-					identity, err = verifiedLoopIdentity(c.ops, mountState.DevicePath, expected)
+					identity, err = legacyLoopIdentity(c.ops, c.state, mountState.VolumeId, expected, identity)
 					if err != nil {
 						return fmt.Errorf("establish legacy loop ownership: %w", err)
 					}
-					mountState.BackingIdentity = identity
-					if err := c.state.SetLegacyMountIdentityAndSave(entityId, mountState.DevicePath, identity); err != nil {
-						return err
+					if identity != nil {
+						mountState.BackingIdentity = identity
+						if err := c.state.SetLegacyMountIdentityAndSave(entityId, mountState.DevicePath, identity); err != nil {
+							return err
+						}
 					}
 				}
-				owned = *identity == *mountState.BackingIdentity
+				owned = identity != nil && *identity == *mountState.BackingIdentity
 			}
 		} else {
 			backing, err := c.ops.DeviceBacking(mountState.DevicePath)

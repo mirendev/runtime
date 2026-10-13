@@ -100,11 +100,12 @@ type mockDiskMountOps struct {
 
 	// loopBacking maps imagePath → existing loop device, for FindLoopByBacking.
 	// Tests populate this to simulate a pre-existing attachment.
-	loopBacking     map[string]string
-	loopIdentities  map[string]*BackingIdentity
-	fileIdentities  map[string]*BackingIdentity
-	loopIdentityErr error
-	fileIdentityErr error
+	loopBacking        map[string]string
+	loopIdentities     map[string]*BackingIdentity
+	fileIdentities     map[string]*BackingIdentity
+	loopIdentityErr    error
+	fileIdentityErr    error
+	fileIdentityErrors map[string]error
 	// findLoopErr, when non-nil, is returned from FindLoopByBacking and
 	// FindAllLoopBackings. Used to simulate a sysfs-degraded environment.
 	findLoopErr error
@@ -194,6 +195,9 @@ func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, *BackingIdentit
 func (m *mockDiskMountOps) FileIdentity(path string) (*BackingIdentity, error) {
 	if m.fileIdentityErr != nil {
 		return nil, m.fileIdentityErr
+	}
+	if err := m.fileIdentityErrors[path]; err != nil {
+		return nil, err
 	}
 	if identity, ok := m.fileIdentities[path]; ok {
 		return identity, nil

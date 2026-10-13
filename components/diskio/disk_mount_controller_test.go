@@ -1110,6 +1110,72 @@ func TestDiskMountCleanupMountedBackingIdentity(t *testing.T) {
 	}
 }
 
+func TestLegacyLoopDeviceReuse(t *testing.T) {
+	for _, scenario := range []string{"volume-owner", "mount-owner", "owner-with-unavailable-peer", "tuple-only", "missing-original", "missing-owner", "inspection-error", "mounted-collision"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			original := filepath.Join(dir, "original", "disk.img")
+			other := filepath.Join(dir, "other", "disk.img")
+			identity := &BackingIdentity{Device: 7, Inode: 29}
+			ops := newMockDiskMountOps()
+			ops.fileIdentities = map[string]*BackingIdentity{original: {Device: 7, Inode: 11}, other: identity}
+			ops.loopIdentities = map[string]*BackingIdentity{"/dev/loop0": identity}
+			state.SetMount("legacy", &MountState{EntityId: "legacy", VolumeId: "original", BackingPath: original,
+				DevicePath: "/dev/loop0", MountPath: "/mnt/old", Mounted: true, CloudVolumeId: "cloud", LeaseNonce: "nonce", LeaseOwned: true})
+			if scenario == "mount-owner" {
+				state.SetMount("other", &MountState{EntityId: "other", VolumeId: "other", BackingPath: other, DevicePath: "/dev/loop9"})
+			} else {
+				state.SetVolume("other", &VolumeState{EntityId: "other", DiskPath: filepath.Dir(other), BackingIdentity: identity})
+			}
+			switch scenario {
+			case "owner-with-unavailable-peer":
+				unknown := filepath.Join(dir, "unknown", "disk.img")
+				state.SetVolume("unknown", &VolumeState{EntityId: "unknown", DiskPath: filepath.Dir(unknown)})
+				ops.fileIdentityErrors = map[string]error{unknown: os.ErrPermission}
+			case "tuple-only":
+				state.SetVolume("other", &VolumeState{EntityId: "other", BackingIdentity: identity})
+			case "missing-owner":
+				ops.fileIdentityErrors = map[string]error{other: os.ErrNotExist}
+			case "missing-original":
+				ops.fileIdentityErrors = map[string]error{original: os.ErrNotExist}
+			case "inspection-error":
+				ops.loopIdentityErr = syscall.EIO
+			case "mounted-collision":
+				require.NoError(t, ops.Mount("/dev/loop0", "/mnt/old", "ext4", false))
+			}
+			require.NoError(t, state.Save())
+			cloud := &mockCloudDiskClient{}
+			controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+			controller.SetCloudClient(cloud)
+			mount := &storage_v1alpha.DiskMount{ID: "legacy", ActualState: storage_v1alpha.DM_MOUNTED, DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}
+			err = controller.Reconcile(t.Context(), mount, nil)
+			if scenario == "volume-owner" || scenario == "mount-owner" || scenario == "owner-with-unavailable-peer" {
+				require.NoError(t, err)
+				require.Nil(t, state.GetMount("legacy"))
+				require.Len(t, cloud.releaseLeaseCalls, 1)
+			} else {
+				require.Error(t, err)
+				if scenario == "inspection-error" {
+					require.ErrorIs(t, err, syscall.EIO)
+				}
+				if scenario == "missing-owner" || scenario == "missing-original" {
+					require.ErrorIs(t, err, os.ErrNotExist)
+				}
+				require.NotNil(t, state.GetMount("legacy"))
+				require.Empty(t, cloud.releaseLeaseCalls)
+			}
+			require.Empty(t, ops.detachedLoops)
+			current, err := ops.LoopIdentity("/dev/loop0")
+			if scenario != "inspection-error" {
+				require.NoError(t, err)
+				require.Equal(t, identity, current, "the current backing must survive stale cleanup")
+			}
+		})
+	}
+}
+
 func TestDiskMountCleanupKernelReality(t *testing.T) {
 	for _, scenario := range []string{"reboot", "current-first", "lease-only", "inspection-error", "unknown-backing", "ambiguous"} {
 		t.Run(scenario, func(t *testing.T) {

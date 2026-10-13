@@ -2,8 +2,12 @@ package diskio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
 // DiskVolumeOps abstracts OS operations for disk volume management.
@@ -108,4 +112,43 @@ func verifiedLoopIdentity(ops DiskMountOps, device, image string) (*BackingIdent
 		return nil, fmt.Errorf("loop %s does not back known file %s", device, image)
 	}
 	return loop, nil
+}
+
+// legacyLoopIdentity returns nil only when a surviving original file differs
+// from the loop and another tracked owner's live file independently matches it.
+// Persisted tuples alone cannot distinguish device reuse from file replacement.
+func legacyLoopIdentity(ops DiskMountOps, state *State, volumeID, image string, loop *BackingIdentity) (*BackingIdentity, error) {
+	file, err := ops.FileIdentity(image)
+	if err != nil {
+		return nil, err
+	}
+	if file != nil && *file == *loop {
+		return loop, nil
+	}
+	var images []string
+	if file != nil && volumeID != "" {
+		for _, volume := range state.ListVolumes() {
+			if volume.EntityId != volumeID && volume.DiskPath != "" && volume.Mode != storage_v1alpha.VM_ACCELERATOR {
+				images = append(images, filepath.Join(volume.DiskPath, "disk.img"))
+			}
+		}
+		for _, mount := range state.ListMounts() {
+			if mount.VolumeId != "" && mount.VolumeId != volumeID && mount.BackingPath != "" &&
+				mount.Mode != storage_v1alpha.VM_ACCELERATOR && !alwaysMount(mount.Mode) {
+				images = append(images, mount.BackingPath)
+			}
+		}
+	}
+	var inspectionErr error
+	for _, candidate := range images {
+		other, err := ops.FileIdentity(candidate)
+		if err != nil {
+			inspectionErr = errors.Join(inspectionErr, fmt.Errorf("inspect alternative backing %s: %w", candidate, err))
+			continue
+		}
+		if other != nil && *other == *loop {
+			return nil, nil
+		}
+	}
+	return nil, errors.Join(fmt.Errorf("cannot establish legacy loop ownership for %s", image), inspectionErr)
 }

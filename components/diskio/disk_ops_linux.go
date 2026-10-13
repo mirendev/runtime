@@ -170,13 +170,20 @@ func (r *realDiskMountOps) FileIdentity(path string) (*BackingIdentity, error) {
 
 func (r *realDiskMountOps) LoopIdentity(device string) (*BackingIdentity, error) {
 	f, err := os.Open(device)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// A missing /dev node does not prove the kernel device is absent.
-			if _, statErr := os.Stat(filepath.Join("/sys/block", filepath.Base(device))); errors.Is(statErr, os.ErrNotExist) {
-				return nil, nil
-			}
+	if errors.Is(err, os.ErrNotExist) {
+		// Private /dev nodes disappear across reboot, even for loops still
+		// present in sysfs. Recreate and validate the node before querying it.
+		if _, statErr := os.Stat(filepath.Join("/sys/block", filepath.Base(device))); errors.Is(statErr, os.ErrNotExist) {
+			return nil, nil
+		} else if statErr != nil {
+			return nil, statErr
 		}
+		if err := ensureDeviceNode(device); err != nil {
+			return nil, err
+		}
+		f, err = os.Open(device)
+	}
+	if err != nil {
 		return nil, err
 	}
 	defer f.Close()

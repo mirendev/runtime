@@ -426,6 +426,28 @@ func (s *State) SetLegacyMountIdentityAndSave(entityId, device string, identity 
 	return nil
 }
 
+// DisownLegacyMountDeviceAndSave preserves lease progress while checkpointing
+// a positively proven reused device before deletion removes bootstrap evidence.
+func (s *State) DisownLegacyMountDeviceAndSave(entityId, device string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.Mounts[entityId]
+	if current == nil {
+		return nil
+	}
+	if current.DevicePath != device || current.BackingIdentity != nil {
+		return fmt.Errorf("legacy attachment changed for %s; retry ownership inspection", entityId)
+	}
+	updated := *current
+	updated.DevicePath, updated.MountPath, updated.Mounted = "", "", false
+	s.Mounts[entityId] = &updated
+	if err := s.saveLocked(); err != nil {
+		s.Mounts[entityId] = current
+		return err
+	}
+	return nil
+}
+
 // DeleteMount removes a mount state
 func (s *State) DeleteMount(entityId string) {
 	s.mu.Lock()

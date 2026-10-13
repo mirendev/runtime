@@ -504,7 +504,7 @@ func (c *DiskVolumeController) preserveLegacyLoopIdentities(volume *VolumeState)
 	needsCheckpoint := false
 	for _, mount := range c.state.ListMounts() {
 		if mount.VolumeId != volume.EntityId || mount.Mode == storage_v1alpha.VM_ACCELERATOR ||
-			mount.DevicePath == "" {
+			alwaysMount(mount.Mode) || mount.DevicePath == "" {
 			continue
 		}
 		needsCheckpoint = true
@@ -518,9 +518,22 @@ func (c *DiskVolumeController) preserveLegacyLoopIdentities(volume *VolumeState)
 		if identity == nil {
 			continue
 		}
-		identity, err = verifiedLoopIdentity(c.mntOps, mount.DevicePath, image)
+		identity, err = legacyLoopIdentity(c.mntOps, c.state, volume.EntityId, image, identity)
 		if err != nil {
 			return fmt.Errorf("preserve legacy loop ownership before volume deletion: %w", err)
+		}
+		if identity == nil {
+			mountedDevice, err := c.mntOps.MountDevice(mount.MountPath)
+			if err != nil {
+				return fmt.Errorf("inspect legacy mount before disowning device: %w", err)
+			}
+			if mountedDevice == mount.DevicePath {
+				return fmt.Errorf("mounted device %s has mismatched legacy backing ownership", mountedDevice)
+			}
+			if err := c.state.DisownLegacyMountDeviceAndSave(mount.EntityId, mount.DevicePath); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := c.state.SetLegacyMountIdentityAndSave(mount.EntityId, mount.DevicePath, identity); err != nil {
 			return err
