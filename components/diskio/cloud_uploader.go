@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"os"
+	"sync"
 
 	"miren.dev/lbd"
 	"miren.dev/runtime/pkg/cloudauth"
@@ -44,6 +45,149 @@ func NewCloudSegmentUploaderWithClient(log *slog.Logger, updates CloudUpdatesCli
 
 // UploadSegment uploads a log segment file to the cloud and returns the cloud segment ID.
 func (u *CloudSegmentUploader) UploadSegment(ctx context.Context, volumeID, segmentPath string) (string, error) {
+	var id string
+	err := u.withCloudUpload(ctx, volumeID, nil, func() error {
+		var err error
+		id, err = u.uploadSegment(ctx, volumeID, segmentPath)
+		return err
+	}, nil)
+	return id, err
+}
+
+const uploadConcurrency = 8
+
+// UploadSegments prepares a bounded batch concurrently, then publishes in order.
+// No local files are retired until the entire batch is authenticated remotely.
+// Thus a crash or partial publication leaves the original batch available to
+// resume by checksum-bound ordering key, including a lost begin response.
+func (u *CloudSegmentUploader) UploadSegments(ctx context.Context, volumeID, diskPath string, paths []string, committed func(string) error) error {
+	if len(paths) == 0 || len(paths) > uploadConcurrency {
+		return fmt.Errorf("upload batch must contain 1..%d segments", uploadConcurrency)
+	}
+	var previous string
+	for _, path := range paths {
+		label := lbd.LabelFromLogPath(path)
+		if !isValidTAI64NLabel(label) || label <= previous {
+			return fmt.Errorf("upload batch must have strictly increasing TAI64N labels")
+		}
+		previous = label
+	}
+	selected := paths
+	return u.withCloudUpload(ctx, volumeID, func() (bool, error) {
+		// Mount replay may have advanced the horizon while this batch waited
+		// for the volume lock. Never publish writes now covered by replay.
+		horizon, err := readLogHorizon(diskPath)
+		if err != nil {
+			return false, err
+		}
+		if horizon != "" {
+			if err := syncLogHorizon(diskPath); err != nil {
+				return false, err
+			}
+		}
+		for len(paths) > 0 && lbd.LabelFromLogPath(paths[0]) <= horizon {
+			paths = paths[1:]
+		}
+		return len(paths) > 0, nil
+	}, func() error {
+		staged, ok := u.updates.(stagedUpdatesClient)
+		if !ok {
+			for _, path := range paths {
+				if _, err := u.uploadSegment(ctx, volumeID, path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		prepared := make([]*preparedUpload, len(paths))
+		errors := make([]error, len(paths))
+		var wg sync.WaitGroup
+		for i, path := range paths {
+			wg.Go(func() {
+				f, err := os.Open(path)
+				if err != nil {
+					errors[i] = err
+					return
+				}
+				defer f.Close()
+				info, err := f.Stat()
+				if err != nil {
+					errors[i] = err
+					return
+				}
+				if info.Size() == 0 {
+					return
+				}
+				prepared[i], errors[i] = staged.PrepareUpload(ctx, volumeID, UploadRequest{
+					Kind: KindLBDLog, OrderingKey: lbd.LabelFromLogPath(path), LeaseNonce: u.leaseNonceFor(volumeID),
+				}, f, info.Size())
+			})
+		}
+		wg.Wait()
+		for i, p := range prepared {
+			if errors[i] != nil {
+				return fmt.Errorf("preparing %s: %w", paths[i], errors[i])
+			}
+			if p != nil {
+				if _, err := staged.CompleteUpload(ctx, p); err != nil {
+					return fmt.Errorf("publishing %s: %w", paths[i], err)
+				}
+			}
+		}
+		return nil
+	}, func() error {
+		for _, path := range selected {
+			if err := committed(path); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (u *CloudSegmentUploader) withCloudUpload(ctx context.Context, volumeID string, preflight func() (bool, error), upload func() error, retire func() error) error {
+	if u.state != nil {
+		unlock, err := u.state.LockCloudVolume(ctx, volumeID)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	hasWork := true
+	if preflight != nil {
+		var err error
+		hasWork, err = preflight()
+		if err != nil {
+			return err
+		}
+	}
+	// A replay-covered batch must neither create a stranded intent nor clear
+	// an earlier intent whose remote work has not been reconciled.
+	if hasWork {
+		if u.state != nil {
+			if err := u.state.SetPendingCloudUpload(volumeID, "uploading"); err != nil {
+				return err
+			}
+		}
+		if err := upload(); err != nil {
+			return err
+		}
+		// Clear before retirement: after a crash here all files still exist and
+		// active checksum-bound claims reconcile them. Clearing after deletion
+		// could strand the transition gate with no segment left to reconcile.
+		if u.state != nil {
+			if err := u.state.SetPendingCloudUpload(volumeID, ""); err != nil {
+				return err
+			}
+		}
+	}
+	if retire != nil {
+		return retire()
+	}
+	return nil
+}
+
+func (u *CloudSegmentUploader) uploadSegment(ctx context.Context, volumeID, segmentPath string) (string, error) {
 	f, err := os.Open(segmentPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open segment file: %w", err)

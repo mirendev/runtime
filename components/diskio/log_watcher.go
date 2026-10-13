@@ -3,9 +3,11 @@ package diskio
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +19,50 @@ import (
 type LogSegmentUploader interface {
 	// UploadSegment uploads a log segment and returns the cloud segment ID.
 	UploadSegment(ctx context.Context, volumeID, segmentPath string) (segmentID string, err error)
+}
+
+type logSegmentBatchUploader interface {
+	UploadSegments(context.Context, string, string, []string, func(string) error) error
+}
+
+// Directory metadata is bounded independently of backlog size. A window
+// amortizes directory enumeration over many small transport batches.
+const logScanWindow = 1024
+
+func oldestSegments(ctx context.Context, logDir string) ([]string, error) {
+	dir, err := os.Open(logDir)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	names := make([]string, 0, logScanWindow)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		entries, err := dir.ReadDir(256)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".log") {
+				continue
+			}
+			if len(names) == logScanWindow && name >= names[len(names)-1] {
+				continue
+			}
+			i := sort.SearchStrings(names, name)
+			if len(names) < logScanWindow {
+				names = append(names, "")
+			}
+			copy(names[i+1:], names[i:len(names)-1])
+			names[i] = name
+		}
+		if err == io.EOF {
+			return names, nil
+		}
+	}
 }
 
 // LogWatcher monitors accelerator volume log directories for completed segments.
@@ -84,7 +130,7 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 		}
 
 		logDir := filepath.Join(vol.DiskPath, "logs")
-		entries, err := os.ReadDir(logDir)
+		names, err := oldestSegments(ctx, logDir)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				w.log.Warn("failed to read log directory", "path", logDir, "error", err)
@@ -97,19 +143,17 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 				"path", vol.DiskPath, "error", err)
 			continue
 		}
-
-		for _, e := range entries {
-			if e.IsDir() {
+		// A previous rename may have succeeded just before fsync failed.
+		// Make the observed horizon durable before trusting it for deletion.
+		if horizon != "" {
+			if err := syncLogHorizon(vol.DiskPath); err != nil {
+				w.log.Warn("failed to sync log horizon, pausing this volume's scan", "path", vol.DiskPath, "error", err)
 				continue
 			}
+		}
 
-			name := e.Name()
-
-			// Only process completed .log files, skip .log.tmp (in-progress)
-			if !strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.tmp") {
-				continue
-			}
-
+		var paths []string
+		for _, name := range names {
 			segPath := filepath.Join(logDir, name)
 			label := lbd.LabelFromLogPath(segPath)
 			if isValidTAI64NLabel(label) && label <= horizon {
@@ -124,37 +168,43 @@ func (w *LogWatcher) scanAndUpload(ctx context.Context) {
 				}
 				continue
 			}
+			paths = append(paths, segPath)
+		}
 
-			if w.uploader != nil {
-				_, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, segPath)
-				if err != nil {
-					// Stop this volume's scan rather than moving to the next
-					// segment. Entries are sorted and TAI64N labels sort
-					// chronologically, so uploading a later segment would
-					// advance the horizon past this one, and replay only asks
-					// for what sorts after the horizon. The gap would never be
-					// requested again. Leave the file and retry next scan.
-					w.log.Warn("failed to upload segment, pausing this volume's scan",
-						"path", segPath, "error", err)
-					break
-				}
-			}
-
-			// Update the log horizon so replay won't re-apply this segment
+		retire := func(segPath string) error {
 			if err := updateLogHorizonFromPath(vol.DiskPath, segPath); err != nil {
-				// Same reasoning: if the horizon did not move, nothing later
-				// may move it past this segment.
-				w.log.Warn("failed to update log horizon, pausing this volume's scan",
-					"path", segPath, "error", err)
-				break
+				return fmt.Errorf("updating log horizon for %s: %w", segPath, err)
 			}
-			if isValidTAI64NLabel(label) && label > horizon {
-				horizon = label
-			}
-
 			if err := os.Remove(segPath); err != nil {
 				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
 			}
+			return nil
+		}
+		for len(paths) > 0 {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			if batch, ok := w.uploader.(logSegmentBatchUploader); ok {
+				n := min(uploadConcurrency, len(paths))
+				if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths[:n], retire); err != nil {
+					w.log.Warn("failed to upload segments, pausing this volume's scan", "path", paths[0], "error", err)
+					break
+				}
+				paths = paths[n:]
+				continue
+			}
+			path := paths[0]
+			if w.uploader != nil {
+				if _, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, path); err != nil {
+					w.log.Warn("failed to upload segment, pausing this volume's scan", "path", path, "error", err)
+					break
+				}
+			}
+			if err := retire(path); err != nil {
+				w.log.Warn("failed to update log horizon, pausing this volume's scan", "path", path, "error", err)
+				break
+			}
+			paths = paths[1:]
 		}
 	}
 }
