@@ -78,9 +78,13 @@ func sourceIgnorePatterns(data []byte, domain []string) []gitignore.Pattern {
 func sourceRepositoryIgnores(ctx context.Context, repo string) ([]gitignore.Pattern, error) {
 	// Git resolves config includes, worktree common directories and path expansion.
 	// These fixed metadata commands never execute model-provided commands or a shell.
-	exclude, err := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude").Output()
+	exclude, err := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--git-path", "info/exclude").Output()
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve Git exclusions (Git must be installed): %w", err)
+	}
+	excludePath := strings.TrimSuffix(string(exclude), "\n")
+	if excludePath == "" || strings.ContainsRune(excludePath, '\n') {
+		return nil, fmt.Errorf("cannot resolve Git exclusions: unexpected metadata output")
 	}
 	global, err := exec.CommandContext(ctx, "git", "-C", repo, "config", "--null", "--path", "--get", "core.excludesFile").Output()
 	if err != nil {
@@ -98,7 +102,7 @@ func sourceRepositoryIgnores(ctx context.Context, repo string) ([]gitignore.Patt
 		global = []byte(filepath.Join(configHome, "git", "ignore"))
 	}
 	var patterns []gitignore.Pattern
-	for _, path := range []string{strings.TrimSuffix(string(global), "\x00"), strings.TrimSuffix(string(exclude), "\n")} {
+	for _, path := range []string{strings.TrimSuffix(string(global), "\x00"), excludePath} {
 		if path == "" {
 			continue
 		}
