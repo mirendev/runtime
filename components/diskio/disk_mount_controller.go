@@ -374,6 +374,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 
 	// Attach device based on volume mode
 	var devicePath string
+	var backingIdentity *BackingIdentity
 	if volState.Mode == storage_v1alpha.VM_ACCELERATOR {
 		logDir := filepath.Join(volState.DiskPath, "logs")
 		if err := c.ops.CreateDir(logDir, 0755); err != nil {
@@ -415,8 +416,12 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 				"device", existing,
 			)
 			devicePath = existing
+			backingIdentity, err = verifiedLoopIdentity(c.ops, devicePath, imagePath)
+			if err != nil {
+				return fmt.Errorf("verify adopted loop backing: %w", err)
+			}
 		} else {
-			devicePath, err = c.ops.LoopAttach(imagePath)
+			devicePath, backingIdentity, err = c.ops.LoopAttach(imagePath)
 			if err != nil {
 				c.setMountError(ctx, mount.ID, fmt.Sprintf("failed to attach loop device: %v", err))
 				return fmt.Errorf("failed to attach loop device: %w", err)
@@ -430,6 +435,7 @@ func (c *DiskMountController) attachAndMount(ctx context.Context, mount *storage
 		CloudVolumeId:      volState.CloudVolumeId,
 		DevicePath:         devicePath,
 		BackingPath:        imagePath,
+		BackingIdentity:    backingIdentity,
 		MountPath:          mount.MountPath,
 		Mounted:            false,
 		ReadOnly:           mount.ReadOnly,
@@ -640,28 +646,54 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 		return fmt.Errorf("inspect mount before cleanup: %w", err)
 	}
 	if mountState.DevicePath != "" {
-		backing, err := c.ops.DeviceBacking(mountState.DevicePath)
-		if err != nil {
-			return fmt.Errorf("inspect device before cleanup: %w", err)
-		}
 		expected := mountState.BackingPath
 		if expected == "" {
 			if volume := c.state.GetVolume(mountState.VolumeId); volume != nil {
 				expected = filepath.Join(volume.DiskPath, "disk.img")
 			}
 		}
-		// lbdctl canonicalizes the add path before the kernel stores it.
-		if backing != expected && expected != "" {
-			if canonical, err := filepath.EvalSymlinks(expected); err == nil {
-				if canonical, err := filepath.Abs(canonical); err == nil {
-					expected = canonical
+		owned, absent := false, false
+		if mountState.Mode != storage_v1alpha.VM_ACCELERATOR {
+			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
+			if err != nil {
+				return fmt.Errorf("inspect loop before cleanup: %w", err)
+			}
+			absent = identity == nil
+			if !absent {
+				if mountState.BackingIdentity == nil {
+					// Legacy ownership must be established while the known file
+					// still exists, not from sysfs path text after rename/unlink.
+					identity, err = verifiedLoopIdentity(c.ops, mountState.DevicePath, expected)
+					if err != nil {
+						return fmt.Errorf("establish legacy loop ownership: %w", err)
+					}
+					mountState.BackingIdentity = identity
+					if err := c.state.SetLegacyMountIdentityAndSave(entityId, mountState.DevicePath, identity); err != nil {
+						return err
+					}
+				}
+				owned = *identity == *mountState.BackingIdentity
+			}
+		} else {
+			backing, err := c.ops.DeviceBacking(mountState.DevicePath)
+			if err != nil {
+				return fmt.Errorf("inspect device before cleanup: %w", err)
+			}
+			// lbdctl canonicalizes the submitted path; unlike loops, the
+			// kernel stores this path rather than following inode renames.
+			if backing != expected && expected != "" {
+				if canonical, err := filepath.EvalSymlinks(expected); err == nil {
+					if canonical, err := filepath.Abs(canonical); err == nil {
+						expected = canonical
+					}
 				}
 			}
+			if backing != "" && expected == "" {
+				return fmt.Errorf("cannot establish backing ownership for %s", entityId)
+			}
+			absent, owned = backing == "", backing != "" && backing == expected
 		}
-		if backing != "" && expected == "" {
-			return fmt.Errorf("cannot establish backing ownership for %s", entityId)
-		}
-		if backing != "" && backing == expected {
+		if owned {
 			for _, other := range c.state.ListMounts() {
 				if other.EntityId == entityId || other.DevicePath != mountState.DevicePath || other.MountPath == "" {
 					continue
@@ -675,9 +707,9 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				}
 			}
 		}
-		if backing == "" || backing != expected {
+		if absent || !owned {
 			if mountedDevice == mountState.DevicePath {
-				return fmt.Errorf("mounted device %s backing %q does not match %q", mountedDevice, backing, expected)
+				return fmt.Errorf("mounted device %s has absent or mismatched backing ownership", mountedDevice)
 			}
 			mountState.DevicePath = ""
 			mountState.Mounted = false
@@ -725,6 +757,10 @@ func (c *DiskMountController) cleanupMount(ctx context.Context, mountState *Moun
 				detachErr = fmt.Errorf("failed to detach lbd device: %w", err)
 			}
 		} else {
+			identity, err := c.ops.LoopIdentity(mountState.DevicePath)
+			if err != nil || identity == nil || mountState.BackingIdentity == nil || *identity != *mountState.BackingIdentity {
+				return fmt.Errorf("loop ownership changed before detach: %s (%v)", mountState.DevicePath, err)
+			}
 			if err := c.ops.LoopDetach(mountState.DevicePath); err != nil {
 				c.log.Warn("failed to detach loop device", "error", err)
 				detachErr = fmt.Errorf("failed to detach loop device: %w", err)

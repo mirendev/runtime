@@ -2,6 +2,7 @@ package diskio
 
 import (
 	"context"
+	"hash/fnv"
 	"os"
 	"strings"
 )
@@ -99,7 +100,11 @@ type mockDiskMountOps struct {
 
 	// loopBacking maps imagePath → existing loop device, for FindLoopByBacking.
 	// Tests populate this to simulate a pre-existing attachment.
-	loopBacking map[string]string
+	loopBacking     map[string]string
+	loopIdentities  map[string]*BackingIdentity
+	fileIdentities  map[string]*BackingIdentity
+	loopIdentityErr error
+	fileIdentityErr error
 	// findLoopErr, when non-nil, is returned from FindLoopByBacking and
 	// FindAllLoopBackings. Used to simulate a sysfs-degraded environment.
 	findLoopErr error
@@ -166,16 +171,54 @@ func (m *mockDiskMountOps) CreateDir(path string, _ os.FileMode) error {
 	return nil
 }
 
-func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, error) {
+func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, *BackingIdentity, error) {
 	if m.attachErr != nil {
-		return "", m.attachErr
+		return "", nil, m.attachErr
+	}
+	identity, err := m.FileIdentity(imagePath)
+	if err != nil {
+		return "", nil, err
 	}
 	m.attachedLoops = append(m.attachedLoops, imagePath)
 	if m.loopBacking == nil {
 		m.loopBacking = make(map[string]string)
 	}
 	m.loopBacking[imagePath] = m.nextLoopDevice
-	return m.nextLoopDevice, nil
+	if m.loopIdentities == nil {
+		m.loopIdentities = make(map[string]*BackingIdentity)
+	}
+	m.loopIdentities[m.nextLoopDevice] = identity
+	return m.nextLoopDevice, identity, nil
+}
+
+func (m *mockDiskMountOps) FileIdentity(path string) (*BackingIdentity, error) {
+	if m.fileIdentityErr != nil {
+		return nil, m.fileIdentityErr
+	}
+	if identity, ok := m.fileIdentities[path]; ok {
+		return identity, nil
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(path))
+	return &BackingIdentity{Device: 1, Inode: h.Sum64()}, nil
+}
+
+func (m *mockDiskMountOps) LoopIdentity(device string) (*BackingIdentity, error) {
+	if m.loopIdentityErr != nil {
+		return nil, m.loopIdentityErr
+	}
+	if m.findLoopErr != nil {
+		return nil, m.findLoopErr
+	}
+	if identity, ok := m.loopIdentities[device]; ok {
+		return identity, nil
+	}
+	for path, dev := range m.loopBacking {
+		if dev == device {
+			return m.FileIdentity(path)
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockDiskMountOps) LoopDetach(devicePath string) error {
@@ -183,6 +226,7 @@ func (m *mockDiskMountOps) LoopDetach(devicePath string) error {
 		return m.detachErr
 	}
 	m.detachedLoops = append(m.detachedLoops, devicePath)
+	delete(m.loopIdentities, devicePath)
 	m.opsLog = append(m.opsLog, "LoopDetach:"+devicePath)
 	for imagePath, dev := range m.loopBacking {
 		if dev == devicePath {
@@ -286,7 +330,11 @@ func (m *mockDiskMountOps) DeviceBacking(device string) (string, error) {
 		return path, nil
 	}
 	backings, err := m.FindAllLoopBackings()
-	return backings[device].Path, err
+	backing := backings[device]
+	if backing.Deleted {
+		return backing.Path + " (deleted)", err
+	}
+	return backing.Path, err
 }
 
 func (m *mockDiskMountOps) IsDeviceMounted(device string) (bool, error) {

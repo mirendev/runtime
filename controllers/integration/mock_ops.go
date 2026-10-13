@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"hash/fnv"
 	"os"
 
 	"miren.dev/runtime/components/diskio"
@@ -70,11 +71,27 @@ func (m *mockDiskMountOps) CreateDir(_ string, _ os.FileMode) error {
 	return nil
 }
 
-func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, error) {
+func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, *diskio.BackingIdentity, error) {
 	devPath := "/dev/loop" + string(rune('0'+m.nextLoopIndex))
 	m.nextLoopIndex++
 	m.loopDevices[imagePath] = devPath
-	return devPath, nil
+	identity, err := m.FileIdentity(imagePath)
+	return devPath, identity, err
+}
+
+func (m *mockDiskMountOps) FileIdentity(path string) (*diskio.BackingIdentity, error) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(path))
+	return &diskio.BackingIdentity{Device: 1, Inode: h.Sum64()}, nil
+}
+
+func (m *mockDiskMountOps) LoopIdentity(device string) (*diskio.BackingIdentity, error) {
+	for path, dev := range m.loopDevices {
+		if dev == device {
+			return m.FileIdentity(path)
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockDiskMountOps) LoopDetach(devicePath string) error {

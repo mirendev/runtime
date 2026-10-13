@@ -316,6 +316,21 @@ We're building toward cloud-connected storage for Miren Disks. Here's what's pla
 
 We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
 
+### Legacy Loop Attachment Recovery
+
+Loop-backed attachment cleanup records the backing file's filesystem device and
+inode, so renaming or unlinking that file does not lose its identity. Legacy
+records can acquire this identity only while an independently known backing
+file still matches the kernel's loop status. The runtime preserves that proof
+before its volume deletion paths rename or remove the file.
+
+If a legacy backing file was already renamed or unlinked without that proof,
+cleanup remains blocked rather than guessing from a reused device name or a
+`deleted-volumes` pathname. Preserve local state and escalate for ownership
+reconciliation; deleting state or force-releasing the lease is not safe recovery.
+Device/inode identity is not an ownership epoch across filesystem recreation or
+device reuse, and does not authorize forced cleanup of an unknown owner's lease.
+
 ### Next Steps
 
 - [app.toml Reference — Disks](./app-toml.md#disks) — Complete field reference for disk configuration (including `lease_timeout`)

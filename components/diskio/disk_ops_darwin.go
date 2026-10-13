@@ -48,8 +48,16 @@ func (s *stubDiskMountOps) CreateDir(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
-func (s *stubDiskMountOps) LoopAttach(_ string) (string, error) {
-	return "", fmt.Errorf("loop devices not supported on darwin")
+func (s *stubDiskMountOps) LoopAttach(_ string) (string, *BackingIdentity, error) {
+	return "", nil, fmt.Errorf("loop devices not supported on darwin")
+}
+
+func (s *stubDiskMountOps) FileIdentity(_ string) (*BackingIdentity, error) {
+	return nil, fmt.Errorf("loop identity not supported on darwin")
+}
+
+func (s *stubDiskMountOps) LoopIdentity(_ string) (*BackingIdentity, error) {
+	return nil, fmt.Errorf("loop identity not supported on darwin")
 }
 
 func (s *stubDiskMountOps) LoopDetach(_ string) error {

@@ -2,6 +2,7 @@ package diskio
 
 import (
 	"context"
+	"fmt"
 	"os"
 )
 
@@ -39,11 +40,22 @@ type LoopBacking struct {
 	Deleted bool
 }
 
+// BackingIdentity identifies the filesystem object, not its mutable pathname.
+// It is not an attachment epoch; lifecycle serialization is still required.
+type BackingIdentity struct {
+	Device uint64 `json:"device"`
+	Inode  uint64 `json:"inode"`
+}
+
 // DiskMountOps abstracts OS operations for disk mount management.
 // This interface enables testing without requiring actual loop device or mount operations.
 type DiskMountOps interface {
 	CreateDir(path string, perm os.FileMode) error
-	LoopAttach(imagePath string) (devicePath string, err error)
+	// LoopAttach returns the identity of the same backing FD used to configure it.
+	LoopAttach(imagePath string) (devicePath string, identity *BackingIdentity, err error)
+	FileIdentity(path string) (*BackingIdentity, error)
+	// LoopIdentity returns nil only when the loop is confirmed absent/unbound.
+	LoopIdentity(devicePath string) (*BackingIdentity, error)
 	LoopDetach(devicePath string) error
 	// FindLoopByBacking returns the loop device path (e.g. /dev/loop3) currently
 	// backing the given image file, or "" if no loop device is attached to it.
@@ -79,4 +91,21 @@ type DiskMountOps interface {
 
 	// FindMounts returns all mounts whose mount path starts with the given prefix.
 	FindMounts(pathPrefix string) []ActiveMount
+}
+
+// verifiedLoopIdentity bootstraps ownership from an independently known file,
+// never from a device's reported pathname (which follows rename and unlink).
+func verifiedLoopIdentity(ops DiskMountOps, device, image string) (*BackingIdentity, error) {
+	file, err := ops.FileIdentity(image)
+	if err != nil {
+		return nil, err
+	}
+	loop, err := ops.LoopIdentity(device)
+	if err != nil {
+		return nil, err
+	}
+	if file == nil || loop == nil || *file != *loop {
+		return nil, fmt.Errorf("loop %s does not back known file %s", device, image)
+	}
+	return loop, nil
 }

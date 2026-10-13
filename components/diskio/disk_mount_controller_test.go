@@ -898,6 +898,103 @@ func TestDiskMountControllerTeardownReleasesWithCloudId(t *testing.T) {
 	assert.Equal(t, "nonce-acc", cloud.releaseLeaseCalls[0].nonce)
 }
 
+func TestLoopCleanupBackingIdentity(t *testing.T) {
+	for _, mounted := range []bool{true, false} {
+		for _, scenario := range []string{"rename", "unlink", "path-replaced", "device-reused", "filesystem-reused", "status-error", "legacy-live", "legacy-missing", "legacy-replaced"} {
+			t.Run(fmt.Sprintf("%s/mounted=%t", scenario, mounted), func(t *testing.T) {
+				dir := t.TempDir()
+				state, err := LoadState(dir)
+				require.NoError(t, err)
+				original := &BackingIdentity{Device: 19, Inode: 201}
+				other := &BackingIdentity{Device: 19, Inode: 299}
+				image, reported := "/volumes/original/disk.img", "/volumes/original/disk.img"
+				ops := newMockDiskMountOps()
+				ops.loopIdentities = map[string]*BackingIdentity{"/dev/loop7": original}
+				ops.fileIdentities = map[string]*BackingIdentity{image: original}
+				ms := &MountState{EntityId: "mount", DevicePath: "/dev/loop7", BackingPath: image,
+					BackingIdentity: original, MountPath: "/mnt/old", Mounted: mounted, CloudVolumeId: "cloud", LeaseNonce: "nonce", LeaseOwned: true}
+				blocked := false
+				switch scenario {
+				case "rename":
+					reported = "/deleted-volumes/moved/disk.img"
+					ops.fileIdentityErr = os.ErrNotExist
+				case "unlink":
+					ops.deletedBacking = map[string]bool{image: true}
+					ops.fileIdentityErr = os.ErrNotExist
+				case "path-replaced":
+					ops.fileIdentities[image] = other
+				case "device-reused":
+					ops.loopIdentities["/dev/loop7"] = other
+					blocked = mounted
+				case "filesystem-reused":
+					ops.loopIdentities["/dev/loop7"] = &BackingIdentity{Device: 23, Inode: 201}
+					blocked = mounted
+				case "status-error":
+					ops.loopIdentityErr = syscall.EIO
+					blocked = true
+				case "legacy-live":
+					ms.BackingIdentity = nil
+					ops.detachErr = syscall.EBUSY
+				case "legacy-missing":
+					ms.BackingIdentity = nil
+					reported = "/deleted-volumes/untrusted/disk.img"
+					ops.fileIdentityErr = os.ErrNotExist
+					blocked = true
+				case "legacy-replaced":
+					ms.BackingIdentity = nil
+					ops.fileIdentities[image] = other
+					blocked = true
+				}
+				ops.loopBacking = map[string]string{reported: "/dev/loop7"}
+				if mounted {
+					require.NoError(t, ops.Mount("/dev/loop7", "/mnt/old", "ext4", false))
+				}
+				state.SetMount("mount", ms)
+				require.NoError(t, state.Save())
+				state, err = LoadState(dir)
+				require.NoError(t, err)
+				cloud := &mockCloudDiskClient{}
+				controller := newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+				controller.SetCloudClient(cloud)
+				mount := &storage_v1alpha.DiskMount{ID: "mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED, ActualState: storage_v1alpha.DM_MOUNTED}
+				err = controller.Reconcile(t.Context(), mount, nil)
+				if scenario == "legacy-live" {
+					require.Error(t, err)
+					require.Empty(t, cloud.releaseLeaseCalls)
+					state, err = LoadState(dir)
+					require.NoError(t, err)
+					require.Equal(t, original, state.GetMount("mount").BackingIdentity)
+					// Restart after bootstrap, then rename: recovery must use the
+					// durable tuple rather than the no-longer-resolvable old path.
+					ops.fileIdentityErr, ops.detachErr = os.ErrNotExist, nil
+					ops.loopBacking = map[string]string{"/deleted-volumes/moved/disk.img": "/dev/loop7"}
+					controller = newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
+					controller.SetCloudClient(cloud)
+					err = controller.Reconcile(t.Context(), mount, nil)
+				}
+				if blocked {
+					require.Error(t, err)
+					require.Empty(t, cloud.releaseLeaseCalls)
+					require.Empty(t, ops.detachedLoops)
+					require.Equal(t, mounted, ops.IsMounted("/mnt/old"))
+					require.Equal(t, "nonce", state.GetMount("mount").LeaseNonce)
+					return
+				}
+				require.NoError(t, err)
+				require.Nil(t, state.GetMount("mount"))
+				require.Len(t, cloud.releaseLeaseCalls, 1)
+				if scenario == "device-reused" || scenario == "filesystem-reused" {
+					require.Empty(t, ops.detachedLoops)
+					require.NotNil(t, ops.loopIdentities["/dev/loop7"], "replacement attachment survives stale cleanup")
+				} else {
+					require.Nil(t, ops.loopIdentities["/dev/loop7"], "owned attachment is detached despite rename/unlink")
+					require.False(t, ops.IsMounted("/mnt/old"))
+				}
+			})
+		}
+	}
+}
+
 func TestDiskMountCleanupPartialProgress(t *testing.T) {
 	for _, failed := range []string{"detach", "release"} {
 		t.Run(failed, func(t *testing.T) {

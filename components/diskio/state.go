@@ -63,6 +63,8 @@ type VolumeState struct {
 	// DevicePath is the loop device backing this volume (alwaysMount modes only)
 	DevicePath string `json:"device_path,omitempty"`
 
+	BackingIdentity *BackingIdentity `json:"backing_identity,omitempty"`
+
 	// MountPath is where the volume is mounted (alwaysMount modes only)
 	MountPath string `json:"mount_path,omitempty"`
 
@@ -90,6 +92,10 @@ type MountState struct {
 
 	// BackingPath identifies the attachment independently of reusable device names.
 	BackingPath string `json:"backing_path,omitempty"`
+
+	// BackingIdentity survives loop backing-file rename/unlink. Nil is legacy,
+	// not permission to adopt the identity of whatever occupies DevicePath now.
+	BackingIdentity *BackingIdentity `json:"backing_identity,omitempty"`
 
 	// MountPath is where the volume is mounted
 	MountPath string `json:"mount_path"`
@@ -401,6 +407,25 @@ func (s *State) SetMountAndSave(entityId string, mount *MountState) error {
 	return s.saveLocked()
 }
 
+// SetLegacyMountIdentityAndSave cannot resurrect a record or overwrite cleanup
+// progress while the volume controller preserves identity before deletion.
+func (s *State) SetLegacyMountIdentityAndSave(entityId, device string, identity *BackingIdentity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.Mounts[entityId]
+	if current == nil || current.DevicePath != device || current.BackingIdentity != nil {
+		return nil
+	}
+	updated := *current
+	updated.BackingIdentity = identity
+	s.Mounts[entityId] = &updated
+	if err := s.saveLocked(); err != nil {
+		s.Mounts[entityId] = current
+		return err
+	}
+	return nil
+}
+
 // DeleteMount removes a mount state
 func (s *State) DeleteMount(entityId string) {
 	s.mu.Lock()
@@ -435,6 +460,7 @@ func (s *State) SetMountFromVolume(volumeId string, mount *MountState) (devicePa
 	}
 
 	mount.DevicePath = v.DevicePath
+	mount.BackingIdentity = v.BackingIdentity
 	mount.MountPath = v.MountPath
 	s.Mounts[mount.EntityId] = mount
 	return v.DevicePath, v.MountPath, nil
