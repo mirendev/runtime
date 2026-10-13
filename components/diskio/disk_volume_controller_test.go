@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 
@@ -1376,4 +1377,71 @@ func TestDiskVolumeControllerOrphanSweepReclaimsDeletedBackings(t *testing.T) {
 
 	assert.Contains(t, mntOps.detachedLoops, ghostLoopDev,
 		"a loop holding an unlinked image under the volumes dir must still be reclaimed")
+}
+
+func TestDiskVolumeDeletionPreservesCloudDrain(t *testing.T) {
+	for _, path := range []string{"delete", "deleted", "orphan"} {
+		for _, blocker := range []string{"pending", "lease", "device", "inflight"} {
+			t.Run(path+"/"+blocker, func(t *testing.T) {
+				es, cleanup := testutils.NewInMemEntityServer(t)
+				defer cleanup()
+				log := testutils.TestLogger(t)
+				root := t.TempDir()
+				dir := filepath.Join(root, "volumes", "volume")
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "logs"), 0755))
+				segment := filepath.Join(dir, "logs", "retained.log")
+				require.NoError(t, os.WriteFile(segment, []byte("unpublished tail"), 0600))
+				state, err := LoadState(root)
+				require.NoError(t, err)
+				volume := &VolumeState{EntityId: "disk_volume/volume", DiskPath: dir, CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR}
+				mount := &MountState{EntityId: "mount", VolumeId: volume.EntityId, CloudVolumeId: "cloud", Mode: storage_v1alpha.VM_ACCELERATOR}
+				unlock := func() {}
+				switch blocker {
+				case "pending":
+					require.NoError(t, state.SetPendingCloudUpload("cloud", "uploading"))
+				case "lease":
+					volume.CloudVolumeId = "" // captured mount identity survives missing volume metadata
+					mount.LeaseOwned = true
+				case "device":
+					mount.DevicePath = "/dev/lbd0"
+				case "inflight":
+					var err error
+					unlock, err = state.LockCloudVolume(t.Context(), "cloud")
+					require.NoError(t, err)
+				}
+				state.SetVolume(volume.EntityId, volume)
+				state.SetMount(mount.EntityId, mount)
+				vc := NewDiskVolumeController(log, root, compute.NewNodeId("node"), state, NewRealDiskVolumeOps(log), newMockDiskMountOps())
+				vc.SetEAC(es.EAC)
+				entityVolume := &storage_v1alpha.DiskVolume{ID: entity.Id(volume.EntityId), DesiredState: storage_v1alpha.DV_ABSENT, ActualState: storage_v1alpha.DV_READY}
+				if path == "deleted" {
+					entityVolume.ActualState = storage_v1alpha.DV_DELETED
+				}
+				reconcile := func(ctx context.Context) error {
+					if path == "orphan" {
+						return vc.ReconcileWithEntities(ctx)
+					}
+					return vc.Reconcile(ctx, entityVolume, nil)
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+				err = reconcile(ctx)
+				cancel()
+				unlock()
+				if path != "orphan" {
+					require.Error(t, err)
+				}
+				data, err := os.ReadFile(segment)
+				require.NoError(t, err)
+				require.Equal(t, "unpublished tail", string(data))
+				require.NotNil(t, state.GetVolume(volume.EntityId))
+				// Successful drain/release removes the fence; unrelated leases do not block deletion.
+				require.NoError(t, state.SetPendingCloudUpload("cloud", ""))
+				state.DeleteMount(mount.EntityId)
+				state.SetMount("other", &MountState{EntityId: "other", VolumeId: "other-volume", CloudVolumeId: "other-cloud", LeaseOwned: true})
+				require.NoError(t, reconcile(t.Context()))
+				require.NoDirExists(t, dir)
+				require.Nil(t, state.GetVolume(volume.EntityId))
+			})
+		}
+	}
 }

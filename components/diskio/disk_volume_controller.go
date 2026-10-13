@@ -295,6 +295,11 @@ func (c *DiskVolumeController) reconcileVolumeAbsent(ctx context.Context, volume
 
 	switch volume.ActualState {
 	case storage_v1alpha.DV_DELETED:
+		unlock, err := c.lockVolumeDeletion(ctx, entityId, volume.CloudVolumeId)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		volState := c.state.GetVolume(entityId)
 		if volState != nil && volState.DiskPath != "" && c.ops.VolumePathExists(volState.DiskPath) {
 			if err := c.preserveLegacyLoopIdentities(volState); err != nil {
@@ -421,6 +426,11 @@ func (c *DiskVolumeController) createVolume(ctx context.Context, volume *storage
 
 func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage_v1alpha.DiskVolume) error {
 	entityId := string(volume.ID)
+	unlock, err := c.lockVolumeDeletion(ctx, entityId, volume.CloudVolumeId)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	c.log.Info("deleting disk volume", "entity_id", entityId)
 
@@ -495,6 +505,47 @@ func (c *DiskVolumeController) deleteVolume(ctx context.Context, volume *storage
 	}
 
 	return nil
+}
+
+// Keep the original directory available until final publication and lease
+// release finish. The lock also excludes a watcher batch already in flight.
+func (c *DiskVolumeController) lockVolumeDeletion(ctx context.Context, entityId, cloudID string) (func(), error) {
+	accelerator := false
+	if volume := c.state.GetVolume(entityId); volume != nil {
+		accelerator = volume.Mode == storage_v1alpha.VM_ACCELERATOR
+		if volume.CloudVolumeId != "" {
+			cloudID = volume.CloudVolumeId
+		}
+	}
+	if cloudID == "" {
+		for _, mount := range c.state.ListMounts() {
+			if mount.VolumeId == entityId && mount.CloudVolumeId != "" {
+				cloudID = mount.CloudVolumeId
+				break
+			}
+		}
+	}
+	unlock, err := c.state.LockCloudVolume(ctx, cloudID)
+	if err != nil {
+		return nil, err
+	}
+	if cloudID == "" {
+		return unlock, nil
+	}
+	if c.state.HasPendingCloudUpload(cloudID) {
+		unlock()
+		return nil, fmt.Errorf("volume %s has a pending cloud upload", cloudID)
+	}
+	for _, mount := range c.state.ListMounts() {
+		// Loop modes have no final log drain and retain their inode-based
+		// rename/unlink recovery; only accelerator attachments need the path.
+		if mount.VolumeId == entityId && (accelerator || mount.Mode == storage_v1alpha.VM_ACCELERATOR) &&
+			(mount.LeaseOwned || mount.LeaseNonce != "" || mount.LeaseAcquisitionID != "" || mount.DevicePath != "" || mount.Mounted) {
+			unlock()
+			return nil, fmt.Errorf("volume %s still has attachment or lease progress in mount %s", entityId, mount.EntityId)
+		}
+	}
+	return unlock, nil
 }
 
 // Capture legacy ownership before we rename/unlink the only independently
@@ -1081,7 +1132,13 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 
 		c.log.Info("cleaning up orphaned disk volume", "entity_id", volState.EntityId)
 
+		unlock, err := c.lockVolumeDeletion(ctx, volState.EntityId, volState.CloudVolumeId)
+		if err != nil {
+			c.log.Warn("cannot delete orphaned volume", "entity_id", volState.EntityId, "error", err)
+			continue
+		}
 		if err := c.preserveLegacyLoopIdentities(volState); err != nil {
+			unlock()
 			c.log.Warn("cannot preserve orphan loop ownership", "entity_id", volState.EntityId, "error", err)
 			continue
 		}
@@ -1099,6 +1156,7 @@ func (c *DiskVolumeController) ReconcileWithEntities(ctx context.Context) error 
 
 		c.state.DeleteVolume(volState.EntityId)
 		orphanCleaned = true
+		unlock()
 	}
 
 	if orphanCleaned {

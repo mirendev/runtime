@@ -509,7 +509,15 @@ func TestDiskMountReleaseDrainsFinalSegmentBeforeLease(t *testing.T) {
 	ops := newMockDiskMountOps()
 	ops.lbdBackings["/dev/lbd0"] = filepath.Join(dir, "disk.img")
 	// Kernel unmount succeeded before the process could persist LeaseOwned.
-	ops.onLbdDetach = func() { write(count - 1) }
+	ops.onLbdDetach = func() {
+		write(count - 1)
+		volumeController := NewDiskVolumeController(slog.Default(), dir, compute.NewNodeId("node"), state, NewRealDiskVolumeOps(slog.Default()), ops)
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, volumeController.Reconcile(ctx, &storage_v1alpha.DiskVolume{
+			ID: "volume", DesiredState: storage_v1alpha.DV_ABSENT, ActualState: storage_v1alpha.DV_READY,
+		}, nil), context.DeadlineExceeded, "deletion between detach and drain must wait for publication")
+	}
 	remote.failures["complete:"+keys[1]] = 1
 	cloud := &mockCloudDiskClient{}
 	client := NewCloudUpdatesClient(slog.Default(), ts.URL, auth)
@@ -527,6 +535,14 @@ func TestDiskMountReleaseDrainsFinalSegmentBeforeLease(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, state.HasPendingCloudUpload("vol-test"))
 	require.Equal(t, "nonce", state.LeaseNonceForCloudVolume("vol-test"))
+	volumeController := NewDiskVolumeController(slog.Default(), dir, compute.NewNodeId("node"), state, NewRealDiskVolumeOps(slog.Default()), ops)
+	require.Error(t, volumeController.Reconcile(t.Context(), &storage_v1alpha.DiskVolume{
+		ID: "volume", DesiredState: storage_v1alpha.DV_ABSENT, ActualState: storage_v1alpha.DV_READY,
+	}, nil), "deletion after failed final drain must preserve its original directory")
+	require.NotNil(t, state.GetVolume("volume"))
+	for _, key := range keys {
+		require.FileExists(t, filepath.Join(logDir, "disk."+key+".log"))
+	}
 	state.DeleteVolume("volume") // orphan retry must use persisted backing and intent
 	controller = newTestDiskMountController(slog.Default(), dir, "node", nil, state, ops)
 	controller.SetCloudClient(cloud)
