@@ -17,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"miren.dev/runtime/version"
 )
 
 const (
@@ -158,6 +160,7 @@ func (c *Client) request(ctx context.Context, timeout time.Duration, method, end
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "miren/"+version.Version)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
