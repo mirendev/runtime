@@ -1417,8 +1417,8 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:  "app",
 					Image: "docker.io/library/busybox:latest",
-					// As PID 1 with no handler installed, sleep ignores SIGTERM.
-					Command:         "exec sleep 3600",
+					// Install SIGTERM ignore before readiness; it survives exec.
+					Command:         `trap "" TERM; echo ready; exec sleep 3600`,
 					ShutdownTimeout: "1s",
 				},
 			},
@@ -1446,6 +1446,19 @@ func TestSandbox(t *testing.T) {
 			sb.Encode))
 
 		r.NoError(co.Create(ctx, &tco, meta))
+
+		r.Eventually(func() bool {
+			logs, err := testDeps.Logs.Read(ctx, id.String(), observability.WithLimit(100))
+			if err != nil {
+				return false
+			}
+			for _, entry := range logs {
+				if entry.Body == "ready" {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "app must ignore SIGTERM before shutdown begins")
 
 		r.NoError(co.StopSandbox(ctx, id, &tco))
 
@@ -1491,7 +1504,7 @@ func TestSandbox(t *testing.T) {
 				{
 					Name:            "app",
 					Image:           "docker.io/library/busybox:latest",
-					Command:         "exec sleep 3600",
+					Command:         `trap "" TERM; echo ready; exec sleep 3600`,
 					ShutdownTimeout: "3s",
 				},
 			},
@@ -1522,6 +1535,19 @@ func TestSandbox(t *testing.T) {
 		defer func() {
 			r.NoError(co.StopSandbox(context.WithoutCancel(ctx), id, &tco))
 		}()
+
+		r.Eventually(func() bool {
+			logs, err := testDeps.Logs.Read(ctx, id.String(), observability.WithLimit(100))
+			if err != nil {
+				return false
+			}
+			for _, entry := range logs {
+				if entry.Body == "ready" {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "app must ignore SIGTERM before shutdown begins")
 
 		drainCtx, drainCancel := context.WithTimeout(ctx, time.Second)
 		defer drainCancel()
