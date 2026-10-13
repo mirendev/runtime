@@ -5,6 +5,8 @@ import (
 )
 
 func RegisterAll(d *mflags.Dispatcher) {
+	registerCloudCommands(d)
+
 	// Core commands
 	d.Dispatch("version", Infer("version", "Print the version", Version,
 		WithGroup(GroupClient),
