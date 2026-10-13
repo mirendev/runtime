@@ -307,14 +307,7 @@ Disks use exclusive leasing - only one app instance can mount a disk at a time. 
 Your server must have the mkfs tools to format the disk types.
 :::
 
-### Roadmap: Cloud Backup & Sync
-
-We're building toward cloud-connected storage for Miren Disks. Here's what's planned:
-
-- **Remote backup & restore** (shipped): `miren disk backup` and `miren disk restore` run from any machine that can reach the cluster. Add `--cloud` to store a backup in Miren Cloud as a restore point, and `--from-cloud` to restore from one.
-- **Automatic cloud sync**: Background replication of disk data to Miren Cloud, enabling seamless portability across clusters.
-
-We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
+### Accelerator Restart Recovery
 
 :::warning[Cloud outages can block accelerator restarts]
 For cloud-connected accelerator disks, even a replacement on the same node
@@ -344,6 +337,15 @@ proof of the current owner's backing file, the runtime cannot safely disown the
 stale device claim.
 Device/inode identity is not an ownership epoch across filesystem recreation or
 device reuse, and does not authorize forced cleanup of an unknown owner's lease.
+
+### Roadmap: Cloud Backup & Sync
+
+We're building toward cloud-connected storage for Miren Disks. Here's what's planned:
+
+- **Remote backup & restore** (shipped): `miren disk backup` and `miren disk restore` run from any machine that can reach the cluster. Add `--cloud` to store a backup in Miren Cloud as a restore point, and `--from-cloud` to restore from one.
+- **Automatic cloud sync**: Background replication of disk data to Miren Cloud, enabling seamless portability across clusters.
+
+We'll update this page and the [changelog](https://miren.md/changelog) as these capabilities land.
 
 ### Next Steps
 
