@@ -124,7 +124,16 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 					}
 					loaded = true
 				}
-				value := cloudField(current, selector)
+				parts := strings.Split(selector, ".")
+				parent := current
+				for _, part := range parts[:len(parts)-1] {
+					parent = cloudField(parent, part)
+				}
+				object, ok := parent.(map[string]any)
+				if !ok {
+					return fmt.Errorf("unexpected response shape from GET %s for %q; refusing to overwrite", path, selector)
+				}
+				value := object[parts[len(parts)-1]]
 				if value == nil {
 					value = ""
 				}
