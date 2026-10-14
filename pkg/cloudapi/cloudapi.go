@@ -185,10 +185,12 @@ func (c *Client) request(ctx context.Context, timeout time.Duration, method, end
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := (&http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}).Do(req)
+	client := &http.Client{Timeout: timeout}
+	if method != http.MethodGet {
+		// Never replay an approval POST or another mutation to a redirected endpoint.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

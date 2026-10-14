@@ -191,3 +191,29 @@ func TestRequestDoesNotReplayRedirectedApproval(t *testing.T) {
 	require.ErrorContains(t, err, "307")
 	require.False(t, replayed)
 }
+
+func TestReadRequestsFollowRedirects(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/clusters":
+			require.Equal(t, "Bearer t", r.Header.Get("Authorization"))
+			_, _ = w.Write([]byte(`{"clusters":[{"xid":"cluster-up","name":"prod"}]}`))
+		case "/online":
+			_, _ = w.Write([]byte(`{"online":true}`))
+		case "/api/v1/users/clusters":
+			http.Redirect(w, r, "/clusters", http.StatusMovedPermanently)
+		default:
+			http.Redirect(w, r, "/online", http.StatusTemporaryRedirect)
+		}
+	}))
+	defer srv.Close()
+	client, err := cloudapi.New(srv.URL, staticToken("t"))
+	require.NoError(t, err)
+	clusters, err := client.ListClusters(context.Background())
+	require.NoError(t, err)
+	require.Len(t, clusters, 1)
+	require.Equal(t, "cluster-up", clusters[0].XID)
+	online, err := client.ClusterOnline(context.Background(), "cluster-up")
+	require.NoError(t, err)
+	require.True(t, online)
+}

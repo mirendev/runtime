@@ -296,6 +296,7 @@ func TestCloudPartialUpdates(t *testing.T) {
 		{"cloud account update", "/api/v1/me", "user", `{"name":"Old","email":"old@example.test","avatar_url":"https://example.test/old"}`, `{"name":"New","email":"old@example.test","avatar_url":"https://example.test/old"}`, []string{"--name", "New"}, false},
 		{"cloud account update", "/api/v1/me", "user", `{"name":"Old","email":"old@example.test","avatar_url":"https://example.test/old"}`, `{"name":"Old","email":"old@example.test","avatar_url":""}`, []string{"--clear-avatar"}, false},
 		{"cloud account update", "/api/v1/me", "user", `{"name":"Old","email":"old@example.test"}`, `{"name":"Old","email":"new@example.test","avatar_url":""}`, []string{"--email", "new@example.test"}, false},
+		{"cloud account update", "/api/v1/me", "user", `{"name":"Old","email":"old@example.test","avatar_url":null}`, `{"name":"New","email":"old@example.test","avatar_url":""}`, []string{"--name", "New"}, false},
 		{"cloud group update", "/api/v1/groups/grp-c", "group", `{"name":"Operators","description":"Production access"}`, `{"name":"Oncall","description":"Production access"}`, []string{"--group", "grp-c", "--name", "Oncall"}, false},
 		{"cloud group update", "/api/v1/groups/grp-c", "group", `{"name":"Operators","description":"Production access"}`, `{"name":"Operators","description":"Staging access"}`, []string{"--group", "grp-c", "--description", "Staging access"}, false},
 		{"cloud group update", "/api/v1/groups/grp-c", "group", `{"name":"Operators","description":"Production access"}`, `{"name":"Operators","description":""}`, []string{"--group", "grp-c", "--clear-description"}, false},
@@ -333,6 +334,34 @@ func TestCloudPartialUpdates(t *testing.T) {
 			require.NoError(t, err)
 			require.JSONEq(t, tc.want, string(data))
 		})
+	}
+}
+
+func TestCloudPartialUpdatesRejectUnexpectedEnvelope(t *testing.T) {
+	for _, command := range []struct {
+		name, envelope string
+		args           []string
+	}{
+		{"cloud account update", "user", []string{"--name", "New"}},
+		{"cloud group update", "group", []string{"--group", "grp-c", "--name", "New"}},
+	} {
+		for _, response := range []string{"null", "[]", "{}", `{"` + command.envelope + `":null}`, `{"` + command.envelope + `":[]}`} {
+			t.Run(command.name+"/"+response, func(t *testing.T) {
+				writes := 0
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodGet {
+						writes++
+					}
+					_, _ = w.Write([]byte(response))
+				}))
+				defer srv.Close()
+				configWithIdentity(t, srv.URL)
+				out, err := runCloudCommand(t, command.name, append(command.args, "--json")...)
+				require.ErrorContains(t, err, "unexpected response shape")
+				require.Empty(t, out.Stdout.String())
+				require.Zero(t, writes, "an invalid envelope must not trigger a replacement write")
+			})
+		}
 	}
 }
 
