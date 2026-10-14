@@ -24,7 +24,7 @@ miren cloud cluster update [flags]
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
 - `--name` — New cluster name
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--tags` — Replacement tags as a JSON object
 
 ## Global Options

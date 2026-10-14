@@ -47,7 +47,8 @@ type CloudEndpoint struct {
 	Preserve       map[string]string
 	List           string
 	Columns        []CloudColumn
-	Confirmation   string // destructive endpoints use CloudDeleteOptions
+	Render         func(*Context, any) error // optional text renderer for composite responses
+	Confirmation   string                    // destructive endpoints use CloudDeleteOptions
 }
 
 type CloudColumn struct {
@@ -59,8 +60,8 @@ type CloudColumn struct {
 // file without a per-command authentication, HTTP, or rendering handler.
 func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEndpoint) *Cmd {
 	return Infer(endpoint.Name, endpoint.Synopsis, func(ctx *Context, opts O) error {
-		path, query, body, err := cloudInput(endpoint, reflect.ValueOf(opts))
-		if err != nil {
+		// Validate inputs before organization resolution can send an HTTP request.
+		if _, _, _, err := cloudInput(endpoint, reflect.ValueOf(opts), nil); err != nil {
 			return err
 		}
 		settings := opts.CloudSettings()
@@ -87,6 +88,7 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		if err != nil {
 			return err
 		}
+		needsConfirmation := false
 		if endpoint.Confirmation != "" {
 			force, ok := any(opts).(interface{ CloudForce() bool })
 			if !ok {
@@ -96,14 +98,55 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 				if !ui.IsInteractive() {
 					return fmt.Errorf("%s requires confirmation; use --force to authorize it non-interactively", endpoint.Name)
 				}
-				confirmed, err := ui.Confirm(ui.WithMessage(endpoint.Confirmation+"\n"+path), ui.WithDefault(false))
-				if err != nil {
-					return err
+				needsConfirmation = true
+			}
+		}
+		path, query, body, err := cloudInput(endpoint, reflect.ValueOf(opts), func(organization string) (string, error) {
+			var response struct {
+				Organizations []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"organizations"`
+			}
+			if err := client.Request(ctx, http.MethodGet, "/api/v1/organizations", nil, nil, &response); err != nil {
+				return "", fmt.Errorf("failed to resolve organization %q: %w", organization, err)
+			}
+			if organization == "" {
+				switch len(response.Organizations) {
+				case 0:
+					return "", fmt.Errorf("no Cloud organizations available; specify --organization (-o)")
+				case 1:
+					return response.Organizations[0].ID, nil
+				default:
+					return "", fmt.Errorf("multiple Cloud organizations available; specify --organization (-o)")
 				}
-				if !confirmed {
-					ctx.Info("Operation cancelled")
-					return nil
+			}
+			var id string
+			for _, org := range response.Organizations {
+				if org.Name != organization {
+					continue
 				}
+				if id != "" {
+					return "", fmt.Errorf("organization name %q is ambiguous; use an org- ID", organization)
+				}
+				id = org.ID
+			}
+			if id == "" {
+				return "", fmt.Errorf("organization %q not found", organization)
+			}
+			return id, nil
+		})
+		if err != nil {
+			return err
+		}
+		if needsConfirmation {
+			confirmed, err := ui.Confirm(ui.WithMessage(endpoint.Confirmation+"\n"+path), ui.WithDefault(false))
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				ctx.Info("Operation cancelled")
+				return nil
 			}
 		}
 		method := endpoint.Method
@@ -144,14 +187,20 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		if err := client.Request(ctx, method, path, query, body, &response); err != nil {
 			return err
 		}
-		if settings.IsJSON() || len(endpoint.Columns) == 0 {
+		if settings.IsJSON() {
+			return PrintJSONTo(stdout, response)
+		}
+		if endpoint.Render != nil {
+			return endpoint.Render(ctx, response)
+		}
+		if len(endpoint.Columns) == 0 {
 			return PrintJSONTo(stdout, response)
 		}
 		return endpoint.render(ctx, response)
 	}, WithGroup(GroupClient))
 }
 
-func cloudInput(endpoint CloudEndpoint, opts reflect.Value) (string, url.Values, any, error) {
+func cloudInput(endpoint CloudEndpoint, opts reflect.Value, resolveOrganization func(string) (string, error)) (string, url.Values, any, error) {
 	path := endpoint.Path
 	query := make(url.Values)
 	var body map[string]any
@@ -178,7 +227,7 @@ func cloudInput(endpoint CloudEndpoint, opts reflect.Value) (string, url.Values,
 			if !ok || key == "" {
 				return fmt.Errorf("invalid cloud mapping %q", tag)
 			}
-			if field.IsZero() {
+			if field.IsZero() && flag != "organization" {
 				if required == "required" || kind == "path" {
 					return fmt.Errorf("--%s is required", info.Tag.Get("long"))
 				}
@@ -186,10 +235,17 @@ func cloudInput(endpoint CloudEndpoint, opts reflect.Value) (string, url.Values,
 					continue
 				}
 			}
+			if flag == "organization" && resolveOrganization != nil && !strings.HasPrefix(field.String(), "org-") {
+				id, err := resolveOrganization(field.String())
+				if err != nil {
+					return err
+				}
+				field = reflect.ValueOf(id)
+			}
 			switch kind {
 			case "path":
 				text := fmt.Sprint(field.Interface())
-				if text == "." || text == ".." {
+				if flag != "organization" && (text == "." || text == "..") {
 					return fmt.Errorf("--%s cannot be a dot path segment", info.Tag.Get("long"))
 				}
 				path = strings.ReplaceAll(path, "{"+key+"}", url.PathEscape(text))
@@ -303,7 +359,7 @@ func (e CloudEndpoint) render(ctx *Context, response any) error {
 
 type CloudOrganizationOptions struct {
 	CloudOptions
-	Organization string `long:"organization" description:"Organization XID (from cloud org list)"`
+	Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 }
 
 type CloudAppOptions struct {
@@ -334,7 +390,7 @@ func registerCloudCommands(d *mflags.Dispatcher) {
 		CloudOptions
 		Registration string `long:"registration" description:"Registration ID from the server approval URL"`
 		Token        string `long:"registration-token" description:"Signed token from the server approval URL"`
-		Organization string `long:"organization" description:"Organization XID to register the cluster in"`
+		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		Name         string `long:"name" description:"Optional cluster name override"`
 	}](CloudEndpoint{
 		Name: "cloud cluster approve", Synopsis: "Approve a pending cluster registration in Miren Cloud",

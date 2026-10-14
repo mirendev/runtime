@@ -23,7 +23,7 @@ miren cloud invite update [flags]
 - `--invite` — Invite link ID
 - `--json` — Shorthand for --format json
 - `--max-uses` — Maximum uses as a JSON integer, or null for unlimited; omitted leaves unchanged on update
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 
 ## Global Options
 

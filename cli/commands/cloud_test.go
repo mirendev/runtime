@@ -98,12 +98,11 @@ func TestCloudValidationAndErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"cloud app show", nil, "--organization is required"},
+		{"cloud app show", nil, "--cluster is required"},
 		{"cloud app show", []string{"--organization", "org"}, "--cluster is required"},
 		{"cloud app show", []string{"--organization", "org", "--cluster", "cluster"}, "--app is required"},
 		{"cloud cluster approve", []string{"--registration", "reg"}, "--registration-token is required"},
-		{"cloud cluster approve", []string{"--registration", "reg", "--registration-token", "token"}, "--organization is required"},
-		{"cloud app list", []string{"--organization", ".."}, "dot path segment"},
+		{"cloud app show", []string{"--organization", "org-a", "--cluster", "..", "--app", "web"}, "dot path segment"},
 		{"cloud org list", []string{"--format", "yaml"}, "unsupported cloud output format"},
 	} {
 		_, err := runCloudCommand(t, tc.name, tc.args...)
@@ -123,7 +122,7 @@ func TestCloudTextOutput(t *testing.T) {
 	}))
 	defer srv.Close()
 	configWithIdentity(t, srv.URL)
-	out, err := runCloudCommand(t, "cloud app list", "--organization", "org")
+	out, err := runCloudCommand(t, "cloud app list", "--organization", "org-acme")
 	require.NoError(t, err)
 	require.Regexp(t, `web\s+prod\s+degraded\s+2\s+5\s+2026-10-12T10:00:00Z`, out.Stdout.String())
 	require.Regexp(t, `worker\s+staging\s+-\s+-\s+-\s+-`, out.Stdout.String(), "unknown samples must not look like zero instances")
@@ -132,7 +131,7 @@ func TestCloudTextOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out.Stdout.String(), "No results")
 	response = `{"entries":[{"line":"build failed"}],"truncated":true}`
-	out, err = runCloudCommand(t, "cloud app logs", "--organization", "org", "--cluster", "cluster", "--app", "web")
+	out, err = runCloudCommand(t, "cloud app logs", "--organization", "org-acme", "--cluster", "cluster", "--app", "web")
 	require.NoError(t, err)
 	require.Contains(t, out.Stdout.String(), "build failed")
 	require.Contains(t, out.Stdout.String(), "Results truncated")
@@ -149,7 +148,7 @@ func TestCloudTextOutput(t *testing.T) {
 }
 
 func TestCloudResourceCommands(t *testing.T) {
-	org := "--organization org-a"
+	org := "-o org-a"
 	cluster := org + " --cluster clu-b"
 	group := "--group grp-c"
 	cases := []struct {
@@ -370,13 +369,105 @@ func TestCloudVolumeCursorText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(response)) }))
 	defer srv.Close()
 	configWithIdentity(t, srv.URL)
-	out, err := runCloudCommand(t, "cloud volume list", "--organization", "org")
+	out, err := runCloudCommand(t, "cloud volume list", "--organization", "org-acme")
 	require.NoError(t, err)
 	require.Regexp(t, `vol-j\s+data\s+9007199254740993\s+-`, out.Stdout.String())
 	require.Contains(t, out.Stdout.String(), "Next cursor: page-2")
 	response = `{"volumes":[],"next_cursor":"page-3"}`
-	out, err = runCloudCommand(t, "cloud volume list", "--organization", "org")
+	out, err = runCloudCommand(t, "cloud volume list", "--organization", "org-acme")
 	require.NoError(t, err)
 	require.Contains(t, out.Stdout.String(), "No results")
 	require.Contains(t, out.Stdout.String(), "Next cursor: page-3")
+}
+
+func TestCloudOrganizationResolution(t *testing.T) {
+	one := `{"organizations":[{"id":"org-selected","name":"Acme / West"}]}`
+	many := `{"organizations":[{"id":"org-other","name":"Other"},{"id":"org-selected","name":"Acme / West"}]}`
+	for _, tc := range []struct {
+		name, command, organizations, path, body, wantError string
+		args                                                []string
+		lookupStatus                                        int
+	}{
+		{"name in path", "cloud app show", many, "/api/v1/organizations/org-selected/apps/Acme%20%2F%20West/web", "", "", []string{"--organization", "Acme / West", "--cluster", "Acme / West", "--app", "web"}, 200},
+		{"dot name is resolved", "cloud org show", `{"organizations":[{"id":"org-selected","name":".."}]}`, "/api/v1/organizations/org-selected", "", "", []string{"-o", ".."}, 200},
+		{"default in path", "cloud org show", one, "/api/v1/organizations/org-selected", "", "", nil, 200},
+		{"ID skips lookup", "cloud org show", "", "/api/v1/organizations/org-selected", "", "", []string{"-o", "org-selected"}, 0},
+		{"short name in body", "cloud cluster approve", many, "/api/v1/clusters/register/reg-a/approve", `{"registration_token":"signed","organization_id":"org-selected"}`, "", []string{"--registration", "reg-a", "--registration-token", "signed", "-o", "Acme / West"}, 200},
+		{"default in body", "cloud cluster approve", one, "/api/v1/clusters/register/reg-a/approve", `{"registration_token":"signed","organization_id":"org-selected"}`, "", []string{"--registration", "reg-a", "--registration-token", "signed"}, 200},
+		{"destructive default", "cloud cluster delete", one, "/api/v1/organizations/org-selected/clusters/clu-a", "", "", []string{"--cluster", "clu-a", "--force"}, 200},
+		{"missing name", "cloud org show", many, "", "", "not found", []string{"-o", "Missing"}, 200},
+		{"exact name", "cloud org show", one, "", "", "not found", []string{"-o", "acme / west"}, 200},
+		{"duplicate name", "cloud org show", `{"organizations":[{"id":"org-a","name":"Acme"},{"id":"org-b","name":"Acme"}]}`, "", "", "ambiguous", []string{"-o", "Acme"}, 200},
+		{"no default", "cloud org show", `{"organizations":[]}`, "", "", "no Cloud organizations", nil, 200},
+		{"multiple defaults", "cloud org show", many, "", "", "specify --organization (-o)", nil, 200},
+		{"lookup error", "cloud org show", `{"error":"access denied"}`, "", "", "403", []string{"-o", "Acme"}, 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var paths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.EscapedPath())
+				require.True(t, strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "))
+				if r.URL.Path == "/api/v1/organizations" {
+					require.Equal(t, http.MethodGet, r.Method)
+					w.WriteHeader(tc.lookupStatus)
+					_, _ = w.Write([]byte(tc.organizations))
+					return
+				}
+				require.Equal(t, tc.path, r.URL.EscapedPath())
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				if tc.body == "" {
+					require.Empty(t, body)
+				} else {
+					require.JSONEq(t, tc.body, string(body))
+				}
+				_, _ = w.Write([]byte(`{"status":"ok"}`))
+			}))
+			defer srv.Close()
+			configWithIdentity(t, srv.URL)
+			out, err := runCloudCommand(t, tc.command, append(tc.args, "--json")...)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				require.Empty(t, out.Stdout.String())
+				require.Equal(t, []string{"/api/v1/organizations"}, paths)
+			} else {
+				require.NoError(t, err)
+				require.JSONEq(t, `{"status":"ok"}`, out.Stdout.String())
+				wantPaths := []string{tc.path}
+				if tc.lookupStatus != 0 {
+					wantPaths = append([]string{"/api/v1/organizations"}, wantPaths...)
+				}
+				require.Equal(t, wantPaths, paths)
+			}
+		})
+	}
+}
+
+func TestCloudMeTextOutput(t *testing.T) {
+	response := `{"user":{"id":"usr-demo","name":"Demo User","email":"demo@example.test"},"organizations":[{"id":"org-a","name":"Acme","role":"admin","feature_flags":{"usersubdomains":true,"clouddisks":false,"addcluster":true}},{"id":"org-b","name":"Other","role":"member","feature_flags":{}}],"identities":[{"id":"provider-123","provider":"github","username":"demo","email":"demo@example.test","connected_at":"2026-01-01T00:00:00Z"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/me", r.URL.Path)
+		_, _ = w.Write([]byte(response))
+	}))
+	defer srv.Close()
+	configWithIdentity(t, srv.URL)
+	out, err := runCloudCommand(t, "cloud me")
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout.String(), "Name: Demo User")
+	require.Contains(t, out.Stdout.String(), "Email: demo@example.test")
+	require.Regexp(t, `org-a\s+Acme\s+admin\s+addcluster, usersubdomains`, out.Stdout.String())
+	require.Regexp(t, `org-b\s+Other\s+member\s+none`, out.Stdout.String())
+	require.Contains(t, out.Stdout.String(), "Linked identities")
+	require.Regexp(t, `github\s+demo\s+demo@example.test\s+provider-123`, out.Stdout.String())
+	require.NotContains(t, out.Stdout.String(), "clouddisks")
+	for _, args := range [][]string{{"--json"}, {"--format", "json"}} {
+		out, err = runCloudCommand(t, "cloud me", args...)
+		require.NoError(t, err)
+		require.JSONEq(t, response, out.Stdout.String())
+	}
+	response = `{"user":{"id":"usr-demo","name":"Demo User","email":"demo@example.test"}}`
+	out, err = runCloudCommand(t, "cloud me")
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout.String(), "Organizations\nNot reported")
+	require.Contains(t, out.Stdout.String(), "Linked identities\nNot reported")
 }

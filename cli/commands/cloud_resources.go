@@ -1,7 +1,10 @@
 package commands
 
 import (
+	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 
 	"miren.dev/mflags"
 )
@@ -57,6 +60,53 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 	}
 	d.Dispatch("cloud me", CloudCommand[CloudOptions](CloudEndpoint{
 		Name: "cloud me", Synopsis: "Show your Cloud profile, organizations and enabled features", Path: "/api/v1/me",
+		Render: func(ctx *Context, response any) error {
+			ctx.Printf("Profile\n")
+			for _, field := range []CloudColumn{{"Name", "user.name"}, {"Email", "user.email"}, {"ID", "user.id"}, {"Avatar", "user.avatar_url"}, {"Created", "user.created_at"}, {"Updated", "user.updated_at"}, {"Sign-in provider", "signed_in_with.provider"}, {"Sign-in account", "signed_in_with.handle"}} {
+				if value := cloudField(response, field.Field); value != nil {
+					ctx.Printf("%s: %v\n", field.Header, value)
+				}
+			}
+			if cloudField(response, "is_superadmin") == true {
+				ctx.Printf("Superadmin: yes\n")
+			}
+			ctx.Printf("\nOrganizations\n")
+			if cloudField(response, "organizations") == nil {
+				ctx.Printf("Not reported\n")
+			} else {
+				organizations, ok := cloudField(response, "organizations").([]any)
+				if !ok {
+					return fmt.Errorf("cloud response field %q is not a list", "organizations")
+				}
+				var rows []any
+				for _, org := range organizations {
+					features := "not reported"
+					if flags, ok := cloudField(org, "feature_flags").(map[string]any); ok {
+						var enabled []string
+						for name, value := range flags {
+							if value == true {
+								enabled = append(enabled, name)
+							}
+						}
+						sort.Strings(enabled)
+						features = "none"
+						if len(enabled) > 0 {
+							features = strings.Join(enabled, ", ")
+						}
+					}
+					rows = append(rows, map[string]any{"id": cloudField(org, "id"), "name": cloudField(org, "name"), "role": cloudField(org, "role"), "features": features})
+				}
+				if err := (CloudEndpoint{List: "organizations", Columns: []CloudColumn{{"ID", "id"}, {"NAME", "name"}, {"ROLE", "role"}, {"ENABLED FEATURES", "features"}}}).render(ctx, map[string]any{"organizations": rows}); err != nil {
+					return err
+				}
+			}
+			ctx.Printf("\nLinked identities\n")
+			if cloudField(response, "identities") == nil {
+				ctx.Printf("Not reported\n")
+				return nil
+			}
+			return (CloudEndpoint{List: "identities", Columns: []CloudColumn{{"PROVIDER", "provider"}, {"ACCOUNT", "username"}, {"EMAIL", "email"}, {"PROVIDER ID", "id"}, {"CONNECTED", "connected_at"}}}).render(ctx, response)
+		},
 	}))
 	d.Dispatch("cloud account update", CloudCommand[struct {
 		CloudOptions
@@ -144,7 +194,7 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 	}))
 	d.Dispatch("cloud org member remove", CloudCommand[struct {
 		CloudDeleteOptions
-		Organization string `long:"organization" description:"Organization XID"`
+		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		User         string `long:"user" description:"Cloud user XID"`
 	}](CloudEndpoint{
 		Name: "cloud org member remove", Synopsis: "Remove an organization member (admin only)", Method: http.MethodDelete, Path: cloudOrgPath + "/members/{user}",
@@ -160,7 +210,7 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 
 	d.Dispatch("cloud cluster delete", CloudCommand[struct {
 		CloudDeleteOptions
-		Organization string `long:"organization" description:"Organization XID"`
+		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		Cluster      string `long:"cluster" description:"Cloud cluster XID"`
 	}](CloudEndpoint{
 		Name: "cloud cluster delete", Synopsis: "Delete a Cloud cluster record (admin only); leaves server registration files unchanged", Method: http.MethodDelete, Path: cloudClusterPath,
@@ -291,7 +341,7 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 	}))
 	d.Dispatch("cloud invite revoke", CloudCommand[struct {
 		CloudDeleteOptions
-		Organization string `long:"organization" description:"Organization XID"`
+		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		Invite       string `long:"invite" description:"Invite link ID"`
 	}](CloudEndpoint{
 		Name: "cloud invite revoke", Synopsis: "Revoke a shared organization invite link (admin only)", Method: http.MethodDelete, Path: cloudOrgPath + "/invite-links/{invite}",
@@ -323,7 +373,7 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 	}))
 	d.Dispatch("cloud enroll-token revoke", CloudCommand[struct {
 		CloudDeleteOptions
-		Organization string `long:"organization" description:"Organization XID"`
+		Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 		Token        string `long:"token" description:"Enrollment token ID (not its secret)"`
 	}](CloudEndpoint{
 		Name: "cloud enroll-token revoke", Synopsis: "Revoke an unused cluster enrollment token (admin only)", Method: http.MethodDelete, Path: cloudOrgPath + "/enroll-tokens/{token}",
@@ -361,7 +411,7 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 	} {
 		d.Dispatch(endpoint.Name, CloudCommand[struct {
 			CloudDeleteOptions
-			Organization string `long:"organization" description:"Organization XID"`
+			Organization string `short:"o" long:"organization" description:"Organization name or org- ID (defaults to your only organization)"`
 			Subdomain    string `long:"subdomain" description:"Claimed subdomain ID"`
 		}](endpoint))
 	}
