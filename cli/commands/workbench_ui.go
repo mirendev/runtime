@@ -206,14 +206,19 @@ func (m *workbenchUI) render() {
 	case theme.VariantNoColor:
 		style = "notty"
 	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(1, m.width-4)))
-	if err == nil {
-		m.rendered, err = renderer.Render(m.text.String())
+
+	if m.text.Len() == 0 {
+		m.rendered = ""
+	} else {
+		renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(max(1, m.width-4)))
+		if err == nil {
+			m.rendered, err = renderer.Render(m.text.String())
+		}
+		if err != nil {
+			m.rendered = m.text.String()
+		}
+		m.err = err
 	}
-	if err != nil {
-		m.rendered = m.text.String()
-	}
-	m.err = err
 }
 
 func (m *workbenchUI) View() string {
