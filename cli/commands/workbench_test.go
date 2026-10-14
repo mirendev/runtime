@@ -50,6 +50,11 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall, app string, b
 			assert.Equal(t, app, request["app"])
 			fmt.Fprint(w, `{}`)
 		case strings.HasSuffix(r.URL.Path, "/client-tools"):
+			if calls == nil {
+				t.Error("local tools must not be registered")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			var request struct {
 				SessionID string `json:"sessionId"`
 				Tools     []struct {
@@ -143,9 +148,9 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall, app string, b
 	return &Context{Context: ctx, ClientConfig: cfg, ClusterConfig: &clientconfig.ClusterConfig{XID: "cloud-cluster", Identity: "cloud"}, ClusterName: "selected", Stdout: out, Stderr: stderr}, out, stderr
 }
 
-func TestWorkbenchQuestion(t *testing.T) {
+func TestDetectiveWithoutLocalTools(t *testing.T) {
 	ctx, output, stderr := workbenchTestContext(t, nil, "web")
-	require.NoError(t, Workbench(ctx, workbenchOptions{App: "web", Question: []string{"Why does startup fail?"}}))
+	require.NoError(t, Detective(ctx, workbenchOptions{App: "web", NoLocalTools: true, Dir: filepath.Join(t.TempDir(), "missing"), Question: []string{"Why does startup fail?"}}))
 	require.Equal(t, "**Startup** needs PORT.\n", output.String())
 	require.Empty(t, stderr.String())
 }
@@ -188,7 +193,7 @@ func TestDetectiveAppDefault(t *testing.T) {
 					writeAppToml(t, opts.Dir, `[[[`)
 				}
 			}
-			ctx, output, _ := workbenchTestContext(t, nil, tc.want)
+			ctx, output, _ := workbenchTestContext(t, []workbenchTestCall{}, tc.want)
 			require.NoError(t, Detective(ctx, opts))
 			require.Equal(t, "**Startup** needs PORT.\n", output.String())
 		})
@@ -438,7 +443,7 @@ func TestDetectiveGitExclusionSources(t *testing.T) {
 
 func TestWorkbenchRequiresSelectedCloudCluster(t *testing.T) {
 	ctx := &Context{Context: context.Background(), Stdout: io.Discard, Stderr: io.Discard}
-	require.ErrorContains(t, Workbench(ctx, workbenchOptions{}), "selected cluster")
+	require.ErrorContains(t, Detective(ctx, workbenchOptions{}), "selected cluster")
 	ctx.ClientConfig = clientconfig.NewConfig()
 	ctx.ClusterConfig = &clientconfig.ClusterConfig{Hostname: "local"}
 	require.ErrorContains(t, Detective(ctx, workbenchOptions{}), "no Cloud ID")

@@ -328,12 +328,6 @@ Complete reference for all `miren` CLI commands.
 |---------|-------------|
 | [`miren whoami`](./command/whoami.md) | Display information about the current authenticated user |
 
-## workbench
-
-| Command | Description |
-|---------|-------------|
-| [`miren workbench`](./command/workbench.md) | Ask Workbench about a cluster |
-
 ---
 
 ## Advanced / Debug Commands

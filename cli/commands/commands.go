@@ -50,15 +50,11 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren whoami --json",
 		}),
 	))
-	d.Dispatch("workbench", Infer("workbench", "Ask Workbench about a cluster", Workbench,
-		WithGroup(GroupClient),
-		WithDescription(workbenchDescription),
-		WithExample(mflags.Example{Name: "Interactive chat", Body: "miren workbench -C production"}),
-		WithExample(mflags.Example{Name: "Ask a question", Body: `miren workbench -C production "Why is my app crashing?"`}),
-	))
 	d.Dispatch("detective", Infer("detective", "Debug with Workbench and read-only local source tools", Detective,
 		WithGroup(GroupClient),
 		WithDescription(workbenchDescription),
+		WithExample(mflags.Example{Name: "Interactive chat", Body: "miren detective -C production"}),
+		WithExample(mflags.Example{Name: "Ask about the cluster without local source", Body: `miren detective -C production --no-local-tools "Is the cluster healthy?"`}),
 		WithExample(mflags.Example{Name: "Inspect an app's source", Body: `miren detective -C production -a myapp -d ./myapp "Why does startup fail?"`}),
 	))
 
