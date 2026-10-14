@@ -367,6 +367,17 @@ miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
 		}),
 	))
 
+	d.Dispatch("session", Section("session", "Manage durable workload Sessions", "", WithSectionGroup(GroupMonitoring)))
+	d.Dispatch("session create", Infer("session create", "Create a Session from an app service", SessionCreate,
+		WithExample(mflags.Example{Name: "Dedicated Session", Body: "miren session create -a myapp --name customer-1"}),
+		WithExample(mflags.Example{Name: "Shared Session", Body: "miren session create -a myapp --name customer-2 --max-sessions-per-sandbox 4"}),
+	))
+	d.Dispatch("session list", Infer("session list", "List Sessions", SessionList))
+	d.Dispatch("session get", Infer("session get", "Show a Session", SessionGet))
+	d.Dispatch("session suspend", Infer("session suspend", "Suspend a Session", SessionSuspend))
+	d.Dispatch("session resume", Infer("session resume", "Resume a Session", SessionResume))
+	d.Dispatch("session delete", Infer("session delete", "Delete a Session", SessionDelete))
+
 	d.Dispatch("top", Infer("top", "Show cluster-wide resource usage", Top,
 		WithGroup(GroupMonitoring),
 		WithDescription(topDescription),

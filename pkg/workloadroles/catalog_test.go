@@ -15,6 +15,7 @@ import (
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/api/metric/metric_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
+	"miren.dev/runtime/api/session/session_v1alpha"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/workloadroles"
@@ -37,6 +38,7 @@ func realMethods(t *testing.T) map[string]map[string]bool {
 		runner_v1alpha.AdaptRunnerRegistration(nil),
 		exec_v1alpha.AdaptSandboxExec(nil),
 		app_v1alpha.AdaptCrud(nil),
+		session_v1alpha.AdaptSessions(nil),
 		app_v1alpha.AdaptAppStatus(nil),
 		app_v1alpha.AdaptLogs(nil),
 		app_v1alpha.AdaptAddons(nil),

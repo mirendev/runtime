@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/api/oidcbinding/oidcbinding_v1alpha"
+	"miren.dev/runtime/api/session/session_v1alpha"
 	addonctrl "miren.dev/runtime/controllers/addon"
 	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/addon/memcache"
@@ -36,6 +37,7 @@ import (
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	routessrv "miren.dev/runtime/servers/routes"
 	sandboxserver "miren.dev/runtime/servers/sandbox"
+	sessionsrv "miren.dev/runtime/servers/session"
 )
 
 // NewApplicationManagement constructs the application management plane on top
@@ -138,6 +140,7 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	// this capability instead makes current CLIs mistake a booting server for a
 	// pre-durable-runs release and silently fall back to legacy exec.
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
+	server.ExposeValue("dev.miren.runtime/sessions", session_v1alpha.AdaptSessions(sessionsrv.NewServer(c.Log, eac)))
 	server.ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(c.Log, ec)))
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(
 		app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker()),

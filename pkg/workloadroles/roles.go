@@ -65,6 +65,7 @@ var (
 	appRead = perms{
 		"appstatus": set("appinfo"),
 		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
+		"sessions":  set("list", "get"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),
@@ -72,6 +73,7 @@ var (
 
 	// appDeploy: build and (re)deploy one app.
 	appDeploy = perms{
+		"sessions": set("create", "setdesiredstate", "delete"),
 		"deployment": set(
 			"deployversion", "createdeployment", "updatedeploymentstatus",
 			"updatedeploymentphase", "updatefaileddeployment",

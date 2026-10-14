@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	computeapi "miren.dev/runtime/api/compute"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -156,6 +158,15 @@ func (c *Controller) SweepOrphanedSandboxes(ctx context.Context) error {
 			"sandbox", sb.ID,
 			"node", schedule.Key.Node,
 			"status", sb.Status)
+		if sb.SessionInfo.Owner != "" || sb.SessionInfo.Group != "" {
+			ackID := computeapi.TeardownID(sb.ID)
+			_, err := c.eac.Create(ctx, entity.New(entity.DBId, ackID,
+				(&compute_v1alpha.SandboxTeardown{Sandbox: sb.ID.String(), Session: sb.SessionInfo.Owner.String()}).Encode).Attrs())
+			if err != nil && !errors.Is(err, cond.ErrConflict{}) {
+				deleteErr = errors.Join(deleteErr, fmt.Errorf("acknowledging orphaned session sandbox %s: %w", sb.ID, err))
+				continue
+			}
+		}
 		if _, err := c.eac.Delete(ctx, sb.ID.String()); err != nil {
 			c.log.Error("failed to delete sandbox assigned to missing node",
 				"sandbox", sb.ID,

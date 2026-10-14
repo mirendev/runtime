@@ -298,6 +298,18 @@ Complete reference for all `miren` CLI commands.
 | [`miren server upgrade`](./command/server-upgrade.md) | Upgrade miren server (deprecated: use 'miren upgrade') |
 | [`miren server upgrade rollback`](./command/server-upgrade-rollback.md) | Rollback server to previous version |
 
+## session
+
+| Command | Description |
+|---------|-------------|
+| [`miren session`](./command/session.md) | Manage durable workload Sessions |
+| [`miren session create`](./command/session-create.md) | Create a Session from an app service |
+| [`miren session delete`](./command/session-delete.md) | Delete a Session |
+| [`miren session get`](./command/session-get.md) | Show a Session |
+| [`miren session list`](./command/session-list.md) | List Sessions |
+| [`miren session resume`](./command/session-resume.md) | Resume a Session |
+| [`miren session suspend`](./command/session-suspend.md) | Suspend a Session |
+
 ## top
 
 | Command | Description |

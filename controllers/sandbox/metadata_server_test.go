@@ -39,6 +39,9 @@ func TestMetadataHandler_RoutesTokenAndActivityWithSharedAuthentication(t *testi
 	require.NoError(t, json.Unmarshal(token.Body.Bytes(), &value))
 	require.NotEmpty(t, value.Value)
 
+	activity := request(http.MethodGet, "/v1/activity", true)
+	require.Equal(t, http.StatusOK, activity.Code)
+	require.JSONEq(t, `{"shutdown_at":null}`, activity.Body.String())
 	report := httptest.NewRequest(http.MethodPost, "/v1/activity", strings.NewReader(`{"state":"idle"}`))
 	report.RemoteAddr = testSandboxIP + ":12345"
 	report.Header.Set("Authorization", "Bearer "+testSecret)
@@ -50,7 +53,7 @@ func TestMetadataHandler_RoutesTokenAndActivityWithSharedAuthentication(t *testi
 	var sb compute.Sandbox
 	sb.Decode(resp.Entity().Entity())
 	require.Equal(t, compute.IDLE, sb.Activity.State)
-	require.Equal(t, http.StatusMethodNotAllowed, request(http.MethodGet, "/v1/activity", false).Code)
+	require.Equal(t, http.StatusUnauthorized, request(http.MethodGet, "/v1/activity", false).Code)
 	require.Equal(t, http.StatusUnauthorized, request(http.MethodGet, "/v1/token", false).Code)
 	require.Equal(t, http.StatusNotFound, request(http.MethodGet, "/v1/unknown", true).Code)
 }
