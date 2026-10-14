@@ -152,20 +152,27 @@ func TestWorkbenchQuestion(t *testing.T) {
 
 func TestDetectiveAppDefault(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		app  string
-		want string
+		name    string
+		app     string
+		want    string
+		dir     bool
+		invalid bool
 	}{
 		{name: "current directory", want: "configured-app"},
 		{name: "parent directory", want: "configured-app"},
-		{name: "explicit directory", want: "other-app"},
+		{name: "explicit directory", want: "other-app", dir: true},
 		{name: "explicit app", app: "override-app", want: "override-app"},
 		{name: "no app"},
+		{name: "broken local config", invalid: true},
+		{name: "broken explicit config", dir: true, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			if tc.name != "no app" {
 				writeAppToml(t, dir, `name = "configured-app"`)
+			}
+			if tc.invalid && !tc.dir {
+				writeAppToml(t, dir, `[[[`)
 			}
 			cwd := dir
 			if tc.name == "parent directory" {
@@ -174,12 +181,16 @@ func TestDetectiveAppDefault(t *testing.T) {
 			}
 			chdir(t, cwd)
 			opts := workbenchOptions{App: tc.app, Dir: ".", Question: []string{"Why does startup fail?"}}
-			if tc.name == "explicit directory" {
+			if tc.dir {
 				opts.Dir = t.TempDir()
 				writeAppToml(t, opts.Dir, `name = "other-app"`)
+				if tc.invalid {
+					writeAppToml(t, opts.Dir, `[[[`)
+				}
 			}
-			ctx, _, _ := workbenchTestContext(t, nil, tc.want)
+			ctx, output, _ := workbenchTestContext(t, nil, tc.want)
 			require.NoError(t, Detective(ctx, opts))
+			require.Equal(t, "**Startup** needs PORT.\n", output.String())
 		})
 	}
 }
@@ -228,7 +239,7 @@ func TestDetectiveTerminal(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Eventually(t, func() bool {
-				return strings.Contains(captured.String(), "Waiting for Miren Cloud") && strings.Contains(captured.String(), "local_list {}")
+				return strings.Contains(captured.String(), "Waiting for Miren Cloud") && strings.Contains(ansi.Strip(captured.String()), "Listing .")
 			}, 3*time.Second, 10*time.Millisecond)
 			if mode == "cancel" {
 				cancelContext()
@@ -283,7 +294,9 @@ func TestDetectiveLocalSourceTools(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(dir, ".env"), filepath.Join(dir, "alias.go")))
 	calls := []workbenchTestCall{
 		{Name: "local_read", Arguments: `{"path":"main.go","start_line":2,"lines":1}`, Output: "2: listen(PORT)\n[truncated; request a later start_line]\n"},
+		{Name: "local_read", Arguments: `{"path":"main.go","start_line":2,"lines":2}`, Output: "2: listen(PORT)\n3: return nil\n[truncated; request a later start_line]\n"},
 		{Name: "local_search", Arguments: `{"query":"PORT"}`, Output: "main.go:2: listen(PORT)\nother/private.go:1: public PORT\nsub/code.go:1: use(PORT)\n"},
+		{Name: "local_search", Arguments: `{"query":"PORT\n\u001b[2J"}`, Output: ""},
 		{Name: "local_list", Arguments: `{"path":"sub"}`, Output: "code.go\n.gitignore\n"},
 		{Name: "local_read", Arguments: `{"path":".miren/app.toml"}`, Output: "1: name = 'web'\n2: \n"},
 	}
@@ -295,9 +308,16 @@ func TestDetectiveLocalSourceTools(t *testing.T) {
 	ctx, output, stderr := workbenchTestContext(t, calls, "web")
 	require.NoError(t, Detective(ctx, workbenchOptions{Dir: dir, Question: []string{"Why does startup fail?"}}))
 	require.Equal(t, "**Startup** needs PORT.\n", output.String())
-	require.Contains(t, stderr.String(), "no local writes or shell execution")
-	require.Contains(t, stderr.String(), `local_read {"path":"main.go","start_line":2,"lines":1}`)
-	require.Contains(t, stderr.String(), `local_search {"query":"PORT"}`)
+	require.NotContains(t, stderr.String(), "Detective can read source")
+	require.NotContains(t, stderr.String(), "Requested content is sent")
+	require.Contains(t, stderr.String(), "Reading main.go")
+	require.Contains(t, stderr.String(), "line 2")
+	require.Contains(t, stderr.String(), "lines 2–3")
+	require.Contains(t, stderr.String(), `Searching "PORT"`)
+	require.Contains(t, stderr.String(), `Searching "PORT\n\x1b[2J"`)
+	require.NotContains(t, stderr.String(), "\x1b[2J")
+	require.Contains(t, stderr.String(), "Listing sub")
+	require.NotContains(t, stderr.String(), "local_read {")
 	require.NotContains(t, stderr.String(), "listen(PORT)")
 }
 

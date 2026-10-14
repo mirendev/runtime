@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"golang.org/x/term"
 
 	"miren.dev/runtime/pkg/cloudapi"
 	"miren.dev/runtime/pkg/theme"
@@ -80,16 +83,71 @@ func (d *workbenchDisplay) Write(p []byte) (int, error) {
 }
 
 func (d *workbenchDisplay) tool(name string, input json.RawMessage) {
-	// Re-encode to keep arguments on one line and escape terminal controls.
-	details, err := json.Marshal(input)
-	if err != nil {
-		details = []byte("(invalid arguments)")
+	var args struct {
+		Path      string `json:"path"`
+		Query     string `json:"query"`
+		StartLine int    `json:"start_line"`
+		Lines     int    `json:"lines"`
 	}
-	label := fmt.Sprintf("%s %s", name, details)
+	action, subject, detail := "Local tool", name, ""
+	if err := json.Unmarshal(input, &args); err != nil {
+		detail = "invalid arguments"
+	} else {
+		if args.Path == "" {
+			args.Path = "."
+		}
+		// Paths stay readable, but control characters must not alter the terminal.
+		path := strconv.QuoteToGraphic(args.Path)
+		path = path[1 : len(path)-1]
+		subject = path
+		switch name {
+		case "local_list":
+			action = "Listing"
+		case "local_search":
+			action = "Searching"
+			subject = strconv.QuoteToGraphic(args.Query)
+			detail = "in " + path
+		case "local_read":
+			action = "Reading"
+			start, lines := args.StartLine, args.Lines
+			if start == 0 {
+				start = 1
+			}
+			if lines == 0 {
+				lines = 200
+			}
+			switch {
+			case start < 1 || lines < 1 || lines > 200:
+				detail = "invalid line range"
+			case lines == 1:
+				detail = fmt.Sprintf("line %d", start)
+			default:
+				detail = fmt.Sprintf("lines %d–%d", start, uint64(start)+uint64(lines)-1)
+			}
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	muted, emphasis, accent := lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle()
+	interactive := isInteractiveOutput(d.output) && isInteractiveOutput(d.status)
+	if interactive {
+		muted = muted.Foreground(theme.Muted)
+		emphasis = emphasis.Bold(true)
+		accent = accent.Foreground(theme.Info)
+	}
+	label := accent.Render("  › ") + emphasis.Render(action) + " " + accent.Render(subject)
+	if detail != "" {
+		separator := " · "
+		if interactive {
+			width, _, err := term.GetSize(int(d.output.(*os.File).Fd()))
+			if err == nil && lipgloss.Width(label)+3+lipgloss.Width(detail) > width {
+				separator = "\n    "
+			}
+		}
+		label += muted.Render(separator + detail)
+	}
 	if d.program != nil {
-		d.program.Println(lipgloss.NewStyle().Foreground(theme.Muted).Render(label))
+		d.program.Println(label)
 	} else {
 		fmt.Fprintln(d.status, label)
 	}

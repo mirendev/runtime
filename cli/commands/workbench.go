@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -59,14 +58,15 @@ func runWorkbench(ctx *Context, opts workbenchOptions) error {
 	}
 	if opts.App == "" {
 		var ac *appconfig.AppConfig
-		var err error
 		if opts.Dir != "" && opts.Dir != "." {
+			var err error
 			ac, err = appconfig.LoadAppConfigUnder(opts.Dir)
+			if err != nil {
+				printConfigWarning(err)
+				ac = nil
+			}
 		} else {
-			ac, err = LoadLocalAppConfig()
-		}
-		if err != nil {
-			return fmt.Errorf("error loading %s: %w", appconfig.AppConfigPath, err)
+			ac = loadLocalAppConfigOrWarn()
 		}
 		if ac != nil {
 			opts.App = ac.Name
@@ -112,11 +112,6 @@ func runWorkbench(ctx *Context, opts workbenchOptions) error {
 		}
 		defer root.Close()
 		source = &workbenchSource{root: root}
-		absolute, err := filepath.Abs(dir)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(ctx.Stderr, "Detective can read source under %s. Requested content is sent to Miren Cloud; no local writes or shell execution.\n", absolute)
 	}
 
 	question := strings.TrimSpace(strings.Join(opts.Question, " "))
