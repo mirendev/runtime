@@ -5,6 +5,7 @@ package victorialogs
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -26,6 +27,8 @@ import (
 )
 
 const legacyVictoriaLogsImage = "oci.miren.cloud/victoria-logs@sha256:30ae01fbc0ef51e7b929c16f17b85112e763bb8b3427d3b2bc6495df0cbad7ac"
+
+var currentEpoch = formatEpochs[len(formatEpochs)-1]
 
 func directoryHashes(t *testing.T, dir string) map[string][32]byte {
 	t.Helper()
@@ -77,7 +80,7 @@ func TestContainerSpecChangeRecreatesButRestartReuses(t *testing.T) {
 	original := first.GetContainer()
 	originalInfo, err := original.Info(namespaces.WithNamespace(ctx, namespace))
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dataRoot, "victorialogs", "mount-marker"), []byte("preserved"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataRoot, currentEpoch, "mount-marker"), []byte("preserved"), 0o600))
 	stopFirstMonitor()
 	require.NoError(t, first.StopTask(ctx, first.GetTask()))
 
@@ -115,7 +118,7 @@ func TestContainerSpecChangeRecreatesButRestartReuses(t *testing.T) {
 	recreatedInfo, err := recreated.GetContainer().Info(namespaces.WithNamespace(ctx, namespace))
 	require.NoError(t, err)
 	require.NotEqual(t, restartedInfo.CreatedAt, recreatedInfo.CreatedAt, "a changed spec should recreate the container")
-	marker, err := os.ReadFile(filepath.Join(dataRoot, "victorialogs", "mount-marker"))
+	marker, err := os.ReadFile(filepath.Join(dataRoot, currentEpoch, "mount-marker"))
 	require.NoError(t, err)
 	require.Equal(t, "preserved", string(marker), "recreation must not replace the bind-mounted data directory")
 
@@ -129,17 +132,17 @@ func TestContainerSpecChangeRecreatesButRestartReuses(t *testing.T) {
 			break
 		}
 	}
-	require.Equal(t, filepath.Join(dataRoot, "victorialogs"), dataMountSource)
+	require.Equal(t, filepath.Join(dataRoot, currentEpoch), dataMountSource)
 
 	// Returning to a previous config on the same image must not restore an
 	// older snapshot and discard records written under the intermediate config.
-	require.NoError(t, os.WriteFile(filepath.Join(dataRoot, "victorialogs", "newer-marker"), []byte("newer"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataRoot, currentEpoch, "newer-marker"), []byte("newer"), 0o600))
 	stopRecreatedMonitor()
 	require.NoError(t, recreated.StopTask(ctx, recreated.GetTask()))
 	backToOriginal := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
 	active = backToOriginal
 	require.NoError(t, backToOriginal.Start(ctx, config))
-	require.FileExists(t, filepath.Join(dataRoot, "victorialogs", "newer-marker"))
+	require.FileExists(t, filepath.Join(dataRoot, currentEpoch, "newer-marker"))
 }
 
 func TestUpgradeAndSnapshotRestore(t *testing.T) {
@@ -186,7 +189,7 @@ func TestUpgradeAndSnapshotRestore(t *testing.T) {
 	legacyInfo, err := legacy.GetContainer().Info(namespaces.WithNamespace(ctx, namespace))
 	require.NoError(t, err)
 	legacySpec := legacyInfo.Labels[componentSpecLabel]
-	preUpgradeHashes := directoryHashes(t, filepath.Join(dataRoot, "victorialogs"))
+	preUpgradeHashes := directoryHashes(t, filepath.Join(dataRoot, currentEpoch))
 
 	victoriaLogsImage = imagerefs.VictoriaLogs
 	upgraded := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
@@ -195,7 +198,7 @@ func TestUpgradeAndSnapshotRestore(t *testing.T) {
 	upgradedInfo, err := upgraded.GetContainer().Info(namespaces.WithNamespace(ctx, namespace))
 	require.NoError(t, err)
 	require.Equal(t, imagerefs.VictoriaLogs, upgradedInfo.Image)
-	snapshot := backupPath(filepath.Join(dataRoot, "victorialogs"), legacySpec)
+	snapshot := backupPath(filepath.Join(dataRoot, currentEpoch), legacySpec)
 	require.Equal(t, preUpgradeHashes, directoryHashes(t, snapshot))
 
 	reader = observability.NewLogReader(upgraded.HTTPEndpoint(), 30*time.Second)
@@ -230,11 +233,11 @@ func TestUpgradeAndSnapshotRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, legacyVictoriaLogsImage, rolledBackInfo.Image)
 	require.Equal(t, preUpgradeHashes, directoryHashes(t, snapshot))
-	restoredHashes := directoryHashes(t, filepath.Join(dataRoot, "victorialogs"))
+	restoredHashes := directoryHashes(t, filepath.Join(dataRoot, currentEpoch))
 	delete(preUpgradeHashes, componentSpecFile)
 	delete(restoredHashes, componentSpecFile) // The live state retains both images for a safe roll-forward.
 	require.Equal(t, preUpgradeHashes, restoredHashes)
-	require.DirExists(t, filepath.Join(dataRoot, "victorialogs.replaced-"+upgradedInfo.Labels[componentSpecLabel]))
+	require.DirExists(t, filepath.Join(dataRoot, currentEpoch+".replaced-"+upgradedInfo.Labels[componentSpecLabel]))
 
 	reader = observability.NewLogReader(rolledBack.HTTPEndpoint(), 30*time.Second)
 	require.Eventually(t, func() bool {
@@ -379,7 +382,10 @@ func TestRollbackFindsImageAfterConfigChange(t *testing.T) {
 	require.Equal(t, "during rollback", string(contents))
 }
 
-func TestStoppedLegacyDataIsBackedUpWithoutContainer(t *testing.T) {
+// A v0.16 store sits in the first epoch, possibly with its container still
+// running after an unclean exit. Upgrading must read it through a seeded
+// copy and leave every file of it exactly as v1.0 wrote it.
+func TestPreviousEpochIsSeededAndLeftIntact(t *testing.T) {
 	if os.Getenv("SKIP_COMPONENT_TEST") != "" {
 		t.Skip("Skipping component test")
 	}
@@ -389,14 +395,15 @@ func TestStoppedLegacyDataIsBackedUpWithoutContainer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cc.Close()) })
 	dataRoot := t.TempDir()
-	namespace := "vl-legacy-" + identity.NewID()
+	namespace := "vl-epoch-" + identity.NewID()
 	config := VictoriaLogsConfig{HTTPPort: testutils.GetFreePort(t), RetentionPeriod: "7d"}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	oldImage := victoriaLogsImage
 	defer func() { victoriaLogsImage = oldImage }()
 	victoriaLogsImage = legacyVictoriaLogsImage
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
 	old := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
-	require.NoError(t, old.Start(ctx, config))
+	require.NoError(t, old.Start(monitorCtx, config))
 	require.NoError(t, observability.NewPersistentLogWriter(old.HTTPEndpoint(), 30*time.Second).WriteEntry("app/legacy", observability.LogEntry{
 		Timestamp: time.Now().Add(-time.Minute), Stream: observability.Stdout, Body: "legacy record",
 	}))
@@ -404,20 +411,119 @@ func TestStoppedLegacyDataIsBackedUpWithoutContainer(t *testing.T) {
 		entries, readErr := observability.NewLogReader(old.HTTPEndpoint(), 30*time.Second).Read(ctx, "app/legacy")
 		return readErr == nil && len(entries) == 1
 	}, 30*time.Second, 200*time.Millisecond)
-	require.NoError(t, old.Stop(ctx))
-	require.NoError(t, os.Remove(filepath.Join(dataRoot, "victorialogs", componentSpecFile)))
-	// An older installation left this state outside the data directory. A
-	// manual restore of v1.0 data must not trust its stale v1.52 identity.
-	require.NoError(t, writeSpecState(filepath.Join(dataRoot, componentSpecFile),
-		"sha256:"+strings.Repeat("b", 64), imagerefs.VictoriaLogs))
-	before := directoryHashes(t, filepath.Join(dataRoot, "victorialogs"))
+	// Stand in for v0.16: its store lives in the first epoch, without the
+	// spec state this release writes. The container keeps running, as after
+	// an unclean exit; the rename does not disturb its bind mount.
+	stopMonitor()
+	previous := filepath.Join(dataRoot, formatEpochs[0])
+	require.NoError(t, os.Rename(filepath.Join(dataRoot, currentEpoch), previous))
+	require.NoError(t, os.Remove(filepath.Join(previous, componentSpecFile)))
+
 	victoriaLogsImage = imagerefs.VictoriaLogs
 	upgraded := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
 	t.Cleanup(func() { require.NoError(t, upgraded.Stop(context.Background())) })
 	require.NoError(t, upgraded.Start(ctx, config))
-	require.Equal(t, before, directoryHashes(t, filepath.Join(dataRoot, "victorialogs.backup-legacy")))
+	// Hashed only now: stopping the old container flushed the store.
+	before := directoryHashes(t, previous)
+	require.FileExists(t, filepath.Join(dataRoot, currentEpoch, seedStateFile))
+	backups, err := filepath.Glob(filepath.Join(dataRoot, "*.backup-*"))
+	require.NoError(t, err)
+	require.Empty(t, backups, "the untouched previous epoch is the rollback copy")
+	reader := observability.NewLogReader(upgraded.HTTPEndpoint(), 30*time.Second)
 	require.Eventually(t, func() bool {
-		entries, readErr := observability.NewLogReader(upgraded.HTTPEndpoint(), 30*time.Second).Read(ctx, "app/legacy")
+		entries, readErr := reader.Read(ctx, "app/legacy")
 		return readErr == nil && len(entries) == 1 && entries[0].Body == "legacy record"
+	}, 30*time.Second, 200*time.Millisecond)
+	require.NoError(t, observability.NewPersistentLogWriter(upgraded.HTTPEndpoint(), 30*time.Second).WriteEntry("app/legacy", observability.LogEntry{
+		Timestamp: time.Now(), Stream: observability.Stdout, Body: "after upgrade",
+	}))
+	require.Eventually(t, func() bool {
+		entries, readErr := reader.Read(ctx, "app/legacy")
+		return readErr == nil && len(entries) == 2
+	}, 30*time.Second, 200*time.Millisecond)
+	require.NoError(t, upgraded.Stop(ctx))
+	delete(before, "flock.lock")
+	after := directoryHashes(t, previous)
+	delete(after, "flock.lock")
+	require.Equal(t, before, after, "running the new image must not change the previous epoch")
+	// The hashes above start after v1.52 booted. The seed's fingerprint was
+	// taken before it ran, so it also covers the first-boot migration.
+	fingerprint, err := epochFingerprint(previous)
+	require.NoError(t, err)
+	recorded, err := os.ReadFile(filepath.Join(dataRoot, currentEpoch, seedStateFile))
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(string(recorded)), fingerprint, "v1.52's first boot must not touch the previous epoch")
+}
+
+// An older release that exited uncleanly after a rollback leaves its v1.0
+// container running on the previous epoch. Its buffered writes must reach the
+// seed: the live epoch has to match the previous one once the upgrade starts,
+// or the next restart would discard the store this upgrade fills.
+func TestRunningOlderContainerIsStoppedBeforeSeedCheck(t *testing.T) {
+	if os.Getenv("SKIP_COMPONENT_TEST") != "" {
+		t.Skip("Skipping component test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cc, err := containerd.New(containerdx.DefaultSocket)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cc.Close()) })
+	dataRoot := t.TempDir()
+	namespace := "vl-rerun-" + identity.NewID()
+	nsCtx := namespaces.WithNamespace(ctx, namespace)
+	config := VictoriaLogsConfig{HTTPPort: testutils.GetFreePort(t), RetentionPeriod: "7d"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	previous := filepath.Join(dataRoot, formatEpochs[0])
+	current := filepath.Join(dataRoot, currentEpoch)
+	oldImage := victoriaLogsImage
+	defer func() { victoriaLogsImage = oldImage }()
+
+	// v0.16's container on the previous epoch.
+	victoriaLogsImage = legacyVictoriaLogsImage
+	old := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
+	image, err := containerdx.PullImage(nsCtx, logger, cc, legacyVictoriaLogsImage, containerd.WithPullUnpack)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(previous, 0o755))
+	container, err := old.createContainer(nsCtx, image, previous, config, "")
+	require.NoError(t, err)
+	endpoint := fmt.Sprintf("127.0.0.1:%d", config.HTTPPort)
+	write := func(body string) {
+		require.NoError(t, observability.NewPersistentLogWriter(endpoint, 30*time.Second).WriteEntry("app/rollback", observability.LogEntry{
+			Timestamp: time.Now(), Stream: observability.Stdout, Body: body,
+		}))
+	}
+	task, err := old.createTask(nsCtx, container)
+	require.NoError(t, err)
+	require.NoError(t, task.Start(nsCtx))
+	require.NoError(t, old.WaitForReady(nsCtx, "127.0.0.1", config.HTTPPort))
+	write("before the seed")
+	require.NoError(t, old.StopTask(nsCtx, task))
+
+	// The state after a seeded upgrade and a rollback: the seed matches the
+	// previous epoch.
+	seeded, err := seedEpoch(logger, previous, current, func() error { return nil })
+	require.NoError(t, err)
+	require.True(t, seeded)
+
+	// v0.16 runs again, takes a write, and exits uncleanly: its container
+	// keeps running.
+	task, err = old.ReplaceTask(nsCtx, container, old.createTask)
+	require.NoError(t, err)
+	require.NoError(t, task.Start(nsCtx))
+	require.NoError(t, old.WaitForReady(nsCtx, "127.0.0.1", config.HTTPPort))
+	write("during rollback")
+
+	victoriaLogsImage = imagerefs.VictoriaLogs
+	upgraded := NewVictoriaLogsComponent(logger, cc, namespace, dataRoot)
+	t.Cleanup(func() { require.NoError(t, upgraded.Stop(context.Background())) })
+	require.NoError(t, upgraded.Start(ctx, config))
+	fingerprint, err := epochFingerprint(previous)
+	require.NoError(t, err)
+	recorded, err := os.ReadFile(filepath.Join(current, seedStateFile))
+	require.NoError(t, err)
+	require.Equal(t, fingerprint, strings.TrimSpace(string(recorded)), "the seed must include what the old container flushed on stop")
+	require.Eventually(t, func() bool {
+		entries, readErr := observability.NewLogReader(upgraded.HTTPEndpoint(), 30*time.Second).Read(ctx, "app/rollback")
+		return readErr == nil && len(entries) == 2
 	}, 30*time.Second, 200*time.Millisecond)
 }
