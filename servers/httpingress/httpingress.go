@@ -1546,13 +1546,15 @@ func (tc *TunnelConn) Release() {
 // sandbox URL for protocols that need custom connection handling (e.g.,
 // WebSocket tunneling).
 //
-// The path parameter is checked against blocked paths (e.g., admin endpoints).
-// If the route requires OIDC authentication, the tunnel is rejected since
-// OIDC flows cannot be performed over tunneled connections.
-func (h *Server) AcquireTunnel(ctx context.Context, hostname, path string) (*TunnelConn, error) {
-	// Block access to internal miren endpoints (admin, OIDC callbacks, etc.)
-	if strings.HasPrefix(path, "/.well-known/miren/") {
-		return nil, fmt.Errorf("access to %s is not allowed via tunnel", path)
+// The path parameter is the decoded request path, without the query, and is
+// checked against blocked paths (e.g., admin endpoints). If the route
+// requires OIDC authentication, the tunnel is rejected since OIDC flows
+// cannot be performed over tunneled connections.
+func (h *Server) AcquireTunnel(ctx context.Context, hostname, reqPath string) (*TunnelConn, error) {
+	// Block access to internal miren endpoints (admin, OIDC callbacks, etc.).
+	// Clean first so "/./.well-known/miren/" can't step around the prefix.
+	if isMirenInternalPath(reqPath) {
+		return nil, fmt.Errorf("access to %s is not allowed via tunnel", reqPath)
 	}
 
 	onlyHost, _, err := net.SplitHostPort(hostname)
@@ -1729,7 +1731,10 @@ func (h *Server) executeInternalRequest(
 	req *httpingress_v1alpha.InternalHttpRequest,
 	method, path, appId string,
 ) (*http.Response, error) {
-	targetURL := lease.Lease.URL + path
+	targetURL, err := joinSandboxURL(lease.Lease.URL, path)
+	if err != nil {
+		return nil, err
+	}
 
 	var bodyReader io.Reader
 	if req.HasBody() && req.Body() != nil {

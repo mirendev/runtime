@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -1183,7 +1182,12 @@ func (c *NetworkClient) newClientUnder(capa *Capability) *NetworkClient {
 	return newClient
 }
 
-func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *NetworkClient {
+// newClientFrom dials the node that issued capa, on behalf of a call that
+// handed it to us. Callbacks to the caller itself travel inline on the
+// caller's session and never get here; what does is a capability the caller
+// re-exported from a third node, so that node is verified with the State's
+// normal client TLS settings rather than pinned to the caller's certificate.
+func (s *State) newClientFrom(capa *Capability) *NetworkClient {
 	transport := s.transport
 	tk := transportH3
 
@@ -1195,24 +1199,11 @@ func (s *State) newClientFrom(capa *Capability, peer *x509.Certificate) *Network
 		tk = transportMsg
 	}
 
-	cfg := s.clientTlsCfg.Clone()
-	cfg.InsecureSkipVerify = true
-
-	if peer != nil {
-		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-			if bytes.Equal(peer.Raw, rawCerts[0]) {
-				return nil
-			}
-
-			return fmt.Errorf("certificate mismatch")
-		}
-	}
-
 	c := &NetworkClient{
 		State:         s,
 		transportKind: tk,
 		transport:     transport,
-		tlsCfg:        cfg,
+		tlsCfg:        s.clientTlsCfg.Clone(),
 		capa:          capa,
 		oid:           capa.OID,
 		remote:        capa.Address,

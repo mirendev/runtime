@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -343,6 +344,14 @@ func (m *POPManager) newWSTunnelHandler(popXID string) http.Handler {
 			wsPath = "/"
 		}
 
+		target, err := parseWSTarget(wsPath)
+		if err != nil {
+			m.log.Warn("rejected WebSocket tunnel request",
+				"pop_xid", popXID, "path", wsPath, "error", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		m.log.Info("WebSocket tunnel request",
 			"pop_xid", popXID,
 			"hostname", wsHostname,
@@ -356,7 +365,7 @@ func (m *POPManager) newWSTunnelHandler(popXID string) http.Handler {
 		ctx := r.Context()
 
 		// Resolve hostname → sandbox URL via the ingress routing/lease system.
-		tunnel, err := m.ingress.AcquireTunnel(ctx, wsHostname, wsPath)
+		tunnel, err := m.ingress.AcquireTunnel(ctx, wsHostname, target.Path)
 		if err != nil {
 			m.log.Error("failed to acquire tunnel",
 				"hostname", wsHostname, "error", err)
@@ -372,7 +381,13 @@ func (m *POPManager) newWSTunnelHandler(popXID string) http.Handler {
 			"app_id", tunnel.AppID)
 
 		// Dial WebSocket to the sandbox.
-		sandboxWSURL := strings.Replace(tunnel.URL, "http://", "ws://", 1) + wsPath
+		sandboxWSURL, err := buildSandboxWSURL(tunnel.URL, target)
+		if err != nil {
+			m.log.Error("invalid sandbox URL for WebSocket tunnel",
+				"sandbox_url", tunnel.URL, "error", err)
+			http.Error(w, "invalid sandbox URL", http.StatusBadGateway)
+			return
+		}
 
 		dialHeaders := http.Header{}
 		for _, key := range []string{
@@ -480,6 +495,52 @@ func (m *POPManager) newWSTunnelHandler(popXID string) http.Handler {
 			"hostname", wsHostname,
 			"path", wsPath)
 	})
+}
+
+// parseWSTarget parses the X-WS-Path header, which the POP fills from the
+// client's request target, and accepts only origin-form ("/path?query").
+// Anything else could change which host the tunnel dials once it is joined
+// to the sandbox URL.
+func parseWSTarget(pathAndQuery string) (*url.URL, error) {
+	if !strings.HasPrefix(pathAndQuery, "/") {
+		return nil, fmt.Errorf("WebSocket path must begin with /")
+	}
+
+	u, err := url.ParseRequestURI(pathAndQuery)
+	if err != nil {
+		return nil, fmt.Errorf("invalid WebSocket path: %w", err)
+	}
+
+	// ParseRequestURI leaves a leading "//" in the path rather than treating
+	// it as an authority, but say so explicitly rather than lean on that.
+	if u.Scheme != "" || u.Host != "" || u.User != nil {
+		return nil, fmt.Errorf("WebSocket path must not name a host")
+	}
+
+	return u, nil
+}
+
+// buildSandboxWSURL joins a sandbox base URL ("http://10.0.0.5:8080") with
+// an origin-form target, taking the host only from the sandbox URL.
+func buildSandboxWSURL(sandboxURL string, target *url.URL) (string, error) {
+	base, err := url.Parse(sandboxURL)
+	if err != nil {
+		return "", err
+	}
+
+	if base.Scheme != "http" || base.Host == "" {
+		return "", fmt.Errorf("unexpected sandbox URL %q", sandboxURL)
+	}
+
+	u := url.URL{
+		Scheme:   "ws",
+		Host:     base.Host,
+		Path:     target.Path,
+		RawPath:  target.RawPath,
+		RawQuery: target.RawQuery,
+	}
+
+	return u.String(), nil
 }
 
 // Tunnel frame format:
