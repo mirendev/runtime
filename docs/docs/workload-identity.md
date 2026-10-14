@@ -62,10 +62,28 @@ Both are wired up through environment variables that Miren injects into every sa
 | --- | --- | --- |
 | `MIREN_IDENTITY_TOKEN_PATH` | `/var/run/miren/identity-token` | Path to the auto-refreshed token file |
 | `MIREN_OIDC_ISSUER_URL` | e.g. `https://cluster.example.com` | The cluster's issuer; matches the token's `iss` claim |
+| `MIREN_METADATA_URL` | e.g. `http://10.x.x.1:7123/v1` | Base URL for workload metadata |
+| `MIREN_METADATA_SECRET` | a 32-byte hex secret | Sandbox-bound bearer credential for workload metadata |
 | `MIREN_IDENTITY_TOKEN_URL` | e.g. `http://10.x.x.1:7123/v1/token` | On-demand token endpoint |
-| `MIREN_IDENTITY_TOKEN_SECRET` | a 32-byte hex secret | Bearer credential for the token endpoint |
+| `MIREN_IDENTITY_TOKEN_SECRET` | same as `MIREN_METADATA_SECRET` | Existing token endpoint credential, retained for compatibility |
+| `MIREN_ACTIVITY_URL` | e.g. `http://10.x.x.1:7123/v1/activity` | Report sandbox activity |
 
-Prefer these environment variables over hardcoding paths or URLs — the token-server address in particular is internal and not a stable value.
+Prefer these environment variables over hardcoding paths or URLs — the metadata server address is internal and not a stable value.
+
+## Reporting sandbox activity
+
+A workload can report its own activity independently of routed traffic. The runner identifies the sandbox from its source address and validates its sandbox-specific metadata secret:
+
+```bash
+curl -X POST "$MIREN_ACTIVITY_URL" \
+  -H "Authorization: Bearer $MIREN_METADATA_SECRET" \
+  -H 'Content-Type: application/json' \
+  -d '{"state":"idle"}'
+```
+
+Send `{"state":"active"}` when work resumes. The endpoint returns `204` on success, `400` for an invalid state, `401` or `403` for failed authentication, `503` while a sandbox is still starting (retry later), and `409` if it is stopped or dead. Miren persists transitions immediately and limits unchanged renewals to one write per 30 seconds. Activity reporting requires workload identity to be enabled on the runner.
+
+The last report and its timestamp are stored on the Sandbox as `activity`, separate from lifecycle `status` and traffic-derived `last_activity`. A report remains fresh for **two minutes**. To keep idle advertised, repeat the idle report at least once per minute. If no report exists, it expires, or the sandbox is not running, readers get **unknown**, which must be treated as active rather than safe to suspend. This signal does not change existing pool scale-down policy.
 
 ## The Identity Token File
 
