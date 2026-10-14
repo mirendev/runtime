@@ -83,6 +83,12 @@ bundle the running server is on. A container started before any of it is
 still running on the same pid at the end. It takes several minutes and needs the iso dev environment for
 the builds. Set `WORK=/some/dir` to keep the fixtures between runs.
 
+To carry containers across a runc or containerd bump, point `NEXT_BASE_URL`
+at the new base bundle (a `file://` URL to a `make release-data` tarball
+works). The fixtures then carry it, so the run upgrades from `BASE_URL`'s
+bundle to the new one and rolls back onto it; swap the two to test the
+other direction.
+
 ## Testing Upgrades
 
 The container starts with miren pre-installed:

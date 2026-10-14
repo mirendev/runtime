@@ -16,10 +16,10 @@ const (
 	// Kubernetes pause container for sandboxes (registry.k8s.io/pause)
 	Pause = "oci.miren.cloud/pause:3.8"
 
-	// BuildKit daemon for building containers (ghcr.io/mirendev/buildkit). Our
-	// fork only publishes a rolling "latest", so we pin its digest for
-	// reproducible builds; bump this when rolling out a new BuildKit.
-	BuildKit = "oci.miren.cloud/buildkit@sha256:1263587b78162302359fec3485c153d44872114b8e944ef94be053cc2218679f"
+	// BuildKit daemon for building containers (docker.io/moby/buildkit),
+	// v0.34.0 pinned by its index digest. A running server recreates its
+	// buildkit container when this changes, keeping the build cache.
+	BuildKit = "oci.miren.cloud/moby/buildkit@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c"
 
 	// Minio object storage server (quay.io/minio/minio)
 	Minio = "oci.miren.cloud/minio:RELEASE.2025-04-03T14-56-28Z"
