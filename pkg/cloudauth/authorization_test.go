@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,10 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/uplink"
 )
+
+// unreachableCloud refuses connections at once, so the signing-key refresher
+// every RPCAuthenticator starts never reaches the real miren.cloud from a test.
+const unreachableCloud = "http://127.0.0.1:1"
 
 func authorizationSession(id string) uplink.Session {
 	return uplink.Session{ID: id, OrganizationID: "org-1", Capabilities: []uplink.CapabilitySelection{{Name: AuthorizationCapability, Version: 1}}}
@@ -42,6 +47,31 @@ func deliverSnapshot(t *testing.T, state *AuthorizationState, snapshot Authoriza
 	require.NoError(t, state.receiveSnapshot(t.Context(), raw))
 }
 
+// lockedBuffer collects logs written from the session-end goroutine as well as
+// the test's own.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestAuthorizationDenialDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -49,17 +79,17 @@ func TestAuthorizationDenialDiagnostics(t *testing.T) {
 	}{
 		{"startup", "not_synced"},
 		{"awaiting snapshot", "not_synced"},
-		{"disconnected", "not_synced"},
-		{"reconnected", "not_synced"},
-		{"malformed snapshot", "not_synced"},
+		{"disconnected", ""},
+		{"reconnected", ""},
+		{"malformed snapshot", ""},
 		{"unknown principal", "unknown_principal"},
 		{"empty groups", "no_matching_rule"},
 		{"unmatched action", "no_matching_rule"},
 		{"allowed", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var logs bytes.Buffer
-			a, err := NewRPCAuthenticator(t.Context(), Config{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+			var logs lockedBuffer
+			a, err := NewRPCAuthenticator(t.Context(), Config{CloudURL: unreachableCloud, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -102,10 +132,17 @@ func TestAuthorizationDenialDiagnostics(t *testing.T) {
 			} else {
 				require.EqualError(t, err, "access denied by RBAC policy")
 			}
-			lines := bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n"))
+			// The signing-key refresher logs on its own schedule, so find the
+			// denial rather than assuming it was the last line.
 			var record map[string]any
-			require.NoError(t, json.Unmarshal(lines[len(lines)-1], &record))
-			require.Equal(t, "authorization denied", record["msg"])
+			for line := range bytes.SplitSeq(bytes.TrimSpace([]byte(logs.String())), []byte("\n")) {
+				var candidate map[string]any
+				require.NoError(t, json.Unmarshal(line, &candidate))
+				if candidate["msg"] == "authorization denied" {
+					record = candidate
+				}
+			}
+			require.NotNil(t, record, "no authorization denied record")
 			require.Equal(t, "WARN", record["level"])
 			require.Equal(t, tc.reason, record["reason"])
 		})
@@ -113,7 +150,7 @@ func TestAuthorizationDenialDiagnostics(t *testing.T) {
 }
 
 func TestAuthorizationSnapshots(t *testing.T) {
-	s := NewAuthorizationState(t.Context(), slog.Default())
+	s := NewAuthorizationState(t.Context(), slog.Default(), "", "")
 	evaluate := func(subject, org string) rbac.Decision {
 		decision, _ := s.Evaluate(&rbac.Request{Subject: subject, Groups: []string{"readers"}, Resource: "apps/demo", Action: "read", Context: map[string]any{"organization_id": org}})
 		return decision
@@ -153,10 +190,13 @@ func TestAuthorizationSnapshots(t *testing.T) {
 
 	deliverSnapshot(t, s, authorizationSnapshot("first", 7))
 	require.Equal(t, rbac.DecisionAllow, evaluate("alice", "org-1"))
+	// Losing cloud is not news about permissions: the last snapshot stands
+	// through the disconnect and the reconnect, until cloud sends another.
 	cancel()
-	require.Equal(t, rbac.DecisionDeny, evaluate("alice", "org-1"))
+	require.Equal(t, rbac.DecisionAllow, evaluate("alice", "org-1"))
 	s.beginSession(t.Context(), authorizationSession("second"))
-	require.Equal(t, rbac.DecisionDeny, evaluate("alice", "org-1"))
+	require.Equal(t, rbac.DecisionAllow, evaluate("alice", "org-1"))
+	require.Equal(t, rbac.DecisionDeny, evaluate("bob", "org-1"))
 	// Reconnect resets the revision and receives changes missed while offline.
 	snapshot = authorizationSnapshot("second", 1)
 	snapshot.Memberships = map[string][]string{"bob": {"readers"}}
@@ -166,7 +206,7 @@ func TestAuthorizationSnapshots(t *testing.T) {
 }
 
 func TestAuthorizationLocalTagSelectorsAndEmptyState(t *testing.T) {
-	s := NewAuthorizationState(t.Context(), slog.Default())
+	s := NewAuthorizationState(t.Context(), slog.Default(), "", "")
 	s.beginSession(t.Context(), authorizationSession("session"))
 	snapshot := authorizationSnapshot("session", 1)
 	snapshot.Policy.Rules[0].TagSelector.Expressions = []rbac.TagExpression{{Tag: "environment", Operator: "equals", Value: "production"}}
@@ -190,7 +230,7 @@ func TestAuthorizationLocalTagSelectorsAndEmptyState(t *testing.T) {
 }
 
 func TestAuthorizationRejectsInvalidSnapshots(t *testing.T) {
-	s := NewAuthorizationState(t.Context(), slog.Default())
+	s := NewAuthorizationState(t.Context(), slog.Default(), "", "")
 	s.beginSession(t.Context(), authorizationSession("session"))
 	deliverSnapshot(t, s, authorizationSnapshot("session", 2))
 	for _, tc := range []struct {
@@ -221,7 +261,7 @@ func TestAuthorizationRejectsInvalidSnapshots(t *testing.T) {
 	require.Error(t, s.receiveSnapshot(t.Context(), raw))
 }
 
-func TestMalformedAuthorizationSnapshotRevokesCachedGrants(t *testing.T) {
+func TestMalformedAuthorizationSnapshotKeepsAccess(t *testing.T) {
 	for _, body := range []string{
 		`{"session_id":"session","organization_id":"org-1","revision":3,"policy":{"rules":null},"memberships":{}}`,
 		`{"session_id":"session","organization_id":"org-1","revision":3,"policy":{"rules":[]},"memberships":null}`,
@@ -230,7 +270,7 @@ func TestMalformedAuthorizationSnapshotRevokesCachedGrants(t *testing.T) {
 		`{`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			s := NewAuthorizationState(t.Context(), slog.Default())
+			s := NewAuthorizationState(t.Context(), slog.Default(), "", "")
 			s.beginSession(t.Context(), authorizationSession("session"))
 			deliverSnapshot(t, s, authorizationSnapshot("session", 2))
 			evaluate := func() rbac.Decision {
@@ -239,19 +279,20 @@ func TestMalformedAuthorizationSnapshotRevokesCachedGrants(t *testing.T) {
 			}
 			require.Equal(t, rbac.DecisionAllow, evaluate())
 			require.Error(t, s.receiveSnapshot(t.Context(), json.RawMessage(body)))
-			require.Equal(t, rbac.DecisionDeny, evaluate())
+			require.Equal(t, rbac.DecisionAllow, evaluate())
 			stale, err := json.Marshal(authorizationSnapshot("session", 2))
 			require.NoError(t, err)
 			require.Error(t, s.receiveSnapshot(t.Context(), stale))
+			revoked := authorizationSnapshot("session", 4)
+			revoked.Memberships["alice"] = []string{}
+			deliverSnapshot(t, s, revoked)
 			require.Equal(t, rbac.DecisionDeny, evaluate())
-			deliverSnapshot(t, s, authorizationSnapshot("session", 4))
-			require.Equal(t, rbac.DecisionAllow, evaluate())
 		})
 	}
 }
 
 func TestAuthorizationConcurrentRevocation(t *testing.T) {
-	s := NewAuthorizationState(t.Context(), slog.Default())
+	s := NewAuthorizationState(t.Context(), slog.Default(), "", "")
 	s.beginSession(t.Context(), authorizationSession("session"))
 	deliverSnapshot(t, s, authorizationSnapshot("session", 1))
 	var wg sync.WaitGroup
@@ -274,8 +315,12 @@ func TestAuthorizationConcurrentRevocation(t *testing.T) {
 
 func TestRPCUsesPushedMembershipsWithoutHTTP(t *testing.T) {
 	var requests atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The signing-key refresher fetches JWKS on its own schedule; what
+		// must not happen is a policy or membership fetch.
+		if r.URL.Path != "/.well-known/jwks.json" {
+			requests.Add(1)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -299,7 +344,7 @@ func TestRPCUsesPushedMembershipsWithoutHTTP(t *testing.T) {
 }
 
 func TestRPCServiceAccountPushedMemberships(t *testing.T) {
-	a, err := NewRPCAuthenticator(t.Context(), Config{Logger: slog.Default()})
+	a, err := NewRPCAuthenticator(t.Context(), Config{CloudURL: unreachableCloud, Logger: slog.Default()})
 	require.NoError(t, err)
 	a.authorization.beginSession(t.Context(), authorizationSession("session"))
 	snapshot := authorizationSnapshot("session", 1)
@@ -374,7 +419,7 @@ func TestCloudEmittedAuthorizationEnvelope(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &envelope))
 	for _, environment := range []string{"production", "development"} {
 		t.Run(environment, func(t *testing.T) {
-			a, err := NewRPCAuthenticator(t.Context(), Config{Logger: slog.Default(), Tags: map[string]any{"environment": environment}})
+			a, err := NewRPCAuthenticator(t.Context(), Config{CloudURL: unreachableCloud, Logger: slog.Default(), Tags: map[string]any{"environment": environment}})
 			require.NoError(t, err)
 			router := uplink.NewMessageRouter()
 			link := uplink.NewClient("https://unused.invalid", nil, router, slog.Default())
@@ -394,4 +439,68 @@ func TestCloudEmittedAuthorizationEnvelope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthorizationSnapshotSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+	evaluate := func(s *AuthorizationState, subject string) rbac.Decision {
+		decision, _ := s.Evaluate(&rbac.Request{Subject: subject, Resource: "apps/demo", Action: "read"})
+		return decision
+	}
+	first := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	first.beginSession(t.Context(), authorizationSession("first"))
+	deliverSnapshot(t, first, authorizationSnapshot("first", 1))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	// A restart before cloud is reachable authorizes from the saved snapshot.
+	restarted := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	require.Equal(t, rbac.DecisionAllow, evaluate(restarted, "alice"))
+
+	// Reconnecting keeps it until the new session's first snapshot replaces it,
+	// whatever revision that session starts from.
+	restarted.beginSession(t.Context(), authorizationSession("second"))
+	require.Equal(t, rbac.DecisionAllow, evaluate(restarted, "alice"))
+	replacement := authorizationSnapshot("second", 1)
+	replacement.Memberships = map[string][]string{"bob": {"readers"}}
+	deliverSnapshot(t, restarted, replacement)
+	require.Equal(t, rbac.DecisionDeny, evaluate(restarted, "alice"))
+	require.Equal(t, rbac.DecisionAllow, evaluate(NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1"), "bob"))
+}
+
+func TestAuthorizationSnapshotFromAnotherOrganizationIsDiscarded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+	s := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	s.beginSession(t.Context(), authorizationSession("first"))
+	deliverSnapshot(t, s, authorizationSnapshot("first", 1))
+	session := authorizationSession("second")
+	session.OrganizationID = "org-2"
+	s.beginSession(t.Context(), session)
+	decision, reason := s.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
+	require.Equal(t, rbac.DecisionDeny, decision)
+	require.Equal(t, "not_synced", reason)
+	require.NoFileExists(t, path)
+}
+
+func TestUnreadableSavedAuthorizationSnapshotIsIgnored(t *testing.T) {
+	for _, body := range []string{`{`, `{"session_id":"s","organization_id":"org-1","revision":1}`, `"not a snapshot"`} {
+		path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+		require.NoError(t, os.WriteFile(path, []byte(`{"cluster_id":"cluster-1","snapshot":`+body+`}`), 0600))
+		s := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+		_, reason := s.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
+		require.Equal(t, "not_synced", reason)
+	}
+}
+
+// A server registered again gets a new cluster ID, and must not restore the
+// previous registration's permissions even if the old process wrote them late.
+func TestSavedAuthorizationSnapshotBelongsToItsCluster(t *testing.T) {
+	path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+	old := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	old.beginSession(t.Context(), authorizationSession("first"))
+	deliverSnapshot(t, old, authorizationSnapshot("first", 1))
+	reregistered := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-2")
+	_, reason := reregistered.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
+	require.Equal(t, "not_synced", reason)
 }

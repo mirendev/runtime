@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"miren.dev/runtime/pkg/auth"
@@ -30,7 +31,21 @@ type Config struct {
 	CloudURL string
 	Logger   *slog.Logger
 	Tags     map[string]any // Tags for this runtime/cluster
+	// ClusterID is the cloud cluster this registration created. Saved
+	// authorization state is tied to it, so a server registered again never
+	// restores another registration's permissions.
+	ClusterID string
+	// StateDir holds cloud's last authorization snapshot and signing keys, so a
+	// restart while cloud is unreachable keeps admitting cloud users. Empty, or
+	// no ClusterID, keeps both in memory only.
+	StateDir string
 }
+
+// Files in Config.StateDir. Both belong to the registration that fetched them.
+const (
+	AuthorizationSnapshotFile = "authorization-snapshot.json"
+	CloudKeysFile             = "cloud-jwks.json"
+)
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
@@ -85,7 +100,13 @@ func NewRPCAuthenticator(ctx context.Context, config Config) (*RPCAuthenticator,
 	// Initialize JWT validation and RBAC (CloudURL always has a value now)
 	a.jwtValidator = auth.NewJWTValidator(config.CloudURL, config.Logger)
 	a.tokenCache = auth.NewTokenCache(ctx)
-	a.authorization = NewAuthorizationState(ctx, config.Logger)
+	var snapshotPath string
+	if config.StateDir != "" && config.ClusterID != "" {
+		a.jwtValidator.UseKeyCache(filepath.Join(config.StateDir, CloudKeysFile))
+		snapshotPath = filepath.Join(config.StateDir, AuthorizationSnapshotFile)
+	}
+	a.jwtValidator.Start(ctx)
+	a.authorization = NewAuthorizationState(ctx, config.Logger, snapshotPath, config.ClusterID)
 
 	return a, nil
 }

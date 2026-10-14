@@ -99,11 +99,35 @@ XIDs). Cloud sends the organization's rules with their tag selectors; the runtim
 selectors against its own cluster tags. Policy and memberships are replaced
 together, and cached grants are invalidated on every update.
 
-JWT authorization is denied before the first snapshot, while the cluster
-connection is disconnected, and after reconnect until a fresh snapshot arrives.
-This applies to direct connections as well as cloud-routed ones, preventing
-removed users or groups from retaining access during an outage. Local,
-CA-verified client certificate access remains available and bypasses cloud RBAC.
+Cloud defines access, so the cluster keeps authorizing from the last snapshot
+cloud sent until cloud sends a new one. Losing the cluster connection,
+reconnecting, and restarting the server don't change who can do what: the
+cluster saves each snapshot to disk, along with cloud's token signing keys, and
+picks up where it left off. An update the cluster can't read is ignored and
+logged as an error, leaving the previous snapshot in place. This applies to
+direct connections as well as cloud-routed ones.
+
+JWT authorization is denied only before a cluster has ever received a snapshot,
+or after it is registered to a different organization. Local, CA-verified client
+certificate access is always available and bypasses cloud RBAC.
+
+:::warning[Revocations wait for the cluster to hear from cloud]
+
+While a cluster can't reach cloud, it keeps trusting what cloud last told it,
+for as long as the outage lasts. That covers two kinds of revocation:
+
+- **Permissions.** Removing someone from a group or from the organization
+  reaches the cluster with its next snapshot. Until then, they keep the access
+  they had.
+- **Signing keys.** If cloud withdraws a token signing key, for example because
+  it leaked, the cluster keeps accepting tokens signed with that key until it
+  fetches cloud's current keys.
+
+Restoring the connection delivers both. Where a cluster is reachable directly,
+treat a long uplink outage as a window in which neither kind of revocation
+applies there.
+
+:::
 
 :::warning[Upgrade cloud first]
 
@@ -113,7 +137,7 @@ callers on this runtime; update cloud before upgrading the runtime.
 :::
 
 After reconnecting, the cluster receives current permissions, including changes
-made while offline, before JWT access resumes.
+made while it was offline, and applies them as soon as they arrive.
 
 `miren debug rbac` and `miren debug rbac test` still perform an explicit, one-shot
 HTTP policy fetch for troubleshooting. They do not inspect the running cluster's
@@ -185,10 +209,11 @@ command. That is the cluster's own policy, not the relay. Check your current
 organization membership and permissions. A newly granted permission becomes
 usable when the corresponding push arrives.
 
-**`cloud authorization is not synchronized`** — the cluster has no current
-authorization snapshot, either because its cloud connection is down or because
-it is waiting for a fresh snapshot. Check the [Connectivity](./connectivity.md)
-panel and that cloud was upgraded first; JWT access resumes after synchronization.
+**`cloud authorization is not synchronized`** — the cluster has never received
+an authorization snapshot from its current organization, usually because it was
+just registered or upgraded and hasn't connected to cloud since. Check the
+[Connectivity](./connectivity.md) panel and that cloud was upgraded first; JWT
+access starts once the first snapshot arrives.
 
 **`the cluster's link to the cloud dropped`** — the cluster disconnected while
 your command was running. Retry it.

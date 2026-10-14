@@ -6,26 +6,55 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	jwt "github.com/golang-jwt/jwt/v5"
 )
 
+const (
+	// jwksRefreshInterval is how old cloud's keys get before the refresher
+	// fetches them again. Keys past it stay in use; only a successful fetch
+	// replaces them.
+	jwksRefreshInterval = time.Hour
+	// jwksRetryInterval spaces out fetches, so an unreachable cloud or a token
+	// naming a key cloud never published cannot turn every request into one.
+	jwksRetryInterval = time.Minute
+)
+
 // JWTValidator validates JWT tokens from miren.cloud using EdDSA signatures.
 // It fetches public keys from the JWKS endpoint at {cloudURL}/.well-known/jwks.json
 // and caches them for efficient validation. Only Ed25519 keys are supported.
+//
+// Cloud's last published keys stay trusted until cloud publishes different
+// ones. An unreachable cloud is not news that a key was withdrawn, and treating
+// it as such would lock every cloud user out of a cluster that cannot reach it.
 type JWTValidator struct {
 	cloudURL   string
 	httpClient *http.Client
 	logger     *slog.Logger
+	cachePath  string
 
-	mu        sync.RWMutex
-	keys      map[string]crypto.PublicKey // Map of kid -> public key
-	keyExpiry time.Time
+	refreshInterval time.Duration
+	retryInterval   time.Duration
+
+	// fetchMu admits one fetch at a time, shared by the refresher and requests
+	// for a key nobody has fetched yet.
+	fetchMu sync.Mutex
+
+	mu          sync.Mutex
+	keys        map[string]crypto.PublicKey // Map of kid -> public key
+	fetchedAt   time.Time
+	lastAttempt time.Time
+	lastErr     error
+	failing     bool
 }
 
 // NewJWTValidator creates a new JWT validator
@@ -35,8 +64,48 @@ func NewJWTValidator(cloudURL string, logger *slog.Logger) *JWTValidator {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		logger: logger.With("model", "jwt"),
+		logger:          logger.With("model", "jwt"),
+		refreshInterval: jwksRefreshInterval,
+		retryInterval:   jwksRetryInterval,
 	}
+}
+
+// Start runs the refresher until ctx ends. It fetches cloud's keys at once
+// unless fresh ones were restored, again each refreshInterval, and after a
+// failure retries each retryInterval until a fetch succeeds. Requests never
+// refresh known keys themselves, so nothing about an unreachable cloud costs
+// them anything.
+func (v *JWTValidator) Start(ctx context.Context) {
+	go v.refreshLoop(ctx)
+}
+
+func (v *JWTValidator) refreshLoop(ctx context.Context) {
+	timer := time.NewTimer(v.nextRefresh())
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		v.fetchMu.Lock()
+		_ = v.refreshLocked(ctx)
+		v.fetchMu.Unlock()
+		timer.Reset(v.nextRefresh())
+	}
+}
+
+// nextRefresh is how long the refresher waits before its next fetch.
+func (v *JWTValidator) nextRefresh() time.Duration {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.lastErr != nil {
+		return v.retryInterval - time.Since(v.lastAttempt)
+	}
+	return v.refreshInterval - time.Since(v.fetchedAt)
 }
 
 // Claims represents the JWT claims from miren.cloud
@@ -89,16 +158,9 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (*
 			return nil, fmt.Errorf("key ID not found in token header")
 		}
 
-		// Get the public keys
-		keys, err := v.getPublicKeys(ctx)
+		publicKey, err := v.publicKey(ctx, kid)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get public keys: %w", err)
-		}
-
-		// Find the key by ID
-		publicKey, ok := keys[kid]
-		if !ok {
-			return nil, fmt.Errorf("key with ID %s not found", kid)
+			return nil, err
 		}
 
 		// Verify the signing method matches the key type (only Ed25519 supported)
@@ -135,45 +197,162 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (*
 	return claims, nil
 }
 
-// getPublicKeys fetches the public keys from miren.cloud JWKS, with caching
-func (v *JWTValidator) getPublicKeys(ctx context.Context) (map[string]crypto.PublicKey, error) {
-	v.mu.RLock()
-	if v.keys != nil && time.Now().Before(v.keyExpiry) {
-		keys := v.keys
-		v.mu.RUnlock()
-		return keys, nil
-	}
-	v.mu.RUnlock()
+// savedKeys is the on-disk form of cloud's JWKS document. CloudURL ties it to
+// the cloud that published it.
+type savedKeys struct {
+	CloudURL string          `json:"cloud_url"`
+	JWKS     json.RawMessage `json:"jwks"`
+}
 
-	// Need to fetch new keys
+// UseKeyCache saves cloud's keys at path after each fetch, and restores any
+// saved there now, so a restart while cloud is unreachable can still validate
+// tokens. Call it before the validator is shared.
+func (v *JWTValidator) UseKeyCache(path string) {
+	v.cachePath = path
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	var saved savedKeys
+	if err == nil {
+		err = json.Unmarshal(data, &saved)
+	}
+	if err == nil && saved.CloudURL != v.cloudURL {
+		err = fmt.Errorf("keys belong to %q, not %q", saved.CloudURL, v.cloudURL)
+	}
+	var keys map[string]crypto.PublicKey
+	if err == nil {
+		keys, err = v.parseJWKS(saved.JWKS)
+	}
+	if err != nil {
+		v.logger.Warn("ignoring saved cloud signing keys", "path", path, "error", err)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		v.logger.Warn("ignoring saved cloud signing keys", "path", path, "error", err)
+		return
+	}
+	v.keys = keys
+	// Saved keys are as old as the file, so the refresher replaces stale ones
+	// as soon as it can reach cloud.
+	v.fetchedAt = info.ModTime()
+	v.logger.Info("restored saved cloud signing keys", "keys", len(keys))
+}
+
+// publicKey returns cloud's key for kid. A known key is returned at once, even
+// when cloud cannot be reached to confirm it; an unknown one waits for a fetch.
+func (v *JWTValidator) publicKey(ctx context.Context, kid string) (crypto.PublicKey, error) {
+	v.mu.Lock()
+	key, known := v.keys[kid]
+	v.mu.Unlock()
+	if known {
+		return key, nil
+	}
+
+	// Cloud may have started signing with a key it published after our last
+	// fetch, so an unknown kid is worth asking about, within the retry limit.
+	// The fetch serves every caller until the next one, so it must not inherit
+	// this request's cancellation; the HTTP client's timeout bounds it.
+	v.fetchMu.Lock()
+	err := v.refreshLocked(context.WithoutCancel(ctx))
+	v.fetchMu.Unlock()
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if v.keys != nil && time.Now().Before(v.keyExpiry) {
-		return v.keys, nil
+	if key, known := v.keys[kid]; known {
+		return key, nil
 	}
+	if v.keys == nil && err != nil {
+		return nil, fmt.Errorf("failed to get public keys: %w", err)
+	}
+	return nil, fmt.Errorf("key with ID %s not found", kid)
+}
 
-	// Fetch JWKS from well-known endpoint
+// refreshLocked fetches cloud's keys unless a fetch ran within retryInterval,
+// in which case it reports that fetch's result. The caller holds fetchMu.
+func (v *JWTValidator) refreshLocked(ctx context.Context) error {
+	v.mu.Lock()
+	if time.Since(v.lastAttempt) < v.retryInterval {
+		err := v.lastErr
+		v.mu.Unlock()
+		return err
+	}
+	v.lastAttempt = time.Now()
+	v.mu.Unlock()
+
+	data, keys, err := v.fetchKeys(ctx)
+
+	v.mu.Lock()
+	v.lastErr = err
+	if err != nil {
+		if !v.failing {
+			v.failing = true
+			if v.keys != nil {
+				v.logger.Warn("cannot refresh cloud signing keys; validating tokens with the last keys fetched",
+					"keys", len(v.keys), "fetched_at", v.fetchedAt, "error", err)
+			} else {
+				v.logger.Warn("cannot fetch cloud signing keys; cloud tokens cannot be validated until cloud is reachable",
+					"error", err)
+			}
+		}
+		v.mu.Unlock()
+		return err
+	}
+	if v.failing {
+		v.failing = false
+		v.logger.Info("cloud signing keys refreshed", "keys", len(keys))
+	}
+	v.keys = keys
+	v.fetchedAt = time.Now()
+	v.mu.Unlock()
+
+	if v.cachePath != "" {
+		saved, err := json.Marshal(savedKeys{CloudURL: v.cloudURL, JWKS: data})
+		if err == nil {
+			err = writeFileAtomic(v.cachePath, saved)
+		}
+		if err != nil {
+			v.logger.Warn("failed to save cloud signing keys; a restart while cloud is unreachable will reject cloud tokens",
+				"path", v.cachePath, "error", err)
+		}
+	}
+	return nil
+}
+
+// fetchKeys fetches the JWKS document from miren.cloud's well-known endpoint.
+func (v *JWTValidator) fetchKeys(ctx context.Context) ([]byte, map[string]crypto.PublicKey, error) {
 	jwksURL := fmt.Sprintf("%s/.well-known/jwks.json", v.cloudURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create JWKS request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create JWKS request: %w", err)
 	}
 
 	resp, err := v.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+		return nil, nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to fetch JWKS: status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("failed to fetch JWKS: status %d", resp.StatusCode)
 	}
 
-	// Parse JWKS response
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read JWKS: %w", err)
+	}
+	keys, err := v.parseJWKS(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, keys, nil
+}
+
+// parseJWKS extracts the Ed25519 keys from a JWKS document.
+func (v *JWTValidator) parseJWKS(data []byte) (map[string]crypto.PublicKey, error) {
 	var jwks JWKS
-	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+	if err := json.Unmarshal(data, &jwks); err != nil {
 		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
 	}
 
@@ -181,7 +360,6 @@ func (v *JWTValidator) getPublicKeys(ctx context.Context) (map[string]crypto.Pub
 		return nil, fmt.Errorf("no keys found in JWKS")
 	}
 
-	// Parse all keys
 	keys := make(map[string]crypto.PublicKey)
 	for _, jwk := range jwks.Keys {
 		if jwk.Kid == "" {
@@ -198,7 +376,7 @@ func (v *JWTValidator) getPublicKeys(ctx context.Context) (map[string]crypto.Pub
 			// Log error but continue with other keys
 			v.logger.Error("failed to parse Ed25519 key",
 				"kid", jwk.Kid,
-				"url", jwksURL,
+				"cloud_url", v.cloudURL,
 				"error", err,
 			)
 			continue
@@ -210,12 +388,29 @@ func (v *JWTValidator) getPublicKeys(ctx context.Context) (map[string]crypto.Pub
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("no valid keys found in JWKS")
 	}
-
-	// Cache for 1 hour
-	v.keys = keys
-	v.keyExpiry = time.Now().Add(1 * time.Hour)
-
 	return keys, nil
+}
+
+// writeFileAtomic replaces path with data, so a crash mid-write leaves the
+// previous contents rather than a truncated file.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // JWKS represents a JSON Web Key Set

@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Features**
+- **Permission changes reach clusters right away** - Miren Cloud now pushes each organization's RBAC rules and group memberships to its clusters over the cluster connection, so a policy edit or membership change applies without waiting for a polling interval or a new login. Clusters authorize from what cloud pushed, not from the groups in a user's token. Cloud defines access, so a cluster keeps authorizing from the last update it received through a lost connection, a reconnect, or a server restart, and saves that update and cloud's signing keys to disk to make the restart case work. Revocations made while a cluster can't reach cloud, whether of a user's permissions or of one of cloud's signing keys, take effect when it reconnects. Upgrade Miren Cloud before the runtime: a cluster on this release denies cloud users until it has received its first update. ([#1314](https://github.com/mirendev/runtime/pull/1314), [#1361](https://github.com/mirendev/runtime/pull/1361))
+
 ---
 
 ## v0.16.2
