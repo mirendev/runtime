@@ -23,7 +23,7 @@ miren cloud app logs [flags]
 - `--json` — Shorthand for --format json
 - `--kind` — Log kind: app or build (default: `app`)
 - `--limit` — Maximum entries (cloud default 500, maximum 2000) (default: `0`)
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--service` — Service to filter
 - `--since` — Lookback duration (e.g. 30m, 2h)
 - `--version` — Build version name (e.g. v3)

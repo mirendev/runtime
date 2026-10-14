@@ -21,7 +21,7 @@ miren cloud app show [flags]
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 
 ## Global Options
 

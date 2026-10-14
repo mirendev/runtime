@@ -21,7 +21,7 @@ miren cloud cluster operations [flags]
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
 - `--limit` — Maximum operations (Cloud default 50, cap 200) (default: `0`)
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 
 ## Global Options
 

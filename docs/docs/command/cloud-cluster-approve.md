@@ -20,7 +20,7 @@ miren cloud cluster approve [flags]
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
 - `--name` — Optional cluster name override
-- `--organization` — Organization XID to register the cluster in
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--registration` — Registration ID from the server approval URL
 - `--registration-token` — Signed token from the server approval URL
 

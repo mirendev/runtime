@@ -20,7 +20,7 @@ miren cloud org member remove [flags]
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
-- `--organization` — Organization XID
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--user` — Cloud user XID
 
 ## Global Options

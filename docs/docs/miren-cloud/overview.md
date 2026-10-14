@@ -59,9 +59,23 @@ miren cloud cluster apps --organization <org-id> --cluster <cluster-id>
 miren cloud app show --organization <org-id> --cluster <cluster-id> --app myapp
 ```
 
-Use organization and cluster IDs from the first two listings, not local cluster
-configuration names. App detail includes deployment metadata and any available
-incidents.
+`--organization` (or `-o`) accepts an `org-` ID or an exact organization name from
+`cloud org list`. Values without the `org-` prefix are looked up by name using
+your selected Cloud identity. If you belong to exactly one organization, you can
+omit the flag; otherwise specify it explicitly. Duplicate names require an ID.
+Cluster flags still take Cloud cluster IDs, not local configuration names.
+App detail includes deployment metadata and any available incidents.
+
+```bash
+miren cloud app list -o "My Team"
+miren cloud app list # Uses your only organization, if you have exactly one
+miren cloud me
+```
+
+`cloud me` shows a readable profile, organization memberships and enabled
+features, and linked sign-in identities by default. Missing membership or
+identity data is marked as not reported, since Cloud can return a partial
+profile. Use `cloud me --json` for the complete API response.
 
 :::info[Mirrored app state]
 App visibility is Cloud's mirrored state, not a live runtime query. Check
@@ -104,7 +118,8 @@ formatted JSON so nested information is not lost.
 
 The [Cloud command reference](../command/cloud.md) includes the following
 additional API families. Every organization-scoped command takes an
-`--organization <id>` flag; group detail and membership commands take `--group`
+`--organization <name-or-id>` / `-o` flag, defaulting to your only organization;
+group detail and membership commands take `--group`
 instead, because group IDs are globally addressable.
 
 | Command family | Capabilities |

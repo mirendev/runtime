@@ -19,7 +19,7 @@ miren cloud org member set-role [flags]
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--role` — Organization role: admin or member (choices: `admin`, `member`)
 - `--user` — Cloud user XID
 

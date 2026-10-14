@@ -22,7 +22,7 @@ miren cloud volume updates [flags]
 - `--json` — Shorthand for --format json
 - `--kind` — Filter update kind
 - `--limit` — Page size (Cloud default 50, range 1-200) (default: `0`)
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 - `--volume` — Cloud volume ID
 
 ## Global Options

@@ -21,7 +21,7 @@ miren cloud enroll-token list [flags]
 - `--json` — Shorthand for --format json
 - `--limit` — Maximum tokens (Cloud default 50, cap 200) (default: `0`)
 - `--offset` — Number of tokens to skip (default: `0`)
-- `--organization` — Organization XID (from cloud org list)
+- `--organization, -o` — Organization name or org- ID (defaults to your only organization)
 
 ## Global Options
 
