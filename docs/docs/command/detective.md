@@ -12,7 +12,7 @@ Ask Workbench is a Miren Labs feature. Ask for access on Discord: https://miren.
 
 Ask the same cluster-scoped Workbench available in Miren Cloud. Requires a Cloud-registered cluster, a Cloud login, and Workbench enabled for the cluster's organization. Cluster selection follows the usual --cluster, MIREN_CLUSTER, per-app state, and active-cluster rules.
 
-With no question, starts an interactive conversation; piped input is treated as one question. Pass -a to focus on an application. Responses stream as plain text. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
+With no question, starts an interactive conversation; piped input is treated as one question. Defaults to the app in the current directory or a parent directory, or in -d when specified. Pass -a or MIREN_APP to override the app. Outside an app directory, asks about the cluster. Terminal responses render Markdown with a waiting indicator; redirected responses stream as plain text. Local tool calls are shown as they happen. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
 
 Detective enables read-only tools for listing, reading and searching source in the current directory (or -d). Workbench enables the same tools only with --local-tools. Requested file content is sent to Miren Cloud. There is no model-callable local shell or editing. In a Git repository, Git must be installed to resolve .git/info/exclude and the effective global excludes file, including included config and worktrees; failures refuse source access. Symlinks, gitignored files, most hidden paths, and common credential files are excluded; .miren/app.toml is eligible unless gitignored. These exclusions are not secret detection: choose a source-only directory and keep sensitive files out of it.
 
@@ -26,7 +26,7 @@ miren detective [args...] [flags]
 
 ## Flags
 
-- `--app, -a` — Application to focus on (optional)
+- `--app, -a` — Application to focus on (defaults to the local app, if any)
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
 - `--dir, -d` — Local source root for detective or --local-tools (default: `.`)

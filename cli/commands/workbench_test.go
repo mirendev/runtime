@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/containerd/console"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/clientconfig"
@@ -27,7 +29,7 @@ type workbenchTestCall struct {
 	Error     bool
 }
 
-func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *bytes.Buffer, *bytes.Buffer) {
+func workbenchTestContext(t *testing.T, calls []workbenchTestCall, app string, beforeUpdate ...func()) (*Context, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	token := freshLoginJWT(t)
 	ack := make(chan struct{}, 1)
@@ -45,7 +47,7 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *b
 			var request map[string]string
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			assert.Equal(t, "cluster-ask", request["agent"])
-			assert.Equal(t, "web", request["app"])
+			assert.Equal(t, app, request["app"])
 			fmt.Fprint(w, `{}`)
 		case strings.HasSuffix(r.URL.Path, "/client-tools"):
 			var request struct {
@@ -96,6 +98,8 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *b
 			callIndex++
 			w.WriteHeader(http.StatusNoContent)
 			ack <- struct{}{}
+		case strings.HasSuffix(r.URL.Path, "/abort"):
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost:
 			if len(calls) > 0 {
 				<-ready
@@ -107,6 +111,9 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *b
 			w.WriteHeader(http.StatusAccepted)
 			fmt.Fprint(w, `{"offset":"0","submissionId":"question"}`)
 		case r.Method == http.MethodGet:
+			for _, wait := range beforeUpdate {
+				wait()
+			}
 			if len(calls) > 0 {
 				select {
 				case <-done:
@@ -119,7 +126,7 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *b
 			switch r.URL.Query().Get("offset") {
 			case "0":
 				w.Header().Set("Stream-Next-Offset", "7")
-				fmt.Fprint(w, `[{"type":"stream-checkpoint","incarnation":"worker-1"},{"type":"message-delta","kind":"reasoning","delta":"private"},{"type":"tool-input","toolName":"local_read","input":{"path":".env"}},{"type":"message-delta","kind":"text","delta":"Startup "},{"type":"submission-settled","submissionId":"other","outcome":"failed"}]`)
+				fmt.Fprint(w, `[{"type":"stream-checkpoint","incarnation":"worker-1"},{"type":"message-delta","kind":"reasoning","delta":"private"},{"type":"tool-input","toolName":"local_read","input":{"path":".env"}},{"type":"message-delta","kind":"text","delta":"**Startup** "},{"type":"submission-settled","submissionId":"other","outcome":"failed"}]`)
 			case "7":
 				fmt.Fprint(w, `[{"type":"stream-checkpoint","incarnation":"worker-1"},{"type":"message-delta","kind":"text","delta":"needs PORT."},{"type":"submission-settled","submissionId":"question","outcome":"completed"}]`)
 			default:
@@ -137,9 +144,120 @@ func workbenchTestContext(t *testing.T, calls []workbenchTestCall) (*Context, *b
 }
 
 func TestWorkbenchQuestion(t *testing.T) {
-	ctx, output, _ := workbenchTestContext(t, nil)
+	ctx, output, stderr := workbenchTestContext(t, nil, "web")
 	require.NoError(t, Workbench(ctx, workbenchOptions{App: "web", Question: []string{"Why does startup fail?"}}))
-	require.Equal(t, "Startup needs PORT.\n", output.String())
+	require.Equal(t, "**Startup** needs PORT.\n", output.String())
+	require.Empty(t, stderr.String())
+}
+
+func TestDetectiveAppDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		app  string
+		want string
+	}{
+		{name: "current directory", want: "configured-app"},
+		{name: "parent directory", want: "configured-app"},
+		{name: "explicit directory", want: "other-app"},
+		{name: "explicit app", app: "override-app", want: "override-app"},
+		{name: "no app"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.name != "no app" {
+				writeAppToml(t, dir, `name = "configured-app"`)
+			}
+			cwd := dir
+			if tc.name == "parent directory" {
+				cwd = filepath.Join(dir, "sub")
+				require.NoError(t, os.Mkdir(cwd, 0700))
+			}
+			chdir(t, cwd)
+			opts := workbenchOptions{App: tc.app, Dir: ".", Question: []string{"Why does startup fail?"}}
+			if tc.name == "explicit directory" {
+				opts.Dir = t.TempDir()
+				writeAppToml(t, opts.Dir, `name = "other-app"`)
+			}
+			ctx, _, _ := workbenchTestContext(t, nil, tc.want)
+			require.NoError(t, Detective(ctx, opts))
+		})
+	}
+}
+
+func TestDetectiveTerminal(t *testing.T) {
+	for _, mode := range []string{"question", "cancel", "chat"} {
+		t.Run(mode, func(t *testing.T) {
+			master, path, err := console.NewPty()
+			require.NoError(t, err)
+			t.Cleanup(func() { master.Close() })
+			require.NoError(t, master.Resize(console.WinSize{Width: 80, Height: 24}))
+			terminal, err := os.OpenFile(path, os.O_RDWR, 0)
+			require.NoError(t, err)
+			t.Cleanup(func() { terminal.Close() })
+			var captured syncBuffer
+			go func() { _, _ = io.Copy(&captured, master) }()
+			release := make(chan struct{})
+			ctx, _, _ := workbenchTestContext(t, []workbenchTestCall{{Name: "local_list", Arguments: `{}`, Output: "main.go\n"}}, "web", func() { <-release })
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			var cancelContext context.CancelFunc
+			ctx.Context, cancelContext = context.WithCancel(ctx.Context)
+			t.Cleanup(cancelContext)
+			ctx.Stdout, ctx.Stderr = terminal, terminal
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0600))
+			opts := workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}
+			if mode == "chat" {
+				stdin := os.Stdin
+				os.Stdin = terminal
+				t.Cleanup(func() { os.Stdin = stdin })
+				opts.Question = nil
+			}
+			finished := make(chan error, 1)
+			go func() {
+				finished <- Detective(ctx, opts)
+			}()
+			if mode == "chat" {
+				require.Eventually(t, func() bool { return strings.Contains(captured.String(), "> ") }, 3*time.Second, 10*time.Millisecond)
+				_, err := master.Write([]byte("Why does startup fail?\n"))
+				require.NoError(t, err)
+			}
+			require.Eventually(t, func() bool {
+				return strings.Contains(captured.String(), "Waiting for Miren Cloud") && strings.Contains(captured.String(), "local_list {}")
+			}, 3*time.Second, 10*time.Millisecond)
+			if mode == "cancel" {
+				cancelContext()
+			}
+			close(release)
+			if mode == "chat" {
+				for turn := 1; turn <= 2; turn++ {
+					require.Eventually(t, func() bool {
+						return strings.Count(ansi.Strip(captured.String()), "Startup needs PORT.") >= turn && strings.Count(captured.String(), "> ") >= turn+1
+					}, 3*time.Second, 10*time.Millisecond)
+					question := "Why does startup fail?\n"
+					if turn == 2 {
+						question = "/quit\n"
+					}
+					_, err := master.Write([]byte(question))
+					require.NoError(t, err)
+				}
+			}
+			if mode == "cancel" {
+				require.ErrorIs(t, <-finished, context.Canceled)
+			} else {
+				require.NoError(t, <-finished)
+				require.Eventually(t, func() bool {
+					return strings.Contains(ansi.Strip(captured.String()), "Startup needs PORT.")
+				}, time.Second, time.Millisecond)
+				require.NotContains(t, captured.String(), "**Startup**")
+			}
+		})
+	}
 }
 
 func TestDetectiveLocalSourceTools(t *testing.T) {
@@ -174,10 +292,13 @@ func TestDetectiveLocalSourceTools(t *testing.T) {
 		require.NoError(t, err)
 		calls = append(calls, workbenchTestCall{Name: "local_read", Arguments: string(data), Error: true})
 	}
-	ctx, output, stderr := workbenchTestContext(t, calls)
-	require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
-	require.Equal(t, "Startup needs PORT.\n", output.String())
+	ctx, output, stderr := workbenchTestContext(t, calls, "web")
+	require.NoError(t, Detective(ctx, workbenchOptions{Dir: dir, Question: []string{"Why does startup fail?"}}))
+	require.Equal(t, "**Startup** needs PORT.\n", output.String())
 	require.Contains(t, stderr.String(), "no local writes or shell execution")
+	require.Contains(t, stderr.String(), `local_read {"path":"main.go","start_line":2,"lines":1}`)
+	require.Contains(t, stderr.String(), `local_search {"query":"PORT"}`)
+	require.NotContains(t, stderr.String(), "listen(PORT)")
 }
 
 func TestDetectiveNestedSourceRoot(t *testing.T) {
@@ -210,7 +331,7 @@ func TestDetectiveNestedSourceRoot(t *testing.T) {
 				{Name: "local_read", Arguments: `{"path":"local.json"}`, Error: true},
 				{Name: "local_read", Arguments: `{"path":"main.go"}`, Output: "1: public MARKER\n"},
 			}
-			ctx, _, _ := workbenchTestContext(t, calls)
+			ctx, _, _ := workbenchTestContext(t, calls, "web")
 			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
 		})
 	}
@@ -227,7 +348,7 @@ func TestDetectiveGitignoreDoesNotExcludeSourceRoot(t *testing.T) {
 				{Name: "local_search", Arguments: `{"query":"MARKER"}`, Output: "main.go:1: public MARKER\n"},
 				{Name: "local_read", Arguments: `{"path":".gitignore"}`, Error: true},
 			}
-			ctx, _, _ := workbenchTestContext(t, calls)
+			ctx, _, _ := workbenchTestContext(t, calls, "web")
 			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
 		})
 	}
@@ -289,7 +410,7 @@ func TestDetectiveGitExclusionSources(t *testing.T) {
 					calls[i].Output = ""
 				}
 			}
-			ctx, _, _ := workbenchTestContext(t, calls)
+			ctx, _, _ := workbenchTestContext(t, calls, "web")
 			require.NoError(t, Detective(ctx, workbenchOptions{App: "web", Dir: dir, Question: []string{"Why does startup fail?"}}))
 		})
 	}

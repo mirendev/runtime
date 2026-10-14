@@ -3,6 +3,7 @@ package commands
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,13 +13,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/cloudapi"
 )
 
 type workbenchOptions struct {
 	ConfigCentric
-	App        string   `short:"a" long:"app" env:"MIREN_APP" description:"Application to focus on (optional)"`
+	App        string   `short:"a" long:"app" env:"MIREN_APP" description:"Application to focus on (defaults to the local app, if any)"`
 	Identity   string   `short:"i" long:"identity" description:"Cloud identity (defaults to the cluster's identity)"`
 	LocalTools bool     `long:"local-tools" description:"Allow read-only local source inspection; requested source content is sent to Cloud"`
 	Dir        string   `short:"d" long:"dir" default:"." description:"Local source root for detective or --local-tools"`
@@ -29,7 +31,7 @@ const workbenchDescription = `Ask Workbench is a Miren Labs feature. Ask for acc
 
 Ask the same cluster-scoped Workbench available in Miren Cloud. Requires a Cloud-registered cluster, a Cloud login, and Workbench enabled for the cluster's organization. Cluster selection follows the usual --cluster, MIREN_CLUSTER, per-app state, and active-cluster rules.
 
-With no question, starts an interactive conversation; piped input is treated as one question. Pass -a to focus on an application. Responses stream as plain text. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
+With no question, starts an interactive conversation; piped input is treated as one question. Defaults to the app in the current directory or a parent directory, or in -d when specified. Pass -a or MIREN_APP to override the app. Outside an app directory, asks about the cluster. Terminal responses render Markdown with a waiting indicator; redirected responses stream as plain text. Local tool calls are shown as they happen. Ctrl-C aborts any active response and exits the CLI; it does not return to the chat prompt. Use /quit or Ctrl-D to exit interactive chat normally.
 
 Detective enables read-only tools for listing, reading and searching source in the current directory (or -d). Workbench enables the same tools only with --local-tools. Requested file content is sent to Miren Cloud. There is no model-callable local shell or editing. In a Git repository, Git must be installed to resolve .git/info/exclude and the effective global excludes file, including included config and worktrees; failures refuse source access. Symlinks, gitignored files, most hidden paths, and common credential files are excluded; .miren/app.toml is eligible unless gitignored. These exclusions are not secret detection: choose a source-only directory and keep sensitive files out of it.
 
@@ -54,6 +56,21 @@ func runWorkbench(ctx *Context, opts workbenchOptions) error {
 	cluster := ctx.ClusterConfig
 	if cluster.XID == "" {
 		return fmt.Errorf("cluster %q has no Cloud ID; add a Cloud-registered cluster with 'miren cluster add'", ctx.ClusterName)
+	}
+	if opts.App == "" {
+		var ac *appconfig.AppConfig
+		var err error
+		if opts.Dir != "" && opts.Dir != "." {
+			ac, err = appconfig.LoadAppConfigUnder(opts.Dir)
+		} else {
+			ac, err = LoadLocalAppConfig()
+		}
+		if err != nil {
+			return fmt.Errorf("error loading %s: %w", appconfig.AppConfigPath, err)
+		}
+		if ac != nil {
+			opts.App = ac.Name
+		}
 	}
 	identityName := opts.Identity
 	if identityName == "" {
@@ -117,6 +134,9 @@ func runWorkbench(ctx *Context, opts workbenchOptions) error {
 			return fmt.Errorf("provide a question or run workbench in an interactive terminal")
 		}
 	}
+	display := &workbenchDisplay{output: ctx.Stdout, status: ctx.Stderr}
+	display.start("Connecting to Miren Cloud")
+	defer display.finish()
 	conversation, err := client.OpenWorkbench(ctx, cluster.XID, "cli-"+uuid.NewString(), opts.App)
 	if err != nil {
 		return err
@@ -131,26 +151,30 @@ func runWorkbench(ctx *Context, opts workbenchOptions) error {
 		}
 		defer tools.Close()
 		group.Go(func() error {
-			err := tools.Serve(runCtx, source.execute)
+			err := tools.Serve(runCtx, func(ctx context.Context, name string, input json.RawMessage) (string, error) {
+				display.tool(name, input)
+				return source.execute(ctx, name, input)
+			})
 			if runCtx.Err() != nil {
 				return nil
 			}
 			return err
 		})
 	}
+	if err := display.finish(); err != nil {
+		return err
+	}
 	group.Go(func() error {
 		defer stop()
 		if !interactive {
-			err := conversation.Ask(runCtx, question, uuid.NewString(), ctx.Stdout)
-			ctx.Printf("\n")
-			return err
+			return display.ask(runCtx, conversation, question)
 		}
-		return workbenchChat(runCtx, conversation, os.Stdin, ctx.Stdout, ctx.Stderr)
+		return workbenchChat(runCtx, conversation, os.Stdin, display)
 	})
 	return group.Wait()
 }
 
-func workbenchChat(ctx context.Context, conversation *cloudapi.Workbench, input io.Reader, output, prompts io.Writer) error {
+func workbenchChat(ctx context.Context, conversation *cloudapi.Workbench, input io.Reader, display *workbenchDisplay) error {
 	lines := make(chan string)
 	readErrors := make(chan error, 1)
 	go func() {
@@ -166,9 +190,9 @@ func workbenchChat(ctx context.Context, conversation *cloudapi.Workbench, input 
 		}
 		readErrors <- scanner.Err()
 	}()
-	fmt.Fprintln(prompts, "Ask Workbench. Type /quit or press Ctrl-D to exit.")
+	fmt.Fprintln(display.status, "Ask Workbench. Type /quit or press Ctrl-D to exit.")
 	for {
-		fmt.Fprint(prompts, "> ")
+		fmt.Fprint(display.status, "> ")
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -183,10 +207,9 @@ func workbenchChat(ctx context.Context, conversation *cloudapi.Workbench, input 
 			if question == "" {
 				continue
 			}
-			if err := conversation.Ask(ctx, question, uuid.NewString(), output); err != nil {
+			if err := display.ask(ctx, conversation, question); err != nil {
 				return err
 			}
-			fmt.Fprintln(output)
 		}
 	}
 }
