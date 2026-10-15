@@ -226,7 +226,7 @@ alpine_image = "alpine:3.19"
 
 ### `[[build.secrets]]` — Build-time secrets {#build-secrets}
 
-Exposes an encrypted [secret](./secrets.md) to the build, so it can fetch private dependencies. An automatic language build mounts each secret on its dependency install step, at the `env` or `file` target you give it. A Dockerfile build reads it with `RUN --mount=type=secret,id=<id>` and ignores the target. BuildKit keeps the value out of image layers and its own logs. See [Using a secret at build time](./secrets.md#using-a-secret-at-build-time) for the full contract.
+Exposes an encrypted [secret](./secrets.md) to the build, so it can fetch private dependencies. An automatic language build mounts each secret on its dependency install step, at the `env` or `file` target you give it. A Dockerfile build reads it with `RUN --mount=type=secret,id=<id>` and ignores the target. BuildKit keeps the value out of image layers and its own logs. See [Private Dependencies](./private-dependencies.md) for recipes, and [Using a secret at build time](./secrets.md#using-a-secret-at-build-time) for the full contract.
 
 ```toml
 [[build.secrets]]
