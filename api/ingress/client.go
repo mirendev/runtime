@@ -401,24 +401,6 @@ func (c *Client) ListOIDCProviders(ctx context.Context) ([]*ingress_v1alpha.Oidc
 	return providers, nil
 }
 
-// DeleteOIDCProvider deletes an OIDC provider by name
-func (c *Client) DeleteOIDCProvider(ctx context.Context, name string) error {
-	provider, err := c.GetOIDCProvider(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if provider == nil {
-		return fmt.Errorf("OIDC provider not found: %s", name)
-	}
-
-	if err := c.ec.Delete(ctx, provider.ID); err != nil {
-		return fmt.Errorf("failed to delete OIDC provider: %w", err)
-	}
-
-	return nil
-}
-
 // SetRouteMaintenance puts a route into maintenance. The router serves a
 // holding page for the route until the state is cleared.
 //
@@ -532,24 +514,6 @@ func (c *Client) ListPasswordProviders(ctx context.Context) ([]*ingress_v1alpha.
 	}
 
 	return providers, nil
-}
-
-// DeletePasswordProvider deletes a password provider by name
-func (c *Client) DeletePasswordProvider(ctx context.Context, name string) error {
-	provider, err := c.GetPasswordProvider(ctx, name)
-	if err != nil {
-		return err
-	}
-
-	if provider == nil {
-		return fmt.Errorf("password provider not found: %s", name)
-	}
-
-	if err := c.ec.Delete(ctx, provider.ID); err != nil {
-		return fmt.Errorf("failed to delete password provider: %w", err)
-	}
-
-	return nil
 }
 
 func (c *Client) CreateWAFProfile(ctx context.Context, level int) (*ingress_v1alpha.WafProfile, error) {
