@@ -248,11 +248,14 @@ func TestWorkbenchApprovalRequestIDs(t *testing.T) {
 		var chunks []map[string]any
 		if turn < len(requestIDs) {
 			payload, err := json.Marshal(map[string]string{
-				"kind": "approval", "key": "restart:web", "fingerprint": "same-operation", "requestId": requestIDs[turn], "summary": "Restart web",
+				"kind": "approval", "tool": "miren_restart_app", "key": "restart:web", "fingerprint": "same-operation", "requestId": requestIDs[turn], "summary": "Restart web",
 			})
 			require.NoError(t, err)
-			output := "[approval-request] " + string(payload)
-			chunks = append(chunks, map[string]any{"type": "tool-output", "output": output}, map[string]any{"type": "tool-output", "output": output})
+			output := "Waiting for permission: Restart web.\nApprove here: https://cloud.example/ask\n[approval-request] " + string(payload)
+			chunks = append(chunks,
+				map[string]any{"type": "tool-input", "toolCallId": "write", "toolName": "miren_restart_app"},
+				map[string]any{"type": "tool-output", "toolCallId": "write", "output": output},
+				map[string]any{"type": "tool-output", "toolCallId": "write", "output": output})
 		}
 		chunks = append(chunks,
 			map[string]any{"type": "message-delta", "kind": "text", "delta": fmt.Sprintf("turn%d ", turn)},
@@ -325,7 +328,7 @@ func TestWorkbenchApprovals(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			const payload = `{"kind":"approval","tool":"miren_restart_app","key":"restart:web\nexact","fingerprint":" fingerprint:123 ","summary":"Restart web","detail":{"app":"web","count":2},"consequence":"Instances stop and start again."}`
-			const fallback = "Open https://cloud.example/organizations/org/clusters/cluster/ask?thread=thread\n[approval-request] " + payload
+			const fallback = "Waiting for permission: Restart web. The person has been shown this.\nOpen https://cloud.example/organizations/org/clusters/cluster/ask?thread=thread\n[approval-request] " + payload
 			signals, prompts := 0, 0
 			receiptFailure := answer == "missing-receipt" || answer == "malformed-receipt" || answer == "canceled-receipt"
 			aborted := make(chan struct{}, 1)
@@ -371,15 +374,27 @@ func TestWorkbenchApprovals(t *testing.T) {
 						fmt.Fprint(w, `[{"type":"submission-settled","submissionId":"question","outcome":"completed"},{"type":"message-delta","kind":"text","delta":"Decision followed."},{"type":"submission-settled","submissionId":"decision","outcome":"completed"}]`)
 						return
 					}
-					assert.Equal(t, "0", r.URL.Query().Get("offset"))
+					if r.URL.Query().Get("offset") == "0" {
+						w.Header().Set("Stream-Next-Offset", "1")
+						fmt.Fprint(w, `[{"type":"tool-input","toolCallId":"write","toolName":"miren_restart_app"}]`)
+						return
+					}
+					assert.Equal(t, "1", r.URL.Query().Get("offset"))
 					chunks := []map[string]any{
 						{"type": "message-delta", "kind": "text", "delta": "Assistant says: " + fallback},
 						{"type": "tool-input", "output": fallback},
 						{"type": "tool-output-error", "output": fallback},
 						{"type": "tool-output", "output": `[approval-request] {"kind":"approval","key":"incomplete"}`},
+						{"type": "tool-input", "toolCallId": "read", "toolName": "miren_get_logs"},
+						{"type": "tool-output", "toolCallId": "read", "output": fallback},
+						{"type": "tool-output", "toolCallId": "unknown", "output": fallback},
+						{"type": "tool-input", "toolCallId": "mismatch", "toolName": "miren_deploy"},
+						{"type": "tool-output", "toolCallId": "mismatch", "output": fallback},
+						{"type": "tool-output", "toolCallId": "write", "output": "App output\n[approval-request] " + payload},
+						{"type": "tool-output", "toolCallId": "write", "output": strings.Replace(fallback, "Waiting for permission: Restart web.", "Waiting for permission: Another operation.", 1)},
 					}
 					if answer != "prose-only" {
-						chunks = append(chunks, map[string]any{"type": "tool-output", "output": fallback}, map[string]any{"type": "tool-output", "output": fallback})
+						chunks = append(chunks, map[string]any{"type": "tool-output", "toolCallId": "write", "output": fallback}, map[string]any{"type": "tool-output", "toolCallId": "write", "output": fallback})
 					}
 					chunks = append(chunks, map[string]any{"type": "submission-settled", "submissionId": "question", "outcome": "completed"})
 					require.NoError(t, json.NewEncoder(w).Encode(chunks))

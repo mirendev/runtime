@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -287,6 +288,9 @@ func (m *workbenchUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Println(text)
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyCtrlD {
+			if msg.Type == tea.KeyCtrlC || m.busy || m.approval != nil {
+				m.err = context.Canceled
+			}
 			m.done = true
 			return m, tea.Quit
 		}
@@ -392,7 +396,15 @@ func (m *workbenchUI) renderApproval() {
 		quoted := strconv.QuoteToGraphic(s)
 		return quoted[1 : len(quoted)-1]
 	}
-	content := "Approval required: " + safe(r.Summary) + "\nTool: " + safe(r.Tool) + "\nConsequences: " + safe(r.Consequence) + "\nArguments:\n" + detail.String()
+	var arguments strings.Builder
+	for _, r := range detail.String() {
+		if unicode.IsGraphic(r) || r == '\n' {
+			arguments.WriteRune(r)
+		} else {
+			fmt.Fprintf(&arguments, "\\u%04x", r)
+		}
+	}
+	content := "Approval required: " + safe(r.Summary) + "\nTool: " + safe(r.Tool) + "\nConsequences: " + safe(r.Consequence) + "\nArguments:\n" + arguments.String()
 	content = ansi.Wrap(content, max(1, m.width), "")
 	m.review = viewport.New(max(1, m.width), max(1, min(m.height-7, strings.Count(content, "\n")+1)))
 	m.review.SetContent(content)

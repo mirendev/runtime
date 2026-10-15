@@ -277,7 +277,7 @@ func TestDetectiveTerminal(t *testing.T) {
 }
 
 func TestDetectiveApprovals(t *testing.T) {
-	for _, mode := range []string{"once", "session", "deny", "chat", "narrow", "noninteractive", "redirected", "cancel", "cancel-active"} {
+	for _, mode := range []string{"once", "session", "deny", "chat", "narrow", "hostile", "noninteractive", "redirected", "cancel", "cancel-active", "eof", "eof-active", "eof-idle", "cancel-idle"} {
 		t.Run(mode, func(t *testing.T) {
 			master, path, err := console.NewPty()
 			require.NoError(t, err)
@@ -293,9 +293,12 @@ func TestDetectiveApprovals(t *testing.T) {
 			go func() { _, _ = io.Copy(&captured, master) }()
 			decisions := make(chan string, 4)
 			polling, aborted := make(chan struct{}, 1), make(chan struct{}, 1)
-			fallback := "Open https://cloud.example/organizations/org/clusters/cluster/ask?thread=owned\n[approval-request] " + `{"kind":"approval","tool":"miren_restart_app","key":"restart:web","fingerprint":"exact fingerprint","summary":"Restart web","detail":{"app":"web","instances":2},"consequence":"Instances stop and start again."}`
+			fallback := "Waiting for permission: Restart web.\nOpen https://cloud.example/organizations/org/clusters/cluster/ask?thread=owned\n[approval-request] " + `{"kind":"approval","tool":"miren_restart_app","key":"restart:web","fingerprint":"exact fingerprint","summary":"Restart web","detail":{"app":"web","instances":2},"consequence":"Instances stop and start again."}`
 			if mode == "narrow" {
 				fallback = strings.Replace(fallback, `"instances":2`, `"instances":2,"notes":"`+strings.Repeat("review this argument ", 60)+`","zz_end":true`, 1)
+			}
+			if mode == "hostile" {
+				fallback = strings.Replace(fallback, `"instances":2`, "\"instances\":2,\"notes\":\"before\u202eafter\u2066isolated\u2069\u0085\"", 1)
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -322,7 +325,7 @@ func TestDetectiveApprovals(t *testing.T) {
 						fmt.Fprint(w, `{"offset":"0","submissionId":"question"}`)
 					}
 				default:
-					if mode == "cancel-active" {
+					if mode == "cancel-active" || mode == "eof-active" {
 						polling <- struct{}{}
 						<-r.Context().Done()
 						return
@@ -332,8 +335,9 @@ func TestDetectiveApprovals(t *testing.T) {
 						return
 					}
 					_ = json.NewEncoder(w).Encode([]map[string]any{
-						{"type": "tool-output", "output": fallback},
-						{"type": "tool-output", "output": fallback},
+						{"type": "tool-input", "toolCallId": "write", "toolName": "miren_restart_app"},
+						{"type": "tool-output", "toolCallId": "write", "output": fallback},
+						{"type": "tool-output", "toolCallId": "write", "output": fallback},
 						{"type": "submission-settled", "submissionId": "question", "outcome": "completed"},
 					})
 				}
@@ -361,20 +365,40 @@ func TestDetectiveApprovals(t *testing.T) {
 				ctx.Stdout, ctx.Stderr = &plain, &plain
 			}
 			opts := workbenchOptions{NoLocalTools: true, Question: []string{"Restart web"}}
-			if mode == "chat" {
+			if mode == "chat" || strings.HasSuffix(mode, "-idle") {
 				opts.Question = nil
 			}
 			finished := make(chan error, 1)
 			go func() { finished <- Detective(ctx, opts) }()
-			if mode == "cancel-active" {
+			if strings.HasSuffix(mode, "-idle") {
+				require.Eventually(t, func() bool { return strings.Contains(captured.String(), "> ") }, 3*time.Second, 10*time.Millisecond)
+				key := "\x04"
+				if mode == "cancel-idle" {
+					key = "\x03"
+				}
+				_, err = master.Write([]byte(key))
+				require.NoError(t, err)
+				if mode == "cancel-idle" {
+					require.ErrorIs(t, <-finished, context.Canceled)
+				} else {
+					require.NoError(t, <-finished)
+				}
+				assert.Empty(t, decisions)
+				return
+			}
+			if mode == "cancel-active" || mode == "eof-active" {
 				select {
 				case <-polling:
 				case <-deadline.Done():
 					t.Fatal("question did not start")
 				}
-				_, err = master.Write([]byte("\x03"))
+				key := "\x03"
+				if mode == "eof-active" {
+					key = "\x04"
+				}
+				_, err = master.Write([]byte(key))
 				require.NoError(t, err)
-				require.NoError(t, <-finished)
+				require.ErrorIs(t, <-finished, context.Canceled)
 				require.Len(t, aborted, 1, "active response must be aborted before CLI exit")
 				return
 			}
@@ -388,6 +412,11 @@ func TestDetectiveApprovals(t *testing.T) {
 				require.Eventually(t, func() bool { return strings.Contains(captured.String(), "Enter confirm") }, 3*time.Second, 10*time.Millisecond)
 				for _, text := range []string{"Restart web", `"app": "web"`, "Consequences: Instances stop", "Allow once", "Allow for conversation", "Deny"} {
 					assert.Contains(t, ansi.Strip(captured.String()), text)
+				}
+				if mode == "hostile" {
+					assert.Contains(t, captured.String(), `before\u202eafter\u2066isolated\u2069\u0085`)
+					assert.NotContains(t, captured.String(), "\u202e")
+					assert.NotContains(t, captured.String(), "\u0085")
 				}
 				if mode == "narrow" {
 					_, err = master.Write([]byte(strings.Repeat("\x1b[6~", 10)))
@@ -410,12 +439,14 @@ func TestDetectiveApprovals(t *testing.T) {
 					keys = "\x1b[A\r"
 				case "cancel":
 					keys = "\x03"
+				case "eof":
+					keys = "\x04"
 				}
 				_, err = master.Write([]byte(keys))
 				require.NoError(t, err)
-				if mode != "cancel" {
+				if mode != "cancel" && mode != "eof" {
 					want := mode
-					if mode == "chat" || mode == "narrow" {
+					if mode == "chat" || mode == "narrow" || mode == "hostile" {
 						want = "deny"
 					}
 					select {
@@ -431,7 +462,11 @@ func TestDetectiveApprovals(t *testing.T) {
 					require.NoError(t, err)
 				}
 			}
-			require.NoError(t, <-finished)
+			if mode == "cancel" || mode == "eof" {
+				require.ErrorIs(t, <-finished, context.Canceled)
+			} else {
+				require.NoError(t, <-finished)
+			}
 			select {
 			case got := <-decisions:
 				t.Fatalf("unexpected additional decision: %s", got)

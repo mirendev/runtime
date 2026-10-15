@@ -112,17 +112,34 @@ func (w *Workbench) AskWithApprovals(ctx context.Context, question, key string, 
 	seen := make(map[[3]string]bool)
 	var pending []WorkbenchApproval
 	for {
-		if err := w.follow(ctx, &receipt.Offset, receipt.SubmissionID, &incarnation, &settled, output, func(raw json.RawMessage) error {
+		if err := w.follow(ctx, &receipt.Offset, receipt.SubmissionID, &incarnation, &settled, output, func(tool string, raw json.RawMessage) error {
+			// Only Cloud's gated write tools can issue approvals. Read tools may
+			// return app-controlled text containing an otherwise valid marker.
+			switch tool {
+			case "miren_deploy", "miren_restart_app", "miren_set_env", "miren_delete_env",
+				"miren_cordon_runner", "miren_uncordon_runner", "miren_drain_runner",
+				"miren_set_maintenance", "miren_clear_maintenance", "miren_cancel_run":
+			default:
+				return nil
+			}
 			var text string
 			if json.Unmarshal(raw, &text) != nil {
 				return nil
 			}
-			_, payload, found := strings.Cut(text, "[approval-request] ")
-			if !found {
+			const marker = "\n[approval-request] "
+			index := strings.LastIndex(text, marker)
+			if index < 0 {
 				return nil
 			}
+			payload := text[index+len(marker):]
 			var request WorkbenchApproval
-			if json.Unmarshal([]byte(strings.TrimSpace(payload)), &request) != nil || request.Kind != "approval" || request.Key == "" || request.Fingerprint == "" || request.Summary == "" {
+			if json.Unmarshal([]byte(strings.TrimSpace(payload)), &request) != nil || request.Kind != "approval" || request.Tool != tool || request.Key == "" || request.Fingerprint == "" || request.Summary == "" {
+				return nil
+			}
+			// Successful writes return JSON, which may itself contain a marker.
+			// Only the gate's waiting envelope is an approval, on old and new Cloud.
+			prefix := "Waiting for permission: " + request.Summary + "."
+			if !strings.HasPrefix(text, prefix+" ") && !strings.HasPrefix(text, prefix+"\n") {
 				return nil
 			}
 			id := [3]string{request.Key, request.Fingerprint, request.RequestID}
@@ -173,7 +190,8 @@ func (w *Workbench) AskWithApprovals(ctx context.Context, question, key string, 
 	}
 }
 
-func (w *Workbench) follow(ctx context.Context, offset *string, submissionID string, incarnation *string, settled *bool, output io.Writer, toolOutput func(json.RawMessage) error) error {
+func (w *Workbench) follow(ctx context.Context, offset *string, submissionID string, incarnation *string, settled *bool, output io.Writer, toolOutput func(string, json.RawMessage) error) error {
+	tools := make(map[string]string)
 	for {
 		endpoint := w.endpoint + "?" + url.Values{
 			"view": {"updates"}, "live": {"long-poll"}, "offset": {*offset},
@@ -191,6 +209,8 @@ func (w *Workbench) follow(ctx context.Context, offset *string, submissionID str
 			Incarnation  string          `json:"incarnation"`
 			Error        json.RawMessage `json:"error"`
 			Output       json.RawMessage `json:"output"`
+			ToolCallID   string          `json:"toolCallId"`
+			ToolName     string          `json:"toolName"`
 		}
 		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&chunks)
 		resp.Body.Close()
@@ -204,8 +224,12 @@ func (w *Workbench) follow(ctx context.Context, offset *string, submissionID str
 					return fmt.Errorf("workbench worker changed; start a new conversation")
 				}
 				*incarnation = chunk.Incarnation
+			case "tool-input":
+				if chunk.ToolCallID != "" {
+					tools[chunk.ToolCallID] = chunk.ToolName
+				}
 			case "tool-output":
-				if err := toolOutput(chunk.Output); err != nil {
+				if err := toolOutput(tools[chunk.ToolCallID], chunk.Output); err != nil {
 					return err
 				}
 			case "message-delta":
