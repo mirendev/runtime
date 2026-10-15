@@ -8,6 +8,7 @@
 package cloudapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,26 +118,57 @@ func (c *Client) get(ctx context.Context, timeout time.Duration, out any, pathPa
 	if err != nil {
 		return err
 	}
+	return c.request(ctx, timeout, http.MethodGet, endpoint, nil, out)
+}
+
+// Request calls a cloud endpoint with query parameters and an optional JSON body.
+// path is an escaped API path, not an arbitrary URL; credentials stay on this cloud.
+func (c *Client) Request(ctx context.Context, method, path string, query url.Values, body, out any) error {
+	endpoint, err := url.Parse(strings.TrimRight(c.baseURL, "/") + "/" + strings.TrimLeft(path, "/"))
+	if err != nil {
+		return err
+	}
+	endpoint.RawQuery = query.Encode()
+	return c.request(ctx, listTimeout, method, endpoint.String(), body, out)
+}
+
+func (c *Client) request(ctx context.Context, timeout time.Duration, method, endpoint string, body, out any) error {
+	var input io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("failed to encode request: %w", err)
+		}
+		input = bytes.NewReader(data)
+	}
 
 	token, err := c.token(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to authenticate: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, input)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	client := &http.Client{Timeout: timeout}
+	if method != http.MethodGet {
+		// Never replay an approval POST or another mutation to a redirected endpoint.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Bounded: the body here only ever goes into an error message, and a
 		// proxy having a bad day can answer with something enormous. Reading
 		// all of it would turn a failed request into a failed process.
@@ -144,7 +176,12 @@ func (c *Client) get(ctx context.Context, timeout time.Duration, out any, pathPa
 		return fmt.Errorf("cloud returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(out); err != nil {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 

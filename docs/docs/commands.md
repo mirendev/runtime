@@ -75,6 +75,91 @@ Complete reference for all `miren` CLI commands.
 | [`miren auth provider remove`](./command/auth-provider-remove.md) | Remove an identity provider |
 | [`miren auth provider show`](./command/auth-provider-show.md) | Show an identity provider |
 
+## cloud
+
+| Command | Description |
+|---------|-------------|
+| [`miren cloud`](./command/cloud.md) | Miren Cloud HTTP API commands |
+| [`miren cloud account`](./command/cloud-account.md) | Cloud profile and credentials |
+| [`miren cloud account identity`](./command/cloud-account-identity.md) | Linked sign-in identities |
+| [`miren cloud account identity list`](./command/cloud-account-identity-list.md) | List your linked sign-in identities |
+| [`miren cloud account identity unlink`](./command/cloud-account-identity-unlink.md) | Unlink a sign-in identity (cannot remove the last one) |
+| [`miren cloud account key`](./command/cloud-account-key.md) | Cloud authentication keys |
+| [`miren cloud account key list`](./command/cloud-account-key-list.md) | List your Cloud authentication keys, including revoked keys |
+| [`miren cloud account key revoke`](./command/cloud-account-key-revoke.md) | Revoke a Cloud authentication key without removing local credentials |
+| [`miren cloud account token`](./command/cloud-account-token.md) | Cloud token revocation |
+| [`miren cloud account token revoke-all`](./command/cloud-account-token-revoke-all.md) | Revoke all previously issued tokens for your account |
+| [`miren cloud account update`](./command/cloud-account-update.md) | Update your Cloud profile, preserving omitted fields |
+| [`miren cloud app`](./command/cloud-app.md) | Cloud app visibility commands |
+| [`miren cloud app deployment`](./command/cloud-app-deployment.md) | Show a mirrored app deployment |
+| [`miren cloud app deployments`](./command/cloud-app-deployments.md) | List mirrored app deployment history (latest 50) |
+| [`miren cloud app list`](./command/cloud-app-list.md) | List mirrored apps across an organization |
+| [`miren cloud app logs`](./command/cloud-app-logs.md) | Fetch bounded live app or build logs through Miren Cloud |
+| [`miren cloud app routes`](./command/cloud-app-routes.md) | Show mirrored app routes and sync state |
+| [`miren cloud app show`](./command/cloud-app-show.md) | Show mirrored app details, deployments and health |
+| [`miren cloud cluster`](./command/cloud-cluster.md) | Cloud cluster commands |
+| [`miren cloud cluster approve`](./command/cloud-cluster-approve.md) | Approve a pending cluster registration in Miren Cloud |
+| [`miren cloud cluster apps`](./command/cloud-cluster-apps.md) | List mirrored apps in a cloud cluster |
+| [`miren cloud cluster delete`](./command/cloud-cluster-delete.md) | Delete a Cloud cluster record (admin only); leaves server registration files unchanged |
+| [`miren cloud cluster list`](./command/cloud-cluster-list.md) | List your clusters in Miren Cloud |
+| [`miren cloud cluster nodes`](./command/cloud-cluster-nodes.md) | Show mirrored node inventory and sync state |
+| [`miren cloud cluster online`](./command/cloud-cluster-online.md) | Check cluster connectivity under your Cloud access rules |
+| [`miren cloud cluster online-batch`](./command/cloud-cluster-online-batch.md) | Check connectivity for multiple accessible clusters |
+| [`miren cloud cluster operation`](./command/cloud-cluster-operation.md) | Show a server operation's progress and outcome |
+| [`miren cloud cluster operations`](./command/cloud-cluster-operations.md) | List server restart and upgrade operation history |
+| [`miren cloud cluster routes`](./command/cloud-cluster-routes.md) | Show mirrored cluster routes and sync state |
+| [`miren cloud cluster server`](./command/cloud-cluster-server.md) | Show server lifecycle status and supported actions |
+| [`miren cloud cluster show`](./command/cloud-cluster-show.md) | Show cloud cluster metadata and mirrored status |
+| [`miren cloud cluster update`](./command/cloud-cluster-update.md) | Update cloud cluster metadata (admin only) |
+| [`miren cloud cluster upgrade-policy`](./command/cloud-cluster-upgrade-policy.md) | Show the cluster's automatic-upgrade policy |
+| [`miren cloud enroll-token`](./command/cloud-enroll-token.md) | Single-use cluster enrollment credentials |
+| [`miren cloud enroll-token create`](./command/cloud-enroll-token-create.md) | Mint a cluster enrollment credential and bootstrap config (admin only) |
+| [`miren cloud enroll-token list`](./command/cloud-enroll-token-list.md) | List enrollment token status without secrets |
+| [`miren cloud enroll-token revoke`](./command/cloud-enroll-token-revoke.md) | Revoke an unused cluster enrollment token (admin only) |
+| [`miren cloud enroll-token show`](./command/cloud-enroll-token-show.md) | Show enrollment token state and bootstrap progress |
+| [`miren cloud group`](./command/cloud-group.md) | Cloud access groups |
+| [`miren cloud group create`](./command/cloud-group-create.md) | Create an access group (admin only) |
+| [`miren cloud group delete`](./command/cloud-group-delete.md) | Delete a non-default access group (admin only) |
+| [`miren cloud group list`](./command/cloud-group-list.md) | List organization access groups |
+| [`miren cloud group member`](./command/cloud-group-member.md) | Cloud group membership |
+| [`miren cloud group member add`](./command/cloud-group-member-add.md) | Add a user to an access group (admin only) |
+| [`miren cloud group member list`](./command/cloud-group-member-list.md) | List access group members |
+| [`miren cloud group member remove`](./command/cloud-group-member-remove.md) | Remove a user from an access group (admin only) |
+| [`miren cloud group show`](./command/cloud-group-show.md) | Show an access group |
+| [`miren cloud group update`](./command/cloud-group-update.md) | Update an access group, preserving omitted fields (admin only) |
+| [`miren cloud invite`](./command/cloud-invite.md) | Organization invite links and recipient actions |
+| [`miren cloud invite accept`](./command/cloud-invite-accept.md) | Join an organization using an invitation |
+| [`miren cloud invite create`](./command/cloud-invite-create.md) | Create a shared organization invite link (admin only) |
+| [`miren cloud invite list`](./command/cloud-invite-list.md) | List outstanding organization invite links (admin only) |
+| [`miren cloud invite revoke`](./command/cloud-invite-revoke.md) | Revoke a shared organization invite link (admin only) |
+| [`miren cloud invite show`](./command/cloud-invite-show.md) | Inspect an invitation as its recipient |
+| [`miren cloud invite update`](./command/cloud-invite-update.md) | Update an invite's expiry, use cap or groups (admin only) |
+| [`miren cloud invite url`](./command/cloud-invite-url.md) | Retrieve a copyable invite URL (admin only) |
+| [`miren cloud me`](./command/cloud-me.md) | Show your Cloud profile, organizations and enabled features |
+| [`miren cloud org`](./command/cloud-org.md) | Cloud organization commands |
+| [`miren cloud org clusters`](./command/cloud-org-clusters.md) | List clusters and mirrored status in an organization |
+| [`miren cloud org create`](./command/cloud-org-create.md) | Create an organization and become its admin |
+| [`miren cloud org list`](./command/cloud-org-list.md) | List your Miren Cloud organizations |
+| [`miren cloud org member`](./command/cloud-org-member.md) | Cloud organization membership |
+| [`miren cloud org member add`](./command/cloud-org-member-add.md) | Add an existing Cloud user to an organization (admin only) |
+| [`miren cloud org member list`](./command/cloud-org-member-list.md) | List organization members |
+| [`miren cloud org member remove`](./command/cloud-org-member-remove.md) | Remove an organization member (admin only) |
+| [`miren cloud org member set-role`](./command/cloud-org-member-set-role.md) | Set an organization member's role (admin only) |
+| [`miren cloud org show`](./command/cloud-org-show.md) | Show organization details and membership |
+| [`miren cloud org user-search`](./command/cloud-org-user-search.md) | Search existing organization members for group membership |
+| [`miren cloud subdomain`](./command/cloud-subdomain.md) | Cloud subdomain claims and assignments |
+| [`miren cloud subdomain assign`](./command/cloud-subdomain-assign.md) | Assign a subdomain to a cluster (admin only) |
+| [`miren cloud subdomain claim`](./command/cloud-subdomain-claim.md) | Claim a subdomain for an organization (admin only) |
+| [`miren cloud subdomain domains`](./command/cloud-subdomain-domains.md) | List available subdomain base domains |
+| [`miren cloud subdomain list`](./command/cloud-subdomain-list.md) | List claimed organization subdomains |
+| [`miren cloud subdomain release`](./command/cloud-subdomain-release.md) | Release an organization's subdomain claim (admin only) |
+| [`miren cloud subdomain unassign`](./command/cloud-subdomain-unassign.md) | Remove a subdomain's cluster assignment (admin only) |
+| [`miren cloud user`](./command/cloud-user.md) | Cloud user discovery |
+| [`miren cloud user search`](./command/cloud-user-search.md) | Find existing Cloud users to add to an organization |
+| [`miren cloud volume`](./command/cloud-volume.md) | Cloud volume and backup inventory |
+| [`miren cloud volume list`](./command/cloud-volume-list.md) | List cloud volumes and active leases |
+| [`miren cloud volume updates`](./command/cloud-volume-updates.md) | List a cloud volume's snapshots and update artifacts |
+
 ## cluster
 
 | Command | Description |
