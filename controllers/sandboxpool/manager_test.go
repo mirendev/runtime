@@ -1,8 +1,10 @@
 package sandboxpool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -1827,4 +1829,75 @@ func TestManagerHealthySandboxResetPersists(t *testing.T) {
 	updated := getPool(t, ctx, server, id)
 	assert.Equal(t, int64(0), updated.ConsecutiveCrashCount)
 	assert.True(t, updated.CooldownUntil.IsZero())
+}
+
+// TestScaleDownMissingVersionStaysQuiet covers a pool scaled to zero whose
+// AppVersion was deleted while a reference lingers, so it waits for
+// cleanupEmptyPools. The scale-down monitor revisits it every 30s meanwhile,
+// so the miss must not land in the ERROR or WARN tiers.
+func TestScaleDownMissingVersionStaysQuiet(t *testing.T) {
+	ctx := context.Background()
+
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, err := server.Client.Create(ctx, "orphan-pool", &compute_v1alpha.SandboxPool{
+		Service:              "web",
+		DesiredInstances:     0,
+		ReferencedByVersions: []entity.Id{"app_version/gone"},
+		SandboxSpec: compute_v1alpha.SandboxSpec{
+			Version:   "app_version/gone",
+			Container: []compute_v1alpha.SandboxSpecContainer{{Image: "test:latest"}},
+		},
+	})
+	require.NoError(t, err)
+
+	manager := NewManager(log, server.EAC)
+	require.NoError(t, manager.checkAllPoolsForScaleDown(ctx))
+
+	out := buf.String()
+	assert.Contains(t, out, "app version is gone")
+	assert.NotContains(t, out, "level=ERROR")
+	assert.NotContains(t, out, "level=WARN")
+}
+
+// TestScaleDownMonitorPassesStopOnCancel checks that a pass interrupted by
+// shutdown bails out instead of logging an ERROR for every remaining pool.
+func TestScaleDownMonitorPassesStopOnCancel(t *testing.T) {
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	for i := range 3 {
+		_, err := server.Client.Create(context.Background(), fmt.Sprintf("pool-%d", i), &compute_v1alpha.SandboxPool{
+			Service:              "web",
+			DesiredInstances:     1,
+			ReferencedByVersions: []entity.Id{"app_version/v1"},
+			SandboxSpec: compute_v1alpha.SandboxSpec{
+				Version:   "app_version/v1",
+				Container: []compute_v1alpha.SandboxSpecContainer{{Image: "test:latest"}},
+			},
+		})
+		require.NoError(t, err)
+	}
+	_, err := server.Client.Create(context.Background(), "sb-pending", &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.PENDING,
+	})
+	require.NoError(t, err)
+
+	manager := NewManager(log, server.EAC)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	assert.Error(t, manager.checkAllPoolsForScaleDown(ctx))
+	assert.Error(t, manager.cleanupEmptyPools(ctx))
+	assert.Error(t, manager.checkForStalePendingSandboxes(ctx))
+	assert.NotContains(t, buf.String(), "level=ERROR")
+	assert.NotContains(t, buf.String(), "level=WARN")
 }

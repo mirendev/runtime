@@ -1729,6 +1729,12 @@ func (a *localActivator) recoverPools(ctx context.Context) error {
 		// Fetch the version to get concurrency config
 		verResp, err := a.eac.Get(ctx, versionID.String())
 		if err != nil {
+			// A pool can outlive its AppVersion until the pool manager's sweep
+			// reaps it; there is nothing for the activator to recover.
+			if errors.Is(err, cond.ErrNotFound{}) {
+				a.log.Warn("skipping pool whose app version is gone", "pool", pool.ID, "version", versionID)
+				continue
+			}
 			a.log.Error("failed to get version for pool", "pool", pool.ID, "version", versionID, "error", err)
 			continue
 		}
