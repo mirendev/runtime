@@ -102,6 +102,7 @@ var (
 		"crud":               set("list"),
 		"logs":               set("sandboxlogs"),
 		"disks":              set("list", "getbyid", "getbyname"),
+		"diskhealth":         set("list"),
 		"addons":             set("listinstances", "listavailable", "getcatalog"),
 		"runnerregistration": set("listinvites", "listrunners", "workloadissuerinfo"),
 		"netdb":              set("listleases", "status"),

@@ -73,6 +73,7 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 	}
 	diskBackup := disksrv.NewServer(c.Log, c.eac, aes.NewClient(c.Log, c.eac), c.DataPath, diskUpdates)
 	server.ExposeValue("dev.miren.runtime/disk-backup", disk_v1alpha.AdaptDiskBackup(diskBackup))
+	server.ExposeValue("dev.miren.runtime/disk-health", disk_v1alpha.AdaptDiskHealth(disksrv.NewHealthServer(c.Log, c.eac)))
 
 	runnerReg := runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
 		Log:                    c.Log,

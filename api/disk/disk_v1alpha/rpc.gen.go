@@ -11,6 +11,93 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+type resourceHealthData struct {
+	Id         *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	DiskId     *string `cbor:"1,keyasint,omitempty" json:"disk_id,omitempty"`
+	State      *string `cbor:"2,keyasint,omitempty" json:"state,omitempty"`
+	Diagnostic *string `cbor:"3,keyasint,omitempty" json:"diagnostic,omitempty"`
+}
+
+type ResourceHealth struct {
+	data resourceHealthData
+}
+
+func (v *ResourceHealth) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *ResourceHealth) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *ResourceHealth) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *ResourceHealth) HasDiskId() bool {
+	return v.data.DiskId != nil
+}
+
+func (v *ResourceHealth) DiskId() string {
+	if v.data.DiskId == nil {
+		return ""
+	}
+	return *v.data.DiskId
+}
+
+func (v *ResourceHealth) SetDiskId(disk_id string) {
+	v.data.DiskId = &disk_id
+}
+
+func (v *ResourceHealth) HasState() bool {
+	return v.data.State != nil
+}
+
+func (v *ResourceHealth) State() string {
+	if v.data.State == nil {
+		return ""
+	}
+	return *v.data.State
+}
+
+func (v *ResourceHealth) SetState(state string) {
+	v.data.State = &state
+}
+
+func (v *ResourceHealth) HasDiagnostic() bool {
+	return v.data.Diagnostic != nil
+}
+
+func (v *ResourceHealth) Diagnostic() string {
+	if v.data.Diagnostic == nil {
+		return ""
+	}
+	return *v.data.Diagnostic
+}
+
+func (v *ResourceHealth) SetDiagnostic(diagnostic string) {
+	v.data.Diagnostic = &diagnostic
+}
+
+func (v *ResourceHealth) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ResourceHealth) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ResourceHealth) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ResourceHealth) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type transferData struct {
 	Done           *int64 `cbor:"0,keyasint,omitempty" json:"done,omitempty"`
 	Total          *int64 `cbor:"1,keyasint,omitempty" json:"total,omitempty"`
@@ -705,6 +792,225 @@ func (v *RestoreResult) MarshalJSON() ([]byte, error) {
 
 func (v *RestoreResult) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
+}
+
+type diskHealthListArgsData struct {
+	Kind   *string `cbor:"0,keyasint,omitempty" json:"kind,omitempty"`
+	Cursor *string `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Limit  *int64  `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+}
+
+type DiskHealthListArgs struct {
+	call rpc.Call
+	data diskHealthListArgsData
+}
+
+func (v *DiskHealthListArgs) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *DiskHealthListArgs) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *DiskHealthListArgs) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *DiskHealthListArgs) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v *DiskHealthListArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *DiskHealthListArgs) Limit() int64 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *DiskHealthListArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskHealthListArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskHealthListArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskHealthListArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type diskHealthListResultsData struct {
+	Resources *[]*ResourceHealth `cbor:"0,keyasint,omitempty" json:"resources,omitempty"`
+	Cursor    *string            `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+}
+
+type DiskHealthListResults struct {
+	call rpc.Call
+	data diskHealthListResultsData
+}
+
+func (v *DiskHealthListResults) SetResources(resources []*ResourceHealth) {
+	x := slices.Clone(resources)
+	v.data.Resources = &x
+}
+
+func (v *DiskHealthListResults) SetCursor(cursor string) {
+	v.data.Cursor = &cursor
+}
+
+func (v *DiskHealthListResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *DiskHealthListResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *DiskHealthListResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *DiskHealthListResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type DiskHealthList struct {
+	rpc.Call
+	args    DiskHealthListArgs
+	results DiskHealthListResults
+}
+
+func (t *DiskHealthList) Args() *DiskHealthListArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *DiskHealthList) Results() *DiskHealthListResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type DiskHealth interface {
+	List(ctx context.Context, state *DiskHealthList) error
+}
+
+type reexportDiskHealth struct {
+	client rpc.Client
+}
+
+func (reexportDiskHealth) List(ctx context.Context, state *DiskHealthList) error {
+	panic("not implemented")
+}
+
+func (t reexportDiskHealth) CapabilityClient() rpc.Client {
+	return t.client
+}
+
+func AdaptDiskHealth(t DiskHealth) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "list",
+			InterfaceName: "DiskHealth",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"kind", "cursor", "limit"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/disk-health/{kind}",
+				Body:       "",
+				PathParams: []string{"kind"},
+				Query: []rpc.HTTPParam{
+					{Name: "cursor", Kind: "string"},
+					{Name: "limit", Kind: "int"},
+				},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.List(ctx, &DiskHealthList{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type DiskHealthClient struct {
+	rpc.Client
+}
+
+func NewDiskHealthClient(client rpc.Client) *DiskHealthClient {
+	return &DiskHealthClient{Client: client}
+}
+
+func (c DiskHealthClient) Export() DiskHealth {
+	return reexportDiskHealth{client: c.Client}
+}
+
+type DiskHealthClientListResults struct {
+	client rpc.Client
+	data   diskHealthListResultsData
+}
+
+func (v *DiskHealthClientListResults) HasResources() bool {
+	return v.data.Resources != nil
+}
+
+func (v *DiskHealthClientListResults) Resources() []*ResourceHealth {
+	if v.data.Resources == nil {
+		return nil
+	}
+	return *v.data.Resources
+}
+
+func (v *DiskHealthClientListResults) HasCursor() bool {
+	return v.data.Cursor != nil
+}
+
+func (v *DiskHealthClientListResults) Cursor() string {
+	if v.data.Cursor == nil {
+		return ""
+	}
+	return *v.data.Cursor
+}
+
+func (v DiskHealthClient) List(ctx context.Context, kind string, cursor string, limit int64) (*DiskHealthClientListResults, error) {
+	args := DiskHealthListArgs{}
+	args.data.Kind = &kind
+	args.data.Cursor = &cursor
+	args.data.Limit = &limit
+
+	var ret diskHealthListResultsData
+
+	err := v.Call(ctx, "list", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DiskHealthClientListResults{client: v.Client, data: ret}, nil
 }
 
 type diskBackupBackupArgsData struct {
