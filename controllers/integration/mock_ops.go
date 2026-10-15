@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"hash/fnv"
 	"os"
 
 	"miren.dev/runtime/components/diskio"
@@ -51,7 +52,7 @@ var _ diskio.DiskVolumeOps = (*mockDiskVolumeOps)(nil)
 
 // mockDiskMountOps implements diskio.DiskMountOps for testing.
 type mockDiskMountOps struct {
-	existingMounts map[string]bool
+	existingMounts map[string]string // mountPath -> devicePath
 	formattedDisks map[string]string // device -> filesystem
 	loopDevices    map[string]string // imagePath -> devicePath
 	nextLoopIndex  int
@@ -59,7 +60,7 @@ type mockDiskMountOps struct {
 
 func newMockDiskMountOps() *mockDiskMountOps {
 	return &mockDiskMountOps{
-		existingMounts: make(map[string]bool),
+		existingMounts: make(map[string]string),
 		formattedDisks: make(map[string]string),
 		loopDevices:    make(map[string]string),
 		nextLoopIndex:  1,
@@ -70,11 +71,27 @@ func (m *mockDiskMountOps) CreateDir(_ string, _ os.FileMode) error {
 	return nil
 }
 
-func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, error) {
+func (m *mockDiskMountOps) LoopAttach(imagePath string) (string, *diskio.BackingIdentity, error) {
 	devPath := "/dev/loop" + string(rune('0'+m.nextLoopIndex))
 	m.nextLoopIndex++
 	m.loopDevices[imagePath] = devPath
-	return devPath, nil
+	identity, err := m.FileIdentity(imagePath)
+	return devPath, identity, err
+}
+
+func (m *mockDiskMountOps) FileIdentity(path string) (*diskio.BackingIdentity, error) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(path))
+	return &diskio.BackingIdentity{Device: 1, Inode: h.Sum64()}, nil
+}
+
+func (m *mockDiskMountOps) LoopIdentity(device string) (*diskio.BackingIdentity, error) {
+	for path, dev := range m.loopDevices {
+		if dev == device {
+			return m.FileIdentity(path)
+		}
+	}
+	return nil, nil
 }
 
 func (m *mockDiskMountOps) LoopDetach(devicePath string) error {
@@ -119,8 +136,8 @@ func (m *mockDiskMountOps) LbdDetach(_ context.Context, devicePath string) error
 	return nil
 }
 
-func (m *mockDiskMountOps) Mount(_, mountPath, _ string, _ bool) error {
-	m.existingMounts[mountPath] = true
+func (m *mockDiskMountOps) Mount(device, mountPath, _ string, _ bool) error {
+	m.existingMounts[mountPath] = device
 	return nil
 }
 
@@ -130,10 +147,28 @@ func (m *mockDiskMountOps) Unmount(path string) error {
 }
 
 func (m *mockDiskMountOps) IsMounted(path string) bool {
-	return m.existingMounts[path]
+	return m.existingMounts[path] != ""
 }
 
-func (m *mockDiskMountOps) IsDeviceMounted(_ string) (bool, error) {
+func (m *mockDiskMountOps) MountDevice(path string) (string, error) {
+	return m.existingMounts[path], nil
+}
+
+func (m *mockDiskMountOps) DeviceBacking(device string) (string, error) {
+	for image, attached := range m.loopDevices {
+		if attached == device {
+			return image, nil
+		}
+	}
+	return "", nil
+}
+
+func (m *mockDiskMountOps) IsDeviceMounted(device string) (bool, error) {
+	for _, mounted := range m.existingMounts {
+		if mounted == device {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 

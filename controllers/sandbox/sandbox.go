@@ -904,6 +904,24 @@ func containerPrefix(id entity.Id) string {
 	return "sandbox." + cid
 }
 
+// SubContainersGone proves local teardown from containerd, not entity status.
+// Even exited containers are retained until cleanup has destroyed them.
+func SubContainersGone(ctx context.Context, cc *containerd.Client, id entity.Id) (bool, error) {
+	if cc == nil {
+		return false, fmt.Errorf("containerd is unavailable")
+	}
+	containers, err := cc.Containers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, container := range containers {
+		if strings.HasPrefix(container.ID(), containerPrefix(id)+"-") {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // sandboxHostname returns a valid hostname for a sandbox container.
 // This is used both for the UTS hostname and the /etc/hosts entry so that
 // processes like EPMD that resolve their own hostname can find themselves.
@@ -1314,14 +1332,15 @@ func (c *SandboxController) reattachLogs(ctx context.Context, sb *compute.Sandbo
 func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, meta *entity.Meta) error {
 	switch co.Status {
 	case compute.DEAD:
-		// A sandbox retired while draining (unhealthy or no-restart cleanup)
-		// whose drain was handed off at shutdown still has a task running.
-		// Nothing else will finish that teardown until the entity is deleted.
-		if c.drainInterrupted(ctx, co.ID) {
-			c.Log.Info("resuming interrupted teardown of dead sandbox", "id", co.ID)
-			return c.StopSandbox(ctx, co.ID, co)
+		// DEAD can precede teardown, including failures before the drain stamp.
+		gone, err := SubContainersGone(namespaces.WithNamespace(ctx, c.Namespace), c.CC, co.ID)
+		if err != nil {
+			return err
 		}
-		return nil
+		if gone {
+			return c.ReleaseDiskLeases(ctx, co.ID)
+		}
+		return c.StopSandbox(ctx, co.ID, co)
 	case compute.STOPPED:
 		c.Log.Debug("sandbox is stopped, verifying it is no longer running")
 		return c.StopSandbox(ctx, co.ID, co)
@@ -3234,17 +3253,20 @@ cleanup:
 	// graceful-shutdown loop above.
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), forceKillTimeout)
 	defer cleanupCancel()
+	var cleanupErr error
 	for _, info := range containers {
 		if info.task != nil {
 			if _, err := info.task.Delete(cleanupCtx, containerd.WithProcessKill); err != nil {
 				if !errdefs.IsNotFound(err) {
 					c.Log.Debug("failed to delete task during cleanup", "id", info.id, "err", err)
+					cleanupErr = stderrors.Join(cleanupErr, err)
 				}
 			}
 		}
 		if err := info.container.Delete(cleanupCtx, containerd.WithSnapshotCleanup); err != nil {
 			if !errdefs.IsNotFound(err) {
 				c.Log.Debug("failed to delete container", "id", info.id, "err", err)
+				cleanupErr = stderrors.Join(cleanupErr, err)
 			}
 		} else {
 			c.Log.Debug("deleted container", "id", info.id)
@@ -3252,25 +3274,7 @@ cleanup:
 	}
 
 	c.Log.Info("subcontainer destruction complete", "sandbox_id", id, "elapsed", time.Since(startTime))
-	return killed, nil
-}
-
-// drainInterrupted reports whether any of a sandbox's subcontainers was sent
-// SIGTERM and is still around, meaning a previous teardown stopped partway.
-func (c *SandboxController) drainInterrupted(ctx context.Context, id entity.Id) bool {
-	ctx = namespaces.WithNamespace(ctx, c.Namespace)
-	containerList, err := c.CC.Containers(ctx, fmt.Sprintf("labels.%q", stopRequestedLabel))
-	if err != nil {
-		c.Log.Warn("failed to check for interrupted drains", "id", id, "err", err)
-		return false
-	}
-	prefix := containerPrefix(id) + "-"
-	for _, cont := range containerList {
-		if strings.HasPrefix(cont.ID(), prefix) {
-			return true
-		}
-	}
-	return false
+	return killed, cleanupErr
 }
 
 // shutdownAttach picks how to attach to a task being shut down. A task that
@@ -3492,13 +3496,6 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 		c.Log.Error("failed to remove monitoring metrics", "id", id, "error", err)
 	}
 
-	// Release disk leases early so replacement sandboxes can acquire them
-	// while we wait for container shutdown
-	if err := c.ReleaseDiskLeases(ctx, id); err != nil {
-		c.Log.Error("failed to release disk leases", "id", id, "error", err)
-		// Continue with cleanup even if this fails
-	}
-
 	// Destroy subcontainers - this will discover them from containerd
 	c.Log.Debug("destroying subcontainers", "id", id)
 	killed, err := c.destroySubContainers(ctx, id, sb)
@@ -3511,14 +3508,19 @@ func (c *SandboxController) StopSandbox(ctx context.Context, id entity.Id, sb *c
 	}
 	if err != nil {
 		c.Log.Error("failed to destroy subcontainers", "id", id, "err", err)
-		// Continue with cleanup even if this fails
+		return err
 	}
 	if len(killed) > 0 && sb != nil {
 		c.reportForcedKills(ctx, sb, killed)
 	}
 
+	// Disk fencing must outlive the last app write and open device handle.
+	if err := c.ReleaseDiskLeases(ctx, id); err != nil {
+		return fmt.Errorf("release disk leases after container shutdown: %w", err)
+	}
+
 	// Stop replicating sqlite disks only once the containers are gone. Doing it
-	// alongside the lease release above would end replication while the app is
+	// before container shutdown would end replication while the app is
 	// still shutting down gracefully, so anything it wrote in that window —
 	// which is as long as the shutdown timeout — would never reach the
 	// coordinator. Registrations are refcounted by sandbox, so a replacement
@@ -3699,6 +3701,13 @@ func (c *SandboxController) releaseSqliteDisks(ctx context.Context, id entity.Id
 // This transitions leases to RELEASED status, which triggers the disk lease
 // controller to unmount the volumes and release the underlying resources.
 func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID entity.Id) error {
+	gone, err := SubContainersGone(namespaces.WithNamespace(ctx, c.Namespace), c.CC, sandboxID)
+	if err != nil {
+		return fmt.Errorf("verify sandbox teardown before lease release: %w", err)
+	}
+	if !gone {
+		return fmt.Errorf("sandbox %s still has app containers", sandboxID)
+	}
 	// Find all disk leases owned by this sandbox
 	listResp, err := c.EAC.List(ctx, entity.Ref(entity.EntityKind, storage.KindDiskLease))
 	if err != nil {
@@ -3710,6 +3719,9 @@ func (c *SandboxController) ReleaseDiskLeases(ctx context.Context, sandboxID ent
 		lease.Decode(e.Entity())
 
 		if lease.SandboxId != sandboxID {
+			continue
+		}
+		if lease.NodeId != "" && !c.NodeId.Matches(lease.NodeId) {
 			continue
 		}
 

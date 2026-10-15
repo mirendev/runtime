@@ -27,6 +27,7 @@ func (b *nodeStorageBoot) start(ctx context.Context, access clusterAccessBootOut
 	b.value, err = runner.NewNodeStorage(access.access, runner.RunnerDeps{
 		MetricsWriter: telemetry.operationalMetrics,
 		CC:            containerd.Client,
+		Namespace:     containerd.Namespace,
 		Resolver:      networkDeps.Resolver,
 	}, access.config)
 	if err != nil {

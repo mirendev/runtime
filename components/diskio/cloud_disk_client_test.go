@@ -6,11 +6,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	compute "miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
 
 func TestAcquireLeaseSuccess(t *testing.T) {
@@ -121,6 +126,78 @@ func TestReleaseLeaseError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "404")
 	assert.Contains(t, err.Error(), "lease not found")
+}
+
+func TestReleaseLeaseReconcilesOnlyExplicitNotOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   int
+		body     string
+		resolved bool
+	}{
+		{"not-owner", 403, `{"code":"lease_not_owner","volume_id":"vol-1"}`, true},
+		{"generic-forbidden", 403, `{"error":"Invalid lease nonce"}`, false},
+		{"wrong-volume", 403, `{"code":"lease_not_owner","volume_id":"other"}`, false},
+		{"unauthenticated", 401, `{"code":"lease_not_owner","volume_id":"vol-1"}`, false},
+		{"server-error", 500, `{"code":"lease_not_owner","volume_id":"vol-1"}`, false},
+		{"malformed", 403, `{"code":`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, h, auth := newTestUploaderServer(t)
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "stale", r.Header.Get("X-Lease-Nonce"))
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}
+			err := NewCloudDiskClient(slog.Default(), ts.URL, auth).ReleaseLease(t.Context(), "vol-1", "stale")
+			if tc.resolved {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestLeaseCleanupRecoversCrashAfterCloudDelete(t *testing.T) {
+	ts, h, auth := newTestUploaderServer(t)
+	var current atomic.Value
+	current.Store("old")
+	h.handler = func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Lease-Nonce") == current.Load().(string) {
+			current.Store("")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"lease_not_owner","volume_id":"cloud"}`))
+	}
+	dir := t.TempDir()
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	require.NoError(t, state.SetMountAndSave("old-mount", &MountState{
+		EntityId: "old-mount", CloudVolumeId: "cloud", LeaseNonce: "old",
+		BackingPath: filepath.Join(dir, "disk.img"),
+		DevicePath:  "/dev/lbd0", Mode: storage_v1alpha.VM_ACCELERATOR,
+	}))
+	client := NewCloudDiskClient(slog.Default(), ts.URL, auth)
+	require.NoError(t, client.ReleaseLease(t.Context(), "cloud", "old"))
+	// Crash before writing the successful release to disk. A replacement now
+	// holds the reused device; recovery must reclaim only the stale record.
+	current.Store("replacement")
+	state, err = LoadState(dir)
+	require.NoError(t, err)
+	state.SetMount("live", &MountState{EntityId: "live", CloudVolumeId: "cloud", DevicePath: "/dev/lbd0", LeaseNonce: "replacement", Mounted: true})
+	ops := newMockDiskMountOps()
+	controller := NewDiskMountController(slog.Default(), dir, compute.NewNodeId("node"), state, ops)
+	controller.SetCloudClient(client)
+	require.NoError(t, controller.Reconcile(t.Context(), &storage_v1alpha.DiskMount{ID: "old-mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED}, nil))
+	require.Equal(t, "replacement", current.Load())
+	require.Empty(t, ops.detachedLbds)
+	state, err = LoadState(dir)
+	require.NoError(t, err)
+	require.Nil(t, state.GetMount("old-mount"))
+	require.Equal(t, "replacement", state.LeaseNonceForCloudVolume("cloud"))
 }
 
 func TestListLogSegmentsSuccess(t *testing.T) {
@@ -464,4 +541,100 @@ func TestDownloadLogSegmentURLConstruction(t *testing.T) {
 	rc.Close()
 
 	assert.Equal(t, "/api/v1/disk/volumes/vol-1/updates/my-seg-id/download", receivedPath)
+}
+
+func TestLeaseAcquisitionIntentRecovery(t *testing.T) {
+	for _, failure := range []string{"lost-response", "nonce-save", "expired", "conflict"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "disk.img"), make([]byte, 4096), 0600))
+			state, err := LoadState(dir)
+			require.NoError(t, err)
+			require.NoError(t, state.SetVolumeAndSave("volume", &VolumeState{
+				EntityId: "volume", CloudVolumeId: "cloud", DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR,
+			}))
+			ts, h, auth := newTestUploaderServer(t)
+			var firstID atomic.Value
+			var calls atomic.Int32
+			h.handler = func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					_, _ = w.Write([]byte(`{"updates":[]}`))
+					return
+				}
+				require.Equal(t, "/api/v1/disk/volumes/cloud/lease/acquire", r.URL.Path)
+				var request acquireLeaseRequest
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+				persisted, err := LoadState(dir)
+				require.NoError(t, err)
+				require.Equal(t, request.AcquisitionID, persisted.GetMount("mount").LeaseAcquisitionID, "intent must be durable before RPC")
+				require.Empty(t, persisted.GetMount("mount").LeaseNonce)
+				if calls.Add(1) == 1 {
+					firstID.Store(request.AcquisitionID)
+					switch failure {
+					case "lost-response":
+						connection, _, err := w.(http.Hijacker).Hijack()
+						require.NoError(t, err)
+						_ = connection.Close()
+						return
+					case "nonce-save":
+						state.SetPath(filepath.Join(dir, "missing-directory"))
+					case "expired":
+						w.WriteHeader(http.StatusConflict)
+						_ = json.NewEncoder(w).Encode(map[string]string{"code": "lease_acquisition_ended", "volume_id": "cloud", "acquisition_id": request.AcquisitionID})
+						return
+					case "conflict":
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(`{"error":"conflicting owner"}`))
+						return
+					}
+				} else if failure == "expired" {
+					require.NotEqual(t, firstID.Load(), request.AcquisitionID, "only confirmed terminal intent may be replaced")
+				} else {
+					require.Equal(t, firstID.Load(), request.AcquisitionID, "ambiguous failure must retry original grant identity")
+				}
+				_ = json.NewEncoder(w).Encode(leaseResponse{VolumeID: "cloud", AcquisitionID: request.AcquisitionID, Nonce: "original-grant"})
+			}
+			controller := NewDiskMountController(slog.Default(), dir, compute.NewNodeId("node"), state, newMockDiskMountOps())
+			controller.SetCloudClient(NewCloudDiskClient(slog.Default(), ts.URL, auth))
+			mount := &storage_v1alpha.DiskMount{ID: "mount", VolumeId: "volume", MountPath: filepath.Join(dir, "mnt"), DesiredState: storage_v1alpha.DM_WANT_MOUNTED, ActualState: storage_v1alpha.DM_PENDING}
+			require.Error(t, controller.Reconcile(t.Context(), mount, nil))
+			restarted, err := LoadState(dir)
+			require.NoError(t, err)
+			if failure == "expired" {
+				require.Empty(t, restarted.GetMount("mount").LeaseAcquisitionID)
+			} else {
+				require.Equal(t, firstID.Load(), restarted.GetMount("mount").LeaseAcquisitionID)
+			}
+			controller.state = restarted
+			mount.ActualState = storage_v1alpha.DM_ATTACHING
+			require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
+			require.Equal(t, int32(2), calls.Load())
+			restarted, err = LoadState(dir)
+			require.NoError(t, err)
+			require.True(t, restarted.GetMount("mount").Mounted)
+			require.Equal(t, "original-grant", restarted.LeaseNonceForCloudVolume("cloud"))
+		})
+	}
+}
+
+func TestLeaseAcquisitionRejectsUnboundResponses(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{404, `{"error":"old cloud"}`},
+		{200, `{"volume_id":"cloud","nonce":"n"}`},
+		{200, `{"volume_id":"other","acquisition_id":"intent","nonce":"n"}`},
+		{409, `{"code":"lease_acquisition_ended","volume_id":"cloud","acquisition_id":"other"}`},
+		{403, `{"code":"lease_acquisition_ended","volume_id":"cloud","acquisition_id":"intent"}`},
+	} {
+		ts, h, auth := newTestUploaderServer(t)
+		h.handler = func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}
+		_, err := NewCloudDiskClient(slog.Default(), ts.URL, auth).AcquireLeaseWithIdentity(t.Context(), "cloud", "intent")
+		require.Error(t, err)
+		require.NotErrorIs(t, err, ErrLeaseAcquisitionEnded)
+	}
 }

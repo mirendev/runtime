@@ -1,10 +1,12 @@
 package diskio
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +19,18 @@ func TestStateNewState(t *testing.T) {
 	assert.NotNil(t, state.Mounts)
 	assert.Empty(t, state.Volumes)
 	assert.Empty(t, state.Mounts)
+}
+
+func TestStateLocalVolumesDoNotShareCloudLock(t *testing.T) {
+	state := NewState()
+	first, err := state.LockCloudVolume(t.Context(), "")
+	require.NoError(t, err)
+	defer first()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	second, err := state.LockCloudVolume(ctx, "")
+	require.NoError(t, err)
+	second()
 }
 
 func TestStateLoadNonExistent(t *testing.T) {
@@ -250,6 +264,7 @@ func TestStateLeaseNonceForCloudVolume(t *testing.T) {
 			VolumeId:      "disk_volume/vol1",
 			CloudVolumeId: "vol-cloud-1",
 			LeaseNonce:    "nonce-1",
+			Mounted:       true,
 		})
 
 		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
@@ -269,6 +284,7 @@ func TestStateLeaseNonceForCloudVolume(t *testing.T) {
 			EntityId:   "disk_mount/mnt-1",
 			VolumeId:   "disk_volume/vol1",
 			LeaseNonce: "nonce-1",
+			Mounted:    true,
 		})
 
 		assert.Equal(t, "nonce-1", state.LeaseNonceForCloudVolume("vol-cloud-1"))
@@ -291,6 +307,7 @@ func TestLoadStateBackfillsMountCloudVolumeId(t *testing.T) {
 		EntityId:   "disk_mount/mnt-1",
 		VolumeId:   "disk_volume/vol1",
 		LeaseNonce: "nonce-1",
+		Mounted:    true,
 	})
 	require.NoError(t, seed.Save())
 
@@ -316,4 +333,53 @@ func TestLoadStateBackfillsMountCloudVolumeId(t *testing.T) {
 	// the orphan-cleanup situation the backfill protects against.
 	loaded.DeleteVolume("disk_volume/vol1")
 	assert.Equal(t, "nonce-1", loaded.LeaseNonceForCloudVolume("vol-cloud-1"))
+}
+
+func TestStateLeaseNonceIgnoresStaleOwners(t *testing.T) {
+	state := NewState()
+	for _, id := range []string{"stale-a", "stale-b", "live"} {
+		state.SetMount(id, &MountState{
+			EntityId: id, CloudVolumeId: "cloud", DevicePath: "/dev/lbd0",
+			LeaseNonce: id, Mounted: id == "live",
+		})
+	}
+	for range 1000 {
+		require.Equal(t, "live", state.LeaseNonceForCloudVolume("cloud"))
+	}
+	state.DeleteMount("live")
+	require.Empty(t, state.LeaseNonceForCloudVolume("cloud"))
+	state.SetMount("owned", &MountState{CloudVolumeId: "cloud", LeaseNonce: "owned", LeaseOwned: true})
+	require.Equal(t, "owned", state.LeaseNonceForCloudVolume("cloud"))
+	state.SetMount("conflicting", &MountState{CloudVolumeId: "cloud", LeaseNonce: "different", Mounted: true})
+	for range 1000 {
+		require.Empty(t, state.LeaseNonceForCloudVolume("cloud"))
+	}
+}
+
+func TestStateCloudUploadGateSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	state, err := LoadState(dir)
+	require.NoError(t, err)
+	unlock, err := state.LockCloudVolume(t.Context(), "cloud")
+	require.NoError(t, err)
+	require.NoError(t, state.SetPendingCloudUpload("cloud", "batch-intent"))
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = state.LockCloudVolume(cancelled, "cloud")
+	require.ErrorIs(t, err, context.Canceled)
+	otherUnlock, err := state.LockCloudVolume(t.Context(), "other")
+	require.NoError(t, err)
+	otherUnlock()
+	unlock()
+	restarted, err := LoadState(dir)
+	require.NoError(t, err)
+	require.True(t, restarted.HasPendingCloudUpload("cloud"))
+	restarted.SetPath(filepath.Join(dir, "missing"))
+	require.Error(t, restarted.SetPendingCloudUpload("cloud", ""))
+	require.True(t, restarted.HasPendingCloudUpload("cloud"), "failed clear must retain transition fencing")
+	restarted.SetPath(dir)
+	require.NoError(t, restarted.SetPendingCloudUpload("cloud", ""))
+	restarted, err = LoadState(dir)
+	require.NoError(t, err)
+	require.False(t, restarted.HasPendingCloudUpload("cloud"))
 }

@@ -215,10 +215,46 @@ func readLogHorizon(diskPath string) (string, error) {
 func writeLogHorizon(diskPath, label string) error {
 	path := filepath.Join(diskPath, logHorizonFile)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(label+"\n"), 0644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp)
+	if _, err := f.WriteString(label + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return syncLogHorizon(diskPath)
+}
+
+// Horizon deletion safety requires both the content and its directory entry
+// to survive a crash, including retry after a failed post-rename directory sync.
+func syncLogHorizon(diskPath string) error {
+	f, err := os.Open(filepath.Join(diskPath, logHorizonFile))
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	f.Close()
+	if err != nil {
+		return err
+	}
+	dir, err := os.Open(diskPath)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // isValidTAI64NLabel checks if a string is a valid TAI64N label (24 hex chars).

@@ -77,6 +77,7 @@ func TestReconcileOrphanLeasesReleasesDeadSandboxLease(t *testing.T) {
 	require.NoError(t, err)
 
 	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
+	leaseController.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) { return true, nil })
 	require.NoError(t, leaseController.Init(ctx))
 
 	// Orphan lease should now be RELEASED.
@@ -121,6 +122,7 @@ func TestReconcileOrphanLeasesReleasesLeaseForMissingSandbox(t *testing.T) {
 	require.NoError(t, err)
 
 	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
+	leaseController.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) { return true, nil })
 	require.NoError(t, leaseController.Init(ctx))
 
 	resp, err := es.EAC.Get(ctx, leaseId.String())
@@ -143,6 +145,7 @@ func TestReconcileOrphanLeasesRecurring(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
+	leaseController.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) { return true, nil })
 	require.NoError(t, leaseController.Init(ctx))
 
 	// After the controller is already up, a sandbox dies holding a BOUND lease.
@@ -225,6 +228,7 @@ func TestReconcileOrphanLeasesGracePeriod(t *testing.T) {
 	require.NoError(t, err)
 
 	leaseController := NewDiskLeaseController(log, es.EAC, compute.NewNodeId("test-node"), "")
+	leaseController.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) { return true, nil })
 
 	// With a long grace, the just-created lease must be left BOUND even though
 	// its sandbox is DEAD.
@@ -243,4 +247,48 @@ func TestReconcileOrphanLeasesGracePeriod(t *testing.T) {
 	lease.Decode(resp.Entity().Entity())
 	assert.Equal(t, storage_v1alpha.RELEASED, lease.Status,
 		"zero grace must reclaim the orphaned lease")
+}
+
+func TestOrphanLeaseRequiresOwnerRunnerTeardown(t *testing.T) {
+	for _, scenario := range []string{"no-inspector", "live", "inspection-error", "remote", "unknown-node"} {
+		t.Run(scenario, func(t *testing.T) {
+			es, cleanup := testutils.NewInMemEntityServer(t)
+			defer cleanup()
+			node := compute.NewNodeId("owner").Id()
+			if scenario == "remote" {
+				node = compute.NewNodeId("other").Id()
+			}
+			if scenario == "unknown-node" {
+				node = ""
+			}
+			lease := &storage_v1alpha.DiskLease{ID: "disk-lease/test", SandboxId: "sandbox/missing", NodeId: node, Status: storage_v1alpha.BOUND}
+			_, err := es.EAC.Create(t.Context(), entity.New(entity.DBId, lease.ID, lease.Encode).Attrs())
+			require.NoError(t, err)
+			controller := NewDiskLeaseController(slog.Default(), es.EAC, compute.NewNodeId("owner"), "universal")
+			if scenario != "no-inspector" {
+				controller.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) {
+					if scenario == "inspection-error" {
+						return false, context.Canceled
+					}
+					return scenario != "live", nil
+				})
+			}
+			require.NoError(t, controller.Init(t.Context()))
+			require.NoError(t, controller.ReconcileOrphanLeases(t.Context(), 0))
+			resp, err := es.EAC.Get(t.Context(), lease.ID.String())
+			require.NoError(t, err)
+			lease.Decode(resp.Entity().Entity())
+			require.Equal(t, storage_v1alpha.BOUND, lease.Status)
+			controller.SetSandboxContainersGone(func(context.Context, entity.Id) (bool, error) { return true, nil })
+			require.NoError(t, controller.ReconcileOrphanLeases(t.Context(), 0))
+			resp, err = es.EAC.Get(t.Context(), lease.ID.String())
+			require.NoError(t, err)
+			lease.Decode(resp.Entity().Entity())
+			if scenario == "remote" || scenario == "unknown-node" {
+				require.Equal(t, storage_v1alpha.BOUND, lease.Status)
+			} else {
+				require.Equal(t, storage_v1alpha.RELEASED, lease.Status)
+			}
+		})
+	}
 }

@@ -9,11 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/diskio"
 	"miren.dev/runtime/controllers/disk"
+	"miren.dev/runtime/controllers/sandbox"
 	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/controller"
 	"miren.dev/runtime/pkg/entity"
@@ -39,6 +41,9 @@ type NodeStorage struct {
 func NewNodeStorage(access *ClusterAccess, deps RunnerDeps, config RunnerConfig) (*NodeStorage, error) {
 	if access == nil {
 		return nil, fmt.Errorf("cluster access is required")
+	}
+	if deps.Namespace == "" {
+		return nil, fmt.Errorf("containerd namespace is required")
 	}
 	return &NodeStorage{access: access, deps: deps, config: config}, nil
 }
@@ -161,6 +166,9 @@ func (s *NodeStorage) Start(ctx context.Context) error {
 
 	diskController := disk.NewDiskController(log, eas, s.nodeId(), s.config.DiskMode, s.deps.IsCoordinator)
 	diskLeaseController := disk.NewDiskLeaseController(log, eas, s.nodeId(), s.config.DiskMode)
+	diskLeaseController.SetSandboxContainersGone(func(ctx context.Context, id entity.Id) (bool, error) {
+		return sandbox.SubContainersGone(namespaces.WithNamespace(ctx, s.deps.Namespace), s.deps.CC, id)
+	})
 	s.closers = append(s.closers, diskController)
 	if err := diskController.Init(ctx); err != nil {
 		return err

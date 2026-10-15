@@ -11,6 +11,7 @@ import (
 	storage "miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	runtimetestutils "miren.dev/runtime/pkg/testutils"
 )
 
 func TestPreviewCannotConfigureVolumes(t *testing.T) {
@@ -367,6 +368,8 @@ func TestAcquireDiskLease(t *testing.T) {
 }
 
 func TestReleaseDiskLeases(t *testing.T) {
+	deps, cleanup := runtimetestutils.NewTestDeps()
+	defer cleanup()
 	t.Run("releases leases owned by sandbox", func(t *testing.T) {
 		r := require.New(t)
 		ctx := context.Background()
@@ -380,6 +383,7 @@ func TestReleaseDiskLeases(t *testing.T) {
 			Log:    log,
 			EAC:    es.EAC,
 			NodeId: compute.NewNodeId("test-node"),
+			CC:     deps.CC, Namespace: deps.Namespace,
 		}
 
 		// Setup: Create a sandbox and its disk lease
@@ -439,6 +443,7 @@ func TestReleaseDiskLeases(t *testing.T) {
 			Log:    log,
 			EAC:    es.EAC,
 			NodeId: compute.NewNodeId("test-node"),
+			CC:     deps.CC, Namespace: deps.Namespace,
 		}
 
 		// Setup: Create two sandboxes with their own leases
@@ -507,6 +512,8 @@ func testSchedule() compute.Schedule {
 }
 
 func TestPeriodicReleasesDiskLeases(t *testing.T) {
+	deps, cleanup := runtimetestutils.NewTestDeps()
+	defer cleanup()
 	t.Run("releases disk leases before deleting dead sandbox", func(t *testing.T) {
 		r := require.New(t)
 		ctx := context.Background()
@@ -520,6 +527,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 			Log:    log,
 			EAC:    es.EAC,
 			NodeId: compute.NewNodeId("test-node"),
+			CC:     deps.CC, Namespace: deps.Namespace,
 		}
 
 		sandboxID := entity.Id("sandbox/dead-with-lease")
@@ -583,6 +591,7 @@ func TestPeriodicReleasesDiskLeases(t *testing.T) {
 			Log:    log,
 			EAC:    es.EAC,
 			NodeId: compute.NewNodeId("test-node"),
+			CC:     deps.CC, Namespace: deps.Namespace,
 		}
 
 		sandboxID := entity.Id("sandbox/dead-no-lease")

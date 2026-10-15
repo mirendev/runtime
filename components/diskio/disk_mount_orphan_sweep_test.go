@@ -116,13 +116,16 @@ func TestReconcileOrphanMountsDeletesMissingVolume(t *testing.T) {
 
 	// Local mount state that should be torn down before the entity is deleted.
 	state.SetMount("disk_mount/mnt-orphan", &MountState{
-		EntityId:   "disk_mount/mnt-orphan",
-		VolumeId:   "disk_volume/vol-gone",
-		DevicePath: "/dev/loop5",
-		MountPath:  "/mnt/orphan",
-		Mounted:    true,
+		EntityId:    "disk_mount/mnt-orphan",
+		VolumeId:    "disk_volume/vol-gone",
+		DevicePath:  "/dev/loop5",
+		BackingPath: "/data/vol-gone/disk.img",
+		MountPath:   "/mnt/orphan",
+		Mounted:     true,
 	})
 	ops.mountedPaths["/mnt/orphan"] = true
+	ops.mountDevices["/mnt/orphan"] = "/dev/loop5"
+	ops.loopBacking = map[string]string{"/data/vol-gone/disk.img": "/dev/loop5"}
 
 	mc := newTestDiskMountController(log, dataPath, nodeId, es.EAC, state, ops)
 
