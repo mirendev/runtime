@@ -137,6 +137,10 @@ func (s *Scheduler) Sweep(ctx context.Context, now time.Time) error {
 			continue
 		}
 
+		if !app.DisabledAt.IsZero() {
+			continue
+		}
+
 		if err := s.sweepApp(ctx, &app, now); err != nil {
 			s.Log.Warn("failed to sweep app for scheduled tasks", "app", app.ID, "error", err)
 		}
@@ -203,6 +207,13 @@ func (s *Scheduler) sweepTask(
 		// catch-up can be made idempotent over a window instead.
 		from = now
 		s.frontier[key] = now
+	}
+	// Enable discards all pending ticks up to its timestamp, including ones
+	// due before disable. Only the latest enable matters, even when several
+	// disable/enable cycles happen between sweeps.
+	if app.LastEnabledAt.After(from) {
+		from = app.LastEnabledAt
+		s.frontier[key] = from
 	}
 	s.mu.Unlock()
 

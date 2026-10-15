@@ -104,7 +104,7 @@ server after changing it. For an app-specific override, see
 
 Templates receive `.Status` (HTTP status number), `.Title`, `.Description`,
 `.Site` (visitor hostname on maintenance pages), `.Reason`, `.BackAt`, and
-`.Maintenance` (boolean). `{{brandLogo}}` renders the built-in Miren logo.
+`.Maintenance` and `.Disabled` (booleans). `{{brandLogo}}` renders the built-in Miren logo.
 Use self-contained markup and inline CSS if the page must work when the app
 is unavailable. Only HTML responses use these templates: `Accept` negotiation
 still selects JSON or plain text for API clients. If the app's template is
@@ -115,7 +115,10 @@ For ordinary errors, `.Status`, `.Title`, and `.Description` are set; `.Site`,
 `.Reason`, and `.BackAt` are empty. During maintenance, `.Status` is 503,
 `.Maintenance` is true, `.Site` is the visitor's hostname, `.Reason` is the
 operator's message, and `.BackAt` is a formatted UTC time when provided.
-`.Title` and `.Description` are empty on maintenance pages. These are the only
+`.Title` and `.Description` are empty on maintenance pages. A disabled app
+(see [`miren app disable`](./command/app-disable.md)) gets the same holding
+page with `.Disabled` also true and `.Reason` and `.BackAt` empty, so a
+template that only checks `.Maintenance` still renders a holding page. These are the only
 template data fields; app IDs, raw failure messages, and request details are
 not exposed. HTML escaping is automatic. Templates must be at most 128 KiB;
 rendered output is capped at 256 KiB and falls back if it exceeds that limit.

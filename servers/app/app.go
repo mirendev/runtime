@@ -25,6 +25,7 @@ import (
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/secret"
 	"miren.dev/runtime/pkg/ui"
 	"miren.dev/runtime/pkg/workloadroles"
@@ -239,6 +240,17 @@ func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error
 // both arrive here, so they cannot drift into disagreeing about whether an app
 // is healthy.
 func (s *appHealthSource) healthOf(entry appEntry) apphealth.State {
+	out := s.poolHealthOf(entry)
+	// A disabled app is held at zero on purpose; whatever its pools read as
+	// on the way down, that is the state worth reporting.
+	if !entry.app.DisabledAt.IsZero() {
+		out.Health = apphealth.Disabled
+	}
+	return out
+}
+
+// poolHealthOf classifies one app from its pools and config alone.
+func (s *appHealthSource) poolHealthOf(entry appEntry) apphealth.State {
 	out := apphealth.State{Name: entry.name}
 
 	if ps, ok := s.poolState[entry.name]; ok {
@@ -729,6 +741,11 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 		state.Results().SetMaintenanceRoutes(down)
 	}
 
+	if !appRec.DisabledAt.IsZero() {
+		state.Results().SetDisabledAt(standard.ToTimestamp(appRec.DisabledAt))
+		state.Results().SetDisabledReason(appRec.DisabledReason)
+	}
+
 	return nil
 }
 
@@ -956,6 +973,12 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, name, &appRec); err != nil {
 		return fmt.Errorf("app %q not found: %w", name, err)
+	}
+
+	// Restart restores fixed-mode counts, which would quietly undo a disable
+	// until the next launcher resync put it back.
+	if !appRec.DisabledAt.IsZero() {
+		return fmt.Errorf("app %q is disabled; run `miren app enable` to start it", name)
 	}
 
 	// Resolve the config to restore DesiredInstances for fixed-mode pools.
