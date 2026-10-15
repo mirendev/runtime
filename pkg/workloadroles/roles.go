@@ -92,11 +92,13 @@ var (
 		),
 		"deployment": set("setenvvars", "deleteenvvars"),
 		"routes":     set("set", "remove", "protect", "unprotect", "waf", "timeout", "tlscheck"),
+		"sandboxes":  set("stop", "delete"),
 	}
 
 	// exec: open a shell / run a command in a sandbox. Guarded in this change.
 	execBlock = perms{
 		"sandboxexec": set("exec"),
+		"sandboxes":   set("selectforapp"),
 	}
 
 	// clusterRead: read across the cluster and its infrastructure.
