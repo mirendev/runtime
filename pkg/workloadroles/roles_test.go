@@ -93,6 +93,7 @@ func TestCarveOutsAbsentFromAllRoles(t *testing.T) {
 		"netdb":              {"releaseip", "releasesubnet", "releaseall", "gc"},
 		"outboardcontrol":    {"checkversion"},
 		"oidcbindings":       {"add", "remove", "list"},
+		"identityproviders":  {"addoidc", "addgithub", "addpassword", "list", "show", "remove"},
 		// Maintenance takes a hostname out of service for everyone. It is an
 		// operator action on shared ingress, guarded by rpc.BoundApp rather
 		// than rpc.AllowApp, so no app-scoped or cluster role should reach it.

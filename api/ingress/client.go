@@ -386,12 +386,7 @@ func (c *Client) GetOIDCProvider(ctx context.Context, name string) (*ingress_v1a
 
 // ListOIDCProviders returns all OIDC providers
 func (c *Client) ListOIDCProviders(ctx context.Context) ([]*ingress_v1alpha.OidcProvider, error) {
-	kindRes, err := c.eac.LookupKind(ctx, "oidc_provider")
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup oidc_provider kind: %w", err)
-	}
-
-	res, err := c.eac.List(ctx, kindRes.Attr())
+	res, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindOidcProvider))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list OIDC providers: %w", err)
 	}
@@ -524,12 +519,7 @@ func (c *Client) GetPasswordProvider(ctx context.Context, name string) (*ingress
 
 // ListPasswordProviders returns all password providers
 func (c *Client) ListPasswordProviders(ctx context.Context) ([]*ingress_v1alpha.PasswordProvider, error) {
-	kindRes, err := c.eac.LookupKind(ctx, "password_provider")
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup password_provider kind: %w", err)
-	}
-
-	res, err := c.eac.List(ctx, kindRes.Attr())
+	res, err := c.eac.List(ctx, entity.Ref(entity.EntityKind, ingress_v1alpha.KindPasswordProvider))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list password providers: %w", err)
 	}

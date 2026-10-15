@@ -27,8 +27,105 @@ types:
       - {name: provider_url, type: string, index: 18}
       - {name: waf_enabled, type: bool, index: 19}
       - {name: maintenance, type: bool, index: 20}
+  - type: ProviderInfo
+    doc: Safe provider metadata. Credentials and arbitrary connector configuration are never returned.
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: kind
+        type: string
+        index: 1
+      - name: provider_url
+        type: string
+        index: 2
+      - name: client_id
+        type: string
+        index: 3
+      - name: scopes
+        type: list
+        element: string
+        index: 4
+      - name: orgs
+        type: list
+        element: GitHubOrganization
+        index: 5
+  - type: GitHubOrganization
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: teams
+        type: list
+        element: string
+        index: 1
 
 interfaces:
+  - name: IdentityProviders
+    doc: Cluster operator management of shared ingress identities. Not app-owned; unavailable to workload and deploy identities.
+    methods:
+      - name: addOIDC
+        index: 0
+        parameters:
+          - name: name
+            type: string
+          - name: provider_url
+            type: string
+          - name: client_id
+            type: string
+          - name: client_secret
+            type: string
+          - name: scopes
+            type: list
+            element: string
+          - name: update
+            type: bool
+      - name: addGitHub
+        index: 1
+        parameters:
+          - name: name
+            type: string
+          - name: client_id
+            type: string
+          - name: client_secret
+            type: string
+          - name: orgs
+            type: list
+            element: GitHubOrganization
+          - name: update
+            type: bool
+      - name: addPassword
+        index: 2
+        parameters:
+          - name: name
+            type: string
+          - name: password
+            type: string
+            doc: Plaintext credential, hashed server-side; never returned or logged.
+          - name: update
+            type: bool
+      - name: list
+        index: 3
+        results:
+          - name: providers
+            type: list
+            element: ProviderInfo
+      - name: show
+        index: 4
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: provider
+            type: ProviderInfo
+      - name: remove
+        index: 5
+        parameters:
+          - name: name
+            type: string
+          - name: force
+            type: bool
+            doc: Permit removal while referenced; does not mutate routes.
   - name: Routes
     doc: >-
       Route management with server-side validation and app ownership checks.

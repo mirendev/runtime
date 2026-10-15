@@ -32,6 +32,7 @@ import (
 	"miren.dev/runtime/servers/build"
 	debugsrv "miren.dev/runtime/servers/debug"
 	"miren.dev/runtime/servers/deployment"
+	"miren.dev/runtime/servers/identityproviders"
 	"miren.dev/runtime/servers/logs"
 	oidcbindingsrv "miren.dev/runtime/servers/oidcbinding"
 	routessrv "miren.dev/runtime/servers/routes"
@@ -169,6 +170,9 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	c.deploymentHandler = deployment_v1alpha.AdaptDeployment(deploymentServer)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcbindingsrv.NewServer(c.Log, ec, eac)))
 	ingressClient := ingress.NewClient(c.Log, loopback)
+	server.ExposeValue("dev.miren.runtime/identity-providers", ingress_v1alpha.AdaptIdentityProviders(
+		identityproviders.NewServer(ingressClient),
+	))
 	server.ExposeValue("dev.miren.runtime/routes", ingress_v1alpha.AdaptRoutes(
 		routessrv.NewServer(c.Log, ingressClient),
 	))

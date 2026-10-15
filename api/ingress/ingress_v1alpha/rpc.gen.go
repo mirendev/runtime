@@ -424,6 +424,1103 @@ func (v *RouteInfo) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type providerInfoData struct {
+	Name        *string                `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Kind        *string                `cbor:"1,keyasint,omitempty" json:"kind,omitempty"`
+	ProviderUrl *string                `cbor:"2,keyasint,omitempty" json:"provider_url,omitempty"`
+	ClientId    *string                `cbor:"3,keyasint,omitempty" json:"client_id,omitempty"`
+	Scopes      *[]string              `cbor:"4,keyasint,omitempty" json:"scopes,omitempty"`
+	Orgs        *[]*GitHubOrganization `cbor:"5,keyasint,omitempty" json:"orgs,omitempty"`
+}
+
+type ProviderInfo struct {
+	data providerInfoData
+}
+
+func (v *ProviderInfo) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *ProviderInfo) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *ProviderInfo) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *ProviderInfo) HasKind() bool {
+	return v.data.Kind != nil
+}
+
+func (v *ProviderInfo) Kind() string {
+	if v.data.Kind == nil {
+		return ""
+	}
+	return *v.data.Kind
+}
+
+func (v *ProviderInfo) SetKind(kind string) {
+	v.data.Kind = &kind
+}
+
+func (v *ProviderInfo) HasProviderUrl() bool {
+	return v.data.ProviderUrl != nil
+}
+
+func (v *ProviderInfo) ProviderUrl() string {
+	if v.data.ProviderUrl == nil {
+		return ""
+	}
+	return *v.data.ProviderUrl
+}
+
+func (v *ProviderInfo) SetProviderUrl(provider_url string) {
+	v.data.ProviderUrl = &provider_url
+}
+
+func (v *ProviderInfo) HasClientId() bool {
+	return v.data.ClientId != nil
+}
+
+func (v *ProviderInfo) ClientId() string {
+	if v.data.ClientId == nil {
+		return ""
+	}
+	return *v.data.ClientId
+}
+
+func (v *ProviderInfo) SetClientId(client_id string) {
+	v.data.ClientId = &client_id
+}
+
+func (v *ProviderInfo) HasScopes() bool {
+	return v.data.Scopes != nil
+}
+
+func (v *ProviderInfo) Scopes() []string {
+	if v.data.Scopes == nil {
+		return nil
+	}
+	return *v.data.Scopes
+}
+
+func (v *ProviderInfo) SetScopes(scopes []string) {
+	x := slices.Clone(scopes)
+	v.data.Scopes = &x
+}
+
+func (v *ProviderInfo) HasOrgs() bool {
+	return v.data.Orgs != nil
+}
+
+func (v *ProviderInfo) Orgs() []*GitHubOrganization {
+	if v.data.Orgs == nil {
+		return nil
+	}
+	return *v.data.Orgs
+}
+
+func (v *ProviderInfo) SetOrgs(orgs []*GitHubOrganization) {
+	x := slices.Clone(orgs)
+	v.data.Orgs = &x
+}
+
+func (v *ProviderInfo) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *ProviderInfo) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *ProviderInfo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *ProviderInfo) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type gitHubOrganizationData struct {
+	Name  *string   `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Teams *[]string `cbor:"1,keyasint,omitempty" json:"teams,omitempty"`
+}
+
+type GitHubOrganization struct {
+	data gitHubOrganizationData
+}
+
+func (v *GitHubOrganization) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *GitHubOrganization) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *GitHubOrganization) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *GitHubOrganization) HasTeams() bool {
+	return v.data.Teams != nil
+}
+
+func (v *GitHubOrganization) Teams() []string {
+	if v.data.Teams == nil {
+		return nil
+	}
+	return *v.data.Teams
+}
+
+func (v *GitHubOrganization) SetTeams(teams []string) {
+	x := slices.Clone(teams)
+	v.data.Teams = &x
+}
+
+func (v *GitHubOrganization) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *GitHubOrganization) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *GitHubOrganization) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *GitHubOrganization) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddOIDCArgsData struct {
+	Name         *string   `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	ProviderUrl  *string   `cbor:"1,keyasint,omitempty" json:"provider_url,omitempty"`
+	ClientId     *string   `cbor:"2,keyasint,omitempty" json:"client_id,omitempty"`
+	ClientSecret *string   `cbor:"3,keyasint,omitempty" json:"client_secret,omitempty"`
+	Scopes       *[]string `cbor:"4,keyasint,omitempty" json:"scopes,omitempty"`
+	Update       *bool     `cbor:"5,keyasint,omitempty" json:"update,omitempty"`
+}
+
+type IdentityProvidersAddOIDCArgs struct {
+	call rpc.Call
+	data identityProvidersAddOIDCArgsData
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasProviderUrl() bool {
+	return v.data.ProviderUrl != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) ProviderUrl() string {
+	if v.data.ProviderUrl == nil {
+		return ""
+	}
+	return *v.data.ProviderUrl
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasClientId() bool {
+	return v.data.ClientId != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) ClientId() string {
+	if v.data.ClientId == nil {
+		return ""
+	}
+	return *v.data.ClientId
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasClientSecret() bool {
+	return v.data.ClientSecret != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) ClientSecret() string {
+	if v.data.ClientSecret == nil {
+		return ""
+	}
+	return *v.data.ClientSecret
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasScopes() bool {
+	return v.data.Scopes != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) Scopes() []string {
+	if v.data.Scopes == nil {
+		return nil
+	}
+	return *v.data.Scopes
+}
+
+func (v *IdentityProvidersAddOIDCArgs) HasUpdate() bool {
+	return v.data.Update != nil
+}
+
+func (v *IdentityProvidersAddOIDCArgs) Update() bool {
+	if v.data.Update == nil {
+		return false
+	}
+	return *v.data.Update
+}
+
+func (v *IdentityProvidersAddOIDCArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddOIDCArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddOIDCArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddOIDCArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddOIDCResultsData struct{}
+
+type IdentityProvidersAddOIDCResults struct {
+	call rpc.Call
+	data identityProvidersAddOIDCResultsData
+}
+
+func (v *IdentityProvidersAddOIDCResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddOIDCResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddOIDCResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddOIDCResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddGitHubArgsData struct {
+	Name         *string                `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	ClientId     *string                `cbor:"1,keyasint,omitempty" json:"client_id,omitempty"`
+	ClientSecret *string                `cbor:"2,keyasint,omitempty" json:"client_secret,omitempty"`
+	Orgs         *[]*GitHubOrganization `cbor:"3,keyasint,omitempty" json:"orgs,omitempty"`
+	Update       *bool                  `cbor:"4,keyasint,omitempty" json:"update,omitempty"`
+}
+
+type IdentityProvidersAddGitHubArgs struct {
+	call rpc.Call
+	data identityProvidersAddGitHubArgsData
+}
+
+func (v *IdentityProvidersAddGitHubArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *IdentityProvidersAddGitHubArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *IdentityProvidersAddGitHubArgs) HasClientId() bool {
+	return v.data.ClientId != nil
+}
+
+func (v *IdentityProvidersAddGitHubArgs) ClientId() string {
+	if v.data.ClientId == nil {
+		return ""
+	}
+	return *v.data.ClientId
+}
+
+func (v *IdentityProvidersAddGitHubArgs) HasClientSecret() bool {
+	return v.data.ClientSecret != nil
+}
+
+func (v *IdentityProvidersAddGitHubArgs) ClientSecret() string {
+	if v.data.ClientSecret == nil {
+		return ""
+	}
+	return *v.data.ClientSecret
+}
+
+func (v *IdentityProvidersAddGitHubArgs) HasOrgs() bool {
+	return v.data.Orgs != nil
+}
+
+func (v *IdentityProvidersAddGitHubArgs) Orgs() []*GitHubOrganization {
+	if v.data.Orgs == nil {
+		return nil
+	}
+	return *v.data.Orgs
+}
+
+func (v *IdentityProvidersAddGitHubArgs) HasUpdate() bool {
+	return v.data.Update != nil
+}
+
+func (v *IdentityProvidersAddGitHubArgs) Update() bool {
+	if v.data.Update == nil {
+		return false
+	}
+	return *v.data.Update
+}
+
+func (v *IdentityProvidersAddGitHubArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddGitHubArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddGitHubArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddGitHubArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddGitHubResultsData struct{}
+
+type IdentityProvidersAddGitHubResults struct {
+	call rpc.Call
+	data identityProvidersAddGitHubResultsData
+}
+
+func (v *IdentityProvidersAddGitHubResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddGitHubResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddGitHubResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddGitHubResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddPasswordArgsData struct {
+	Name     *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Password *string `cbor:"1,keyasint,omitempty" json:"password,omitempty"`
+	Update   *bool   `cbor:"2,keyasint,omitempty" json:"update,omitempty"`
+}
+
+type IdentityProvidersAddPasswordArgs struct {
+	call rpc.Call
+	data identityProvidersAddPasswordArgsData
+}
+
+func (v *IdentityProvidersAddPasswordArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *IdentityProvidersAddPasswordArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *IdentityProvidersAddPasswordArgs) HasPassword() bool {
+	return v.data.Password != nil
+}
+
+func (v *IdentityProvidersAddPasswordArgs) Password() string {
+	if v.data.Password == nil {
+		return ""
+	}
+	return *v.data.Password
+}
+
+func (v *IdentityProvidersAddPasswordArgs) HasUpdate() bool {
+	return v.data.Update != nil
+}
+
+func (v *IdentityProvidersAddPasswordArgs) Update() bool {
+	if v.data.Update == nil {
+		return false
+	}
+	return *v.data.Update
+}
+
+func (v *IdentityProvidersAddPasswordArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddPasswordArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddPasswordArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddPasswordArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersAddPasswordResultsData struct{}
+
+type IdentityProvidersAddPasswordResults struct {
+	call rpc.Call
+	data identityProvidersAddPasswordResultsData
+}
+
+func (v *IdentityProvidersAddPasswordResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddPasswordResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersAddPasswordResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersAddPasswordResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersListArgsData struct{}
+
+type IdentityProvidersListArgs struct {
+	call rpc.Call
+	data identityProvidersListArgsData
+}
+
+func (v *IdentityProvidersListArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersListArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersListArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersListArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersListResultsData struct {
+	Providers *[]*ProviderInfo `cbor:"0,keyasint,omitempty" json:"providers,omitempty"`
+}
+
+type IdentityProvidersListResults struct {
+	call rpc.Call
+	data identityProvidersListResultsData
+}
+
+func (v *IdentityProvidersListResults) SetProviders(providers []*ProviderInfo) {
+	x := slices.Clone(providers)
+	v.data.Providers = &x
+}
+
+func (v *IdentityProvidersListResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersListResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersListResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersListResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersShowArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type IdentityProvidersShowArgs struct {
+	call rpc.Call
+	data identityProvidersShowArgsData
+}
+
+func (v *IdentityProvidersShowArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *IdentityProvidersShowArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *IdentityProvidersShowArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersShowArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersShowArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersShowArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersShowResultsData struct {
+	Provider *ProviderInfo `cbor:"0,keyasint,omitempty" json:"provider,omitempty"`
+}
+
+type IdentityProvidersShowResults struct {
+	call rpc.Call
+	data identityProvidersShowResultsData
+}
+
+func (v *IdentityProvidersShowResults) SetProvider(provider *ProviderInfo) {
+	v.data.Provider = provider
+}
+
+func (v *IdentityProvidersShowResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersShowResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersShowResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersShowResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersRemoveArgsData struct {
+	Name  *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Force *bool   `cbor:"1,keyasint,omitempty" json:"force,omitempty"`
+}
+
+type IdentityProvidersRemoveArgs struct {
+	call rpc.Call
+	data identityProvidersRemoveArgsData
+}
+
+func (v *IdentityProvidersRemoveArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *IdentityProvidersRemoveArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *IdentityProvidersRemoveArgs) HasForce() bool {
+	return v.data.Force != nil
+}
+
+func (v *IdentityProvidersRemoveArgs) Force() bool {
+	if v.data.Force == nil {
+		return false
+	}
+	return *v.data.Force
+}
+
+func (v *IdentityProvidersRemoveArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersRemoveArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersRemoveArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersRemoveArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type identityProvidersRemoveResultsData struct{}
+
+type IdentityProvidersRemoveResults struct {
+	call rpc.Call
+	data identityProvidersRemoveResultsData
+}
+
+func (v *IdentityProvidersRemoveResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *IdentityProvidersRemoveResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *IdentityProvidersRemoveResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *IdentityProvidersRemoveResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type IdentityProvidersAddOIDC struct {
+	rpc.Call
+	args    IdentityProvidersAddOIDCArgs
+	results IdentityProvidersAddOIDCResults
+}
+
+func (t *IdentityProvidersAddOIDC) Args() *IdentityProvidersAddOIDCArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersAddOIDC) Results() *IdentityProvidersAddOIDCResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProvidersAddGitHub struct {
+	rpc.Call
+	args    IdentityProvidersAddGitHubArgs
+	results IdentityProvidersAddGitHubResults
+}
+
+func (t *IdentityProvidersAddGitHub) Args() *IdentityProvidersAddGitHubArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersAddGitHub) Results() *IdentityProvidersAddGitHubResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProvidersAddPassword struct {
+	rpc.Call
+	args    IdentityProvidersAddPasswordArgs
+	results IdentityProvidersAddPasswordResults
+}
+
+func (t *IdentityProvidersAddPassword) Args() *IdentityProvidersAddPasswordArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersAddPassword) Results() *IdentityProvidersAddPasswordResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProvidersList struct {
+	rpc.Call
+	args    IdentityProvidersListArgs
+	results IdentityProvidersListResults
+}
+
+func (t *IdentityProvidersList) Args() *IdentityProvidersListArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersList) Results() *IdentityProvidersListResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProvidersShow struct {
+	rpc.Call
+	args    IdentityProvidersShowArgs
+	results IdentityProvidersShowResults
+}
+
+func (t *IdentityProvidersShow) Args() *IdentityProvidersShowArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersShow) Results() *IdentityProvidersShowResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProvidersRemove struct {
+	rpc.Call
+	args    IdentityProvidersRemoveArgs
+	results IdentityProvidersRemoveResults
+}
+
+func (t *IdentityProvidersRemove) Args() *IdentityProvidersRemoveArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *IdentityProvidersRemove) Results() *IdentityProvidersRemoveResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type IdentityProviders interface {
+	AddOIDC(ctx context.Context, state *IdentityProvidersAddOIDC) error
+	AddGitHub(ctx context.Context, state *IdentityProvidersAddGitHub) error
+	AddPassword(ctx context.Context, state *IdentityProvidersAddPassword) error
+	List(ctx context.Context, state *IdentityProvidersList) error
+	Show(ctx context.Context, state *IdentityProvidersShow) error
+	Remove(ctx context.Context, state *IdentityProvidersRemove) error
+}
+
+type reexportIdentityProviders struct {
+	client rpc.Client
+}
+
+func (reexportIdentityProviders) AddOIDC(ctx context.Context, state *IdentityProvidersAddOIDC) error {
+	panic("not implemented")
+}
+
+func (reexportIdentityProviders) AddGitHub(ctx context.Context, state *IdentityProvidersAddGitHub) error {
+	panic("not implemented")
+}
+
+func (reexportIdentityProviders) AddPassword(ctx context.Context, state *IdentityProvidersAddPassword) error {
+	panic("not implemented")
+}
+
+func (reexportIdentityProviders) List(ctx context.Context, state *IdentityProvidersList) error {
+	panic("not implemented")
+}
+
+func (reexportIdentityProviders) Show(ctx context.Context, state *IdentityProvidersShow) error {
+	panic("not implemented")
+}
+
+func (reexportIdentityProviders) Remove(ctx context.Context, state *IdentityProvidersRemove) error {
+	panic("not implemented")
+}
+
+func (t reexportIdentityProviders) CapabilityClient() rpc.Client {
+	return t.client
+}
+
+func AdaptIdentityProviders(t IdentityProviders) *rpc.Interface {
+	methods := []rpc.Method{
+		{
+			Name:          "addOIDC",
+			InterfaceName: "IdentityProviders",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"name", "provider_url", "client_id", "client_secret", "scopes", "update"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.AddOIDC(ctx, &IdentityProvidersAddOIDC{Call: call})
+			},
+		},
+		{
+			Name:          "addGitHub",
+			InterfaceName: "IdentityProviders",
+			Index:         1,
+			Public:        false,
+			Params:        []string{"name", "client_id", "client_secret", "orgs", "update"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.AddGitHub(ctx, &IdentityProvidersAddGitHub{Call: call})
+			},
+		},
+		{
+			Name:          "addPassword",
+			InterfaceName: "IdentityProviders",
+			Index:         2,
+			Public:        false,
+			Params:        []string{"name", "password", "update"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.AddPassword(ctx, &IdentityProvidersAddPassword{Call: call})
+			},
+		},
+		{
+			Name:          "list",
+			InterfaceName: "IdentityProviders",
+			Index:         3,
+			Public:        false,
+			Params:        []string{},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.List(ctx, &IdentityProvidersList{Call: call})
+			},
+		},
+		{
+			Name:          "show",
+			InterfaceName: "IdentityProviders",
+			Index:         4,
+			Public:        false,
+			Params:        []string{"name"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Show(ctx, &IdentityProvidersShow{Call: call})
+			},
+		},
+		{
+			Name:          "remove",
+			InterfaceName: "IdentityProviders",
+			Index:         5,
+			Public:        false,
+			Params:        []string{"name", "force"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.Remove(ctx, &IdentityProvidersRemove{Call: call})
+			},
+		},
+	}
+
+	return rpc.NewInterface(methods, t)
+}
+
+type IdentityProvidersClient struct {
+	rpc.Client
+}
+
+func NewIdentityProvidersClient(client rpc.Client) *IdentityProvidersClient {
+	return &IdentityProvidersClient{Client: client}
+}
+
+func (c IdentityProvidersClient) Export() IdentityProviders {
+	return reexportIdentityProviders{client: c.Client}
+}
+
+type IdentityProvidersClientAddOIDCResults struct {
+	client rpc.Client
+	data   identityProvidersAddOIDCResultsData
+}
+
+func (v IdentityProvidersClient) AddOIDC(ctx context.Context, name string, provider_url string, client_id string, client_secret string, scopes []string, update bool) (*IdentityProvidersClientAddOIDCResults, error) {
+	args := IdentityProvidersAddOIDCArgs{}
+	args.data.Name = &name
+	args.data.ProviderUrl = &provider_url
+	args.data.ClientId = &client_id
+	args.data.ClientSecret = &client_secret
+	x := slices.Clone(scopes)
+	args.data.Scopes = &x
+	args.data.Update = &update
+
+	var ret identityProvidersAddOIDCResultsData
+
+	err := v.Call(ctx, "addOIDC", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientAddOIDCResults{client: v.Client, data: ret}, nil
+}
+
+type IdentityProvidersClientAddGitHubResults struct {
+	client rpc.Client
+	data   identityProvidersAddGitHubResultsData
+}
+
+func (v IdentityProvidersClient) AddGitHub(ctx context.Context, name string, client_id string, client_secret string, orgs []*GitHubOrganization, update bool) (*IdentityProvidersClientAddGitHubResults, error) {
+	args := IdentityProvidersAddGitHubArgs{}
+	args.data.Name = &name
+	args.data.ClientId = &client_id
+	args.data.ClientSecret = &client_secret
+	x := slices.Clone(orgs)
+	args.data.Orgs = &x
+	args.data.Update = &update
+
+	var ret identityProvidersAddGitHubResultsData
+
+	err := v.Call(ctx, "addGitHub", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientAddGitHubResults{client: v.Client, data: ret}, nil
+}
+
+type IdentityProvidersClientAddPasswordResults struct {
+	client rpc.Client
+	data   identityProvidersAddPasswordResultsData
+}
+
+func (v IdentityProvidersClient) AddPassword(ctx context.Context, name string, password string, update bool) (*IdentityProvidersClientAddPasswordResults, error) {
+	args := IdentityProvidersAddPasswordArgs{}
+	args.data.Name = &name
+	args.data.Password = &password
+	args.data.Update = &update
+
+	var ret identityProvidersAddPasswordResultsData
+
+	err := v.Call(ctx, "addPassword", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientAddPasswordResults{client: v.Client, data: ret}, nil
+}
+
+type IdentityProvidersClientListResults struct {
+	client rpc.Client
+	data   identityProvidersListResultsData
+}
+
+func (v *IdentityProvidersClientListResults) HasProviders() bool {
+	return v.data.Providers != nil
+}
+
+func (v *IdentityProvidersClientListResults) Providers() []*ProviderInfo {
+	if v.data.Providers == nil {
+		return nil
+	}
+	return *v.data.Providers
+}
+
+func (v IdentityProvidersClient) List(ctx context.Context) (*IdentityProvidersClientListResults, error) {
+	args := IdentityProvidersListArgs{}
+
+	var ret identityProvidersListResultsData
+
+	err := v.Call(ctx, "list", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientListResults{client: v.Client, data: ret}, nil
+}
+
+type IdentityProvidersClientShowResults struct {
+	client rpc.Client
+	data   identityProvidersShowResultsData
+}
+
+func (v *IdentityProvidersClientShowResults) HasProvider() bool {
+	return v.data.Provider != nil
+}
+
+func (v *IdentityProvidersClientShowResults) Provider() *ProviderInfo {
+	return v.data.Provider
+}
+
+func (v IdentityProvidersClient) Show(ctx context.Context, name string) (*IdentityProvidersClientShowResults, error) {
+	args := IdentityProvidersShowArgs{}
+	args.data.Name = &name
+
+	var ret identityProvidersShowResultsData
+
+	err := v.Call(ctx, "show", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientShowResults{client: v.Client, data: ret}, nil
+}
+
+type IdentityProvidersClientRemoveResults struct {
+	client rpc.Client
+	data   identityProvidersRemoveResultsData
+}
+
+func (v IdentityProvidersClient) Remove(ctx context.Context, name string, force bool) (*IdentityProvidersClientRemoveResults, error) {
+	args := IdentityProvidersRemoveArgs{}
+	args.data.Name = &name
+	args.data.Force = &force
+
+	var ret identityProvidersRemoveResultsData
+
+	err := v.Call(ctx, "remove", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IdentityProvidersClientRemoveResults{client: v.Client, data: ret}, nil
+}
+
 type routesSetMaintenanceArgsData struct {
 	Host         *string `cbor:"0,keyasint,omitempty" json:"host,omitempty"`
 	DefaultRoute *bool   `cbor:"1,keyasint,omitempty" json:"default_route,omitempty"`
