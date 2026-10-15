@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+---
+
+## v0.17.0
+*2026-10-15*
+
 **Upgrade Notes**
 - **Embedded VictoriaLogs upgrade** - To search every log field, this release upgrades the embedded VictoriaLogs. Its new data lives in a separate `victorialogs-v2` directory, so rolling back to an older release still boots on its own logs. The old `victorialogs` directory keeps its disk space until you delete it, which is safe once you no longer need to roll back. Hosts close to full should check free space before upgrading. See [VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md). ([#1258](https://github.com/mirendev/runtime/pull/1258))
 
