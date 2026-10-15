@@ -1,7 +1,7 @@
 package commands
 
 import (
-	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 func SandboxStop(ctx *Context, opts struct {
@@ -10,14 +10,12 @@ func SandboxStop(ctx *Context, opts struct {
 }) error {
 	sandboxID := opts.SandboxID
 
-	client, err := ctx.RPCClient("entities")
+	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
 	if err != nil {
 		return err
 	}
 
-	computeClient := compute.NewClient(ctx.Log, client)
-
-	err = computeClient.StopSandbox(ctx, sandboxID)
+	_, err = compute_v1alpha.NewSandboxesClient(client).Stop(ctx, sandboxID)
 	if err != nil {
 		return err
 	}
