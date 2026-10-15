@@ -96,35 +96,7 @@ How the build uses the secret depends on how your app builds.
 
 ### Automatic language builds
 
-When Miren builds your app from its detected language, it mounts each build secret on the step that installs your dependencies (`go mod download`, `bundle install`, `npm install`, `pip install`, `cargo build` of your dependencies, and so on). Say where the secret goes with `env` or `file`:
-
-```toml
-# A token your committed .npmrc reads as ${NPM_TOKEN}
-[[build.secrets]]
-id = "npm"
-ref = "registry/npm-token"
-env = "NPM_TOKEN"
-
-# A netrc for private Git repositories over https
-[[build.secrets]]
-id = "netrc"
-ref = "github/netrc"
-file = "~/.netrc"
-```
-
-`env` sets an environment variable for the install step. `file` mounts the secret as a file. A path starting with `~/` lands in the home directory of whichever user runs the install, so `~/.netrc` works whether that step runs as root or as the app user.
-
-A netrc covers the most ground for private Git dependencies. Go modules, Ruby gems with a `git:` source, npm packages from Git URLs, pip, Poetry, and uv Git requirements, Elixir Git deps, and Rust crates from Git all fetch through Git, and Git reads it. (Node, Bun, and Python builds install Git when your manifests or lockfiles name a Git dependency, since their images don't include it.) For GitHub, use a fine-grained personal access token with read access to the repositories you need:
-
-```text
-machine github.com login x-access-token password github_pat_...
-```
-
-For Go, list your private modules in `go.sum`. Go asks the public module proxy for each module first and fetches it directly when the proxy doesn't have it, so a private module's path (never its code) reaches `proxy.golang.org`, and a module missing from `go.sum` fails its checksum lookup.
-
-Builds have no SSH key, so Miren rewrites SSH URLs on GitHub, GitLab, and Bitbucket (`git@github.com:org/repo`, `ssh://git@github.com/...`) to https, where the netrc can authenticate them. You don't need to change a lockfile that pins SSH URLs.
-
-Package registries mostly read a token from the environment. A committed `.npmrc` (or `bunfig.toml` for Bun) with `//npm.example.com/:_authToken=${NPM_TOKEN}` picks up an `env = "NPM_TOKEN"` secret, and Bundler, pip, uv, Poetry, and Cargo each have their own environment variables for registry credentials.
+When Miren builds your app from its detected language, it mounts each build secret on the step that installs your dependencies, as an environment variable (`env`) or a file (`file`). [Private Dependencies](./private-dependencies.md) walks through it, with recipes for private Git repositories and for npm, Bundler, pip, uv, Poetry, and Cargo registries.
 
 The secret is mounted only on the steps that fetch dependencies, and it is never written to a layer. Its value is not part of the build cache key either, so rotating it doesn't force a rebuild.
 
