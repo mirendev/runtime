@@ -49,14 +49,7 @@ Miren builds on the official Go image, runs `go mod download` (skipped when a `v
 directory is present), and compiles the binary to `/bin/app`. The builder already ships
 `git` and `ca-certificates`, so public modules resolve with no extra setup.
 
-:::warning[Private modules need vendoring or a Dockerfile]
-The automatic Go build can't authenticate to a private module host. It doesn't read
-`GOPRIVATE`, a `.netrc`, or git credentials, and variables you set with `miren env set`
-are not injected into the module download step. If your project depends on private
-modules, either commit a `vendor/` directory — Miren then builds with `-mod=vendor` and
-skips the download entirely — or use a [`Dockerfile.miren`](./index.md#using-dockerfilemiren)
-where you control how modules are fetched.
-:::
+Private modules need a credential. See [Private dependencies](#private-dependencies).
 
 ### Which package gets built
 
@@ -113,6 +106,23 @@ If your app depends on files it must have at runtime, embed them with
 files are compiled into the binary and always present.
 :::
 
+## Private dependencies
+
+Private modules fetch over Git, so give the build a netrc with a token that can read
+them:
+
+```toml
+[[build.secrets]]
+id = "netrc"
+ref = "github/netrc"
+file = "~/.netrc"
+```
+
+SSH module URLs work as they are. List private modules in `go.sum`: Go checks the
+public proxy first, and a private module missing from `go.sum` fails its checksum
+lookup. Committing a `vendor/` directory also works, since Miren then builds with
+`-mod=vendor` and skips the download. See [Private Dependencies](../private-dependencies.md) for the full walkthrough.
+
 ## Environment variables
 
 Set variables with `miren env set` — `-e` for plain values, `-s` for secrets (masked
@@ -150,6 +160,7 @@ See [App Configuration — Environment Variables](../app-configuration.md#enviro
 - **Runtime files:** non-Go files carried to `/app`; prefer `go:embed` for required assets
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; netrc via `file = "~/.netrc"`; list modules in `go.sum`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 

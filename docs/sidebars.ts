@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'deployment',
         'app-configuration',
+        'private-dependencies',
         'services',
         'tasks',
         'ci-deploy',
