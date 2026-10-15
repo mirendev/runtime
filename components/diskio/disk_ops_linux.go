@@ -84,7 +84,23 @@ func (r *realDiskMountOps) CreateDir(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+const loopAttachAttempts = 5
+
 func (r *realDiskMountOps) LoopAttach(imagePath string) (string, *BackingIdentity, error) {
+	for attempt := 1; ; attempt++ {
+		device, identity, err := r.loopAttachOnce(imagePath)
+		// LOOP_CTL_GET_FREE only reports a device that was free when asked.
+		// Another attacher can configure it first, and the kernel answers our
+		// LOOP_CONFIGURE with EBUSY. Ask for a fresh device, as losetup does.
+		if errors.Is(err, unix.EBUSY) && attempt < loopAttachAttempts {
+			time.Sleep(time.Duration(attempt) * 10 * time.Millisecond)
+			continue
+		}
+		return device, identity, err
+	}
+}
+
+func (r *realDiskMountOps) loopAttachOnce(imagePath string) (string, *BackingIdentity, error) {
 	// Open loop-control to get a free device
 	ctl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	if err != nil {

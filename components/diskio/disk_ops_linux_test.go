@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,16 +125,8 @@ func TestLoopIdentitySurvivesRenameAndUnlink(t *testing.T) {
 	// Rebind this exact loop number to the replacement at the original path.
 	// Identical path text must not authorize stale cleanup of the new inode.
 	require.NoError(t, ops.LoopDetach(device))
-	loop, err := os.OpenFile(device, os.O_RDWR, 0)
-	require.NoError(t, err)
-	defer loop.Close()
-	f, err = os.OpenFile(image, os.O_RDWR, 0)
-	require.NoError(t, err)
-	defer f.Close()
-	require.NoError(t, f.Truncate(8*1024*1024))
-	require.NoError(t, unix.IoctlLoopConfigure(int(loop.Fd()), &unix.LoopConfig{Fd: uint32(f.Fd()), Size: 4096}))
-	// Do not keep an opener that would defer an erroneous LOOP_CLR_FD.
-	require.NoError(t, loop.Close())
+	require.NoError(t, os.Truncate(image, 8*1024*1024))
+	reconfigureLoop(t, ops, device, identity, image)
 	state, err := LoadState(dir)
 	require.NoError(t, err)
 	state.SetMount("stale", &MountState{EntityId: "stale", DevicePath: device, BackingPath: image, BackingIdentity: identity})
@@ -198,15 +191,7 @@ func TestLegacyLoopDeletionRecovery(t *testing.T) {
 					require.NoError(t, volumeOps.CreateDiskImage(filepath.Join(otherDir, "disk.img"), 8*1024*1024))
 					// Free-device allocation need not reuse this number, especially
 					// when other CI packages attach loops on the same kernel.
-					loop, err := os.OpenFile(device, os.O_RDWR, 0)
-					require.NoError(t, err)
-					defer loop.Close()
-					backing, err := os.OpenFile(filepath.Join(otherDir, "disk.img"), os.O_RDWR, 0)
-					require.NoError(t, err)
-					defer backing.Close()
-					require.NoError(t, unix.IoctlLoopConfigure(int(loop.Fd()), &unix.LoopConfig{
-						Fd: uint32(backing.Fd()), Size: 4096, Info: unix.LoopInfo64{Flags: unix.LO_FLAGS_DIRECT_IO},
-					}))
+					reconfigureLoop(t, ops, device, identity, filepath.Join(otherDir, "disk.img"))
 					t.Cleanup(func() { require.NoError(t, ops.LoopDetach(device)) })
 					otherIdentity, err = ops.FileIdentity(filepath.Join(otherDir, "disk.img"))
 					require.NoError(t, err)
@@ -259,6 +244,46 @@ func TestLegacyLoopDeletionRecovery(t *testing.T) {
 				require.Len(t, cloud.releaseLeaseCalls, 1)
 			})
 		}
+	}
+}
+
+// reconfigureLoop points device at image right after the caller detached it
+// from the backing identified by detached. LOOP_CLR_FD only defers teardown while anything else holds the
+// device open (udev probing a freshly attached loop, say), and LOOP_CONFIGURE
+// answers EBUSY until that last opener closes it. Wait it out rather than race
+// it, closing our own fd between attempts so we don't extend the wait.
+func reconfigureLoop(t *testing.T, ops DiskMountOps, device string, detached *BackingIdentity, image string) {
+	t.Helper()
+	backing, err := os.OpenFile(image, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer backing.Close()
+	configure := func() error {
+		loop, err := os.OpenFile(device, os.O_RDWR, 0)
+		require.NoError(t, err)
+		defer loop.Close()
+		return unix.IoctlLoopConfigure(int(loop.Fd()), &unix.LoopConfig{
+			Fd: uint32(backing.Fd()), Size: 4096, Info: unix.LoopInfo64{Flags: unix.LO_FLAGS_DIRECT_IO},
+		})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		err := configure()
+		if !errors.Is(err, unix.EBUSY) {
+			require.NoError(t, err)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	current, err := ops.LoopIdentity(device)
+	require.NoError(t, err)
+	switch {
+	case current == nil:
+		// Teardown may have finished since the last attempt.
+		require.NoError(t, configure(), "%s is unbound but LOOP_CONFIGURE still reports EBUSY", device)
+	case *current == *detached:
+		require.FailNow(t, fmt.Sprintf("%s never finished detaching", device))
+	default:
+		t.Skipf("%s was claimed by another loop user after detach", device)
 	}
 }
 
@@ -365,6 +390,11 @@ func TestLoopIdentityPrivateDeviceNode(t *testing.T) {
 		t.Run(fmt.Sprintf("bound=%t", bound), func(t *testing.T) {
 			if !bound {
 				require.NoError(t, ops.LoopDetach(device))
+				// LOOP_CLR_FD defers teardown while another opener remains.
+				require.Eventually(t, func() bool {
+					current, err := ops.LoopIdentity(device)
+					return err == nil && current == nil
+				}, 5*time.Second, 10*time.Millisecond, "%s never finished detaching", device)
 			}
 			root := t.TempDir()
 			require.NoError(t, os.Mkdir(filepath.Join(root, "dev"), 0755))
