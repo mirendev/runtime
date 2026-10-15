@@ -8,6 +8,7 @@
 package cloudapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"miren.dev/runtime/version"
 )
 
 const (
@@ -118,35 +121,64 @@ func (c *Client) get(ctx context.Context, timeout time.Duration, out any, pathPa
 		return err
 	}
 
-	token, err := c.token(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to authenticate: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	resp, err := c.request(ctx, timeout, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+	return nil
+}
 
-	if resp.StatusCode != http.StatusOK {
+type responseError struct {
+	status int
+	body   string
+}
+
+func (e *responseError) Error() string {
+	return fmt.Sprintf("cloud returned status %d: %s", e.status, e.body)
+}
+
+func (c *Client) request(ctx context.Context, timeout time.Duration, method, endpoint string, body any) (*http.Response, error) {
+	var data []byte
+	if body != nil {
+		var err error
+		data, err = json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", "miren/"+version.Version)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
 		// Bounded: the body here only ever goes into an error message, and a
 		// proxy having a bad day can answer with something enormous. Reading
 		// all of it would turn a failed request into a failed process.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return fmt.Errorf("cloud returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, &responseError{status: resp.StatusCode, body: strings.TrimSpace(string(body))}
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return nil
+	return resp, nil
 }

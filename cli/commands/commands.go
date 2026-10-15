@@ -50,6 +50,13 @@ func RegisterAll(d *mflags.Dispatcher) {
 			Body: "miren whoami --json",
 		}),
 	))
+	d.Dispatch("detective", Infer("detective", "Debug with Workbench and read-only local source tools", Detective,
+		WithGroup(GroupClient),
+		WithDescription(workbenchDescription),
+		WithExample(mflags.Example{Name: "Interactive chat", Body: "miren detective -C production"}),
+		WithExample(mflags.Example{Name: "Ask about the cluster without local source", Body: `miren detective -C production --no-local-tools "Is the cluster healthy?"`}),
+		WithExample(mflags.Example{Name: "Inspect an app's source", Body: `miren detective -C production -a myapp -d ./myapp "Why does startup fail?"`}),
+	))
 
 	// Doctor commands
 	d.Dispatch("doctor", Infer("doctor", "Diagnose miren environment and connectivity", Doctor,
