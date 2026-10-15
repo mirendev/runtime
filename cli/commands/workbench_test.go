@@ -276,6 +276,177 @@ func TestDetectiveTerminal(t *testing.T) {
 	}
 }
 
+func TestDetectiveApprovals(t *testing.T) {
+	for _, mode := range []string{"once", "session", "deny", "chat", "narrow", "noninteractive", "redirected", "cancel", "cancel-active"} {
+		t.Run(mode, func(t *testing.T) {
+			master, path, err := console.NewPty()
+			require.NoError(t, err)
+			defer master.Close()
+			require.NoError(t, master.Resize(console.WinSize{Width: 80, Height: 24}))
+			if mode == "narrow" {
+				require.NoError(t, master.Resize(console.WinSize{Width: 40, Height: 24}))
+			}
+			terminal, err := os.OpenFile(path, os.O_RDWR, 0)
+			require.NoError(t, err)
+			defer terminal.Close()
+			var captured syncBuffer
+			go func() { _, _ = io.Copy(&captured, master) }()
+			decisions := make(chan string, 4)
+			polling, aborted := make(chan struct{}, 1), make(chan struct{}, 1)
+			fallback := "Open https://cloud.example/organizations/org/clusters/cluster/ask?thread=owned\n[approval-request] " + `{"kind":"approval","tool":"miren_restart_app","key":"restart:web","fingerprint":"exact fingerprint","summary":"Restart web","detail":{"app":"web","instances":2},"consequence":"Instances stop and start again."}`
+			if mode == "narrow" {
+				fallback = strings.Replace(fallback, `"instances":2`, `"instances":2,"notes":"`+strings.Repeat("review this argument ", 60)+`","zz_end":true`, 1)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/ensure-context"):
+					fmt.Fprint(w, `{"contextId":"scope"}`)
+				case strings.HasSuffix(r.URL.Path, "/threads"):
+					fmt.Fprint(w, `{}`)
+				case strings.HasSuffix(r.URL.Path, "/abort"):
+					aborted <- struct{}{}
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost:
+					var request map[string]string
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+					if request["kind"] == "signal" {
+						assert.Equal(t, "workbench.approval", request["type"])
+						var decision map[string]string
+						require.NoError(t, json.Unmarshal([]byte(request["body"]), &decision))
+						assert.Equal(t, "restart:web", decision["key"])
+						assert.Equal(t, "exact fingerprint", decision["fingerprint"])
+						decisions <- decision["answer"]
+						fmt.Fprint(w, `{"offset":"20","submissionId":"decision"}`)
+					} else {
+						assert.Equal(t, "Restart web", request["body"])
+						fmt.Fprint(w, `{"offset":"0","submissionId":"question"}`)
+					}
+				default:
+					if mode == "cancel-active" {
+						polling <- struct{}{}
+						<-r.Context().Done()
+						return
+					}
+					if r.URL.Query().Get("offset") == "20" {
+						fmt.Fprint(w, `[{"type":"message-delta","kind":"text","delta":"Decision response followed."},{"type":"submission-settled","submissionId":"decision","outcome":"completed"}]`)
+						return
+					}
+					_ = json.NewEncoder(w).Encode([]map[string]any{
+						{"type": "tool-output", "output": fallback},
+						{"type": "tool-output", "output": fallback},
+						{"type": "submission-settled", "submissionId": "question", "outcome": "completed"},
+					})
+				}
+			}))
+			defer server.Close()
+			cfg := clientconfig.NewConfig()
+			cfg.SetIdentity("cloud", &clientconfig.IdentityConfig{Type: clientconfig.IdentityToken, Token: freshLoginJWT(t), Issuer: server.URL})
+			deadline, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			ctx := &Context{Context: deadline, ClientConfig: cfg, ClusterConfig: &clientconfig.ClusterConfig{XID: "cluster", Identity: "cloud"}, Stdout: terminal, Stderr: terminal}
+			stdin := os.Stdin
+			os.Stdin = terminal
+			defer func() { os.Stdin = stdin }()
+			var plain bytes.Buffer
+			if mode == "noninteractive" {
+				reader, writer, err := os.Pipe()
+				require.NoError(t, err)
+				defer reader.Close()
+				_, err = writer.WriteString("once\n")
+				require.NoError(t, err)
+				require.NoError(t, writer.Close())
+				os.Stdin = reader
+			}
+			if mode == "redirected" {
+				ctx.Stdout, ctx.Stderr = &plain, &plain
+			}
+			opts := workbenchOptions{NoLocalTools: true, Question: []string{"Restart web"}}
+			if mode == "chat" {
+				opts.Question = nil
+			}
+			finished := make(chan error, 1)
+			go func() { finished <- Detective(ctx, opts) }()
+			if mode == "cancel-active" {
+				select {
+				case <-polling:
+				case <-deadline.Done():
+					t.Fatal("question did not start")
+				}
+				_, err = master.Write([]byte("\x03"))
+				require.NoError(t, err)
+				require.NoError(t, <-finished)
+				require.Len(t, aborted, 1, "active response must be aborted before CLI exit")
+				return
+			}
+			if mode == "chat" {
+				require.Eventually(t, func() bool { return strings.Contains(captured.String(), "> ") }, 3*time.Second, 10*time.Millisecond)
+				_, err = master.Write([]byte("Restart web\r"))
+				require.NoError(t, err)
+			}
+			interactive := mode != "noninteractive" && mode != "redirected"
+			if interactive {
+				require.Eventually(t, func() bool { return strings.Contains(captured.String(), "Enter confirm") }, 3*time.Second, 10*time.Millisecond)
+				for _, text := range []string{"Restart web", `"app": "web"`, "Consequences: Instances stop", "Allow once", "Allow for conversation", "Deny"} {
+					assert.Contains(t, ansi.Strip(captured.String()), text)
+				}
+				if mode == "narrow" {
+					_, err = master.Write([]byte(strings.Repeat("\x1b[6~", 10)))
+					require.NoError(t, err)
+					require.Eventually(t, func() bool { return strings.Contains(captured.String(), `"zz_end": true`) }, time.Second, time.Millisecond)
+				}
+				// Chat prose and a bracketed paste cannot select an allow choice.
+				_, err = master.Write([]byte("yes allow once\x1b[200~once\n\x1b[201~down"))
+				require.NoError(t, err)
+				select {
+				case got := <-decisions:
+					t.Fatalf("text admitted a decision: %s", got)
+				case <-time.After(80 * time.Millisecond):
+				}
+				keys := "\r"
+				switch mode {
+				case "once":
+					keys = "\x1b[B\r"
+				case "session":
+					keys = "\x1b[A\r"
+				case "cancel":
+					keys = "\x03"
+				}
+				_, err = master.Write([]byte(keys))
+				require.NoError(t, err)
+				if mode != "cancel" {
+					want := mode
+					if mode == "chat" || mode == "narrow" {
+						want = "deny"
+					}
+					select {
+					case got := <-decisions:
+						assert.Equal(t, want, got)
+					case <-deadline.Done():
+						t.Fatal("decision not admitted")
+					}
+					require.Eventually(t, func() bool { return strings.Contains(ansi.Strip(captured.String()), "Decision response followed.") }, 3*time.Second, 10*time.Millisecond)
+				}
+				if mode == "chat" {
+					_, err = master.Write([]byte("/quit\r"))
+					require.NoError(t, err)
+				}
+			}
+			require.NoError(t, <-finished)
+			select {
+			case got := <-decisions:
+				t.Fatalf("unexpected additional decision: %s", got)
+			default:
+			}
+			if !interactive {
+				require.Eventually(t, func() bool {
+					return strings.Contains(captured.String()+plain.String(), "https://cloud.example/organizations/org/clusters/cluster/ask?thread=owned")
+				}, time.Second, time.Millisecond)
+				assert.NotContains(t, captured.String()+plain.String(), "Approval required:")
+			}
+		})
+	}
+}
+
 func TestDetectiveLocalSourceTools(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
