@@ -212,8 +212,8 @@ usable when the corresponding push arrives.
 **`cloud authorization is not synchronized`** — the cluster has never received
 an authorization snapshot from its current organization, usually because it was
 just registered or upgraded and hasn't connected to cloud since. Check the
-[Connectivity](./connectivity.md) panel and that cloud was upgraded first; JWT
-access starts once the first snapshot arrives.
+[Connectivity](./connectivity.md) panel. JWT access starts once the first
+snapshot arrives.
 
 **`the cluster's link to the cloud dropped`** — the cluster disconnected while
 your command was running. Retry it.
