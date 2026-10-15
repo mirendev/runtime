@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -25,6 +26,10 @@ type Client struct {
 	log *slog.Logger
 	ec  *entityserver.Client
 	eac *entityserver_v1alpha.EntityAccessClient
+
+	// ProviderMu serializes provider mutations with route protection. The
+	// coordinator's provider and route RPC servers must share this client.
+	ProviderMu sync.Mutex
 }
 
 // NewClient creates a new Ingress client from an RPC client

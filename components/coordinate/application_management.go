@@ -168,8 +168,9 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	}
 	c.deploymentHandler = deployment_v1alpha.AdaptDeployment(deploymentServer)
 	server.ExposeValue("dev.miren.runtime/oidc-bindings", oidcbinding_v1alpha.AdaptOidcBindings(oidcbindingsrv.NewServer(c.Log, ec, eac)))
+	ingressClient := ingress.NewClient(c.Log, loopback)
 	server.ExposeValue("dev.miren.runtime/routes", ingress_v1alpha.AdaptRoutes(
-		routessrv.NewServer(c.Log, ingress.NewClient(c.Log, loopback)),
+		routessrv.NewServer(c.Log, ingressClient),
 	))
 	c.debugServer, err = debugsrv.NewServer(c.Log, filepath.Join(c.DataPath, "net.db"), eac)
 	if err != nil {
