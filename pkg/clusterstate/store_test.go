@@ -2,7 +2,9 @@ package clusterstate
 
 import (
 	"bytes"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,25 +17,31 @@ import (
 func TestSealingKeyCreationAndRecovery(t *testing.T) {
 	client, prefix := etcdtest.TestEtcdClient(t)
 	dir := t.TempDir()
-	key, err := EnsureSealingKey(t.Context(), client, prefix, dir)
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	key, err := EnsureSealingKey(t.Context(), log, client, prefix, dir)
 	require.NoError(t, err)
 	require.Len(t, key, 32)
+	require.Contains(t, logs.String(), "level=INFO")
+	require.Contains(t, logs.String(), SealingKeyPath(dir))
+	require.Contains(t, logs.String(), "back it up separately, etcd snapshots cannot be restored without it")
 	info, err := os.Stat(SealingKeyPath(dir))
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	store, err := New(client, prefix, key)
 	require.NoError(t, err)
 	require.NoError(t, store.Put(t.Context(), "authority", []byte("credential")))
-	again, err := EnsureSealingKey(t.Context(), client, prefix, dir)
+	again, err := EnsureSealingKey(t.Context(), log, client, prefix, dir)
 	require.NoError(t, err)
 	require.Equal(t, key, again)
 	require.NoError(t, os.WriteFile(SealingKeyPath(dir), key[:31], 0600))
-	_, err = EnsureSealingKey(t.Context(), client, prefix, dir)
+	_, err = EnsureSealingKey(t.Context(), log, client, prefix, dir)
 	require.ErrorContains(t, err, "expected 32 bytes")
 	require.NoError(t, os.Remove(SealingKeyPath(dir)))
-	_, err = EnsureSealingKey(t.Context(), client, prefix, dir)
+	_, err = EnsureSealingKey(t.Context(), log, client, prefix, dir)
 	require.ErrorContains(t, err, "restore the original key")
 	require.NoFileExists(t, SealingKeyPath(dir))
+	require.Equal(t, 1, strings.Count(logs.String(), "generated cluster sealing key"))
 }
 
 func TestEncryptedAndWrongKey(t *testing.T) {

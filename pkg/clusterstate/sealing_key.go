@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -22,7 +23,7 @@ func SealingKeyPath(dataPath string) string {
 // EnsureSealingKey creates a key only before metadata migration. A restored
 // snapshot without its original sealing key must fail rather than mint a new
 // root that cannot decrypt the cluster's credentials.
-func EnsureSealingKey(ctx context.Context, client *clientv3.Client, prefix, dataPath string) ([]byte, error) {
+func EnsureSealingKey(ctx context.Context, log *slog.Logger, client *clientv3.Client, prefix, dataPath string) ([]byte, error) {
 	filename := SealingKeyPath(dataPath)
 	key, err := os.ReadFile(filename)
 	if err == nil {
@@ -53,5 +54,6 @@ func EnsureSealingKey(ctx context.Context, client *clientv3.Client, prefix, data
 	if err := atomicfile.Write(filename, key, 0600); err != nil {
 		return nil, err
 	}
+	log.Info("generated cluster sealing key; back it up separately, etcd snapshots cannot be restored without it", "path", filename)
 	return key, nil
 }

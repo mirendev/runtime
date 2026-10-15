@@ -89,7 +89,7 @@ func (c *Foundation) initializeAuthority(ctx context.Context) error {
 			return fmt.Errorf("securing coordinator metadata: %w", err)
 		}
 	}
-	key, err := clusterstate.EnsureSealingKey(ctx, c.etcdClient, c.Prefix, c.DataPath)
+	key, err := clusterstate.EnsureSealingKey(ctx, c.Log, c.etcdClient, c.Prefix, c.DataPath)
 	if err != nil {
 		return err
 	}
