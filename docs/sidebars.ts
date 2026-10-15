@@ -67,6 +67,7 @@ const sidebars: SidebarsConfig = {
         'distributed-runners',
         'admin-interface',
         'observability',
+        'host-queries',
         'logs',
       ],
     },
