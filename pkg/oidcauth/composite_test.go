@@ -351,6 +351,8 @@ func TestAuthorizeOIDC(t *testing.T) {
 		{"builder", "buildfromtar", true},
 		{"builder", "analyzeapp", true},
 		{"telemetry", "reportspans", true},
+		{"sandboxpools", "list", true},
+		{"sandboxpools", "setdesired", false},
 		{"unknown", "anything", false},
 		{"deployment", "unknown", false},
 		{"", "", false},
@@ -390,6 +392,10 @@ func TestCompositeAuthorizer_WorkloadRoles(t *testing.T) {
 		{workloadroles.RoleAppDebugger, [2]string{"sandboxexec", "exec"}, [2]string{"deployment", "deployversion"}},
 		{workloadroles.RoleClusterReadonly, [2]string{"crud", "list"}, [2]string{"crud", "setenvvar"}},
 		{workloadroles.RoleClusterAdmin, [2]string{"sandboxexec", "exec"}, [2]string{"entityaccess", "delete"}},
+		{workloadroles.RoleAppReadonly, [2]string{"sandboxpools", "list"}, [2]string{"sandboxpools", "setdesired"}},
+		{workloadroles.RoleAppAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"entityaccess", "patch"}},
+		{workloadroles.RoleClusterReadonly, [2]string{"sandboxpools", "list"}, [2]string{"sandboxpools", "setdesired"}},
+		{workloadroles.RoleClusterAdmin, [2]string{"sandboxpools", "setdesired"}, [2]string{"runnerregistration", "issueworkloadtoken"}},
 	}
 
 	for _, c := range cases {

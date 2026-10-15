@@ -44,6 +44,9 @@ var oidcDeployRole = map[string]map[string]bool{
 	"appstatus": {
 		"appinfo": true,
 	},
+	"sandboxpools": {
+		"list": true,
+	},
 }
 
 // CompositeAuthenticator tries a chain of authenticators in order and returns
