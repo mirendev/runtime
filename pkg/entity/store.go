@@ -1538,14 +1538,26 @@ var deleteEntityRaceHook func()
 // delete wins against a busy reconcile loop instead of spuriously reporting the
 // entity as already gone.
 func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
+	return s.DeleteEntityAtRevision(ctx, id, 0)
+}
+
+// DeleteEntityAtRevision refuses to delete a record changed since authorization.
+// A zero revision retains the unconditional delete's retry behavior.
+func (s *EtcdStore) DeleteEntityAtRevision(ctx context.Context, id Id, revision int64) error {
 	const maxDeleteRetries = 3
 	for attempt := 0; ; attempt++ {
 		entity, err := s.GetEntity(ctx, id)
 		if err != nil {
+			if revision != 0 {
+				return err
+			}
 			if errors.Is(err, cond.ErrNotFound{}) {
 				return nil
 			}
 			return err
+		}
+		if revision != 0 && entity.GetRevision() != revision {
+			return cond.Conflict("entity", id)
 		}
 
 		// Collect all indexed attributes including nested ones within components
@@ -1608,7 +1620,7 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		// The guard failed: either the entity was concurrently deleted, or a
 		// concurrent write bumped its revision. Re-read and retry; GetEntity
 		// returning NotFound on the next pass resolves the former.
-		if attempt >= maxDeleteRetries {
+		if revision != 0 || attempt >= maxDeleteRetries {
 			s.log.Error("delete lost revision race after retries", "id", id)
 			return cond.Conflict("entity", id)
 		}

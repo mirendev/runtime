@@ -608,8 +608,16 @@ func (m *MockStore) EnsureEntity(ctx context.Context, entity *Entity, opts ...En
 }
 
 func (m *MockStore) DeleteEntity(ctx context.Context, id Id) error {
+	return m.DeleteEntityAtRevision(ctx, id, 0)
+}
+
+func (m *MockStore) DeleteEntityAtRevision(ctx context.Context, id Id, revision int64) error {
 	m.mu.Lock()
 	entity, existed := m.Entities[id]
+	if revision != 0 && (!existed || entity.GetRevision() != revision) {
+		m.mu.Unlock()
+		return cond.Conflict("entity", id)
+	}
 	m.deleteLocked(id)
 	m.mu.Unlock()
 

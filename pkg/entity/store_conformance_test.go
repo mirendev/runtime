@@ -712,6 +712,27 @@ func TestStoreConformance_DeleteEntity(t *testing.T) {
 	})
 }
 
+func TestStoreConformance_DeleteEntityAtRevision(t *testing.T) {
+	runStoreConformance(t, func(t *testing.T, store Store) {
+		ctx := t.Context()
+		deleter := store.(interface {
+			DeleteEntityAtRevision(context.Context, Id, int64) error
+		})
+		created, err := store.CreateEntity(ctx, New(Ref(DBId, Id("conf-delete-revision"))))
+		require.NoError(t, err)
+		oldRevision := created.GetRevision()
+		updated, err := store.PatchEntity(ctx, New(Ref(DBId, created.Id()), String(Doc, "new owner")))
+		require.NoError(t, err)
+		require.Error(t, deleter.DeleteEntityAtRevision(ctx, created.Id(), oldRevision))
+		retained, err := store.GetEntity(ctx, created.Id())
+		require.NoError(t, err)
+		assert.Equal(t, "new owner", MustGet(retained, Doc).Value.String())
+		require.NoError(t, deleter.DeleteEntityAtRevision(ctx, created.Id(), updated.GetRevision()))
+		_, err = store.GetEntity(ctx, created.Id())
+		assert.True(t, isNotFound(err))
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Indexes and collections
 // ---------------------------------------------------------------------------

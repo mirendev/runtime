@@ -457,6 +457,20 @@ func (e *EntityServer) Delete(ctx context.Context, req *entityserver_v1alpha.Ent
 	return e.Store.DeleteEntity(ctx, entity.Id(args.Id()))
 }
 
+func (e *EntityServer) DeleteAtRevision(ctx context.Context, req *entityserver_v1alpha.EntityAccessDeleteAtRevision) error {
+	args := req.Args()
+	if args.Id() == "" || args.Revision() <= 0 {
+		return fmt.Errorf("id and positive revision are required")
+	}
+	store, ok := e.Store.(interface {
+		DeleteEntityAtRevision(context.Context, entity.Id, int64) error
+	})
+	if !ok {
+		return fmt.Errorf("store does not support revision-checked deletion")
+	}
+	return store.DeleteEntityAtRevision(ctx, entity.Id(args.Id()), args.Revision())
+}
+
 // markerStore is implemented by stores whose index keyspace carries presence
 // markers beside matches (see the index layout comment in pkg/entity). A store
 // without markers, like the mock, needs neither method.
