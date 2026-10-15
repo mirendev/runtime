@@ -65,6 +65,7 @@ var (
 	appRead = perms{
 		"appstatus":    set("appinfo"),
 		"sandboxpools": set("list"),
+		"routes":       set("list", "show"),
 		"logs":         set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
@@ -90,6 +91,7 @@ var (
 			"setinitialenvvars", "deleteenvvar", "restart",
 		),
 		"deployment": set("setenvvars", "deleteenvvars"),
+		"routes":     set("set", "remove", "protect", "unprotect", "waf", "timeout", "tlscheck"),
 	}
 
 	// exec: open a shell / run a command in a sandbox. Guarded in this change.
@@ -171,6 +173,8 @@ func clusterAdminPerms() perms {
 			"internalhttp": set("dorequest"),
 			"disks":        set("new", "delete"),
 			"addons":       set("createinstance", "deleteinstance"),
+			// Defaults steer unmatched traffic cluster-wide, not just one app.
+			"routes": set("setdefault", "unsetdefault"),
 			// Backup, restore and recovery read and rewrite a disk's contents
 			// wholesale, so they sit with the other disk mutations rather than
 			// with reads — listdeleted included, since what it lists is the
