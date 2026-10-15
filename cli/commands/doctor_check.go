@@ -99,8 +99,8 @@ type doctorEnv struct {
 	clusterErr       error
 	requestedCluster string
 
-	// connErr is the result of actually trying to use the cluster. nil means
-	// the connection worked.
+	// connErr comes from the shared ServerInfo.Version probe. nil means the
+	// server answered, not necessarily that it has finished starting.
 	connErr error
 
 	// tcp and udp are independent reachability probes. Their value is the
@@ -185,15 +185,12 @@ func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		client, err := ctx.RPCClient("entities")
-		if err == nil && client != nil {
-			defer client.Close()
-		}
-		env.connErr = err
-	})
-
-	wg.Go(func() {
 		env.serverVersion, env.serverVersionErr = fetchServerVersion(ctx)
+		// A missing version endpoint is still a reply from a reachable server.
+		// The version check reports the unsupported API; never probe entities.
+		if !errors.Is(env.serverVersionErr, errServerVersionUnsupported) {
+			env.connErr = env.serverVersionErr
+		}
 	})
 	wg.Go(func() {
 		env.resources, env.resourcesErr = gatherDoctorResources(ctx)

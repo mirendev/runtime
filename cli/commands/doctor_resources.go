@@ -8,47 +8,36 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/storage/storage_v1alpha"
+	"miren.dev/runtime/api/disk/disk_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
 type doctorResources struct {
-	disks   []storage_v1alpha.Disk
-	volumes []storage_v1alpha.DiskVolume
+	disks   []*disk_v1alpha.ResourceHealth
+	volumes []*disk_v1alpha.ResourceHealth
 }
 
 func gatherDoctorResources(ctx *Context) (*doctorResources, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cl, err := ctx.rpcClient(probeCtx, "entities")
+	cl, err := ctx.rpcClient(probeCtx, "dev.miren.runtime/disk-health")
 	if err != nil {
 		return nil, err
 	}
 	defer cl.Close()
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
+	health := disk_v1alpha.NewDiskHealthClient(cl)
 	r := &doctorResources{}
 	for _, kindName := range []string{"disk", "disk_volume"} {
-		kind, err := eac.LookupKind(probeCtx, kindName)
-		if err != nil {
-			return nil, fmt.Errorf("lookup %s: %w", kindName, err)
-		}
 		for cursor := ""; ; {
-			page, err := eac.ListPage(probeCtx, kind.Attr(), cursor, 200)
+			page, err := health.List(probeCtx, kindName, cursor, 200)
 			if err != nil {
 				return nil, fmt.Errorf("list %s: %w", kindName, err)
 			}
-			for _, entry := range page.Values() {
-				switch kindName {
-				case "disk":
-					var disk storage_v1alpha.Disk
-					disk.Decode(entry.Entity())
-					r.disks = append(r.disks, disk)
-				case "disk_volume":
-					var volume storage_v1alpha.DiskVolume
-					volume.Decode(entry.Entity())
-					r.volumes = append(r.volumes, volume)
-				}
+			switch kindName {
+			case "disk":
+				r.disks = append(r.disks, page.Resources()...)
+			case "disk_volume":
+				r.volumes = append(r.volumes, page.Resources()...)
 			}
 			cursor = page.Cursor()
 			if cursor == "" {
@@ -122,13 +111,13 @@ func checkDisks(env *doctorEnv) checkResult {
 	}
 	var failing []string
 	for _, disk := range env.resources.disks {
-		if disk.Status == storage_v1alpha.ERROR {
-			failing = append(failing, fmt.Sprintf("disk %s", disk.ID))
+		if disk.State() == "status.error" {
+			failing = append(failing, fmt.Sprintf("disk %s", disk.Id()))
 		}
 	}
 	for _, volume := range env.resources.volumes {
-		if volume.ActualState == storage_v1alpha.DV_ERROR {
-			failing = append(failing, fmt.Sprintf("volume %s: %s", volume.ID, volume.ErrorMessage))
+		if volume.State() == "actual_state.dv_error" {
+			failing = append(failing, fmt.Sprintf("volume %s: %s", volume.Id(), volume.Diagnostic()))
 		}
 	}
 	if len(failing) == 0 {
