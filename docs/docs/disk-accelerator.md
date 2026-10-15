@@ -22,6 +22,10 @@ Cloud is built on.
 `lbd` is not part of Linux, so it has to be compiled for the exact kernel your
 node is running. One command does that.
 
+:::warning[Experimental]
+Accelerator mode is experimental. It's here for you to try, and we'd love to hear how it goes, but expect rough edges and changes between releases. Universal mode remains the default.
+:::
+
 ## Minimum working example
 
 ```bash
