@@ -19,7 +19,7 @@ import (
 // cert must yield no identity -- otherwise a self-signed forgery would be
 // granted the RBAC-bypassing "cert" method in Authorize.
 func TestRPCAuthenticator_CertRequiresVerifiedChain(t *testing.T) {
-	auth, err := NewRPCAuthenticator(t.Context(), Config{Logger: slog.Default()})
+	auth, err := NewRPCAuthenticator(t.Context(), Config{CloudURL: unreachableCloud, Logger: slog.Default()})
 	require.NoError(t, err)
 	defer auth.Stop()
 

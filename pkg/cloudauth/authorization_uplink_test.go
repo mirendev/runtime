@@ -73,7 +73,7 @@ func TestAuthorizationOverUplink(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewAuthorizationState(ctx, slog.Default())
+	s := NewAuthorizationState(ctx, slog.Default(), "", "")
 	link := uplink.NewClient(srv.URL, authorizationTokenSource{}, uplink.NewMessageRouter(), slog.Default(), uplink.WithSession(uplink.SessionIdentity{RuntimeVersion: "test"}))
 	s.Register(link)
 	done := make(chan error, 1)
@@ -120,9 +120,8 @@ func TestAuthorizationOverUplink(t *testing.T) {
 	send(conn, authorizationSnapshot(conn.id, 5))
 	waitDecision("alice", rbac.DecisionAllow)
 	require.NoError(t, conn.ws.CloseNow())
-	waitDecision("alice", rbac.DecisionDeny)
 	conn = nextConnection()
-	require.Equal(t, rbac.DecisionDeny, decision("alice"))
+	require.Equal(t, rbac.DecisionAllow, decision("alice"))
 	snapshot = authorizationSnapshot(conn.id, 1)
 	snapshot.Memberships = map[string][]string{"bob": {"readers"}}
 	send(conn, snapshot)

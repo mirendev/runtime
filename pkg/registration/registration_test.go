@@ -123,3 +123,20 @@ func TestClearRegistrationPartial(t *testing.T) {
 
 	assert.NoFileExists(t, keyPath)
 }
+
+// Saved cloud state is tied to its cluster and cloud when it is read back, so
+// a routine registration update keeps it and only unregistering tidies it up.
+func TestRegistrationChangesAndSavedCloudState(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range cloudStateFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0600))
+	}
+	require.NoError(t, SaveRegistration(dir, &StoredRegistration{PrivateKey: "key"}))
+	for _, name := range cloudStateFiles {
+		assert.FileExists(t, filepath.Join(dir, name))
+	}
+	require.NoError(t, ClearRegistration(dir))
+	for _, name := range cloudStateFiles {
+		assert.NoFileExists(t, filepath.Join(dir, name))
+	}
+}

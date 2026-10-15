@@ -544,8 +544,10 @@ func (c *Foundation) Start(ctx context.Context) (retErr error) {
 		}
 
 		authConfig := cloudauth.Config{
-			CloudURL: c.CloudAuth.CloudURL, // cloudauth will use default if empty
-			Logger:   c.Log,
+			CloudURL:  c.CloudAuth.CloudURL, // cloudauth will use default if empty
+			Logger:    c.Log,
+			ClusterID: c.CloudAuth.ClusterID,
+			StateDir:  filepath.Join(c.DataPath, "server"),
 		}
 
 		// Pass through tags from registration for RBAC evaluation
