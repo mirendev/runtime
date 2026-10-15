@@ -820,6 +820,7 @@ func (e *EntityServer) ListPage(ctx context.Context, req *entityserver_v1alpha.E
 	req.Results().SetCursor(encodeCursor(page.cursor))
 	req.Results().SetTotal(page.total)
 	req.Results().SetRevision(page.revision)
+	req.Results().SetIncomplete(page.incomplete)
 
 	return nil
 }
@@ -1118,10 +1119,11 @@ func (e *EntityServer) ListDocuments(ctx context.Context, req *entityserver_v1al
 // resolvedPage is one page of entities that actually resolved, with the ids
 // that did not already dropped and accounted for.
 type resolvedPage struct {
-	entities []*entity.Entity
-	cursor   string
-	total    int64
-	revision int64
+	entities   []*entity.Entity
+	cursor     string
+	total      int64
+	revision   int64
+	incomplete bool
 }
 
 // entityPage reads one page of an index and the entities it names.
@@ -1213,7 +1215,7 @@ func (e *EntityServer) resolve(
 		}
 	}
 
-	return &resolvedPage{entities: resolved, cursor: cursor, total: total, revision: revision}
+	return &resolvedPage{entities: resolved, cursor: cursor, total: total, revision: revision, incomplete: len(undecodable) > 0}
 }
 
 // encodeCursor hides the store key a cursor is made of. It is a resume point,

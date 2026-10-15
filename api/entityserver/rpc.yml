@@ -271,6 +271,9 @@ interfaces:
           - name: revision
             type: int64
             doc: The store revision this page was read at.
+          - name: incomplete
+            type: bool
+            doc: True when corrupt entities were omitted. Readable values are still returned; callers requiring complete coverage must reject this page.
 
       - name: makeAttr
         parameters:
