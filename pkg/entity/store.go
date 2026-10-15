@@ -1218,7 +1218,6 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	originalEntity := entity.Clone()
-	rev := entity.GetRevision()
 
 	repl := current.Clone()
 
@@ -1237,12 +1236,9 @@ func (s *EtcdStore) ReplaceEntity(
 		repl.SetCreatedAt(updatedAt)
 	}
 
-	if repl.GetRevision() == 0 {
-		repl.SetRevision(rev)
-	}
-
-	// Check revision if specified
-	if err := s.checkRevisionConflict(repl, o.fromRevision); err != nil {
+	// The payload may carry a stale revision; only the stored snapshot can
+	// establish whether the caller's expected revision is still current.
+	if err := s.checkRevisionConflict(originalEntity, o.fromRevision); err != nil {
 		return nil, err
 	}
 
@@ -1293,7 +1289,7 @@ func (s *EtcdStore) ReplaceEntity(
 	// Build conditions: revision check + unique-value constraints
 	var conditions []clientv3.Cmp
 	if o.fromRevision != 0 {
-		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", o.fromRevision))
 	}
 	conditions = append(conditions, uniqueConditions...)
 

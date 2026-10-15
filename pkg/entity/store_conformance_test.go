@@ -648,15 +648,21 @@ func TestStoreConformance_ReplaceEntityRevisionConflict(t *testing.T) {
 			Any(DBId, initial.Id()),
 			Any(Ident, "conf-occ-replace"),
 			Any(Doc, "stale"),
+			Any(Revision, staleRev),
 		), WithFromRevision(staleRev))
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, cond.ErrConflict{}),
 			"stale-revision replace must return cond.ErrConflict, got %v", err)
 
+		retained, err := store.GetEntity(ctx, initial.Id())
+		require.NoError(t, err)
+		assert.Equal(t, "bumped", MustGet(retained, Doc).Value.String())
+
 		_, err = store.ReplaceEntity(ctx, New(
 			Any(DBId, initial.Id()),
 			Any(Ident, "conf-occ-replace"),
 			Any(Doc, "current"),
+			Any(Revision, staleRev),
 		), WithFromRevision(bumped.GetRevision()))
 		require.NoError(t, err)
 	})
