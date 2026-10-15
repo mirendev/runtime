@@ -124,6 +124,27 @@ Bun apps can skip this and run `.ts` files directly.
 
 See [Services](../services.md) to run a worker alongside your web process.
 
+## Private dependencies
+
+For a private npm registry, commit an `.npmrc` that reads the token from the
+environment, then hand the build that token as a secret:
+
+```ini title=".npmrc"
+@acme:registry=https://npm.acme.dev/
+//npm.acme.dev/:_authToken=${NPM_TOKEN}
+```
+
+```toml
+[[build.secrets]]
+id = "npm"
+ref = "registry/npm-token"
+env = "NPM_TOKEN"
+```
+
+npm, Yarn 1, and Bun all read `.npmrc`, and Bun also reads a committed `bunfig.toml`.
+Yarn 2 and later read `.yarnrc.yml` instead.
+For private Git repositories, store a netrc with a read token and mount it with `file = "~/.netrc"`. See [Private Dependencies](../private-dependencies.md) for the full walkthrough.
+
 ## Environment variables
 
 Set variables with `miren env set` — `-e` for plain values, `-s` for secrets (masked
@@ -160,6 +181,7 @@ See [App Configuration — Environment Variables](../app-configuration.md#enviro
 - **TypeScript:** Node → build with `[build] onbuild`; Bun → runs `.ts` directly
 - **Env vars:** `miren env set -e KEY=VALUE`, `-s` for secrets, or `[[env]]` in `app.toml`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; npm token via `.npmrc` + `env = "NPM_TOKEN"`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 

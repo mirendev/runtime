@@ -88,6 +88,21 @@ Miren also scans your code and config for `System.fetch_env!/1` and
 `System.get_env/1` and reports the variables it finds, so you can spot one you haven't set. See
 [App Configuration: Environment Variables](../app-configuration.md#environment-variables).
 
+## Private dependencies
+
+Git dependencies in `mix.exs`, including private repositories, fetch with a netrc.
+Store one with a token that can read them and mount it:
+
+```toml
+[[build.secrets]]
+id = "netrc"
+ref = "github/netrc"
+file = "~/.netrc"
+```
+
+SSH URLs like `git@github.com:acme/lib.git` work as they are. See [Private Dependencies](../private-dependencies.md) for the full
+walkthrough.
+
 ## Migrations
 
 For a Phoenix app with Ecto, run `mix phx.gen.release` locally and commit what it
@@ -239,6 +254,7 @@ the release at `/app`, and the web service runs `/app/bin/<release> start`.
 - **Migrations:** automatic deploy task when Phoenix's `rel/overlays/bin/migrate` exists, except for `ecto_sqlite3`; explicit migration/deploy tasks take precedence; SQLite migrations must run where the service disk is mounted
 - **Metrics:** add a Prometheus exporter and configure `[services.web.metrics]`
 - **Dockerfile:** not needed; add `Dockerfile.miren` only for custom builds
+- **Private deps:** `[[build.secrets]]`; netrc via `file = "~/.netrc"`; see [Private Dependencies](../private-dependencies.md)
 
 ## Next steps
 
