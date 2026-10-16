@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
 )
 
 func SandboxDelete(ctx *Context, opts struct {
@@ -13,12 +13,10 @@ func SandboxDelete(ctx *Context, opts struct {
 }) error {
 	sandboxID := opts.SandboxID
 
-	client, err := ctx.RPCClient("entities")
+	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
 	if err != nil {
 		return err
 	}
-
-	computeClient := compute.NewClient(ctx.Log, client)
 
 	// Confirm deletion unless forced
 	if !opts.Force {
@@ -31,7 +29,7 @@ func SandboxDelete(ctx *Context, opts struct {
 		}
 	}
 
-	err = computeClient.DeleteSandbox(ctx, sandboxID)
+	_, err = compute_v1alpha.NewSandboxesClient(client).Delete(ctx, sandboxID)
 	if err != nil {
 		return err
 	}

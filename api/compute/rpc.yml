@@ -64,6 +64,24 @@ types:
         index: 12
         doc: Unix milliseconds
 
+  - type: SandboxSelection
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: short_id
+        type: string
+        index: 1
+      - name: service
+        type: string
+        index: 2
+      - name: version
+        type: string
+        index: 3
+      - name: candidate_count
+        type: int32
+        index: 4
+
 interfaces:
   - name: SandboxPools
     methods:
@@ -108,3 +126,28 @@ interfaces:
           - name: sandboxes
             type: list
             element: SandboxInfo
+      - name: stop
+        parameters:
+          - name: sandbox
+            type: string
+      - name: delete
+        parameters:
+          - name: sandbox
+            type: string
+      - name: selectForApp
+        doc: Select an existing running, scheduled service sandbox; never creates one.
+        parameters:
+          - name: app
+            type: string
+          - name: service
+            type: string
+        results:
+          - name: selection
+            type: SandboxSelection
+          - name: failure
+            type: string
+            doc: Empty on success; unknown_service, missing_default, or no_running for expected selection failures.
+          - name: services
+            type: list
+            element: string
+            doc: Known services for unknown_service, or eligible running services for missing_default.

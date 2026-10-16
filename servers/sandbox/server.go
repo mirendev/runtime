@@ -1,4 +1,4 @@
-// Package sandbox serves the operator-facing sandbox inventory.
+// Package sandbox serves sandbox inventory, lifecycle and exec selection.
 //
 // Sandbox entities are execution records and contain resolved container
 // environment values. This package is the boundary that turns those raw
