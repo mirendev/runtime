@@ -439,6 +439,52 @@ types:
         type: int64
         index: 2
 
+  - type: AddonCatalogEntry
+    doc: Public catalog metadata only; excludes provider config and container images.
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: display_name
+        type: string
+        index: 1
+      - name: description
+        type: string
+        index: 2
+      - name: default_variant
+        type: string
+        index: 3
+      - name: default_version
+        doc: Default version tag. Providers accept arbitrary version tags or image references, not a fixed supported-version list.
+        type: string
+        index: 4
+      - name: variants
+        type: list
+        element: AddonCatalogVariant
+        index: 5
+
+  - type: AddonCatalogVariant
+    fields:
+      - name: name
+        type: string
+        index: 0
+      - name: description
+        type: string
+        index: 1
+      - name: details
+        type: list
+        element: AddonCatalogDetail
+        index: 2
+
+  - type: AddonCatalogDetail
+    fields:
+      - name: key
+        type: string
+        index: 0
+      - name: value
+        type: string
+        index: 1
+
   - type: AddonInstance
     fields:
       - name: id
@@ -845,6 +891,25 @@ interfaces:
     http:
       prefix: /api/v1
     methods:
+      - name: listAvailable
+        doc: Cluster-wide catalog discovery, independent of attached addon instances.
+        http:
+          get: /addons
+        results:
+          - name: addons
+            type: list
+            element: AddonCatalogEntry
+
+      - name: getCatalog
+        http:
+          get: /addons/{name}
+        parameters:
+          - name: name
+            type: string
+        results:
+          - name: addon
+            type: AddonCatalogEntry
+
       - name: createInstance
         http:
           post: /apps/{app}/addons

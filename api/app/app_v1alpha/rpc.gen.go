@@ -2119,6 +2119,253 @@ func (v *DiskConfig) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type addonCatalogEntryData struct {
+	Name           *string                 `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	DisplayName    *string                 `cbor:"1,keyasint,omitempty" json:"display_name,omitempty"`
+	Description    *string                 `cbor:"2,keyasint,omitempty" json:"description,omitempty"`
+	DefaultVariant *string                 `cbor:"3,keyasint,omitempty" json:"default_variant,omitempty"`
+	DefaultVersion *string                 `cbor:"4,keyasint,omitempty" json:"default_version,omitempty"`
+	Variants       *[]*AddonCatalogVariant `cbor:"5,keyasint,omitempty" json:"variants,omitempty"`
+}
+
+type AddonCatalogEntry struct {
+	data addonCatalogEntryData
+}
+
+func (v *AddonCatalogEntry) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonCatalogEntry) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonCatalogEntry) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AddonCatalogEntry) HasDisplayName() bool {
+	return v.data.DisplayName != nil
+}
+
+func (v *AddonCatalogEntry) DisplayName() string {
+	if v.data.DisplayName == nil {
+		return ""
+	}
+	return *v.data.DisplayName
+}
+
+func (v *AddonCatalogEntry) SetDisplayName(display_name string) {
+	v.data.DisplayName = &display_name
+}
+
+func (v *AddonCatalogEntry) HasDescription() bool {
+	return v.data.Description != nil
+}
+
+func (v *AddonCatalogEntry) Description() string {
+	if v.data.Description == nil {
+		return ""
+	}
+	return *v.data.Description
+}
+
+func (v *AddonCatalogEntry) SetDescription(description string) {
+	v.data.Description = &description
+}
+
+func (v *AddonCatalogEntry) HasDefaultVariant() bool {
+	return v.data.DefaultVariant != nil
+}
+
+func (v *AddonCatalogEntry) DefaultVariant() string {
+	if v.data.DefaultVariant == nil {
+		return ""
+	}
+	return *v.data.DefaultVariant
+}
+
+func (v *AddonCatalogEntry) SetDefaultVariant(default_variant string) {
+	v.data.DefaultVariant = &default_variant
+}
+
+func (v *AddonCatalogEntry) HasDefaultVersion() bool {
+	return v.data.DefaultVersion != nil
+}
+
+func (v *AddonCatalogEntry) DefaultVersion() string {
+	if v.data.DefaultVersion == nil {
+		return ""
+	}
+	return *v.data.DefaultVersion
+}
+
+func (v *AddonCatalogEntry) SetDefaultVersion(default_version string) {
+	v.data.DefaultVersion = &default_version
+}
+
+func (v *AddonCatalogEntry) HasVariants() bool {
+	return v.data.Variants != nil
+}
+
+func (v *AddonCatalogEntry) Variants() []*AddonCatalogVariant {
+	if v.data.Variants == nil {
+		return nil
+	}
+	return *v.data.Variants
+}
+
+func (v *AddonCatalogEntry) SetVariants(variants []*AddonCatalogVariant) {
+	x := slices.Clone(variants)
+	v.data.Variants = &x
+}
+
+func (v *AddonCatalogEntry) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogEntry) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogEntry) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogEntry) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonCatalogVariantData struct {
+	Name        *string                `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+	Description *string                `cbor:"1,keyasint,omitempty" json:"description,omitempty"`
+	Details     *[]*AddonCatalogDetail `cbor:"2,keyasint,omitempty" json:"details,omitempty"`
+}
+
+type AddonCatalogVariant struct {
+	data addonCatalogVariantData
+}
+
+func (v *AddonCatalogVariant) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonCatalogVariant) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonCatalogVariant) SetName(name string) {
+	v.data.Name = &name
+}
+
+func (v *AddonCatalogVariant) HasDescription() bool {
+	return v.data.Description != nil
+}
+
+func (v *AddonCatalogVariant) Description() string {
+	if v.data.Description == nil {
+		return ""
+	}
+	return *v.data.Description
+}
+
+func (v *AddonCatalogVariant) SetDescription(description string) {
+	v.data.Description = &description
+}
+
+func (v *AddonCatalogVariant) HasDetails() bool {
+	return v.data.Details != nil
+}
+
+func (v *AddonCatalogVariant) Details() []*AddonCatalogDetail {
+	if v.data.Details == nil {
+		return nil
+	}
+	return *v.data.Details
+}
+
+func (v *AddonCatalogVariant) SetDetails(details []*AddonCatalogDetail) {
+	x := slices.Clone(details)
+	v.data.Details = &x
+}
+
+func (v *AddonCatalogVariant) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogVariant) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogVariant) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogVariant) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonCatalogDetailData struct {
+	Key   *string `cbor:"0,keyasint,omitempty" json:"key,omitempty"`
+	Value *string `cbor:"1,keyasint,omitempty" json:"value,omitempty"`
+}
+
+type AddonCatalogDetail struct {
+	data addonCatalogDetailData
+}
+
+func (v *AddonCatalogDetail) HasKey() bool {
+	return v.data.Key != nil
+}
+
+func (v *AddonCatalogDetail) Key() string {
+	if v.data.Key == nil {
+		return ""
+	}
+	return *v.data.Key
+}
+
+func (v *AddonCatalogDetail) SetKey(key string) {
+	v.data.Key = &key
+}
+
+func (v *AddonCatalogDetail) HasValue() bool {
+	return v.data.Value != nil
+}
+
+func (v *AddonCatalogDetail) Value() string {
+	if v.data.Value == nil {
+		return ""
+	}
+	return *v.data.Value
+}
+
+func (v *AddonCatalogDetail) SetValue(value string) {
+	v.data.Value = &value
+}
+
+func (v *AddonCatalogDetail) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonCatalogDetail) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonCatalogDetail) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonCatalogDetail) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type addonInstanceData struct {
 	Id           *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
 	Name         *string `cbor:"1,keyasint,omitempty" json:"name,omitempty"`
@@ -6320,6 +6567,124 @@ func (v DisksClient) Delete(ctx context.Context, id string) (*DisksClientDeleteR
 	return &DisksClientDeleteResults{client: v.Client, data: ret}, nil
 }
 
+type addonsListAvailableArgsData struct{}
+
+type AddonsListAvailableArgs struct {
+	call rpc.Call
+	data addonsListAvailableArgsData
+}
+
+func (v *AddonsListAvailableArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListAvailableArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsListAvailableResultsData struct {
+	Addons *[]*AddonCatalogEntry `cbor:"0,keyasint,omitempty" json:"addons,omitempty"`
+}
+
+type AddonsListAvailableResults struct {
+	call rpc.Call
+	data addonsListAvailableResultsData
+}
+
+func (v *AddonsListAvailableResults) SetAddons(addons []*AddonCatalogEntry) {
+	x := slices.Clone(addons)
+	v.data.Addons = &x
+}
+
+func (v *AddonsListAvailableResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsListAvailableResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsListAvailableResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsGetCatalogArgsData struct {
+	Name *string `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
+}
+
+type AddonsGetCatalogArgs struct {
+	call rpc.Call
+	data addonsGetCatalogArgsData
+}
+
+func (v *AddonsGetCatalogArgs) HasName() bool {
+	return v.data.Name != nil
+}
+
+func (v *AddonsGetCatalogArgs) Name() string {
+	if v.data.Name == nil {
+		return ""
+	}
+	return *v.data.Name
+}
+
+func (v *AddonsGetCatalogArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsGetCatalogArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type addonsGetCatalogResultsData struct {
+	Addon *AddonCatalogEntry `cbor:"0,keyasint,omitempty" json:"addon,omitempty"`
+}
+
+type AddonsGetCatalogResults struct {
+	call rpc.Call
+	data addonsGetCatalogResultsData
+}
+
+func (v *AddonsGetCatalogResults) SetAddon(addon *AddonCatalogEntry) {
+	v.data.Addon = addon
+}
+
+func (v *AddonsGetCatalogResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AddonsGetCatalogResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AddonsGetCatalogResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type addonsCreateInstanceArgsData struct {
 	Name     *string   `cbor:"0,keyasint,omitempty" json:"name,omitempty"`
 	Addon    *string   `cbor:"1,keyasint,omitempty" json:"addon,omitempty"`
@@ -6671,6 +7036,58 @@ func (v *AddonsDeleteInstanceResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type AddonsListAvailable struct {
+	rpc.Call
+	args    AddonsListAvailableArgs
+	results AddonsListAvailableResults
+}
+
+func (t *AddonsListAvailable) Args() *AddonsListAvailableArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsListAvailable) Results() *AddonsListAvailableResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
+type AddonsGetCatalog struct {
+	rpc.Call
+	args    AddonsGetCatalogArgs
+	results AddonsGetCatalogResults
+}
+
+func (t *AddonsGetCatalog) Args() *AddonsGetCatalogArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *AddonsGetCatalog) Results() *AddonsGetCatalogResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type AddonsCreateInstance struct {
 	rpc.Call
 	args    AddonsCreateInstanceArgs
@@ -6776,6 +7193,8 @@ func (t *AddonsDeleteInstance) Results() *AddonsDeleteInstanceResults {
 }
 
 type Addons interface {
+	ListAvailable(ctx context.Context, state *AddonsListAvailable) error
+	GetCatalog(ctx context.Context, state *AddonsGetCatalog) error
 	CreateInstance(ctx context.Context, state *AddonsCreateInstance) error
 	ListInstances(ctx context.Context, state *AddonsListInstances) error
 	RotateCredential(ctx context.Context, state *AddonsRotateCredential) error
@@ -6784,6 +7203,14 @@ type Addons interface {
 
 type reexportAddons struct {
 	client rpc.Client
+}
+
+func (reexportAddons) ListAvailable(ctx context.Context, state *AddonsListAvailable) error {
+	panic("not implemented")
+}
+
+func (reexportAddons) GetCatalog(ctx context.Context, state *AddonsGetCatalog) error {
+	panic("not implemented")
 }
 
 func (reexportAddons) CreateInstance(ctx context.Context, state *AddonsCreateInstance) error {
@@ -6808,6 +7235,38 @@ func (t reexportAddons) CapabilityClient() rpc.Client {
 
 func AdaptAddons(t Addons) *rpc.Interface {
 	methods := []rpc.Method{
+		{
+			Name:          "listAvailable",
+			InterfaceName: "Addons",
+			Index:         0,
+			Public:        false,
+			Params:        []string{},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/addons",
+				Body:       "",
+				PathParams: []string{},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListAvailable(ctx, &AddonsListAvailable{Call: call})
+			},
+		},
+		{
+			Name:          "getCatalog",
+			InterfaceName: "Addons",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"name"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/addons/{name}",
+				Body:       "",
+				PathParams: []string{"name"},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.GetCatalog(ctx, &AddonsGetCatalog{Call: call})
+			},
+		},
 		{
 			Name:          "createInstance",
 			InterfaceName: "Addons",
@@ -6887,6 +7346,62 @@ func NewAddonsClient(client rpc.Client) *AddonsClient {
 
 func (c AddonsClient) Export() Addons {
 	return reexportAddons{client: c.Client}
+}
+
+type AddonsClientListAvailableResults struct {
+	client rpc.Client
+	data   addonsListAvailableResultsData
+}
+
+func (v *AddonsClientListAvailableResults) HasAddons() bool {
+	return v.data.Addons != nil
+}
+
+func (v *AddonsClientListAvailableResults) Addons() []*AddonCatalogEntry {
+	if v.data.Addons == nil {
+		return nil
+	}
+	return *v.data.Addons
+}
+
+func (v AddonsClient) ListAvailable(ctx context.Context) (*AddonsClientListAvailableResults, error) {
+	args := AddonsListAvailableArgs{}
+
+	var ret addonsListAvailableResultsData
+
+	err := v.Call(ctx, "listAvailable", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientListAvailableResults{client: v.Client, data: ret}, nil
+}
+
+type AddonsClientGetCatalogResults struct {
+	client rpc.Client
+	data   addonsGetCatalogResultsData
+}
+
+func (v *AddonsClientGetCatalogResults) HasAddon() bool {
+	return v.data.Addon != nil
+}
+
+func (v *AddonsClientGetCatalogResults) Addon() *AddonCatalogEntry {
+	return v.data.Addon
+}
+
+func (v AddonsClient) GetCatalog(ctx context.Context, name string) (*AddonsClientGetCatalogResults, error) {
+	args := AddonsGetCatalogArgs{}
+	args.data.Name = &name
+
+	var ret addonsGetCatalogResultsData
+
+	err := v.Call(ctx, "getCatalog", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AddonsClientGetCatalogResults{client: v.Client, data: ret}, nil
 }
 
 type AddonsClientCreateInstanceResults struct {

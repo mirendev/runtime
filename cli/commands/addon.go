@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
-	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -14,20 +12,13 @@ func AddonListAvailable(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	cl, err := ctx.RPCClient("entities")
+	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
 	if err != nil {
 		return err
 	}
 	defer cl.Close()
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
-
-	kindRes, err := eac.LookupKind(ctx, "addon")
-	if err != nil {
-		return err
-	}
-
-	res, err := eac.List(ctx, kindRes.Attr())
+	res, err := app_v1alpha.NewAddonsClient(cl).ListAvailable(ctx)
 	if err != nil {
 		return err
 	}
@@ -43,19 +34,17 @@ func AddonListAvailable(ctx *Context, opts struct {
 		}
 
 		var addons []addonInfo
-		for _, e := range res.Values() {
-			var addon addon_v1alpha.Addon
-			addon.Decode(e.Entity())
+		for _, addon := range res.Addons() {
 			var variantNames []string
-			for _, v := range addon.Variants {
-				variantNames = append(variantNames, v.Name)
+			for _, v := range addon.Variants() {
+				variantNames = append(variantNames, v.Name())
 			}
 			addons = append(addons, addonInfo{
-				Name:           addon.Name,
-				DisplayName:    addon.DisplayName,
-				Description:    addon.Description,
-				DefaultVariant: addon.DefaultVariant,
-				DefaultVersion: addon.DefaultVersion,
+				Name:           addon.Name(),
+				DisplayName:    addon.DisplayName(),
+				Description:    addon.Description(),
+				DefaultVariant: addon.DefaultVariant(),
+				DefaultVersion: addon.DefaultVersion(),
 				Variants:       variantNames,
 			})
 		}
@@ -65,21 +54,18 @@ func AddonListAvailable(ctx *Context, opts struct {
 	var rows []ui.Row
 	headers := []string{"ADDON", "DESCRIPTION", "VARIANTS", "DEFAULT VARIANT", "DEFAULT VERSION"}
 
-	for _, e := range res.Values() {
-		var addon addon_v1alpha.Addon
-		addon.Decode(e.Entity())
-
+	for _, addon := range res.Addons() {
 		var variantNames []string
-		for _, v := range addon.Variants {
-			variantNames = append(variantNames, v.Name)
+		for _, v := range addon.Variants() {
+			variantNames = append(variantNames, v.Name())
 		}
 
 		rows = append(rows, ui.Row{
-			addon.Name,
-			addon.Description,
+			addon.Name(),
+			addon.Description(),
 			strings.Join(variantNames, ", "),
-			addon.DefaultVariant,
-			addon.DefaultVersion,
+			addon.DefaultVariant(),
+			addon.DefaultVersion(),
 		})
 	}
 
@@ -104,21 +90,18 @@ func AddonVariants(ctx *Context, opts struct {
 	ConfigCentric
 	Addon string `position:"0" usage:"Addon name (e.g., miren-postgresql)" required:"true"`
 }) error {
-	cl, err := ctx.RPCClient("entities")
+	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
 	if err != nil {
 		return err
 	}
 	defer cl.Close()
 
-	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
-
-	addonRes, err := eac.Get(ctx, "addon/"+opts.Addon)
+	addonRes, err := app_v1alpha.NewAddonsClient(cl).GetCatalog(ctx, opts.Addon)
 	if err != nil {
 		return fmt.Errorf("addon %q not found: %w", opts.Addon, err)
 	}
 
-	var addon addon_v1alpha.Addon
-	addon.Decode(addonRes.Entity().Entity())
+	addon := addonRes.Addon()
 
 	if opts.IsJSON() {
 		type variantInfo struct {
@@ -129,34 +112,34 @@ func AddonVariants(ctx *Context, opts struct {
 		}
 
 		var variants []variantInfo
-		for _, v := range addon.Variants {
+		for _, v := range addon.Variants() {
 			details := make(map[string]string)
-			for _, d := range v.Details {
-				details[d.Key] = d.Value
+			for _, d := range v.Details() {
+				details[d.Key()] = d.Value()
 			}
 			variants = append(variants, variantInfo{
-				Name:        v.Name,
-				Description: v.Description,
+				Name:        v.Name(),
+				Description: v.Description(),
 				Details:     details,
-				Default:     v.Name == addon.DefaultVariant,
+				Default:     v.Name() == addon.DefaultVariant(),
 			})
 		}
 		return PrintJSON(variants)
 	}
 
-	ctx.Printf("Variants for %s:\n\n", addon.DisplayName)
+	ctx.Printf("Variants for %s:\n\n", addon.DisplayName())
 
 	var rows []ui.Row
 	headers := []string{"VARIANT", "DESCRIPTION", "DEFAULT"}
 
-	for _, v := range addon.Variants {
+	for _, v := range addon.Variants() {
 		def := ""
-		if v.Name == addon.DefaultVariant {
+		if v.Name() == addon.DefaultVariant() {
 			def = "yes"
 		}
 		rows = append(rows, ui.Row{
-			v.Name,
-			v.Description,
+			v.Name(),
+			v.Description(),
 			def,
 		})
 	}
@@ -174,11 +157,11 @@ func AddonVariants(ctx *Context, opts struct {
 
 	ctx.Printf("%s\n", table.Render())
 
-	for _, v := range addon.Variants {
-		if len(v.Details) > 0 {
-			ctx.Printf("\n%s:\n", v.Name)
-			for _, d := range v.Details {
-				ctx.Printf("  %s: %s\n", d.Key, d.Value)
+	for _, v := range addon.Variants() {
+		if len(v.Details()) > 0 {
+			ctx.Printf("\n%s:\n", v.Name())
+			for _, d := range v.Details() {
+				ctx.Printf("  %s: %s\n", d.Key(), d.Value())
 			}
 		}
 	}
