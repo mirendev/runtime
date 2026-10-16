@@ -108,11 +108,19 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 	s.levelVar.Set(level)
 
+	text := slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: &s.levelVar,
+	})
+	// Under systemd, tag each line with its priority so journalctl -p can
+	// filter on it. A line that CountAt says is really info, like the loud
+	// "Log leveling changed", is filed at info rather than err.
+	if slogfmt.OnJournalStream(os.Stderr) {
+		text = text.WithJournalPriority(logcount.MirenLevel)
+	}
+
 	// Counted at the root so every printed line, relayed child output
 	// included, feeds miren_log_messages_total.
-	s.Log = slog.New(logcount.NewHandler(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: &s.levelVar,
-	}), logcount.Default))
+	s.Log = slog.New(logcount.NewHandler(text, logcount.Default))
 
 	// A separate logger for UI output, which is always at least debug level
 	s.UILog = slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{
