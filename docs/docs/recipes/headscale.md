@@ -1,6 +1,6 @@
 ---
 title: Run a headscale control server
-description: Self-host headscale, the open-source Tailscale control server, on Miren — reachable at your own hostname, with its database and keys on a persistent disk.
+description: Self-host headscale, the open-source Tailscale control server, on Miren at your own hostname, with its state on a persistent disk.
 keywords: [headscale, tailscale, tailnet, control server, vpn, wireguard, derp, self-hosted, example, deploy]
 ---
 

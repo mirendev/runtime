@@ -1,6 +1,6 @@
 ---
 title: Run an Amp agent on Miren
-description: A worked example — run the Amp coding agent as a headless runner on Miren that dials out to ampcode.com and shows up as a Machine you drive from the web app.
+description: Run the Amp coding agent as a headless runner on Miren that dials out to ampcode.com and shows up as a Machine in the web app.
 keywords: [amp, ampcode, ai agent, runner, machine, headless, remote thread, example, deploy]
 ---
 

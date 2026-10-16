@@ -1,6 +1,6 @@
 ---
 title: Secrets
-description: Store credentials encrypted in your cluster and reference them from app config, so the value is never stored in the clear and every deploy records exactly which version it used.
+description: Store credentials encrypted in your cluster and reference them from app config, with every deploy recording which version it used.
 keywords: [secrets, credentials, encryption, rotation, env vars, secret backend]
 ---
 

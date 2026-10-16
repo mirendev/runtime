@@ -1,6 +1,6 @@
 ---
 title: Workload Identity
-description: Every Miren sandbox receives a signed OIDC identity token it can use to authenticate to external services — no long-lived cloud credentials baked into your app.
+description: Every Miren sandbox gets a signed OIDC token for authenticating to external services, so no long-lived cloud credentials live in your app.
 keywords: [workload identity, oidc, jwt, aws sts, federation, sandbox, token, identity token]
 ---
 
