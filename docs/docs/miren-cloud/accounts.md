@@ -1,6 +1,6 @@
 ---
 title: Accounts and Sign-In
-description: Sign in to Miren Cloud with GitHub or Google, connect more than one sign-in method to the same account, merge accounts you created by accident, and switch between several accounts in one browser.
+description: Sign in to Miren Cloud with GitHub or Google, link sign-in methods, merge duplicate accounts, and switch between accounts.
 keywords: [miren cloud, account, sign in, github, google, link, merge, switch account]
 ---
 

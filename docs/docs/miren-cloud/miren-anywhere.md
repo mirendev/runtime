@@ -1,6 +1,6 @@
 ---
 title: Miren Anywhere
-description: Serve public apps from a cluster with no public IP. No port forwarding, no static IP, no DNS setup. Miren Cloud handles ingress and your cluster dials out.
+description: Serve public apps from a cluster with no public IP, port forwarding, or DNS setup. Your cluster dials out and Miren Cloud handles ingress.
 keywords: [miren anywhere, pop, point of presence, nat traversal, no public ip, home lab, ingress, global router]
 ---
 
