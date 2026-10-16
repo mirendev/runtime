@@ -1491,10 +1491,11 @@ func (v *EntityAccessListPageArgs) UnmarshalJSON(data []byte) error {
 }
 
 type entityAccessListPageResultsData struct {
-	Values   *[]*Entity `cbor:"0,keyasint,omitempty" json:"values,omitempty"`
-	Cursor   *string    `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
-	Total    *int64     `cbor:"2,keyasint,omitempty" json:"total,omitempty"`
-	Revision *int64     `cbor:"3,keyasint,omitempty" json:"revision,omitempty"`
+	Values     *[]*Entity `cbor:"0,keyasint,omitempty" json:"values,omitempty"`
+	Cursor     *string    `cbor:"1,keyasint,omitempty" json:"cursor,omitempty"`
+	Total      *int64     `cbor:"2,keyasint,omitempty" json:"total,omitempty"`
+	Revision   *int64     `cbor:"3,keyasint,omitempty" json:"revision,omitempty"`
+	Incomplete *bool      `cbor:"4,keyasint,omitempty" json:"incomplete,omitempty"`
 }
 
 type EntityAccessListPageResults struct {
@@ -1517,6 +1518,10 @@ func (v *EntityAccessListPageResults) SetTotal(total int64) {
 
 func (v *EntityAccessListPageResults) SetRevision(revision int64) {
 	v.data.Revision = &revision
+}
+
+func (v *EntityAccessListPageResults) SetIncomplete(incomplete bool) {
+	v.data.Incomplete = &incomplete
 }
 
 func (v *EntityAccessListPageResults) MarshalCBOR() ([]byte, error) {
@@ -3648,6 +3653,17 @@ func (v *EntityAccessClientListPageResults) Revision() int64 {
 		return 0
 	}
 	return *v.data.Revision
+}
+
+func (v *EntityAccessClientListPageResults) HasIncomplete() bool {
+	return v.data.Incomplete != nil
+}
+
+func (v *EntityAccessClientListPageResults) Incomplete() bool {
+	if v.data.Incomplete == nil {
+		return false
+	}
+	return *v.data.Incomplete
 }
 
 func (v EntityAccessClient) ListPage(ctx context.Context, index entity.Attr, cursor string, limit int64) (*EntityAccessClientListPageResults, error) {

@@ -10,6 +10,24 @@ imports:
     import: miren.dev/runtime/pkg/rpc/standard
 
 types:
+  - type: ResourceHealth
+    doc: Safe lifecycle summary; never includes backing paths, configuration or raw controller errors
+    fields:
+      - name: id
+        type: string
+        index: 0
+      - name: disk_id
+        type: string
+        index: 1
+        doc: Parent disk for a volume, or the disk itself
+      - name: state
+        type: string
+        index: 2
+      - name: diagnostic
+        type: string
+        index: 3
+        doc: Fixed safe explanation for error states; empty otherwise
+
   - type: Transfer
     doc: >
       How far a byte transfer has got. Backup and restore move whole disk
@@ -176,6 +194,37 @@ types:
         doc: True when the disk did not exist and was created by this restore
 
 interfaces:
+  - name: DiskHealth
+    doc: Cluster-wide read-only resource diagnostics, not an app-scoped inventory
+    http:
+      prefix: /api/v1
+    methods:
+      - name: list
+        index: 0
+        http:
+          get: /disk-health/{kind}
+        doc: >
+          Read one bounded page of disk or volume lifecycle summaries. Walk
+          each kind separately until cursor is empty. Pages are live, not a
+          consistent snapshot; resources may change during a scan. Store
+          failures fail the call rather than reporting healthy resources.
+        parameters:
+          - name: kind
+            type: string
+            doc: Exactly disk or disk_volume; arbitrary entity kinds are not accepted
+          - name: cursor
+            type: string
+            doc: Opaque cursor from the previous page of the same kind, empty to start
+          - name: limit
+            type: int64
+            doc: Default and maximum 200; negative limits are rejected
+        results:
+          - name: resources
+            type: list
+            element: ResourceHealth
+          - name: cursor
+            type: string
+
   - name: DiskBackup
     doc: >
       Backup and restore of disk images, driven by a remote client (RFD-108).
