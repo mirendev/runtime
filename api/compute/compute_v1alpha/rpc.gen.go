@@ -539,9 +539,10 @@ func (v *SandboxPoolsListResults) UnmarshalJSON(data []byte) error {
 
 type sandboxPoolsSetDesiredArgsData struct {
 	Pool     *string `cbor:"0,keyasint,omitempty" json:"pool,omitempty"`
-	Desired  *string `cbor:"1,keyasint,omitempty" json:"desired,omitempty"`
-	Revision *int64  `cbor:"2,keyasint,omitempty" json:"revision,omitempty"`
-	RawId    *bool   `cbor:"3,keyasint,omitempty" json:"raw_id,omitempty"`
+	Count    *int64  `cbor:"1,keyasint,omitempty" json:"count,omitempty"`
+	Relative *bool   `cbor:"2,keyasint,omitempty" json:"relative,omitempty"`
+	Revision *int64  `cbor:"3,keyasint,omitempty" json:"revision,omitempty"`
+	RawId    *bool   `cbor:"4,keyasint,omitempty" json:"raw_id,omitempty"`
 }
 
 type SandboxPoolsSetDesiredArgs struct {
@@ -560,15 +561,26 @@ func (v *SandboxPoolsSetDesiredArgs) Pool() string {
 	return *v.data.Pool
 }
 
-func (v *SandboxPoolsSetDesiredArgs) HasDesired() bool {
-	return v.data.Desired != nil
+func (v *SandboxPoolsSetDesiredArgs) HasCount() bool {
+	return v.data.Count != nil
 }
 
-func (v *SandboxPoolsSetDesiredArgs) Desired() string {
-	if v.data.Desired == nil {
-		return ""
+func (v *SandboxPoolsSetDesiredArgs) Count() int64 {
+	if v.data.Count == nil {
+		return 0
 	}
-	return *v.data.Desired
+	return *v.data.Count
+}
+
+func (v *SandboxPoolsSetDesiredArgs) HasRelative() bool {
+	return v.data.Relative != nil
+}
+
+func (v *SandboxPoolsSetDesiredArgs) Relative() bool {
+	if v.data.Relative == nil {
+		return false
+	}
+	return *v.data.Relative
 }
 
 func (v *SandboxPoolsSetDesiredArgs) HasRevision() bool {
@@ -768,7 +780,7 @@ func AdaptSandboxPools(t SandboxPools) *rpc.Interface {
 			InterfaceName: "SandboxPools",
 			Index:         0,
 			Public:        false,
-			Params:        []string{"pool", "desired", "revision", "raw_id"},
+			Params:        []string{"pool", "count", "relative", "revision", "raw_id"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.SetDesired(ctx, &SandboxPoolsSetDesired{Call: call})
 			},
@@ -924,10 +936,11 @@ func (v *SandboxPoolsClientSetDesiredResults) ReadyInstances() int64 {
 	return *v.data.ReadyInstances
 }
 
-func (v SandboxPoolsClient) SetDesired(ctx context.Context, pool string, desired string, revision int64, raw_id bool) (*SandboxPoolsClientSetDesiredResults, error) {
+func (v SandboxPoolsClient) SetDesired(ctx context.Context, pool string, count int64, relative bool, revision int64, raw_id bool) (*SandboxPoolsClientSetDesiredResults, error) {
 	args := SandboxPoolsSetDesiredArgs{}
 	args.data.Pool = &pool
-	args.data.Desired = &desired
+	args.data.Count = &count
+	args.data.Relative = &relative
 	args.data.Revision = &revision
 	args.data.RawId = &raw_id
 

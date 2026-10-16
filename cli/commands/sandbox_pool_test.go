@@ -109,7 +109,7 @@ func TestSandboxPoolCommandsWithoutEntityAccess(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, before.Revision(), after.Revision())
 	}
-	for _, input := range []string{"-4", "bad", "+bad", "9223372036854775808"} {
+	for _, input := range []string{"-4", "bad", "+bad", "9223372036854775808", "21", "+18", "+50"} {
 		require.Error(t, setDesired(poolID.String(), input, false))
 		require.Empty(t, stdout.String())
 	}

@@ -18,7 +18,8 @@ func SandboxPoolSetDesired(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
 	desiredStr := strings.TrimSpace(opts.Desired)
-	if _, err := strconv.ParseInt(desiredStr, 10, 64); err != nil {
+	count, err := strconv.ParseInt(desiredStr, 10, 64)
+	if err != nil {
 		if strings.HasPrefix(desiredStr, "+") || strings.HasPrefix(desiredStr, "-") {
 			return fmt.Errorf("invalid relative count %q: %v", opts.Desired, err)
 		}
@@ -34,7 +35,8 @@ func SandboxPoolSetDesired(ctx *Context, opts struct {
 	if !opts.RawID && !strings.HasPrefix(poolID, "pool/") {
 		poolID = "pool/" + poolID
 	}
-	res, err := compute_v1alpha.NewSandboxPoolsClient(client).SetDesired(ctx, poolID, desiredStr, 0, opts.RawID)
+	relative := strings.HasPrefix(desiredStr, "+") || strings.HasPrefix(desiredStr, "-")
+	res, err := compute_v1alpha.NewSandboxPoolsClient(client).SetDesired(ctx, poolID, count, relative, 0, opts.RawID)
 	if err != nil {
 		if errors.Is(err, cond.ErrNotFound{}) {
 			return fmt.Errorf("sandbox pool not found: %s (error: %w)", opts.PoolID, err)

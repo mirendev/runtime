@@ -79,9 +79,12 @@ interfaces:
       - name: setDesired
         parameters:
           - {name: pool, type: string}
-          - name: desired
-            type: string
-            doc: Absolute nonnegative count, or signed relative adjustment (+N or -N).
+          - name: count
+            type: int64
+            doc: Absolute instance count or relative delta; the final count must be between zero and MaxPoolSize.
+          - name: relative
+            type: bool
+            doc: Add count to the current desired instances atomically instead of replacing it.
           - name: revision
             type: int64
             doc: Optional expected revision; zero uses the current revision. Conflicts are never retried.

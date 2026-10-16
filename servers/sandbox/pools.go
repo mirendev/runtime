@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/pkg/concurrency"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
@@ -148,12 +148,8 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 	if expected := state.Args().Revision(); expected != 0 && expected != ent.Revision() {
 		return cond.Conflict("sandbox pool", "revision changed")
 	}
-	desired := strings.TrimSpace(state.Args().Desired())
-	count, err := strconv.ParseInt(desired, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid desired count %q", desired)
-	}
-	if strings.HasPrefix(desired, "+") || strings.HasPrefix(desired, "-") {
+	count := state.Args().Count()
+	if state.Args().Relative() {
 		if (count > 0 && pool.DesiredInstances > math.MaxInt64-count) || (count < 0 && pool.DesiredInstances < math.MinInt64-count) {
 			return fmt.Errorf("relative adjustment overflows instance count")
 		}
@@ -164,6 +160,9 @@ func (s *PoolServer) SetDesired(ctx context.Context, state *compute_v1alpha.Sand
 	}
 	if count < 0 {
 		return fmt.Errorf("count cannot be negative: %d", count)
+	}
+	if count > concurrency.MaxPoolSize {
+		return fmt.Errorf("count exceeds maximum pool size %d: %d", concurrency.MaxPoolSize, count)
 	}
 	revision := ent.Revision()
 	changed := count != pool.DesiredInstances

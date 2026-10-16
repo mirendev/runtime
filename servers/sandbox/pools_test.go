@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -105,37 +106,38 @@ func TestPoolInventoryAndScaling(t *testing.T) {
 			_, err := client.List(own, "other")
 			require.ErrorIs(t, err, rpc.ErrUnauthorized)
 			for _, target := range []string{otherPool.String(), versionID.String(), "app_version/missing", orphan.String()} {
-				_, err = client.SetDesired(own, target, "0", 0, true)
+				_, err = client.SetDesired(own, target, 0, false, 0, true)
 				require.EqualError(t, err, rpc.ErrUnauthorized.Error(), "denials must not disclose owner or entity existence")
 			}
-			_, err = client.SetDesired(own, poolID.String(), "+0", 0, false)
+			_, err = client.SetDesired(own, poolID.String(), 0, true, 0, false)
 			require.NoError(t, err)
 			if method == rpc.AuthMethodWorkload {
-				res, err := client.SetDesired(own, poolID.String(), "+1", 0, false)
+				res, err := client.SetDesired(own, poolID.String(), 1, true, 0, false)
 				require.NoError(t, err)
 				require.EqualValues(t, 4, res.Desired())
-				_, err = client.SetDesired(own, poolID.String(), "-1", 0, false)
+				_, err = client.SetDesired(own, poolID.String(), -1, true, 0, false)
 				require.NoError(t, err)
 			}
 		})
 	}
-	_, err = client.SetDesired(ctx, orphan.String(), "1", 0, false)
+	_, err = client.SetDesired(ctx, orphan.String(), 1, false, 0, false)
 	require.NoError(t, err)
-	_, err = client.SetDesired(ctx, versionID.String(), "1", 0, true)
+	_, err = client.SetDesired(ctx, versionID.String(), 1, false, 0, true)
 	require.ErrorContains(t, err, "not a sandbox pool")
 
 	for _, tc := range []struct {
-		input   string
-		want    int64
-		changed bool
+		count    int64
+		relative bool
+		want     int64
+		changed  bool
 	}{
-		{" 5 ", 5, true}, {"+2", 7, true}, {"-4", 3, true}, {"3", 3, false}, {"+0", 3, false}, {"-3", 0, true}, {"0", 0, false},
+		{5, false, 5, true}, {2, true, 7, true}, {-4, true, 3, true}, {3, false, 3, false}, {0, true, 3, false}, {-3, true, 0, true}, {0, false, 0, false},
 	} {
-		t.Run("scale/"+tc.input, func(t *testing.T) {
+		t.Run(fmt.Sprintf("scale/%d/relative=%t", tc.count, tc.relative), func(t *testing.T) {
 			var before compute_v1alpha.SandboxPool
 			ent, err := ec.GetByIdWithEntity(ctx, poolID, &before)
 			require.NoError(t, err)
-			res, err := client.SetDesired(ctx, strings.TrimPrefix(poolID.String(), "pool/"), tc.input, ent.Revision(), false)
+			res, err := client.SetDesired(ctx, strings.TrimPrefix(poolID.String(), "pool/"), tc.count, tc.relative, ent.Revision(), false)
 			require.NoError(t, err)
 			require.Equal(t, poolID.String(), res.PoolId())
 			require.Equal(t, ent.Entity().ShortId(), res.PoolShortId())
@@ -157,15 +159,11 @@ func TestPoolInventoryAndScaling(t *testing.T) {
 			}
 		})
 	}
-	for _, input := range []string{"-1", "", "bad", "1.5", "9223372036854775808"} {
-		_, err := client.SetDesired(ctx, poolID.String(), input, 0, false)
-		require.Error(t, err, input)
-	}
-	_, err = client.SetDesired(ctx, poolID.String(), "9223372036854775807", 0, false)
-	require.NoError(t, err)
-	_, err = client.SetDesired(ctx, poolID.String(), "+1", 0, false)
-	require.ErrorContains(t, err, "overflows")
-	_, err = client.SetDesired(ctx, poolID.String(), "3", 0, false)
+	_, err = client.SetDesired(ctx, poolID.String(), -1, false, 0, false)
+	require.ErrorContains(t, err, "count cannot be negative")
+	_, err = client.SetDesired(ctx, poolID.String(), -1, true, 0, false)
+	require.ErrorContains(t, err, "relative adjustment would result in negative count")
+	_, err = client.SetDesired(ctx, poolID.String(), 3, false, 0, false)
 	require.NoError(t, err)
 
 	// Two clients using one inventory revision must not both apply a delta.
@@ -176,7 +174,7 @@ func TestPoolInventoryAndScaling(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			_, err := client.SetDesired(ctx, poolID.String(), "+2", ent.Revision(), false)
+			_, err := client.SetDesired(ctx, poolID.String(), 2, true, ent.Revision(), false)
 			errors <- err
 		})
 	}
@@ -193,13 +191,62 @@ func TestPoolInventoryAndScaling(t *testing.T) {
 	require.Equal(t, 1, successes)
 	require.NoError(t, ec.GetById(ctx, poolID, &pool))
 	require.EqualValues(t, 5, pool.DesiredInstances)
-	for _, input := range []string{"+1", "5"} {
-		_, err := client.SetDesired(ctx, poolID.String(), input, ent.Revision(), false)
-		require.ErrorContains(t, err, "conflict", fmt.Sprintf("stale %s", input))
+	for _, relative := range []bool{false, true} {
+		_, err := client.SetDesired(ctx, poolID.String(), 5, relative, ent.Revision(), false)
+		require.ErrorContains(t, err, "conflict")
 	}
 	var other compute_v1alpha.SandboxPool
 	require.NoError(t, ec.GetById(ctx, otherPool, &other))
 	require.EqualValues(t, 8, other.DesiredInstances)
+}
+
+func TestPoolScalingLimits(t *testing.T) {
+	ctx := t.Context()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	client := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(inmem.Client))))
+	for _, tc := range []struct {
+		name     string
+		initial  int64
+		count    int64
+		relative bool
+		want     int64
+		err      string
+	}{
+		{"absolute-limit", 3, 20, false, 20, ""},
+		{"absolute-above-limit", 3, 21, false, 0, "exceeds maximum pool size 20"},
+		{"relative-limit", 3, 17, true, 20, ""},
+		{"relative-above-limit", 3, 18, true, 0, "exceeds maximum pool size 20"},
+		{"large-relative", 3, 50, true, 0, "exceeds maximum pool size 20"},
+		{"relative-noop-at-limit", 20, 0, true, 20, ""},
+		{"repair-legacy-count", 500, -480, true, 20, ""},
+		{"still-above-limit", 500, -1, true, 0, "exceeds maximum pool size 20"},
+		{"positive-overflow", 3, math.MaxInt64, true, 0, "overflows"},
+		{"minimum-delta", 3, math.MinInt64, true, 0, "relative adjustment would result in negative count"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := inmem.Client.Create(ctx, tc.name, &compute_v1alpha.SandboxPool{DesiredInstances: tc.initial})
+			require.NoError(t, err)
+			var pool compute_v1alpha.SandboxPool
+			before, err := inmem.Client.GetByIdWithEntity(ctx, id, &pool)
+			require.NoError(t, err)
+			res, err := client.SetDesired(ctx, id.String(), tc.count, tc.relative, before.Revision(), true)
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, res.Desired())
+			}
+			after, err := inmem.Client.GetByIdWithEntity(ctx, id, &pool)
+			require.NoError(t, err)
+			if tc.err != "" || tc.initial == tc.want {
+				require.Equal(t, tc.initial, pool.DesiredInstances)
+				require.Equal(t, before.Revision(), after.Revision())
+			} else {
+				require.Equal(t, tc.want, pool.DesiredInstances)
+			}
+		})
+	}
 }
 
 func TestPoolOrphanScaling(t *testing.T) {
@@ -221,18 +268,18 @@ func TestPoolOrphanScaling(t *testing.T) {
 			require.Empty(t, listed.Pools()[0].App())
 			for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
 				bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method, Metadata: map[string]any{"app": "shop", "bound_app": "shop"}})
-				_, err = client.SetDesired(bound, id.String(), "0", 0, true)
+				_, err = client.SetDesired(bound, id.String(), 0, false, 0, true)
 				require.EqualError(t, err, rpc.ErrUnauthorized.Error())
 			}
 			for _, method := range []rpc.AuthMethod{rpc.AuthMethodCert, rpc.AuthMethodJWT} {
 				operator := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method, Subject: "operator"})
-				res, err := client.SetDesired(operator, id.String(), "-4", 0, true)
+				res, err := client.SetDesired(operator, id.String(), -4, true, 0, true)
 				require.NoError(t, err)
 				require.EqualValues(t, 0, res.Desired())
 				var stored compute_v1alpha.SandboxPool
 				require.NoError(t, inmem.Client.GetById(ctx, id, &stored))
 				require.Zero(t, stored.DesiredInstances)
-				res, err = client.SetDesired(operator, id.String(), "4", res.Revision(), true)
+				res, err = client.SetDesired(operator, id.String(), 4, false, res.Revision(), true)
 				require.NoError(t, err)
 				require.EqualValues(t, 4, res.Desired())
 			}
@@ -267,7 +314,7 @@ func TestPoolOwnerStoreFailure(t *testing.T) {
 	for _, caller := range []context.Context{ctx, bound} {
 		_, err = client.List(caller, "")
 		require.ErrorIs(t, err, cond.ErrCorruption{})
-		_, err = client.SetDesired(caller, id.String(), "0", 0, true)
+		_, err = client.SetDesired(caller, id.String(), 0, false, 0, true)
 		require.ErrorIs(t, err, cond.ErrCorruption{})
 	}
 	var stored compute_v1alpha.SandboxPool
@@ -305,7 +352,7 @@ func TestPoolScalingConcurrentReadPatch(t *testing.T) {
 	errors := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, err := client.SetDesired(ctx, poolID.String(), "+2", 0, false)
+			_, err := client.SetDesired(ctx, poolID.String(), 2, true, 0, false)
 			errors <- err
 		}()
 	}
