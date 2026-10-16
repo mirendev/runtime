@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -15,21 +17,27 @@ import (
 func (r *AppInfo) ListVersions(ctx context.Context, state *app_v1alpha.CrudListVersions) error {
 	a := state.Args()
 	if !rpc.AllowApp(ctx, a.App()) {
-		return rpc.AppAccessError(ctx, a.App())
+		return rpc.ErrUnauthorized
 	}
 
 	var app core_v1alpha.App
 	record, err := r.EC.GetWithEntity(ctx, a.App(), &app)
 	if err != nil {
+		if rpc.BoundApp(ctx) != "" && errors.Is(err, cond.ErrNotFound{}) {
+			return rpc.ErrUnauthorized
+		}
 		return err
 	}
 	if !app.Is(record.Entity()) {
+		if rpc.BoundApp(ctx) != "" {
+			return rpc.ErrUnauthorized
+		}
 		return fmt.Errorf("%q is not an app", a.App())
 	}
 	var owner core_v1alpha.Metadata
 	owner.Decode(record.Entity())
 	if !rpc.AllowApp(ctx, owner.Name) {
-		return rpc.AppAccessError(ctx, owner.Name)
+		return rpc.ErrUnauthorized
 	}
 	results, err := r.EC.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, app.ID))
 	if err != nil {

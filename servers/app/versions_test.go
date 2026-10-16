@@ -13,6 +13,9 @@ import (
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -126,7 +129,7 @@ func TestListVersions(t *testing.T) {
 			require.Len(t, res.Versions(), 4)
 			for _, target := range []string{"other", "missing", appID.String(), ""} {
 				_, err := client.ListVersions(scoped, target, false, 0)
-				require.ErrorIs(t, err, rpc.ErrUnauthorized)
+				require.EqualError(t, err, rpc.ErrUnauthorized.Error())
 			}
 		})
 	}
@@ -190,7 +193,7 @@ func TestListVersionsResolvedAppAuthorizationEtcd(t *testing.T) {
 			Method: method, Metadata: map[string]any{"app": alias, "bound_app": alias},
 		})
 		_, err := client.ListVersions(scoped, alias, false, 0)
-		require.ErrorIs(t, err, rpc.ErrUnauthorized)
+		require.EqualError(t, err, rpc.ErrUnauthorized.Error())
 	}
 	result, err := client.ListVersions(ctx, alias, false, 0)
 	require.NoError(t, err)
@@ -201,4 +204,33 @@ func TestListVersionsResolvedAppAuthorizationEtcd(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.ListVersions(ctx, record.Entity().ShortId(), false, 0)
 	require.ErrorContains(t, err, "not an app")
+	_, err = client.ListVersions(ctx, "missing", false, 0)
+	require.ErrorIs(t, err, cond.ErrNotFound{})
+	for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
+		for _, target := range []string{record.Entity().ShortId(), "missing"} {
+			scoped := rpc.ContextWithIdentity(ctx, &rpc.Identity{
+				Method: method, Metadata: map[string]any{"app": target, "bound_app": target},
+			})
+			_, err := client.ListVersions(scoped, target, false, 0)
+			require.EqualError(t, err, rpc.ErrUnauthorized.Error())
+		}
+	}
+}
+
+func TestListVersionsPreservesBackendFailure(t *testing.T) {
+	backend := rpc.NewInterface([]rpc.Method{{
+		Name: "get", InterfaceName: "EntityAccess",
+		Handler: func(context.Context, rpc.Call) error { return context.DeadlineExceeded },
+	}}, struct{}{})
+	ec := entityserver.NewClient(slog.Default(), entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(backend)))
+	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: ec})))
+	for _, ctx := range []context.Context{
+		t.Context(),
+		rpc.ContextWithIdentity(t.Context(), &rpc.Identity{
+			Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "shop"},
+		}),
+	} {
+		_, err := client.ListVersions(ctx, "shop", false, 0)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	}
 }
