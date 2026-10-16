@@ -22,6 +22,10 @@ func AppVersions(ctx *Context, opts struct {
 	}
 	defer client.Close()
 
+	if !client.HasMethod(ctx, "listVersions") {
+		return fmt.Errorf("app versions requires a newer server version")
+	}
+
 	crud := app_v1alpha.NewCrudClient(client)
 	result, err := crud.ListVersions(ctx, opts.App, opts.Ephemeral, int64(opts.Limit))
 	if err != nil {

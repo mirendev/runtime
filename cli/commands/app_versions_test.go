@@ -129,6 +129,15 @@ func TestAppVersionsRPC(t *testing.T) {
 				require.Error(t, err)
 				require.Empty(t, printed)
 			})
+			t.Run("older_server", func(t *testing.T) {
+				server.Server().ExposeValue("dev.miren.runtime/app", rpc.NewInterface([]rpc.Method{{
+					Name: "list", InterfaceName: "Crud",
+					Handler: func(context.Context, rpc.Call) error { return nil },
+				}}, struct{}{}))
+				printed, err := run("shop", false, 20, "text")
+				require.ErrorContains(t, err, "app versions requires a newer server version")
+				require.Empty(t, printed)
+			})
 		})
 	}
 }
