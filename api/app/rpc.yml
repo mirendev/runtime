@@ -573,15 +573,6 @@ interfaces:
           - name: sourceValue
             type: string
             doc: "Normalized image reference or auto-detected stack name, depending on sourceKind"
-      - name: setHost
-        http:
-          put: /apps/{app}/host
-          body: "*"
-        parameters:
-          - name: app
-            type: string
-          - name: host
-            type: string
       - name: setWorkloadRole
         doc: |
           Set the authorization role that identity tokens minted for this app's

@@ -59,10 +59,6 @@ func TestCrudWrites_AppScopingGuards(t *testing.T) {
 			_, err := client.SetConfiguration(c, victim, &app_v1alpha.Configuration{})
 			return err
 		},
-		"SetHost": func(c context.Context) error {
-			_, err := client.SetHost(c, victim, "victim.example.com")
-			return err
-		},
 		"SetEnvVar": func(c context.Context) error {
 			_, err := client.SetEnvVar(c, victim, "K", "v", false, "")
 			return err
