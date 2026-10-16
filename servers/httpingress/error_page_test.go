@@ -142,6 +142,9 @@ func TestLoadErrorPageTemplate(t *testing.T) {
 	assert.ErrorContains(t, err, "exceeds")
 }
 
+// TestDocumentedErrorPageTemplate also runs in test.yml's lint job, because
+// the test runners skip PRs that only touch docs/. A new test that reads from
+// docs/ needs the same treatment.
 func TestDocumentedErrorPageTemplate(t *testing.T) {
 	doc, err := os.ReadFile("../../docs/docs/server-config.md")
 	require.NoError(t, err)

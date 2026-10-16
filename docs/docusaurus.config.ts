@@ -194,6 +194,11 @@ const config: Config = {
 
   onBrokenLinks: 'throw',
 
+  // The app.toml schema is published here but owned by appconfig, whose tests
+  // keep it in step with the structs. Keeping it out of docs/ means editing it
+  // runs those tests, which a docs-only PR skips.
+  staticDirectories: ['static', '../appconfig/schema'],
+
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
   // may want to replace "en" with "zh-Hans".
