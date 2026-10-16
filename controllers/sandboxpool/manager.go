@@ -581,13 +581,15 @@ func (m *Manager) runScaleDownMonitor(ctx context.Context) {
 			m.log.Info("scale-down monitor stopped")
 			return
 		case <-ticker.C:
-			if err := m.checkAllPoolsForScaleDown(ctx); err != nil {
+			// A pass interrupted by shutdown fails with context canceled; that
+			// is not a failure worth an ERROR line.
+			if err := m.checkAllPoolsForScaleDown(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("scale-down check failed", "error", err)
 			}
-			if err := m.cleanupEmptyPools(ctx); err != nil {
+			if err := m.cleanupEmptyPools(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("pool cleanup failed", "error", err)
 			}
-			if err := m.checkForStalePendingSandboxes(ctx); err != nil {
+			if err := m.checkForStalePendingSandboxes(ctx); err != nil && ctx.Err() == nil {
 				m.log.Error("stale pending sandbox check failed", "error", err)
 			}
 		}
@@ -604,6 +606,10 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 	}
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
@@ -623,6 +629,20 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		// Get AppVersion to derive concurrency config
 		verResp, err := m.eac.Get(ctx, pool.SandboxSpec.Version.String())
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// The version can be deleted before the pool is reaped. A pool at
+			// zero desired with a lingering reference is reaped later by
+			// cleanupEmptyPools. Reaching here with DesiredInstances > 0 would
+			// take a launcher failure mid-deploy, and nothing frees that pool;
+			// we accept that rather than track per-pool state. Either way this
+			// runs every 30s, so a miss must not flood the log.
+			if errors.Is(err, cond.ErrNotFound{}) {
+				m.log.Debug("skipping scale-down for pool whose app version is gone",
+					"pool", pool.ID, "version", pool.SandboxSpec.Version)
+				continue
+			}
 			m.log.Error("failed to get version for pool", "pool", pool.ID, "error", err)
 			continue
 		}
@@ -739,6 +759,10 @@ func (m *Manager) cleanupEmptyPools(ctx context.Context) error {
 	oneHourAgo := now.Add(-1 * time.Hour)
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(ent.Entity())
 
@@ -804,6 +828,10 @@ func (m *Manager) checkForStalePendingSandboxes(ctx context.Context) error {
 	threshold := now.Add(-PendingSandboxTimeout)
 
 	for _, ent := range resp.Values() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		var sb compute_v1alpha.Sandbox
 		sb.Decode(ent.Entity())
 
