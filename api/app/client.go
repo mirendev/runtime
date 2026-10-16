@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
-	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -86,29 +84,6 @@ func (c *Client) GetById(ctx context.Context, id entity.Id) (*core_v1alpha.App, 
 		return nil, fmt.Errorf("failed to get app %s: %w", id, err)
 	}
 	return &app, nil
-}
-
-// SetHost sets the host for an app by creating/updating an http_route entity
-func (c *Client) SetHost(ctx context.Context, appName, host string) error {
-	// First verify the app exists
-	app, err := c.GetByName(ctx, appName)
-	if err != nil {
-		return err
-	}
-
-	// Create the http_route entity
-	route := &ingress_v1alpha.HttpRoute{
-		Host: strings.ToLower(host),
-		App:  app.ID,
-	}
-
-	// Use the host as the route name
-	_, err = c.entityClient.CreateOrUpdate(ctx, host, route)
-	if err != nil {
-		return fmt.Errorf("failed to create/update route: %w", err)
-	}
-
-	return nil
 }
 
 // List returns all apps

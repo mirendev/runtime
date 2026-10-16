@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *main*
 
+**Security**
+- **Removed the unused `setHost` app RPC** - Its route writes skipped hostname ownership checks, and it was reachable by workloads running as `app-admin`. Its REST form, `PUT /apps/{app}/host`, is gone too. ([#1378](https://github.com/mirendev/runtime/pull/1378))
+
 ---
 
 ## v0.17.0
