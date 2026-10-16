@@ -1,7 +1,9 @@
 package entity
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -2354,6 +2356,40 @@ func TestCreateEntity_UniqueValueCollisionRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.Kvs, 1)
 	assert.Equal(t, entityId, string(resp.Kvs[0].Value))
+}
+
+// A revision-checked write carries its unique-value guards in the same
+// transaction as the revision guard. When only a unique guard fails, the store
+// must log a unique-value race at Warn rather than a revision race at Debug,
+// since a caller retrying on conflict will hit it every time.
+func TestPatchEntity_UniqueConflictUnderFromRevisionLogsWarn(t *testing.T) {
+	client, prefix := setupTestEtcd(t)
+
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store, err := NewEtcdStore(t.Context(), log, client, prefix)
+	require.NoError(t, err)
+
+	kind, err := store.CreateEntity(t.Context(), New(
+		Any(Ident, KeywordValue("test/uniqrace")),
+	))
+	require.NoError(t, err)
+
+	holder, err := store.CreateEntity(t.Context(), New(Ref(EntityKind, kind.Id())))
+	require.NoError(t, err)
+	other, err := store.CreateEntity(t.Context(), New(Ref(EntityKind, kind.Id())))
+	require.NoError(t, err)
+
+	logs.Reset()
+	_, err = store.PatchEntity(t.Context(), New(
+		Ref(DBId, other.Id()),
+		String(DBShortId, holder.ShortId()),
+	), WithFromRevision(other.GetRevision()))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, cond.ErrConflict{}), "got %v", err)
+
+	assert.Contains(t, logs.String(), `level=WARN msg="patch lost unique-value race"`)
+	assert.NotContains(t, logs.String(), "lost revision race")
 }
 
 func TestCreateEntity_AllocatesShortId(t *testing.T) {
