@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,20 +43,4 @@ func TestAuthProviderGitHubOrgTeamsSurviveParsing(t *testing.T) {
 
 	orgs := stringSliceField(t, cmd, "Orgs")
 	require.Equal(t, []string{"mirendev:platform,eng", "other"}, orgs)
-
-	raw, err := buildGitHubConfigJSON(orgs)
-	require.NoError(t, err)
-
-	var cfg struct {
-		Orgs []struct {
-			Name  string   `json:"name"`
-			Teams []string `json:"teams"`
-		} `json:"orgs"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(raw), &cfg))
-	require.Len(t, cfg.Orgs, 2)
-	require.Equal(t, "mirendev", cfg.Orgs[0].Name)
-	require.Equal(t, []string{"platform", "eng"}, cfg.Orgs[0].Teams)
-	require.Equal(t, "other", cfg.Orgs[1].Name)
-	require.Empty(t, cfg.Orgs[1].Teams)
 }

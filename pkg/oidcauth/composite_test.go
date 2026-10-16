@@ -447,6 +447,35 @@ func TestCompositeAuthorizer_SetWorkloadRoleIsOperatorOnly(t *testing.T) {
 	}
 }
 
+// Shared ingress identities are managed by operators, never deploy/workload tokens.
+func TestCompositeAuthorizer_IdentityProvidersAreOperatorOnly(t *testing.T) {
+	for _, action := range []string{"addoidc", "addgithub", "addpassword", "list", "show", "remove"} {
+		t.Run(action, func(t *testing.T) {
+			comp := NewCompositeAuthorizer(nil)
+			for _, method := range []rpc.AuthMethod{rpc.AuthMethodOIDC, rpc.AuthMethodSystem, rpc.AuthMethodSigned} {
+				if err := comp.Authorize(context.Background(), &rpc.Identity{Method: method}, "identityproviders", action); err == nil {
+					t.Errorf("%s must not manage providers", method)
+				}
+			}
+			for role := range workloadroles.Roles {
+				if err := comp.Authorize(context.Background(), workloadIdentity("myapp", role), "identityproviders", action); err == nil {
+					t.Errorf("workload role %q must not manage providers", role)
+				}
+			}
+			if err := comp.Authorize(context.Background(), &rpc.Identity{Method: rpc.AuthMethodCert}, "identityproviders", action); err != nil {
+				t.Errorf("cluster certificate should be allowed: %v", err)
+			}
+			for _, deny := range []error{nil, errors.New("cloud RBAC denied")} {
+				comp := NewCompositeAuthorizer(&mockAuthorizer{err: deny})
+				err := comp.Authorize(context.Background(), &rpc.Identity{Method: rpc.AuthMethodJWT}, "identityproviders", action)
+				if !errors.Is(err, deny) {
+					t.Errorf("operator JWT must honor cloud RBAC: got %v, want %v", err, deny)
+				}
+			}
+		})
+	}
+}
+
 // An unknown or missing role name grants nothing (fail closed).
 func TestCompositeAuthorizer_WorkloadUnknownRoleDenied(t *testing.T) {
 	comp := NewCompositeAuthorizer(nil)
