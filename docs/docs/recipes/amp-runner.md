@@ -61,7 +61,7 @@ If the cluster isn't configured locally yet, list what your identity can see and
 
 ```bash
 # Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
-miren cluster add -i cloud
+miren cluster add
 
 miren whoami -C amp
 ```
@@ -92,17 +92,14 @@ RUN curl -fsSL https://ampcode.com/install.sh | AMP_VERSION=0.0.1784319456-g6a2c
 
 COPY runner.sh /usr/local/bin/runner.sh
 RUN chmod +x /usr/local/bin/runner.sh
+
+CMD ["runner.sh"]
 ```
 
 :::note[Why the extra symlink]
 The installer drops the binary at `$AMP_HOME/bin/amp` and tries to symlink it into a
 per-user PATH directory (`~/.local/bin`). Building as root, that isn't reliably on `PATH`, so
 the recipe symlinks `/opt/amp/bin/amp` into `/usr/local/bin` explicitly.
-:::
-
-:::note[No ENTRYPOINT or CMD needed]
-Miren runs the service `command` from `app.toml` via `/bin/sh -c "<cmd>"`, so this image
-doesn't need an `ENTRYPOINT` or `CMD` — `runner.sh` is invoked directly (see below).
 :::
 
 ## The runner entrypoint
@@ -159,8 +156,8 @@ name = "amp-runner"
 dockerfile = "Dockerfile"
 
 # Portless background service: nothing listens, so no `port`/`port_type`.
+# No `command` either: the service runs the image's CMD.
 [services.runner]
-command = "runner.sh"
 
 [services.runner.concurrency]
 mode = "fixed"

@@ -40,11 +40,8 @@ If the cluster isn't configured locally yet, list what your identity can see and
 
 <CliCommand context="client">
 ```bash
-# List clusters available to your cloud identity
-miren cluster add -i cloud
-
-# Add it by name + public address (from the list above)
-miren cluster add -c hermes -a <your-cluster-ip>:8443 -i cloud
+# Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
+miren cluster add
 
 miren whoami -C hermes
 ```

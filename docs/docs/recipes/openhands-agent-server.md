@@ -49,7 +49,7 @@ the browser) and connect it to this server.
 <CliCommand context="client">
 ```bash
 # Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
-miren cluster add -i cloud
+miren cluster add
 
 miren whoami -C openhands
 ```
