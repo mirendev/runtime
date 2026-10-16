@@ -35,13 +35,13 @@ For getting your own source code onto Miren, start with [Deployment](../deployme
 
 ## Select the target cluster
 
-If the cluster isn't configured locally yet, list what your identity can see and add it
+If the cluster isn't configured locally yet, add it by its Miren Cloud name
 (this pins the TLS fingerprint):
 
 <CliCommand context="client">
 ```bash
-# Add a cluster your cloud identity can see (interactive picker; pins the TLS fingerprint)
-miren cluster add
+# Add a cluster your cloud identity can see, stored locally as `hermes` (pins the TLS fingerprint)
+miren cluster add -c <your-cluster> --as hermes
 
 miren whoami -C hermes
 ```
