@@ -264,6 +264,8 @@ func TestSandbox(t *testing.T) {
 		case <-ctx.Done():
 			r.NoError(ctx.Err())
 		case exitStatus = <-ch:
+			// Process exit can precede stdout copying; drain it before closing the pipe.
+			proc.IO().Wait()
 			pw.Close()
 		}
 
