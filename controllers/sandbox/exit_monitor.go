@@ -7,12 +7,21 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/pkg/errors"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
+)
+
+// Bounds on the backoff monitorTaskExit uses when containerd fails to report a
+// task's exit. Vars rather than consts so tests can shrink them.
+var (
+	exitWaitRetryBase = 500 * time.Millisecond
+	exitWaitRetryMax  = 30 * time.Second
 )
 
 func (c *SandboxController) monitorTaskExit(
@@ -24,6 +33,11 @@ func (c *SandboxController) monitorTaskExit(
 ) {
 	c.Log.Debug("monitoring task for exit", "sandbox", sb.ID, "container", containerID)
 
+	var (
+		failures int
+		waitedAt = time.Now()
+	)
+
 	for {
 		select {
 		case exitStatus := <-exitCh:
@@ -34,12 +48,52 @@ func (c *SandboxController) monitorTaskExit(
 			// where containerd returns an ExitStatus with UnknownExitStatus (255) and
 			// zero exit time because the task state is uncertain.
 			if err := exitStatus.Error(); err != nil {
-				c.Log.Warn("received exit status with error, attempting to re-establish monitoring",
-					"sandbox", sb.ID,
-					"container", containerID,
-					"error", err,
-				)
-				// Try to re-establish monitoring since the process may still be running
+				if grpcstatus.Code(err) == codes.NotFound {
+					c.Log.Warn("task no longer exists, stopping exit monitoring",
+						"sandbox", sb.ID,
+						"container", containerID,
+					)
+					return
+				}
+
+				// task.Wait reports RPC failures on the channel rather than
+				// returning them, so while containerd is unreachable every
+				// retry fails instantly. Back off, and keep retrying: the
+				// process may well outlive the outage, and giving up would
+				// lose its exit for good. A wait that held for a while means
+				// the last outage ended, so a new one starts the count over.
+				if time.Since(waitedAt) > exitWaitRetryMax {
+					failures = 0
+				}
+				failures++
+				delay := exitWaitRetryMax
+				if failures <= 16 {
+					delay = min(exitWaitRetryBase<<(failures-1), exitWaitRetryMax)
+				}
+
+				if failures == 1 {
+					c.Log.Warn("received exit status with error, retrying monitoring with backoff",
+						"sandbox", sb.ID,
+						"container", containerID,
+						"error", err,
+					)
+				} else {
+					c.Log.Debug("exit monitoring still failing",
+						"sandbox", sb.ID,
+						"container", containerID,
+						"attempt", failures,
+						"backoff", delay,
+						"error", err,
+					)
+				}
+
+				select {
+				case <-time.After(delay):
+				case <-c.topCtx.Done():
+					return
+				}
+
+				waitedAt = time.Now()
 				newExitCh, waitErr := task.Wait(c.topCtx)
 				if waitErr != nil {
 					c.Log.Warn("failed to re-establish task monitoring after error status",
