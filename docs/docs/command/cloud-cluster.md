@@ -18,6 +18,7 @@ miren cloud cluster [flags]
 
 - [`miren cloud cluster approve`](./cloud-cluster-approve.md) — Approve a pending cluster registration in Miren Cloud
 - [`miren cloud cluster apps`](./cloud-cluster-apps.md) — List mirrored apps in a cloud cluster
+- [`miren cloud cluster cloud-init`](./cloud-cluster-cloud-init.md) — Generate cloud-init user-data to install and enroll a new cluster (admin only)
 - [`miren cloud cluster delete`](./cloud-cluster-delete.md) — Delete a Cloud cluster record (admin only); leaves server registration files unchanged
 - [`miren cloud cluster list`](./cloud-cluster-list.md) — List your clusters in Miren Cloud
 - [`miren cloud cluster nodes`](./cloud-cluster-nodes.md) — Show mirrored node inventory and sync state

@@ -40,12 +40,14 @@ func (o CloudDeleteOptions) CloudForce() bool { return o.Force }
 // APIs. It preserves the fetched snapshot, not concurrent changes.
 // JSON output retains the API document, including pagination/sync metadata.
 // List and Columns select the text table; without Columns, text is pretty JSON.
+// Text selects a string to emit verbatim, suitable for scripts and config files.
 type CloudEndpoint struct {
 	Name, Synopsis string
 	Method, Path   string
 	Inputs         map[string]string
 	Preserve       map[string]string
 	List           string
+	Text           string
 	Columns        []CloudColumn
 	Render         func(*Context, any) error // optional text renderer for composite responses
 	Confirmation   string                    // destructive endpoints use CloudDeleteOptions
@@ -69,7 +71,7 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		if settings.Format != "" && !strings.EqualFold(settings.Format, "text") && !settings.IsJSON() {
 			return fmt.Errorf("unsupported cloud output format %q (use text or json)", settings.Format)
 		}
-		if settings.IsJSON() {
+		if settings.IsJSON() || endpoint.Text != "" {
 			defer ctx.ProgressToStderr()()
 		}
 		config, err := clientconfig.LoadConfig()
@@ -189,6 +191,14 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		}
 		if settings.IsJSON() {
 			return PrintJSONTo(stdout, response)
+		}
+		if endpoint.Text != "" {
+			value, ok := cloudField(response, endpoint.Text).(string)
+			if !ok || value == "" {
+				return fmt.Errorf("cloud response field %q is not a nonempty string", endpoint.Text)
+			}
+			_, err := io.WriteString(stdout, value)
+			return err
 		}
 		if endpoint.Render != nil {
 			return endpoint.Render(ctx, response)

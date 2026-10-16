@@ -105,6 +105,7 @@
       "command/cloud-cluster",
       "command/cloud-cluster-approve",
       "command/cloud-cluster-apps",
+      "command/cloud-cluster-cloud-init",
       "command/cloud-cluster-delete",
       "command/cloud-cluster-list",
       "command/cloud-cluster-nodes",
