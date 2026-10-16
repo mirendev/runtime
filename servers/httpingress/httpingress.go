@@ -398,6 +398,7 @@ type lease struct {
 	Uses     int
 	LastUsed time.Time
 	Lease    *activator.Lease
+	app      string
 }
 
 func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease) *lease {
@@ -408,6 +409,7 @@ func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease
 		Lease:    l,
 		Uses:     1,
 		LastUsed: time.Now(),
+		app:      app,
 	}
 
 	ar, ok := h.apps[app]
@@ -436,6 +438,9 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	}
 
 	for _, l := range ar.leases {
+		if l.Lease.Overflow {
+			continue
+		}
 		if l.Uses <= l.Lease.Size {
 			l.Uses++
 			l.LastUsed = time.Now()
@@ -451,6 +456,25 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 	defer h.mu.Unlock()
 
 	lease.Uses--
+
+	// Cached, an overflow lease would keep load pinned to its sandbox after
+	// new ones boot.
+	if lease.Lease.Overflow && lease.Uses <= 0 {
+		ar, ok := h.apps[lease.app]
+		if !ok {
+			return
+		}
+		for i, l := range ar.leases {
+			if l == lease {
+				h.aa.ReleaseLease(context.WithoutCancel(ctx), l.Lease)
+				ar.leases = append(ar.leases[:i], ar.leases[i+1:]...)
+				break
+			}
+		}
+		if len(ar.leases) == 0 {
+			delete(h.apps, lease.app)
+		}
+	}
 }
 
 // invalidateLease removes a lease from the cache entirely.

@@ -531,3 +531,40 @@ func TestSandboxDeathAcrossMultipleApps(t *testing.T) {
 		t.Errorf("expected 2 ReleaseLease calls, got %d", aa.releaseCount)
 	}
 }
+
+// Overflow leases are never reused and go back to the activator when their
+// request finishes.
+func TestOverflowLeaseReleasedAfterItsRequest(t *testing.T) {
+	aa := &mockActivator{}
+	srv := newTestServer(aa)
+	ctx := context.Background()
+
+	overflow := srv.retainLease(ctx, "app/myapp", &activator.Lease{Size: 2, URL: "http://10.0.0.2:3000", Overflow: true})
+	normal := srv.retainLease(ctx, "app/myapp", &activator.Lease{Size: 2, URL: "http://10.0.0.1:3000"})
+	srv.releaseLease(ctx, normal)
+
+	got, err := srv.useLease(ctx, "app/myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != normal {
+		t.Fatalf("overflow lease must not be reused, got %v", got)
+	}
+	srv.releaseLease(ctx, got)
+
+	srv.releaseLease(ctx, overflow)
+
+	aa.mu.Lock()
+	released := append([]string(nil), aa.releasedURLs...)
+	aa.mu.Unlock()
+	if len(released) != 1 || released[0] != "http://10.0.0.2:3000" {
+		t.Fatalf("expected only the overflow lease released to the activator, got %v", released)
+	}
+
+	srv.mu.Lock()
+	leases := srv.apps["app/myapp"].leases
+	srv.mu.Unlock()
+	if len(leases) != 1 || leases[0] != normal {
+		t.Fatalf("expected only the normal lease left in the cache, got %d leases", len(leases))
+	}
+}
