@@ -237,9 +237,19 @@ func TestLegacyLoopDeletionRecovery(t *testing.T) {
 				mount := &storage_v1alpha.DiskMount{ID: "mount", DesiredState: storage_v1alpha.DM_WANT_UNMOUNTED, ActualState: storage_v1alpha.DM_MOUNTED}
 				require.NoError(t, controller.Reconcile(t.Context(), mount, nil))
 				require.False(t, ops.IsMounted(mountPath))
-				current, err := ops.LoopIdentity(device)
-				require.NoError(t, err)
-				require.Equal(t, otherIdentity, current, "a reused device must survive cleanup after deletion and restart")
+				if deletion == "device-reused" {
+					current, err := ops.LoopIdentity(device)
+					require.NoError(t, err)
+					require.Equal(t, otherIdentity, current, "a reused device must survive cleanup after deletion and restart")
+				} else {
+					// LOOP_CLR_FD defers teardown while another opener (e.g. udev)
+					// holds the device. Once detached, another test may reuse it.
+					require.EventuallyWithT(t, func(c *assert.CollectT) {
+						current, err := ops.LoopIdentity(device)
+						assert.NoError(c, err)
+						assert.NotEqual(c, identity, current, "the original backing must be detached")
+					}, 5*time.Second, 10*time.Millisecond)
+				}
 				require.Nil(t, state.GetMount("mount"))
 				require.Len(t, cloud.releaseLeaseCalls, 1)
 			})
