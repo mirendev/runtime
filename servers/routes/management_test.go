@@ -13,6 +13,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
@@ -476,4 +477,74 @@ func TestRouteOwnerRequiresExactAppReferenceEtcd(t *testing.T) {
 	result, err := client.Show(appContext(rpc.AuthMethodWorkload, "other"), "owned.example.com", false)
 	require.NoError(t, err)
 	require.Equal(t, "other", result.Route().App())
+}
+
+type rereadingEntities struct {
+	*entityserver.EntityServer
+	id   entity.Id
+	race func()
+}
+
+func (e *rereadingEntities) Get(ctx context.Context, state *entityserver_v1alpha.EntityAccessGet) error {
+	if state.Args().Id() == e.id.String() && e.race != nil {
+		race := e.race
+		e.race = nil
+		race()
+	}
+	return e.EntityServer.Get(ctx, state)
+}
+
+func TestRouteSnapshotRequiresExactRouteEtcd(t *testing.T) {
+	for _, replacement := range []string{"short-id-alias", "wrong-kind"} {
+		for _, operation := range []string{"show", "timeout"} {
+			t.Run(replacement+"/"+operation, func(t *testing.T) {
+				im, cleanup := testutils.NewEtcdEntityServer(t)
+				t.Cleanup(cleanup)
+				ctx := operatorContext("operator")
+				appID, err := im.Client.Create(ctx, "owner", &core_v1alpha.App{})
+				require.NoError(t, err)
+				victimID, err := im.Client.Create(ctx, "victim.example", &ingress_v1alpha.HttpRoute{
+					Host: "victim.example", App: appID, RequestTimeout: "17s",
+				})
+				require.NoError(t, err)
+				victim, err := im.Server.Store.GetEntity(ctx, victimID)
+				require.NoError(t, err)
+				// A default route's ID ends in the app name, which can match
+				// the short ID of an unrelated route after default deletion.
+				alias := victim.ShortId()
+				require.NotEmpty(t, alias)
+				targetID, err := im.Client.Create(ctx, alias, &core_v1alpha.App{})
+				require.NoError(t, err)
+				defaultID, err := im.Client.Create(ctx, "default-"+targetID.String(), &ingress_v1alpha.HttpRoute{
+					Default: true, App: targetID,
+				})
+				require.NoError(t, err)
+				proxy := &rereadingEntities{EntityServer: im.Server, id: defaultID}
+				proxy.race = func() {
+					if replacement == "short-id-alias" {
+						require.NoError(t, im.Server.Store.DeleteEntity(ctx, defaultID))
+					} else {
+						victim, err = im.Server.Store.ReplaceEntity(ctx, entity.New(
+							entity.DBId, defaultID, (&core_v1alpha.App{}).Encode,
+						))
+						require.NoError(t, err)
+						victimID = defaultID
+					}
+					victim, err = im.Server.Store.GetEntity(ctx, victimID)
+					require.NoError(t, err)
+				}
+				ic := ingress.NewClient(slog.Default(), rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(proxy)))
+				client := ingress_v1alpha.NewRoutesClient(rpc.LocalClient(ingress_v1alpha.AdaptRoutes(NewServer(slog.Default(), ic))))
+				if operation == "show" {
+					_, err = client.Show(ctx, "", true)
+				} else {
+					_, err = client.Timeout(ctx, "", true, "9m")
+				}
+				require.ErrorIs(t, err, cond.ErrNotFound{})
+				retained, err := im.Server.Store.GetEntity(ctx, victimID)
+				require.NoError(t, err)
+				require.Equal(t, victim.Attrs(), retained.Attrs(), "a rejected read or mutation must leave the replacement entity unchanged")
+			})
+		}
+	}
 }

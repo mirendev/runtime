@@ -102,6 +102,9 @@ func (s *Server) load(ctx context.Context, host string, def bool) (*ingress_v1al
 	if err != nil {
 		return nil, nil, err
 	}
+	if current.ID != route.ID || !current.Is(record.Entity()) {
+		return nil, nil, cond.NotFound("route", route.ID)
+	}
 	if err := s.authorize(ctx, &current); err != nil {
 		return nil, nil, err
 	}
