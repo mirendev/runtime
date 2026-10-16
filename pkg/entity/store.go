@@ -1616,7 +1616,11 @@ func (s *EtcdStore) DeleteEntityAtRevision(ctx context.Context, id Id, revision 
 		// The guard failed: either the entity was concurrently deleted, or a
 		// concurrent write bumped its revision. Re-read and retry; GetEntity
 		// returning NotFound on the next pass resolves the former.
-		if revision != 0 || attempt >= maxDeleteRetries {
+		if revision != 0 {
+			s.log.Debug("revision-checked delete lost revision race", "id", id)
+			return cond.Conflict("entity", id)
+		}
+		if attempt >= maxDeleteRetries {
 			s.log.Error("delete lost revision race after retries", "id", id)
 			return cond.Conflict("entity", id)
 		}
