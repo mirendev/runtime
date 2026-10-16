@@ -85,7 +85,7 @@ var (
 	appConfig = perms{
 		"crud": set(
 			"setconfiguration", "setenvvar", "setenvvars",
-			"setinitialenvvars", "deleteenvvar", "restart", "sethost",
+			"setinitialenvvars", "deleteenvvar", "restart",
 		),
 		"deployment": set("setenvvars", "deleteenvvars"),
 	}

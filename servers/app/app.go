@@ -732,38 +732,6 @@ func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudG
 	return nil
 }
 
-func (r *AppInfo) SetHost(ctx context.Context, state *app_v1alpha.CrudSetHost) error {
-	name := state.Args().App()
-
-	if !rpc.AllowApp(ctx, name) {
-		return rpc.AppAccessError(ctx, name)
-	}
-
-	var appRec core_v1alpha.App
-
-	err := r.EC.Get(ctx, name, &appRec)
-	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) {
-			// No app, no problem.
-			return nil
-		}
-
-		return err
-	}
-
-	var routeRec ingress_v1alpha.HttpRoute
-
-	routeRec.Host = strings.ToLower(state.Args().Host())
-	routeRec.App = appRec.ID
-
-	_, err = r.EC.CreateOrUpdate(ctx, routeRec.Host, &routeRec)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // SetWorkloadRole sets the app's workload identity role. This is the operator
 // path: it can grant cluster-scoped roles, which the app.toml path must not.
 //
