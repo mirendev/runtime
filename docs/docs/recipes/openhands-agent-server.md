@@ -1,6 +1,6 @@
 ---
 title: Run an OpenHands agent server
-description: A worked example — run OpenHands' agent server as a self-contained Miren app that executes the coding agent in its own container (no Docker socket) behind an API-key-authenticated HTTP/WebSocket API.
+description: Run OpenHands' agent server on Miren as a self-contained app, with the coding agent in its own container behind an API-key-protected API.
 keywords: [openhands, agent server, ai agent, coding agent, agent canvas, backend, api, example, deploy]
 ---
 
