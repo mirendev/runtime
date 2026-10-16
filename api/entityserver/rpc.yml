@@ -384,3 +384,9 @@ interfaces:
           - name: schemas
             type: list
             element: AttributeSchema
+
+      - name: deleteAtRevision
+        doc: Delete only the entity at the supplied positive revision, failing on concurrent changes.
+        parameters:
+          - {name: id, type: string}
+          - {name: revision, type: int64}

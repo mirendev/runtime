@@ -1218,7 +1218,6 @@ func (s *EtcdStore) ReplaceEntity(
 	}
 
 	originalEntity := entity.Clone()
-	rev := entity.GetRevision()
 
 	repl := current.Clone()
 
@@ -1237,12 +1236,9 @@ func (s *EtcdStore) ReplaceEntity(
 		repl.SetCreatedAt(updatedAt)
 	}
 
-	if repl.GetRevision() == 0 {
-		repl.SetRevision(rev)
-	}
-
-	// Check revision if specified
-	if err := s.checkRevisionConflict(repl, o.fromRevision); err != nil {
+	// The payload may carry a stale revision; only the stored snapshot can
+	// establish whether the caller's expected revision is still current.
+	if err := s.checkRevisionConflict(originalEntity, o.fromRevision); err != nil {
 		return nil, err
 	}
 
@@ -1293,7 +1289,7 @@ func (s *EtcdStore) ReplaceEntity(
 	// Build conditions: revision check + unique-value constraints
 	var conditions []clientv3.Cmp
 	if o.fromRevision != 0 {
-		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", rev))
+		conditions = append(conditions, clientv3.Compare(clientv3.ModRevision(key), "=", o.fromRevision))
 	}
 	conditions = append(conditions, uniqueConditions...)
 
@@ -1538,14 +1534,26 @@ var deleteEntityRaceHook func()
 // delete wins against a busy reconcile loop instead of spuriously reporting the
 // entity as already gone.
 func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
+	return s.DeleteEntityAtRevision(ctx, id, 0)
+}
+
+// DeleteEntityAtRevision refuses to delete a record changed since authorization.
+// A zero revision retains the unconditional delete's retry behavior.
+func (s *EtcdStore) DeleteEntityAtRevision(ctx context.Context, id Id, revision int64) error {
 	const maxDeleteRetries = 3
 	for attempt := 0; ; attempt++ {
 		entity, err := s.GetEntity(ctx, id)
 		if err != nil {
+			if revision != 0 {
+				return err
+			}
 			if errors.Is(err, cond.ErrNotFound{}) {
 				return nil
 			}
 			return err
+		}
+		if revision != 0 && entity.GetRevision() != revision {
+			return cond.Conflict("entity", id)
 		}
 
 		// Collect all indexed attributes including nested ones within components
@@ -1608,6 +1616,10 @@ func (s *EtcdStore) DeleteEntity(ctx context.Context, id Id) error {
 		// The guard failed: either the entity was concurrently deleted, or a
 		// concurrent write bumped its revision. Re-read and retry; GetEntity
 		// returning NotFound on the next pass resolves the former.
+		if revision != 0 {
+			s.log.Debug("revision-checked delete lost revision race", "id", id)
+			return cond.Conflict("entity", id)
+		}
 		if attempt >= maxDeleteRetries {
 			s.log.Error("delete lost revision race after retries", "id", id)
 			return cond.Conflict("entity", id)

@@ -2261,6 +2261,77 @@ func (v *EntityAccessGetAttributesByTagResults) UnmarshalJSON(data []byte) error
 	return json.Unmarshal(data, &v.data)
 }
 
+type entityAccessDeleteAtRevisionArgsData struct {
+	Id       *string `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Revision *int64  `cbor:"1,keyasint,omitempty" json:"revision,omitempty"`
+}
+
+type EntityAccessDeleteAtRevisionArgs struct {
+	call rpc.Call
+	data entityAccessDeleteAtRevisionArgsData
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) HasRevision() bool {
+	return v.data.Revision != nil
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) Revision() int64 {
+	if v.data.Revision == nil {
+		return 0
+	}
+	return *v.data.Revision
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type entityAccessDeleteAtRevisionResultsData struct{}
+
+type EntityAccessDeleteAtRevisionResults struct {
+	call rpc.Call
+	data entityAccessDeleteAtRevisionResultsData
+}
+
+func (v *EntityAccessDeleteAtRevisionResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *EntityAccessDeleteAtRevisionResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type EntityAccessGet struct {
 	rpc.Call
 	args    EntityAccessGetArgs
@@ -2833,6 +2904,32 @@ func (t *EntityAccessGetAttributesByTag) Results() *EntityAccessGetAttributesByT
 	return results
 }
 
+type EntityAccessDeleteAtRevision struct {
+	rpc.Call
+	args    EntityAccessDeleteAtRevisionArgs
+	results EntityAccessDeleteAtRevisionResults
+}
+
+func (t *EntityAccessDeleteAtRevision) Args() *EntityAccessDeleteAtRevisionArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *EntityAccessDeleteAtRevision) Results() *EntityAccessDeleteAtRevisionResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type EntityAccess interface {
 	Get(ctx context.Context, state *EntityAccessGet) error
 	Put(ctx context.Context, state *EntityAccessPut) error
@@ -2856,6 +2953,7 @@ type EntityAccess interface {
 	PingSession(ctx context.Context, state *EntityAccessPingSession) error
 	Reindex(ctx context.Context, state *EntityAccessReindex) error
 	GetAttributesByTag(ctx context.Context, state *EntityAccessGetAttributesByTag) error
+	DeleteAtRevision(ctx context.Context, state *EntityAccessDeleteAtRevision) error
 }
 
 type reexportEntityAccess struct {
@@ -2947,6 +3045,10 @@ func (reexportEntityAccess) Reindex(ctx context.Context, state *EntityAccessRein
 }
 
 func (reexportEntityAccess) GetAttributesByTag(ctx context.Context, state *EntityAccessGetAttributesByTag) error {
+	panic("not implemented")
+}
+
+func (reexportEntityAccess) DeleteAtRevision(ctx context.Context, state *EntityAccessDeleteAtRevision) error {
 	panic("not implemented")
 }
 
@@ -3174,6 +3276,16 @@ func AdaptEntityAccess(t EntityAccess) *rpc.Interface {
 			Params:        []string{"tag"},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.GetAttributesByTag(ctx, &EntityAccessGetAttributesByTag{Call: call})
+			},
+		},
+		{
+			Name:          "deleteAtRevision",
+			InterfaceName: "EntityAccess",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"id", "revision"},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.DeleteAtRevision(ctx, &EntityAccessDeleteAtRevision{Call: call})
 			},
 		},
 	}
@@ -3977,4 +4089,24 @@ func (v EntityAccessClient) GetAttributesByTag(ctx context.Context, tag string) 
 	}
 
 	return &EntityAccessClientGetAttributesByTagResults{client: v.Client, data: ret}, nil
+}
+
+type EntityAccessClientDeleteAtRevisionResults struct {
+	client rpc.Client
+	data   entityAccessDeleteAtRevisionResultsData
+}
+
+func (v EntityAccessClient) DeleteAtRevision(ctx context.Context, id string, revision int64) (*EntityAccessClientDeleteAtRevisionResults, error) {
+	args := EntityAccessDeleteAtRevisionArgs{}
+	args.data.Id = &id
+	args.data.Revision = &revision
+
+	var ret entityAccessDeleteAtRevisionResultsData
+
+	err := v.Call(ctx, "deleteAtRevision", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EntityAccessClientDeleteAtRevisionResults{client: v.Client, data: ret}, nil
 }
