@@ -210,6 +210,7 @@ To get started with iso:
 - Tests must run without any parallelism (`-p 1`) due to shared containerd/buildkit instances
 - Blackbox CLI tests in `blackbox/` directory (run via `make test-blackbox`)
 - Test data in various `testdata/` directories
+- A Go test that reads a file under `docs/` goes in its package's `docs_test.go` and is named `TestDocs*`. PRs that only touch `docs/` skip the Go test runners, so the `lint` job runs these on every PR instead.
 
 ### Distributed Runner Development
 
