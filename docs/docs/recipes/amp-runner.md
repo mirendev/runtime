@@ -152,6 +152,10 @@ and add the file below. The `Dockerfile` and `runner.sh` stay at the project roo
 ```toml
 name = "amp-runner"
 
+# No `web` service. Without this, Miren synthesizes one that would also run the
+# image's CMD, starting a second runner without the workspace disk.
+web = false
+
 [build]
 dockerfile = "Dockerfile"
 
@@ -291,7 +295,7 @@ miren sandbox exec <sandbox-id> -C amp -- \
 ## Roadblock checklist
 
 1. Set `amp.remoteThreadCreation.enabled: true` (in `runner.sh`), or the runner accepts no threads.
-2. Portless service: omit `port`/`port_type`, and name it `runner`, not `web` (else `error acquiring lease`).
+2. Portless service: omit `port`/`port_type`, name it `runner`, not `web` (else `error acquiring lease`), and set `web = false` so no synthesized `web` service runs the image too.
 3. Run the daemon `amp --no-tui` (via `runner.sh`), not `amp -x` — the process must not exit.
 4. Give it a stable `AMP_RUNNER_ID` (valid hostname) and a fixed working directory.
 5. A `miren` disk means `fixed` / `num_instances = 1`; expect `did not become healthy` noise on redeploy (verify state before retrying). Use `local` for snappy rollouts.
