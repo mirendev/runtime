@@ -59,7 +59,7 @@ func appContext(method rpc.AuthMethod, app string) context.Context {
 func TestRouteManagementContract(t *testing.T) {
 	c, im := managementFixture(t)
 	ctx := appContext(rpc.AuthMethodWorkload, "alpha")
-	set, err := c.Set(ctx, "APP.EXAMPLE.COM", "alpha", "")
+	set, err := c.Set(operatorContext("operator"), "APP.EXAMPLE.COM", "alpha", "")
 	require.NoError(t, err)
 	assert.Equal(t, "web", set.Route().Service())
 	assert.Equal(t, "app.example.com", set.Route().Host())
@@ -160,6 +160,8 @@ func TestRouteOwnershipAndDefaults(t *testing.T) {
 	for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
 		ctx := appContext(method, "beta")
 		calls := map[string]func() error{
+			"claim hostname":      func() error { _, e := c.Set(ctx, "new.example.com", "beta", "web"); return e },
+			"claim wildcard":      func() error { _, e := c.Set(ctx, "*.example.net", "beta", "web"); return e },
 			"show":                func() error { _, e := c.Show(ctx, testHost, false); return e },
 			"remove":              func() error { _, e := c.Remove(ctx, testHost); return e },
 			"take ownership":      func() error { _, e := c.Set(ctx, testHost, "beta", "api"); return e },
@@ -181,6 +183,8 @@ func TestRouteOwnershipAndDefaults(t *testing.T) {
 		for name, call := range calls {
 			t.Run(string(method)+"/"+name, func(t *testing.T) { require.ErrorContains(t, call(), "unauthorized") })
 		}
+		_, err := c.Set(ctx, "beta.example.com", "beta", "api")
+		require.NoError(t, err, "app-scoped callers can still update an existing route they own")
 		list, err := c.List(ctx, "")
 		require.NoError(t, err)
 		require.Len(t, list.Routes(), 1)
@@ -218,12 +222,20 @@ func TestRouteOwnershipAndDefaults(t *testing.T) {
 	require.NoError(t, err, "unsetting defaults must leave named routes intact")
 	_, err = c.Set(op, testHost, "beta", "web")
 	require.NoError(t, err, "cluster operators can reassign routes")
+	_, err = c.Set(op, "*.example.net", "alpha", "web")
+	require.NoError(t, err, "cluster operators can claim wildcards")
+	for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
+		_, err = c.Set(appContext(method, "beta"), "feat.example.net", "beta", "web")
+		require.ErrorIs(t, err, rpc.ErrUnauthorized, "an exact claim must not shadow another app's wildcard")
+	}
+	_, err = c.Show(op, "feat.example.net", false)
+	require.Error(t, err, "denied claims must not create an exact route")
 }
 
 func TestRouteValidation(t *testing.T) {
 	c, im := managementFixture(t)
 	ctx := appContext(rpc.AuthMethodWorkload, "alpha")
-	_, err := c.Set(ctx, testHost, "alpha", "web")
+	_, err := c.Set(operatorContext("operator"), testHost, "alpha", "web")
 	require.NoError(t, err)
 	_, err = c.Timeout(ctx, testHost, false, "45s")
 	require.NoError(t, err)
@@ -277,7 +289,7 @@ func TestRouteValidation(t *testing.T) {
 func TestRouteDanglingProviderReference(t *testing.T) {
 	c, im := managementFixture(t)
 	ctx := appContext(rpc.AuthMethodWorkload, "alpha")
-	_, err := c.Set(ctx, testHost, "alpha", "web")
+	_, err := c.Set(operatorContext("operator"), testHost, "alpha", "web")
 	require.NoError(t, err)
 	_, err = c.Protect(ctx, testHost, false, "oidc", nil, false)
 	require.NoError(t, err)

@@ -286,6 +286,9 @@ func (s *Server) Set(ctx context.Context, state *ingress_v1alpha.RoutesSet) erro
 		return err
 	}
 	if r == nil {
+		if rpc.BoundApp(ctx) != "" {
+			return fmt.Errorf("%w: claiming a new hostname requires cluster-level access", rpc.ErrUnauthorized)
+		}
 		r = &ingress_v1alpha.HttpRoute{Host: host, App: app.ID, Service: service}
 		err = s.create(ctx, host, r)
 	} else {

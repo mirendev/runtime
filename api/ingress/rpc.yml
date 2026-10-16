@@ -117,7 +117,7 @@ interfaces:
           - {name: route, type: RouteInfo}
       - name: set
         index: 4
-        doc: Create or reassign a named route; an omitted service validates and selects web. Reassignment requires access to both apps. Existing settings are retained.
+        doc: Create or reassign a named route; claiming a new hostname requires cluster-level access. App-bound callers can update existing routes they own. An omitted service validates and selects web. Reassignment requires access to both apps. Existing settings are retained.
         parameters:
           - {name: host, type: string}
           - {name: app, type: string}
