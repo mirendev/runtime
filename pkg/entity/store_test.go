@@ -3130,7 +3130,7 @@ func TestEtcdStore_DeleteIsAtomicUnderConcurrentPatch(t *testing.T) {
 // entity this way, so a primary-key-only read would export a node without its
 // status for as long as the runner held its session.
 func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
-	store, _ := setupTestEtcdStore(t)
+	store, client := setupTestEtcdStore(t)
 	ctx := t.Context()
 
 	_, err := store.CreateEntity(ctx, New(
@@ -3159,6 +3159,10 @@ func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
 	require.True(t, ok, "the session attribute is part of the entity at that revision")
 	assert.Equal(t, "ready", status.Value.String())
 
+	// Other tests share etcd's revision counter even though their keys are isolated.
+	_, err = client.Put(ctx, store.Prefix()+"/unrelated", "write")
+	require.NoError(t, err)
+
 	// Once the session is gone the attribute is gone with it, and a read at
 	// that later revision says so, while the earlier revision still has it.
 	require.NoError(t, store.RevokeSession(ctx, session))
@@ -3170,9 +3174,11 @@ func TestEtcdStore_GetEntityAtRevisionIncludesSessionAttributes(t *testing.T) {
 		_, still := current.Get("test/session-status")
 		return !still
 	}, 5*time.Second, 50*time.Millisecond)
-	current, err := store.GetEntity(ctx, Id("node/pinned"))
+	// Revoking a session leaves the primary key's ModRevision unchanged.
+	// Use the store revision observed after revocation, not the entity revision.
+	current, err := client.Get(ctx, store.buildKey(Id("node/pinned")))
 	require.NoError(t, err)
-	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.GetRevision()+1)
+	later, err := store.GetEntityAtRevision(ctx, Id("node/pinned"), current.Header.Revision)
 	require.NoError(t, err)
 	_, still := later.Get("test/session-status")
 	require.False(t, still)
