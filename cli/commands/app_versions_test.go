@@ -119,7 +119,7 @@ func TestAppVersionsRPC(t *testing.T) {
 				}
 				printed, err = run("shop", true, 20, "text")
 				require.NoError(t, err)
-				for _, text := range []string{"VERSION", "LABEL", "CREATED", "EXPIRES", "a-preview", "pr-17", "2026-01-02 04:04:05", "z-active", "promoted", "-"} {
+				for _, text := range []string{"VERSION", "LABEL", "CREATED", "EXPIRES", "a-preview", "pr-17", created.Add(time.Hour).Local().Format("2006-01-02 15:04:05"), "z-active", "promoted", "-"} {
 					require.Contains(t, printed, text)
 				}
 				require.NotContains(t, printed, "m-rolling")
