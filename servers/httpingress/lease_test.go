@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -566,5 +569,69 @@ func TestOverflowLeaseReleasedAfterItsRequest(t *testing.T) {
 	srv.mu.Unlock()
 	if len(leases) != 1 || leases[0] != normal {
 		t.Fatalf("expected only the normal lease left in the cache, got %d leases", len(leases))
+	}
+}
+
+// A cached lease serves at most Size concurrent requests. The check used to be
+// Uses <= Size, which let a lease sized for two requests carry three.
+func TestUseLeaseStopsAtSize(t *testing.T) {
+	srv := newTestServer(&mockActivator{})
+	ctx := context.Background()
+
+	ll := srv.retainLease(ctx, "app/myapp", &activator.Lease{Size: 2, URL: "http://10.0.0.1:3000"})
+
+	second, err := srv.useLease(ctx, "app/myapp")
+	if err != nil || second != ll {
+		t.Fatalf("expected the cached lease for the second request, got %v, %v", second, err)
+	}
+
+	third, err := srv.useLease(ctx, "app/myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third != nil {
+		t.Fatalf("expected no cached lease past Size, got one with Uses=%d", third.Uses)
+	}
+}
+
+type failingWriter struct {
+	header http.Header
+}
+
+func (f *failingWriter) Header() http.Header       { return f.header }
+func (f *failingWriter) WriteHeader(int)           {}
+func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("client went away") }
+
+// When the client hangs up mid-response, ReverseProxy panics with
+// http.ErrAbortHandler. The lease's use must still be handed back, or the lease
+// never drains to zero uses and never expires.
+func TestProxyWithLeaseReleasesOnAbort(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(strings.Repeat("x", 64<<10)))
+	}))
+	defer backend.Close()
+
+	srv := newTestServer(&mockActivator{})
+	srv.transport = http.DefaultTransport.(*http.Transport).Clone()
+	ctx := context.Background()
+
+	ll := srv.retainLease(ctx, "app/myapp", &activator.Lease{Size: 2, URL: backend.URL})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), http.ServerContextKey, &http.Server{}))
+
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler {
+				t.Fatalf("expected the ErrAbortHandler panic to propagate, got %v", r)
+			}
+		}()
+		srv.proxyWithLease(&failingWriter{header: http.Header{}}, req, ll, "app/myapp", "myapp", true, 0)
+	}()
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if ll.Uses != 0 {
+		t.Fatalf("expected the aborted request's use to be released, got Uses=%d", ll.Uses)
 	}
 }

@@ -441,7 +441,7 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 		if l.Lease.Overflow {
 			continue
 		}
-		if l.Uses <= l.Lease.Size {
+		if l.Uses < l.Lease.Size {
 			l.Uses++
 			l.LastUsed = time.Now()
 			return l, nil
@@ -1067,7 +1067,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			req = req.WithContext(ctx)
 			// On non-final attempts, suppress error response so we can retry
 			writeErr := attempt == maxRetries
-			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr, requestTimeout)
+			err = h.proxyWithLease(w, req, curLease, targetAppId.String(), *appName, writeErr, requestTimeout)
 			if err != nil && isProxyConnectionError(err) {
 				// Cached lease pointed at a dead sandbox — invalidate all app
 				// leases (they likely all point to the same dead sandbox) and retry
@@ -1134,7 +1134,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)
-		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true, requestTimeout)
+		err = h.proxyWithLease(w, req, localLease, targetAppId.String(), *appName, true, requestTimeout)
 		if err != nil {
 			// Connection error on a fresh lease - the sandbox may have died
 			// between lease acquisition and proxy. Invalidate immediately.
@@ -1234,6 +1234,22 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 // captures the error but does NOT write to the ResponseWriter, allowing the caller
 // to retry with a fresh lease. This is safe because connection errors happen during
 // TCP dial, before any response bytes are sent.
+// proxyWithLease proxies to a cached lease's sandbox and hands the lease's
+// use back if the proxy panics. ReverseProxy aborts a response whose body copy
+// fails (a client hanging up mid-download) by panicking with
+// http.ErrAbortHandler, which skips the caller's releaseLease. Each one leaked
+// a use, and a lease that never returns to zero uses never expires, so its
+// sandbox capacity stayed claimed for the sandbox's lifetime.
+func (h *Server) proxyWithLease(w http.ResponseWriter, req *http.Request, l *lease, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
+	defer func() {
+		if r := recover(); r != nil {
+			h.releaseLease(context.Background(), l)
+			panic(r)
+		}
+	}()
+	return h.proxyToLease(w, req, l.Lease.URL, appEntityID, appName, writeErrorResponse, requestTimeout)
+}
+
 func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {
