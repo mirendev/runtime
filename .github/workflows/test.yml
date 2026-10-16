@@ -15,6 +15,11 @@ on:
     # required check. That trades one spare CI run for a PR that can merge
     # without having been tested. Labels land on roughly 1 PR in 60 here, so
     # the waste is theoretical and the hazard is not.
+    #
+    # The docs-only skip below is the one deliberate exception, and it is safe
+    # for the same reason the label gate would not be: it is decided by the
+    # PR's diff, so every run of a given PR, labeled or not, reaches the same
+    # answer.
     types: [opened, synchronize, reopened, labeled]
   merge_group:
   workflow_call:
@@ -92,6 +97,13 @@ jobs:
         version: v2.12.2
         working-directory: x
 
+    # The one Go test that reads a page under docs/. It runs here because
+    # lint always runs, while the test runners skip on docs-only PRs, which
+    # are exactly the PRs that can break it. Retire this step once the
+    # template lives in servers/httpingress and the page includes it.
+    - name: Check the documented error page template
+      run: go test ./servers/httpingress -run '^TestDocumentedErrorPageTemplate$' -count=1
+
     - name: Check the vendored lbd source matches go.mod
       run: ./hack/sync-lbd-src.sh --check
 
@@ -121,9 +133,16 @@ jobs:
   # Which parts of the tree a PR touches, for jobs that are too expensive to
   # run on every PR but too important to leave to someone remembering a label.
   # Only consulted for pull_request; other events don't gate on it at all.
+  #
+  # `code` is false when every changed file is under docs/. The Go test and
+  # blackbox jobs skip on it, and the `test` gate accepts those skips only
+  # when it is false. lint and build are required checks that no gate backs
+  # up, so they always run: a skip there would pass on its own say-so, and
+  # lint carries the docs lint anyway.
   changes:
     runs-on: ubuntu-26.04
     outputs:
+      code: ${{ steps.filter.outputs.code }}
       distributed: ${{ steps.filter.outputs.distributed }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,27 +153,42 @@ jobs:
         # unquoted `&& 0 ||` would always fall through to the other side.
         fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
-    - name: Detect distributed-relevant changes
+    - name: Detect relevant changes
       id: filter
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: |
         set -euo pipefail
 
-        # Non-PR events don't consult this output, so don't spend a diff on them.
+        # Non-PR events don't consult these outputs, so don't spend a diff on them.
         if [ "${{ github.event_name }}" != "pull_request" ]; then
+          echo "code=true" >> "$GITHUB_OUTPUT"
           echo "distributed=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        changed=$(git diff --name-only "$BASE_SHA" HEAD)
+        # --no-renames lists both sides of a move. Otherwise a Go file moved
+        # into docs/ shows up only under its new name and reads as docs-only.
+        changed=$(git diff --no-renames --name-only "$BASE_SHA" HEAD)
         echo "Changed files:"
         echo "$changed"
+
+        # Herestrings, not `echo | grep -q`: grep -q exits on its first match,
+        # and on a list bigger than a pipe buffer echo then dies of SIGPIPE.
+        # Under pipefail that makes the if false, which here would mean
+        # skipping the suite on a large code PR.
+        if grep -qv '^docs/' <<<"$changed"; then
+          echo "code changes found"
+          echo "code=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "docs-only change"
+          echo "code=false" >> "$GITHUB_OUTPUT"
+        fi
 
         # The code paths that can break the multi-node topology, plus this
         # workflow itself so a change to the gating is exercised by the PR
         # that makes it.
-        if echo "$changed" | grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|hack/blackbox-groups-distributed\.json|\.iso/peers\.yml|\.github/workflows/test\.yml)'; then
+        if grep -qE '^(controllers/disk/|components/diskio/|components/runner/|blackbox/|hack/dev-distributed|hack/blackbox-groups-distributed\.json|\.iso/peers\.yml|\.github/workflows/test\.yml)' <<<"$changed"; then
           echo "distributed-relevant changes found"
           echo "distributed=true" >> "$GITHUB_OUTPUT"
         else
@@ -163,6 +197,8 @@ jobs:
         fi
 
   test-groups:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -278,6 +314,8 @@ jobs:
   # Deliberately not in the `test` gate yet. Once this job has shown a low
   # flake rate, add it to that job's needs so it becomes required.
   test-stackbuild:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -346,6 +384,8 @@ jobs:
         fi
 
   blackbox-groups:
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -473,7 +513,11 @@ jobs:
       run: make dev-stop || true
 
   test-blackbox-pop:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [changes]
+    if: >-
+      needs.changes.outputs.code == 'true' && (
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository )
     runs-on: depot-ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -765,8 +809,16 @@ jobs:
         echo "blackbox-groups-distributed result: ${{ needs.blackbox-groups-distributed.result }}"
         echo "test-blackbox-distributed result: ${{ needs.test-blackbox-distributed.result }}"
         echo "changes result: ${{ needs.changes.result }}"
+        echo "changes code output: ${{ needs.changes.outputs.code }}"
 
-        if [[ "${{ needs.test-runner.result }}" != "success" ]]; then
+        # A docs-only PR skips the Go tests and the blackbox suite outright.
+        # That is the only case where the jobs required below may be skipped.
+        docs_only="${{ needs.changes.outputs.code == 'false' }}"
+        ran_or_docs_only() {
+          [[ "$1" == "success" || ( "$1" == "skipped" && "$docs_only" == "true" ) ]]
+        }
+
+        if ! ran_or_docs_only "${{ needs.test-runner.result }}"; then
           exit 1
         fi
         # changes decides whether the distributed job runs on a PR. If it
@@ -778,8 +830,8 @@ jobs:
         fi
         # blackbox-groups builds the shard matrix. If it fails, the sharded
         # test-blackbox job is skipped, which would otherwise look benign below,
-        # so require it to succeed outright.
-        if [[ "${{ needs.blackbox-groups.result }}" != "success" ]]; then
+        # so require it to succeed unless the PR is docs-only.
+        if ! ran_or_docs_only "${{ needs.blackbox-groups.result }}"; then
           exit 1
         fi
         # Blackbox tests are skipped for external (fork) PRs. A matrix job's

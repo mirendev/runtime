@@ -12,6 +12,7 @@ on:
       - 'release/[0-9]*'
     paths:
       - 'docs/**'
+      - 'appconfig/schema/**'
       - 'cli/commands/**'
       - 'hack/gen-command-docs'
       - 'hack/docs-snapshot'
@@ -19,6 +20,7 @@ on:
   pull_request:
     paths:
       - 'docs/**'
+      - 'appconfig/schema/**'
       - 'cli/commands/**'
       - 'hack/gen-command-docs'
       - 'hack/docs-snapshot'
