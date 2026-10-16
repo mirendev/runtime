@@ -292,7 +292,7 @@ miren sandbox exec <sandbox-id> -C amp -- \
 
 1. Set `amp.remoteThreadCreation.enabled: true` (in `runner.sh`), or the runner accepts no threads.
 2. Portless service: omit `port`/`port_type`, and name it `runner`, not `web` (else `error acquiring lease`).
-3. Run the daemon `amp --no-tui`, not `amp -x` — the service command must not exit.
+3. Run the daemon `amp --no-tui` (via `runner.sh`), not `amp -x` — the process must not exit.
 4. Give it a stable `AMP_RUNNER_ID` (valid hostname) and a fixed working directory.
 5. A `miren` disk means `fixed` / `num_instances = 1`; expect `did not become healthy` noise on redeploy (verify state before retrying). Use `local` for snappy rollouts.
 6. Point `HOME` and `AMP_SETTINGS_FILE` at the writable disk.
