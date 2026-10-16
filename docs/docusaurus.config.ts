@@ -1,4 +1,5 @@
 import {existsSync, readFileSync} from 'fs';
+import llmsSectionsPlugin from './plugins/llms-sections';
 import ogImagesPlugin from './plugins/og-images';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
@@ -150,18 +151,34 @@ const config: Config = {
       },
     ],
     [
-      'docusaurus-plugin-llms',
+      // docusaurus-plugin-llms, with llms.txt regrouped to follow the sidebar.
+      llmsSectionsPlugin,
       {
-        generateLLMsTxt: true,
-        generateLLMsFullTxt: true,
-        generateMarkdownFiles: true,
-        docsDir: llmsDocsDir,
-        // Docs are served from the site root, so emit Markdown beside the
-        // corresponding HTML route rather than under build/docs/.
-        preserveDirectoryStructure: false,
-        excludeImports: true,
-        removeDuplicateHeadings: true,
-        logLevel: 'quiet',
+        llms: {
+          generateLLMsTxt: true,
+          generateLLMsFullTxt: true,
+          generateMarkdownFiles: true,
+          docsDir: llmsDocsDir,
+          // Docs are served from the site root, so emit Markdown beside the
+          // corresponding HTML route rather than under build/docs/.
+          preserveDirectoryStructure: false,
+          excludeImports: true,
+          removeDuplicateHeadings: true,
+          logLevel: 'quiet',
+          // The site tagline says nothing to an agent deciding whether it is
+          // in the right place.
+          description:
+            'Miren is a container platform for small teams: deploy apps to a Linux server with builds, scaling, routing, TLS, and backups built in.',
+          rootContent: [
+            'Each link below is a Markdown copy of a docs page, grouped the way the docs sidebar groups them and roughly in the order you would need them.',
+            'The language guides and the CLI reference are each represented by an index page that links to every guide or command, so follow those when you need a specific language or `miren` subcommand.',
+            'Every page in one file: https://miren.md/llms-full.txt',
+          ].join('\n\n'),
+        },
+        // Categories that would otherwise list ~40 language guides and ~200
+        // CLI commands. Their index pages already link to every entry.
+        pointers: ['guides/index', 'commands'],
+        leadSection: 'Getting started',
       },
     ],
   ],
