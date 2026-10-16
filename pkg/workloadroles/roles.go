@@ -63,8 +63,9 @@ type perms map[string]map[string]bool
 var (
 	// appRead: read one app's own state.
 	appRead = perms{
-		"appstatus": set("appinfo"),
-		"logs":      set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
+		"appstatus":    set("appinfo"),
+		"sandboxpools": set("list"),
+		"logs":         set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),
@@ -83,6 +84,7 @@ var (
 	// appConfig: mutate one app's configuration. These handlers gain their
 	// rpc.AllowApp guard in this change; before that they were cluster-wide.
 	appConfig = perms{
+		"sandboxpools": set("setdesired"),
 		"crud": set(
 			"setconfiguration", "setenvvar", "setenvvars",
 			"setinitialenvvars", "deleteenvvar", "restart",

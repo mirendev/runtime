@@ -139,6 +139,7 @@ func (c *ApplicationManagement) exposeManagementAPIs(ctx context.Context) error 
 	// pre-durable-runs release and silently fall back to legacy exec.
 	server.ExposeValue("dev.miren.runtime/app-runs", app_v1alpha.AdaptRuns(ai))
 	server.ExposeValue("dev.miren.runtime/sandboxes", compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(c.Log, ec)))
+	server.ExposeValue("dev.miren.runtime/sandbox-pools", compute_v1alpha.AdaptSandboxPools(sandboxserver.NewPoolServer(ec)))
 	server.ExposeValue("dev.miren.runtime/addons", app_v1alpha.AdaptAddons(
 		app.NewAddonsServer(c.Log, ec, addonRegistry, addon.NewRegistryImageChecker()),
 	))

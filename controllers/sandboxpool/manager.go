@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	// MaxPoolSize is the maximum number of sandboxes allowed in a pool
-	// This prevents runaway growth even if there are bugs in scaling logic
-	MaxPoolSize = 20
-
 	// PendingSandboxTimeout is the maximum time a sandbox can stay in PENDING
 	// state before being marked STOPPED for cleanup. PENDING sandboxes count
 	// toward pool capacity, so stuck ones block new sandbox creation.
@@ -147,12 +143,12 @@ func (m *Manager) Reconcile(ctx context.Context, pool *compute_v1alpha.SandboxPo
 	desired := pool.DesiredInstances
 
 	// Cap desired at MaxPoolSize as a defensive measure
-	if desired > MaxPoolSize {
+	if desired > concurrency.MaxPoolSize {
 		m.log.Warn("pool desired instances exceeds maximum, capping",
 			"pool", pool.ID,
 			"desired", desired,
-			"max_size", MaxPoolSize)
-		desired = MaxPoolSize
+			"max_size", concurrency.MaxPoolSize)
+		desired = concurrency.MaxPoolSize
 	}
 
 	// Scale up if needed
@@ -542,7 +538,7 @@ func (m *Manager) updatePoolStatus(ctx context.Context, pool *compute_v1alpha.Sa
 			"pool", pool.ID,
 			"current", current,
 			"ready", ready,
-			"desired", min(pool.DesiredInstances, MaxPoolSize))
+			"desired", min(pool.DesiredInstances, concurrency.MaxPoolSize))
 	}
 
 	// Propagate all pool changes back to the entity for the framework to diff and persist.
