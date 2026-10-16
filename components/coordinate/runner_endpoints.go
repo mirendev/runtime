@@ -75,7 +75,7 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 	server.ExposeValue("dev.miren.runtime/disk-backup", disk_v1alpha.AdaptDiskBackup(diskBackup))
 	server.ExposeValue("dev.miren.runtime/disk-health", disk_v1alpha.AdaptDiskHealth(disksrv.NewHealthServer(c.Log, c.eac)))
 
-	runnerReg := runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
+	registrationConfig := runnerserver.RegistrationServerConfig{
 		Log:                    c.Log,
 		Authority:              c.authority,
 		EAC:                    c.eac,
@@ -94,7 +94,11 @@ func (c *RunnerEndpoints) Start(context.Context) error {
 			TempDir:  c.TempDir,
 		},
 		RPC: c.state,
-	})
+	}
+	if c.EtcdTLS != nil {
+		registrationConfig.EtcdClient = c.etcdClient
+	}
+	runnerReg := runnerserver.NewRegistrationServer(registrationConfig)
 	server.ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(runnerReg))
 	server.ExposeValue("dev.miren.runtime/telemetry", telemetry_v1alpha.AdaptTelemetry(telemetrysrv.NewServer(c.Log, c.TracesDestination)))
 	return nil

@@ -93,50 +93,64 @@ func (s *failRotationRecord) Call(ctx context.Context, method string, args, resu
 }
 
 func TestFailedRotationRecordLeavesLiveKeyUnchanged(t *testing.T) {
-	c, backend, ec, _ := newTestController(t)
-	ctx := t.Context()
-	oldKey := backend.Keyring().CurrentID()
-	_, _, err := backend.Put(ctx, "app/before", []byte("before rotation"))
-	require.NoError(t, err)
+	for _, storage := range []string{"file", "shared"} {
+		t.Run(storage, func(t *testing.T) {
+			c, backend, ec, _ := newTestController(t)
+			ctx := t.Context()
+			if storage == "shared" {
+				client, prefix := etcdtest.TestEtcdClient(t)
+				shared, err := keyring.NewSharedStore(client, prefix, c.DataPath, []byte("authority"))
+				require.NoError(t, err)
+				ring, release, err := shared.Lock(ctx)
+				require.NoError(t, err)
+				release()
+				backend.UseKeyring(ring)
+				backend.SharedKeyring = shared
+			}
+			oldKey := backend.Keyring().CurrentID()
+			_, _, err := backend.Put(ctx, "app/before", []byte("before rotation"))
+			require.NoError(t, err)
 
-	failure := errors.New("injected rotation record failure")
-	fault := &failRotationRecord{Client: ec.EAC().Client, err: failure}
-	c.EC = entityserver.NewClient(c.Log, esv1.NewEntityAccessClient(fault))
+			failure := errors.New("injected rotation record failure")
+			fault := &failRotationRecord{Client: ec.EAC().Client, err: failure}
+			c.EC = entityserver.NewClient(c.Log, esv1.NewEntityAccessClient(fault))
 
-	require.ErrorContains(t, c.Begin(ctx), "recording the rotation: "+failure.Error())
-	require.Nil(t, fault.err, "the record write must have reached the injected failure")
-	require.Equal(t, oldKey, backend.Keyring().CurrentID())
-	assert.Len(t, backend.Keyring().Keys(), 1)
-	active, err := c.activeRotation(ctx)
-	require.NoError(t, err)
-	require.Nil(t, active)
+			require.ErrorContains(t, c.Begin(ctx), "recording the rotation: "+failure.Error())
+			require.Nil(t, fault.err, "the record write must have reached the injected failure")
+			require.Equal(t, oldKey, backend.Keyring().CurrentID())
+			assert.Len(t, backend.Keyring().Keys(), 1)
+			active, err := c.activeRotation(ctx)
+			require.NoError(t, err)
+			require.Nil(t, active)
 
-	_, _, err = backend.Put(ctx, "app/after", []byte("after failure"))
-	require.NoError(t, err)
-	remaining, err := backend.CountOnKey(ctx, oldKey)
-	require.NoError(t, err)
-	assert.Equal(t, 2, remaining, "writes still seal under the old key after failure")
+			_, _, err = backend.Put(ctx, "app/after", []byte("after failure"))
+			require.NoError(t, err)
+			remaining, err := backend.CountOnKey(ctx, oldKey)
+			require.NoError(t, err)
+			assert.Equal(t, 2, remaining, "writes still seal under the old key after failure")
 
-	// Retrying must target the original key, not strand its versions.
-	require.NoError(t, c.Begin(ctx))
-	active, err = c.activeRotation(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, active)
-	assert.Equal(t, oldKey, active.FromKey)
-	assert.Equal(t, backend.Keyring().CurrentID(), active.ToKey)
-	drive(t, c, ctx)
-	assert.Len(t, backend.Keyring().Keys(), 1)
-	remaining, err = backend.CountOnKey(ctx, oldKey)
-	require.NoError(t, err)
-	assert.Zero(t, remaining)
+			// Retrying must target the original key, not strand its versions.
+			require.NoError(t, c.Begin(ctx))
+			active, err = c.activeRotation(ctx)
+			require.NoError(t, err)
+			require.NotNil(t, active)
+			assert.Equal(t, oldKey, active.FromKey)
+			assert.Equal(t, backend.Keyring().CurrentID(), active.ToKey)
+			drive(t, c, ctx)
+			assert.Len(t, backend.Keyring().Keys(), 1)
+			remaining, err = backend.CountOnKey(ctx, oldKey)
+			require.NoError(t, err)
+			assert.Zero(t, remaining)
 
-	for path, want := range map[string]string{
-		"app/before": "before rotation",
-		"app/after":  "after failure",
-	} {
-		got, err := backend.Resolve(ctx, path)
-		require.NoError(t, err)
-		assert.Equal(t, want, string(got.Bytes))
+			for path, want := range map[string]string{
+				"app/before": "before rotation",
+				"app/after":  "after failure",
+			} {
+				got, err := backend.Resolve(ctx, path)
+				require.NoError(t, err)
+				assert.Equal(t, want, string(got.Bytes))
+			}
+		})
 	}
 }
 

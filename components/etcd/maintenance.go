@@ -141,8 +141,8 @@ func (e *EtcdComponent) newMaintenanceClient(endpoint string) (*clientv3.Client,
 	return clientv3.New(cfg)
 }
 
-// clientConfig dials one endpoint with the server's own certificate as the
-// client identity, which the CA trusts like any other client cert.
+// clientConfig uses the coordinator client identity, which also has permission
+// to compact, defragment, and snapshot an RBAC-enabled member.
 func clientConfig(endpoint string, tls *TLSConfig) (clientv3.Config, error) {
 	cfg := clientv3.Config{
 		Endpoints:   []string{endpoint},
@@ -186,8 +186,8 @@ func (e *EtcdComponent) waitForHealthy(ctx context.Context) error {
 }
 
 func buildMaintenanceTLSConfig(certsDir string) (*tls.Config, error) {
-	certFile := filepath.Join(certsDir, "server.crt")
-	keyFile := filepath.Join(certsDir, "server.key")
+	certFile := filepath.Join(certsDir, "client.crt")
+	keyFile := filepath.Join(certsDir, "client.key")
 	caFile := filepath.Join(certsDir, "ca.crt")
 
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)

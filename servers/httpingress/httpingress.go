@@ -88,6 +88,7 @@ type IngressConfig struct {
 	DataPath          string
 	ErrorPageTemplate *template.Template
 	WorkloadIssuer    *workloadidentity.Issuer
+	OIDCSigningKey    []byte
 	// Instance, when set, adds process identity and readiness to /health.
 	Instance *serverinfo.Source
 	// TrustProxyHeaders honors X-Forwarded-Proto and Forwarded from the peer
@@ -177,10 +178,10 @@ func NewServer(
 		config.RequestTimeout = 60 * time.Second
 	}
 
-	var signingKey []byte
-	if config.DataPath != "" {
+	signingKey := config.OIDCSigningKey
+	if len(signingKey) == 0 && config.DataPath != "" {
 		var err error
-		signingKey, err = loadOrGenerateSigningKey(config.DataPath)
+		signingKey, err = LoadOrGenerateSigningKey(config.DataPath)
 		if err != nil {
 			log.Error("failed to load OIDC signing key, sessions will not survive restarts", "error", err)
 		}

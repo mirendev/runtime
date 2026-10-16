@@ -92,19 +92,19 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	// the dataflow edges that determine startup and shutdown order. The graph
 	// does not change after startup begins.
 	ipDiscovery := newIPDiscoveryBoot(ipDiscoveryInputs(options))
-	registration := newRegistrationBoot(registrationInputs(options))
-	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
-	tracing := newTracingBoot(tracingInputs(options), registration.output, workloadIdentity.output)
 	containerdConfig := containerdBootConfig(options)
 	containerdConfig.ReportVersion = instance.SetComponent
 	containerd := containerdcomp.NewBoot("containerd", containerdConfig)
 	victoriaLogs := newVictoriaLogsBoot(victoriaLogsInputs(options), containerd.Output)
 	victoriaMetrics := newVictoriaMetricsBoot(victoriaMetricsInputs(options), containerd.Output)
-	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), tracing.component, victoriaLogs.output, victoriaMetrics.output)
+	observability := newObservabilityBoot(observabilityInputs(options, entitySyncDiagnostics), victoriaLogs.output, victoriaMetrics.output)
 	pprof := newPprofBoot(observability.output)
 	exitReport := newExitReportBoot(exitReportInputs(options), observability.output)
 	dataRestore := newDataRestoreBoot(dataRestoreInputsFrom(options), containerd.Output, observability.output)
 	etcd := newEtcdBoot(etcdInputs(options), ipDiscovery.output, containerd.Output, observability.output, dataRestore.component)
+	registration := newRegistrationBoot(registrationInputs(options), etcd.output)
+	workloadIdentity := newWorkloadIdentityBoot(workloadIdentityInputs(options), registration.output)
+	tracing := newTracingBoot(tracingInputs(options), registration.output, workloadIdentity.output)
 	network := newNetworkBoot(networkInputs(options), etcd.output, observability.output)
 	registryHostMapping := newRegistryHostMappingBoot(registryHostMappingInputs(hostMapper), network.output)
 	buildkit := newBuildkitBoot(buildkitInputs(options), containerd.Output, registryHostMapping.output, network.output, observability.output, tracing.output)

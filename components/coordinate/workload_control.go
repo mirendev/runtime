@@ -252,6 +252,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 		}
 		clusterHostnames := acmeClusterHostnames(c.CloudAuth.DNSHostname, selfIssuerHostnames(issuerURL, c.AdditionalNames))
 		dnsController := certctrl.NewController(c.Log, c.DataPath, c.AcmeEmail, c.AcmeDNSProvider, clusterHostnames)
+		dnsController.SetSharedStore(c.clusterState)
 		if err := dnsController.Init(ctx); err != nil {
 			return fmt.Errorf("initializing DNS certificate controller: %w", err)
 		}
@@ -270,6 +271,7 @@ func (c *WorkloadControl) Start(ctx context.Context) error {
 			PublicIPs:        c.PublicIPs,
 			ClusterHostnames: acmeClusterHostnames(c.CloudAuth.DNSHostname, c.AdditionalNames),
 		})
+		autocertController.SetSharedStore(c.clusterState)
 		if err := autocertController.Init(ctx); err != nil {
 			return fmt.Errorf("initializing autocert controller: %w", err)
 		}

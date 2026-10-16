@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -22,6 +23,7 @@ import (
 	"miren.dev/runtime/pkg/enrolltoken"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/etcdaccess"
 	"miren.dev/runtime/pkg/joincode"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
@@ -44,6 +46,7 @@ type RegistrationServerConfig struct {
 	CoordinatorInternalIP netip.Addr
 	EtcdEndpoints         []string
 	EtcdPrefix            string
+	EtcdClient            *clientv3.Client
 
 	// Observability endpoints provided to runners at join time
 	VictoriametricsAddress string
@@ -286,6 +289,11 @@ func (s *RegistrationServer) Join(ctx context.Context, req *runner_v1alpha.Runne
 	// Now that invite is claimed, issue the certificate with proper SANs
 	// so the coordinator can connect to the runner's API by IP.
 	certName := runnerCertName(runnerID)
+	if s.EtcdClient != nil {
+		if err := etcdaccess.Runner(ctx, s.EtcdClient, certName); err != nil {
+			return fmt.Errorf("provisioning runner network access: %w", err)
+		}
+	}
 
 	ips, dnsNames := buildRunnerSANs(listenAddr)
 
@@ -489,6 +497,11 @@ func (s *RegistrationServer) reissueRunnerCertificate(ctx context.Context, peer 
 		s.Log.Warn("RefreshCertificate rejected: runner is not registered",
 			"subject", peer.Subject.String())
 		return nil, fmt.Errorf("runner is not registered")
+	}
+	if s.EtcdClient != nil {
+		if err := etcdaccess.Runner(ctx, s.EtcdClient, commonName); err != nil {
+			return nil, fmt.Errorf("provisioning runner network access: %w", err)
+		}
 	}
 
 	ips, dnsNames := buildRunnerSANs(listenAddr)

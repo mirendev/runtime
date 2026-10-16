@@ -19,6 +19,8 @@ import (
 // audience, which is what stops a token minted for one service being replayed
 // against another.
 func (iss *Issuer) VerifyToken(tokenString, expectedAudience string) (*WorkloadClaims, error) {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	if expectedAudience == "" {
 		return nil, fmt.Errorf("an expected audience is required to verify a token")
 	}
@@ -41,7 +43,7 @@ func (iss *Issuer) VerifyToken(tokenString, expectedAudience string) (*WorkloadC
 		return nil, fmt.Errorf("verifying token: %w", err)
 	}
 
-	if !iss.AcceptsIssuer(claims.Issuer) {
+	if claims.Issuer == "" || (claims.Issuer != iss.issuerURL && claims.Issuer != iss.supersededIssuer) {
 		// Wraps the library's sentinel so callers that match on it keep working
 		// now that the check has moved out of jwt.WithIssuer.
 		return nil, fmt.Errorf("verifying token: issuer %q is not this cluster: %w",

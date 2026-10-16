@@ -49,6 +49,8 @@ func (w SystemWorkload) valid() bool {
 // audience and the expected workload together so a token minted for one
 // workload or service cannot be replayed against another.
 func (iss *Issuer) IssueSystemWorkloadToken(workload SystemWorkload, opts TokenOptions) (string, error) {
+	iss.mu.RLock()
+	defer iss.mu.RUnlock()
 	if !workload.valid() {
 		return "", fmt.Errorf("unknown system workload %q", workload)
 	}

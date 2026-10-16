@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -537,6 +538,9 @@ func Abandon(store *Store, id string) (*Operation, error) {
 	}
 	if !changed {
 		return op, fmt.Errorf("%w: %s", ErrNothingToAbandon, id)
+	}
+	if err := writeFileAtomic(store.dir, filepath.Join(store.dir, id+".abandoned"), id, []byte(reason)); err != nil {
+		return nil, err
 	}
 	return op, store.Update(op)
 }

@@ -2,9 +2,11 @@ package coordinate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -12,8 +14,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/etcdtest"
 	"miren.dev/runtime/pkg/lifecyclesync"
 	"miren.dev/runtime/pkg/serverlifecycle"
 )
@@ -265,6 +269,122 @@ func stepByName(op *serverlifecycle.Operation, name string) *serverlifecycle.Nod
 		}
 	}
 	return nil
+}
+
+func TestFleetCheckpointRunRestoresWithoutLocalLedger(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	state, err := clusterstate.New(client, prefix, []byte("test-authority"))
+	require.NoError(t, err)
+	fleet := newFakeFleet()
+	fleet.add("a-runner", "runner", "v1.0.0", compute_v1alpha.READY)
+	u, store := newTestUpgrader(t, fleet)
+	u.WithFleetStore(state)
+	op := handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	// The restored coordinator has etcd but none of the original host's files.
+	require.NoError(t, os.RemoveAll(store.Dir()))
+	u.store, err = serverlifecycle.NewStore(store.Dir())
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- u.Run(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	require.Eventually(t, func() bool {
+		got, err := u.operation(t.Context(), op.ID)
+		return err == nil && got.Succeeded() && got.FinishedAt != nil && len(got.Nodes) == 1 && got.Nodes[0].Succeeded()
+	}, 5*time.Second, 10*time.Millisecond)
+	fleet.mu.Lock()
+	require.Equal(t, []string{"v2.0.0"}, fleet.requests)
+	fleet.mu.Unlock()
+}
+
+func TestFleetCheckpointStaleHandoffCannotReplayFinishedWalk(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	state, err := clusterstate.New(client, prefix, []byte("test-authority"))
+	require.NoError(t, err)
+	fleet := newFakeFleet()
+	fleet.add("a-runner", "runner", "v1.0.0", compute_v1alpha.READY)
+	u, store := newTestUpgrader(t, fleet)
+	u.WithFleetStore(state)
+	op := handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	require.NoError(t, u.drive(t.Context(), op.ID))
+	active, err := u.fleetOperations(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, active, "completed history must not grow the active checkpoint")
+	// Completion committed, but a crash left the older active entry behind.
+	stale, err := json.Marshal(map[string]*serverlifecycle.Operation{op.ID: op})
+	require.NoError(t, err)
+	require.NoError(t, state.Put(t.Context(), fleetCheckpoint, stale))
+	// A restored disk can lag the authoritative etcd checkpoint.
+	require.NoError(t, store.Update(op))
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	require.NoError(t, u.Run(ctx))
+	got, err := u.operation(t.Context(), op.ID)
+	require.NoError(t, err)
+	require.True(t, got.Succeeded())
+	local, err := store.Get(op.ID)
+	require.NoError(t, err)
+	require.True(t, local.Succeeded(), "authoritative completion must release the local busy slot")
+	require.Equal(t, []string{"v2.0.0"}, fleet.requests)
+	// The old monolithic format migrates without losing completion or replaying
+	// an older local handoff, including after an empty-directory restore.
+	legacy, err := json.Marshal(map[string]*serverlifecycle.Operation{got.ID: got})
+	require.NoError(t, err)
+	require.NoError(t, state.Put(t.Context(), fleetCheckpoint, legacy))
+	require.NoError(t, state.Delete(t.Context(), fleetCheckpoint+"/completed/"+op.ID))
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	active, err = u.fleetOperations(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, active)
+	got, err = u.operation(t.Context(), op.ID)
+	require.NoError(t, err)
+	require.True(t, got.Succeeded())
+}
+
+func TestFleetCheckpointHonorsAbandonmentAndExcludesActiveAbandon(t *testing.T) {
+	client, prefix := etcdtest.TestEtcdClient(t)
+	state, err := clusterstate.New(client, prefix, []byte("test-authority"))
+	require.NoError(t, err)
+	fleet := newFakeFleet()
+	fleet.add("a-runner", "runner", "v1.0.0", compute_v1alpha.READY)
+	u, store := newTestUpgrader(t, fleet)
+	u.WithFleetStore(state)
+	op := handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	_, err = serverlifecycle.Abandon(store, op.ID)
+	require.NoError(t, err)
+	// The walker must consume the operator command, not replay the old handoff.
+	require.NoError(t, u.drive(t.Context(), op.ID))
+	got, err := u.operation(t.Context(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, serverlifecycle.PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "abandoned by operator")
+	require.Empty(t, fleet.requests)
+
+	op = handedOff(t, store)
+	require.NoError(t, u.importHandoffs(t.Context(), []*serverlifecycle.Operation{op}))
+	dialing := make(chan struct{})
+	resume := make(chan struct{})
+	u.dial = func(ctx context.Context, address string) (RunnerLifecycleClient, error) {
+		close(dialing)
+		select {
+		case <-resume:
+			return fleet.dial(ctx, address)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- u.drive(ctx, op.ID) }()
+	<-dialing
+	_, err = serverlifecycle.Abandon(store, op.ID)
+	require.ErrorIs(t, err, serverlifecycle.ErrLocked)
+	close(resume)
+	require.NoError(t, <-done)
 }
 
 func TestWalkUpgradesEveryRunnerInOrder(t *testing.T) {

@@ -213,8 +213,10 @@ On a multi-node cluster the value does cross the network once. A runner holds no
 
 Once the container starts, your application holds its own copy for as long as it runs — an environment variable is readable by the process and anything that can inspect it. Miren stops handing the value around; it cannot un-give it to the app you handed it to.
 
-:::warning[Back up the keyring]
-The cluster key lives at `<data-path>/server/secrets.keyring`, alongside the cluster's CA key. **If that file is lost, every stored secret is permanently unrecoverable.** Include it in whatever backs up your data path.
+:::warning[Protect your etcd backups]
+After migration, etcd holds the authoritative secret keyring and cluster CA, encrypted under a host-only key at `<data-path>/server/cluster-sealing.key`. The local `secrets.keyring` and CA files are recoverable caches; the sealing key is not. Back it up separately to a restricted location, never together with snapshots sent to Cloud. Without it, an etcd snapshot cannot decrypt secrets or recover signing credentials.
+
+Restore requires both the snapshot and the original sealing key, installed with permissions `0600` before coordinator startup. See [coordinator metadata](./server-config.md#coordinator-metadata). Losing the sealing key and its separate backup makes secrets unrecoverable. Before upgrading an older cluster, retain its keyring and CA backups until migration succeeds, then keep backing up the sealing key. Restrict snapshot access too: not all application/entity data is encrypted.
 :::
 
 ## The cluster key

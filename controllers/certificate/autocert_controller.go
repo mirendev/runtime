@@ -3,10 +3,12 @@ package certificate
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -22,6 +24,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/components/autotls"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -105,6 +108,30 @@ type AutocertController struct {
 	// computed against a route's old tls_check can't outlive the purge.
 	hostGenMu sync.Mutex
 	hostGen   uint64
+	shared    *clusterstate.Store
+}
+
+// SetSharedStore enables durable ACME cache storage. Call before Init.
+func (c *AutocertController) SetSharedStore(store *clusterstate.Store) { c.shared = store }
+
+type sharedAutocertCache struct {
+	store *clusterstate.Store
+}
+
+func (c sharedAutocertCache) Get(ctx context.Context, key string) ([]byte, error) {
+	v, err := c.store.Get(ctx, "autocert/"+key)
+	if errors.Is(err, clusterstate.ErrNotFound) {
+		return nil, autocert.ErrCacheMiss
+	}
+	return v, err
+}
+
+func (c sharedAutocertCache) Put(ctx context.Context, key string, data []byte) error {
+	return c.store.Put(ctx, "autocert/"+key, data)
+}
+
+func (c sharedAutocertCache) Delete(ctx context.Context, key string) error {
+	return c.store.Delete(ctx, "autocert/"+key)
 }
 
 // acmeFailure records when an ACME attempt failed and how long to wait before
@@ -187,9 +214,16 @@ func (c *AutocertController) Init(ctx context.Context) error {
 	c.fallbackCert = fallbackCert
 	c.log.Info("loaded fallback self-signed certificate for unconfigured hosts")
 
+	cache := autocert.Cache(autocert.DirCache(certsDir))
+	if c.shared != nil {
+		if err := c.importAutocertCache(ctx, certsDir); err != nil {
+			return fmt.Errorf("importing local autocert cache: %w", err)
+		}
+		cache = sharedAutocertCache{store: c.shared}
+	}
 	c.mgr = &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
-		Cache:  autocert.DirCache(certsDir),
+		Cache:  cache,
 		Email:  c.email,
 		HostPolicy: func(ctx context.Context, host string) error {
 			if c.isAllowedHost(ctx, strings.ToLower(host)) {
@@ -218,6 +252,26 @@ func (c *AutocertController) Init(ctx context.Context) error {
 	}
 
 	c.log.Info("autocert controller initialized")
+	return nil
+}
+
+func (c *AutocertController) importAutocertCache(ctx context.Context, certsDir string) error {
+	entries, err := os.ReadDir(certsDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(certsDir, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if _, err := c.shared.Ensure(ctx, "autocert/"+entry.Name(), data); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

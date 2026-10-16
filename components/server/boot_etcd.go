@@ -3,8 +3,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -15,6 +17,7 @@ import (
 )
 
 type etcdBootInputs struct {
+	log      *slog.Logger
 	config   serverconfig.EtcdConfig
 	tls      serverconfig.TLSConfig
 	dataPath string
@@ -30,12 +33,14 @@ type etcdBoot struct {
 	inputs        etcdBootInputs
 	observability observabilityBootOutput
 	server        *etcd.EtcdComponent
+	cancel        context.CancelFunc
 	result        etcdBootOutput
 	output        boot.Output[etcdBootOutput]
 }
 
 func etcdInputs(options StartOptions) etcdBootInputs {
 	return etcdBootInputs{
+		log:      options.Log,
 		config:   options.Config.Etcd,
 		tls:      options.Config.TLS,
 		dataPath: options.Config.Server.GetDataPath(),
@@ -84,7 +89,19 @@ func (b *etcdBoot) startExternal(ctx context.Context) (etcdBootOutput, error) {
 	if _, err := client.Get(readyCtx, b.inputs.config.GetPrefix(), clientv3.WithLimit(1)); err != nil {
 		return etcdBootOutput{}, fmt.Errorf("checking external etcd readiness: %w", err)
 	}
-	return etcdBootOutput{endpoints: endpoints}, nil
+	result := etcdBootOutput{endpoints: endpoints}
+	if err := b.prepareMetadata(ctx, b.inputs.log, result); err != nil {
+		return etcdBootOutput{}, err
+	}
+	return result, nil
+}
+
+func (b *etcdBoot) prepareMetadata(ctx context.Context, log *slog.Logger, result etcdBootOutput) error {
+	config := coordinate.CoordinatorConfig{DataPath: b.inputs.dataPath, Prefix: b.inputs.config.GetPrefix(), EtcdEndpoints: result.endpoints}
+	if result.tls != nil {
+		config.EtcdTLS = result.tls.ClientTLS
+	}
+	return coordinate.NewFoundation(log, config).PrepareMetadata(ctx)
 }
 
 func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, containerd containerdBootOutput, observability observabilityBootOutput) (etcdBootOutput, error) {
@@ -107,15 +124,46 @@ func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBoo
 	b.result.tls = tls
 	config.TLS = &etcd.TLSConfig{CertsDir: tls.CertsDir}
 
-	if err := b.server.Start(ctx, config); err != nil {
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	b.cancel = cancel
+	if err := b.server.Start(runtimeCtx, config); err != nil {
 		return etcdBootOutput{}, err
 	}
 	b.result.endpoints = []string{b.server.ClientEndpoint()}
+	if err := b.prepareMetadata(ctx, log, b.result); err != nil {
+		return etcdBootOutput{}, err
+	}
+	// A snapshot restored into an empty directory bootstraps with a temporary
+	// transport CA. Switch to the restored authority before publishing etcd to
+	// networking clients or runners, not on the following server restart.
+	ca, err := coordinate.EnsureCA(log, b.inputs.dataPath)
+	if err != nil {
+		return etcdBootOutput{}, err
+	}
+	if !bytes.Equal(ca.GetCACertificate(), tls.ClientTLS.CACert) {
+		err := b.server.Stop(ctx)
+		b.cancel()
+		if err != nil {
+			return etcdBootOutput{}, err
+		}
+		tls, err = coordinate.SetupEtcdTLS(log, b.inputs.dataPath, b.inputs.tls.AdditionalNames, ipDiscovery.ipSet.RawIPs())
+		if err != nil {
+			return etcdBootOutput{}, err
+		}
+		b.result.tls = tls
+		runtimeCtx, b.cancel = context.WithCancel(ctx)
+		if err := b.server.Start(runtimeCtx, config); err != nil {
+			return etcdBootOutput{}, err
+		}
+	}
 	log.Info("using embedded etcd", "endpoint", b.server.ClientEndpoint())
 	return b.result, nil
 }
 
 func (b *etcdBoot) stop(ctx context.Context) error {
+	if b.cancel != nil {
+		defer b.cancel()
+	}
 	if b.server == nil {
 		return nil
 	}

@@ -46,11 +46,17 @@ func (c *SecretStore) Start(ctx context.Context) error {
 	if registry == nil {
 		registry = secret.NewRegistry()
 	}
-	secretKeyring, err := keyring.Ensure(c.Log, c.DataPath)
+	shared, err := keyring.NewSharedStore(c.etcdClient, c.Prefix, c.DataPath, c.sealingKey)
+	if err != nil {
+		return err
+	}
+	secretKeyring, release, err := shared.Lock(ctx)
 	if err != nil {
 		return fmt.Errorf("opening secret keyring: %w", err)
 	}
+	release()
 	backend := secretcluster.NewBackend(c.Log, ec, secretKeyring)
+	backend.SharedKeyring = shared
 	if err := registry.Register(backend); err != nil {
 		return fmt.Errorf("registering in-cluster secret backend: %w", err)
 	}

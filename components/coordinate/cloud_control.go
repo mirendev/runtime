@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -588,7 +589,19 @@ func (c *CloudControl) recordIdentityAnchor(issuerURL string) {
 	}
 
 	registrationDir := filepath.Join(c.DataPath, "server")
-	reg, err := registration.LoadRegistration(registrationDir)
+	var reg *registration.StoredRegistration
+	var err error
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if c.clusterState != nil {
+		var data []byte
+		data, err = c.clusterState.Get(ctx, "registration")
+		if err == nil {
+			err = json.Unmarshal(data, &reg)
+		}
+	} else {
+		reg, err = registration.LoadRegistration(registrationDir)
+	}
 	if err != nil {
 		c.Log.Warn("cannot record identity anchor; registration is unreadable", "error", err)
 		return
@@ -604,10 +617,24 @@ func (c *CloudControl) recordIdentityAnchor(issuerURL string) {
 	}
 
 	reg.IdentityIssuerURL = issuerURL
+	data, err := json.Marshal(reg)
+	if err == nil && c.clusterState != nil {
+		err = c.clusterState.Put(ctx, "registration", data)
+	}
+	if err != nil {
+		c.Log.Warn("failed to persist the workload identity anchor", "error", err)
+		return
+	}
 	if err := registration.SaveRegistration(registrationDir, reg); err != nil {
 		c.Log.Warn("failed to record the workload identity anchor reported by cloud",
 			"issuer", issuerURL, "error", err)
 		return
+	}
+	if c.clusterState != nil {
+		if err := c.cacheMetadata("registration", data); err != nil {
+			c.Log.Warn("failed to fingerprint the registration cache", "error", err)
+			return
+		}
 	}
 
 	c.CloudAuth.IdentityIssuerURL = issuerURL

@@ -32,9 +32,11 @@ func registrationInputs(options StartOptions) registrationBootInputs {
 	return registrationBootInputs{log: options.Log, dataPath: options.Config.Server.GetDataPath()}
 }
 
-func newRegistrationBoot(inputs registrationBootInputs) *registrationBoot {
+func newRegistrationBoot(inputs registrationBootInputs, etcd boot.Output[etcdBootOutput]) *registrationBoot {
 	b := &registrationBoot{inputs: inputs}
-	b.component, b.output = boot.Provide0("registration", b.start)
+	b.component, b.output = boot.Provide1("registration", etcd, func(ctx context.Context, _ etcdBootOutput) (registrationBootOutput, error) {
+		return b.start(ctx)
+	})
 	return b
 }
 

@@ -68,10 +68,9 @@ func observabilityInputs(options StartOptions, entitySync *entitysync.Diagnostic
 	}
 }
 
-func newObservabilityBoot(inputs observabilityBootInputs, tracing *boot.Component, victoriaLogs boot.Output[victoriaLogsBootOutput], victoriaMetrics boot.Output[victoriaMetricsBootOutput]) *observabilityBoot {
+func newObservabilityBoot(inputs observabilityBootInputs, victoriaLogs boot.Output[victoriaLogsBootOutput], victoriaMetrics boot.Output[victoriaMetricsBootOutput]) *observabilityBoot {
 	b := &observabilityBoot{inputs: inputs}
 	b.component, b.output = boot.Provide2("observability", victoriaLogs, victoriaMetrics, b.start,
-		boot.DependsOn(tracing),
 		boot.WithStop(b.stop, componentStopTimeout))
 	return b
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns"
 	"github.com/go-acme/lego/v4/registration"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/clusterstate"
 	"miren.dev/runtime/pkg/entity"
 )
 
@@ -41,9 +42,13 @@ type Controller struct {
 	initOnce   sync.Once
 	initErr    error
 	certCache  map[string]*cachedCert
+	certMisses map[string]time.Time
 	cacheMutex sync.RWMutex
 	failures   sync.Map // domain -> time.Time
+	shared     *clusterstate.Store
 }
+
+func (c *Controller) SetSharedStore(store *clusterstate.Store) { c.shared = store }
 
 const dnsFailureCooldown = 5 * time.Minute
 
@@ -117,7 +122,13 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 	}
 
 	// Load or create account
-	user, err := c.loadOrCreateAccount(certsDir)
+	var user *legoUser
+	var err error
+	if c.shared != nil {
+		user, err = c.ensureSharedAccount(ctx, certsDir)
+	} else {
+		user, err = c.loadOrCreateAccount(certsDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load/create ACME account: %w", err)
 	}
@@ -143,6 +154,24 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 	}
 
 	// Register account if needed
+	var accountLock *clusterstate.Lock
+	if user.Registration == nil {
+		if c.shared != nil {
+			accountLock, err = c.shared.Lock(ctx, "acme/account")
+			if err != nil {
+				return err
+			}
+			defer accountLock.Unlock()
+			data, getErr := c.shared.Get(ctx, "acme/dns-account")
+			if getErr == nil {
+				current, decodeErr := decodeAccount(data)
+				if decodeErr != nil {
+					return decodeErr
+				}
+				user.Registration = current.Registration
+			}
+		}
+	}
 	if user.Registration == nil {
 		c.Log.Info("registering new ACME account", "email", user.Email)
 		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
@@ -150,6 +179,15 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 			return fmt.Errorf("failed to register ACME account: %w", err)
 		}
 		user.Registration = reg
+		if accountLock != nil {
+			data, encodeErr := encodeAccount(user)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			if err := accountLock.Put(ctx, "acme/dns-account", data); err != nil {
+				return err
+			}
+		}
 		if err := c.saveAccount(certsDir, user); err != nil {
 			c.Log.Error("failed to save account", "error", err)
 		}
@@ -158,7 +196,10 @@ func (c *Controller) initializeLego(ctx context.Context) error {
 	c.client = client
 
 	// Load existing certificates from disk into cache
-	if err := c.loadExistingCerts(certsDir); err != nil {
+	if err := c.loadExistingCerts(ctx, certsDir); err != nil {
+		if c.shared != nil {
+			return fmt.Errorf("importing existing certificates: %w", err)
+		}
 		c.Log.Warn("failed to load existing certificates", "error", err)
 	}
 
@@ -206,7 +247,7 @@ func (c *Controller) renewClusterHostnames(ctx context.Context) {
 }
 
 // loadExistingCerts scans the certs directory and loads all existing certificates into cache
-func (c *Controller) loadExistingCerts(certsDir string) error {
+func (c *Controller) loadExistingCerts(ctx context.Context, certsDir string) error {
 	entries, err := os.ReadDir(certsDir)
 	if err != nil {
 		return fmt.Errorf("failed to read certs directory: %w", err)
@@ -240,6 +281,20 @@ func (c *Controller) loadExistingCerts(certsDir string) error {
 		if err != nil {
 			c.Log.Warn("failed to read key file", "domain", domain, "error", err)
 			continue
+		}
+		if c.shared != nil {
+			bundle, marshalErr := json.Marshal(certificateBundle{Certificate: certPEM, PrivateKey: keyPEM})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			authoritative, ensureErr := c.shared.Ensure(ctx, "acme/certificates/"+domain, bundle)
+			if ensureErr != nil {
+				return ensureErr
+			}
+			var value certificateBundle
+			if json.Unmarshal(authoritative, &value) == nil {
+				certPEM, keyPEM = value.Certificate, value.PrivateKey
+			}
 		}
 
 		if _, err := c.loadCertIntoCache(domain, certPEM, keyPEM); err != nil {
@@ -331,6 +386,23 @@ func (c *Controller) Delete(ctx context.Context, id entity.Id, obj *ingress_v1al
 }
 
 func (c *Controller) provisionCertificate(ctx context.Context, domain string) error {
+	var sharedLock *clusterstate.Lock
+	if c.shared != nil {
+		var err error
+		sharedLock, err = c.shared.Lock(ctx, "acme/"+domain)
+		if err != nil {
+			return err
+		}
+		defer sharedLock.Unlock()
+		if bundle, err := c.shared.Get(ctx, "acme/certificates/"+domain); err == nil {
+			var value certificateBundle
+			if json.Unmarshal(bundle, &value) == nil {
+				if cert, loadErr := c.loadCertIntoCache(domain, value.Certificate, value.PrivateKey); loadErr == nil && time.Until(cert.notAfter) > 30*24*time.Hour {
+					return nil
+				}
+			}
+		}
+	}
 	certsDir := filepath.Join(c.dataPath, "certs")
 	certFile := filepath.Join(certsDir, domain+".crt")
 	keyFile := filepath.Join(certsDir, domain+".key")
@@ -361,6 +433,15 @@ func (c *Controller) provisionCertificate(ctx context.Context, domain string) er
 	if err != nil {
 		return &acmeObtainError{err: err}
 	}
+	if c.shared != nil {
+		bundle, err := json.Marshal(certificateBundle{Certificate: cert.Certificate, PrivateKey: cert.PrivateKey})
+		if err != nil {
+			return err
+		}
+		if err := sharedLock.Put(ctx, "acme/certificates/"+domain, bundle); err != nil {
+			return fmt.Errorf("saving shared certificate: %w", err)
+		}
+	}
 
 	// Save to disk
 	if err := os.WriteFile(certFile, cert.Certificate, 0644); err != nil {
@@ -374,6 +455,11 @@ func (c *Controller) provisionCertificate(ctx context.Context, domain string) er
 	// Load into cache
 	_, err = c.loadCertIntoCache(domain, cert.Certificate, cert.PrivateKey)
 	return err
+}
+
+type certificateBundle struct {
+	Certificate []byte `json:"certificate"`
+	PrivateKey  []byte `json:"private_key"`
 }
 
 func (c *Controller) loadCertIntoCache(domain string, certPEM, keyPEM []byte) (*cachedCert, error) {
@@ -400,6 +486,7 @@ func (c *Controller) loadCertIntoCache(domain string, certPEM, keyPEM []byte) (*
 
 	c.cacheMutex.Lock()
 	c.certCache[domain] = cached
+	delete(c.certMisses, domain)
 	c.cacheMutex.Unlock()
 
 	return cached, nil
@@ -419,6 +506,34 @@ func (c *Controller) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificat
 	}
 
 	cached := c.getCachedCert(domain)
+	c.cacheMutex.RLock()
+	lastMiss := c.certMisses[domain]
+	c.cacheMutex.RUnlock()
+	if cached == nil && c.shared != nil && time.Since(lastMiss) >= time.Minute {
+		ctx, cancel := context.WithTimeout(hello.Context(), 2*time.Second)
+		defer cancel()
+		if bundle, err := c.shared.Get(ctx, "acme/certificates/"+domain); err == nil {
+			var value certificateBundle
+			if json.Unmarshal(bundle, &value) == nil {
+				cached, _ = c.loadCertIntoCache(domain, value.Certificate, value.PrivateKey)
+			}
+		} else if errors.Is(err, clusterstate.ErrNotFound) {
+			c.cacheMutex.Lock()
+			if c.certMisses == nil {
+				c.certMisses = make(map[string]time.Time)
+			}
+			// SNI is attacker-controlled: bound both retention and cache size.
+			for name, missedAt := range c.certMisses {
+				if time.Since(missedAt) >= time.Minute {
+					delete(c.certMisses, name)
+				}
+			}
+			if len(c.certMisses) < 256 {
+				c.certMisses[domain] = time.Now()
+			}
+			c.cacheMutex.Unlock()
+		}
+	}
 	if cached == nil {
 		return nil, fmt.Errorf("no certificate available for %s", domain)
 	}
@@ -515,6 +630,54 @@ func (c *Controller) saveAccount(certsDir string, user *legoUser) error {
 	if err := os.WriteFile(keyFile, pem.EncodeToMemory(pemBlock), 0600); err != nil {
 		return fmt.Errorf("failed to write key file: %w", err)
 	}
-
 	return nil
+}
+
+type sharedAccount struct {
+	Email        string                 `json:"email"`
+	Registration *registration.Resource `json:"registration,omitempty"`
+	Key          []byte                 `json:"key"`
+}
+
+func encodeAccount(user *legoUser) ([]byte, error) {
+	key, err := x509.MarshalECPrivateKey(user.key.(*ecdsa.PrivateKey))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(sharedAccount{Email: user.Email, Registration: user.Registration, Key: key})
+}
+
+func decodeAccount(data []byte) (*legoUser, error) {
+	var value sharedAccount
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	key, err := x509.ParseECPrivateKey(value.Key)
+	if err != nil {
+		return nil, err
+	}
+	return &legoUser{Email: value.Email, Registration: value.Registration, key: key}, nil
+}
+
+func (c *Controller) ensureSharedAccount(ctx context.Context, certsDir string) (*legoUser, error) {
+	data, err := c.shared.Get(ctx, "acme/dns-account")
+	if err == nil {
+		return decodeAccount(data)
+	}
+	if !errors.Is(err, clusterstate.ErrNotFound) {
+		return nil, err
+	}
+	local, err := c.loadOrCreateAccount(certsDir)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap, err := encodeAccount(local)
+	if err != nil {
+		return nil, err
+	}
+	data, err = c.shared.Ensure(ctx, "acme/dns-account", bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAccount(data)
 }

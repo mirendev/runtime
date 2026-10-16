@@ -89,6 +89,29 @@ func TestEnsureCAIdempotent(t *testing.T) {
 	r.Equal(first, second, "EnsureCA should reuse the existing CA on subsequent calls")
 }
 
+func TestEnsureCARecoversInterruptedCredentialMirrors(t *testing.T) {
+	r := require.New(t)
+	log := slog.New(slog.DiscardHandler)
+	dir := t.TempDir()
+	ca, err := coordinate.EnsureCA(log, dir)
+	r.NoError(err)
+	cert, key, err := ca.ExportPEM()
+	r.NoError(err)
+	// The bundle committed, but neither compatibility mirror finished writing.
+	r.NoError(os.WriteFile(filepath.Join(dir, "server", "ca.crt"), []byte("partial"), 0644))
+	r.NoError(os.WriteFile(filepath.Join(dir, "server", "ca.key"), nil, 0600))
+	recovered, err := coordinate.EnsureCA(log, dir)
+	r.NoError(err)
+	r.Equal(ca.GetCACertificate(), recovered.GetCACertificate())
+	for name, expected := range map[string][]byte{"ca.crt": cert, "ca.key": key} {
+		data, err := os.ReadFile(filepath.Join(dir, "server", name))
+		r.NoError(err)
+		r.Equal(expected, data)
+	}
+	_, err = coordinate.SetupEtcdTLS(log, dir, nil, nil)
+	r.NoError(err)
+}
+
 // TestEnsureCADoesNotOverwriteUnreadableCA guards against silently regenerating
 // a CA when its cert exists but can't be read. A transient read error must not
 // be mistaken for absence, since regenerating would clobber a valid CA and
