@@ -67,6 +67,7 @@ var (
 		"sandboxpools": set("list"),
 		"routes":       set("list", "show"),
 		"logs":         set("applogs", "streamlogs", "streamlogchunks", "streamlogchunksv2"),
+		"crud":         set("listversions"),
 		// getconfiguration is deliberately excluded: it returns resolved env
 		// including sibling-service secrets. Revisit if a read role should see it.
 		"deployment": set("listdeployments", "getdeploymentbyid", "getactivedeployment"),

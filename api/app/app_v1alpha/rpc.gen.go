@@ -12,6 +12,135 @@ import (
 	"miren.dev/runtime/pkg/rpc/stream"
 )
 
+type appVersionSummaryData struct {
+	Id             *string             `cbor:"0,keyasint,omitempty" json:"id,omitempty"`
+	Version        *string             `cbor:"1,keyasint,omitempty" json:"version,omitempty"`
+	Status         *string             `cbor:"2,keyasint,omitempty" json:"status,omitempty"`
+	CreatedAt      *standard.Timestamp `cbor:"3,keyasint,omitempty" json:"created_at,omitempty"`
+	EphemeralLabel *string             `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
+	EphemeralTtl   *string             `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
+	ExpiresAt      *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"expires_at,omitempty"`
+}
+
+type AppVersionSummary struct {
+	data appVersionSummaryData
+}
+
+func (v *AppVersionSummary) HasId() bool {
+	return v.data.Id != nil
+}
+
+func (v *AppVersionSummary) Id() string {
+	if v.data.Id == nil {
+		return ""
+	}
+	return *v.data.Id
+}
+
+func (v *AppVersionSummary) SetId(id string) {
+	v.data.Id = &id
+}
+
+func (v *AppVersionSummary) HasVersion() bool {
+	return v.data.Version != nil
+}
+
+func (v *AppVersionSummary) Version() string {
+	if v.data.Version == nil {
+		return ""
+	}
+	return *v.data.Version
+}
+
+func (v *AppVersionSummary) SetVersion(version string) {
+	v.data.Version = &version
+}
+
+func (v *AppVersionSummary) HasStatus() bool {
+	return v.data.Status != nil
+}
+
+func (v *AppVersionSummary) Status() string {
+	if v.data.Status == nil {
+		return ""
+	}
+	return *v.data.Status
+}
+
+func (v *AppVersionSummary) SetStatus(status string) {
+	v.data.Status = &status
+}
+
+func (v *AppVersionSummary) HasCreatedAt() bool {
+	return v.data.CreatedAt != nil
+}
+
+func (v *AppVersionSummary) CreatedAt() *standard.Timestamp {
+	return v.data.CreatedAt
+}
+
+func (v *AppVersionSummary) SetCreatedAt(created_at *standard.Timestamp) {
+	v.data.CreatedAt = created_at
+}
+
+func (v *AppVersionSummary) HasEphemeralLabel() bool {
+	return v.data.EphemeralLabel != nil
+}
+
+func (v *AppVersionSummary) EphemeralLabel() string {
+	if v.data.EphemeralLabel == nil {
+		return ""
+	}
+	return *v.data.EphemeralLabel
+}
+
+func (v *AppVersionSummary) SetEphemeralLabel(ephemeral_label string) {
+	v.data.EphemeralLabel = &ephemeral_label
+}
+
+func (v *AppVersionSummary) HasEphemeralTtl() bool {
+	return v.data.EphemeralTtl != nil
+}
+
+func (v *AppVersionSummary) EphemeralTtl() string {
+	if v.data.EphemeralTtl == nil {
+		return ""
+	}
+	return *v.data.EphemeralTtl
+}
+
+func (v *AppVersionSummary) SetEphemeralTtl(ephemeral_ttl string) {
+	v.data.EphemeralTtl = &ephemeral_ttl
+}
+
+func (v *AppVersionSummary) HasExpiresAt() bool {
+	return v.data.ExpiresAt != nil
+}
+
+func (v *AppVersionSummary) ExpiresAt() *standard.Timestamp {
+	return v.data.ExpiresAt
+}
+
+func (v *AppVersionSummary) SetExpiresAt(expires_at *standard.Timestamp) {
+	v.data.ExpiresAt = expires_at
+}
+
+func (v *AppVersionSummary) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *AppVersionSummary) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *AppVersionSummary) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *AppVersionSummary) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type logTargetData struct {
 	App     *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
 	Sandbox *string `cbor:"1,keyasint,omitempty" json:"sandbox,omitempty"`
@@ -3637,6 +3766,96 @@ func (v *CrudRestartResults) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, &v.data)
 }
 
+type crudListVersionsArgsData struct {
+	App       *string `cbor:"0,keyasint,omitempty" json:"app,omitempty"`
+	Ephemeral *bool   `cbor:"1,keyasint,omitempty" json:"ephemeral,omitempty"`
+	Limit     *int64  `cbor:"2,keyasint,omitempty" json:"limit,omitempty"`
+}
+
+type CrudListVersionsArgs struct {
+	call rpc.Call
+	data crudListVersionsArgsData
+}
+
+func (v *CrudListVersionsArgs) HasApp() bool {
+	return v.data.App != nil
+}
+
+func (v *CrudListVersionsArgs) App() string {
+	if v.data.App == nil {
+		return ""
+	}
+	return *v.data.App
+}
+
+func (v *CrudListVersionsArgs) HasEphemeral() bool {
+	return v.data.Ephemeral != nil
+}
+
+func (v *CrudListVersionsArgs) Ephemeral() bool {
+	if v.data.Ephemeral == nil {
+		return false
+	}
+	return *v.data.Ephemeral
+}
+
+func (v *CrudListVersionsArgs) HasLimit() bool {
+	return v.data.Limit != nil
+}
+
+func (v *CrudListVersionsArgs) Limit() int64 {
+	if v.data.Limit == nil {
+		return 0
+	}
+	return *v.data.Limit
+}
+
+func (v *CrudListVersionsArgs) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListVersionsArgs) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListVersionsArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListVersionsArgs) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
+type crudListVersionsResultsData struct {
+	Versions *[]*AppVersionSummary `cbor:"0,keyasint,omitempty" json:"versions,omitempty"`
+}
+
+type CrudListVersionsResults struct {
+	call rpc.Call
+	data crudListVersionsResultsData
+}
+
+func (v *CrudListVersionsResults) SetVersions(versions []*AppVersionSummary) {
+	x := slices.Clone(versions)
+	v.data.Versions = &x
+}
+
+func (v *CrudListVersionsResults) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(v.data)
+}
+
+func (v *CrudListVersionsResults) UnmarshalCBOR(data []byte) error {
+	return cbor.Unmarshal(data, &v.data)
+}
+
+func (v *CrudListVersionsResults) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.data)
+}
+
+func (v *CrudListVersionsResults) UnmarshalJSON(data []byte) error {
+	return json.Unmarshal(data, &v.data)
+}
+
 type CrudNew struct {
 	rpc.Call
 	args    CrudNewArgs
@@ -3923,6 +4142,32 @@ func (t *CrudRestart) Results() *CrudRestartResults {
 	return results
 }
 
+type CrudListVersions struct {
+	rpc.Call
+	args    CrudListVersionsArgs
+	results CrudListVersionsResults
+}
+
+func (t *CrudListVersions) Args() *CrudListVersionsArgs {
+	args := &t.args
+	if args.call != nil {
+		return args
+	}
+	args.call = t.Call
+	t.Call.Args(args)
+	return args
+}
+
+func (t *CrudListVersions) Results() *CrudListVersionsResults {
+	results := &t.results
+	if results.call != nil {
+		return results
+	}
+	results.call = t.Call
+	t.Call.Results(results)
+	return results
+}
+
 type Crud interface {
 	New(ctx context.Context, state *CrudNew) error
 	SetConfiguration(ctx context.Context, state *CrudSetConfiguration) error
@@ -3935,6 +4180,7 @@ type Crud interface {
 	SetInitialEnvVars(ctx context.Context, state *CrudSetInitialEnvVars) error
 	DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) error
 	Restart(ctx context.Context, state *CrudRestart) error
+	ListVersions(ctx context.Context, state *CrudListVersions) error
 }
 
 type reexportCrud struct {
@@ -3982,6 +4228,10 @@ func (reexportCrud) DeleteEnvVar(ctx context.Context, state *CrudDeleteEnvVar) e
 }
 
 func (reexportCrud) Restart(ctx context.Context, state *CrudRestart) error {
+	panic("not implemented")
+}
+
+func (reexportCrud) ListVersions(ctx context.Context, state *CrudListVersions) error {
 	panic("not implemented")
 }
 
@@ -4162,6 +4412,26 @@ func AdaptCrud(t Crud) *rpc.Interface {
 			},
 			Handler: func(ctx context.Context, call rpc.Call) error {
 				return t.Restart(ctx, &CrudRestart{Call: call})
+			},
+		},
+		{
+			Name:          "listVersions",
+			InterfaceName: "Crud",
+			Index:         0,
+			Public:        false,
+			Params:        []string{"app", "ephemeral", "limit"},
+			HTTP: &rpc.HTTPBinding{
+				Verb:       "GET",
+				Path:       "/api/v1/apps/{app}/versions",
+				Body:       "",
+				PathParams: []string{"app"},
+				Query: []rpc.HTTPParam{
+					{Name: "ephemeral", Kind: "bool"},
+					{Name: "limit", Kind: "int"},
+				},
+			},
+			Handler: func(ctx context.Context, call rpc.Call) error {
+				return t.ListVersions(ctx, &CrudListVersions{Call: call})
 			},
 		},
 	}
@@ -4630,6 +4900,38 @@ func (v CrudClient) Restart(ctx context.Context, app string, service string) (*C
 	}
 
 	return &CrudClientRestartResults{client: v.Client, data: ret}, nil
+}
+
+type CrudClientListVersionsResults struct {
+	client rpc.Client
+	data   crudListVersionsResultsData
+}
+
+func (v *CrudClientListVersionsResults) HasVersions() bool {
+	return v.data.Versions != nil
+}
+
+func (v *CrudClientListVersionsResults) Versions() []*AppVersionSummary {
+	if v.data.Versions == nil {
+		return nil
+	}
+	return *v.data.Versions
+}
+
+func (v CrudClient) ListVersions(ctx context.Context, app string, ephemeral bool, limit int64) (*CrudClientListVersionsResults, error) {
+	args := CrudListVersionsArgs{}
+	args.data.App = &app
+	args.data.Ephemeral = &ephemeral
+	args.data.Limit = &limit
+
+	var ret crudListVersionsResultsData
+
+	err := v.Call(ctx, "listVersions", &args, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CrudClientListVersionsResults{client: v.Client, data: ret}, nil
 }
 
 type userQueryWhoAmIArgsData struct{}

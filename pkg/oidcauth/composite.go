@@ -32,6 +32,7 @@ var oidcDeployRole = map[string]map[string]bool{
 	},
 	"crud": {
 		"list":             true,
+		"listversions":     true,
 		"getconfiguration": true,
 	},
 	"builder": {
