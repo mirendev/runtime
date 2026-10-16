@@ -148,9 +148,9 @@ func TestSandboxLifecycle(t *testing.T) {
 					other := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method,
 						Metadata: map[string]any{"app": "other", "bound_app": "other"}})
 					_, err = client.Stop(other, sbID.String())
-					require.Error(t, err)
+					require.EqualError(t, err, "unauthorized")
 					_, err = client.Delete(other, sbID.String())
-					require.Error(t, err)
+					require.EqualError(t, err, "unauthorized")
 				}
 				require.Equal(t, status, func() compute_v1alpha.SandboxStatus {
 					var got compute_v1alpha.Sandbox
@@ -164,9 +164,9 @@ func TestSandboxLifecycle(t *testing.T) {
 						bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method,
 							Metadata: map[string]any{"app": "shop", "bound_app": "shop"}})
 						_, err = client.Stop(bound, "target")
-						require.Error(t, err)
+						require.EqualError(t, err, "unauthorized")
 						_, err = client.Delete(bound, sbID.String())
-						require.Error(t, err)
+						require.EqualError(t, err, "unauthorized")
 					}
 					// Operator/cluster callers may recover unowned or orphaned sandboxes.
 					own = rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodCert, Subject: "operator"})
@@ -277,9 +277,21 @@ func TestLifecycleTargetResolution(t *testing.T) {
 	client := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), inmem.Client))))
 	for _, target := range []string{"missing", appID.String()} {
 		_, err := client.Stop(ctx, target)
-		require.Error(t, err)
+		if target == "missing" {
+			require.ErrorContains(t, err, "not found")
+		} else {
+			require.ErrorContains(t, err, "not a sandbox")
+		}
 		_, err = client.Delete(ctx, target)
 		require.Error(t, err)
+		for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
+			bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method,
+				Metadata: map[string]any{"app": "shop", "bound_app": "shop"}})
+			_, err := client.Stop(bound, target)
+			require.EqualError(t, err, "unauthorized")
+			_, err = client.Delete(bound, target)
+			require.EqualError(t, err, "unauthorized")
+		}
 	}
 	var app core_v1alpha.App
 	require.NoError(t, inmem.Client.GetById(ctx, appID, &app))
@@ -460,8 +472,10 @@ func TestSandboxLifecycleRejectsAliasedOwnerReferences(t *testing.T) {
 				bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method, Metadata: map[string]any{"app": "shop", "bound_app": "shop"}})
 				_, err := client.Stop(bound, id.String())
 				require.ErrorIs(t, err, rpc.ErrUnauthorized)
+				require.EqualError(t, err, "unauthorized")
 				_, err = client.Delete(bound, id.String())
 				require.ErrorIs(t, err, rpc.ErrUnauthorized)
+				require.EqualError(t, err, "unauthorized")
 			}
 			var current compute_v1alpha.Sandbox
 			require.NoError(t, store.Client.GetById(ctx, id, &current))

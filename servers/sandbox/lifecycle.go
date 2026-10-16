@@ -14,20 +14,27 @@ import (
 // poolless app-run sandboxes. Unowned/operator sandboxes are only reachable by
 // unbound callers whose method permission is checked by the RPC authorizer.
 func (s *Server) authorizedSandbox(ctx context.Context, name string) (*compute_v1alpha.Sandbox, int64, error) {
+	bound := rpc.BoundApp(ctx) != ""
 	var sb compute_v1alpha.Sandbox
 	ent, err := s.ec.GetWithEntity(ctx, name, &sb)
 	if err != nil {
 		ent, err = s.ec.GetByIdWithEntity(ctx, entity.Id(name), &sb)
 		if err != nil {
+			if bound {
+				return nil, 0, rpc.ErrUnauthorized
+			}
 			return nil, 0, fmt.Errorf("sandbox %q not found: %w", name, err)
 		}
 	}
 	if !sb.Is(ent.Entity()) {
+		if bound {
+			return nil, 0, rpc.ErrUnauthorized
+		}
 		return nil, 0, fmt.Errorf("%q is not a sandbox", name)
 	}
 	// Method-authorized cluster callers must be able to recover sandboxes
 	// whose pool, version, or app has already been deleted.
-	if rpc.BoundApp(ctx) == "" {
+	if !bound {
 		return &sb, ent.Revision(), nil
 	}
 
@@ -38,20 +45,20 @@ func (s *Server) authorizedSandbox(ctx context.Context, name string) (*compute_v
 		var pool compute_v1alpha.SandboxPool
 		poolEnt, err := s.ec.GetByIdWithEntity(ctx, entity.Id(poolID), &pool)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		if pool.ID.String() != poolID || !pool.Is(poolEnt.Entity()) {
-			return nil, 0, rpc.AppAccessError(ctx, "")
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		appID = pool.App
 	} else if !entity.Empty(sb.Spec.Version) {
 		var version core_v1alpha.AppVersion
 		versionEnt, err := s.ec.GetByIdWithEntity(ctx, sb.Spec.Version, &version)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		if version.ID != sb.Spec.Version || !version.Is(versionEnt.Entity()) {
-			return nil, 0, rpc.AppAccessError(ctx, "")
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		appID = version.App
 	}
@@ -61,17 +68,17 @@ func (s *Server) authorizedSandbox(ctx context.Context, name string) (*compute_v
 		var app core_v1alpha.App
 		appEnt, err := s.ec.GetByIdWithEntity(ctx, appID, &app)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		if app.ID != appID || !app.Is(appEnt.Entity()) {
-			return nil, 0, rpc.AppAccessError(ctx, "")
+			return nil, 0, rpc.ErrUnauthorized
 		}
 		var owner core_v1alpha.Metadata
 		owner.Decode(appEnt.Entity())
 		appName = owner.Name
 	}
 	if !rpc.AllowApp(ctx, appName) {
-		return nil, 0, rpc.AppAccessError(ctx, appName)
+		return nil, 0, rpc.ErrUnauthorized
 	}
 	return &sb, ent.Revision(), nil
 }
