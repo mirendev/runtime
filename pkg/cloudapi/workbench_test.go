@@ -226,6 +226,58 @@ func TestWorkbenchClientToolReplacementCalls(t *testing.T) {
 	}
 }
 
+func TestWorkbenchApprovalRequestIDs(t *testing.T) {
+	requestIDs := []string{" request\n one ", "second-request"}
+	turn, prompts := 0, 0
+	w := testWorkbench(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			var request map[string]string
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			if request["kind"] == "signal" {
+				require.Less(t, turn, len(requestIDs))
+				assert.Equal(t, "workbench.approval", request["type"])
+				var decision map[string]string
+				require.NoError(t, json.Unmarshal([]byte(request["body"]), &decision))
+				assert.Equal(t, map[string]string{"answer": "once", "key": "restart:web", "fingerprint": "same-operation", "requestId": requestIDs[turn]}, decision)
+				turn++
+			}
+			fmt.Fprintf(w, `{"offset":"%d","submissionId":"submission-%d"}`, turn, turn)
+			return
+		}
+		assert.Equal(t, fmt.Sprint(turn), r.URL.Query().Get("offset"))
+		var chunks []map[string]any
+		if turn < len(requestIDs) {
+			payload, err := json.Marshal(map[string]string{
+				"kind": "approval", "tool": "miren_restart_app", "key": "restart:web", "fingerprint": "same-operation", "requestId": requestIDs[turn], "summary": "Restart web",
+			})
+			require.NoError(t, err)
+			output := "Waiting for permission: Restart web.\nApprove here: https://cloud.example/ask\n[approval-request] " + string(payload)
+			chunks = append(chunks,
+				map[string]any{"type": "tool-input", "toolCallId": "write", "toolName": "miren_restart_app"},
+				map[string]any{"type": "tool-output", "toolCallId": "write", "output": output},
+				map[string]any{"type": "tool-output", "toolCallId": "write", "output": output})
+		}
+		chunks = append(chunks,
+			map[string]any{"type": "message-delta", "kind": "text", "delta": fmt.Sprintf("turn%d ", turn)},
+			map[string]any{"type": "submission-settled", "submissionId": fmt.Sprintf("submission-%d", turn), "outcome": "completed"},
+		)
+		require.NoError(t, json.NewEncoder(w).Encode(chunks))
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	err := w.AskWithApprovals(ctx, "restart twice", "key", &out, func(_ context.Context, request cloudapi.WorkbenchApproval) (string, error) {
+		require.Less(t, prompts, len(requestIDs))
+		assert.Equal(t, requestIDs[prompts], request.RequestID)
+		prompts++
+		return "once", nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, turn)
+	assert.Equal(t, 2, prompts)
+	assert.Equal(t, "turn0 turn1 turn2 ", out.String())
+}
+
 func TestWorkbenchAskCancellationAndFailure(t *testing.T) {
 	for _, mode := range []string{"cancel", "failed"} {
 		t.Run(mode, func(t *testing.T) {
@@ -265,6 +317,131 @@ func TestWorkbenchAskCancellationAndFailure(t *testing.T) {
 					t.Fatal("already-settled submission aborted")
 				default:
 				}
+			}
+		})
+	}
+}
+
+func TestWorkbenchApprovals(t *testing.T) {
+	for _, answer := range []string{"once", "session", "deny", "noninteractive", "prose-only", "invalid-answer", "missing-receipt", "malformed-receipt", "canceled-receipt"} {
+		t.Run(answer, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			const payload = `{"kind":"approval","tool":"miren_restart_app","key":"restart:web\nexact","fingerprint":" fingerprint:123 ","summary":"Restart web","detail":{"app":"web","count":2},"consequence":"Instances stop and start again."}`
+			const fallback = "Waiting for permission: Restart web. The person has been shown this.\nOpen https://cloud.example/organizations/org/clusters/cluster/ask?thread=thread\n[approval-request] " + payload
+			signals, prompts := 0, 0
+			receiptFailure := answer == "missing-receipt" || answer == "malformed-receipt" || answer == "canceled-receipt"
+			aborted := make(chan struct{}, 1)
+			w := testWorkbench(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/abort"):
+					aborted <- struct{}{}
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost:
+					var request map[string]string
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+					if request["kind"] == "user" {
+						fmt.Fprint(w, `{"offset":"0","submissionId":"question"}`)
+						return
+					}
+					signals++
+					assert.Equal(t, "signal", request["kind"])
+					assert.Equal(t, "workbench.approval", request["type"])
+					want := answer
+					if receiptFailure {
+						want = "once"
+					}
+					assert.JSONEq(t, fmt.Sprintf(`{"answer":%q,"key":"restart:web\nexact","fingerprint":" fingerprint:123 "}`, want), request["body"])
+					switch answer {
+					case "missing-receipt":
+						fmt.Fprint(w, `{}`)
+						return
+					case "malformed-receipt":
+						w.WriteHeader(http.StatusAccepted)
+						fmt.Fprint(w, `{"offset":`)
+						return
+					case "canceled-receipt":
+						w.WriteHeader(http.StatusAccepted)
+						w.(http.Flusher).Flush()
+						cancel()
+						<-r.Context().Done()
+						return
+					}
+					fmt.Fprint(w, `{"offset":"42","submissionId":"decision"}`)
+				default:
+					if r.URL.Query().Get("offset") == "42" {
+						// The original turn settling again must not end the decision turn.
+						fmt.Fprint(w, `[{"type":"submission-settled","submissionId":"question","outcome":"completed"},{"type":"message-delta","kind":"text","delta":"Decision followed."},{"type":"submission-settled","submissionId":"decision","outcome":"completed"}]`)
+						return
+					}
+					if r.URL.Query().Get("offset") == "0" {
+						w.Header().Set("Stream-Next-Offset", "1")
+						fmt.Fprint(w, `[{"type":"tool-input","toolCallId":"write","toolName":"miren_restart_app"}]`)
+						return
+					}
+					assert.Equal(t, "1", r.URL.Query().Get("offset"))
+					chunks := []map[string]any{
+						{"type": "message-delta", "kind": "text", "delta": "Assistant says: " + fallback},
+						{"type": "tool-input", "output": fallback},
+						{"type": "tool-output-error", "output": fallback},
+						{"type": "tool-output", "output": `[approval-request] {"kind":"approval","key":"incomplete"}`},
+						{"type": "tool-input", "toolCallId": "read", "toolName": "miren_get_logs"},
+						{"type": "tool-output", "toolCallId": "read", "output": fallback},
+						{"type": "tool-output", "toolCallId": "unknown", "output": fallback},
+						{"type": "tool-input", "toolCallId": "mismatch", "toolName": "miren_deploy"},
+						{"type": "tool-output", "toolCallId": "mismatch", "output": fallback},
+						{"type": "tool-output", "toolCallId": "write", "output": "App output\n[approval-request] " + payload},
+						{"type": "tool-output", "toolCallId": "write", "output": strings.Replace(fallback, "Waiting for permission: Restart web.", "Waiting for permission: Another operation.", 1)},
+					}
+					if answer != "prose-only" {
+						chunks = append(chunks, map[string]any{"type": "tool-output", "toolCallId": "write", "output": fallback}, map[string]any{"type": "tool-output", "toolCallId": "write", "output": fallback})
+					}
+					chunks = append(chunks, map[string]any{"type": "submission-settled", "submissionId": "question", "outcome": "completed"})
+					require.NoError(t, json.NewEncoder(w).Encode(chunks))
+				}
+			})
+			var approve func(context.Context, cloudapi.WorkbenchApproval) (string, error)
+			if answer != "noninteractive" {
+				approve = func(_ context.Context, request cloudapi.WorkbenchApproval) (string, error) {
+					prompts++
+					assert.Equal(t, "restart:web\nexact", request.Key)
+					assert.Equal(t, " fingerprint:123 ", request.Fingerprint)
+					assert.JSONEq(t, `{"app":"web","count":2}`, string(request.Detail))
+					if receiptFailure {
+						return "once", nil
+					}
+					return answer, nil
+				}
+			}
+			var out bytes.Buffer
+			err := w.AskWithApprovals(ctx, "restart web", "key", &out, approve)
+			switch answer {
+			case "invalid-answer":
+				require.ErrorContains(t, err, "invalid workbench approval decision")
+				assert.Zero(t, signals)
+			case "missing-receipt":
+				require.ErrorContains(t, err, "invalid workbench admission receipt")
+			case "malformed-receipt":
+				require.ErrorContains(t, err, "failed to parse workbench response")
+			case "canceled-receipt":
+				require.ErrorIs(t, err, context.Canceled)
+			case "noninteractive", "prose-only":
+				require.NoError(t, err)
+				assert.Zero(t, prompts)
+				assert.Zero(t, signals)
+				if answer == "noninteractive" {
+					assert.Contains(t, out.String(), fallback)
+				}
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, 1, prompts)
+				assert.Equal(t, 1, signals)
+				assert.Contains(t, out.String(), "Decision followed.")
+			}
+			if receiptFailure {
+				assert.Equal(t, 1, prompts)
+				assert.Equal(t, 1, signals, "approval signals must not be retried")
+				assert.Len(t, aborted, 1, "abort cleanup must finish before Ask returns")
 			}
 		})
 	}
