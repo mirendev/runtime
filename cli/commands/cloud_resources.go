@@ -348,14 +348,19 @@ func registerCloudResourceCommands(d *mflags.Dispatcher) {
 		Confirmation: "Revoke this invite link so it can no longer be used?",
 	}))
 
-	d.Dispatch("cloud enroll-token create", CloudCommand[struct {
-		CloudOrganizationOptions
-		TTL  int    `long:"ttl-hours" description:"Token lifetime in hours (Cloud default 24, maximum 168)"`
-		Tags string `long:"default-tags" description:"Default cluster tags as a JSON object"`
-	}](CloudEndpoint{
-		Name: "cloud enroll-token create", Synopsis: "Mint a cluster enrollment credential and bootstrap config (admin only)", Method: http.MethodPost, Path: cloudOrgPath + "/enroll-tokens",
-		Inputs: map[string]string{"ttl-hours": "body:ttl_hours", "default-tags": "json:default_tags"},
-	}))
+	for _, endpoint := range []CloudEndpoint{
+		{Name: "cloud enroll-token create", Synopsis: "Mint a cluster enrollment credential and bootstrap config (admin only)"},
+		{Name: "cloud cluster cloud-init", Synopsis: "Generate cloud-init user-data to install and enroll a new cluster (admin only)", Text: "user_data"},
+	} {
+		endpoint.Method = http.MethodPost
+		endpoint.Path = cloudOrgPath + "/enroll-tokens"
+		endpoint.Inputs = map[string]string{"ttl-hours": "body:ttl_hours", "default-tags": "json:default_tags"}
+		d.Dispatch(endpoint.Name, CloudCommand[struct {
+			CloudOrganizationOptions
+			TTL  int    `long:"ttl-hours" description:"Token lifetime in hours (Cloud default 24, maximum 168)"`
+			Tags string `long:"default-tags" description:"Default cluster tags as a JSON object"`
+		}](endpoint))
+	}
 	d.Dispatch("cloud enroll-token list", CloudCommand[struct {
 		CloudOrganizationOptions
 		Limit  int `long:"limit" description:"Maximum tokens (Cloud default 50, cap 200)"`

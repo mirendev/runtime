@@ -100,6 +100,7 @@ Complete reference for all `miren` CLI commands.
 | [`miren cloud cluster`](./command/cloud-cluster.md) | Cloud cluster commands |
 | [`miren cloud cluster approve`](./command/cloud-cluster-approve.md) | Approve a pending cluster registration in Miren Cloud |
 | [`miren cloud cluster apps`](./command/cloud-cluster-apps.md) | List mirrored apps in a cloud cluster |
+| [`miren cloud cluster cloud-init`](./command/cloud-cluster-cloud-init.md) | Generate cloud-init user-data to install and enroll a new cluster (admin only) |
 | [`miren cloud cluster delete`](./command/cloud-cluster-delete.md) | Delete a Cloud cluster record (admin only); leaves server registration files unchanged |
 | [`miren cloud cluster list`](./command/cloud-cluster-list.md) | List your clusters in Miren Cloud |
 | [`miren cloud cluster nodes`](./command/cloud-cluster-nodes.md) | Show mirrored node inventory and sync state |

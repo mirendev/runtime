@@ -147,6 +147,42 @@ func TestCloudTextOutput(t *testing.T) {
 	require.NotContains(t, out.Stdout.String(), "inaccessible")
 }
 
+func TestCloudInitOutput(t *testing.T) {
+	snippet := "#include-once\nhttps://cloud.example.test/boot/bootstrap-test\n"
+	response := map[string]any{
+		"id": "enr-test", "token": "secret-test", "expires_at": "2026-10-17T12:00:00Z",
+		"user_data": snippet, "cloud_config": "#cloud-config\npackages:\n  - curl\n",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/api/v1/organizations/org-acme/enroll-tokens", r.URL.Path)
+		require.True(t, strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, map[string]any{"ttl_hours": float64(12), "default_tags": map[string]any{"region": "west"}}, body)
+		w.WriteHeader(http.StatusCreated)
+		require.NoError(t, json.NewEncoder(w).Encode(response))
+	}))
+	defer srv.Close()
+	configWithIdentity(t, srv.URL)
+	args := []string{"-o", "org-acme", "--ttl-hours", "12", "--default-tags", `{"region":"west"}`}
+	out, err := runCloudCommand(t, "cloud cluster cloud-init", args...)
+	require.NoError(t, err)
+	require.Equal(t, snippet, out.Stdout.String(), "redirected output must be usable user-data without labels or JSON quoting")
+	require.Contains(t, out.Stderr.String(), "Using identity")
+	out, err = runCloudCommand(t, "cloud cluster cloud-init", append(args, "--json")...)
+	require.NoError(t, err)
+	var document map[string]any
+	require.NoError(t, json.Unmarshal(out.Stdout.Bytes(), &document))
+	require.Equal(t, response, document)
+	for _, invalid := range []any{nil, "", true} {
+		response["user_data"] = invalid
+		out, err = runCloudCommand(t, "cloud cluster cloud-init", args...)
+		require.ErrorContains(t, err, `"user_data" is not a nonempty string`)
+		require.Empty(t, out.Stdout.String())
+	}
+}
+
 func TestCloudResourceCommands(t *testing.T) {
 	org := "-o org-a"
 	cluster := org + " --cluster clu-b"
@@ -205,6 +241,7 @@ func TestCloudResourceCommands(t *testing.T) {
 		{"cloud invite revoke", "DELETE", "/api/v1/organizations/org-a/invite-links/inv-g", org + " --invite inv-g --force", "", "null", nil},
 		{"cloud enroll-token create", "POST", "/api/v1/organizations/org-a/enroll-tokens", org + " --ttl-hours 12", `{"ttl_hours":12,"default_tags":{"region":"west"}}`, `{"id":"enr-h","token":"secret","cloud_config":"bootstrap"}`, []string{"--default-tags", `{"region":"west"}`}},
 		{"cloud enroll-token create", "POST", "/api/v1/organizations/org-a/enroll-tokens", org, "", `{"id":"enr-h","token":"secret","cloud_config":"bootstrap"}`, nil},
+		{"cloud cluster cloud-init", "POST", "/api/v1/organizations/org-a/enroll-tokens", org, "", `{"id":"enr-h","token":"secret","user_data":"#include-once\nhttps://cloud.example.test/boot/test\n","cloud_config":"#cloud-config\n"}`, nil},
 		{"cloud enroll-token list", "GET", "/api/v1/organizations/org-a/enroll-tokens?limit=9&offset=13", org + " --limit 9 --offset 13", "", `{"enroll_tokens":[{"id":"enr-h","state":"pending"}]}`, nil},
 		{"cloud enroll-token show", "GET", "/api/v1/organizations/org-a/enroll-tokens/enr-h", org + " --token enr-h", "", `{"id":"enr-h","state":"pending"}`, nil},
 		{"cloud enroll-token revoke", "DELETE", "/api/v1/organizations/org-a/enroll-tokens/enr-h", org + " --token enr-h --force", "", "null", nil},

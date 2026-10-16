@@ -153,6 +153,44 @@ miren cloud subdomain claim --organization <org-id> --name myteam
 miren cloud volume list --organization <org-id> --limit 50 --json
 ```
 
+### Cloud-init for a new cluster
+
+Generate the same cloud-init user-data offered by Cloud's **Add A Cluster** page:
+
+```bash
+umask 077
+miren cloud cluster cloud-init -o my-organization > user-data.yaml
+```
+
+Supply `user-data.yaml` as your new Linux machine's cloud-init user-data. It
+contains an `#include-once` bootstrap URL: on first boot, Cloud supplies the
+configuration that installs Miren and enrolls the server in your organization
+without browser approval. Organization-admin access is required. As with other
+Cloud commands, `-o` accepts an organization name or `org-` ID and can be omitted
+when you belong to exactly one organization.
+
+Use `--ttl-hours` (default 24, maximum 168) and `--default-tags` to customize the
+enrollment credential.
+
+:::warning[Enrollment credentials]
+The machine must enroll before the credential expires; each credential can
+enroll one cluster. Cloud can reuse an existing live credential when neither
+option is supplied, so use an explicit TTL when provisioning multiple machines.
+Treat the bootstrap URL and generated files as secrets.
+:::
+
+The default output is only the ready-to-use snippet; identity messages go to
+stderr. `--json` returns the full enrollment response, including its ID, expiry,
+secret token, user-data, and expanded `cloud_config`. For a self-contained
+cloud-config rather than the bootstrap URL:
+
+```bash
+miren cloud cluster cloud-init -o my-organization --ttl-hours 24 --json \
+  | jq -r .cloud_config > cloud-config.yaml
+```
+
+### Input and output details
+
 Structured inputs such as `--tags`, `--default-tags`, and invite `--groups` are
 JSON values, not strings containing JSON on the wire. Omitted invite update flags
 leave their values unchanged; `--max-uses null` removes the use cap, and
