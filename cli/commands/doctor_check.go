@@ -186,9 +186,10 @@ func gatherCluster(ctx *Context, opts ConfigCentric, env *doctorEnv) {
 
 	wg.Go(func() {
 		env.serverVersion, env.serverVersionErr = fetchServerVersion(ctx)
-		// A missing version endpoint is still a reply from a reachable server.
-		// The version check reports the unsupported API; never probe entities.
-		if !errors.Is(env.serverVersionErr, errServerVersionUnsupported) {
+		// A missing endpoint or failed call after resolution still proves
+		// reachability. Report those through the version check, not connectivity.
+		if !errors.Is(env.serverVersionErr, errServerVersionUnsupported) &&
+			!errors.Is(env.serverVersionErr, errServerVersionQuery) {
 			env.connErr = env.serverVersionErr
 		}
 	})

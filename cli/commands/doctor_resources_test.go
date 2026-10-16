@@ -48,6 +48,12 @@ func (s *doctorFailingHealthPages) ListPage(ctx context.Context, call *entityser
 	return s.EntityAccess.ListPage(ctx, call)
 }
 
+type doctorFailingServerInfo struct{}
+
+func (doctorFailingServerInfo) Version(context.Context, *server_v1alpha.ServerInfoVersion) error {
+	return errors.New("version query failed")
+}
+
 func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 	log := testutils.TestLogger(t)
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -73,14 +79,16 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 		versionAPI  bool
 		healthAPI   bool
 		pageFailure string
+		versionFail bool
 	}{
-		{"ready", "cluster-readonly", true, true, true, ""},
-		{"starting", "cluster-readonly", false, true, true, ""},
-		{"old server", "cluster-readonly", false, false, true, ""},
-		{"health unsupported", "cluster-readonly", true, true, false, ""},
-		{"health denied", "app-readonly", true, true, true, ""},
-		{"late backend failure", "cluster-readonly", true, true, true, "backend"},
-		{"late incomplete scan", "cluster-readonly", true, true, true, "incomplete"},
+		{"ready", "cluster-readonly", true, true, true, "", false},
+		{"starting", "cluster-readonly", false, true, true, "", false},
+		{"old server", "cluster-readonly", false, false, true, "", false},
+		{"health unsupported", "cluster-readonly", true, true, false, "", false},
+		{"health denied", "app-readonly", true, true, true, "", false},
+		{"late backend failure", "cluster-readonly", true, true, true, "backend", false},
+		{"late incomplete scan", "cluster-readonly", true, true, true, "incomplete", false},
+		{"version query failure", "cluster-readonly", true, true, true, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server, err := rpc.NewState(t.Context(), rpc.WithLogger(log),
@@ -93,7 +101,11 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 				source.MarkReady()
 			}
 			if tc.versionAPI {
-				server.Server().ExposeValue(serverInfoService, server_v1alpha.AdaptServerInfo(serverinfosrv.NewServer(source)))
+				var info server_v1alpha.ServerInfo = serverinfosrv.NewServer(source)
+				if tc.versionFail {
+					info = doctorFailingServerInfo{}
+				}
+				server.Server().ExposeValue(serverInfoService, server_v1alpha.AdaptServerInfo(info))
 			}
 			if tc.healthAPI {
 				eac := inmem.EAC
@@ -114,7 +126,11 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 			gatherCluster(ctx, ConfigCentric{cfg: cfg, Cluster: "test"}, env)
 			require.NoError(t, env.connErr, "a version reply or unsupported endpoint still proves reachability")
 			serverCheck := checkServer(env)
-			if tc.versionAPI {
+			if tc.versionFail {
+				require.ErrorContains(t, env.serverVersionErr, "version query failed")
+				assert.Equal(t, checkOK, serverCheck.Status)
+				assert.Contains(t, checkVersion(env).Summary, "server version unknown")
+			} else if tc.versionAPI {
 				require.NoError(t, env.serverVersionErr)
 				require.NotNil(t, env.serverVersion)
 				assert.Equal(t, tc.ready, env.serverVersion.Ready)
@@ -149,4 +165,21 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 			assert.NotContains(t, result.Summary, "private-error-canary")
 		})
 	}
+}
+
+func TestDoctorRejectsUnusableConnectionConfig(t *testing.T) {
+	cfg := clientconfig.NewConfig()
+	cfg.SetCluster("test", &clientconfig.ClusterConfig{
+		Hostname:   "127.0.0.1:1",
+		ClientCert: "-----BEGIN CERTIFICATE-----\nnot a real one\n-----END CERTIFICATE-----\n",
+	})
+	require.NoError(t, cfg.SetActiveCluster("test"))
+	ctx := &Context{
+		Context: t.Context(), Log: testutils.TestLogger(t),
+		Stdout: io.Discard, Stderr: io.Discard, ClientConfig: cfg,
+	}
+	env := &doctorEnv{}
+	gatherCluster(ctx, ConfigCentric{cfg: cfg, Cluster: "test"}, env)
+	require.Error(t, env.connErr)
+	assert.Equal(t, checkFail, checkServer(env).Status)
 }
