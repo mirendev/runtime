@@ -8,9 +8,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
@@ -18,6 +20,7 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/servers/routes"
 )
 
 func newTestServer(t *testing.T) (*ingress_v1alpha.IdentityProvidersClient, *ingress.Client) {
@@ -375,6 +378,100 @@ func TestProviderRPCWithoutEntityAccess(t *testing.T) {
 			require.ErrorContains(t, err, "403")
 			_, err = c.Remove(ctx, "shared", false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+type providerReferenceBarrier struct {
+	rpc.Client
+	method           string
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (b *providerReferenceBarrier) Call(ctx context.Context, method string, args, result any) error {
+	if method == b.method {
+		b.once.Do(func() { close(b.entered) })
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return b.Client.Call(ctx, method, args, result)
+}
+
+func TestProviderRemovalRacesRouteProtection(t *testing.T) {
+	for _, tc := range []struct{ kind, first string }{
+		{"oidc", "protect"}, {"oidc", "remove"},
+		{"password", "protect"}, {"password", "remove"},
+	} {
+		t.Run(tc.kind+"/"+tc.first+" first", func(t *testing.T) {
+			im, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			ctx, cancel := context.WithTimeout(operatorContext(), 10*time.Second)
+			t.Cleanup(cancel)
+			app, err := im.Client.Create(ctx, "site", &core_v1alpha.App{})
+			require.NoError(t, err)
+			var id entity.Id
+			if tc.kind == "password" {
+				id, err = im.Client.Create(ctx, "login", &ingress_v1alpha.PasswordProvider{Name: "login"})
+			} else {
+				id, err = im.Client.Create(ctx, "login", &ingress_v1alpha.OidcProvider{Name: "login"})
+			}
+			require.NoError(t, err)
+			routeID, err := im.Client.Create(ctx, "site.example", &ingress_v1alpha.HttpRoute{Host: "site.example", App: app})
+			require.NoError(t, err)
+			barrier := &providerReferenceBarrier{
+				Client: rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(im.Server)),
+				method: "replace", entered: make(chan struct{}), release: make(chan struct{}),
+			}
+			if tc.first == "remove" {
+				barrier.method = "delete"
+			}
+			release := sync.OnceFunc(func() { close(barrier.release) })
+			t.Cleanup(release)
+			// Match coordinator wiring: both public APIs share one ingress client.
+			ic := ingress.NewClient(slog.Default(), barrier)
+			providers := ingress_v1alpha.NewIdentityProvidersClient(rpc.LocalClient(ingress_v1alpha.AdaptIdentityProviders(NewServer(ic))))
+			routes := ingress_v1alpha.NewRoutesClient(rpc.LocalClient(ingress_v1alpha.AdaptRoutes(routes.NewServer(slog.Default(), ic))))
+			protect := func() error { _, err := routes.Protect(ctx, "site.example", false, "login", nil, false); return err }
+			remove := func() error { _, err := providers.Remove(ctx, "login", false); return err }
+			firstCall, secondCall := protect, remove
+			if tc.first == "remove" {
+				firstCall, secondCall = remove, protect
+			}
+			firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+			go func() { firstDone <- firstCall() }()
+			select {
+			case <-barrier.entered:
+			case <-ctx.Done():
+				t.Fatal("first operation did not reach its commit: ", ctx.Err())
+			}
+			// Let the competing operation attempt its lookup while the first
+			// is paused after resolution/reference checks, before its write.
+			go func() { secondDone <- secondCall() }()
+			select {
+			case err := <-secondDone:
+				secondDone <- err
+			case <-time.After(100 * time.Millisecond):
+			}
+			release()
+			require.NoError(t, <-firstDone)
+			err = <-secondDone
+			var route ingress_v1alpha.HttpRoute
+			require.NoError(t, im.Client.GetById(ctx, routeID, &route))
+			if tc.first == "protect" {
+				require.ErrorContains(t, err, "attached to 1 route(s)")
+				require.Equal(t, id, route.AuthProvider)
+				_, err = providers.Show(ctx, "login")
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "provider not found")
+				require.Empty(t, route.AuthProvider)
+				_, err = providers.Show(ctx, "login")
+				require.ErrorContains(t, err, "not found")
+			}
 		})
 	}
 }
