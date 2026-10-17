@@ -1,13 +1,79 @@
 package compute
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/rpc"
 )
+
+type sandboxReadRace struct {
+	entityserver_v1alpha.EntityAccess
+	afterRead func() error
+}
+
+func (s *sandboxReadRace) Get(ctx context.Context, call *entityserver_v1alpha.EntityAccessGet) error {
+	if err := s.EntityAccess.Get(ctx, call); err != nil {
+		return err
+	}
+	if s.afterRead != nil {
+		f := s.afterRead
+		s.afterRead = nil
+		return f()
+	}
+	return nil
+}
+
+func TestStopSandboxPreservesConcurrentRunnerUpdates(t *testing.T) {
+	for _, race := range []bool{false, true} {
+		name := "stop"
+		if race {
+			name = "runner marks dead after read"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			sandbox := &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}
+			sandbox.Spec.Version = "app_version/original"
+			id, err := inmem.Client.Create(ctx, "shop", sandbox)
+			require.NoError(t, err)
+			proxy := &sandboxReadRace{EntityAccess: inmem.Server}
+			if race {
+				proxy.afterRead = func() error {
+					sandbox.ID = id
+					sandbox.Status = compute_v1alpha.DEAD
+					sandbox.Spec.Version = "app_version/runner-update"
+					return inmem.Client.Update(ctx, sandbox)
+				}
+			}
+			client := NewClient(slog.Default(), rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(proxy)))
+			err = client.StopSandbox(ctx, id.String())
+			if race {
+				require.ErrorIs(t, err, cond.ErrConflict{})
+			} else {
+				require.NoError(t, err)
+			}
+			var stored compute_v1alpha.Sandbox
+			require.NoError(t, inmem.Client.GetById(ctx, id, &stored))
+			if race {
+				require.Equal(t, compute_v1alpha.DEAD, stored.Status)
+				require.Equal(t, "app_version/runner-update", stored.Spec.Version.String())
+			} else {
+				require.Equal(t, compute_v1alpha.STOPPED, stored.Status)
+				require.Equal(t, "app_version/original", stored.Spec.Version.String())
+			}
+		})
+	}
+}
 
 func TestSandboxStatusCoverage(t *testing.T) {
 	// Every SandboxStatus must be covered by exactly one of
