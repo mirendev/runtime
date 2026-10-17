@@ -7,17 +7,55 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
+
+func TestSandboxPoolCommandsLegacyEntities(t *testing.T) {
+	for _, oldService := range []bool{false, true} {
+		t.Run(fmt.Sprint("old-service=", oldService), func(t *testing.T) {
+			testSandboxPoolCommandsLegacy(t, oldService)
+		})
+	}
+}
+
+func testSandboxPoolCommandsLegacy(t *testing.T, oldService bool) {
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	if oldService {
+		server.Server().ExposeValue("dev.miren.runtime/sandbox-pools", rpc.NewInterface([]rpc.Method{{
+			Name: "legacy", InterfaceName: "SandboxPools", Handler: func(context.Context, rpc.Call) error { return nil },
+		}}, nil))
+	}
+	id := entity.Id("pool/legacy")
+	require.NoError(t, store.Client.UpdateAttrs(t.Context(), id, (&compute_v1alpha.SandboxPool{Service: "web", DesiredInstances: 3}).Encode(), entity.Ref(entity.DBId, id)))
+	args := []string{"--config", filepath.Join(t.TempDir(), "config.yaml"), "--server-address", server.ListenAddr()}
+	out, err := RunCommand(SandboxPoolList, append(args, "--format", "json")...)
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout.String(), `"desired_instances": 3`)
+	out, err = RunCommand(SandboxPoolSetDesired, append(args, "legacy", "+2")...)
+	require.NoError(t, err)
+	require.Contains(t, out.Stdout.String(), "New desired_instances: 5")
+	var pool compute_v1alpha.SandboxPool
+	require.NoError(t, store.Client.GetById(t.Context(), id, &pool))
+	require.EqualValues(t, 5, pool.DesiredInstances)
+	_, err = RunCommand(SandboxPoolSetDesired, append(args, "legacy", "9223372036854775807")...)
+	require.ErrorContains(t, err, "maximum pool size")
+}
 
 func TestSandboxPoolCommandsWithoutEntityAccess(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
@@ -167,7 +205,7 @@ func TestSandboxPoolCommandsDoNotFallback(t *testing.T) {
 			if available {
 				require.ErrorContains(t, err, "unauthorized")
 			} else {
-				require.ErrorContains(t, err, "sandbox-pools")
+				require.ErrorContains(t, err, "entities")
 			}
 			require.Empty(t, stdout.String())
 			err = SandboxPoolSetDesired(ctx, struct {
@@ -180,7 +218,7 @@ func TestSandboxPoolCommandsDoNotFallback(t *testing.T) {
 			if available {
 				require.ErrorContains(t, err, "unauthorized")
 			} else {
-				require.ErrorContains(t, err, "sandbox-pools")
+				require.ErrorContains(t, err, "entities")
 			}
 			require.Empty(t, stdout.String())
 		})

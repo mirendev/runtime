@@ -19,7 +19,7 @@ func RouteShow(ctx *Context, opts struct {
 	if opts.Host != "" && opts.Default {
 		return fmt.Errorf("--default cannot be used with a hostname")
 	}
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

@@ -157,18 +157,40 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 	}
 }
 
-func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
-	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"),
-		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(sandboxCommandAuthorizer{t: t}))
+func TestSandboxCommandsFallbackWhenAPIIsUnavailable(t *testing.T) {
+	for _, oldService := range []bool{false, true} {
+		t.Run(fmt.Sprint("old-service=", oldService), func(t *testing.T) {
+			testSandboxCommandsLegacy(t, oldService)
+		})
+	}
+}
+
+func testSandboxCommandsLegacy(t *testing.T, oldService bool) {
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	store, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	if oldService {
+		// A real capability with no lifecycle/selection methods simulates an
+		// older service without relying on a mocked client error.
+		server.Server().ExposeValue("dev.miren.runtime/sandboxes", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	}
 	ctx := &Context{Context: t.Context(), Log: testutils.TestLogger(t), Stdout: &bytes.Buffer{}, Stderr: io.Discard}
 	ctx.Config.ServerAddress = server.ListenAddr()
-	_, _, err = selectAppSandbox(ctx, "shop", "")
-	require.ErrorIs(t, err, rpc.ErrResolveLookup)
+	t.Cleanup(func() { require.NoError(t, ctx.Close()) })
+	appID, err := store.Client.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	poolID, err := store.Client.Create(ctx, "web-pool", &compute_v1alpha.SandboxPool{App: appID, Service: "web"})
+	require.NoError(t, err)
+	id, err := store.Client.Create(ctx, "target", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}, entityserver.WithLabels(types.LabelSet("pool", poolID.String())))
+	require.NoError(t, err)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, id, (&compute_v1alpha.Schedule{Key: compute_v1alpha.Key{Node: "node/one"}}).Encode()))
+	chosen, count, err := selectAppSandbox(ctx, "shop", "")
+	require.NoError(t, err)
+	require.Equal(t, id, chosen.ID)
+	require.Equal(t, 1, count)
 	for _, tc := range []struct {
 		command any
 		flags   []string
@@ -176,8 +198,11 @@ func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
 		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
 		args = append(args, tc.flags...)
 		out, err := RunCommand(tc.command, append(args, "target")...)
-		require.ErrorIs(t, err, rpc.ErrResolveLookup)
-		require.Empty(t, out.Stdout.String())
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Stdout.String())
+		if len(tc.flags) == 0 {
+			require.NoError(t, store.Client.UpdateAttrs(ctx, id, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusDeadId)))
+		}
 	}
 }
 

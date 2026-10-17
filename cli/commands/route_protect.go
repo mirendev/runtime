@@ -25,7 +25,7 @@ func RouteProtect(ctx *Context, opts struct {
 	if opts.Provider == "" {
 		return fmt.Errorf("--provider is required")
 	}
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}
