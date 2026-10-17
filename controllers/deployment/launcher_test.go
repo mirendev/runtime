@@ -4393,7 +4393,7 @@ func TestProductionDeployPreservesPreviewPools(t *testing.T) {
 			reaped, err := launcher.reapStaleStatelessPools(ctx, app, prod, spec, map[string]bool{"web": true})
 			require.NoError(t, err)
 			assert.Zero(t, reaped)
-			cleaned, err := launcher.cleanupOldVersionPools(ctx, app, prod.ID)
+			cleaned, err := launcher.cleanupOldVersionPools(ctx, app, prod.ID, nil)
 			require.NoError(t, err)
 			assert.Zero(t, cleaned)
 			after, err := server.EAC.Get(ctx, previewPoolID.String())

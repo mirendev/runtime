@@ -189,6 +189,10 @@ type localActivator struct {
 	// Map key is verKey (version + service), value is list of channels to notify
 	newSandboxChans map[verKey][]chan struct{}
 
+	// fallbackKicks records when fallbackLease last asked for capacity for an
+	// active version at zero. Guarded by mu; created on first use.
+	fallbackKicks map[verKey]time.Time
+
 	// invalidationCh signals httpingress when a sandbox becomes non-RUNNING
 	invalidationCh chan SandboxInvalidation
 
@@ -300,7 +304,21 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 		// Status changed or capacity was taken between RLock and Lock, fall through to pool request
 	}
 
-	// No available sandboxes with capacity
+	// No available sandboxes with capacity. A health-checked service keeps its
+	// previous version answering until the active one passes its check.
+	if lease, kick := a.fallbackLease(ver, service); lease != nil {
+		if kick {
+			go func() {
+				kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cancel()
+				if _, err := a.requestPoolCapacity(kctx, ver, service); err != nil {
+					a.log.Warn("failed to request capacity for the active version", "app", ver.App, "version", ver.Version, "error", err)
+				}
+			}()
+		}
+		return lease, nil
+	}
+
 	if hasPending {
 		// We have PENDING sandboxes booting - wait for them instead of creating more
 		a.log.Info("no running sandboxes available, but pending sandboxes exist - waiting",
@@ -321,6 +339,131 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 
 	return a.waitForSandbox(ctx, ver, service, true)
 }
+
+// fallbackLease leases a RUNNING sandbox of another version of the same app
+// and service, for a service with a health check whose active version has no
+// RUNNING sandbox yet. The deployment launcher keeps the previous version's pool
+// up until the active version passes its check, so during a deploy requests go
+// to the old version instead of waiting on, or failing against, the new one.
+// It returns nil when there is nothing to fall back to, and leaves an active
+// version that has a RUNNING sandbox (even a busy one) to the normal path.
+//
+// kick is true when the active pool has nothing running or booting and no
+// desired instances, so nothing would ever start the version the launcher is
+// waiting on; the caller asks for capacity for it.
+func (a *localActivator) fallbackLease(ver *core_v1alpha.AppVersion, service string) (lease *Lease, kick bool) {
+	if ver.EphemeralLabel != "" {
+		return nil, false
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	key := verKey{ver.ID.String(), service}
+
+	// Whether the service has a health check is read from the active version's
+	// pool. Until the activator has seen that pool, a previous version's pool
+	// with a check stands in for it.
+	var activePool *compute_v1alpha.SandboxPool
+	if st, ok := a.pools[key]; ok && st.pool != nil {
+		activePool = st.pool
+		if activePool.SandboxSpec.HealthCheckPath == "" || len(activePool.SandboxSpec.Volume) > 0 {
+			return nil, false
+		}
+	}
+	booting := false
+	if ref, ok := a.versions[key]; ok {
+		if ps, ok := a.poolSandboxes[ref.poolID]; ok {
+			for _, s := range ps.sandboxes {
+				if s.sandbox.Status == compute_v1alpha.RUNNING {
+					return nil, false
+				}
+				if s.sandbox.Status == compute_v1alpha.PENDING {
+					booting = true
+				}
+			}
+		}
+	}
+
+	// The newest version with room serves: when two old versions are both up
+	// (a deploy landed before the launcher retired the one before it), the
+	// newer one is the one that last passed.
+	var best *versionPoolRef
+	var bestSandbox *sandbox
+	for k, ref := range a.versions {
+		if k.service != service || k.ver == key.ver || ref.ver == nil ||
+			ref.ver.App != ver.App || ref.ver.EphemeralLabel != "" {
+			continue
+		}
+		if best != nil && !newerVersion(ref.ver, best.ver) {
+			continue
+		}
+		ps, ok := a.poolSandboxes[ref.poolID]
+		if !ok {
+			continue
+		}
+		// Disk services don't overlap versions: the old pool is draining.
+		if ps.pool != nil && len(ps.pool.SandboxSpec.Volume) > 0 {
+			continue
+		}
+		if activePool == nil && (ps.pool == nil || ps.pool.SandboxSpec.HealthCheckPath == "") {
+			continue
+		}
+		for _, s := range ps.sandboxes {
+			if s.sandbox.Status == compute_v1alpha.RUNNING && s.tracker.HasCapacity() && s.url != "" {
+				best, bestSandbox = ref, s
+				break
+			}
+		}
+	}
+	if bestSandbox == nil {
+		return nil, false
+	}
+
+	s := bestSandbox
+	leaseSize := s.tracker.AcquireLease()
+	s.lastRenewal = time.Now()
+	a.log.Info("active version has no healthy sandbox yet; serving from the previous version",
+		"app", ver.App,
+		"version", ver.Version,
+		"fallback_version", best.ver.Version,
+		"sandbox", s.sandbox.ID,
+		"service", service)
+	kick = activePool != nil && activePool.DesiredInstances == 0 && !booting &&
+		time.Since(a.fallbackKicks[key]) > fallbackKickInterval
+	if kick {
+		if a.fallbackKicks == nil {
+			a.fallbackKicks = make(map[verKey]time.Time)
+		}
+		a.fallbackKicks[key] = time.Now()
+	}
+	// The lease names the version it came from, so renewing and releasing it
+	// find this pool.
+	return &Lease{
+		ver:     best.ver,
+		sandbox: s.sandbox,
+		ent:     s.ent,
+		pool:    service,
+		service: service,
+		Size:    leaseSize,
+		URL:     s.url,
+	}, kick
+}
+
+// newerVersion reports whether a was created after b. Version names are
+// "<app>-v" plus an idgen ID, whose leading bits are a millisecond timestamp
+// and whose base58 alphabet sorts in ASCII order, so a longer name, or a
+// later one of the same length, is newer.
+func newerVersion(a, b *core_v1alpha.AppVersion) bool {
+	if len(a.Version) != len(b.Version) {
+		return len(a.Version) > len(b.Version)
+	}
+	return a.Version > b.Version
+}
+
+// fallbackKickInterval spaces out the capacity requests fallbackLease makes for
+// an active pool at zero, so a burst of requests asks once rather than once each.
+const fallbackKickInterval = 30 * time.Second
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")

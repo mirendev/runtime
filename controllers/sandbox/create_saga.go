@@ -28,6 +28,7 @@ const (
 	actionBootCtrs     = "boot-containers"
 	actionAddMetrics   = "add-metrics"
 	actionWaitPorts    = "wait-ports"
+	actionWaitHealthy  = "wait-healthy"
 	actionSetRunning   = "set-running"
 	actionUpdateSvcs   = "update-services"
 )
@@ -603,6 +604,7 @@ func undoWaitPorts(_ context.Context, _ waitPortsIn, _ waitPortsOut) error {
 type setRunningIn struct {
 	SandboxID     string         `json:"sandbox_id" saga:"sandbox_id"`
 	PortsReady    saga.Edge      `saga:"ports_ready"`
+	Healthy       saga.Edge      `saga:"healthy"`
 	ObservedPorts []observedPort `json:"observed_ports" saga:"observed_ports"`
 }
 
@@ -661,6 +663,7 @@ type updateServicesIn struct {
 	Addresses  []string  `json:"addresses" saga:"addresses"`
 	Revision   int64     `json:"revision" saga:"revision"`
 	PortsReady saga.Edge `saga:"ports_ready"`
+	Healthy    saga.Edge `saga:"healthy"`
 }
 
 type updateServicesOut struct{}
@@ -711,7 +714,11 @@ func registerCreateSandboxSaga(
 		nodeID:     nodeID,
 	}
 
+	// v2 added wait-healthy. A v1 execution can resume under it: the step's
+	// inputs all come from v1 actions, and one already past set-running just
+	// probes a RUNNING sandbox before update-services, passing or compensating.
 	return saga.Define(sagaCreateSandbox).
+		Version(2).ResumesFrom(1).
 		Using(deps).
 		Using(log).
 		Action(actionAllocNetwork, allocNetwork).Undo(undoAllocNetwork).
@@ -721,6 +728,7 @@ func registerCreateSandboxSaga(
 		Action(actionBootCtrs, bootContainers).Undo(undoBootContainers).
 		Action(actionAddMetrics, addMetrics).Undo(undoAddMetrics).
 		Action(actionWaitPorts, waitPorts).Undo(undoWaitPorts).
+		Action(actionWaitHealthy, waitHealthy).Undo(undoWaitHealthy).
 		Action(actionSetRunning, setRunning).Undo(undoSetRunning).
 		Action(actionUpdateSvcs, updateServices).Undo(undoUpdateServices).
 		RegisterTo(registry)

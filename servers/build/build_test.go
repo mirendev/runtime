@@ -936,6 +936,30 @@ func TestBuildServicesConfig(t *testing.T) {
 				assert.Empty(t, byName["worker"].PortTimeout, "unset field stays empty so resolvePortWaitTimeout falls back to default")
 			},
 		},
+		{
+			name: "service with health_check copies through to ConfigSpec",
+			appConfig: &appconfig.AppConfig{
+				Services: map[string]*appconfig.ServiceConfig{
+					"web": {
+						Command:     "bin/start",
+						Port:        4000,
+						HealthCheck: &appconfig.ServiceHealthCheckConfig{Path: "/up", Timeout: "90s"},
+					},
+					"worker": {
+						Command: "bin/worker",
+					},
+				},
+			},
+			procfileServices: nil,
+			validateServices: func(t *testing.T, services []core_v1alpha.ConfigSpecServices) {
+				byName := make(map[string]core_v1alpha.ConfigSpecServices, len(services))
+				for _, s := range services {
+					byName[s.Name] = s
+				}
+				assert.Equal(t, core_v1alpha.ConfigSpecServicesHealthCheck{Path: "/up", Timeout: "90s"}, byName["web"].HealthCheck)
+				assert.Empty(t, byName["worker"].HealthCheck.Path, "a service without a check gets none")
+			},
+		},
 	}
 
 	for _, tt := range tests {

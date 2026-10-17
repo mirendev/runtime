@@ -187,6 +187,11 @@ func Build(log *slog.Logger, opts Options) (*compute_v1alpha.SandboxSpec, error)
 			if !opts.SkipPorts && svc.PortTimeout != "" {
 				sbSpec.PortWaitTimeout = svc.PortTimeout
 			}
+			// A sandbox without its ports (a task, say) has nothing to check.
+			if !opts.SkipPorts && svc.HealthCheck.Path != "" {
+				sbSpec.HealthCheckPath = svc.HealthCheck.Path
+				sbSpec.HealthCheckTimeout = svc.HealthCheck.Timeout
+			}
 
 			if opts.SkipPorts {
 				break

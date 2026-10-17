@@ -1,6 +1,9 @@
 {
   "create-sandbox": {
-    "version": 1,
+    "version": 2,
+    "resumes_from": [
+      1
+    ],
     "actions": {
       "add-metrics": {
         "inputs": [
@@ -87,17 +90,20 @@
       },
       "set-running": {
         "inputs": [
+          "healthy",
           "observed_ports",
           "ports_ready",
           "sandbox_id"
         ],
         "dependencies": [
+          "wait-healthy",
           "wait-ports"
         ]
       },
       "update-services": {
         "inputs": [
           "addresses",
+          "healthy",
           "ports_ready",
           "revision",
           "sandbox_id"
@@ -105,6 +111,25 @@
         "dependencies": [
           "alloc-network",
           "patch-network",
+          "wait-healthy",
+          "wait-ports"
+        ]
+      },
+      "wait-healthy": {
+        "inputs": [
+          "addresses",
+          "observed_ports",
+          "ports_ready",
+          "sandbox_id",
+          "wait_port_ids",
+          "wait_port_ports"
+        ],
+        "outputs": [
+          "healthy"
+        ],
+        "dependencies": [
+          "alloc-network",
+          "boot-containers",
           "wait-ports"
         ]
       },

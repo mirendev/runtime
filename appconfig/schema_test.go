@@ -41,6 +41,7 @@ func TestPublishedSchemaFieldsMatchConfig(t *testing.T) {
 		{name: "service", typeOf: reflect.TypeFor[ServiceConfig](), got: schema.Defs["service"].Properties},
 		{name: "concurrency", typeOf: reflect.TypeFor[ServiceConcurrencyConfig](), got: schema.Defs["concurrency"].Properties},
 		{name: "metrics", typeOf: reflect.TypeFor[ServiceMetricsConfig](), got: schema.Defs["metrics"].Properties},
+		{name: "health_check", typeOf: reflect.TypeFor[ServiceHealthCheckConfig](), got: schema.Defs["health_check"].Properties},
 		{name: "port", typeOf: reflect.TypeFor[PortConfig](), got: schema.Defs["port"].Properties},
 		{name: "disk", typeOf: reflect.TypeFor[DiskConfig](), got: schema.Defs["disk"].Properties},
 		{name: "task", typeOf: reflect.TypeFor[TaskConfig](), got: schema.Defs["task"].Properties},

@@ -49,6 +49,19 @@ components:
       type: bool
       doc: Whether to use host networking
 
+    health_check_path:
+      type: string
+      doc: |
+        HTTP path the sandbox must answer with 2xx or 3xx on its HTTP port,
+        after its ports bind, before it is marked RUNNING. Empty means no
+        check: the sandbox is RUNNING once its ports bind.
+
+    health_check_timeout:
+      type: string
+      doc: |
+        How long the health check may take, counted from when the ports bind.
+        Parsed via time.ParseDuration. Empty or invalid falls back to 60s.
+
     port_wait_timeout:
       type: string
       doc: |

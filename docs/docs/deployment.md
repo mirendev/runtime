@@ -28,7 +28,7 @@ When you run `miren deploy`, Miren:
 
 1. **Uploads your files** — sends your project files and app configuration to the server (after your first deploy, only changed files are transferred)
 2. **Selects or builds an image** — builds a configured or discovered Dockerfile first; otherwise uses a configured web image directly or inspects your source for a detected [language or framework](./guides/index.md)
-3. **Activates the new version** — rolls out the new version, replacing the previous one
+3. **Activates the new version** — rolls out the new version, replacing the previous one. A service with a [health check](./app-toml.md#health-check) keeps the previous version serving until the new one passes it.
 
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
 

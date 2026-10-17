@@ -716,6 +716,16 @@ components:
         port_timeout:
           type: string
           doc: Custom port-wait timeout (e.g. "60s", "2m"). Empty falls back to the 15s default; invalid duration strings are rejected at parse time.
+        health_check:
+          type: component
+          doc: HTTP check a new instance must pass before it takes traffic
+          attrs:
+            path:
+              type: string
+              doc: Path to GET on the service's HTTP port; 2xx or 3xx passes
+            timeout:
+              type: string
+              doc: How long an instance has to pass, counted from when its port binds (e.g. "60s")
         metrics:
           type: component
           doc: Prometheus scrape endpoint for this service

@@ -160,6 +160,8 @@ type mockContainerRuntime struct {
 	destroySubCtrsErr    error
 	releaseDiskLeasesErr error
 	waitForPortErr       error
+	// waitForPortFn, when set, answers each call by its 1-based number.
+	waitForPortFn func(call int) error
 
 	// loadContainerErrFunc allows per-call error control (e.g. succeed on first, ErrNotFound on second)
 	loadContainerErrFunc func(call int) error
@@ -288,6 +290,9 @@ func (m *mockContainerRuntime) WaitForPort(ctx context.Context, id string, port 
 	defer m.mu.Unlock()
 	m.waitForPortCalls++
 	m.lastWaitForPortTimeout = timeout
+	if m.waitForPortFn != nil {
+		return m.waitForPortFn(m.waitForPortCalls)
+	}
 	return m.waitForPortErr
 }
 

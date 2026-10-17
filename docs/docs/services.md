@@ -237,6 +237,7 @@ Each service can configure:
 | `port` | Port the service listens on (single-port shorthand) | For `web` inheriting the primary image: its single exposed TCP port, otherwise 3000 |
 | `ports` | Port configuration array (multi-port, see [Traffic Routing](./traffic-routing.md)) | (none) |
 | `port_timeout` | Time to wait for the service to bind its port at startup (e.g. `"60s"`, `"2m"`) | `15s` |
+| `health_check` | HTTP path a new instance must answer before it takes traffic; the previous version serves until it does (see [app.toml](./app-toml.md#health-check)) | (none) |
 | `env` | Service-specific environment variables | (none) |
 | `concurrency` | Scaling configuration | See [Scaling](./scaling.md) |
 | `concurrency.shutdown_timeout` | Time a stopping instance gets to exit after `SIGTERM` before it is killed (see [Graceful Shutdown](#graceful-shutdown)) | `10s` |
