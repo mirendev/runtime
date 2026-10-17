@@ -55,8 +55,10 @@ func (c *providerCompatClient) Call(ctx context.Context, method string, args, re
 type legacyProviderClient struct{ rpc.Client }
 
 func (c *legacyProviderClient) Call(ctx context.Context, method string, args, result any) error {
-	// This identity applies only to the in-process adapter. EntityAccess on the
-	// remote coordinator still authenticates and authorizes the actual caller.
+	// The legacy path follows the old coordinator's EntityAccess policy, not
+	// the newer RPC's operator-only restriction, just as the old CLI did. This
+	// identity bypasses only the in-process gate; remote EntityAccess still
+	// authenticates and authorizes the actual caller with its real credentials.
 	ctx = rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: rpc.AuthMethodJWT, Subject: "legacy-cli"})
 	return c.Client.Call(ctx, method, args, result)
 }

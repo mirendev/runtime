@@ -611,7 +611,7 @@ func (c *Client) SetRouteWAFLevelOnRoute(ctx context.Context, route *ingress_v1a
 		return nil, err
 	}
 	route.WafProfile = profile.ID
-	if err := c.ec.Update(ctx, route); err != nil {
+	if err := c.ec.Patch(ctx, route.ID, 0, entity.Ref(ingress_v1alpha.HttpRouteWafProfileId, profile.ID)); err != nil {
 		return nil, fmt.Errorf("failed to set WAF profile on route: %w", err)
 	}
 	return route, nil
