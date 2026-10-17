@@ -2,9 +2,15 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc/standard"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -16,31 +22,89 @@ func AppVersions(ctx *Context, opts struct {
 	Ephemeral bool `long:"ephemeral" description:"Show only ephemeral versions"`
 	Limit     int  `short:"n" long:"limit" description:"Max versions to show" default:"20"`
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/app")
+	versions, err := fetchAppVersions(ctx, opts.App, opts.Ephemeral, opts.Limit)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	if !client.HasMethod(ctx, "listVersions") {
-		return fmt.Errorf("app versions requires a newer server version")
-	}
-
-	crud := app_v1alpha.NewCrudClient(client)
-	result, err := crud.ListVersions(ctx, opts.App, opts.Ephemeral, int64(opts.Limit))
-	if err != nil {
-		return fmt.Errorf("failed to list app versions: %w", err)
-	}
-
-	versions := result.Versions()
 	if opts.IsJSON() {
 		return printAppVersionsJSON(versions)
 	}
-
 	if opts.Ephemeral {
 		return printEphemeralVersionsTable(ctx, versions)
 	}
 	return printAllVersionsTable(ctx, versions)
+}
+
+func fetchAppVersions(ctx *Context, name string, ephemeral bool, limit int) ([]*app_v1alpha.AppVersionSummary, error) {
+	client, err := ctx.RPCClient("dev.miren.runtime/app")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "listVersions")
+	}
+	if isMissingRPC(err) {
+		return fetchAppVersionsLegacy(ctx, name, ephemeral, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	crud := app_v1alpha.NewCrudClient(client)
+	result, err := crud.ListVersions(ctx, name, ephemeral, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
+	}
+	return result.Versions(), nil
+}
+
+func fetchAppVersionsLegacy(ctx *Context, name string, ephemeral bool, limit int) ([]*app_v1alpha.AppVersionSummary, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	appEntity, err := app.NewClient(ctx.Log, client).GetByName(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app %q: %w", name, err)
+	}
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
+	lr, err := ec.List(ctx, entity.Ref(core_v1alpha.AppVersionAppId, appEntity.ID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app versions: %w", err)
+	}
+	var versions []*app_v1alpha.AppVersionSummary
+	for lr.Next() {
+		var av core_v1alpha.AppVersion
+		if err := lr.Read(&av); err != nil {
+			continue
+		}
+		if ephemeral && av.EphemeralLabel == "" {
+			continue
+		}
+		status := "replaced"
+		if av.ID == appEntity.ActiveVersion {
+			status = "active"
+		} else if av.EphemeralLabel != "" {
+			status = "ephemeral"
+		}
+		v := &app_v1alpha.AppVersionSummary{}
+		v.SetId(string(av.ID))
+		v.SetVersion(av.Version)
+		v.SetStatus(status)
+		v.SetCreatedAt(standard.ToTimestamp(lr.Entity().GetCreatedAt()))
+		v.SetEphemeralLabel(av.EphemeralLabel)
+		v.SetEphemeralTtl(av.EphemeralTtl)
+		if !av.EphemeralExpiresAt.IsZero() {
+			v.SetExpiresAt(standard.ToTimestamp(av.EphemeralExpiresAt))
+		}
+		versions = append(versions, v)
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return standard.FromTimestamp(versions[i].CreatedAt()).After(standard.FromTimestamp(versions[j].CreatedAt()))
+	})
+	if limit > 0 && len(versions) > limit {
+		versions = versions[:limit]
+	}
+	return versions, nil
 }
 
 func printAppVersionsJSON(versions []*app_v1alpha.AppVersionSummary) error {

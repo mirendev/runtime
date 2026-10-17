@@ -1,16 +1,21 @@
 package commands
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/routes"
@@ -19,10 +24,28 @@ import (
 // Only Routes is exposed: an accidental EntityAccess or IdentityProviders
 // dependency fails on the wire rather than passing through a permissive mock.
 func TestRouteCLIWithoutEntityAccess(t *testing.T) {
+	testRouteCLI(t, "current")
+}
+
+func TestRouteCLILegacyFallback(t *testing.T) {
+	for _, mode := range []string{"old-service", "missing-service", "missing-timeout-method"} {
+		t.Run(mode, func(t *testing.T) { testRouteCLI(t, mode) })
+	}
+}
+
+func testRouteCLI(t *testing.T, mode string) {
+	t.Helper()
 	t.Setenv("MIREN_CLUSTER", "")
 	t.Setenv("MIREN_CONFIG", filepath.Join(t.TempDir(), "no-config"))
 	im, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
+	// SchemaKind entries installed by schema.Apply use string values, whereas
+	// LookupKind queries keywords. Real etcd indexes encode them identically;
+	// the mock's typed comparisons need a matching keyword value explicitly.
+	ingressSchema := im.GetEntity("dev.miren.ingress/schema.v1alpha")
+	require.NotNil(t, ingressSchema)
+	ingressSchema.Set(entity.Keyword(entity.SchemaKind, "http_route"))
+	im.AddEntity(ingressSchema)
 	ver, err := im.Client.Create(t.Context(), "shop-v1", &core_v1alpha.AppVersion{Config: core_v1alpha.Config{
 		Services: []core_v1alpha.Services{{Name: "web"}, {Name: "api", Port: 8081, PortType: "http"}},
 	}})
@@ -40,8 +63,31 @@ func TestRouteCLIWithoutEntityAccess(t *testing.T) {
 	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"), rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
-	server.Server().ExposeValue("dev.miren.runtime/routes", ingress_v1alpha.AdaptRoutes(
-		routes.NewServer(slog.Default(), ingress.NewClient(slog.Default(), im.EAC.Client))))
+	iface := ingress_v1alpha.AdaptRoutes(routes.NewServer(slog.Default(), ingress.NewClient(slog.Default(), im.EAC.Client)))
+	if mode == "old-service" {
+		var methods []rpc.Method
+		for _, method := range iface.Methods() {
+			if method.Index < 2 {
+				methods = append(methods, method)
+			}
+		}
+		iface = rpc.NewInterface(methods, nil)
+	}
+	if mode == "missing-timeout-method" {
+		var methods []rpc.Method
+		for _, method := range iface.Methods() {
+			if method.Name != "timeout" {
+				methods = append(methods, method)
+			}
+		}
+		iface = rpc.NewInterface(methods, nil)
+	}
+	if mode != "missing-service" {
+		server.Server().ExposeValue("dev.miren.runtime/routes", iface)
+	}
+	if mode != "current" {
+		server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(im.Server))
+	}
 
 	run := func(command any, args ...string) (string, error) {
 		t.Helper()
@@ -113,4 +159,60 @@ func TestRouteCLIWithoutEntityAccess(t *testing.T) {
 	require.Contains(t, ok(RouteUnsetDefault), "No default route was set")
 	require.Contains(t, ok(RouteRemove, "shop.example"), "Route removed: shop.example")
 	require.Contains(t, ok(RouteList), "No routes found")
+}
+
+func TestRouteCLIDoesNotFallbackOnRPCFailure(t *testing.T) {
+	t.Setenv("MIREN_CLUSTER", "")
+	t.Setenv("MIREN_CONFIG", filepath.Join(t.TempDir(), "no-config"))
+	im, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	_, err := im.Client.Create(t.Context(), "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	ic := ingress.NewClient(slog.Default(), im.EAC.Client)
+	_, err = ic.SetRoute(t.Context(), "shop.example", "app/shop")
+	require.NoError(t, err)
+	for _, failure := range []error{rpc.ErrUnauthorized, cond.NotFound("route", "shop.example")} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"), rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, server.Close()) })
+			iface := ingress_v1alpha.AdaptRoutes(routes.NewServer(slog.Default(), ic))
+			methods := iface.Methods()
+			for i := range methods {
+				methods[i].Handler = func(context.Context, rpc.Call) error { return failure }
+			}
+			server.Server().ExposeValue("dev.miren.runtime/routes", rpc.NewInterface(methods, nil))
+			var entityCalls atomic.Int64
+			entityMethods := entityserver_v1alpha.AdaptEntityAccess(im.Server).Methods()
+			for i := range entityMethods {
+				original := entityMethods[i].Handler
+				entityMethods[i].Handler = func(ctx context.Context, call rpc.Call) error {
+					entityCalls.Add(1)
+					return original(ctx, call)
+				}
+			}
+			server.Server().ExposeValue("entities", rpc.NewInterface(entityMethods, nil))
+			for _, command := range []struct {
+				fn   any
+				args []string
+			}{
+				{RouteSet, []string{"shop.example", "shop"}},
+				{RouteShow, []string{"shop.example"}},
+				{RouteList, nil},
+				{RouteRemove, []string{"shop.example"}},
+				{RouteSetDefault, []string{"shop"}},
+				{RouteUnsetDefault, nil},
+				{RouteProtect, []string{"shop.example", "--provider", "login"}},
+				{RouteUnprotect, []string{"shop.example"}},
+				{RouteWaf, []string{"shop.example"}},
+				{RouteTimeout, []string{"shop.example", "5m"}},
+				{RouteTLSCheck, []string{"shop.example", "/tls"}},
+			} {
+				_, err := RunCommand(command.fn, append([]string{"--server-address", server.ListenAddr()}, command.args...)...)
+				require.Error(t, err)
+				require.ErrorContains(t, err, failure.Error())
+			}
+			require.Zero(t, entityCalls.Load(), "RPC failures must not reach EntityAccess")
+		})
+	}
 }

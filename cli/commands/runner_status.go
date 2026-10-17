@@ -7,10 +7,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/rpc"
@@ -142,6 +146,10 @@ func describeSandboxes(ctx *Context, cfg *runnerconfig.Config) string {
 	if err != nil {
 		return fmt.Sprintf("unknown (%s)", err)
 	}
+	return counts
+}
+
+func formatRunnerSandboxCounts(counts *runner_v1alpha.RunnerRegistrationClientSandboxCountsResults) string {
 	line := fmt.Sprintf("%d running", counts.Running())
 	if len(counts.Others()) == 0 {
 		return line
@@ -159,7 +167,7 @@ func describeSandboxes(ctx *Context, cfg *runnerconfig.Config) string {
 // "unknown", not a hang.
 const sandboxQueryTimeout = 15 * time.Second
 
-func fetchSandboxCounts(ctx *Context, cfg *runnerconfig.Config) (*runner_v1alpha.RunnerRegistrationClientSandboxCountsResults, error) {
+func fetchSandboxCounts(ctx *Context, cfg *runnerconfig.Config) (string, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, sandboxQueryTimeout)
 	defer cancel()
 
@@ -171,24 +179,71 @@ func fetchSandboxCounts(ctx *Context, cfg *runnerconfig.Config) (*runner_v1alpha
 		ClientKey:  cfg.ClientKey,
 	})
 	if err := clientCfg.SetActiveCluster("coordinator"); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	state, err := clientCfg.State(queryCtx, rpc.WithLogger(ctx.Log))
 	if err != nil {
-		return nil, fmt.Errorf("coordinator unreachable: %w", err)
+		return "", fmt.Errorf("coordinator unreachable: %w", err)
 	}
 
 	client, err := state.Client(rpc.ServiceRunner)
-	if err != nil {
-		return nil, fmt.Errorf("coordinator unreachable: %w", err)
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(queryCtx, client, "SandboxCounts")
 	}
-	defer client.Close()
+	if isMissingRPC(err) {
+		client, err := state.Client("entities")
+		if err != nil {
+			return "", fmt.Errorf("coordinator unreachable: %w", err)
+		}
+		defer client.Close()
+		eac := entityserver_v1alpha.NewEntityAccessClient(client)
+		res, err := eac.List(queryCtx, compute_v1alpha.Index(compute_v1alpha.KindSandbox, compute_v1alpha.NewNodeId(cfg.RunnerID).Id()))
+		if err != nil {
+			return "", fmt.Errorf("coordinator query failed: %w", err)
+		}
+		running := 0
+		others := map[string]int{}
+		for _, record := range res.Values() {
+			var sb compute_v1alpha.Sandbox
+			sb.Decode(record.Entity())
+			if compute.SandboxDead(sb.Status) {
+				continue
+			}
+			if sb.Status == compute_v1alpha.RUNNING {
+				running++
+			} else {
+				status := strings.TrimPrefix(string(sb.Status), "status.")
+				if status == "" {
+					status = "unknown"
+				}
+				others[status]++
+			}
+		}
+		line := fmt.Sprintf("%d running", running)
+		var parts []string
+		var names []string
+		for name := range others {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			parts = append(parts, fmt.Sprintf("%d %s", others[name], name))
+		}
+		if len(parts) > 0 {
+			line += " (" + strings.Join(parts, ", ") + ")"
+		}
+		return line, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("coordinator unreachable: %w", err)
+	}
 
 	res, err := runner_v1alpha.NewRunnerRegistrationClient(client).SandboxCounts(queryCtx)
 	if err != nil {
-		return nil, fmt.Errorf("coordinator query failed: %w", err)
+		return "", fmt.Errorf("coordinator query failed: %w", err)
 	}
 
-	return res, nil
+	return formatRunnerSandboxCounts(res), nil
 }

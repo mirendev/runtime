@@ -45,7 +45,7 @@ func AuthProviderAddPassword(ctx *Context, opts struct {
 		}
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}

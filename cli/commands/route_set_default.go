@@ -20,7 +20,7 @@ func RouteSetDefault(ctx *Context, opts struct {
 		return fmt.Errorf("app is required")
 	}
 
-	cl, err := ctx.RPCClient("dev.miren.runtime/routes")
+	cl, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

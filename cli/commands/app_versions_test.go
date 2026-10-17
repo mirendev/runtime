@@ -13,6 +13,7 @@ import (
 
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
@@ -57,17 +58,32 @@ func TestAppVersionsRPC(t *testing.T) {
 		{"id": "app_version/preview", "version": "a-preview", "status": "ephemeral", "created_at": "2026-01-02T03:05:05Z", "ephemeral_label": "pr-17", "ephemeral_ttl": "1h", "expires_at": "2026-01-02T04:04:05Z"},
 		{"id": "app_version/active", "version": "z-active", "status": "active", "created_at": "2026-01-02T03:04:05Z", "ephemeral_label": "promoted", "ephemeral_ttl": "48h"},
 	}
-	for _, method := range []rpc.AuthMethod{rpc.AuthMethodWorkload, rpc.AuthMethodOIDC} {
-		t.Run(string(method), func(t *testing.T) {
+	for _, mode := range []string{"workload", "oidc", "old-service", "missing-service"} {
+		t.Run(mode, func(t *testing.T) {
+			legacy := mode == "old-service" || mode == "missing-service"
+			var auth rpc.Authenticator = versionHistoryIdentity{method: rpc.AuthMethod(mode)}
+			if legacy {
+				auth = &rpc.NoOpAuthenticator{}
+			}
 			server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"),
-				rpc.WithAuthenticator(versionHistoryIdentity{method: method}),
+				rpc.WithAuthenticator(auth),
 				rpc.WithAuthorizer(oidcauth.NewCompositeAuthorizer(nil)))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close()) })
-			// Only the safe capability is exposed: the CLI cannot fall back to entities.
-			server.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(&appserver.AppInfo{
-				Log: slog.Default(), EC: inmem.Client,
-			}))
+			if legacy {
+				server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+				if mode == "old-service" {
+					server.Server().ExposeValue("dev.miren.runtime/app", rpc.NewInterface([]rpc.Method{{
+						Name: "list", InterfaceName: "Crud",
+						Handler: func(context.Context, rpc.Call) error { return nil },
+					}}, struct{}{}))
+				}
+			} else {
+				// Modern servers need no EntityAccess capability.
+				server.Server().ExposeValue("dev.miren.runtime/app", app_v1alpha.AdaptCrud(&appserver.AppInfo{
+					Log: slog.Default(), EC: inmem.Client,
+				}))
+			}
 
 			run := func(app string, ephemeral bool, limit int, format string) (string, error) {
 				t.Helper()
@@ -125,17 +141,11 @@ func TestAppVersionsRPC(t *testing.T) {
 				require.NotContains(t, printed, "m-rolling")
 			})
 			t.Run("cross_app_denial", func(t *testing.T) {
+				if legacy {
+					return
+				}
 				printed, err := run("other", false, 0, "json")
 				require.Error(t, err)
-				require.Empty(t, printed)
-			})
-			t.Run("older_server", func(t *testing.T) {
-				server.Server().ExposeValue("dev.miren.runtime/app", rpc.NewInterface([]rpc.Method{{
-					Name: "list", InterfaceName: "Crud",
-					Handler: func(context.Context, rpc.Call) error { return nil },
-				}}, struct{}{}))
-				printed, err := run("shop", false, 20, "text")
-				require.ErrorContains(t, err, "app versions requires a newer server version")
 				require.Empty(t, printed)
 			})
 		})
