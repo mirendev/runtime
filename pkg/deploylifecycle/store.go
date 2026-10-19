@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -89,20 +90,8 @@ func (s *Store) AppByName(ctx context.Context, name string) (*core_v1alpha.App, 
 	return &app, res.Entity().Revision(), nil
 }
 
-func (s *Store) EnsureApp(ctx context.Context, name string) (*core_v1alpha.App, int64, error) {
-	app, revision, err := s.AppByName(ctx, name)
-	if err == nil {
-		return app, revision, nil
-	}
-	if !errors.Is(err, cond.ErrNotFound{}) {
-		return nil, 0, err
-	}
-	app = &core_v1alpha.App{ID: entity.Id("app/" + name), Project: "project/default"}
-	attrs := append(app.Encode(), entity.Ref(entity.DBId, app.ID))
-	if _, ensureErr := s.eac.Ensure(ctx, attrs); ensureErr != nil {
-		return nil, 0, ensureErr
-	}
-	return s.AppByName(ctx, name)
+func (s *Store) EnsureApp(ctx context.Context, name, creator string) (*core_v1alpha.App, int64, error) {
+	return appclient.EnsureApp(ctx, s.eac, name, creator)
 }
 
 func (s *Store) AppVersionByID(ctx context.Context, id string) (*core_v1alpha.AppVersion, error) {

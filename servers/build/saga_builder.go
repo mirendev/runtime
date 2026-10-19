@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/build/build_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -258,6 +259,7 @@ func (s *SagaBuilder) startBuild(
 ) error {
 	sb := s.executor.Start(sagaBuildFromTar).
 		Input("app_name", appName).
+		Input("app_creator", app.CreationSubject(ctx)).
 		Input("stream_id", streamID).
 		WithActionContext(actionCtx).
 		WithID(executionID)
