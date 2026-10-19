@@ -132,7 +132,6 @@ func serveIngressError(w http.ResponseWriter, r *http.Request, message string, s
 }
 
 func serveIngressErrorWithTemplate(w http.ResponseWriter, r *http.Request, message string, status int, page, cluster *template.Template) {
-	w.Header().Add("Vary", "Accept")
 	data := errorPageData{Status: status}
 	switch status {
 	case http.StatusNotFound:
@@ -151,7 +150,27 @@ func serveIngressErrorWithTemplate(w http.ResponseWriter, r *http.Request, messa
 		data.Title = "Something went wrong."
 		data.Description = "We couldn't complete your request. Please try again in a few moments."
 	}
+	serveIngressErrorPage(w, r, message, data, page, cluster)
+}
 
+// servePreviewNotFound answers a request for a preview label that no longer
+// resolves. A preview that ran past its TTL and one that was never deployed
+// look the same once GC has deleted the version, so the page names both.
+func (h *Server) servePreviewNotFound(w http.ResponseWriter, r *http.Request, label string) {
+	page := errorPage
+	if errorRepresentation(r.Header.Get("Accept")) == "text/html" {
+		page = h.htmlErrorTemplate(r)
+	}
+	serveIngressErrorPage(w, r, fmt.Sprintf("preview %q has expired or does not exist", label), errorPageData{
+		Status:      http.StatusNotFound,
+		Title:       "This preview has expired or doesn't exist.",
+		Description: "Previews are removed once their time is up. If this one came from a pull request, redeploy it from there to bring it back.",
+	}, page, h.config.ErrorPageTemplate)
+}
+
+func serveIngressErrorPage(w http.ResponseWriter, r *http.Request, message string, data errorPageData, page, cluster *template.Template) {
+	status := data.Status
+	w.Header().Add("Vary", "Accept")
 	switch errorRepresentation(r.Header.Get("Accept")) {
 	case "application/json":
 		w.Header().Set("Cache-Control", "no-store")
