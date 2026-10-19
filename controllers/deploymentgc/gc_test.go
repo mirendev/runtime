@@ -39,7 +39,7 @@ func newFixture(t *testing.T, config GCConfig) *fixture {
 
 func (f *fixture) createApp(t *testing.T, name string) entity.Id {
 	t.Helper()
-	app, _, err := f.store.EnsureApp(context.Background(), name)
+	app, _, err := f.store.EnsureApp(context.Background(), name, "")
 	require.NoError(t, err)
 	return app.ID
 }
