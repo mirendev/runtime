@@ -118,7 +118,7 @@ func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 		Subject: "user-42", Method: rpc.AuthMethodJWT,
 		Metadata: map[string]any{"organization_id": "org-42", "email": "ada@example.com", "name": "Ada Lovelace"},
 	})
-	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "new-web", Operation: OperationBuild})
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
 	assert.Equal(t, "jwt", rec.Deployment.DeployedBy.AuthMethod)
@@ -128,6 +128,9 @@ func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	stored, err := tr.Store().Get(ctx, rec.Deployment.ID.String())
 	require.NoError(t, err)
 	assert.Equal(t, rec.Deployment.DeployedBy, stored.Deployment.DeployedBy)
+	app, _, err := tr.Store().AppByName(ctx, "new-web")
+	require.NoError(t, err)
+	assert.Equal(t, "user-42", app.CreatedBy)
 }
 
 func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {

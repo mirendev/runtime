@@ -31,7 +31,6 @@ import (
 	"miren.dev/runtime/components/buildkit"
 	"miren.dev/runtime/components/netresolve"
 	"miren.dev/runtime/observability"
-	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/containerdx"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
@@ -1142,14 +1141,14 @@ func (b *Builder) applyWorkloadRole(ctx context.Context, name string, ac *appcon
 	return b.ec.Patch(ctx, appRec.ID, 0, entity.String(core_v1alpha.AppWorkloadRoleId, ac.WorkloadRole))
 }
 
-func (b *Builder) nextVersion(ctx context.Context, name string) (
+func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 	*core_v1alpha.App,
 	*core_v1alpha.AppVersion,
 	core_v1alpha.ConfigSpec,
 	string,
 	error,
 ) {
-	app, err := b.ensureApp(ctx, name)
+	app, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, creator)
 	if err != nil {
 		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 	}
@@ -1201,24 +1200,8 @@ func (b *Builder) nextVersion(ctx context.Context, name string) (
 // the build takes its app-scoped lock. It preserves nextVersion's historical
 // create-on-first-deploy behavior.
 func (b *Builder) ensureApp(ctx context.Context, name string) (*core_v1alpha.App, error) {
-	var appRec core_v1alpha.App
-	if err := b.ec.Get(ctx, name, &appRec); err == nil {
-		return &appRec, nil
-	} else if !errors.Is(err, cond.ErrNotFound{}) {
-		return nil, err
-	}
-
-	appRec.Project = "project/default"
-	id, err := b.ec.Create(ctx, name, &appRec)
-	if err != nil {
-		// A concurrent first deploy may have created it between Get and Create.
-		if getErr := b.ec.Get(ctx, name, &appRec); getErr == nil {
-			return &appRec, nil
-		}
-		return nil, err
-	}
-	appRec.ID = id
-	return &appRec, nil
+	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, app.CreationSubject(ctx))
+	return record, err
 }
 
 func (b *Builder) loadAppConfig(dfs fsutil.FS) (*appconfig.AppConfig, error) {

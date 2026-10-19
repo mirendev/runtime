@@ -1,9 +1,10 @@
 {
   "build-from-tar": {
-    "version": 3,
+    "version": 4,
     "resumes_from": [
       1,
-      2
+      2,
+      3
     ],
     "actions": {
       "activate-deployment": {
@@ -148,6 +149,7 @@
       },
       "get-next-version": {
         "inputs": [
+          "app_creator",
           "app_name"
         ],
         "outputs": [

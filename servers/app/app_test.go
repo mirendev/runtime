@@ -20,6 +20,27 @@ import (
 	"miren.dev/runtime/pkg/secret"
 )
 
+func TestNewRecordsCreatorWithoutTransferringOwnership(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	server := &AppInfo{Log: slog.Default(), EC: inmem.Client}
+	client := &app_v1alpha.CrudClient{Client: rpc.LocalClient(app_v1alpha.AdaptCrud(server))}
+	ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT})
+	created, err := client.New(ctx, "owned")
+	require.NoError(t, err)
+	ctx = rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "bob", Method: rpc.AuthMethodJWT})
+	repeated, err := client.New(ctx, "owned")
+	require.NoError(t, err)
+	assert.Equal(t, created.Id(), repeated.Id())
+	var stored core_v1alpha.App
+	require.NoError(t, inmem.Client.Get(ctx, "owned", &stored))
+	assert.Equal(t, "alice", stored.CreatedBy)
+	listed, err := client.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed.Apps(), 1)
+	assert.Equal(t, "alice", listed.Apps()[0].CreatedBy())
+}
+
 func TestDeployTrackerInitializesOnceConcurrently(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)

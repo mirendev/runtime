@@ -180,6 +180,10 @@ types:
         element: string
         index: 10
         doc: "Hostnames of this app's routes currently in maintenance. The default route appears as an empty string."
+      - name: created_by
+        type: string
+        index: 11
+        doc: "Authenticated creator subject; empty for legacy or unattributed apps"
 
   - type: CpuUsage
     fields:
@@ -422,6 +426,10 @@ types:
         type: list
         element: '*ServiceHealth'
         index: 22
+      - name: createdBy
+        type: string
+        index: 23
+        doc: "Authenticated creator subject; empty for legacy or unattributed apps"
 
   - type: LogEntry
     fields:
