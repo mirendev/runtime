@@ -554,3 +554,86 @@ func TestEvaluatorWithNoPolicy(t *testing.T) {
 		t.Errorf("expected deny with no policy, got %v", decision)
 	}
 }
+
+func TestEvaluatorScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope, instance, subject, owner string
+		want                                  Decision
+	}{
+		{"exact", "alice-blog", "alice-blog", "hank", "alice", DecisionAllow},
+		{"other app", "alice-blog", "bob-blog", "hank", "bob", DecisionDeny},
+		{"whole name", "alice-blog", "alice-blog-prod", "hank", "alice", DecisionDeny},
+		{"glob", "api-*-prod", "api-west-prod", "alice", "bob", DecisionAllow},
+		{"glob suffix", "api-*-prod", "api-west-dev", "alice", "bob", DecisionDeny},
+		{"glob overlap", "api-*api", "api", "alice", "bob", DecisionDeny},
+		{"glob question", "api-?", "api-a", "alice", "bob", DecisionAllow},
+		{"glob class", "api-[ab]", "api-c", "alice", "bob", DecisionDeny},
+		{"invalid glob", "api-[", "api-[", "alice", "bob", DecisionDeny},
+		{"unknown special", "$future", "$future", "alice", "alice", DecisionDeny},
+		{"owner", "$owner", "alice-blog", "alice", "alice", DecisionAllow},
+		{"other owner", "$owner", "bob-blog", "alice", "bob", DecisionDeny},
+		{"missing owner", "$owner", "legacy-app", "alice", "", DecisionDeny},
+		{"missing subject", "$owner", "alice-blog", "", "alice", DecisionDeny},
+		{"both identities missing", "$owner", "legacy-app", "", "", DecisionDeny},
+		{"owner without instance", "$owner", "", "alice", "alice", DecisionDeny},
+		{"exact without instance", "alice-blog", "", "alice", "alice", DecisionDeny},
+		{"glob without instance", "api-*", "", "alice", "alice", DecisionDeny},
+		{"wildcard without instance", "*", "", "alice", "", DecisionAllow},
+		{"legacy without instance", "", "", "alice", "", DecisionAllow},
+		{"legacy other owner", "", "bob-blog", "alice", "bob", DecisionAllow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemoryPolicyStore()
+			store.UpdatePolicy(&Policy{Rules: []Rule{{Groups: []string{"members"}, Permissions: []Permission{{Resource: "app", Actions: []string{"*"}, Scope: tc.scope}}}}})
+			eval := NewEvaluator(t.Context(), store, nil)
+			for _, action := range []string{"read", "create", "list"} {
+				req := &Request{Subject: tc.subject, Groups: []string{"members"}, Resource: "app", Action: action, Instance: tc.instance, Owner: tc.owner}
+				if got := eval.Evaluate(req); got != tc.want {
+					t.Errorf("%s: got %v, want %v", action, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestEvaluatorScopedCacheIsolation(t *testing.T) {
+	store := NewMemoryPolicyStore()
+	store.UpdatePolicy(&Policy{Rules: []Rule{{Groups: []string{"members"}, Permissions: []Permission{
+		{Resource: "app", Actions: []string{"*"}, Scope: "$owner"},
+		{Resource: "app", Actions: []string{"list", "deploy"}, Scope: "shared-blog"},
+		{Resource: "app", Actions: []string{"create"}},
+	}}}})
+	eval := NewEvaluator(t.Context(), store, nil)
+	for _, tc := range []struct {
+		name, subject, instance, owner, action, group string
+		want                                          Decision
+	}{
+		{"owner primes cache", "alice", "alice-blog", "alice", "deploy", "members", DecisionAllow},
+		{"other app", "alice", "bob-blog", "bob", "deploy", "members", DecisionDeny},
+		{"ownership transferred", "alice", "alice-blog", "bob", "deploy", "members", DecisionDeny},
+		{"ownership removed", "alice", "alice-blog", "", "deploy", "members", DecisionDeny},
+		{"new owner", "bob", "alice-blog", "bob", "deploy", "members", DecisionAllow},
+		{"other subject", "hank", "alice-blog", "bob", "deploy", "members", DecisionDeny},
+		{"collaborator", "hank", "shared-blog", "alice", "deploy", "members", DecisionAllow},
+		{"collaborator other instance same owner", "hank", "private-blog", "alice", "deploy", "members", DecisionDeny},
+		{"collaborator cannot configure", "hank", "shared-blog", "alice", "configure", "members", DecisionDeny},
+		{"group still required", "alice", "alice-blog", "alice", "deploy", "outsiders", DecisionDeny},
+		{"owner list result", "alice", "alice-blog", "alice", "list", "members", DecisionAllow},
+		{"hidden list result", "alice", "bob-blog", "bob", "list", "members", DecisionDeny},
+		{"shared list result", "hank", "shared-blog", "alice", "list", "members", DecisionAllow},
+		{"no collection bypass", "alice", "", "", "list", "members", DecisionDeny},
+		{"explicit create grant", "alice", "", "", "create", "members", DecisionAllow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &Request{Subject: tc.subject, Groups: []string{tc.group}, Resource: "app", Action: tc.action, Instance: tc.instance, Owner: tc.owner}
+			if got := eval.Evaluate(req); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+	store.UpdatePolicy(&Policy{})
+	eval.ClearCache()
+	if got := eval.Evaluate(&Request{Subject: "alice", Groups: []string{"members"}, Resource: "app", Action: "deploy", Instance: "alice-blog", Owner: "alice"}); got != DecisionDeny {
+		t.Fatalf("revoked owner grant: got %v", got)
+	}
+}
