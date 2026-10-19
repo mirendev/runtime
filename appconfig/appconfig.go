@@ -3,6 +3,7 @@ package appconfig
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -193,6 +194,22 @@ type ServiceConfig struct {
 	// Empty falls back to the default; invalid duration strings are rejected
 	// at parse time by Validate.
 	PortTimeout string `toml:"port_timeout,omitempty"`
+	// HealthCheck, when set, holds each new instance out of service until an
+	// HTTP GET of its path answers. During a deploy the previous version keeps
+	// serving until the new one passes.
+	HealthCheck *ServiceHealthCheckConfig `toml:"health_check,omitempty"`
+}
+
+// DefaultHealthCheckTimeout is how long an instance has to pass its health
+// check, counted from when its port binds, when the service doesn't set one.
+const DefaultHealthCheckTimeout = "60s"
+
+// ServiceHealthCheckConfig describes the HTTP check a new instance must pass
+// before it takes traffic: a GET of Path on the service's HTTP port that
+// answers 2xx or 3xx (redirects are not followed).
+type ServiceHealthCheckConfig struct {
+	Path    string `toml:"path"`
+	Timeout string `toml:"timeout,omitempty"`
 }
 
 // AddonConfig represents configuration for an addon in app.toml.
@@ -601,6 +618,33 @@ func (ac *AppConfig) Validate() error {
 				return &ValidationError{
 					KeyPath: svcPrefix + ".port_timeout",
 					Message: fmt.Sprintf("service %s: invalid port_timeout %q: %v", serviceName, svcConfig.PortTimeout, err),
+				}
+			}
+		}
+
+		if hc := svcConfig.HealthCheck; hc != nil {
+			hcPath := svcPrefix + ".health_check"
+			// A path on the instance itself: no host (//other.example), no
+			// fragment, nothing a request line can't carry.
+			if _, err := url.ParseRequestURI(hc.Path); err != nil || !strings.HasPrefix(hc.Path, "/") ||
+				strings.HasPrefix(hc.Path, "//") || strings.ContainsAny(hc.Path, "# \t") {
+				return &ValidationError{
+					KeyPath: hcPath + ".path",
+					Message: fmt.Sprintf("service %s: health_check path must be an absolute URL path, such as \"/up\"", serviceName),
+				}
+			}
+			if hc.Timeout != "" {
+				if d, err := time.ParseDuration(hc.Timeout); err != nil || d <= 0 {
+					return &ValidationError{
+						KeyPath: hcPath + ".timeout",
+						Message: fmt.Sprintf("service %s: invalid health_check timeout %q: must be a positive duration such as \"60s\"", serviceName, hc.Timeout),
+					}
+				}
+			}
+			if defaultMetricsPort(serviceName, svcConfig) == 0 {
+				return &ValidationError{
+					KeyPath: hcPath,
+					Message: fmt.Sprintf("service %s: health_check needs an HTTP port to check", serviceName),
 				}
 			}
 		}

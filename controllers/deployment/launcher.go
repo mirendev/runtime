@@ -392,7 +392,19 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	// the stateless services after their replacements are ready. Only reap for
 	// services whose replacement was successfully ensured, so a failed create
 	// never leaves a service with its old pool scaled down and no replacement.
-	reaped, err := l.reapStaleStatelessPools(ctx, app, &ver, spec, ensuredServices)
+	// A service with a health check keeps its previous pools until the current
+	// version has a sandbox that passed the check. The activator serves from
+	// them meanwhile, so a version that boots but doesn't work never replaces
+	// one that does.
+	awaitingHealth := l.servicesAwaitingHealth(ctx, app, &ver, spec)
+	reapable := make(map[string]bool, len(ensuredServices))
+	for svc := range ensuredServices {
+		if !awaitingHealth[svc] {
+			reapable[svc] = true
+		}
+	}
+
+	reaped, err := l.reapStaleStatelessPools(ctx, app, &ver, spec, reapable)
 	if err != nil {
 		l.Log.Error("failed to reap stale stateless pools",
 			"app", app.ID,
@@ -402,7 +414,7 @@ func (l *Launcher) reconcileAppVersion(ctx context.Context, app *core_v1alpha.Ap
 	}
 
 	// Clean up old version pools (pools not referenced by current version)
-	cleaned, err := l.cleanupOldVersionPools(ctx, app, ver.ID)
+	cleaned, err := l.cleanupOldVersionPools(ctx, app, ver.ID, awaitingHealth)
 	if err != nil {
 		l.Log.Error("failed to cleanup old version pools",
 			"app", app.ID,
@@ -892,6 +904,11 @@ func specsMatch(spec1, spec2 *compute_v1alpha.SandboxSpec) (string, bool) {
 		return fmt.Sprintf("port wait timeout mismatch: %s vs %s", spec1.PortWaitTimeout, spec2.PortWaitTimeout), false
 	}
 
+	if spec1.HealthCheckPath != spec2.HealthCheckPath || spec1.HealthCheckTimeout != spec2.HealthCheckTimeout {
+		return fmt.Sprintf("health check mismatch: %s %s vs %s %s",
+			spec1.HealthCheckPath, spec1.HealthCheckTimeout, spec2.HealthCheckPath, spec2.HealthCheckTimeout), false
+	}
+
 	if spec1.RestartPolicy != spec2.RestartPolicy {
 		return fmt.Sprintf("restart policy mismatch: %s vs %s", spec1.RestartPolicy, spec2.RestartPolicy), false
 	}
@@ -1213,7 +1230,7 @@ func (l *Launcher) hasRunningSandboxForPool(ctx context.Context, poolID entity.I
 
 // cleanupOldVersionPools removes old version references from pools and scales
 // down unreferenced pools. It returns the number of pools it actually changed.
-func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha.App, currentVersionID entity.Id) (int, error) {
+func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha.App, currentVersionID entity.Id, keepServices map[string]bool) (int, error) {
 	// List all pools
 	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
 	if err != nil {
@@ -1249,6 +1266,15 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 		if isUsedByCurrentVersion {
 			// Pool is being reused by current version - keep ALL references.
 			// Multiple versions may reference the same pool during rolling deployments.
+			continue
+		}
+
+		if keepServices[pool.Service] && len(pool.ReferencedByVersions) > 0 {
+			l.Log.Warn("current version has not passed its health check; keeping the previous version serving",
+				"app", app.ID,
+				"service", pool.Service,
+				"pool", pool.ID,
+				"current_version", currentVersionID)
 			continue
 		}
 
@@ -1293,6 +1319,56 @@ func (l *Launcher) cleanupOldVersionPools(ctx context.Context, app *core_v1alpha
 	}
 
 	return cleaned, nil
+}
+
+// servicesAwaitingHealth returns the services of ver that declare a health
+// check and whose pool has no sandbox that passed it yet. Services with disks
+// are left out: their old pool is drained before the new one starts, so there
+// is nothing to keep. If the pools can't be read, every checked service counts
+// as awaiting, which keeps old pools a little longer rather than cutting over
+// to a version that may not work.
+func (l *Launcher) servicesAwaitingHealth(ctx context.Context, app *core_v1alpha.App, ver *core_v1alpha.AppVersion, spec *core_v1alpha.ConfigSpec) map[string]bool {
+	awaiting := make(map[string]bool)
+	for _, svc := range spec.Services {
+		if svc.HealthCheck.Path != "" && !serviceHasDisks(spec, svc.Name) {
+			awaiting[svc.Name] = true
+		}
+	}
+	if len(awaiting) == 0 {
+		return nil
+	}
+
+	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		l.Log.Error("failed to list pools for health check gating", "app", app.ID, "error", err)
+		return awaiting
+	}
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+		if !awaiting[pool.Service] || !containsRef(pool.ReferencedByVersions, ver.ID) {
+			continue
+		}
+		var poolMeta core_v1alpha.Metadata
+		poolMeta.Decode(ent.Entity())
+		if appLabel, _ := poolMeta.Labels.Get("app"); appLabel != app.ID.String() {
+			continue
+		}
+		// A sandbox is RUNNING only once it passed its health check.
+		if pool.ReadyInstances > 0 {
+			delete(awaiting, pool.Service)
+			continue
+		}
+		running, err := l.hasRunningSandboxForPool(ctx, pool.ID, pool.Service)
+		if err != nil {
+			l.Log.Warn("failed to check pool sandboxes for health check gating", "pool", pool.ID, "error", err)
+			continue
+		}
+		if running {
+			delete(awaiting, pool.Service)
+		}
+	}
+	return awaiting
 }
 
 // ensureServiceForPorts creates or updates a network Service entity for a service

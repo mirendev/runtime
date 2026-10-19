@@ -42,7 +42,7 @@ func structFingerprint(t reflect.Type) string {
 // fails, update specsMatch to handle the new field (or explicitly skip it),
 // then update the expected hash here.
 func TestSpecsMatchCoversAllFields(t *testing.T) {
-	assert.Equal(t, "bcaca8d21481f244", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
+	assert.Equal(t, "f610b22edd6b6bd8", structFingerprint(reflect.TypeFor[compute_v1alpha.SandboxSpec]()),
 		"SandboxSpec struct tree changed — update specsMatch and this hash")
 }
 
@@ -298,6 +298,25 @@ func TestSpecsMatch(t *testing.T) {
 			},
 			wantMatch:  false,
 			wantReason: "mount",
+		},
+
+		// A changed health check needs new sandboxes: the check runs at boot.
+		{
+			name: "adding a health check does not match",
+			modify: func(a, b *compute_v1alpha.SandboxSpec) {
+				b.HealthCheckPath = "/up"
+			},
+			wantMatch:  false,
+			wantReason: "health check",
+		},
+		{
+			name: "health check timeout change does not match",
+			modify: func(a, b *compute_v1alpha.SandboxSpec) {
+				a.HealthCheckPath, b.HealthCheckPath = "/up", "/up"
+				b.HealthCheckTimeout = "2m"
+			},
+			wantMatch:  false,
+			wantReason: "health check",
 		},
 	}
 

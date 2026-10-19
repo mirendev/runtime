@@ -104,6 +104,15 @@
         "public": {"type": "boolean", "default": false}
       }
     },
+    "health_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/([^/#\\s][^#\\s]*)?$", "description": "Path to GET on the service's HTTP port. A new instance takes traffic only once it answers 2xx or 3xx."},
+        "timeout": {"$ref": "#/$defs/duration", "default": "60s"}
+      }
+    },
     "disk": {
       "type": "object",
       "additionalProperties": false,
@@ -134,6 +143,7 @@
         "env": {"type": "array", "items": {"$ref": "#/$defs/env"}},
         "concurrency": {"$ref": "#/$defs/concurrency"},
         "metrics": {"$ref": "#/$defs/metrics"},
+        "health_check": {"$ref": "#/$defs/health_check"},
         "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}}
       },
       "allOf": [

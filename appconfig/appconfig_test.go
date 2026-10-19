@@ -1731,6 +1731,90 @@ port_timeout = "2m"
 	})
 }
 
+func TestServiceHealthCheckParsing(t *testing.T) {
+	config := `name = "test-app"
+
+[services.web]
+port = 4000
+
+[services.web.health_check]
+path = "/up"
+timeout = "90s"
+
+[services.worker]
+command = "bin/worker"
+`
+	ac, err := Parse([]byte(config))
+	require.NoError(t, err)
+	require.NotNil(t, ac.Services["web"].HealthCheck)
+	assert.Equal(t, "/up", ac.Services["web"].HealthCheck.Path)
+	assert.Equal(t, "90s", ac.Services["web"].HealthCheck.Timeout)
+	assert.Nil(t, ac.Services["worker"].HealthCheck)
+}
+
+func TestServiceHealthCheckValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		service string
+		wantErr string
+	}{
+		{
+			name:    "web's default port is enough",
+			service: "[services.web]\n[services.web.health_check]\npath = \"/up\"\n",
+		},
+		{
+			name:    "path must be absolute",
+			service: "[services.web]\n[services.web.health_check]\npath = \"up\"\n",
+			wantErr: "health_check path must be an absolute URL path",
+		},
+		{
+			name:    "path may carry a query",
+			service: "[services.web]\n[services.web.health_check]\npath = \"/up?deep=1\"\n",
+		},
+		{
+			name:    "path can't hold a space",
+			service: "[services.web]\n[services.web.health_check]\npath = \"/up now\"\n",
+			wantErr: "health_check path must be an absolute URL path",
+		},
+		{
+			name:    "path can't name another host",
+			service: "[services.web]\n[services.web.health_check]\npath = \"//evil.example/up\"\n",
+			wantErr: "health_check path must be an absolute URL path",
+		},
+		{
+			name:    "path is required",
+			service: "[services.web]\n[services.web.health_check]\ntimeout = \"30s\"\n",
+			wantErr: "health_check path must be an absolute URL path",
+		},
+		{
+			name:    "timeout needs a unit",
+			service: "[services.web]\n[services.web.health_check]\npath = \"/up\"\ntimeout = \"30\"\n",
+			wantErr: `invalid health_check timeout "30"`,
+		},
+		{
+			name:    "timeout must be positive",
+			service: "[services.web]\n[services.web.health_check]\npath = \"/up\"\ntimeout = \"0s\"\n",
+			wantErr: `invalid health_check timeout "0s"`,
+		},
+		{
+			name:    "service needs an HTTP port",
+			service: "[services.queue]\ncommand = \"bin/q\"\nport = 5672\nport_type = \"tcp\"\n[services.queue.health_check]\npath = \"/up\"\n",
+			wantErr: "service queue: health_check needs an HTTP port to check",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte("name = \"test-app\"\n\n" + tt.service))
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestParseTasks(t *testing.T) {
 	config := `
 name = "test-app"

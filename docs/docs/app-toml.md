@@ -274,6 +274,7 @@ args = ["postgres", "-c", "shared_buffers=256MB"]
 | `env` | [[env]](#env) | Service-specific environment variables (same schema as global `[[env]]`) | — |
 | `concurrency` | [concurrency](#concurrency) | Scaling configuration | See defaults below |
 | `metrics` | [metrics](#service-metrics) | Prometheus-compatible metrics endpoint scraped by the runtime | Disabled |
+| `health_check` | [health_check](#health-check) | HTTP check a new instance must pass before it takes traffic | None |
 | `disks` | [[disk]](#disks) | Persistent disk attachments | — |
 
 :::note[Validation]
@@ -320,6 +321,42 @@ With the default `public = false`, Miren returns 404 for the configured path at
 public ingress. Setting `public = true` lets the request continue through the
 route's normal authentication and middleware. It does not bypass route
 protection.
+
+### `[services.<name>.health_check]` — Health check {#health-check}
+
+Holds each new instance of a service out of service until it answers an HTTP
+check. After the instance binds its port, Miren sends `GET <path>` to it about
+once a second. The instance takes traffic only once the check answers with a
+2xx or 3xx status. Redirects are not followed.
+
+```toml
+[services.web.health_check]
+path = "/up"
+timeout = "60s"
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `path` | string | Absolute path to request on the service's HTTP port | Required |
+| `timeout` | duration | How long an instance has to pass, counted from when its port binds | `"60s"` |
+
+During a deploy, the previous version keeps serving requests until the new
+version has an instance that passed. If the new version never passes, its
+instances fail with the check's last answer in `miren logs`, the deploy reports
+the failure, and the previous version stays up. Run `miren rollback` to make it
+the active version again, or deploy a fix.
+
+The check is sent to the instance's own address, so the `Host` header is that
+address rather than your app's domain. Apps that restrict hosts have to let the
+check path through. In Rails, for example:
+
+```ruby
+config.host_authorization = { exclude: ->(request) { request.path == "/up" } }
+```
+
+A service with disks can't run two versions at once, so its old instance stops
+before the new one starts. The check still keeps a failing instance from taking
+traffic, but there is no previous version left to serve in the meantime.
 
 ### `[services.<name>.concurrency]` — Scaling {#concurrency}
 

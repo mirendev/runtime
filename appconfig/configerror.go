@@ -368,12 +368,13 @@ func validFieldsForPath(path string) ([]string, bool) {
 
 // validFields maps section paths to their valid field names.
 var validFields = map[string][]string{
-	"":                       {"name", "static", "env", "concurrency", "services", "tasks", "web", "build", "include", "addons", "aliases", "workload_role"},
-	"static":                 {"dir"},
-	"services.*":             {"command", "port", "port_name", "port_type", "ports", "image", "env", "concurrency", "disks", "port_timeout"},
-	"services.*.concurrency": {"mode", "requests_per_instance", "scale_down_delay", "num_instances", "shutdown_timeout"},
-	"services.*.disks":       {"name", "provider", "mount_path", "read_only", "size_gb", "filesystem", "lease_timeout"},
-	"services.*.ports":       {"port", "name", "type", "node_port"},
+	"":                        {"name", "static", "env", "concurrency", "services", "tasks", "web", "build", "include", "addons", "aliases", "workload_role"},
+	"static":                  {"dir"},
+	"services.*":              {"command", "port", "port_name", "port_type", "ports", "image", "env", "concurrency", "disks", "port_timeout", "health_check"},
+	"services.*.concurrency":  {"mode", "requests_per_instance", "scale_down_delay", "num_instances", "shutdown_timeout"},
+	"services.*.disks":        {"name", "provider", "mount_path", "read_only", "size_gb", "filesystem", "lease_timeout"},
+	"services.*.ports":        {"port", "name", "type", "node_port"},
+	"services.*.health_check": {"path", "timeout"},
 	// Tasks deliberately have no ports, concurrency, image, or disks: a task is
 	// a command the platform runs, not a process it keeps up. Suggesting them
 	// here would advertise fields the schema doesn't accept.

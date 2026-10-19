@@ -524,3 +524,20 @@ func TestBuildOmitsTheAppLabelWhenUnknown(t *testing.T) {
 	_, ok := spec.LogAttribute.Get("miren.app")
 	assert.False(t, ok)
 }
+
+func TestBuildCarriesTheHealthCheck(t *testing.T) {
+	opts := baseOptions()
+	opts.Config.Services[0].HealthCheck = core_v1alpha.ConfigSpecServicesHealthCheck{Path: "/up", Timeout: "90s"}
+
+	spec, err := Build(nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, "/up", spec.HealthCheckPath)
+	assert.Equal(t, "90s", spec.HealthCheckTimeout)
+
+	// A sandbox without ports (a task run, say) has nothing to check.
+	opts.SkipPorts = true
+	spec, err = Build(nil, opts)
+	require.NoError(t, err)
+	assert.Empty(t, spec.HealthCheckPath)
+	assert.Empty(t, spec.HealthCheckTimeout)
+}
