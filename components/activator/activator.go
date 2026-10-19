@@ -323,6 +323,13 @@ func (a *localActivator) AcquireLease(ctx context.Context, ver *core_v1alpha.App
 }
 
 var ErrSandboxDiedEarly = fmt.Errorf("sandbox died while booting")
+
+// ErrCrashCooldown means the pool is backing off after repeated crashes and
+// the activator refused to start another sandbox. It wraps ErrSandboxDiedEarly
+// so existing checks still match. The sandboxpool manager reports the cooldown
+// once when it begins; callers seeing this per request should stay quiet.
+var ErrCrashCooldown = fmt.Errorf("%w: application in crash cooldown", ErrSandboxDiedEarly)
+
 var ErrPoolTimeout = fmt.Errorf("timeout waiting for sandbox from pool")
 
 // waitForSandbox waits for a sandbox with capacity to become available.
@@ -536,7 +543,9 @@ func (a *localActivator) waitForSandbox(ctx context.Context, ver *core_v1alpha.A
 		if shouldFailFast {
 			// We have sandboxes tracked but none are RUNNING or PENDING
 			// AND either we weren't scaling up, or a new sandbox was created and died
-			a.log.Error("all sandboxes failed while waiting",
+			// The app crashed on boot and the pool manager will record it; the
+			// platform did its job, so this is not an Error.
+			a.log.Warn("all sandboxes failed while waiting",
 				"app", ver.App,
 				"version", ver.Version,
 				"service", service,
@@ -669,8 +678,8 @@ poolLoop:
 
 			// Check if pool is in crash cooldown before attempting to increment
 			if !state.pool.CooldownUntil.IsZero() && time.Now().Before(state.pool.CooldownUntil) {
-				return state.pool, fmt.Errorf("%w: application in crash cooldown until %s (consecutive crashes: %d)",
-					ErrSandboxDiedEarly,
+				return state.pool, fmt.Errorf("%w until %s (consecutive crashes: %d)",
+					ErrCrashCooldown,
 					state.pool.CooldownUntil.Format(time.RFC3339),
 					state.pool.ConsecutiveCrashCount)
 			}
