@@ -188,7 +188,7 @@ Push a new commit, redeploy with `--ephemeral pr-123`, and the previous `pr-123`
 
 ## TTL and Cleanup
 
-`--ttl` takes a Go duration string (`30m`, `2h`, `48h`) and defaults to `24h`. Expiration is fixed at deploy time.
+A preview lasts a week unless you say otherwise, long enough for a PR to sit over a weekend before anyone reviews it. Pass `--ttl` to pick a different lifetime, in minutes, hours, days or weeks (`90m`, `48h`, `3d`, `2w`). The clock starts when you deploy, and redeploying the same label starts it over.
 
 Requests to an expired label return 404 immediately — the ephemeral lookup filters expired versions itself, so the cutoff is enforced as soon as the timestamp passes. A background controller sweeps the actual entities every five minutes to free their resources. There's no extend command — redeploy with the same label to refresh the TTL.
 

@@ -106,7 +106,7 @@ type deployOpts struct {
 	Env           []string `short:"e" long:"env" split:"false" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
 	Sensitive     []string `short:"s" long:"sensitive" split:"false" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
-	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h)" default:"24h"`
+	TTL           string   `long:"ttl" description:"TTL for ephemeral version (e.g. 48h, 7d, 2w)" default:"7d"`
 	SummaryJSON   string   `long:"summary-json" description:"Write a JSON summary of the deploy result (deploy id, version, and route URLs) to this path"`
 }
 
@@ -331,10 +331,11 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 		}
 		ephemeralLabel = normalized
 
-		if _, err := time.ParseDuration(opts.TTL); err != nil {
+		ttl, err := ephemeralx.ParseTTL(opts.TTL)
+		if err != nil {
 			return fmt.Errorf("invalid TTL %q: %w", opts.TTL, err)
 		}
-		ephemeralTTL = opts.TTL
+		ephemeralTTL = ephemeralx.WireTTL(ttl)
 	}
 	if opts.Message != "" && opts.Analyze {
 		return fmt.Errorf("--message cannot be used with --analyze (no deployment is created)")
