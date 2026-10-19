@@ -65,11 +65,14 @@ func (tr *tokenRefresher) snapshot() []tokenEntry {
 }
 
 // ReleaseTokenState revokes every workload identity record for a sandbox, including
-// its persisted token-request secret. Called from StopSandbox so the state goes away
+// its persisted metadata secret. Called from StopSandbox so the state goes away
 // with the sandbox itself rather than with the entity, which outlives it by up to the
 // periodic cleanup horizon, and from boot-failure paths that never reach StopSandbox.
 func (c *SandboxController) ReleaseTokenState(id entity.Id) {
 	sandboxID := id.String()
+	c.activityMu.Lock()
+	delete(c.activity, sandboxID)
+	c.activityMu.Unlock()
 	if c.tokenRefresher != nil {
 		c.tokenRefresher.unregister(sandboxID)
 	}
