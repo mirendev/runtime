@@ -28,6 +28,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # proxy.golang.org occasionally resets an HTTP/2 stream mid-download. With
+  # the default `,` separator Go only falls back to direct on a 404 or 410, so
+  # a reset fails the job; `|` falls back on any error. GOSUMDB stays on, so a
+  # direct fetch is still checked against the checksum database. iso containers
+  # get the same setting from .iso/Dockerfile.
+  GOPROXY: https://proxy.golang.org|direct
+
 permissions:
   # Used by golangci-lint to emit annotations that are picked up by github
   contents: read
@@ -56,6 +64,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Install system dependencies
       run: |
@@ -215,6 +229,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     # Test fixtures intentionally emit compiler errors. testfmt reports real
     # failures explicitly; the Go matcher would also annotate fixture output.
@@ -245,8 +265,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-
+        key: iso-cache-unit-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-unit-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -258,6 +278,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Test (runner ${{ matrix.group.runner }})
       run: |
@@ -288,7 +313,10 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        cache: true
+        # Host Go only installs iso; the tests build inside the container. A
+        # host cache saved from here would hold little besides iso's own
+        # modules, and could win the shared key ahead of a job that needs it.
+        cache: false
 
     - name: Resolve iso version
       id: iso-version
@@ -314,8 +342,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-
+        key: iso-cache-unit-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-unit-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -327,6 +355,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Test stackbuild
       run: |
@@ -398,6 +431,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -426,8 +465,8 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-${{ hashFiles('go.sum') }}
-        restore-keys: iso-cache-blackbox-
+        key: iso-cache-blackbox-shard-${{ hashFiles('go.sum', 'x/go.sum') }}
+        restore-keys: iso-cache-blackbox-shard-
 
     - name: Restore Docker image cache
       id: docker-image-cache
@@ -439,6 +478,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Start dev environment
       run: ISO_CACHE_DIR=/tmp/iso-cache make dev-start
@@ -485,6 +529,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -513,7 +563,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-pop-${{ hashFiles('go.sum') }}
+        key: iso-cache-blackbox-pop-${{ hashFiles('go.sum', 'x/go.sum') }}
         restore-keys: iso-cache-blackbox-pop-
 
     - name: Restore Docker image cache
@@ -526,6 +576,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     # POP tests need the cloud repo to build cloud and pop binaries from source.
     # Requires CLOUD_REPO_TOKEN secret — a PAT with read access to mirendev/cloud.
@@ -673,6 +728,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    - name: Download modules
+      run: hack/ci-mod-download.sh
 
     - name: Disable Go problem matcher for tests
       run: echo '::remove-matcher owner=go::'
@@ -701,7 +762,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /tmp/iso-cache
-        key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum') }}
+        key: iso-cache-blackbox-distributed-${{ hashFiles('go.sum', 'x/go.sum') }}
         restore-keys: iso-cache-blackbox-distributed-
 
     - name: Restore Docker image cache
@@ -714,6 +775,11 @@ jobs:
     - name: Load cached Docker image
       if: steps.docker-image-cache.outputs.cache-hit == 'true'
       run: docker load < /tmp/iso-image.tar
+
+    # Same reason as the host-side download step: fill the iso module cache
+    # completely before anything in this job can save it.
+    - name: Download modules (iso)
+      run: ISO_CACHE_DIR=/tmp/iso-cache iso run bash hack/ci-mod-download.sh
 
     - name: Start distributed environment
       run: ISO_CACHE_DIR=/tmp/iso-cache make dev-distributed
@@ -818,9 +884,12 @@ jobs:
       with:
         go-version-file: 'go.mod'
         cache: true
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
 
     - name: Download modules
-      run: go mod download
+      run: hack/ci-mod-download.sh
 
     - name: Cross-compile all targets
       run: |
