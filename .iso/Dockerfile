@@ -70,6 +70,11 @@ RUN chmod 755 /root && \
 # Setup Go cache directories
 ENV GOMODCACHE=/go/pkg/mod
 ENV GOCACHE=/go/build-cache
+# Fall back to a direct fetch on any proxy error, not only a 404 or 410:
+# proxy.golang.org occasionally resets a stream mid-download, and the default
+# `,` separator turns that into a failed build. GOSUMDB still verifies modules
+# fetched directly.
+ENV GOPROXY=https://proxy.golang.org|direct
 
 # Set working directory
 WORKDIR /workspace
