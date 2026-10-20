@@ -94,6 +94,9 @@ func shortIDFromEntity(ent *entityserver_v1alpha.Entity) string {
 
 func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 	name := state.Args().Name()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "create"); err != nil {
+		return err
+	}
 
 	appRec, _, err := appclient.EnsureApp(ctx, r.EC.EAC(), name, appclient.CreationSubject(ctx))
 	if err != nil {
@@ -107,6 +110,9 @@ func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 
 func (r *AppInfo) Destroy(ctx context.Context, state *app_v1alpha.CrudDestroy) error {
 	name := state.Args().Name()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "destroy"); err != nil {
+		return err
+	}
 
 	var appRec core_v1alpha.App
 
@@ -366,6 +372,9 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 
 func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudSetConfiguration) error {
 	name := state.Args().App()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
@@ -602,6 +611,9 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudGetConfiguration) error {
 	name := state.Args().App()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "read"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
@@ -777,6 +789,9 @@ func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.
 
 func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVar) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -798,6 +813,9 @@ func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVa
 
 func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvVars) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -828,6 +846,9 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 
 func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.CrudSetInitialEnvVars) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -855,6 +876,9 @@ func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.Crud
 
 func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDeleteEnvVar) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -902,6 +926,9 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 	args := state.Args()
 	name := args.App()
 	service := args.Service()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "deploy"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)

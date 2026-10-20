@@ -374,6 +374,7 @@ func (s *Server) prepareMethodCall(ctx context.Context, req opRequest) (context.
 		return ctx, nil, Method{}, nil, opReply{Status: "forbidden", Error: "invalid bearer token"}, false
 	}
 	ctx = ContextWithIdentity(ctx, identity)
+	ctx = ContextWithAuthorization(ctx, s.state.authorizer, strings.ToLower(mm.InterfaceName), strings.ToLower(mm.Name))
 
 	if len(req.Trace) > 0 {
 		ctx = Propagator().Extract(ctx, propagation.MapCarrier(req.Trace))

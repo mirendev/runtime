@@ -1161,6 +1161,8 @@ func (s *Server) startCallStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx = ContextWithAuthorization(ctx, s.state.authorizer, strings.ToLower(mm.InterfaceName), strings.ToLower(mm.Name))
+
 	// Enforce authentication for non-public methods
 	if !mm.Public {
 		identity := IdentityFromContext(ctx)
@@ -1325,6 +1327,8 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+
+		ctx = ContextWithAuthorization(ctx, s.state.authorizer, strings.ToLower(mm.InterfaceName), strings.ToLower(mm.Name))
 
 		// Enforce authentication for non-public methods
 		if !mm.Public {

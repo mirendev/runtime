@@ -66,6 +66,10 @@ func restHandler(m Method, st *State) http.HandlerFunc {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 
+		if st != nil {
+			r = r.WithContext(ContextWithAuthorization(r.Context(), st.authorizer, strings.ToLower(m.InterfaceName), strings.ToLower(m.Name)))
+		}
+
 		if !restAuthorize(w, r, m, st) {
 			return
 		}

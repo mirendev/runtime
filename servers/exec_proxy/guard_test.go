@@ -9,6 +9,7 @@ import (
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
@@ -112,4 +113,33 @@ func TestResolveSandboxApp(t *testing.T) {
 		})
 		assert.False(t, rpc.AllowApp(scoped, app))
 	})
+}
+
+type denyExecResource struct{}
+
+func (*denyExecResource) Authorize(context.Context, *rpc.Identity, string, string) error { return nil }
+func (*denyExecResource) AuthorizeResource(context.Context, *rpc.Identity, rpc.ResourceRequest) error {
+	return rpc.ErrUnauthorized
+}
+
+func TestExecResourceDenialBeforeForwarding(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	appID, err := inmem.Client.Create(t.Context(), "private", &core_v1alpha.App{CreatedBy: "alice"})
+	require.NoError(t, err)
+	version, err := inmem.Client.Create(t.Context(), "private-v1", &core_v1alpha.AppVersion{App: appID})
+	require.NoError(t, err)
+	var sandbox compute_v1alpha.Sandbox
+	sandbox.Spec.Version = version
+	id, err := inmem.Client.Create(t.Context(), "private-sb", &sandbox)
+	require.NoError(t, err)
+	server := &Server{EAC: inmem.EAC}
+	client := exec_v1alpha.NewSandboxExecClient(rpc.LocalClient(exec_v1alpha.AdaptSandboxExec(server)))
+	ctx := rpc.ContextWithAuthorization(t.Context(), &denyExecResource{}, "sandboxexec", "exec")
+	_, err = client.Exec(ctx, "id", id.String(), "", nil, nil, nil, nil)
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	_, err = client.Exec(ctx, "app", "private", "", nil, nil, nil, nil)
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	_, err = client.Attach(ctx, id.String(), "", nil, nil, nil)
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
 }

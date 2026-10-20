@@ -191,12 +191,32 @@ func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity
 	if identity.Method == rpc.AuthMethodCert {
 		return nil
 	}
+	// Migrated handlers evaluate the resolved target. A method-only check here
+	// would reject valid scoped rules before the app is known.
+	if rpc.AppAction(resource, action) != "" {
+		return nil
+	}
+	return a.authorize(ctx, identity, rpc.ResourceRequest{Resource: resource, Action: action}, resource, action)
+}
 
-	// Build RBAC request using the provided resource and action
+func (a *RPCAuthenticator) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {
+	if identity == nil {
+		return rpc.ErrUnauthorized
+	}
+	if identity.Method == rpc.AuthMethodCert {
+		return nil
+	}
+	resource, action := rpc.RPCPermissionFromContext(ctx)
+	return a.authorize(ctx, identity, request, resource, action)
+}
+
+func (a *RPCAuthenticator) authorize(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest, legacyResource, legacyAction string) error {
 	req := &rbac.Request{
 		Subject:  identity.Subject,
-		Resource: resource,
-		Action:   action,
+		Resource: request.Resource,
+		Action:   request.Action,
+		Instance: request.Instance,
+		Owner:    request.Owner,
 		Tags:     a.tags,
 		Context:  map[string]any{},
 	}
@@ -205,21 +225,22 @@ func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity
 		req.Context["organization_id"] = identity.Metadata["organization_id"]
 	}
 
-	decision, reason := a.authorization.Evaluate(req)
+	decision, reason := a.authorization.EvaluateResource(req, legacyResource, legacyAction)
 	if decision == rbac.DecisionDeny {
 		a.logger.Warn("authorization denied",
 			"reason", reason,
 			"subject", identity.Subject,
 			"groups", req.Groups,
-			"resource", resource,
-			"action", action,
+			"resource", req.Resource,
+			"action", req.Action,
+			"instance", req.Instance,
 			"tags", a.tags,
 		)
 
 		if reason == "not_synced" {
-			return fmt.Errorf("access denied: cloud authorization is not synchronized; check the cluster's cloud connection and initial snapshot")
+			return fmt.Errorf("%w: cloud authorization is not synchronized; check the cluster's cloud connection and initial snapshot", rpc.ErrUnauthorized)
 		}
-		return fmt.Errorf("access denied by RBAC policy")
+		return fmt.Errorf("%w: denied by RBAC policy", rpc.ErrUnauthorized)
 	}
 
 	return nil

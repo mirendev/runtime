@@ -320,6 +320,60 @@ func TestRESTAndRPCAgreeOnAuthorization(t *testing.T) {
 	}
 }
 
+type resourceMeter struct{ restMeter }
+
+func (m *resourceMeter) ReadTemperature(ctx context.Context, call *example.MeterReadTemperature) error {
+	if err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "read", Instance: call.Args().Name()}); err != nil {
+		return err
+	}
+	return m.restMeter.ReadTemperature(ctx, call)
+}
+
+type roomAuthorizer struct{}
+
+func (*roomAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error { return nil }
+
+func (*roomAuthorizer) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {
+	resource, action := rpc.RPCPermissionFromContext(ctx)
+	if identity != nil && resource == "meter" && action == "readtemperature" && request.Instance == "room1" {
+		return nil
+	}
+	return rpc.ErrUnauthorized
+}
+
+func TestResolvedAuthorizationAcrossTransports(t *testing.T) {
+	ctx := t.Context()
+	ss, err := rpc.NewState(ctx, rpc.WithSkipVerify,
+		rpc.WithRESTBindAddr("localhost:0"), rpc.WithWSBindAddr("localhost:0"), rpc.WithTCPBindAddr("localhost:0"),
+		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(&roomAuthorizer{}))
+	require.NoError(t, err)
+	ss.Server().ExposeValue("meter", example.AdaptMeter(&resourceMeter{}))
+	for _, name := range []string{"room1", "other"} {
+		t.Run(name, func(t *testing.T) {
+			resp := restGet(t, "https://"+ss.RESTListenAddr()+"/api/v1/meters/"+name+"/temperature")
+			defer resp.Body.Close()
+			if name == "room1" {
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+			} else {
+				require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			}
+			for _, remote := range []string{ss.ListenAddr(), "wss://" + ss.WSListenAddr(), "tcp://" + ss.TCPListenAddr()} {
+				cs, err := rpc.NewState(ctx, rpc.WithSkipVerify)
+				require.NoError(t, err)
+				client, err := cs.Connect(remote, "meter")
+				require.NoError(t, err)
+				result, err := example.NewMeterClient(client).ReadTemperature(ctx, name)
+				if name == "room1" {
+					require.NoError(t, err)
+					require.Equal(t, float32(21.5), result.Reading().Temperature())
+				} else {
+					require.ErrorContains(t, err, "unauthorized")
+				}
+			}
+		})
+	}
+}
+
 // ServeMux rejects more than exact duplicates: two annotations differing only
 // in wildcard name are distinct strings that still conflict, and it reports
 // that by panicking. Mounting runs from ExposeValue during startup, so an
