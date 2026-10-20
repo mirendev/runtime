@@ -196,7 +196,14 @@ func (a *RPCAuthenticator) Authorize(ctx context.Context, identity *rpc.Identity
 	if rpc.AppAction(resource, action) != "" {
 		return nil
 	}
-	return a.authorize(ctx, identity, rpc.ResourceRequest{Resource: resource, Action: action}, resource, action)
+	// Unmigrated operations cannot bypass app isolation through raw entities
+	// or infrastructure APIs. EvaluateResource retains v1's method vocabulary.
+	request := rpc.ResourceRequest{Resource: "cluster", Action: "admin"}
+	if resource == "userquery" && action == "whoami" {
+		// Caller introspection does not confer access to cluster resources.
+		request.Resource, request.Action = resource, action
+	}
+	return a.authorize(ctx, identity, request, resource, action)
 }
 
 func (a *RPCAuthenticator) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {

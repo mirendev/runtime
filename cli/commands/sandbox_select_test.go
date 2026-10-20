@@ -145,6 +145,10 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 	ctx, _, server := sandboxCommandServer(t, true)
 	_, _, err := selectAppSandbox(ctx, "shop", "")
 	require.ErrorContains(t, err, "403")
+	args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
+	out, err := RunCommand(SandboxList, args...)
+	require.ErrorContains(t, err, "403")
+	require.Empty(t, out.Stdout.String())
 	for _, tc := range []struct {
 		command any
 		flags   []string
@@ -169,6 +173,10 @@ func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
 	ctx.Config.ServerAddress = server.ListenAddr()
 	_, _, err = selectAppSandbox(ctx, "shop", "")
 	require.ErrorIs(t, err, rpc.ErrResolveLookup)
+	args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
+	out, err := RunCommand(SandboxList, args...)
+	require.ErrorIs(t, err, rpc.ErrResolveLookup)
+	require.Empty(t, out.Stdout.String())
 	for _, tc := range []struct {
 		command any
 		flags   []string

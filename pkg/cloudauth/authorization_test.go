@@ -13,12 +13,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/auth"
 	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
@@ -620,5 +622,58 @@ func TestAuthorizationSnapshotVersionMustBeNegotiated(t *testing.T) {
 		require.ErrorContains(t, state.receiveSnapshot(t.Context(), raw), "version")
 		decision, _ := state.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
 		require.Equal(t, rbac.DecisionAllow, decision, "rejected snapshot must leave prior policy in effect")
+	}
+}
+
+func TestInfrastructureAuthorizationRequiresClusterAdmin(t *testing.T) {
+	targets := []struct{ resource, action string }{
+		{"runnerregistration", "issueworkloadtoken"},
+		{"nodeadmin", "query"},
+		{"netdb", "releaseall"},
+		{"resourceusage", "httplistnodes"},
+		{"routes", "setdefault"},
+		{"crud", "setworkloadrole"},
+		{"futureinfra", "read"},
+	}
+	for _, method := range entityserver_v1alpha.AdaptEntityAccess(nil).Methods() {
+		targets = append(targets, struct{ resource, action string }{"entityaccess", strings.ToLower(method.Name)})
+	}
+	var legacy []rbac.Permission
+	for _, target := range targets {
+		legacy = append(legacy, rbac.Permission{Resource: target.resource, Actions: []string{target.action}})
+	}
+	for _, version := range []uint{1, 2} {
+		for _, tc := range []struct {
+			name        string
+			permissions []rbac.Permission
+			allow       bool
+		}{
+			{"app-only", []rbac.Permission{{Resource: "app", Actions: []string{"*"}, Scope: "*"}}, false},
+			{"method-grants", legacy, version == 1},
+			{"administrator", []rbac.Permission{{Resource: "cluster", Actions: []string{"admin"}}}, version == 2},
+		} {
+			t.Run(fmt.Sprintf("v%d/%s", version, tc.name), func(t *testing.T) {
+				a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), "", "")}
+				session := authorizationSession("session")
+				session.Capabilities[0].Version = version
+				a.authorization.beginSession(t.Context(), session)
+				snapshot := authorizationSnapshot("session", 1)
+				snapshot.Version = version
+				snapshot.Policy.Rules[0].Permissions = append([]rbac.Permission{{Resource: "userquery", Actions: []string{"whoami"}}}, tc.permissions...)
+				deliverSnapshot(t, a.authorization, snapshot)
+				identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+				for _, target := range targets {
+					err := a.Authorize(t.Context(), identity, target.resource, target.action)
+					if tc.allow {
+						require.NoError(t, err, "%s:%s", target.resource, target.action)
+					} else {
+						require.ErrorIs(t, err, rpc.ErrUnauthorized, "%s:%s", target.resource, target.action)
+					}
+					require.NoError(t, a.Authorize(t.Context(), &rpc.Identity{Method: rpc.AuthMethodCert}, target.resource, target.action))
+				}
+				require.NoError(t, a.Authorize(t.Context(), identity, "userquery", "whoami"), "self-introspection retains its own permission")
+				require.ErrorIs(t, a.Authorize(t.Context(), &rpc.Identity{Subject: "unknown", Method: rpc.AuthMethodJWT}, "entityaccess", "get"), rpc.ErrUnauthorized)
+			})
+		}
 	}
 }
