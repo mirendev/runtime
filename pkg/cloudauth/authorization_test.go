@@ -131,7 +131,7 @@ func TestAuthorizationDenialDiagnostics(t *testing.T) {
 				require.Contains(t, err.Error(), "cloud authorization is not synchronized")
 				require.Contains(t, err.Error(), "snapshot")
 			} else {
-				require.EqualError(t, err, "access denied by RBAC policy")
+				require.ErrorIs(t, err, rpc.ErrUnauthorized)
 			}
 			// The signing-key refresher logs on its own schedule, so find the
 			// denial rather than assuming it was the last line.
@@ -556,4 +556,69 @@ func TestScopedAuthorizationSnapshot(t *testing.T) {
 	require.NoError(t, dispatch(8, `[{"resource":"app","actions":["list"]}]`))
 	require.Equal(t, rbac.DecisionAllow, evaluate(state, "bob-blog", "bob"))
 	require.Equal(t, rbac.DecisionAllow, evaluate(state, "", ""))
+}
+
+func TestResolvedAppAuthorizationVersions(t *testing.T) {
+	for _, version := range []uint{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "authorization.json")
+			a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")}
+			session := authorizationSession("session")
+			session.Capabilities[0].Version = version
+			a.authorization.beginSession(t.Context(), session)
+			snapshot := authorizationSnapshot("session", 1)
+			snapshot.Version = version
+			permission := rbac.Permission{Resource: "app", Actions: []string{"read"}, Scope: "$owner"}
+			if version == 1 {
+				permission = rbac.Permission{Resource: "crud", Actions: []string{"getconfiguration"}}
+			}
+			snapshot.Policy.Rules[0].Permissions = []rbac.Permission{permission}
+			deliverSnapshot(t, a.authorization, snapshot)
+			for _, restarted := range []bool{false, true} {
+				if restarted {
+					a.authorization = NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+				}
+				identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+				ctx := rpc.ContextWithIdentity(t.Context(), identity)
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "getconfiguration")
+				require.NoError(t, a.Authorize(ctx, identity, "crud", "getconfiguration"))
+				request := rpc.ResourceRequest{Resource: "app", Action: "read", Instance: "blog", Owner: "alice"}
+				require.NoError(t, rpc.AuthorizeResource(ctx, request))
+				request.Owner = "bob"
+				if version == 2 {
+					require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+				} else {
+					require.NoError(t, rpc.AuthorizeResource(ctx, request), "legacy unscoped grant must retain access")
+				}
+				request.Owner = "alice"
+				request.Action = "configure"
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "setconfiguration")
+				require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+				identity.Subject = "missing"
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "getconfiguration")
+				request.Action = "read"
+				require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+			}
+		})
+	}
+}
+
+func TestAuthorizationSnapshotVersionMustBeNegotiated(t *testing.T) {
+	for _, selected := range []uint{1, 2} {
+		state := NewAuthorizationState(t.Context(), slog.Default(), "", "")
+		session := authorizationSession("session")
+		session.Capabilities[0].Version = selected
+		state.beginSession(t.Context(), session)
+		snapshot := authorizationSnapshot("session", 1)
+		snapshot.Version = selected
+		deliverSnapshot(t, state, snapshot)
+		snapshot.Revision++
+		snapshot.Version = 3 - selected
+		snapshot.Policy.Rules = []rbac.Rule{}
+		raw, err := json.Marshal(snapshot)
+		require.NoError(t, err)
+		require.ErrorContains(t, state.receiveSnapshot(t.Context(), raw), "version")
+		decision, _ := state.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
+		require.Equal(t, rbac.DecisionAllow, decision, "rejected snapshot must leave prior policy in effect")
+	}
 }

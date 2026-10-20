@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -19,9 +21,16 @@ func (r *AppInfo) ListVersions(ctx context.Context, state *app_v1alpha.CrudListV
 	if !rpc.AllowApp(ctx, a.App()) {
 		return rpc.ErrUnauthorized
 	}
+	if err := appclient.Authorize(ctx, r.EC.EAC(), a.App(), "read"); err != nil {
+		return err
+	}
 
 	var app core_v1alpha.App
-	record, err := r.EC.GetWithEntity(ctx, a.App(), &app)
+	target := a.App()
+	if !strings.Contains(target, "/") {
+		target = "app/" + target
+	}
+	record, err := r.EC.GetByIdWithEntity(ctx, entity.Id(target), &app)
 	if err != nil {
 		if rpc.BoundApp(ctx) != "" && errors.Is(err, cond.ErrNotFound{}) {
 			return rpc.ErrUnauthorized
