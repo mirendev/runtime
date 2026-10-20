@@ -1,0 +1,12 @@
+{
+  "name": "miren-pi-durable",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs", "test": "node --test" },
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": {
+    "@earendil-works/chord": "1.3.0",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/pi-durable": "1.3.0"
+  }
+}

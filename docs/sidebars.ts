@@ -166,6 +166,7 @@ const sidebars: SidebarsConfig = {
       label: 'Recipes',
       collapsed: false,
       items: [
+        'recipes/pi-durable',
         'recipes/hermes-agent',
         'recipes/amp-runner',
         'recipes/openhands-agent-server',

@@ -1,0 +1,33 @@
+name = "pi-durable"
+
+[build]
+dockerfile = "Dockerfile"
+
+[services.agent]
+command = "node server.mjs"
+
+[services.agent.concurrency]
+mode = "fixed"
+num_instances = 1
+shutdown_timeout = "30s"
+
+[addons.miren-sqlite]
+variant = "standard"
+services = ["agent"]
+
+[[services.agent.env]]
+key = "AGENT_PROVIDER"
+value = "faux"
+
+[[services.agent.env]]
+key = "TOOL_DELAY_MS"
+value = "1000"
+
+[[env]]
+key = "AGENT_TOKEN"
+required = true
+sensitive = true
+
+[[services.agent.env]]
+key = "ANTHROPIC_API_KEY"
+sensitive = true
