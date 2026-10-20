@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"miren.dev/runtime/api/app"
 	computev1 "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -114,6 +115,9 @@ func (s *Server) sandboxDetail(
 
 	if found == nil {
 		return nil, fmt.Errorf("sandbox %q not found", query)
+	}
+	if err := app.AuthorizeSandbox(ctx, s.EC.EAC(), found.ref.Sandbox(), "read"); err != nil {
+		return nil, err
 	}
 
 	out := &sandboxDetailResult{}

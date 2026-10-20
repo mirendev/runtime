@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"slices"
 
+	appapi "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
@@ -30,6 +31,9 @@ func (s *Server) SelectForApp(ctx context.Context, state *compute_v1alpha.Sandbo
 	md.Decode(appEnt.Entity())
 	if !rpc.AllowApp(ctx, md.Name) {
 		return rpc.AppAccessError(ctx, md.Name)
+	}
+	if err := appapi.Authorize(ctx, s.ec.EAC(), md.Name, "exec"); err != nil {
+		return err
 	}
 	pools, err := s.ec.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, app.ID))
 	if err != nil {

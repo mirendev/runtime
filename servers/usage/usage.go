@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/metrics"
@@ -146,6 +147,9 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 
 	for _, sb := range dir.sandboxes {
 		if !f.matches(sb.ref) {
+			continue
+		}
+		if err := app.AuthorizeSandbox(ctx, s.EC.EAC(), sb.ref.Sandbox(), "list"); err != nil {
 			continue
 		}
 

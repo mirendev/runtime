@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"strings"
 
+	appapi "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 )
 
 type Server struct {
@@ -96,6 +98,14 @@ func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList)
 		var sb compute_v1alpha.Sandbox
 		if err := sandboxes.Read(&sb); err != nil {
 			return err
+		}
+		if rpc.BoundApp(ctx) != "" {
+			if _, _, err := s.authorizedSandbox(ctx, sb.ID.String()); err != nil {
+				continue
+			}
+		}
+		if err := appapi.AuthorizeSandbox(ctx, s.ec.EAC(), sb.ID.String(), "list"); err != nil {
+			continue
 		}
 		ent := sandboxes.Entity()
 

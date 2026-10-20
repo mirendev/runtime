@@ -177,6 +177,14 @@ func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error
 		var app core_v1alpha.App
 		list.Read(&app)
 		md := list.Metadata()
+		if !rpc.AllowApp(ctx, md.Name) {
+			continue
+		}
+		if err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
+			Resource: "app", Action: "list", Instance: md.Name, Owner: app.CreatedBy,
+		}); err != nil {
+			continue
+		}
 
 		entry := appEntry{name: md.Name, app: app}
 

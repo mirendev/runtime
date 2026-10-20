@@ -60,6 +60,8 @@ func AppAction(resource, action string) string {
 	switch resource {
 	case "crud":
 		switch action {
+		case "list":
+			return "list"
 		case "new":
 			return "create"
 		case "destroy":
@@ -73,6 +75,20 @@ func AppAction(resource, action string) string {
 		}
 	case "appstatus":
 		if action == "appinfo" {
+			return "read"
+		}
+	case "sandboxes":
+		switch action {
+		case "list":
+			return "list"
+		case "selectforapp":
+			return "exec"
+		}
+	case "resourceusage":
+		switch action {
+		case "listapps", "httplistapps", "listsandboxes", "httplistsandboxes":
+			return "list"
+		case "getapp", "httpgetapp", "getsandbox", "httpgetsandbox":
 			return "read"
 		}
 	case "runs":

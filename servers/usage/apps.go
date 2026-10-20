@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute"
+	"miren.dev/runtime/api/core/core_v1alpha"
 
 	"miren.dev/runtime/api/usage/usage_v1alpha"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/standard"
 )
 
@@ -21,6 +24,22 @@ type appListing struct {
 	cluster  totals
 	total    int32
 	warnings []string
+}
+
+func (s *Server) authorizeApp(ctx context.Context, name, action string) error {
+	if rpc.HasResourceAuthorizer(ctx) {
+		id := name
+		if !strings.Contains(id, "/") {
+			id = "app/" + id
+		}
+		record, err := s.EC.EAC().Get(ctx, id)
+		var stored core_v1alpha.App
+		if err != nil || !stored.Is(record.Entity().Entity()) {
+			// Historical metric labels are not authoritative ownership records.
+			return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "cluster", Action: "admin"})
+		}
+	}
+	return app.Authorize(ctx, s.EC.EAC(), name, action)
 }
 
 // listApps is the one implementation behind ListApps (RPC) and HttpListApps
@@ -34,6 +53,10 @@ type appListing struct {
 // needs the same entity view -- to say which contributing sandboxes still exist
 // -- and loading it twice would mean two passes over the entity store per call.
 func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering) (*appListing, *directory, error) {
+	return s.listAppsForAction(ctx, f, w, ord, "list")
+}
+
+func (s *Server) listAppsForAction(ctx context.Context, f filter, w window, ord ordering, action string) (*appListing, *directory, error) {
 	// The directory is still loaded, but for a narrower job than it used to do.
 	// It no longer supplies the figures -- those come from the store, grouped
 	// by app -- only each app's entity id, and a row for an app that exists but
@@ -54,7 +77,18 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 
 	m, warnings := s.appSamples(ctx, selector, w)
 
-	rows, cluster := buildAppRows(dir, m, f.app, f.includeAddons)
+	rows, _ := buildAppRows(dir, m, f.app, f.includeAddons)
+	visible := rows[:0]
+	var cluster totals
+	for _, row := range rows {
+		if err := s.authorizeApp(ctx, row.App(), action); err != nil {
+			continue
+		}
+		visible = append(visible, row)
+		cluster.cpuCores += row.Total().CpuCores()
+		cluster.memoryBytes += row.Total().MemoryBytes()
+	}
+	rows = visible
 
 	out := &appListing{cluster: cluster, warnings: warnings, total: int32(len(rows))}
 
@@ -168,6 +202,9 @@ func (s *Server) appDetail(
 	if name == "" {
 		return nil, fmt.Errorf("an app name is required")
 	}
+	if err := s.authorizeApp(ctx, name, "read"); err != nil {
+		return nil, err
+	}
 
 	// Asking for contributor histories is asking for contributors. Requiring
 	// both flags would only be a way to get the combination wrong and receive
@@ -176,7 +213,7 @@ func (s *Server) appDetail(
 		opts.contributors = true
 	}
 
-	listing, dir, err := s.listApps(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{})
+	listing, dir, err := s.listAppsForAction(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{}, "read")
 	if err != nil {
 		return nil, err
 	}
