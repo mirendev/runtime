@@ -24,6 +24,34 @@ var (
 	exitWaitRetryMax  = 30 * time.Second
 )
 
+// taskIODrainTimeout bounds how long an exited task's output may take to finish
+// copying out of containerd. The backlog is at most a few pipe buffers, so this
+// is generous; it exists so a stuck copy cannot hold up recording the exit.
+// A variable so tests can shorten it.
+var taskIODrainTimeout = 30 * time.Second
+
+// waitForTaskIO blocks until containerd has copied all of an exited task's
+// output to its writers, or the drain timeout passes.
+func (c *SandboxController) waitForTaskIO(sandboxID entity.Id, containerID string, task containerd.Task) {
+	tio := task.IO()
+	if tio == nil {
+		return
+	}
+
+	copied := make(chan struct{})
+	go func() {
+		tio.Wait()
+		close(copied)
+	}()
+
+	select {
+	case <-copied:
+	case <-time.After(taskIODrainTimeout):
+		c.Log.Warn("container output was still copying after its process exited; attached clients may miss the end of it",
+			"sandbox", sandboxID, "container", containerID, "timeout", taskIODrainTimeout)
+	}
+}
+
 func (c *SandboxController) monitorTaskExit(
 	sb *compute.Sandbox,
 	containerID string,
@@ -114,6 +142,18 @@ func (c *SandboxController) monitorTaskExit(
 				"exit_time", exitStatus.ExitTime(),
 			)
 			c.setProcessExited(containerID)
+
+			// The process exiting does not mean its output has arrived. What it
+			// wrote last can still be sitting in the stdout pipe and FIFO, behind
+			// a log consumer that ingests line by line, when the exit event
+			// fires. Everything below leads to the Hub closing -- directly, and
+			// through the STOPPED patch waking teardown -- and a closed Hub
+			// discards what containerd copies into it afterwards, so an attached
+			// `miren app run` lost the end of its output and still exited 0
+			// (MIR-2012). Wait for the copy to finish first.
+			if c.hubs.Get(sb.ID, containerName) != nil {
+				c.waitForTaskIO(sb.ID, containerID, task)
+			}
 
 			// We don't delete the task here so that our destroySubContainers function
 			// has a consistent view of the state of containers and tasks.

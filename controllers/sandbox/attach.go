@@ -19,7 +19,9 @@ import (
 // stdout — a stalled or half-dead client would freeze the workload it is
 // watching. Dropping is safe here because the log stream, not the attached
 // terminal, is the durable record: everything a dropped client missed is still
-// readable with `miren logs`.
+// readable with `miren logs`. Safe, but not silent: a Subscription counts what
+// it lost, so the attach can tell its client the output was cut short instead
+// of letting a truncated stream pass for a complete one (MIR-2012).
 const subscriberQueue = 256
 
 // replayBuffer bounds the recent output a Hub keeps for clients that have not
@@ -71,6 +73,11 @@ type Hub struct {
 	// container has already written something.
 	history []byte
 
+	// trimmed counts bytes that have fallen off the front of history. A client
+	// that subscribes now has missed them, and is told so the same way as a
+	// client that missed output by falling behind.
+	trimmed uint64
+
 	stdinR *io.PipeReader
 	stdinW *io.PipeWriter
 
@@ -78,20 +85,23 @@ type Hub struct {
 }
 
 type subscriber struct {
-	ch      chan []byte
-	done    chan struct{}
+	ch   chan []byte
+	done chan struct{}
+
+	// drained is closed when the subscriber's goroutine exits: either it has
+	// written everything the Hub queued for it, or it was stopped.
+	drained chan struct{}
+
+	// dropped counts bytes discarded because this subscriber's queue was full.
 	dropped atomic.Uint64
 
-	// closeOnce guards done, which both Close and the subscriber's own
-	// unsubscribe need to close. They do not otherwise coordinate: teardown can
-	// close a Hub while a client is still attached, and that client's deferred
-	// unsubscribe then runs afterwards. Without a shared guard the second close
-	// panics and takes the runner process with it.
+	// closeOnce guards done. A deferred unsubscribe can run more than once, and
+	// a second close would panic and take the runner process with it.
 	closeOnce sync.Once
 }
 
-// stop releases the subscriber's goroutine. Safe to call from either path, and
-// safe to call repeatedly.
+// stop releases the subscriber's goroutine, abandoning anything still queued.
+// Safe to call repeatedly.
 func (s *subscriber) stop() {
 	s.closeOnce.Do(func() { close(s.done) })
 }
@@ -136,7 +146,7 @@ func (h *Hub) Write(p []byte) (int, error) {
 		select {
 		case s.ch <- chunk:
 		default:
-			s.dropped.Add(1)
+			s.dropped.Add(uint64(len(chunk)))
 		}
 	}
 	h.mu.Unlock()
@@ -150,32 +160,56 @@ func (h *Hub) remember(chunk []byte) {
 	if len(chunk) >= replayBuffer {
 		// A single chunk larger than the whole buffer: keep only its tail, so
 		// what a client replays is still the most recent output.
+		h.trimmed += uint64(len(h.history) + len(chunk) - replayBuffer)
 		h.history = append(h.history[:0], chunk[len(chunk)-replayBuffer:]...)
 		return
 	}
 
 	if len(h.history)+len(chunk) > replayBuffer {
 		drop := len(h.history) + len(chunk) - replayBuffer
+		h.trimmed += uint64(drop)
 		h.history = append(h.history[:0], h.history[drop:]...)
 	}
 	h.history = append(h.history, chunk...)
 }
 
-// Subscribe delivers container output to w until the returned function is
-// called. Multiple clients may subscribe at once.
+// Subscription is one client's attachment to a Hub's output.
+type Subscription struct {
+	s    *subscriber
+	stop func()
+}
+
+// Stop detaches the client, abandoning anything still queued for it. It is
+// idempotent and must be called to release the subscriber's goroutine.
+func (sub *Subscription) Stop() { sub.stop() }
+
+// Drained is closed once the subscriber has nothing left to write: the Hub
+// closed and every queued chunk reached the writer, or Stop was called.
+//
+// An attach waits on this after the container ends. The Hub closing only means
+// no more output is coming; output already queued for a client still has to
+// cross the network, and returning before it does cuts the stream short.
+func (sub *Subscription) Drained() <-chan struct{} { return sub.s.drained }
+
+// Dropped reports how many bytes of output this subscriber never received:
+// output that had already left the replay buffer when it subscribed, plus
+// anything lost because it could not keep up. Non-zero means its client saw an
+// incomplete stream.
+func (sub *Subscription) Dropped() uint64 { return sub.s.dropped.Load() }
+
+// Subscribe delivers container output to w until the Hub closes or the
+// subscription is stopped. Multiple clients may subscribe at once.
 //
 // A new subscriber first receives the recent output the container has already
 // produced, then everything written from here on. The replay is what makes a
 // command that finishes before the client connects still print something; the
 // snapshot and the registration happen under one lock, so no chunk is delivered
 // twice or skipped between the two.
-//
-// The returned function is idempotent and must be called to release the
-// subscriber's goroutine.
-func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
+func (h *Hub) Subscribe(w io.Writer) *Subscription {
 	s := &subscriber{
-		ch:   make(chan []byte, subscriberQueue),
-		done: make(chan struct{}),
+		ch:      make(chan []byte, subscriberQueue),
+		done:    make(chan struct{}),
+		drained: make(chan struct{}),
 	}
 
 	h.mu.Lock()
@@ -185,12 +219,14 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 		// from at a terminal.
 		history := make([]byte, len(h.history))
 		copy(history, h.history)
+		s.dropped.Store(h.trimmed)
 		h.mu.Unlock()
 
 		if len(history) > 0 {
 			_, _ = w.Write(history)
 		}
-		return func() {}
+		close(s.drained)
+		return &Subscription{s: s, stop: func() {}}
 	}
 	id := h.nextID
 	h.nextID++
@@ -198,9 +234,12 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 
 	history := make([]byte, len(h.history))
 	copy(history, h.history)
+	s.dropped.Store(h.trimmed)
 	h.mu.Unlock()
 
 	go func() {
+		defer close(s.drained)
+
 		if len(history) > 0 {
 			_, _ = w.Write(history)
 		}
@@ -208,7 +247,12 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 			select {
 			case <-s.done:
 				return
-			case chunk := <-s.ch:
+			case chunk, ok := <-s.ch:
+				// Closed by Hub.Close once nothing more can be queued; by
+				// then everything before it has been written.
+				if !ok {
+					return
+				}
 				// A write failure means this client is gone. Keep draining
 				// rather than returning, so Hub.Write's non-blocking send
 				// continues to succeed until the caller unsubscribes.
@@ -217,12 +261,12 @@ func (h *Hub) Subscribe(w io.Writer) (unsubscribe func()) {
 		}
 	}()
 
-	return func() {
+	return &Subscription{s: s, stop: func() {
 		h.mu.Lock()
 		delete(h.subs, id)
 		h.mu.Unlock()
 		s.stop()
-	}
+	}}
 }
 
 // Stdin returns the reader handed to containerd as the container's stdin.
@@ -264,9 +308,9 @@ func (h *Hub) Resize(ctx context.Context, w, height uint32) error {
 	return (*r).Resize(ctx, w, height)
 }
 
-// Dropped reports how many output chunks were discarded because attached
-// clients could not keep up. Non-zero means some client saw a gap; the log
-// stream still has everything.
+// Dropped reports how many bytes of output attached clients never received,
+// summed across them; see Subscription.Dropped. Non-zero means some client saw
+// a gap; the log stream still has everything.
 func (h *Hub) Dropped() uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -289,6 +333,11 @@ func (h *Hub) Done() <-chan struct{} { return h.done }
 // Close releases the Hub and closes the container's stdin. Only teardown may
 // call it: closing stdin ends an interactive shell, so a client disconnecting
 // must not.
+//
+// Attached clients are not cut off. Each subscriber finishes writing what was
+// already queued for it and then signals Drained; abandoning that queue is what
+// made `miren app run` lose the end of its output whenever the container exited
+// faster than the client could receive (MIR-2012).
 func (h *Hub) Close() {
 	h.mu.Lock()
 	if h.closed {
@@ -304,8 +353,11 @@ func (h *Hub) Close() {
 	}
 	h.mu.Unlock()
 
+	// Closing ch rather than done lets each goroutine finish the queue. Safe
+	// without the lock: closed is set and the subscribers are out of the map, so
+	// no Write can send on these channels again.
 	for _, s := range subs {
-		s.stop()
+		close(s.ch)
 	}
 
 	_ = h.stdinW.Close()
