@@ -21,7 +21,12 @@ func (d *DeploymentServer) authorizeDeployment(ctx context.Context, deployment *
 		return nil // Existing AllowApp guards still apply to trusted internal calls.
 	}
 	if deployment.App == "" {
-		return rpc.ErrUnauthorized
+		// Pre-attempt deployment records only stored the app name. Resolve
+		// that name through the app store rather than denying legacy history.
+		if deployment.AppName == "" {
+			return rpc.ErrUnauthorized
+		}
+		return appclient.Authorize(ctx, d.EAC, deployment.AppName, action)
 	}
 	return appclient.Authorize(ctx, d.EAC, deployment.App.String(), action)
 }

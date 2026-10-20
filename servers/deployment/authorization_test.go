@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/deployment/deployment_v1alpha"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/rpc"
@@ -50,4 +51,25 @@ func TestDeploymentResourceAuthorizationBeforeMutation(t *testing.T) {
 	variable.SetValue("v")
 	_, err = client.SetEnvVars(ctx, "web", "prod", []*deployment_v1alpha.EnvironmentVariable{variable}, "")
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+}
+
+func TestLegacyDeploymentAuthorizationUsesStoredApp(t *testing.T) {
+	client, inmem := newLockTestClient(t)
+	_, _, err := app.EnsureApp(t.Context(), inmem.EAC, "web", "owner")
+	require.NoError(t, err)
+	legacyID, err := inmem.Client.Create(t.Context(), "legacy", &core_v1alpha.Deployment{AppName: "web", Status: "active"})
+	require.NoError(t, err)
+	for _, grant := range []string{"other", "web"} {
+		ctx := rpc.ContextWithAuthorization(t.Context(), &deploymentPolicy{app: grant, action: "read"}, "deployment", "getdeploymentbyid")
+		result, err := client.GetDeploymentById(ctx, legacyID.String())
+		if grant == "other" {
+			require.ErrorIs(t, err, rpc.ErrUnauthorized)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, "web", result.Deployment().AppName())
+		}
+	}
+	ctx := rpc.ContextWithAuthorization(t.Context(), &deploymentPolicy{app: "web", action: "deploy"}, "deployment", "updatedeploymentphase")
+	_, err = client.UpdateDeploymentPhase(ctx, legacyID.String(), "building")
+	require.ErrorContains(t, err, "cannot set phase on deployment in succeeded state")
 }

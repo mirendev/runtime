@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rbac"
@@ -172,4 +173,32 @@ func TestAppAndSandboxPermissionsResolveStoredOwnership(t *testing.T) {
 	require.NoError(t, app.AuthorizeSandbox(ctx, inmem.EAC, pooledID.String(), "exec"), "pool ownership must take precedence over version attribution")
 	require.NoError(t, inmem.Client.Delete(t.Context(), poolID))
 	require.ErrorIs(t, app.AuthorizeSandbox(ctx, inmem.EAC, pooledID.String(), "exec"), rpc.ErrUnauthorized)
+}
+
+type failingAppLookup struct {
+	entityserver_v1alpha.EntityAccess
+	err error
+}
+
+func (s failingAppLookup) Get(context.Context, *entityserver_v1alpha.EntityAccessGet) error {
+	return s.err
+}
+
+func TestAppAuthorizationLookupErrorsAndMissingTargets(t *testing.T) {
+	auth := &appPolicyAuthorizer{policy: rbac.Policy{Rules: []rbac.Rule{{Groups: []string{"members"}, Permissions: []rbac.Permission{
+		{Resource: "app", Actions: []string{"configure", "logs"}, Scope: "explicit"},
+		{Resource: "app", Actions: []string{"configure", "logs"}, Scope: "$owner"},
+	}}}}}
+	auth.evaluator = rbac.NewEvaluator(t.Context(), auth, slog.Default())
+	ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT})
+	ctx = rpc.ContextWithAuthorization(ctx, auth, "crud", "setconfiguration")
+	for _, failure := range []error{context.Canceled, fmt.Errorf("entity store unavailable")} {
+		eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: failure})))
+		require.ErrorIs(t, app.Authorize(ctx, eac, "explicit", "configure"), failure)
+	}
+	eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: cond.NotFound("app", "missing")})))
+	for _, action := range []string{"configure", "logs"} {
+		require.NoError(t, app.Authorize(ctx, eac, "explicit", action), "explicit grants preserve handler-specific missing-app behavior")
+		require.ErrorIs(t, app.Authorize(ctx, eac, "missing", action), rpc.ErrUnauthorized, "$owner must not match a missing app")
+	}
 }
