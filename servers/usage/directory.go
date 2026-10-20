@@ -282,6 +282,11 @@ func (s *Server) buildRef(
 	if owner := owners[appID]; owner != nil {
 		ref.SetAppId(appID)
 		ref.SetApp(owner.name)
+	} else {
+		// Legacy addon pools only label their app. Preserve display/filtering
+		// for operators, but leave AppId empty so labels never grant access.
+		name, _ := md.Labels.Get("app")
+		ref.SetApp(name)
 	}
 
 	ref.SetKind(string(compute.SandboxKind(sb)))
