@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -173,6 +174,21 @@ func TestAppAndSandboxPermissionsResolveStoredOwnership(t *testing.T) {
 	require.NoError(t, app.AuthorizeSandbox(ctx, inmem.EAC, pooledID.String(), "exec"), "pool ownership must take precedence over version attribution")
 	require.NoError(t, inmem.Client.Delete(t.Context(), poolID))
 	require.ErrorIs(t, app.AuthorizeSandbox(ctx, inmem.EAC, pooledID.String(), "exec"), rpc.ErrUnauthorized)
+	operator := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "operator", Method: rpc.AuthMethodCert})
+	operator = rpc.ContextWithAuthorization(operator, oidcauth.NewCompositeAuthorizer(auth), "sandboxexec", "exec")
+	require.NoError(t, app.AuthorizeSandbox(operator, inmem.EAC, pooledID.String(), "exec"))
+	missingVersionID, err := inmem.Client.Create(t.Context(), "missing-version", &compute_v1alpha.Sandbox{
+		Spec: compute_v1alpha.SandboxSpec{Version: "app_version/missing"},
+	})
+	require.NoError(t, err)
+	require.ErrorIs(t, app.AuthorizeSandbox(ctx, inmem.EAC, missingVersionID.String(), "exec"), rpc.ErrUnauthorized)
+	require.NoError(t, app.AuthorizeSandbox(operator, inmem.EAC, missingVersionID.String(), "exec"))
+	var shared core_v1alpha.App
+	require.NoError(t, inmem.Client.Get(t.Context(), "shared-blog", &shared))
+	require.NoError(t, inmem.Client.Delete(t.Context(), shared.ID))
+	require.ErrorIs(t, app.AuthorizeSandbox(ctx, inmem.EAC, "sandbox/shared-blog-sb", "logs"), rpc.ErrUnauthorized,
+		"a named app grant must not stand in for an unresolved sandbox owner")
+	require.NoError(t, app.AuthorizeSandbox(operator, inmem.EAC, "sandbox/shared-blog-sb", "logs"))
 }
 
 type failingAppLookup struct {
@@ -195,6 +211,7 @@ func TestAppAuthorizationLookupErrorsAndMissingTargets(t *testing.T) {
 	for _, failure := range []error{context.Canceled, fmt.Errorf("entity store unavailable")} {
 		eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: failure})))
 		require.ErrorIs(t, app.Authorize(ctx, eac, "explicit", "configure"), failure)
+		require.ErrorIs(t, app.AuthorizeSandbox(ctx, eac, "sandbox/explicit", "logs"), failure)
 	}
 	eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: cond.NotFound("app", "missing")})))
 	for _, action := range []string{"configure", "logs"} {
