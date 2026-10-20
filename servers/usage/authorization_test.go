@@ -17,9 +17,11 @@ import (
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/metrics"
+	"miren.dev/runtime/pkg/addon"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
 	"miren.dev/runtime/pkg/rpc"
+	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
 
 type usageAuthorizer struct {
@@ -252,7 +254,53 @@ func TestSandboxUsageUsesVerifiedPoolOwner(t *testing.T) {
 		if poolID == pool.String() {
 			require.Equal(t, "hidden", detail.Usage().Ref().App())
 		} else {
-			require.Empty(t, detail.Usage().Ref().App())
+			require.Equal(t, "visible", detail.Usage().Ref().App(), "unverified labels remain display-only")
+			require.Empty(t, detail.Usage().Ref().AppId())
 		}
 	}
+}
+
+func TestLegacyAddonDisplayDoesNotGrantAccess(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+	_, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{CreatedBy: "alice"})
+	require.NoError(t, err)
+	labels := types.LabelSet("addon", "postgresql", "app", "visible", "server", "database")
+	fw := addon.NewProviderFramework(slog.Default(), inmem.Client, inmem.EAC, nil)
+	poolID, err := fw.CreateSandboxPool(ctx, addon.CreateSandboxPoolSpec{Name: "database", Image: "postgres:17", Labels: labels})
+	require.NoError(t, err)
+	var pool compute_v1alpha.SandboxPool
+	require.NoError(t, inmem.Client.GetById(ctx, poolID, &pool))
+	require.Empty(t, pool.App, "exercise the legacy addon ownership shape")
+	id, err := inmem.Client.Create(ctx, "database", &compute_v1alpha.Sandbox{
+		Status: compute_v1alpha.RUNNING, Spec: pool.SandboxSpec,
+	}, entityserver.WithLabels(append(labels, types.Label{Key: "pool", Value: poolID.String()})))
+	require.NoError(t, err)
+	usage := usage_v1alpha.NewResourceUsageClient(rpc.LocalClient(usage_v1alpha.AdaptResourceUsage(NewServer(slog.Default(), inmem.Client, nil))))
+	var selector usage_v1alpha.Selector
+	selector.SetApp("visible")
+	selector.SetKind("addon")
+	operator := rpc.ContextWithAuthorization(ctx, usageAuthorizer{admin: true}, "resourceusage", "listsandboxes")
+	listed, err := usage.ListSandboxes(operator, &selector, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, listed.Sandboxes(), 1, "operator app/kind filtering must retain the database")
+	require.Equal(t, "visible", listed.Sandboxes()[0].Ref().App())
+	require.Empty(t, listed.Sandboxes()[0].Ref().AppId())
+	owner := rpc.ContextWithAuthorization(ctx, usageAuthorizer{action: "list"}, "resourceusage", "listsandboxes")
+	listed, err = usage.ListSandboxes(owner, &selector, nil, nil)
+	require.NoError(t, err)
+	require.Empty(t, listed.Sandboxes(), "display labels must not confer list access")
+	owner = rpc.ContextWithAuthorization(ctx, usageAuthorizer{action: "read"}, "resourceusage", "getsandbox")
+	_, err = usage.GetSandbox(owner, id.String(), nil, nil)
+	require.Error(t, err, "display labels must not confer read access")
+	sandboxes := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(sandboxserver.NewServer(slog.Default(), inmem.Client))))
+	inventory, err := sandboxes.List(operator)
+	require.NoError(t, err)
+	require.Len(t, inventory.Sandboxes(), 1)
+	require.Equal(t, "visible", inventory.Sandboxes()[0].App())
+	owner = rpc.ContextWithAuthorization(ctx, usageAuthorizer{action: "list"}, "sandboxes", "list")
+	inventory, err = sandboxes.List(owner)
+	require.NoError(t, err)
+	require.Empty(t, inventory.Sandboxes())
 }

@@ -147,6 +147,11 @@ func (s *Server) List(ctx context.Context, state *compute_v1alpha.SandboxesList)
 		item.SetId(sb.ID.String())
 		item.SetShortId(ent.ShortId())
 		item.SetApp(owner.Instance)
+		if owner.Instance == "" {
+			// Display-only fallback for legacy addon pools, after authorization.
+			name, _ := metadata.Labels.Get("app")
+			item.SetApp(name)
+		}
 		item.SetVersion(sb.Spec.Version.String())
 		item.SetVersionShortId(versionShortIDs[sb.Spec.Version.String()])
 		item.SetService(service)
