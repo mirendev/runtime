@@ -1089,7 +1089,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 				h.Log.Warn("disk-backed preview denied", "error", err, "app", targetAppId)
 				h.serveIngressError(w, req, "This preview uses unsupported storage. Remove disk attachments and redeploy the preview.", http.StatusLocked)
 			} else if errors.Is(err, activator.ErrSandboxDiedEarly) {
-				h.Log.Error("sandbox died early while acquiring lease", "error", err, "app", targetAppId)
+				h.logSandboxDiedEarly(err, targetAppId)
 				h.serveIngressError(w, req, fmt.Sprintf("The application %s failed to boot. Please check the applications logs.\n", targetAppId), http.StatusRequestTimeout)
 			} else {
 				h.Log.Error("error acquiring lease", "error", err, "app", targetAppId)
@@ -1255,6 +1255,8 @@ func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetUR
 			}
 			if isProxyConnectionError(err) {
 				h.Log.Warn("proxy connection error to sandbox", "error", err, "url", targetURL, "app", appName)
+			} else if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+				h.Log.Debug("client disconnected before proxy response completed", "error", err, "url", targetURL, "app", appName)
 			} else {
 				h.Log.Error("proxy error", "error", err, "url", targetURL, "app", appName)
 			}
@@ -1296,6 +1298,17 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 // Unwrap returns the underlying ResponseWriter for middleware compatibility
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// logSandboxDiedEarly records a lease that failed because the app's sandbox
+// died. A crash cooldown repeats on every request until it expires, and the
+// sandboxpool manager already warned once when it began, so it stays at Debug.
+func (h *Server) logSandboxDiedEarly(err error, app entity.Id) {
+	if errors.Is(err, activator.ErrCrashCooldown) {
+		h.Log.Debug("app in crash cooldown, refusing lease", "error", err, "app", app)
+		return
+	}
+	h.Log.Warn("sandbox died early while acquiring lease", "error", err, "app", app)
 }
 
 // isProxyConnectionError checks if an error indicates the backend is unreachable

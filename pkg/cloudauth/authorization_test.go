@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -503,4 +504,56 @@ func TestSavedAuthorizationSnapshotBelongsToItsCluster(t *testing.T) {
 	reregistered := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-2")
 	_, reason := reregistered.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
 	require.Equal(t, "not_synced", reason)
+}
+
+func TestScopedAuthorizationSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+	state := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	router := uplink.NewMessageRouter()
+	link := uplink.NewClient("https://unused.invalid", nil, router, slog.Default())
+	state.Register(link)
+	state.beginSession(t.Context(), authorizationSession("session"))
+	dispatch := func(revision int, permissions string) error {
+		return router.Dispatch(t.Context(), uplink.Envelope{Type: TypeAuthorizationSnapshot, Data: json.RawMessage(fmt.Sprintf(`{
+			"session_id":"session", "organization_id":"org-1", "revision":%d,
+			"policy":{"rules":[{"groups":["members"],"permissions":%s}]},
+			"memberships":{"alice":["members"]}
+		}`, revision, permissions))})
+	}
+	evaluate := func(s *AuthorizationState, instance, owner string) rbac.Decision {
+		decision, _ := s.Evaluate(&rbac.Request{Subject: "alice", Resource: "app", Action: "list", Instance: instance, Owner: owner})
+		return decision
+	}
+	require.NoError(t, dispatch(1, `[{"resource":"app","actions":["list"],"scope":"$owner"}]`))
+	require.Equal(t, rbac.DecisionAllow, evaluate(state, "alice-blog", "alice"))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "bob-blog", "bob"))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "alice-blog", "bob"))
+	restarted := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	require.Equal(t, rbac.DecisionAllow, evaluate(restarted, "alice-blog", "alice"))
+	require.Equal(t, rbac.DecisionDeny, evaluate(restarted, "bob-blog", "bob"))
+
+	// A replacement withdraws even a cached ownership grant, and persists the
+	// explicit collaborator scope instead of silently dropping it on restart.
+	require.NoError(t, dispatch(2, `[{"resource":"app","actions":["list"],"scope":"shared-*"}]`))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "alice-blog", "alice"))
+	require.Equal(t, rbac.DecisionAllow, evaluate(state, "shared-blog", "bob"))
+	restarted = NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	require.Equal(t, rbac.DecisionDeny, evaluate(restarted, "alice-blog", "alice"))
+	require.Equal(t, rbac.DecisionAllow, evaluate(restarted, "shared-blog", "bob"))
+
+	for i, scope := range []string{`null`, `42`, `{}`, `[]`} {
+		require.Error(t, dispatch(3+i, `[{"resource":"app","actions":["list"],"scope":`+scope+`}]`))
+		require.Equal(t, rbac.DecisionDeny, evaluate(state, "alice-blog", "alice"))
+		require.Equal(t, rbac.DecisionAllow, evaluate(state, "shared-blog", "bob"))
+	}
+	// Unknown special scopes and malformed globs grant nothing, not everything.
+	require.NoError(t, dispatch(7, `[{"resource":"app","actions":["list"],"scope":"$future"},{"resource":"app","actions":["list"],"scope":"["}]`))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "$future", "alice"))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "[", "alice"))
+	require.Equal(t, rbac.DecisionDeny, evaluate(state, "shared-blog", "bob"))
+
+	// Old Cloud payloads omitting scope retain their unscoped behavior.
+	require.NoError(t, dispatch(8, `[{"resource":"app","actions":["list"]}]`))
+	require.Equal(t, rbac.DecisionAllow, evaluate(state, "bob-blog", "bob"))
+	require.Equal(t, rbac.DecisionAllow, evaluate(state, "", ""))
 }
