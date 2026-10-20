@@ -11,6 +11,11 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *release/0.17*
 
+---
+
+## v0.17.1
+*2026-10-20*
+
 **Bug Fixes**
 - **Miren refuses certificates from eight compromised eMudhra intermediates** - The private keys of eight eMudhra intermediate certificate authorities were compromised, so whoever holds them can issue a certificate for any site. Miren is now built with Go 1.26.10, which refuses any certificate chain through those intermediates. That covers Miren's own TLS connections, such as image pulls, Miren Cloud, and ACME. Image builds aren't covered yet: BuildKit fetches base images with its own TLS stack, and it gets the same fix once a BuildKit release built on a fixed Go is available. ([#1392](https://github.com/mirendev/runtime/pull/1392))
 
