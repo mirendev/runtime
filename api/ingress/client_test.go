@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 	"miren.dev/runtime/pkg/appspec"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
@@ -500,6 +501,38 @@ func TestClientSetRouteStoresService(t *testing.T) {
 	route, err := client.Lookup(ctx, "api.example.com")
 	require.NoError(t, err)
 	require.Equal(t, "api", route.Service)
+}
+
+func TestSetRouteWAFLevelPreservesChangesSinceLookup(t *testing.T) {
+	ctx := t.Context()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	client := NewClient(slog.Default(), inmem.EAC.Client)
+	_, err := inmem.Client.Create(ctx, "shop-route", &ingress_v1alpha.HttpRoute{
+		Host: "shop.example", App: "app/shop", AuthProvider: "oidc_provider/login",
+		RequestTimeout: "1m", Maintenance: ingress_v1alpha.Maintenance{Reason: "upgrade"},
+	})
+	require.NoError(t, err)
+	stale, err := client.Lookup(ctx, "shop.example")
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	current, err := client.ClearRouteMaintenance(ctx, stale)
+	require.NoError(t, err)
+	current, err = client.DetachAuthProviderFromRoute(ctx, current)
+	require.NoError(t, err)
+	_, err = client.SetRouteRequestTimeout(ctx, current, "2m")
+	require.NoError(t, err)
+
+	_, err = client.SetRouteWAFLevelOnRoute(ctx, stale, 3)
+	require.NoError(t, err)
+	current, err = client.Lookup(ctx, "shop.example")
+	require.NoError(t, err)
+	require.True(t, current.Maintenance.Empty())
+	require.Empty(t, current.AuthProvider)
+	require.Equal(t, "2m", current.RequestTimeout)
+	profile, err := client.GetWAFProfileByID(ctx, current.WafProfile)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, profile.ParanoiaLevel)
 }
 
 func TestValidateTLSCheckPath(t *testing.T) {
