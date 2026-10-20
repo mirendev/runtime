@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 type usageAuthorizer struct {
 	action string
 	admin  bool
+	fail   func(rpc.ResourceRequest) error
 }
 
 func (usageAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error {
@@ -31,6 +33,9 @@ func (usageAuthorizer) Authorize(context.Context, *rpc.Identity, string, string)
 }
 
 func (a usageAuthorizer) AuthorizeResource(_ context.Context, _ *rpc.Identity, r rpc.ResourceRequest) error {
+	if a.fail != nil {
+		return a.fail(r)
+	}
 	if a.admin || (r.Resource == "app" && r.Instance == "visible" && r.Action == a.action) {
 		return nil
 	}
@@ -151,6 +156,37 @@ func TestUsageVisibilityPublicSurfaces(t *testing.T) {
 	_, err = client.GetSandbox(ctx, brokenID.String(), nil, nil)
 	require.NoError(t, err, "trusted unconfigured calls retain recovery access")
 
+	for _, phase := range []string{"preflight", "row", "detail"} {
+		t.Run("global failure "+phase, func(t *testing.T) {
+			failure := errors.New("authorization service unavailable")
+			failureCtx := rpc.ContextWithAuthorization(ctx, usageAuthorizer{fail: func(r rpc.ResourceRequest) error {
+				if phase == "preflight" || r.Instance != "" || r.Resource == "cluster" {
+					return failure
+				}
+				return nil
+			}}, "resourceusage", "originalmethod")
+			if phase == "detail" {
+				_, err := client.GetApp(failureCtx, "visible", nil, nil)
+				require.ErrorContains(t, err, failure.Error())
+				_, err = client.GetSandbox(failureCtx, ids["visible"], nil, nil)
+				require.ErrorContains(t, err, failure.Error())
+			} else {
+				_, err := client.ListApps(failureCtx, nil, nil, nil)
+				require.ErrorContains(t, err, failure.Error())
+				_, err = client.ListSandboxes(failureCtx, nil, nil, nil)
+				require.ErrorContains(t, err, failure.Error())
+				if phase == "preflight" {
+					var selector usage_v1alpha.Selector
+					selector.SetNode("missing-node")
+					_, err = client.ListApps(failureCtx, &selector, nil, nil)
+					require.ErrorContains(t, err, failure.Error())
+					_, err = client.ListSandboxes(failureCtx, &selector, nil, nil)
+					require.ErrorContains(t, err, failure.Error())
+				}
+			}
+		})
+	}
+
 	for _, method := range iface.Methods() {
 		var args string
 		switch method.Name {
@@ -185,5 +221,38 @@ func TestUsageVisibilityPublicSurfaces(t *testing.T) {
 				require.NoError(t, method.Handler(readCtx, &usageRESTCall{t: t, args: args}))
 			}
 		})
+	}
+}
+
+func TestSandboxUsageUsesVerifiedPoolOwner(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+	visible, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{CreatedBy: "owner"})
+	require.NoError(t, err)
+	hidden, err := inmem.Client.Create(ctx, "hidden", &core_v1alpha.App{})
+	require.NoError(t, err)
+	version, err := inmem.Client.Create(ctx, "version", &core_v1alpha.AppVersion{App: visible})
+	require.NoError(t, err)
+	pool, err := inmem.Client.Create(ctx, "pool", &compute_v1alpha.SandboxPool{App: hidden})
+	require.NoError(t, err)
+	s := NewServer(slog.Default(), inmem.Client, nil)
+	client := usage_v1alpha.NewResourceUsageClient(rpc.LocalClient(usage_v1alpha.AdaptResourceUsage(s)))
+	readCtx := rpc.ContextWithAuthorization(ctx, usageAuthorizer{action: "read"}, "resourceusage", "getSandbox")
+	for i, poolID := range []string{pool.String(), "sandbox_pool/missing"} {
+		id, err := inmem.Client.Create(ctx, []string{"pooled", "broken"}[i], &compute_v1alpha.Sandbox{
+			Status: compute_v1alpha.RUNNING,
+			Spec:   compute_v1alpha.SandboxSpec{Version: version},
+		}, entityserver.WithLabels(types.Labels{{Key: "pool", Value: poolID}, {Key: "app", Value: "visible"}}))
+		require.NoError(t, err)
+		_, err = client.GetSandbox(readCtx, id.String(), nil, nil)
+		require.Error(t, err, "neither a version nor a label may override a pool")
+		detail, err := client.GetSandbox(ctx, id.String(), nil, nil)
+		require.NoError(t, err)
+		if poolID == pool.String() {
+			require.Equal(t, "hidden", detail.Usage().Ref().App())
+		} else {
+			require.Empty(t, detail.Usage().Ref().App())
+		}
 	}
 }
