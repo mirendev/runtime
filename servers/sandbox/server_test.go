@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -556,6 +557,7 @@ func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
 	var got []string
 	for _, sb := range listed.Sandboxes() {
 		got = append(got, sb.Id())
+		require.Equal(t, "mine", sb.App(), "display ownership must agree with authorization, not the version")
 	}
 	require.ElementsMatch(t, want, got)
 	readOnly, err := client.List(caller("read", false))
@@ -575,5 +577,33 @@ func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
 		listed, err := client.List(bound)
 		require.NoError(t, err)
 		require.Len(t, listed.Sandboxes(), 2)
+		// Even a cluster administrator cannot use orphan recovery through an
+		// app-bound identity.
+		bound = rpc.ContextWithAuthorization(bound, sandboxVisibilityAuthorizer{admin: true}, "sandboxes", "list")
+		listed, err = client.List(bound)
+		require.NoError(t, err)
+		require.Len(t, listed.Sandboxes(), 2)
 	}
+}
+
+func TestInventoryPropagatesGlobalAuthorizationFailureWhenEmpty(t *testing.T) {
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ctx := rpc.ContextWithAuthorization(t.Context(), inventoryFailedAuthorizer{}, "sandboxes", "list")
+	sandboxes := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), store.Client))))
+	_, err := sandboxes.List(ctx)
+	require.ErrorContains(t, err, "policy service unavailable")
+	pools := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(store.Client))))
+	_, err = pools.List(ctx, "")
+	require.ErrorContains(t, err, "policy service unavailable")
+}
+
+type inventoryFailedAuthorizer struct{}
+
+func (inventoryFailedAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error {
+	return nil
+}
+
+func (inventoryFailedAuthorizer) AuthorizeResource(context.Context, *rpc.Identity, rpc.ResourceRequest) error {
+	return fmt.Errorf("policy service unavailable")
 }

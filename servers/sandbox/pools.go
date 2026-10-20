@@ -29,12 +29,19 @@ func NewPoolServer(ec *entityserver.Client) *PoolServer {
 var _ compute_v1alpha.SandboxPools = (*PoolServer)(nil)
 
 func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoolsList) error {
+	if _, err := rpc.FilterResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "list"}); err != nil {
+		return err
+	}
 	appName := state.Args().App()
 	if appName == "" {
 		appName = rpc.BoundApp(ctx)
 	}
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
+	}
+	apps, err := inventoryApps(ctx, s.ec)
+	if err != nil {
+		return err
 	}
 	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool)
 	if appName != "" {
@@ -54,18 +61,19 @@ func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoo
 		if err := pools.Read(&pool); err != nil {
 			return err
 		}
-		owner, err := s.poolApp(ctx, &pool)
+		owner := apps[pool.App]
+		allowed, err := filterInventoryApp(ctx, owner)
 		if err != nil {
 			return err
 		}
-		if !rpc.AllowApp(ctx, owner) {
-			return rpc.AppAccessError(ctx, owner)
+		if !allowed {
+			continue
 		}
 		ent := pools.Entity()
 		item := new(compute_v1alpha.SandboxPoolInfo)
 		item.SetId(pool.ID.String())
 		item.SetShortId(ent.ShortId())
-		item.SetApp(owner)
+		item.SetApp(owner.Instance)
 		item.SetVersion(pool.SandboxSpec.Version.String())
 		item.SetService(pool.Service)
 		item.SetScalingMode("auto")

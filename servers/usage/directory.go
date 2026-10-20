@@ -32,6 +32,7 @@ type sandboxRow struct {
 type directory struct {
 	sandboxes []sandboxRow
 	nodes     map[entity.Id]*nodeInfo
+	apps      map[string]*appOwner
 
 	// versions is every app version in the store, keyed by version id. Unlike
 	// sandboxes these are not swept when they stop running, so this is the one
@@ -158,7 +159,11 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 		return nil, err
 	}
 
-	dir := &directory{nodes: nodes, versions: apps}
+	owners, err := s.loadAppOwners(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dir := &directory{nodes: nodes, versions: apps, apps: owners}
 
 	for sandboxes.Next() {
 		var sb computev1.Sandbox
@@ -193,7 +198,7 @@ func (s *Server) loadDirectory(ctx context.Context, f filter) (*directory, error
 		poolID, _ := md.Labels.Get("pool")
 
 		dir.sandboxes = append(dir.sandboxes, sandboxRow{
-			ref:    s.buildRef(&sb, &md, &sch, ent, pools, apps, nodes),
+			ref:    s.buildRef(&sb, &md, &sch, ent, pools, apps, owners, nodes),
 			poolID: poolID,
 		})
 	}
@@ -236,6 +241,7 @@ func (s *Server) buildRef(
 	ent *entity.Entity,
 	pools map[string]*poolInfo,
 	apps map[string]*appInfo,
+	owners map[string]*appOwner,
 	nodes map[entity.Id]*nodeInfo,
 ) *usage_v1alpha.SandboxRef {
 	var ref usage_v1alpha.SandboxRef
@@ -259,19 +265,24 @@ func (s *Server) buildRef(
 	}
 	ref.SetService(service)
 
-	// The app name likewise has two sources. The label is the app's name
-	// directly; the version reference resolves to the same app but survives a
-	// sandbox created without the label.
-	appName, _ := md.Labels.Get("app")
+	// Pool ownership wins; only poolless sandboxes inherit version ownership.
+	// Labels are not authoritative, and deleted apps cannot confer access.
+	appID := ""
 	if a := apps[sb.Spec.Version.String()]; a != nil {
-		ref.SetAppId(a.id)
 		ref.SetVersion(a.version)
 		ref.SetVersionShortId(a.shortID)
-		if appName == "" {
-			appName = ui.CleanEntityID(a.id)
+		appID = a.id
+	}
+	if poolID != "" {
+		appID = ""
+		if p := pools[poolID]; p != nil {
+			appID = p.appID
 		}
 	}
-	ref.SetApp(appName)
+	if owner := owners[appID]; owner != nil {
+		ref.SetAppId(appID)
+		ref.SetApp(owner.name)
+	}
 
 	ref.SetKind(string(compute.SandboxKind(sb)))
 
@@ -287,6 +298,7 @@ func (s *Server) buildRef(
 }
 
 type poolInfo struct {
+	appID              string
 	service            string
 	consecutiveCrashes int32
 }
@@ -304,6 +316,7 @@ func (s *Server) loadPools(ctx context.Context) (map[string]*poolInfo, error) {
 			continue
 		}
 		pools[p.ID.String()] = &poolInfo{
+			appID:              p.App.String(),
 			service:            p.Service,
 			consecutiveCrashes: int32(p.ConsecutiveCrashCount),
 		}

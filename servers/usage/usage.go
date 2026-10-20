@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/entityserver"
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/metrics"
@@ -133,6 +132,9 @@ type sandboxListing struct {
 // HttpListSandboxes (REST). Neither surface holds logic of its own beyond
 // translating its arguments.
 func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord ordering) (*sandboxListing, error) {
+	if err := preflightList(ctx); err != nil {
+		return nil, err
+	}
 	dir, err := s.loadDirectory(ctx, f)
 	if err != nil {
 		return nil, err
@@ -149,7 +151,11 @@ func (s *Server) listSandboxes(ctx context.Context, f filter, w window, ord orde
 		if !f.matches(sb.ref) {
 			continue
 		}
-		if err := app.AuthorizeSandbox(ctx, s.EC.EAC(), sb.ref.Sandbox(), "list"); err != nil {
+		allowed, err := authorizeOwner(ctx, dir.apps[sb.ref.AppId()], "list", true)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
 			continue
 		}
 

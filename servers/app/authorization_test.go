@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -98,6 +99,7 @@ func TestCrudResourceAuthorizationBeforeMutation(t *testing.T) {
 type appVisibilityAuthorizer struct {
 	policy    rbac.Policy
 	evaluator *rbac.Evaluator
+	failure   error
 }
 
 func (a *appVisibilityAuthorizer) GetPolicy() *rbac.Policy { return &a.policy }
@@ -105,6 +107,9 @@ func (*appVisibilityAuthorizer) Authorize(context.Context, *rpc.Identity, string
 	return nil
 }
 func (a *appVisibilityAuthorizer) AuthorizeResource(_ context.Context, id *rpc.Identity, req rpc.ResourceRequest) error {
+	if a.failure != nil {
+		return a.failure
+	}
 	if a.evaluator.Evaluate(&rbac.Request{
 		Subject: id.Subject, Groups: []string{"members"}, Resource: req.Resource,
 		Action: req.Action, Instance: req.Instance, Owner: req.Owner,
@@ -112,6 +117,22 @@ func (a *appVisibilityAuthorizer) AuthorizeResource(_ context.Context, id *rpc.I
 		return nil
 	}
 	return rpc.ErrUnauthorized
+}
+
+func TestAppInventoryPropagatesAuthorizationFailure(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: inmem.Client})))
+	for _, populated := range []bool{false, true} {
+		if populated {
+			_, err := inmem.Client.Create(t.Context(), "shop", &core_v1alpha.App{})
+			require.NoError(t, err)
+		}
+		auth := &appVisibilityAuthorizer{failure: fmt.Errorf("%w: policy unavailable", rpc.ErrUnauthorized)}
+		ctx := rpc.ContextWithAuthorization(t.Context(), auth, "crud", "list")
+		_, err := client.List(ctx)
+		require.ErrorContains(t, err, "policy unavailable")
+	}
 }
 
 func TestAppInventoryScopedVisibility(t *testing.T) {

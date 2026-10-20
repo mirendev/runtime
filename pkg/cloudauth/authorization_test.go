@@ -607,6 +607,48 @@ func TestResolvedAppAuthorizationVersions(t *testing.T) {
 	}
 }
 
+func TestInventoryAuthorizationFailuresAndQuietExclusions(t *testing.T) {
+	var logs lockedBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	a := &RPCAuthenticator{logger: logger, authorization: NewAuthorizationState(t.Context(), logger, "", "")}
+	identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+	ctx := rpc.ContextWithIdentity(t.Context(), identity)
+	ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "list")
+	request := rpc.ResourceRequest{Resource: "app", Action: "list"}
+	_, err := rpc.FilterResource(ctx, request)
+	require.ErrorContains(t, err, "not synchronized")
+	require.Contains(t, logs.String(), `"level":"WARN"`)
+
+	session := authorizationSession("session")
+	session.Capabilities[0].Version = 2
+	a.authorization.beginSession(t.Context(), session)
+	snapshot := authorizationSnapshot("session", 1)
+	snapshot.Version = 2
+	snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "app", Actions: []string{"list"}, Scope: "$owner"}}
+	deliverSnapshot(t, a.authorization, snapshot)
+	logs.Reset()
+	allowed, err := rpc.FilterResource(ctx, request)
+	require.NoError(t, err, "collection preflight must not reject scoped users")
+	require.False(t, allowed)
+	request.Instance, request.Owner = "shop", "bob"
+	allowed, err = rpc.FilterResource(ctx, request)
+	require.NoError(t, err)
+	require.False(t, allowed)
+	require.NotContains(t, logs.String(), "authorization denied", "ordinary hidden rows must not warn")
+	request.Owner = "alice"
+	allowed, err = rpc.FilterResource(ctx, request)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	request.Owner = "bob"
+	require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+	require.Contains(t, logs.String(), `"level":"WARN"`, "direct denials still warn")
+	logs.Reset()
+	identity.Subject = "missing"
+	_, err = rpc.FilterResource(ctx, request)
+	require.ErrorContains(t, err, "unknown_principal")
+	require.Contains(t, logs.String(), `"level":"WARN"`)
+}
+
 func TestAuthorizationSnapshotVersionMustBeNegotiated(t *testing.T) {
 	for _, selected := range []uint{1, 2} {
 		state := NewAuthorizationState(t.Context(), slog.Default(), "", "")
