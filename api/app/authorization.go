@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
@@ -31,14 +30,14 @@ func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient
 	}
 	record, err := eac.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, cond.ErrNotFound{}) && (action == "read" || action == "destroy") {
-			// Preserve missing-app reads and idempotent deletion for callers
-			// with an explicit grant. No stored owner means $owner cannot match.
-			return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
-				Resource: "app", Action: action, Instance: strings.TrimPrefix(id, "app/"),
-			})
+		if !errors.Is(err, cond.ErrNotFound{}) {
+			return err
 		}
-		return fmt.Errorf("%w: cannot resolve app", rpc.ErrUnauthorized)
+		// Let explicitly authorized callers reach the handler's missing-app
+		// behavior. Without a stored owner, an $owner grant cannot match.
+		return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
+			Resource: "app", Action: action, Instance: strings.TrimPrefix(id, "app/"),
+		})
 	}
 	ent := record.Entity().Entity()
 	var app core_v1alpha.App
