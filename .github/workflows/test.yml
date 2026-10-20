@@ -44,7 +44,11 @@ permissions:
 
 jobs:
   lint:
-    runs-on: depot-ubuntu-latest
+    # Fork PRs run on GitHub-hosted runners instead of Depot. Depot's cache is
+    # one namespace for the whole repo, so fork code running there could save
+    # entries that main and release jobs later restore; GitHub's cache keeps a
+    # fork PR's writes in its own scope. The blackbox jobs skip forks instead.
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -214,7 +218,7 @@ jobs:
   test-runner:
     name: test (runner ${{ matrix.group.runner }})
     needs: test-groups
-    runs-on: depot-ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -303,7 +307,7 @@ jobs:
   # Deliberately not in the `test` gate yet. Once this job has shown a low
   # flake rate, add it to that job's needs so it becomes required.
   test-stackbuild:
-    runs-on: depot-ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
@@ -664,12 +668,16 @@ jobs:
     # authoritative even if the `changes` job fails — a failed dependency would
     # otherwise skip this on main and tags, quietly dropping the release coverage
     # this whole gate exists to protect.
+    #
+    # Fork PRs skip it like the other blackbox jobs: the shards run on Depot,
+    # whose cache every branch shares (see the comment on `lint`).
     needs: [changes]
     if: >-
       !cancelled() && (
-      github.event_name != 'pull_request' ||
+      github.event_name != 'pull_request' || (
+      github.event.pull_request.head.repo.full_name == github.repository && (
       needs.changes.outputs.distributed == 'true' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:distributed') )
+      contains(github.event.pull_request.labels.*.name, 'ci:distributed') )))
     runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -873,7 +881,7 @@ jobs:
   build:
     # Skip when called from release.yml - it has its own build jobs with signing
     if: github.event_name != 'workflow_call'
-    runs-on: depot-ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-26.04' || 'depot-ubuntu-latest' }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
