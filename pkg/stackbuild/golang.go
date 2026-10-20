@@ -242,7 +242,7 @@ func (s *GoStack) GenerateLLB(ctx context.Context, dir string, opts BuildOptions
 	} else if s.goModVersion != "" {
 		version = s.goModVersion
 	}
-	base := llb.Image(imagerefs.GetGolangImage(version), llb.WithMetaResolver(mr))
+	base := pinnedImage(imagerefs.GetGolangImage(version), mr)
 
 	h := &highlevelBuilder{opts}
 
@@ -418,7 +418,7 @@ func (s *GoStack) assembleRuntime(ctx context.Context, h *highlevelBuilder, buil
 	// set into /bin, giving /bin/sh plus the common coreutils. busybox is
 	// static so it runs regardless of the base's libc, and the lot adds about a
 	// megabyte.
-	busybox := llb.Image(imagerefs.BusyboxDefault)
+	busybox := pinnedImage(imagerefs.BusyboxDefault, imagemetaresolver.New())
 	rt = rt.File(llb.Copy(busybox, "/bin/busybox", "/bin/busybox", &llb.CopyInfo{}))
 	rt = rt.Run(
 		llb.Args([]string{"/bin/busybox", "sh", "-c",
