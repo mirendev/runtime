@@ -131,10 +131,35 @@ applies there.
 
 :::warning[Upgrade cloud first]
 
-A cloud that does not negotiate authorization version 1 cannot authorize JWT
-callers on this runtime; update cloud before upgrading the runtime.
+A cloud that does not negotiate authorization version 1 or 2 cannot authorize
+JWT callers on this runtime; update cloud before upgrading the runtime.
 
 :::
+
+Authorization version 1 retains the existing RPC-interface/method policy
+vocabulary. Version 2 snapshots must explicitly include `version: 2` and use
+logical permissions for migrated app operations (`app:read`, `app:create`,
+`app:configure`, `app:deploy`, `app:destroy`, `app:logs`, and `app:exec`). The
+runtime resolves the app's stored name and creator before evaluating its scope;
+ownership alone never grants access without a matching policy rule. Creating an
+app requires an unscoped create grant, including implicit creation during a
+build. A deploy grant alone is not a create grant.
+
+Cloud must only emit scoped, logical permissions after negotiating version 2
+with that specific runtime. Older runtimes ignore unknown permission fields,
+so sending them a scoped rule can silently turn it into a cluster-wide grant.
+Upgrading the evaluator alone is not sufficient rollout protection. Version 1
+and version 2 policies must not be combined as alternative grants: a broad legacy
+grant must not override a scoped logical permission. Version selection and
+policy replacement are atomic, and saved snapshots retain their vocabulary
+across restarts. Before downgrading to a runtime without version 2 support,
+replace the saved authorization state and policy with an appropriate version 1
+policy; old binaries cannot safely read version 2 snapshots.
+
+Logical authorization is being migrated incrementally. Collection filtering,
+related-resource authorization, raw entity/infrastructure gates, ownership
+transfer, and standalone file policies are separate changes. Do not enable a
+restricted shared-cluster policy until those enforcement paths are deployed.
 
 After reconnecting, the cluster receives current permissions, including changes
 made while it was offline, and applies them as soon as they arrive.

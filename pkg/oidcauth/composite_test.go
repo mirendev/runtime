@@ -553,3 +553,28 @@ func TestCompositeAuthorizer_UnknownMethodDenied(t *testing.T) {
 		}
 	}
 }
+
+func TestCompositeResourceChecksRetainWorkloadBoundaries(t *testing.T) {
+	comp := NewCompositeAuthorizer(nil)
+	for _, tc := range []struct {
+		role, target, action string
+		allowed              bool
+	}{
+		{workloadroles.RoleAppDeployer, "mine", "deploy", true},
+		{workloadroles.RoleAppDeployer, "other", "deploy", false},
+		{workloadroles.RoleAppDeployer, "", "create", false},
+		{workloadroles.RoleClusterAdmin, "", "create", true},
+	} {
+		identity := workloadIdentity("mine", tc.role)
+		if tc.role == workloadroles.RoleClusterAdmin {
+			identity.Metadata["app"] = ""
+		}
+		ctx := rpc.ContextWithIdentity(t.Context(), identity)
+		err := comp.AuthorizeResource(ctx, identity, rpc.ResourceRequest{Resource: "app", Action: tc.action, Instance: tc.target})
+		if tc.allowed {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+		}
+	}
+}

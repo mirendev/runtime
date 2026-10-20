@@ -116,6 +116,41 @@ func setupTestServer(t *testing.T, mockServer *httptest.Server) (*Server, *entit
 	}
 }
 
+type denyLogResource struct{}
+
+func (*denyLogResource) Authorize(context.Context, *rpc.Identity, string, string) error { return nil }
+func (*denyLogResource) AuthorizeResource(context.Context, *rpc.Identity, rpc.ResourceRequest) error {
+	return rpc.ErrUnauthorized
+}
+
+func TestLogResourceDenialBeforeReading(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	appID, err := inmem.Client.Create(t.Context(), "private", &core_v1alpha.App{CreatedBy: "alice"})
+	require.NoError(t, err)
+	version, err := inmem.Client.Create(t.Context(), "private-v1", &core_v1alpha.AppVersion{App: appID})
+	require.NoError(t, err)
+	var sandbox compute_v1alpha.Sandbox
+	sandbox.Spec.Version = version
+	sandboxID, err := inmem.Client.Create(t.Context(), "private-sb", &sandbox)
+	require.NoError(t, err)
+	client := app_v1alpha.NewLogsClient(rpc.LocalClient(app_v1alpha.AdaptLogs(NewServer(slog.Default(), inmem.Client, nil))))
+	ctx := rpc.ContextWithAuthorization(t.Context(), &denyLogResource{}, "logs", "applogs")
+	_, err = client.AppLogs(ctx, "private", nil, false)
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	_, err = client.SandboxLogs(ctx, sandboxID.String(), nil, false)
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	chunks := stream.Callback(func(*app_v1alpha.LogChunk) error { t.Fatal("denied stream returned logs"); return nil })
+	appTarget, sandboxTarget, systemTarget := new(app_v1alpha.LogTarget), new(app_v1alpha.LogTarget), new(app_v1alpha.LogTarget)
+	appTarget.SetApp("private")
+	sandboxTarget.SetSandbox(sandboxID.String())
+	systemTarget.SetSystem(true)
+	for _, target := range []*app_v1alpha.LogTarget{appTarget, sandboxTarget, systemTarget} {
+		_, err = client.StreamLogChunks(ctx, target, nil, false, "", chunks, nil)
+		require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	}
+}
+
 func TestStreamLogChunks_Basic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

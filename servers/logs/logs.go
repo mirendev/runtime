@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -63,6 +64,9 @@ func (s *Server) AppLogs(ctx context.Context, state *app_v1alpha.LogsAppLogs) er
 	if !rpc.AllowApp(ctx, args.Application()) {
 		return rpc.AppAccessError(ctx, args.Application())
 	}
+	if err := appclient.Authorize(ctx, s.EC.EAC(), args.Application(), "logs"); err != nil {
+		return err
+	}
 
 	var appRec core_v1alpha.App
 
@@ -111,6 +115,9 @@ func (s *Server) SandboxLogs(ctx context.Context, state *app_v1alpha.LogsSandbox
 
 	sandboxID, err := s.resolveSandboxID(ctx, args.Sandbox())
 	if err != nil {
+		return err
+	}
+	if err := appclient.AuthorizeSandbox(ctx, s.EC.EAC(), sandboxID, "logs"); err != nil {
 		return err
 	}
 
@@ -233,6 +240,9 @@ func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTa
 	}
 
 	if hasSystem {
+		if err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "cluster", Action: "admin"}); err != nil {
+			return logTarget, err
+		}
 		logTarget.EntityID = observability.SystemLogEntityID
 		return logTarget, nil
 	}
@@ -242,10 +252,16 @@ func (s *Server) resolveLogTarget(ctx context.Context, target *app_v1alpha.LogTa
 		if err != nil {
 			return logTarget, err
 		}
+		if err := appclient.AuthorizeSandbox(ctx, s.EC.EAC(), resolved, "logs"); err != nil {
+			return logTarget, err
+		}
 		logTarget.SandboxID = resolved
 		return logTarget, nil
 	}
 
+	if err := appclient.Authorize(ctx, s.EC.EAC(), target.App(), "logs"); err != nil {
+		return logTarget, err
+	}
 	var appRec core_v1alpha.App
 	err := s.EC.Get(ctx, target.App(), &appRec)
 	if err != nil {

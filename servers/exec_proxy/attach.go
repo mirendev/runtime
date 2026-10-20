@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
 	"miren.dev/runtime/pkg/cond"
@@ -54,6 +55,9 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	// resolved from the sandbox's own version rather than anything caller-sent.
 	if app := s.resolveSandboxApp(ctx, found); !rpc.AllowApp(ctx, app) {
 		return rpc.AppAccessError(ctx, app)
+	}
+	if err := appclient.AuthorizeSandbox(ctx, s.EAC, id, "exec"); err != nil {
+		return err
 	}
 
 	var sch compute_v1alpha.Schedule
