@@ -649,6 +649,9 @@ func TestActivatorKeepsDeadSandbox(t *testing.T) {
 func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
+	server, cleanup := testutils.NewInMemEntityServer(t)
+	defer cleanup()
+
 	testVer := &core_v1alpha.AppVersion{
 		ID:       entity.Id("ver-1"),
 		App:      entity.Id("app-1"),
@@ -696,6 +699,7 @@ func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
 	poolID := entity.Id("pool-1")
 	activator := &localActivator{
 		log: log,
+		eac: server.EAC,
 		versions: map[verKey]*versionPoolRef{
 			{"ver-1", "web"}: {
 				ver:      testVer,
@@ -706,7 +710,7 @@ func TestActivatorFailsFastWhenAllSandboxesDead(t *testing.T) {
 		},
 		poolSandboxes: map[entity.Id]*poolSandboxes{
 			poolID: {
-				pool:      &compute_v1alpha.SandboxPool{ID: poolID},
+				pool:      &compute_v1alpha.SandboxPool{ID: poolID, DesiredInstances: 1},
 				sandboxes: []*sandbox{deadSandbox},
 				service:   "web",
 				strategy:  strategy,
@@ -834,7 +838,7 @@ func TestActivatorPendingSandboxAwareness(t *testing.T) {
 		strategy: strategy,
 	}
 	activator.poolSandboxes[poolID] = &poolSandboxes{
-		pool:      &compute_v1alpha.SandboxPool{ID: poolID},
+		pool:      &compute_v1alpha.SandboxPool{ID: poolID, DesiredInstances: 1},
 		sandboxes: []*sandbox{pendingSb},
 		service:   "web",
 		strategy:  strategy,

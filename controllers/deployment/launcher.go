@@ -580,6 +580,21 @@ func (l *Launcher) ensurePoolForService(ctx context.Context, app *core_v1alpha.A
 		l.Log.Info("strategy-enforced minimum, starting with desired instances",
 			"service", serviceName,
 			"desired_instances", desiredInstances)
+	} else if ver.EphemeralLabel == "" {
+		// An autoscaled service's load doesn't change because its spec did.
+		// Start the replacement at the size the current pool reached, so the
+		// cutover doesn't hand that load to a single sandbox.
+		prev, err := l.currentPoolSize(ctx, app.ID, serviceName)
+		if err != nil {
+			l.Log.Warn("failed to read current pool size, starting new pool at one instance",
+				"service", serviceName,
+				"error", err)
+		} else if seed := min(prev, int64(strategy.MaxInstances())); seed > desiredInstances {
+			desiredInstances = seed
+			l.Log.Info("seeding new pool from current pool size",
+				"service", serviceName,
+				"desired_instances", desiredInstances)
+		}
 	}
 
 	// Use app metadata (already fetched earlier) for sandbox labels
@@ -802,6 +817,43 @@ func (l *Launcher) findMatchingPool(ctx context.Context, appID entity.Id, servic
 	}
 
 	return nil, nil
+}
+
+// currentPoolSize returns the largest DesiredInstances among the app's
+// non-ephemeral pools for a service, which is how big the service currently
+// runs. Pools already scaled to zero contribute nothing.
+func (l *Launcher) currentPoolSize(ctx context.Context, appID entity.Id, serviceName string) (int64, error) {
+	poolsResp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool))
+	if err != nil {
+		return 0, fmt.Errorf("failed to list pools: %w", err)
+	}
+
+	var size int64
+	for _, ent := range poolsResp.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(ent.Entity())
+		if pool.Service != serviceName || pool.DesiredInstances <= size {
+			continue
+		}
+
+		var poolMeta core_v1alpha.Metadata
+		poolMeta.Decode(ent.Entity())
+		if appLabel, _ := poolMeta.Labels.Get("app"); appLabel != appID.String() {
+			continue
+		}
+
+		ephemeral, err := l.isEphemeralPool(ctx, &pool)
+		if err != nil {
+			return 0, err
+		}
+		if ephemeral {
+			continue
+		}
+
+		size = pool.DesiredInstances
+	}
+
+	return size, nil
 }
 
 // Older preview pools did not persist Ephemeral. The template version survives
@@ -1119,16 +1171,19 @@ func (l *Launcher) updatePool(ctx context.Context, poolWithEntity *PoolWithEntit
 	return nil
 }
 
-// waitForPoolReady polls until at least one sandbox in the pool is RUNNING, or the timeout expires.
-// It checks both the pool's ReadyInstances field (updated by the pool controller on its
-// ~10s resync cycle) and sandbox entities directly (updated immediately when sandboxes boot).
-// This avoids a ~10s delay waiting for the pool controller to reconcile.
+// waitForPoolReady polls until the pool has as many RUNNING sandboxes as it
+// desires (at least one), or the timeout expires. Waiting for the whole pool
+// rather than its first sandbox matters because the caller retires the old
+// pool next, and its whole load would land on that one sandbox.
+//
+// It checks both the pool's ReadyInstances field (updated by the pool
+// controller on its ~10s resync cycle) and sandbox entities directly (updated
+// immediately when sandboxes boot), so it doesn't wait on the controller.
 func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeout time.Duration) error {
 	pollInterval := 500 * time.Millisecond
 	deadline := time.Now().Add(timeout)
 
 	for {
-		// Check pool's ReadyInstances first (fast path if pool controller already reconciled)
 		resp, err := l.EAC.Get(ctx, poolID.String())
 		if err != nil {
 			return fmt.Errorf("failed to get pool %s: %w", poolID, err)
@@ -1137,36 +1192,39 @@ func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeo
 		var pool compute_v1alpha.SandboxPool
 		pool.Decode(resp.Entity().Entity())
 
-		if pool.ReadyInstances > 0 {
-			l.Log.Info("new pool has ready instances",
-				"pool", poolID,
-				"ready_instances", pool.ReadyInstances)
-			return nil
+		// The pool manager never provisions past MaxPoolSize, whatever is
+		// persisted, so waiting for more would always time out.
+		want := max(min(pool.DesiredInstances, concurrency.MaxPoolSize), 1)
+
+		ready := pool.ReadyInstances
+		if ready < want {
+			running, runErr := l.countRunningSandboxesForPool(ctx, poolID, pool.Service)
+			if runErr != nil {
+				l.Log.Warn("failed to query sandboxes while waiting for pool readiness",
+					"pool", poolID,
+					"error", runErr)
+			} else {
+				ready = max(ready, running)
+			}
 		}
 
-		// Check sandbox entities directly — they're updated immediately when
-		// the sandbox boots, without waiting for the pool controller to reconcile.
-		running, runErr := l.hasRunningSandboxForPool(ctx, poolID, pool.Service)
-		if runErr != nil {
-			l.Log.Warn("failed to query sandboxes while waiting for pool readiness",
-				"pool", poolID,
-				"error", runErr)
-		} else if running {
+		if ready >= want {
 			l.Log.Info("new pool has ready instances",
 				"pool", poolID,
-				"ready_instances", 1)
+				"ready_instances", ready,
+				"desired_instances", pool.DesiredInstances)
 			return nil
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("pool %s not ready after %s (ready_instances=%d, current_instances=%d): %w",
-				poolID, timeout, pool.ReadyInstances, pool.CurrentInstances, context.DeadlineExceeded)
+			return fmt.Errorf("pool %s not ready after %s (ready_instances=%d, desired_instances=%d): %w",
+				poolID, timeout, ready, pool.DesiredInstances, context.DeadlineExceeded)
 		}
 
 		l.Log.Debug("waiting for pool to become ready",
 			"pool", poolID,
-			"ready_instances", pool.ReadyInstances,
-			"current_instances", pool.CurrentInstances)
+			"ready_instances", ready,
+			"desired_instances", pool.DesiredInstances)
 
 		select {
 		case <-ctx.Done():
@@ -1176,13 +1234,15 @@ func (l *Launcher) waitForPoolReady(ctx context.Context, poolID entity.Id, timeo
 	}
 }
 
-// hasRunningSandboxForPool checks if there is at least one RUNNING sandbox
-// with the given pool label, by querying sandbox entities directly.
-func (l *Launcher) hasRunningSandboxForPool(ctx context.Context, poolID entity.Id, service string) (bool, error) {
+// countRunningSandboxesForPool counts RUNNING sandboxes with the given pool
+// label, by querying sandbox entities directly.
+func (l *Launcher) countRunningSandboxesForPool(ctx context.Context, poolID entity.Id, service string) (int64, error) {
 	resp, err := l.EAC.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
 	if err != nil {
-		return false, fmt.Errorf("list sandboxes: %w", err)
+		return 0, fmt.Errorf("list sandboxes: %w", err)
 	}
+
+	var count int64
 
 	for _, ent := range resp.Values() {
 		var sb compute_v1alpha.Sandbox
@@ -1205,10 +1265,10 @@ func (l *Launcher) hasRunningSandboxForPool(ctx context.Context, poolID entity.I
 			continue
 		}
 
-		return true, nil
+		count++
 	}
 
-	return false, nil
+	return count, nil
 }
 
 // cleanupOldVersionPools removes old version references from pools and scales
