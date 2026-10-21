@@ -997,6 +997,12 @@ func leaseCacheKey(appID entity.Id, service string, versionID entity.Id, ephemer
 	return key
 }
 
+// Only browser navigations can safely receive a loading page that retries via GET.
+func isBrowserNavigation(req *http.Request) bool {
+	return req.Method == http.MethodGet && errorRepresentation(req.Header.Get("Accept")) == "text/html" &&
+		(req.Header.Get("Sec-Fetch-Dest") == "" || req.Header.Get("Sec-Fetch-Dest") == "document")
+}
+
 // serveAuthenticatedRequest handles the request after authentication (if any)
 func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Request, targetAppId entity.Id, service, routeType string, target *resolvedIngressTarget, appName *string, requestTimeout time.Duration) {
 	req = req.WithContext(context.WithValue(req.Context(), errorPageTargetKey{}, target))
@@ -1105,9 +1111,48 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 		// Give lease acquisition a generous timeout to complete sandbox boot
 		// even if the client request times out. This prevents dangling resources.
 		actContext, actCancel := context.WithTimeout(context.Background(), leaseAcquisitionTimeout)
-		defer actCancel()
 
-		actLease, err := h.aa.AcquireLease(actContext, &av, service)
+		var actLease *activator.Lease
+		if isBrowserNavigation(req) {
+			type leaseResult struct {
+				lease *activator.Lease
+				err   error
+			}
+			result := make(chan leaseResult)
+			abandoned := make(chan struct{})
+			defer close(abandoned)
+			go func() {
+				defer actCancel()
+				l, err := h.aa.AcquireLease(actContext, &av, service)
+				select {
+				case result <- leaseResult{l, err}:
+				case <-abandoned:
+					// Keep a completed boot available for the browser's next retry,
+					// without leaving a request counted as using the lease.
+					if err == nil && l != nil {
+						h.releaseLease(actContext, h.retainLease(actContext, leaseKey, l))
+					} else if err != nil {
+						h.Log.Debug("background lease acquisition failed", "error", err, "app", targetAppId)
+					}
+				}
+			}()
+
+			timer := time.NewTimer(1500 * time.Millisecond)
+			defer timer.Stop()
+
+			select {
+			case res := <-result:
+				actLease, err = res.lease, res.err
+			case <-timer.C:
+				serveLoading(w)
+				return
+			case <-ctx.Done():
+				return
+			}
+		} else {
+			defer actCancel()
+			actLease, err = h.aa.AcquireLease(actContext, &av, service)
+		}
 		if err != nil {
 			if errors.Is(err, ephemeralx.ErrDisksUnsupported) {
 				h.Log.Warn("disk-backed preview denied", "error", err, "app", targetAppId)
