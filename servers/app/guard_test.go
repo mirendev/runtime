@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver"
@@ -13,6 +14,47 @@ import (
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 )
+
+func TestCrudList_AppScoping(t *testing.T) {
+	ctx := context.Background()
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ec := entityserver.NewClient(slog.Default(), inmem.EAC)
+	appInfo := &AppInfo{Log: slog.Default(), EC: ec}
+	client := &app_v1alpha.CrudClient{Client: rpc.LocalClient(app_v1alpha.AdaptCrud(appInfo))}
+	for _, name := range []string{"team-a", "team-b"} {
+		_, err := ec.Create(ctx, name, &core_v1alpha.App{})
+		require.NoError(t, err)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		identity *rpc.Identity
+		want     []string
+	}{
+		{"oidc team a", &rpc.Identity{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "team-a"}}, []string{"team-a"}},
+		{"oidc team b", &rpc.Identity{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "team-b"}}, []string{"team-b"}},
+		{"oidc missing app", &rpc.Identity{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "missing"}}, nil},
+		{"workload", &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "team-a"}}, []string{"team-a"}},
+		{"certificate", &rpc.Identity{Method: rpc.AuthMethodCert}, []string{"team-a", "team-b"}},
+		{"jwt", &rpc.Identity{Method: rpc.AuthMethodJWT}, []string{"team-a", "team-b"}},
+		{"internal", nil, []string{"team-a", "team-b"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			callCtx := ctx
+			if tt.identity != nil {
+				callCtx = rpc.ContextWithIdentity(ctx, tt.identity)
+			}
+			result, err := client.List(callCtx)
+			require.NoError(t, err)
+			var names []string
+			for _, app := range result.Apps() {
+				names = append(names, app.Name())
+			}
+			require.ElementsMatch(t, tt.want, names)
+		})
+	}
+}
 
 // The config-write handlers gained rpc.AllowApp guards so they can be granted to
 // an app-scoped workload role without letting a workload reach another app. This
