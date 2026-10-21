@@ -110,14 +110,28 @@ func (m *Manager) UpgradeArtifact(ctx context.Context, artifact Artifact) error 
 	// Get current version for reporting
 	currentVersion, _ := m.installer.GetCurrentVersion(ctx)
 
-	// Download the artifact
+	// Check the download against the manifest that names the build, as the
+	// lifecycle executor does: a channel's .sha256 can belong to a different
+	// build than its tarball while a publish is overwriting it. Without a
+	// manifest the downloader falls back to .sha256.
+	var expected string
+	if metadata, err := m.downloader.GetVersionMetadata(ctx, artifact.Version); err == nil {
+		expected, _ = metadata.GetArtifactChecksum(artifact.Filename())
+	}
+
 	fmt.Printf("Downloading %s version %s...\n", artifact.Type, artifact.Version)
 	downloadOpts := DownloadOptions{
-		TargetDir:      m.opts.TempDir,
-		ProgressWriter: NewProgressWriter(os.Stdout),
+		TargetDir:        m.opts.TempDir,
+		ProgressWriter:   NewProgressWriter(os.Stdout),
+		ExpectedChecksum: expected,
 	}
 
 	downloaded, err := m.downloader.Download(ctx, artifact, downloadOpts)
+	if errors.Is(err, ErrChecksumMismatch) {
+		// Someone is at the keyboard, so say what is likely going on rather
+		// than waiting it out the way the executor does.
+		return fmt.Errorf("download failed: %w (a new build is probably being published; try again in a minute)", err)
+	}
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

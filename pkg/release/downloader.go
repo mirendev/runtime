@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,11 @@ type DownloadOptions struct {
 	// ExpectedChecksum allows providing a known checksum from metadata
 	ExpectedChecksum string
 }
+
+// ErrChecksumMismatch means a downloaded artifact did not hash to its expected
+// checksum. Channel paths like main/ are overwritten in place by each publish,
+// so this is usually a download that raced one, not a corrupt artifact.
+var ErrChecksumMismatch = errors.New("checksum mismatch")
 
 // assetDownloader implements Downloader using the Miren asset service
 type assetDownloader struct {
@@ -266,7 +272,7 @@ func (d *assetDownloader) verifyChecksum(filePath, expectedChecksum string) erro
 
 	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
 	if actualChecksum != expectedChecksum {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+		return fmt.Errorf("%w: expected %s, got %s", ErrChecksumMismatch, expectedChecksum, actualChecksum)
 	}
 
 	return nil

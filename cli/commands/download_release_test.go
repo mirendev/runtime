@@ -4,12 +4,16 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/pkg/release"
 )
 
 type releaseTarEntry struct {
@@ -254,5 +258,58 @@ func TestPromoteReleaseDir(t *testing.T) {
 		content, err := os.ReadFile(filepath.Join(release, "marker"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("old"), content)
+	})
+}
+
+// releaseAssets serves a branch's version.json and .sha256 the way the asset
+// service does, so the two can be made to disagree like a publish in flight.
+func releaseAssets(t *testing.T, manifest, sidecar string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/main/version.json":
+			if manifest == "" {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(manifest))
+		case "/main/miren-base-linux-amd64.tar.gz.sha256":
+			_, _ = w.Write([]byte(sidecar + "  miren-base-linux-amd64.tar.gz\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv(release.AssetBaseURLEnv, srv.URL)
+}
+
+func TestExpectedReleaseChecksum(t *testing.T) {
+	ctx := &Context{Context: context.Background(), Log: slog.New(slog.DiscardHandler)}
+	// Built per case: the URL follows the asset base each case points at.
+	sidecarURL := func() string {
+		return release.Artifact{Type: release.ArtifactTypeBase, Version: "main", Platform: "linux", Arch: "amd64"}.GetChecksumURL()
+	}
+
+	t.Run("prefers the manifest over the sidecar", func(t *testing.T) {
+		// The sidecar has already moved on to the next build; the manifest
+		// still names the one whose tarball is being served.
+		releaseAssets(t, `{"version":"main:b2975c1","artifacts":[{"name":"miren-base-linux-amd64.tar.gz","sha256":"00e42230"}]}`, "dd5d5f82")
+		sum, err := expectedReleaseChecksum(ctx, "main", "miren-base-linux-amd64.tar.gz", sidecarURL(), t.TempDir())
+		require.NoError(t, err)
+		require.Equal(t, "00e42230", sum)
+	})
+
+	t.Run("falls back to the sidecar without a manifest entry", func(t *testing.T) {
+		releaseAssets(t, `{"version":"main:b2975c1","artifacts":[]}`, "dd5d5f82")
+		sum, err := expectedReleaseChecksum(ctx, "main", "miren-base-linux-amd64.tar.gz", sidecarURL(), t.TempDir())
+		require.NoError(t, err)
+		require.Equal(t, "dd5d5f82", sum)
+	})
+
+	t.Run("falls back to the sidecar without a manifest", func(t *testing.T) {
+		releaseAssets(t, "", "dd5d5f82")
+		sum, err := expectedReleaseChecksum(ctx, "main", "miren-base-linux-amd64.tar.gz", sidecarURL(), t.TempDir())
+		require.NoError(t, err)
+		require.Equal(t, "dd5d5f82", sum)
 	})
 }
