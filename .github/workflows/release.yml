@@ -20,6 +20,11 @@ concurrency:
   group: release-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  # Fall back to a direct fetch on any proxy error, not just a 404. See the
+  # matching block in test.yml.
+  GOPROXY: https://proxy.golang.org|direct
+
 # Permissions needed for reusable workflow (test.yml) and release jobs
 permissions:
   contents: write        # For package job
@@ -142,17 +147,28 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        # `make release-data` below runs the checked-out tag's Makefile, so a
-        # dispatched rebuild is kept off the shared cache entirely. setup-go has
-        # no read-only mode, so that costs the restore too and the rebuild
-        # resolves modules cold. CodeQL only flagged this shape in test.yml, but
-        # it is the same shape here.
-        cache: ${{ needs.init.outputs.cache }}
+        # Host Go only installs iso here; `make release-data` does the real
+        # build inside the iso container, against that container's own module
+        # cache. With the cache on, this job would save a host module cache
+        # holding little more than iso's dependencies, and if it saved first,
+        # build-binaries on the same runner would restore that near-empty cache
+        # under the full key from then on.
+        cache: false
 
     - name: Install iso
       run: |
         go install miren.dev/iso/cmd/iso@latest
         echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    # No shared iso module cache here on purpose: Depot's cache is shared
+    # across every branch, Go trusts modules already in GOMODCACHE without
+    # rechecking go.sum, and this bundle ships. The download is cold, so it
+    # runs through the retrying fill script first, into iso's job-local cache
+    # volume, rather than inside the build where one reset fails the release.
+    # Old tags rebuilt by dispatch predate the script, hence the hashFiles gate.
+    - name: Download modules (iso)
+      if: hashFiles('hack/ci-mod-download.sh') != ''
+      run: iso run bash hack/ci-mod-download.sh
 
     - name: Build and package for ${{ matrix.arch }}
       env:
@@ -203,9 +219,25 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: 'go.mod'
-        # Same as the package job: the build below runs the tag's own build
-        # script, so a dispatched rebuild starts from a cold module cache.
-        cache: ${{ needs.init.outputs.cache }}
+        # Only the macOS builds cache. They run on GitHub-hosted runners, whose
+        # cache is branch-scoped. The Linux builds run on Depot, whose cache
+        # every branch can write, and Go would trust a planted module there in
+        # a binary we sign; they download cold instead, like the package job.
+        # A dispatched rebuild runs the tag's own build script, so it stays off
+        # the cache everywhere. setup-go has no read-only mode, so that costs
+        # the restore too.
+        cache: ${{ needs.init.outputs.cache == 'true' && matrix.os == 'darwin' }}
+        cache-dependency-path: |
+          go.sum
+          x/go.sum
+
+    # Runs on every build, cached or not. On macOS it keeps the saved cache
+    # complete, since build-ci.sh only builds cmd/miren. On Linux, where the
+    # download is cold, it is the retry the build itself doesn't have. Old
+    # tags rebuilt by dispatch predate the script, hence the hashFiles gate.
+    - name: Download modules
+      if: hashFiles('hack/ci-mod-download.sh') != ''
+      run: hack/ci-mod-download.sh
 
     - name: Build binary for ${{ matrix.os }}-${{ matrix.arch }}
       # build-ci.sh rather than `make bin/miren`, and the same two variables the
