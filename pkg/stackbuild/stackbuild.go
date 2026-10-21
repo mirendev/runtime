@@ -266,7 +266,17 @@ func (s *MetaStack) baseImage(ctx context.Context, ref string, opts BuildOptions
 	// within the build between inheritBaseEnv and the LLB marshal below.
 	mr := imagemetaresolver.New()
 	s.inheritBaseEnv(ctx, mr, ref, opts)
-	return llb.Image(ref, llb.WithMetaResolver(mr))
+	return pinnedImage(ref, mr)
+}
+
+// pinnedImage hands BuildKit ref pinned to the digest mr resolves it to here,
+// rather than the bare tag. That keeps the tag lookup in this process, so
+// BuildKit only fetches content it can verify against the digest, and its own
+// registry TLS can't change which image a build gets. Sharing mr with an
+// earlier ResolveImageConfig call (as baseImage does) pins the same revision
+// whose config was read, since the resolver caches per ref and platform.
+func pinnedImage(ref string, mr llb.ImageMetaResolver) llb.State {
+	return llb.Image(ref, llb.WithMetaResolver(mr), llb.ResolveDigest(true))
 }
 
 // inheritBaseEnv resolves ref's image config and folds the environment the
@@ -383,7 +393,7 @@ func (s *MetaStack) applyOnBuild(cur llb.State, opts BuildOptions) llb.State {
 func (m *MetaStack) addAppUser(cur llb.State) llb.State {
 	m.result.Config.User = "2010"
 
-	bb := llb.Image(imagerefs.BusyboxDefault)
+	bb := pinnedImage(imagerefs.BusyboxDefault, imagemetaresolver.New())
 
 	return cur.Run(
 		llb.Args([]string{"/bin/sh", "-c",

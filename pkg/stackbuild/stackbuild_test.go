@@ -22,6 +22,7 @@ import (
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/session/auth/authprovider"
 	"github.com/moby/buildkit/session/secrets/secretsprovider"
+	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/progress/progresswriter"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/require"
@@ -136,6 +137,25 @@ type solvedVertex struct {
 	Log string
 }
 
+// requirePinnedImages fails unless every image source in def names a digest.
+// Stacks build images through pinnedImage so that miren, not BuildKit,
+// resolves each tag; a bare llb.Image would quietly hand that back.
+func requirePinnedImages(t *testing.T, def *llb.Definition) {
+	t.Helper()
+	var images int
+	for _, dt := range def.Def {
+		var op pb.Op
+		require.NoError(t, op.Unmarshal(dt))
+		id := op.GetSource().GetIdentifier()
+		if !strings.HasPrefix(id, "docker-image://") {
+			continue
+		}
+		images++
+		require.Contains(t, id, "@sha256:", "image source is not pinned to a digest")
+	}
+	require.NotZero(t, images, "definition has no image sources")
+}
+
 // solveLLB builds state on c, runs each check against the exported tar, and
 // returns the vertices the solve reported, so a caller can see which steps
 // came from cache. A non-empty cacheDir imports and exports a cache on the
@@ -155,6 +175,7 @@ func solveLLBWithSecrets(t *testing.T, c *buildkit.Client, cacheDir, dir string,
 
 	def, err := state.Marshal(ctx)
 	require.NoError(t, err)
+	requirePinnedImages(t, def)
 
 	pw, err := progresswriter.NewPrinter(ctx, os.Stdout, "plain")
 	require.NoError(t, err)
@@ -629,8 +650,9 @@ func TestNodeNextjs(t *testing.T) {
 			// cases. This covers the GenerateLLB wiring without needing Docker.
 			state, err := stack.GenerateLLB(context.Background(), dir, BuildOptions{EnvVars: map[string]string{"NEXT_PUBLIC_FOO": "bar"}})
 			require.NoError(t, err)
-			_, err = state.Marshal(context.Background())
+			def, err := state.Marshal(context.Background())
 			require.NoError(t, err)
+			requirePinnedImages(t, def)
 		})
 	}
 }
