@@ -11,6 +11,9 @@ All notable changes to Miren Runtime will be documented in this file.
 ## Unreleased
 *release/0.17*
 
+**Bug Fixes**
+- **Builds fetch base images only over verified connections** - Miren's BuildKit config told it to reach Docker Hub over plain HTTP. Docker Hub redirected every request to HTTPS, so pulls worked, but each lookup started in the clear, where someone on the network path could answer it with a different image. BuildKit now goes to Docker Hub over HTTPS from the first request. Stack builds (the ones Miren builds for you without a Dockerfile) also pin each base image to a digest Miren resolves itself, so BuildKit only accepts content that matches it. That closes the build gap noted in v0.17.1 for stack builds; Dockerfile builds still get it with the BuildKit update. ([#1400](https://github.com/mirendev/runtime/pull/1400))
+
 ---
 
 ## v0.17.1
