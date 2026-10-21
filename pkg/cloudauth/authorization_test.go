@@ -659,7 +659,10 @@ func TestInfrastructureAuthorizationRequiresClusterAdmin(t *testing.T) {
 				a.authorization.beginSession(t.Context(), session)
 				snapshot := authorizationSnapshot("session", 1)
 				snapshot.Version = version
-				snapshot.Policy.Rules[0].Permissions = append([]rbac.Permission{{Resource: "userquery", Actions: []string{"whoami"}}}, tc.permissions...)
+				snapshot.Policy.Rules[0].Permissions = append([]rbac.Permission{
+					{Resource: "userquery", Actions: []string{"whoami"}},
+					{Resource: "telemetry", Actions: []string{"reportspans"}},
+				}, tc.permissions...)
 				deliverSnapshot(t, a.authorization, snapshot)
 				identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
 				for _, target := range targets {
@@ -672,7 +675,12 @@ func TestInfrastructureAuthorizationRequiresClusterAdmin(t *testing.T) {
 					require.NoError(t, a.Authorize(t.Context(), &rpc.Identity{Method: rpc.AuthMethodCert}, target.resource, target.action))
 				}
 				require.NoError(t, a.Authorize(t.Context(), identity, "userquery", "whoami"), "self-introspection retains its own permission")
+				require.NoError(t, a.Authorize(t.Context(), identity, "telemetry", "reportspans"), "deploy tracing retains its own permission")
 				require.ErrorIs(t, a.Authorize(t.Context(), &rpc.Identity{Subject: "unknown", Method: rpc.AuthMethodJWT}, "entityaccess", "get"), rpc.ErrUnauthorized)
+				snapshot.Revision++
+				snapshot.Policy.Rules[0].Permissions = tc.permissions
+				deliverSnapshot(t, a.authorization, snapshot)
+				require.ErrorIs(t, a.Authorize(t.Context(), identity, "telemetry", "reportspans"), rpc.ErrUnauthorized, "span reporting still requires its own grant")
 			})
 		}
 	}
