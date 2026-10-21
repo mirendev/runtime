@@ -45,11 +45,26 @@ func (s *PoolServer) List(ctx context.Context, state *compute_v1alpha.SandboxPoo
 	}
 	index := entity.Ref(entity.EntityKind, compute_v1alpha.KindSandboxPool)
 	if appName != "" {
-		var app core_v1alpha.App
-		if err := s.ec.Get(ctx, appName, &app); err != nil {
+		var appID entity.Id
+		for id, owner := range apps {
+			if owner.Instance == appName {
+				appID = id
+				break
+			}
+		}
+		if entity.Empty(appID) {
+			state.Results().SetPools([]*compute_v1alpha.SandboxPoolInfo{})
+			return nil
+		}
+		allowed, err := filterInventoryApp(ctx, apps[appID])
+		if err != nil {
 			return err
 		}
-		index = entity.Ref(compute_v1alpha.SandboxPoolAppId, app.ID)
+		if !allowed {
+			state.Results().SetPools([]*compute_v1alpha.SandboxPoolInfo{})
+			return nil
+		}
+		index = entity.Ref(compute_v1alpha.SandboxPoolAppId, appID)
 	}
 	pools, err := s.ec.List(ctx, index)
 	if err != nil {

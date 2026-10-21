@@ -568,6 +568,16 @@ func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listedPools.Pools(), 1)
 	require.Equal(t, pools["mine"].String(), listedPools.Pools()[0].Id())
+	for _, app := range []string{"mine", "private", "nonexistent"} {
+		filtered, err := poolClient.List(caller("list", false), app)
+		require.NoError(t, err, app)
+		if app == "mine" {
+			require.Len(t, filtered.Pools(), 1)
+			require.Equal(t, pools["mine"].String(), filtered.Pools()[0].Id())
+		} else {
+			require.Empty(t, filtered.Pools(), "hidden and nonexistent apps must be indistinguishable")
+		}
+	}
 	listedPools, err = poolClient.List(caller("read", false), "")
 	require.NoError(t, err)
 	require.Empty(t, listedPools.Pools())
