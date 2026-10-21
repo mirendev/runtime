@@ -603,6 +603,35 @@ func TestResolvedAppAuthorizationVersions(t *testing.T) {
 	}
 }
 
+func TestPoolInventoryAuthorizationVersions(t *testing.T) {
+	for _, version := range []uint{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), "", "")}
+			session := authorizationSession("session")
+			session.Capabilities[0].Version = version
+			a.authorization.beginSession(t.Context(), session)
+			snapshot := authorizationSnapshot("session", 1)
+			snapshot.Version = version
+			permission := rbac.Permission{Resource: "app", Actions: []string{"list"}, Scope: "$owner"}
+			if version == 1 {
+				permission = rbac.Permission{Resource: "sandboxpools", Actions: []string{"list"}}
+			}
+			snapshot.Policy.Rules[0].Permissions = []rbac.Permission{permission}
+			deliverSnapshot(t, a.authorization, snapshot)
+			identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+			ctx := rpc.ContextWithIdentity(t.Context(), identity)
+			ctx = rpc.ContextWithAuthorization(ctx, a, "sandboxpools", "list")
+			require.NoError(t, a.Authorize(ctx, identity, "sandboxpools", "list"), "scoped callers must reach the pool row filter")
+			for _, owner := range []string{"alice", "bob"} {
+				allowed, err := rpc.FilterResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "list", Instance: "shop", Owner: owner})
+				require.NoError(t, err)
+				require.Equal(t, version == 1 || owner == "alice", allowed)
+			}
+			require.ErrorIs(t, a.Authorize(ctx, identity, "sandboxpools", "setdesired"), rpc.ErrUnauthorized, "listing does not grant scaling")
+		})
+	}
+}
+
 func TestInventoryAuthorizationFailuresAndQuietExclusions(t *testing.T) {
 	var logs lockedBuffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
