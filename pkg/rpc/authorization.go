@@ -124,6 +124,10 @@ func AppAction(resource, action string) string {
 		case "selectforapp":
 			return "exec"
 		}
+	case "sandboxpools":
+		if action == "list" {
+			return "list"
+		}
 	case "resourceusage":
 		switch action {
 		case "listapps", "httplistapps", "listsandboxes", "httplistsandboxes":
