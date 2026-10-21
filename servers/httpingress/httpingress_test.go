@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -910,6 +913,90 @@ func (stubActivator) Invalidations() <-chan activator.SandboxInvalidation {
 	return make(chan activator.SandboxInvalidation)
 }
 func (stubActivator) SetPoolCreator(activator.PoolCreator) {}
+
+type bootingActivator struct {
+	stubActivator
+	ready   <-chan struct{}
+	url     string
+	started atomic.Bool
+}
+
+func (a *bootingActivator) AcquireLease(ctx context.Context, _ *core_v1alpha.AppVersion, _ string) (*activator.Lease, error) {
+	if a.started.Swap(true) {
+		return nil, errors.New("boot already requested")
+	}
+	select {
+	case <-a.ready:
+		return &activator.Lease{URL: a.url, Size: 10}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestColdStartLoading(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_, _ = fmt.Fprintf(w, "%s %s %s", r.Method, r.URL.RequestURI(), body)
+	}))
+	defer backend.Close()
+
+	for _, tc := range []struct {
+		name, method, accept, dest string
+		fast, loading              bool
+	}{
+		{name: "slow navigation", method: "GET", accept: "text/html", dest: "document", loading: true},
+		{name: "fast navigation", method: "GET", accept: "text/html", fast: true},
+		{name: "API", method: "GET", accept: "application/json"},
+		{name: "POST", method: "POST", accept: "text/html", dest: "document"},
+		{name: "fetch", method: "GET", accept: "text/html", dest: "empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ready := make(chan struct{})
+			s := newTimeoutTestServer(5 * time.Second)
+			s.apps = make(map[string]*appUsage)
+			s.aa = &bootingActivator{ready: ready, url: backend.URL}
+			target := &resolvedIngressTarget{config: &core_v1alpha.ConfigSpec{}}
+			appName := "test"
+			request := func() *http.Request {
+				r := httptest.NewRequest(tc.method, "http://app.example.com/orders?sort=desc", strings.NewReader("payload"))
+				r.Header.Set("Accept", tc.accept)
+				r.Header.Set("Sec-Fetch-Dest", tc.dest)
+				return r
+			}
+			if tc.fast {
+				close(ready)
+			} else {
+				timer := time.AfterFunc(2200*time.Millisecond, func() { close(ready) })
+				defer timer.Stop()
+			}
+			w := httptest.NewRecorder()
+			start := time.Now()
+			s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+			elapsed := time.Since(start)
+			if tc.loading {
+				require.Equal(t, http.StatusServiceUnavailable, w.Code)
+				require.GreaterOrEqual(t, elapsed, 1500*time.Millisecond)
+				require.Less(t, elapsed, 2200*time.Millisecond)
+				require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+				require.Equal(t, "2", w.Header().Get("Retry-After"))
+				require.Contains(t, w.Body.String(), "Loading…")
+				require.Contains(t, w.Body.String(), `<meta http-equiv="refresh" content="2">`)
+				// The original request has returned, but boot must finish and
+				// the next navigation must reach the app with its URL intact.
+				// This activator cannot start a second boot to mask cancellation
+				// or a lost lease from the first request.
+				<-ready
+				require.Eventually(t, func() bool {
+					w = httptest.NewRecorder()
+					s.serveAuthenticatedRequest(w, request(), "app/test", "web", "route", target, &appName, 5*time.Second)
+					return w.Code == http.StatusOK
+				}, time.Second, 10*time.Millisecond)
+			}
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Equal(t, tc.method+" /orders?sort=desc payload", w.Body.String())
+		})
+	}
+}
 
 func TestDiskBackedPreviewIngressDenial(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
