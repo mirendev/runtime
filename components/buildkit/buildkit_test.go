@@ -385,7 +385,7 @@ func TestBuildkitRestart(t *testing.T) {
 		r.NoError(err)
 		bk, err := client.Info(ctx)
 		r.NoError(err)
-		r.Equal("v0.34.0", bk.BuildkitVersion.Version)
+		r.Equal("v0.34.1", bk.BuildkitVersion.Version)
 		client.Close()
 
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 60*time.Second)
