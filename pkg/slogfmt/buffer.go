@@ -50,8 +50,10 @@ func (b *Buffer) WriteByte(c byte) error {
 	return nil
 }
 
+// WriteNewLine ends the buffer with a newline unless it already ends in one,
+// as it does after a multi-line attr.
 func (b *Buffer) WriteNewLine() {
-	if len(*b) > 0 && (*b)[0] == '\n' {
+	if len(*b) > 0 && (*b)[len(*b)-1] == '\n' {
 		return
 	}
 
