@@ -130,7 +130,7 @@ func TestAppAndSandboxPermissionsResolveStoredOwnership(t *testing.T) {
 		if name == "mine" {
 			owner = "alice"
 		}
-		appID, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{CreatedBy: owner})
+		appID, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{OwnedBy: owner})
 		require.NoError(t, err)
 		versionID, err := inmem.Client.Create(t.Context(), name+"-v1", &core_v1alpha.AppVersion{App: appID})
 		require.NoError(t, err)

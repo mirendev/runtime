@@ -125,7 +125,7 @@ func (*denyExecResource) AuthorizeResource(context.Context, *rpc.Identity, rpc.R
 func TestExecResourceDenialBeforeForwarding(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
-	appID, err := inmem.Client.Create(t.Context(), "private", &core_v1alpha.App{CreatedBy: "alice"})
+	appID, err := inmem.Client.Create(t.Context(), "private", &core_v1alpha.App{OwnedBy: "alice"})
 	require.NoError(t, err)
 	version, err := inmem.Client.Create(t.Context(), "private-v1", &core_v1alpha.AppVersion{App: appID})
 	require.NoError(t, err)
