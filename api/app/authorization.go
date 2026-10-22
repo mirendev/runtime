@@ -51,7 +51,7 @@ func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient
 		return rpc.AppAccessError(ctx, metadata.Name)
 	}
 	return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
-		Resource: "app", Action: action, Instance: metadata.Name, Owner: app.CreatedBy,
+		Resource: "app", Action: action, Instance: metadata.Name, Owner: app.OwnedBy,
 	})
 }
 
@@ -128,6 +128,6 @@ func AuthorizeSandbox(ctx context.Context, eac *entityserver_v1alpha.EntityAcces
 		return rpc.AppAccessError(ctx, metadata.Name)
 	}
 	return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
-		Resource: "app", Action: action, Instance: metadata.Name, Owner: app.CreatedBy,
+		Resource: "app", Action: action, Instance: metadata.Name, Owner: app.OwnedBy,
 	})
 }

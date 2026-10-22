@@ -379,16 +379,12 @@ func handleEphemeral(ctx context.Context, in handleEphemeralIn) (handleEphemeral
 
 	ttl := in.EphemeralTTL
 	if ttl == "" {
-		ttl = "24h"
+		ttl = ephemeralx.DefaultTTL
 	}
-	ttlDuration, err := time.ParseDuration(ttl)
+	ttlDuration, err := ephemeralx.ParseTTL(ttl)
 	if err != nil {
 		status.SendError("invalid ephemeral TTL %q: %v", ttl, err)
 		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: %w", ttl, err)
-	}
-	if ttlDuration <= 0 {
-		status.SendError("invalid ephemeral TTL %q: must be greater than 0", ttl)
-		return handleEphemeralOut{}, fmt.Errorf("invalid ephemeral TTL %q: must be greater than 0", ttl)
 	}
 
 	spec, err := unmarshalConfigSpec(in.ConfigSpec)

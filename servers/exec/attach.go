@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/exec/exec_v1alpha"
@@ -16,6 +17,12 @@ import (
 // under, matching what the deployment launcher and the run controller put in a
 // sandbox spec.
 const defaultAttachContainer = "app"
+
+// attachDrainTimeout bounds how long an attach keeps delivering queued output
+// after its container has gone. A healthy client finishes in well under this;
+// the bound only matters for a connection that is wedged without having
+// failed, which would otherwise hold the handler open forever.
+const attachDrainTimeout = time.Minute
 
 // Attach joins the caller to a container's existing primary process.
 //
@@ -69,8 +76,8 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 	out := stream.ToWriter(ctx, args.Output())
 	defer out.Close()
 
-	unsubscribe := hub.Subscribe(out)
-	defer unsubscribe()
+	sub := hub.Subscribe(out)
+	defer sub.Stop()
 
 	// Window updates drive the container's own pty, so a resize from any
 	// attached client is seen by all of them. Shared-terminal semantics are the
@@ -127,7 +134,7 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 		// the input pump, which costs nothing: there is no longer a process on
 		// the other end of that stdin to receive it.
 		s.Log.Debug("attach ended with the container", "sandbox", sandboxID, "container", container)
-		return nil
+		return finishAttach(ctx, sub)
 
 	case <-ctx.Done():
 		// The client disconnected. That is not an error and, deliberately, not
@@ -144,11 +151,46 @@ func (s *Server) Attach(ctx context.Context, req *exec_v1alpha.SandboxExecAttach
 		}
 		select {
 		case <-hub.Done():
-			return nil
+			return finishAttach(ctx, sub)
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+// finishAttach delivers whatever output is still queued for a client whose
+// container has ended, and says so if the client did not get all of it.
+//
+// The container ending is not the output ending. Chunks the Hub accepted are
+// still crossing the network one round trip at a time, and returning first
+// cuts the client's stream short -- which, with the run's exit code reported
+// separately, reads as a complete and successful command (MIR-2012). So the
+// attach waits for the queue, and a stream with gaps in it comes back as an
+// error rather than as a quiet success.
+func finishAttach(ctx context.Context, sub *sandbox.Subscription) error {
+	select {
+	case <-sub.Drained():
+	case <-ctx.Done():
+		// The client left; there is nobody to tell.
+		return nil
+	case <-time.After(attachDrainTimeout):
+		return OutputTruncatedError{Reason: fmt.Sprintf("the client did not receive the rest within %s", attachDrainTimeout)}
+	}
+
+	if n := sub.Dropped(); n > 0 {
+		return OutputTruncatedError{Reason: fmt.Sprintf("%d bytes of output never reached the client", n)}
+	}
+	return nil
+}
+
+// OutputTruncatedError says an attached client did not receive all of a
+// container's output. The log stream still has it.
+type OutputTruncatedError struct {
+	Reason string
+}
+
+func (e OutputTruncatedError) Error() string {
+	return "attach: output truncated: " + e.Reason
 }
 
 // NotReadyError says the container is attachable but has not booted yet, which

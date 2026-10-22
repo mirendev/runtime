@@ -17,9 +17,9 @@ const (
 	Pause = "oci.miren.cloud/pause:3.8"
 
 	// BuildKit daemon for building containers (docker.io/moby/buildkit),
-	// v0.34.0 pinned by its index digest. A running server recreates its
+	// v0.34.1 pinned by its index digest. A running server recreates its
 	// buildkit container when this changes, keeping the build cache.
-	BuildKit = "oci.miren.cloud/moby/buildkit@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c"
+	BuildKit = "oci.miren.cloud/moby/buildkit@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c"
 
 	// Minio object storage server (quay.io/minio/minio)
 	Minio = "oci.miren.cloud/minio:RELEASE.2025-04-03T14-56-28Z"

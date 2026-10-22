@@ -12,7 +12,7 @@ func RouteList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

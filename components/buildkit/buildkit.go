@@ -407,9 +407,6 @@ insecure-entitlements = [ "network.host", "security.insecure" ]
     all = true
     maxUsedSpace = %[1]d
 
-[registry."docker.io"]
-  http = true
-
 [registry."%[3]s"]
   insecure = true
   http = true

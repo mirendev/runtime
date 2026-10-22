@@ -30,13 +30,13 @@ func (providerCLIIdentity) Authenticate(context.Context, *rpc.Credentials) (*rpc
 type providerCLIPolicy struct{ deny bool }
 
 func (p providerCLIPolicy) Authorize(_ context.Context, _ *rpc.Identity, resource, _ string) error {
-	if resource != "identityproviders" || p.deny {
+	if resource == "identityproviders" && p.deny {
 		return fmt.Errorf("provider management denied")
 	}
 	return nil
 }
 
-func providerCLIContext(t *testing.T, deny bool) (*Context, *ingress.Client) {
+func providerCLIContext(t *testing.T, deny bool, legacy ...bool) (*Context, *ingress.Client) {
 	t.Helper()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
@@ -45,9 +45,21 @@ func providerCLIContext(t *testing.T, deny bool) (*Context, *ingress.Client) {
 		rpc.WithAuthenticator(providerCLIIdentity{}), rpc.WithAuthorizer(providerCLIPolicy{deny: deny}))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
-	// Deliberately offer only the public provider capability. Every command
-	// must work without resolving an entity or route-management capability.
-	server.Server().ExposeValue("dev.miren.runtime/identity-providers", ingress_v1alpha.AdaptIdentityProviders(identityproviders.NewServer(ic)))
+	// Current servers deliberately offer no EntityAccess unless testing denial.
+	if len(legacy) > 0 && legacy[0] {
+		server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+		if len(legacy) > 1 && legacy[1] {
+			server.Server().ExposeValue("dev.miren.runtime/identity-providers", rpc.NewInterface([]rpc.Method{
+				{Name: "oldMethod", InterfaceName: "IdentityProviders"},
+			}, nil))
+		}
+	} else {
+		server.Server().ExposeValue("dev.miren.runtime/identity-providers", ingress_v1alpha.AdaptIdentityProviders(identityproviders.NewServer(ic)))
+		if deny {
+			// An available legacy capability must never bypass RPC denial.
+			server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+		}
+	}
 	ctx := &Context{Context: t.Context(), Log: slog.Default(), Stderr: io.Discard}
 	ctx.Config.ServerAddress = server.ListenAddr()
 	return ctx, ic
@@ -77,7 +89,13 @@ func runProviderCLI(t *testing.T, ctx *Context, command any, args ...string) (st
 }
 
 func TestAuthProviderCLIWithoutEntityAccess(t *testing.T) {
-	ctx, ic := providerCLIContext(t, false)
+	t.Run("current", func(t *testing.T) { testAuthProviderCLI(t, false) })
+	t.Run("legacy", func(t *testing.T) { testAuthProviderCLI(t, true) })
+	t.Run("missing-methods", func(t *testing.T) { testAuthProviderCLI(t, true, true) })
+}
+
+func testAuthProviderCLI(t *testing.T, legacy ...bool) {
+	ctx, ic := providerCLIContext(t, false, legacy...)
 	out, err := runProviderCLI(t, ctx, AuthProviderList)
 	require.NoError(t, err)
 	require.Equal(t, "No identity providers found\n", out)

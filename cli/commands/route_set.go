@@ -31,7 +31,7 @@ func RouteSet(ctx *Context, opts struct {
 		return fmt.Errorf("app is required")
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

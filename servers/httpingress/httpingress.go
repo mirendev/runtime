@@ -398,6 +398,7 @@ type lease struct {
 	Uses     int
 	LastUsed time.Time
 	Lease    *activator.Lease
+	app      string
 }
 
 func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease) *lease {
@@ -408,6 +409,7 @@ func (h *Server) retainLease(ctx context.Context, app string, l *activator.Lease
 		Lease:    l,
 		Uses:     1,
 		LastUsed: time.Now(),
+		app:      app,
 	}
 
 	ar, ok := h.apps[app]
@@ -436,7 +438,10 @@ func (h *Server) useLease(ctx context.Context, app string) (*lease, error) {
 	}
 
 	for _, l := range ar.leases {
-		if l.Uses <= l.Lease.Size {
+		if l.Lease.Overflow {
+			continue
+		}
+		if l.Uses < l.Lease.Size {
 			l.Uses++
 			l.LastUsed = time.Now()
 			return l, nil
@@ -451,6 +456,25 @@ func (h *Server) releaseLease(ctx context.Context, lease *lease) {
 	defer h.mu.Unlock()
 
 	lease.Uses--
+
+	// Cached, an overflow lease would keep load pinned to its sandbox after
+	// new ones boot.
+	if lease.Lease.Overflow && lease.Uses <= 0 {
+		ar, ok := h.apps[lease.app]
+		if !ok {
+			return
+		}
+		for i, l := range ar.leases {
+			if l == lease {
+				h.aa.ReleaseLease(context.WithoutCancel(ctx), l.Lease)
+				ar.leases = append(ar.leases[:i], ar.leases[i+1:]...)
+				break
+			}
+		}
+		if len(ar.leases) == 0 {
+			delete(h.apps, lease.app)
+		}
+	}
 }
 
 // invalidateLease removes a lease from the cache entirely.
@@ -749,7 +773,7 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 		}
 		if ephemeralVersion == nil && strategy == resolveEphemeralStrict {
 			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", appID)
-			h.serveIngressError(w, req, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			h.servePreviewNotFound(w, req, ephemeralLabel)
 			return nil, false
 		}
 		if ephemeralVersion != nil {
@@ -1043,7 +1067,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 			req = req.WithContext(ctx)
 			// On non-final attempts, suppress error response so we can retry
 			writeErr := attempt == maxRetries
-			err = h.proxyToLease(w, req, curLease.Lease.URL, targetAppId.String(), *appName, writeErr, requestTimeout)
+			err = h.proxyWithLease(w, req, curLease, targetAppId.String(), *appName, writeErr, requestTimeout)
 			if err != nil && isProxyConnectionError(err) {
 				// Cached lease pointed at a dead sandbox — invalidate all app
 				// leases (they likely all point to the same dead sandbox) and retry
@@ -1110,7 +1134,7 @@ func (h *Server) serveAuthenticatedRequest(w http.ResponseWriter, req *http.Requ
 
 		req = req.WithContext(ctx)
 		// Fresh lease — always write error response (no retry on fresh lease failure)
-		err = h.proxyToLease(w, req, actLease.URL, targetAppId.String(), *appName, true, requestTimeout)
+		err = h.proxyWithLease(w, req, localLease, targetAppId.String(), *appName, true, requestTimeout)
 		if err != nil {
 			// Connection error on a fresh lease - the sandbox may have died
 			// between lease acquisition and proxy. Invalidate immediately.
@@ -1210,6 +1234,22 @@ func (h *Server) logRequestFromStats(appEntityID, appName string, stats httputil
 // captures the error but does NOT write to the ResponseWriter, allowing the caller
 // to retry with a fresh lease. This is safe because connection errors happen during
 // TCP dial, before any response bytes are sent.
+// proxyWithLease proxies to a cached lease's sandbox and hands the lease's
+// use back if the proxy panics. ReverseProxy aborts a response whose body copy
+// fails (a client hanging up mid-download) by panicking with
+// http.ErrAbortHandler, which skips the caller's releaseLease. Each one leaked
+// a use, and a lease that never returns to zero uses never expires, so its
+// sandbox capacity stayed claimed for the sandbox's lifetime.
+func (h *Server) proxyWithLease(w http.ResponseWriter, req *http.Request, l *lease, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
+	defer func() {
+		if r := recover(); r != nil {
+			h.releaseLease(context.Background(), l)
+			panic(r)
+		}
+	}()
+	return h.proxyToLease(w, req, l.Lease.URL, appEntityID, appName, writeErrorResponse, requestTimeout)
+}
+
 func (h *Server) proxyToLease(w http.ResponseWriter, req *http.Request, targetURL, appEntityID, appName string, writeErrorResponse bool, requestTimeout time.Duration) error {
 	targetParsed, err := url.Parse(targetURL)
 	if err != nil {

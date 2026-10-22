@@ -1,13 +1,22 @@
 package certificate
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -899,4 +908,130 @@ func TestAutocertController_ClusterHostnames_EmptyIgnored(t *testing.T) {
 	if count != 0 {
 		t.Errorf("expected no allowed hosts from empty cluster hostnames, got %d", count)
 	}
+}
+
+// cacheTestCert writes a certificate for host into the controller's ACME cache
+// in the layout autocert itself uses: the private key, then the chain.
+func cacheTestCert(t *testing.T, c *AutocertController, host string, notAfter time.Time) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: host},
+		DNSNames:     []string{host},
+		NotBefore:    notAfter.Add(-90 * 24 * time.Hour),
+		NotAfter:     notAfter,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	require.NoError(t, pem.Encode(&buf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	require.NoError(t, pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	require.NoError(t, c.mgr.Cache.Put(context.Background(), host, buf.Bytes()))
+}
+
+// storeTestRoute registers a route the way Reconcile does, without
+// provisioning a certificate for it.
+func storeTestRoute(c *AutocertController, host, tlsCheck string) {
+	c.allowedHosts.Store(host, struct{}{})
+	c.routeChecks.Store(entity.Id("http_route/"+host), routeCheck{host: host, tlsCheck: tlsCheck})
+}
+
+func TestAutocertController_GetCertificate_RetainedCertForExpiredPreview(t *testing.T) {
+	c := newTestAutocertController(t)
+	storeTestRoute(c, "app.example.com", "")
+	storeTestRoute(c, "*.tenants.example.com", "/tls-check")
+	c.allowedHosts.Store("pinned.example.com", struct{}{})
+	c.SetHostChecker(func(context.Context, string) (bool, error) { return false, nil })
+
+	cacheTestCert(t, c, "pr-33.app.example.com", time.Now().Add(60*24*time.Hour))
+	cacheTestCert(t, c, "pr-34.app.example.com", time.Now().Add(-time.Hour))
+	cacheTestCert(t, c, "pr-35.elsewhere.example.com", time.Now().Add(60*24*time.Hour))
+	cacheTestCert(t, c, "gone.tenants.example.com", time.Now().Add(60*24*time.Hour))
+	cacheTestCert(t, c, "pr-36.pinned.example.com", time.Now().Add(60*24*time.Hour))
+
+	get := func(host string) *tls.Certificate {
+		t.Helper()
+		cert, err := c.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+		require.NoError(t, err)
+		return cert
+	}
+
+	// The preview's label no longer resolves, but the certificate it earned
+	// is still good, so the visitor reaches the ingress's page.
+	cert := get("pr-33.app.example.com")
+	require.NotSame(t, &c.fallbackCert, cert)
+	require.NoError(t, cert.Leaf.VerifyHostname("pr-33.app.example.com"))
+	require.Same(t, cert, get("pr-33.app.example.com"), "the lookup is remembered")
+
+	// A name that never had a certificate, one whose certificate ran out, and
+	// one not under any route all get the fallback.
+	require.Same(t, &c.fallbackCert, get("www.app.example.com"))
+	require.Same(t, &c.fallbackCert, get("pr-34.app.example.com"))
+	require.Same(t, &c.fallbackCert, get("pr-35.elsewhere.example.com"))
+
+	// An app's tls_check refusal means the fallback, even for a name it once
+	// vouched for. So does a parent with no reconciled route behind it.
+	require.Same(t, &c.fallbackCert, get("gone.tenants.example.com"))
+	require.Same(t, &c.fallbackCert, get("pr-36.pinned.example.com"))
+}
+
+// blockingCache counts reads and holds any read of a held name until release
+// closes.
+type blockingCache struct {
+	autocert.Cache
+	held    string
+	release chan struct{}
+	reads   atomic.Int32
+}
+
+func (b *blockingCache) Get(ctx context.Context, key string) ([]byte, error) {
+	b.reads.Add(1)
+	if strings.TrimSuffix(key, "+rsa") == b.held {
+		<-b.release
+	}
+	return b.Cache.Get(ctx, key)
+}
+
+// Refused names under a route are client-supplied, so reading the store for
+// them has to be capped and collapsed the way host checks are.
+func TestAutocertController_RetainedCert_CapsAndCollapsesReads(t *testing.T) {
+	c := newTestAutocertController(t)
+	c.retainedSlots = make(chan struct{}, 1)
+	storeTestRoute(c, "app.example.com", "")
+	c.SetHostChecker(func(context.Context, string) (bool, error) { return false, nil })
+	cacheTestCert(t, c, "pr-33.app.example.com", time.Now().Add(60*24*time.Hour))
+
+	bc := &blockingCache{Cache: c.mgr.Cache, held: "pr-33.app.example.com", release: make(chan struct{})}
+	c.mgr.Cache = bc
+
+	hello := func(host string) *tls.ClientHelloInfo { return &tls.ClientHelloInfo{ServerName: host} }
+
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.retainedCert(hello("pr-33.app.example.com"), "pr-33.app.example.com")
+		}()
+	}
+	require.Eventually(t, func() bool { return bc.reads.Load() == 1 }, time.Second, time.Millisecond)
+
+	// The one slot is taken, so another name gets nothing and reads nothing.
+	require.Nil(t, c.retainedCert(hello("www.app.example.com"), "www.app.example.com"))
+	require.Equal(t, int32(1), bc.reads.Load(), "concurrent handshakes share one read, and over the cap reads nothing")
+
+	close(bc.release)
+	wg.Wait()
+	require.Eventually(t, func() bool { return len(c.retainedSlots) == 0 }, time.Second, time.Millisecond)
+
+	// The over-cap miss wasn't remembered, so the name gets a real read now.
+	_, remembered := c.retainedCerts.Get("www.app.example.com")
+	require.False(t, remembered)
+	require.Nil(t, c.retainedCert(hello("www.app.example.com"), "www.app.example.com"))
+	require.Equal(t, int32(3), bc.reads.Load(), "a real miss tries both key spellings")
 }

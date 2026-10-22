@@ -27,7 +27,7 @@ func RouteTLSCheck(ctx *Context, opts struct {
 		}
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}

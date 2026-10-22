@@ -1,6 +1,6 @@
 module miren.dev/runtime
 
-go 1.26.5
+go 1.26.10
 
 require (
 	github.com/NimbleMarkets/ntcharts v0.3.1

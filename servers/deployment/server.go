@@ -724,17 +724,13 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 			results.SetError(fmt.Sprintf("invalid ephemeral label: %v", err))
 			return nil
 		}
-		ephTTL := "24h"
+		ephTTL := ephemeralx.DefaultTTL
 		if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
 			ephTTL = args.EphemeralTtl()
 		}
-		ttlDuration, parseErr := time.ParseDuration(ephTTL)
+		ttlDuration, parseErr := ephemeralx.ParseTTL(ephTTL)
 		if parseErr != nil {
 			results.SetError(fmt.Sprintf("invalid ephemeral TTL %q: %v", ephTTL, parseErr))
-			return nil
-		}
-		if ttlDuration <= 0 {
-			results.SetError(fmt.Sprintf("invalid ephemeral TTL %q: must be greater than 0", ephTTL))
 			return nil
 		}
 

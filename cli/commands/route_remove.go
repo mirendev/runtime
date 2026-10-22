@@ -9,7 +9,7 @@ func RouteRemove(ctx *Context, opts struct {
 	Host string `position:"0" usage:"Hostname of the route to remove"`
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

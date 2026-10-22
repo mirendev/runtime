@@ -57,7 +57,7 @@ func RouteTimeout(ctx *Context, opts struct {
 		return err
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}

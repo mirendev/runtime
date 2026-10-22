@@ -14,6 +14,7 @@ import (
 	"miren.dev/runtime/api/server/server_v1alpha"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
@@ -85,14 +86,19 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 		{"starting", "cluster-readonly", false, true, true, "", false},
 		{"old server", "cluster-readonly", false, false, true, "", false},
 		{"health unsupported", "cluster-readonly", true, true, false, "", false},
+		{"health method unsupported", "cluster-readonly", true, true, false, "", false},
 		{"health denied", "app-readonly", true, true, true, "", false},
 		{"late backend failure", "cluster-readonly", true, true, true, "backend", false},
 		{"late incomplete scan", "cluster-readonly", true, true, true, "incomplete", false},
 		{"version query failure", "cluster-readonly", true, true, true, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var auth rpc.Authenticator = doctorWorkloadAuth{role: tc.role}
+			if !tc.healthAPI {
+				auth = &rpc.NoOpAuthenticator{}
+			}
 			server, err := rpc.NewState(t.Context(), rpc.WithLogger(log),
-				rpc.WithAuthenticator(doctorWorkloadAuth{role: tc.role}),
+				rpc.WithAuthenticator(auth),
 				rpc.WithAuthorizer(oidcauth.NewCompositeAuthorizer(nil)))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close()) })
@@ -115,8 +121,14 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 				}
 				server.Server().ExposeValue("dev.miren.runtime/disk-health", disk_v1alpha.AdaptDiskHealth(disksrv.NewHealthServer(log, eac)))
 			}
-			// No EntityAccess capability is exposed, and this workload role has
-			// no entity grants. Both scans must work through the safe contract.
+			if !tc.healthAPI {
+				server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(inmem.Server))
+				if tc.name == "health method unsupported" {
+					server.Server().ExposeValue("dev.miren.runtime/disk-health", rpc.NewInterface([]rpc.Method{{Name: "oldMethod", InterfaceName: "DiskHealth"}}, nil))
+				}
+				schema := inmem.GetEntity("dev.miren.storage/schema.v1alpha")
+				inmem.AddEntity(entity.New(schema.Attrs(), entity.Keyword(entity.SchemaKind, "disk"), entity.Keyword(entity.SchemaKind, "disk_volume")))
+			}
 			ctx := &Context{Context: t.Context(), Log: log, Stdout: io.Discard, Stderr: io.Discard}
 			ctx.Config.ServerAddress = server.ListenAddr()
 			cfg := clientconfig.NewConfig()
@@ -145,7 +157,7 @@ func TestDoctorGathersSafeResourcePagesAndServerReadiness(t *testing.T) {
 				assert.Equal(t, checkOK, serverCheck.Status)
 				assert.Equal(t, checkWarn, checkVersion(env).Status)
 			}
-			if !tc.healthAPI || tc.role == "app-readonly" || tc.pageFailure != "" {
+			if tc.role == "app-readonly" || tc.pageFailure != "" {
 				require.Error(t, env.resourcesErr)
 				assert.Nil(t, env.resources, "an incomplete scan must not report resources healthy")
 				assert.Equal(t, checkSkip, checkDisks(env).Status)

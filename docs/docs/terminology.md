@@ -144,7 +144,7 @@ An SSL/TLS certificate that Miren provisions automatically from [Let's Encrypt](
 
 ## TTL
 
-Time to live — the expiration timer for an [ephemeral version](#ephemeral-version). After the TTL elapses, the ephemeral version is automatically deleted. Defaults to 24 hours and can be overridden with `--ttl` on deploy.
+Time to live — the expiration timer for an [ephemeral version](#ephemeral-version). After the TTL elapses, the ephemeral version is automatically deleted. Defaults to 7 days and can be overridden with `--ttl` on deploy.
 
 ## Version
 

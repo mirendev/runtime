@@ -12,7 +12,7 @@ func AuthProviderList(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func AuthProviderShow(ctx *Context, opts struct {
 	if opts.Name == "" {
 		return fmt.Errorf("provider name is required")
 	}
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func AuthProviderRemove(ctx *Context, opts struct {
 	if opts.Name == "" {
 		return fmt.Errorf("provider name is required")
 	}
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}

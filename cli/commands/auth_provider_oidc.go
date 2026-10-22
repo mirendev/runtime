@@ -40,7 +40,7 @@ func AuthProviderAddOIDC(ctx *Context, opts struct {
 	}
 	scopes := strings.Join(scopeList, " ")
 
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}

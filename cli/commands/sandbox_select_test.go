@@ -162,20 +162,33 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 }
 
 func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
-	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"),
-		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(sandboxCommandAuthorizer{t: t}))
+	for _, oldService := range []bool{false, true} {
+		t.Run(fmt.Sprint("old-service=", oldService), func(t *testing.T) {
+			testSandboxCommandsLegacy(t, oldService)
+		})
+	}
+}
+
+func testSandboxCommandsLegacy(t *testing.T, oldService bool) {
+	server, err := rpc.NewState(t.Context(), rpc.WithBindAddr("localhost:0"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	store, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(store.Server))
+	if oldService {
+		// A real capability with no lifecycle/selection methods simulates an
+		// older service without relying on a mocked client error.
+		server.Server().ExposeValue("dev.miren.runtime/sandboxes", exec_v1alpha.AdaptSandboxExec(&selectedExecServer{}))
+	}
 	ctx := &Context{Context: t.Context(), Log: testutils.TestLogger(t), Stdout: &bytes.Buffer{}, Stderr: io.Discard}
 	ctx.Config.ServerAddress = server.ListenAddr()
+	t.Cleanup(func() { require.NoError(t, ctx.Close()) })
 	_, _, err = selectAppSandbox(ctx, "shop", "")
-	require.ErrorIs(t, err, rpc.ErrResolveLookup)
+	require.True(t, isMissingRPC(err), "%v", err)
 	args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
 	out, err := RunCommand(SandboxList, args...)
-	require.ErrorIs(t, err, rpc.ErrResolveLookup)
+	require.Error(t, err)
 	require.Empty(t, out.Stdout.String())
 	for _, tc := range []struct {
 		command any
@@ -184,7 +197,7 @@ func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
 		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
 		args = append(args, tc.flags...)
 		out, err := RunCommand(tc.command, append(args, "target")...)
-		require.ErrorIs(t, err, rpc.ErrResolveLookup)
+		require.True(t, isMissingRPC(err), "%v", err)
 		require.Empty(t, out.Stdout.String())
 	}
 }

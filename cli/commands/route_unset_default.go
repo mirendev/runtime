@@ -9,7 +9,7 @@ import (
 func RouteUnsetDefault(ctx *Context, opts struct {
 	ConfigCentric
 }) error {
-	cl, err := ctx.RPCClient("dev.miren.runtime/routes")
+	cl, err := routeRPCClient(ctx)
 	if err != nil {
 		return err
 	}

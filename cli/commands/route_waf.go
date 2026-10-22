@@ -27,7 +27,7 @@ func RouteWaf(ctx *Context, opts struct {
 		return fmt.Errorf("WAF level must be between 1 and 4, got %d", opts.Level)
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}

@@ -30,7 +30,7 @@ func AuthProviderAddGitHub(ctx *Context, opts struct {
 		return err
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/identity-providers")
+	client, err := providerRPCClient(ctx)
 	if err != nil {
 		return err
 	}

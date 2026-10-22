@@ -328,7 +328,7 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 	for _, entry := range src.apps {
 		var a app_v1alpha.AppInfo
 		a.SetName(entry.name)
-		a.SetCreatedBy(entry.app.CreatedBy)
+		a.SetOwnedBy(entry.app.OwnedBy)
 
 		if entry.activeVersion != nil {
 			var vi app_v1alpha.VersionInfo

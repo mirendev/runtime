@@ -1,6 +1,6 @@
 # Miren Runtime Build Environment
 
-FROM golang:1.26
+FROM golang:1.26.10
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -25,12 +25,12 @@ RUN apt-get update && apt-get install -y \
 
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
         echo "https://github.com/containerd/containerd/releases/download/v2.0.13/containerd-2.0.13-linux-arm64.tar.gz" > /tmp/containerd_url; \
-        echo "https://github.com/moby/buildkit/releases/download/v0.34.0/buildkit-v0.34.0.linux-arm64.tar.gz" > /tmp/buildkit_url; \
+        echo "https://github.com/moby/buildkit/releases/download/v0.34.1/buildkit-v0.34.1.linux-arm64.tar.gz" > /tmp/buildkit_url; \
         echo "https://github.com/opencontainers/runc/releases/download/v1.5.2/runc.arm64" > /tmp/runc_url; \
         echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-arm64.tar.gz" > /tmp/nerdctl_url; \
     else \
         echo "https://github.com/containerd/containerd/releases/download/v2.0.13/containerd-2.0.13-linux-amd64.tar.gz" > /tmp/containerd_url; \
-        echo "https://github.com/moby/buildkit/releases/download/v0.34.0/buildkit-v0.34.0.linux-amd64.tar.gz" > /tmp/buildkit_url; \
+        echo "https://github.com/moby/buildkit/releases/download/v0.34.1/buildkit-v0.34.1.linux-amd64.tar.gz" > /tmp/buildkit_url; \
         echo "https://github.com/opencontainers/runc/releases/download/v1.5.2/runc.amd64" > /tmp/runc_url; \
         echo "https://github.com/containerd/nerdctl/releases/download/v2.0.5/nerdctl-2.0.5-linux-amd64.tar.gz" > /tmp/nerdctl_url; \
     fi && \
@@ -70,6 +70,11 @@ RUN chmod 755 /root && \
 # Setup Go cache directories
 ENV GOMODCACHE=/go/pkg/mod
 ENV GOCACHE=/go/build-cache
+# Fall back to a direct fetch on any proxy error, not only a 404 or 410:
+# proxy.golang.org occasionally resets a stream mid-download, and the default
+# `,` separator turns that into a failed build. GOSUMDB still verifies modules
+# fetched directly.
+ENV GOPROXY=https://proxy.golang.org|direct
 
 # Set working directory
 WORKDIR /workspace

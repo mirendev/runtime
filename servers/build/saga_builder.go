@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/deploylifecycle"
 	"miren.dev/runtime/pkg/entity"
+	ephemeralx "miren.dev/runtime/pkg/ephemeral"
 	"miren.dev/runtime/pkg/idgen"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/rpc/stream"
@@ -386,7 +387,7 @@ func ephemeralFromArgs(args buildArgs) *ephemeralOpts {
 	if !args.HasEphemeralLabel() || args.EphemeralLabel() == "" {
 		return nil
 	}
-	ttl := "24h"
+	ttl := ephemeralx.DefaultTTL
 	if args.HasEphemeralTtl() && args.EphemeralTtl() != "" {
 		ttl = args.EphemeralTtl()
 	}

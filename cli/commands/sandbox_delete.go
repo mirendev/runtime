@@ -14,6 +14,10 @@ func SandboxDelete(ctx *Context, opts struct {
 	sandboxID := opts.SandboxID
 
 	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "delete")
+	}
 	if err != nil {
 		return err
 	}

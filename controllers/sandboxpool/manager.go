@@ -677,7 +677,7 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 		minInstances := int64(strategy.MinInstances())
 
 		// Check if this pool has idle sandboxes that should be retired
-		if err := m.checkPoolForScaleDown(ctx, &pool, scaleDownDelay, minInstances); err != nil {
+		if err := m.checkPoolForScaleDown(ctx, &pool, ent.Revision(), scaleDownDelay, minInstances); err != nil {
 			m.log.Error("failed to check pool for scale-down",
 				"pool", pool.ID,
 				"error", err)
@@ -689,7 +689,13 @@ func (m *Manager) checkAllPoolsForScaleDown(ctx context.Context) error {
 
 // checkPoolForScaleDown examines a single pool and decrements DesiredInstances
 // if there are idle sandboxes that exceed the ScaleDownDelay threshold.
-func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, scaleDownDelay time.Duration, minInstances int64) error {
+//
+// The write is conditional on revision, the pool revision the caller read.
+// newDesired is computed from that read, so writing it unconditionally could
+// undo a scale-up the activator made in between, and the activator's own
+// cache would then disagree with the store. On a conflict the pool
+// is simply re-examined on the next tick.
+func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alpha.SandboxPool, revision int64, scaleDownDelay time.Duration, minInstances int64) error {
 	// Get all sandboxes for this pool
 	sandboxes, err := m.listSandboxes(ctx, pool)
 	if err != nil {
@@ -737,7 +743,11 @@ func (m *Manager) checkPoolForScaleDown(ctx context.Context, pool *compute_v1alp
 				entity.Int64(compute_v1alpha.SandboxPoolDesiredInstancesId, newDesired),
 			}
 
-			if _, err := m.eac.Patch(ctx, attrs, 0); err != nil {
+			if _, err := m.eac.Patch(ctx, attrs, revision); err != nil {
+				if errors.Is(err, cond.ErrConflict{}) {
+					m.log.Debug("pool changed since scale-down check, retrying next tick", "pool", pool.ID)
+					return nil
+				}
 				return fmt.Errorf("failed to update pool desired instances: %w", err)
 			}
 		}

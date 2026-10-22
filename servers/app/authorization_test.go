@@ -34,7 +34,7 @@ func TestCrudResourceAuthorizationBeforeMutation(t *testing.T) {
 	ctx := t.Context()
 	server := &AppInfo{Log: slog.Default(), EC: inmem.Client}
 	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(server)))
-	appID, err := inmem.Client.Create(ctx, "shop", &core_v1alpha.App{CreatedBy: "alice"})
+	appID, err := inmem.Client.Create(ctx, "shop", &core_v1alpha.App{OwnedBy: "alice"})
 	require.NoError(t, err)
 	var value app_v1alpha.NamedValue
 	value.SetKey("KEY")
@@ -76,7 +76,7 @@ func TestCrudResourceAuthorizationBeforeMutation(t *testing.T) {
 			require.EqualError(t, tc.call(caller), rpc.ErrUnauthorized.Error())
 			var stored core_v1alpha.App
 			require.NoError(t, inmem.Client.Get(ctx, "shop", &stored))
-			require.Equal(t, "alice", stored.CreatedBy)
+			require.Equal(t, "alice", stored.OwnedBy)
 			require.Empty(t, stored.ActiveVersion)
 			for _, kind := range []entity.Id{core_v1alpha.KindAppVersion, core_v1alpha.KindConfigVersion, core_v1alpha.KindDeployment} {
 				list, err := inmem.Client.List(ctx, entity.Ref(entity.EntityKind, kind))

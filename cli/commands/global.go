@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
+	"miren.dev/runtime/pkg/color"
 	"miren.dev/runtime/pkg/logcount"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/slogfmt"
@@ -108,11 +109,24 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 
 	s.levelVar.Set(level)
 
+	text := slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: &s.levelVar,
+	})
+	// Under systemd, tag each line with its priority so journalctl -p can
+	// filter on it. A line that CountAt says is really info, like the loud
+	// "Log leveling changed", is filed at info rather than err.
+	//
+	// Color goes too: journald stores a line holding escape codes as a byte
+	// array rather than text, which breaks -o json readers, and journalctl
+	// colors lines by priority on its own.
+	if slogfmt.OnJournalStream(os.Stderr) {
+		text = text.WithJournalPriority(logcount.MirenLevel)
+		color.NoColor = true
+	}
+
 	// Counted at the root so every printed line, relayed child output
 	// included, feeds miren_log_messages_total.
-	s.Log = slog.New(logcount.NewHandler(slogfmt.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: &s.levelVar,
-	}), logcount.Default))
+	s.Log = slog.New(logcount.NewHandler(text, logcount.Default))
 
 	// A separate logger for UI output, which is always at least debug level
 	s.UILog = slog.New(slogfmt.NewTextHandler(os.Stdout, &slog.HandlerOptions{

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"miren.dev/runtime/api/addon/addon_v1alpha"
 	"miren.dev/runtime/api/app/app_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -12,13 +14,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 	FormatOptions
 	ConfigCentric
 }) error {
-	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
-	if err != nil {
-		return err
-	}
-	defer cl.Close()
-
-	res, err := app_v1alpha.NewAddonsClient(cl).ListAvailable(ctx)
+	entries, err := fetchAddonCatalog(ctx, "")
 	if err != nil {
 		return err
 	}
@@ -34,7 +30,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 		}
 
 		var addons []addonInfo
-		for _, addon := range res.Addons() {
+		for _, addon := range entries {
 			var variantNames []string
 			for _, v := range addon.Variants() {
 				variantNames = append(variantNames, v.Name())
@@ -54,7 +50,7 @@ func AddonListAvailable(ctx *Context, opts struct {
 	var rows []ui.Row
 	headers := []string{"ADDON", "DESCRIPTION", "VARIANTS", "DEFAULT VARIANT", "DEFAULT VERSION"}
 
-	for _, addon := range res.Addons() {
+	for _, addon := range entries {
 		var variantNames []string
 		for _, v := range addon.Variants() {
 			variantNames = append(variantNames, v.Name())
@@ -90,18 +86,12 @@ func AddonVariants(ctx *Context, opts struct {
 	ConfigCentric
 	Addon string `position:"0" usage:"Addon name (e.g., miren-postgresql)" required:"true"`
 }) error {
-	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
-	if err != nil {
-		return err
-	}
-	defer cl.Close()
-
-	addonRes, err := app_v1alpha.NewAddonsClient(cl).GetCatalog(ctx, opts.Addon)
+	entries, err := fetchAddonCatalog(ctx, opts.Addon)
 	if err != nil {
 		return fmt.Errorf("addon %q not found: %w", opts.Addon, err)
 	}
 
-	addon := addonRes.Addon()
+	addon := entries[0]
 
 	if opts.IsJSON() {
 		type variantInfo struct {
@@ -167,6 +157,85 @@ func AddonVariants(ctx *Context, opts struct {
 	}
 
 	return nil
+}
+
+func fetchAddonCatalog(ctx *Context, name string) ([]*app_v1alpha.AddonCatalogEntry, error) {
+	method := "listAvailable"
+	if name != "" {
+		method = "getCatalog"
+	}
+	cl, err := ctx.RPCClient("dev.miren.runtime/addons")
+	if err == nil {
+		defer cl.Close()
+		err = requireRPCMethod(ctx, cl, method)
+	}
+	if err == nil {
+		addons := app_v1alpha.NewAddonsClient(cl)
+		if name != "" {
+			res, err := addons.GetCatalog(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			return []*app_v1alpha.AddonCatalogEntry{res.Addon()}, nil
+		}
+		res, err := addons.ListAvailable(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return res.Addons(), nil
+	}
+	if !isMissingRPC(err) {
+		return nil, err
+	}
+	cl, err = ctx.RPCClient("entities")
+	if err != nil {
+		return nil, err
+	}
+	defer cl.Close()
+	eac := entityserver_v1alpha.NewEntityAccessClient(cl)
+	var records []*entityserver_v1alpha.Entity
+	if name != "" {
+		res, err := eac.Get(ctx, "addon/"+name)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, res.Entity())
+	} else {
+		kind, err := eac.LookupKind(ctx, "addon")
+		if err != nil {
+			return nil, err
+		}
+		res, err := eac.List(ctx, kind.Attr())
+		if err != nil {
+			return nil, err
+		}
+		records = res.Values()
+	}
+	var entries []*app_v1alpha.AddonCatalogEntry
+	for _, record := range records {
+		var stored addon_v1alpha.Addon
+		stored.Decode(record.Entity())
+		entry := &app_v1alpha.AddonCatalogEntry{}
+		entry.SetName(stored.Name)
+		entry.SetDisplayName(stored.DisplayName)
+		entry.SetDescription(stored.Description)
+		entry.SetDefaultVariant(stored.DefaultVariant)
+		entry.SetDefaultVersion(stored.DefaultVersion)
+		for _, v := range stored.Variants {
+			variant := &app_v1alpha.AddonCatalogVariant{}
+			variant.SetName(v.Name)
+			variant.SetDescription(v.Description)
+			for _, d := range v.Details {
+				detail := &app_v1alpha.AddonCatalogDetail{}
+				detail.SetKey(d.Key)
+				detail.SetValue(d.Value)
+				variant.SetDetails(append(variant.Details(), detail))
+			}
+			entry.SetVariants(append(entry.Variants(), variant))
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 func AddonCreate(ctx *Context, opts struct {

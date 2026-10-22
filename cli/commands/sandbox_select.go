@@ -23,6 +23,10 @@ type sandboxCandidate struct {
 
 func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, int, error) {
 	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
+	if err == nil {
+		defer client.Close()
+		err = requireRPCMethod(ctx, client, "selectForApp")
+	}
 	if err != nil {
 		return sandboxCandidate{}, 0, err
 	}

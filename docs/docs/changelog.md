@@ -16,6 +16,23 @@ All notable changes to Miren Runtime will be documented in this file.
 
 ---
 
+## v0.17.2
+*2026-10-21*
+
+**Bug Fixes**
+- **Image builds refuse certificates from the compromised eMudhra intermediates** - v0.17.1 rebuilt Miren on Go 1.26.10 but noted that image builds weren't covered yet, because BuildKit fetches base images with its own TLS stack. Miren now runs BuildKit v0.34.1, which is built on the same fixed Go, so builds get the same protection. Servers replace their BuildKit container on upgrade and keep the build cache. ([#1403](https://github.com/mirendev/runtime/pull/1403))
+- **Builds fetch base images only over verified connections** - Miren's BuildKit config told it to reach Docker Hub over plain HTTP. Docker Hub redirected every request to HTTPS, so pulls worked, but each lookup started in the clear, where someone on the network path could answer it with a different image. BuildKit now goes to Docker Hub over HTTPS from the first request. Stack builds (the ones Miren builds for you without a Dockerfile) also pin each base image to a digest Miren resolves itself, so BuildKit only accepts content that matches it. ([#1400](https://github.com/mirendev/runtime/pull/1400))
+
+---
+
+## v0.17.1
+*2026-10-20*
+
+**Bug Fixes**
+- **Miren refuses certificates from eight compromised eMudhra intermediates** - The private keys of eight eMudhra intermediate certificate authorities were compromised, so whoever holds them can issue a certificate for any site. Miren is now built with Go 1.26.10, which refuses any certificate chain through those intermediates. That covers Miren's own TLS connections, such as image pulls, Miren Cloud, and ACME. Image builds aren't covered yet: BuildKit fetches base images with its own TLS stack, and it gets the same fix once a BuildKit release built on a fixed Go is available. ([#1392](https://github.com/mirendev/runtime/pull/1392))
+
+---
+
 ## v0.17.0
 *2026-10-15*
 

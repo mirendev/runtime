@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/runner/runner_v1alpha"
 	"miren.dev/runtime/pkg/caauth"
 	"miren.dev/runtime/pkg/entity"
@@ -107,7 +108,20 @@ func TestRunnerStatusSandboxCountsDenialIsUnknown(t *testing.T) {
 	require.Contains(t, describeSandboxes(ctx, cfg), "unknown (coordinator query failed:")
 }
 
-func runnerStatusCoordinator(t *testing.T, statuses []compute_v1alpha.SandboxStatus, certRunnerID string) *runnerconfig.Config {
+func TestRunnerStatusSandboxCountsLegacy(t *testing.T) {
+	for _, mode := range []string{"missing-service", "old-service"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := runnerStatusCoordinator(t, []compute_v1alpha.SandboxStatus{
+				compute_v1alpha.RUNNING, compute_v1alpha.PENDING, compute_v1alpha.PENDING,
+				compute_v1alpha.NOT_READY, compute_v1alpha.DEAD, compute_v1alpha.STOPPED,
+			}, "full-runner-id", mode)
+			ctx := &Context{Context: t.Context(), Log: slog.Default()}
+			require.Equal(t, "1 running (1 not_ready, 2 pending)", describeSandboxes(ctx, cfg))
+		})
+	}
+}
+
+func runnerStatusCoordinator(t *testing.T, statuses []compute_v1alpha.SandboxStatus, certRunnerID string, mode ...string) *runnerconfig.Config {
 	t.Helper()
 	const runnerID = "full-runner-id"
 	ca, err := caauth.New(caauth.Options{CommonName: "test-ca", ValidFor: time.Hour})
@@ -147,11 +161,25 @@ func runnerStatusCoordinator(t *testing.T, statuses []compute_v1alpha.SandboxSta
 		).Attrs())
 		require.NoError(t, err)
 	}
-	// Only the operation-specific service is exposed, never EntityAccess.
-	server.Server().ExposeValue(rpc.ServiceRunner, runner_v1alpha.AdaptRunnerRegistration(
+	iface := runner_v1alpha.AdaptRunnerRegistration(
 		runnerserver.NewRegistrationServer(runnerserver.RegistrationServerConfig{
 			Log: slog.Default(), EAC: es.EAC, Authority: ca,
-		})))
+		}))
+	if len(mode) > 0 {
+		server.Server().ExposeValue("entities", entityserver_v1alpha.AdaptEntityAccess(es.Server))
+		if mode[0] == "old-service" {
+			var methods []rpc.Method
+			for _, method := range iface.Methods() {
+				if method.Name != "SandboxCounts" {
+					methods = append(methods, method)
+				}
+			}
+			server.Server().ExposeValue(rpc.ServiceRunner, rpc.NewInterface(methods, nil))
+		}
+	} else {
+		// Modern servers need only the runner-scoped capability.
+		server.Server().ExposeValue(rpc.ServiceRunner, iface)
+	}
 	return &runnerconfig.Config{RunnerID: runnerID, CoordinatorAddress: server.ListenAddr(),
 		CACert: string(ca.GetCACertificate()), ClientCert: string(clientCert.CertPEM), ClientKey: string(clientCert.KeyPEM)}
 }

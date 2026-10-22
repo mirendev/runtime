@@ -19,7 +19,7 @@ func RouteUnprotect(ctx *Context, opts struct {
 		return fmt.Errorf("--default cannot be used with a hostname")
 	}
 
-	client, err := ctx.RPCClient("dev.miren.runtime/routes")
+	client, err := routeSettingsRPCClient(ctx)
 	if err != nil {
 		return err
 	}
