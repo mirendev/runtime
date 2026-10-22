@@ -145,6 +145,11 @@ ownership alone never grants access without a matching policy rule. Creating an
 app requires an unscoped create grant, including implicit creation during a
 build. A deploy grant alone is not a create grant.
 
+App-bound OIDC/CI tokens cannot create apps. Before the first CI deployment,
+have a Cloud principal with unscoped `app:create` and the appropriate
+`app:deploy` permission run `miren deploy` to create the app. Subsequent CI
+deployments can use an app-bound token with deploy permission for that app.
+
 Cloud must only emit scoped, logical permissions after negotiating version 2
 with that specific runtime. Older runtimes ignore unknown permission fields,
 so sending them a scoped rule can silently turn it into a cluster-wide grant.
@@ -229,7 +234,7 @@ explicitly:
 [Connectivity](./connectivity.md) panel; the cluster is offline or has lost its
 uplink.
 
-**`access denied by RBAC policy`** — you reached the cluster and it refused the
+**`unauthorized: denied by RBAC policy`** — you reached the cluster and it refused the
 command. That is the cluster's own policy, not the relay. Check your current
 organization membership and permissions. A newly granted permission becomes
 usable when the corresponding push arrives.
