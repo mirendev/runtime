@@ -773,7 +773,7 @@ func (h *Server) resolveIngressTarget(w http.ResponseWriter, req *http.Request, 
 		}
 		if ephemeralVersion == nil && strategy == resolveEphemeralStrict {
 			h.Log.Debug("no ephemeral version found", "label", ephemeralLabel, "app", appID)
-			h.serveIngressError(w, req, fmt.Sprintf("ephemeral version %q not found or has expired", ephemeralLabel), http.StatusNotFound)
+			h.servePreviewNotFound(w, req, ephemeralLabel)
 			return nil, false
 		}
 		if ephemeralVersion != nil {

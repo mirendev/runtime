@@ -188,9 +188,9 @@ Push a new commit, redeploy with `--ephemeral pr-123`, and the previous `pr-123`
 
 ## TTL and Cleanup
 
-`--ttl` takes a Go duration string (`30m`, `2h`, `48h`) and defaults to `24h`. Expiration is fixed at deploy time.
+A preview lasts a week unless you say otherwise, long enough for a PR to sit over a weekend before anyone reviews it. Pass `--ttl` to pick a different lifetime, in minutes, hours, days or weeks (`90m`, `48h`, `3d`, `2w`). The clock starts when you deploy, and redeploying the same label starts it over. There's no separate extend command.
 
-Requests to an expired label return 404 immediately — the ephemeral lookup filters expired versions itself, so the cutoff is enforced as soon as the timestamp passes. A background controller sweeps the actual entities every five minutes to free their resources. There's no extend command — redeploy with the same label to refresh the TTL.
+When a preview expires, its URL stops serving your app right away. Anyone who opens the link after that sees a page saying the preview has expired or doesn't exist, rather than an error or a certificate warning, and can redeploy it from the pull request. Miren frees the expired preview's resources within a few minutes.
 
 **Per-app limit.** Each app can have at most 10 ephemeral versions at once. Deploying an 11th evicts the version nearest to expiry. Replacing an existing label doesn't count against the limit, since the old version is deleted before the new one is created.
 
