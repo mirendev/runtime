@@ -496,8 +496,24 @@ func TestSelectForAppRejectsNonApp(t *testing.T) {
 	record, err := store.Store.GetEntity(ctx, versionID)
 	require.NoError(t, err)
 	client := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), store.Client))))
-	_, err = client.SelectForApp(ctx, record.ShortId(), "")
-	require.ErrorContains(t, err, "not an app")
+	for _, authorized := range []context.Context{ctx, rpc.ContextWithAuthorization(ctx, sandboxVisibilityAuthorizer{admin: true}, "sandboxes", "selectforapp")} {
+		_, err = client.SelectForApp(authorized, record.ShortId(), "")
+		require.ErrorContains(t, err, "not an app")
+		_, err = client.SelectForApp(authorized, "nonexistent", "")
+		require.ErrorContains(t, err, "not found")
+	}
+	scoped := rpc.ContextWithAuthorization(ctx, sandboxVisibilityAuthorizer{action: "exec"}, "sandboxes", "selectforapp")
+	for _, target := range []string{record.ShortId(), "nonexistent"} {
+		_, err := client.SelectForApp(scoped, target, "")
+		require.EqualError(t, err, rpc.ErrUnauthorized.Error(), target)
+	}
+	appID, err := store.Client.Create(ctx, "mine", &core_v1alpha.App{OwnedBy: "alice"})
+	require.NoError(t, err)
+	appRecord, err := store.Store.GetEntity(ctx, appID)
+	require.NoError(t, err)
+	selected, err := client.SelectForApp(scoped, appRecord.ShortId(), "")
+	require.NoError(t, err, "authorized app short IDs must still resolve to their canonical owner")
+	require.Equal(t, "no_running", selected.Failure())
 }
 
 type sandboxVisibilityAuthorizer struct {
@@ -522,7 +538,7 @@ func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
 	versions := map[string]entity.Id{}
 	pools := map[string]entity.Id{}
 	for name, owner := range map[string]string{"mine": "alice", "private": "bob"} {
-		appID, err := inmem.Client.Create(ctx, name, &core_v1alpha.App{CreatedBy: owner})
+		appID, err := inmem.Client.Create(ctx, name, &core_v1alpha.App{OwnedBy: owner})
 		require.NoError(t, err)
 		versions[name], err = inmem.Client.Create(ctx, name, &core_v1alpha.AppVersion{App: appID})
 		require.NoError(t, err)
@@ -588,8 +604,12 @@ func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
 	require.ErrorIs(t, err, rpc.ErrUnauthorized)
 	_, err = client.SelectForApp(caller("exec", false), "mine", "")
 	require.NoError(t, err)
-	_, err = client.SelectForApp(caller("exec", false), "private", "")
-	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	for _, action := range []string{"", "list", "exec"} {
+		for _, target := range []string{"private", "nonexistent"} {
+			_, err = client.SelectForApp(caller(action, false), target, "")
+			require.EqualError(t, err, rpc.ErrUnauthorized.Error(), "hidden and nonexistent apps must be indistinguishable")
+		}
+	}
 	for _, method := range []rpc.AuthMethod{rpc.AuthMethodOIDC, rpc.AuthMethodWorkload} {
 		bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method, Metadata: map[string]any{"app": "mine", "bound_app": "mine"}})
 		listed, err := client.List(bound)

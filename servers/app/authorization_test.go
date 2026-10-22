@@ -139,7 +139,7 @@ func TestAppInventoryScopedVisibility(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	for name, owner := range map[string]string{"mine": "alice", "shared-web": "bob", "private": "bob", "legacy": ""} {
-		_, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{CreatedBy: owner})
+		_, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{OwnedBy: owner})
 		require.NoError(t, err)
 	}
 	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: inmem.Client})))

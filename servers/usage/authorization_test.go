@@ -62,7 +62,7 @@ func TestUsageVisibilityPublicSurfaces(t *testing.T) {
 	ctx := t.Context()
 	ids := map[string]string{}
 	for _, name := range []string{"visible", "hidden"} {
-		appID, err := inmem.Client.Create(ctx, name, &core_v1alpha.App{CreatedBy: name})
+		appID, err := inmem.Client.Create(ctx, name, &core_v1alpha.App{OwnedBy: name})
 		require.NoError(t, err)
 		version, err := inmem.Client.Create(ctx, name, &core_v1alpha.AppVersion{App: appID})
 		require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestSandboxUsageUsesVerifiedPoolOwner(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	ctx := t.Context()
-	visible, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{CreatedBy: "owner"})
+	visible, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{OwnedBy: "owner"})
 	require.NoError(t, err)
 	hidden, err := inmem.Client.Create(ctx, "hidden", &core_v1alpha.App{})
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestLegacyAddonDisplayDoesNotGrantAccess(t *testing.T) {
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
 	t.Cleanup(cleanup)
 	ctx := t.Context()
-	_, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{CreatedBy: "alice"})
+	_, err := inmem.Client.Create(ctx, "visible", &core_v1alpha.App{OwnedBy: "alice"})
 	require.NoError(t, err)
 	labels := types.LabelSet("addon", "postgresql", "app", "visible", "server", "database")
 	fw := addon.NewProviderFramework(slog.Default(), inmem.Client, inmem.EAC, nil)
