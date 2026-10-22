@@ -240,6 +240,8 @@ func (a *RPCAuthenticator) authorize(ctx context.Context, identity *rpc.Identity
 			"groups", req.Groups,
 			"resource", req.Resource,
 			"action", req.Action,
+			"rpc_resource", legacyResource,
+			"rpc_action", legacyAction,
 			"instance", req.Instance,
 			"tags", a.tags,
 		)
