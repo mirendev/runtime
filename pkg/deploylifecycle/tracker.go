@@ -119,12 +119,11 @@ func (t *Tracker) Begin(ctx context.Context, params BeginParams) (*Record, error
 		var resolved *core_v1alpha.App
 		var err error
 		if params.Operation == OperationBuild {
-			creator := params.Subject
-			if creator == "" {
+			var creator string
+			if params.Subject == "" {
 				creator = appclient.CreationSubject(ctx)
-			}
-			if creator == "" {
-				creator = params.DeployedBy.Subject
+			} else if params.AuthMethod == string(rpc.AuthMethodJWT) {
+				creator = params.Subject
 			}
 			resolved, _, err = t.store.EnsureApp(ctx, params.AppName, creator)
 		} else {

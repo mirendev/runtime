@@ -660,7 +660,7 @@ type appInfoData struct {
 	CrashCount        *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
 	CooldownSeconds   *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"10,keyasint,omitempty" json:"maintenance_routes,omitempty"`
-	CreatedBy         *string             `cbor:"11,keyasint,omitempty" json:"created_by,omitempty"`
+	OwnedBy           *string             `cbor:"11,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type AppInfo struct {
@@ -828,19 +828,19 @@ func (v *AppInfo) SetMaintenanceRoutes(maintenance_routes []string) {
 	v.data.MaintenanceRoutes = &x
 }
 
-func (v *AppInfo) HasCreatedBy() bool {
-	return v.data.CreatedBy != nil
+func (v *AppInfo) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
 }
 
-func (v *AppInfo) CreatedBy() string {
-	if v.data.CreatedBy == nil {
+func (v *AppInfo) OwnedBy() string {
+	if v.data.OwnedBy == nil {
 		return ""
 	}
-	return *v.data.CreatedBy
+	return *v.data.OwnedBy
 }
 
-func (v *AppInfo) SetCreatedBy(created_by string) {
-	v.data.CreatedBy = &created_by
+func (v *AppInfo) SetOwnedBy(owned_by string) {
+	v.data.OwnedBy = &owned_by
 }
 
 func (v *AppInfo) MarshalCBOR() ([]byte, error) {
@@ -1639,7 +1639,7 @@ type applicationStatusData struct {
 	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"21,keyasint,omitempty" json:"maintenance_routes,omitempty"`
 	Services          *[]*ServiceHealth   `cbor:"22,keyasint,omitempty" json:"services,omitempty"`
-	CreatedBy         *string             `cbor:"23,keyasint,omitempty" json:"created_by,omitempty"`
+	OwnedBy           *string             `cbor:"23,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1998,19 +1998,19 @@ func (v *ApplicationStatus) SetServices(services []*ServiceHealth) {
 	v.data.Services = &x
 }
 
-func (v *ApplicationStatus) HasCreatedBy() bool {
-	return v.data.CreatedBy != nil
+func (v *ApplicationStatus) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
 }
 
-func (v *ApplicationStatus) CreatedBy() string {
-	if v.data.CreatedBy == nil {
+func (v *ApplicationStatus) OwnedBy() string {
+	if v.data.OwnedBy == nil {
 		return ""
 	}
-	return *v.data.CreatedBy
+	return *v.data.OwnedBy
 }
 
-func (v *ApplicationStatus) SetCreatedBy(createdBy string) {
-	v.data.CreatedBy = &createdBy
+func (v *ApplicationStatus) SetOwnedBy(ownedBy string) {
+	v.data.OwnedBy = &ownedBy
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

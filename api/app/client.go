@@ -42,21 +42,23 @@ func (c *Client) Create(ctx context.Context, name string) (*core_v1alpha.App, er
 	return app, nil
 }
 
-// CreationSubject returns the authenticated creator, never an anonymous label.
+// CreationSubject returns a Cloud user subject eligible for app ownership.
+// Other auth methods have distinct subject namespaces or short-lived identities;
+// their deployment attribution must not become a Cloud user's owner grant.
 // Unattributed apps remain unowned rather than becoming owned by a later deployer.
 func CreationSubject(ctx context.Context) string {
-	if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method != rpc.AuthMethodAnonymous {
+	if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method == rpc.AuthMethodJWT {
 		return identity.Subject
 	}
 	return ""
 }
 
 // EnsureApp atomically creates an app without changing an existing app's owner
-// or configuration. creator must come from authenticated context or durable,
-// server-owned job inputs, not from a caller-supplied app configuration.
+// or configuration. creator must be an eligible Cloud user subject from
+// authenticated context or durable server-owned inputs, never app configuration.
 func EnsureApp(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, name, creator string) (*core_v1alpha.App, int64, error) {
 	app := &core_v1alpha.App{
-		ID: entity.Id("app/" + name), Project: "project/default", CreatedBy: creator,
+		ID: entity.Id("app/" + name), Project: "project/default", OwnedBy: creator,
 	}
 	attrs := append(app.Encode(), (&core_v1alpha.Metadata{Name: name}).Encode()...)
 	attrs = append(attrs, entity.Ref(entity.DBId, app.ID))
