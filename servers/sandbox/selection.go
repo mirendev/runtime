@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	appapi "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
@@ -21,11 +23,19 @@ func (s *Server) SelectForApp(ctx context.Context, state *compute_v1alpha.Sandbo
 	}
 	var app core_v1alpha.App
 	appEnt, err := s.ec.GetWithEntity(ctx, appName, &app)
-	if err != nil {
+	if err != nil && !errors.Is(err, cond.ErrNotFound{}) {
 		return err
 	}
-	if !app.Is(appEnt.Entity()) {
-		return fmt.Errorf("%q is not an app", appName)
+	if err == nil && !app.Is(appEnt.Entity()) {
+		err = fmt.Errorf("%q is not an app", appName)
+	}
+	if err != nil {
+		// Only explicitly authorized callers may distinguish missing and non-app
+		// targets from hidden apps. Resolve valid short IDs before checking owners.
+		if authErr := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "exec", Instance: appName}); authErr != nil {
+			return authErr
+		}
+		return err
 	}
 	var md core_v1alpha.Metadata
 	md.Decode(appEnt.Entity())

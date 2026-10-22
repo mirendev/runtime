@@ -183,7 +183,7 @@ func inventoryApps(ctx context.Context, ec *entityserver.Client) (map[entity.Id]
 		var md core_v1alpha.Metadata
 		md.Decode(apps.Entity())
 		if md.Name != "" {
-			owners[app.ID] = rpc.ResourceRequest{Resource: "app", Action: "list", Instance: md.Name, Owner: app.CreatedBy}
+			owners[app.ID] = rpc.ResourceRequest{Resource: "app", Action: "list", Instance: md.Name, Owner: app.OwnedBy}
 		}
 	}
 	return owners, nil

@@ -30,7 +30,7 @@ func (s *Server) loadAppOwners(ctx context.Context) (map[string]*appOwner, error
 		if md.Name == "" {
 			continue
 		}
-		owner := &appOwner{name: md.Name, owner: app.CreatedBy}
+		owner := &appOwner{name: md.Name, owner: app.OwnedBy}
 		// Names and entity IDs occupy disjoint namespaces (IDs contain '/').
 		owners[app.ID.String()] = owner
 		owners[md.Name] = owner

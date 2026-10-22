@@ -184,7 +184,7 @@ func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error
 			continue
 		}
 		allowed, err := rpc.FilterResource(ctx, rpc.ResourceRequest{
-			Resource: "app", Action: "list", Instance: md.Name, Owner: app.CreatedBy,
+			Resource: "app", Action: "list", Instance: md.Name, Owner: app.OwnedBy,
 		})
 		if err != nil {
 			return nil, err
