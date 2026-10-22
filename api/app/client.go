@@ -42,9 +42,10 @@ func (c *Client) Create(ctx context.Context, name string) (*core_v1alpha.App, er
 	return app, nil
 }
 
-// CreationSubject returns a Cloud user subject eligible for app ownership.
+// CreationSubject returns a Cloud principal subject eligible for app ownership.
+// Cloud JWTs authenticate both users and service accounts.
 // Other auth methods have distinct subject namespaces or short-lived identities;
-// their deployment attribution must not become a Cloud user's owner grant.
+// their deployment attribution must not become a Cloud principal's owner grant.
 // Unattributed apps remain unowned rather than becoming owned by a later deployer.
 func CreationSubject(ctx context.Context) string {
 	if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method == rpc.AuthMethodJWT {
@@ -54,7 +55,7 @@ func CreationSubject(ctx context.Context) string {
 }
 
 // EnsureApp atomically creates an app without changing an existing app's owner
-// or configuration. creator must be an eligible Cloud user subject from
+// or configuration. creator must be an eligible Cloud principal subject from
 // authenticated context or durable server-owned inputs, never app configuration.
 func EnsureApp(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, name, creator string) (*core_v1alpha.App, int64, error) {
 	app := &core_v1alpha.App{

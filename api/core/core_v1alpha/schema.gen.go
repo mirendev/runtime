@@ -1383,7 +1383,7 @@ func (o *App) InitSchema(sb *schema.SchemaBuilder) {
 	sb.Component("deployment_lock", "dev.miren.core/app.deployment_lock", schema.Doc("The expiring lock held by the deployment currently mutating this app"))
 	(&DeploymentLock{}).InitSchema(sb.Builder("app.deployment_lock"))
 	sb.Ref("initial_config", "dev.miren.core/app.initial_config", schema.Doc("Reference to the initial ConfigVersion entity created before the first deploy"))
-	sb.String("owned_by", "dev.miren.core/app.owned_by", schema.Doc("Cloud user subject that owns the app; empty for legacy apps and non-Cloud creators"))
+	sb.String("owned_by", "dev.miren.core/app.owned_by", schema.Doc("Cloud principal subject that owns the app; empty for legacy apps and non-Cloud creators"))
 	sb.Ref("project", "dev.miren.core/app.project", schema.Doc("The project that the app belongs to"))
 	sb.String("workload_role", "dev.miren.core/app.workload_role", schema.Doc("The authorization role that identity tokens minted for this app's sandboxes authenticate as (see pkg/workloadroles). Empty means the default (app-readonly). Cluster-scoped roles may only be set by an operator, never via app.toml."))
 }
