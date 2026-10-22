@@ -34,11 +34,11 @@ func TestNewRecordsCreatorWithoutTransferringOwnership(t *testing.T) {
 	assert.Equal(t, created.Id(), repeated.Id())
 	var stored core_v1alpha.App
 	require.NoError(t, inmem.Client.Get(ctx, "owned", &stored))
-	assert.Equal(t, "alice", stored.CreatedBy)
+	assert.Equal(t, "alice", stored.OwnedBy)
 	listed, err := client.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, listed.Apps(), 1)
-	assert.Equal(t, "alice", listed.Apps()[0].CreatedBy())
+	assert.Equal(t, "alice", listed.Apps()[0].OwnedBy())
 }
 
 func TestDeployTrackerInitializesOnceConcurrently(t *testing.T) {

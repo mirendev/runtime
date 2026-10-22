@@ -75,9 +75,9 @@ kinds:
       doc: The email address of the project owner
 
   app:
-    created_by:
+    owned_by:
       type: string
-      doc: Authenticated subject that created the app; empty for legacy or unattributed apps
+      doc: Cloud user subject that owns the app; empty for legacy apps and non-Cloud creators
 
     project:
       type: ref

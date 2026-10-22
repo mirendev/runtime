@@ -41,10 +41,10 @@ func TestCreatePreservesFirstCreator(t *testing.T) {
 	}
 	stored, err := client.GetByName(t.Context(), "shared")
 	require.NoError(t, err)
-	require.Regexp(t, `^creator-[0-7]$`, stored.CreatedBy)
+	require.Regexp(t, `^creator-[0-7]$`, stored.OwnedBy)
 	for _, result := range results {
 		assert.Equal(t, stored.ID, result.ID)
-		assert.Equal(t, stored.CreatedBy, result.CreatedBy)
+		assert.Equal(t, stored.OwnedBy, result.OwnedBy)
 	}
 }
 
@@ -54,22 +54,35 @@ func TestCreateDoesNotClaimUnownedApps(t *testing.T) {
 	client := app.NewClient(slog.Default(), rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(inmem.Server)))
 	_, err := inmem.Client.Create(t.Context(), "legacy", &core_v1alpha.App{WorkloadRole: "app-deployer"})
 	require.NoError(t, err)
-	for _, name := range []string{"legacy", "anonymous", "unattributed"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method rpc.AuthMethod
+	}{
+		{name: "legacy"},
+		{name: "unattributed"},
+		{name: "anonymous", method: rpc.AuthMethodAnonymous},
+		{name: "cert", method: rpc.AuthMethodCert},
+		{name: "oidc", method: rpc.AuthMethodOIDC},
+		{name: "workload", method: rpc.AuthMethodWorkload},
+		{name: "system", method: rpc.AuthMethodSystem},
+		{name: "token", method: rpc.AuthMethodToken},
+		{name: "signed", method: rpc.AuthMethodSigned},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
-			if name == "anonymous" {
-				ctx = rpc.ContextWithIdentity(ctx, &rpc.Identity{Subject: "anonymous", Method: rpc.AuthMethodAnonymous})
+			if tc.method != "" {
+				ctx = rpc.ContextWithIdentity(ctx, &rpc.Identity{Subject: "later-deployer", Method: tc.method})
 			}
-			_, err := client.Create(ctx, name)
+			_, err := client.Create(ctx, tc.name)
 			require.NoError(t, err)
 			ctx = rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "later-deployer", Method: rpc.AuthMethodJWT})
-			record, err := client.Create(ctx, name)
+			record, err := client.Create(ctx, tc.name)
 			require.NoError(t, err)
-			assert.Empty(t, record.CreatedBy)
-			stored, err := client.GetByName(t.Context(), name)
+			assert.Empty(t, record.OwnedBy)
+			stored, err := client.GetByName(t.Context(), tc.name)
 			require.NoError(t, err)
-			assert.Empty(t, stored.CreatedBy)
-			if name == "legacy" {
+			assert.Empty(t, stored.OwnedBy)
+			if tc.name == "legacy" {
 				assert.Equal(t, "app-deployer", stored.WorkloadRole)
 			}
 		})
