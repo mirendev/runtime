@@ -36,7 +36,7 @@ type AuthMethod string
 
 const (
 	AuthMethodCert      AuthMethod = "cert"      // TLS client certificate
-	AuthMethodJWT       AuthMethod = "jwt"       // JWT token (e.g., from Miren Cloud)
+	AuthMethodJWT       AuthMethod = "jwt"       // Configured Miren Cloud JWT (user or service account)
 	AuthMethodAnonymous AuthMethod = "anonymous" // No authentication (public methods)
 	AuthMethodToken     AuthMethod = "token"     // Bearer token (e.g., outboard)
 	AuthMethodOIDC      AuthMethod = "oidc"      // External OIDC token (e.g., GitHub Actions)

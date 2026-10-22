@@ -77,7 +77,7 @@ kinds:
   app:
     owned_by:
       type: string
-      doc: Cloud user subject that owns the app; empty for legacy apps and non-Cloud creators
+      doc: Cloud principal subject that owns the app; empty for legacy apps and non-Cloud creators
 
     project:
       type: ref

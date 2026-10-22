@@ -183,7 +183,7 @@ types:
       - name: owned_by
         type: string
         index: 11
-        doc: "Cloud user owner subject; empty for legacy apps and non-Cloud creators"
+        doc: "Cloud principal owner subject; empty for legacy apps and non-Cloud creators"
 
   - type: CpuUsage
     fields:
@@ -429,7 +429,7 @@ types:
       - name: ownedBy
         type: string
         index: 23
-        doc: "Cloud user owner subject; empty for legacy apps and non-Cloud creators"
+        doc: "Cloud principal owner subject; empty for legacy apps and non-Cloud creators"
 
   - type: LogEntry
     fields:
