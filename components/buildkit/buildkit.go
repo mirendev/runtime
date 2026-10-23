@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -80,6 +81,13 @@ type Component struct {
 	otelEnv       []string           // OTEL_* env buildkitd runs with
 	external      bool               // true if connecting to external daemon (no container management)
 	monitorCancel context.CancelFunc // cancels the task exit-monitor goroutine on intentional stop
+
+	// starting holds a channel that closes when the Start in progress returns.
+	// The server starts the daemon off its startup path, so a client can be
+	// asked for while that is still under way; Client waits on it rather than
+	// failing a build that arrived a few seconds early. Start holds mu for its
+	// whole run, so this lives outside it.
+	starting atomic.Pointer[chan struct{}]
 }
 
 type buildkitTask interface {
@@ -119,6 +127,10 @@ var buildkitLogOptions = []slogout.LoggerOption{
 // Start starts the BuildKit daemon container.
 // For external components, this verifies the socket is accessible.
 func (c *Component) Start(ctx context.Context, config Config) error {
+	done := make(chan struct{})
+	c.starting.Store(&done)
+	defer close(done)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -299,8 +311,17 @@ func (c *Component) IsRunning() bool {
 	return c.running
 }
 
-// Client returns a new BuildKit client connected to the daemon.
+// Client returns a new BuildKit client connected to the daemon, first waiting
+// for a Start in progress to finish.
 func (c *Component) Client(ctx context.Context) (*buildkitclient.Client, error) {
+	if done := c.starting.Load(); done != nil {
+		select {
+		case <-*done:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for buildkit to start: %w", ctx.Err())
+		}
+	}
+
 	c.mu.Lock()
 	socketPath := c.socketPath
 	running := c.running
