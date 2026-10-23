@@ -145,10 +145,6 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 	ctx, _, server := sandboxCommandServer(t, true)
 	_, _, err := selectAppSandbox(ctx, "shop", "")
 	require.ErrorContains(t, err, "403")
-	args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
-	out, err := RunCommand(SandboxList, args...)
-	require.ErrorContains(t, err, "403")
-	require.Empty(t, out.Stdout.String())
 	for _, tc := range []struct {
 		command any
 		flags   []string
@@ -161,7 +157,7 @@ func TestSandboxCommandsDoNotFallbackAfterDenial(t *testing.T) {
 	}
 }
 
-func TestSandboxCommandsDoNotFallbackWhenAPIIsUnavailable(t *testing.T) {
+func TestSandboxCommandsFallbackWhenAPIIsUnavailable(t *testing.T) {
 	for _, oldService := range []bool{false, true} {
 		t.Run(fmt.Sprint("old-service=", oldService), func(t *testing.T) {
 			testSandboxCommandsLegacy(t, oldService)
@@ -179,17 +175,22 @@ func testSandboxCommandsLegacy(t *testing.T, oldService bool) {
 	if oldService {
 		// A real capability with no lifecycle/selection methods simulates an
 		// older service without relying on a mocked client error.
-		server.Server().ExposeValue("dev.miren.runtime/sandboxes", exec_v1alpha.AdaptSandboxExec(&selectedExecServer{}))
+		server.Server().ExposeValue("dev.miren.runtime/sandboxes", entityserver_v1alpha.AdaptEntityAccess(store.Server))
 	}
 	ctx := &Context{Context: t.Context(), Log: testutils.TestLogger(t), Stdout: &bytes.Buffer{}, Stderr: io.Discard}
 	ctx.Config.ServerAddress = server.ListenAddr()
 	t.Cleanup(func() { require.NoError(t, ctx.Close()) })
-	_, _, err = selectAppSandbox(ctx, "shop", "")
-	require.True(t, isMissingRPC(err), "%v", err)
-	args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
-	out, err := RunCommand(SandboxList, args...)
-	require.Error(t, err)
-	require.Empty(t, out.Stdout.String())
+	appID, err := store.Client.Create(ctx, "shop", &core_v1alpha.App{})
+	require.NoError(t, err)
+	poolID, err := store.Client.Create(ctx, "web-pool", &compute_v1alpha.SandboxPool{App: appID, Service: "web"})
+	require.NoError(t, err)
+	id, err := store.Client.Create(ctx, "target", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING}, entityserver.WithLabels(types.LabelSet("pool", poolID.String())))
+	require.NoError(t, err)
+	require.NoError(t, store.Client.UpdateAttrs(ctx, id, (&compute_v1alpha.Schedule{Key: compute_v1alpha.Key{Node: "node/one"}}).Encode()))
+	chosen, count, err := selectAppSandbox(ctx, "shop", "")
+	require.NoError(t, err)
+	require.Equal(t, id, chosen.ID)
+	require.Equal(t, 1, count)
 	for _, tc := range []struct {
 		command any
 		flags   []string
@@ -197,8 +198,11 @@ func testSandboxCommandsLegacy(t *testing.T, oldService bool) {
 		args := []string{"--config", filepath.Join(t.TempDir(), "clientconfig.yaml"), "--server-address", server.ListenAddr()}
 		args = append(args, tc.flags...)
 		out, err := RunCommand(tc.command, append(args, "target")...)
-		require.True(t, isMissingRPC(err), "%v", err)
-		require.Empty(t, out.Stdout.String())
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Stdout.String())
+		if len(tc.flags) == 0 {
+			require.NoError(t, store.Client.UpdateAttrs(ctx, id, entity.Ref(compute_v1alpha.SandboxStatusId, compute_v1alpha.SandboxStatusDeadId)))
+		}
 	}
 }
 

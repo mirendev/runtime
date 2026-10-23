@@ -1,10 +1,16 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/core/core_v1alpha"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
+	"miren.dev/runtime/pkg/entity"
+	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/ui"
 )
 
@@ -100,7 +106,13 @@ func SandboxList(ctx *Context, opts struct {
 
 	entries, err := listSandboxesRPC(ctx)
 	if err != nil {
-		return err
+		if !serverPredatesSandboxInventory(err) {
+			return err
+		}
+		entries, err = listSandboxesLegacy(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	entries, deadCount := filter.apply(entries)
 
@@ -194,6 +206,13 @@ func SandboxList(ctx *Context, opts struct {
 	return nil
 }
 
+// serverPredatesSandboxInventory distinguishes an old server from a current
+// server refusing or failing the request. Falling back after an authorization
+// error would turn the raw entity API into a privilege bypass.
+func serverPredatesSandboxInventory(err error) bool {
+	return errors.Is(err, rpc.ErrResolveLookup)
+}
+
 func listSandboxesRPC(ctx *Context) ([]sandboxListEntry, error) {
 	client, err := ctx.RPCClient("dev.miren.runtime/sandboxes")
 	if err != nil {
@@ -212,6 +231,126 @@ func listSandboxesRPC(ctx *Context) ([]sandboxListEntry, error) {
 			sb.Id(), sb.ShortId(), sb.App(), sb.Version(), sb.VersionShortId(),
 			sb.Service(), sb.Pool(), sb.PoolShortId(), sb.Address(), sb.Runner(),
 			sb.Status(), sb.CreatedAt(), sb.UpdatedAt(),
+		))
+	}
+
+	return entries, nil
+}
+
+// listSandboxesLegacy keeps a current CLI useful against a server from before
+// the sandbox inventory capability. Although it must read raw entities, it
+// converts each one into the allow-listed entry immediately; rendering never
+// receives the Sandbox and therefore cannot serialize its execution spec.
+func listSandboxesLegacy(ctx *Context) ([]sandboxListEntry, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	return listSandboxesFromEntities(ctx, entityserver_v1alpha.NewEntityAccessClient(client))
+}
+
+func listSandboxesFromEntities(
+	ctx context.Context,
+	eac *entityserver_v1alpha.EntityAccessClient,
+) ([]sandboxListEntry, error) {
+	kindRes, err := eac.LookupKind(ctx, "sandbox")
+	if err != nil {
+		return nil, err
+	}
+	res, err := eac.List(ctx, kindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+
+	poolKindRes, err := eac.LookupKind(ctx, "sandbox_pool")
+	if err != nil {
+		return nil, err
+	}
+	poolsRes, err := eac.List(ctx, poolKindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+	poolServices := make(map[string]string)
+	poolShortIDs := make(map[string]string)
+	for _, e := range poolsRes.Values() {
+		var pool compute_v1alpha.SandboxPool
+		pool.Decode(e.Entity())
+		poolServices[pool.ID.String()] = pool.Service
+		if shortID := e.Entity().ShortId(); shortID != "" {
+			poolShortIDs[pool.ID.String()] = shortID
+		}
+	}
+
+	versionShortIDs := make(map[string]string)
+	versionApps := make(map[string]string)
+	if versionKindRes, err := eac.LookupKind(ctx, "app_version"); err == nil {
+		if versionsRes, err := eac.List(ctx, versionKindRes.Attr()); err == nil {
+			for _, e := range versionsRes.Values() {
+				var version core_v1alpha.AppVersion
+				version.Decode(e.Entity())
+				if shortID := e.Entity().ShortId(); shortID != "" {
+					versionShortIDs[version.ID.String()] = shortID
+				}
+				if !entity.Empty(version.App) {
+					versionApps[version.ID.String()] = ui.CleanEntityID(version.App.String())
+				}
+			}
+		}
+	}
+
+	nodeKindRes, err := eac.LookupKind(ctx, "node")
+	if err != nil {
+		return nil, err
+	}
+	nodesRes, err := eac.List(ctx, nodeKindRes.Attr())
+	if err != nil {
+		return nil, err
+	}
+	nodeNames := make(map[entity.Id]string)
+	for _, e := range nodesRes.Values() {
+		var node compute_v1alpha.Node
+		node.Decode(e.Entity())
+		name := node.Name
+		if name == "" {
+			name = node.RunnerId
+			if len(name) > 12 {
+				name = name[:12]
+			}
+		}
+		if name != "" {
+			nodeNames[node.ID] = name
+		}
+	}
+
+	entries := make([]sandboxListEntry, 0, len(res.Values()))
+	for _, e := range res.Values() {
+		var sb compute_v1alpha.Sandbox
+		sb.Decode(e.Entity())
+
+		var metadata core_v1alpha.Metadata
+		metadata.Decode(e.Entity())
+		pool, _ := metadata.Labels.Get("pool")
+		service := poolServices[pool]
+		app := versionApps[sb.Spec.Version.String()]
+
+		address := ""
+		if len(sb.Network) > 0 {
+			address = sb.Network[0].Address
+		}
+
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(e.Entity())
+		runner := ""
+		if !entity.Empty(schedule.Key.Node) {
+			runner = nodeNames[schedule.Key.Node]
+		}
+
+		entries = append(entries, newSandboxListEntry(
+			sb.ID.String(), e.Entity().ShortId(), app, sb.Spec.Version.String(),
+			versionShortIDs[sb.Spec.Version.String()], service, pool, poolShortIDs[pool],
+			address, runner, string(sb.Status), e.CreatedAt(), e.UpdatedAt(),
 		))
 	}
 

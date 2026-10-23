@@ -3,10 +3,14 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strings"
 
+	"miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
+	"miren.dev/runtime/api/entityserver"
+	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/ui"
@@ -19,6 +23,7 @@ type sandboxCandidate struct {
 	ID      entity.Id
 	Brief   string
 	Service string
+	Version entity.Id
 }
 
 func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, int, error) {
@@ -28,10 +33,16 @@ func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, 
 		err = requireRPCMethod(ctx, client, "selectForApp")
 	}
 	if err != nil {
+		if isMissingRPC(err) {
+			return selectAppSandboxLegacy(ctx, appName, service)
+		}
 		return sandboxCandidate{}, 0, err
 	}
 	result, err := compute_v1alpha.NewSandboxesClient(client).SelectForApp(ctx, appName, service)
 	if err != nil {
+		if isMissingRPC(err) {
+			return selectAppSandboxLegacy(ctx, appName, service)
+		}
 		if errors.Is(err, cond.ErrNotFound{}) {
 			return sandboxCandidate{}, 0, unknownAppError(appName, err, ctx.Verbose())
 		}
@@ -53,6 +64,90 @@ func selectAppSandbox(ctx *Context, appName, service string) (sandboxCandidate, 
 		return sandboxCandidate{}, 0, fmt.Errorf("sandbox selection returned no sandbox")
 	}
 	return sandboxCandidate{ID: entity.Id(chosen.Id()), Brief: chosen.ShortId(), Service: chosen.Service()}, int(chosen.CandidateCount()), nil
+}
+
+func selectAppSandboxLegacy(ctx *Context, appName, service string) (sandboxCandidate, int, error) {
+	client, err := ctx.RPCClient("entities")
+	if err != nil {
+		return sandboxCandidate{}, 0, err
+	}
+	defer client.Close()
+	ec := entityserver.NewClient(ctx.Log, entityserver_v1alpha.NewEntityAccessClient(client))
+	appEnt, err := app.NewClient(ctx.Log, client).GetByName(ctx, appName)
+	if err != nil {
+		if errors.Is(err, cond.ErrNotFound{}) {
+			return sandboxCandidate{}, 0, unknownAppError(appName, err, ctx.Verbose())
+		}
+		return sandboxCandidate{}, 0, err
+	}
+	pools, err := ec.List(ctx, entity.Ref(compute_v1alpha.SandboxPoolAppId, appEnt.ID))
+	if err != nil {
+		return sandboxCandidate{}, 0, err
+	}
+	poolService := make(map[string]string)
+	var known []string
+	for pools.Next() {
+		var pool compute_v1alpha.SandboxPool
+		if err := pools.Read(&pool); err != nil {
+			continue
+		}
+		if !slices.Contains(known, pool.Service) {
+			known = append(known, pool.Service)
+		}
+		if service == "" || pool.Service == service {
+			poolService[pool.ID.String()] = pool.Service
+		}
+	}
+	if service != "" && len(poolService) == 0 {
+		return sandboxCandidate{}, 0, unknownServiceError(appName, service, known)
+	}
+	sandboxes, err := ec.List(ctx, entity.Ref(entity.EntityKind, compute_v1alpha.KindSandbox))
+	if err != nil {
+		return sandboxCandidate{}, 0, err
+	}
+	var candidates []sandboxCandidate
+	var running []string
+	for sandboxes.Next() {
+		var sb compute_v1alpha.Sandbox
+		if err := sandboxes.Read(&sb); err != nil || sb.Status != compute_v1alpha.RUNNING {
+			continue
+		}
+		md := sandboxes.Metadata()
+		if md == nil {
+			continue
+		}
+		pool, _ := md.Labels.Get("pool")
+		svc, ours := poolService[pool]
+		var schedule compute_v1alpha.Schedule
+		schedule.Decode(sandboxes.Entity())
+		if !ours || entity.Empty(schedule.Key.Node) {
+			continue
+		}
+		if !slices.Contains(running, svc) {
+			running = append(running, svc)
+		}
+		if service == "" && slices.Contains(known, defaultExecService) && svc != defaultExecService {
+			continue
+		}
+		candidates = append(candidates, sandboxCandidate{ID: sb.ID, Brief: ui.BriefId(sandboxes.Entity()), Service: svc, Version: sb.Spec.Version})
+	}
+	if len(candidates) == 0 {
+		if service == "" && slices.Contains(known, defaultExecService) {
+			slices.Sort(running)
+			return sandboxCandidate{}, 0, noDefaultServiceError(appName, running)
+		}
+		return sandboxCandidate{}, 0, noRunningSandboxError(appName, service)
+	}
+	var active []sandboxCandidate
+	for _, candidate := range candidates {
+		if !entity.Empty(appEnt.ActiveVersion) && candidate.Version == appEnt.ActiveVersion {
+			active = append(active, candidate)
+		}
+	}
+	if len(active) > 0 {
+		candidates = active
+	}
+	return candidates[rand.IntN(len(candidates))], len(candidates), nil
 }
 
 func unknownAppError(appName string, cause error, verbose bool) error {
