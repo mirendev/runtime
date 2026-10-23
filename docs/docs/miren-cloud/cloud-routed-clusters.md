@@ -131,28 +131,39 @@ applies there.
 
 :::warning[Upgrade cloud first]
 
-A cloud that does not negotiate authorization version 1 or 2 cannot authorize
+A cloud that does not negotiate authorization version 1 cannot authorize
 JWT callers on this runtime; update cloud before upgrading the runtime.
 
 :::
 
-Authorization version 1 retains the existing RPC-interface/method policy
-vocabulary. Version 2 snapshots must explicitly include `version: 2` and use
+The runtime currently offers only authorization version 1, retaining the existing
+RPC-interface/method policy vocabulary. Version 2 negotiation is held for a
+separate, approved Cloud/runtime rollout; it is not a CLI version. The runtime
+retains version 2 enforcement for saved snapshots. This negotiation hold is not
+a kill switch: a saved version 2 snapshot remains authoritative across restarts
+until a valid replacement arrives, including a version 1 replacement.
+
+Version 2 snapshots must explicitly include `version: 2` and use
 logical permissions for migrated app operations (`app:read`, `app:create`,
 `app:configure`, `app:deploy`, `app:destroy`, `app:logs`, and `app:exec`). The
 runtime resolves the app's stored name and creator before evaluating its scope;
 ownership alone never grants access without a matching policy rule. Creating an
-app requires an unscoped create grant, including implicit creation during a
-build. A deploy grant alone is not a create grant.
+app under version 2 requires an unscoped create grant, including implicit
+creation during a build. A deploy grant alone is not a create grant.
 
-App-bound OIDC/CI tokens cannot create apps. Before the first CI deployment,
-have a Cloud principal with unscoped `app:create` and the appropriate
-`app:deploy` permission run `miren deploy` to create the app. Subsequent CI
-deployments can use an app-bound token with deploy permission for that app.
+Version 1 and standalone certificate, OIDC, and workload callers retain their
+existing method permissions and app bindings, including implicit creation during
+an authorized first build. Source-only analysis uses `builder:analyzeapp`, not
+`app:read`, in both policy versions. Prepared uploads require the same initiating
+subject only under logical Cloud policy. Existing sandbox app-confinement checks
+remain in place; the additional authoritative owner lookup applies to logical
+Cloud policy only.
 
 Cloud must only emit scoped, logical permissions after negotiating version 2
 with that specific runtime. Older runtimes ignore unknown permission fields,
 so sending them a scoped rule can silently turn it into a cluster-wide grant.
+Never strip scopes to downgrade a policy; version 1 grants must be genuinely
+unscoped. Cloud must persist and emit scopes before version 2 can be enabled.
 Upgrading the evaluator alone is not sufficient rollout protection. Version 1
 and version 2 policies must not be combined as alternative grants: a broad legacy
 grant must not override a scoped logical permission. Version selection and

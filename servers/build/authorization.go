@@ -9,13 +9,13 @@ import (
 	"miren.dev/runtime/pkg/rpc"
 )
 
-// Check both permissions before creating anything. A prospective app's owner
-// is the authenticated creator, not a value supplied in the build config.
+// Logical policy requires both permissions before creating anything. Legacy
+// deploy roles retain implicit creation, confined to their bound app.
 func (b *Builder) authorizeBuild(ctx context.Context, name string) error {
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
-	if !rpc.HasResourceAuthorizer(ctx) {
+	if !rpc.UsesLogicalAuthorization(ctx) {
 		return nil
 	}
 	_, err := b.ec.EAC().Get(ctx, "app/"+name)

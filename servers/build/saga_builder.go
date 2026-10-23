@@ -192,7 +192,7 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
-	if rpc.HasResourceAuthorizer(ctx) && sess.subject != app.CreationSubject(ctx) {
+	if rpc.UsesLogicalAuthorization(ctx) && sess.subject != app.CreationSubject(ctx) {
 		return rpc.ErrUnauthorized
 	}
 	if err := s.inner.authorizeBuild(ctx, name); err != nil {
@@ -273,7 +273,7 @@ func (s *SagaBuilder) startBuild(
 	// and authorize the actual app before admitting durable work, rather than
 	// persisting a prospective-owner grant that could target another creator's
 	// app after a restart.
-	if rpc.HasResourceAuthorizer(ctx) {
+	if rpc.UsesLogicalAuthorization(ctx) {
 		if _, err := s.inner.ensureApp(ctx, appName); err != nil {
 			return err
 		}

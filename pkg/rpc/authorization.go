@@ -17,6 +17,24 @@ type ResourceAuthorizer interface {
 	AuthorizeResource(context.Context, *Identity, ResourceRequest) error
 }
 
+// LogicalAuthorizer distinguishes scoped policy from legacy method gates.
+// Standalone role checks are not Cloud logical policy, even when composed with it.
+type LogicalAuthorizer interface {
+	UsesLogicalAuthorization(context.Context, *Identity) bool
+}
+
+// UsesLogicalAuthorization reports whether new resolved-resource checks apply.
+// A false result from Cloud must include authorization of the original method,
+// atomically with selecting legacy policy, not just a snapshot version lookup.
+// Resource authorizers without a mode selector always enforce their policy.
+func UsesLogicalAuthorization(ctx context.Context) bool {
+	auth, _ := ctx.Value(authorizationKey{}).(authorizationContext)
+	if mode, ok := auth.authorizer.(LogicalAuthorizer); ok {
+		return mode.UsesLogicalAuthorization(ctx, IdentityFromContext(ctx))
+	}
+	return HasResourceAuthorizer(ctx)
+}
+
 type authorizationKey struct{}
 
 type authorizationContext struct {
@@ -95,8 +113,6 @@ func AppAction(resource, action string) string {
 		switch action {
 		case "buildfromtar", "prepareupload", "buildfromprepared":
 			return "deploy"
-		case "analyzeapp":
-			return "read"
 		}
 	case "deployment":
 		switch action {

@@ -1703,10 +1703,7 @@ func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
 
 // AnalyzeApp analyzes an app without building it, returning detected stack, services, and configuration.
 func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAnalyzeApp) error {
-	// This RPC only accepts caller-provided source, not an existing app target.
-	if err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "read"}); err != nil {
-		return err
-	}
+	// The transport gates builder/analyzeapp. Source analysis has no app target.
 	args := state.Args()
 	td := args.Tardata()
 

@@ -20,6 +20,7 @@ import (
 	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 func TestCreatePreservesFirstCreator(t *testing.T) {
@@ -212,6 +213,16 @@ func TestAppAuthorizationLookupErrorsAndMissingTargets(t *testing.T) {
 		eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: failure})))
 		require.ErrorIs(t, app.Authorize(ctx, eac, "explicit", "configure"), failure)
 		require.ErrorIs(t, app.AuthorizeSandbox(ctx, eac, "sandbox/explicit", "logs"), failure)
+		for _, identity := range []*rpc.Identity{
+			{Method: rpc.AuthMethodCert},
+			{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"role": workloadroles.RoleClusterDebugger}},
+		} {
+			comp := oidcauth.NewCompositeAuthorizer(nil)
+			legacy := rpc.ContextWithIdentity(t.Context(), identity)
+			legacy = rpc.ContextWithAuthorization(legacy, comp, "sandboxexec", "exec")
+			require.NoError(t, comp.Authorize(legacy, identity, "sandboxexec", "exec"))
+			require.NoError(t, app.AuthorizeSandbox(legacy, eac, "sandbox/explicit", "exec"), "standalone access must not gain an owner lookup")
+		}
 	}
 	eac := entityserver_v1alpha.NewEntityAccessClient(rpc.LocalClient(entityserver_v1alpha.AdaptEntityAccess(failingAppLookup{err: cond.NotFound("app", "missing")})))
 	for _, action := range []string{"configure", "logs"} {
