@@ -121,7 +121,10 @@ tar -C "$T" -czf "$WORK/assets/v9.0.3/miren-base-linux-amd64.tar.gz" miren; rm -
 for v in v9.0.1 v9.0.2 v9.0.3; do
   n=${v##*.}
   (cd "$WORK/assets/$v" && sha256sum miren-base-linux-amd64.tar.gz >miren-base-linux-amd64.tar.gz.sha256)
-  echo "{\"version\":\"$v\",\"commit\":\"$(printf '%040d' $n)\",\"branch\":\"$v\",\"build_date\":\"2026-01-01T0$n:00:00Z\",\"artifacts\":[]}" \
+  # Upgrades check against the manifest's checksum; the .sha256 is for
+  # binaries from before that.
+  sum=$(cut -d' ' -f1 "$WORK/assets/$v/miren-base-linux-amd64.tar.gz.sha256")
+  echo "{\"version\":\"$v\",\"commit\":\"$(printf '%040d' $n)\",\"branch\":\"$v\",\"build_date\":\"2026-01-01T0$n:00:00Z\",\"artifacts\":[{\"name\":\"miren-base-linux-amd64.tar.gz\",\"sha256\":\"$sum\"}]}" \
     >"$WORK/assets/$v/version.json"
 done
 

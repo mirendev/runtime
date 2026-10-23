@@ -30,7 +30,12 @@ type Options struct {
 	// before the operation fails (and, for upgrades, rolls back).
 	ReadyTimeout  time.Duration
 	ProbeInterval time.Duration
-	AutoRollback  bool
+	// ChecksumRetries and ChecksumRetryDelay ride out a publish in progress:
+	// channel paths are overwritten file by file, so for about a minute the
+	// artifact can disagree with the version.json that names it.
+	ChecksumRetries    int
+	ChecksumRetryDelay time.Duration
+	AutoRollback       bool
 	// PathSymlink, when set, is kept pointing at InstallPath after a
 	// successful upgrade so the CLI on $PATH tracks the server.
 	PathSymlink string
@@ -42,17 +47,19 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
-		ServiceName:    "miren",
-		Daemon:         "server",
-		StateDir:       release.DefaultManagerOptions().StateDir,
-		InstallPath:    release.DefaultManagerOptions().InstallPath,
-		TempDir:        os.TempDir(),
-		ArtifactType:   release.ArtifactTypeBase,
-		ReadyTimeout:   3 * time.Minute,
-		ProbeInterval:  2 * time.Second,
-		AutoRollback:   true,
-		PathSymlink:    release.SystemCLIPath,
-		UpgradeRunners: true,
+		ServiceName:        "miren",
+		Daemon:             "server",
+		StateDir:           release.DefaultManagerOptions().StateDir,
+		InstallPath:        release.DefaultManagerOptions().InstallPath,
+		TempDir:            os.TempDir(),
+		ArtifactType:       release.ArtifactTypeBase,
+		ReadyTimeout:       3 * time.Minute,
+		ProbeInterval:      2 * time.Second,
+		ChecksumRetries:    4,
+		ChecksumRetryDelay: 30 * time.Second,
+		AutoRollback:       true,
+		PathSymlink:        release.SystemCLIPath,
+		UpgradeRunners:     true,
 	}
 }
 
@@ -96,6 +103,8 @@ type Executor struct {
 	// downloaded is deliberately not persisted: a resumed run downloads again
 	// rather than trusting a temp file that may be gone.
 	downloaded *release.DownloadedArtifact
+	// checksumMismatches counts retries in this run; a resumed run starts over.
+	checksumMismatches int
 }
 
 func NewExecutor(store *Store, opts Options, log *slog.Logger) *Executor {
@@ -214,17 +223,46 @@ func (e *Executor) download(ctx context.Context, op *Operation) error {
 		artifactType = release.ArtifactType(op.ArtifactType)
 	}
 	artifact := release.NewArtifact(artifactType, op.TargetVersion)
+	// The manifest's checksum, not the artifact's .sha256 file, so the bytes
+	// are checked against the same publish that named the version. Older
+	// manifests may lack the artifact; the downloader then fetches .sha256.
+	expected, _ := metadata.GetArtifactChecksum(artifact.Filename())
 	progress := &progressRecorder{store: e.store, op: op}
 	downloaded, err := e.downloader.Download(ctx, artifact, release.DownloadOptions{
-		TargetDir:      e.opts.TempDir,
-		ProgressWriter: progress,
+		TargetDir:        e.opts.TempDir,
+		ProgressWriter:   progress,
+		ExpectedChecksum: expected,
 	})
+	if errors.Is(err, release.ErrChecksumMismatch) && e.checksumMismatches < e.opts.ChecksumRetries {
+		return e.retryDownload(ctx, op, err)
+	}
 	if err != nil {
 		return e.fail(ctx, op, fmt.Errorf("download %s %s: %w", artifact.Type, op.ResolvedVersion, err))
 	}
 	e.downloaded = downloaded
 	op.Progress = ""
 	return e.transition(op, PhaseBackingUp)
+}
+
+// retryDownload waits out a publish that is overwriting the channel, then
+// leaves the operation in downloading so the next step resolves the version
+// afresh. By then version.json, which is published last, has usually caught
+// up with the artifacts.
+func (e *Executor) retryDownload(ctx context.Context, op *Operation, cause error) error {
+	e.checksumMismatches++
+	e.log.Warn("downloaded artifact does not match its manifest, retrying",
+		"operation", op.ID, "version", op.ResolvedVersion,
+		"attempt", e.checksumMismatches, "of", e.opts.ChecksumRetries, "error", cause)
+	op.Progress = fmt.Sprintf("checksum mismatch, likely a publish in progress; retrying in %s", e.opts.ChecksumRetryDelay)
+	if err := e.store.Update(op); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(e.opts.ChecksumRetryDelay):
+	}
+	return nil
 }
 
 // backUp takes the snapshot rollback will restore. An upgrade that cannot be
