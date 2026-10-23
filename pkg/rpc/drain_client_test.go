@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -209,4 +210,49 @@ func TestHTTPDrainRetriesWatchAfterPreparationFailure(t *testing.T) {
 	require.Eventually(t, func() bool { return preparations.Load() == 2 }, time.Second, time.Millisecond)
 	s.cancel()
 	require.Eventually(t, s.li.idle, time.Second, time.Millisecond)
+}
+
+// A peer that vanishes without CONNECTION_CLOSE, as an exiting CLI used to,
+// leaves the server holding its connection until the 30s idle timeout. The
+// drain must not wait for that once nothing is running on it.
+func TestHTTPDrainDoesNotWaitOnAVanishedPeer(t *testing.T) {
+	s, err := NewState(t.Context(), WithSkipVerify,
+		WithHTTPHandler("GET /payload", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "ok")
+		})))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	tr := &quic.Transport{Conn: udp}
+	client := &http3.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			raddr, err := net.ResolveUDPAddr("udp", addr)
+			if err != nil {
+				return nil, err
+			}
+			return tr.DialEarly(ctx, raddr, tlsCfg, cfg)
+		},
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+s.LoopbackAddr()+"/payload", nil)
+	require.NoError(t, err)
+	resp, err := client.RoundTrip(req)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(body))
+
+	// Closing the socket out from under the transport is what a process exit
+	// does: whatever close the transport attempts never reaches the server.
+	require.NoError(t, udp.Close())
+	require.False(t, s.li.idle(), "server already saw the peer leave; the test would prove nothing")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, s.Shutdown(ctx))
+	require.Less(t, time.Since(start), drainSettle+2*time.Second, "shutdown waited on a peer with nothing running")
 }
