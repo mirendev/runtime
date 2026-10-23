@@ -47,27 +47,44 @@ const drainPollInterval = 25 * time.Millisecond
 // Healthy drains finish well inside it, so it costs nothing on a clean stop.
 const drainCensusDelay = 5 * time.Second
 
+// drainSettle is how long every handler must have been finished before a drain
+// stops waiting on the connections still open. A handler that has returned has
+// handed its response to QUIC, but closing the connection discards whatever has
+// not been delivered yet, so the last response gets time to reach its caller.
+// Callers include CLIs across the internet, where one lost packet costs a
+// retransmission timeout of several round trips. A second covers that, and
+// shutdown latency is the only thing it trades away.
+const drainSettle = time.Second
+
 // WebTransport's raw HTTP/3 connections are not managed by http3.Shutdown.
 // Clients that understand /_rpc/drain retire themselves after reading their
-// responses. Older and plain HTTP/3 clients have only the deadline fallback.
+// responses, but a client that goes away without closing its connection (a CLI
+// killed mid-command, an older CLI, a peer whose network drops) leaves the
+// server holding a dead peer until the QUIC idle timeout, 30s after its last
+// packet. Waiting for those turned shutdowns into 20-30s stalls with nothing
+// running. By the time the drain starts, Shutdown has cancelled s.top, so new
+// requests are refused and the only work left is handlers already running.
+// Once they have finished there is nothing to drain, and Shutdown closes the
+// remaining connections.
 func (s *State) drainWebTransport(ctx context.Context) error {
 	_ = s.li.Close()
 	// Stabilize the census before observing zero: Accept may have returned a
 	// connection just before listener closure and not counted it yet.
 	<-s.acceptDone
-	return waitForIdle(ctx, s.log, "HTTP/3", s.li)
+	return waitForIdle(ctx, s.log, "HTTP/3", s.li, s.server.requests)
 }
 
-// waitForIdle polls until every connection ln accepted has closed or ctx ends.
-// If the wait outlasts drainCensusDelay it logs the connections still open,
-// once: a wait that ends just inside its deadline returns nil, and this line is
-// then the only record of which peer held the shutdown up.
-func waitForIdle(ctx context.Context, log *slog.Logger, surface string, ln *countingListener) error {
+// waitForIdle polls until every connection ln accepted has closed, or until
+// requests (when given) has had no handler running for drainSettle, or ctx
+// ends. If the wait outlasts drainCensusDelay it logs the connections still
+// open, once: a wait that ends just inside its deadline returns nil, and this
+// line is then the only record of which peer held the shutdown up.
+func waitForIdle(ctx context.Context, log *slog.Logger, surface string, ln *countingListener, requests *requestCounter) error {
 	ticker := time.NewTicker(drainPollInterval)
 	defer ticker.Stop()
 	census := time.NewTimer(drainCensusDelay)
 	defer census.Stop()
-	for !ln.idle() {
+	for !ln.idle() && !requests.settled(time.Now()) {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
@@ -80,6 +97,38 @@ func waitForIdle(ctx context.Context, log *slog.Logger, surface string, ln *coun
 		}
 	}
 	return nil
+}
+
+// requestCounter tracks the handlers running on a server and when the last
+// one finished.
+type requestCounter struct {
+	active   atomic.Int64
+	lastDone atomic.Int64 // unix nanoseconds
+}
+
+// begin and end tolerate a nil counter, which a Server built without
+// NewServer has.
+func (c *requestCounter) begin() {
+	if c != nil {
+		c.active.Add(1)
+	}
+}
+
+func (c *requestCounter) end() {
+	if c != nil {
+		c.lastDone.Store(time.Now().UnixNano())
+		c.active.Add(-1)
+	}
+}
+
+// settled reports that no handler is running and none has finished within
+// drainSettle of now. A nil counter is never settled, so a drain without one
+// waits for its connections as before.
+func (c *requestCounter) settled(now time.Time) bool {
+	if c == nil || c.active.Load() > 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, c.lastDone.Load())) >= drainSettle
 }
 
 // countingListener wraps the QUIC listener handed to an http3.Server so we can
@@ -191,7 +240,7 @@ func drainQUIC(ctx context.Context, log *slog.Logger, surface string, shutdown f
 	// context and closes its listeners before it looks at the context, so the
 	// teardown happens in full and only the waiting is skipped.
 	go func() {
-		if waitForIdle(drainCtx, log, surface, ln) == nil {
+		if waitForIdle(drainCtx, log, surface, ln, nil) == nil {
 			cancel()
 		}
 	}()
