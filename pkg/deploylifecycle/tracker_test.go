@@ -118,7 +118,7 @@ func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 		Subject: "user-42", Method: rpc.AuthMethodJWT,
 		Metadata: map[string]any{"organization_id": "org-42", "email": "ada@example.com", "name": "Ada Lovelace"},
 	})
-	rec, err := tr.Begin(ctx, BeginParams{AppName: "web", Operation: OperationBuild})
+	rec, err := tr.Begin(ctx, BeginParams{AppName: "new-web", Operation: OperationBuild})
 	require.NoError(t, err)
 	assert.Equal(t, "user-42", rec.Deployment.DeployedBy.Subject)
 	assert.Equal(t, "jwt", rec.Deployment.DeployedBy.AuthMethod)
@@ -128,6 +128,9 @@ func TestBeginCapturesAuthenticatedIdentity(t *testing.T) {
 	stored, err := tr.Store().Get(ctx, rec.Deployment.ID.String())
 	require.NoError(t, err)
 	assert.Equal(t, rec.Deployment.DeployedBy, stored.Deployment.DeployedBy)
+	app, _, err := tr.Store().AppByName(ctx, "new-web")
+	require.NoError(t, err)
+	assert.Equal(t, "user-42", app.OwnedBy)
 }
 
 func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
@@ -137,13 +140,16 @@ func TestBeginDoesNotBorrowOrganizationFromAnotherIdentity(t *testing.T) {
 		Metadata: map[string]any{"organization_id": "org-worker", "email": "worker@example.com", "name": "Worker"},
 	})
 	rec, err := tr.Begin(ctx, BeginParams{
-		AppName: "web", Subject: "original-user", AuthMethod: "jwt",
+		AppName: "recovered-web", Subject: "original-user", AuthMethod: "jwt",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "original-user", rec.Deployment.DeployedBy.Subject)
 	assert.Empty(t, rec.Deployment.DeployedBy.OrganizationId)
 	assert.Empty(t, rec.Deployment.DeployedBy.Email)
 	assert.Empty(t, rec.Deployment.DeployedBy.Name)
+	app, _, err := tr.Store().AppByName(ctx, "recovered-web")
+	require.NoError(t, err)
+	assert.Equal(t, "original-user", app.OwnedBy)
 }
 
 func TestBeginDoesNotCaptureAnonymousOrganization(t *testing.T) {
@@ -160,12 +166,29 @@ func TestBeginDoesNotCaptureAnonymousOrganization(t *testing.T) {
 func TestBeginPreservesCallerIdentityWithoutAuthenticatedOverride(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	rec, err := tr.Begin(context.Background(), BeginParams{
-		AppName: "web", Operation: OperationBuild,
+		AppName: "attributed-web", Operation: OperationBuild,
 		DeployedBy: core_v1alpha.DeployedBy{Subject: "wired-subject", AuthMethod: "wired-method"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "wired-subject", rec.Deployment.DeployedBy.Subject)
 	assert.Equal(t, "wired-method", rec.Deployment.DeployedBy.AuthMethod)
+	app, _, err := tr.Store().AppByName(t.Context(), "attributed-web")
+	require.NoError(t, err)
+	assert.Empty(t, app.OwnedBy, "deployment attribution cannot assign app ownership")
+}
+
+func TestBeginDoesNotAssignNonCloudOwnerOnRecovery(t *testing.T) {
+	for _, method := range []rpc.AuthMethod{rpc.AuthMethodCert, rpc.AuthMethodOIDC, rpc.AuthMethodWorkload, rpc.AuthMethodSystem, ""} {
+		t.Run(string(method), func(t *testing.T) {
+			tr, _ := newTestTracker(t)
+			ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "recovery-user", Method: rpc.AuthMethodJWT})
+			_, err := tr.Begin(ctx, BeginParams{AppName: "non-cloud-web", Subject: "original-user", AuthMethod: string(method)})
+			require.NoError(t, err)
+			app, _, err := tr.Store().AppByName(ctx, "non-cloud-web")
+			require.NoError(t, err)
+			assert.Empty(t, app.OwnedBy, "neither a non-Cloud creator nor the recovery worker becomes the owner")
+		})
+	}
 }
 
 // A losing contender must not end up with a record it can never finish.

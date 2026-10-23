@@ -95,27 +95,12 @@ func shortIDFromEntity(ent *entityserver_v1alpha.Entity) string {
 func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 	name := state.Args().Name()
 
-	var appRec core_v1alpha.App
-
-	err := r.EC.Get(ctx, name, &appRec)
-	if err == nil {
-		// App already exists, return its ID
-		state.Results().SetId(string(appRec.ID))
-		return nil
-	}
-	if !errors.Is(err, cond.ErrNotFound{}) {
-		return fmt.Errorf("failed to look up app %q: %w", name, err)
-	}
-
-	// Set default project to match the build server behavior
-	appRec.Project = "project/default"
-
-	id, err := r.EC.Create(ctx, name, &appRec)
+	appRec, _, err := appclient.EnsureApp(ctx, r.EC.EAC(), name, appclient.CreationSubject(ctx))
 	if err != nil {
 		return err
 	}
 
-	state.Results().SetId(string(id))
+	state.Results().SetId(string(appRec.ID))
 
 	return nil
 }
@@ -337,6 +322,7 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 	for _, entry := range src.apps {
 		var a app_v1alpha.AppInfo
 		a.SetName(entry.name)
+		a.SetOwnedBy(entry.app.OwnedBy)
 
 		if entry.activeVersion != nil {
 			var vi app_v1alpha.VersionInfo

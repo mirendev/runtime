@@ -660,6 +660,7 @@ type appInfoData struct {
 	CrashCount        *int64              `cbor:"8,keyasint,omitempty" json:"crash_count,omitempty"`
 	CooldownSeconds   *int32              `cbor:"9,keyasint,omitempty" json:"cooldown_seconds,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"10,keyasint,omitempty" json:"maintenance_routes,omitempty"`
+	OwnedBy           *string             `cbor:"11,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type AppInfo struct {
@@ -825,6 +826,21 @@ func (v *AppInfo) MaintenanceRoutes() []string {
 func (v *AppInfo) SetMaintenanceRoutes(maintenance_routes []string) {
 	x := slices.Clone(maintenance_routes)
 	v.data.MaintenanceRoutes = &x
+}
+
+func (v *AppInfo) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
+}
+
+func (v *AppInfo) OwnedBy() string {
+	if v.data.OwnedBy == nil {
+		return ""
+	}
+	return *v.data.OwnedBy
+}
+
+func (v *AppInfo) SetOwnedBy(owned_by string) {
+	v.data.OwnedBy = &owned_by
 }
 
 func (v *AppInfo) MarshalCBOR() ([]byte, error) {
@@ -1623,6 +1639,7 @@ type applicationStatusData struct {
 	WorkloadRole      *string             `cbor:"20,keyasint,omitempty" json:"workload_role,omitempty"`
 	MaintenanceRoutes *[]string           `cbor:"21,keyasint,omitempty" json:"maintenance_routes,omitempty"`
 	Services          *[]*ServiceHealth   `cbor:"22,keyasint,omitempty" json:"services,omitempty"`
+	OwnedBy           *string             `cbor:"23,keyasint,omitempty" json:"owned_by,omitempty"`
 }
 
 type ApplicationStatus struct {
@@ -1979,6 +1996,21 @@ func (v *ApplicationStatus) Services() []*ServiceHealth {
 func (v *ApplicationStatus) SetServices(services []*ServiceHealth) {
 	x := slices.Clone(services)
 	v.data.Services = &x
+}
+
+func (v *ApplicationStatus) HasOwnedBy() bool {
+	return v.data.OwnedBy != nil
+}
+
+func (v *ApplicationStatus) OwnedBy() string {
+	if v.data.OwnedBy == nil {
+		return ""
+	}
+	return *v.data.OwnedBy
+}
+
+func (v *ApplicationStatus) SetOwnedBy(ownedBy string) {
+	v.data.OwnedBy = &ownedBy
 }
 
 func (v *ApplicationStatus) MarshalCBOR() ([]byte, error) {

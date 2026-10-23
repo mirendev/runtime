@@ -45,6 +45,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		return err
 	}
 
+	rai.SetOwnedBy(appRec.OwnedBy)
 	role := appRec.WorkloadRole
 	if role == "" {
 		role = workloadroles.Default
