@@ -201,6 +201,27 @@ func (c *CompositeAuthorizer) Authorize(ctx context.Context, identity *rpc.Ident
 	}
 }
 
+// UsesLogicalAuthorization enables Cloud policy checks only for Cloud callers.
+func (c *CompositeAuthorizer) UsesLogicalAuthorization(ctx context.Context, identity *rpc.Identity) bool {
+	if identity == nil {
+		return true
+	}
+	switch identity.Method {
+	case rpc.AuthMethodJWT, rpc.AuthMethodAnonymous, rpc.AuthMethodToken:
+		if mode, ok := c.primary.(rpc.LogicalAuthorizer); ok {
+			return mode.UsesLogicalAuthorization(ctx, identity)
+		}
+		_, ok := c.primary.(rpc.ResourceAuthorizer)
+		return ok
+	case rpc.AuthMethodCert, rpc.AuthMethodOIDC, rpc.AuthMethodWorkload:
+		return false
+	case rpc.AuthMethodSystem, rpc.AuthMethodSigned:
+		return true
+	default:
+		return true
+	}
+}
+
 // AuthorizeResource retains the method-role gate for OIDC/workload identities
 // while delegating human resource decisions to the primary policy provider.
 func (c *CompositeAuthorizer) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {

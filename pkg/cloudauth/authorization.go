@@ -140,7 +140,9 @@ type AuthorizationLink interface {
 }
 
 func (s *AuthorizationState) Register(link AuthorizationLink) {
-	link.OfferCapability(uplink.CapabilityOffer{Name: AuthorizationCapability, Versions: []uint{1, 2}})
+	// Hold new v2 negotiation until Cloud scope emission and the full runtime
+	// enforcement boundary are ready for an explicitly approved rollout.
+	link.OfferCapability(uplink.CapabilityOffer{Name: AuthorizationCapability, Versions: []uint{1}})
 	link.OnSession(s.beginSession)
 	link.Handle(TypeAuthorizationSnapshot, s.receiveSnapshot)
 }
@@ -231,6 +233,29 @@ func (s *AuthorizationState) Evaluate(req *rbac.Request) (rbac.Decision, string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.evaluateLocked(req)
+}
+
+// EvaluateMethod defers migrated methods only under logical policy. Legacy
+// method authorization and the version decision share the snapshot lock.
+func (s *AuthorizationState) EvaluateMethod(req *rbac.Request, migrated bool) (rbac.Decision, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loaded && s.snapshot.Version == 2 && migrated {
+		return rbac.DecisionAllow, ""
+	}
+	return s.evaluateLocked(req)
+}
+
+// AllowsLegacy authorizes before permitting a handler to skip logical checks.
+// A version-only read could skip both gates during a v2-to-v1 transition.
+func (s *AuthorizationState) AllowsLegacy(req *rbac.Request) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshot.Version >= 2 {
+		return false
+	}
+	decision, _ := s.evaluateLocked(req)
+	return decision == rbac.DecisionAllow
 }
 
 // EvaluateResource selects legacy or logical vocabulary under the same lock as

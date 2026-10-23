@@ -15,7 +15,7 @@ import (
 // Authorize resolves names or IDs before evaluating an app operation. Workload
 // confinement remains mandatory even on callers without a resource authorizer.
 func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, target, action string) error {
-	if !rpc.HasResourceAuthorizer(ctx) {
+	if !rpc.UsesLogicalAuthorization(ctx) {
 		if !rpc.AllowApp(ctx, target) {
 			return rpc.AppAccessError(ctx, target)
 		}
@@ -59,7 +59,7 @@ func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient
 // to its owning app. A sandbox with no verifiable app cannot inherit an
 // app-scoped permission.
 func AuthorizeSandbox(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, target, action string) error {
-	if !rpc.HasResourceAuthorizer(ctx) {
+	if !rpc.UsesLogicalAuthorization(ctx) {
 		return nil
 	}
 	record, err := eac.Get(ctx, target)
