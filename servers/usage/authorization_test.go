@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +20,11 @@ import (
 	"miren.dev/runtime/api/usage/usage_v1alpha"
 	"miren.dev/runtime/metrics"
 	"miren.dev/runtime/pkg/addon"
+	"miren.dev/runtime/pkg/cloudauth"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/entity/types"
+	"miren.dev/runtime/pkg/oidcauth"
+	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
 	sandboxserver "miren.dev/runtime/servers/sandbox"
 )
@@ -303,4 +308,78 @@ func TestLegacyAddonDisplayDoesNotGrantAccess(t *testing.T) {
 	inventory, err = sandboxes.List(owner)
 	require.NoError(t, err)
 	require.Empty(t, inventory.Sandboxes())
+}
+
+func TestUsageRealAuthorizationCompatibility(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ids := map[string]string{}
+	for name, owner := range map[string]string{"visible": "alice", "hidden": "bob"} {
+		app, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{OwnedBy: owner})
+		require.NoError(t, err)
+		version, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.AppVersion{App: app})
+		require.NoError(t, err)
+		id, err := inmem.Client.Create(t.Context(), name, &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING, Spec: compute_v1alpha.SandboxSpec{Version: version}})
+		require.NoError(t, err)
+		ids[name] = id.String()
+	}
+	_, err := inmem.Client.Create(t.Context(), "legacy-addon", &compute_v1alpha.Sandbox{Status: compute_v1alpha.RUNNING},
+		entityserver.WithLabels(types.LabelSet("app", "visible")))
+	require.NoError(t, err)
+	client := usage_v1alpha.NewResourceUsageClient(rpc.LocalClient(usage_v1alpha.AdaptResourceUsage(NewServer(slog.Default(), inmem.Client, nil))))
+	for _, version := range []uint{1, 2} {
+		stateDir := t.TempDir()
+		permission := rbac.Permission{Resource: "resourceusage", Actions: []string{"listsandboxes", "getsandbox"}}
+		if version == 2 {
+			permission = rbac.Permission{Resource: "app", Actions: []string{"list", "read"}, Scope: "$owner"}
+		}
+		// Restore the same persisted snapshot the runtime uses after a restart.
+		data, err := json.Marshal(map[string]any{"cluster_id": "cluster", "snapshot": cloudauth.AuthorizationSnapshot{
+			Version: version, OrganizationID: "org", Revision: 1,
+			Policy:      rbac.Policy{Rules: []rbac.Rule{{Groups: []string{"members"}, Permissions: []rbac.Permission{permission}}}},
+			Memberships: map[string][]string{"alice": {"members"}},
+		}})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(stateDir, cloudauth.AuthorizationSnapshotFile), data, 0600))
+		cloud, err := cloudauth.NewRPCAuthenticator(t.Context(), cloudauth.Config{CloudURL: "http://127.0.0.1:1", Logger: slog.Default(), StateDir: stateDir, ClusterID: "cluster"})
+		require.NoError(t, err)
+		authorizer := oidcauth.NewCompositeAuthorizer(cloud)
+		for _, identity := range []*rpc.Identity{
+			{Method: rpc.AuthMethodJWT, Subject: "alice"},
+			{Method: rpc.AuthMethodCert, Subject: "operator"},
+			{Method: rpc.AuthMethodWorkload, Subject: "workload", Metadata: map[string]any{"role": "cluster-readonly"}},
+		} {
+			ctx := rpc.ContextWithIdentity(t.Context(), identity)
+			ctx = rpc.ContextWithAuthorization(ctx, authorizer, "resourceusage", "listsandboxes")
+			require.NoError(t, authorizer.Authorize(ctx, identity, "resourceusage", "listsandboxes"))
+			var selector usage_v1alpha.Selector
+			selector.SetIncludeSystem(true)
+			listed, err := client.ListSandboxes(ctx, &selector, nil, nil)
+			require.NoError(t, err)
+			scoped := version == 2 && identity.Method == rpc.AuthMethodJWT
+			if scoped {
+				require.Len(t, listed.Sandboxes(), 1)
+				require.Equal(t, ids["visible"], listed.Sandboxes()[0].Ref().Sandbox())
+			} else {
+				require.Len(t, listed.Sandboxes(), 3, "legacy callers retain orphan recovery without trusting addon labels")
+			}
+			ctx = rpc.ContextWithAuthorization(ctx, authorizer, "resourceusage", "getsandbox")
+			require.NoError(t, authorizer.Authorize(ctx, identity, "resourceusage", "getsandbox"))
+			_, hiddenErr := client.GetSandbox(ctx, ids["hidden"], nil, nil)
+			_, missingErr := client.GetSandbox(ctx, "sandbox/missing", nil, nil)
+			if scoped {
+				require.Error(t, hiddenErr)
+				require.EqualError(t, missingErr, hiddenErr.Error())
+			} else {
+				require.NoError(t, hiddenErr)
+				require.ErrorContains(t, missingErr, "not found")
+			}
+		}
+		for _, identity := range []*rpc.Identity{
+			{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "visible"}},
+			{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "visible", "role": "app-readonly"}},
+		} {
+			require.Error(t, authorizer.Authorize(t.Context(), identity, "resourceusage", "listsandboxes"), "visibility must not grant new methods to bound identities")
+		}
+	}
 }

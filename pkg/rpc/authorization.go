@@ -24,7 +24,11 @@ var ErrResourceDenied = fmt.Errorf("%w: denied by resource policy", ErrUnauthori
 // FilterResource excludes ordinary policy denials but propagates failures that
 // invalidate the whole inventory. A bare ErrUnauthorized is also an exclusion
 // for simple authorizers; contextual failures must wrap it instead.
+// Legacy and standalone callers retain their transport method gate.
 func FilterResource(ctx context.Context, request ResourceRequest) (bool, error) {
+	if !UsesLogicalAuthorization(ctx) {
+		return true, nil
+	}
 	request.Filter = true
 	err := AuthorizeResource(ctx, request)
 	if errors.Is(err, ErrResourceDenied) || err == ErrUnauthorized {

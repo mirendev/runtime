@@ -11,6 +11,7 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
 )
@@ -168,11 +169,15 @@ func TestAppInventoryScopedVisibility(t *testing.T) {
 			require.ElementsMatch(t, tc.want, names)
 		})
 	}
-	for _, method := range []rpc.AuthMethod{rpc.AuthMethodOIDC, rpc.AuthMethodWorkload} {
-		ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Method: method, Metadata: map[string]any{"app": "mine", "bound_app": "mine"}})
-		result, err := client.List(ctx)
-		require.NoError(t, err)
-		require.Len(t, result.Apps(), 1)
-		require.Equal(t, "mine", result.Apps()[0].Name())
-	}
+	authorizer := oidcauth.NewCompositeAuthorizer(nil)
+	identity := &rpc.Identity{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "mine"}}
+	ctx := rpc.ContextWithIdentity(t.Context(), identity)
+	ctx = rpc.ContextWithAuthorization(ctx, authorizer, "crud", "list")
+	require.NoError(t, authorizer.Authorize(ctx, identity, "crud", "list"))
+	result, err := client.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, result.Apps(), 1, "OIDC binding must prevent cluster-wide app disclosure even without Cloud")
+	require.Equal(t, "mine", result.Apps()[0].Name())
+	workload := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "mine", "role": "app-readonly"}}
+	require.Error(t, authorizer.Authorize(t.Context(), workload, "crud", "list"), "app workloads must not acquire a cluster inventory method")
 }

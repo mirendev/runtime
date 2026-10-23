@@ -43,6 +43,9 @@ func (d *directory) appByName(name string) *appOwner {
 }
 
 func authorizeOwner(ctx context.Context, owner *appOwner, action string, filter bool) (bool, error) {
+	if !rpc.UsesLogicalAuthorization(ctx) {
+		return true, nil
+	}
 	request := rpc.ResourceRequest{Resource: "cluster", Action: "admin"}
 	if owner != nil {
 		if !rpc.AllowApp(ctx, owner.name) {

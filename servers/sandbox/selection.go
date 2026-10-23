@@ -32,8 +32,10 @@ func (s *Server) SelectForApp(ctx context.Context, state *compute_v1alpha.Sandbo
 	if err != nil {
 		// Only explicitly authorized callers may distinguish missing and non-app
 		// targets from hidden apps. Resolve valid short IDs before checking owners.
-		if authErr := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "exec", Instance: appName}); authErr != nil {
-			return authErr
+		if rpc.UsesLogicalAuthorization(ctx) {
+			if authErr := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "exec", Instance: appName}); authErr != nil {
+				return authErr
+			}
 		}
 		return err
 	}

@@ -113,6 +113,9 @@ func (s *Server) sandboxDetail(
 	}
 
 	if found == nil {
+		if _, err := authorizeOwner(ctx, nil, "read", false); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("sandbox %q not found", query)
 	}
 	if _, err := authorizeOwner(ctx, dir.apps[found.ref.AppId()], "read", false); err != nil {
