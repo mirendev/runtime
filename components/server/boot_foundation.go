@@ -121,7 +121,6 @@ func foundationConfig(options StartOptions, resolver netresolve.Resolver, secret
 
 	return coordinate.CoordinatorConfig{
 		Address:                   address,
-		EtcdEndpoints:             append([]string(nil), config.Etcd.Endpoints...),
 		Prefix:                    config.Etcd.GetPrefix(),
 		DataPath:                  config.Server.GetDataPath(),
 		AdditionalNames:           append([]string(nil), config.TLS.AdditionalNames...),

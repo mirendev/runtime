@@ -64,8 +64,7 @@ type Config struct {
 	Traces TracesExport
 }
 
-// Component manages a persistent BuildKit daemon as a containerd container,
-// or connects to an external BuildKit daemon via Unix socket.
+// Component manages a persistent BuildKit daemon as a containerd container.
 type Component struct {
 	Log       *slog.Logger
 	CC        *containerd.Client
@@ -79,7 +78,6 @@ type Component struct {
 	socketDir     string
 	hostsPath     string             // path to custom /etc/hosts file for the container
 	otelEnv       []string           // OTEL_* env buildkitd runs with
-	external      bool               // true if connecting to external daemon (no container management)
 	monitorCancel context.CancelFunc // cancels the task exit-monitor goroutine on intentional stop
 
 	// starting holds a channel that closes when the Start in progress returns.
@@ -103,17 +101,6 @@ func NewComponent(log *slog.Logger, cc *containerd.Client, namespace, dataPath s
 		CC:        cc,
 		Namespace: namespace,
 		DataPath:  dataPath,
-		external:  false,
-	}
-}
-
-// NewExternalComponent creates a BuildKit component that connects to an external daemon.
-// No container lifecycle management is performed - it only provides client access.
-func NewExternalComponent(log *slog.Logger, socketPath string) *Component {
-	return &Component{
-		Log:        log,
-		socketPath: socketPath,
-		external:   true,
 	}
 }
 
@@ -125,7 +112,6 @@ var buildkitLogOptions = []slogout.LoggerOption{
 }
 
 // Start starts the BuildKit daemon container.
-// For external components, this verifies the socket is accessible.
 func (c *Component) Start(ctx context.Context, config Config) error {
 	done := make(chan struct{})
 	c.starting.Store(&done)
@@ -136,16 +122,6 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 
 	if c.running {
 		return fmt.Errorf("buildkit component already running")
-	}
-
-	// External mode: just verify the socket is accessible
-	if c.external {
-		c.Log.Info("using external buildkit daemon", "socket", c.socketPath)
-		if err := c.waitForReady(ctx); err != nil {
-			return fmt.Errorf("external buildkit daemon not accessible at %s: %w", c.socketPath, err)
-		}
-		c.running = true
-		return nil
 	}
 
 	ctx = namespaces.WithNamespace(ctx, c.Namespace)
@@ -245,19 +221,9 @@ func (c *Component) Start(ctx context.Context, config Config) error {
 }
 
 // Stop stops the BuildKit daemon container.
-// For external components, this is a no-op.
 func (c *Component) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// External mode: no container to manage, just flip the flag idempotently.
-	if c.external {
-		if c.running {
-			c.running = false
-			c.Log.Info("disconnected from external buildkit daemon")
-		}
-		return nil
-	}
 
 	// Nothing to tear down once the container has been released. Note we can't
 	// gate solely on c.running: after an unexpected daemon death the exit

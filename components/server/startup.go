@@ -167,7 +167,6 @@ func newStartup(runtime *Runtime, options StartOptions) *startup {
 	ociRegistry := newOCIRegistryBoot(ociRegistryInputs(options), workloadIdentity.output, entityAccess.output, registryHostMapping.output, sandboxHost.component, observability.output)
 	workAdmission := newWorkAdmissionBoot(applicationManagement.output, workloadControl.component, nodePresence.Component, buildkit.component, ociRegistry.component, registryHostMapping.component)
 	buildSagaRecovery := newBuildSagaRecoveryBoot(
-		buildSagaRecoveryInputs(options),
 		applicationManagement.output,
 		workAdmission.component,
 	)
@@ -226,13 +225,8 @@ func containerdBootConfig(options StartOptions) containerdcomp.BootConfig {
 		socketPath = filepath.Join(dataPath, "containerd", "containerd.sock")
 	}
 
-	var bootConfig containerdcomp.BootConfig
-	if config.GetStartEmbedded() {
-		bootConfig = containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
-			config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
-	} else {
-		bootConfig = containerdcomp.ExternalBootConfig(options.Log, dataPath, socketPath)
-	}
+	bootConfig := containerdcomp.EmbeddedBootConfig(options.Log, dataPath,
+		config.GetBinaryPath(), options.Config.Server.GetReleasePath(), socketPath)
 	bootConfig.StopTimeout = componentStopTimeout
 	return bootConfig
 }

@@ -20,7 +20,7 @@ func configureServerClient(ctx *Context, config *serverconfig.Config, foundation
 	if config.Server.GetConfigClusterName() == "" {
 		config.Server.SetConfigClusterName("local")
 	}
-	if config.GetMode() != "standalone" || config.Server.GetSkipClientConfig() {
+	if config.Server.GetSkipClientConfig() {
 		return nil
 	}
 	certificate, err := foundation.IssueCertificate("miren-server")

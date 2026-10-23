@@ -107,7 +107,7 @@ func daemonSudoSteps(daemon lifecycleDaemon, exe string) []string {
 	if daemon.name == serverDaemon.name {
 		// Whether etcd is embedded lives in root-only config and the unit's
 		// environment, so the step states the condition rather than guess.
-		steps = append(steps, "snapshot etcd first when it is embedded (the default), so a failed upgrade can roll back the data too; with external etcd there is no snapshot, and rollback restores only the binary")
+		steps = append(steps, "snapshot etcd first, so a failed upgrade can roll back the data too")
 	}
 	steps = append(steps,
 		fmt.Sprintf("install the new binary at %s and point %s at it", mgr.InstallPath, mgr.PathSymlink),

@@ -1,0 +1,83 @@
+labs = []
+mode = 'standalone'
+
+[app_version]
+retention_count = 10
+retention_period = '30d'
+
+[buildkit]
+gc_keep_duration = '7d'
+gc_keep_storage = '10GB'
+socket_dir = ''
+socket_path = ''
+
+[containerd]
+binary_path = 'containerd'
+socket_path = ''
+start_embedded = true
+
+[deployment]
+retention_count = 25
+retention_period = '30d'
+
+[etcd]
+client_port = 12379
+endpoints = []
+http_client_port = 12381
+peer_port = 12380
+prefix = '/miren'
+quota_backend_bytes = 0
+start_embedded = true
+
+[ingress]
+address = ''
+error_page = ''
+mode = 'tls-autoprovision'
+trusted_proxy_hops = 1
+
+[metrics]
+[metrics.remote_write]
+
+[saga]
+retention_period = '7d'
+
+[secrets]
+key_rotation_period = '90d'
+
+[server]
+address = ':8443'
+config_cluster_name = 'local'
+data_path = '/var/lib/miren'
+disk_mode = ''
+http_request_timeout = 60
+release_path = ''
+runner_address = 'localhost:8444'
+runner_id = 'miren'
+skip_client_config = false
+stop_sandboxes_on_shutdown = false
+
+[telemetry]
+[telemetry.metrics]
+remote_write_url = ''
+workload_identity_audience = ''
+
+[telemetry.traces]
+endpoint = ''
+workload_identity_audience = ''
+
+[tls]
+acme_dns_provider = ''
+acme_email = ''
+additional_ips = []
+additional_names = []
+self_signed = false
+
+[victorialogs]
+address = 'victorialogs:9428'
+http_port = 9428
+retention_period = '30d'
+
+[victoriametrics]
+address = 'victoriametrics:8428'
+http_port = 8428
+retention_period = '1'

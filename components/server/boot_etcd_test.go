@@ -25,12 +25,6 @@ import (
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
-func TestExternalEtcdRequiresEndpoints(t *testing.T) {
-	b := &etcdBoot{}
-	_, err := b.startExternal(t.Context())
-	require.ErrorContains(t, err, "etcd endpoints not specified")
-}
-
 func TestEmbeddedEtcdBootRestoresCredentialsAndTransportOnFirstStart(t *testing.T) {
 	deps, cleanup := testutils.NewTestDeps()
 	defer cleanup()

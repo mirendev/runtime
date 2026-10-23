@@ -11,35 +11,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// startInProgress marks a Start as under way, the way Start does on entry, and
+// returns a func that finishes it without the daemon coming up.
+func startInProgress(c *Component) (finish func()) {
+	done := make(chan struct{})
+	c.starting.Store(&done)
+	return func() { close(done) }
+}
+
 func TestClientWaitsForStartInProgress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c := NewExternalComponent(slog.New(slog.NewTextHandler(io.Discard, nil)), "/nonexistent/buildkitd.sock")
-
-		// The socket never appears, so Start polls until its deadline.
-		startCtx, cancelStart := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancelStart()
-		startErr := make(chan error, 1)
-		go func() { startErr <- c.Start(startCtx, Config{}) }()
-		synctest.Wait()
+		c := NewComponent(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, "", t.TempDir())
+		finish := startInProgress(c)
+		go func() {
+			time.Sleep(10 * time.Second)
+			finish()
+		}()
 
 		begun := time.Now()
 		_, err := c.Client(t.Context())
 		// A Start that fails still releases waiting clients, which then see
 		// the daemon is not running rather than hanging until their deadline.
 		require.ErrorContains(t, err, "not running")
-		require.Error(t, <-startErr)
 		require.GreaterOrEqual(t, time.Since(begun), 10*time.Second, "Client returned before Start finished")
 	})
 }
 
 func TestClientGivesUpWhenItsContextEnds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		c := NewExternalComponent(slog.New(slog.NewTextHandler(io.Discard, nil)), "/nonexistent/buildkitd.sock")
-
-		startCtx, cancelStart := context.WithTimeout(t.Context(), 10*time.Second)
-		defer cancelStart()
-		go func() { _ = c.Start(startCtx, Config{}) }()
-		synctest.Wait()
+		c := NewComponent(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, "", t.TempDir())
+		finish := startInProgress(c)
+		defer finish()
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()

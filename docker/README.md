@@ -40,10 +40,9 @@ If you prefer to install manually:
 
 ## Architecture
 
-The Docker setup includes:
-
-- **Miren Container**: Contains miren server with containerd and container runtime
-- **etcd**: Distributed key-value store for state management  
+The Docker setup is a single privileged container running the miren server,
+which starts its own containerd, etcd, BuildKit, and log and metrics storage
+inside it.
 
 ## Configuration
 
@@ -103,4 +102,3 @@ The runtime container requires privileged mode to run containerd and manage cont
 Ensure no other services are using the required ports:
 - 8080 (HTTP ingress)
 - 8443 (Miren server QUIC)
-- 2379 (etcd)

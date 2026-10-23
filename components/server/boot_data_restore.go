@@ -125,9 +125,6 @@ func (b *dataRestoreBoot) start(ctx context.Context, containerd containerdBootOu
 // restore knows what a BackupRef is: today, the path of an etcd snapshot
 // taken by the executor's etcd DataBackup.
 func (b *dataRestoreBoot) restore(ctx context.Context, log *slog.Logger, containerd containerdBootOutput, ref, label string) error {
-	if !b.inputs.etcd.GetStartEmbedded() {
-		return fmt.Errorf("cannot restore %s: etcd is not embedded", ref)
-	}
 	component := etcd.NewEtcdComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)
 	return component.Restore(ctx, etcd.RestoreOptions{
 		Snapshot: ref,

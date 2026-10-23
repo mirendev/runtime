@@ -11,25 +11,20 @@ import (
 // ServerConfigGenerate generates a server configuration file
 func ServerConfigGenerate(ctx *Context, opts struct {
 	Output   string `short:"o" long:"output" description:"Output file path (defaults to stdout)"`
-	Mode     string `short:"m" long:"mode" description:"Server mode: standalone (default), distributed (experimental)" default:"standalone"`
 	Defaults bool   `short:"d" long:"defaults" description:"Generate config with default values"`
+	// Kept so scripts passing --mode standalone keep working.
+	Mode string `short:"m" long:"mode" description:"Deprecated: standalone is the only server mode" hidden:"yes"`
 }) error {
+	if opts.Mode != "" && opts.Mode != "standalone" {
+		return fmt.Errorf("--mode %s is no longer supported; standalone is the only server mode", opts.Mode)
+	}
+
 	var cfg *serverconfig.Config
 
 	if opts.Defaults {
 		cfg = serverconfig.DefaultConfig()
 	} else {
-		// Create minimal config
 		cfg = &serverconfig.Config{}
-		if opts.Mode != "" {
-			cfg.SetMode(opts.Mode)
-		}
-	}
-
-	// Apply mode defaults inline since we're not using Load()
-	if cfg.GetMode() == "standalone" {
-		cfg.Etcd.SetStartEmbedded(true)
-		cfg.Containerd.SetStartEmbedded(true)
 	}
 
 	// Marshal to TOML

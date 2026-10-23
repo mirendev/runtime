@@ -11,18 +11,6 @@ import (
 	"miren.dev/runtime/pkg/workloadidentity"
 )
 
-func TestBuildkitWithoutConfiguredDaemonPublishesEmptyOutput(t *testing.T) {
-	b := &buildkitBoot{}
-
-	output, err := b.startDisabled(t.Context())
-	if err != nil {
-		t.Fatalf("start() error = %v", err)
-	}
-	if output.component != nil {
-		t.Fatal("buildkit published a component without an embedded or external daemon")
-	}
-}
-
 func TestBuildkitTraces(t *testing.T) {
 	token := workloadidentity.NewSystemTokenSource(workloadidentity.SystemWorkloadTelemetryWriter, "aud")
 

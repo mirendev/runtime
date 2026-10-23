@@ -29,7 +29,7 @@ func TestBuildSagaRecoveryStartsAfterWorkAdmission(t *testing.T) {
 			return nil
 		}
 	})
-	recovery := newBuildSagaRecoveryBoot(buildSagaRecoveryBootInputs{enabled: true}, applicationsOutput, workAdmission)
+	recovery := newBuildSagaRecoveryBoot(applicationsOutput, workAdmission)
 
 	for _, component := range []*boot.Component{applicationsComponent, workAdmission, recovery.component} {
 		require.NoError(t, graph.Add(component))

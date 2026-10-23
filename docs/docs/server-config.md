@@ -31,8 +31,6 @@ The server reads its config from the first file found:
 ### Example
 
 ```toml
-mode = "standalone"
-
 [server]
 address = ":8443"
 data_path = "/var/lib/miren"
@@ -44,24 +42,34 @@ mode = "tls-autoprovision"
 [tls]
 acme_email = "admin@example.com"
 
-[etcd]
-start_embedded = true
-
 [buildkit]
 gc_keep_storage = "20GB"
 gc_keep_duration = "14d"
 ```
 
-## Server Modes
+## Embedded Components
 
-Miren has two operating modes:
+The server runs etcd, containerd, BuildKit, VictoriaLogs, and VictoriaMetrics
+itself and manages their lifecycle, data, and upgrades. Additional machines join
+as [distributed runners](./distributed-runners.md).
 
-| Mode | Description |
-|------|-------------|
-| `standalone` | All components (etcd, containerd, buildkit, logs, metrics) run embedded within a single process. **This is the default.** |
-| `distributed` | Components run as separate services. Experimental. |
+Earlier releases had an experimental `distributed` server mode that pointed the
+server at external data stores instead. That mode is gone. A server whose
+configuration still selects it refuses to start and names the setting, so it
+never comes up on empty embedded stores in place of your data. If you are
+upgrading, the upgrade rolls back to the previous release. The settings that
+are refused, whether they come from the config file, environment, or flags, are:
 
-In standalone mode, embedded services start automatically unless explicitly disabled.
+- `mode` set to anything other than `"standalone"`
+- `start_embedded = false` in any of `[etcd]`, `[containerd]`, `[buildkit]`,
+  `[victorialogs]`, or `[victoriametrics]`
+
+`mode = "standalone"`, `--mode standalone`, and `start_embedded = true` are still
+accepted and have no effect. So are `[etcd] endpoints`, `[buildkit] socket_path`,
+and the `[victorialogs]` and `[victoriametrics]` `address` settings, which only
+took effect alongside one of the refused settings above. Configs written by
+`miren server config generate --defaults` in earlier releases include the
+Victoria addresses, and they keep working.
 
 ## Coordinator metadata
 
@@ -89,7 +97,6 @@ Protect snapshots with restricted access as well: application/entity data is not
 
 | Field | Type | Default | Env Var | CLI Flag |
 |-------|------|---------|---------|----------|
-| `mode` | string | `standalone` | `MIREN_MODE` | `--mode`, `-m` |
 | `labs` | string[] | `[]` | `MIREN_LABS` | `--labs` |
 
 ## `[server]` — Core Settings {#server}
@@ -238,18 +245,14 @@ Settings under `[tls]` cover two kinds of certs. `acme_email`, `acme_dns_provide
 
 ## `[etcd]` — Etcd Settings {#etcd}
 
-Miren uses etcd as its entity store. In standalone mode, an embedded etcd server starts automatically.
+Miren uses etcd as its entity store and runs it embedded.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `endpoints` | string[] | `[]` | Etcd endpoints (auto-configured when embedded) | `MIREN_ETCD_ENDPOINTS` | `--etcd`, `-e` |
 | `prefix` | string | `/miren` | Key prefix in etcd | `MIREN_ETCD_PREFIX` | `--etcd-prefix`, `-p` |
-| `start_embedded` | bool | `true`\* | Start embedded etcd server | `MIREN_ETCD_START_EMBEDDED` | `--start-etcd` |
 | `client_port` | int | `12379` | Embedded etcd client port | `MIREN_ETCD_CLIENT_PORT` | `--etcd-client-port` |
 | `peer_port` | int | `12380` | Embedded etcd peer port | `MIREN_ETCD_PEER_PORT` | `--etcd-peer-port` |
 | `http_client_port` | int | `12381` | Embedded etcd HTTP client port (bound to loopback) | `MIREN_ETCD_HTTP_CLIENT_PORT` | `--etcd-http-client-port` |
-
-\* Defaults to `true` in standalone mode only.
 
 :::info[Embedded etcd always comes up with mTLS]
 `client_port` binds to all interfaces since embedded etcd always starts with
@@ -276,21 +279,14 @@ For a downgrade to a binary predating etcd authorization, restore its
 pre-upgrade etcd snapshot using the managed rollback path. An in-place binary
 downgrade leaves authorization enabled: older maintenance clients and newly
 joined runners do not have the required etcd identities.
-
-This automatic authorization setup applies to embedded mTLS etcd. If you use
-external etcd, you are responsible for isolating and protecting that server;
-its contents include the cluster's private credentials.
 :::
 
 ## `[containerd]` — Containerd Settings {#containerd}
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded containerd daemon | `MIREN_CONTAINERD_START_EMBEDDED` | `--start-containerd` |
 | `binary_path` | string | `containerd` | Path to containerd binary | `MIREN_CONTAINERD_BINARY_PATH` | `--containerd-binary` |
-| `socket_path` | string | — | Path to containerd socket | `MIREN_CONTAINERD_SOCKET_PATH` | `--containerd-socket` |
-
-\* Defaults to `true` in standalone mode only.
+| `socket_path` | string | `<data_path>/containerd/containerd.sock` | Socket the embedded containerd listens on | `MIREN_CONTAINERD_SOCKET_PATH` | `--containerd-socket` |
 
 ## `[buildkit]` — BuildKit Settings {#buildkit}
 
@@ -298,13 +294,9 @@ Controls the BuildKit daemon used for building container images.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded BuildKit daemon | `MIREN_BUILDKIT_START_EMBEDDED` | `--start-buildkit` |
-| `socket_path` | string | — | Path to external BuildKit socket (distributed mode) | `MIREN_BUILDKIT_SOCKET_PATH` | `--buildkit-socket` |
 | `socket_dir` | string | — | Directory for embedded BuildKit socket | `MIREN_BUILDKIT_SOCKET_DIR` | `--buildkit-socket-dir` |
 | `gc_keep_storage` | string | `10GB` | Maximum BuildKit layer cache size | `MIREN_BUILDKIT_GC_KEEP_STORAGE` | `--buildkit-gc-storage` |
 | `gc_keep_duration` | string | `7d` | How long to keep cache entries | `MIREN_BUILDKIT_GC_KEEP_DURATION` | `--buildkit-gc-duration` |
-
-\* Defaults to `true` in standalone mode only.
 
 ## `[victorialogs]` — Log Storage Settings {#victorialogs}
 
@@ -312,16 +304,12 @@ Controls the embedded VictoriaLogs instance used for application log storage.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded VictoriaLogs server | `MIREN_VICTORIALOGS_START_EMBEDDED` | `--start-victorialogs` |
 | `http_port` | int | `9428` | HTTP port in embedded mode | `MIREN_VICTORIALOGS_HTTP_PORT` | `--victorialogs-http-port` |
 | `retention_period` | string | `30d` | Retention period (e.g. `30d`, `2w`, `1y`) | `MIREN_VICTORIALOGS_RETENTION_PERIOD` | `--victorialogs-retention` |
-| `address` | string | `victorialogs:9428` | Address when not using embedded | `MIREN_VICTORIALOGS_ADDRESS` | `--victorialogs-addr` |
 
-\* Defaults to `true` in standalone mode only.
-
-Miren snapshots embedded VictoriaLogs data before image upgrades. See
+Miren snapshots VictoriaLogs data before image upgrades. See
 [VictoriaLogs upgrade and rollback](./victorialogs-upgrade.md) for backup
-retention and rollback details. External VictoriaLogs is not managed by Miren.
+retention and rollback details.
 
 ## `[victoriametrics]` — Metrics Storage Settings {#victoriametrics}
 
@@ -331,12 +319,8 @@ destination and are not copied into this instance.
 
 | Field | Type | Default | Description | Env Var | CLI Flag |
 |-------|------|---------|-------------|---------|----------|
-| `start_embedded` | bool | `true`\* | Start embedded VictoriaMetrics server | `MIREN_VICTORIAMETRICS_START_EMBEDDED` | `--start-victoriametrics` |
 | `http_port` | int | `8428` | HTTP port in embedded mode | `MIREN_VICTORIAMETRICS_HTTP_PORT` | `--victoriametrics-http-port` |
 | `retention_period` | string | `1` | Retention period in months | `MIREN_VICTORIAMETRICS_RETENTION_PERIOD` | `--victoriametrics-retention` |
-| `address` | string | `victoriametrics:8428` | Address when not using embedded | `MIREN_VICTORIAMETRICS_ADDRESS` | `--victoriametrics-addr` |
-
-\* Defaults to `true` in standalone mode only.
 
 ## `[telemetry.metrics]` — Managed Application Metrics {#managed-app-metrics}
 
