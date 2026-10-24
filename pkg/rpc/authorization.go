@@ -1,6 +1,10 @@
 package rpc
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // ResourceRequest names a logical operation after the handler has resolved its
 // target. Instance and Owner must come from authoritative server-side state.
@@ -9,6 +13,28 @@ type ResourceRequest struct {
 	Action   string
 	Instance string
 	Owner    string
+	// Filter marks an inventory check, where excluding a row is expected.
+	Filter bool
+}
+
+// ErrResourceDenied distinguishes a policy exclusion from an authorization
+// service failure, such as unavailable policy or an unknown principal.
+var ErrResourceDenied = fmt.Errorf("%w: denied by resource policy", ErrUnauthorized)
+
+// FilterResource excludes ordinary policy denials but propagates failures that
+// invalidate the whole inventory. A bare ErrUnauthorized is also an exclusion
+// for simple authorizers; contextual failures must wrap it instead.
+// Legacy and standalone callers retain their transport method gate.
+func FilterResource(ctx context.Context, request ResourceRequest) (bool, error) {
+	if !UsesLogicalAuthorization(ctx) {
+		return true, nil
+	}
+	request.Filter = true
+	err := AuthorizeResource(ctx, request)
+	if errors.Is(err, ErrResourceDenied) || err == ErrUnauthorized {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ResourceAuthorizer supplements the transport's method gate with a check on
@@ -78,6 +104,8 @@ func AppAction(resource, action string) string {
 	switch resource {
 	case "crud":
 		switch action {
+		case "list":
+			return "list"
 		case "new":
 			return "create"
 		case "destroy":
@@ -91,6 +119,24 @@ func AppAction(resource, action string) string {
 		}
 	case "appstatus":
 		if action == "appinfo" {
+			return "read"
+		}
+	case "sandboxes":
+		switch action {
+		case "list":
+			return "list"
+		case "selectforapp":
+			return "exec"
+		}
+	case "sandboxpools":
+		if action == "list" {
+			return "list"
+		}
+	case "resourceusage":
+		switch action {
+		case "listapps", "httplistapps", "listsandboxes", "httplistsandboxes":
+			return "list"
+		case "getapp", "httpgetapp", "getsandbox", "httpgetsandbox":
 			return "read"
 		}
 	case "runs":

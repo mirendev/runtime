@@ -211,7 +211,7 @@ func (a *RPCAuthenticator) UsesLogicalAuthorization(ctx context.Context, identit
 
 func (a *RPCAuthenticator) AuthorizeResource(ctx context.Context, identity *rpc.Identity, request rpc.ResourceRequest) error {
 	if identity == nil {
-		return rpc.ErrUnauthorized
+		return fmt.Errorf("%w: missing identity", rpc.ErrUnauthorized)
 	}
 	if identity.Method == rpc.AuthMethodCert {
 		return nil
@@ -243,7 +243,11 @@ func (a *RPCAuthenticator) authorize(ctx context.Context, identity *rpc.Identity
 		decision, reason = a.authorization.EvaluateResource(req, legacyResource, legacyAction)
 	}
 	if decision == rbac.DecisionDeny {
-		a.logger.Warn("authorization denied",
+		level := slog.LevelWarn
+		if request.Filter && reason == "no_matching_rule" {
+			level = slog.LevelDebug
+		}
+		a.logger.Log(ctx, level, "authorization denied",
 			"reason", reason,
 			"subject", identity.Subject,
 			"groups", req.Groups,
@@ -256,7 +260,10 @@ func (a *RPCAuthenticator) authorize(ctx context.Context, identity *rpc.Identity
 		if reason == "not_synced" {
 			return fmt.Errorf("%w: cloud authorization is not synchronized; check the cluster's cloud connection and initial snapshot", rpc.ErrUnauthorized)
 		}
-		return fmt.Errorf("%w: denied by RBAC policy", rpc.ErrUnauthorized)
+		if reason == "no_matching_rule" {
+			return rpc.ErrResourceDenied
+		}
+		return fmt.Errorf("%w: %s", rpc.ErrUnauthorized, reason)
 	}
 
 	return nil

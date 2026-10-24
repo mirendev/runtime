@@ -163,6 +163,9 @@ type appHealthSource struct {
 // Kept separate from route lookup so periodic health samples do not pay for
 // an HttpRoute listing they will discard.
 func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error) {
+	if _, err := rpc.FilterResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "list"}); err != nil {
+		return nil, err
+	}
 	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return nil, err
@@ -177,6 +180,18 @@ func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error
 		var app core_v1alpha.App
 		list.Read(&app)
 		md := list.Metadata()
+		if !rpc.AllowApp(ctx, md.Name) {
+			continue
+		}
+		allowed, err := rpc.FilterResource(ctx, rpc.ResourceRequest{
+			Resource: "app", Action: "list", Instance: md.Name, Owner: app.OwnedBy,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
 
 		entry := appEntry{name: md.Name, app: app}
 

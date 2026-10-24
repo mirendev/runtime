@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -495,6 +496,152 @@ func TestSelectForAppRejectsNonApp(t *testing.T) {
 	record, err := store.Store.GetEntity(ctx, versionID)
 	require.NoError(t, err)
 	client := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), store.Client))))
-	_, err = client.SelectForApp(ctx, record.ShortId(), "")
-	require.ErrorContains(t, err, "not an app")
+	for _, authorized := range []context.Context{ctx, rpc.ContextWithAuthorization(ctx, sandboxVisibilityAuthorizer{admin: true}, "sandboxes", "selectforapp")} {
+		_, err = client.SelectForApp(authorized, record.ShortId(), "")
+		require.ErrorContains(t, err, "not an app")
+		_, err = client.SelectForApp(authorized, "nonexistent", "")
+		require.ErrorContains(t, err, "not found")
+	}
+	scoped := rpc.ContextWithAuthorization(ctx, sandboxVisibilityAuthorizer{action: "exec"}, "sandboxes", "selectforapp")
+	for _, target := range []string{record.ShortId(), "nonexistent"} {
+		_, err := client.SelectForApp(scoped, target, "")
+		require.EqualError(t, err, rpc.ErrUnauthorized.Error(), target)
+	}
+	appID, err := store.Client.Create(ctx, "mine", &core_v1alpha.App{OwnedBy: "alice"})
+	require.NoError(t, err)
+	appRecord, err := store.Store.GetEntity(ctx, appID)
+	require.NoError(t, err)
+	selected, err := client.SelectForApp(scoped, appRecord.ShortId(), "")
+	require.NoError(t, err, "authorized app short IDs must still resolve to their canonical owner")
+	require.Equal(t, "no_running", selected.Failure())
+}
+
+type sandboxVisibilityAuthorizer struct {
+	action string
+	admin  bool
+}
+
+func (sandboxVisibilityAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error {
+	return nil
+}
+func (a sandboxVisibilityAuthorizer) AuthorizeResource(_ context.Context, _ *rpc.Identity, req rpc.ResourceRequest) error {
+	if a.admin || (req.Resource == "app" && req.Action == a.action && req.Instance == "mine" && req.Owner == "alice") {
+		return nil
+	}
+	return rpc.ErrUnauthorized
+}
+
+func TestSandboxInventoryVisibilityAndSelection(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ctx := t.Context()
+	versions := map[string]entity.Id{}
+	pools := map[string]entity.Id{}
+	for name, owner := range map[string]string{"mine": "alice", "private": "bob"} {
+		appID, err := inmem.Client.Create(ctx, name, &core_v1alpha.App{OwnedBy: owner})
+		require.NoError(t, err)
+		versions[name], err = inmem.Client.Create(ctx, name, &core_v1alpha.AppVersion{App: appID})
+		require.NoError(t, err)
+		pools[name], err = inmem.Client.Create(ctx, name, &compute_v1alpha.SandboxPool{App: appID})
+		require.NoError(t, err)
+	}
+	want := []string{}
+	for _, tc := range []struct {
+		name, pool, version string
+		visible             bool
+	}{
+		{"owned-pool", pools["mine"].String(), versions["private"].String(), true},
+		{"owned-run", "", versions["mine"].String(), true},
+		{"private-pool", pools["private"].String(), versions["mine"].String(), false},
+		{"broken-pool", "sandbox_pool/missing", versions["mine"].String(), false},
+		{"orphan", "", "", false},
+	} {
+		id, err := inmem.Client.Create(ctx, tc.name, &compute_v1alpha.Sandbox{
+			Spec: compute_v1alpha.SandboxSpec{Version: entity.Id(tc.version)},
+		}, entityserver.WithLabels(types.LabelSet("pool", tc.pool)))
+		require.NoError(t, err)
+		if tc.visible {
+			want = append(want, id.String())
+		}
+	}
+	client := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), inmem.Client))))
+	caller := func(action string, admin bool) context.Context {
+		return rpc.ContextWithAuthorization(ctx, sandboxVisibilityAuthorizer{action: action, admin: admin}, "sandboxes", "list")
+	}
+	listed, err := client.List(caller("list", false))
+	require.NoError(t, err)
+	var got []string
+	for _, sb := range listed.Sandboxes() {
+		got = append(got, sb.Id())
+		require.Equal(t, "mine", sb.App(), "display ownership must agree with authorization, not the version")
+	}
+	require.ElementsMatch(t, want, got)
+	readOnly, err := client.List(caller("read", false))
+	require.NoError(t, err)
+	require.Empty(t, readOnly.Sandboxes())
+	poolClient := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(inmem.Client))))
+	listedPools, err := poolClient.List(caller("list", false), "")
+	require.NoError(t, err)
+	require.Len(t, listedPools.Pools(), 1)
+	require.Equal(t, pools["mine"].String(), listedPools.Pools()[0].Id())
+	for _, app := range []string{"mine", "private", "nonexistent"} {
+		filtered, err := poolClient.List(caller("list", false), app)
+		require.NoError(t, err, app)
+		if app == "mine" {
+			require.Len(t, filtered.Pools(), 1)
+			require.Equal(t, pools["mine"].String(), filtered.Pools()[0].Id())
+		} else {
+			require.Empty(t, filtered.Pools(), "hidden and nonexistent apps must be indistinguishable")
+		}
+	}
+	listedPools, err = poolClient.List(caller("read", false), "")
+	require.NoError(t, err)
+	require.Empty(t, listedPools.Pools())
+	admin, err := client.List(caller("", true))
+	require.NoError(t, err)
+	require.Len(t, admin.Sandboxes(), 5, "administrators retain orphan visibility")
+	_, err = client.SelectForApp(caller("list", false), "mine", "")
+	require.ErrorIs(t, err, rpc.ErrUnauthorized)
+	_, err = client.SelectForApp(caller("exec", false), "mine", "")
+	require.NoError(t, err)
+	for _, action := range []string{"", "list", "exec"} {
+		for _, target := range []string{"private", "nonexistent"} {
+			_, err = client.SelectForApp(caller(action, false), target, "")
+			require.EqualError(t, err, rpc.ErrUnauthorized.Error(), "hidden and nonexistent apps must be indistinguishable")
+		}
+	}
+	for _, method := range []rpc.AuthMethod{rpc.AuthMethodOIDC, rpc.AuthMethodWorkload} {
+		bound := rpc.ContextWithIdentity(ctx, &rpc.Identity{Method: method, Metadata: map[string]any{"app": "mine", "bound_app": "mine"}})
+		listed, err := client.List(bound)
+		require.NoError(t, err)
+		require.Len(t, listed.Sandboxes(), 2)
+		// Even a cluster administrator cannot use orphan recovery through an
+		// app-bound identity.
+		bound = rpc.ContextWithAuthorization(bound, sandboxVisibilityAuthorizer{admin: true}, "sandboxes", "list")
+		listed, err = client.List(bound)
+		require.NoError(t, err)
+		require.Len(t, listed.Sandboxes(), 2)
+	}
+}
+
+func TestInventoryPropagatesGlobalAuthorizationFailureWhenEmpty(t *testing.T) {
+	store, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	ctx := rpc.ContextWithAuthorization(t.Context(), inventoryFailedAuthorizer{}, "sandboxes", "list")
+	sandboxes := compute_v1alpha.NewSandboxesClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxes(NewServer(testutils.TestLogger(t), store.Client))))
+	_, err := sandboxes.List(ctx)
+	require.ErrorContains(t, err, "policy service unavailable")
+	pools := compute_v1alpha.NewSandboxPoolsClient(rpc.LocalClient(compute_v1alpha.AdaptSandboxPools(NewPoolServer(store.Client))))
+	_, err = pools.List(ctx, "")
+	require.ErrorContains(t, err, "policy service unavailable")
+}
+
+type inventoryFailedAuthorizer struct{}
+
+func (inventoryFailedAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error {
+	return nil
+}
+
+func (inventoryFailedAuthorizer) AuthorizeResource(context.Context, *rpc.Identity, rpc.ResourceRequest) error {
+	return fmt.Errorf("policy service unavailable")
 }

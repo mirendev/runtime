@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -10,6 +11,8 @@ import (
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
+	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
 )
 
@@ -92,4 +95,89 @@ func TestCrudResourceAuthorizationBeforeMutation(t *testing.T) {
 	allowed := rpc.ContextWithAuthorization(ctx, auth, "crud", "listversions")
 	_, err = client.ListVersions(allowed, appID.String(), false, 0)
 	require.NoError(t, err)
+}
+
+type appVisibilityAuthorizer struct {
+	policy    rbac.Policy
+	evaluator *rbac.Evaluator
+	failure   error
+}
+
+func (a *appVisibilityAuthorizer) GetPolicy() *rbac.Policy { return &a.policy }
+func (*appVisibilityAuthorizer) Authorize(context.Context, *rpc.Identity, string, string) error {
+	return nil
+}
+func (a *appVisibilityAuthorizer) AuthorizeResource(_ context.Context, id *rpc.Identity, req rpc.ResourceRequest) error {
+	if a.failure != nil {
+		return a.failure
+	}
+	if a.evaluator.Evaluate(&rbac.Request{
+		Subject: id.Subject, Groups: []string{"members"}, Resource: req.Resource,
+		Action: req.Action, Instance: req.Instance, Owner: req.Owner,
+	}) == rbac.DecisionAllow {
+		return nil
+	}
+	return rpc.ErrUnauthorized
+}
+
+func TestAppInventoryPropagatesAuthorizationFailure(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: inmem.Client})))
+	for _, populated := range []bool{false, true} {
+		if populated {
+			_, err := inmem.Client.Create(t.Context(), "shop", &core_v1alpha.App{})
+			require.NoError(t, err)
+		}
+		auth := &appVisibilityAuthorizer{failure: fmt.Errorf("%w: policy unavailable", rpc.ErrUnauthorized)}
+		ctx := rpc.ContextWithAuthorization(t.Context(), auth, "crud", "list")
+		_, err := client.List(ctx)
+		require.ErrorContains(t, err, "policy unavailable")
+	}
+}
+
+func TestAppInventoryScopedVisibility(t *testing.T) {
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	for name, owner := range map[string]string{"mine": "alice", "shared-web": "bob", "private": "bob", "legacy": ""} {
+		_, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{OwnedBy: owner})
+		require.NoError(t, err)
+	}
+	client := app_v1alpha.NewCrudClient(rpc.LocalClient(app_v1alpha.AdaptCrud(&AppInfo{Log: slog.Default(), EC: inmem.Client})))
+	for _, tc := range []struct {
+		name, action, scope string
+		want                []string
+	}{
+		{"owner", "list", "$owner", []string{"mine"}},
+		{"collaborator", "list", "shared-*", []string{"shared-web"}},
+		{"read does not grant list", "read", "*", nil},
+		{"administrator", "list", "*", []string{"legacy", "mine", "private", "shared-web"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := &appVisibilityAuthorizer{policy: rbac.Policy{Rules: []rbac.Rule{{Groups: []string{"members"}, Permissions: []rbac.Permission{
+				{Resource: "app", Actions: []string{tc.action}, Scope: tc.scope},
+			}}}}}
+			auth.evaluator = rbac.NewEvaluator(t.Context(), auth, slog.Default())
+			ctx := rpc.ContextWithIdentity(t.Context(), &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT})
+			ctx = rpc.ContextWithAuthorization(ctx, auth, "crud", "list")
+			result, err := client.List(ctx)
+			require.NoError(t, err)
+			var names []string
+			for _, app := range result.Apps() {
+				names = append(names, app.Name())
+			}
+			require.ElementsMatch(t, tc.want, names)
+		})
+	}
+	authorizer := oidcauth.NewCompositeAuthorizer(nil)
+	identity := &rpc.Identity{Method: rpc.AuthMethodOIDC, Metadata: map[string]any{"bound_app": "mine"}}
+	ctx := rpc.ContextWithIdentity(t.Context(), identity)
+	ctx = rpc.ContextWithAuthorization(ctx, authorizer, "crud", "list")
+	require.NoError(t, authorizer.Authorize(ctx, identity, "crud", "list"))
+	result, err := client.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, result.Apps(), 1, "OIDC binding must prevent cluster-wide app disclosure even without Cloud")
+	require.Equal(t, "mine", result.Apps()[0].Name())
+	workload := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "mine", "role": "app-readonly"}}
+	require.Error(t, authorizer.Authorize(t.Context(), workload, "crud", "list"), "app workloads must not acquire a cluster inventory method")
 }

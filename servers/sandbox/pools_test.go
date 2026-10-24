@@ -300,6 +300,10 @@ func (s poolOwnerFailureStore) GetEntity(ctx context.Context, id entity.Id) (*en
 	return s.Store.GetEntity(ctx, id)
 }
 
+func (s poolOwnerFailureStore) ListIndexRevision(context.Context, entity.Attr) ([]entity.Id, int64, error) {
+	return nil, 0, cond.Corruption("entity", "owner store unavailable")
+}
+
 func TestPoolOwnerStoreFailure(t *testing.T) {
 	ctx := t.Context()
 	inmem, cleanup := testutils.NewInMemEntityServer(t)
