@@ -130,6 +130,9 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if err := s.inner.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
 	if err := validateDeploymentMessage(args.EphemeralLabel(), args.Deployment()); err != nil {
 		return err
 	}
@@ -179,17 +182,26 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 	}
 	sessionID := args.SessionId()
 
-	val, ok := s.inner.sessions.LoadAndDelete(sessionID)
+	val, ok := s.inner.sessions.Load(sessionID)
 	if !ok {
 		return fmt.Errorf("unknown or expired upload session: %s", sessionID)
 	}
 	sess := val.(*buildSession)
-	sess.cancelFunc()
 
 	name := sess.appName
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if rpc.UsesLogicalAuthorization(ctx) && sess.subject != app.CreationSubject(ctx) {
+		return rpc.ErrUnauthorized
+	}
+	if err := s.inner.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
+	if !s.inner.sessions.CompareAndDelete(sessionID, val) {
+		return fmt.Errorf("unknown or expired upload session: %s", sessionID)
+	}
+	sess.cancelFunc()
 	work := newDeploymentContext(ctx)
 	defer work.Close()
 	defer func() { retErr = work.result(retErr) }()
@@ -257,6 +269,15 @@ func (s *SagaBuilder) startBuild(
 	eph *ephemeralOpts,
 	deployReq *build_v1alpha.DeployRequest,
 ) error {
+	// Recovery has no initiating RPC context. Resolve first-writer ownership
+	// and authorize the actual app before admitting durable work, rather than
+	// persisting a prospective-owner grant that could target another creator's
+	// app after a restart.
+	if rpc.UsesLogicalAuthorization(ctx) {
+		if _, err := s.inner.ensureApp(ctx, appName); err != nil {
+			return err
+		}
+	}
 	sb := s.executor.Start(sagaBuildFromTar).
 		Input("app_name", appName).
 		Input("app_creator", app.CreationSubject(ctx)).

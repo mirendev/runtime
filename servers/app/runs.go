@@ -13,6 +13,7 @@ import (
 
 	"github.com/mr-tron/base58"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	compute "miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
@@ -85,6 +86,9 @@ func (r *AppInfo) SubmitRun(ctx context.Context, state *app_v1alpha.RunsSubmitRu
 	a := state.Args()
 	if !rpc.AllowApp(ctx, a.App()) {
 		return rpc.AppAccessError(ctx, a.App())
+	}
+	if err := appclient.Authorize(ctx, r.EC.EAC(), a.App(), "exec"); err != nil {
+		return err
 	}
 	if a.RequestId() == "" || a.Version() == "" || len(a.Command()) == 0 {
 		return cond.ValidationFailure("missing-field", "request_id, version and command are required")
@@ -189,6 +193,9 @@ func (r *AppInfo) CreateRunEntity(ctx context.Context, app, taskName string, com
 	if !rpc.AllowApp(ctx, app) {
 		return "", "", rpc.AppAccessError(ctx, app)
 	}
+	if err := appclient.Authorize(ctx, r.EC.EAC(), app, "exec"); err != nil {
+		return "", "", err
+	}
 
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, app, &appRec); err != nil {
@@ -265,6 +272,9 @@ func (r *AppInfo) ListRuns(ctx context.Context, state *app_v1alpha.RunsListRuns)
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
 	}
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "read"); err != nil {
+		return err
+	}
 
 	var appRec core_v1alpha.App
 	if err := r.EC.Get(ctx, args.App(), &appRec); err != nil {
@@ -312,7 +322,7 @@ func (r *AppInfo) GetRun(ctx context.Context, state *app_v1alpha.RunsGetRun) err
 	if err != nil {
 		return err
 	}
-	if err := r.authorizeRun(ctx, run); err != nil {
+	if err := r.authorizeRun(ctx, run, "read"); err != nil {
 		return err
 	}
 
@@ -358,7 +368,7 @@ func (r *AppInfo) CancelRunEntity(ctx context.Context, runID string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if err := r.authorizeRun(ctx, run); err != nil {
+	if err := r.authorizeRun(ctx, run, "exec"); err != nil {
 		return false, err
 	}
 
@@ -382,7 +392,7 @@ func (r *AppInfo) CancelRunEntity(ctx context.Context, runID string) (bool, erro
 // GetRun and CancelRun take a bare run id, so without this an app-scoped caller
 // could read or cancel any run in the cluster. The app is resolved from the run
 // itself rather than anything caller-supplied.
-func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run) error {
+func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run, action string) error {
 	var md core_v1alpha.Metadata
 	if err := r.EC.GetById(ctx, run.App, &md); err != nil {
 		// The owning app can't be resolved, so the guard can't be evaluated.
@@ -393,7 +403,7 @@ func (r *AppInfo) authorizeRun(ctx context.Context, run *run_v1alpha.Run) error 
 	if !rpc.AllowApp(ctx, md.Name) {
 		return rpc.AppAccessError(ctx, md.Name)
 	}
-	return nil
+	return appclient.Authorize(ctx, r.EC.EAC(), run.App.String(), action)
 }
 
 // lookupRun resolves a run by full or bare id, and returns its short-id along

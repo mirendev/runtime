@@ -54,6 +54,10 @@ func TestAuthorizationOverUplink(t *testing.T) {
 		if len(hello.Capabilities) != 1 || hello.Capabilities[0].Name != AuthorizationCapability {
 			return
 		}
+		if versions := hello.Capabilities[0].Versions; len(versions) != 1 || versions[0] != 1 {
+			t.Errorf("authorization rollout hold must offer only v1, got %v", versions)
+			return
+		}
 		id := fmt.Sprintf("session-%d", sequence.Add(1))
 		welcome := uplink.SessionWelcome{
 			HandshakeVersion: 1, SessionID: id, OrganizationID: "org-1",

@@ -19,7 +19,11 @@ import (
 
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
+	"miren.dev/runtime/api/app"
+	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/pkg/auth"
+	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rbac"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/uplink"
@@ -131,7 +135,7 @@ func TestAuthorizationDenialDiagnostics(t *testing.T) {
 				require.Contains(t, err.Error(), "cloud authorization is not synchronized")
 				require.Contains(t, err.Error(), "snapshot")
 			} else {
-				require.EqualError(t, err, "access denied by RBAC policy")
+				require.ErrorIs(t, err, rpc.ErrUnauthorized)
 			}
 			// The signing-key refresher logs on its own schedule, so find the
 			// denial rather than assuming it was the last line.
@@ -556,4 +560,187 @@ func TestScopedAuthorizationSnapshot(t *testing.T) {
 	require.NoError(t, dispatch(8, `[{"resource":"app","actions":["list"]}]`))
 	require.Equal(t, rbac.DecisionAllow, evaluate(state, "bob-blog", "bob"))
 	require.Equal(t, rbac.DecisionAllow, evaluate(state, "", ""))
+}
+
+func TestResolvedAppAuthorizationVersions(t *testing.T) {
+	for _, version := range []uint{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "authorization.json")
+			a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")}
+			session := authorizationSession("session")
+			session.Capabilities[0].Version = version
+			a.authorization.beginSession(t.Context(), session)
+			snapshot := authorizationSnapshot("session", 1)
+			snapshot.Version = version
+			permission := rbac.Permission{Resource: "app", Actions: []string{"read"}, Scope: "$owner"}
+			if version == 1 {
+				permission = rbac.Permission{Resource: "crud", Actions: []string{"getconfiguration"}}
+			}
+			snapshot.Policy.Rules[0].Permissions = []rbac.Permission{permission}
+			deliverSnapshot(t, a.authorization, snapshot)
+			for _, restarted := range []bool{false, true} {
+				if restarted {
+					a.authorization = NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+				}
+				identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+				ctx := rpc.ContextWithIdentity(t.Context(), identity)
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "getconfiguration")
+				require.NoError(t, a.Authorize(ctx, identity, "crud", "getconfiguration"))
+				request := rpc.ResourceRequest{Resource: "app", Action: "read", Instance: "blog", Owner: "alice"}
+				require.NoError(t, rpc.AuthorizeResource(ctx, request))
+				request.Owner = "bob"
+				if version == 2 {
+					require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+				} else {
+					require.NoError(t, rpc.AuthorizeResource(ctx, request), "legacy unscoped grant must retain access")
+				}
+				request.Owner = "alice"
+				request.Action = "configure"
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "setconfiguration")
+				require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+				identity.Subject = "missing"
+				ctx = rpc.ContextWithAuthorization(ctx, a, "crud", "getconfiguration")
+				request.Action = "read"
+				require.ErrorIs(t, rpc.AuthorizeResource(ctx, request), rpc.ErrUnauthorized)
+			}
+		})
+	}
+}
+
+func TestAuthorizationSnapshotVersionMustBeNegotiated(t *testing.T) {
+	for _, selected := range []uint{1, 2} {
+		state := NewAuthorizationState(t.Context(), slog.Default(), "", "")
+		session := authorizationSession("session")
+		session.Capabilities[0].Version = selected
+		state.beginSession(t.Context(), session)
+		snapshot := authorizationSnapshot("session", 1)
+		snapshot.Version = selected
+		deliverSnapshot(t, state, snapshot)
+		snapshot.Revision++
+		snapshot.Version = 3 - selected
+		snapshot.Policy.Rules = []rbac.Rule{}
+		raw, err := json.Marshal(snapshot)
+		require.NoError(t, err)
+		require.ErrorContains(t, state.receiveSnapshot(t.Context(), raw), "version")
+		decision, _ := state.Evaluate(&rbac.Request{Subject: "alice", Resource: "apps/demo", Action: "read"})
+		require.Equal(t, rbac.DecisionAllow, decision, "rejected snapshot must leave prior policy in effect")
+	}
+}
+
+func TestLogicalCompatibilityAcrossPolicyReplacement(t *testing.T) {
+	a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), "", "")}
+	comp := oidcauth.NewCompositeAuthorizer(a)
+	identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+	ctx := rpc.ContextWithIdentity(t.Context(), identity)
+	ctx = rpc.ContextWithAuthorization(ctx, comp, "crud", "getconfiguration")
+	inmem, cleanup := testutils.NewInMemEntityServer(t)
+	t.Cleanup(cleanup)
+	_, err := inmem.Client.Create(t.Context(), "mine", &core_v1alpha.App{OwnedBy: "alice"})
+	require.NoError(t, err)
+	_, err = inmem.Client.Create(t.Context(), "theirs", &core_v1alpha.App{OwnedBy: "bob"})
+	require.NoError(t, err)
+	for i, version := range []uint{1, 2, 1} {
+		session := authorizationSession(fmt.Sprint(i))
+		session.Capabilities[0].Version = version
+		a.authorization.beginSession(t.Context(), session)
+		snapshot := authorizationSnapshot(session.ID, 1)
+		snapshot.Version = version
+		permission := rbac.Permission{Resource: "crud", Actions: []string{"getconfiguration"}}
+		if version == 2 {
+			permission = rbac.Permission{Resource: "app", Actions: []string{"read"}, Scope: "$owner"}
+		}
+		snapshot.Policy.Rules[0].Permissions = []rbac.Permission{permission}
+		deliverSnapshot(t, a.authorization, snapshot)
+		require.NoError(t, comp.Authorize(ctx, identity, "crud", "getconfiguration"))
+		require.Equal(t, version == 2, rpc.UsesLogicalAuthorization(ctx))
+		require.NoError(t, app.Authorize(ctx, inmem.EAC, "mine", "read"))
+		err = app.Authorize(ctx, inmem.EAC, "theirs", "read")
+		if version == 2 {
+			require.ErrorIs(t, err, rpc.ErrUnauthorized)
+		} else {
+			require.NoError(t, err)
+		}
+		// Replace a cached grant before the handler: no legacy shortcut may
+		// evade the revocation, including after a v2-to-v1 replacement.
+		snapshot.Revision++
+		snapshot.Policy.Rules = []rbac.Rule{}
+		deliverSnapshot(t, a.authorization, snapshot)
+		require.True(t, rpc.UsesLogicalAuthorization(ctx), "revoked legacy method cannot skip enforcement")
+		require.ErrorIs(t, app.Authorize(ctx, inmem.EAC, "mine", "read"), rpc.ErrUnauthorized)
+		if version == 1 {
+			require.ErrorIs(t, comp.Authorize(ctx, identity, "crud", "getconfiguration"), rpc.ErrUnauthorized)
+		}
+	}
+}
+
+func TestAnalyzeAppUsesMethodPolicyInBothVersions(t *testing.T) {
+	require.Empty(t, rpc.AppAction("builder", "analyzeapp"), "source analysis cannot defer to an app target")
+	for _, version := range []uint{1, 2} {
+		a := &RPCAuthenticator{logger: slog.Default(), authorization: NewAuthorizationState(t.Context(), slog.Default(), "", "")}
+		comp := oidcauth.NewCompositeAuthorizer(a)
+		identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+		session := authorizationSession("analysis")
+		session.Capabilities[0].Version = version
+		a.authorization.beginSession(t.Context(), session)
+		snapshot := authorizationSnapshot(session.ID, 1)
+		snapshot.Version = version
+		snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "app", Actions: []string{"read"}}}
+		deliverSnapshot(t, a.authorization, snapshot)
+		require.ErrorIs(t, comp.Authorize(t.Context(), identity, "builder", "analyzeapp"), rpc.ErrUnauthorized)
+		snapshot.Revision++
+		snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "builder", Actions: []string{"analyzeapp"}}}
+		deliverSnapshot(t, a.authorization, snapshot)
+		require.NoError(t, comp.Authorize(t.Context(), identity, "builder", "analyzeapp"))
+		snapshot.Revision++
+		snapshot.Policy.Rules = []rbac.Rule{}
+		deliverSnapshot(t, a.authorization, snapshot)
+		require.ErrorIs(t, comp.Authorize(t.Context(), identity, "builder", "analyzeapp"), rpc.ErrUnauthorized)
+	}
+}
+
+func TestSavedV2SurvivesRolloutHoldUntilValidReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), AuthorizationSnapshotFile)
+	state := NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	session := authorizationSession("v2")
+	session.Capabilities[0].Version = 2
+	state.beginSession(t.Context(), session)
+	snapshot := authorizationSnapshot(session.ID, 1)
+	snapshot.Version = 2
+	snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "app", Actions: []string{"read"}, Scope: "$owner"}}
+	deliverSnapshot(t, state, snapshot)
+	state = NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	a := &RPCAuthenticator{logger: slog.Default(), authorization: state}
+	comp := oidcauth.NewCompositeAuthorizer(a)
+	identity := &rpc.Identity{Subject: "alice", Method: rpc.AuthMethodJWT}
+	ctx := rpc.ContextWithIdentity(t.Context(), identity)
+	ctx = rpc.ContextWithAuthorization(ctx, comp, "crud", "getconfiguration")
+	check := func(scoped bool) {
+		t.Helper()
+		require.Equal(t, scoped, rpc.UsesLogicalAuthorization(ctx))
+		require.NoError(t, rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "read", Instance: "mine", Owner: "alice"}))
+		err := rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "read", Instance: "theirs", Owner: "bob"})
+		if scoped {
+			require.ErrorIs(t, err, rpc.ErrUnauthorized)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	check(true)
+	state.beginSession(t.Context(), authorizationSession("v1"))
+	check(true)
+	snapshot.SessionID = "v1"
+	snapshot.Revision = 1
+	snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "app", Actions: []string{"read"}}}
+	raw, err := json.Marshal(snapshot)
+	require.NoError(t, err)
+	require.ErrorContains(t, state.receiveSnapshot(t.Context(), raw), "version")
+	check(true)
+	snapshot.Version = 1
+	snapshot.Revision++
+	snapshot.Policy.Rules[0].Permissions = []rbac.Permission{{Resource: "crud", Actions: []string{"getconfiguration"}}}
+	deliverSnapshot(t, state, snapshot)
+	check(false)
+	state = NewAuthorizationState(t.Context(), slog.Default(), path, "cluster-1")
+	a.authorization = state
+	check(false)
 }

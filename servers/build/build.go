@@ -74,6 +74,7 @@ func (w *buildLogWriter) write(msg string) {
 type buildSession struct {
 	dir        string
 	appName    string
+	subject    string
 	cancelFunc context.CancelFunc
 }
 
@@ -1148,11 +1149,17 @@ func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 	string,
 	error,
 ) {
-	app, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, creator)
+	if err := b.authorizeBuild(ctx, name); err != nil {
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
+	}
+	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, creator)
 	if err != nil {
 		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
 	}
-	appRec := *app
+	if err := app.Authorize(ctx, b.ec.EAC(), name, "deploy"); err != nil {
+		return nil, nil, core_v1alpha.ConfigSpec{}, "", err
+	}
+	appRec := *record
 
 	var currentCfg core_v1alpha.ConfigSpec
 
@@ -1200,7 +1207,13 @@ func (b *Builder) nextVersion(ctx context.Context, name, creator string) (
 // the build takes its app-scoped lock. It preserves nextVersion's historical
 // create-on-first-deploy behavior.
 func (b *Builder) ensureApp(ctx context.Context, name string) (*core_v1alpha.App, error) {
+	if err := b.authorizeBuild(ctx, name); err != nil {
+		return nil, err
+	}
 	record, _, err := app.EnsureApp(ctx, b.ec.EAC(), name, app.CreationSubject(ctx))
+	if err == nil {
+		err = app.Authorize(ctx, b.ec.EAC(), name, "deploy")
+	}
 	return record, err
 }
 
@@ -1369,6 +1382,9 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if err := b.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
 
 	if b.DataPath == "" {
 		return fmt.Errorf("data path not configured")
@@ -1396,6 +1412,7 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 	b.sessions.Store(sessionID, &buildSession{
 		dir:        tempDir,
 		appName:    name,
+		subject:    app.CreationSubject(ctx),
 		cancelFunc: cancelCleanup,
 	})
 
@@ -1686,6 +1703,7 @@ func (b *Builder) readProcFile(dfs fsutil.FS) (map[string]string, error) {
 
 // AnalyzeApp analyzes an app without building it, returning detected stack, services, and configuration.
 func (b *Builder) AnalyzeApp(ctx context.Context, state *build_v1alpha.BuilderAnalyzeApp) error {
+	// The transport gates builder/analyzeapp. Source analysis has no app target.
 	args := state.Args()
 	td := args.Tardata()
 
