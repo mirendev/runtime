@@ -240,8 +240,20 @@ func (s *AuthorizationState) Evaluate(req *rbac.Request) (rbac.Decision, string)
 func (s *AuthorizationState) EvaluateMethod(req *rbac.Request, migrated bool) (rbac.Decision, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.loaded && s.snapshot.Version == 2 && migrated {
-		return rbac.DecisionAllow, ""
+	if s.loaded && s.snapshot.Version == 2 {
+		if migrated {
+			return rbac.DecisionAllow, ""
+		}
+		// Unmigrated operations must not bypass app isolation through raw
+		// entities or infrastructure. Non-targeted caller utilities retain
+		// explicit grants, including for administrators.
+		switch {
+		case req.Resource == "userquery" && req.Action == "whoami",
+			req.Resource == "telemetry" && req.Action == "reportspans",
+			req.Resource == "builder" && req.Action == "analyzeapp":
+		default:
+			req.Resource, req.Action = "cluster", "admin"
+		}
 	}
 	return s.evaluateLocked(req)
 }
