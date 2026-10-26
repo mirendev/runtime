@@ -94,34 +94,25 @@ func shortIDFromEntity(ent *entityserver_v1alpha.Entity) string {
 
 func (r *AppInfo) New(ctx context.Context, state *app_v1alpha.CrudNew) error {
 	name := state.Args().Name()
-
-	var appRec core_v1alpha.App
-
-	err := r.EC.Get(ctx, name, &appRec)
-	if err == nil {
-		// App already exists, return its ID
-		state.Results().SetId(string(appRec.ID))
-		return nil
-	}
-	if !errors.Is(err, cond.ErrNotFound{}) {
-		return fmt.Errorf("failed to look up app %q: %w", name, err)
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "create"); err != nil {
+		return err
 	}
 
-	// Set default project to match the build server behavior
-	appRec.Project = "project/default"
-
-	id, err := r.EC.Create(ctx, name, &appRec)
+	appRec, _, err := appclient.EnsureApp(ctx, r.EC.EAC(), name, appclient.CreationSubject(ctx))
 	if err != nil {
 		return err
 	}
 
-	state.Results().SetId(string(id))
+	state.Results().SetId(string(appRec.ID))
 
 	return nil
 }
 
 func (r *AppInfo) Destroy(ctx context.Context, state *app_v1alpha.CrudDestroy) error {
 	name := state.Args().Name()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "destroy"); err != nil {
+		return err
+	}
 
 	var appRec core_v1alpha.App
 
@@ -172,6 +163,9 @@ type appHealthSource struct {
 // Kept separate from route lookup so periodic health samples do not pay for
 // an HttpRoute listing they will discard.
 func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error) {
+	if _, err := rpc.FilterResource(ctx, rpc.ResourceRequest{Resource: "app", Action: "list"}); err != nil {
+		return nil, err
+	}
 	list, err := r.EC.List(ctx, entity.Ref(entity.EntityKind, core_v1alpha.KindApp))
 	if err != nil {
 		return nil, err
@@ -186,6 +180,18 @@ func (r *AppInfo) collectAppHealth(ctx context.Context) (*appHealthSource, error
 		var app core_v1alpha.App
 		list.Read(&app)
 		md := list.Metadata()
+		if !rpc.AllowApp(ctx, md.Name) {
+			continue
+		}
+		allowed, err := rpc.FilterResource(ctx, rpc.ResourceRequest{
+			Resource: "app", Action: "list", Instance: md.Name, Owner: app.OwnedBy,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
 
 		entry := appEntry{name: md.Name, app: app}
 
@@ -337,6 +343,7 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 	for _, entry := range src.apps {
 		var a app_v1alpha.AppInfo
 		a.SetName(entry.name)
+		a.SetOwnedBy(entry.app.OwnedBy)
 
 		if entry.activeVersion != nil {
 			var vi app_v1alpha.VersionInfo
@@ -380,6 +387,9 @@ func (r *AppInfo) ListApps(ctx context.Context) ([]*app_v1alpha.AppInfo, error) 
 
 func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudSetConfiguration) error {
 	name := state.Args().App()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
@@ -616,6 +626,9 @@ func (r *AppInfo) SetConfiguration(ctx context.Context, state *app_v1alpha.CrudS
 
 func (r *AppInfo) GetConfiguration(ctx context.Context, state *app_v1alpha.CrudGetConfiguration) error {
 	name := state.Args().App()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "read"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
@@ -791,6 +804,9 @@ func (r *AppInfo) setEnvVars(ctx context.Context, name string, vars []appclient.
 
 func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVar) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -812,6 +828,9 @@ func (r *AppInfo) SetEnvVar(ctx context.Context, state *app_v1alpha.CrudSetEnvVa
 
 func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvVars) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -842,6 +861,9 @@ func (r *AppInfo) SetEnvVars(ctx context.Context, state *app_v1alpha.CrudSetEnvV
 
 func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.CrudSetInitialEnvVars) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -869,6 +891,9 @@ func (r *AppInfo) SetInitialEnvVars(ctx context.Context, state *app_v1alpha.Crud
 
 func (r *AppInfo) DeleteEnvVar(ctx context.Context, state *app_v1alpha.CrudDeleteEnvVar) error {
 	args := state.Args()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), args.App(), "configure"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, args.App()) {
 		return rpc.AppAccessError(ctx, args.App())
@@ -916,6 +941,9 @@ func (r *AppInfo) Restart(ctx context.Context, state *app_v1alpha.CrudRestart) e
 	args := state.Args()
 	name := args.App()
 	service := args.Service()
+	if err := appclient.Authorize(ctx, r.EC.EAC(), name, "deploy"); err != nil {
+		return err
+	}
 
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)

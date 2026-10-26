@@ -32,6 +32,21 @@ When you run `miren deploy`, Miren:
 
 Each deployment is a tracked object with its own ID, a status, and the git commit it came from. A successful deployment produces a new version (identified by a version ID); a failed one produces no version but stays in history as a record of the attempt. You can inspect, roll back, or redeploy any previous version at any time.
 
+### App ownership
+
+When a Cloud-authenticated user or service account creates an app explicitly or
+through its first deployment, Miren records that principal's subject as `owned_by`.
+App list and status RPC responses include this field. Subsequent deployments do
+not change the owner. If two callers create a new app concurrently, the first
+successful creation determines its ownership.
+
+Existing apps without ownership remain unowned, as do apps created without a
+Cloud JWT identity, including certificate, OIDC/CI, workload, and system callers.
+Deployment audit attribution is separate from ownership. Deploying an unowned
+app does not claim it, and Miren does not infer ownership from deployment history.
+Recording ownership alone does not grant permissions or change the cluster's
+current authorization rules.
+
 ## Deploying from a Project Directory
 
 The most common workflow — run `miren deploy` from the root of your project:

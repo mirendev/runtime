@@ -142,6 +142,9 @@ func (d *DeploymentServer) UpdateDeploymentStatus(ctx context.Context, req *depl
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
+	if err := d.authorizeDeployment(ctx, rec.Deployment, "deploy"); err != nil {
+		return err
+	}
 	switch status {
 	case deploylifecycle.StatusInProgress:
 		// Older clients reassert running after creation. Lifecycle progress and
@@ -213,6 +216,9 @@ func (d *DeploymentServer) UpdateDeploymentPhase(ctx context.Context, req *deplo
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
+	if err := d.authorizeDeployment(ctx, rec.Deployment, "deploy"); err != nil {
+		return err
+	}
 	if err := d.tracker.SetPhase(ctx, deploymentId, deploylifecycle.Phase(newPhase)); err != nil {
 		return err
 	}
@@ -255,6 +261,9 @@ func (d *DeploymentServer) UpdateFailedDeployment(ctx context.Context, req *depl
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
+	if err := d.authorizeDeployment(ctx, rec.Deployment, "deploy"); err != nil {
+		return err
+	}
 	// build_logs remains in the deprecated RPC request for old clients, but the
 	// complete build stream belongs in VictoriaLogs rather than this entity.
 	if err := d.tracker.Fail(ctx, deploymentId, errorMessage); err != nil {
@@ -296,6 +305,9 @@ func (d *DeploymentServer) ListDeployments(ctx context.Context, req *deployment_
 
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
+	}
+	if err := d.authorizeApp(ctx, appName, "read"); err != nil {
+		return err
 	}
 
 	deployments, err := d.listDeploymentsInternal(ctx, appName, status, int(limit))
@@ -358,6 +370,9 @@ func (d *DeploymentServer) GetDeploymentById(ctx context.Context, req *deploymen
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
 	}
+	if err := d.authorizeDeployment(ctx, rec.Deployment, "read"); err != nil {
+		return err
+	}
 	activeDeployment, err := d.servingDeploymentID(ctx, rec.Deployment.AppName)
 	if err != nil {
 		return err
@@ -394,6 +409,9 @@ func (d *DeploymentServer) UpdateDeploymentAppVersion(ctx context.Context, req *
 
 	if !rpc.AllowApp(ctx, rec.Deployment.AppName) {
 		return rpc.AppAccessError(ctx, rec.Deployment.AppName)
+	}
+	if err := d.authorizeDeployment(ctx, rec.Deployment, "deploy"); err != nil {
+		return err
 	}
 
 	// If the new version resolves to a real AppVersion, it must belong to the
@@ -450,6 +468,9 @@ func (d *DeploymentServer) GetActiveDeployment(ctx context.Context, req *deploym
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
+	if err := d.authorizeApp(ctx, appName, "read"); err != nil {
+		return err
+	}
 
 	app, _, err := d.tracker.Store().AppByName(ctx, appName)
 	if err != nil && !errors.Is(err, cond.ErrNotFound{}) {
@@ -501,6 +522,9 @@ func (d *DeploymentServer) GetDeployLock(ctx context.Context, req *deployment_v1
 
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
+	}
+	if err := d.authorizeApp(ctx, appName, "read"); err != nil {
+		return err
 	}
 
 	// Blocking folds in expiry and terminal-holder reconciliation, so a released
@@ -556,6 +580,9 @@ func (d *DeploymentServer) CancelDeployment(ctx context.Context, req *deployment
 	// Enforce app scoping: scoped callers (e.g. OIDC) can only cancel deployments for their bound app
 	if !rpc.AllowApp(ctx, deployment.AppName) {
 		return rpc.AppAccessError(ctx, deployment.AppName)
+	}
+	if err := d.authorizeDeployment(ctx, &deployment, "deploy"); err != nil {
+		return err
 	}
 
 	rec, err := d.tracker.Store().Get(ctx, deploymentId)
@@ -615,6 +642,9 @@ func (d *DeploymentServer) DeployVersion(ctx context.Context, req *deployment_v1
 	// Enforce app scoping: scoped callers (e.g. OIDC) can only deploy their bound app
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
+	}
+	if err := d.authorizeApp(ctx, appName, "deploy"); err != nil {
+		return err
 	}
 	if args.EphemeralLabel() != "" && args.Message() != "" {
 		return cond.ValidationFailure("invalid-message", "deployment message is not supported for ephemeral versions")
@@ -932,6 +962,9 @@ func (d *DeploymentServer) SetEnvVars(ctx context.Context, req *deployment_v1alp
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
 	}
+	if err := d.authorizeApp(ctx, appName, "configure"); err != nil {
+		return err
+	}
 
 	clusterId := args.ClusterId()
 	service := ""
@@ -994,6 +1027,9 @@ func (d *DeploymentServer) DeleteEnvVars(ctx context.Context, req *deployment_v1
 
 	if !rpc.AllowApp(ctx, appName) {
 		return rpc.AppAccessError(ctx, appName)
+	}
+	if err := d.authorizeApp(ctx, appName, "configure"); err != nil {
+		return err
 	}
 
 	clusterId := args.ClusterId()

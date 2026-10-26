@@ -20,10 +20,13 @@ const (
 	TypeAuthorizationSnapshot = "authorization.snapshot"
 )
 
-// AuthorizationSnapshot is the version 1 cloud authorization contract. Cloud
+// AuthorizationSnapshot is the cloud authorization contract. Cloud
 // sends full replacements, with increasing revisions within each session.
 // Revisions restart with each session, so they only order snapshots within one.
 type AuthorizationSnapshot struct {
+	// Version 2 selects logical resource permissions. Zero preserves saved and
+	// wire version-1 snapshots, whose permissions name RPC interfaces/methods.
+	Version        uint                `json:"version,omitempty"`
 	SessionID      string              `json:"session_id"`
 	OrganizationID string              `json:"organization_id"`
 	Revision       uint64              `json:"revision"`
@@ -93,6 +96,9 @@ func (s *AuthorizationState) restore() {
 	if err == nil && (snapshot.Memberships == nil || snapshot.Policy.Rules == nil) {
 		err = fmt.Errorf("snapshot is missing rules or memberships")
 	}
+	if err == nil && snapshot.Version > 2 {
+		err = fmt.Errorf("unsupported authorization snapshot version %d", snapshot.Version)
+	}
 	if err != nil {
 		s.logger.Warn("ignoring saved cloud authorization snapshot", "path", s.path, "error", err)
 		return
@@ -134,6 +140,8 @@ type AuthorizationLink interface {
 }
 
 func (s *AuthorizationState) Register(link AuthorizationLink) {
+	// Hold new v2 negotiation until Cloud scope emission and the full runtime
+	// enforcement boundary are ready for an explicitly approved rollout.
 	link.OfferCapability(uplink.CapabilityOffer{Name: AuthorizationCapability, Versions: []uint{1}})
 	link.OnSession(s.beginSession)
 	link.Handle(TypeAuthorizationSnapshot, s.receiveSnapshot)
@@ -184,7 +192,7 @@ func (s *AuthorizationState) receiveSnapshot(ctx context.Context, data json.RawM
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	selection, selected := s.session.Capability(AuthorizationCapability)
-	if !selected || selection.Version != 1 || s.sessionCtx == nil || s.sessionCtx.Err() != nil || ctx.Err() != nil {
+	if !selected || (selection.Version != 1 && selection.Version != 2) || s.sessionCtx == nil || s.sessionCtx.Err() != nil || ctx.Err() != nil {
 		return fmt.Errorf("authorization snapshot outside a negotiated session")
 	}
 	// An update we cannot read tells us nothing about permissions, so access
@@ -200,6 +208,9 @@ func (s *AuthorizationState) receiveSnapshot(ctx context.Context, data json.RawM
 		return fmt.Errorf("authorization snapshot revision is not increasing")
 	}
 	s.revision = snapshot.Revision
+	if snapshot.Version > 2 || (selection.Version == 1 && snapshot.Version > 1) || (selection.Version == 2 && snapshot.Version != 2) {
+		return fmt.Errorf("authorization snapshot version does not match negotiated capability")
+	}
 	if snapshot.Memberships == nil || snapshot.Policy.Rules == nil {
 		s.logger.Error("ignoring incomplete cloud authorization snapshot", "revision", snapshot.Revision)
 		return fmt.Errorf("authorization snapshot must contain rules and memberships")
@@ -221,6 +232,44 @@ func (s *AuthorizationState) receiveSnapshot(ctx context.Context, data json.RawM
 func (s *AuthorizationState) Evaluate(req *rbac.Request) (rbac.Decision, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.evaluateLocked(req)
+}
+
+// EvaluateMethod defers migrated methods only under logical policy. Legacy
+// method authorization and the version decision share the snapshot lock.
+func (s *AuthorizationState) EvaluateMethod(req *rbac.Request, migrated bool) (rbac.Decision, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loaded && s.snapshot.Version == 2 && migrated {
+		return rbac.DecisionAllow, ""
+	}
+	return s.evaluateLocked(req)
+}
+
+// AllowsLegacy authorizes before permitting a handler to skip logical checks.
+// A version-only read could skip both gates during a v2-to-v1 transition.
+func (s *AuthorizationState) AllowsLegacy(req *rbac.Request) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshot.Version >= 2 {
+		return false
+	}
+	decision, _ := s.evaluateLocked(req)
+	return decision == rbac.DecisionAllow
+}
+
+// EvaluateResource selects legacy or logical vocabulary under the same lock as
+// snapshot replacement. A revocation cannot race a separate version lookup.
+func (s *AuthorizationState) EvaluateResource(req *rbac.Request, legacyResource, legacyAction string) (rbac.Decision, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.snapshot.Version < 2 {
+		req.Resource, req.Action = legacyResource, legacyAction
+	}
+	return s.evaluateLocked(req)
+}
+
+func (s *AuthorizationState) evaluateLocked(req *rbac.Request) (rbac.Decision, string) {
 	if !s.loaded {
 		return rbac.DecisionDeny, "not_synced"
 	}

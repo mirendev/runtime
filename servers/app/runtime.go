@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"miren.dev/runtime/api/addon/addon_v1alpha"
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/app/app_v1alpha"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	coreutil "miren.dev/runtime/api/core"
@@ -28,6 +29,9 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if err := appclient.Authorize(ctx, a.EC.EAC(), name, "read"); err != nil {
+		return err
+	}
 
 	var appRec core_v1alpha.App
 
@@ -45,6 +49,7 @@ func (a *AppInfo) AppInfo(ctx context.Context, state *app_v1alpha.AppStatusAppIn
 		return err
 	}
 
+	rai.SetOwnedBy(appRec.OwnedBy)
 	role := appRec.WorkloadRole
 	if role == "" {
 		role = workloadroles.Default

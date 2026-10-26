@@ -131,10 +131,51 @@ applies there.
 
 :::warning[Upgrade cloud first]
 
-A cloud that does not negotiate authorization version 1 cannot authorize JWT
-callers on this runtime; update cloud before upgrading the runtime.
+A cloud that does not negotiate authorization version 1 cannot authorize
+JWT callers on this runtime; update cloud before upgrading the runtime.
 
 :::
+
+The runtime currently offers only authorization version 1, retaining the existing
+RPC-interface/method policy vocabulary. Version 2 negotiation is held for a
+separate, approved Cloud/runtime rollout; it is not a CLI version. The runtime
+retains version 2 enforcement for saved snapshots. This negotiation hold is not
+a kill switch: a saved version 2 snapshot remains authoritative across restarts
+until a valid replacement arrives, including a version 1 replacement.
+
+Version 2 snapshots must explicitly include `version: 2` and use
+logical permissions for migrated app operations (`app:read`, `app:create`,
+`app:configure`, `app:deploy`, `app:destroy`, `app:logs`, and `app:exec`). The
+runtime resolves the app's stored name and creator before evaluating its scope;
+ownership alone never grants access without a matching policy rule. Creating an
+app under version 2 requires an unscoped create grant, including implicit
+creation during a build. A deploy grant alone is not a create grant.
+
+Version 1 and standalone certificate, OIDC, and workload callers retain their
+existing method permissions and app bindings, including implicit creation during
+an authorized first build. Source-only analysis uses `builder:analyzeapp`, not
+`app:read`, in both policy versions. Prepared uploads require the same initiating
+subject only under logical Cloud policy. Existing sandbox app-confinement checks
+remain in place; the additional authoritative owner lookup applies to logical
+Cloud policy only.
+
+Cloud must only emit scoped, logical permissions after negotiating version 2
+with that specific runtime. Older runtimes ignore unknown permission fields,
+so sending them a scoped rule can silently turn it into a cluster-wide grant.
+Never strip scopes to downgrade a policy; version 1 grants must be genuinely
+unscoped. Cloud must persist and emit scopes before version 2 can be enabled.
+Upgrading the evaluator alone is not sufficient rollout protection. Version 1
+and version 2 policies must not be combined as alternative grants: a broad legacy
+grant must not override a scoped logical permission. Version selection and
+policy replacement are atomic, and saved snapshots retain their vocabulary
+across restarts. Before downgrading to a runtime without version 2 support,
+replace the saved authorization state and policy with an appropriate version 1
+policy; old binaries cannot safely read version 2 snapshots.
+
+Logical authorization is being migrated incrementally. Collection filtering,
+related-resource authorization, raw entity/infrastructure gates, ownership
+transfer, and standalone file policies are separate changes. Do not enable a
+restricted shared-cluster policy until those enforcement paths are deployed.
 
 After reconnecting, the cluster receives current permissions, including changes
 made while it was offline, and applies them as soon as they arrive.
@@ -204,7 +245,7 @@ explicitly:
 [Connectivity](./connectivity.md) panel; the cluster is offline or has lost its
 uplink.
 
-**`access denied by RBAC policy`** — you reached the cluster and it refused the
+**`unauthorized: denied by RBAC policy`** — you reached the cluster and it refused the
 command. That is the cluster's own policy, not the relay. Check your current
 organization membership and permissions. A newly granted permission becomes
 usable when the corresponding push arrives.

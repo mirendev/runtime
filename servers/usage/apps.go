@@ -34,6 +34,15 @@ type appListing struct {
 // needs the same entity view -- to say which contributing sandboxes still exist
 // -- and loading it twice would mean two passes over the entity store per call.
 func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering) (*appListing, *directory, error) {
+	return s.listAppsForAction(ctx, f, w, ord, "list")
+}
+
+func (s *Server) listAppsForAction(ctx context.Context, f filter, w window, ord ordering, action string) (*appListing, *directory, error) {
+	if action == "list" {
+		if err := preflightList(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
 	// The directory is still loaded, but for a narrower job than it used to do.
 	// It no longer supplies the figures -- those come from the store, grouped
 	// by app -- only each app's entity id, and a row for an app that exists but
@@ -43,6 +52,11 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 	dir, err := s.loadDirectory(ctx, filter{node: f.node, includeSystem: true})
 	if err != nil {
 		return nil, nil, err
+	}
+	if action == "read" {
+		if _, err := authorizeOwner(ctx, dir.appByName(f.app), action, false); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// An unknown node is an empty listing, not the whole cluster. See
@@ -54,7 +68,24 @@ func (s *Server) listApps(ctx context.Context, f filter, w window, ord ordering)
 
 	m, warnings := s.appSamples(ctx, selector, w)
 
-	rows, cluster := buildAppRows(dir, m, f.app, f.includeAddons)
+	rows, _ := buildAppRows(dir, m, f.app, f.includeAddons)
+	visible := rows[:0]
+	var cluster totals
+	for _, row := range rows {
+		if action == "list" {
+			allowed, err := authorizeOwner(ctx, dir.appByName(row.App()), action, true)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+		}
+		visible = append(visible, row)
+		cluster.cpuCores += row.Total().CpuCores()
+		cluster.memoryBytes += row.Total().MemoryBytes()
+	}
+	rows = visible
 
 	out := &appListing{cluster: cluster, warnings: warnings, total: int32(len(rows))}
 
@@ -168,7 +199,6 @@ func (s *Server) appDetail(
 	if name == "" {
 		return nil, fmt.Errorf("an app name is required")
 	}
-
 	// Asking for contributor histories is asking for contributors. Requiring
 	// both flags would only be a way to get the combination wrong and receive
 	// an empty list.
@@ -176,7 +206,7 @@ func (s *Server) appDetail(
 		opts.contributors = true
 	}
 
-	listing, dir, err := s.listApps(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{})
+	listing, dir, err := s.listAppsForAction(ctx, filter{app: name, includeAddons: opts.includeAddons}, w, ordering{}, "read")
 	if err != nil {
 		return nil, err
 	}

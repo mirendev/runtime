@@ -34,18 +34,45 @@ func NewClient(log *slog.Logger, client rpc.Client) *Client {
 
 // Create creates a new app entity
 func (c *Client) Create(ctx context.Context, name string) (*core_v1alpha.App, error) {
-	app := &core_v1alpha.App{}
-
-	// Create the app entity
-	id, err := c.entityClient.Create(ctx, name, app)
+	app, _, err := EnsureApp(ctx, c.entityClient.EAC(), name, CreationSubject(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create app %s: %w", name, err)
 	}
 
-	// Set the ID on the app
-	app.ID = id
-
 	return app, nil
+}
+
+// CreationSubject returns a Cloud principal subject eligible for app ownership.
+// Cloud JWTs authenticate both users and service accounts.
+// Other auth methods have distinct subject namespaces or short-lived identities;
+// their deployment attribution must not become a Cloud principal's owner grant.
+// Unattributed apps remain unowned rather than becoming owned by a later deployer.
+func CreationSubject(ctx context.Context) string {
+	if identity := rpc.IdentityFromContext(ctx); identity != nil && identity.Method == rpc.AuthMethodJWT {
+		return identity.Subject
+	}
+	return ""
+}
+
+// EnsureApp atomically creates an app without changing an existing app's owner
+// or configuration. creator must be an eligible Cloud principal subject from
+// authenticated context or durable server-owned inputs, never app configuration.
+func EnsureApp(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, name, creator string) (*core_v1alpha.App, int64, error) {
+	app := &core_v1alpha.App{
+		ID: entity.Id("app/" + name), Project: "project/default", OwnedBy: creator,
+	}
+	attrs := append(app.Encode(), (&core_v1alpha.Metadata{Name: name}).Encode()...)
+	attrs = append(attrs, entity.Ref(entity.DBId, app.ID))
+	if _, err := eac.Ensure(ctx, attrs); err != nil {
+		return nil, 0, err
+	}
+	res, err := eac.Get(ctx, app.ID.String())
+	if err != nil {
+		return nil, 0, err
+	}
+	app = &core_v1alpha.App{}
+	app.Decode(res.Entity().Entity())
+	return app, res.Entity().Revision(), nil
 }
 
 // GetByName retrieves an app by its name

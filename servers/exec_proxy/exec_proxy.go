@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	appclient "miren.dev/runtime/api/app"
 	"miren.dev/runtime/api/compute/compute_v1alpha"
 	"miren.dev/runtime/api/core/core_v1alpha"
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
@@ -99,6 +100,9 @@ func (s *Server) Exec(ctx context.Context, req *exec_v1alpha.SandboxExecExec) er
 		if app := s.resolveSandboxApp(ctx, found); !rpc.AllowApp(ctx, app) {
 			return rpc.AppAccessError(ctx, app)
 		}
+		if err := appclient.AuthorizeSandbox(ctx, s.EAC, id, "exec"); err != nil {
+			return err
+		}
 
 	case "app":
 		// Compatibility window: a pre-durable-runs client (<= v0.13) reaches an
@@ -185,6 +189,9 @@ const execByAppPoll = 250 * time.Millisecond
 // controller, so a handler that dies mid-request leaks nothing.
 func (s *Server) execByApp(ctx context.Context, req *exec_v1alpha.SandboxExecExec) error {
 	args := req.Args()
+	if err := appclient.Authorize(ctx, s.EAC, args.Value(), "exec"); err != nil {
+		return err
+	}
 
 	var command []string
 	opts := args.Options()
