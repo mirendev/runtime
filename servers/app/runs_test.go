@@ -25,7 +25,9 @@ import (
 	run_v1alpha "miren.dev/runtime/api/run/run_v1alpha"
 	"miren.dev/runtime/pkg/entity"
 	"miren.dev/runtime/pkg/entity/testutils"
+	"miren.dev/runtime/pkg/oidcauth"
 	"miren.dev/runtime/pkg/rpc"
+	"miren.dev/runtime/pkg/workloadroles"
 )
 
 func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
@@ -147,6 +149,41 @@ func TestSubmitRunIdentityAndWorkerHealth(t *testing.T) {
 	info, err = client.GetRun(ctx, terminal.String())
 	require.NoError(t, err)
 	assert.Equal(t, "none", info.Run().WorkerStatus())
+}
+
+func TestBoundWorkloadsCancelOwnedRuns(t *testing.T) {
+	for _, role := range []string{workloadroles.RoleAppDebugger, workloadroles.RoleAppAdmin} {
+		t.Run(role, func(t *testing.T) {
+			inmem, cleanup := testutils.NewInMemEntityServer(t)
+			t.Cleanup(cleanup)
+			manager := &AppInfo{Log: slog.Default(), EC: inmem.Client}
+			identity := &rpc.Identity{Method: rpc.AuthMethodWorkload, Metadata: map[string]any{"app": "web", "role": role}}
+			auth := oidcauth.NewCompositeAuthorizer(nil)
+			ctx := rpc.ContextWithIdentity(t.Context(), identity)
+			// Legacy exec-by-app uses this exported run-manager method for
+			// cleanup, retaining its authorized sandboxexec method context.
+			ctx = rpc.ContextWithAuthorization(ctx, auth, "sandboxexec", "exec")
+			require.NoError(t, auth.Authorize(ctx, identity, "sandboxexec", "exec"))
+			for _, name := range []string{"web", "other"} {
+				appID, err := inmem.Client.Create(t.Context(), name, &core_v1alpha.App{})
+				require.NoError(t, err)
+				runID, err := inmem.Client.Create(t.Context(), name+"-run", &run_v1alpha.Run{App: appID, Status: run_v1alpha.PENDING})
+				require.NoError(t, err)
+				canceled, err := manager.CancelRunEntity(ctx, runID.String())
+				var stored run_v1alpha.Run
+				require.NoError(t, inmem.Client.GetById(t.Context(), runID, &stored))
+				if name == "web" {
+					require.NoError(t, err)
+					require.True(t, canceled)
+					require.False(t, stored.CancelRequestedAt.IsZero())
+				} else {
+					require.ErrorIs(t, err, rpc.ErrUnauthorized)
+					require.False(t, canceled)
+					require.True(t, stored.CancelRequestedAt.IsZero())
+				}
+			}
+		})
+	}
 }
 
 // A canceled or timed-out run does produce an observed exit code -- the
