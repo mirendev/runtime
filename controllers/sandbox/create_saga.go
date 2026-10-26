@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/errdefs"
@@ -631,6 +632,10 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 			attrs := []entity.Attr{
 				entity.Ref(compute.SandboxStatusId, compute.SandboxStatusRunningId),
 				entity.Ref(compute.SandboxStartupOutcomeId, compute.SandboxStartupOutcomeStartupRunningId),
+			}
+			// Start the idle grace period at readiness, not before a slow boot.
+			if sb.LastActivity.IsZero() {
+				attrs = append(attrs, entity.Time(compute.SandboxLastActivityId, time.Now()))
 			}
 			for _, op := range in.ObservedPorts {
 				bp := compute.BoundPort{Port: int64(op.Port), Address: op.Address}

@@ -620,6 +620,13 @@ func TestManagerScaleDownNeverLeasedSandboxes(t *testing.T) {
 			remaining: []int{1, 2},
 		},
 		{
+			name: "slow boot receives full idle delay after readiness",
+			sandboxes: []sandboxState{
+				{age: 4 * time.Minute, lastActivity: now, status: compute_v1alpha.RUNNING},
+			},
+			remaining: []int{0},
+		},
+		{
 			name: "all unused sandboxes scale to zero",
 			sandboxes: []sandboxState{
 				{age: time.Hour, status: compute_v1alpha.RUNNING},
