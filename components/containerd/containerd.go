@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -51,6 +52,7 @@ type ContainerdComponent struct {
 	client   *containerd.Client
 	running  bool
 	waitDone chan struct{}
+	owner    *os.File
 }
 
 // NewContainerdComponent creates a new containerd component
@@ -73,8 +75,37 @@ func (c *ContainerdComponent) populateDefaults(config *Config) {
 	}
 }
 
+// lockBaseDir takes an exclusive flock that this process holds for as long as
+// it owns the daemon under baseDir. The kernel drops it when the process dies,
+// however it dies, so holding it means no live server owns whatever containerd
+// is still running there.
+func lockBaseDir(baseDir string) (*os.File, error) {
+	path := filepath.Join(baseDir, "owner.lock")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another server process is already managing containerd in %s", baseDir)
+		}
+		return nil, fmt.Errorf("locking %s: %w", path, err)
+	}
+	return f, nil
+}
+
+func (c *ContainerdComponent) releaseOwner() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.owner != nil {
+		c.owner.Close()
+		c.owner = nil
+	}
+}
+
 // Start starts the containerd daemon
-func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
+func (c *ContainerdComponent) Start(ctx context.Context, config *Config) (err error) {
 	// Populate defaults
 	c.populateDefaults(config)
 
@@ -97,6 +128,19 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 		return fmt.Errorf("failed to create base directory: %w", err)
 	}
 
+	owner, err := lockBaseDir(config.BaseDir)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.owner = owner
+	c.mu.Unlock()
+	defer func() {
+		if err != nil {
+			c.releaseOwner()
+		}
+	}()
+
 	// Setup directories
 	stateDir := filepath.Join(config.BaseDir, "state")
 	rootDir := filepath.Join(config.BaseDir, "root")
@@ -116,6 +160,22 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	)
 	if err := c.generateDefaultConfig(config.ConfigPath, config.SocketPath, config.BinDir, stateDir, rootDir); err != nil {
 		return fmt.Errorf("failed to generate config: %w", err)
+	}
+
+	survivors, err := findSurvivors(config.SocketPath, config.ConfigPath)
+	if err != nil {
+		return fmt.Errorf("looking for containerd left by a previous server: %w", err)
+	}
+	if len(survivors) > 0 {
+		pids := make([]int, len(survivors))
+		for i, proc := range survivors {
+			pids[i] = proc.Pid
+		}
+		c.log.Warn("stopping containerd left running by a previous server process",
+			"pids", pids, "socket", config.SocketPath)
+		if err := stopSurvivors(survivors, 30*time.Second); err != nil {
+			return err
+		}
 	}
 
 	// Build command
@@ -154,17 +214,18 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	}
 
 	// Update state with lock
+	waitDone := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
 	c.running = true
-	c.waitDone = make(chan struct{})
+	c.waitDone = waitDone
 	c.mu.Unlock()
 
 	c.log.Info("containerd started", "pid", cmd.Process.Pid)
 
 	// Monitor the process in background
 	go func() {
-		defer close(c.waitDone)
+		defer close(waitDone)
 
 		if err := cmd.Wait(); err != nil {
 			c.log.Error("containerd exited with error", "error", err)
@@ -183,12 +244,16 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 	}()
 
 	// Wait for socket to be available (no lock held)
-	if err := c.waitForSocket(ctx, config.SocketPath); err != nil {
+	err = c.waitForSocket(ctx, config.SocketPath, waitDone)
+	if err == nil {
+		err = checkSocketOwner(config.SocketPath, cmd.Process.Pid)
+	}
+	if err != nil {
 		// Clean up on failure
 		cmd.Process.Kill()
 
 		// Wait for the monitoring goroutine to finish
-		<-c.waitDone
+		<-waitDone
 
 		return fmt.Errorf("containerd failed to start: %w", err)
 	}
@@ -221,6 +286,7 @@ func (c *ContainerdComponent) Start(ctx context.Context, config *Config) error {
 
 // Stop stops the containerd daemon
 func (c *ContainerdComponent) Stop(ctx context.Context) error {
+	defer c.releaseOwner()
 	c.mu.Lock()
 
 	if !c.running || c.cmd == nil {
@@ -325,10 +391,29 @@ func (c *ContainerdComponent) Client() (*containerd.Client, error) {
 	return c.client, nil
 }
 
+// checkSocketOwner confirms the daemon answering on socketPath is the one we
+// just started. Anything else answering means a daemon we don't own is still
+// serving there, and ours will never come up.
+func checkSocketOwner(socketPath string, pid int) error {
+	owner, err := socketOwner(socketPath)
+	if errors.Is(err, errors.ErrUnsupported) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking containerd socket owner: %w", err)
+	}
+	if owner != pid {
+		return fmt.Errorf("containerd socket %s is served by pid %d, not the daemon we started (pid %d)", socketPath, owner, pid)
+	}
+	return nil
+}
+
 // waitForSocket waits for the containerd socket to be accepting connections.
 // Checking file existence alone is insufficient — containerd creates the
 // socket file before it starts listening, causing a race on fast machines.
-func (c *ContainerdComponent) waitForSocket(ctx context.Context, socketPath string) error {
+// exited closes if the daemon dies first, so a crash fails fast rather than
+// waiting out the timeout.
+func (c *ContainerdComponent) waitForSocket(ctx context.Context, socketPath string, exited <-chan struct{}) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -339,6 +424,8 @@ func (c *ContainerdComponent) waitForSocket(ctx context.Context, socketPath stri
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-exited:
+			return fmt.Errorf("containerd exited before its socket was ready")
 		case <-timeout:
 			return fmt.Errorf("timeout waiting for containerd socket at %s", socketPath)
 		case <-ticker.C:
