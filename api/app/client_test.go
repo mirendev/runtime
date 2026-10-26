@@ -221,6 +221,7 @@ func TestAppAuthorizationLookupErrorsAndMissingTargets(t *testing.T) {
 			legacy := rpc.ContextWithIdentity(t.Context(), identity)
 			legacy = rpc.ContextWithAuthorization(legacy, comp, "sandboxexec", "exec")
 			require.NoError(t, comp.Authorize(legacy, identity, "sandboxexec", "exec"))
+			require.NoError(t, app.Authorize(legacy, eac, "app/explicit", "exec"), "unbound legacy callers must not gain an app lookup")
 			require.NoError(t, app.AuthorizeSandbox(legacy, eac, "sandbox/explicit", "exec"), "standalone access must not gain an owner lookup")
 		}
 	}

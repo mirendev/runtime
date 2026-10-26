@@ -35,6 +35,13 @@ type fakeHost struct {
 	metadata  map[string]*release.Metadata
 	instances int
 
+	// mismatches: downloads that fail their checksum before one succeeds,
+	// like fetching a channel mid-publish. onMismatch runs after each, to
+	// let the publish move on.
+	mismatches int
+	onMismatch func()
+	checksums  []string
+
 	// The data side: the store lets Restart play the booting server, which
 	// answers a pending restore request according to restoreBehavior.
 	store           *Store
@@ -182,6 +189,14 @@ func (h *fakeHost) HasBackup() bool { return h.backup != nil }
 
 func (h *fakeHost) Download(_ context.Context, a release.Artifact, opts release.DownloadOptions) (*release.DownloadedArtifact, error) {
 	h.downloads++
+	h.checksums = append(h.checksums, opts.ExpectedChecksum)
+	if h.mismatches > 0 {
+		h.mismatches--
+		if h.onMismatch != nil {
+			h.onMismatch()
+		}
+		return nil, fmt.Errorf("checksum verification failed: %w: expected %s, got 00e42230", release.ErrChecksumMismatch, opts.ExpectedChecksum)
+	}
 	if opts.ProgressWriter != nil {
 		if pw, ok := opts.ProgressWriter.(interface{ SetTotal(int64) }); ok {
 			pw.SetTotal(100)
@@ -209,6 +224,7 @@ func newTestExecutor(t *testing.T, host *fakeHost) (*Executor, *Store) {
 	opts := DefaultOptions()
 	opts.ReadyTimeout = 200 * time.Millisecond
 	opts.ProbeInterval = 5 * time.Millisecond
+	opts.ChecksumRetryDelay = time.Millisecond
 	opts.PathSymlink = ""
 	// The hand-off has its own tests; the rest exercise the executor alone.
 	opts.UpgradeRunners = false
@@ -257,6 +273,78 @@ func TestUpgradeDownloadsInstallsRestartsVerifies(t *testing.T) {
 	// The restarted server's runtime versions are the record that the bundle
 	// swap took, not just the miren binary.
 	require.Equal(t, map[string]string{"containerd": "v2.0.4", "runc": "1.2.2"}, got.Components)
+}
+
+// mainBuild is version.json for a main build whose base artifact hashes to sum.
+func mainBuild(commit, sum string) *release.Metadata {
+	return &release.Metadata{
+		Version: "main:" + commit,
+		Commit:  "c-main:" + commit,
+		Artifacts: []release.ArtifactInfo{{
+			Name:   release.NewArtifact(release.ArtifactTypeBase, "main").Filename(),
+			SHA256: sum,
+		}},
+	}
+}
+
+func TestUpgradeChecksDownloadAgainstManifest(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.metadata["main"] = mainBuild("b2975c1", "00e42230")
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "main"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	// The checksum comes from the version.json that named the build, not
+	// from a separate .sha256 that a concurrent publish may already have
+	// replaced.
+	require.Equal(t, []string{"00e42230"}, host.checksums)
+}
+
+// A publish overwrites main/ file by file and writes version.json last, so
+// for a minute the artifact and the manifest disagree. That is a wait, not a
+// failed upgrade.
+func TestUpgradeRetriesChecksumMismatchDuringPublish(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.metadata["main"] = mainBuild("b2975c1", "00e42230")
+	host.mismatches = 1
+	host.onMismatch = func() { host.metadata["main"] = mainBuild("1318ee8", "dd5d5f82") }
+	ex, store := newTestExecutor(t, host)
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "main"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseSucceeded, got.Phase, got.Error)
+	require.Equal(t, "main:1318ee8", got.ResolvedVersion)
+	require.Equal(t, []string{"00e42230", "dd5d5f82"}, host.checksums)
+	require.Equal(t, 1, host.installs)
+	require.Empty(t, got.Error)
+}
+
+func TestUpgradeFailsWhenChecksumNeverMatches(t *testing.T) {
+	host := newFakeHost("v1.0.0")
+	host.metadata["main"] = mainBuild("b2975c1", "00e42230")
+	host.mismatches = 100
+	ex, store := newTestExecutor(t, host)
+	ex.opts.ChecksumRetries = 2
+
+	op := NewOperation(ActionUpgrade, "test")
+	op.TargetVersion = "main"
+	require.NoError(t, store.Create(op))
+
+	got, err := ex.Run(context.Background(), op.ID)
+	require.NoError(t, err)
+	require.Equal(t, PhaseFailed, got.Phase)
+	require.Contains(t, got.Error, "checksum mismatch")
+	require.Equal(t, 3, host.downloads)
+	require.Equal(t, 0, host.installs)
 }
 
 func TestUpgradeRollsBackWhenNewBinaryNeverReady(t *testing.T) {
