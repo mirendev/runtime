@@ -15,13 +15,17 @@ import (
 // Authorize resolves names or IDs before evaluating an app operation. Workload
 // confinement remains mandatory even on callers without a resource authorizer.
 func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient, target, action string) error {
-	if !rpc.UsesLogicalAuthorization(ctx) {
+	logical := rpc.UsesLogicalAuthorization(ctx)
+	// Bound callers carry app names, but indirect operations pass entity IDs.
+	// Resolve those IDs before checking confinement; unbound legacy callers
+	// still need no additional store lookup.
+	if !logical && (rpc.BoundApp(ctx) == "" || !strings.Contains(target, "/")) {
 		if !rpc.AllowApp(ctx, target) {
 			return rpc.AppAccessError(ctx, target)
 		}
 		return nil
 	}
-	if action == "create" {
+	if logical && action == "create" {
 		return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{Resource: "app", Action: action})
 	}
 	id := target
@@ -30,7 +34,7 @@ func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient
 	}
 	record, err := eac.Get(ctx, id)
 	if err != nil {
-		if !errors.Is(err, cond.ErrNotFound{}) {
+		if !logical || !errors.Is(err, cond.ErrNotFound{}) {
 			return err
 		}
 		// Let explicitly authorized callers reach the handler's missing-app
@@ -49,6 +53,9 @@ func Authorize(ctx context.Context, eac *entityserver_v1alpha.EntityAccessClient
 	metadata.Decode(ent)
 	if !rpc.AllowApp(ctx, metadata.Name) {
 		return rpc.AppAccessError(ctx, metadata.Name)
+	}
+	if !logical {
+		return nil
 	}
 	return rpc.AuthorizeResource(ctx, rpc.ResourceRequest{
 		Resource: "app", Action: action, Instance: metadata.Name, Owner: app.OwnedBy,
