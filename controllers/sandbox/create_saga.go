@@ -634,7 +634,7 @@ func setRunning(ctx context.Context, in setRunningIn) (setRunningOut, error) {
 				entity.Ref(compute.SandboxStartupOutcomeId, compute.SandboxStartupOutcomeStartupRunningId),
 			}
 			// Start the idle grace period at readiness, not before a slow boot.
-			if sb.LastActivity.IsZero() {
+			if sb.Status == compute.PENDING || sb.LastActivity.IsZero() {
 				attrs = append(attrs, entity.Time(compute.SandboxLastActivityId, time.Now()))
 			}
 			for _, op := range in.ObservedPorts {

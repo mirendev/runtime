@@ -1704,7 +1704,7 @@ func TestSandbox(t *testing.T) {
 		staleTime := time.Now().Add(-3 * time.Minute)
 		staleEntity := entity.New(currentSb.Encode())
 		staleEntity.SetCreatedAt(staleTime)
-		staleEntity.Set(entity.Time(compute.SandboxLastActivityId, time.Time{}))
+		staleEntity.Set(entity.Time(compute.SandboxLastActivityId, staleTime))
 		rpcE.SetId(id.String())
 		rpcE.SetAttrs(staleEntity.Attrs())
 		_, err = co.EAC.Put(ctx, &rpcE)

@@ -1383,13 +1383,9 @@ func (c *SandboxController) Create(ctx context.Context, co *compute.Sandbox, met
 					if age > staleThreshold {
 						c.Log.Info("sandbox exists and is healthy but status is PENDING (stale), updating to RUNNING",
 							"id", co.ID, "createdAt", createdAt, "age", age)
-						lastActivity := co.LastActivity
-						if lastActivity.IsZero() {
-							lastActivity = time.Now()
-						}
 						patchAttrs := entity.New(
 							entity.Ref(entity.DBId, co.ID),
-							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING, LastActivity: lastActivity}).Encode,
+							(&compute.Sandbox{Status: compute.RUNNING, StartupOutcome: compute.STARTUP_RUNNING, LastActivity: time.Now()}).Encode,
 						)
 						_, err := c.ops.PatchSandbox(ctx, patchAttrs.Attrs(), meta.Revision)
 						if err != nil {

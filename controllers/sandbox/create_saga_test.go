@@ -543,6 +543,8 @@ func TestCreateSandboxSaga_StartsIdleDelayAtReadiness(t *testing.T) {
 	defer cleanup()
 	h := newTestHarness(t)
 	server.Store.NowFunc = func() time.Time { return time.Now().Add(-4 * time.Minute) }
+	// The activator can sync its tracking timestamp before boot finishes.
+	h.entities.sandbox.LastActivity = time.Now().Add(-3 * time.Minute)
 	id, err := server.Client.Create(ctx, "slow-boot", h.entities.sandbox)
 	require.NoError(t, err)
 	server.Store.NowFunc = nil
