@@ -8,7 +8,7 @@ description: "Deploy an application"
 
 Deploy an application
 
-Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. When source needs rebuilding, this is the command that does it.
+Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. To rebuild the deployed source without uploading local files, use `miren app rebuild` instead.
 
 To activate an existing version without selecting or building another image, pass `--version`:
 ```bash

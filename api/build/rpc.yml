@@ -360,6 +360,23 @@ interfaces:
           - name: version_short_id
             type: string
 
+      - name: rebuild
+        doc: Rebuild and deploy the active version's retained source, without uploading local files
+        parameters:
+          - name: application
+            type: string
+          - name: status
+            type: stream.SendStream[*Status]
+          - name: deployment
+            type: '*DeployRequest'
+        results:
+          - name: version
+            type: string
+          - name: access_info
+            type: '*AccessInfo'
+          - name: version_short_id
+            type: string
+
       - name: analyzeApp
         doc: Analyze an app without building it, returning detected stack, services, and configuration
         parameters:

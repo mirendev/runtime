@@ -1503,6 +1503,7 @@ func (d *DeploymentServer) createDerivedVersion(ctx context.Context, base *core_
 		Version:        newVersionName,
 		Artifact:       base.Artifact,
 		StaticArtifact: base.StaticArtifact,
+		SourceArchive:  base.SourceArchive,
 		ImageUrl:       base.ImageUrl,
 		Config:         base.Config,
 		AdminToken:     base.AdminToken,

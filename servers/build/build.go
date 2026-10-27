@@ -125,8 +125,7 @@ type Builder struct {
 	// deployment costs no extra RPC hop.
 	deploy *deploylifecycle.Tracker
 
-	sessions   sync.Map // sessionID → *buildSession
-	cacheLocks *appLocks
+	sessions sync.Map // sessionID → *buildSession
 }
 
 func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, appClient *app.Client, addonsClient *app_v1alpha.AddonsClient, res netresolve.Resolver, tmpdir string, logWriter observability.LogWriter, dnsHostname string, bk *buildkit.Component, dataPath string) *Builder {
@@ -142,7 +141,6 @@ func NewBuilder(log *slog.Logger, eas *entityserver_v1alpha.EntityAccessClient, 
 		LogWriter:     logWriter,
 		DNSHostname:   dnsHostname,
 		DataPath:      dataPath,
-		cacheLocks:    newAppLocks(),
 		deploy:        deploylifecycle.NewTracker(log, eas),
 	}
 	// Only assign when non-nil: storing a typed-nil *buildkit.Component into the
@@ -1397,12 +1395,23 @@ func (b *Builder) PrepareUpload(ctx context.Context, state *build_v1alpha.Builde
 		return err
 	}
 
-	cache := &sourceCache{dataPath: b.DataPath, log: b.Log, locks: b.cacheLocks}
-
-	matched, needed, err := cache.stageMatchingFiles(name, tempDir, manifest)
+	matched, needed, err := b.stageMatchingFiles(ctx, name, tempDir, manifest)
 	if err != nil {
 		os.RemoveAll(tempDir)
-		return fmt.Errorf("staging cached files: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		b.Log.Debug("retained source unavailable for delta upload", "app", name, "error", err)
+		// Never mix partially extracted files with a full-upload fallback.
+		tempDir, err = os.MkdirTemp(b.TempDir, "buildkit-")
+		if err != nil {
+			return err
+		}
+		matched = 0
+		needed = make([]string, 0, len(manifest))
+		for _, entry := range manifest {
+			needed = append(needed, entry.Path())
+		}
 	}
 
 	sessionID := idgen.Gen("s")

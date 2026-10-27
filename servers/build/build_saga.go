@@ -66,7 +66,7 @@ type buildSagaDeps struct {
 }
 
 // receiveTarIn carries the initial inputs the entry point seeds the saga
-// with. AppName is mostly used for logging and cache writes; the StreamID
+// with. AppName identifies the build; the StreamID
 // is the handle that lets us pull bytes out of StreamRegistry.
 type receiveTarIn struct {
 	AppName  string `json:"app_name" saga:"app_name"`
@@ -76,14 +76,12 @@ type receiveTarIn struct {
 // receiveTarOut publishes the staged source directory so downstream
 // actions can read app.toml, run buildkit against it, etc.
 type receiveTarOut struct {
-	SourceDir string `json:"source_dir" saga:"source_dir"`
+	SourceDir     string `json:"source_dir" saga:"source_dir"`
+	SourceArchive string `json:"source_archive,omitempty" saga:"source_archive,optional"`
 }
 
-// receiveTar stages the incoming tar stream to disk and (best-effort)
-// updates the source code cache so the next delta upload can skip
-// unchanged files. The cache write matches existing BuildFromTar
-// behavior — failure logs a warning rather than failing the build,
-// since cache is a perf optimization, not correctness.
+// receiveTar stages the incoming source and retains it for rebuilds and
+// subsequent delta uploads.
 func receiveTar(ctx context.Context, in receiveTarIn) (receiveTarOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 	status := deps.statuses.SenderFor(in.StreamID)
@@ -96,19 +94,12 @@ func receiveTar(ctx context.Context, in receiveTarIn) (receiveTarOut, error) {
 		return receiveTarOut{}, fmt.Errorf("staging tar stream %s: %w", in.StreamID, err)
 	}
 
-	if deps.builder.DataPath != "" {
-		cache := &sourceCache{
-			dataPath: deps.builder.DataPath,
-			log:      deps.builder.Log,
-			locks:    deps.builder.cacheLocks,
-		}
-		if err := cache.saveSourceImage(in.AppName, path); err != nil {
-			deps.builder.Log.Warn("failed to save source code cache", "app", in.AppName, "error", err)
-		}
+	archive, err := deps.builder.retainSource(path)
+	if err != nil {
+		return receiveTarOut{}, fmt.Errorf("retaining build source: %w", err)
 	}
-
 	status.SendMessage("Preparing deployment")
-	return receiveTarOut{SourceDir: path}, nil
+	return receiveTarOut{SourceDir: path, SourceArchive: archive}, nil
 }
 
 func undoReceiveTar(ctx context.Context, in receiveTarIn, _ receiveTarOut) error {
@@ -129,7 +120,10 @@ type loadSourceIn struct {
 	SourceDir string `json:"source_dir" saga:"source_dir"`
 	// StreamID is consumed so a config error found here can be reported to the
 	// deploying client, which is the whole value of failing fast.
-	StreamID string `json:"stream_id" saga:"stream_id"`
+	StreamID       string `json:"stream_id" saga:"stream_id"`
+	RebuildVersion string `json:"rebuild_version,omitempty" saga:"rebuild_version,optional"`
+	// Check the selected version only after acquiring the deployment lock.
+	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
 }
 
 type loadSourceOut struct {
@@ -143,6 +137,16 @@ type loadSourceOut struct {
 func loadSource(ctx context.Context, in loadSourceIn) (loadSourceOut, error) {
 	deps := saga.Get[*buildSagaDeps](ctx)
 	b := deps.builder
+
+	if in.RebuildVersion != "" {
+		var app core_v1alpha.App
+		if err := b.ec.Get(ctx, in.AppName, &app); err != nil {
+			return loadSourceOut{}, err
+		}
+		if string(app.ActiveVersion) != in.RebuildVersion {
+			return loadSourceOut{}, fmt.Errorf("deployed version changed before rebuild started; retry the rebuild")
+		}
+	}
 
 	tr, err := fsutil.NewFS(in.SourceDir)
 	if err != nil {
@@ -268,6 +272,7 @@ type prepareConfigIn struct {
 	SourceKind       string                               `json:"source_kind,omitempty" saga:"source_kind,optional"`
 	SourceValue      string                               `json:"source_value,omitempty" saga:"source_value,optional"`
 	EphemeralLabel   string                               `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
+	RebuildVersion   string                               `json:"rebuild_version,omitempty" saga:"rebuild_version,optional"`
 }
 
 type prepareConfigOut struct {
@@ -284,16 +289,20 @@ func prepareConfig(ctx context.Context, in prepareConfigIn) (prepareConfigOut, e
 		return prepareConfigOut{}, fmt.Errorf("deserializing existing config: %w", err)
 	}
 
-	spec := buildVersionConfig(ConfigInputs{
-		BuildResult:      in.BuildResult,
-		SourceKind:       in.SourceKind,
-		SourceValue:      in.SourceValue,
-		AppConfig:        in.AppConfig,
-		ProcfileServices: in.ProcfileServices,
-		ExistingConfig:   existing,
-		CliEnvVars:       in.CLIEnvVars,
-		Log:              b.Log,
-	})
+	// Rebuilding code must not revert configuration changes made since upload.
+	spec := existing
+	if in.RebuildVersion == "" {
+		spec = buildVersionConfig(ConfigInputs{
+			BuildResult:      in.BuildResult,
+			SourceKind:       in.SourceKind,
+			SourceValue:      in.SourceValue,
+			AppConfig:        in.AppConfig,
+			ProcfileServices: in.ProcfileServices,
+			ExistingConfig:   existing,
+			CliEnvVars:       in.CLIEnvVars,
+			Log:              b.Log,
+		})
+	}
 
 	// Validate the app.toml workload_role here, before the version is created or
 	// activated, so a bad role fails the deploy without leaving a new version
@@ -492,6 +501,7 @@ type createVersionIn struct {
 	GitInfo            string `json:"deploy_git_info_json,omitempty" saga:"deploy_git_info_json,optional"`
 	SourceKind         string `json:"source_kind,omitempty" saga:"source_kind,optional"`
 	SourceValue        string `json:"source_value,omitempty" saga:"source_value,optional"`
+	SourceArchive      string `json:"source_archive,omitempty" saga:"source_archive,optional"`
 	EphemeralLabel     string `json:"ephemeral_label,omitempty" saga:"ephemeral_label,optional"`
 	EphemeralTTL       string `json:"ephemeral_ttl,omitempty" saga:"ephemeral_ttl,optional"`
 	EphemeralExpiresAt string `json:"ephemeral_expires_at,omitempty" saga:"ephemeral_expires_at,optional"`
@@ -510,6 +520,7 @@ func createVersion(ctx context.Context, in createVersionIn) (createVersionOut, e
 		Version:        in.VersionName,
 		ImageUrl:       in.FinalImageURL,
 		StaticArtifact: in.StaticArtifact,
+		SourceArchive:  in.SourceArchive,
 		ManifestDigest: in.ManifestDigest,
 		AdminToken:     in.AdminToken,
 		Artifact:       entity.Id(in.ArtifactID),
@@ -749,7 +760,8 @@ type setActiveVersionIn struct {
 	DeployTasksRan saga.Edge `saga:"deploy_tasks_ran"`
 	// Consuming DeploymentID anchors this action after begin-deployment. It is
 	// empty only for ephemeral builds and sagas created by an older runtime.
-	DeploymentID string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	DeploymentID   string `json:"deployment_id,omitempty" saga:"deployment_id,optional"`
+	RebuildVersion string `json:"rebuild_version,omitempty" saga:"rebuild_version,optional"`
 }
 
 type setActiveVersionOut struct {
@@ -769,8 +781,10 @@ func setActiveVersion(ctx context.Context, in setActiveVersionIn) (setActiveVers
 
 	// Apply a workload_role declared in app.toml (app-scoped only) so it takes
 	// effect on this deploy. A cluster-scoped value fails the deploy.
-	if err := b.applyWorkloadRole(ctx, in.AppName, in.AppConfig); err != nil {
-		return setActiveVersionOut{}, err
+	if in.RebuildVersion == "" {
+		if err := b.applyWorkloadRole(ctx, in.AppName, in.AppConfig); err != nil {
+			return setActiveVersionOut{}, err
+		}
 	}
 	return setActiveVersionOut{}, nil
 }
@@ -1160,7 +1174,7 @@ func registerBuildSaga(
 	// Older executions lack app_creator and safely leave newly created apps
 	// unattributed rather than assigning the recovering worker as their owner.
 	return saga.Define(sagaBuildFromTar).
-		Version(4).ResumesFrom(1, 2, 3).
+		Version(5).ResumesFrom(1, 2, 3, 4).
 		Using(deps).
 		Using(log).
 		Action(actionReceiveTar, receiveTar).Undo(undoReceiveTar).

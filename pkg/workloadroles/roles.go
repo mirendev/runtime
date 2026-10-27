@@ -80,7 +80,7 @@ var (
 			"updatedeploymentphase", "updatefaileddeployment",
 			"updatedeploymentappversion", "canceldeployment",
 		),
-		"builder": set("buildfromtar", "prepareupload", "buildfromprepared"),
+		"builder": set("buildfromtar", "prepareupload", "buildfromprepared", "rebuild"),
 	}
 
 	// appConfig: mutate one app's configuration. These handlers gain their

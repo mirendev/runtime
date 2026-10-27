@@ -42,6 +42,7 @@
       "command/app-delete",
       "command/app-history",
       "command/app-list",
+      "command/app-rebuild",
       "command/app-restart",
       "command/app-run",
       "command/app-runs",

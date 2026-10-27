@@ -150,14 +150,18 @@ func attachBuildSecrets(solveOpt *client.SolveOpt, secrets map[string][]byte) {
 	solveOpt.Session = append(solveOpt.Session, secretsprovider.FromMap(secrets))
 }
 
+func dockerfileFrontendAttrs() map[string]string {
+	return map[string]string{
+		"build-arg:BUILDKIT_INLINE_CACHE": "1",
+		// Refresh mutable FROM tags without disabling BuildKit's layer cache.
+		"image-resolve-mode": llb.ResolveModeForcePull.String(),
+	}
+}
+
 func (b *Buildkit) Transform(ctx context.Context, dfs fsutil.FS, tos ...TransformOptions) (io.ReadCloser, chan struct{}, error) {
 	var opts transformOpt
 
-	opts.frontendAttrs = map[string]string{
-		//"attest:sbom":       "mode:max",
-		//"attest:provenance": "mode:max",
-		"build-arg:BUILDKIT_INLINE_CACHE": "1",
-	}
+	opts.frontendAttrs = dockerfileFrontendAttrs()
 
 	for _, o := range tos {
 		o(&opts)
@@ -388,11 +392,7 @@ func (b *Buildkit) buildImage(
 ) (*BuildResult, error) {
 	var opts transformOpt
 
-	opts.frontendAttrs = map[string]string{
-		//"attest:sbom":       "mode:max",
-		//"attest:provenance": "mode:max",
-		"build-arg:BUILDKIT_INLINE_CACHE": "1",
-	}
+	opts.frontendAttrs = dockerfileFrontendAttrs()
 
 	for _, o := range tos {
 		o(&opts)

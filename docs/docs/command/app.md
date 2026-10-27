@@ -63,6 +63,7 @@ miren app --watch
 - [`miren app delete`](./app-delete.md) — Delete an application and all its resources
 - [`miren app history`](./app-history.md) — Show deployment history for an application
 - [`miren app list`](./app-list.md) — List all applications
+- [`miren app rebuild`](./app-rebuild.md) — Rebuild and deploy the currently deployed source
 - [`miren app restart`](./app-restart.md) — Restart an application
 - [`miren app run`](./app-run.md) — Open interactive shell in a new sandbox
 - [`miren app runs`](./app-runs.md) — List recent task runs

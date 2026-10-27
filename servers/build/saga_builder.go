@@ -55,7 +55,7 @@ type buildResults interface {
 // SagaBuilder is the saga-backed implementation of the build_v1alpha
 // Builder RPC interface. It wraps the existing *Builder (which keeps
 // shared collaborators like the entity client, app client, BuildKit
-// component, and source cache locks), adds a per-instance saga
+// component, and upload sessions), adds a per-instance saga
 // executor + registry, and exposes BuildFromTar / BuildFromPrepared
 // implementations that drive the build-from-tar saga end to end.
 //
@@ -163,7 +163,7 @@ func (s *SagaBuilder) BuildFromTar(ctx context.Context, state *build_v1alpha.Bui
 	}
 
 	executionID := "build-from-tar-" + streamID
-	if err := s.startBuild(work.control, work.action, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
+	if err := s.startBuild(work.control, work.action, executionID, name, streamID, args.EnvVars(), ephemeralFromArgs(args), deployReq, ""); err != nil {
 		return err
 	}
 
@@ -223,13 +223,6 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 		}
 	}
 
-	if s.inner.DataPath != "" {
-		cache := &sourceCache{dataPath: s.inner.DataPath, log: s.inner.Log, locks: s.inner.cacheLocks}
-		if err := cache.saveSourceImage(name, sess.dir); err != nil {
-			s.inner.Log.Warn("failed to save source code cache", "error", err, "app", name)
-		}
-	}
-
 	s.streams.MarkStaged(sessionID, sess.dir)
 	defer func() {
 		if err := s.streams.Cleanup(sessionID); err != nil {
@@ -243,7 +236,7 @@ func (s *SagaBuilder) BuildFromPrepared(ctx context.Context, state *build_v1alph
 	}
 
 	executionID := "build-from-prepared-" + sessionID
-	if err := s.startBuild(work.control, work.action, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args), deployReq); err != nil {
+	if err := s.startBuild(work.control, work.action, executionID, name, sessionID, args.EnvVars(), ephemeralFromArgs(args), deployReq, ""); err != nil {
 		return err
 	}
 
@@ -268,6 +261,7 @@ func (s *SagaBuilder) startBuild(
 	cliEnvVars []*build_v1alpha.EnvironmentVariable,
 	eph *ephemeralOpts,
 	deployReq *build_v1alpha.DeployRequest,
+	rebuildVersion string,
 ) error {
 	// Recovery has no initiating RPC context. Resolve first-writer ownership
 	// and authorize the actual app before admitting durable work, rather than
@@ -285,6 +279,9 @@ func (s *SagaBuilder) startBuild(
 		WithActionContext(actionCtx).
 		WithID(executionID)
 
+	if rebuildVersion != "" {
+		sb = sb.Input("rebuild_version", rebuildVersion)
+	}
 	if len(cliEnvVars) > 0 {
 		sb = sb.Input("cli_env_vars", cliEnvVars)
 	}
