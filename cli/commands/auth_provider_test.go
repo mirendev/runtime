@@ -16,6 +16,7 @@ import (
 	"miren.dev/runtime/api/entityserver/entityserver_v1alpha"
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
+	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/entity/testutils"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/servers/identityproviders"
@@ -197,7 +198,10 @@ func TestAuthProviderCLIDenialAndValidation(t *testing.T) {
 		{AuthProviderRemove, []string{"shared", "--force"}},
 	} {
 		out, err := runProviderCLI(t, ctx, tc.command, tc.args...)
-		require.ErrorContains(t, err, "403")
+		var denial cond.ErrRemote
+		require.ErrorAs(t, err, &denial)
+		require.Equal(t, "permission", denial.Category)
+		require.Equal(t, "forbidden", denial.Code)
 		require.Empty(t, out)
 	}
 	for _, org := range []string{" ", "mirendev:", "mirendev: , "} {

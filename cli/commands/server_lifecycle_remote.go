@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -67,9 +68,12 @@ func (c *Context) targetsLocalServer() bool {
 }
 
 // answered reports whether err is the server's answer rather than a failure
-// to reach it. Application errors cross the RPC as cond errors; connection
-// and resolution failures do not.
+// to reach it. Application errors cross the RPC as cond errors; lookup denials
+// retain their HTTP status in ResolveError.
 func answered(err error) bool {
+	if re, ok := errors.AsType[*rpc.ResolveError](err); ok && re.Kind == rpc.ResolveStatusError {
+		return re.StatusCode == http.StatusUnauthorized || re.StatusCode == http.StatusForbidden
+	}
 	if errors.Is(err, cond.ErrNotFound{}) || errors.Is(err, cond.ErrConflict{}) {
 		return true
 	}
