@@ -69,6 +69,9 @@ func (s *SagaBuilder) Rebuild(ctx context.Context, state *build_v1alpha.BuilderR
 	if !rpc.AllowApp(ctx, name) {
 		return rpc.AppAccessError(ctx, name)
 	}
+	if err := s.inner.authorizeBuild(ctx, name); err != nil {
+		return err
+	}
 	if err := validateDeploymentMessage("", args.Deployment()); err != nil {
 		return err
 	}
