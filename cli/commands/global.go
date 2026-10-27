@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 
 	"golang.org/x/sys/unix"
 	"miren.dev/runtime/clientconfig"
@@ -40,6 +41,13 @@ type Context struct {
 	Stderr io.Writer
 
 	cancels []func()
+
+	// states are the RPC states this command opened. Close shuts them down so
+	// the server hears the connection end; a process that just exits leaves the
+	// server holding it until QUIC's idle timeout, and a server shutting down
+	// waits on it.
+	statesMu sync.Mutex
+	states   []*rpc.State
 
 	ClientConfig  *clientconfig.Config
 	ClusterConfig *clientconfig.ClusterConfig
@@ -253,11 +261,26 @@ func setup(ctx context.Context, flags *GlobalFlags, opts any, commandName string
 }
 
 func (c *Context) Close() error {
+	c.statesMu.Lock()
+	states := c.states
+	c.states = nil
+	c.statesMu.Unlock()
+
+	for _, cs := range states {
+		_ = cs.Close()
+	}
+
 	for _, cancel := range c.cancels {
 		cancel()
 	}
 
 	return nil
+}
+
+func (c *Context) trackState(cs *rpc.State) {
+	c.statesMu.Lock()
+	c.states = append(c.states, cs)
+	c.statesMu.Unlock()
 }
 
 func (c *Context) SetExitCode(code int) {
@@ -355,6 +378,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 		if err != nil {
 			return nil, c.unusableClusterError(c.ClusterName, err)
 		}
+		c.trackState(cs)
 
 		client, err := cs.Client(name)
 		if err != nil {
@@ -375,6 +399,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 
 		cs, err = c.ClientConfig.State(rpcCtx, opts...)
 		if err == nil {
+			c.trackState(cs)
 			client, err := cs.Client(name)
 			if err != nil {
 				return nil, c.wrapRPCError(err)
@@ -402,6 +427,7 @@ func (c *Context) rpcClient(rpcCtx context.Context, name string) (*rpc.NetworkCl
 	if err != nil {
 		return nil, err
 	}
+	c.trackState(cs)
 
 	client, err := cs.Connect(c.Config.ServerAddress, name)
 	if err != nil {
