@@ -174,7 +174,7 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 			// The server answered; waiting for a different answer is not
 			// going to help. Only an unreachable server is worth outlasting.
 			if answered(err) {
-				return op, err
+				return op, fmt.Errorf("%w (operation %s may still be running; check with miren server operations show %s)", err, op.ID, op.ID)
 			}
 			if unreachableSince.IsZero() {
 				unreachableSince = time.Now()

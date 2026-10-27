@@ -63,23 +63,43 @@ func (lifecycleDenyAuthorizer) Authorize(context.Context, *rpc.Identity, string,
 	return errors.New("lifecycle access denied")
 }
 
-func TestFollowRemoteOperationStopsOnHTTPDenial(t *testing.T) {
-	ss, err := rpc.NewState(t.Context(), rpc.WithSkipVerify,
-		rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(lifecycleDenyAuthorizer{}))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ss.Close() })
-	// Authorization must reject Get before the unimplemented handler is reached.
-	ss.Server().ExposeValue(serverLifecycleService, server_v1alpha.AdaptServerLifecycle(nil))
+type lifecycleMissingOperation struct{ server_v1alpha.ServerLifecycle }
 
-	deadline, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	var output bytes.Buffer
-	ctx := &Context{Context: deadline, Log: slog.Default(), Stdout: &output}
-	ctx.Config.ServerAddress = ss.LoopbackAddr()
-	op := &serverlifecycle.Operation{ID: "denied-op", Phase: serverlifecycle.PhaseRestarting}
-	latest, err := followRemoteOperation(ctx, op)
-	require.Equal(t, op, latest)
-	require.Equal(t, cond.ErrRemote{Category: "permission", Code: "forbidden", Message: "lifecycle access denied"}, err)
-	require.NotContains(t, output.String(), "server unreachable")
-	require.NoError(t, deadline.Err(), "denial must stop following before the polling deadline")
+func (lifecycleMissingOperation) Get(_ context.Context, call *server_v1alpha.ServerLifecycleGet) error {
+	return cond.NotFound("lifecycle operation", call.Args().Id())
+}
+
+func TestFollowRemoteOperationStopsOnServerAnswer(t *testing.T) {
+	for _, denied := range []bool{true, false} {
+		t.Run(fmt.Sprintf("denied=%t", denied), func(t *testing.T) {
+			var authorizer rpc.Authorizer
+			if denied {
+				authorizer = lifecycleDenyAuthorizer{}
+			}
+			ss, err := rpc.NewState(t.Context(), rpc.WithSkipVerify,
+				rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(authorizer))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = ss.Close() })
+			ss.Server().ExposeValue(serverLifecycleService, server_v1alpha.AdaptServerLifecycle(lifecycleMissingOperation{}))
+
+			deadline, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var output bytes.Buffer
+			ctx := &Context{Context: deadline, Log: slog.Default(), Stdout: &output}
+			ctx.Config.ServerAddress = ss.LoopbackAddr()
+			op := &serverlifecycle.Operation{ID: "pending-op", Phase: serverlifecycle.PhaseRestarting}
+			latest, err := followRemoteOperation(ctx, op)
+			require.Equal(t, op, latest)
+			if denied {
+				var permission cond.ErrRemote
+				require.ErrorAs(t, err, &permission)
+				require.Equal(t, cond.ErrRemote{Category: "permission", Code: "forbidden", Message: "lifecycle access denied"}, permission)
+			} else {
+				require.ErrorIs(t, err, cond.ErrNotFound{})
+			}
+			require.ErrorContains(t, err, "operation pending-op may still be running; check with miren server operations show pending-op")
+			require.NotContains(t, output.String(), "server unreachable")
+			require.NoError(t, deadline.Err(), "server answer must stop following before the polling deadline")
+		})
+	}
 }
