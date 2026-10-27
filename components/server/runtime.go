@@ -104,6 +104,7 @@ func (s *startup) addComponents() error {
 		s.etcd.component,
 		s.victoriaLogs.component,
 		s.victoriaMetrics.component,
+		s.buildkit.handle,
 		s.buildkit.component,
 		s.foundation.component,
 		s.appData.component,
