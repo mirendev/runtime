@@ -316,6 +316,8 @@ num_instances = 1
 
 Connect to other services using their DNS name and standard port—`postgres.app.miren:5432` for PostgreSQL, `redis.app.miren:6379` for Redis. The container images listen on their standard ports by default; Miren doesn't manage these ports.
 
+For a service in another app in the same cluster, use `<service>.<app>.app.miren`, such as `postgres.data.app.miren:5432` for the `postgres` service in the `data` app. The shorter name always refers to the caller's own app. Both forms resolve directly to sandbox IPv4 addresses and require a recognized sandbox caller; use the process's actual listening port, not an ingress port. See [internal DNS scope and connection behavior](./traffic-routing.md#service-to-service-communication).
+
 ## Traffic Routing
 
 The `web` service is the default target for external HTTP traffic through Miren's HTTP ingress. Create a route to make your app reachable:
