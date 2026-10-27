@@ -317,6 +317,10 @@ DNS returns A records for the service's active sandbox IPv4 addresses, not an in
 
 To discover available services, query TXT records at `app.miren` for your own app or `<app>.app.miren` for another app. For example, a TXT query for `data.app.miren` might return `"postgres redis"`: a sorted, space-separated list of services with active sandboxes. You can then resolve `postgres.data.app.miren` to connect. Unknown apps and malformed names return no TXT answers.
 
+:::warning[DNS-compatible names]
+Explicit app discovery requires the stored app name to be a single lowercase DNS label, such as `data` or `my-app`. App creation does not enforce this restriction: names containing uppercase letters or dots cannot be targeted by these forms. DNS queries are case-insensitive, so capitalizing a query cannot distinguish apps named `MyApp` and `myapp`; it targets the lowercase name. Use lowercase DNS-label service names as well.
+:::
+
 :::note[Internal DNS scope]
 Internal discovery, including TXT service listings, requires a recognized sandbox caller. Explicit app names intentionally allow discovery across apps in the same cluster; app-local names are a convenience, not a network isolation boundary. Applications should authenticate sensitive internal endpoints. This does not grant RPC or workload-identity permissions. Reverse DNS remains scoped to the caller's app.
 :::
