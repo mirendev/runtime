@@ -96,7 +96,8 @@ func receiveTar(ctx context.Context, in receiveTarIn) (receiveTarOut, error) {
 
 	archive, err := deps.builder.retainSource(path)
 	if err != nil {
-		return receiveTarOut{}, fmt.Errorf("retaining build source: %w", err)
+		// Retention enables future rebuilds and delta uploads, not this deploy.
+		deps.builder.Log.Warn("failed to retain build source; rebuilds unavailable for this version", "app", in.AppName, "error", err)
 	}
 	status.SendMessage("Preparing deployment")
 	return receiveTarOut{SourceDir: path, SourceArchive: archive}, nil

@@ -229,6 +229,10 @@ output. Use `miren deploy cancel -a myapp` to cancel an in-progress rebuild.
 :::info[Source retention required]
 Apps deployed before source retention was available need one normal
 `miren deploy` with an updated server before they can be rebuilt.
+If the server cannot retain source, it logs a warning but allows the deployment
+to continue. That version cannot be rebuilt, and subsequent uploads fall back to
+uploading the full project. Restore source storage and deploy again to enable
+rebuilds for the new version.
 :::
 
 Apps that run a prebuilt image directly cannot be rebuilt; deploy them again to

@@ -3,6 +3,8 @@ package build
 import (
 	"compress/gzip"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -132,4 +134,33 @@ func TestRebuildRejectsChangedActiveVersion(t *testing.T) {
 	require.Empty(t, app.ActiveVersion)
 	_, err = h.builder.deploy.Begin(ctx, deploylifecycle.BeginParams{AppName: "demo", AppID: entity.Id(app.ID), Operation: deploylifecycle.OperationBuild})
 	require.NoError(t, err, "failed rebuild must release the deployment lock")
+}
+
+func TestSourceRetentionFailureDoesNotBlockDeploy(t *testing.T) {
+	for _, label := range []string{"", "preview"} {
+		t.Run("label="+label, func(t *testing.T) {
+			ctx := t.Context()
+			h := newDeploySagaHarness(t)
+			h.builder.DataPath = t.TempDir()
+			// A file in place of the archive directory makes writes fail even as root.
+			require.NoError(t, os.WriteFile(filepath.Join(h.builder.DataPath, "build-sources"), []byte("blocked"), 0600))
+			h.builder.ingressClient = ingress.NewClient(h.builder.Log, h.inmem.EAC.Client)
+			s := &SagaBuilder{inner: h.builder, executor: h.executor, streams: h.streams, statuses: h.statuses, log: h.builder.Log}
+			client := build_v1alpha.NewBuilderClient(rpc.LocalClient(build_v1alpha.AdaptBuilder(s)))
+			result, err := client.BuildFromTar(ctx, "demo", stream.ServeReader(ctx, makeTar(t, dockerfileTarball(t))),
+				stream.Callback(func(*build_v1alpha.Status) error { return nil }), nil, label, "24h", nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, result.Version())
+			var app core_v1alpha.App
+			require.NoError(t, h.builder.ec.Get(ctx, "demo", &app))
+			if label != "" {
+				require.Empty(t, app.ActiveVersion, "preview must not activate")
+			} else {
+				require.NotEmpty(t, app.ActiveVersion)
+			}
+			var version core_v1alpha.AppVersion
+			require.NoError(t, h.builder.ec.Get(ctx, result.Version(), &version))
+			require.Empty(t, version.SourceArchive)
+		})
+	}
 }
