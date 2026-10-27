@@ -17,7 +17,7 @@ miren server config generate [flags]
 ## Flags
 
 - `--defaults, -d` — Generate config with default values
-- `--mode, -m` — Server mode: standalone (default), distributed (experimental) (default: `standalone`)
+- `--mode, -m` — Deprecated: standalone is the only server mode
 - `--output, -o` — Output file path (defaults to stdout)
 
 ## Global Options

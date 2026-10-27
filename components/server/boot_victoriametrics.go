@@ -4,7 +4,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"miren.dev/runtime/components/victoriametrics"
@@ -37,24 +36,8 @@ func victoriaMetricsInputs(options StartOptions) victoriaMetricsBootInputs {
 func newVictoriaMetricsBoot(inputs victoriaMetricsBootInputs, containerd boot.Output[containerdBootOutput]) *victoriaMetricsBoot {
 	b := &victoriaMetricsBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
-	if inputs.config.GetStartEmbedded() {
-		b.component, b.output = boot.Provide1("victoriametrics", containerd, b.startEmbedded, stop)
-	} else {
-		b.component, b.output = boot.Provide0("victoriametrics", b.startExternal, stop)
-	}
+	b.component, b.output = boot.Provide1("victoriametrics", containerd, b.startEmbedded, stop)
 	return b
-}
-
-func (b *victoriaMetricsBoot) startExternal(ctx context.Context) (victoriaMetricsBootOutput, error) {
-	b.log = b.inputs.log
-	if b.inputs.config.GetAddress() == "" {
-		return victoriaMetricsBootOutput{}, fmt.Errorf("victoriametrics address not specified and embedded victoriametrics not started")
-	}
-	b.log.Info("using external victoriametrics", "address", b.inputs.config.GetAddress())
-	if err := waitForVictoriaHealth(ctx, "victoriametrics", b.inputs.config.GetAddress()); err != nil {
-		return victoriaMetricsBootOutput{}, err
-	}
-	return victoriaMetricsBootOutput{address: b.inputs.config.GetAddress()}, nil
 }
 
 func (b *victoriaMetricsBoot) startEmbedded(ctx context.Context, containerd containerdBootOutput) (victoriaMetricsBootOutput, error) {

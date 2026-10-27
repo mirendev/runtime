@@ -44,38 +44,9 @@ func buildkitInputs(options StartOptions) buildkitBootInputs {
 func newBuildkitBoot(inputs buildkitBootInputs, containerd boot.Output[containerdBootOutput], registryHostMapping boot.Output[registryHostMappingBootOutput], network boot.Output[networkBootOutput], observability boot.Output[observabilityBootOutput], tracing boot.Output[tracingBootOutput]) *buildkitBoot {
 	b := &buildkitBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
-	switch {
-	case inputs.config.GetStartEmbedded():
-		b.handle, b.output = boot.Provide2("buildkit-handle", containerd, observability, b.newEmbedded)
-		b.component = boot.Run4("buildkit", b.output, registryHostMapping, network, tracing, b.startEmbedded, stop)
-	case inputs.config.GetSocketPath() != "":
-		b.handle, b.output = boot.Provide1("buildkit-handle", observability, b.newExternal)
-		b.component = boot.Run1("buildkit", b.output, b.start, stop)
-	default:
-		b.handle, b.output = boot.Provide0("buildkit-handle", b.startDisabled)
-		b.component = boot.Run1("buildkit", b.output, func(context.Context, buildkitBootOutput) error { return nil })
-	}
+	b.handle, b.output = boot.Provide2("buildkit-handle", containerd, observability, b.newEmbedded)
+	b.component = boot.Run4("buildkit", b.output, registryHostMapping, network, tracing, b.startEmbedded, stop)
 	return b
-}
-
-func (b *buildkitBoot) newExternal(_ context.Context, observability observabilityBootOutput) (buildkitBootOutput, error) {
-	b.observability = observability
-	b.result.component = buildkit.NewExternalComponent(observability.log, b.inputs.config.GetSocketPath())
-	return b.result, nil
-}
-
-func (b *buildkitBoot) start(ctx context.Context, handle buildkitBootOutput) error {
-	log := b.observability.log
-	log.Info("using external buildkit daemon", "socket", b.inputs.config.GetSocketPath())
-	if err := handle.component.Start(ctx, buildkit.Config{}); err != nil {
-		return err
-	}
-	log.Info("connected to external buildkit", "socket-path", handle.component.SocketPath())
-	return nil
-}
-
-func (b *buildkitBoot) startDisabled(context.Context) (buildkitBootOutput, error) {
-	return buildkitBootOutput{}, nil
 }
 
 func (b *buildkitBoot) newEmbedded(_ context.Context, containerd containerdBootOutput, observability observabilityBootOutput) (buildkitBootOutput, error) {
@@ -139,12 +110,8 @@ func buildkitTraces(tracing tracingBootOutput) buildkit.TracesExport {
 	}
 }
 
-func buildkitEnabled(config serverconfig.BuildkitConfig) bool {
-	return config.GetStartEmbedded() || config.GetSocketPath() != ""
-}
-
 func (b *buildkitBoot) stop(ctx context.Context) error {
-	if b.result.component == nil || !b.inputs.config.GetStartEmbedded() {
+	if b.result.component == nil {
 		return nil
 	}
 	b.observability.log.Info("stopping embedded buildkit")

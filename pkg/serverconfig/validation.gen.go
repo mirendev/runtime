@@ -38,16 +38,6 @@ func (c *Config) Validate() error {
 	if err := c.Metrics.Validate(); err != nil {
 		return fmt.Errorf("metrics: %w", err)
 	}
-	// Validate mode
-	if c.Mode != nil {
-		validModes := map[string]bool{
-			"standalone":  true,
-			"distributed": true,
-		}
-		if !validModes[*c.Mode] {
-			return fmt.Errorf("invalid mode %q: must be one of [standalone distributed]", *c.Mode)
-		}
-	}
 
 	if err := c.Saga.Validate(); err != nil {
 		return fmt.Errorf("saga: %w", err)
@@ -153,11 +143,6 @@ func (c *EtcdConfig) Validate() error {
 			return fmt.Errorf("port conflict: port %d is used multiple times", *c.PeerPort)
 		}
 		seen[*c.PeerPort] = true
-	}
-
-	// Validate etcd endpoints requirement
-	if c.StartEmbedded != nil && !*c.StartEmbedded && len(c.Endpoints) == 0 {
-		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
 	}
 
 	return nil
@@ -302,13 +287,6 @@ func (c *TelemetryTracesConfig) Validate() error {
 // Validate validates VictoriaLogsConfig
 func (c *VictoriaLogsConfig) Validate() error {
 
-	// Validate address
-	if c.Address != nil && *c.Address != "" {
-		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
-			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
-		}
-	}
-
 	// Validate http_port
 	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {
 		return fmt.Errorf("http_port must be between 1 and 65535, got %d", *c.HTTPPort)
@@ -332,13 +310,6 @@ func (c *VictoriaLogsConfig) Validate() error {
 
 // Validate validates VictoriaMetricsConfig
 func (c *VictoriaMetricsConfig) Validate() error {
-
-	// Validate address
-	if c.Address != nil && *c.Address != "" {
-		if _, _, err := net.SplitHostPort(*c.Address); err != nil {
-			return fmt.Errorf("invalid address %q: %w", *c.Address, err)
-		}
-	}
 
 	// Validate http_port
 	if c.HTTPPort != nil && (*c.HTTPPort < 1 || *c.HTTPPort > 65535) {

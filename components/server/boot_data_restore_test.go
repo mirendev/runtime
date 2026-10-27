@@ -47,21 +47,22 @@ func TestDataRestoreBootRecordsFailureAndRefusesToStart(t *testing.T) {
 	op.BackupRef = filepath.Join(dir, "backups", op.ID+".etcd.db")
 	op.DataRestore = &serverlifecycle.DataRestore{BackupRef: op.BackupRef}
 	require.NoError(t, store.Create(op))
+	require.NoError(t, os.MkdirAll(filepath.Dir(op.BackupRef), 0o755))
+	require.NoError(t, os.WriteFile(op.BackupRef, []byte("truncated"), 0o600))
 
-	embedded := false
 	b := &dataRestoreBoot{inputs: dataRestoreInputs{
 		lifecycleDir: dir,
 		dataPath:     t.TempDir(),
-		etcd:         serverconfig.EtcdConfig{StartEmbedded: &embedded},
+		etcd:         serverconfig.DefaultEtcdConfig(),
 	}}
 	err = b.start(t.Context(), containerdBootOutput{}, observabilityBootOutput{log: slog.Default()})
-	require.ErrorContains(t, err, "not embedded")
+	require.ErrorContains(t, err, "not an etcd snapshot")
 
 	result, err := store.ReadRestoreResult(op.ID)
 	require.NoError(t, err)
 	require.Equal(t, op.ID, result.OperationID)
 	require.Equal(t, op.BackupRef, result.BackupRef)
-	require.Contains(t, result.Error, "not embedded")
+	require.Contains(t, result.Error, "not an etcd snapshot")
 	require.True(t, result.RestoredAt.IsZero())
 
 	// Still pending: the next boot tries again, until abandoned.

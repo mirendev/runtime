@@ -113,9 +113,3 @@ the old Miren release. If the backup is absent or cannot be restored, do not
 start the old binary on the upgraded directory.
 
 :::
-
-This applies only when `[victorialogs].start_embedded = true`. Miren does not
-manage external VictoriaLogs storage. Attribute-wide `miren logs -g` searches
-require VictoriaLogs v1.50 or newer; Miren warns at startup if an external
-server reports an older version or its version cannot be verified. Upgrade an
-external server independently before relying on all-field results.

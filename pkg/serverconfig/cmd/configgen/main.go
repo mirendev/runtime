@@ -34,15 +34,14 @@ type Config struct {
 
 // Field represents a configuration field
 type Field struct {
-	Type        string         `yaml:"type"`
-	Default     any            `yaml:"default"`
-	CLI         *CLIConfig     `yaml:"cli"`
-	Env         string         `yaml:"env"`
-	TOML        string         `yaml:"toml"`
-	Validation  *Validation    `yaml:"validation"`
-	Nested      bool           `yaml:"nested"`
-	ModeDefault map[string]any `yaml:"mode_default"`
-	CLIOnly     bool           `yaml:"cli_only"`
+	Type       string      `yaml:"type"`
+	Default    any         `yaml:"default"`
+	CLI        *CLIConfig  `yaml:"cli"`
+	Env        string      `yaml:"env"`
+	TOML       string      `yaml:"toml"`
+	Validation *Validation `yaml:"validation"`
+	Nested     bool        `yaml:"nested"`
+	CLIOnly    bool        `yaml:"cli_only"`
 }
 
 // CLIConfig represents CLI flag configuration
@@ -540,50 +539,14 @@ func Load(configPath string, flags *CLIFlags, log *slog.Logger) (*Config, error)
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
-	// Resolve the effective mode first (CLI/env > Config > Default)
-	// We need this to apply mode-specific defaults correctly.
-	// CLI and env both flow through flags.Mode (mflags' env tag handling
-	// puts env values into the flags struct during FromStruct).
-	var effectiveMode string
-	if cfg.Mode != nil {
-		effectiveMode = *cfg.Mode
-	}
-	if flags.Mode != nil && *flags.Mode != "" {
-		effectiveMode = *flags.Mode
-	}
-
-	// Apply mode defaults based on the resolved mode
-	// Only set if not already set (nil check)
-	{{range $cname, $config := .Configs}}
-	{{- $structField := configPath $cname}}
-	{{- range $fname, $field := $config.Fields}}
-	{{- if $field.ModeDefault}}
-	{{- range $mode, $val := $field.ModeDefault}}
-	if effectiveMode == "{{$mode}}" {
-		if cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} == nil {
-			cfg.{{if $structField}}{{$structField}}.{{end}}{{$fname | title}} = new({{$val}})
-		}
-	}
-	{{- end}}
-	{{- end}}
-	{{- end}}
-	{{- end}}
-
 	// Apply CLI flags (env values are already in flags via mflags env tags).
 	applyCLIFlags(cfg, flags)
 
-	// Post-process etcd configuration
-	// If embedded etcd is enabled and no endpoints are specified, set default endpoint
-	if cfg.Etcd.StartEmbedded != nil && *cfg.Etcd.StartEmbedded && len(cfg.Etcd.Endpoints) == 0 {
-		port := 12379
-		if cfg.Etcd.ClientPort != nil {
-			port = *cfg.Etcd.ClientPort
-		}
-		cfg.Etcd.Endpoints = []string{fmt.Sprintf("http://127.0.0.1:%d", port)}
-	}
-
 	// Validate
 	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("configuration validation failed: %w", err)
+	}
+	if err := cfg.ValidateRetiredTopology(); err != nil {
 		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
@@ -808,13 +771,6 @@ func (c *{{$name}}) Validate() error {
 	}
 	{{- end}}{{end}}
 	{{- end}}
-	{{end}}
-	
-	{{if eq $name "EtcdConfig"}}
-	// Validate etcd endpoints requirement
-	if c.StartEmbedded != nil && !*c.StartEmbedded && len(c.Endpoints) == 0 {
-		return fmt.Errorf("etcd endpoints must be set when start_embedded=false")
-	}
 	{{end}}
 	
 	return nil

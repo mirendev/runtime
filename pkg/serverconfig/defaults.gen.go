@@ -38,7 +38,7 @@ func DefaultBuildkitConfig() BuildkitConfig {
 		GcKeepDuration: new("7d"),
 		GcKeepStorage:  new("10GB"),
 		SocketDir:      new(""),
-		SocketPath:     new(""),
+		SocketPath:     nil,
 		StartEmbedded:  nil,
 	}
 }
@@ -167,7 +167,7 @@ func DefaultTelemetryTracesConfig() TelemetryTracesConfig {
 // DefaultVictoriaLogsConfig returns default VictoriaLogsConfig
 func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 	return VictoriaLogsConfig{
-		Address:         new("victorialogs:9428"),
+		Address:         nil,
 		HTTPPort:        new(9428),
 		RetentionPeriod: new("30d"),
 		StartEmbedded:   nil,
@@ -177,7 +177,7 @@ func DefaultVictoriaLogsConfig() VictoriaLogsConfig {
 // DefaultVictoriaMetricsConfig returns default VictoriaMetricsConfig
 func DefaultVictoriaMetricsConfig() VictoriaMetricsConfig {
 	return VictoriaMetricsConfig{
-		Address:         new("victoriametrics:8428"),
+		Address:         nil,
 		HTTPPort:        new(8428),
 		RetentionPeriod: new("1"),
 		StartEmbedded:   nil,

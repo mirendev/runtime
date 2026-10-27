@@ -116,16 +116,12 @@ func (b *serverLifecycleBoot) newContainerExecutor(log *slog.Logger) (*serverlif
 	ex := serverlifecycle.NewExecutor(store, opts, log).
 		WithRestarter(serverlifecycle.ContainerRestarter{}).
 		WithProber(serverlifecycle.InstanceProber{Source: b.instance})
-	if b.inputs.etcd.GetStartEmbedded() {
-		ex.WithDataBackup(etcd.Backup{
-			Dir:      filepath.Join(store.Dir(), "backups"),
-			Endpoint: fmt.Sprintf("https://localhost:%d", b.inputs.etcd.GetClientPort()),
-			TLS:      &etcd.TLSConfig{CertsDir: coordinate.EtcdCertsDir(b.inputs.dataPath)},
-			Log:      log,
-		})
-	} else {
-		log.Info("etcd is not embedded; upgrades will not snapshot it and rollback restores only the binary")
-	}
+	ex.WithDataBackup(etcd.Backup{
+		Dir:      filepath.Join(store.Dir(), "backups"),
+		Endpoint: fmt.Sprintf("https://localhost:%d", b.inputs.etcd.GetClientPort()),
+		TLS:      &etcd.TLSConfig{CertsDir: coordinate.EtcdCertsDir(b.inputs.dataPath)},
+		Log:      log,
+	})
 	return ex, nil
 }
 

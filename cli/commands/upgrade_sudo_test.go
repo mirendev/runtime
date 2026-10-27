@@ -46,7 +46,7 @@ func TestDaemonSudoSteps(t *testing.T) {
 
 	t.Run("server mentions the etcd snapshot and runner hand-off", func(t *testing.T) {
 		steps := daemonSudoSteps(serverDaemon, serverBinary)
-		assert.Contains(t, steps, "snapshot etcd first when it is embedded (the default), so a failed upgrade can roll back the data too; with external etcd there is no snapshot, and rollback restores only the binary")
+		assert.Contains(t, steps, "snapshot etcd first, so a failed upgrade can roll back the data too")
 		assert.Contains(t, steps, "ask this cluster's runners, if any, to upgrade to the same build")
 		for _, s := range steps {
 			assert.NotContains(t, s, "copy the new build over this CLI", "the CLI is the server binary here")

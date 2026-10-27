@@ -76,8 +76,13 @@ func TestRegistrationBootRestoresBeforeIdentityAndCloudConsumers(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "server", "workload-identity.etcd-hydrating"), nil, 0600))
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "server", "workload-identity.key"), []byte("truncated"), 0600))
 			}
-			etcd := &etcdBoot{inputs: etcdBootInputs{log: testLogger(), dataPath: restoredDir, config: serverconfig.EtcdConfig{Endpoints: client.Endpoints(), Prefix: &prefix}}}
-			etcdComponent, etcdOutput := boot.Provide0("etcd", etcd.startExternal)
+			// Stand in for embedded etcd with the shared test server, running
+			// the same metadata preparation startEmbedded does.
+			etcd := &etcdBoot{inputs: etcdBootInputs{log: testLogger(), dataPath: restoredDir, config: serverconfig.EtcdConfig{Prefix: &prefix}}}
+			etcdComponent, etcdOutput := boot.Provide0("etcd", func(ctx context.Context) (etcdBootOutput, error) {
+				output := etcdBootOutput{endpoints: client.Endpoints()}
+				return output, etcd.prepareMetadata(ctx, testLogger(), output)
+			})
 			registered := newRegistrationBoot(registrationBootInputs{log: testLogger(), dataPath: restoredDir}, etcdOutput)
 			identity := newWorkloadIdentityBoot(workloadIdentityBootInputs{log: testLogger(), dataPath: restoredDir}, registered.output)
 			graph := boot.NewGraph()

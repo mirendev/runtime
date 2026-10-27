@@ -7,9 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"miren.dev/runtime/components/coordinate"
 	"miren.dev/runtime/components/etcd"
 	"miren.dev/runtime/pkg/boot"
@@ -63,37 +61,10 @@ func embeddedEtcdConfig(config serverconfig.EtcdConfig) etcd.EtcdConfig {
 func newEtcdBoot(inputs etcdBootInputs, ipDiscovery boot.Output[ipDiscoveryBootOutput], containerd boot.Output[containerdBootOutput], observability boot.Output[observabilityBootOutput], dataRestore *boot.Component) *etcdBoot {
 	b := &etcdBoot{inputs: inputs}
 	stop := boot.WithStop(b.stop, componentStopTimeout)
-	if inputs.config.GetStartEmbedded() {
-		// The order-only edge on dataRestore is what makes a rollback's
-		// data restore land before etcd opens the data directory.
-		b.component, b.output = boot.Provide3("etcd", ipDiscovery, containerd, observability, b.startEmbedded, stop, boot.DependsOn(dataRestore))
-	} else {
-		b.component, b.output = boot.Provide0("etcd", b.startExternal, stop)
-	}
+	// The order-only edge on dataRestore is what makes a rollback's
+	// data restore land before etcd opens the data directory.
+	b.component, b.output = boot.Provide3("etcd", ipDiscovery, containerd, observability, b.startEmbedded, stop, boot.DependsOn(dataRestore))
 	return b
-}
-
-func (b *etcdBoot) startExternal(ctx context.Context) (etcdBootOutput, error) {
-	endpoints := append([]string(nil), b.inputs.config.Endpoints...)
-	if len(endpoints) == 0 {
-		return etcdBootOutput{}, fmt.Errorf("etcd endpoints not specified and embedded etcd not started")
-	}
-	client, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
-	if err != nil {
-		return etcdBootOutput{}, fmt.Errorf("creating external etcd client: %w", err)
-	}
-	defer client.Close()
-
-	readyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if _, err := client.Get(readyCtx, b.inputs.config.GetPrefix(), clientv3.WithLimit(1)); err != nil {
-		return etcdBootOutput{}, fmt.Errorf("checking external etcd readiness: %w", err)
-	}
-	result := etcdBootOutput{endpoints: endpoints}
-	if err := b.prepareMetadata(ctx, b.inputs.log, result); err != nil {
-		return etcdBootOutput{}, err
-	}
-	return result, nil
 }
 
 func (b *etcdBoot) prepareMetadata(ctx context.Context, log *slog.Logger, result etcdBootOutput) error {
@@ -106,7 +77,6 @@ func (b *etcdBoot) prepareMetadata(ctx context.Context, log *slog.Logger, result
 
 func (b *etcdBoot) startEmbedded(ctx context.Context, ipDiscovery ipDiscoveryBootOutput, containerd containerdBootOutput, observability observabilityBootOutput) (etcdBootOutput, error) {
 	b.observability = observability
-	b.result.endpoints = append([]string(nil), b.inputs.config.Endpoints...)
 	log := observability.log
 	log.Info("starting embedded etcd server", "client-port", b.inputs.config.GetClientPort(), "peer-port", b.inputs.config.GetPeerPort())
 	b.server = etcd.NewEtcdComponent(log, containerd.Client, containerd.Namespace, b.inputs.dataPath)

@@ -10,23 +10,23 @@ type CLIFlags struct {
 	BuildkitConfigGcKeepDuration                   *string  `long:"buildkit-gc-duration" description:"How long to keep BuildKit cache entries (e.g., 7d, 24h)" env:"MIREN_BUILDKIT_GC_KEEP_DURATION"`
 	BuildkitConfigGcKeepStorage                    *string  `long:"buildkit-gc-storage" description:"Maximum BuildKit layer cache size (e.g., 10GB, 50GB)" env:"MIREN_BUILDKIT_GC_KEEP_STORAGE"`
 	BuildkitConfigSocketDir                        *string  `long:"buildkit-socket-dir" description:"Directory for embedded BuildKit Unix socket (defaults to data_path/buildkit/socket)" env:"MIREN_BUILDKIT_SOCKET_DIR"`
-	BuildkitConfigSocketPath                       *string  `long:"buildkit-socket" description:"Path to external BuildKit Unix socket (for distributed mode)" env:"MIREN_BUILDKIT_SOCKET_PATH"`
-	BuildkitConfigStartEmbedded                    *bool    `long:"start-buildkit" description:"Start embedded BuildKit daemon for container image builds" env:"MIREN_BUILDKIT_START_EMBEDDED"`
+	BuildkitConfigSocketPath                       *string  `long:"buildkit-socket" description:"Retired and ignored: miren always runs its own BuildKit" env:"MIREN_BUILDKIT_SOCKET_PATH" hidden:"yes"`
+	BuildkitConfigStartEmbedded                    *bool    `long:"start-buildkit" description:"Retired: BuildKit always runs embedded" env:"MIREN_BUILDKIT_START_EMBEDDED" hidden:"yes"`
 	ConfigFile                                     *string  `long:"config" description:"Path to configuration file"`
 	Labs                                           []string `long:"labs" description:"Comma-separated list of Miren Labs features to enable/disable. Prefix with - to disable." env:"MIREN_LABS"`
-	Mode                                           *string  `long:"mode" short:"m" description:"Server mode: standalone (default), distributed (experimental)" env:"MIREN_MODE"`
+	Mode                                           *string  `long:"mode" short:"m" description:"Deprecated: standalone is the only server mode" env:"MIREN_MODE" hidden:"yes"`
 	ContainerdConfigBinaryPath                     *string  `long:"containerd-binary" description:"Path to containerd binary" env:"MIREN_CONTAINERD_BINARY_PATH"`
 	ContainerdConfigSocketPath                     *string  `long:"containerd-socket" description:"Path to containerd socket" env:"MIREN_CONTAINERD_SOCKET_PATH"`
-	ContainerdConfigStartEmbedded                  *bool    `long:"start-containerd" description:"Start embedded containerd daemon" env:"MIREN_CONTAINERD_START_EMBEDDED"`
+	ContainerdConfigStartEmbedded                  *bool    `long:"start-containerd" description:"Retired: containerd always runs embedded" env:"MIREN_CONTAINERD_START_EMBEDDED" hidden:"yes"`
 	DeploymentConfigRetentionCount                 *int     `long:"deployment-retention-count" description:"Number of most-recent deployment records to retain per app regardless of age" env:"MIREN_DEPLOYMENT_RETENTION_COUNT"`
 	DeploymentConfigRetentionPeriod                *string  `long:"deployment-retention-period" description:"Retain deployment records newer than this duration regardless of count (e.g. 30d, 2w). Set to 0 to keep them indefinitely." env:"MIREN_DEPLOYMENT_RETENTION_PERIOD"`
 	EtcdConfigClientPort                           *int     `long:"etcd-client-port" description:"Etcd client port" env:"MIREN_ETCD_CLIENT_PORT"`
-	EtcdConfigEndpoints                            []string `long:"etcd" short:"e" description:"Etcd endpoints" env:"MIREN_ETCD_ENDPOINTS"`
+	EtcdConfigEndpoints                            []string `long:"etcd" short:"e" description:"Retired and ignored: miren always runs its own etcd" env:"MIREN_ETCD_ENDPOINTS" hidden:"yes"`
 	EtcdConfigHTTPClientPort                       *int     `long:"etcd-http-client-port" description:"Etcd HTTP client port" env:"MIREN_ETCD_HTTP_CLIENT_PORT"`
 	EtcdConfigPeerPort                             *int     `long:"etcd-peer-port" description:"Etcd peer port" env:"MIREN_ETCD_PEER_PORT"`
 	EtcdConfigPrefix                               *string  `long:"etcd-prefix" short:"p" description:"Etcd prefix" env:"MIREN_ETCD_PREFIX"`
 	EtcdConfigQuotaBackendBytes                    *int     `long:"etcd-quota-backend-bytes" description:"Etcd backend quota in bytes (0 = auto-size from system RAM)" env:"MIREN_ETCD_QUOTA_BACKEND_BYTES"`
-	EtcdConfigStartEmbedded                        *bool    `long:"start-etcd" description:"Start embedded etcd server" env:"MIREN_ETCD_START_EMBEDDED"`
+	EtcdConfigStartEmbedded                        *bool    `long:"start-etcd" description:"Retired: etcd always runs embedded" env:"MIREN_ETCD_START_EMBEDDED" hidden:"yes"`
 	IngressConfigAddress                           *string  `long:"ingress-address" description:"Optional bind override. Replaces the mode's default bind entirely (interface and port). Rejected by validation in tls-autoprovision (where :443 + :80 is structural). Reserved unix:/path prefix is not yet supported." env:"MIREN_INGRESS_ADDRESS"`
 	IngressConfigMode                              *string  `long:"ingress-mode" description:"Ingress mode: tls-autoprovision (default, :443 + :80 with ACME or self-signed), behind-proxy-http (plain HTTP for use behind a TLS-terminating proxy), behind-proxy-https (TLS terminated by Miren; certs come from self-signed or DNS-01 ACME, since :80 isn't bound for HTTP-01)" env:"MIREN_INGRESS_MODE"`
 	IngressConfigTrustedProxyHops                  *int     `long:"ingress-trusted-proxy-hops" description:"Number of trusted proxies immediately in front of Miren when ingress.mode is behind-proxy-http. Used to select the visitor address from X-Forwarded-For." env:"MIREN_INGRESS_TRUSTED_PROXY_HOPS"`
@@ -54,14 +54,14 @@ type CLIFlags struct {
 	TelemetryMetricsConfigWorkloadIdentityAudience *string  `long:"telemetry-metrics-audience" description:"Workload identity audience for the metrics destination" env:"MIREN_TELEMETRY_METRICS_AUDIENCE"`
 	TelemetryTracesConfigEndpoint                  *string  `long:"telemetry-traces-endpoint" description:"OTLP/HTTP base URL for traces (defaults to OTEL_EXPORTER_OTLP_ENDPOINT)" env:"MIREN_TELEMETRY_TRACES_ENDPOINT"`
 	TelemetryTracesConfigWorkloadIdentityAudience  *string  `long:"telemetry-traces-audience" description:"Authenticate trace export with a workload identity token for this audience" env:"MIREN_TELEMETRY_TRACES_AUDIENCE"`
-	VictoriaLogsConfigAddress                      *string  `long:"victorialogs-addr" description:"VictoriaLogs address (when not using embedded)" env:"MIREN_VICTORIALOGS_ADDRESS"`
+	VictoriaLogsConfigAddress                      *string  `long:"victorialogs-addr" description:"Retired and ignored: miren always runs its own VictoriaLogs" env:"MIREN_VICTORIALOGS_ADDRESS" hidden:"yes"`
 	VictoriaLogsConfigHTTPPort                     *int     `long:"victorialogs-http-port" description:"VictoriaLogs HTTP port in embedded mode" env:"MIREN_VICTORIALOGS_HTTP_PORT"`
 	VictoriaLogsConfigRetentionPeriod              *string  `long:"victorialogs-retention" description:"VictoriaLogs retention period (e.g. 30d, 2w, 1y)" env:"MIREN_VICTORIALOGS_RETENTION_PERIOD"`
-	VictoriaLogsConfigStartEmbedded                *bool    `long:"start-victorialogs" description:"Start embedded VictoriaLogs server" env:"MIREN_VICTORIALOGS_START_EMBEDDED"`
-	VictoriaMetricsConfigAddress                   *string  `long:"victoriametrics-addr" description:"VictoriaMetrics address (when not using embedded)" env:"MIREN_VICTORIAMETRICS_ADDRESS"`
+	VictoriaLogsConfigStartEmbedded                *bool    `long:"start-victorialogs" description:"Retired: VictoriaLogs always runs embedded" env:"MIREN_VICTORIALOGS_START_EMBEDDED" hidden:"yes"`
+	VictoriaMetricsConfigAddress                   *string  `long:"victoriametrics-addr" description:"Retired and ignored: miren always runs its own VictoriaMetrics" env:"MIREN_VICTORIAMETRICS_ADDRESS" hidden:"yes"`
 	VictoriaMetricsConfigHTTPPort                  *int     `long:"victoriametrics-http-port" description:"VictoriaMetrics HTTP port in embedded mode" env:"MIREN_VICTORIAMETRICS_HTTP_PORT"`
 	VictoriaMetricsConfigRetentionPeriod           *string  `long:"victoriametrics-retention" description:"VictoriaMetrics retention period in months" env:"MIREN_VICTORIAMETRICS_RETENTION_PERIOD"`
-	VictoriaMetricsConfigStartEmbedded             *bool    `long:"start-victoriametrics" description:"Start embedded VictoriaMetrics server" env:"MIREN_VICTORIAMETRICS_START_EMBEDDED"`
+	VictoriaMetricsConfigStartEmbedded             *bool    `long:"start-victoriametrics" description:"Retired: VictoriaMetrics always runs embedded" env:"MIREN_VICTORIAMETRICS_START_EMBEDDED" hidden:"yes"`
 }
 
 // NewCLIFlags creates a new CLIFlags struct for parsing
