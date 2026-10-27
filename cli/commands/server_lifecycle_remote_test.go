@@ -17,6 +17,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverlifecycle"
+	"miren.dev/runtime/pkg/ui"
 )
 
 func TestTargetsLocalServer(t *testing.T) {
@@ -69,15 +70,25 @@ func (lifecycleMissingOperation) Get(_ context.Context, call *server_v1alpha.Ser
 	return cond.NotFound("lifecycle operation", call.Args().Id())
 }
 
+type lifecycleRejectAuthenticator struct{}
+
+func (lifecycleRejectAuthenticator) Authenticate(context.Context, *rpc.Credentials) (*rpc.Identity, error) {
+	return nil, errors.New("credentials rejected")
+}
+
 func TestFollowRemoteOperationStopsOnServerAnswer(t *testing.T) {
-	for _, denied := range []bool{true, false} {
-		t.Run(fmt.Sprintf("denied=%t", denied), func(t *testing.T) {
+	for _, failure := range []string{"call denial", "not found", "lookup denial"} {
+		t.Run(failure, func(t *testing.T) {
 			var authorizer rpc.Authorizer
-			if denied {
+			if failure == "call denial" {
 				authorizer = lifecycleDenyAuthorizer{}
 			}
+			var authenticator rpc.Authenticator = &rpc.NoOpAuthenticator{}
+			if failure == "lookup denial" {
+				authenticator = lifecycleRejectAuthenticator{}
+			}
 			ss, err := rpc.NewState(t.Context(), rpc.WithSkipVerify,
-				rpc.WithAuthenticator(&rpc.NoOpAuthenticator{}), rpc.WithAuthorizer(authorizer))
+				rpc.WithAuthenticator(authenticator), rpc.WithAuthorizer(authorizer))
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = ss.Close() })
 			ss.Server().ExposeValue(serverLifecycleService, server_v1alpha.AdaptServerLifecycle(lifecycleMissingOperation{}))
@@ -90,14 +101,26 @@ func TestFollowRemoteOperationStopsOnServerAnswer(t *testing.T) {
 			op := &serverlifecycle.Operation{ID: "pending-op", Phase: serverlifecycle.PhaseRestarting}
 			latest, err := followRemoteOperation(ctx, op)
 			require.Equal(t, op, latest)
-			if denied {
+			switch failure {
+			case "call denial":
 				var permission cond.ErrRemote
 				require.ErrorAs(t, err, &permission)
 				require.Equal(t, cond.ErrRemote{Category: "permission", Code: "forbidden", Message: "lifecycle access denied"}, permission)
-			} else {
+			case "not found":
 				require.ErrorIs(t, err, cond.ErrNotFound{})
+			case "lookup denial":
+				var resolve *rpc.ResolveError
+				require.ErrorAs(t, err, &resolve)
+				require.Equal(t, http.StatusUnauthorized, resolve.StatusCode)
 			}
-			require.ErrorContains(t, err, "operation pending-op may still be running; check with miren server operations show pending-op")
+			var rendered bytes.Buffer
+			if terminal, ok := errors.AsType[ui.SeverityTerminalError](err); ok {
+				terminal.WriteWithSeverity(&rendered, ui.SeverityError)
+			} else {
+				fmt.Fprint(&rendered, err)
+			}
+			require.Contains(t, rendered.String(), "may still be running")
+			require.Contains(t, rendered.String(), "miren server operations show pending-op")
 			require.NotContains(t, output.String(), "server unreachable")
 			require.NoError(t, deadline.Err(), "server answer must stop following before the polling deadline")
 		})

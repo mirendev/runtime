@@ -12,6 +12,7 @@ import (
 	"miren.dev/runtime/pkg/cond"
 	"miren.dev/runtime/pkg/rpc"
 	"miren.dev/runtime/pkg/serverlifecycle"
+	"miren.dev/runtime/pkg/ui"
 	lifecyclesrv "miren.dev/runtime/servers/serverlifecycle"
 )
 
@@ -174,6 +175,13 @@ func followRemoteOperation(ctx *Context, op *serverlifecycle.Operation) (*server
 			// The server answered; waiting for a different answer is not
 			// going to help. Only an unreachable server is worth outlasting.
 			if answered(err) {
+				if diagnostic, ok := errors.AsType[*ui.Diagnostic](err); ok {
+					diagnostic.Actions = append(diagnostic.Actions, ui.Action{
+						Command: "miren server operations show " + op.ID,
+						Note:    "the operation may still be running",
+					})
+					return op, err
+				}
 				return op, fmt.Errorf("%w (operation %s may still be running; check with miren server operations show %s)", err, op.ID, op.ID)
 			}
 			if unreachableSince.IsZero() {
