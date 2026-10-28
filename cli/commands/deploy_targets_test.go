@@ -41,11 +41,10 @@ cluster_id = "cluster-prod-id"
 		XID:      "cluster-prod-id",
 	})
 
-	t.Run("first target is the default", func(t *testing.T) {
+	t.Run("multiple targets require explicit selection", func(t *testing.T) {
+		t.Setenv("CI", "1")
 		opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{cfg: cfg}}}
-		require.NoError(t, opts.Validate(&GlobalFlags{}))
-		require.Empty(t, opts.Cluster)
-		require.Equal(t, "miren-staging", opts.targetCluster)
+		require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "pass -C")
 	})
 
 	t.Run("named target selects its cluster", func(t *testing.T) {
@@ -66,10 +65,9 @@ cluster_id = "cluster-prod-id"
 		require.Nil(t, state)
 	})
 
-	t.Run("explicit cluster overrides the default target", func(t *testing.T) {
-		opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other"}}}
-		require.NoError(t, opts.Validate(&GlobalFlags{}))
-		require.Equal(t, "other", opts.Cluster)
+	t.Run("explicit cluster must be a target", func(t *testing.T) {
+		opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other", cfg: cfg}}}
+		require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "not a deploy target")
 	})
 
 	t.Run("target and explicit cluster conflict", func(t *testing.T) {
@@ -81,14 +79,13 @@ cluster_id = "cluster-prod-id"
 	})
 }
 
-func TestDeployOptsExplicitClusterBypassesInvalidDeployConfig(t *testing.T) {
+func TestDeployOptsExplicitClusterRejectsInvalidDeployConfig(t *testing.T) {
 	dir := t.TempDir()
 	writeAppToml(t, dir, `name = "myapp"`)
 	writeDeployToml(t, dir, `not valid toml =`)
 
 	opts := deployOpts{AppCentric: AppCentric{Dir: dir, ConfigCentric: ConfigCentric{Cluster: "other"}}}
-	require.NoError(t, opts.Validate(&GlobalFlags{}))
-	require.Equal(t, "other", opts.Cluster)
+	require.ErrorContains(t, opts.Validate(&GlobalFlags{}), "error loading .miren/deploy.toml")
 }
 
 func TestDeployOptsValidateTargetWithUnknownClusterID(t *testing.T) {

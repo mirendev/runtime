@@ -2,30 +2,43 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	"miren.dev/runtime/api/ingress"
 	"miren.dev/runtime/api/ingress/ingress_v1alpha"
 )
 
-func RouteSet(ctx *Context, opts struct {
+type RouteSetOptions struct {
 	Host    string `position:"0" usage:"Hostname for the route (e.g., example.com or *.example.com)" required:"true"`
-	AppName string `position:"1" usage:"Application name to route to"`
+	AppName string `position:"1" usage:"Deprecated: use --app instead"`
 	Service string `long:"service" description:"HTTP-capable app service to route to" default:"web"`
-	ConfigCentric
-}) error {
+	AppCentric
+}
+
+func (o *RouteSetOptions) Validate(flags *GlobalFlags) error {
+	// Resolve the legacy argument before AppCentric requires an app. An
+	// explicit --app (or MIREN_APP) takes precedence over that argument.
+	if o.App == "" && o.AppName != "" {
+		o.App = o.AppName
+	}
+	return o.AppCentric.Validate(flags)
+}
+
+func RouteSet(ctx *Context, opts RouteSetOptions) error {
+	if opts.AppName != "" {
+		fmt.Fprintln(os.Stderr, "Warning: the positional app in 'miren route set' is deprecated; use --app instead.")
+	}
 	if opts.Host == "" {
-		return fmt.Errorf("host is required")
+		return fmt.Errorf("route hostname is required")
 	}
 
 	if err := ingress.ValidateWildcardHost(opts.Host); err != nil {
 		return err
 	}
 
-	appName := opts.AppName
+	appName := opts.App
 	if appName == "" {
-		if ac := loadLocalAppConfigOrWarn(); ac != nil && ac.Name != "" {
-			appName = ac.Name
-		}
+		appName = opts.AppName
 	}
 	if appName == "" {
 		return fmt.Errorf("app is required")

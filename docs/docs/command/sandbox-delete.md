@@ -22,7 +22,8 @@ miren sandbox delete <sandboxid> [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
-- `--force, -f` — Force delete without confirmation
+- `--force, -f` — Deprecated: use --yes to skip confirmation
+- `--yes, -y` — Skip confirmation prompt
 
 ## Global Options
 
@@ -38,10 +39,10 @@ miren sandbox delete <sandboxid> [flags]
 miren sandbox delete sb_abc123
 ```
 
-**Force delete without confirmation:**
+**Delete without confirmation:**
 
 ```bash
-miren sandbox delete sb_abc123 --force
+miren sandbox delete sb_abc123 --yes
 ```
 
 ## See also

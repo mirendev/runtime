@@ -18,29 +18,42 @@ import (
 	"miren.dev/runtime/pkg/ui"
 )
 
-func Admin(ctx *Context, opts struct {
+type AdminOptions struct {
 	AppCentric
+	FormatOptions
 	List       bool     `long:"list" short:"l" description:"List available admin methods"`
 	FuncHelp   bool     `long:"func-help" description:"Show help for a specific admin method"`
-	JSON       bool     `long:"json" short:"j" description:"Output as highlighted JSON (default for non-TTY)"`
+	LegacyJSON bool     `short:"j" description:"Deprecated: use --json or --format json"`
 	Pretty     bool     `long:"pretty" short:"p" description:"Render output in a human-friendly format (default for TTY)"`
 	NoValidate bool     `long:"no-validate" description:"Skip method/parameter validation"`
 	ParamsFile string   `long:"params-file" short:"f" description:"Read params as JSON from file (use - for stdin)"`
 	Method     string   `position:"0" description:"Admin method to call"`
 	Params     []string `rest:"true" description:"Method parameters as key=value pairs"`
 	Unknown    []string `unknown:"true"`
-}) error {
+}
+
+func AdminList(ctx *Context, opts AdminOptions) error {
+	opts.List = true
+	return Admin(ctx, opts)
+}
+
+func Admin(ctx *Context, opts AdminOptions) error {
+	if opts.LegacyJSON {
+		fmt.Fprintln(os.Stderr, "Warning: admin -j is deprecated; use --json or --format json.")
+		opts.JSON = true
+	}
 	// Get RPC client
 	cl, err := ctx.RPCClient("dev.miren.runtime/admin")
 	if err != nil {
 		return err
 	}
+	defer cl.Close()
 
 	adminClient := admin_v1alpha.NewAdminClient(cl)
 
 	// Handle --list flag
 	if opts.List {
-		return adminListMethods(ctx, adminClient, opts.App)
+		return adminListMethods(ctx, adminClient, opts.App, opts.IsJSON())
 	}
 
 	// Method is required if not listing or getting help
@@ -175,21 +188,26 @@ func Admin(ctx *Context, opts struct {
 	// - If --pretty is passed, always use pretty
 	// - Otherwise, use pretty for TTY, JSON for non-TTY
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	usePretty := opts.Pretty || (isTTY && !opts.JSON)
+	usePretty := !opts.IsJSON() && (opts.Pretty || isTTY)
 
 	// Print result
 	if result.Result().HasResult() && result.Result().Result() != "" {
 		var prettyResult any
 		if err := json.Unmarshal([]byte(result.Result().Result()), &prettyResult); err == nil {
-			if usePretty {
-				ctx.Printf("%s", renderPretty(prettyResult))
-			} else {
-				ctx.Printf("%s\n", highlightJSON(prettyResult, 0))
+			if opts.IsJSON() || !usePretty {
+				return PrintJSON(prettyResult)
 			}
+			ctx.Printf("%s", renderPretty(prettyResult))
 		} else {
+			if opts.IsJSON() {
+				return PrintJSON(result.Result().Result())
+			}
 			ctx.Printf("%s\n", result.Result().Result())
 		}
 	} else {
+		if opts.IsJSON() {
+			return PrintJSON(nil)
+		}
 		ctx.Printf("OK\n")
 	}
 
@@ -563,7 +581,7 @@ func renderMethodHelp(ctx *Context, appName string, m *admin_v1alpha.AdminMethod
 	ctx.Printf("%s\n", renderMethodHelpString(appName, m))
 }
 
-func adminListMethods(ctx *Context, adminClient *admin_v1alpha.AdminClient, appName string) error {
+func adminListMethods(ctx *Context, adminClient *admin_v1alpha.AdminClient, appName string, asJSON bool) error {
 	result, err := adminClient.ListMethods(ctx, appName)
 	if err != nil {
 		return fmt.Errorf("RPC error: %w", err)
@@ -571,6 +589,30 @@ func adminListMethods(ctx *Context, adminClient *admin_v1alpha.AdminClient, appN
 
 	if result.HasError() && result.Error() != "" {
 		return fmt.Errorf("failed to list methods: %s", result.Error())
+	}
+
+	if asJSON {
+		type paramJSON struct {
+			Name     string `json:"name"`
+			Type     string `json:"type,omitempty"`
+			Required bool   `json:"required"`
+		}
+		type methodJSON struct {
+			Name        string      `json:"name"`
+			Description string      `json:"description,omitempty"`
+			Category    string      `json:"category,omitempty"`
+			Params      []paramJSON `json:"params,omitempty"`
+		}
+		methods := make([]methodJSON, 0, len(result.Methods()))
+		for _, m := range result.Methods() {
+			item := methodJSON{Name: m.Name(), Description: m.Description(), Category: m.Category()}
+			for _, p := range m.Params() {
+				item.Params = append(item.Params, paramJSON{Name: p.Name(), Type: p.ParamType(), Required: p.Required()})
+			}
+			methods = append(methods, item)
+		}
+		sort.Slice(methods, func(i, j int) bool { return methods[i].Name < methods[j].Name })
+		return PrintJSON(methods)
 	}
 
 	if !result.HasMethods() || len(result.Methods()) == 0 {
@@ -619,105 +661,16 @@ func adminMethodHelp(ctx *Context, adminClient *admin_v1alpha.AdminClient, appNa
 
 // JSON syntax highlighting styles (similar to jq)
 var (
-	jsonKeyStyle    = lipgloss.NewStyle().Foreground(theme.Info)    // Blue for keys
 	jsonStringStyle = lipgloss.NewStyle().Foreground(theme.Success) // Green for strings
 	jsonNumberStyle = lipgloss.NewStyle().Foreground(theme.Info)    // Blue for numbers
 	jsonBoolStyle   = lipgloss.NewStyle().Foreground(theme.Warning) // Yellow for booleans
 	jsonNullStyle   = lipgloss.NewStyle().Foreground(theme.Muted)   // Gray for null
-	jsonBracket     = lipgloss.NewStyle().Foreground(theme.Muted)   // Muted for brackets
 )
 
 // Pretty rendering styles
 var (
 	tableTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
 )
-
-// highlightJSON recursively renders a JSON value with syntax highlighting
-func highlightJSON(v any, indent int) string {
-	indentStr := strings.Repeat("  ", indent)
-	nextIndent := strings.Repeat("  ", indent+1)
-
-	switch val := v.(type) {
-	case nil:
-		return jsonNullStyle.Render("null")
-
-	case bool:
-		if val {
-			return jsonBoolStyle.Render("true")
-		}
-		return jsonBoolStyle.Render("false")
-
-	case float64:
-		// Format nicely - no decimal for integers
-		if val == float64(int64(val)) {
-			return jsonNumberStyle.Render(fmt.Sprintf("%d", int64(val)))
-		}
-		return jsonNumberStyle.Render(fmt.Sprintf("%g", val))
-
-	case string:
-		escaped, _ := json.Marshal(val)
-		return jsonStringStyle.Render(string(escaped))
-
-	case []any:
-		if len(val) == 0 {
-			return jsonBracket.Render("[]")
-		}
-
-		var sb strings.Builder
-		sb.WriteString(jsonBracket.Render("["))
-		sb.WriteString("\n")
-
-		for i, item := range val {
-			sb.WriteString(nextIndent)
-			sb.WriteString(highlightJSON(item, indent+1))
-			if i < len(val)-1 {
-				sb.WriteString(",")
-			}
-			sb.WriteString("\n")
-		}
-
-		sb.WriteString(indentStr)
-		sb.WriteString(jsonBracket.Render("]"))
-		return sb.String()
-
-	case map[string]any:
-		if len(val) == 0 {
-			return jsonBracket.Render("{}")
-		}
-
-		// Sort keys for consistent output
-		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		var sb strings.Builder
-		sb.WriteString(jsonBracket.Render("{"))
-		sb.WriteString("\n")
-
-		for i, key := range keys {
-			escapedKey, _ := json.Marshal(key)
-			sb.WriteString(nextIndent)
-			sb.WriteString(jsonKeyStyle.Render(string(escapedKey)))
-			sb.WriteString(": ")
-			sb.WriteString(highlightJSON(val[key], indent+1))
-			if i < len(keys)-1 {
-				sb.WriteString(",")
-			}
-			sb.WriteString("\n")
-		}
-
-		sb.WriteString(indentStr)
-		sb.WriteString(jsonBracket.Render("}"))
-		return sb.String()
-
-	default:
-		// Fallback for unexpected types
-		b, _ := json.Marshal(val)
-		return string(b)
-	}
-}
 
 // renderPretty renders data in a human-friendly format
 func renderPretty(v any) string {

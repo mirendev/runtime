@@ -20,6 +20,7 @@ type appVersionSummaryData struct {
 	EphemeralLabel *string             `cbor:"4,keyasint,omitempty" json:"ephemeral_label,omitempty"`
 	EphemeralTtl   *string             `cbor:"5,keyasint,omitempty" json:"ephemeral_ttl,omitempty"`
 	ExpiresAt      *standard.Timestamp `cbor:"6,keyasint,omitempty" json:"expires_at,omitempty"`
+	ShortId        *string             `cbor:"7,keyasint,omitempty" json:"short_id,omitempty"`
 }
 
 type AppVersionSummary struct {
@@ -123,6 +124,21 @@ func (v *AppVersionSummary) ExpiresAt() *standard.Timestamp {
 
 func (v *AppVersionSummary) SetExpiresAt(expires_at *standard.Timestamp) {
 	v.data.ExpiresAt = expires_at
+}
+
+func (v *AppVersionSummary) HasShortId() bool {
+	return v.data.ShortId != nil
+}
+
+func (v *AppVersionSummary) ShortId() string {
+	if v.data.ShortId == nil {
+		return ""
+	}
+	return *v.data.ShortId
+}
+
+func (v *AppVersionSummary) SetShortId(short_id string) {
+	v.data.ShortId = &short_id
 }
 
 func (v *AppVersionSummary) MarshalCBOR() ([]byte, error) {

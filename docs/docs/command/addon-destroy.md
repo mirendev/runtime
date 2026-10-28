@@ -1,12 +1,12 @@
 ---
 title: "miren addon destroy"
 sidebar_label: "addon destroy"
-description: "Remove an addon from an application"
+description: "Deprecated: use 'miren addon delete'"
 ---
 
 # miren addon destroy
 
-Remove an addon from an application
+Deprecated: use 'miren addon delete'
 
 Removing an addon deprovisions the backing resource and strips its injected environment variables from your app. Miren creates a new app version without those variables and rolls it out automatically — you do not need to run `miren deploy` or `miren app restart`.
 
@@ -22,7 +22,8 @@ miren addon destroy <name> [flags]
 
 ## Flags
 
-- `--force, -f` — Skip confirmation prompt
+- `--force, -f` — Deprecated: use --yes to skip confirmation
+- `--yes, -y` — Skip confirmation prompt
 
 ## Config Options
 
@@ -45,13 +46,13 @@ miren addon destroy <name> [flags]
 **Remove an addon:**
 
 ```bash
-miren addon destroy miren-postgresql
+miren addon delete miren-postgresql
 ```
 
 **Remove without confirmation:**
 
 ```bash
-miren addon destroy miren-postgresql --force
+miren addon delete miren-postgresql --yes
 ```
 
 ## See also

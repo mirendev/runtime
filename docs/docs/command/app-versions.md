@@ -1,12 +1,12 @@
 ---
 title: "miren app versions"
 sidebar_label: "app versions"
-description: "List app versions with status"
+description: "Deprecated: use 'miren app history --versions'"
 ---
 
 # miren app versions
 
-List app versions with status
+Deprecated: use 'miren app history --versions'
 
 ## Usage
 

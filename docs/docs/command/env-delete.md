@@ -22,8 +22,9 @@ miren env delete [args...] [flags]
 
 ## Flags
 
-- `--force, -f` — Skip confirmation prompt
+- `--force, -f` — Deprecated: use --yes to skip confirmation
 - `--service, -S` — Delete env var from specific service only (if not specified, deletes global env var)
+- `--yes, -y` — Skip confirmation prompt
 
 ## Config Options
 

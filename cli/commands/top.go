@@ -72,6 +72,37 @@ type topOptions struct {
 	Samples  int    `long:"samples" description:"Stop after this many refreshes (0 for unlimited)"`
 }
 
+func AppTop(ctx *Context, opts struct {
+	AppCentric
+	FormatOptions
+	Service      string `long:"service" description:"Only show sandboxes of this service"`
+	Runner       string `long:"runner" description:"Only show sandboxes on this runner"`
+	Kind         string `long:"kind" description:"Only show sandboxes of this kind"`
+	Status       string `long:"status" description:"Only show sandboxes in this status"`
+	Apps         bool   `long:"apps" description:"Show this app's totals instead of per-sandbox usage"`
+	System       bool   `long:"system" description:"Include addon and platform sandboxes"`
+	NoAddons     bool   `long:"no-addons" description:"Exclude dedicated addons from app totals"`
+	Since        string `long:"since" description:"Measure over this window, e.g. 30s, 5m, 1h (default 1m)"`
+	Aggregate    string `long:"aggregate" description:"How to collapse the window: avg, max, min, last" default:"avg"`
+	Series       bool   `long:"series" description:"Show CPU and memory over time (implies --apps)"`
+	Step         string `long:"step" description:"Resolution of --series"`
+	Contributors bool   `long:"contributors" description:"List contributing sandboxes (implies --apps)"`
+	Sort         string `long:"sort" description:"Sort by: cpu, memory, name, app, service, node" default:"cpu"`
+	Order        string `long:"order" description:"Sort direction: desc or asc"`
+	Limit        int    `long:"limit" description:"Show at most this many rows (0 for all)"`
+	Watch        bool   `short:"w" long:"watch" description:"Refresh continuously until interrupted"`
+	Interval     string `long:"interval" description:"Refresh interval when watching" default:"5s"`
+	Samples      int    `long:"samples" description:"Stop after this many refreshes (0 for unlimited)"`
+}) error {
+	return runTop(ctx, topOptions{
+		ConfigCentric: opts.ConfigCentric, FormatOptions: opts.FormatOptions,
+		App: opts.App, Service: opts.Service, Runner: opts.Runner, Kind: opts.Kind, Status: opts.Status,
+		Apps: opts.Apps || opts.Series || opts.Contributors, System: opts.System, NoAddons: opts.NoAddons,
+		Since: opts.Since, Aggregate: opts.Aggregate, Series: opts.Series, Step: opts.Step, Contributors: opts.Contributors,
+		Sort: opts.Sort, Order: opts.Order, Limit: opts.Limit, Watch: opts.Watch, Interval: opts.Interval, Samples: opts.Samples,
+	})
+}
+
 // checkSeriesFlags rejects the flag combinations --series cannot serve.
 //
 // A history is one app's. A range query grouped across every app in a cluster
@@ -105,6 +136,13 @@ func checkSeriesFlags(opts topOptions) error {
 
 // Top reports what a cluster is spending its CPU and memory on.
 func Top(ctx *Context, opts topOptions) error {
+	if opts.App != "" {
+		fmt.Fprintln(os.Stderr, "Warning: top --app is deprecated; use 'miren app top --app' instead.")
+	}
+	return runTop(ctx, opts)
+}
+
+func runTop(ctx *Context, opts topOptions) error {
 	client, err := ctx.RPCClient(ServiceUsage)
 	if err != nil {
 		return err
@@ -139,7 +177,7 @@ func Top(ctx *Context, opts topOptions) error {
 	// --samples implies watching: asking for six of something is asking for it
 	// more than once, and requiring --watch alongside it would only be a way to
 	// get the flag combination wrong.
-	if !opts.Watch && opts.Samples <= 1 {
+	if (!opts.Watch && opts.Samples <= 1) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		out, err := q.render(ctx)
 		if err != nil {
 			return err
@@ -156,14 +194,9 @@ func Top(ctx *Context, opts topOptions) error {
 		interval = minWatchInterval
 	}
 
-	// Two cases print successive snapshots instead of redrawing one in place.
-	//
-	// A bounded run keeps all of its samples, because the point of asking for
-	// six of them is to compare them. And a run with no terminal has nothing to
-	// redraw in: piped to a file or called from a script, the TUI library fails
-	// with an error about /dev/tty that tells the reader nothing about what to
-	// do, so it falls back the way top -b does.
-	if opts.Samples > 0 || !term.IsTerminal(int(os.Stdout.Fd())) {
+	// A bounded terminal run keeps its samples for comparison rather than
+	// redrawing them. Non-terminal output has already returned one snapshot.
+	if opts.Samples > 0 {
 		return q.watchBatch(ctx, interval, opts.Samples)
 	}
 
@@ -171,8 +204,7 @@ func Top(ctx *Context, opts topOptions) error {
 }
 
 // watchBatch prints a fresh snapshot every interval, separated by a timestamp.
-// It runs samples times, or until interrupted when samples is zero. Used for a
-// bounded run, and whenever there is no terminal to redraw in.
+// It runs samples times, or until interrupted when samples is zero.
 func (q topQuery) watchBatch(ctx *Context, interval time.Duration, samples int) error {
 	for n := 0; samples <= 0 || n < samples; n++ {
 		out, err := q.render(ctx)
@@ -338,7 +370,7 @@ func renderSandboxTable(res *usage_v1alpha.ResourceUsageClientListSandboxesResul
 		return "No sandboxes are reporting usage.\n" + renderWarnings(res.Warnings())
 	}
 
-	headers := []string{"APP", "SERVICE", "RUNNER", "CPU", "NODE%", "MEM", "STATUS"}
+	headers := []string{"SANDBOX", "APP", "SERVICE", "RUNNER", "CPU", "NODE%", "MEM", "STATUS"}
 	rows := make([]ui.Row, 0, len(sandboxes))
 
 	for _, w := range sandboxes {
@@ -364,6 +396,7 @@ func renderSandboxTable(res *usage_v1alpha.ResourceUsageClientListSandboxesResul
 		}
 
 		rows = append(rows, ui.Row{
+			orDash(shortOrClean(ref.SandboxShortId(), ref.Sandbox())),
 			orDash(ref.App()),
 			orDash(ref.Service()),
 			orDash(ref.NodeName()),
@@ -814,15 +847,21 @@ deployment before the current one. An app with nothing left running is marked
 to contain its samples. Samples are kept for a month, so a long enough --since
 will name apps that have since been deleted.
 
+Use "miren app top" for one app, selected from --app or the local app config.
+"miren sandbox top" is the sandbox view; "miren top" remains an alias.
+
 --series adds that app's CPU and memory over time, which a row cannot show: a
 row collapses the window to one number. --contributors breaks the figures down
 by the sandboxes that produced them, including the ones already replaced. Both
-need --apps and --app, because they answer for one app:
+imply --apps under app top:
 
-  miren top --apps --app shop --since 168h --series --contributors
+  miren app top --app shop --since 168h --series --contributors
 
 Use --format json to get the points and the breakdown as data, and --step to
 choose the resolution of the history.
+
+--watch refreshes on a terminal. When stdout is a pipe or file, it prints one
+snapshot and exits instead.
 
 There is no restart column. Miren replaces a failed sandbox rather than
 restarting it, so no single sandbox accumulates a restart count; repeated

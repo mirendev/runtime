@@ -1,12 +1,12 @@
 ---
 title: "miren top"
 sidebar_label: "top"
-description: "Show cluster-wide resource usage"
+description: "Alias for 'miren sandbox top'"
 ---
 
 # miren top
 
-Show cluster-wide resource usage
+Alias for 'miren sandbox top'
 
 Show what a cluster is spending its CPU and memory on, ordered by the busiest.
 
@@ -42,15 +42,21 @@ deployment before the current one. An app with nothing left running is marked
 to contain its samples. Samples are kept for a month, so a long enough --since
 will name apps that have since been deleted.
 
+Use "miren app top" for one app, selected from --app or the local app config.
+"miren sandbox top" is the sandbox view; "miren top" remains an alias.
+
 --series adds that app's CPU and memory over time, which a row cannot show: a
 row collapses the window to one number. --contributors breaks the figures down
 by the sandboxes that produced them, including the ones already replaced. Both
-need --apps and --app, because they answer for one app:
+imply --apps under app top:
 
-  miren top --apps --app shop --since 168h --series --contributors
+  miren app top --app shop --since 168h --series --contributors
 
 Use --format json to get the points and the breakdown as data, and --step to
 choose the resolution of the history.
+
+--watch refreshes on a terminal. When stdout is a pipe or file, it prints one
+snapshot and exits instead.
 
 There is no restart column. Miren replaces a failed sandbox rather than
 restarting it, so no single sandbox accumulates a restart count; repeated
@@ -105,47 +111,47 @@ miren top [flags]
 **What is using the cluster's CPU:**
 
 ```bash
-miren top
+miren sandbox top
 ```
 
 **Which host is hot, and whether an app is to blame:**
 
 ```bash
-miren top --nodes
+miren sandbox top --nodes
 ```
 
 **Per-app totals, including each app's dedicated addons:**
 
 ```bash
-miren top --apps
+miren sandbox top --apps
 ```
 
 **One app's usage:**
 
 ```bash
-miren top --apps --app myapp
+miren sandbox top --apps --app myapp
 ```
 
 **Narrow to one runner:**
 
 ```bash
-miren top --runner miren-garden-runner-1
+miren sandbox top --runner miren-garden-runner-1
 ```
 
 **Find a spike that has already passed:**
 
 ```bash
-miren top --since 1h --aggregate max
+miren sandbox top --since 1h --aggregate max
 ```
 
 **Watch continuously:**
 
 ```bash
-miren top --watch
+miren sandbox top --watch
 ```
 
 **Machine-readable output:**
 
 ```bash
-miren top --format json
+miren sandbox top --format json
 ```

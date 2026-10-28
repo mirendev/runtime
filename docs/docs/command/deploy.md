@@ -1,18 +1,18 @@
 ---
 title: "miren deploy"
 sidebar_label: "deploy"
-description: "Deploy an application"
+description: "Alias for 'miren deployment create'"
 ---
 
 # miren deploy
 
-Deploy an application
+Alias for 'miren deployment create'
 
 Deploy uploads your project files and configuration, selects the app's primary image, and activates the resulting version. A Dockerfile selected by `[build].dockerfile` or discovered as `Dockerfile.miren` is built first. Without one, a configured web image is resolved directly; otherwise Miren builds an image from automatically detected source. When source needs rebuilding, this is the command that does it.
 
 To activate an existing version without selecting or building another image, pass `--version`:
 ```bash
-miren deploy --version myapp-vCVkjR6u7744AsMebwMjGU
+miren deployment create --version myapp-vCVkjR6u7744AsMebwMjGU
 ```
 This reuses the existing image and rolls it out immediately. It is useful for rolling forward to a known-good version without waiting for an image to resolve or build. Find version IDs with `miren app history`.
 
@@ -32,7 +32,7 @@ Use `--format json` to get the result as a single JSON document on stdout (`stat
 Use `--format jsonl` to follow the deploy as it happens. Nothing unstructured is printed at all: stdout is one JSON object per line, each with an `event` name and a `time`, and stderr stays empty. Events are `start`, `message`, `upload`, `upload_complete`, `build_step` (with `status` started, done, cached, or error), `build_log`, `build_error`, `build_complete`, `deployment` (phase changes, using the deployment record's phase names), `warning`, `health` (an `outcome` of waiting, healthy, scaled_to_zero, task_only, crashed, or timeout, an `ok` flag, and the app's health classification with its instance counts), `port_warning`, `app_log` (recent crash output on a failed rollout), `log` (the CLI's own log records, which would otherwise go to stderr), and finally `result`, which carries the same fields as the `--format json` document.
 
 :::note[Config changes deploy on their own]
-Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deploy` when your code or `app.toml` has changed.
+Changing environment variables (`miren env set` / `miren env delete`) or addons (`miren addon create` / `miren addon destroy`) already creates and rolls out a new version. You only need `miren deployment create` when your code or `app.toml` has changed.
 :::
 
 ## Usage
@@ -48,7 +48,7 @@ miren deploy [flags]
 - `--ephemeral` — Deploy as ephemeral preview with this label (e.g. feat-login)
 - `--explain, -x` — Explain the build process
 - `--explain-format` — Explain format (default: `auto`) (choices: `auto`, `plain`, `tty`, `rawjson`, `quiet`)
-- `--force, -f` — Skip confirmation prompt
+- `--force, -f` — Deprecated: use --yes to skip confirmation
 - `--format` — Output format (text, json, jsonl) (default: `text`) (choices: `text`, `json`, `jsonl`)
 - `--json` — Shorthand for --format json
 - `--message, -m` — Description of this deployment
@@ -58,6 +58,7 @@ miren deploy [flags]
 - `--target` — Deployment target from .miren/deploy.toml
 - `--ttl` — TTL for ephemeral version (e.g. 48h, 7d, 2w) (default: `7d`)
 - `--version, -V` — Deploy an existing version (reuse its resolved image; skip image selection and build)
+- `--yes, -y` — Skip confirmation prompt
 
 ## Config Options
 
@@ -80,7 +81,7 @@ miren deploy [flags]
 **Basic:**
 
 ```bash
-miren deploy
+miren deployment create
 ```
 
 **Analyze:**
@@ -89,19 +90,19 @@ miren deploy
 Before deploying, the system can tell you how it's going
 to treat your application by running:
 
-miren deploy --analyze
+miren deployment create --analyze
 ```
 
 **Set environment variables during deploy:**
 
 ```bash
-miren deploy -e DATABASE_URL=postgres://localhost/mydb
+miren deployment create -e DATABASE_URL=postgres://localhost/mydb
 ```
 
 **Deploy an existing version:**
 
 ```bash
-miren deploy --version v3
+miren deployment create --version v3
 ```
 
 **Deploy from a script or CI:**
@@ -110,7 +111,7 @@ miren deploy --version v3
 Progress goes to stderr; stdout carries one JSON document
 with the status, version, and URLs:
 
-miren deploy --format json | jq -r .app_version
+miren deployment create --format json | jq -r .app_version
 ```
 
 **Follow a deploy as a stream of events:**
@@ -118,10 +119,10 @@ miren deploy --format json | jq -r .app_version
 ```bash
 One JSON object per line on stdout, nothing on stderr:
 
-miren deploy --format jsonl | jq -c 'select(.event == "build_step")'
+miren deployment create --format jsonl | jq -c 'select(.event == "build_step")'
 ```
 
 ## Subcommands
 
-- [`miren deploy cancel`](./deploy-cancel.md) — Cancel an in-progress deployment
-- [`miren deploy target`](./deploy-target.md) — List deployment targets
+- [`miren deploy cancel`](./deploy-cancel.md) — Deprecated: use 'miren deployment cancel'
+- [`miren deploy target`](./deploy-target.md) — Deprecated: use 'miren target list'

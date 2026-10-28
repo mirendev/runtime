@@ -74,7 +74,7 @@ To keep deployment destinations in the repository, add a target from the app dir
 
 <CliCommand context="client">
 ```miren
-miren deploy target add staging
+miren target add staging
 ```
 </CliCommand>
 
@@ -82,7 +82,7 @@ Choose a configured cluster from the picker. For scripts, supply its local name 
 
 <CliCommand context="client">
 ```miren
-miren deploy target add prod my-prod-cluster
+miren target add prod my-prod-cluster
 ```
 </CliCommand>
 
@@ -100,11 +100,13 @@ cluster = "miren-prod"
 cluster_id = "cluster-def456"
 ```
 
-The first target is the default for `miren deploy`. Select another by name:
+All app-centric commands use these targets, including `deploy`, `logs`, `app status`, and `env`. With one target, Miren selects it automatically. With several, choose a target with `-C` or `MIREN_CLUSTER`; an interactive terminal offers a picker when neither is set. Scripts fail with an actionable error rather than choosing the first target.
+
+For example, select production for this invocation:
 
 <CliCommand context="client">
 ```miren
-miren deploy --target prod
+miren deploy -C prod
 ```
 </CliCommand>
 
@@ -113,27 +115,24 @@ miren deploy --target prod
 Manage the file without editing TOML by hand:
 
 ```miren
-miren deploy target                 # list targets
-miren deploy target add qa          # add via cluster picker
-miren deploy target set-default prod
-miren deploy target remove qa
+miren target list
+miren target add qa                 # add via cluster picker
+miren target remove qa
 ```
 
-An explicit `--cluster` (`-C`) or `MIREN_CLUSTER` overrides the default target. A named `--target` cannot be combined with either explicit cluster selection.
+When `deploy.toml` exists, `-C` and `MIREN_CLUSTER` must name one of its targets. Configured cluster names for those targets remain accepted for compatibility. `miren deploy --target prod` also remains supported, but cannot be combined with `-C` or `MIREN_CLUSTER`.
 
-Selecting a deployment target affects that deploy only. It does not change the app's pinned cluster for commands such as `miren logs`.
+Selecting a cluster affects only the current invocation. Per-app cluster pins are no longer read or written. `miren cluster switch` changes the global active cluster; cluster-wide commands ignore `deploy.toml`, even when run in an app directory.
 
-### Confirmation Prompt
+:::warning[Target order is not a default]
+`miren deploy target set-default` and `target add --default` retain their file-reordering behavior for one release and print a deprecation warning. Reordering no longer decides which cluster commands use.
+:::
 
-If your cluster config includes multiple clusters, Miren asks you to confirm which cluster to deploy to. Skip the prompt with `--force`:
+### Deploying without targets
 
-<CliCommand context="client">
-```miren
-miren deploy --force
-```
-</CliCommand>
+Without `deploy.toml`, pass `-C` or set `MIREN_CLUSTER` to choose a configured cluster explicitly. Otherwise, deploy uses the sole configured cluster or offers a picker when several are configured. Without an interactive terminal, an ambiguous deploy fails and asks for `-C`.
 
-The prompt is also skipped automatically when only one cluster is configured or when stdin is not a terminal (e.g., in CI).
+Deploy never silently uses the global active cluster to resolve an ambiguous destination. Other app commands without targets may use the global active cluster.
 
 ## Build Detection
 

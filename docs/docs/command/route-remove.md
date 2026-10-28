@@ -1,12 +1,12 @@
 ---
 title: "miren route remove"
 sidebar_label: "route remove"
-description: "Remove an HTTP route"
+description: "Deprecated: use 'miren route delete'"
 ---
 
 # miren route remove
 
-Remove an HTTP route
+Deprecated: use 'miren route delete'
 
 ## Usage
 
@@ -22,6 +22,7 @@ miren route remove [host] [flags]
 
 - `--cluster, -C` — Cluster name
 - `--config` — Path to the config file
+- `--yes, -y` — Skip confirmation prompt
 
 ## Global Options
 
@@ -34,7 +35,7 @@ miren route remove [host] [flags]
 **Remove a route:**
 
 ```bash
-miren route remove example.com
+miren route delete example.com
 ```
 
 ## See also

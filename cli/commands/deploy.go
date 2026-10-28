@@ -102,7 +102,8 @@ type deployOpts struct {
 	Explain       bool     `short:"x" long:"explain" description:"Explain the build process"`
 	ExplainFormat string   `long:"explain-format" description:"Explain format" choice:"auto" choice:"plain" choice:"tty" choice:"rawjson" choice:"quiet" default:"auto"` //nolint
 	Quiet         bool     `short:"q" long:"quiet" description:"Suppress upload and build progress; print only phase summaries and the result"`
-	Force         bool     `short:"f" long:"force" description:"Skip confirmation prompt"`
+	Yes           bool     `short:"y" long:"yes" description:"Skip confirmation prompt"`
+	Force         bool     `short:"f" long:"force" description:"Deprecated: use --yes to skip confirmation"`
 	Env           []string `short:"e" long:"env" split:"false" description:"Set environment variable (KEY=VALUE, KEY=@file, or KEY to prompt)"`
 	Sensitive     []string `short:"s" long:"sensitive" split:"false" description:"Set sensitive environment variable (masked in output)"`
 	Ephemeral     string   `long:"ephemeral" description:"Deploy as ephemeral preview with this label (e.g. feat-login)"`
@@ -118,35 +119,18 @@ func (o *deployOpts) Validate(glbl *GlobalFlags) error {
 	if o.Target != "" && o.Cluster != "" {
 		return fmt.Errorf("--target cannot be combined with --cluster or MIREN_CLUSTER")
 	}
-	if o.Cluster != "" {
-		return nil
-	}
-
-	dc, err := appconfig.LoadDeployConfigUnder(o.ResolvedDir())
-	if err != nil {
-		return fmt.Errorf("error loading %s: %w", appconfig.DeployConfigPath, err)
-	}
-	if dc == nil {
-		if o.Target != "" {
-			return fmt.Errorf("--target requires %s", appconfig.DeployConfigPath)
-		}
-		return nil
-	}
-
-	target, err := dc.Target(o.Target)
-	if err != nil {
-		return err
-	}
-	o.targetCluster, err = o.clusterNameForTarget(target)
-	if err != nil {
-		return err
-	}
-	return nil
+	var err error
+	o.targetCluster, err = o.selectAppCluster(o.Target, true)
+	return err
 }
 
 func (o *deployOpts) LoadCluster() (*clientconfig.ClusterConfig, string, error) {
 	if o.targetCluster == "" {
-		return o.AppCentric.LoadCluster()
+		var err error
+		o.targetCluster, err = o.selectAppCluster(o.Target, true)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	config := o.ConfigCentric
 	config.Cluster = o.targetCluster
@@ -160,7 +144,7 @@ func (o *deployOpts) RequestedCluster() string {
 	return o.Cluster
 }
 
-func (o *deployOpts) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
+func (o *AppCentric) clusterNameForTarget(target *appconfig.DeployTarget) (string, error) {
 	cfg, err := o.LoadConfig()
 	if err != nil {
 		if errors.Is(err, clientconfig.ErrNoConfig) || errors.Is(err, ErrNoConfig) {
@@ -230,6 +214,9 @@ func requireDeploymentMessageSupport(ctx context.Context, cl *rpc.NetworkClient)
 // progresses, ending in a "result" line with that same document, and the
 // human text is dropped rather than moved.
 func Deploy(ctx *Context, opts deployOpts) error {
+	if opts.Force {
+		fmt.Fprintln(ctx.Stderr, "Warning: -f/--force for skipping confirmation is deprecated; use --yes instead. This alias will be removed next release.")
+	}
 	if opts.JSON && opts.IsJSONL() {
 		// Both would claim stdout: one document and a stream cannot share it.
 		return fmt.Errorf("--json and --format jsonl cannot be combined")
@@ -243,7 +230,7 @@ func Deploy(ctx *Context, opts deployOpts) error {
 	var events *deployEventStream
 	switch {
 	case opts.IsJSONL():
-		opts.Force = true
+		opts.Yes = true
 		events = newDeployEventStream(stdout)
 		previousOut, previousLog := ctx.Stdout, ctx.Log
 		ctx.Stdout = io.Discard
@@ -254,8 +241,8 @@ func Deploy(ctx *Context, opts deployOpts) error {
 		defer func() { ctx.Stdout, ctx.Log = previousOut, previousLog }()
 		events.start(opts.App, ctx.ClusterName)
 	case opts.IsJSON():
-		// A JSON consumer cannot answer a prompt, so behave as --force.
-		opts.Force = true
+		// A JSON consumer cannot answer a prompt, so behave as --yes.
+		opts.Yes = true
 		defer ctx.ProgressToStderr()()
 	}
 
@@ -350,7 +337,7 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 
 	// A machine-readable format is by definition driven by a program, even if
 	// stdin happens to be a terminal, so never prompt there.
-	isInteractive := term.IsTerminal(int(os.Stdin.Fd())) && !opts.machineReadable()
+	isInteractive := ui.IsInteractive() && !opts.machineReadable()
 
 	// Check that we have at least one cluster configured
 	// Check if we have an identity - if so, offer to add a cluster
@@ -554,12 +541,12 @@ func runDeploy(ctx *Context, opts deployOpts, summary *deployevents.Result, even
 	// Replace the context so downstream calls inherit the trace
 	ctx.Context = deployCtxTraced
 
-	// Confirm deployment unless --force is used or stdin is not a TTY.
+	// Confirm deployment unless --yes is used or no terminal is attached.
 	// Always confirm when the app config was found in a parent directory,
 	// otherwise skip confirmation when only one cluster is configured.
 	hasSingleCluster := ctx.ClientConfig != nil && ctx.ClientConfig.GetClusterCount() == 1
 	needsConfirm := opts.foundInParent || !hasSingleCluster
-	if !opts.Force && isInteractive && needsConfirm {
+	if !opts.Yes && !opts.Force && isInteractive && needsConfirm {
 		if opts.foundInParent {
 			ctx.Printf("  ℹ App config found in parent directory %s\n", dir)
 		}

@@ -122,7 +122,7 @@ func TestClusterExportAddress(t *testing.T) {
 			ConfigCentric: ConfigCentric{cfg: cfg},
 		})
 		r.Error(err)
-		r.Contains(err.Error(), "no cluster specified")
+		r.Contains(err.Error(), "miren cluster add")
 	})
 
 	t.Run("cluster not found", func(t *testing.T) {
