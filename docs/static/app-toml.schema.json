@@ -16,7 +16,7 @@
         "dir": {"type": "string", "description": "Absolute directory to export and serve.", "pattern": "^/"}
       }
     },
-    "include": {"type": "array", "description": "Extra files or directories to include in the build context.", "items": {"type": "string"}, "uniqueItems": true},
+    "include": {"type": "array", "description": "Extra files or directories to include in the build context, relative to the source root.", "items": {"type": "string"}, "uniqueItems": true},
     "concurrency": {"type": "integer", "description": "Legacy global concurrency target. Prefer per-service concurrency.", "minimum": 0, "deprecated": true},
     "workload_role": {"type": "string", "description": "App-scoped role used for in-cluster API access.", "default": "app-readonly"},
     "web": {"type": "boolean", "description": "Whether Miren may synthesize a long-running web service when none is declared."},
@@ -50,8 +50,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "source_root": {"type": "string", "description": "Upload root and build context, relative to the config root (the directory containing .miren). Defaults to the config root when omitted."},
         "version": {"type": "string", "description": "Language or runtime version."},
-        "dockerfile": {"type": "string", "description": "Path to a custom Dockerfile."},
+        "dockerfile": {"type": "string", "description": "Path to a custom Dockerfile, relative to the source root."},
         "onbuild": {"type": "array", "description": "Commands run in /app after the main build steps.", "items": {"type": "string"}},
         "alpine_image": {"type": "string", "description": "Custom Alpine base image for the runtime stage."},
         "secrets": {"type": "array", "description": "Secrets exposed to a Dockerfile build via --mount=type=secret. Never enters an image layer, and BuildKit does not write it to the build log on its own.", "items": {"$ref": "#/$defs/build_secret"}}
