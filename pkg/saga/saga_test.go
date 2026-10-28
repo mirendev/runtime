@@ -257,6 +257,55 @@ func TestExecutor_FailureAndUndo(t *testing.T) {
 	assert.Empty(t, ctrl.undoMultCalls)
 }
 
+func TestExecutor_FailedOutputDiagnostics(t *testing.T) {
+	type diagnostic struct {
+		Value int `json:"value"`
+	}
+	cause := errors.New("action failed")
+	undoStruct := func(context.Context, struct{}, diagnostic) error {
+		return errors.New("failed action must not be undone")
+	}
+	undoPointer := func(context.Context, struct{}, *diagnostic) error {
+		return errors.New("failed action must not be undone")
+	}
+	for _, tc := range []struct {
+		name   string
+		action any
+		undo   any
+		want   string
+	}{
+		{"zero struct", func(context.Context, struct{}) (diagnostic, error) {
+			return diagnostic{}, cause
+		}, undoStruct, ""},
+		{"nil pointer", func(context.Context, struct{}) (*diagnostic, error) {
+			return nil, cause
+		}, undoPointer, ""},
+		{"partial struct", func(context.Context, struct{}) (diagnostic, error) {
+			return diagnostic{Value: 17}, cause
+		}, undoStruct, `{"value":17}`},
+		{"partial pointer", func(context.Context, struct{}) (*diagnostic, error) {
+			return &diagnostic{Value: 23}, cause
+		}, undoPointer, `{"value":23}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := NewRegistry()
+			require.NoError(t, Define("diagnostics").Action("fail", tc.action).Undo(tc.undo).RegisterTo(registry))
+			storage := NewMemoryStorage()
+			executor := NewExecutor(storage, WithRegistry(registry))
+			require.ErrorIs(t, executor.Start("diagnostics").WithID("test").Execute(context.Background()), cause)
+			exec, err := storage.Get(context.Background(), "test")
+			require.NoError(t, err)
+			assert.Equal(t, StatusFailed, exec.Status)
+			assert.Equal(t, cause.Error(), exec.ExecutedActions["fail"].Error)
+			if tc.want == "" {
+				assert.Empty(t, exec.ExecutedActions["fail"].Output)
+			} else {
+				assert.JSONEq(t, tc.want, string(exec.ExecutedActions["fail"].Output))
+			}
+		})
+	}
+}
+
 func TestExecutor_ActionCancellationStillCompensates(t *testing.T) {
 	registry := NewRegistry()
 	ctrl := &testController{}
