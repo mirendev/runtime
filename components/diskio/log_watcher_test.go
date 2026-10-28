@@ -3,6 +3,7 @@ package diskio
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"miren.dev/runtime/api/storage/storage_v1alpha"
 )
+
+// Run a scan window synchronously for the segment retirement tests.
+func (w *LogWatcher) scanAndUpload(ctx context.Context) {
+	for _, vol := range w.state.ListVolumes() {
+		paths := w.scanVolume(ctx, vol, nil)
+		for len(paths) > 0 {
+			paths = w.scanVolume(ctx, vol, paths)
+		}
+	}
+}
 
 type mockUploader struct {
 	uploaded []mockUploadCall
@@ -25,6 +36,160 @@ type mockUploader struct {
 type mockUploadCall struct {
 	volumeID    string
 	segmentPath string
+}
+
+type logUploaderFunc func(context.Context, string, string) (string, error)
+
+func (f logUploaderFunc) UploadSegment(ctx context.Context, id, path string) (string, error) {
+	return f(ctx, id, path)
+}
+
+func TestLogWatcherBoundsVolumesAndJoinsUploads(t *testing.T) {
+	state := NewState()
+	const key = "400000000000000100000001"
+	for i := 0; i < logVolumeConcurrency+2; i++ {
+		id := fmt.Sprintf("vol-%d", i)
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "logs"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "logs", "disk."+key+".log"), []byte(id), 0600))
+		state.SetVolume(id, &VolumeState{EntityId: id, VolumeId: id, CloudVolumeId: id, DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR})
+	}
+	started := make(chan string, 16)
+	cancelled := make(chan struct{}, 16)
+	allowOne := make(chan struct{})
+	exit := make(chan struct{})
+	uploader := logUploaderFunc(func(ctx context.Context, id, path string) (string, error) {
+		started <- id
+		select {
+		case <-allowOne:
+			return id, nil
+		case <-ctx.Done():
+			cancelled <- struct{}{}
+			<-exit
+			return "", ctx.Err()
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	watch := NewLogWatcher(slog.Default(), state, uploader, time.Millisecond)
+	runErr := make(chan error, 1)
+	go func() { runErr <- watch.Run(ctx) }()
+	t.Cleanup(func() { cancel(); close(exit); watch.Wait() })
+	seen := make(map[string]bool)
+	for i := 0; i < logVolumeConcurrency; i++ {
+		select {
+		case id := <-started:
+			require.False(t, seen[id], "one scan per volume even across ticks")
+			seen[id] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("independent volumes did not start concurrently")
+		}
+	}
+	select {
+	case id := <-started:
+		t.Fatalf("volume %s exceeded concurrency bound", id)
+	case <-time.After(25 * time.Millisecond):
+	}
+	allowOne <- struct{}{}
+	select {
+	case id := <-started:
+		require.False(t, seen[id], "pending volume must receive the freed slot")
+	case <-time.After(5 * time.Second):
+		t.Fatal("pending volume was not serviced")
+	}
+	cancel()
+	for i := 0; i < logVolumeConcurrency; i++ {
+		select {
+		case <-cancelled:
+		case <-time.After(5 * time.Second):
+			t.Fatal("upload did not observe cancellation")
+		}
+	}
+	select {
+	case <-runErr:
+		t.Fatal("Run returned before its uploads exited")
+	default:
+	}
+	// Cleanup releases the uploads; Wait must not return before that.
+}
+
+func TestLogWatcherRotatesBackloggedVolumes(t *testing.T) {
+	state := NewState()
+	const count = uploadConcurrency*3 + 1
+	addVolume := func(id string, count int) string {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "logs"), 0755))
+		for i := 1; i <= count; i++ {
+			name := fmt.Sprintf("disk.4000000000000001%08x.log", i)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "logs", name), []byte(id), 0600))
+		}
+		state.SetVolume(id, &VolumeState{EntityId: id, CloudVolumeId: id, DiskPath: dir, Mode: storage_v1alpha.VM_ACCELERATOR})
+		return dir
+	}
+	for i := 0; i < logVolumeConcurrency; i++ {
+		addVolume(fmt.Sprintf("old-%d", i), count)
+	}
+	started := make(chan struct{}, logVolumeConcurrency)
+	gate := make(chan struct{})
+	tail := make(chan struct{})
+	events := make(chan mockUploadCall, logVolumeConcurrency*count+1)
+	uploader := logUploaderFunc(func(ctx context.Context, id, path string) (string, error) {
+		if filepath.Base(path) == "disk.400000000000000100000001.log" && id != "new" {
+			started <- struct{}{}
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		if filepath.Base(path) == fmt.Sprintf("disk.4000000000000001%08x.log", uploadConcurrency+1) {
+			select {
+			case <-tail:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		events <- mockUploadCall{id, filepath.Base(path)}
+		return id, nil
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	watch := NewLogWatcher(slog.Default(), state, uploader, time.Millisecond)
+	go func() { assert.NoError(t, watch.Run(ctx)) }()
+	t.Cleanup(func() { cancel(); watch.Wait() })
+	for i := 0; i < logVolumeConcurrency; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("backlogs did not start")
+		}
+	}
+	newDir := addVolume("new", 1)
+	// Leave discovery ticks running while all slots are occupied.
+	time.Sleep(25 * time.Millisecond)
+	close(gate)
+	require.Eventually(t, func() bool {
+		horizon, _ := readLogHorizon(newDir)
+		return horizon == "400000000000000100000001"
+	}, 5*time.Second, time.Millisecond)
+	close(tail)
+	calls := make(map[string][]string)
+	for i := 0; i < logVolumeConcurrency*count+1; i++ {
+		select {
+		case call := <-events:
+			if call.volumeID == "new" {
+				for _, old := range calls {
+					require.LessOrEqual(t, len(old), uploadConcurrency, "new disk waits at most one transport batch, not a scan window")
+				}
+			}
+			calls[call.volumeID] = append(calls[call.volumeID], call.segmentPath)
+		case <-time.After(5 * time.Second):
+			t.Fatal("cached backlog window did not finish")
+		}
+	}
+	for i := 0; i < logVolumeConcurrency; i++ {
+		for j, path := range calls[fmt.Sprintf("old-%d", i)] {
+			require.Equal(t, fmt.Sprintf("disk.4000000000000001%08x.log", j+1), path)
+		}
+	}
 }
 
 func (m *mockUploader) UploadSegment(_ context.Context, volumeID, segmentPath string) (string, error) {

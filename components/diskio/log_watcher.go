@@ -29,6 +29,15 @@ type logSegmentBatchUploader interface {
 // amortizes directory enumeration over many small transport batches.
 const logScanWindow = 1024
 
+// Each turn publishes at most one transport batch. A FIFO of pending volumes
+// prevents large backlogs from taking every turn when all workers are busy.
+const logVolumeConcurrency = 4
+
+type logVolumeScan struct {
+	volume *VolumeState
+	paths  []string
+}
+
 func oldestSegments(ctx context.Context, logDir string) ([]string, error) {
 	dir, err := os.Open(logDir)
 	if err != nil {
@@ -98,12 +107,57 @@ func (w *LogWatcher) Run(ctx context.Context) error {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
+	completed := make(chan *logVolumeScan, logVolumeConcurrency)
+	active := make(map[string]bool)
+	queued := make(map[string]bool)
+	var pending []*logVolumeScan
+	// Shutdown must join uploads before the runner tears down their dependencies.
+	defer func() {
+		for len(active) > 0 {
+			delete(active, (<-completed).volume.EntityId)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			w.scanAndUpload(ctx)
+			for _, vol := range w.state.ListVolumes() {
+				if vol.Mode == storage_v1alpha.VM_ACCELERATOR && !active[vol.EntityId] && !queued[vol.EntityId] {
+					pending = append(pending, &logVolumeScan{volume: vol})
+					queued[vol.EntityId] = true
+				}
+			}
+		case scan := <-completed:
+			id := scan.volume.EntityId
+			delete(active, id)
+			if len(scan.paths) > 0 {
+				pending = append(pending, scan)
+				queued[id] = true
+			}
+		}
+		for len(pending) > 0 && len(active) < logVolumeConcurrency && ctx.Err() == nil {
+			scan := pending[0]
+			pending[0] = nil
+			pending = pending[1:]
+			id := scan.volume.EntityId
+			delete(queued, id)
+			// Resolve queued state at dispatch rather than retaining stale paths
+			// across a deletion or registration transition.
+			vol := w.state.GetVolume(id)
+			if vol == nil {
+				continue
+			}
+			if vol.DiskPath != scan.volume.DiskPath || vol.CloudVolumeId != scan.volume.CloudVolumeId {
+				scan.paths = nil
+			}
+			scan.volume = vol
+			active[id] = true
+			go func() {
+				scan.paths = w.scanVolume(ctx, vol, scan.paths)
+				completed <- scan
+			}()
 		}
 	}
 }
@@ -113,98 +167,105 @@ func (w *LogWatcher) Wait() {
 	<-w.done
 }
 
-func (w *LogWatcher) scanAndUpload(ctx context.Context) {
-	for _, vol := range w.state.ListVolumes() {
-		if vol.Mode != storage_v1alpha.VM_ACCELERATOR {
-			continue
-		}
+func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []string) []string {
+	if vol.Mode != storage_v1alpha.VM_ACCELERATOR {
+		return nil
+	}
 
-		// A volume with no cloud id has not been registered yet. Uploading
-		// would fail, and deleting would throw away a segment that was never
-		// backed up, so leave both alone: registration is retried on every
-		// reconcile and the next scan will pick these up.
-		if w.uploader != nil && vol.CloudVolumeId == "" {
-			w.log.Debug("volume not registered with miren.cloud, deferring segment upload",
-				"volume_id", vol.VolumeId)
-			continue
-		}
+	// A volume with no cloud id has not been registered yet. Uploading
+	// would fail, and deleting would throw away a segment that was never
+	// backed up, so leave both alone: registration is retried on every
+	// reconcile and the next scan will pick these up.
+	if w.uploader != nil && vol.CloudVolumeId == "" {
+		w.log.Debug("volume not registered with miren.cloud, deferring segment upload",
+			"volume_id", vol.VolumeId)
+		return nil
+	}
 
+	if len(paths) == 0 {
 		logDir := filepath.Join(vol.DiskPath, "logs")
 		names, err := oldestSegments(ctx, logDir)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				w.log.Warn("failed to read log directory", "path", logDir, "error", err)
 			}
-			continue
-		}
-		horizon, err := readLogHorizon(vol.DiskPath)
-		if err != nil {
-			w.log.Warn("failed to read log horizon, pausing this volume's scan",
-				"path", vol.DiskPath, "error", err)
-			continue
-		}
-		// A previous rename may have succeeded just before fsync failed.
-		// Make the observed horizon durable before trusting it for deletion.
-		if horizon != "" {
-			if err := syncLogHorizon(vol.DiskPath); err != nil {
-				w.log.Warn("failed to sync log horizon, pausing this volume's scan", "path", vol.DiskPath, "error", err)
-				continue
-			}
-		}
-
-		var paths []string
-		for _, name := range names {
-			segPath := filepath.Join(logDir, name)
-			label := lbd.LabelFromLogPath(segPath)
-			if isValidTAI64NLabel(label) && label <= horizon {
-				// Replay can also advance the horizon past local segments that were
-				// never uploaded. They cannot be replayed after this boundary;
-				// do not reintroduce stale writes into the cloud history.
-				if err := os.Remove(segPath); err != nil {
-					w.log.Warn("failed to remove segment", "path", segPath, "error", err)
-				} else {
-					w.log.Warn("removed segment covered by log horizon without upload",
-						"path", segPath, "horizon", horizon)
-				}
-				continue
-			}
-			paths = append(paths, segPath)
-		}
-
-		retire := func(segPath string) error {
-			if err := updateLogHorizonFromPath(vol.DiskPath, segPath); err != nil {
-				return fmt.Errorf("updating log horizon for %s: %w", segPath, err)
-			}
-			if err := os.Remove(segPath); err != nil {
-				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
-			}
 			return nil
 		}
-		for len(paths) > 0 {
-			if err := ctx.Err(); err != nil {
-				return
-			}
-			if batch, ok := w.uploader.(logSegmentBatchUploader); ok {
-				n := min(uploadConcurrency, len(paths))
-				if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths[:n], retire); err != nil {
-					w.log.Warn("failed to upload segments, pausing this volume's scan", "path", paths[0], "error", err)
-					break
-				}
-				paths = paths[n:]
-				continue
-			}
-			path := paths[0]
-			if w.uploader != nil {
-				if _, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, path); err != nil {
-					w.log.Warn("failed to upload segment, pausing this volume's scan", "path", path, "error", err)
-					break
-				}
-			}
-			if err := retire(path); err != nil {
-				w.log.Warn("failed to update log horizon, pausing this volume's scan", "path", path, "error", err)
-				break
-			}
-			paths = paths[1:]
+		for _, name := range names {
+			paths = append(paths, filepath.Join(logDir, name))
 		}
 	}
+	horizon, err := readLogHorizon(vol.DiskPath)
+	if err != nil {
+		w.log.Warn("failed to read log horizon, pausing this volume's scan",
+			"path", vol.DiskPath, "error", err)
+		return nil
+	}
+	// A previous rename may have succeeded just before fsync failed.
+	// Make the observed horizon durable before trusting it for deletion.
+	if horizon != "" {
+		if err := syncLogHorizon(vol.DiskPath); err != nil {
+			w.log.Warn("failed to sync log horizon, pausing this volume's scan", "path", vol.DiskPath, "error", err)
+			return nil
+		}
+	}
+
+	var uncovered []string
+	for _, segPath := range paths {
+		label := lbd.LabelFromLogPath(segPath)
+		if isValidTAI64NLabel(label) && label <= horizon {
+			// Replay can also advance the horizon past local segments that were
+			// never uploaded. They cannot be replayed after this boundary;
+			// do not reintroduce stale writes into the cloud history.
+			if err := os.Remove(segPath); err != nil {
+				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
+			} else {
+				w.log.Warn("removed segment covered by log horizon without upload",
+					"path", segPath, "horizon", horizon)
+			}
+			continue
+		}
+		uncovered = append(uncovered, segPath)
+	}
+	paths = uncovered
+
+	retire := func(segPath string) error {
+		if err := updateLogHorizonFromPath(vol.DiskPath, segPath); err != nil {
+			return fmt.Errorf("updating log horizon for %s: %w", segPath, err)
+		}
+		if err := os.Remove(segPath); err != nil {
+			w.log.Warn("failed to remove segment", "path", segPath, "error", err)
+		}
+		return nil
+	}
+	n := min(uploadConcurrency, len(paths))
+	remaining := paths[n:]
+	paths = paths[:n]
+	for len(paths) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		if batch, ok := w.uploader.(logSegmentBatchUploader); ok {
+			n := min(uploadConcurrency, len(paths))
+			if err := batch.UploadSegments(ctx, vol.CloudVolumeId, vol.DiskPath, paths[:n], retire); err != nil {
+				w.log.Warn("failed to upload segments, pausing this volume's scan", "path", paths[0], "error", err)
+				return nil
+			}
+			paths = paths[n:]
+			continue
+		}
+		path := paths[0]
+		if w.uploader != nil {
+			if _, err := w.uploader.UploadSegment(ctx, vol.CloudVolumeId, path); err != nil {
+				w.log.Warn("failed to upload segment, pausing this volume's scan", "path", path, "error", err)
+				return nil
+			}
+		}
+		if err := retire(path); err != nil {
+			w.log.Warn("failed to update log horizon, pausing this volume's scan", "path", path, "error", err)
+			return nil
+		}
+		paths = paths[1:]
+	}
+	return remaining
 }
