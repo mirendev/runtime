@@ -22,7 +22,6 @@ import (
 
 func TestAnalyzeSourceRoot(t *testing.T) {
 	dir := t.TempDir()
-	writeAppToml(t, dir, `[[[`)
 	for _, app := range []string{"api", "worker"} {
 		configDir := filepath.Join(dir, "services", app)
 		writeAppToml(t, configDir, "name = '"+app+"'\n[build]\nsource_root = '../..'\ndockerfile = 'services/"+app+"/Dockerfile'\n")
