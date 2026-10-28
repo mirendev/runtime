@@ -16,7 +16,7 @@ miren cloud operation list [flags]
 
 ## Flags
 
-- `--cluster, -C` — Cloud cluster XID (not a local config name)
+- `--cluster, -C` — Cloud cluster XID
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json

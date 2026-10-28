@@ -70,8 +70,12 @@ your selected Cloud identity. If you belong to exactly one organization, you can
 omit the flag; otherwise select one interactively or specify it explicitly.
 Duplicate names require an ID. `org show <name-or-id>` takes its organization as
 an argument. Cluster arguments and `-C` flags take Cloud cluster IDs, not local
-configuration names. App commands use the usual app selection: `-a`,
+configuration names. Always supply `-C` for app detail commands; they do not
+read `MIREN_CLUSTER`, resolve local cluster names, or connect directly to a
+runtime. App commands use the usual app-name selection: `-a`,
 `MIREN_APP`, then the name in `.miren/app.toml` (or the directory given with `-d`).
+If no app name is found, they ask for `-a` rather than offering to initialize a
+local app.
 App detail includes deployment metadata and any available incidents.
 
 ```bash

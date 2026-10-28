@@ -3,11 +3,14 @@ package commands
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"miren.dev/mflags"
@@ -548,23 +551,22 @@ func TestCloudDetailTextOutput(t *testing.T) {
 
 func TestCloudAppContextInvoke(t *testing.T) {
 	for _, tc := range []struct {
-		name, envApp, wantApp string
-		args                  []string
+		name, envApp, wantApp, wantCluster, wantError string
+		args                                          []string
 	}{
-		{"local config", "", "local-web", nil},
-		{"environment", "env-web", "env-web", nil},
-		{"flags override environment and config", "env-web", "flag-web", []string{"-a", "flag-web", "-C", "flag-cluster"}},
+		{"local config", "", "local-web", "cloud-cluster", "", []string{"-C", "cloud-cluster"}},
+		{"app environment", "env-web", "env-web", "cloud-cluster", "", []string{"-C", "cloud-cluster"}},
+		{"flags override environment and config", "env-web", "flag-web", "flag-cluster", "", []string{"-a", "flag-web", "-C", "flag-cluster"}},
+		{"runtime cluster environment is not a Cloud ID", "env-web", "", "", "--cluster is required", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := 0
-			cluster := "env-cluster"
-			if len(tc.args) > 0 {
-				cluster = "flag-cluster"
-			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests++
 				require.Equal(t, http.MethodGet, r.Method)
-				require.Equal(t, "/api/v1/organizations/org-acme/apps/"+cluster+"/"+tc.wantApp, r.URL.Path)
+				if tc.wantError == "" {
+					require.Equal(t, "/api/v1/organizations/org-acme/apps/"+tc.wantCluster+"/"+tc.wantApp, r.URL.Path)
+				}
 				_, _ = w.Write([]byte(`{"name":"` + tc.wantApp + `"}`))
 			}))
 			defer srv.Close()
@@ -581,8 +583,49 @@ func TestCloudAppContextInvoke(t *testing.T) {
 			require.True(t, ok)
 			args := append([]string{"-o", "org-acme", "--json"}, tc.args...)
 			require.NoError(t, cmd.fs.Parse(args))
-			require.NoError(t, cmd.Invoke(args...))
-			require.Equal(t, 1, requests)
+			err := cmd.Invoke(args...)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				require.Zero(t, requests)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, requests)
+			}
 		})
 	}
+}
+
+func TestCloudAppDoesNotDialRuntime(t *testing.T) {
+	runtime, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer runtime.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/organizations/org-acme/apps/"+runtime.LocalAddr().String()+"/web", r.URL.Path)
+		_, _ = w.Write([]byte(`{"name":"web"}`))
+	}))
+	defer srv.Close()
+	configWithIdentity(t, srv.URL)
+	d := mflags.NewDispatcher("miren")
+	registerCloudCommands(d)
+	cmd := d.GetCommand("cloud app show").(*Cmd)
+	args := []string{"-o", "org-acme", "-C", runtime.LocalAddr().String(), "-a", "web", "--json"}
+	require.NoError(t, cmd.fs.Parse(args))
+	require.NoError(t, cmd.Invoke(args...))
+	require.NoError(t, runtime.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+	_, _, err = runtime.ReadFrom(make([]byte, 2048))
+	require.Error(t, err, "a Cloud HTTP query must not send runtime QUIC packets")
+	require.True(t, err.(net.Error).Timeout())
+}
+
+func TestCloudAppMissingNameDoesNotInitialize(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+	t.Setenv("MIREN_APP", "")
+	d := mflags.NewDispatcher("miren")
+	registerCloudCommands(d)
+	cmd := d.GetCommand("cloud app show").(*Cmd)
+	args := []string{"-o", "org-acme", "-C", "cloud-cluster"}
+	require.NoError(t, cmd.fs.Parse(args))
+	require.ErrorContains(t, cmd.Invoke(args...), "--app is required")
+	require.NoDirExists(t, filepath.Join(dir, ".miren"))
 }

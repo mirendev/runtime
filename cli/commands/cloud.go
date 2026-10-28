@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"miren.dev/mflags"
+	"miren.dev/runtime/appconfig"
 	"miren.dev/runtime/clientconfig"
 	"miren.dev/runtime/pkg/ui"
 )
@@ -62,7 +63,7 @@ type CloudColumn struct {
 // CloudCommand lets an endpoint and its conversions live in one definition
 // file without a per-command authentication, HTTP, or rendering handler.
 func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEndpoint) *Cmd {
-	cmd := Infer(endpoint.Name, endpoint.Synopsis, func(ctx *Context, opts O) error {
+	return Infer(endpoint.Name, endpoint.Synopsis, func(ctx *Context, opts O) error {
 		// Validate inputs before organization resolution can send an HTTP request.
 		if _, _, _, err := cloudInput(endpoint, reflect.ValueOf(opts), nil); err != nil {
 			return err
@@ -228,10 +229,6 @@ func CloudCommand[O interface{ CloudSettings() CloudOptions }](endpoint CloudEnd
 		}
 		return endpoint.render(ctx, response)
 	}, WithGroup(GroupClient))
-	if cluster := cmd.FlagSet().Lookup("cluster"); cluster != nil {
-		cluster.Usage = "Cloud cluster XID (not a local config name)"
-	}
-	return cmd
 }
 
 func cloudInput(endpoint CloudEndpoint, opts reflect.Value, resolveOrganization func(string) (string, error)) (string, url.Values, any, error) {
@@ -468,7 +465,42 @@ type CloudOrganizationOptions struct {
 
 type CloudAppOptions struct {
 	CloudOrganizationOptions
-	AppCentric
+	Config  string `long:"config" description:"Path to the config file"`
+	Cluster string `short:"C" long:"cluster" description:"Cloud cluster XID (not a local config name)"`
+	App     string `short:"a" long:"app" env:"MIREN_APP" description:"Application name"`
+	Dir     string `short:"d" long:"dir" description:"Directory to find app configuration in" default:"."`
+}
+
+// Cloud reads can default an app name, but must not dial a runtime or offer to
+// create an app. AppCentric also supplies those runtime-only lifecycle hooks.
+func (o *CloudAppOptions) Validate(*GlobalFlags) error {
+	if o.App != "" {
+		return nil
+	}
+	var ac *appconfig.AppConfig
+	var err error
+	if o.Dir == "." {
+		ac, err = LoadLocalAppConfig()
+		if err != nil {
+			local.fatal("")
+		}
+	} else {
+		ac, err = appconfig.LoadAppConfigUnder(o.Dir)
+	}
+	if err != nil {
+		return fmt.Errorf("error loading %s: %w", appconfig.AppConfigPath, err)
+	}
+	if ac != nil {
+		o.App = ac.Name
+	}
+	return nil
+}
+
+func (o *CloudAppOptions) LoadConfig() (*clientconfig.Config, error) {
+	if o.Config != "" {
+		return clientconfig.LoadConfigFrom(o.Config)
+	}
+	return clientconfig.LoadConfig()
 }
 
 const cloudAppPath = "/api/v1/organizations/{organization}/apps/{cluster}/{app}"

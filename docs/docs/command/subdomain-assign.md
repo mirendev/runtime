@@ -20,7 +20,7 @@ miren subdomain assign [subdomain] [flags]
 
 ## Flags
 
-- `--cluster, -C` — Cloud cluster XID (not a local config name)
+- `--cluster, -C` — Cloud cluster XID to serve this subdomain
 - `--format` — Output format (text, json) (default: `text`)
 - `--identity, -i` — Cloud identity to use (required when more than one is configured)
 - `--json` — Shorthand for --format json
