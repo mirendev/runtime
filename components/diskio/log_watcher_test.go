@@ -519,4 +519,12 @@ func TestLogWatcherCleansUpSegmentsAtOrBeforeHorizon(t *testing.T) {
 	horizon, err = readLogHorizon(diskPath)
 	require.NoError(t, err)
 	assert.Equal(t, "40000000682f1a2c1dcd6502", horizon)
+
+	// A final drain can retire cached paths while this scan waits its turn.
+	logs.Reset()
+	watcher.scanVolume(context.Background(), state.GetVolume("disk_volume/vol1"), []string{
+		filepath.Join(logDir, first), filepath.Join(logDir, newer),
+	})
+	assert.Empty(t, logs.String(), "already-retired cached paths should not produce warnings")
+	assert.Len(t, uploader.uploaded, 2)
 }

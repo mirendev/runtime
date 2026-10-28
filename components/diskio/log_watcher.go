@@ -217,9 +217,9 @@ func (w *LogWatcher) scanVolume(ctx context.Context, vol *VolumeState, paths []s
 			// Replay can also advance the horizon past local segments that were
 			// never uploaded. They cannot be replayed after this boundary;
 			// do not reintroduce stale writes into the cloud history.
-			if err := os.Remove(segPath); err != nil {
+			if err := os.Remove(segPath); err != nil && !os.IsNotExist(err) {
 				w.log.Warn("failed to remove segment", "path", segPath, "error", err)
-			} else {
+			} else if err == nil {
 				w.log.Warn("removed segment covered by log horizon without upload",
 					"path", segPath, "horizon", horizon)
 			}
